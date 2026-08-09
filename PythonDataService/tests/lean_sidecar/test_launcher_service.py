@@ -8,6 +8,8 @@ the API contract is stable.
 from __future__ import annotations
 
 import asyncio
+import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -19,10 +21,11 @@ from app.lean_sidecar import config as sidecar_config
 from app.lean_sidecar.launcher.models import (
     ExtractMetadataRequest,
     ExtractMetadataResponse,
+    LauncherImageReadiness,
     LaunchRequest,
     LaunchResponse,
 )
-from app.lean_sidecar.launcher.service import LaunchRejectedError, launch
+from app.lean_sidecar.launcher.service import LaunchRejectedError, check_pinned_image, launch
 from app.lean_sidecar.workspace import resolve_workspace
 
 DUMMY_DIGEST = "sha256:0000000000000000000000000000000000000000000000000000000000000002"
@@ -101,6 +104,81 @@ class TestLaunchValidation:
         assert ei.value.reason == "runner_configuration_error"
 
 
+class TestPinnedImageReadiness:
+    def test_check_pinned_image_reports_local_pinned_image_as_ready(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.lean_sidecar.launcher import service as launcher_service
+
+        monkeypatch.setattr(launcher_service, "PINNED_LEAN_IMAGE_DIGEST", DUMMY_DIGEST)
+        monkeypatch.setattr(launcher_service, "_require_podman", lambda: "/usr/local/bin/podman")
+        completed = subprocess.CompletedProcess([], 0)
+        monkeypatch.setattr(launcher_service.subprocess, "run", lambda *args, **kwargs: completed)
+
+        readiness = check_pinned_image()
+
+        assert readiness == LauncherImageReadiness(
+            reference=f"{sidecar_config.LEAN_IMAGE_REPO}@{DUMMY_DIGEST}",
+            available=True,
+            detail="Pinned LEAN image is present in Podman's local image store.",
+        )
+
+    def test_check_pinned_image_reports_missing_local_image_without_running_a_container(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.lean_sidecar.launcher import service as launcher_service
+
+        monkeypatch.setattr(launcher_service, "PINNED_LEAN_IMAGE_DIGEST", DUMMY_DIGEST)
+        monkeypatch.setattr(launcher_service, "_require_podman", lambda: "/usr/local/bin/podman")
+        completed = subprocess.CompletedProcess([], 1)
+        monkeypatch.setattr(launcher_service.subprocess, "run", lambda *args, **kwargs: completed)
+        readiness = check_pinned_image()
+
+        assert readiness.reference == f"{sidecar_config.LEAN_IMAGE_REPO}@{DUMMY_DIGEST}"
+        assert readiness.available is False
+        assert readiness.failure_reason == "missing"
+        assert readiness.detail == "Pinned LEAN image is not present in Podman's local image store."
+
+    def test_check_pinned_image_reports_podman_operational_failure_without_calling_it_missing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.lean_sidecar.launcher import service as launcher_service
+
+        monkeypatch.setattr(launcher_service, "PINNED_LEAN_IMAGE_DIGEST", DUMMY_DIGEST)
+        monkeypatch.setattr(launcher_service, "_require_podman", lambda: "/usr/local/bin/podman")
+        completed = subprocess.CompletedProcess([], 125)
+        monkeypatch.setattr(launcher_service.subprocess, "run", lambda *args, **kwargs: completed)
+
+        readiness = check_pinned_image()
+
+        assert readiness.available is False
+        assert readiness.failure_reason == "check_failed"
+        assert "exit code 125" in readiness.detail
+
+    def test_check_pinned_image_bounds_probe_below_the_diagnostics_timeout(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.lean_sidecar.launcher import service as launcher_service
+
+        monkeypatch.setattr(launcher_service, "PINNED_LEAN_IMAGE_DIGEST", DUMMY_DIGEST)
+        monkeypatch.setattr(launcher_service, "_require_podman", lambda: "/usr/local/bin/podman")
+        observed_timeout: float | None = None
+
+        def run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[object]:
+            nonlocal observed_timeout
+            timeout = kwargs["timeout"]
+            assert isinstance(timeout, float)
+            observed_timeout = timeout
+            return subprocess.CompletedProcess([], 0)
+
+        monkeypatch.setattr(launcher_service.subprocess, "run", run)
+
+        check_pinned_image()
+
+        assert observed_timeout is not None
+        assert observed_timeout < 2.0
+
+
 class TestLauncherAppConcurrency:
     """Endpoint handlers must not block the launcher event loop.
 
@@ -125,6 +203,37 @@ class TestLauncherAppConcurrency:
             assert (tmp_path / ".launcher-token").is_file()
 
     @pytest.mark.asyncio
+    async def test_healthz_coalesces_concurrent_pinned_image_probes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.lean_sidecar.launcher import app as launcher_app_module
+
+        calls = 0
+
+        def slow_check_pinned_image() -> LauncherImageReadiness:
+            nonlocal calls
+            calls += 1
+            time.sleep(0.05)
+            return LauncherImageReadiness(
+                reference="localhost/learn-ai/lean-sandbox@sha256:test",
+                available=True,
+                detail="Pinned LEAN image is present in Podman's local image store.",
+            )
+
+        monkeypatch.setattr(launcher_app_module, "check_pinned_image", slow_check_pinned_image)
+        monkeypatch.setattr(launcher_app_module, "_pinned_image_readiness", None)
+        monkeypatch.setattr(launcher_app_module, "_pinned_image_readiness_at", None)
+        monkeypatch.setattr(launcher_app_module, "_pinned_image_probe", None)
+
+        transport = ASGITransport(app=launcher_app_module.app)
+        async with AsyncClient(transport=transport, base_url="http://launcher") as client:
+            first, second = await asyncio.gather(client.get("/healthz"), client.get("/healthz"))
+
+        assert first.status_code == 200, first.text
+        assert second.status_code == 200, second.text
+        assert calls == 1
+
+    @pytest.mark.asyncio
     async def test_extract_metadata_responds_while_launch_is_running(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -132,12 +241,17 @@ class TestLauncherAppConcurrency:
     ) -> None:
         from app.lean_sidecar.launcher import app as launcher_app_module
 
+        launch_started = threading.Event()
+        release_launch = threading.Event()
+
         def slow_launch(request: LaunchRequest, *, artifacts_root: Path) -> LaunchResponse:
-            time.sleep(0.3)
+            launch_started.set()
+            if not release_launch.wait(timeout=2):
+                raise AssertionError("test did not release the blocked launch")
             return LaunchResponse(
                 run_id=request.run_id,
                 exit_code=0,
-                duration_ms=300,
+                duration_ms=1,
                 timed_out=False,
                 log_tail="ok",
                 lean_errors={},
@@ -169,19 +283,23 @@ class TestLauncherAppConcurrency:
                     headers=headers,
                 )
             )
-            await asyncio.sleep(0)
+            assert await asyncio.to_thread(launch_started.wait, 1)
 
-            started = time.perf_counter()
-            metadata_response = await client.post(
-                "/extract-metadata",
-                json={"run_id": "run_concurrent", "image_digest": DUMMY_DIGEST},
-                headers=headers,
-            )
-            elapsed = time.perf_counter() - started
-            launch_response = await launch_task
+            try:
+                metadata_response = await asyncio.wait_for(
+                    client.post(
+                        "/extract-metadata",
+                        json={"run_id": "run_concurrent", "image_digest": DUMMY_DIGEST},
+                        headers=headers,
+                    ),
+                    timeout=1,
+                )
+                assert not release_launch.is_set()
+            finally:
+                release_launch.set()
+                launch_response = await asyncio.wait_for(launch_task, timeout=1)
 
         assert metadata_response.status_code == 200, metadata_response.text
-        assert elapsed < 0.2
         assert launch_response.status_code == 200, launch_response.text
 
 

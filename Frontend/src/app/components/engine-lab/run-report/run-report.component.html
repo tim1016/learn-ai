@@ -34,26 +34,30 @@
             </p>
           }
           @case ("agree") {
-            <p class="parity-body">Both engines produced equivalent trades for this configuration.</p>
+            <p class="parity-body">Trades, production readiness, and LEAN-native calculations all passed the compatibility contract.</p>
           }
           @case ("diverged") {
-            <p class="parity-body">The engines disagree — divergences by category:</p>
-            <ul class="parity-counts">
-              @for (entry of p.countsByCategory; track entry.category) {
-                <li><span>{{ entry.category | receiptLabel }}</span><strong>{{ entry.count }}</strong></li>
-              }
-            </ul>
-            <details class="parity-divergences">
-              <summary>Show {{ p.divergences.length }} divergence details</summary>
-              <ul>
-                @for (d of p.divergences; track $index) {
-                  <li>
-                    <span class="parity-chip">{{ d.category | receiptLabel }}</span>
-                    {{ d.message }}
-                  </li>
+            <p class="parity-body">{{ p.reason ?? "The engines disagree." }}</p>
+            @if (p.countsByCategory.length > 0) {
+              <ul class="parity-counts">
+                @for (entry of p.countsByCategory; track entry.category) {
+                  <li><span>{{ entry.category | receiptLabel }}</span><strong>{{ entry.count }}</strong></li>
                 }
               </ul>
-            </details>
+            }
+            @if (p.divergences.length > 0) {
+              <details class="parity-divergences">
+                <summary>Show {{ p.divergences.length }} divergence details</summary>
+                <ul>
+                  @for (d of p.divergences; track $index) {
+                    <li>
+                      <span class="parity-chip">{{ d.category | receiptLabel }}</span>
+                      {{ d.message }}
+                    </li>
+                  }
+                </ul>
+              </details>
+            }
           }
           @case ("unavailable") {
             <p class="parity-body">{{ p.reason ?? "Parity validation is unavailable for this run." }}</p>
@@ -63,6 +67,25 @@
               The LEAN companion did not produce a verdict{{ p.reason ? ": " + p.reason : "." }}
             </p>
           }
+        }
+        @if (p.inputParity || p.nativeMetricParity || p.readinessParity) {
+          <div class="parity-receipts" aria-label="Compatibility calculation receipts">
+            @if (p.inputParity; as input) {
+              <span>Shared fixture: <strong>{{ input.status | receiptLabel }}</strong>
+                @if (input.fixture_id) { · {{ input.fixture_id }} }
+              </span>
+            }
+            @if (p.nativeMetricParity; as native) {
+              <span>LEAN-native values: <strong>{{ native.status | receiptLabel }}</strong>
+                @if (native.native_metric_count) { · {{ native.native_metric_count }} checked }
+              </span>
+            }
+            @if (p.readinessParity; as readiness) {
+              <span>Readiness fields: <strong>{{ readiness.status | receiptLabel }}</strong>
+                @if (readiness.compared_field_count) { · {{ readiness.compared_field_count }} checked }
+              </span>
+            }
+          </div>
         }
       </section>
     }

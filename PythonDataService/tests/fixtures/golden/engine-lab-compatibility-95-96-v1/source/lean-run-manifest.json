@@ -1,0 +1,400 @@
+{
+  "account_currency": "USD",
+  "algorithm_language": "Python",
+  "algorithm_source_sha256": "7bd99036d8e98526bc5b75c6760b67960ae676c6dfc667c9b442df95a2c6d581",
+  "algorithm_type_name": "MyAlgorithm",
+  "bars_consumed_by_symbol": {
+    "SPY": 8970
+  },
+  "brokerage_policy": "interactive_brokers",
+  "comparison_contract_id": "us-equity-raw-ibkr-v1",
+  "comparison_group_id": "pg-d2236694f523410fbb91",
+  "config_json_sha256": "7d620a1bf83db94f5c000a0de4b6bddaecd9a5ad7afbb9dd51a6b801a9e4e936",
+  "data_adjustment_policy": "raw_exact_bar_snapshot",
+  "data_normalization_mode": "Raw",
+  "data_policy": {
+    "adjusted": false,
+    "fixture_id": "bar-store-v1-6e96f0f2c5383e2d",
+    "fixture_sha256": "6e96f0f2c5383e2d1ad40f7308433aacc862bbfd6a9828f0b263cade70f0460e",
+    "input_bars": {
+      "multiplier": 1,
+      "timespan": "minute"
+    },
+    "provider_kind": "fixture",
+    "session": "regular",
+    "source": "polygon",
+    "strategy_bars": {
+      "multiplier": 15,
+      "timespan": "minute"
+    },
+    "symbol": "SPY",
+    "timestamp_policy": "bar_close_ms_utc",
+    "timezone": "America/New_York"
+  },
+  "effective_algorithm_window_ms": {
+    "end_ms": 1786147199000,
+    "start_ms": 1783468800000
+  },
+  "exit_code": 0,
+  "fill_forward": false,
+  "finished_at_ms": 1786240821117,
+  "input_snapshot_sha256": "e35cc50bdcf0e0db8f0a19848fb682b39a11e3d7cc9aa53dfee953d3dec1af99",
+  "launcher_version_sha256": "8afcdb09f2dd038f4cb4f2bac4ce18bb2ca17391c28efbabc90c35d136631964",
+  "lean_image_digest": "sha256:3dd003372f1ef1981b4e80038e3f1c557f1fe414d1be531f485ef870f81a5771",
+  "lean_runtime_provenance": {
+    "binary_sha256": {
+      "QuantConnect.Common.dll": "827339fd94aef0ea71f8576d918e0a361ef858f9d2159a4bb2293018a9a57cbc",
+      "QuantConnect.Lean.Engine.dll": "b0eeec4f21b5a4cb458923ca7eb32e34b7ce39f22edd5377da0dfd13d81cf12a",
+      "QuantConnect.Lean.Launcher.dll": "b2004a97d5ee8f323ff5d342a6f10d57705f088cf417ee551681e708b7a93f0b"
+    },
+    "image_digest": "sha256:3dd003372f1ef1981b4e80038e3f1c557f1fe414d1be531f485ef870f81a5771",
+    "lean_version": "17748",
+    "pdb_sha256": {
+      "QuantConnect.Common.pdb": "2d5f78082f8850a4e05bdfe775b23101ab3189e585f279b7961a1a083c8aad61",
+      "QuantConnect.Lean.Engine.pdb": "1d6f3ed66be0a6c989afff852bbbd01447914bbe915be89780e5d0e829178930",
+      "QuantConnect.Lean.Launcher.pdb": "30788cd31dd9ddd953edbdaef116423afdfc4adfaa356b37a71e03e1f9948788"
+    },
+    "source_commit": "261366a7e26ae942df858ab20df4fef8fa07de67",
+    "source_link_url_template": "https://raw.githubusercontent.com/QuantConnect/Lean/261366a7e26ae942df858ab20df4fef8fa07de67/*",
+    "upstream_image_digest": "sha256:4934c22c2b080a688f25b571746603e01533c5e581499d8457e5624a132ba77b"
+  },
+  "limits": {
+    "cpus": 2.0,
+    "log_tail_bytes": 8388608,
+    "memory_mb": 3072,
+    "pids_limit": 512,
+    "wall_clock_timeout_s": 7200,
+    "workspace_max_mb": 512
+  },
+  "normalized_parser_version": "lean-native-r1",
+  "notes": [
+    "lean-native-r1 \u2014 full-result parser populates the executed algorithm window; artifact-specific chart endpoints remain separate evidence.",
+    "is_clean=True",
+    "lean_error_categories=[]",
+    "normalized_parser=present",
+    "algorithm_source_kind=trusted_sample",
+    "trusted_template=ema_crossover_signal",
+    "date_semantics=session_open_half_open"
+  ],
+  "parameters": {
+    "adjustment": "raw",
+    "bar_minutes": 15,
+    "end_date": "2026-08-07",
+    "session": "regular",
+    "start_date": "2026-07-08",
+    "starting_cash": 100000.0,
+    "symbol": "SPY"
+  },
+  "requested_window_ms": {
+    "end_ms": 1786368600000,
+    "start_ms": 1783517400000
+  },
+  "run_id": "companion-pg-d2236694f523410fbb91",
+  "schema_version": 5,
+  "staged_data": {
+    "bar_zips": [
+      {
+        "path_in_workspace": "equity/usa/daily/spy.zip",
+        "sha256": "ac729288f828a314bbd452454080e3b13ef230d0cf9c63703232ceb724cdb24f",
+        "size_bytes": 572
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260708_quote.zip",
+        "sha256": "3104ed675a62cd1544e82ba3da3f697c18bdf8756ccafd71b703f7160e01ecdc",
+        "size_bytes": 3295
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260708_trade.zip",
+        "sha256": "1416395568a1a3746228d499807ef04530cbbb7e5662d05f968a925f72bab665",
+        "size_bytes": 12728
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260709_quote.zip",
+        "sha256": "bb340db12f9b91ba643a7c81fa1116708c456ae64f285c3d3b7d010c5020e7ad",
+        "size_bytes": 3131
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260709_trade.zip",
+        "sha256": "8f61d7990445c406233c7fe53e37d4fae8e5b1ac3c07be2efab6b2db2c0bdbca",
+        "size_bytes": 11532
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260710_quote.zip",
+        "sha256": "b8ddb824db4431fe93bb68583bc7e92c50c87dbca7fb91b0d51b81a8443b98b0",
+        "size_bytes": 3188
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260710_trade.zip",
+        "sha256": "3d36cdbe835e56ef3228520c239512736fc15549146d3c282a463d5df9df38a2",
+        "size_bytes": 11207
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260713_quote.zip",
+        "sha256": "791c003afc159d9df7f453e7414024ecc2f985dc846f42ee210d0cab8dafa9bd",
+        "size_bytes": 3198
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260713_trade.zip",
+        "sha256": "4a4e4d28c8f687200d9110fc7d77f5221e06d114206ffb8f3dbef489f8703414",
+        "size_bytes": 12343
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260714_quote.zip",
+        "sha256": "4f3670d01f8815358c00559c14bf995530e72cfd9bf6aad5152e57d043a92789",
+        "size_bytes": 3142
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260714_trade.zip",
+        "sha256": "0a72150561c2246a2b9055207b7862549eb4f84afc6f732c351fb65a66aa0e1a",
+        "size_bytes": 11572
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260715_quote.zip",
+        "sha256": "0f0ff027a1f9f400246aa8ae1d0d62805b737297b99998bc6a811e6214ca8279",
+        "size_bytes": 3339
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260715_trade.zip",
+        "sha256": "147a362702a08337fb93436dd2db7a622fb9e74adf85329fcd1b849a1d9739bb",
+        "size_bytes": 11668
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260716_quote.zip",
+        "sha256": "9d0c4a8177b080bec1504acf0c764e7879ac1239bbeb04610452cdabf743f69d",
+        "size_bytes": 3295
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260716_trade.zip",
+        "sha256": "2aebd03fb551dc9f11d629c5460337ab041edb5ec044bcea0d9d4ebf42e21599",
+        "size_bytes": 12103
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260717_quote.zip",
+        "sha256": "05dc7c73509bce0d6284386f3beb9998752284e03302dda96a3c2a34789c0976",
+        "size_bytes": 3323
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260717_trade.zip",
+        "sha256": "f6d6e281ea4523e584dd8c9a684861861f782c5c3f07a6402f97cbc4e5a7140d",
+        "size_bytes": 12651
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260720_quote.zip",
+        "sha256": "e51fc72c31896fc05b293246349b47ba09177e491aac357c151fc5acd9ab6481",
+        "size_bytes": 3293
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260720_trade.zip",
+        "sha256": "84884fed6f7af212237c6204f99b97b7ae8fe257355cda59816015d0682edc4b",
+        "size_bytes": 12105
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260721_quote.zip",
+        "sha256": "04230bfa8769d15a65da6f1c98359e84f3cb4a964b3d9375a63e767b211de3c1",
+        "size_bytes": 3081
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260721_trade.zip",
+        "sha256": "7c63cb0efb0fb7d57731a4955fd67dd99e4bd0d02e7d1740ab756294eacf1dd8",
+        "size_bytes": 11584
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260722_quote.zip",
+        "sha256": "3a42994ab8cb1cf38f1490a1873abc9315a8ae0ccf0ef8172e21ef9c980c164b",
+        "size_bytes": 3140
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260722_trade.zip",
+        "sha256": "9fb393be52ac87c30385e9660e71e8c270a69028dd8a0bb024f5c88b7b02d756",
+        "size_bytes": 12318
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260723_quote.zip",
+        "sha256": "39c8553c7ab64aaf52d91ccc8335f414ebbc330bb447667ae5a1f80e71150af6",
+        "size_bytes": 3363
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260723_trade.zip",
+        "sha256": "9c6a4337e847fa42e1430d445f8f27498447d96a5373a6bb1614f61713524304",
+        "size_bytes": 12552
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260724_quote.zip",
+        "sha256": "0ce02edcf2ed22365669ca5aa83b9317e4a0793f1d6b2654f82e85bdba37dad3",
+        "size_bytes": 3324
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260724_trade.zip",
+        "sha256": "9ccf19f0db41504845339687368f9b84efa3f6b6784023655c0207520cfa809d",
+        "size_bytes": 11913
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260727_quote.zip",
+        "sha256": "f86d34434c78220ef14c7cee39635237f620d1772b965329a00195b9de2134d7",
+        "size_bytes": 3333
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260727_trade.zip",
+        "sha256": "0a50991c0e8263d18046f63b7f35714159de3d15d170f6673bc13549ce0ea616",
+        "size_bytes": 12099
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260728_quote.zip",
+        "sha256": "099a5d9f8c670d7898befffd17eadaab3b7d22cca1bcd983b2e6d787be16a9f1",
+        "size_bytes": 3216
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260728_trade.zip",
+        "sha256": "e56d92c54cfc9ec9110c28b136df50aee80b4aa8db47453d5130e0f2657bbeca",
+        "size_bytes": 12423
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260729_quote.zip",
+        "sha256": "2e87851989531969e1f87c1dd716a3daef84bdb088bb02566c5897381756d75a",
+        "size_bytes": 3466
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260729_trade.zip",
+        "sha256": "b54d8c775884b1ce25ed64d1400a3e8cb560bbb738cf5f5f0cad98723ada120f",
+        "size_bytes": 13449
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260730_quote.zip",
+        "sha256": "0020b202c1e03d1d5976471bbc07fadb75efc387c837179b141adde4d59768c0",
+        "size_bytes": 3233
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260730_trade.zip",
+        "sha256": "5fcff6c2e2d3f13a21990890da033fd2e4475b91b9e2cb53c693813775fcbe40",
+        "size_bytes": 13135
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260731_quote.zip",
+        "sha256": "44668d95b3078af0702e134800285002162ab3e75dcfaede8be865593e253162",
+        "size_bytes": 3389
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260731_trade.zip",
+        "sha256": "dc5ce887925e859bd3030ecbb29ee4d9ef3a6ca4b3e116a0355ecc77085fade1",
+        "size_bytes": 12721
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260803_quote.zip",
+        "sha256": "a04f42aba191ef113f4cbb9f06a353d73594573c349608a518207f8d5649b46b",
+        "size_bytes": 3289
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260803_trade.zip",
+        "sha256": "be4d265b2515c8e77e60c9619a2d21e154cb019a6f43a7c6f014b22f21912ec7",
+        "size_bytes": 12174
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260804_quote.zip",
+        "sha256": "c4bd547c63e7292acef37743798443409aa6bc3af64415c9ace10db48354c9fc",
+        "size_bytes": 3357
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260804_trade.zip",
+        "sha256": "03045930124948bf48551a554dc45b1c5b78920a1ce33e729478d4c53f6e89ed",
+        "size_bytes": 12681
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260805_quote.zip",
+        "sha256": "7b20312c63c1161279639e9f5b17ebdfeeaf7ceb9c175df0b640feb85cc04aa6",
+        "size_bytes": 3240
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260805_trade.zip",
+        "sha256": "7e42d680fd24f0542950caac50c16cb7fcac29be696ab5e0b0cc958b48732261",
+        "size_bytes": 12544
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260806_quote.zip",
+        "sha256": "6878a5a633620be354dab68a09bf6e1e847e19709ed9bcadf43ae3341348d555",
+        "size_bytes": 3163
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260806_trade.zip",
+        "sha256": "313644a15f6113723c0a1b9b8825944542d3ca70aa58bf07c81b38ada2b3e985",
+        "size_bytes": 11561
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260807_quote.zip",
+        "sha256": "5af64c9cbbe674802ef585e385cc8bcec66b12c5baf5f5a8d6f5a28fdc74cc7f",
+        "size_bytes": 3178
+      },
+      {
+        "path_in_workspace": "equity/usa/minute/spy/20260807_trade.zip",
+        "sha256": "17fa33e107cd8464a35632a64742fabf169314e45d188e60e31ffca41b6c25fc",
+        "size_bytes": 11108
+      }
+    ],
+    "factor_files": [],
+    "map_files": [],
+    "market_hours_database": {
+      "path_in_workspace": "market-hours/market-hours-database.json",
+      "sha256": "0a36677e269a4a8b4bbac20014ab9feb2f1273b27caa18f9c3cc37644e9f8545",
+      "size_bytes": 3142300
+    },
+    "symbol_properties_database": {
+      "path_in_workspace": "symbol-properties/symbol-properties-database.csv",
+      "sha256": "7d1ea07fc2897904c8b02b81bbe3c09e25e98c3bc69085ccdc0ff926a5432491",
+      "size_bytes": 685171
+    }
+  },
+  "staged_data_window_ms": {
+    "end_ms": 1786161600000,
+    "start_ms": 1783483200000
+  },
+  "staged_zip_sha256": {
+    "equity/usa/daily/spy.zip": "ac729288f828a314bbd452454080e3b13ef230d0cf9c63703232ceb724cdb24f",
+    "equity/usa/minute/spy/20260708_quote.zip": "3104ed675a62cd1544e82ba3da3f697c18bdf8756ccafd71b703f7160e01ecdc",
+    "equity/usa/minute/spy/20260708_trade.zip": "1416395568a1a3746228d499807ef04530cbbb7e5662d05f968a925f72bab665",
+    "equity/usa/minute/spy/20260709_quote.zip": "bb340db12f9b91ba643a7c81fa1116708c456ae64f285c3d3b7d010c5020e7ad",
+    "equity/usa/minute/spy/20260709_trade.zip": "8f61d7990445c406233c7fe53e37d4fae8e5b1ac3c07be2efab6b2db2c0bdbca",
+    "equity/usa/minute/spy/20260710_quote.zip": "b8ddb824db4431fe93bb68583bc7e92c50c87dbca7fb91b0d51b81a8443b98b0",
+    "equity/usa/minute/spy/20260710_trade.zip": "3d36cdbe835e56ef3228520c239512736fc15549146d3c282a463d5df9df38a2",
+    "equity/usa/minute/spy/20260713_quote.zip": "791c003afc159d9df7f453e7414024ecc2f985dc846f42ee210d0cab8dafa9bd",
+    "equity/usa/minute/spy/20260713_trade.zip": "4a4e4d28c8f687200d9110fc7d77f5221e06d114206ffb8f3dbef489f8703414",
+    "equity/usa/minute/spy/20260714_quote.zip": "4f3670d01f8815358c00559c14bf995530e72cfd9bf6aad5152e57d043a92789",
+    "equity/usa/minute/spy/20260714_trade.zip": "0a72150561c2246a2b9055207b7862549eb4f84afc6f732c351fb65a66aa0e1a",
+    "equity/usa/minute/spy/20260715_quote.zip": "0f0ff027a1f9f400246aa8ae1d0d62805b737297b99998bc6a811e6214ca8279",
+    "equity/usa/minute/spy/20260715_trade.zip": "147a362702a08337fb93436dd2db7a622fb9e74adf85329fcd1b849a1d9739bb",
+    "equity/usa/minute/spy/20260716_quote.zip": "9d0c4a8177b080bec1504acf0c764e7879ac1239bbeb04610452cdabf743f69d",
+    "equity/usa/minute/spy/20260716_trade.zip": "2aebd03fb551dc9f11d629c5460337ab041edb5ec044bcea0d9d4ebf42e21599",
+    "equity/usa/minute/spy/20260717_quote.zip": "05dc7c73509bce0d6284386f3beb9998752284e03302dda96a3c2a34789c0976",
+    "equity/usa/minute/spy/20260717_trade.zip": "f6d6e281ea4523e584dd8c9a684861861f782c5c3f07a6402f97cbc4e5a7140d",
+    "equity/usa/minute/spy/20260720_quote.zip": "e51fc72c31896fc05b293246349b47ba09177e491aac357c151fc5acd9ab6481",
+    "equity/usa/minute/spy/20260720_trade.zip": "84884fed6f7af212237c6204f99b97b7ae8fe257355cda59816015d0682edc4b",
+    "equity/usa/minute/spy/20260721_quote.zip": "04230bfa8769d15a65da6f1c98359e84f3cb4a964b3d9375a63e767b211de3c1",
+    "equity/usa/minute/spy/20260721_trade.zip": "7c63cb0efb0fb7d57731a4955fd67dd99e4bd0d02e7d1740ab756294eacf1dd8",
+    "equity/usa/minute/spy/20260722_quote.zip": "3a42994ab8cb1cf38f1490a1873abc9315a8ae0ccf0ef8172e21ef9c980c164b",
+    "equity/usa/minute/spy/20260722_trade.zip": "9fb393be52ac87c30385e9660e71e8c270a69028dd8a0bb024f5c88b7b02d756",
+    "equity/usa/minute/spy/20260723_quote.zip": "39c8553c7ab64aaf52d91ccc8335f414ebbc330bb447667ae5a1f80e71150af6",
+    "equity/usa/minute/spy/20260723_trade.zip": "9c6a4337e847fa42e1430d445f8f27498447d96a5373a6bb1614f61713524304",
+    "equity/usa/minute/spy/20260724_quote.zip": "0ce02edcf2ed22365669ca5aa83b9317e4a0793f1d6b2654f82e85bdba37dad3",
+    "equity/usa/minute/spy/20260724_trade.zip": "9ccf19f0db41504845339687368f9b84efa3f6b6784023655c0207520cfa809d",
+    "equity/usa/minute/spy/20260727_quote.zip": "f86d34434c78220ef14c7cee39635237f620d1772b965329a00195b9de2134d7",
+    "equity/usa/minute/spy/20260727_trade.zip": "0a50991c0e8263d18046f63b7f35714159de3d15d170f6673bc13549ce0ea616",
+    "equity/usa/minute/spy/20260728_quote.zip": "099a5d9f8c670d7898befffd17eadaab3b7d22cca1bcd983b2e6d787be16a9f1",
+    "equity/usa/minute/spy/20260728_trade.zip": "e56d92c54cfc9ec9110c28b136df50aee80b4aa8db47453d5130e0f2657bbeca",
+    "equity/usa/minute/spy/20260729_quote.zip": "2e87851989531969e1f87c1dd716a3daef84bdb088bb02566c5897381756d75a",
+    "equity/usa/minute/spy/20260729_trade.zip": "b54d8c775884b1ce25ed64d1400a3e8cb560bbb738cf5f5f0cad98723ada120f",
+    "equity/usa/minute/spy/20260730_quote.zip": "0020b202c1e03d1d5976471bbc07fadb75efc387c837179b141adde4d59768c0",
+    "equity/usa/minute/spy/20260730_trade.zip": "5fcff6c2e2d3f13a21990890da033fd2e4475b91b9e2cb53c693813775fcbe40",
+    "equity/usa/minute/spy/20260731_quote.zip": "44668d95b3078af0702e134800285002162ab3e75dcfaede8be865593e253162",
+    "equity/usa/minute/spy/20260731_trade.zip": "dc5ce887925e859bd3030ecbb29ee4d9ef3a6ca4b3e116a0355ecc77085fade1",
+    "equity/usa/minute/spy/20260803_quote.zip": "a04f42aba191ef113f4cbb9f06a353d73594573c349608a518207f8d5649b46b",
+    "equity/usa/minute/spy/20260803_trade.zip": "be4d265b2515c8e77e60c9619a2d21e154cb019a6f43a7c6f014b22f21912ec7",
+    "equity/usa/minute/spy/20260804_quote.zip": "c4bd547c63e7292acef37743798443409aa6bc3af64415c9ace10db48354c9fc",
+    "equity/usa/minute/spy/20260804_trade.zip": "03045930124948bf48551a554dc45b1c5b78920a1ce33e729478d4c53f6e89ed",
+    "equity/usa/minute/spy/20260805_quote.zip": "7b20312c63c1161279639e9f5b17ebdfeeaf7ceb9c175df0b640feb85cc04aa6",
+    "equity/usa/minute/spy/20260805_trade.zip": "7e42d680fd24f0542950caac50c16cb7fcac29be696ab5e0b0cc958b48732261",
+    "equity/usa/minute/spy/20260806_quote.zip": "6878a5a633620be354dab68a09bf6e1e847e19709ed9bcadf43ae3341348d555",
+    "equity/usa/minute/spy/20260806_trade.zip": "313644a15f6113723c0a1b9b8825944542d3ca70aa58bf07c81b38ada2b3e985",
+    "equity/usa/minute/spy/20260807_quote.zip": "5af64c9cbbe674802ef585e385cc8bcec66b12c5baf5f5a8d6f5a28fdc74cc7f",
+    "equity/usa/minute/spy/20260807_trade.zip": "17fa33e107cd8464a35632a64742fabf169314e45d188e60e31ffca41b6c25fc"
+  },
+  "started_at_ms": 1786240814205,
+  "starting_capital": 100000.0
+}

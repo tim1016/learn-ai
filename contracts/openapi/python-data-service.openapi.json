@@ -15261,6 +15261,18 @@
             "title": "Commission Per Order",
             "type": "number"
           },
+          "compatibility_profile": {
+            "anyOf": [
+              {
+                "const": "us-equity-raw-ibkr-v1"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pinned cross-engine execution contract. The v1 profile requires raw regular-session minute bars and enables LEAN SetHoldings sizing, IBKR equity fees, and stale session-close next-open fills.",
+            "title": "Compatibility Profile"
+          },
           "data_policy": {
             "anyOf": [
               {
@@ -23194,7 +23206,7 @@
         "type": "object"
       },
       "LeanRuntimeStatsResponse": {
-        "description": "LEAN runtimeStatistics \u2014 5 key fields.",
+        "description": "Typed projection of every LEAN runtime statistic plus order count.",
         "properties": {
           "equity": {
             "default": 0.0,
@@ -23206,9 +23218,19 @@
             "title": "Fees",
             "type": "number"
           },
+          "holdings": {
+            "default": 0.0,
+            "title": "Holdings",
+            "type": "number"
+          },
           "net_profit": {
             "default": 0.0,
             "title": "Net Profit",
+            "type": "number"
+          },
+          "probabilistic_sharpe_ratio": {
+            "default": 0.0,
+            "title": "Probabilistic Sharpe Ratio",
             "type": "number"
           },
           "total_orders": {
@@ -23219,6 +23241,16 @@
           "total_return": {
             "default": 0.0,
             "title": "Total Return",
+            "type": "number"
+          },
+          "unrealized": {
+            "default": 0.0,
+            "title": "Unrealized",
+            "type": "number"
+          },
+          "volume": {
+            "default": 0.0,
+            "title": "Volume",
             "type": "number"
           }
         },
@@ -23242,8 +23274,13 @@
         "type": "object"
       },
       "LeanTradeStatsResponse": {
-        "description": "LEAN TradeStatistics \u2014 key fields matching TS.cs.",
+        "description": "LEAN TradeStatistics \u2014 every field emitted by LEAN's result DTO.",
         "properties": {
+          "average_end_trade_drawdown": {
+            "default": 0.0,
+            "title": "Average End Trade Drawdown",
+            "type": "number"
+          },
           "average_losing_trade_duration": {
             "default": "",
             "title": "Average Losing Trade Duration",
@@ -23252,6 +23289,16 @@
           "average_loss": {
             "default": 0.0,
             "title": "Average Loss",
+            "type": "number"
+          },
+          "average_mae": {
+            "default": 0.0,
+            "title": "Average Mae",
+            "type": "number"
+          },
+          "average_mfe": {
+            "default": 0.0,
+            "title": "Average Mfe",
             "type": "number"
           },
           "average_profit": {
@@ -23290,9 +23337,24 @@
             "title": "Largest Loss",
             "type": "number"
           },
+          "largest_mae": {
+            "default": 0.0,
+            "title": "Largest Mae",
+            "type": "number"
+          },
+          "largest_mfe": {
+            "default": 0.0,
+            "title": "Largest Mfe",
+            "type": "number"
+          },
           "largest_profit": {
             "default": 0.0,
             "title": "Largest Profit",
+            "type": "number"
+          },
+          "loss_rate": {
+            "default": 0.0,
+            "title": "Loss Rate",
             "type": "number"
           },
           "max_consecutive_losing_trades": {
@@ -23304,6 +23366,41 @@
             "default": 0,
             "title": "Max Consecutive Winning Trades",
             "type": "integer"
+          },
+          "maximum_closed_trade_drawdown": {
+            "default": 0.0,
+            "title": "Maximum Closed Trade Drawdown",
+            "type": "number"
+          },
+          "maximum_drawdown_duration": {
+            "default": "",
+            "title": "Maximum Drawdown Duration",
+            "type": "string"
+          },
+          "maximum_end_trade_drawdown": {
+            "default": 0.0,
+            "title": "Maximum End Trade Drawdown",
+            "type": "number"
+          },
+          "maximum_intra_trade_drawdown": {
+            "default": 0.0,
+            "title": "Maximum Intra Trade Drawdown",
+            "type": "number"
+          },
+          "median_losing_trade_duration": {
+            "default": "",
+            "title": "Median Losing Trade Duration",
+            "type": "string"
+          },
+          "median_trade_duration": {
+            "default": "",
+            "title": "Median Trade Duration",
+            "type": "string"
+          },
+          "median_winning_trade_duration": {
+            "default": "",
+            "title": "Median Winning Trade Duration",
+            "type": "string"
           },
           "number_of_losing_trades": {
             "default": 0,
@@ -23323,6 +23420,11 @@
           "profit_loss_downside_deviation": {
             "default": 0.0,
             "title": "Profit Loss Downside Deviation",
+            "type": "number"
+          },
+          "profit_loss_ratio": {
+            "default": 0.0,
+            "title": "Profit Loss Ratio",
             "type": "number"
           },
           "profit_loss_standard_deviation": {
@@ -23379,6 +23481,16 @@
           "total_profit_loss": {
             "default": 0.0,
             "title": "Total Profit Loss",
+            "type": "number"
+          },
+          "win_loss_ratio": {
+            "default": 0.0,
+            "title": "Win Loss Ratio",
+            "type": "number"
+          },
+          "win_rate": {
+            "default": 0.0,
+            "title": "Win Rate",
             "type": "number"
           }
         },
@@ -33917,6 +34029,10 @@
       },
       "RunVerdict": {
         "properties": {
+          "available_required_metrics": {
+            "title": "Available Required Metrics",
+            "type": "integer"
+          },
           "cleanliness": {
             "anyOf": [
               {
@@ -33987,9 +34103,20 @@
             "title": "Missing Metrics",
             "type": "array"
           },
+          "missing_required_metrics": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing Required Metrics",
+            "type": "array"
+          },
           "normalized_weights": {
             "title": "Normalized Weights",
             "type": "boolean"
+          },
+          "parity_signature": {
+            "title": "Parity Signature",
+            "type": "object"
           },
           "red_flags": {
             "items": {
@@ -33997,6 +34124,10 @@
             },
             "title": "Red Flags",
             "type": "array"
+          },
+          "required_metrics": {
+            "title": "Required Metrics",
+            "type": "integer"
           },
           "signal": {
             "anyOf": [
@@ -34016,6 +34147,16 @@
             ],
             "title": "Signal"
           },
+          "status": {
+            "enum": [
+              "complete",
+              "incomplete",
+              "unavailable",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
           "verdict_version": {
             "title": "Verdict Version",
             "type": "integer"
@@ -34023,12 +34164,15 @@
         },
         "required": [
           "verdict_version",
+          "status",
           "engine",
           "generated_at_ms",
           "composite",
           "grade",
           "signal",
           "headline",
+          "available_required_metrics",
+          "required_metrics",
           "normalized_weights"
         ],
         "title": "RunVerdict",

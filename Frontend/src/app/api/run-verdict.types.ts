@@ -3,6 +3,7 @@
 export type RunVerdictGrade = "A+" | "A" | "B" | "C" | "D" | "F";
 export type RunVerdictSignal = "Deploy" | "Paper-trade" | "Iterate" | "Rework" | "Reject";
 export type RunVerdictEngine = "python" | "lean";
+export type RunVerdictStatus = "complete" | "incomplete" | "unavailable" | "failed";
 
 export interface RunVerdictSubScore {
   key: string;
@@ -30,6 +31,8 @@ export interface RunVerdictCleanliness {
 
 export interface RunVerdict {
   verdict_version: number;
+  /** Optional only so historical persisted v1 verdicts continue to render. */
+  status?: RunVerdictStatus;
   engine: RunVerdictEngine;
   generated_at_ms: number;
   composite: number | null;
@@ -39,6 +42,11 @@ export interface RunVerdict {
   red_flags: string[];
   dimensions: RunVerdictDimension[];
   missing_metrics: string[];
+  missing_required_metrics?: string[];
+  available_required_metrics?: number;
+  required_metrics?: number;
   normalized_weights: boolean;
   cleanliness: RunVerdictCleanliness | null;
+  /** Python-authored, tolerance-pinned receipt used for paired-run comparison. */
+  parity_signature?: Record<string, unknown>;
 }

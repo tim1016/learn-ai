@@ -66,6 +66,10 @@ public class StrategyExecution
     [Column(TypeName = "jsonb")]
     public string? LeanStatisticsJson { get; set; }
 
+    /// <summary>Complete native LEAN analysis findings, retained without interpretation.</summary>
+    [Column(TypeName = "jsonb")]
+    public string? LeanAnalysisJson { get; set; }
+
     /// <summary>Frozen backend-authored run verdict JSONB. Null for pre-versioning rows.</summary>
     [Column(TypeName = "jsonb")]
     public string? RunVerdictJson { get; set; }

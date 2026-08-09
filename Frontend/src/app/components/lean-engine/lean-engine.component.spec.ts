@@ -1,11 +1,11 @@
-import { TestBed } from '@angular/core/testing';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
 import { provideZonelessChangeDetection } from '@angular/core';
 import { Apollo } from 'apollo-angular';
 import { of } from 'rxjs';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { LeanEngineComponent } from './lean-engine.component';
 import { JobsService } from '../../services/jobs.service';
@@ -124,6 +124,15 @@ describe('LeanEngineComponent.composeDataPolicy', () => {
     expect(dp.strategy_bars).toEqual({ timespan: 'minute', multiplier: 1 });
   });
 
+  it('uses raw bars for the server-owned compatibility pair', () => {
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    const component = fixture.componentInstance;
+
+    component.engine.set('both');
+
+    expect(component.composeDataPolicy().adjusted).toBe(false);
+  });
+
   it('falls back to SPY when no symbol is configured (matches effectiveSymbol)', () => {
     const fixture = TestBed.createComponent(LeanEngineComponent);
     const component = fixture.componentInstance;
@@ -237,6 +246,15 @@ describe('LeanEngineComponent engine selector', () => {
     });
 
     return { startJob, startTrustedRun, nextTradingDayOpen, diagnose, NEXT_TRADING_DAY_OPEN_MS };
+  }
+
+  function renderedRunError(fixture: ComponentFixture<LeanEngineComponent>): string {
+    fixture.componentInstance.strategiesLoading.set(false);
+    fixture.detectChanges();
+    const host: HTMLElement = fixture.nativeElement;
+    const notice = host.querySelector<HTMLElement>('.notice.error');
+    expect(notice).not.toBeNull();
+    return notice?.textContent ?? '';
   }
 
   it('exposes an engine signal that defaults to python and accepts lean', () => {
@@ -405,7 +423,7 @@ describe('LeanEngineComponent engine selector', () => {
     });
   });
 
-  it('starts Python and LEAN jobs together in validation mode', async () => {
+  it('starts one raw Python anchor and lets the server create its linked LEAN companion', async () => {
     const { startJob } = configureTestBed();
     const fixture = TestBed.createComponent(LeanEngineComponent);
     fixture.detectChanges();
@@ -427,10 +445,123 @@ describe('LeanEngineComponent engine selector', () => {
 
     await component.run();
 
-    expect(startJob.mock.calls.map((call) => call[0])).toEqual([
-      'engine_backtest',
-      'lean_engine_run',
+    expect(startJob).toHaveBeenCalledTimes(1);
+    expect(startJob.mock.calls[0][0]).toBe('engine_backtest');
+    const envelope = startJob.mock.calls[0][1] as { backtest: Record<string, unknown> };
+    expect(envelope.backtest['compatibility_profile']).toBe('us-equity-raw-ibkr-v1');
+    expect(envelope.backtest['data_policy']).toMatchObject({ adjusted: false });
+  });
+
+  it('blocks both engines before either job is submitted when the pinned image is unavailable', async () => {
+    const diagnose = vi.fn().mockResolvedValue({
+      overall_status: 'fail',
+      fetched_at_ms: 1_783_875_135_460,
+      checks: [
+        {
+          name: 'launcher_healthz',
+          label: 'GET launcher /healthz',
+          status: 'pass',
+          detail: 'launcher reachable',
+          fix: null,
+        },
+        {
+          name: 'launcher_image',
+          label: 'Pinned LEAN image',
+          status: 'fail',
+          detail: 'Pinned LEAN image is not present locally.',
+          fix: 'Build the configured local LEAN derivative, then restart the launcher.',
+        },
+      ],
+    } satisfies LeanLauncherDiagnosticReport);
+    const { startJob } = configureTestBed({ diagnose });
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+
+    component.engine.set('both');
+    component.strategies.set([
+      {
+        name: 'ema_crossover_signal',
+        display_name: 'EMA Crossover Signal',
+        description: '',
+        params_schema: { properties: {} },
+        supported_resolutions: ['minute'],
+        lean_twin: 'ema_crossover_signal',
+      },
     ]);
+    component.selectedStrategyName.set('ema_crossover_signal');
+
+    await component.run();
+    expect(diagnose).toHaveBeenCalledTimes(1);
+    expect(startJob).not.toHaveBeenCalled();
+    expect(renderedRunError(fixture)).toContain('Build the configured local LEAN derivative');
+  });
+
+  it('does not submit either engine when both mode has no LEAN validation template', async () => {
+    const { diagnose, startJob } = configureTestBed();
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+
+    component.engine.set('both');
+    component.strategies.set([
+      {
+        name: 'ema_crossover_signal',
+        display_name: 'EMA Crossover Signal',
+        description: '',
+        params_schema: { properties: {} },
+        supported_resolutions: ['minute'],
+        lean_twin: null,
+      },
+    ]);
+    component.selectedStrategyName.set('ema_crossover_signal');
+
+    await component.run();
+    expect(diagnose).not.toHaveBeenCalled();
+    expect(startJob).not.toHaveBeenCalled();
+    expect(renderedRunError(fixture)).toContain(
+      'Select a strategy with an aligned LEAN validation template.',
+    );
+  });
+
+  it('refreshes a stale ready launcher state before submitting either engine', async () => {
+    const diagnose = vi.fn().mockResolvedValue({
+      overall_status: 'fail',
+      fetched_at_ms: 1_783_875_135_460,
+      checks: [
+        {
+          name: 'launcher_healthz',
+          label: 'GET launcher /healthz',
+          status: 'fail',
+          detail: 'connect failed',
+          fix: 'Start the launcher on port 8090.',
+        },
+      ],
+    } satisfies LeanLauncherDiagnosticReport);
+    const { startJob } = configureTestBed({ diagnose });
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+
+    component.engine.set('both');
+    component.leanLauncherStatus.set('ready');
+    component.strategies.set([
+      {
+        name: 'ema_crossover_signal',
+        display_name: 'EMA Crossover Signal',
+        description: '',
+        params_schema: { properties: {} },
+        supported_resolutions: ['minute'],
+        lean_twin: 'ema_crossover_signal',
+      },
+    ]);
+    component.selectedStrategyName.set('ema_crossover_signal');
+
+    await component.run();
+
+    expect(diagnose).toHaveBeenCalledTimes(1);
+    expect(startJob).not.toHaveBeenCalled();
+    expect(component.leanLauncherStatus()).toBe('blocked');
   });
 
   it('submits the EMA signal template for the EMA signal strategy', async () => {
@@ -544,9 +675,10 @@ describe('LeanEngineComponent engine selector', () => {
     component.selectedStrategyName.set('ema_crossover_signal');
 
     await component.run();
-
     expect(startJob).not.toHaveBeenCalled();
-    expect(component.runError()).toBe('Select a strategy with an aligned LEAN validation template.');
+    expect(renderedRunError(fixture)).toContain(
+      'Select a strategy with an aligned LEAN validation template.',
+    );
   });
 
   it('submits the deployment-validation LEAN template for the matching Python strategy', async () => {
@@ -614,11 +746,56 @@ describe('LeanEngineComponent engine selector', () => {
     component.selectedStrategyName.set('ema_crossover_signal');
 
     await component.run();
-
     expect(diagnose).toHaveBeenCalledTimes(1);
     expect(startJob).not.toHaveBeenCalled();
     expect(component.leanLauncherStatus()).toBe('blocked');
-    expect(component.runError()).toContain('Start the launcher');
+    expect(renderedRunError(fixture)).toContain('Start the launcher');
+  });
+
+  it('blocks a LEAN run when the reachable launcher is missing its pinned image', async () => {
+    const diagnose = vi.fn().mockResolvedValue({
+      overall_status: 'fail',
+      fetched_at_ms: 1_783_875_135_460,
+      checks: [
+        {
+          name: 'launcher_healthz',
+          label: 'GET launcher /healthz',
+          status: 'pass',
+          detail: 'launcher reachable',
+          fix: null,
+        },
+        {
+          name: 'launcher_image',
+          label: 'Pinned LEAN image',
+          status: 'fail',
+          detail: 'Pinned LEAN image is not present locally.',
+          fix: 'Build the configured local LEAN derivative, then restart the launcher.',
+        },
+      ],
+    } satisfies LeanLauncherDiagnosticReport);
+    const { startJob } = configureTestBed({ diagnose });
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+
+    component.engine.set('lean');
+    component.strategies.set([
+      {
+        name: 'ema_crossover_signal',
+        display_name: 'EMA Crossover Signal',
+        description: '',
+        params_schema: { properties: {} },
+        supported_resolutions: ['minute'],
+        lean_twin: 'ema_crossover_signal',
+      },
+    ]);
+    component.selectedStrategyName.set('ema_crossover_signal');
+
+    await component.run();
+    expect(diagnose).toHaveBeenCalledTimes(1);
+    expect(startJob).not.toHaveBeenCalled();
+    expect(component.leanLauncherStatus()).toBe('blocked');
+    expect(renderedRunError(fixture)).toContain('Build the configured local LEAN derivative');
   });
 
   it('allows LEAN runs when launcher health passes with non-fatal warnings', async () => {

@@ -11,6 +11,10 @@ import argparse
 
 import pytest
 
+from app.lean_sidecar.config import (
+    HISTORICAL_LEAN_IMAGE_DIGEST_ARM64,
+    PINNED_LEAN_IMAGE_DIGEST,
+)
 from scripts.regenerate_cross_engine_study import (
     _parse_args,
     _resolve_target_cells,
@@ -22,6 +26,20 @@ def test_parse_args_all() -> None:
     assert ns.all is True
     assert ns.cell is None
     assert ns.ticker is None
+    assert ns.image_digest == PINNED_LEAN_IMAGE_DIGEST
+
+
+def test_parse_args_accepts_retained_historical_fixture_digest() -> None:
+    assert HISTORICAL_LEAN_IMAGE_DIGEST_ARM64 is not None
+
+    ns = _parse_args(["--all", "--image-digest", HISTORICAL_LEAN_IMAGE_DIGEST_ARM64])
+
+    assert ns.image_digest == HISTORICAL_LEAN_IMAGE_DIGEST_ARM64
+
+
+def test_parse_args_rejects_unapproved_fixture_digest() -> None:
+    with pytest.raises(SystemExit):
+        _parse_args(["--all", "--image-digest", "sha256:" + "f" * 64])
 
 
 def test_parse_args_one_cell() -> None:

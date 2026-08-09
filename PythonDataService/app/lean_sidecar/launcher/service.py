@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import logging
 import shlex
+import subprocess
 from pathlib import Path
 
-from app.lean_sidecar.config import RunLimits
+from app.lean_sidecar.config import LEAN_IMAGE_REPO, PINNED_LEAN_IMAGE_DIGEST, RunLimits
 from app.lean_sidecar.launcher.models import (
     ExtractMetadataRequest,
     ExtractMetadataResponse,
+    LauncherImageReadiness,
     LaunchRequest,
     LaunchResponse,
 )
@@ -24,6 +26,7 @@ from app.lean_sidecar.runner import (
     RunnerConfigurationError,
     RunResult,
     _require_image_in_allowlist,
+    _require_podman,
     build_command,
     execute,
 )
@@ -38,6 +41,8 @@ from app.lean_sidecar.workspace import (
 from app.lean_sidecar.workspace_poller import WorkspacePoller
 
 logger = logging.getLogger(__name__)
+
+_PINNED_IMAGE_CHECK_TIMEOUT_S = 1.0
 
 
 class LaunchRejectedError(Exception):
@@ -54,7 +59,90 @@ class LaunchRejectedError(Exception):
         self.detail = detail
 
 
-def launch(request: LaunchRequest, *, artifacts_root: Path) -> LaunchResponse:
+def check_pinned_image() -> LauncherImageReadiness:
+    """Verify that Podman can run the exact image the launcher is pinned to.
+
+    ``/healthz`` used to prove only that the FastAPI process was listening.
+    That let Engine Lab accept a LEAN run even when Podman would try to pull a
+    locally-built digest from ``localhost:443`` and fail with exit 125. This
+    inexpensive, read-only check makes image availability part of readiness
+    without launching a container or resolving a mutable tag.
+    """
+    if PINNED_LEAN_IMAGE_DIGEST is None:
+        return LauncherImageReadiness(
+            reference=None,
+            available=False,
+            failure_reason="check_failed",
+            detail="No default LEAN image digest is pinned in launcher configuration.",
+        )
+
+    reference = f"{LEAN_IMAGE_REPO}@{PINNED_LEAN_IMAGE_DIGEST}"
+    try:
+        podman = _require_podman()
+    except RunnerConfigurationError as exc:
+        return LauncherImageReadiness(
+            reference=reference,
+            available=False,
+            failure_reason="check_failed",
+            detail=str(exc),
+        )
+
+    try:
+        completed = subprocess.run(
+            [podman, "image", "exists", reference],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=_PINNED_IMAGE_CHECK_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        return LauncherImageReadiness(
+            reference=reference,
+            available=False,
+            failure_reason="check_failed",
+            detail=(
+                "Podman did not answer the local pinned-image check within "
+                f"{_PINNED_IMAGE_CHECK_TIMEOUT_S:.1f} seconds."
+            ),
+        )
+    except OSError as exc:
+        logger.warning("LEAN pinned-image readiness check could not invoke Podman: %s", exc)
+        return LauncherImageReadiness(
+            reference=reference,
+            available=False,
+            failure_reason="check_failed",
+            detail=f"Podman could not check the local pinned image: {exc}",
+        )
+
+    if completed.returncode == 0:
+        return LauncherImageReadiness(
+            reference=reference,
+            available=True,
+            detail="Pinned LEAN image is present in Podman's local image store.",
+        )
+    if completed.returncode == 1:
+        return LauncherImageReadiness(
+            reference=reference,
+            available=False,
+            failure_reason="missing",
+            detail="Pinned LEAN image is not present in Podman's local image store.",
+        )
+
+    logger.warning("LEAN pinned-image readiness check exited with status %s", completed.returncode)
+    return LauncherImageReadiness(
+        reference=reference,
+        available=False,
+        failure_reason="check_failed",
+        detail=f"Podman could not determine pinned-image readiness (exit code {completed.returncode}).",
+    )
+
+
+def launch(
+    request: LaunchRequest,
+    *,
+    artifacts_root: Path,
+    allowed_image_digests: frozenset[str] | None = None,
+) -> LaunchResponse:
     """Validate, plan, execute, and persist the launcher log.
 
     Order of operations is load-bearing for safety:
@@ -67,7 +155,9 @@ def launch(request: LaunchRequest, *, artifacts_root: Path) -> LaunchResponse:
 
     Writing the plan before execution means a launcher crash mid-run
     still leaves an audit trail of "the launcher tried to invoke
-    exactly this".
+    exactly this". HTTP callers never supply ``allowed_image_digests``;
+    the explicit override exists only for the developer-only reconciliation
+    fixture generator, whose historical pins are isolated from live requests.
     """
     try:
         workspace = resolve_workspace(request.run_id, artifacts_root)
@@ -100,6 +190,7 @@ def launch(request: LaunchRequest, *, artifacts_root: Path) -> LaunchResponse:
                 request.image_digest,
                 limits=limits,
                 hardening_profile=HardeningProfile(request.hardening_profile),
+                allowed_image_digests=allowed_image_digests,
             )
         else:
             plan = build_command(
@@ -107,6 +198,7 @@ def launch(request: LaunchRequest, *, artifacts_root: Path) -> LaunchResponse:
                 request.image_digest,
                 limits=limits,
                 hardening_flags=tuple(request.hardening_flags),
+                allowed_image_digests=allowed_image_digests,
             )
     except RunnerConfigurationError as e:
         # The runner itself decides which configuration is acceptable

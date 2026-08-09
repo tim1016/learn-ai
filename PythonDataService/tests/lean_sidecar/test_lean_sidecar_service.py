@@ -122,6 +122,38 @@ def test_runtime_polygon_adjustment_is_raw_for_adjusted_false() -> None:
     assert _runtime_polygon_adjustment(dp) == "raw"
 
 
+def test_compatibility_fixture_receipt_rejects_changed_shared_bytes() -> None:
+    from app.services.lean_sidecar_service import (
+        LeanSidecarServiceError,
+        _assert_compatibility_fixture_receipt,
+    )
+
+    with pytest.raises(LeanSidecarServiceError, match="compatibility_fixture_source_mismatch"):
+        _assert_compatibility_fixture_receipt(
+            expected_id="bar-store-v1-expected",
+            expected_sha256="a" * 64,
+            actual={
+                "fixture_id": "bar-store-v1-changed",
+                "fixture_sha256": "b" * 64,
+            },
+            phase="source",
+        )
+
+
+def test_compatibility_fixture_receipt_accepts_exact_replay() -> None:
+    from app.services.lean_sidecar_service import _assert_compatibility_fixture_receipt
+
+    _assert_compatibility_fixture_receipt(
+        expected_id="bar-store-v1-exact",
+        expected_sha256="a" * 64,
+        actual={
+            "fixture_id": "bar-store-v1-exact",
+            "fixture_sha256": "a" * 64,
+        },
+        phase="staging",
+    )
+
+
 def test_trusted_run_request_carries_data_policy() -> None:
     """TrustedRunRequest exposes a single data_policy field; legacy top-level fields are gone."""
     from app.lean_sidecar.data_policy import BarsSpec, DataPolicy
@@ -158,3 +190,29 @@ def test_trusted_run_request_carries_data_policy() -> None:
     assert "data_source" not in fields
     assert "adjustment" not in fields
     assert "session" not in fields
+
+
+def test_effective_window_uses_algorithm_contract_not_summary_curve() -> None:
+    """The reduced LEAN summary can stop before the executed algorithm."""
+    from app.lean_sidecar.normalized_parser import NormalizedResult
+    from app.services.lean_sidecar_service import _effective_window_from_normalized
+
+    normalized = NormalizedResult(
+        parser_version="lean-native-r1",
+        algorithm_id="MyAlgorithm",
+        statistics={},
+        algorithm_start_ms_utc=1_699_920_000_000,
+        algorithm_end_ms_utc=1_700_092_799_000,
+        total_order_events=0,
+        total_equity_points=2,
+        first_equity_ms_utc=1_699_977_600_000,
+        last_equity_ms_utc=1_700_064_000_000,
+        first_summary_equity_ms_utc=1_699_977_600_000,
+        last_summary_equity_ms_utc=1_700_000_000_000,
+    )
+
+    window = _effective_window_from_normalized(normalized)
+
+    assert window is not None
+    assert window.start_ms == 1_699_920_000_000
+    assert window.end_ms == 1_700_092_799_000

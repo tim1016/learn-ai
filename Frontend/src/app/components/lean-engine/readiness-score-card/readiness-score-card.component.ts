@@ -4,6 +4,7 @@ import type {
   RunVerdict,
   RunVerdictGrade,
   RunVerdictSignal,
+  RunVerdictStatus,
   RunVerdictSubScore,
 } from "../../../api/run-verdict.types";
 
@@ -21,20 +22,26 @@ interface CardDimension {
 }
 
 interface CardReport {
+  status: RunVerdictStatus;
   composite: number | null;
   grade: RunVerdictGrade | null;
   signal: RunVerdictSignal | null;
   verdict: string;
   dimensions: CardDimension[];
+  availableRequiredMetrics: number;
+  requiredMetrics: number;
   normalizedWeights: boolean;
 }
 
 const EMPTY_REPORT: CardReport = {
+  status: "unavailable",
   composite: null,
   grade: null,
   signal: null,
   verdict: "No frozen verdict recorded for this run.",
   dimensions: [],
+  availableRequiredMetrics: 0,
+  requiredMetrics: 0,
   normalizedWeights: false,
 };
 
@@ -54,6 +61,7 @@ export class ReadinessScoreCardComponent {
     const v = this.verdict();
     if (!v) return EMPTY_REPORT;
     return {
+      status: v.status ?? (v.composite === null ? "unavailable" : "complete"),
       composite: v.composite,
       grade: v.grade,
       signal: v.signal,
@@ -66,11 +74,14 @@ export class ReadinessScoreCardComponent {
         summary: d.summary,
         subScores: d.sub_scores,
       })),
+      availableRequiredMetrics: v.available_required_metrics ?? 0,
+      requiredMetrics: v.required_metrics ?? 0,
       normalizedWeights: v.normalized_weights,
     };
   });
 
   readonly hasScore = computed<boolean>(() => this.report().composite !== null);
+  readonly hasCoverage = computed<boolean>(() => this.report().requiredMetrics > 0);
 
   /** Green / amber / red band from the composite score. Used for the ring
    *  color and the grade chip background. */

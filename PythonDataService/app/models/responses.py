@@ -515,7 +515,7 @@ class LeanPortfolioStatsResponse(BaseModel):
 
 
 class LeanTradeStatsResponse(BaseModel):
-    """LEAN TradeStatistics — key fields matching TS.cs."""
+    """LEAN TradeStatistics — every field emitted by LEAN's result DTO."""
 
     start_date_time: int | None = None
     end_date_time: int | None = None
@@ -533,24 +533,44 @@ class LeanTradeStatsResponse(BaseModel):
     average_trade_duration: str = ""
     average_winning_trade_duration: str = ""
     average_losing_trade_duration: str = ""
+    median_trade_duration: str = ""
+    median_winning_trade_duration: str = ""
+    median_losing_trade_duration: str = ""
     max_consecutive_winning_trades: int = 0
     max_consecutive_losing_trades: int = 0
+    profit_loss_ratio: float = 0.0
+    win_loss_ratio: float = 0.0
+    win_rate: float = 0.0
+    loss_rate: float = 0.0
+    average_mae: float = 0.0
+    average_mfe: float = 0.0
+    largest_mae: float = 0.0
+    largest_mfe: float = 0.0
+    maximum_closed_trade_drawdown: float = 0.0
+    maximum_intra_trade_drawdown: float = 0.0
     profit_factor: float = 0.0
     profit_to_max_drawdown_ratio: float = 0.0
     profit_loss_standard_deviation: float = 0.0
     profit_loss_downside_deviation: float = 0.0
     sharpe_ratio: float = 0.0
     sortino_ratio: float = 0.0
+    maximum_end_trade_drawdown: float = 0.0
+    average_end_trade_drawdown: float = 0.0
+    maximum_drawdown_duration: str = ""
     total_fees: float = 0.0
 
 
 class LeanRuntimeStatsResponse(BaseModel):
-    """LEAN runtimeStatistics — 5 key fields."""
+    """Typed projection of every LEAN runtime statistic plus order count."""
 
     equity: float = 0.0
     fees: float = 0.0
+    holdings: float = 0.0
     net_profit: float = 0.0
+    probabilistic_sharpe_ratio: float = 0.0
     total_return: float = 0.0
+    unrealized: float = 0.0
+    volume: float = 0.0
     total_orders: int = 0
 
 

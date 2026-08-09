@@ -1,14 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { AccountMonitorRedirectComponent } from './components/broker/account-monitor-redirect/account-monitor-redirect.component';
 import { BrokerDeployPageComponent } from './components/broker/broker-deploy-page/broker-deploy-page.component';
 import { AlpacaBotControlExampleComponent } from './components/examples/alpaca-bot-control/alpaca-bot-control-example.component';
 import { routes } from './app.routes';
 
 describe('routes', () => {
-  it('uses one Broker Deploy page for legacy and broker-aware routes', async () => {
+  it('uses one Broker Deploy page for Alpaca Broker V2 routes', async () => {
     const paths = [
-      'broker/deploy',
       'brokers/:broker/deploy',
       'brokers/:broker/accounts/:accountId/deploy',
     ];
@@ -19,38 +17,27 @@ describe('routes', () => {
     }
   });
 
-  it('redirects the retired Broker Status bookmark to the account roster', () => {
-    const route = routes.find((candidate) => candidate.path === 'broker');
-
-    expect(route).toMatchObject({ redirectTo: 'broker/accounts', pathMatch: 'full' });
-  });
-
-  it('keeps the retired Account Monitor bookmark as the one-time Accounts redirect', async () => {
-    const route = routes.find((candidate) => candidate.path === 'broker/account-monitor');
-    if (route?.loadComponent === undefined) throw new Error('Account Monitor redirect route is missing.');
-
-    expect(await route.loadComponent()).toBe(AccountMonitorRedirectComponent);
-  });
-
-  it('keeps the retired Reconciliation bookmark on Accounts', () => {
-    const route = routes.find((candidate) => candidate.path === 'broker/reconciliation');
-
-    expect(route).toMatchObject({ redirectTo: 'broker/accounts', pathMatch: 'full' });
-  });
-
-  it.each(['broker/bots', 'broker/bots/:id', 'broker/instances', 'broker/instances/:id'])(
-    'redirects the deprecated %s surface to Alpaca Broker V2',
-    (path) => {
+  it.each([
+    ['broker', 'brokers/alpaca'],
+    ['broker/accounts', 'brokers/alpaca'],
+    ['broker/accounts/:accountId', 'brokers/alpaca'],
+    ['broker/account-monitor', 'brokers/alpaca'],
+    ['broker/reconciliation', 'brokers/alpaca'],
+    ['broker/orders', 'brokers/alpaca'],
+    ['broker/session-mirror', 'brokers/alpaca'],
+    ['broker/paper-run', 'brokers/alpaca/bots'],
+    ['broker/instances', 'brokers/alpaca/bots'],
+    ['broker/instances/:id', 'brokers/alpaca/bots'],
+    ['broker/bots', 'brokers/alpaca/bots'],
+    ['broker/bots/:id', 'brokers/alpaca/bots'],
+    ['broker/offline-replay', 'brokers/alpaca'],
+    ['broker/bot-manual', 'brokers/alpaca/manual'],
+    ['broker/deploy', 'brokers/alpaca/deploy'],
+  ])('keeps the deprecated %s URL as a redirect to %s', (path, redirectTo) => {
       const route = routes.find((candidate) => candidate.path === path);
 
-      expect(route).toMatchObject({ redirectTo: 'brokers/alpaca/bots', pathMatch: 'full' });
-    },
-  );
-
-  it('redirects the deprecated bot manual to the Broker V2 manual', () => {
-    const route = routes.find((candidate) => candidate.path === 'broker/bot-manual');
-
-    expect(route).toMatchObject({ redirectTo: 'brokers/alpaca/manual', pathMatch: 'full' });
+      expect(route).toMatchObject({ redirectTo, pathMatch: 'full' });
+      expect(route?.loadComponent).toBeUndefined();
   });
 
   it('keeps the Clerk diagnostic gallery unlinked beneath the examples route', async () => {

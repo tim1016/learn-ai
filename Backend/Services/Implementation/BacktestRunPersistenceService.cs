@@ -119,9 +119,12 @@ public class BacktestRunPersistenceService : IBacktestRunPersistenceService
             LeanStatisticsJson = payload.LeanStatistics is null
                 ? null
                 : JsonSerializer.Serialize(payload.LeanStatistics),
+            LeanAnalysisJson = payload.LeanAnalysisJson,
             Source = payload.Source,
             LeanRunId = payload.LeanRunId,
-            FillMode = payload.Source == "engine" ? "signal_bar_close" : "lean-sidecar",
+            FillMode = !string.IsNullOrWhiteSpace(payload.FillMode)
+                ? payload.FillMode
+                : payload.Source == "engine" ? "signal_bar_close" : "lean-sidecar",
             ExecutedAt = DateTime.UtcNow,
             DurationMs = 0,
             // PR B (2026-05-19) — DataPolicy / Commission / Brokerage.

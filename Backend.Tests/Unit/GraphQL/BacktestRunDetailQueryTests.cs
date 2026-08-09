@@ -7,6 +7,30 @@ namespace Backend.Tests.Unit.GraphQL;
 public class BacktestRunDetailQueryTests
 {
     [Fact]
+    public void FromExecution_LeanAnalysis_PreservesCompleteJsonEnvelope()
+    {
+        const string analysis = """
+            [{
+              "name": "FlatEquityCurveAnalysis",
+              "issue": "The curve is flat.",
+              "sample": [{ "start": 1700000000000, "end": 1700086400000, "trading_days": 2 }],
+              "solutions": ["Check warm-up.", "Check subscriptions."]
+            }]
+            """;
+        var execution = new StrategyExecution
+        {
+            Ticker = new Ticker { Symbol = "SPY", Name = "SPY", Market = "stocks" },
+            Source = "lean-sidecar",
+            StrategyName = "ema_crossover",
+            LeanAnalysisJson = analysis,
+        };
+
+        var detail = BacktestRunDetailType.FromExecution(execution, [], NullLogger.Instance);
+
+        Assert.Equal(analysis, detail.LeanAnalysisJson);
+    }
+
+    [Fact]
     public void FromExecution_ValidEquityEnvelope_ParsesPoints()
     {
         var execution = new StrategyExecution

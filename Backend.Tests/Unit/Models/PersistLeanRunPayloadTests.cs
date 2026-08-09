@@ -51,7 +51,9 @@ public class PersistLeanRunPayloadTests
                         "is_synthetic_exit": false
                     }
                 ],
-                "lean_statistics": { "parser_version": "phase-3a-r1" }
+                "lean_statistics": { "parser_version": "phase-3a-r1" },
+                "lean_analysis_json": "[{\"name\":\"ExecutionSpeedAnalysis\"}]",
+                "fill_mode": "signal_bar_close"
             }
             """;
 
@@ -73,6 +75,8 @@ public class PersistLeanRunPayloadTests
         Assert.Equal(100_042.50m, payload.FinalEquity);
         Assert.Equal(0.5, payload.WinRate, precision: 9);
         Assert.Single(payload.Trades);
+        Assert.Equal("[{\"name\":\"ExecutionSpeedAnalysis\"}]", payload.LeanAnalysisJson);
+        Assert.Equal("signal_bar_close", payload.FillMode);
 
         var trade = payload.Trades[0];
         Assert.Equal(1, trade.TradeNumber);

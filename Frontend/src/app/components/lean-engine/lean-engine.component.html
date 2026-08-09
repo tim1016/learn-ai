@@ -67,7 +67,7 @@
                       (ngModelChange)="engine.set($event)">
                       <option value="python">Python (in-process)</option>
                       <option value="lean">LEAN (sidecar)</option>
-                      <option value="both">Both — validate equivalence</option>
+                      <option value="both">Compatibility pair — raw bars</option>
                     </select>
                   </label>
                 </app-config-section>
@@ -202,7 +202,7 @@
                           @switch (leanLauncherStatus()) {
                             @case ('ready') { Launcher ready }
                             @case ('checking') { Checking... }
-                            @case ('blocked') { Launcher not running }
+                            @case ('blocked') { Launcher unavailable }
                             @default { Launcher not checked }
                           }
                         </span>

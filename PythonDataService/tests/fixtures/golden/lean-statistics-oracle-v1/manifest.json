@@ -1,0 +1,27 @@
+{
+  "artifacts": {
+    "workspace/data/alternative/interest-rate/usa/interest-rate.csv": {
+      "sha256": "1d0e6f2ab20e61a4330e8a38735bc73cde4034e7293a45d23b5ebdc6467f7899",
+      "size_bytes": 904
+    },
+    "workspace/output/MyAlgorithm-summary.json": {
+      "sha256": "8c0507842028cdf664f32540db7a11002fe649c4caafe3d7078b930d85cbaf6d",
+      "size_bytes": 10164
+    },
+    "workspace/output/MyAlgorithm.json": {
+      "sha256": "fd10d7f5793b324d9f70a3c4ecfb1b3e4bf08d431272d4f765861224cd7a69d4",
+      "size_bytes": 658158
+    }
+  },
+  "comparison_contract_id": "us-equity-raw-ibkr-v1",
+  "end_ms_utc": 1786147199000,
+  "fixture_id": "lean-statistics-oracle-v1",
+  "lean_image_digest": "sha256:3dd003372f1ef1981b4e80038e3f1c557f1fe414d1be531f485ef870f81a5771",
+  "lean_source_commit": "261366a7e26ae942df858ab20df4fef8fa07de67",
+  "lean_version": 17748,
+  "oracle": "QuantConnect LEAN native backtest result",
+  "regeneration": "scripts/regenerate_lean_statistics_oracle.py",
+  "start_ms_utc": 1723075200000,
+  "strategy": "ema_crossover_signal",
+  "symbol": "SPY"
+}

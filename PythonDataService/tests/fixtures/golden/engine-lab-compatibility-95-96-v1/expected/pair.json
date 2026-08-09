@@ -1,0 +1,1887 @@
+{
+  "fixture_id": "engine-lab-compatibility-95-96-v1",
+  "fixture_schema_version": 1,
+  "lean": {
+    "data_policy": {
+      "adjusted": false,
+      "fixture_id": "bar-store-v1-6e96f0f2c5383e2d",
+      "fixture_sha256": "6e96f0f2c5383e2d1ad40f7308433aacc862bbfd6a9828f0b263cade70f0460e",
+      "input_bars": {
+        "multiplier": 1,
+        "timespan": "minute"
+      },
+      "provider_kind": "fixture",
+      "session": "regular",
+      "source": "polygon",
+      "strategy_bars": {
+        "multiplier": 15,
+        "timespan": "minute"
+      },
+      "symbol": "SPY",
+      "timestamp_policy": "bar_close_ms_utc",
+      "timezone": "America/New_York"
+    },
+    "duration_ms": 0,
+    "engine": "lean",
+    "executed_at_ms": 1786240821196,
+    "fill_mode": "signal_bar_close",
+    "headline_kpis": {
+      "final_equity": "98829.69",
+      "initial_cash": "100000.00",
+      "losing_trades": 3,
+      "max_drawdown": "0.014",
+      "profit_factor": "0.2356",
+      "sharpe_ratio": "-5.5781",
+      "sortino_ratio": "-11.5485",
+      "total_fees": "10.0000",
+      "total_pnl": "-1170.31330000",
+      "total_trades": 5,
+      "win_rate": "0.40000000",
+      "winning_trades": 2
+    },
+    "lean_analysis": [
+      {
+        "issue": "The equity curve is flat for several days in a row.",
+        "name": "FlatEquityCurveAnalysis",
+        "sample": [
+          {
+            "end": 1784347200000,
+            "start": 1783569600000,
+            "trading_days": 8
+          },
+          {
+            "end": 1784952000000,
+            "start": 1784692800000,
+            "trading_days": 4
+          },
+          {
+            "end": 1785384000000,
+            "start": 1785211200000,
+            "trading_days": 3
+          },
+          {
+            "end": 1786075200000,
+            "start": 1785470400000,
+            "trading_days": 6
+          }
+        ],
+        "solutions": [
+          "Check if you need to warm-up some data structures, including indicators, RollingWindow objects, and training data.",
+          "Check if the algorithm subscribes to any assets. Is the universe selection actually selecting anything?",
+          "Check if the trading logic ever leads to a trade.",
+          "Check if there is enough cash to satisify the minimum order sizes."
+        ]
+      },
+      {
+        "issue": "The strategy has a lower Sharpe ratio than the benchmark.",
+        "name": "PerformanceRelativeToBenchmarkAnalysis",
+        "sample": {
+          "backtestSharpe": "-28.271083224826",
+          "benchmarkSharpe": "-6.005278314207858"
+        },
+        "solutions": [
+          "Try adjusting the trading rules and/or the universe to get a strategy that outperforms the benchmark."
+        ]
+      },
+      {
+        "issue": "The distribution of the strategy's daily returns in excess of the benchmark's daily returns has a p-value above 0.05. Therefore, we fail to reject the null hypothesis that the mean of this distribution is above zero.",
+        "name": "StatisticalSignificanceOfDailyReturnsAnalysis",
+        "sample": {
+          "pValue": "0.20169462998155413"
+        },
+        "solutions": [
+          "Try adjusting the trading rules and/or the universe to get a strategy that outperforms the benchmark."
+        ]
+      }
+    ],
+    "lean_run_id": "companion-pg-d2236694f523410fbb91",
+    "native_statistics": {
+      "namespaces": {
+        "absolute_tolerance": "0.0000500001",
+        "contract_id": "lean-native-statistics-261366a7e26ae942df858ab20df4fef8fa07de67",
+        "divergences": [],
+        "formatted_metric_count": 25,
+        "formatted_python_lean_compatible": {
+          "Alpha": "0",
+          "Annual Standard Deviation": "0.027",
+          "Annual Variance": "0.001",
+          "Average Loss": "-0.51%",
+          "Average Win": "0.18%",
+          "Beta": "0",
+          "Compounding Annual Return": "-13.074%",
+          "Drawdown": "1.400%",
+          "Drawdown Recovery": "0",
+          "End Equity": "98829.69",
+          "Expectancy": "-0.460",
+          "Information Ratio": "-3.517",
+          "Loss Rate": "60%",
+          "Net Profit": "-1.170%",
+          "Portfolio Turnover": "32.14%",
+          "Probabilistic Sharpe Ratio": "1.328%",
+          "Profit-Loss Ratio": "0.35",
+          "Sharpe Ratio": "-5.578",
+          "Sortino Ratio": "-11.549",
+          "Start Equity": "100000",
+          "Total Fees": "$10.00",
+          "Total Orders": "10",
+          "Tracking Error": "0.027",
+          "Treynor Ratio": "0",
+          "Win Rate": "40%"
+        },
+        "lean_native": {
+          "portfolioStatistics": {
+            "alpha": "0",
+            "annualStandardDeviation": "0.0267",
+            "annualVariance": "0.0007",
+            "averageLossRate": "-0.0051",
+            "averageWinRate": "0.0018",
+            "beta": "0",
+            "compoundingAnnualReturn": "-0.1307",
+            "drawdown": "0.014",
+            "drawdownRecovery": "0",
+            "endEquity": "98829.6867",
+            "expectancy": "-0.4601",
+            "informationRatio": "-3.5169",
+            "lossRate": "0.6",
+            "portfolioTurnover": "0.3214",
+            "probabilisticSharpeRatio": "0.0133",
+            "profitLossRatio": "0.3497",
+            "sharpeRatio": "-5.5781",
+            "sortinoRatio": "-11.5485",
+            "startEquity": "100000",
+            "totalNetProfit": "-0.0117",
+            "trackingError": "0.0267",
+            "treynorRatio": "0",
+            "valueAtRisk95": "-0.003",
+            "valueAtRisk99": "-0.004",
+            "winRate": "0.4"
+          },
+          "tradeStatistics": {
+            "averageEndTradeDrawdown": "-361.5640",
+            "averageLosingTradeDuration": "01:15:00",
+            "averageLoss": "-506.0133",
+            "averageMAE": "-453.0560",
+            "averageMFE": "129.5000",
+            "averageProfit": "178.86",
+            "averageProfitLoss": "-232.0640",
+            "averageTradeDuration": "01:15:00",
+            "averageWinningTradeDuration": "01:15:00",
+            "endDateTime": 1786114800000,
+            "largestLoss": "-591.85",
+            "largestMAE": "-885.78",
+            "largestMFE": "268.81",
+            "largestProfit": "244.69",
+            "lossRate": "0.6",
+            "maxConsecutiveLosingTrades": 2,
+            "maxConsecutiveWinningTrades": 1,
+            "maximumClosedTradeDrawdown": "-1273.35",
+            "maximumDrawdownDuration": "00:00:00",
+            "maximumEndTradeDrawdown": "969.57",
+            "maximumIntraTradeDrawdown": "-1545.77",
+            "medianLosingTradeDuration": "01:15:00",
+            "medianTradeDuration": "01:15:00",
+            "medianWinningTradeDuration": "01:15:00",
+            "numberOfLosingTrades": 3,
+            "numberOfWinningTrades": 2,
+            "profitFactor": "0.2356",
+            "profitLossDownsideDeviation": "83.0247",
+            "profitLossRatio": "0.3535",
+            "profitLossStandardDeviation": "382.5295",
+            "profitToMaxDrawdownRatio": "-0.9112",
+            "sharpeRatio": "-0.6067",
+            "sortinoRatio": "-2.7951",
+            "startDateTime": 1784555100000,
+            "totalFees": "10",
+            "totalLoss": "-1518.04",
+            "totalNumberOfTrades": 5,
+            "totalProfit": "357.72",
+            "totalProfitLoss": "-1160.32",
+            "winLossRatio": "0.6667",
+            "winRate": "0.4"
+          }
+        },
+        "native_metric_count": 66,
+        "primitive_receipts": {
+          "data_monitor": {
+            "relative_path": "data-monitor-report-20260809020019740.json",
+            "row_count": null,
+            "sha256": "6bb596c6b688124479585256c0997f90a2bbf2a080baede178dc11828bdd77e5",
+            "size_bytes": 329
+          },
+          "full_result": {
+            "relative_path": "MyAlgorithm.json",
+            "row_count": null,
+            "sha256": "88ceae78149711f942dec5ef914125787269bced0782f2a889c99841da251b13",
+            "size_bytes": 87925
+          },
+          "observations": {
+            "relative_path": "storage/observations.csv",
+            "row_count": 8971,
+            "sha256": "655b36dde451f87495f638f743dbdd11fd2ae1ab255747f06c678ce02207ed89",
+            "size_bytes": 455801
+          },
+          "order_events": {
+            "relative_path": "MyAlgorithm-order-events.json",
+            "row_count": null,
+            "sha256": "acaf45d3ef0903c7b8b5c97a708bce15a2d7830951a11fd14c45c5a19b6e0727",
+            "size_bytes": 6533
+          },
+          "other:MyAlgorithm-log.txt": {
+            "relative_path": "MyAlgorithm-log.txt",
+            "row_count": null,
+            "sha256": "3aa11f38f48964b269cf7d8773ae14b127fb6deb847aeab95325ef84bfec92d0",
+            "size_bytes": 184
+          },
+          "other:failed-data-requests-20260809020015394.txt": {
+            "relative_path": "failed-data-requests-20260809020015394.txt",
+            "row_count": null,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "size_bytes": 0
+          },
+          "other:log.txt": {
+            "relative_path": "log.txt",
+            "row_count": null,
+            "sha256": "db283c2d8a6443cfeae3d9261b57b947f2782bd004324bde6b2c0004f9511409",
+            "size_bytes": 8212
+          },
+          "other:succeeded-data-requests-20260809020015394.txt": {
+            "relative_path": "succeeded-data-requests-20260809020015394.txt",
+            "row_count": null,
+            "sha256": "acf9bd5d68fae815ff7f3d83f82bf883a0ba20a74bb7a92aa5892efc7399bf95",
+            "size_bytes": 2007
+          },
+          "state_export": {
+            "relative_path": "storage/state.csv",
+            "row_count": 585,
+            "sha256": "1a05ef481b30e42856370176341c0f5fda503a4d278f65daec0d06435ace7e13",
+            "size_bytes": 50372
+          },
+          "summary_result": {
+            "relative_path": "MyAlgorithm-summary.json",
+            "row_count": null,
+            "sha256": "f29608a58601bc0c055a8ac1f0c4004cc2383052606c315a3dfc307c43030ebf",
+            "size_bytes": 4931
+          }
+        },
+        "python_lean_compatible": {
+          "portfolioStatistics": {
+            "alpha": "0.0",
+            "annualStandardDeviation": "0.026683319307109588",
+            "annualVariance": "0.0007119995292451673",
+            "averageLossRate": "-0.005098300692375714026635976127",
+            "averageWinRate": "0.001783071930468087827426298368",
+            "beta": "0.0",
+            "compoundingAnnualReturn": "-0.13074105755829257",
+            "drawdown": "0.014",
+            "drawdownRecovery": 0,
+            "endEquity": "98829.6867",
+            "expectancy": "-0.4601046083347265877467114096",
+            "informationRatio": "-3.516853424052709",
+            "lossRate": "0.6",
+            "portfolioTurnover": "0.32139190322580646",
+            "probabilisticSharpeRatio": "0.013279674408900932",
+            "profitLossRatio": "0.3497384791631835306332214760",
+            "sharpeRatio": "-5.578066250200077",
+            "sortinoRatio": "-11.54851676826572",
+            "startEquity": "100000.0",
+            "totalNetProfit": "-0.011703133",
+            "trackingError": "0.026683319307109588",
+            "treynorRatio": "0.0",
+            "valueAtRisk95": "-0.003",
+            "valueAtRisk99": "-0.004",
+            "winRate": "0.4"
+          },
+          "tradeStatistics": {
+            "averageEndTradeDrawdown": "-361.564",
+            "averageLosingTradeDuration": "01:15:00",
+            "averageLoss": "-506.0133333333333333333333333",
+            "averageMAE": "-453.056",
+            "averageMFE": "129.50",
+            "averageProfit": "178.86",
+            "averageProfitLoss": "-232.064",
+            "averageTradeDuration": "01:15:00",
+            "averageWinningTradeDuration": "01:15:00",
+            "endDateTime": 1786114800000,
+            "largestLoss": "-591.85",
+            "largestMAE": "-885.78",
+            "largestMFE": "268.81",
+            "largestProfit": "244.69",
+            "lossRate": "0.6",
+            "maxConsecutiveLosingTrades": 2,
+            "maxConsecutiveWinningTrades": 1,
+            "maximumClosedTradeDrawdown": "-1273.35",
+            "maximumDrawdownDuration": "00:00:00",
+            "maximumEndTradeDrawdown": "969.57",
+            "maximumIntraTradeDrawdown": "-1545.77",
+            "medianLosingTradeDuration": "01:15:00",
+            "medianTradeDuration": "01:15:00",
+            "medianWinningTradeDuration": "01:15:00",
+            "numberOfLosingTrades": 3,
+            "numberOfWinningTrades": 2,
+            "profitFactor": "0.2356459645332138810571526442",
+            "profitLossDownsideDeviation": "83.02469893551759",
+            "profitLossRatio": "0.3534689467998208215857289663",
+            "profitLossStandardDeviation": "382.52946236858674",
+            "profitToMaxDrawdownRatio": "-0.9112341461499195036714179134",
+            "sharpeRatio": "-0.6066565397684177427020733615",
+            "sortinoRatio": "-2.795120042292909445734319699",
+            "startDateTime": 1784555100000,
+            "totalFees": "10.0",
+            "totalLoss": "-1518.04",
+            "totalNumberOfTrades": 5,
+            "totalProfit": "357.72",
+            "totalProfitLoss": "-1160.32",
+            "winLossRatio": "0.6666666666666666666666666667",
+            "winRate": "0.4"
+          }
+        },
+        "reason": null,
+        "source_commit": "261366a7e26ae942df858ab20df4fef8fa07de67",
+        "status": "match"
+      },
+      "portfolio": {
+        "alpha": "0.0",
+        "annual_standard_deviation": "0.0267",
+        "annual_variance": "0.0007",
+        "average_loss_rate": "-0.0051",
+        "average_win_rate": "0.0018",
+        "beta": "0.0",
+        "compounding_annual_return": "-0.1307",
+        "drawdown": "0.014",
+        "drawdown_recovery": 0,
+        "end_equity": "98829.6867",
+        "expectancy": "-0.4601",
+        "information_ratio": "-3.5169",
+        "loss_rate": "0.6",
+        "portfolio_turnover": "0.3214",
+        "probabilistic_sharpe_ratio": "0.0133",
+        "profit_loss_ratio": "0.3497",
+        "sharpe_ratio": "-5.5781",
+        "sortino_ratio": "-11.5485",
+        "start_equity": "100000.0",
+        "total_net_profit": "-0.0117",
+        "tracking_error": "0.0267",
+        "treynor_ratio": "0.0",
+        "value_at_risk_95": "-0.003",
+        "value_at_risk_99": "-0.004",
+        "win_rate": "0.4"
+      },
+      "runtime": {
+        "equity": "98829.69",
+        "fees": "-10.0",
+        "holdings": "0.0",
+        "net_profit": "-1170.31",
+        "probabilistic_sharpe_ratio": "0.01328",
+        "total_orders": 10,
+        "total_return": "-0.011699999999999999",
+        "unrealized": "0.0",
+        "volume": "987846.87"
+      },
+      "trade": {
+        "average_end_trade_drawdown": "-361.564",
+        "average_losing_trade_duration": "01:15:00",
+        "average_loss": "-506.0133",
+        "average_mae": "-453.056",
+        "average_mfe": "129.5",
+        "average_profit": "178.86",
+        "average_profit_loss": "-232.064",
+        "average_trade_duration": "01:15:00",
+        "average_winning_trade_duration": "01:15:00",
+        "end_date_time": 1786114800000,
+        "largest_loss": "-591.85",
+        "largest_mae": "-885.78",
+        "largest_mfe": "268.81",
+        "largest_profit": "244.69",
+        "loss_rate": "0.6",
+        "max_consecutive_losing_trades": 2,
+        "max_consecutive_winning_trades": 1,
+        "maximum_closed_trade_drawdown": "-1273.35",
+        "maximum_drawdown_duration": "00:00:00",
+        "maximum_end_trade_drawdown": "969.57",
+        "maximum_intra_trade_drawdown": "-1545.77",
+        "median_losing_trade_duration": "01:15:00",
+        "median_trade_duration": "01:15:00",
+        "median_winning_trade_duration": "01:15:00",
+        "number_of_losing_trades": 3,
+        "number_of_winning_trades": 2,
+        "profit_factor": "0.2356",
+        "profit_loss_downside_deviation": "83.0247",
+        "profit_loss_ratio": "0.3535",
+        "profit_loss_standard_deviation": "382.5295",
+        "profit_to_max_drawdown_ratio": "-0.9112",
+        "sharpe_ratio": "-0.6067",
+        "sortino_ratio": "-2.7951",
+        "start_date_time": 1784555100000,
+        "total_fees": "10.0",
+        "total_loss": "-1518.04",
+        "total_number_of_trades": 5,
+        "total_profit": "357.72",
+        "total_profit_loss": "-1160.32",
+        "win_loss_ratio": "0.6667",
+        "win_rate": "0.4"
+      }
+    },
+    "parameters": {
+      "starting_cash": "100000.0",
+      "symbol": "SPY"
+    },
+    "readiness": {
+      "available_required_metrics": 17,
+      "composite": 44,
+      "dimensions": [
+        {
+          "key": "return_quality",
+          "label": "Return Quality",
+          "score": 23,
+          "sub_scores": [
+            {
+              "display": "-4.69",
+              "key": "sharpe",
+              "label": "Sharpe ratio",
+              "note": "Negative Sharpe - losing money on risk-adjusted basis.",
+              "raw_value": "-4.692637448628308",
+              "score": 0
+            },
+            {
+              "display": "-4.54",
+              "key": "sortino",
+              "label": "Sortino ratio",
+              "note": "Downside risk dominates.",
+              "raw_value": "-4.542163906292782",
+              "score": 3
+            },
+            {
+              "display": "-13.17%",
+              "key": "cagr",
+              "label": "CAGR",
+              "note": "Negative compound annual return.",
+              "raw_value": "-0.1317415405842577",
+              "score": 0
+            },
+            {
+              "display": "-10.29",
+              "key": "calmar",
+              "label": "Calmar ratio",
+              "note": "Negative Calmar.",
+              "raw_value": "-10.289793131728763",
+              "score": 0
+            },
+            {
+              "display": "2.99%",
+              "key": "annual_vol",
+              "label": "Annual volatility",
+              "note": "Very low volatility - stable return profile.",
+              "raw_value": "0.02989365169597819",
+              "score": 20
+            }
+          ],
+          "summary": "Does the strategy make money efficiently per unit of risk?",
+          "weight": "0.29411764705882354"
+        },
+        {
+          "key": "risk_control",
+          "label": "Risk Control",
+          "score": 88,
+          "sub_scores": [
+            {
+              "display": "1.28%",
+              "key": "max_dd",
+              "label": "Max drawdown",
+              "note": "Extreme preservation - verify window is long enough.",
+              "raw_value": "0.012803128196817707",
+              "score": 17
+            },
+            {
+              "display": "18 days",
+              "key": "recovery",
+              "label": "Drawdown recovery",
+              "note": "Healthy recovery window.",
+              "raw_value": "18.0",
+              "score": 16
+            },
+            {
+              "display": "2",
+              "key": "cons_losses",
+              "label": "Max consecutive losers",
+              "note": "Resilient through streaks.",
+              "raw_value": "2.0",
+              "score": 20
+            },
+            {
+              "display": "-",
+              "key": "dd_duration",
+              "label": "Drawdown duration",
+              "note": "Not yet computed - needs equity-curve timestamps.",
+              "raw_value": null,
+              "score": null
+            },
+            {
+              "display": "-",
+              "key": "downside_vol",
+              "label": "Downside volatility",
+              "note": "Planned - uses Sortino's sigma_d separately.",
+              "raw_value": null,
+              "score": null
+            }
+          ],
+          "summary": "Does the strategy preserve capital when it's wrong?",
+          "weight": "0.23529411764705882"
+        },
+        {
+          "key": "trade_edge",
+          "label": "Trade Edge",
+          "score": 14,
+          "sub_scores": [
+            {
+              "display": "0.24",
+              "key": "pf",
+              "label": "Profit factor",
+              "note": "Losing system.",
+              "raw_value": "0.23650497468083068",
+              "score": 0
+            },
+            {
+              "display": "-0.234%",
+              "key": "expectancy",
+              "label": "Expectancy / trade",
+              "note": "Non-positive edge per trade.",
+              "raw_value": "-0.00233800115707996",
+              "score": 0
+            },
+            {
+              "display": "40.00%",
+              "key": "win_rate",
+              "label": "Win rate",
+              "note": "Trend-style range - pair with payoff > 2x.",
+              "raw_value": "0.4",
+              "score": 10
+            },
+            {
+              "display": "0.35",
+              "key": "payoff",
+              "label": "Payoff ratio",
+              "note": "Avg loser is 2x the avg winner - fragile edge.",
+              "raw_value": "0.35475746202124603",
+              "score": 4
+            },
+            {
+              "display": "-",
+              "key": "fee_drag",
+              "label": "Fee drag on gross",
+              "note": "Gross profit non-positive - fees are not the limiting factor.",
+              "raw_value": null,
+              "score": 0
+            }
+          ],
+          "summary": "Is there a real per-trade edge after costs?",
+          "weight": "0.23529411764705882"
+        },
+        {
+          "key": "stat_confidence",
+          "label": "Statistical Confidence",
+          "score": 55,
+          "sub_scores": [
+            {
+              "display": "14.02%",
+              "key": "psr",
+              "label": "Probabilistic Sharpe",
+              "note": "Cannot distinguish strategy from noise.",
+              "raw_value": "0.14017371464233241",
+              "score": 2
+            },
+            {
+              "display": "5",
+              "key": "sample",
+              "label": "Sample size (trades)",
+              "note": "Too few trades to draw any conclusion.",
+              "raw_value": "5.0",
+              "score": 2
+            },
+            {
+              "display": "Clean",
+              "key": "skepticism",
+              "label": "Skepticism penalty",
+              "note": "None of the skepticism thresholds tripped.",
+              "raw_value": null,
+              "score": 20
+            },
+            {
+              "display": "-4.92",
+              "key": "trade_gap",
+              "label": "Trade vs Portfolio Sharpe gap",
+              "note": "Low sequencing risk.",
+              "raw_value": "-4.924407531090146",
+              "score": 20
+            },
+            {
+              "display": "-",
+              "key": "benchmark",
+              "label": "Benchmark outperformance",
+              "note": "Planned - requires a Buy-and-Hold return series alongside the backtest.",
+              "raw_value": null,
+              "score": null
+            }
+          ],
+          "summary": "Is the edge trustworthy, or sample-size / overfitting noise?",
+          "weight": "0.23529411764705882"
+        },
+        {
+          "key": "alpha_calibration",
+          "label": "Alpha Calibration",
+          "score": null,
+          "sub_scores": [
+            {
+              "display": "-",
+              "key": "ece",
+              "label": "Expected Calibration Error",
+              "note": "Planned - derive from insight_summary confidence buckets.",
+              "raw_value": null,
+              "score": null
+            },
+            {
+              "display": "-",
+              "key": "conf_spread",
+              "label": "Over/under-confidence spread",
+              "note": "Planned - per-bucket accuracy minus emitted confidence.",
+              "raw_value": null,
+              "score": null
+            },
+            {
+              "display": "-",
+              "key": "magnitude_bias",
+              "label": "Magnitude bias",
+              "note": "Planned - mean of (actual - predicted) move.",
+              "raw_value": null,
+              "score": null
+            },
+            {
+              "display": "-",
+              "key": "worst_hour",
+              "label": "Worst-hour accuracy",
+              "note": "Planned - min accuracy across hour-of-day buckets.",
+              "raw_value": null,
+              "score": null
+            },
+            {
+              "display": "-",
+              "key": "regime_consistency",
+              "label": "Regime consistency",
+              "note": "Planned - rolling accuracy variance across market regimes.",
+              "raw_value": null,
+              "score": null
+            }
+          ],
+          "summary": "Does the alpha model's confidence match its empirical accuracy?",
+          "weight": "0.0"
+        }
+      ],
+      "grade": "C",
+      "missing_required_metrics": [],
+      "parity_signature": {
+        "absolute_tolerance": "1E-12",
+        "available_required_metrics": 17,
+        "composite": 44,
+        "contract_id": "readiness-core-v2",
+        "grade": "C",
+        "missing_required_metrics": [],
+        "normalized_weights": false,
+        "red_flags": [],
+        "required_inputs": [
+          {
+            "dimension": "return_quality",
+            "display": "-4.69",
+            "metric": "sharpe",
+            "raw_value": "-4.692637448628",
+            "score": 0
+          },
+          {
+            "dimension": "return_quality",
+            "display": "-4.54",
+            "metric": "sortino",
+            "raw_value": "-4.542163906293",
+            "score": 3
+          },
+          {
+            "dimension": "return_quality",
+            "display": "-13.17%",
+            "metric": "cagr",
+            "raw_value": "-0.131741540584",
+            "score": 0
+          },
+          {
+            "dimension": "return_quality",
+            "display": "-10.29",
+            "metric": "calmar",
+            "raw_value": "-10.289793131729",
+            "score": 0
+          },
+          {
+            "dimension": "return_quality",
+            "display": "2.99%",
+            "metric": "annual_vol",
+            "raw_value": "0.029893651696",
+            "score": 20
+          },
+          {
+            "dimension": "risk_control",
+            "display": "1.28%",
+            "metric": "max_dd",
+            "raw_value": "0.012803128197",
+            "score": 17
+          },
+          {
+            "dimension": "risk_control",
+            "display": "18 days",
+            "metric": "recovery",
+            "raw_value": "18.000000000000",
+            "score": 16
+          },
+          {
+            "dimension": "risk_control",
+            "display": "2",
+            "metric": "cons_losses",
+            "raw_value": "2.000000000000",
+            "score": 20
+          },
+          {
+            "dimension": "trade_edge",
+            "display": "0.24",
+            "metric": "pf",
+            "raw_value": "0.236504974681",
+            "score": 0
+          },
+          {
+            "dimension": "trade_edge",
+            "display": "-0.234%",
+            "metric": "expectancy",
+            "raw_value": "-0.002338001157",
+            "score": 0
+          },
+          {
+            "dimension": "trade_edge",
+            "display": "40.00%",
+            "metric": "win_rate",
+            "raw_value": "0.400000000000",
+            "score": 10
+          },
+          {
+            "dimension": "trade_edge",
+            "display": "0.35",
+            "metric": "payoff",
+            "raw_value": "0.354757462021",
+            "score": 4
+          },
+          {
+            "dimension": "trade_edge",
+            "display": "-",
+            "metric": "fee_drag",
+            "raw_value": null,
+            "score": 0
+          },
+          {
+            "dimension": "stat_confidence",
+            "display": "14.02%",
+            "metric": "psr",
+            "raw_value": "0.140173714642",
+            "score": 2
+          },
+          {
+            "dimension": "stat_confidence",
+            "display": "5",
+            "metric": "sample",
+            "raw_value": "5.000000000000",
+            "score": 2
+          },
+          {
+            "dimension": "stat_confidence",
+            "display": "Clean",
+            "metric": "skepticism",
+            "raw_value": null,
+            "score": 20
+          },
+          {
+            "dimension": "stat_confidence",
+            "display": "-4.92",
+            "metric": "trade_gap",
+            "raw_value": "-4.924407531090",
+            "score": 20
+          }
+        ],
+        "required_metrics": 17,
+        "signal": "Rework",
+        "status": "complete"
+      },
+      "required_metrics": 17,
+      "signal": "Rework",
+      "status": "complete",
+      "verdict_version": 2
+    },
+    "source": "lean-sidecar",
+    "source_run_id": 96,
+    "strategy_name": "ema_crossover_signal",
+    "symbol": "SPY",
+    "trades": [
+      {
+        "entry_ms_utc": 1784555100000,
+        "entry_price": "748.56000000",
+        "exit_ms_utc": 1784559600000,
+        "exit_price": "744.11000000",
+        "is_synthetic_exit": false,
+        "pnl": "-593.85000000",
+        "pnl_pct": "-0.0059447472480495885433365395",
+        "pnl_points": "-4.45000000",
+        "quantity": "133.00000000",
+        "signal_reason": "EMA crossover exit (5-bar time stop)"
+      },
+      {
+        "entry_ms_utc": 1784642400000,
+        "entry_price": "745.37000000",
+        "exit_ms_utc": 1784646900000,
+        "exit_price": "747.20980000",
+        "is_synthetic_exit": false,
+        "pnl": "242.69340000",
+        "pnl_pct": "0.0024683043320766867461797497",
+        "pnl_points": "1.83980000",
+        "quantity": "133.00000000",
+        "signal_reason": "EMA crossover exit (5-bar time stop)"
+      },
+      {
+        "entry_ms_utc": 1785159900000,
+        "entry_price": "743.45000000",
+        "exit_ms_utc": 1785164400000,
+        "exit_price": "739.69010000",
+        "is_synthetic_exit": false,
+        "pnl": "-502.06670000",
+        "pnl_pct": "-0.0050573676777187436949357724",
+        "pnl_points": "-3.75990000",
+        "quantity": "133.00000000",
+        "signal_reason": "EMA crossover exit (5-bar time stop)"
+      },
+      {
+        "entry_ms_utc": 1785420900000,
+        "entry_price": "737.98000000",
+        "exit_ms_utc": 1785425400000,
+        "exit_price": "734.80000000",
+        "is_synthetic_exit": false,
+        "pnl": "-428.12000000",
+        "pnl_pct": "-0.0043090598661210330903276512",
+        "pnl_points": "-3.18000000",
+        "quantity": "134.00000000",
+        "signal_reason": "EMA crossover exit (5-bar time stop)"
+      },
+      {
+        "entry_ms_utc": 1786110300000,
+        "entry_price": "771.99000000",
+        "exit_ms_utc": 1786114800000,
+        "exit_price": "772.88000000",
+        "is_synthetic_exit": false,
+        "pnl": "111.03000000",
+        "pnl_pct": "0.0011528646744128809958678221",
+        "pnl_points": "0.89000000",
+        "quantity": "127.00000000",
+        "signal_reason": "EMA crossover exit (5-bar time stop)"
+      }
+    ],
+    "validation_analytics": {
+      "computedAtMs": 1786240821161,
+      "engine": "lean",
+      "error": null,
+      "horizons": [
+        {
+          "endMsUtc": 1786147200000,
+          "hasFullCoverage": true,
+          "key": "2w",
+          "label": "2 weeks",
+          "netReturn": "-0.008202543468976087",
+          "profitFactor": "0.12308478008470583",
+          "startMsUtc": 1784937600000,
+          "tradeCount": 3,
+          "winRate": "0.3333333333333333"
+        },
+        {
+          "endMsUtc": 1786147200000,
+          "hasFullCoverage": true,
+          "key": "1m",
+          "label": "1 month",
+          "netReturn": "-0.011665023796625151",
+          "profitFactor": "0.2365049746808265",
+          "startMsUtc": 1783555200000,
+          "tradeCount": 5,
+          "winRate": "0.4"
+        },
+        {
+          "endMsUtc": 1786147200000,
+          "hasFullCoverage": false,
+          "key": "3m",
+          "label": "3 months",
+          "netReturn": null,
+          "profitFactor": "0.2365049746808265",
+          "startMsUtc": 1778371200000,
+          "tradeCount": 5,
+          "winRate": "0.4"
+        },
+        {
+          "endMsUtc": 1786147200000,
+          "hasFullCoverage": false,
+          "key": "6m",
+          "label": "6 months",
+          "netReturn": null,
+          "profitFactor": "0.2365049746808265",
+          "startMsUtc": 1770595200000,
+          "tradeCount": 5,
+          "winRate": "0.4"
+        },
+        {
+          "endMsUtc": 1786147200000,
+          "hasFullCoverage": false,
+          "key": "1y",
+          "label": "1 year",
+          "netReturn": null,
+          "profitFactor": "0.2365049746808265",
+          "startMsUtc": 1754611200000,
+          "tradeCount": 5,
+          "winRate": "0.4"
+        },
+        {
+          "endMsUtc": 1786147200000,
+          "hasFullCoverage": false,
+          "key": "2y",
+          "label": "2 years",
+          "netReturn": null,
+          "profitFactor": "0.2365049746808265",
+          "startMsUtc": 1723075200000,
+          "tradeCount": 5,
+          "winRate": "0.4"
+        }
+      ],
+      "rollingTradeStability": [],
+      "schemaVersion": 1,
+      "seasonality": [
+        {
+          "medianCompoundedReturn": null,
+          "month": 1,
+          "monthLabel": "Jan",
+          "observationCount": 0
+        },
+        {
+          "medianCompoundedReturn": null,
+          "month": 2,
+          "monthLabel": "Feb",
+          "observationCount": 0
+        },
+        {
+          "medianCompoundedReturn": null,
+          "month": 3,
+          "monthLabel": "Mar",
+          "observationCount": 0
+        },
+        {
+          "medianCompoundedReturn": null,
+          "month": 4,
+          "monthLabel": "Apr",
+          "observationCount": 0
+        },
+        {
+          "medianCompoundedReturn": null,
+          "month": 5,
+          "monthLabel": "May",
+          "observationCount": 0
+        },
+        {
+          "medianCompoundedReturn": null,
+          "month": 6,
+          "monthLabel": "Jun",
+          "observationCount": 0
+        },
+        {
+          "medianCompoundedReturn": "-0.012803128196817726",
+          "month": 7,
+          "monthLabel": "Jul",
+          "observationCount": 1
+        },
+        {
+          "medianCompoundedReturn": "0.001152864674412779",
+          "month": 8,
+          "monthLabel": "Aug",
+          "observationCount": 1
+        },
+        {
+          "medianCompoundedReturn": null,
+          "month": 9,
+          "monthLabel": "Sep",
+          "observationCount": 0
+        },
+        {
+          "medianCompoundedReturn": null,
+          "month": 10,
+          "monthLabel": "Oct",
+          "observationCount": 0
+        },
+        {
+          "medianCompoundedReturn": null,
+          "month": 11,
+          "monthLabel": "Nov",
+          "observationCount": 0
+        },
+        {
+          "medianCompoundedReturn": null,
+          "month": 12,
+          "monthLabel": "Dec",
+          "observationCount": 0
+        }
+      ],
+      "timingCells": [
+        {
+          "averageReturn": "-0.005501057462884131",
+          "hourEt": 9,
+          "tradeCount": 2,
+          "weekday": 0,
+          "weekdayLabel": "Mon",
+          "winRate": 0
+        },
+        {
+          "averageReturn": "0.002468304332076644",
+          "hourEt": 10,
+          "tradeCount": 1,
+          "weekday": 1,
+          "weekdayLabel": "Tue",
+          "winRate": 1
+        },
+        {
+          "averageReturn": "-0.004309059866121119",
+          "hourEt": 10,
+          "tradeCount": 1,
+          "weekday": 3,
+          "weekdayLabel": "Thu",
+          "winRate": 0
+        },
+        {
+          "averageReturn": "0.0011528646744128634",
+          "hourEt": 9,
+          "tradeCount": 1,
+          "weekday": 4,
+          "weekdayLabel": "Fri",
+          "winRate": 1
+        }
+      ]
+    }
+  },
+  "parity_group_id": "pg-d2236694f523410fbb91",
+  "parity_verdict": {
+    "computed_at_ms": 1786240821262,
+    "counts_by_category": {},
+    "divergences": [],
+    "engines": {
+      "left": "python",
+      "right": "lean"
+    },
+    "input_parity": {
+      "compared_field_count": 15,
+      "fixture_id": "bar-store-v1-6e96f0f2c5383e2d",
+      "fixture_sha256": "6e96f0f2c5383e2d1ad40f7308433aacc862bbfd6a9828f0b263cade70f0460e",
+      "mismatched_fields": [],
+      "reason": null,
+      "status": "match"
+    },
+    "left_execution_id": 95,
+    "native_metric_parity": {
+      "absolute_tolerance": "0.0000500001",
+      "contract_id": "lean-native-statistics-261366a7e26ae942df858ab20df4fef8fa07de67",
+      "divergence_count": 0,
+      "formatted_metric_count": 25,
+      "native_metric_count": 66,
+      "reason": null,
+      "source_commit": "261366a7e26ae942df858ab20df4fef8fa07de67",
+      "status": "match"
+    },
+    "parity_group_id": "pg-d2236694f523410fbb91",
+    "readiness_parity": {
+      "compared_field_count": 17,
+      "mismatched_fields": [],
+      "reason": null,
+      "status": "match"
+    },
+    "reason": null,
+    "right_execution_id": 96,
+    "schema_version": 2,
+    "status": "agree",
+    "tolerances": {
+      "fill_price_atol": "0.01"
+    }
+  },
+  "python": {
+    "data_policy": {
+      "adjusted": false,
+      "fixture_id": "bar-store-v1-6e96f0f2c5383e2d",
+      "fixture_sha256": "6e96f0f2c5383e2d1ad40f7308433aacc862bbfd6a9828f0b263cade70f0460e",
+      "input_bars": {
+        "multiplier": 1,
+        "timespan": "minute"
+      },
+      "provider_kind": "fixture",
+      "session": "regular",
+      "source": "polygon",
+      "strategy_bars": {
+        "multiplier": 15,
+        "timespan": "minute"
+      },
+      "symbol": "SPY",
+      "timestamp_policy": "bar_close_ms_utc",
+      "timezone": "America/New_York"
+    },
+    "duration_ms": 755,
+    "engine": "python",
+    "executed_at_ms": 1786240813711,
+    "fill_mode": "signal_bar_close",
+    "headline_kpis": {
+      "final_equity": "98829.69",
+      "initial_cash": "100000.00",
+      "losing_trades": 3,
+      "max_drawdown": "0.01280313",
+      "profit_factor": "0.23650497",
+      "sharpe_ratio": "-4.69263745",
+      "sortino_ratio": "-4.54216391",
+      "total_fees": "10.0000",
+      "total_pnl": "-1170.31330000",
+      "total_trades": 5,
+      "win_rate": "0.40000000",
+      "winning_trades": 2
+    },
+    "lean_analysis": [],
+    "lean_run_id": null,
+    "native_statistics": {
+      "portfolio": {
+        "alpha": "0.0",
+        "annual_standard_deviation": "0.03122999905282043",
+        "annual_variance": "0.000975312840839165",
+        "average_loss_rate": "-0.00003796733575185408",
+        "average_win_rate": "0.00001364983439375697",
+        "beta": "0.0",
+        "compounding_annual_return": "-0.13330336491328",
+        "drawdown": "0.012842870459812694",
+        "drawdown_recovery": 0,
+        "end_equity": "98830.99942146002",
+        "expectancy": "-0.4561939190785553",
+        "information_ratio": "-4.2968220573076445",
+        "loss_rate": "0.6",
+        "portfolio_turnover": "0.0",
+        "probabilistic_sharpe_ratio": "0.01811030876773989",
+        "profit_loss_ratio": "0.3595152023036117",
+        "sharpe_ratio": "-4.2968220573076445",
+        "sortino_ratio": "-10.562053644792572",
+        "start_equity": "100000.0",
+        "total_net_profit": "-0.011690005785399804",
+        "tracking_error": "0.03122999905282043",
+        "treynor_ratio": "0.0",
+        "value_at_risk_95": "-0.0037684278008447473",
+        "value_at_risk_99": "-0.005109134860102926",
+        "win_rate": "0.4"
+      },
+      "runtime": {
+        "equity": "98830.99942146002",
+        "fees": "0.0",
+        "holdings": "0.0",
+        "net_profit": "-1169.0005785399844",
+        "probabilistic_sharpe_ratio": "0.0",
+        "total_orders": 5,
+        "total_return": "-0.011690005785399804",
+        "unrealized": "0.0",
+        "volume": "0.0"
+      },
+      "trade": {
+        "average_end_trade_drawdown": "0.0",
+        "average_losing_trade_duration": "1:15:00",
+        "average_loss": "-3.7966333333333333",
+        "average_mae": "0.0",
+        "average_mfe": "0.0",
+        "average_profit": "1.3649",
+        "average_profit_loss": "-1.7320200000000001",
+        "average_trade_duration": "1:15:00",
+        "average_winning_trade_duration": "1:15:00",
+        "end_date_time": 1786114800000,
+        "largest_loss": "-4.45",
+        "largest_mae": "0.0",
+        "largest_mfe": "0.0",
+        "largest_profit": "1.8398",
+        "loss_rate": "0.0",
+        "max_consecutive_losing_trades": 2,
+        "max_consecutive_winning_trades": 1,
+        "maximum_closed_trade_drawdown": "0.0",
+        "maximum_drawdown_duration": "",
+        "maximum_end_trade_drawdown": "0.0",
+        "maximum_intra_trade_drawdown": "0.0",
+        "median_losing_trade_duration": "",
+        "median_trade_duration": "",
+        "median_winning_trade_duration": "",
+        "number_of_losing_trades": 3,
+        "number_of_winning_trades": 2,
+        "profit_factor": "0.23966847821315374",
+        "profit_loss_downside_deviation": "0.0008188284612928201",
+        "profit_loss_ratio": "0.0",
+        "profit_loss_standard_deviation": "0.0038592538391949535",
+        "profit_to_max_drawdown_ratio": "-0.9102330995223864",
+        "sharpe_ratio": "-9.617044979718456",
+        "sortino_ratio": "-45.32648718767056",
+        "start_date_time": 1784555100000,
+        "total_fees": "0.0",
+        "total_loss": "-11.3899",
+        "total_number_of_trades": 5,
+        "total_profit": "2.7298",
+        "total_profit_loss": "-8.6601",
+        "win_loss_ratio": "0.0",
+        "win_rate": "0.0"
+      }
+    },
+    "parameters": {
+      "symbol": "SPY"
+    },
+    "readiness": {
+      "available_required_metrics": 17,
+      "composite": 44,
+      "dimensions": [
+        {
+          "key": "return_quality",
+          "label": "Return Quality",
+          "score": 23,
+          "sub_scores": [
+            {
+              "display": "-4.69",
+              "key": "sharpe",
+              "label": "Sharpe ratio",
+              "note": "Negative Sharpe - losing money on risk-adjusted basis.",
+              "raw_value": "-4.692637448628308",
+              "score": 0
+            },
+            {
+              "display": "-4.54",
+              "key": "sortino",
+              "label": "Sortino ratio",
+              "note": "Downside risk dominates.",
+              "raw_value": "-4.542163906292782",
+              "score": 3
+            },
+            {
+              "display": "-13.17%",
+              "key": "cagr",
+              "label": "CAGR",
+              "note": "Negative compound annual return.",
+              "raw_value": "-0.13174154058425536",
+              "score": 0
+            },
+            {
+              "display": "-10.29",
+              "key": "calmar",
+              "label": "Calmar ratio",
+              "note": "Negative Calmar.",
+              "raw_value": "-10.28979313172858",
+              "score": 0
+            },
+            {
+              "display": "2.99%",
+              "key": "annual_vol",
+              "label": "Annual volatility",
+              "note": "Very low volatility - stable return profile.",
+              "raw_value": "0.02989365169597819",
+              "score": 20
+            }
+          ],
+          "summary": "Does the strategy make money efficiently per unit of risk?",
+          "weight": "0.29411764705882354"
+        },
+        {
+          "key": "risk_control",
+          "label": "Risk Control",
+          "score": 88,
+          "sub_scores": [
+            {
+              "display": "1.28%",
+              "key": "max_dd",
+              "label": "Max drawdown",
+              "note": "Extreme preservation - verify window is long enough.",
+              "raw_value": "0.012803128196817707",
+              "score": 17
+            },
+            {
+              "display": "18 days",
+              "key": "recovery",
+              "label": "Drawdown recovery",
+              "note": "Healthy recovery window.",
+              "raw_value": "18.0",
+              "score": 16
+            },
+            {
+              "display": "2",
+              "key": "cons_losses",
+              "label": "Max consecutive losers",
+              "note": "Resilient through streaks.",
+              "raw_value": "2.0",
+              "score": 20
+            },
+            {
+              "display": "-",
+              "key": "dd_duration",
+              "label": "Drawdown duration",
+              "note": "Not yet computed - needs equity-curve timestamps.",
+              "raw_value": null,
+              "score": null
+            },
+            {
+              "display": "-",
+              "key": "downside_vol",
+              "label": "Downside volatility",
+              "note": "Planned - uses Sortino's sigma_d separately.",
+              "raw_value": null,
+              "score": null
+            }
+          ],
+          "summary": "Does the strategy preserve capital when it's wrong?",
+          "weight": "0.23529411764705882"
+        },
+        {
+          "key": "trade_edge",
+          "label": "Trade Edge",
+          "score": 14,
+          "sub_scores": [
+            {
+              "display": "0.24",
+              "key": "pf",
+              "label": "Profit factor",
+              "note": "Losing system.",
+              "raw_value": "0.23650497468083068",
+              "score": 0
+            },
+            {
+              "display": "-0.234%",
+              "key": "expectancy",
+              "label": "Expectancy / trade",
+              "note": "Non-positive edge per trade.",
+              "raw_value": "-0.00233800115707996",
+              "score": 0
+            },
+            {
+              "display": "40.00%",
+              "key": "win_rate",
+              "label": "Win rate",
+              "note": "Trend-style range - pair with payoff > 2x.",
+              "raw_value": "0.4",
+              "score": 10
+            },
+            {
+              "display": "0.35",
+              "key": "payoff",
+              "label": "Payoff ratio",
+              "note": "Avg loser is 2x the avg winner - fragile edge.",
+              "raw_value": "0.35475746202124603",
+              "score": 4
+            },
+            {
+              "display": "-",
+              "key": "fee_drag",
+              "label": "Fee drag on gross",
+              "note": "Gross profit non-positive - fees are not the limiting factor.",
+              "raw_value": null,
+              "score": 0
+            }
+          ],
+          "summary": "Is there a real per-trade edge after costs?",
+          "weight": "0.23529411764705882"
+        },
+        {
+          "key": "stat_confidence",
+          "label": "Statistical Confidence",
+          "score": 55,
+          "sub_scores": [
+            {
+              "display": "14.02%",
+              "key": "psr",
+              "label": "Probabilistic Sharpe",
+              "note": "Cannot distinguish strategy from noise.",
+              "raw_value": "0.14017371464233241",
+              "score": 2
+            },
+            {
+              "display": "5",
+              "key": "sample",
+              "label": "Sample size (trades)",
+              "note": "Too few trades to draw any conclusion.",
+              "raw_value": "5.0",
+              "score": 2
+            },
+            {
+              "display": "Clean",
+              "key": "skepticism",
+              "label": "Skepticism penalty",
+              "note": "None of the skepticism thresholds tripped.",
+              "raw_value": null,
+              "score": 20
+            },
+            {
+              "display": "-4.92",
+              "key": "trade_gap",
+              "label": "Trade vs Portfolio Sharpe gap",
+              "note": "Low sequencing risk.",
+              "raw_value": "-4.924407531090146",
+              "score": 20
+            },
+            {
+              "display": "-",
+              "key": "benchmark",
+              "label": "Benchmark outperformance",
+              "note": "Planned - requires a Buy-and-Hold return series alongside the backtest.",
+              "raw_value": null,
+              "score": null
+            }
+          ],
+          "summary": "Is the edge trustworthy, or sample-size / overfitting noise?",
+          "weight": "0.23529411764705882"
+        },
+        {
+          "key": "alpha_calibration",
+          "label": "Alpha Calibration",
+          "score": null,
+          "sub_scores": [
+            {
+              "display": "-",
+              "key": "ece",
+              "label": "Expected Calibration Error",
+              "note": "Planned - derive from insight_summary confidence buckets.",
+              "raw_value": null,
+              "score": null
+            },
+            {
+              "display": "-",
+              "key": "conf_spread",
+              "label": "Over/under-confidence spread",
+              "note": "Planned - per-bucket accuracy minus emitted confidence.",
+              "raw_value": null,
+              "score": null
+            },
+            {
+              "display": "-",
+              "key": "magnitude_bias",
+              "label": "Magnitude bias",
+              "note": "Planned - mean of (actual - predicted) move.",
+              "raw_value": null,
+              "score": null
+            },
+            {
+              "display": "-",
+              "key": "worst_hour",
+              "label": "Worst-hour accuracy",
+              "note": "Planned - min accuracy across hour-of-day buckets.",
+              "raw_value": null,
+              "score": null
+            },
+            {
+              "display": "-",
+              "key": "regime_consistency",
+              "label": "Regime consistency",
+              "note": "Planned - rolling accuracy variance across market regimes.",
+              "raw_value": null,
+              "score": null
+            }
+          ],
+          "summary": "Does the alpha model's confidence match its empirical accuracy?",
+          "weight": "0.0"
+        }
+      ],
+      "grade": "C",
+      "missing_required_metrics": [],
+      "parity_signature": {
+        "absolute_tolerance": "1E-12",
+        "available_required_metrics": 17,
+        "composite": 44,
+        "contract_id": "readiness-core-v2",
+        "grade": "C",
+        "missing_required_metrics": [],
+        "normalized_weights": false,
+        "red_flags": [],
+        "required_inputs": [
+          {
+            "dimension": "return_quality",
+            "display": "-4.69",
+            "metric": "sharpe",
+            "raw_value": "-4.692637448628",
+            "score": 0
+          },
+          {
+            "dimension": "return_quality",
+            "display": "-4.54",
+            "metric": "sortino",
+            "raw_value": "-4.542163906293",
+            "score": 3
+          },
+          {
+            "dimension": "return_quality",
+            "display": "-13.17%",
+            "metric": "cagr",
+            "raw_value": "-0.131741540584",
+            "score": 0
+          },
+          {
+            "dimension": "return_quality",
+            "display": "-10.29",
+            "metric": "calmar",
+            "raw_value": "-10.289793131729",
+            "score": 0
+          },
+          {
+            "dimension": "return_quality",
+            "display": "2.99%",
+            "metric": "annual_vol",
+            "raw_value": "0.029893651696",
+            "score": 20
+          },
+          {
+            "dimension": "risk_control",
+            "display": "1.28%",
+            "metric": "max_dd",
+            "raw_value": "0.012803128197",
+            "score": 17
+          },
+          {
+            "dimension": "risk_control",
+            "display": "18 days",
+            "metric": "recovery",
+            "raw_value": "18.000000000000",
+            "score": 16
+          },
+          {
+            "dimension": "risk_control",
+            "display": "2",
+            "metric": "cons_losses",
+            "raw_value": "2.000000000000",
+            "score": 20
+          },
+          {
+            "dimension": "trade_edge",
+            "display": "0.24",
+            "metric": "pf",
+            "raw_value": "0.236504974681",
+            "score": 0
+          },
+          {
+            "dimension": "trade_edge",
+            "display": "-0.234%",
+            "metric": "expectancy",
+            "raw_value": "-0.002338001157",
+            "score": 0
+          },
+          {
+            "dimension": "trade_edge",
+            "display": "40.00%",
+            "metric": "win_rate",
+            "raw_value": "0.400000000000",
+            "score": 10
+          },
+          {
+            "dimension": "trade_edge",
+            "display": "0.35",
+            "metric": "payoff",
+            "raw_value": "0.354757462021",
+            "score": 4
+          },
+          {
+            "dimension": "trade_edge",
+            "display": "-",
+            "metric": "fee_drag",
+            "raw_value": null,
+            "score": 0
+          },
+          {
+            "dimension": "stat_confidence",
+            "display": "14.02%",
+            "metric": "psr",
+            "raw_value": "0.140173714642",
+            "score": 2
+          },
+          {
+            "dimension": "stat_confidence",
+            "display": "5",
+            "metric": "sample",
+            "raw_value": "5.000000000000",
+            "score": 2
+          },
+          {
+            "dimension": "stat_confidence",
+            "display": "Clean",
+            "metric": "skepticism",
+            "raw_value": null,
+            "score": 20
+          },
+          {
+            "dimension": "stat_confidence",
+            "display": "-4.92",
+            "metric": "trade_gap",
+            "raw_value": "-4.924407531090",
+            "score": 20
+          }
+        ],
+        "required_metrics": 17,
+        "signal": "Rework",
+        "status": "complete"
+      },
+      "required_metrics": 17,
+      "signal": "Rework",
+      "status": "complete",
+      "verdict_version": 2
+    },
+    "source": "engine",
+    "source_run_id": 95,
+    "strategy_name": "ema_crossover_signal",
+    "symbol": "SPY",
+    "trades": [
+      {
+        "entry_ms_utc": 1784555100000,
+        "entry_price": "748.56000000",
+        "exit_ms_utc": 1784559600000,
+        "exit_price": "744.11000000",
+        "is_synthetic_exit": false,
+        "pnl": "-593.85000000",
+        "pnl_pct": "-0.0059447472480495885433365395",
+        "pnl_points": "-4.45000000",
+        "quantity": "133.00000000",
+        "signal_reason": ""
+      },
+      {
+        "entry_ms_utc": 1784642400000,
+        "entry_price": "745.37000000",
+        "exit_ms_utc": 1784646900000,
+        "exit_price": "747.20980000",
+        "is_synthetic_exit": false,
+        "pnl": "242.69340000",
+        "pnl_pct": "0.0024683043320766867461797497",
+        "pnl_points": "1.83980000",
+        "quantity": "133.00000000",
+        "signal_reason": ""
+      },
+      {
+        "entry_ms_utc": 1785159900000,
+        "entry_price": "743.45000000",
+        "exit_ms_utc": 1785164400000,
+        "exit_price": "739.69010000",
+        "is_synthetic_exit": false,
+        "pnl": "-502.06670000",
+        "pnl_pct": "-0.0050573676777187436949357724",
+        "pnl_points": "-3.75990000",
+        "quantity": "133.00000000",
+        "signal_reason": ""
+      },
+      {
+        "entry_ms_utc": 1785420900000,
+        "entry_price": "737.98000000",
+        "exit_ms_utc": 1785425400000,
+        "exit_price": "734.80000000",
+        "is_synthetic_exit": false,
+        "pnl": "-428.12000000",
+        "pnl_pct": "-0.0043090598661210330903276512",
+        "pnl_points": "-3.18000000",
+        "quantity": "134.00000000",
+        "signal_reason": ""
+      },
+      {
+        "entry_ms_utc": 1786110300000,
+        "entry_price": "771.99000000",
+        "exit_ms_utc": 1786114800000,
+        "exit_price": "772.88000000",
+        "is_synthetic_exit": false,
+        "pnl": "111.03000000",
+        "pnl_pct": "0.0011528646744128809958678221",
+        "pnl_points": "0.89000000",
+        "quantity": "127.00000000",
+        "signal_reason": ""
+      }
+    ],
+    "validation_analytics": {
+      "computedAtMs": 1786240813584,
+      "engine": "python",
+      "error": null,
+      "horizons": [
+        {
+          "endMsUtc": 1786147200000,
+          "hasFullCoverage": true,
+          "key": "2w",
+          "label": "2 weeks",
+          "netReturn": "-0.008202543468976087",
+          "profitFactor": "0.1230847800847091",
+          "startMsUtc": 1784937600000,
+          "tradeCount": 3,
+          "winRate": "0.3333333333333333"
+        },
+        {
+          "endMsUtc": 1786147200000,
+          "hasFullCoverage": true,
+          "key": "1m",
+          "label": "1 month",
+          "netReturn": "-0.01166502379662504",
+          "profitFactor": "0.23650497468083068",
+          "startMsUtc": 1783555200000,
+          "tradeCount": 5,
+          "winRate": "0.4"
+        },
+        {
+          "endMsUtc": 1786147200000,
+          "hasFullCoverage": false,
+          "key": "3m",
+          "label": "3 months",
+          "netReturn": null,
+          "profitFactor": "0.23650497468083068",
+          "startMsUtc": 1778371200000,
+          "tradeCount": 5,
+          "winRate": "0.4"
+        },
+        {
+          "endMsUtc": 1786147200000,
+          "hasFullCoverage": false,
+          "key": "6m",
+          "label": "6 months",
+          "netReturn": null,
+          "profitFactor": "0.23650497468083068",
+          "startMsUtc": 1770595200000,
+          "tradeCount": 5,
+          "winRate": "0.4"
+        },
+        {
+          "endMsUtc": 1786147200000,
+          "hasFullCoverage": false,
+          "key": "1y",
+          "label": "1 year",
+          "netReturn": null,
+          "profitFactor": "0.23650497468083068",
+          "startMsUtc": 1754611200000,
+          "tradeCount": 5,
+          "winRate": "0.4"
+        },
+        {
+          "endMsUtc": 1786147200000,
+          "hasFullCoverage": false,
+          "key": "2y",
+          "label": "2 years",
+          "netReturn": null,
+          "profitFactor": "0.23650497468083068",
+          "startMsUtc": 1723075200000,
+          "tradeCount": 5,
+          "winRate": "0.4"
+        }
+      ],
+      "rollingTradeStability": [],
+      "schemaVersion": 1,
+      "seasonality": [
+        {
+          "medianCompoundedReturn": null,
+          "month": 1,
+          "monthLabel": "Jan",
+          "observationCount": 0
+        },
+        {
+          "medianCompoundedReturn": null,
+          "month": 2,
+          "monthLabel": "Feb",
+          "observationCount": 0
+        },
+        {
+          "medianCompoundedReturn": null,
+          "month": 3,
+          "monthLabel": "Mar",
+          "observationCount": 0
+        },
+        {
+          "medianCompoundedReturn": null,
+          "month": 4,
+          "monthLabel": "Apr",
+          "observationCount": 0
+        },
+        {
+          "medianCompoundedReturn": null,
+          "month": 5,
+          "monthLabel": "May",
+          "observationCount": 0
+        },
+        {
+          "medianCompoundedReturn": null,
+          "month": 6,
+          "monthLabel": "Jun",
+          "observationCount": 0
+        },
+        {
+          "medianCompoundedReturn": "-0.012803128196817504",
+          "month": 7,
+          "monthLabel": "Jul",
+          "observationCount": 1
+        },
+        {
+          "medianCompoundedReturn": "0.001152864674412779",
+          "month": 8,
+          "monthLabel": "Aug",
+          "observationCount": 1
+        },
+        {
+          "medianCompoundedReturn": null,
+          "month": 9,
+          "monthLabel": "Sep",
+          "observationCount": 0
+        },
+        {
+          "medianCompoundedReturn": null,
+          "month": 10,
+          "monthLabel": "Oct",
+          "observationCount": 0
+        },
+        {
+          "medianCompoundedReturn": null,
+          "month": 11,
+          "monthLabel": "Nov",
+          "observationCount": 0
+        },
+        {
+          "medianCompoundedReturn": null,
+          "month": 12,
+          "monthLabel": "Dec",
+          "observationCount": 0
+        }
+      ],
+      "timingCells": [
+        {
+          "averageReturn": "-0.005501057462884167",
+          "hourEt": 9,
+          "tradeCount": 2,
+          "weekday": 0,
+          "weekdayLabel": "Mon",
+          "winRate": 0
+        },
+        {
+          "averageReturn": "0.0024683043320766866",
+          "hourEt": 10,
+          "tradeCount": 1,
+          "weekday": 1,
+          "weekdayLabel": "Tue",
+          "winRate": 1
+        },
+        {
+          "averageReturn": "-0.004309059866121033",
+          "hourEt": 10,
+          "tradeCount": 1,
+          "weekday": 3,
+          "weekdayLabel": "Thu",
+          "winRate": 0
+        },
+        {
+          "averageReturn": "0.001152864674412881",
+          "hourEt": 9,
+          "tradeCount": 1,
+          "weekday": 4,
+          "weekdayLabel": "Fri",
+          "winRate": 1
+        }
+      ]
+    }
+  },
+  "source_runs": {
+    "lean": 96,
+    "python": 95
+  },
+  "window": {
+    "end_ms": 1786147199000,
+    "start_ms": 1783468800000
+  }
+}

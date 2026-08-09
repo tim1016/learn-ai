@@ -1,0 +1,21 @@
+{
+  "algorithm-language": "Python",
+  "algorithm-location": "/lean-run/project/main.py",
+  "algorithm-type-name": "MyAlgorithm",
+  "data-folder": "/lean-run/data",
+  "debugging": false,
+  "environment": "backtesting",
+  "maximum-data-points-per-chart-series": 4000,
+  "object-store-root": "/lean-run/output/storage",
+  "parameters": {
+    "adjustment": "raw",
+    "bar_minutes": "15",
+    "end_date": "2026-08-07",
+    "session": "regular",
+    "start_date": "2026-07-08",
+    "starting_cash": "100000.0",
+    "symbol": "SPY"
+  },
+  "results-destination-folder": "/lean-run/output",
+  "show-missing-data-logs": true
+}

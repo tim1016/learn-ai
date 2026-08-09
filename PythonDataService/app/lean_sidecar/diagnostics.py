@@ -2,17 +2,18 @@
 
 Walks the layers an operator would hit when ``/api/lean-sidecar/*``
 fails with ``LauncherUnreachable``: env config, URL parseability,
-shared-secret token resolution, and a live HTTP probe of the
-launcher's ``/healthz``. Modelled on
+shared-secret token resolution, a live HTTP probe of the launcher's
+``/healthz``, and the launcher's exact pinned-image readiness. Modelled on
 :mod:`app.broker.ibkr.diagnostics` so the operator UX is consistent
 across the two host-process integrations.
 
 Important non-side-effects:
 
 * Does **not** send a real ``/launch`` request — only ``/healthz``,
-  which is unauthenticated on the launcher side. The token-resolution
-  check is local-only (env / on-disk file inspection); it does not
-  exercise the auth path against the launcher.
+  which is unauthenticated on the launcher side. The launcher performs
+  a read-only ``podman image exists`` check for its own pin. The token-
+  resolution check is local-only (env / on-disk file inspection); it
+  does not exercise the auth path against the launcher.
 * Does not write to disk. Safe to call as often as the UI wants.
 """
 
@@ -28,6 +29,7 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.lean_sidecar.config import LEAN_IMAGE_REPO, PINNED_LEAN_IMAGE_DIGEST
 from app.lean_sidecar.launcher_auth import read_launcher_token
 from app.lean_sidecar.launcher_client import DEFAULT_LAUNCHER_URL
 
@@ -249,61 +251,168 @@ def _check_token_resolved() -> LauncherDiagnosticCheck:
     )
 
 
-async def _check_healthz(url: str) -> LauncherDiagnosticCheck:
+def _image_check_skip(detail: str) -> LauncherDiagnosticCheck:
+    return LauncherDiagnosticCheck(
+        name="launcher_image",
+        label="Pinned LEAN image",
+        status="skip",
+        detail=detail,
+    )
+
+
+def _check_image_readiness(payload: object) -> LauncherDiagnosticCheck:
+    """Validate the structured image readiness returned by ``/healthz``."""
+    if PINNED_LEAN_IMAGE_DIGEST is None:
+        return LauncherDiagnosticCheck(
+            name="launcher_image",
+            label="Pinned LEAN image",
+            status="fail",
+            detail="The data-plane has no default LEAN image digest configured.",
+            fix="Pin a validated LEAN image digest in app/lean_sidecar/config.py, then restart the launcher.",
+        )
+    expected_reference = f"{LEAN_IMAGE_REPO}@{PINNED_LEAN_IMAGE_DIGEST}"
+    if not isinstance(payload, dict):
+        return LauncherDiagnosticCheck(
+            name="launcher_image",
+            label="Pinned LEAN image",
+            status="fail",
+            detail="Launcher /healthz did not return the required image-readiness object.",
+            fix="Restart the launcher from the current learn-ai source so it reports pinned-image readiness.",
+        )
+    image = payload.get("image")
+    if not isinstance(image, dict):
+        return LauncherDiagnosticCheck(
+            name="launcher_image",
+            label="Pinned LEAN image",
+            status="fail",
+            detail="Launcher /healthz does not report pinned-image readiness.",
+            fix="Restart the launcher from the current learn-ai source so it reports pinned-image readiness.",
+        )
+    reference = image.get("reference")
+    available = image.get("available")
+    failure_reason = image.get("failure_reason")
+    detail = image.get("detail")
+    if reference != expected_reference:
+        return LauncherDiagnosticCheck(
+            name="launcher_image",
+            label="Pinned LEAN image",
+            status="fail",
+            detail=(
+                f"Launcher expects {reference!r}, but the data plane requires "
+                f"{expected_reference!r}."
+            ),
+            fix="Restart the launcher so it loads the same pinned-image configuration as the data plane.",
+        )
+    if available is not True:
+        if failure_reason != "missing":
+            return LauncherDiagnosticCheck(
+                name="launcher_image",
+                label="Pinned LEAN image",
+                status="fail",
+                detail=detail if isinstance(detail, str) else "Launcher could not verify the pinned LEAN image.",
+                fix="Resolve the launcher or Podman readiness-check failure, then retry the diagnostic.",
+            )
+        return LauncherDiagnosticCheck(
+            name="launcher_image",
+            label="Pinned LEAN image",
+            status="fail",
+            detail=detail if isinstance(detail, str) else "Launcher could not verify the pinned LEAN image.",
+            fix=(
+                "Build the configured local LEAN derivative, pin its resulting digest in "
+                "app/lean_sidecar/config.py, then restart the launcher."
+            ),
+        )
+    return LauncherDiagnosticCheck(
+        name="launcher_image",
+        label="Pinned LEAN image",
+        status="pass",
+        detail=detail if isinstance(detail, str) else "Pinned LEAN image is available locally.",
+    )
+
+
+async def _check_launcher_health(url: str) -> list[LauncherDiagnosticCheck]:
     target = f"{url}/healthz"
     try:
         async with httpx.AsyncClient(timeout=_HEALTHZ_PROBE_TIMEOUT_S) as client:
             response = await client.get(target)
     except httpx.ConnectError as exc:
-        return LauncherDiagnosticCheck(
-            name="launcher_healthz",
-            label=f"GET {target}",
-            status="fail",
-            detail=f"connect failed: {exc}",
-            fix=(
-                "Confirm the launcher process is running and listening on "
-                "the configured port. From the host: "
-                "``uvicorn app.lean_sidecar.launcher.app:app --host 0.0.0.0 --port 8090``. "
-                "Loopback-only binds (127.0.0.1) are unreachable from the container."
+        return [
+            LauncherDiagnosticCheck(
+                name="launcher_healthz",
+                label=f"GET {target}",
+                status="fail",
+                detail=f"connect failed: {exc}",
+                fix=(
+                    "Confirm the launcher process is running and listening on "
+                    "the configured port. From the host: "
+                    "``uvicorn app.lean_sidecar.launcher.app:app --host 0.0.0.0 --port 8090``. "
+                    "Loopback-only binds (127.0.0.1) are unreachable from the container."
+                ),
             ),
-        )
+            _image_check_skip("skipped because the launcher is not reachable"),
+        ]
     except httpx.TimeoutException:
-        return LauncherDiagnosticCheck(
-            name="launcher_healthz",
-            label=f"GET {target}",
-            status="fail",
-            detail=f"timeout after {_HEALTHZ_PROBE_TIMEOUT_S:.1f}s",
-            fix=(
-                "The hostname resolved but no TCP response arrived. Check "
-                "that host.containers.internal points at the host's bridge "
-                "address and that the host firewall allows inbound from "
-                "the container bridge."
+        return [
+            LauncherDiagnosticCheck(
+                name="launcher_healthz",
+                label=f"GET {target}",
+                status="fail",
+                detail=f"timeout after {_HEALTHZ_PROBE_TIMEOUT_S:.1f}s",
+                fix=(
+                    "The hostname resolved but no TCP response arrived. Check "
+                    "that host.containers.internal points at the host's bridge "
+                    "address and that the host firewall allows inbound from "
+                    "the container bridge."
+                ),
             ),
-        )
+            _image_check_skip("skipped because the launcher did not respond"),
+        ]
     except httpx.HTTPError as exc:
-        return LauncherDiagnosticCheck(
-            name="launcher_healthz",
-            label=f"GET {target}",
-            status="fail",
-            detail=f"{type(exc).__name__}: {exc}",
-        )
-    if response.status_code != 200:
-        return LauncherDiagnosticCheck(
-            name="launcher_healthz",
-            label=f"GET {target}",
-            status="fail",
-            detail=f"unexpected status {response.status_code}: {response.text[:200]}",
-            fix=(
-                "The launcher is reachable but /healthz did not return 200 — "
-                "check the launcher's logs for startup errors."
+        return [
+            LauncherDiagnosticCheck(
+                name="launcher_healthz",
+                label=f"GET {target}",
+                status="fail",
+                detail=f"{type(exc).__name__}: {exc}",
             ),
-        )
-    return LauncherDiagnosticCheck(
-        name="launcher_healthz",
-        label=f"GET {target}",
-        status="pass",
-        detail=f"200 OK in <{_HEALTHZ_PROBE_TIMEOUT_S:.1f}s; body={response.text[:120]}",
-    )
+            _image_check_skip("skipped because the launcher health probe failed"),
+        ]
+    if response.status_code != 200:
+        return [
+            LauncherDiagnosticCheck(
+                name="launcher_healthz",
+                label=f"GET {target}",
+                status="fail",
+                detail=f"unexpected status {response.status_code}: {response.text[:200]}",
+                fix=(
+                    "The launcher is reachable but /healthz did not return 200 — "
+                    "check the launcher's logs for startup errors."
+                ),
+            ),
+            _image_check_skip("skipped because the launcher health endpoint failed"),
+        ]
+    try:
+        payload = response.json()
+    except ValueError:
+        return [
+            LauncherDiagnosticCheck(
+                name="launcher_healthz",
+                label=f"GET {target}",
+                status="fail",
+                detail="200 OK but /healthz returned a non-JSON body.",
+                fix="Restart the launcher from the current learn-ai source.",
+            ),
+            _image_check_skip("skipped because the launcher health response is invalid"),
+        ]
+    return [
+        LauncherDiagnosticCheck(
+            name="launcher_healthz",
+            label=f"GET {target}",
+            status="pass",
+            detail=f"200 OK in <{_HEALTHZ_PROBE_TIMEOUT_S:.1f}s",
+        ),
+        _check_image_readiness(payload),
+    ]
 
 
 def _aggregate_status(checks: list[LauncherDiagnosticCheck]) -> Literal["pass", "warn", "fail"]:
@@ -319,7 +428,8 @@ async def run_launcher_diagnostics() -> LauncherDiagnosticReport:
 
     Each check captures its own exception so the report always renders.
     Synchronous checks run inline; the only async check is the
-    ``/healthz`` probe, bounded by ``_HEALTHZ_PROBE_TIMEOUT_S``.
+    ``/healthz`` probe and its local pinned-image readiness result,
+    bounded by ``_HEALTHZ_PROBE_TIMEOUT_S``.
     """
     url = _resolved_launcher_url()
     checks: list[LauncherDiagnosticCheck] = []
@@ -336,8 +446,9 @@ async def run_launcher_diagnostics() -> LauncherDiagnosticReport:
                 detail="skipped because LEAN_LAUNCHER_URL did not parse to a usable host",
             )
         )
+        checks.append(_image_check_skip("skipped because LEAN_LAUNCHER_URL did not parse to a usable host"))
     else:
-        checks.append(await _check_healthz(url))
+        checks.extend(await _check_launcher_health(url))
     return LauncherDiagnosticReport(
         overall_status=_aggregate_status(checks),
         checks=checks,

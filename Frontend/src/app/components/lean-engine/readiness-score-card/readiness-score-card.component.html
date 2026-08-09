@@ -24,7 +24,14 @@
           }
         </div>
       } @else {
-        <div class="score-empty">—</div>
+        <div class="score-empty">
+          @if (hasCoverage()) {
+            <strong>{{ rpt.availableRequiredMetrics }}/{{ rpt.requiredMetrics }}</strong>
+            <span>required</span>
+          } @else {
+            <strong>—</strong>
+          }
+        </div>
       }
     </div>
 
@@ -36,6 +43,10 @@
           <span class="grade-chip" [class]="gradeChipClass(rpt.grade)">
             Grade {{ rpt.grade }}
           </span>
+        } @else if (rpt.status === 'incomplete') {
+          <span class="grade-chip chip-na">Incomplete</span>
+        } @else if (rpt.status === 'unavailable') {
+          <span class="grade-chip chip-na">Unavailable</span>
         }
         @if (rpt.signal) {
           <span class="signal-chip" [attr.data-band]="band()">{{ rpt.signal }}</span>
@@ -56,7 +67,7 @@
   </div>
 
   <!-- Dimension strip (always visible, compact) -->
-  @if (hasScore() && rpt.dimensions.length > 0) {
+  @if (rpt.dimensions.length > 0) {
     <div class="dimension-strip">
       @for (d of rpt.dimensions; track d.key) {
         <div class="dim-pill" [attr.data-band]="dimensionBand(d.score)">
@@ -87,8 +98,10 @@
             <div class="dim-block-score">
               @if (d.score !== null) {
                 <strong>{{ d.score }}</strong><span>/100</span>
+              } @else if (d.key === 'alpha_calibration') {
+                <span class="na-label">Not graded — not in v2</span>
               } @else {
-                <span class="na-label">Not graded — all sub-scores unavailable</span>
+                <span class="na-label">Not graded — required evidence missing</span>
               }
               <div class="dim-block-weight">{{ (d.weight * 100).toFixed(0) }}% weight</div>
             </div>
@@ -114,7 +127,15 @@
         </div>
       }
 
-      @if (rpt.normalizedWeights) {
+      @if (rpt.status === 'incomplete' && hasCoverage()) {
+        <div class="weight-note">
+          <i class="pi pi-info-circle"></i>
+          <span>
+            Required metric coverage is {{ rpt.availableRequiredMetrics }}/{{ rpt.requiredMetrics }}.
+            Missing evidence is not scored and does not increase another metric’s weight.
+          </span>
+        </div>
+      } @else if (rpt.normalizedWeights) {
         <div class="weight-note">
           <i class="pi pi-info-circle"></i>
           <span>
