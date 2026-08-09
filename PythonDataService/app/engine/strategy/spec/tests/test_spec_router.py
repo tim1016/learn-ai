@@ -79,7 +79,12 @@ async def test_fixtures_list_endpoint() -> None:
     assert resp.status_code == 200
     items = resp.json()
     names = {item["name"] for item in items}
-    assert names == {"spy_ema_crossover", "sma_crossover", "rsi_mean_reversion"}, (
+    assert names == {
+        "spy_ema_crossover",
+        "sma_crossover",
+        "rsi_mean_reversion",
+        "deployment_validation",
+    }, (
         f"unexpected fixture names: {names}"
     )
     by_name = {item["name"]: item for item in items}
