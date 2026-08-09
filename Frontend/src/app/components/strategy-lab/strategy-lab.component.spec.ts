@@ -1,6 +1,6 @@
 import { provideHttpClient } from "@angular/common/http";
 import { HttpTestingController, provideHttpClientTesting } from "@angular/common/http/testing";
-import { Component, input, output, provideZonelessChangeDetection, signal } from "@angular/core";
+import { provideZonelessChangeDetection, signal } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
 import { ActivatedRoute, Router, convertToParamMap } from "@angular/router";
 import { Apollo } from "apollo-angular";
@@ -10,16 +10,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { BacktestRunDetail } from "../../graphql/backtest-runs.query";
 import { JobsService } from "../../services/jobs.service";
 import { LeanSidecarService } from "../../services/lean-sidecar.service";
-import { RunReportComponent } from "../engine-lab/run-report/run-report.component";
 import { StrategyLabComponent } from "./strategy-lab.component";
 import { toStrategyLabConfiguration } from "./strategy-lab.models";
-
-@Component({ selector: "app-engine-run-report", template: "Persisted run report" })
-class RunReportStubComponent {
-  readonly runId = input.required<number>();
-  readonly runDetail = input<BacktestRunDetail | null>(null);
-  readonly runRefreshed = output<BacktestRunDetail>();
-}
 
 function run(overrides: Partial<BacktestRunDetail> = {}): BacktestRunDetail {
   return {
@@ -96,7 +88,7 @@ function strategyCatalog() {
   }];
 }
 
-async function createLab(options: { restoreRun?: number; routeRunId?: number; backtestRun?: BacktestRunDetail | null } = {}) {
+async function createLab(options: { restoreRun?: number; backtestRun?: BacktestRunDetail | null } = {}) {
   const jobs = signal<never[]>([]);
   const navigate = vi.fn(async () => true);
   const params = convertToParamMap(options.restoreRun ? { restoreRun: String(options.restoreRun) } : {});
@@ -121,12 +113,8 @@ async function createLab(options: { restoreRun?: number; routeRunId?: number; ba
         },
       },
     ],
-  }).overrideComponent(StrategyLabComponent, {
-    remove: { imports: [RunReportComponent] },
-    add: { imports: [RunReportStubComponent] },
   }).compileComponents();
   const fixture = TestBed.createComponent(StrategyLabComponent);
-  if (options.routeRunId) fixture.componentRef.setInput("id", String(options.routeRunId));
   fixture.detectChanges();
   return { fixture, http: TestBed.inject(HttpTestingController), navigate };
 }
@@ -158,55 +146,6 @@ describe("Strategy Lab Workbench", () => {
     http.verify();
   });
 
-  it("keeps a deep-linked run inside the full-width Workbench with statistics below configuration", async () => {
-    const saved = run({
-      verdictJson: JSON.stringify({
-        verdict_version: 1,
-        engine: "python",
-        generated_at_ms: 1,
-        composite: 41,
-        grade: "C",
-        signal: "Rework",
-        headline: "Needs work.",
-        red_flags: [],
-        dimensions: [{
-          key: "return_quality",
-          label: "Return quality",
-          weight: 0.2,
-          score: 8,
-          summary: "Mixed return quality.",
-          sub_scores: [
-            { key: "sharpe", label: "Sharpe", score: 2, raw_value: -2.03, display: "−2.03", note: "Below target." },
-            { key: "cagr", label: "CAGR", score: 17, raw_value: 0.12, display: "12.00%", note: "Above target." },
-          ],
-        }],
-        missing_metrics: [],
-        normalized_weights: false,
-        cleanliness: null,
-      }),
-    });
-    const { fixture, http } = await createLab({ routeRunId: saved.id, backtestRun: saved });
-    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
-    await vi.waitFor(() => expect(fixture.componentInstance.selectedRun()?.id).toBe(saved.id));
-    fixture.detectChanges();
-
-    const root = fixture.nativeElement as HTMLElement;
-    expect(root.textContent).toContain("Workbench");
-    expect(root.textContent).toContain("History");
-    expect(root.querySelector(".workbench__rail app-strategy-lab-config-rail .config-strip")).not.toBeNull();
-    expect(root.querySelector(".workbench__rail app-strategy-lab-results-sidebar")).not.toBeNull();
-    expect(root.querySelector(".workbench__stage app-engine-run-report")).not.toBeNull();
-    expect(root.textContent).toContain("CAGR");
-    expect(root.textContent).not.toContain("Back to workbench");
-
-    root.querySelector<HTMLButtonElement>("[aria-label='Expand configuration']")?.click();
-    fixture.detectChanges();
-    const strategyPicker = root.querySelector<HTMLSelectElement>("#strategy-picker");
-    expect(strategyPicker?.value).toBe("ema_crossover_signal");
-    expect(strategyPicker?.selectedOptions[0]?.textContent).toContain("EMA crossover");
-    http.verify();
-  });
-
 });
 
 describe("Strategy Lab saved configuration", () => {
@@ -228,6 +167,9 @@ describe("Strategy Lab saved configuration", () => {
     expect(fixture.componentInstance.config.fillMode()).toBe("next_bar_open");
     expect(fixture.componentInstance.config.initialCash()).toBe(75_000);
     expect(fixture.componentInstance.config.commissionPerOrder()).toBe(0.35);
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.querySelector("app-engine-run-report")).toBeNull();
+    expect(root.querySelector("app-strategy-lab-results-sidebar")).toBeNull();
     http.verify();
   });
 

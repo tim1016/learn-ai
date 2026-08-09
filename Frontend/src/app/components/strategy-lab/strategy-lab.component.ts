@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal } from "@angular/core";
+import { ChangeDetectionStrategy, Component, inject } from "@angular/core";
 import { ActivatedRoute, Router } from "@angular/router";
 import { firstValueFrom } from "rxjs";
 import { Apollo } from "apollo-angular";
@@ -17,8 +17,6 @@ import {
 import { EngineLabRunHistoryComponent } from "../lean-engine/engine-lab-run-history/engine-lab-run-history.component";
 import { EngineRunDockSource } from "../lean-engine/engine-run-dock-source";
 import { ValidationStagePlaceholderComponent } from "../lean-engine/validation-stage-placeholder/validation-stage-placeholder.component";
-import { RunReportComponent } from "../engine-lab/run-report/run-report.component";
-import { ResultsSidebarComponent } from "./results-sidebar/results-sidebar.component";
 import { StrategyLabConfigRailComponent } from "./strategy-lab-config-rail/strategy-lab-config-rail.component";
 import { StrategyLabConfigStore } from "./strategy-lab-config.store";
 import { StrategyLabRunner } from "./strategy-lab-runner.service";
@@ -40,8 +38,6 @@ import { toStrategyLabConfiguration } from "./strategy-lab.models";
     StrategyLabConfigRailComponent,
     EngineLabRunHistoryComponent,
     ValidationStagePlaceholderComponent,
-    RunReportComponent,
-    ResultsSidebarComponent,
     RunDockComponent,
   ],
   templateUrl: "./strategy-lab.component.html",
@@ -61,24 +57,15 @@ export class StrategyLabComponent {
   private readonly route = inject(ActivatedRoute);
   readonly config = inject(StrategyLabConfigStore);
   readonly runs = inject(StrategyLabRunner);
-  readonly id = input<string | null>(null);
-  readonly selectedRun = signal<BacktestRunDetail | null>(null);
 
-  private readonly legacyRunId = parseRunId(this.route.snapshot.queryParamMap.get("restoreRun"));
-  private readonly requestedRunId = computed(() => parseRunId(this.id()) ?? this.legacyRunId);
+  private readonly restoreRunId = parseRunId(this.route.snapshot.queryParamMap.get("restoreRun"));
 
   constructor() {
     const strategiesReady = this.config.loadStrategies();
-    effect(() => {
-      const runId = this.requestedRunId();
-      if (runId === null) {
-        this.selectedRun.set(null);
-        return;
-      }
-      this.selectedRun.set(null);
+    if (this.restoreRunId !== null) {
       this.runs.clearRunError();
-      void this.loadRun(runId, strategiesReady);
-    });
+      void this.restoreSavedRun(this.restoreRunId, strategiesReady);
+    }
   }
 
   selectHistoryRun(id: string): void {
@@ -91,11 +78,7 @@ export class StrategyLabComponent {
     void this.router.navigate(["/strategy-lab/runs", numericId]);
   }
 
-  acceptRefreshedRun(run: BacktestRunDetail): void {
-    if (run.id === this.requestedRunId()) this.selectedRun.set(run);
-  }
-
-  private async loadRun(runId: number, strategiesReady: Promise<void>): Promise<void> {
+  private async restoreSavedRun(runId: number, strategiesReady: Promise<void>): Promise<void> {
     await strategiesReady;
     try {
       const response = await firstValueFrom(
@@ -106,14 +89,11 @@ export class StrategyLabComponent {
         }),
       );
       const run = response.data?.backtestRun;
-      if (this.requestedRunId() !== runId) return;
       if (run === null || run === undefined) {
         this.runs.runError.set(`Saved run #${runId} was not found.`);
         return;
       }
-      this.selectedRun.set(run);
       this.config.activeTab.set("configuration");
-      this.config.configNavCollapsed.set(true);
       try {
         this.restoreConfiguration(run);
       } catch (error) {
@@ -124,9 +104,7 @@ export class StrategyLabComponent {
         this.runs.runError.set(message);
       }
     } catch (error) {
-      if (this.requestedRunId() === runId) {
-        this.runs.runError.set(error instanceof Error ? error.message : "Failed to load the saved run.");
-      }
+      this.runs.runError.set(error instanceof Error ? error.message : "Failed to load the saved run.");
     }
   }
 

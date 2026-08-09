@@ -48,6 +48,22 @@ async def test_trusted_run_rejects_stale_persistence_before_staging(
         await service.run_trusted_sample(request)
 
 
+def test_completed_run_skips_persistence_when_source_changes(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from app.services import lean_sidecar_service as service
+    from app.services.lean_sidecar_persistence import StaleLeanPersistenceSourceError
+
+    def reject_stale_source() -> None:
+        raise StaleLeanPersistenceSourceError("restart the Python data service")
+
+    monkeypatch.setattr(service, "assert_lean_persistence_source_current", reject_stale_source)
+
+    assert service._can_persist_completed_run("completed-run") is False
+    assert "Skipping persistence for completed LEAN run completed-run" in caplog.text
+
+
 def test_trusted_run_request_exposes_symbol_via_data_policy() -> None:
     from app.services.lean_sidecar_service import TrustedRunRequest
 

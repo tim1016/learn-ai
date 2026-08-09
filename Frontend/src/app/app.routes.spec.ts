@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { BrokerDeployPageComponent } from './components/broker/broker-deploy-page/broker-deploy-page.component';
 import { AlpacaBotControlExampleComponent } from './components/examples/alpaca-bot-control/alpaca-bot-control-example.component';
-import { StrategyLabComponent } from './components/strategy-lab/strategy-lab.component';
+import { StrategyLabResultsComponent } from './components/strategy-lab/results-page/strategy-lab-results.component';
 import { routes } from './app.routes';
 
 describe('routes', () => {
@@ -25,11 +25,11 @@ describe('routes', () => {
     });
   });
 
-  it('loads the complete Workbench shell for persisted run URLs', async () => {
+  it('loads the read-only Results page for persisted run URLs', async () => {
     const route = routes.find((candidate) => candidate.path === 'strategy-lab/runs/:id');
     if (route?.loadComponent === undefined) throw new Error('Strategy Lab run route is missing.');
 
-    expect(await route.loadComponent()).toBe(StrategyLabComponent);
+    expect(await route.loadComponent()).toBe(StrategyLabResultsComponent);
   });
 
   it('uses one Broker Deploy page for Alpaca Broker V2 routes', async () => {

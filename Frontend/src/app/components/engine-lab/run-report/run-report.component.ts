@@ -24,7 +24,7 @@ import {
   type StrategyLabParityView,
 } from "../../strategy-lab/strategy-lab.models";
 
-/** Persisted-run evidence rendered inside the Strategy Lab Workbench stage. */
+/** Persisted-run evidence rendered inside the read-only Strategy Lab Results page. */
 @Component({
   selector: "app-engine-run-report",
   changeDetection: ChangeDetectionStrategy.OnPush,

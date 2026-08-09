@@ -8,7 +8,7 @@
       <p-tabpanels>
         <p-tabpanel value="configuration">
           <div class="workbench">
-            <aside class="workbench__rail" aria-label="Run controls and supplementary statistics">
+            <aside class="workbench__rail" aria-label="Run controls">
               @if (config.strategiesLoading()) {
                 <div class="lab-notice" role="status">Loading strategies…</div>
               } @else if (config.strategiesError(); as error) {
@@ -49,9 +49,6 @@
                 />
               }
 
-              @if (selectedRun(); as currentRun) {
-                <app-strategy-lab-results-sidebar [run]="currentRun" />
-              }
             </aside>
 
             <section class="workbench__stage" aria-label="Strategy evidence">
@@ -67,21 +64,13 @@
                 <div class="lab-notice lab-notice--error" role="alert">{{ error }}</div>
               }
 
-              @if (selectedRun(); as currentRun) {
-                <app-engine-run-report
-                  [runId]="currentRun.id"
-                  [runDetail]="currentRun"
-                  (runRefreshed)="acceptRefreshedRun($event)"
-                />
-              } @else {
-                <app-validation-stage-placeholder
-                  [symbol]="config.effectiveSymbol()"
-                  [resolution]="config.resolution()"
-                  [fillMode]="config.fillMode()"
-                  [engine]="config.engine()"
-                  [dataPolicyNote]="config.dataPolicyNote()"
-                />
-              }
+              <app-validation-stage-placeholder
+                [symbol]="config.effectiveSymbol()"
+                [resolution]="config.resolution()"
+                [fillMode]="config.fillMode()"
+                [engine]="config.engine()"
+                [dataPolicyNote]="config.dataPolicyNote()"
+              />
             </section>
           </div>
         </p-tabpanel>
