@@ -118,19 +118,19 @@ type BacktestRunDetailType {
   parityVerdicts: [BacktestRunParityVerdictType!]!
 }
 
-type BacktestRunEquityCurvesType {
-  schemaVersion: Int!
-  error: String
-  markToMarket: BacktestRunEquityCurveType
-  realized: BacktestRunEquityCurveType
-}
-
 type BacktestRunEquityCurveType {
   cadence: String
   rawPoints: Int!
   keptPoints: Int!
   error: String
   points: [BacktestRunEquityPointType!]!
+}
+
+type BacktestRunEquityCurvesType {
+  schemaVersion: Int!
+  error: String
+  markToMarket: BacktestRunEquityCurveType
+  realized: BacktestRunEquityCurveType
 }
 
 type BacktestRunEquityPointType {
