@@ -1,10 +1,46 @@
 using Backend;
+using Backend.Models.MarketData;
 using System.Text.Json;
 
 namespace Backend.Tests.Unit;
 
 public class StudiesApiTests
 {
+    [Theory]
+    [InlineData("engine", "python", true)]
+    [InlineData("engine", "both", true)]
+    [InlineData("engine", "lean", false)]
+    [InlineData("lean-sidecar", "lean", true)]
+    [InlineData("lean-sidecar", "both", true)]
+    [InlineData("lean-sidecar", "python", false)]
+    public void RequestedEngineContract_ValidatesSourceAwarePairs(
+        string source,
+        string requestedEngine,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            RequestedEngineContract.IsValidForSource(
+                source,
+                requestedEngine,
+                allowLegacyNull: false));
+    }
+
+    [Fact]
+    public void ToStudyDetailResponse_PreservesRequestedEngine()
+    {
+        var execution = new StrategyExecution
+        {
+            Ticker = new Ticker { Symbol = "SPY", Name = "SPY", Market = "stocks" },
+            RequestedEngine = "both",
+            ExecutedAt = DateTime.UtcNow,
+        };
+
+        var response = StudiesApi.ToStudyDetailResponse(execution);
+
+        Assert.Equal("both", response.RequestedEngine);
+    }
+
     [Fact]
     public void SaveStudyRequest_UnavailableRiskMetrics_DeserializesAsNull()
     {

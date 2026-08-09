@@ -49,14 +49,17 @@ export class StrategyLabVerdictComponent {
   readonly rerun = output();
   readonly parityExpanded = signal(false);
 
+  /** Presentation color consumes the backend-authored grade. Angular does not
+   * recreate the verdict service's numerical score bands. */
   readonly band = computed<"green" | "amber" | "red" | "na">(() => {
-    const score = this.verdict()?.composite;
-    if (score === null || score === undefined) return "na";
-    if (score >= 70) return "green";
-    if (score >= 55) return "amber";
-    return "red";
+    const grade = this.verdict()?.grade?.toUpperCase();
+    if (grade === "A" || grade === "A+") return "green";
+    if (grade === "B" || grade === "B+") return "amber";
+    if (grade === "C" || grade === "D" || grade === "F") return "red";
+    return "na";
   });
 
+  /** Composite rounding is display-only; the persisted value remains intact. */
   readonly grade = computed(() => {
     const verdict = this.verdict();
     if (!verdict?.grade || verdict.composite === null) return "Not graded";

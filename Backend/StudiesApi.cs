@@ -12,9 +12,6 @@ namespace Backend;
 /// </summary>
 public static class StudiesApi
 {
-    private static bool IsRequestedEngine(string value)
-        => value is "python" or "lean" or "both";
-
     public static void MapStudiesEndpoints(this WebApplication app)
     {
         var group = app.MapGroup("/api/studies").WithTags("Studies");
@@ -32,8 +29,17 @@ public static class StudiesApi
         AppDbContext db,
         CancellationToken ct)
     {
-        if (!IsRequestedEngine(request.RequestedEngine))
-            return Results.BadRequest(new { error = "requestedEngine must be python, lean, or both" });
+        var source = request.Source ?? "engine";
+        if (!RequestedEngineContract.IsValidForSource(
+                source,
+                request.RequestedEngine,
+                allowLegacyNull: false))
+        {
+            return Results.BadRequest(new
+            {
+                error = "requestedEngine must match source (engine: python|both; lean-sidecar: lean|both)",
+            });
+        }
 
         var tradeTimestampError = ValidateSaveStudyTradeTimestamps(request);
         if (tradeTimestampError is not null)
@@ -83,7 +89,7 @@ public static class StudiesApi
             AnnualStandardDeviation = request.AnnualStandardDeviation,
             DrawdownRecoveryDays = request.DrawdownRecoveryDays,
             LeanStatisticsJson = request.LeanStatisticsJson,
-            Source = request.Source ?? "engine",
+            Source = source,
             RequestedEngine = request.RequestedEngine,
             FillMode = request.FillMode ?? "signal_bar_close",
             Notes = request.Notes,
@@ -247,7 +253,12 @@ public static class StudiesApi
         if (execution == null)
             return Results.NotFound(new { error = $"Study {id} not found" });
 
-        return Results.Ok(new StudyDetailResponse
+        return Results.Ok(ToStudyDetailResponse(execution));
+    }
+
+    internal static StudyDetailResponse ToStudyDetailResponse(StrategyExecution execution)
+    {
+        return new StudyDetailResponse
         {
             Id = execution.Id,
             Symbol = execution.Ticker.Symbol,
@@ -258,6 +269,7 @@ public static class StudiesApi
             Timespan = execution.Timespan,
             FillMode = execution.FillMode,
             Source = execution.Source,
+            RequestedEngine = execution.RequestedEngine,
             InitialCash = execution.InitialCash,
             FinalEquity = execution.FinalEquity,
             TotalFees = execution.TotalFees,
@@ -297,7 +309,7 @@ public static class StudiesApi
                 CumulativePnL = t.CumulativePnL,
                 SignalReason = t.SignalReason,
             }).ToList(),
-        });
+        };
     }
 
     // ── PATCH /api/studies/{id}/notes — update notes ──────────────
@@ -494,6 +506,7 @@ public record StudyListItem
 
 public record StudyDetailResponse : StudyListItem
 {
+    public string? RequestedEngine { get; init; }
     public decimal TotalFees { get; init; }
     public decimal InformationRatio { get; init; }
     public decimal TrackingError { get; init; }

@@ -38,7 +38,7 @@ public record PersistLeanRunPayload(
     public string? DataPolicyJson { get; init; }
 
     [JsonPropertyName("requested_engine")]
-    public string RequestedEngine { get; init; } = "lean";
+    public string? RequestedEngine { get; init; }
 
     /// <summary>
     /// PR B — commission per order in dollars. Python engine sends the
@@ -107,3 +107,22 @@ public record PersistLeanTradePayload(
     [property: JsonPropertyName("pnl")] decimal Pnl,
     [property: JsonPropertyName("signal_reason")] string SignalReason,
     [property: JsonPropertyName("is_synthetic_exit")] bool IsSyntheticExit);
+
+public static class RequestedEngineContract
+{
+    public static bool IsValidForSource(
+        string source,
+        string? requestedEngine,
+        bool allowLegacyNull)
+    {
+        if (requestedEngine is null)
+            return allowLegacyNull && (source == "engine" || source == "lean-sidecar");
+
+        return source switch
+        {
+            "engine" => requestedEngine is "python" or "both",
+            "lean-sidecar" => requestedEngine is "lean" or "both",
+            _ => false,
+        };
+    }
+}

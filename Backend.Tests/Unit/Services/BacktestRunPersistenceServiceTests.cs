@@ -90,6 +90,8 @@ public class BacktestRunPersistenceServiceTests
         Assert.Equal("lean-sidecar", row.Source);
         Assert.Equal("ui_run_new", row.LeanRunId);
         Assert.Equal("ema_crossover", row.StrategyName);
+        Assert.Equal("""{"symbol":"SPY"}""", row.Parameters);
+        Assert.DoesNotContain("starting_cash", row.Parameters, StringComparison.Ordinal);
         Assert.Equal(1, row.TotalTrades);
         Assert.Equal(9m, row.TotalPnL);
         Assert.Equal(100_008m, row.FinalEquity);
@@ -121,6 +123,23 @@ public class BacktestRunPersistenceServiceTests
         var count = await db.StrategyExecutions
             .CountAsync(s => s.LeanRunId == "ui_run_idempotent");
         Assert.Equal(1, count);
+    }
+
+    [Fact]
+    public async Task PersistAsync_IdempotentRetryRejectsConflictingRequestedEngine()
+    {
+        var service = CreateService(out _);
+        var first = BuildPayload(leanRunId: "ui_run_engine_conflict") with
+        {
+            RequestedEngine = "lean",
+        };
+        var conflicting = first with { RequestedEngine = "both" };
+
+        await service.PersistAsync(first, CancellationToken.None);
+        var error = await Assert.ThrowsAsync<ArgumentException>(
+            () => service.PersistAsync(conflicting, CancellationToken.None));
+
+        Assert.Contains("requested_engine", error.Message);
     }
 
     [Fact]
@@ -416,6 +435,44 @@ public class BacktestRunPersistenceServiceTests
             () => service.PersistAsync(payload, CancellationToken.None));
 
         Assert.Contains("requested_engine", error.Message);
+    }
+
+    [Theory]
+    [InlineData("engine", "lean")]
+    [InlineData("lean-sidecar", "python")]
+    public async Task PersistAsync_RejectsRequestedEngineThatContradictsSource(
+        string source,
+        string requestedEngine)
+    {
+        var service = CreateService(out _);
+        var payload = BuildPayload(leanRunId: "ui_run_crossed_provenance") with
+        {
+            Source = source,
+            LeanRunId = source == "engine" ? null : "ui_run_crossed_provenance",
+            RequestedEngine = requestedEngine,
+        };
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(
+            () => service.PersistAsync(payload, CancellationToken.None));
+
+        Assert.Contains("requested_engine", error.Message);
+    }
+
+    [Fact]
+    public async Task PersistAsync_LegacyEnginePayload_PreservesMissingRequestedEngine()
+    {
+        var service = CreateService(out var db);
+        var payload = BuildPayload(leanRunId: "placeholder") with
+        {
+            Source = "engine",
+            LeanRunId = null,
+            RequestedEngine = null,
+        };
+
+        var id = await service.PersistAsync(payload, CancellationToken.None);
+
+        var row = await db.StrategyExecutions.SingleAsync(s => s.Id == id);
+        Assert.Null(row.RequestedEngine);
     }
 
     [Fact]

@@ -8,11 +8,17 @@ import {
 
 import {
   daysBetween,
+  dominantState,
   isoDate,
+  summarizeAvailability,
   weekdaysBetween,
+  type AvailabilityCell,
+  type DominantState,
   type TickerRange,
 } from '../ticker-range-picker.types';
 import { toMostRecentWeekday } from '../../date/weekday';
+
+export type LegendTreatment = 'tinted-bold' | 'solid-bold' | 'icon-glyph';
 
 interface Preset {
   days: number;
@@ -37,8 +43,12 @@ const PRESETS: readonly Preset[] = [
 export class TimeWindowCardComponent {
   readonly value = model.required<TickerRange>();
   readonly appearance = input<'card' | 'flat'>('card');
+  readonly availability = input<readonly AvailabilityCell[]>([]);
+  readonly legendTreatment = input<LegendTreatment>('tinted-bold');
 
   readonly presets = PRESETS;
+  readonly summary = computed(() => summarizeAvailability(this.availability()));
+  readonly dominant = computed<DominantState>(() => dominantState(this.summary()));
 
   readonly spanDays = computed(() => {
     const v = this.value();
@@ -46,6 +56,8 @@ export class TimeWindowCardComponent {
   });
 
   readonly spanBusinessDays = computed(() => {
+    const summaryDays = this.summary().weekdays;
+    if (summaryDays > 0) return summaryDays;
     const v = this.value();
     return weekdaysBetween(v.from, v.to);
   });
@@ -54,6 +66,10 @@ export class TimeWindowCardComponent {
     const s = this.spanDays();
     return PRESETS.find((p) => Math.abs(s - p.days) < 2)?.days ?? null;
   });
+
+  trackByDay(_: number, cell: AvailabilityCell): string {
+    return cell.date;
+  }
 
   updateFrom(v: string): void {
     this.value.set({ ...this.value(), from: v });

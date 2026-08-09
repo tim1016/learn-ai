@@ -29,7 +29,9 @@
       [recent]="recent()" />
 
     <app-time-window-card
-      [(value)]="value" />
+      [(value)]="value"
+      [availability]="availability()"
+      [legendTreatment]="legendTreatment()" />
 
     @if (!hideSampling()) {
       <app-sampling-card

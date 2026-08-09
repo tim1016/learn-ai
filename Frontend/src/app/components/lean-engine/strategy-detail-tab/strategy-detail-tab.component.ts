@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, input, output } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
-import type { StrategyInfo } from '../lean-engine.component';
+import type { StrategyInfo } from '../../strategy-lab/strategy-lab.models';
 
 /**
  * Read-only detail view for a single registered strategy, hosted in its own

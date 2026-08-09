@@ -82,8 +82,47 @@ def test_engine_backtest_request_pins_requested_engine_vocabulary() -> None:
     with pytest.raises(ValidationError, match="requested_engine"):
         EngineBacktestRequest(
             strategy_name="spy_ema_crossover",
-            requested_engine="maybe",  # type: ignore[arg-type]
+            requested_engine="lean",  # type: ignore[arg-type]
         )
+
+    from app.routers.lean_sidecar import TrustedRunRequestModel
+
+    with pytest.raises(ValidationError, match="requested_engine"):
+        TrustedRunRequestModel(
+            run_id="python-cannot-enter-lean-endpoint",
+            requested_engine="python",  # type: ignore[arg-type]
+            symbol="SPY",
+            start_ms_utc=1_736_173_800_000,
+            end_ms_utc=1_736_778_600_000,
+            starting_cash=100_000,
+        )
+
+
+def test_python_only_request_has_no_parity_group_or_companion(monkeypatch) -> None:
+    """Python-only runs persist without creating a misleading LEAN companion."""
+    from app.routers import engine as engine_router
+
+    request = engine_router.EngineBacktestRequest(
+        strategy_name="ema_crossover_signal",
+        requested_engine="python",
+    )
+    dispatched: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        engine_router,
+        "dispatch_parity_companion",
+        lambda **kwargs: dispatched.append(kwargs),
+    )
+
+    parity_group_id = engine_router._new_parity_group_id_for(request.requested_engine)
+    engine_router._dispatch_requested_parity_companion(
+        registration=engine_router._STRATEGY_REGISTRY[request.strategy_name],
+        request=request,
+        parity_group_id=parity_group_id,
+        study_id=1,
+    )
+
+    assert parity_group_id is None
+    assert dispatched == []
 
 
 @pytest.mark.asyncio
@@ -150,6 +189,41 @@ async def test_engine_backtest_defers_data_policy_when_symbol_absent() -> None:
     )
 
     assert req.data_policy is None
+
+
+def test_resolved_snapshot_freezes_strategy_defaults_for_history() -> None:
+    """Omitted dates/params persist the initialized values, never empty overrides."""
+    from decimal import Decimal
+
+    from app.engine.execution.portfolio import Portfolio
+    from app.engine.strategy.base import StrategyContext
+    from app.engine.strategy.registry import _STRATEGY_REGISTRY
+    from app.routers.engine import (
+        EngineBacktestRequest,
+        _resolve_legacy_data_policy,
+        _resolved_run_configuration,
+    )
+
+    registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
+    request = EngineBacktestRequest(strategy_name="ema_crossover_signal", params={})
+    validated = registration.param_schema.model_validate(request.params)
+    strategy = registration.build(validated)
+    strategy.ctx = StrategyContext(portfolio=Portfolio(initial_cash=Decimal("100000")))
+    strategy.initialize()
+
+    _resolve_legacy_data_policy(request, validated)
+    snapshot = _resolved_run_configuration(
+        request=request,
+        registration=registration,
+        validated_params=validated,
+        strategy=strategy,
+    )
+
+    assert snapshot.start_date == "2024-03-28"
+    assert snapshot.end_date == "2026-03-27"
+    assert snapshot.parameters == {"symbol": "SPY"}
+    assert request.data_policy is not None
+    assert request.data_policy.symbol == "SPY"
 
 
 def test_compatibility_profile_rejects_adjusted_input() -> None:

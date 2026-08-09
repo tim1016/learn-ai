@@ -1,10 +1,8 @@
-import { HttpClient } from "@angular/common/http";
 import { ChangeDetectionStrategy, Component, computed, inject, input, output } from "@angular/core";
 import { rxResource } from "@angular/core/rxjs-interop";
 import { Apollo } from "apollo-angular";
-import { catchError, map, of } from "rxjs";
+import { map, of } from "rxjs";
 
-import { environment } from "../../../../environments/environment";
 import type { RunVerdict } from "../../../api/run-verdict.types";
 import {
   BACKTEST_RUN_DETAIL_QUERY,
@@ -12,7 +10,7 @@ import {
   type BacktestRunDetailQueryResult,
   type BacktestRunDetailTrade,
 } from "../../../graphql/backtest-runs.query";
-import type { TradingCandle, TradingMarker, TradingPoint } from "../../../shared/trading-chart";
+import type { TradingMarker, TradingPoint } from "../../../shared/trading-chart";
 import type {
   EngineResultData,
   EngineTrade,
@@ -26,45 +24,6 @@ import {
   StrategyLabVerdictComponent,
   type StrategyLabParityView,
 } from "../../strategy-lab/strategy-lab-verdict/strategy-lab-verdict.component";
-
-interface EngineBar {
-  t: number;
-  o: number;
-  h: number;
-  l: number;
-  c: number;
-  v: number;
-}
-
-interface EngineBarsResponse {
-  policy_key: string;
-  symbol: string;
-  count: number;
-  bars: EngineBar[];
-  coverage: {
-    expected_days: number;
-    available_days: number;
-    is_complete: boolean;
-    missing_days: string[];
-  };
-}
-
-interface BarsQuery {
-  symbol: string;
-  from_date: string;
-  to_date: string;
-  adjusted: boolean;
-  session: string;
-  timespan: string;
-  multiplier: number;
-}
-
-type BarsState =
-  | { kind: "loaded"; response: EngineBarsResponse }
-  | { kind: "unavailable"; reason: string }
-  | { kind: "pending" };
-
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** One persisted-run renderer shared by Workbench and the run-detail route. */
 @Component({
@@ -81,14 +40,18 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 })
 export class RunReportComponent {
   private readonly apollo = inject(Apollo);
-  private readonly http = inject(HttpClient);
 
   readonly runId = input.required<number>();
+  readonly runDetail = input<BacktestRunDetail | null>(null);
   readonly rerun = output();
 
-  private readonly runResource = rxResource<BacktestRunDetail | null, number>({
-    params: () => this.runId(),
+  private readonly runResource = rxResource<BacktestRunDetail | null, number | null>({
+    params: () => {
+      const supplied = this.runDetail();
+      return supplied?.id === this.runId() && !hasPendingParity(supplied) ? null : this.runId();
+    },
     stream: ({ params }) => {
+      if (params === null) return of(null);
       const ref = this.apollo.watchQuery<BacktestRunDetailQueryResult>({
         query: BACKTEST_RUN_DETAIL_QUERY,
         variables: { id: params },
@@ -105,72 +68,13 @@ export class RunReportComponent {
     },
   });
 
-  readonly run = computed(() => this.runResource.value() ?? null);
+  readonly run = computed(() => {
+    const refreshed = this.runResource.value();
+    if (refreshed?.id === this.runId()) return refreshed;
+    const supplied = this.runDetail();
+    return supplied?.id === this.runId() ? supplied : null;
+  });
   readonly loading = computed(() => this.runResource.isLoading() && !this.run());
-
-  private readonly barsQuery = computed<BarsQuery | null>(() => {
-    const run = this.run();
-    const policy = run?.dataPolicy;
-    const bars = policy?.strategy_bars;
-    if (!run || !policy || !bars || !ISO_DATE.test(run.startDate) || !ISO_DATE.test(run.endDate)) return null;
-    return {
-      symbol: run.symbol,
-      from_date: run.startDate,
-      to_date: run.endDate,
-      adjusted: policy.adjusted,
-      session: policy.session,
-      timespan: bars.timespan,
-      multiplier: bars.multiplier,
-    };
-  });
-
-  private readonly barsResource = rxResource<BarsState, BarsQuery | null>({
-    params: () => this.barsQuery(),
-    stream: ({ params }) => {
-      if (params === null) {
-        return of<BarsState>({
-          kind: "unavailable",
-          reason: "Price chart unavailable — this run has no recorded data policy or date window.",
-        });
-      }
-      return this.http
-        .get<EngineBarsResponse>(`${environment.pythonServiceUrl}/api/engine/bars`, { params: { ...params } })
-        .pipe(
-          map((response): BarsState => ({ kind: "loaded", response })),
-          catchError(() => of<BarsState>({
-            kind: "unavailable",
-            reason: "Bar store unreachable — price chart unavailable for this run.",
-          })),
-        );
-    },
-  });
-
-  private readonly barsState = computed<BarsState>(() =>
-    this.barsResource.value() ?? { kind: "pending" },
-  );
-
-  readonly candles = computed<TradingCandle[]>(() => {
-    const state = this.barsState();
-    if (state.kind !== "loaded") return [];
-    return state.response.bars.map((bar) => ({
-      timeMs: bar.t,
-      open: bar.o,
-      high: bar.h,
-      low: bar.l,
-      close: bar.c,
-      volume: bar.v,
-    }));
-  });
-
-  readonly barsNotice = computed<string | null>(() => {
-    const state = this.barsState();
-    if (state.kind === "unavailable") return state.reason;
-    if (state.kind === "loaded" && !state.response.coverage.is_complete) {
-      const coverage = state.response.coverage;
-      return `Bar store covers ${coverage.available_days} of ${coverage.expected_days} weekdays; missing sessions remain visible as gaps.`;
-    }
-    return null;
-  });
 
   readonly verdict = computed<RunVerdict | null>(() => {
     const json = this.run()?.verdictJson;
@@ -215,21 +119,21 @@ export class RunReportComponent {
 
   readonly markers = computed<TradingMarker[]>(() =>
     (this.run()?.trades ?? []).flatMap((trade) => {
-      const won = trade.pnL >= 0;
-      const color = won ? "#26a69a" : "#ef5350";
+      const outcome = trade.pnL > 0 ? "WIN" : trade.pnL < 0 ? "LOSS" : "BREAK EVEN";
+      const color = trade.pnL > 0 ? "#26a69a" : trade.pnL < 0 ? "#ef5350" : "#90a4ae";
       return [{
         timeMs: trade.entryTimestamp,
         position: "belowBar" as const,
         color,
         shape: "arrowUp" as const,
-        text: `BUY · ${won ? "WIN" : "LOSS"}`,
+        text: `BUY · ${outcome}`,
       },
       {
         timeMs: trade.exitTimestamp,
         position: "aboveBar" as const,
         color,
         shape: "arrowDown" as const,
-        text: `SELL · ${won ? "+" : ""}${formatMoney(trade.pnL)}`,
+        text: `SELL · ${trade.pnL > 0 ? "+" : ""}${formatMoney(trade.pnL)}`,
       }];
     }),
   );
@@ -243,9 +147,6 @@ export class RunReportComponent {
     if (!run) return [];
 
     const notices: string[] = [];
-    const barsNotice = this.barsNotice();
-    if (barsNotice) notices.push(barsNotice);
-
     if (!run.equityCurve) {
       notices.push("Equity curve was not recorded for this run.");
     } else if (run.equityCurve.error) {
@@ -271,6 +172,10 @@ export class RunReportComponent {
     const latest = [...verdicts].sort((left, right) => right.createdAt - left.createdAt)[0];
     return toParityView(latest);
   });
+}
+
+function hasPendingParity(run: BacktestRunDetail): boolean {
+  return run.parityVerdicts.some((verdict) => verdict.status === "pending");
 }
 
 export function parseLeanAnalysis(json: string | null): LeanAnalysisFinding[] {

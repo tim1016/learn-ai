@@ -54,8 +54,15 @@ public class BacktestRunPersistenceService : IBacktestRunPersistenceService
         if (payload.Source == "engine" && !string.IsNullOrWhiteSpace(payload.LeanRunId))
             throw new ArgumentException("lean_run_id must be null when source='engine'", nameof(payload));
 
-        if (payload.RequestedEngine is not ("python" or "lean" or "both"))
-            throw new ArgumentException("requested_engine must be python, lean, or both", nameof(payload));
+        if (!RequestedEngineContract.IsValidForSource(
+                payload.Source,
+                payload.RequestedEngine,
+                allowLegacyNull: true))
+        {
+            throw new ArgumentException(
+                "requested_engine must match source (engine: python|both; lean-sidecar: lean|both)",
+                nameof(payload));
+        }
 
         // Idempotency: only applies to lean-sidecar runs, where lean_run_id is the natural key.
         // Engine runs have no external idempotency key — every persist creates a new row.
@@ -64,19 +71,23 @@ public class BacktestRunPersistenceService : IBacktestRunPersistenceService
             var existing = await _db.StrategyExecutions
                 .AsNoTracking()
                 .Where(s => s.Source == "lean-sidecar" && s.LeanRunId == payload.LeanRunId)
-                .Select(s => (int?)s.Id)
+                .Select(s => new { s.Id, s.RequestedEngine })
                 .FirstOrDefaultAsync(ct);
 
-            if (existing.HasValue)
+            if (existing is not null)
             {
+                EnsureRequestedEngineMatchesExisting(
+                    existing.RequestedEngine,
+                    payload.RequestedEngine,
+                    payload.LeanRunId);
                 _logger.LogInformation(
                     "[STEP 1] PersistLean idempotent: LeanRunId={LeanRunId} already exists as StrategyExecutionId={Id}",
-                    payload.LeanRunId, existing.Value);
+                    payload.LeanRunId, existing.Id);
                 // A retried persist still gets a shot at freezing the parity
                 // verdict — the computation is conditional (pending-only), so
                 // this can only repair a stalled group, never overwrite.
-                await TryComputeParityVerdictAsync(payload, existing.Value, ct);
-                return existing.Value;
+                await TryComputeParityVerdictAsync(payload, existing.Id, ct);
+                return existing.Id;
             }
         }
 
@@ -105,7 +116,6 @@ public class BacktestRunPersistenceService : IBacktestRunPersistenceService
             Parameters = JsonSerializer.Serialize(new
             {
                 symbol = payload.Symbol,
-                starting_cash = payload.StartingCash,
             }),
             StartDate = startDateStr,
             EndDate = endDateStr,
@@ -124,6 +134,9 @@ public class BacktestRunPersistenceService : IBacktestRunPersistenceService
                 : JsonSerializer.Serialize(payload.LeanStatistics),
             LeanAnalysisJson = payload.LeanAnalysisJson,
             Source = payload.Source,
+            // Preserve null for legacy payloads. The GraphQL projection already
+            // owns the source-aware compatibility fallback; fabricating "lean"
+            // here would mislabel legacy in-process engine runs.
             RequestedEngine = payload.RequestedEngine,
             LeanRunId = payload.LeanRunId,
             FillMode = !string.IsNullOrWhiteSpace(payload.FillMode)
@@ -176,13 +189,22 @@ public class BacktestRunPersistenceService : IBacktestRunPersistenceService
         catch (DbUpdateException ex) when (IsUniqueViolation(ex))
         {
             // A concurrent call won the race and inserted the same LeanRunId.
-            // Look up and return the existing Id so the caller is idempotent.
+            // PostgreSQL aborts the current transaction after a unique
+            // violation, so roll it back and clear the failed tracked insert
+            // before querying the committed winner.
+            await tx.RollbackAsync(ct);
+            _db.ChangeTracker.Clear();
             var raceWinner = await _db.StrategyExecutions
                 .AsNoTracking()
                 .Where(s => s.Source == "lean-sidecar" && s.LeanRunId == payload.LeanRunId)
-                .Select(s => s.Id)
+                .Select(s => new { s.Id, s.RequestedEngine })
                 .FirstAsync(ct);
-            return raceWinner;
+            EnsureRequestedEngineMatchesExisting(
+                raceWinner.RequestedEngine,
+                payload.RequestedEngine,
+                payload.LeanRunId);
+            await TryComputeParityVerdictAsync(payload, raceWinner.Id, ct);
+            return raceWinner.Id;
         }
 
         _logger.LogInformation(
@@ -248,6 +270,23 @@ public class BacktestRunPersistenceService : IBacktestRunPersistenceService
     {
         // Npgsql: SqlState 23505 == unique_violation
         return ex.InnerException is Npgsql.PostgresException pg && pg.SqlState == "23505";
+    }
+
+    private static void EnsureRequestedEngineMatchesExisting(
+        string? existingRequestedEngine,
+        string? requestedEngine,
+        string? leanRunId)
+    {
+        if (existingRequestedEngine is null ||
+            requestedEngine is null ||
+            existingRequestedEngine == requestedEngine)
+        {
+            return;
+        }
+
+        throw new ArgumentException(
+            $"requested_engine conflicts with the existing run '{leanRunId}'",
+            nameof(requestedEngine));
     }
 
     /// <summary>

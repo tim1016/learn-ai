@@ -393,7 +393,10 @@ export class TradingChartComponent implements OnDestroy {
 }
 
 function toChartTime(timeMs: number): UTCTimestamp {
-  return Math.floor(timeMs / 1000) as UTCTimestamp;
+  // Keep canonical milliseconds everywhere upstream. Lightweight Charts is
+  // the sole seconds boundary; fractional seconds preserve distinct points
+  // instead of silently collapsing them onto the preceding whole second.
+  return timeMs / 1000 as UTCTimestamp;
 }
 
 function sortByTime<T extends { time: Time }>(left: T, right: T): number {

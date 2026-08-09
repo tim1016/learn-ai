@@ -11,6 +11,7 @@ being rolled out.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -52,16 +53,18 @@ from app.engine.results.lean_statistics import compute_lean_statistics
 from app.engine.results.statistics import summarize
 from app.engine.results.trade_record import TradeRecord
 from app.engine.strategy.base import Strategy
-from app.engine.strategy.registry import _STRATEGY_REGISTRY, StrategyRegistration
+from app.engine.strategy.registry import _STRATEGY_REGISTRY, ChartParamRef, StrategyRegistration
 from app.models.responses import (
     LeanPortfolioStatsResponse,
     LeanRuntimeStatsResponse,
     LeanStatisticsResponse,
     LeanTradeStatsResponse,
 )
+from app.schemas.engine_chart import EngineChartRequest, EngineChartResponse
 from app.schemas.engine_validation import EngineValidationAnalyticsResponse
 from app.schemas.run_verdict import RunVerdict
 from app.services.engine_bars_service import read_consolidated_bars
+from app.services.engine_chart_service import build_engine_chart
 from app.services.engine_validation_analytics import (
     ValidationEquityPoint,
     ValidationTrade,
@@ -79,6 +82,7 @@ from app.utils.timestamps import now_ms_utc, to_ms_utc
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
 
 def _public_params_schema(reg: StrategyRegistration) -> dict[str, Any]:
     schema = reg.param_schema.model_json_schema()
@@ -159,7 +163,7 @@ class EngineBacktestRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     strategy_name: str = Field(..., description="Registered strategy identifier")
-    requested_engine: Literal["python", "lean", "both"] = Field(
+    requested_engine: Literal["python", "both"] = Field(
         "python",
         description="Operator-selected execution mode, persisted for exact History rehydration.",
     )
@@ -435,6 +439,15 @@ class EngineBacktestResponse(BaseModel):
     validation_analytics: EngineValidationAnalyticsResponse | None = None
 
 
+class ResolvedRunConfiguration(BaseModel):
+    """The concrete configuration the initialized strategy actually executed."""
+
+    start_date: str
+    end_date: str
+    resolution: Literal["minute", "daily"]
+    parameters: dict[str, Any]
+
+
 # ---------------------------------------------------------------------------
 # Phase callbacks
 #
@@ -456,6 +469,29 @@ def _noop_phase(_: str) -> None:
 
 def _noop_log(_: str) -> None:
     pass
+
+
+def _new_parity_group_id_for(requested_engine: Literal["python", "both"]) -> str | None:
+    """Mint a parity group only for an operator-requested paired run."""
+    return new_parity_group_id() if requested_engine == "both" else None
+
+
+def _dispatch_requested_parity_companion(
+    *,
+    registration: StrategyRegistration,
+    request: EngineBacktestRequest,
+    parity_group_id: str | None,
+    study_id: int | None,
+) -> None:
+    """Dispatch LEAN only when the persisted Python run belongs to a pair."""
+    if study_id is None or parity_group_id is None:
+        return
+    dispatch_parity_companion(
+        registration=registration,
+        request=request,
+        parity_group_id=parity_group_id,
+        left_execution_id=study_id,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -487,6 +523,46 @@ def _apply_overrides(strategy: Strategy, req: EngineBacktestRequest) -> None:
         strategy.set_end_date(d.year, d.month, d.day)
     if req.initial_cash is not None:
         strategy.set_cash(req.initial_cash)
+
+
+def _resolve_legacy_data_policy(
+    request: EngineBacktestRequest,
+    validated_params: Any,
+) -> None:
+    """Fill the legacy policy from validated defaults before any bar read."""
+    if request.data_policy is not None:
+        return
+    symbol = getattr(validated_params, "symbol", None)
+    if not isinstance(symbol, str) or not symbol.strip():
+        return
+    timespan: Literal["minute", "day"] = "day" if request.resolution == "daily" else "minute"
+    request.data_policy = _EngineDataPolicyModel(
+        source="polygon",
+        symbol=symbol.strip().upper(),
+        adjusted=True,
+        session="regular",
+        input_bars=_EngineBarsSpecModel(timespan=timespan, multiplier=1),
+        strategy_bars=_EngineBarsSpecModel(timespan=timespan, multiplier=1),
+    )
+
+
+def _resolved_run_configuration(
+    *,
+    request: EngineBacktestRequest,
+    registration: StrategyRegistration,
+    validated_params: Any,
+    strategy: Strategy,
+) -> ResolvedRunConfiguration:
+    """Snapshot defaults and overrides after strategy initialization."""
+    if strategy.start_date is None or strategy.end_date is None:
+        raise RuntimeError("initialized strategy did not resolve an execution date window")
+    parameters = validated_params.model_dump(mode="json", exclude=registration.hidden_params)
+    return ResolvedRunConfiguration(
+        start_date=strategy.start_date.date().isoformat(),
+        end_date=strategy.end_date.date().isoformat(),
+        resolution=request.resolution,
+        parameters=parameters,
+    )
 
 
 def _format_trade(index: int, trade: Any) -> EngineTradeResponse:
@@ -529,6 +605,12 @@ def _format_trade_record(index: int, trade: Any, cumulative_pnl_pct: float) -> T
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+class StrategyBarCadenceInfo(BaseModel):
+    timespan: Literal["minute", "day"]
+    multiplier: int = Field(ge=1)
+    parameter: str | None = None
+
+
 class StrategyInfo(BaseModel):
     name: str
     display_name: str
@@ -558,6 +640,7 @@ class StrategyInfo(BaseModel):
     # The LEAN trusted template that validates this strategy's execution
     # semantics. ``None`` means Engine Lab must not offer a LEAN parity run.
     lean_twin: str | None = None
+    strategy_bars: StrategyBarCadenceInfo
 
 
 @router.get("/strategies", response_model=list[StrategyInfo])
@@ -573,6 +656,11 @@ def list_engine_strategies() -> list[StrategyInfo]:
         reg = _STRATEGY_REGISTRY[name]
         if not reg.catalog_visible:
             continue
+        cadence_param = reg.strategy_bars.multiplier
+        defaults = reg.param_schema.model_validate({})
+        multiplier = (
+            getattr(defaults, cadence_param.field) if isinstance(cadence_param, ChartParamRef) else cadence_param
+        )
         result.append(
             StrategyInfo(
                 name=name,
@@ -585,6 +673,11 @@ def list_engine_strategies() -> list[StrategyInfo]:
                 pine_available=reg.pine_generator is not None,
                 sizing_surface=reg.sizing_surface,
                 lean_twin=reg.lean_twin,
+                strategy_bars=StrategyBarCadenceInfo(
+                    timespan=reg.strategy_bars.timespan,
+                    multiplier=multiplier,
+                    parameter=cadence_param.field if isinstance(cadence_param, ChartParamRef) else None,
+                ),
             )
         )
     return result
@@ -856,6 +949,15 @@ def get_engine_bars(
     )
 
 
+@router.post("/chart", response_model=EngineChartResponse)
+async def get_engine_chart(request: EngineChartRequest) -> EngineChartResponse:
+    """Render exact strategy bars and indicators from one policy-store read."""
+    try:
+        return await asyncio.to_thread(build_engine_chart, request)
+    except (ValueError, ValidationError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
 @router.post("/backtest", response_model=EngineBacktestResponse)
 def run_engine_backtest(
     request: EngineBacktestRequest,
@@ -972,6 +1074,8 @@ def execute_engine_backtest(
                 "params_errors": exc.errors(),
             },
         )
+
+    _resolve_legacy_data_policy(request, validated_params)
 
     fill_mode = _parse_fill_mode(request.fill_mode)
 
@@ -1138,9 +1242,7 @@ def execute_engine_backtest(
     # native chart is sparse, so the pinned profile uses the common closed-
     # trade ledger on both sides while retaining each native curve as evidence.
     statistics_equity_points = (
-        None
-        if request.compatibility_profile == COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1
-        else equity_points
+        None if request.compatibility_profile == COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1 else equity_points
     )
     stats = summarize(
         initial_cash=float(result.initial_cash),
@@ -1310,14 +1412,20 @@ def execute_engine_backtest(
     # Minted BEFORE persisting so the row itself carries the group id —
     # the .NET persist step joins the LEAN companion back to this run
     # through it when computing the frozen ParityVerdict.
-    parity_group_id = new_parity_group_id()
+    parity_group_id = _new_parity_group_id_for(request.requested_engine)
+    resolved_configuration = _resolved_run_configuration(
+        request=request,
+        registration=registration,
+        validated_params=validated_params,
+        strategy=strategy,
+    )
     response.study_id = _save_study_sync(
         response=response,
         symbol=strategy.ctx.symbols[0] if strategy.ctx.symbols else "SPY",
-        start_date=request.from_date or "",
-        end_date=request.to_date or "",
-        resolution=request.resolution or "minute",
-        params_json=json.dumps(request.params) if request.params else "{}",
+        start_date=resolved_configuration.start_date,
+        end_date=resolved_configuration.end_date,
+        resolution=resolved_configuration.resolution,
+        params_json=json.dumps(resolved_configuration.parameters, sort_keys=True),
         duration_ms=int((time.time() - _run_start) * 1000),
         commission_per_order=float(request.commission_per_order),
         requested_engine=request.requested_engine,
@@ -1326,17 +1434,14 @@ def execute_engine_backtest(
 
     on_log(f"Saved study {response.study_id}")
 
-    if response.study_id is not None:
-        # Every persisted run gets a parity disposition: an async LEAN
-        # validating companion when eligible, an honest "unavailable"
-        # verdict row otherwise. Best-effort — never fails the run.
+    if parity_group_id is not None:
         on_log("Recording parity disposition")
-        dispatch_parity_companion(
-            registration=registration,
-            request=request,
-            parity_group_id=parity_group_id,
-            left_execution_id=response.study_id,
-        )
+    _dispatch_requested_parity_companion(
+        registration=registration,
+        request=request,
+        parity_group_id=parity_group_id,
+        study_id=response.study_id,
+    )
 
     return response
 

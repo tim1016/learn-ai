@@ -1,14 +1,21 @@
 import { ChangeDetectionStrategy, Component, computed, input, model, output } from "@angular/core";
 
+import type { DataPolicy } from "../../../models/data-policy";
 import { InstrumentCardComponent } from "../../../shared/ticker-range-picker/parts/instrument-card.component";
 import { TimeWindowCardComponent } from "../../../shared/ticker-range-picker/parts/time-window-card.component";
 import type { TickerOption, TickerRange } from "../../../shared/ticker-range-picker/ticker-range-picker.types";
-import type { EngineChoice, StrategyInfo } from "../../lean-engine/lean-engine.component";
+import type { EngineChoice, StrategyInfo } from "../strategy-lab.models";
 
 export interface StrategyParameterChange {
   field: string;
   rawValue: string;
   type: string | undefined;
+}
+
+interface StrategyLabPrimaryAction {
+  kind: "check-launcher" | "run";
+  label: string;
+  disabled: boolean;
 }
 
 @Component({
@@ -24,6 +31,7 @@ export class StrategyLabConfigRailComponent {
   readonly collapsed = input(false);
   readonly engine = input.required<EngineChoice>();
   readonly range = model.required<TickerRange>();
+  readonly dataPolicy = input.required<DataPolicy>();
   readonly strategies = input<readonly StrategyInfo[]>([]);
   readonly selectedStrategyName = input<string | null>(null);
   readonly paramValues = input<Record<string, unknown>>({});
@@ -33,6 +41,7 @@ export class StrategyLabConfigRailComponent {
   readonly tickerPool = input<readonly TickerOption[]>([]);
   readonly recentTickers = input<readonly string[]>([]);
   readonly running = input(false);
+  readonly runBlocked = input(false);
   readonly launcherBlocksRun = input(false);
   readonly launcherStatus = input("unknown");
   readonly launcherDetail = input("");
@@ -60,15 +69,42 @@ export class StrategyLabConfigRailComponent {
       .map(([field, property]) => ({ field, property }));
   });
 
-  readonly runLabel = computed(() => {
-    if (this.launcherBlocksRun()) return "Check launcher";
-    if (this.engine() === "both") return "Run both engines";
-    return "Run validation";
+  readonly samplingSummary = computed(() => {
+    const policy = this.dataPolicy();
+    const input = policy.input_bars;
+    const sampling = `${input.multiplier} ${input.timespan}${input.multiplier === 1 ? "" : "s"}`;
+    const session = policy.session === "regular" ? "regular session" : "extended session";
+    const provider = policy.provider_kind === "fixture"
+      ? `fixture ${policy.fixture_id ?? "(unidentified)"}`
+      : policy.source;
+    return `${sampling} · ${session} · ${provider}`;
   });
 
-  readonly runDisabled = computed(() =>
-    this.running() || !this.selectedStrategyName() || (this.engine() !== "python" && this.launcherBlocksRun()),
-  );
+  readonly primaryAction = computed<StrategyLabPrimaryAction>(() => {
+    const unavailableStrategy = this.selectedStrategy() === null;
+    const recoveryDisabled = this.running() || !this.selectedStrategyName();
+    if (this.launcherBlocksRun()) {
+      return {
+        kind: "check-launcher",
+        label: "Check launcher",
+        disabled: recoveryDisabled || unavailableStrategy || this.runBlocked(),
+      };
+    }
+    return {
+      kind: "run",
+      label: this.engine() === "both" ? "Run both engines" : "Run validation",
+      disabled: recoveryDisabled || unavailableStrategy || this.runBlocked(),
+    };
+  });
+
+  activatePrimaryAction(): void {
+    if (this.primaryAction().disabled) return;
+    if (this.primaryAction().kind === "check-launcher") {
+      this.launcherCheckRequested.emit();
+      return;
+    }
+    this.runRequested.emit();
+  }
 
   selectEngine(engine: EngineChoice): void {
     this.engineChanged.emit(engine);

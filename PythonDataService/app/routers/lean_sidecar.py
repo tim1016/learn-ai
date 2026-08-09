@@ -221,7 +221,7 @@ class TrustedRunRequestModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    requested_engine: Literal["python", "lean", "both"] = Field(
+    requested_engine: Literal["lean", "both"] = Field(
         "lean",
         description="Operator-selected execution mode, persisted for exact History rehydration.",
     )

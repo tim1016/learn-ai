@@ -52,10 +52,10 @@
     <details class="advanced">
       <summary>Advanced <span>Sampling, parameters, execution</span></summary>
       <div class="advanced-row">
-        <span>Sampling</span><strong class="mono">1 minute · read only</strong>
+        <span>Sampling</span><strong class="mono">{{ samplingSummary() }}</strong>
       </div>
 
-      @if (parameterEntries().length > 0) {
+      @if (engine() !== "lean" && parameterEntries().length > 0) {
         <fieldset class="advanced-params">
           <legend>Strategy parameters</legend>
           @for (entry of parameterEntries(); track entry.field) {
@@ -75,21 +75,27 @@
 
       <fieldset class="advanced-params">
         <legend>Execution</legend>
-        <label>
-          <span>Fill mode</span>
-          <select [value]="fillMode()" (change)="onFillModeEvent($event)">
-            <option value="signal_bar_close">Signal bar close</option>
-            <option value="next_bar_open">Next bar open</option>
-          </select>
-        </label>
+        @if (engine() !== "lean") {
+          <label>
+            <span>Fill mode</span>
+            <select [value]="fillMode()" (change)="onFillModeEvent($event)">
+              <option value="signal_bar_close">Signal bar close</option>
+              <option value="next_bar_open">Next bar open</option>
+            </select>
+          </label>
+        }
         <label>
           <span>Initial cash</span>
           <input type="number" min="0" [value]="initialCash()" (input)="onInitialCashEvent($event)" />
         </label>
-        <label>
-          <span>Commission / order</span>
-          <input type="number" min="0" step="0.01" [value]="commissionPerOrder()" (input)="onCommissionEvent($event)" />
-        </label>
+        @if (engine() !== "lean") {
+          <label>
+            <span>Commission / order</span>
+            <input type="number" min="0" step="0.01" [value]="commissionPerOrder()" (input)="onCommissionEvent($event)" />
+          </label>
+        } @else {
+          <p>Strategy parameters, fills, and fees are defined by the aligned LEAN template.</p>
+        }
       </fieldset>
 
       @if (engine() !== "python") {
@@ -107,11 +113,11 @@
       <button
         type="button"
         class="run-button"
-        [disabled]="runDisabled()"
-        (click)="launcherBlocksRun() ? launcherCheckRequested.emit() : runRequested.emit()"
+        [disabled]="primaryAction().disabled"
+        (click)="activatePrimaryAction()"
       >
         <i class="pi" [class.pi-spin]="running()" [class.pi-spinner]="running()" [class.pi-play]="!running()"></i>
-        {{ running() ? "Running…" : runLabel() }}
+        {{ running() ? "Running…" : primaryAction().label }}
       </button>
     </footer>
   </aside>

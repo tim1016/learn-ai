@@ -1,0 +1,140 @@
+import { provideHttpClient } from "@angular/common/http";
+import { signal } from "@angular/core";
+import { TestBed } from "@angular/core/testing";
+import { ActivatedRoute, convertToParamMap } from "@angular/router";
+import { of } from "rxjs";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import { JobsService } from "../../services/jobs.service";
+import { LeanSidecarService } from "../../services/lean-sidecar.service";
+import { StrategyLabConfigStore } from "./strategy-lab-config.store";
+import { StrategyLabRunner } from "./strategy-lab-runner.service";
+import type { StrategyInfo } from "./strategy-lab.models";
+
+const STRATEGY = {
+  name: "ema_crossover_signal",
+  display_name: "EMA crossover",
+  description: "EMA validation",
+  params_schema: { properties: { symbol: { type: "string", default: "SPY" } } },
+  supported_resolutions: ["minute"],
+  lean_twin: "ema_crossover_signal",
+  strategy_bars: { timespan: "minute", multiplier: 15, parameter: null },
+} satisfies StrategyInfo;
+
+describe("StrategyLab configuration and runner", () => {
+  let config: StrategyLabConfigStore;
+  let runner: StrategyLabRunner;
+  let startJob: ReturnType<typeof vi.fn>;
+  let nextTradingDayOpen: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    startJob = vi.fn(async () => "job-1");
+    nextTradingDayOpen = vi.fn(async (date: string) => ({
+      session_open_ms_utc: date === "2026-01-04" ? 1_767_624_600_000 : 1_768_000_000_000,
+    }));
+    TestBed.configureTestingModule({
+      providers: [
+        provideHttpClient(),
+        StrategyLabConfigStore,
+        StrategyLabRunner,
+        { provide: ActivatedRoute, useValue: { queryParamMap: of(convertToParamMap({})) } },
+        {
+          provide: JobsService,
+          useValue: {
+            jobs: signal([]),
+            job: vi.fn(() => null),
+            startJob,
+            fetchResult: vi.fn(),
+          },
+        },
+        {
+          provide: LeanSidecarService,
+          useValue: {
+            diagnose: vi.fn(async () => ({
+              overall_status: "pass",
+              checks: [{ name: "launcher_healthz", status: "pass", detail: "ready" }],
+            })),
+            nextTradingDayOpen,
+          },
+        },
+      ],
+    });
+    config = TestBed.inject(StrategyLabConfigStore);
+    runner = TestBed.inject(StrategyLabRunner);
+    config.strategies.set([STRATEGY]);
+    config.selectStrategy(STRATEGY.name);
+  });
+
+  it("submits one Python anchor for Both mode with the exact compatibility policy", async () => {
+    config.engine.set("both");
+
+    await runner.run();
+
+    expect(startJob).toHaveBeenCalledOnce();
+    expect(startJob).toHaveBeenCalledWith(
+      "engine_backtest",
+      expect.objectContaining({
+        backtest: expect.objectContaining({
+          requested_engine: "both",
+          compatibility_profile: "us-equity-raw-ibkr-v1",
+          data_policy: expect.objectContaining({ adjusted: false, symbol: "SPY" }),
+        }),
+      }),
+    );
+  });
+
+  it("keeps data-policy cadence and adjustment choices in the configuration store", () => {
+    config.engine.set("python");
+    expect(config.dataPolicy()).toEqual(expect.objectContaining({
+      adjusted: true,
+      input_bars: { timespan: "minute", multiplier: 1 },
+      strategy_bars: { timespan: "minute", multiplier: 15 },
+    }));
+  });
+
+  it("selects a runnable strategy after an ordinary engine change", () => {
+    const pythonOnly = { ...STRATEGY, name: "python_only", lean_twin: null };
+    config.strategies.set([pythonOnly, STRATEGY]);
+    config.selectStrategy(pythonOnly.name);
+
+    config.changeEngine("lean");
+    TestBed.tick();
+
+    expect(config.selectedStrategyName()).toBe(STRATEGY.name);
+  });
+
+  it("resolves configurable strategy cadence from registry metadata instead of strategy names", () => {
+    const strategy = {
+      ...STRATEGY,
+      name: "sma_crossover",
+      params_schema: {
+        properties: {
+          symbol: { type: "string", default: "SPY" },
+          resolution_minutes: { type: "integer", default: 15 },
+        },
+      },
+      strategy_bars: { timespan: "minute" as const, multiplier: 15, parameter: "resolution_minutes" },
+    };
+    config.strategies.set([strategy]);
+    config.selectStrategy(strategy.name);
+    config.updateParameter("resolution_minutes", "30", "integer");
+
+    expect(config.dataPolicy().strategy_bars).toEqual({ timespan: "minute", multiplier: 30 });
+  });
+
+  it("delegates LEAN session anchors to the canonical calendar service", async () => {
+    config.engine.set("lean");
+    config.range.update((range) => ({ ...range, from: "2026-01-05" }));
+
+    await runner.run();
+
+    expect(nextTradingDayOpen).toHaveBeenCalledWith("2026-01-04");
+    expect(nextTradingDayOpen).toHaveBeenCalledWith(config.endDate());
+    expect(startJob).toHaveBeenCalledWith(
+      "lean_engine_run",
+      expect.objectContaining({
+        request: expect.objectContaining({ start_ms_utc: 1_767_624_600_000 }),
+      }),
+    );
+  });
+});

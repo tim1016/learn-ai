@@ -496,9 +496,7 @@ async def start_lean_engine_run_job(req: LeanEngineRunJobRequest) -> dict:
     try:
         payload = TrustedRunRequestModel.model_validate(req.request)
     except Exception as exc:
-        raise HTTPException(
-            status_code=400, detail=f"invalid lean-engine-run payload: {exc}"
-        ) from exc
+        raise HTTPException(status_code=400, detail=f"invalid lean-engine-run payload: {exc}") from exc
 
     assert payload.data_policy is not None  # _normalize_to_data_policy guarantees
     dp = payload.data_policy
@@ -520,6 +518,7 @@ async def start_lean_engine_run_job(req: LeanEngineRunJobRequest) -> dict:
     )
     trusted_request = TrustedRunRequest(
         run_id=payload.run_id,
+        requested_engine=payload.requested_engine,
         start_ms_utc=payload.start_ms_utc,
         end_ms_utc=payload.end_ms_utc,
         starting_cash=payload.starting_cash,
@@ -791,8 +790,7 @@ async def start_feature_research_job(req: FeatureResearchJobRequest) -> dict:
             cancel,
             "feature_research",
             "loading_bars",
-            f"Loading {ticker} {req.multiplier}{req.timespan} bars "
-            f"from {req.from_date} to {req.to_date}",
+            f"Loading {ticker} {req.multiplier}{req.timespan} bars from {req.from_date} to {req.to_date}",
         )
 
         bars = polygon_client.fetch_aggregates(
@@ -901,8 +899,7 @@ async def start_signal_engine_job(req: SignalEngineJobRequest) -> dict:
             cancel,
             "signal_engine",
             "loading_bars",
-            f"Loading {ticker} {req.multiplier}{req.timespan} bars "
-            f"from {req.from_date} to {req.to_date}",
+            f"Loading {ticker} {req.multiplier}{req.timespan} bars from {req.from_date} to {req.to_date}",
         )
         bars = polygon_client.fetch_aggregates(
             ticker=ticker,
@@ -1041,8 +1038,7 @@ def _serialize_target(target: Any) -> dict:
         "total_count": target.total_count,
         "valid_ratio": target.valid_ratio,
         "invalid_reason_counts": [
-            {"reason": reason, "count": count}
-            for reason, count in target.invalid_reason_counts.items()
+            {"reason": reason, "count": count} for reason, count in target.invalid_reason_counts.items()
         ],
     }
 
@@ -1078,9 +1074,7 @@ def _serialize_feature_report(report: Any) -> dict:
         "monotonicity_ratio": report.monotonicity_ratio,
         "robustness": asdict(report.robustness) if report.robustness is not None else None,
         "feature_spec": asdict(report.feature_spec) if report.feature_spec is not None else None,
-        "validation_verdict": (
-            asdict(report.validation_verdict) if report.validation_verdict is not None else None
-        ),
+        "validation_verdict": (asdict(report.validation_verdict) if report.validation_verdict is not None else None),
         "target": _serialize_target(report.target) if report.target is not None else None,
         "passed_validation": report.passed_validation,
         "error": report.error,
@@ -1104,26 +1098,14 @@ def _serialize_signal_report(report: Any) -> dict:
         "backtest_grid": [asdict(bt) for bt in report.backtest_grid],
         "walk_forward": asdict(report.walk_forward) if report.walk_forward is not None else None,
         "graduation": asdict(report.graduation) if report.graduation is not None else None,
-        "signal_diagnostics": (
-            asdict(report.signal_diagnostics) if report.signal_diagnostics is not None else None
-        ),
-        "data_sufficiency": (
-            asdict(report.data_sufficiency) if report.data_sufficiency is not None else None
-        ),
-        "effective_sample": (
-            asdict(report.effective_sample) if report.effective_sample is not None else None
-        ),
+        "signal_diagnostics": (asdict(report.signal_diagnostics) if report.signal_diagnostics is not None else None),
+        "data_sufficiency": (asdict(report.data_sufficiency) if report.data_sufficiency is not None else None),
+        "effective_sample": (asdict(report.effective_sample) if report.effective_sample is not None else None),
         "regime_coverage": report.regime_coverage,
         "joint_regime_coverage": [asdict(b) for b in report.joint_regime_coverage],
-        "signal_behavior": (
-            asdict(report.signal_behavior) if report.signal_behavior is not None else None
-        ),
-        "oos_sharpe_ci": (
-            asdict(report.oos_sharpe_ci) if report.oos_sharpe_ci is not None else None
-        ),
-        "deflated_sharpe": (
-            asdict(report.deflated_sharpe) if report.deflated_sharpe is not None else None
-        ),
+        "signal_behavior": (asdict(report.signal_behavior) if report.signal_behavior is not None else None),
+        "oos_sharpe_ci": (asdict(report.oos_sharpe_ci) if report.oos_sharpe_ci is not None else None),
+        "deflated_sharpe": (asdict(report.deflated_sharpe) if report.deflated_sharpe is not None else None),
         "methodology": report.methodology,
         "research_log": report.research_log,
         "error": report.error,

@@ -2932,6 +2932,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/engine/chart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Get Engine Chart
+         * @description Render exact strategy bars and indicators from one policy-store read.
+         */
+        post: operations["get_engine_chart_api_engine_chart_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/engine/data/availability": {
         parameters: {
             query?: never;
@@ -10111,7 +10131,35 @@ export interface components {
              * Params
              * @description Indicator parameters
              */
-            params?: Record<string, never>;
+            params?: {
+                [key: string]: number;
+            };
+        };
+        /** ChartIndicatorPoint */
+        ChartIndicatorPoint: {
+            /** T */
+            t: number;
+            /** Value */
+            value: number | null;
+        };
+        /** ChartIndicatorResult */
+        ChartIndicatorResult: {
+            /** Color */
+            color: string;
+            /** Data */
+            data: components["schemas"]["ChartIndicatorPoint"][] | {
+                [key: string]: components["schemas"]["ChartIndicatorPoint"][];
+            };
+            /** Default Visible */
+            default_visible?: boolean | null;
+            /** Id */
+            id: string;
+            /** Panel */
+            panel: string;
+            /** Refs */
+            refs?: number[];
+            /** Type */
+            type: string;
         };
         /**
          * ChartLiveResponse
@@ -12354,7 +12402,7 @@ export interface components {
              * @default python
              * @enum {string}
              */
-            requested_engine?: "python" | "lean" | "both";
+            requested_engine?: "python" | "both";
             /**
              * Resolution
              * @description Data resolution: 'minute' (default) or 'daily'
@@ -12468,6 +12516,87 @@ export interface components {
             symbol: string;
             /** Timespan */
             timespan: string;
+        };
+        /** EngineChartBar */
+        EngineChartBar: {
+            /** C */
+            c: number;
+            /** H */
+            h: number;
+            /** L */
+            l: number;
+            /** O */
+            o: number;
+            /** T */
+            t: number;
+            /** V */
+            v: number;
+        };
+        /** EngineChartCoverage */
+        EngineChartCoverage: {
+            /** Available Days */
+            available_days: number;
+            /** Expected Days */
+            expected_days: number;
+            /** Is Complete */
+            is_complete: boolean;
+            /** Missing Session Ms Utc */
+            missing_session_ms_utc?: number[];
+        };
+        /** EngineChartRequest */
+        EngineChartRequest: {
+            /**
+             * Adjusted
+             * @default true
+             */
+            adjusted?: boolean;
+            /** Excluded Strategy Indicator Ids */
+            excluded_strategy_indicator_ids?: string[];
+            /** From Ms Utc */
+            from_ms_utc: number;
+            /** Indicators */
+            indicators?: components["schemas"]["ChartIndicatorEntry"][];
+            /**
+             * Multiplier
+             * @default 1
+             */
+            multiplier?: number;
+            /** Parameters */
+            parameters?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /**
+             * Session
+             * @default regular
+             * @enum {string}
+             */
+            session?: "regular" | "extended";
+            /** Strategy Name */
+            strategy_name: string;
+            /** Symbol */
+            symbol: string;
+            /**
+             * Timespan
+             * @default minute
+             * @enum {string}
+             */
+            timespan?: "minute" | "hour" | "day";
+            /** To Ms Utc */
+            to_ms_utc: number;
+        };
+        /** EngineChartResponse */
+        EngineChartResponse: {
+            /** Bars */
+            bars: components["schemas"]["EngineChartBar"][];
+            coverage: components["schemas"]["EngineChartCoverage"];
+            /** Indicator Specs */
+            indicator_specs: components["schemas"]["ResolvedChartIndicator"][];
+            /** Indicators */
+            indicators: components["schemas"]["ChartIndicatorResult"][];
+            /** Policy Key */
+            policy_key: string;
+            /** Symbol */
+            symbol: string;
         };
         /**
          * EngineOverlay
@@ -19787,6 +19916,21 @@ export interface components {
             /** Period Minutes */
             period_minutes: number;
         };
+        /** ResolvedChartIndicator */
+        ResolvedChartIndicator: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Name */
+            name: string;
+            /** Params */
+            params: {
+                [key: string]: number;
+            };
+            /** Strategy Default */
+            strategy_default: boolean;
+        };
         /**
          * ResumeComparison
          * @description An already-evaluated Resume checkpoint comparison.
@@ -21981,6 +22125,18 @@ export interface components {
              */
             symbol?: string;
         };
+        /** StrategyBarCadenceInfo */
+        StrategyBarCadenceInfo: {
+            /** Multiplier */
+            multiplier: number;
+            /** Parameter */
+            parameter?: string | null;
+            /**
+             * Timespan
+             * @enum {string}
+             */
+            timespan: "minute" | "day";
+        };
         /** StrategyBehavioralEquivalence */
         StrategyBehavioralEquivalence: {
             /** Detail */
@@ -22053,6 +22209,7 @@ export interface components {
              * @enum {string}
              */
             sizing_surface?: "policy" | "explicit";
+            strategy_bars: components["schemas"]["StrategyBarCadenceInfo"];
             /** Supported Resolutions */
             supported_resolutions?: string[];
         };
@@ -23269,7 +23426,7 @@ export interface components {
              * @default lean
              * @enum {string}
              */
-            requested_engine?: "python" | "lean" | "both";
+            requested_engine?: "lean" | "both";
             /**
              * Run Id
              * @description Slug matching ^[a-z0-9][a-z0-9_-]{2,63}$
@@ -29241,6 +29398,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EngineBarsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_engine_chart_api_engine_chart_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EngineChartRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EngineChartResponse"];
                 };
             };
             /** @description Validation Error */

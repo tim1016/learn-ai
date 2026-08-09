@@ -21,13 +21,16 @@ import {
   type TickerRange,
 } from './ticker-range-picker.types';
 import { InstrumentCardComponent } from './parts/instrument-card.component';
-import { TimeWindowCardComponent } from './parts/time-window-card.component';
+import {
+  TimeWindowCardComponent,
+  type LegendTreatment,
+} from './parts/time-window-card.component';
 import {
   SamplingCardComponent,
   type SessionMode,
 } from './parts/sampling-card.component';
 
-export type { SessionMode };
+export type { LegendTreatment, SessionMode };
 type TickerRangePickerPresentation = 'card' | 'embedded';
 
 /**
@@ -83,6 +86,7 @@ export class TickerRangePickerComponent {
   readonly presentation = input<TickerRangePickerPresentation>('card');
 
   readonly title = input('Backtest data');
+  readonly legendTreatment = input<LegendTreatment>('tinted-bold');
   readonly sessionMode = input<SessionMode>('preview');
 
   readonly advisoryAction = output<AdvisoryAction>();

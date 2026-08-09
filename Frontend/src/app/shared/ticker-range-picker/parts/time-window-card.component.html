@@ -1,5 +1,8 @@
 <section class="group time-window"
          [class.group--flat]="appearance() === 'flat'"
+         [class.time-window--legend-tinted]="legendTreatment() === 'tinted-bold'"
+         [class.time-window--legend-solid]="legendTreatment() === 'solid-bold'"
+         [class.time-window--legend-icon]="legendTreatment() === 'icon-glyph'"
          aria-label="Time window">
   <header class="group__head">
     <span class="group__eyebrow">
@@ -39,4 +42,53 @@
       </button>
     }
   </div>
+
+  @if (availability().length > 0) {
+    <div class="strip" aria-label="Per-day cache availability">
+      @for (cell of availability(); track trackByDay($index, cell)) {
+        <div
+          class="strip__cell"
+          [class.strip__cell--complete]="cell.status === 'complete'"
+          [class.strip__cell--partial]="cell.status === 'partial'"
+          [class.strip__cell--missing]="cell.status === 'missing'"
+          [class.strip__cell--hole]="cell.status === 'hole'"
+          [class.strip__cell--weekend]="cell.status === 'weekend'"
+          [attr.title]="cell.date + ' · ' + cell.status"
+        ></div>
+      }
+    </div>
+
+    <div class="legend">
+      <span class="legend-chip legend-chip--complete" [class.legend-chip--dominant]="dominant() === 'complete'">
+        <i class="pi pi-check legend-chip__icon" aria-hidden="true"></i>
+        <span class="legend-chip__swatch"></span>
+        <span class="legend-chip__count mono">{{ summary().complete }}</span>
+        <span class="legend-chip__label">complete</span>
+      </span>
+      @if (summary().partial > 0) {
+        <span class="legend-chip legend-chip--partial" [class.legend-chip--dominant]="dominant() === 'partial'">
+          <i class="pi pi-clock legend-chip__icon" aria-hidden="true"></i>
+          <span class="legend-chip__swatch"></span>
+          <span class="legend-chip__count mono">{{ summary().partial }}</span>
+          <span class="legend-chip__label">partial</span>
+        </span>
+      }
+      @if (summary().hole > 0) {
+        <span class="legend-chip legend-chip--hole" [class.legend-chip--dominant]="dominant() === 'hole'">
+          <i class="pi pi-times legend-chip__icon" aria-hidden="true"></i>
+          <span class="legend-chip__swatch"></span>
+          <span class="legend-chip__count mono">{{ summary().hole }}</span>
+          <span class="legend-chip__label">{{ summary().hole === 1 ? 'hole' : 'holes' }}</span>
+        </span>
+      }
+      @if (summary().missing > 0) {
+        <span class="legend-chip legend-chip--missing" [class.legend-chip--dominant]="dominant() === 'missing'">
+          <i class="pi pi-circle-off legend-chip__icon" aria-hidden="true"></i>
+          <span class="legend-chip__swatch"></span>
+          <span class="legend-chip__count mono">{{ summary().missing }}</span>
+          <span class="legend-chip__label">missing</span>
+        </span>
+      }
+    </div>
+  }
 </section>

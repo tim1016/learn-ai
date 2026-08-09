@@ -18,6 +18,10 @@ describe('routes', () => {
       redirectTo: 'strategy-lab/runs/:id',
       pathMatch: 'full',
     });
+    expect(routes.find((route) => route.path === 'engine-docs')).toMatchObject({
+      redirectTo: 'strategy-lab/docs',
+      pathMatch: 'full',
+    });
   });
 
   it('uses one Broker Deploy page for Alpaca Broker V2 routes', async () => {

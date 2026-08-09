@@ -2,6 +2,8 @@ import { provideZonelessChangeDetection } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
 import { describe, expect, it } from "vitest";
 
+import metricGolden from "@repo-contracts/fixtures/strategy-metric-help-golden-v1.json";
+
 import { STRATEGY_METRIC_HELP } from "../../lean-engine/metric-grade.util";
 import { MetricHelpPopoverComponent } from "./metric-help-popover.component";
 
@@ -33,5 +35,9 @@ describe("MetricHelpPopoverComponent", () => {
       expect(metric.docAnchor).toBe(`/strategy-lab/docs#${metric.id}`);
       expect(metric.formula.trim().length).toBeGreaterThan(4);
     }
+    expect(Object.keys(STRATEGY_METRIC_HELP).sort())
+      .toEqual(Object.keys(metricGolden.expected).sort());
+    expect(metricGolden.absolute_tolerance).toBe(1e-12);
+    expect(metricGolden.relative_tolerance).toBe(0);
   });
 });

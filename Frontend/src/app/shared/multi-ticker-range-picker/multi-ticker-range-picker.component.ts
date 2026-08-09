@@ -7,7 +7,10 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 
-import { TimeWindowCardComponent } from '../ticker-range-picker/parts/time-window-card.component';
+import {
+  TimeWindowCardComponent,
+  type LegendTreatment,
+} from '../ticker-range-picker/parts/time-window-card.component';
 import {
   SamplingCardComponent,
   type SessionMode,
@@ -58,6 +61,7 @@ export class MultiTickerRangePickerComponent {
   readonly sessionMode = input<SessionMode>('preview');
   readonly showAutoFetch = input(true);
   readonly title = input('Cross-sectional data');
+  readonly legendTreatment = input<LegendTreatment>('tinted-bold');
 
   /** Project the universe onto a single-symbol TickerRange shape so
    *  the shared TimeWindow + Sampling sub-components can consume it

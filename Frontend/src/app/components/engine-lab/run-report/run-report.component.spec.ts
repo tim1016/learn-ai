@@ -1,10 +1,8 @@
-import { provideHttpClient } from "@angular/common/http";
-import { HttpTestingController, provideHttpClientTesting } from "@angular/common/http/testing";
 import { provideZonelessChangeDetection } from "@angular/core";
 import { Component, input } from "@angular/core";
 import { ComponentFixture, TestBed } from "@angular/core/testing";
 import { Apollo } from "apollo-angular";
-import { of } from "rxjs";
+import { from } from "rxjs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { BacktestRunDetail, BacktestRunDetailTrade } from "../../../graphql/backtest-runs.query";
@@ -17,7 +15,6 @@ import { parseLeanAnalysis, RunReportComponent, toEngineTrade } from "./run-repo
 })
 class StrategyLabChartStubComponent {
   readonly run = input.required<BacktestRunDetail>();
-  readonly candles = input<unknown[]>([]);
   readonly markers = input<unknown[]>([]);
   readonly equityPoints = input<unknown[]>([]);
 }
@@ -118,23 +115,25 @@ function makeRun(overrides: Partial<BacktestRunDetail> = {}): BacktestRunDetail 
   };
 }
 
-async function renderReport(run: BacktestRunDetail | null): Promise<{
-  fixture: ComponentFixture<RunReportComponent>;
-  httpMock: HttpTestingController;
-}> {
+let watchQueryMock: ReturnType<typeof vi.fn>;
+
+async function renderReport(
+  run: BacktestRunDetail | null,
+  supplyRunDetail = false,
+  watchedRuns: (BacktestRunDetail | null)[] = [run],
+): Promise<ComponentFixture<RunReportComponent>> {
+  watchQueryMock = vi.fn(() => ({
+    valueChanges: from(watchedRuns.map((backtestRun) => ({ data: { backtestRun } }))),
+    stopPolling: vi.fn(),
+  }));
   const apolloMock = {
-    watchQuery: vi.fn(() => ({
-      valueChanges: of({ data: { backtestRun: run } }),
-      stopPolling: vi.fn(),
-    })),
+    watchQuery: watchQueryMock,
   };
   TestBed.resetTestingModule();
   await TestBed.configureTestingModule({
     imports: [RunReportComponent],
     providers: [
       provideZonelessChangeDetection(),
-      provideHttpClient(),
-      provideHttpClientTesting(),
       { provide: Apollo, useValue: apolloMock },
     ],
   })
@@ -146,14 +145,12 @@ async function renderReport(run: BacktestRunDetail | null): Promise<{
 
   const fixture = TestBed.createComponent(RunReportComponent);
   fixture.componentRef.setInput("runId", 44);
+  if (supplyRunDetail && run) fixture.componentRef.setInput("runDetail", run);
   fixture.detectChanges();
-  // Flush effects/resources without awaiting app stability — a pending
-  // bars request (deliberately unflushed until the test inspects it)
-  // would otherwise keep the app unstable forever.
   await Promise.resolve();
   TestBed.tick();
   fixture.detectChanges();
-  return { fixture, httpMock: TestBed.inject(HttpTestingController) };
+  return fixture;
 }
 
 afterEach(() => {
@@ -183,14 +180,7 @@ describe("RunReportComponent", () => {
   });
 
   it("renders the persisted verdict and condensed metrics without restating configuration", async () => {
-    const { fixture, httpMock } = await renderReport(makeRun());
-    httpMock.expectOne((req) => req.url.includes("/api/engine/bars")).flush({
-      policy_key: "polygon-adjusted",
-      symbol: "SPY",
-      count: 0,
-      bars: [],
-      coverage: { expected_days: 2, available_days: 2, is_complete: true, missing_days: [] },
-    });
+    const fixture = await renderReport(makeRun());
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -209,61 +199,43 @@ describe("RunReportComponent", () => {
     ]);
   });
 
-  it("requests bars using the persisted DataPolicy dimensions", async () => {
-    const { httpMock } = await renderReport(makeRun());
+  it("renders a zero-PnL trade as neutral break-even chart evidence", async () => {
+    const fixture = await renderReport(makeRun({
+      winningTrades: 0,
+      losingTrades: 0,
+      trades: [makeTrade({ pnL: 0, pnlPts: 0, pnlPct: 0 })],
+    }));
 
-    const req = httpMock.expectOne((r) => r.url.includes("/api/engine/bars"));
-    expect(req.request.params.get("symbol")).toBe("SPY");
-    expect(req.request.params.get("from_date")).toBe("2026-01-05");
-    expect(req.request.params.get("to_date")).toBe("2026-01-06");
-    expect(req.request.params.get("adjusted")).toBe("true");
-    expect(req.request.params.get("session")).toBe("regular");
-    expect(req.request.params.get("timespan")).toBe("minute");
-    expect(req.request.params.get("multiplier")).toBe("15");
-    req.flush({
-      policy_key: "polygon-adjusted",
-      symbol: "SPY",
-      count: 0,
-      bars: [],
-      coverage: { expected_days: 2, available_days: 2, is_complete: true, missing_days: [] },
-    });
+    expect(fixture.componentInstance.markers()).toEqual([
+      expect.objectContaining({ color: "#90a4ae", text: "BUY · BREAK EVEN" }),
+      expect.objectContaining({ color: "#90a4ae", text: "SELL · $0.00" }),
+    ]);
   });
 
-  it("surfaces partial bar-store coverage as an honest notice", async () => {
-    const { fixture, httpMock } = await renderReport(makeRun());
-    httpMock.expectOne((req) => req.url.includes("/api/engine/bars")).flush({
-      policy_key: "polygon-adjusted",
-      symbol: "SPY",
-      count: 26,
-      bars: [],
-      coverage: { expected_days: 2, available_days: 1, is_complete: false, missing_days: ["2026-01-06"] },
-    });
-    await fixture.whenStable();
-    fixture.detectChanges();
+  it("uses a history-selected run directly instead of querying the same row twice", async () => {
+    const fixture = await renderReport(makeRun(), true);
 
-    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
-    expect(text).toContain("Bar store covers 1 of 2 weekdays");
+    expect(watchQueryMock).not.toHaveBeenCalled();
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain("Diagnostic complete");
   });
 
-  it("skips the bars fetch and explains why when the run has no data policy", async () => {
-    const { fixture, httpMock } = await renderReport(makeRun({ dataPolicy: null }));
-    httpMock.expectNone((req) => req.url.includes("/api/engine/bars"));
-    await fixture.whenStable();
+  it("keeps polling a supplied pending run and renders the terminal parity update", async () => {
+    const pending = makeRun({
+      parityVerdicts: [{ id: 1, status: "pending", verdictJson: "{}", createdAt: 1 }],
+    });
+    const terminal = makeRun({
+      parityVerdicts: [{ id: 1, status: "matched", verdictJson: JSON.stringify({ schema_version: 1, status: "matched" }), createdAt: 2 }],
+    });
+
+    const fixture = await renderReport(pending, true, [pending, terminal]);
     fixture.detectChanges();
 
-    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
-    expect(text).toContain("no recorded data policy");
+    expect(watchQueryMock).toHaveBeenCalledOnce();
+    expect(fixture.componentInstance.run()?.parityVerdicts[0].status).toBe("matched");
   });
 
   it("reports missing validation analytics honestly for legacy rows", async () => {
-    const { fixture, httpMock } = await renderReport(makeRun({ validationAnalytics: null }));
-    httpMock.expectOne((req) => req.url.includes("/api/engine/bars")).flush({
-      policy_key: "polygon-adjusted",
-      symbol: "SPY",
-      count: 0,
-      bars: [],
-      coverage: { expected_days: 2, available_days: 2, is_complete: true, missing_days: [] },
-    });
+    const fixture = await renderReport(makeRun({ validationAnalytics: null }));
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -272,14 +244,7 @@ describe("RunReportComponent", () => {
   });
 
   it("explains the native LEAN chart cadence without treating it as a KPI source", async () => {
-    const { fixture, httpMock } = await renderReport(makeRun({ source: "lean-sidecar", engine: "LEAN" }));
-    httpMock.expectOne((req) => req.url.includes("/api/engine/bars")).flush({
-      policy_key: "polygon-adjusted",
-      symbol: "SPY",
-      count: 0,
-      bars: [],
-      coverage: { expected_days: 2, available_days: 2, is_complete: true, missing_days: [] },
-    });
+    const fixture = await renderReport(makeRun({ source: "lean-sidecar", engine: "LEAN" }));
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -290,7 +255,7 @@ describe("RunReportComponent", () => {
   });
 
   it("keeps native LEAN findings available in a collapsed deep dive", async () => {
-    const { fixture, httpMock } = await renderReport(makeRun({
+    const fixture = await renderReport(makeRun({
       leanAnalysisJson: JSON.stringify([{
         name: "FlatEquityCurveAnalysis",
         issue: "The curve is flat.",
@@ -298,13 +263,6 @@ describe("RunReportComponent", () => {
         solutions: ["Check subscriptions."],
       }]),
     }));
-    httpMock.expectOne((req) => req.url.includes("/api/engine/bars")).flush({
-      policy_key: "polygon-adjusted",
-      symbol: "SPY",
-      count: 0,
-      bars: [],
-      coverage: { expected_days: 2, available_days: 2, is_complete: true, missing_days: [] },
-    });
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -316,7 +274,7 @@ describe("RunReportComponent", () => {
   });
 
   it("renders 'Run not found' when the id does not resolve", async () => {
-    const { fixture } = await renderReport(null);
+    const fixture = await renderReport(null);
     const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
     expect(text).toContain("Run not found.");
   });
@@ -325,16 +283,9 @@ describe("RunReportComponent", () => {
     status: string;
     verdictJson: string;
   }): Promise<ComponentFixture<RunReportComponent>> {
-    const { fixture, httpMock } = await renderReport(
+    const fixture = await renderReport(
       makeRun({ parityVerdicts: [{ id: 1, createdAt: Date.UTC(2026, 0, 6, 21, 5), ...verdict }] }),
     );
-    httpMock.expectOne((req) => req.url.includes("/api/engine/bars")).flush({
-      policy_key: "polygon-adjusted",
-      symbol: "SPY",
-      count: 0,
-      bars: [],
-      coverage: { expected_days: 2, available_days: 2, is_complete: true, missing_days: [] },
-    });
     await fixture.whenStable();
     fixture.detectChanges();
     return fixture;

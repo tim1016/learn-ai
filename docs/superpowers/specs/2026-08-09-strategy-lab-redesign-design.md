@@ -24,7 +24,7 @@ The user's direction: this page is a **strategy *diagnostic***, not a strategy s
 ## 3. Naming & routing
 
 - Page title **"Engine Lab" → "Strategy Lab"**; header icon/subtitle updated to the diagnostic framing ("Run one strategy across Python / LEAN and read what it did").
-- Primary route **`/strategy-lab`**, with **`/engine`, `/engine/docs`, `/lean-engine`, `/lean-lab` redirecting** to it (preserve existing redirects, add the new canonical path).
+- Primary route **`/strategy-lab`**, with **`/engine`, `/lean-engine`, and `/lean-lab` redirecting** to it. Documentation lives at `/strategy-lab/docs`; both `/engine/docs` and legacy `/engine-docs` redirect there, preserving metric fragments such as `#sharpe`.
 - Run detail: **`/strategy-lab/runs/:id`**, with `/engine/runs/:id` redirecting.
 - Two tabs only: **Workbench** and **History**. The current dynamic "strategy detail" third tab is **removed** — deep strategy detail is a Strategy Validation concern.
 
@@ -35,7 +35,7 @@ A **trimmed left rail** (the user's chosen form factor) holding **four flat inpu
 **The four inputs (flat controls — no nested `config-section` panels, no mismatched padding):**
 1. **Engine** — `python | lean | both` (compatibility pair).
 2. **Instrument** — symbol picker (from `ticker-range-picker`'s instrument card).
-3. **Time window** — from/to + presets. **Remove the per-day availability / completeness strip and legend** from `time-window-card`. At most a small info affordance (optional, non-blocking); no day-by-day grid.
+3. **Time window** — from/to + presets. Strategy Lab does not request the optional per-day availability strip, while the shared `time-window-card` retains that capability for Data and Research consumers.
 4. **Strategy** — a **light picker** only (name + select). No params-heavy form, no description panels. If a strategy exposes parameters, they live in **Advanced**, not the primary input.
 
 **Advanced (Strategy Lab is leaner than Data Lab):**
@@ -103,7 +103,7 @@ Today Engine Lab renders the candlestick chart and the equity chart as **two ind
 
 ### 8.3 Data-source-agnostic inputs
 
-The component takes **normalized signal inputs** and owns all chart lifecycle/sync — it does **not** fetch. Inputs (shape to be finalized in the plan): `candles`, `volume?`, `overlays[]` (name + points + style), `subPanes[]` (name + series + reference levels), `markers[]`, and `visibleRange`. Timestamps are seconds (`ms/1000` cast to `UTCTimestamp`) per lightweight-charts; canonical values upstream stay `int64 ms UTC` per temporal-rigor.
+The component takes **normalized signal inputs** and owns all chart lifecycle/sync — it does **not** fetch. Inputs (shape to be finalized in the plan): `candles`, `volume?`, `overlays[]` (name + points + style), `subPanes[]` (name + series + reference levels), `markers[]`, and `visibleRange`. Every timestamp remains canonical `int64 ms UTC` in flight and on the wire. Conversion to Lightweight Charts seconds happens only in the immediate chart adapter as `timeMs / 1000`; fractional seconds are retained so distinct millisecond points do not collide at whole-second precision.
 
 Strategy Lab feeds it from the **persisted run** (bars via `GET /api/engine/bars` from the run's `DataPolicy`, trades → markers, equity envelope → equity pane, strategy indicators → overlays/panes). Data Lab will feed it from `/api/chart/data` in Spec 2.
 
@@ -151,8 +151,8 @@ Old surfaces removed/retired: the dynamic strategy-detail tab, the standalone re
 ## 11. Data flow
 
 1. Config rail (signals) → **Run validation** → `JobsService.startJob(...)` (Python) / LEAN job → SSE phase line.
-2. On completion → persisted run id → `RunReportComponent` fetches the run (`BACKTEST_RUN_DETAIL_QUERY`, polling while parity pending) + bars (`/api/engine/bars`) → maps to `EngineResultData`.
-3. `RunReportComponent` renders verdict line, metric strip, and feeds the **Strategy-Lab chart adapter** → `TradingChartComponent` (candles, trades→markers, equity, strategy indicators).
+2. On completion → persisted run id → `RunReportComponent` fetches the run (`BACKTEST_RUN_DETAIL_QUERY`, polling while parity pending).
+3. `RunReportComponent` renders verdict line and metric strip; the Strategy-Lab chart makes one atomic `/api/engine/chart` request that reads the run's exact policy-keyed bar store and computes strategy indicators through the canonical engine implementations before adapting them to `TradingChartComponent`.
 4. History select → set config signals from the run + route to `RunReportComponent`.
 
 ## 12. Testing
@@ -164,7 +164,7 @@ Old surfaces removed/retired: the dynamic strategy-detail tab, the standalone re
 - **TradingChart:** given fixture candles + equity + one sub-pane, assert every pane shares one visible logical range and the same gridline x-positions after `fitContent`; adding an indicator adds a synced pane; the indicator rail is present only in expanded state. (Chart-internal lightweight-charts calls exercised via the component's public inputs.)
 - **History repopulation:** selecting a run sets the config signals to the run's recorded values and renders its results.
 - **A11y:** the page passes AXE; "?" and expand controls have accessible names; WCAG AA contrast in the dark chart theme.
-- No golden fixtures or numerical parity tests change (no math is touched).
+- **Metric formula evidence:** the user-visible formula registry is covered by `contracts/fixtures/strategy-metric-help-golden-v1.json`, a tolerance-pinned canonical Python test, and `docs/references/strategy-metric-help.md`.
 
 ## 13. Risks, dependencies, open questions
 

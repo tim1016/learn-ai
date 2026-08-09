@@ -20,14 +20,14 @@ const VERDICT: RunVerdict = {
   cleanliness: null,
 };
 
-async function render(status: string) {
+async function render(status: string, verdict: RunVerdict = VERDICT) {
   TestBed.resetTestingModule();
   await TestBed.configureTestingModule({
     imports: [StrategyLabVerdictComponent],
     providers: [provideZonelessChangeDetection()],
   }).compileComponents();
   const fixture = TestBed.createComponent(StrategyLabVerdictComponent);
-  fixture.componentRef.setInput("verdict", VERDICT);
+  fixture.componentRef.setInput("verdict", verdict);
   fixture.componentRef.setInput("tradeCount", 8);
   fixture.componentRef.setInput("parity", {
     status,
@@ -49,6 +49,7 @@ describe("StrategyLabVerdictComponent", () => {
     expect(root.textContent).toContain("parity: Agree");
     expect(root.querySelector(".verdict-line__breakdown")).toBeNull();
     expect(root.textContent).not.toContain("Not duplicated in the slim line");
+    expect(root.querySelector(".verdict-line")?.getAttribute("data-band")).toBe("amber");
   });
 
   it("makes parity expandable only when the engines diverged", async () => {
@@ -60,5 +61,13 @@ describe("StrategyLabVerdictComponent", () => {
     fixture.detectChanges();
     expect(root.textContent).toContain("Fill Price Drift");
     expect(root.textContent).toContain("Two fills differ");
+  });
+
+  it("uses the backend grade for its band and rounds the score for display only", async () => {
+    const fixture = await render("agree", { ...VERDICT, grade: "A", composite: 69.5 });
+    const root = fixture.nativeElement as HTMLElement;
+
+    expect(root.textContent).toContain("A · 70");
+    expect(root.querySelector(".verdict-line")?.getAttribute("data-band")).toBe("green");
   });
 });

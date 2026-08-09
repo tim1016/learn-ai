@@ -187,6 +187,11 @@ export const routes: Routes = [
     pathMatch: "full",
   },
   {
+    path: "engine-docs",
+    redirectTo: "strategy-lab/docs",
+    pathMatch: "full",
+  },
+  {
     path: "engine/runs/:id",
     redirectTo: "strategy-lab/runs/:id",
     pathMatch: "full",

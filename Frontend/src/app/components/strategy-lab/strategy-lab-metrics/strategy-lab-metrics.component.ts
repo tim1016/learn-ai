@@ -17,6 +17,7 @@ export class StrategyLabMetricsComponent {
 
   formatCurrency(value: number | null | undefined): string {
     if (value === null || value === undefined || Number.isNaN(value)) return "—";
+    if (!Number.isFinite(value)) return value < 0 ? "−∞" : "∞";
     return new Intl.NumberFormat("en-US", {
       style: "currency",
       currency: "USD",
@@ -26,12 +27,13 @@ export class StrategyLabMetricsComponent {
 
   formatNumber(value: number | null | undefined): string {
     if (value === null || value === undefined || Number.isNaN(value)) return "—";
-    if (!Number.isFinite(value)) return "∞";
+    if (!Number.isFinite(value)) return value < 0 ? "−∞" : "∞";
     return value.toFixed(2);
   }
 
   formatPercent(value: number | null | undefined): string {
     if (value === null || value === undefined || Number.isNaN(value)) return "—";
+    if (!Number.isFinite(value)) return value < 0 ? "−∞" : "∞";
     return `${(value * 100).toFixed(2)}%`;
   }
 }

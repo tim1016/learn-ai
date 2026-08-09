@@ -1,7 +1,7 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TimeWindowCardComponent } from './time-window-card.component';
-import type { TickerRange } from '../ticker-range-picker.types';
+import type { AvailabilityCell, TickerRange } from '../ticker-range-picker.types';
 
 describe('TimeWindowCardComponent', () => {
   const baseValue: TickerRange = {
@@ -105,12 +105,26 @@ describe('TimeWindowCardComponent', () => {
     });
   });
 
-  it('does not render a per-day availability strip or legend', () => {
+  it('renders the availability strip when cells are provided', () => {
+    const cells: AvailabilityCell[] = [
+      { date: '2025-04-01', status: 'complete' },
+      { date: '2025-04-02', status: 'partial' },
+      { date: '2025-04-03', status: 'missing' },
+    ];
+    fixture.componentRef.setInput('availability', cells);
     fixture.detectChanges();
 
     const root = fixture.nativeElement as HTMLElement;
-    expect(root.querySelector('.availability-strip')).toBeNull();
-    expect(root.querySelector('.availability-legend')).toBeNull();
+    expect(root.querySelectorAll('.strip__cell')).toHaveLength(3);
+    expect(root.querySelector('.legend')).not.toBeNull();
+  });
+
+  it('keeps availability absent for consumers that do not provide it', () => {
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.querySelector('.strip')).toBeNull();
+    expect(root.querySelector('.legend')).toBeNull();
   });
 
   it('updateFrom mutates value().from immutably', () => {

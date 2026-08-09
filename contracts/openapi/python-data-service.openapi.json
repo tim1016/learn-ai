@@ -10427,6 +10427,16 @@
             "type": "string"
           },
           "params": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
             "description": "Indicator parameters",
             "title": "Params",
             "type": "object"
@@ -10436,6 +10446,98 @@
           "name"
         ],
         "title": "ChartIndicatorEntry",
+        "type": "object"
+      },
+      "ChartIndicatorPoint": {
+        "properties": {
+          "t": {
+            "title": "T",
+            "type": "integer"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "t",
+          "value"
+        ],
+        "title": "ChartIndicatorPoint",
+        "type": "object"
+      },
+      "ChartIndicatorResult": {
+        "properties": {
+          "color": {
+            "title": "Color",
+            "type": "string"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ChartIndicatorPoint"
+                },
+                "type": "array"
+              },
+              {
+                "additionalProperties": {
+                  "items": {
+                    "$ref": "#/components/schemas/ChartIndicatorPoint"
+                  },
+                  "type": "array"
+                },
+                "type": "object"
+              }
+            ],
+            "title": "Data"
+          },
+          "default_visible": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Visible"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "panel": {
+            "title": "Panel",
+            "type": "string"
+          },
+          "refs": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Refs",
+            "type": "array"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "panel",
+          "type",
+          "color",
+          "data"
+        ],
+        "title": "ChartIndicatorResult",
         "type": "object"
       },
       "ChartLiveResponse": {
@@ -15344,7 +15446,6 @@
             "description": "Operator-selected execution mode, persisted for exact History rehydration.",
             "enum": [
               "python",
-              "lean",
               "both"
             ],
             "title": "Requested Engine",
@@ -15653,6 +15754,204 @@
           "coverage"
         ],
         "title": "EngineBarsResponse",
+        "type": "object"
+      },
+      "EngineChartBar": {
+        "properties": {
+          "c": {
+            "title": "C",
+            "type": "number"
+          },
+          "h": {
+            "title": "H",
+            "type": "number"
+          },
+          "l": {
+            "title": "L",
+            "type": "number"
+          },
+          "o": {
+            "title": "O",
+            "type": "number"
+          },
+          "t": {
+            "title": "T",
+            "type": "integer"
+          },
+          "v": {
+            "title": "V",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "t",
+          "o",
+          "h",
+          "l",
+          "c",
+          "v"
+        ],
+        "title": "EngineChartBar",
+        "type": "object"
+      },
+      "EngineChartCoverage": {
+        "properties": {
+          "available_days": {
+            "title": "Available Days",
+            "type": "integer"
+          },
+          "expected_days": {
+            "title": "Expected Days",
+            "type": "integer"
+          },
+          "is_complete": {
+            "title": "Is Complete",
+            "type": "boolean"
+          },
+          "missing_session_ms_utc": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Missing Session Ms Utc",
+            "type": "array"
+          }
+        },
+        "required": [
+          "expected_days",
+          "available_days",
+          "is_complete"
+        ],
+        "title": "EngineChartCoverage",
+        "type": "object"
+      },
+      "EngineChartRequest": {
+        "properties": {
+          "adjusted": {
+            "default": true,
+            "title": "Adjusted",
+            "type": "boolean"
+          },
+          "excluded_strategy_indicator_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Excluded Strategy Indicator Ids",
+            "type": "array"
+          },
+          "from_ms_utc": {
+            "minimum": 0.0,
+            "title": "From Ms Utc",
+            "type": "integer"
+          },
+          "indicators": {
+            "items": {
+              "$ref": "#/components/schemas/ChartIndicatorEntry"
+            },
+            "title": "Indicators",
+            "type": "array"
+          },
+          "multiplier": {
+            "default": 1,
+            "minimum": 1.0,
+            "title": "Multiplier",
+            "type": "integer"
+          },
+          "parameters": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Parameters",
+            "type": "object"
+          },
+          "session": {
+            "default": "regular",
+            "enum": [
+              "regular",
+              "extended"
+            ],
+            "title": "Session",
+            "type": "string"
+          },
+          "strategy_name": {
+            "minLength": 1,
+            "title": "Strategy Name",
+            "type": "string"
+          },
+          "symbol": {
+            "maxLength": 20,
+            "minLength": 1,
+            "title": "Symbol",
+            "type": "string"
+          },
+          "timespan": {
+            "default": "minute",
+            "enum": [
+              "minute",
+              "hour",
+              "day"
+            ],
+            "title": "Timespan",
+            "type": "string"
+          },
+          "to_ms_utc": {
+            "minimum": 0.0,
+            "title": "To Ms Utc",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "strategy_name",
+          "symbol",
+          "from_ms_utc",
+          "to_ms_utc"
+        ],
+        "title": "EngineChartRequest",
+        "type": "object"
+      },
+      "EngineChartResponse": {
+        "properties": {
+          "bars": {
+            "items": {
+              "$ref": "#/components/schemas/EngineChartBar"
+            },
+            "title": "Bars",
+            "type": "array"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/EngineChartCoverage"
+          },
+          "indicator_specs": {
+            "items": {
+              "$ref": "#/components/schemas/ResolvedChartIndicator"
+            },
+            "title": "Indicator Specs",
+            "type": "array"
+          },
+          "indicators": {
+            "items": {
+              "$ref": "#/components/schemas/ChartIndicatorResult"
+            },
+            "title": "Indicators",
+            "type": "array"
+          },
+          "policy_key": {
+            "title": "Policy Key",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "policy_key",
+          "symbol",
+          "bars",
+          "coverage",
+          "indicator_specs",
+          "indicators"
+        ],
+        "title": "EngineChartResponse",
         "type": "object"
       },
       "EngineOverlay": {
@@ -32418,6 +32717,49 @@
         "title": "Resolution",
         "type": "object"
       },
+      "ResolvedChartIndicator": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            "title": "Params",
+            "type": "object"
+          },
+          "strategy_default": {
+            "title": "Strategy Default",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "params",
+          "label",
+          "strategy_default"
+        ],
+        "title": "ResolvedChartIndicator",
+        "type": "object"
+      },
       "ResumeComparison": {
         "additionalProperties": false,
         "description": "An already-evaluated Resume checkpoint comparison.",
@@ -36844,6 +37186,40 @@
         "title": "StrategyAnalyzeResponse",
         "type": "object"
       },
+      "StrategyBarCadenceInfo": {
+        "properties": {
+          "multiplier": {
+            "minimum": 1.0,
+            "title": "Multiplier",
+            "type": "integer"
+          },
+          "parameter": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parameter"
+          },
+          "timespan": {
+            "enum": [
+              "minute",
+              "day"
+            ],
+            "title": "Timespan",
+            "type": "string"
+          }
+        },
+        "required": [
+          "timespan",
+          "multiplier"
+        ],
+        "title": "StrategyBarCadenceInfo",
+        "type": "object"
+      },
       "StrategyBehavioralEquivalence": {
         "properties": {
           "detail": {
@@ -37077,6 +37453,9 @@
             "title": "Sizing Surface",
             "type": "string"
           },
+          "strategy_bars": {
+            "$ref": "#/components/schemas/StrategyBarCadenceInfo"
+          },
           "supported_resolutions": {
             "items": {
               "type": "string"
@@ -37089,7 +37468,8 @@
           "name",
           "display_name",
           "description",
-          "params_schema"
+          "params_schema",
+          "strategy_bars"
         ],
         "title": "StrategyInfo",
         "type": "object"
@@ -40010,7 +40390,6 @@
             "default": "lean",
             "description": "Operator-selected execution mode, persisted for exact History rehydration.",
             "enum": [
-              "python",
               "lean",
               "both"
             ],
@@ -51719,6 +52098,48 @@
           }
         },
         "summary": "Get Engine Bars",
+        "tags": [
+          "engine"
+        ]
+      }
+    },
+    "/api/engine/chart": {
+      "post": {
+        "description": "Render exact strategy bars and indicators from one policy-store read.",
+        "operationId": "get_engine_chart_api_engine_chart_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EngineChartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineChartResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Engine Chart",
         "tags": [
           "engine"
         ]
