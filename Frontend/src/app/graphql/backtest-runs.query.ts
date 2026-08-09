@@ -103,13 +103,27 @@ export const BACKTEST_RUN_DETAIL_QUERY = gql`
       verdictGrade
       verdictSignal
       equityCurve {
-        cadence
-        rawPoints
-        keptPoints
+        schemaVersion
         error
-        points {
-          t
-          e
+        markToMarket {
+          cadence
+          rawPoints
+          keptPoints
+          error
+          points {
+            t
+            e
+          }
+        }
+        realized {
+          cadence
+          rawPoints
+          keptPoints
+          error
+          points {
+            t
+            e
+          }
         }
       }
       # Frozen validation-analytics envelope. Aliased to the canonical
@@ -306,6 +320,13 @@ export interface BacktestRunDetailTrade {
 }
 
 export interface BacktestRunEquityCurve {
+  schemaVersion: number;
+  error: string | null;
+  markToMarket: BacktestRunEquitySeries | null;
+  realized: BacktestRunEquitySeries | null;
+}
+
+export interface BacktestRunEquitySeries {
   cadence: string | null;
   rawPoints: number;
   keptPoints: number;

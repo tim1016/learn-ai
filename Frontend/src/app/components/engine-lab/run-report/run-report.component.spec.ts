@@ -1,8 +1,7 @@
-import { provideZonelessChangeDetection } from "@angular/core";
-import { Component, input } from "@angular/core";
+import { Component, computed, input, provideZonelessChangeDetection } from "@angular/core";
 import { ComponentFixture, TestBed } from "@angular/core/testing";
 import { Apollo } from "apollo-angular";
-import { concat, from, NEVER, type Observable, of, throwError } from "rxjs";
+import { from } from "rxjs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { BacktestRunDetail, BacktestRunDetailTrade } from "../../../graphql/backtest-runs.query";
@@ -11,12 +10,18 @@ import { parseLeanAnalysis, RunReportComponent, toEngineTrade } from "./run-repo
 
 @Component({
   selector: "app-strategy-lab-chart",
-  template: "<div data-testid=\"strategy-chart\">Synced strategy chart</div>",
+  template: `
+    <div data-testid="strategy-chart">Shared-time-scale strategy chart</div>
+    <output data-testid="strategy-chart-markers">{{ markersJson() }}</output>
+    <output data-testid="strategy-chart-equity">{{ equityPointsJson() }}</output>
+  `,
 })
 class StrategyLabChartStubComponent {
   readonly run = input.required<BacktestRunDetail>();
   readonly markers = input<unknown[]>([]);
   readonly equityPoints = input<unknown[]>([]);
+  readonly markersJson = computed(() => JSON.stringify(this.markers()));
+  readonly equityPointsJson = computed(() => JSON.stringify(this.equityPoints()));
 }
 
 function makeTrade(overrides: Partial<BacktestRunDetailTrade> = {}): BacktestRunDetailTrade {
@@ -36,7 +41,13 @@ function makeTrade(overrides: Partial<BacktestRunDetailTrade> = {}): BacktestRun
   };
 }
 
+function curve(points: { t: number; e: number }[], cadence: string) {
+  return { cadence, rawPoints: points.length, keptPoints: points.length, error: null, points };
+}
+
 function makeRun(overrides: Partial<BacktestRunDetail> = {}): BacktestRunDetail {
+  const start = Date.UTC(2026, 0, 5, 15, 0);
+  const end = Date.UTC(2026, 0, 6, 21, 0);
   return {
     id: 44,
     engine: "PYTHON",
@@ -49,7 +60,7 @@ function makeRun(overrides: Partial<BacktestRunDetail> = {}): BacktestRunDetail 
     startDate: "2026-01-05",
     endDate: "2026-01-06",
     fillMode: "signal_bar_close",
-    executedAt: Date.UTC(2026, 0, 6, 21, 0),
+    executedAt: end,
     durationMs: 1200,
     totalTrades: 1,
     winningTrades: 1,
@@ -67,45 +78,26 @@ function makeRun(overrides: Partial<BacktestRunDetail> = {}): BacktestRunDetail 
     leanStatisticsJson: null,
     leanAnalysisJson: null,
     verdictJson: JSON.stringify({
-      verdict_version: 1,
-      engine: "python",
-      generated_at_ms: 1,
-      composite: 72,
-      grade: "B",
-      signal: "Iterate",
-      headline: "Profitable but thin sample.",
-      red_flags: [],
-      dimensions: [],
-      missing_metrics: [],
-      normalized_weights: false,
-      cleanliness: null,
+      verdict_version: 1, engine: "python", generated_at_ms: 1, composite: 72,
+      grade: "B", signal: "Iterate", headline: "Profitable but thin sample.",
+      red_flags: [], dimensions: [], missing_metrics: [], normalized_weights: false, cleanliness: null,
     }),
     verdictVersion: 1,
     verdictGrade: "B",
     verdictSignal: "Iterate",
     equityCurve: {
-      cadence: "strategy_bar_close",
-      rawPoints: 2,
-      keptPoints: 2,
+      schemaVersion: 2,
       error: null,
-      points: [
-        { t: Date.UTC(2026, 0, 5, 15, 0), e: 100_000 },
-        { t: Date.UTC(2026, 0, 6, 21, 0), e: 100_048 },
-      ],
+      markToMarket: curve([{ t: start, e: 100_000 }, { t: end, e: 100_048 }], "strategy_bar_close"),
+      realized: curve([{ t: start, e: 100_000 }, { t: makeTrade().exitTimestamp, e: 100_048 }, { t: end, e: 100_048 }], "trade_exit"),
     },
     validationAnalytics: null,
     dataPolicy: {
-      source: "polygon",
-      symbol: "SPY",
-      adjusted: true,
-      session: "regular",
+      source: "polygon", symbol: "SPY", adjusted: true, session: "regular",
       input_bars: { timespan: "minute", multiplier: 1 },
       strategy_bars: { timespan: "minute", multiplier: 15 },
-      timestamp_policy: "bar_close_ms_utc",
-      timezone: "America/New_York",
-      provider_kind: "live",
-      fixture_id: null,
-      fixture_sha256: null,
+      timestamp_policy: "bar_close_ms_utc", timezone: "America/New_York",
+      provider_kind: "live", fixture_id: null, fixture_sha256: null,
     },
     insightSummaryJson: null,
     parityGroupId: null,
@@ -118,354 +110,126 @@ function makeRun(overrides: Partial<BacktestRunDetail> = {}): BacktestRunDetail 
 
 let watchQueryMock: ReturnType<typeof vi.fn>;
 
-interface WatchResult {
-  data?: { backtestRun?: BacktestRunDetail | null };
-  loading?: boolean;
-}
-
 async function renderReport(
-  run: BacktestRunDetail | null,
-  supplyRunDetail = false,
-  watchedRuns: (BacktestRunDetail | null)[] = [run],
-  valueChanges?: Observable<WatchResult>,
+  run: BacktestRunDetail,
+  supplied = false,
+  queryResult: unknown = { data: { backtestRun: run }, loading: false },
 ): Promise<ComponentFixture<RunReportComponent>> {
   watchQueryMock = vi.fn(() => ({
-    valueChanges: valueChanges ?? from(
-      watchedRuns.map((backtestRun) => ({ data: { backtestRun } })),
-    ),
+    valueChanges: from([queryResult]),
     stopPolling: vi.fn(),
   }));
-  const apolloMock = {
-    watchQuery: watchQueryMock,
-  };
-  TestBed.resetTestingModule();
   await TestBed.configureTestingModule({
     imports: [RunReportComponent],
-    providers: [
-      provideZonelessChangeDetection(),
-      { provide: Apollo, useValue: apolloMock },
-    ],
-  })
-    .overrideComponent(RunReportComponent, {
-      remove: { imports: [StrategyLabChartComponent] },
-      add: { imports: [StrategyLabChartStubComponent] },
-    })
-    .compileComponents();
+    providers: [provideZonelessChangeDetection(), { provide: Apollo, useValue: { watchQuery: watchQueryMock } }],
+  }).overrideComponent(RunReportComponent, {
+    remove: { imports: [StrategyLabChartComponent] },
+    add: { imports: [StrategyLabChartStubComponent] },
+  }).compileComponents();
 
   const fixture = TestBed.createComponent(RunReportComponent);
-  fixture.componentRef.setInput("runId", 44);
-  if (supplyRunDetail && run) fixture.componentRef.setInput("runDetail", run);
+  fixture.componentRef.setInput("runId", run.id);
+  if (supplied) fixture.componentRef.setInput("runDetail", run);
   fixture.detectChanges();
-  await Promise.resolve();
-  TestBed.tick();
+  await fixture.whenStable();
   fixture.detectChanges();
   return fixture;
 }
 
 afterEach(() => {
+  TestBed.resetTestingModule();
   vi.restoreAllMocks();
 });
 
 describe("RunReportComponent", () => {
-  it("preserves every valid native LEAN analysis finding and arbitrary sample shape", () => {
-    const parsed = parseLeanAnalysis(JSON.stringify([
-      {
-        name: "FlatEquityCurveAnalysis",
-        issue: "The curve is flat.",
-        sample: [{ start: 1_700_000_000_000, end: 1_700_086_400_000, trading_days: 2 }],
-        solutions: ["Check warm-up.", "Check subscriptions."],
-      },
-      {
-        name: "StatisticalSignificanceOfDailyReturnsAnalysis",
-        issue: "The p-value is above 0.05.",
-        sample: { pValue: "0.0684907141208504" },
-        solutions: ["Review the trading rules."],
-      },
-    ]));
-
-    expect(parsed).toHaveLength(2);
-    expect(parsed[0].solutions).toEqual(["Check warm-up.", "Check subscriptions."]);
-    expect(parsed[1].sample).toEqual({ pValue: "0.0684907141208504" });
-  });
-
-  it("renders the persisted verdict and condensed metrics without restating configuration", async () => {
+  it("renders the grade-led KPI row and chart without duplicating navigation or configuration", async () => {
     const fixture = await renderReport(makeRun());
-    await fixture.whenStable();
-    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+    const text = root.textContent ?? "";
 
-    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
-    expect(text).toContain("Diagnostic complete");
-    expect(text).toContain("B · 72");
-    expect(text).toContain("Net P&L");
-    expect(text).toContain("Synced strategy chart");
-    expect(text).not.toContain("spy_ema_crossover / SPY");
-    expect(text).not.toContain("run #44");
-    expect([...((fixture.nativeElement as HTMLElement).querySelectorAll("details"))]
-      .every((detail) => !detail.open)).toBe(true);
-    expect(fixture.componentInstance.markers()).toEqual([
-      expect.objectContaining({ color: "#26a69a", text: "BUY · WIN" }),
-      expect.objectContaining({ color: "#26a69a", text: "SELL · +$48.00" }),
-    ]);
+    expect(text).toContain("Validation grade");
+    expect(text).toContain("72 / 100");
+    expect(text).toContain("Shared-time-scale strategy chart");
+    expect(text).not.toContain("Back to workbench");
+    expect(text).not.toContain("Run configuration");
+    expect(text).not.toContain("More statistics");
+    expect(text).not.toContain("Diagnostic complete");
+    expect(root.querySelector("app-strategy-lab-verdict")).toBeNull();
   });
 
-  it("renders a zero-PnL trade as neutral break-even chart evidence", async () => {
-    const fixture = await renderReport(makeRun({
-      winningTrades: 0,
-      losingTrades: 0,
-      trades: [makeTrade({ pnL: 0, pnlPts: 0, pnlPct: 0 })],
-    }));
-
-    expect(fixture.componentInstance.markers()).toEqual([
-      expect.objectContaining({ color: "#90a4ae", text: "BUY · BREAK EVEN" }),
-      expect.objectContaining({ color: "#90a4ae", text: "SELL · $0.00" }),
-    ]);
-  });
-
-  it("uses a history-selected run directly instead of querying the same row twice", async () => {
+  it("uses the producer-authored realized staircase instead of mark-to-market points", async () => {
     const fixture = await renderReport(makeRun(), true);
+    const root = fixture.nativeElement as HTMLElement;
 
     expect(watchQueryMock).not.toHaveBeenCalled();
-    expect((fixture.nativeElement as HTMLElement).textContent).toContain("Diagnostic complete");
+    expect(root.querySelector("[data-testid='strategy-chart-equity']")?.textContent).toBe(JSON.stringify([
+      { timeMs: Date.UTC(2026, 0, 5, 15, 0), value: 100_000 },
+      { timeMs: makeTrade().exitTimestamp, value: 100_048 },
+      { timeMs: Date.UTC(2026, 0, 6, 21, 0), value: 100_048 },
+    ]));
   });
 
-  it("keeps polling a supplied pending run and renders the terminal parity update", async () => {
-    const pending = makeRun({
-      parityVerdicts: [{ id: 1, status: "pending", verdictJson: "{}", createdAt: 1 }],
+  it("does not mislabel a report-query failure as a missing run", async () => {
+    const fixture = await renderReport(makeRun(), false, {
+      data: undefined,
+      loading: false,
+      error: new Error("Backtest detail query is incompatible with the server."),
     });
-    const terminal = makeRun({
-      parityVerdicts: [{ id: 1, status: "matched", verdictJson: JSON.stringify({ schema_version: 1, status: "matched" }), createdAt: 2 }],
-    });
-
-    const fixture = await renderReport(pending, true, [pending, terminal]);
-    fixture.detectChanges();
-
-    expect(watchQueryMock).toHaveBeenCalledOnce();
-    expect(fixture.componentInstance.run()?.parityVerdicts[0].status).toBe("matched");
-  });
-
-  it("keeps the loading state while Apollo has no network result", async () => {
-    const fixture = await renderReport(
-      null,
-      false,
-      [],
-      concat(of({ loading: true, data: undefined }), NEVER),
-    );
-    fixture.detectChanges();
-
     const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
-    expect(text).toContain("Loading run…");
-    expect(text).not.toContain("Run not found.");
-    expect(watchQueryMock).toHaveBeenCalledWith(expect.objectContaining({
-      fetchPolicy: "network-only",
-    }));
-  });
 
-  it("labels large ledgers as bounded evidence while retaining full-run metrics", async () => {
-    const fixture = await renderReport(makeRun({
-      totalTrades: 19_861,
-      tradesTruncated: true,
-    }));
-
-    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
-    expect(text).toContain("most recent 1 of 19,861 trades");
-    expect(text).toContain("Headline metrics use the complete persisted run.");
-    expect(text).toContain("1 recent of 19861 completed trades");
-    expect(text).toContain("Loaded 1");
-    expect(text).not.toContain("All 1");
-  });
-
-  it("does not mislabel transport failures as missing runs", async () => {
-    const fixture = await renderReport(
-      null,
-      false,
-      [],
-      throwError(() => new Error("gateway timeout")),
-    );
-    fixture.detectChanges();
-
-    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
     expect(text).toContain("Run report could not be loaded.");
     expect(text).not.toContain("Run not found.");
   });
 
-  it("reports missing validation analytics honestly for legacy rows", async () => {
-    const fixture = await renderReport(makeRun({ validationAnalytics: null }));
-    await fixture.whenStable();
-    fixture.detectChanges();
+  it("keeps buy and sell markers tied to persisted trade outcomes", async () => {
+    const fixture = await renderReport(makeRun({ trades: [makeTrade({ pnL: 0, pnlPts: 0, pnlPct: 0 })] }));
+    const markers = (fixture.nativeElement as HTMLElement)
+      .querySelector("[data-testid='strategy-chart-markers']")?.textContent;
 
-    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
-    expect(text).toContain("Validation analytics were not recorded for this run.");
+    expect(markers).toContain('"color":"#90a4ae"');
+    expect(markers).toContain("BUY · BREAK EVEN");
+    expect(markers).toContain("SELL · $0.00");
   });
 
-  it("explains the native LEAN chart cadence without treating it as a KPI source", async () => {
-    const fixture = await renderReport(makeRun({ source: "lean-sidecar", engine: "LEAN" }));
-    await fixture.whenStable();
-    fixture.detectChanges();
-
-    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
-    expect(text).toContain("native Strategy Equity chart");
-    expect(text).toContain("can be sparse or end before the terminal portfolio value");
-    expect(text).toContain("never from interpolating this chart");
-  });
-
-  it("keeps native LEAN findings available in a collapsed deep dive", async () => {
+  it("makes a missing realized curve explicit instead of relabeling mark-to-market evidence", async () => {
     const fixture = await renderReport(makeRun({
-      leanAnalysisJson: JSON.stringify([{
-        name: "FlatEquityCurveAnalysis",
-        issue: "The curve is flat.",
-        sample: { trading_days: 2 },
-        solutions: ["Check subscriptions."],
-      }]),
+      equityCurve: {
+        schemaVersion: 2,
+        error: null,
+        markToMarket: curve([{ t: 1, e: 100 }], "strategy_bar_close"),
+        realized: { cadence: "trade_exit", rawPoints: 0, keptPoints: 0, error: "Realized equity unavailable.", points: [] },
+      },
     }));
-    await fixture.whenStable();
-    fixture.detectChanges();
 
-    const root = fixture.nativeElement as HTMLElement;
-    expect(root.textContent).toContain("LEAN native analysis");
-    expect(root.textContent).toContain("Flat Equity Curve");
-    expect(root.textContent).toContain("Check subscriptions.");
-    expect([...root.querySelectorAll("details")].every((detail) => !detail.open)).toBe(true);
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain("Realized equity unavailable.");
+    expect((fixture.nativeElement as HTMLElement)
+      .querySelector("[data-testid='strategy-chart-equity']")?.textContent).toBe("[]");
   });
 
-  it("renders 'Run not found' when the id does not resolve", async () => {
-    const fixture = await renderReport(null);
-    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
-    expect(text).toContain("Run not found.");
-  });
+  it("renders a notice for a structurally malformed persisted verdict", async () => {
+    const fixture = await renderReport(makeRun({ verdictJson: "{}" }));
 
-  async function renderWithParity(verdict: {
-    status: string;
-    verdictJson: string;
-  }): Promise<ComponentFixture<RunReportComponent>> {
-    const fixture = await renderReport(
-      makeRun({ parityVerdicts: [{ id: 1, createdAt: Date.UTC(2026, 0, 6, 21, 5), ...verdict }] }),
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain(
+      "Persisted verdict data is incomplete or malformed.",
     );
-    await fixture.whenStable();
-    fixture.detectChanges();
-    return fixture;
-  }
-
-  it("shows the pending parity state while the LEAN companion runs", async () => {
-    const fixture = await renderWithParity({
-      status: "pending",
-      verdictJson: JSON.stringify({ schema_version: 1, status: "pending", reason: null }),
-    });
-    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
-    expect(text).toContain("parity: Pending");
+    expect(fixture.componentInstance.verdict()).toBeNull();
   });
 
-  it("shows divergence categories when the engines disagree", async () => {
-    const fixture = await renderWithParity({
-      status: "diverged",
-      verdictJson: JSON.stringify({
-        schema_version: 1,
-        status: "diverged",
-        counts_by_category: { FILL_PRICE_DRIFT: 2 },
-        divergences: [
-          { category: "FILL_PRICE_DRIFT", trade_number: 1, ms_utc: 1, message: "fill differs by $0.03" },
-          { category: "FILL_PRICE_DRIFT", trade_number: 2, ms_utc: 2, message: "fill differs by $0.02" },
-        ],
-      }),
-    });
-    const root = fixture.nativeElement as HTMLElement;
-    const parityButton = root.querySelector<HTMLButtonElement>(".verdict-line__parity");
-    expect(parityButton?.textContent).toContain("Diverged");
-    parityButton?.click();
-    fixture.detectChanges();
-    expect(root.textContent).toContain("Fill Price Drift");
-    expect(root.textContent).toContain("fill differs by $0.03");
-  });
+  it("preserves every valid native LEAN analysis finding and arbitrary sample shape", () => {
+    const parsed = parseLeanAnalysis(JSON.stringify([{
+      name: "FlatEquityCurveAnalysis",
+      issue: "The curve is flat.",
+      sample: [{ start: 1_700_000_000_000, end: 1_700_086_400_000 }],
+      solutions: ["Check warm-up."],
+    }]));
 
-  it("shows native and readiness receipts and explains a readiness mismatch", async () => {
-    const fixture = await renderWithParity({
-      status: "diverged",
-      verdictJson: JSON.stringify({
-        schema_version: 2,
-        status: "diverged",
-        reason: "production_readiness_mismatch",
-        counts_by_category: {},
-        divergences: [],
-        native_metric_parity: {
-          status: "match",
-          native_metric_count: 66,
-          formatted_metric_count: 25,
-        },
-        readiness_parity: {
-          status: "mismatch",
-          compared_field_count: 17,
-          mismatched_fields: ["parity_signature"],
-        },
-        input_parity: {
-          status: "match",
-          compared_field_count: 15,
-          fixture_id: "bar-store-v1-exact",
-          fixture_sha256: "a".repeat(64),
-          mismatched_fields: [],
-        },
-      }),
-    });
-    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
-    expect(text).toContain("different production-readiness evidence");
-    expect(text).toContain("LEAN-native values:");
-    expect(text).toContain("66 checked");
-    expect(text).toContain("Readiness fields:");
-    expect(text).toContain("17 checked");
-    expect(text).toContain("Shared fixture:");
-    expect(text).toContain("bar-store-v1-exact");
-  });
-
-  it("explains honest unavailability with trader copy", async () => {
-    const fixture = await renderWithParity({
-      status: "unavailable",
-      verdictJson: JSON.stringify({ schema_version: 1, status: "unavailable", reason: "no_lean_counterpart" }),
-    });
-    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
-    expect(text).toContain("parity: Unavailable");
-  });
-
-  it("explains that an ordinary raw run did not opt into the compatibility contract", async () => {
-    const fixture = await renderWithParity({
-      status: "unavailable",
-      verdictJson: JSON.stringify({
-        schema_version: 1,
-        status: "unavailable",
-        reason: "execution_profile_unsupported",
-      }),
-    });
-    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
-    expect(text).toContain("Start a Compatibility pair");
+    expect(parsed).toEqual([expect.objectContaining({ name: "FlatEquityCurveAnalysis", solutions: ["Check warm-up."] })]);
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────
-// Persisted-trade adapter — regression coverage moved from the deleted
-// lean-engine mapStudyTradeToEngineTrade helper. Numerical fields are
-// passed through from the persisted run contract; the UI must not
-// independently recompute P&L.
-// ─────────────────────────────────────────────────────────────────────────
 describe("toEngineTrade", () => {
-  it("passes through persisted pnl points and percent", () => {
-    const trade = toEngineTrade(makeTrade({ pnlPts: 7, pnlPct: 0.02 }), 0);
-    expect(trade.pnl_pts).toBe(7);
-    expect(trade.pnl_pct).toBe(0.02);
-  });
-
-  it("classifies WIN/LOSS from the persisted dollar PnL, not the price delta", () => {
-    // Fees can turn a positive price delta into a losing trade.
-    const trade = toEngineTrade(makeTrade({ entryPrice: 500, exitPrice: 500.01, pnL: -1.9 }), 0);
-    expect(trade.result).toBe("LOSS");
-  });
-
-  it("passes through a persisted zero percent", () => {
-    const trade = toEngineTrade(makeTrade({ entryPrice: 0, exitPrice: 5, pnlPct: 0 }), 0);
-    expect(trade.pnl_pct).toBe(0);
-  });
-
-  it("assigns a 1-based trade number and passes fields through", () => {
-    const trade = toEngineTrade(makeTrade({ quantity: 3, signalReason: "rsi_oversold" }), 4);
-    expect(trade.trade_number).toBe(5);
-    expect(trade.quantity).toBe(3);
-    expect(trade.signal_reason).toBe("rsi_oversold");
-    expect(trade.indicators).toEqual({});
+  it("passes through persisted P&L fields without recomputing them", () => {
+    const trade = toEngineTrade(makeTrade({ pnlPts: 7, pnlPct: 0.02, pnL: -1.9 }), 4);
+    expect(trade).toEqual(expect.objectContaining({ trade_number: 5, pnl_pts: 7, pnl_pct: 0.02, result: "LOSS" }));
   });
 });

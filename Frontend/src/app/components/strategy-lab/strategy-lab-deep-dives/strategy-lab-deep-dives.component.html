@@ -1,15 +1,52 @@
 @let r = result();
 <section class="deep-dives" aria-label="Run deep dives">
-  <details>
-    <summary><span>LEAN statistics</span><small>Portfolio, trade, and runtime fields</small></summary>
-    <div class="deep-dives__body">
-      @if (leanStats(); as stats) {
+  @if (parity(); as p) {
+    <details data-testid="compatibility-deep-dive">
+      <summary>
+        <span>Compatibility evidence</span>
+        <small>{{ p.status | receiptLabel }}</small>
+      </summary>
+      <div class="deep-dives__body compatibility">
+        @if (p.reason) { <p>{{ p.reason }}</p> }
+        @if (p.inputParity; as input) {
+          <p>Shared fixture: <strong>{{ input.status | receiptLabel }}</strong>@if (input.fixture_id) { · {{ input.fixture_id }} }</p>
+        }
+        @if (p.nativeMetricParity; as native) {
+          <p>LEAN-native values: <strong>{{ native.status | receiptLabel }}</strong></p>
+        }
+        @if (p.readinessParity; as readiness) {
+          <p>Readiness fields: <strong>{{ readiness.status | receiptLabel }}</strong></p>
+        }
+        @if (p.countsByCategory.length) {
+          <dl class="compatibility__counts">
+            @for (entry of p.countsByCategory; track entry.category) {
+              <div><dt>{{ entry.category | receiptLabel }}</dt><dd>{{ entry.count }}</dd></div>
+            }
+          </dl>
+        }
+        @if (p.divergences.length) {
+          <section class="compatibility__differences" aria-label="Compatibility differences">
+            <h3>Differences</h3>
+            @for (item of p.divergences; track $index) {
+              <p><strong>{{ item.category | receiptLabel }}</strong> {{ item.message }}</p>
+            }
+          </section>
+        }
+      </div>
+    </details>
+  }
+
+  @if (leanStatistics(); as stats) {
+    <details data-testid="lean-statistics-deep-dive">
+      <summary>
+        <span>Native LEAN statistics</span>
+        <small>Complete engine-authored statistics catalog</small>
+      </summary>
+      <div class="deep-dives__body deep-dives__body--wide">
         <app-lean-statistics [stats]="stats" />
-      } @else {
-        <p class="deep-dives__empty">LEAN statistics were not recorded for this run.</p>
-      }
-    </div>
-  </details>
+      </div>
+    </details>
+  }
 
   @if (leanAnalysis(); as findings) {
     @if (findings.length > 0) {
@@ -42,17 +79,6 @@
       </details>
     }
   }
-
-  <details>
-    <summary><span>Fee &amp; sequencing</span><small>Execution costs and return cadence</small></summary>
-    <div class="fee-readout">
-      <span>Total fees <strong>{{ formatCurrency(r.total_fees) }}</strong></span>
-      <span>Commission / order <strong>{{ formatCurrency(commissionPerOrder()) }}</strong></span>
-      <span>Fill mode <strong>{{ r.fill_mode === "signal_bar_close" ? "Signal close" : "Next open" }}</strong></span>
-      <span>Portfolio Sharpe <strong>{{ r.statistics['sharpe_ratio'] ?? "—" }}</strong></span>
-      <span>Trade Sharpe <strong>{{ leanStats()?.trade?.sharpe_ratio ?? "—" }}</strong></span>
-    </div>
-  </details>
 
   <details>
     <summary><span>Validation atlas</span><small>Horizons, timing, seasonality, stability</small></summary>

@@ -1,4 +1,8 @@
 import type { EngineValidationAnalytics } from "../lean-engine/engine-results/engine-validation-analytics.types";
+import type { RunVerdict } from "../../api/run-verdict.types";
+import type { DataPolicy } from "../../models/data-policy";
+import type { BacktestRunDetail } from "../../graphql/backtest-runs.query";
+import type { TickerRange } from "../../shared/ticker-range-picker";
 
 export type EngineChoice = "python" | "lean" | "both";
 export type EngineResolution = "minute" | "daily";
@@ -67,6 +71,98 @@ export interface EngineBacktestResponse {
   error?: string;
 }
 
+/** Read-only parity evidence attached to one persisted Strategy Lab run. */
+export interface StrategyLabParityView {
+  status: string;
+  createdAt?: number;
+  reason: string | null;
+  countsByCategory: { category: string; count: number }[];
+  divergences: {
+    category: string;
+    message: string;
+    trade_number?: number | null;
+    ms_utc?: number | null;
+  }[];
+  nativeMetricParity?: {
+    status: string;
+    native_metric_count?: number;
+    formatted_metric_count?: number;
+    divergence_count?: number;
+    source_commit?: string | null;
+  } | null;
+  readinessParity?: {
+    status: string;
+    compared_field_count?: number;
+    mismatched_fields?: string[];
+  } | null;
+  inputParity?: {
+    status: string;
+    compared_field_count?: number;
+    fixture_id?: string | null;
+    fixture_sha256?: string | null;
+    mismatched_fields?: string[];
+  } | null;
+}
+
+export interface StrategyLabConfiguration {
+  engine: EngineChoice;
+  range: TickerRange;
+  parameters: Record<string, unknown>;
+  fillMode: "signal_bar_close" | "next_bar_open";
+  initialCash: number;
+  commissionPerOrder: number;
+  dataPolicy: DataPolicy | null;
+}
+
+export interface ParsedRunVerdict {
+  verdict: RunVerdict | null;
+  error: string | null;
+}
+
+export function parseRunVerdict(value: string | null): RunVerdict | null {
+  return parseRunVerdictEnvelope(value).verdict;
+}
+
+export function parseRunVerdictEnvelope(value: string | null): ParsedRunVerdict {
+  if (!value) return { verdict: null, error: null };
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isRunVerdict(parsed)
+      ? { verdict: parsed, error: null }
+      : { verdict: null, error: "Persisted verdict data is incomplete or malformed." };
+  } catch {
+    return { verdict: null, error: "Persisted verdict data is malformed." };
+  }
+}
+
+export function toStrategyLabConfiguration(
+  run: BacktestRunDetail,
+  currentRange: TickerRange,
+): StrategyLabConfiguration {
+  const parameters = parseStrategyParameters(run.parameters);
+  const symbol = run.dataPolicy?.symbol ?? run.symbol ?? readString(parameters, "symbol") ?? "SPY";
+  const policy = run.dataPolicy;
+  const timespan = policy?.input_bars.timespan;
+  return {
+    engine: run.requestedEngine ?? inferRequestedEngine(run),
+    range: {
+      ...currentRange,
+      symbol: symbol.toUpperCase(),
+      from: run.startDate,
+      to: run.endDate,
+      resolution: timespan === "day" ? "daily" : timespan ?? "minute",
+      multiplier: policy?.input_bars.multiplier ?? 1,
+      session: policy?.session === "extended" ? "extended" : "rth",
+      autoFetch: policy?.provider_kind !== "fixture",
+    },
+    parameters: { ...parameters, symbol: symbol.toUpperCase() },
+    fillMode: run.fillMode === "next_bar_open" ? "next_bar_open" : "signal_bar_close",
+    initialCash: run.initialCash,
+    commissionPerOrder: run.commissionPerOrder ?? 0,
+    dataPolicy: policy ?? null,
+  };
+}
+
 export function parseStrategyParameters(value: string | null): Record<string, StrategyParameterValue> {
   if (!value) return {};
   try {
@@ -97,9 +193,76 @@ function isParameterRecord(value: unknown): value is Record<string, StrategyPara
     Object.values(value).every(isParameterValue);
 }
 
+function readString(value: Record<string, unknown>, key: string): string | null {
+  const candidate = value[key];
+  return typeof candidate === "string" && candidate.trim() ? candidate : null;
+}
+
+function inferRequestedEngine(run: BacktestRunDetail): EngineChoice {
+  return run.engine === "LEAN" || run.source === "lean-sidecar" ? "lean" : "python";
+}
+
 function isParameterValue(value: unknown): value is StrategyParameterValue {
   if (value === null || typeof value === "string" || typeof value === "boolean") return true;
   if (typeof value === "number") return Number.isFinite(value);
   if (Array.isArray(value)) return value.every(isParameterValue);
   return isParameterRecord(value);
+}
+
+function isRunVerdict(value: unknown): value is RunVerdict {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value["verdict_version"] === "number" &&
+    typeof value["engine"] === "string" &&
+    typeof value["generated_at_ms"] === "number" &&
+    isNullableNumber(value["composite"]) &&
+    isNullableString(value["grade"]) &&
+    isNullableString(value["signal"]) &&
+    typeof value["headline"] === "string" &&
+    isStringArray(value["red_flags"]) &&
+    Array.isArray(value["dimensions"]) && value["dimensions"].every(isRunVerdictDimension) &&
+    isStringArray(value["missing_metrics"]) &&
+    typeof value["normalized_weights"] === "boolean" &&
+    (value["cleanliness"] === null || isRecord(value["cleanliness"]))
+  );
+}
+
+function isRunVerdictDimension(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value["key"] === "string" &&
+    typeof value["label"] === "string" &&
+    typeof value["weight"] === "number" &&
+    isNullableNumber(value["score"]) &&
+    typeof value["summary"] === "string" &&
+    Array.isArray(value["sub_scores"]) && value["sub_scores"].every(isRunVerdictSubScore)
+  );
+}
+
+function isRunVerdictSubScore(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value["key"] === "string" &&
+    typeof value["label"] === "string" &&
+    isNullableNumber(value["score"]) &&
+    isNullableNumber(value["raw_value"]) &&
+    typeof value["display"] === "string" &&
+    typeof value["note"] === "string"
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNullableNumber(value: unknown): boolean {
+  return value === null || (typeof value === "number" && Number.isFinite(value));
+}
+
+function isNullableString(value: unknown): boolean {
+  return value === null || typeof value === "string";
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
 }

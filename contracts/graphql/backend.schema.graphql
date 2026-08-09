@@ -106,7 +106,7 @@ type BacktestRunDetailType {
   verdictVersion: Int
   verdictGrade: String
   verdictSignal: String
-  equityCurve: BacktestRunEquityCurveType
+  equityCurve: BacktestRunEquityCurvesType
   validationAnalytics: BacktestRunValidationAnalyticsType
   insightSummaryJson: String
   dataPolicyJson: String
@@ -124,6 +124,13 @@ type BacktestRunEquityCurveType {
   keptPoints: Int!
   error: String
   points: [BacktestRunEquityPointType!]!
+}
+
+type BacktestRunEquityCurvesType {
+  schemaVersion: Int!
+  error: String
+  markToMarket: BacktestRunEquityCurveType
+  realized: BacktestRunEquityCurveType
 }
 
 type BacktestRunEquityPointType {

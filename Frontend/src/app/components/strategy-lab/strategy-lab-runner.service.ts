@@ -1,5 +1,6 @@
 import { HttpErrorResponse } from "@angular/common/http";
 import { computed, effect, inject, Injectable, signal } from "@angular/core";
+import { Router } from "@angular/router";
 
 import { JobsService } from "../../services/jobs.service";
 import { LeanSidecarService } from "../../services/lean-sidecar.service";
@@ -21,6 +22,7 @@ const COMPATIBILITY_PROFILE = "us-equity-raw-ibkr-v1";
 export class StrategyLabRunner {
   private readonly jobs = inject(JobsService);
   private readonly leanSidecar = inject(LeanSidecarService);
+  private readonly router = inject(Router);
   private readonly engineJobId = signal<string | null>(null);
   private readonly leanJobId = signal<string | null>(null);
 
@@ -36,20 +38,14 @@ export class StrategyLabRunner {
   readonly runPhase = signal<StrategyLabRunPhase>("idle");
   readonly runStatusBanner = signal("");
   readonly runPhaseDetail = signal("");
-  readonly completedRunId = signal<number | null>(null);
   readonly runError = signal<string | null>(null);
 
   constructor() {
     this.wireEngineJobEffect();
     this.wireLeanJobEffect();
-    effect(() => {
-      const runId = this.completedRunId();
-      if (runId !== null) this.config.collapseForRun(runId);
-    });
   }
 
-  clearReport(): void {
-    this.completedRunId.set(null);
+  clearRunError(): void {
     this.runError.set(null);
   }
 
@@ -185,7 +181,6 @@ export class StrategyLabRunner {
   private beginRun(headline: string, detail: string): void {
     this.running.set(true);
     this.runError.set(null);
-    this.completedRunId.set(null);
     this.setRunStatus("connecting", headline, detail);
   }
 
@@ -319,13 +314,14 @@ export class StrategyLabRunner {
           "completed",
           `Completed — ${response.total_trades} trade${response.total_trades === 1 ? "" : "s"}, net ${formatCurrency(response.net_profit)}`,
         );
-        if (response.study_id != null) this.completedRunId.set(response.study_id);
+        if (response.study_id != null) {
+          await this.router.navigate(["/strategy-lab/runs", response.study_id]);
+        }
         else {
           this.runError.set(
             "Run completed but persistence failed — no report available. The run was not saved to history; check backend logs.",
           );
         }
-        this.config.activeTab.set("configuration");
       }
     } catch (error) {
       this.fail(
@@ -341,12 +337,12 @@ export class StrategyLabRunner {
     try {
       const response = await this.jobs.fetchResult<TrustedRunResponse>(jobId);
       if (response.strategy_execution_id !== null) {
-        this.completedRunId.set(response.strategy_execution_id);
         this.setRunStatus(
           "completed",
           "LEAN run finished",
           `Persisted as study #${response.strategy_execution_id}.`,
         );
+        await this.router.navigate(["/strategy-lab/runs", response.strategy_execution_id]);
       } else {
         this.runError.set(
           "LEAN run completed but persistence failed — no report available. The run was not saved to history; check backend logs.",

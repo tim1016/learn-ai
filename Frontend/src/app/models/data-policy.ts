@@ -36,3 +36,32 @@ export interface DataPolicy {
   /** Populated only when provider_kind === 'fixture'. */
   fixture_sha256: string | null;
 }
+
+/**
+ * Rebuild a DataPolicy at the GraphQL-to-engine boundary.
+ *
+ * Apollo adds ``__typename`` to queried objects, including nested bar specs.
+ * Explicit reconstruction keeps editable restored state identical to the
+ * strict Python/LEAN request contract without weakening server validation.
+ */
+export function toDataPolicyPayload(policy: DataPolicy): DataPolicy {
+  return {
+    source: policy.source,
+    symbol: policy.symbol,
+    adjusted: policy.adjusted,
+    session: policy.session,
+    input_bars: {
+      timespan: policy.input_bars.timespan,
+      multiplier: policy.input_bars.multiplier,
+    },
+    strategy_bars: {
+      timespan: policy.strategy_bars.timespan,
+      multiplier: policy.strategy_bars.multiplier,
+    },
+    timestamp_policy: policy.timestamp_policy,
+    timezone: policy.timezone,
+    provider_kind: policy.provider_kind,
+    fixture_id: policy.fixture_id,
+    fixture_sha256: policy.fixture_sha256,
+  };
+}

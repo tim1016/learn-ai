@@ -1302,6 +1302,47 @@
         }
       },
       "status": "active"
+    },
+    {
+      "id": "ENG-006",
+      "name": "Persisted realized-equity staircase",
+      "category": "engine-results",
+      "canonical_module": "PythonDataService/app/engine/results/equity_downsample.py",
+      "canonical_callable": "build_realized_equity_envelope",
+      "reference": {
+        "kind": "hand_computed",
+        "oracle": "exact decimal accumulation of the synthetic closed-trade ledger without importing canonical code",
+        "citation": "Persisted BacktestTrade.PnL accounting contract; see docs/references/realized-equity-staircase-v1.md."
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "PythonDataService/scripts/fixture_generators/realized_equity_staircase.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-06,
+        "rtol": 0.0,
+        "note": "Exact Decimal oracle transported through float display points; fixed P&L tolerance required by the realized-equity contract."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.json",
+          "output": "output.json",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.json": "a58ba7b19a13d9ebfef65e0cee32609843e5f1ef22fe818ccb0ece507ee1d7fe",
+            "output.json": "6879cb253de2af7b43feb755d4c3d5153c883c173a35f4c32ee7e12596db029f"
+          },
+          "file_sha256": {
+            "input.json": "c59c6b2080464247851e5eada0b4983bd07c78265573cf16e477637bb7231979",
+            "output.json": "103d25cad1f113b7d1108dee52ff4b5787c27c352fe85f77fbd2760381c5953c",
+            "attribution.md": "1ae21a123345b74f1973b12af0f5758225225cacc01501115be6174a1148e834"
+          }
+        }
+      },
+      "status": "active"
     }
   ]
 }

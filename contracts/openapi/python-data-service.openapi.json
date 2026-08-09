@@ -16044,6 +16044,11 @@
             "title": "Indicators",
             "type": "object"
           },
+          "is_synthetic_exit": {
+            "default": false,
+            "title": "Is Synthetic Exit",
+            "type": "boolean"
+          },
           "pnl_pct": {
             "title": "Pnl Pct",
             "type": "number"

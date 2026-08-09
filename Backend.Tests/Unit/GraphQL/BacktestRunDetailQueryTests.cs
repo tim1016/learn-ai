@@ -109,7 +109,7 @@ public class BacktestRunDetailQueryTests
     }
 
     [Fact]
-    public void FromExecution_ValidEquityEnvelope_ParsesPoints()
+    public void FromExecution_StrictEquityEnvelope_ParsesBothCurveIdentities()
     {
         var execution = new StrategyExecution
         {
@@ -118,12 +118,23 @@ public class BacktestRunDetailQueryTests
             StrategyName = "ema_crossover",
             EquityCurveJson = """
             {
-              "cadence": "strategy_bar_close",
-              "downsample": { "raw_points": 2, "kept_points": 2 },
-              "points": [
-                { "t": 1700000000000, "e": 100000.12 },
-                { "t": 1700000060000, "e": 100010.34 }
-              ]
+              "schema_version": 2,
+              "mark_to_market": {
+                "cadence": "strategy_bar_close",
+                "downsample": { "raw_points": 2, "kept_points": 2 },
+                "points": [
+                  { "t": 1700000000000, "e": 100000.12 },
+                  { "t": 1700000060000, "e": 100010.34 }
+                ]
+              },
+              "realized": {
+                "cadence": "trade_exit",
+                "downsample": { "raw_points": 2, "kept_points": 2 },
+                "points": [
+                  { "t": 1700000000000, "e": 100000.00 },
+                  { "t": 1700000060000, "e": 100010.34 }
+                ]
+              }
             }
             """,
         };
@@ -131,12 +142,15 @@ public class BacktestRunDetailQueryTests
         var detail = BacktestRunDetailType.FromExecution(execution, [], NullLogger.Instance);
 
         Assert.NotNull(detail.EquityCurve);
-        Assert.Equal("strategy_bar_close", detail.EquityCurve.Cadence);
-        Assert.Equal(2, detail.EquityCurve.RawPoints);
-        Assert.Equal(2, detail.EquityCurve.KeptPoints);
-        Assert.Equal(2, detail.EquityCurve.Points.Count);
-        Assert.Equal(1_700_000_000_000, detail.EquityCurve.Points[0].T);
-        Assert.Equal(100000.12m, detail.EquityCurve.Points[0].E);
+        Assert.Equal(2, detail.EquityCurve.SchemaVersion);
+        Assert.NotNull(detail.EquityCurve.MarkToMarket);
+        Assert.NotNull(detail.EquityCurve.Realized);
+        Assert.Equal("strategy_bar_close", detail.EquityCurve.MarkToMarket.Cadence);
+        Assert.Equal("trade_exit", detail.EquityCurve.Realized.Cadence);
+        Assert.Equal(2, detail.EquityCurve.MarkToMarket.RawPoints);
+        Assert.Equal(2, detail.EquityCurve.Realized.Points.Count);
+        Assert.Equal(1_700_000_000_000, detail.EquityCurve.MarkToMarket.Points[0].T);
+        Assert.Equal(100000.12m, detail.EquityCurve.MarkToMarket.Points[0].E);
     }
 
     [Fact]
@@ -155,6 +169,37 @@ public class BacktestRunDetailQueryTests
     }
 
     [Fact]
+    public void FromExecution_LegacyBareEquityCurve_PreservesMarkToMarketAndMarksRealizedUnavailable()
+    {
+        var execution = new StrategyExecution
+        {
+            Ticker = new Ticker { Symbol = "SPY", Name = "SPY", Market = "stocks" },
+            Source = "engine",
+            StrategyName = "ema_crossover",
+            EquityCurveJson = """
+            {
+              "cadence": "strategy_bar_close",
+              "downsample": { "raw_points": 2, "kept_points": 2 },
+              "points": [
+                { "t": 1700000000000, "e": 100000.00 },
+                { "t": 1700000060000, "e": 100010.00 }
+              ]
+            }
+            """,
+        };
+
+        var detail = BacktestRunDetailType.FromExecution(execution, [], NullLogger.Instance);
+
+        Assert.Equal(1, detail.EquityCurve!.SchemaVersion);
+        Assert.Equal("strategy_bar_close", detail.EquityCurve.MarkToMarket!.Cadence);
+        Assert.Equal(2, detail.EquityCurve.MarkToMarket.Points.Count);
+        Assert.Equal(100010.00m, detail.EquityCurve.MarkToMarket.Points[1].E);
+        Assert.Equal(
+            "Realized equity was not recorded for this legacy run.",
+            detail.EquityCurve.Realized!.Error);
+    }
+
+    [Fact]
     public void FromExecution_CorruptEquityEnvelope_ReturnsUnreadableReceipt()
     {
         var execution = new StrategyExecution
@@ -169,7 +214,29 @@ public class BacktestRunDetailQueryTests
 
         Assert.NotNull(detail.EquityCurve);
         Assert.Equal("Equity curve envelope unreadable.", detail.EquityCurve.Error);
-        Assert.Empty(detail.EquityCurve.Points);
+        Assert.Null(detail.EquityCurve.Realized);
+    }
+
+    [Fact]
+    public void FromExecution_RejectsARealizedCurveWithTheWrongCadence()
+    {
+        var execution = new StrategyExecution
+        {
+            Ticker = new Ticker { Symbol = "SPY", Name = "SPY", Market = "stocks" },
+            Source = "engine",
+            StrategyName = "ema_crossover",
+            EquityCurveJson = """
+            {
+              "schema_version": 2,
+              "mark_to_market": { "cadence": "strategy_bar_close", "points": [] },
+              "realized": { "cadence": "strategy_bar_close", "points": [] }
+            }
+            """,
+        };
+
+        var detail = BacktestRunDetailType.FromExecution(execution, [], NullLogger.Instance);
+
+        Assert.Equal("Realized curve has an unsupported cadence.", detail.EquityCurve!.Realized!.Error);
     }
 
     [Fact]

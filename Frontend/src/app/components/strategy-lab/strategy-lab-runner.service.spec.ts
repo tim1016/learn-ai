@@ -92,6 +92,35 @@ describe("StrategyLab configuration and runner", () => {
     }));
   });
 
+  it("removes GraphQL metadata before a restored data policy reaches the engine", async () => {
+    const restoredPolicy = {
+      ...config.dataPolicy(),
+      __typename: "DataPolicyType",
+      input_bars: {
+        ...config.dataPolicy().input_bars,
+        __typename: "BarsSpecType",
+      },
+      strategy_bars: {
+        ...config.dataPolicy().strategy_bars,
+        __typename: "BarsSpecType",
+      },
+    };
+    config.restoreDataPolicy(restoredPolicy);
+
+    await runner.run();
+
+    const submittedPayload = startJob.mock.calls[0]?.[1];
+    expect(submittedPayload).toEqual(expect.objectContaining({
+      backtest: expect.objectContaining({
+        data_policy: expect.objectContaining({
+          input_bars: { timespan: "minute", multiplier: 1 },
+          strategy_bars: { timespan: "minute", multiplier: 15 },
+        }),
+      }),
+    }));
+    expect(JSON.stringify(submittedPayload)).not.toContain("__typename");
+  });
+
   it("selects a runnable strategy after an ordinary engine change", () => {
     const pythonOnly = { ...STRATEGY, name: "python_only", lean_twin: null };
     config.strategies.set([pythonOnly, STRATEGY]);

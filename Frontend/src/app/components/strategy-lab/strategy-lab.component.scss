@@ -17,8 +17,11 @@
   align-items: start;
 }
 
-.workbench--rail-collapsed {
-  grid-template-columns: 52px minmax(0, 1fr);
+.workbench__rail {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+  align-content: start;
 }
 
 .workbench__stage {
@@ -71,8 +74,7 @@
 }
 
 @media (max-width: 900px) {
-  .workbench,
-  .workbench--rail-collapsed {
+  .workbench {
     grid-template-columns: minmax(0, 1fr);
   }
 }

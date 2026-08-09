@@ -1,0 +1,55 @@
+{
+  "cases": [
+    {
+      "name": "equal_exit_order",
+      "initial_cash": "100000.00",
+      "start_ms_utc": 1700000000000,
+      "end_ms_utc": 1700000005000,
+      "trades": [
+        {
+          "trade_number": 2,
+          "exit_ms_utc": 1700000002000,
+          "pnl": "-75.50"
+        },
+        {
+          "trade_number": 1,
+          "exit_ms_utc": 1700000002000,
+          "pnl": "250.25"
+        },
+        {
+          "trade_number": 3,
+          "exit_ms_utc": 1700000004000,
+          "pnl": "0.00"
+        }
+      ]
+    },
+    {
+      "name": "boundary_folding",
+      "initial_cash": "100.00",
+      "start_ms_utc": 1700000010000,
+      "end_ms_utc": 1700000013000,
+      "trades": [
+        {
+          "trade_number": 1,
+          "exit_ms_utc": 1700000010000,
+          "pnl": "1.25"
+        },
+        {
+          "trade_number": 2,
+          "exit_ms_utc": 1700000012000,
+          "pnl": "-0.25"
+        },
+        {
+          "trade_number": 3,
+          "exit_ms_utc": 1700000013000,
+          "pnl": "1.00"
+        },
+        {
+          "trade_number": 4,
+          "exit_ms_utc": 1700000013000,
+          "pnl": "-0.50"
+        }
+      ]
+    }
+  ]
+}

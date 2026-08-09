@@ -1,0 +1,98 @@
+:host {
+  display: block;
+  min-width: 0;
+}
+
+.results-sidebar {
+  overflow: hidden;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+
+header {
+  display: grid;
+  gap: 2px;
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--border);
+
+  h2 {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: var(--fs-sm);
+  }
+
+  small {
+    color: var(--text-muted);
+    font-size: var(--fs-xxs);
+  }
+}
+
+.results-sidebar__metrics {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: metric;
+}
+
+.results-sidebar__metrics li {
+  counter-increment: metric;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: 7px var(--space-3);
+  border-bottom: 1px solid var(--border);
+  border-left: 3px solid var(--text-muted);
+
+  &::before {
+    content: counter(metric, decimal-leading-zero);
+    color: var(--text-muted);
+    font: 500 9px/1 var(--font-mono);
+  }
+
+  span {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-subtle);
+    font-size: var(--fs-xxs);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  strong {
+    color: var(--text-primary);
+    font: 650 var(--fs-xs)/1 var(--font-mono);
+    white-space: nowrap;
+  }
+}
+
+[data-band="positive"] { border-left-color: var(--bull) !important; }
+[data-band="warning"] { border-left-color: var(--warn) !important; }
+[data-band="negative"] { border-left-color: var(--bear) !important; }
+
+.results-sidebar__empty {
+  margin: 0;
+  padding: var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+}
+
+.results-sidebar__compatibility {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-left: 3px solid var(--text-muted);
+
+  span {
+    color: var(--text-subtle);
+    font-size: var(--fs-xs);
+  }
+
+  strong {
+    color: var(--text-primary);
+    font: 650 var(--fs-xs)/1 var(--font-mono);
+  }
+}

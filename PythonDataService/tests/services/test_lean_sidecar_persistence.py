@@ -18,6 +18,20 @@ from app.services.lean_sidecar_persistence import (
 )
 
 
+def test_source_freshness_guard_requires_restart_after_source_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import lean_sidecar_persistence as persistence
+
+    monkeypatch.setattr(persistence, "_LOADED_PERSISTENCE_SOURCE_SHA256", "0" * 64)
+
+    with pytest.raises(
+        persistence.StaleLeanPersistenceSourceError,
+        match="restart the Python data service",
+    ):
+        persistence.assert_lean_persistence_source_current()
+
+
 def _filled_event(
     event_id: int,
     direction: str,
@@ -368,9 +382,12 @@ def test_build_persist_payload_pairs_round_trip(tmp_path: Path) -> None:
     assert payload["verdict_grade"] == verdict["grade"]
     assert payload["verdict_signal"] == verdict["signal"]
     equity = json.loads(payload["equity_curve_json"])
-    assert equity["cadence"] == "lean_chart_sampling"
-    assert equity["downsample"]["raw_points"] == 2
-    assert equity["points"][-1] == {"t": 1_700_000_600_000, "e": 100_009.0}
+    assert equity["schema_version"] == 2
+    assert equity["mark_to_market"]["cadence"] == "lean_chart_sampling"
+    assert equity["mark_to_market"]["downsample"]["raw_points"] == 2
+    assert equity["mark_to_market"]["points"][-1] == {"t": 1_700_000_600_000, "e": 100_009.0}
+    assert equity["realized"]["cadence"] == "trade_exit"
+    assert equity["realized"]["points"][-1] == {"t": 1_700_000_600_000, "e": 100_009.0}
     # pnl=9.0 already nets the $1 of fees (pair_order_events: pnl = gross - entry_fee - exit_fee).
     # final_equity = starting_cash + total_pnl; do NOT subtract total_fees again.
     assert payload["final_equity"] == pytest.approx(100_009.0)  # 100000 + 9
@@ -396,6 +413,51 @@ def test_build_persist_payload_pairs_round_trip(tmp_path: Path) -> None:
     assert stats["portfolio"]["end_equity"] == pytest.approx(100_009.0)
     assert stats["trade"]["total_number_of_trades"] == 1
     assert stats["runtime"]["total_orders"] == 1
+
+
+def test_build_persist_payload_uses_covered_lean_timestamps_for_realized_bounds(
+    tmp_path: Path,
+) -> None:
+    """A final-session exit must not be rejected by a UTC-midnight date anchor."""
+    from app.services.lean_sidecar_persistence import build_persist_payload
+
+    start_date_ms = 1_723_161_600_000  # 2024-08-09 00:00:00 UTC
+    end_date_ms = 1_786_060_800_000  # 2026-08-07 00:00:00 UTC
+    first_chart_ms = start_date_ms + 4 * 60 * 60 * 1_000
+    entry_ms = end_date_ms + 14 * 60 * 60 * 1_000
+    exit_ms = end_date_ms + 15 * 60 * 60 * 1_000
+    last_chart_ms = end_date_ms + 20 * 60 * 60 * 1_000
+    ws = _write_fixture_workspace(
+        tmp_path,
+        "final_session_exit",
+        order_events=[
+            _filled_event(1, "buy", entry_ms, 100.0, 10, fee=0.5),
+            _filled_event(2, "sell", exit_ms, 101.0, 10, fee=0.5),
+        ],
+        equity_curve=[
+            {"ms_utc": first_chart_ms, "value": 100_000.0},
+            {"ms_utc": last_chart_ms, "value": 100_009.0},
+        ],
+    )
+
+    payload = build_persist_payload(
+        workspace_path=ws,
+        run_id="final_session_exit",
+        starting_cash=100_000.0,
+        symbol="SPY",
+        algorithm_name="ema_crossover_signal",
+        start_date_ms=start_date_ms,
+        end_date_ms=end_date_ms,
+        parity_group_id="pg-final-session-exit",
+    )
+
+    realized = json.loads(payload["equity_curve_json"])["realized"]
+    assert realized["points"] == [
+        {"t": first_chart_ms, "e": 100_000.0},
+        {"t": exit_ms, "e": 100_009.0},
+        {"t": last_chart_ms, "e": 100_009.0},
+    ]
+    assert realized["points"][-1]["e"] == pytest.approx(100_009.0, abs=1e-6, rel=0)
 
 
 def test_compatibility_pair_scores_the_same_closed_trade_ledger_contract(tmp_path: Path) -> None:
@@ -1334,6 +1396,10 @@ def test_failed_run_payload_emits_canonical_shape(tmp_path: Path) -> None:
     assert verdict["grade"] == "F"
     assert verdict["signal"] == "Reject"
     assert "lean_run_failed" in verdict["red_flags"]
+    equity = json.loads(payload["equity_curve_json"])
+    assert equity["schema_version"] == 2
+    assert equity["mark_to_market"]["error"] == "No normalized/result.json — LEAN run did not produce output"
+    assert equity["realized"]["error"] == "No normalized/result.json — LEAN run did not produce output"
 
 
 @pytest.mark.asyncio

@@ -65,6 +65,29 @@ public class StudiesApiTests
     }
 
     [Fact]
+    public void SaveStudyRequest_DeserializesSyntheticExitReceipt()
+    {
+        const string json = """
+            {
+              "trades": [
+                {
+                  "entryTimestamp": 1748629800000,
+                  "exitTimestamp": 1748629860000,
+                  "isSyntheticExit": true
+                }
+              ]
+            }
+            """;
+        var request = JsonSerializer.Deserialize<SaveStudyRequest>(json, new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+        });
+
+        Assert.NotNull(request);
+        Assert.True(request.Trades![0].IsSyntheticExit);
+    }
+
+    [Fact]
     public void ValidateSaveStudyTradeTimestamps_MissingEntryTimestamp_ReturnsError()
     {
         var request = new SaveStudyRequest

@@ -78,13 +78,64 @@ from app.lean_sidecar.trusted_templates import (
 from app.lean_sidecar.workspace import Workspace, resolve_workspace
 from app.schemas.run_verdict import RunVerdictCleanliness
 from app.services.lean_sidecar_persistence import (
+    StaleLeanPersistenceSourceError,
     _algorithm_name_for_run,
+    assert_lean_persistence_source_current,
     build_persist_payload,
     persist_via_dotnet,
 )
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
+
+
+def _warn_if_persistence_source_changed(run_id: str) -> None:
+    """Record a stale-source warning without discarding a completed run."""
+    try:
+        assert_lean_persistence_source_current()
+    except StaleLeanPersistenceSourceError as exc:
+        logger.warning(
+            "Persisting completed LEAN run %s using its already-loaded worker source; "
+            "restart the Python data service before starting another run: %s",
+            run_id,
+            exc,
+        )
+
+
+async def _persist_completed_run(
+    *,
+    request: TrustedRunRequest,
+    workspace: Workspace,
+    manifest: RunManifest,
+    response: LaunchResponse,
+    backend_url: str,
+) -> int | None:
+    """Persist one launched result even if the worker source changed mid-run."""
+    _warn_if_persistence_source_changed(request.run_id)
+    persist_payload = build_persist_payload(
+        workspace_path=workspace.root,
+        run_id=request.run_id,
+        starting_cash=request.starting_cash,
+        symbol=request.symbol,
+        algorithm_name=_algorithm_name_for_run(request.template, request.algorithm_source),
+        start_date_ms=_date_to_ms_utc(request.start_date),
+        end_date_ms=_date_to_ms_utc(request.end_date),
+        # PR B P1 fix — forward the manifest so the persist payload carries
+        # the true ``brokerage_policy`` + ``data_policy``. Without this, the
+        # .NET row would either be NULL ("unknown") or, pre-fix, would have
+        # been silently labeled ``algorithm_default`` even for IBKR
+        # reconciliation runs.
+        manifest=manifest,
+        cleanliness=RunVerdictCleanliness(
+            is_clean=response.is_clean,
+            is_reconciliation_grade=not any(response.lean_errors.values()),
+            error_counts={category: len(errors) for category, errors in response.lean_errors.items() if errors},
+        ),
+        parity_group_id=request.parity_group_id,
+        requested_engine=request.requested_engine,
+    )
+    return await persist_via_dotnet(payload=persist_payload, base_url=backend_url)
+
 
 # Phase 2a uses the same in-process launcher version label as Phase 1.
 # When the launcher gains its own deployable image this becomes its
@@ -501,6 +552,8 @@ async def run_trusted_sample(
     as before — the existing ``/api/lean-sidecar/trusted-run`` endpoint
     (used by test infra and reconcile scripts) calls it with no hooks.
     """
+    assert_lean_persistence_source_current()
+
     _emit_phase = on_phase or (lambda _name: None)
     _emit_log = on_log or (lambda _msg: None)
 
@@ -840,33 +893,18 @@ async def run_trusted_sample(
     # AFTER the manifest is finalized so workspace_path is stable. A
     # persistence failure is logged but does NOT abort the run — the
     # workspace artifacts on disk are the authoritative record.
-    persist_payload = build_persist_payload(
-        workspace_path=workspace.root,
-        run_id=request.run_id,
-        starting_cash=request.starting_cash,
-        symbol=request.symbol,
-        algorithm_name=_algorithm_name_for_run(request.template, request.algorithm_source),
-        start_date_ms=_date_to_ms_utc(request.start_date),
-        end_date_ms=_date_to_ms_utc(request.end_date),
-        # PR B P1 fix — forward the manifest so the persist payload carries
-        # the true ``brokerage_policy`` + ``data_policy``. Without this, the
-        # .NET row would either be NULL ("unknown") or, pre-fix, would have
-        # been silently labeled ``algorithm_default`` even for IBKR
-        # reconciliation runs.
-        manifest=manifest,
-        cleanliness=RunVerdictCleanliness(
-            is_clean=response.is_clean,
-            is_reconciliation_grade=not any(response.lean_errors.values()),
-            error_counts={category: len(errors) for category, errors in response.lean_errors.items() if errors},
-        ),
-        parity_group_id=request.parity_group_id,
-        requested_engine=request.requested_engine,
-    )
+    # The source guard above rejects *new* work before staging. If the file
+    # changes while LEAN is already running, the launched worker and its
+    # normalized result still form one coherent completed run; persist that
+    # result and require a restart only before the next run starts.
     _emit_phase("persisting")
     _emit_log("Persisting run to history")
-    strategy_execution_id = await persist_via_dotnet(
-        payload=persist_payload,
-        base_url=settings.BACKEND_URL,
+    strategy_execution_id = await _persist_completed_run(
+        request=request,
+        workspace=workspace,
+        manifest=manifest,
+        response=response,
+        backend_url=settings.BACKEND_URL,
     )
 
     return TrustedRunResult(

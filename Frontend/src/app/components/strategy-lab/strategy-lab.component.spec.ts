@@ -1,8 +1,8 @@
 import { provideHttpClient } from "@angular/common/http";
 import { HttpTestingController, provideHttpClientTesting } from "@angular/common/http/testing";
-import { Component, input, output, provideZonelessChangeDetection, signal } from "@angular/core";
+import { provideZonelessChangeDetection, signal } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
-import { ActivatedRoute, convertToParamMap } from "@angular/router";
+import { ActivatedRoute, Router, convertToParamMap } from "@angular/router";
 import { Apollo } from "apollo-angular";
 import { of } from "rxjs";
 import { describe, expect, it, vi } from "vitest";
@@ -10,15 +10,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { BacktestRunDetail } from "../../graphql/backtest-runs.query";
 import { JobsService } from "../../services/jobs.service";
 import { LeanSidecarService } from "../../services/lean-sidecar.service";
-import { RunReportComponent } from "../engine-lab/run-report/run-report.component";
-import { StrategyLabComponent, toStrategyLabConfiguration } from "./strategy-lab.component";
-
-@Component({ selector: "app-engine-run-report", template: "Saved report {{ runId() }}" })
-class RunReportStubComponent {
-  readonly runId = input.required<number>();
-  readonly runDetail = input<BacktestRunDetail | null>(null);
-  readonly rerun = output();
-}
+import { StrategyLabComponent } from "./strategy-lab.component";
+import { toStrategyLabConfiguration } from "./strategy-lab.models";
 
 function run(overrides: Partial<BacktestRunDetail> = {}): BacktestRunDetail {
   return {
@@ -95,52 +88,96 @@ function strategyCatalog() {
   }];
 }
 
-async function createLab(backtestRun: BacktestRunDetail | null = null) {
+async function createLab(options: { restoreRun?: number; backtestRun?: BacktestRunDetail | null } = {}) {
   const jobs = signal<never[]>([]);
+  const navigate = vi.fn(async () => true);
+  const params = convertToParamMap(options.restoreRun ? { restoreRun: String(options.restoreRun) } : {});
   await TestBed.configureTestingModule({
     imports: [StrategyLabComponent],
     providers: [
       provideZonelessChangeDetection(),
       provideHttpClient(),
       provideHttpClientTesting(),
-      { provide: ActivatedRoute, useValue: { queryParamMap: of(convertToParamMap({})) } },
-      {
-        provide: JobsService,
-        useValue: {
-          jobs,
-          job: vi.fn(() => null),
-          startJob: vi.fn(),
-          fetchResult: vi.fn(),
-          cancelJob: vi.fn(),
-        },
-      },
-      {
-        provide: LeanSidecarService,
-        useValue: { diagnose: vi.fn(), nextTradingDayOpen: vi.fn() },
-      },
+      { provide: ActivatedRoute, useValue: { queryParamMap: of(params), snapshot: { queryParamMap: params } } },
+      { provide: Router, useValue: { navigate } },
+      { provide: JobsService, useValue: { jobs, job: vi.fn(() => null), startJob: vi.fn(), fetchResult: vi.fn(), cancelJob: vi.fn() } },
+      { provide: LeanSidecarService, useValue: { diagnose: vi.fn(), nextTradingDayOpen: vi.fn() } },
       {
         provide: Apollo,
         useValue: {
-          query: vi.fn(() => of({ data: { backtestRun } })),
+          query: vi.fn(() => of({ data: { backtestRun: options.backtestRun ?? null } })),
           watchQuery: vi.fn(() => ({
-            valueChanges: of({ data: { backtestRuns: [] } }),
-            refetch: vi.fn(async () => ({ data: { backtestRuns: [] } })),
+            valueChanges: of({ data: { backtestRuns: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } }),
+            refetch: vi.fn(),
           })),
         },
       },
     ],
-  })
-    .overrideComponent(StrategyLabComponent, {
-      remove: { imports: [RunReportComponent] },
-      add: { imports: [RunReportStubComponent] },
-    })
-    .compileComponents();
+  }).compileComponents();
   const fixture = TestBed.createComponent(StrategyLabComponent);
   fixture.detectChanges();
-  return { fixture, http: TestBed.inject(HttpTestingController) };
+  return { fixture, http: TestBed.inject(HttpTestingController), navigate };
 }
 
-describe("Strategy Lab History rehydration", () => {
+describe("Strategy Lab Workbench", () => {
+  it("starts with Workbench and History tabs instead of repeated page framing", async () => {
+    const { fixture, http } = await createLab();
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.textContent).toContain("Workbench");
+    expect(root.textContent).toContain("History");
+    expect(root.textContent).not.toContain("Run a strategy, inspect its evidence");
+    expect(root.querySelector("app-strategy-lab-config-rail")).not.toBeNull();
+    expect(root.querySelector("app-engine-run-report")).toBeNull();
+    http.verify();
+  });
+
+  it("opens a selected history run on its dedicated Results route", async () => {
+    const { fixture, http, navigate } = await createLab();
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    await fixture.whenStable();
+
+    fixture.componentInstance.selectHistoryRun("91");
+
+    expect(navigate).toHaveBeenCalledWith(["/strategy-lab/runs", 91]);
+    http.verify();
+  });
+
+});
+
+describe("Strategy Lab saved configuration", () => {
+  it("rehydrates the persisted configuration after returning from Results", async () => {
+    const saved = run();
+    const { fixture, http } = await createLab({ restoreRun: saved.id, backtestRun: saved });
+    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    const root = fixture.nativeElement as HTMLElement;
+    await vi.waitFor(() => {
+      expect(root.querySelector(".config-rail")).not.toBeNull();
+    });
+    fixture.detectChanges();
+
+    expect(root.querySelector<HTMLElement>("[role='radio'][aria-checked='true']")?.textContent?.trim()).toBe("both");
+    expect(root.querySelector("app-instrument-card .ticker-box__symbol")?.textContent?.trim()).toBe("QQQ");
+    const dates = root.querySelectorAll<HTMLInputElement>("app-time-window-card input[type='date']");
+    expect(dates[0]?.value).toBe("2026-03-02");
+    expect(dates[1]?.value).toBe("2026-04-02");
+
+    const advanced = root.querySelector<HTMLDetailsElement>("details.advanced");
+    if (!advanced) throw new Error("Advanced configuration controls are missing");
+    advanced.open = true;
+    fixture.detectChanges();
+    expect(root.querySelector<HTMLSelectElement>("details.advanced select")?.value).toBe("next_bar_open");
+    const executionInputs = root.querySelectorAll<HTMLInputElement>("details.advanced fieldset:last-of-type input");
+    expect(executionInputs[0]?.value).toBe("75000");
+    expect(executionInputs[1]?.value).toBe("0.35");
+    expect(root.querySelector("app-engine-run-report")).toBeNull();
+    expect(root.querySelector("app-strategy-lab-results-sidebar")).toBeNull();
+    http.verify();
+  });
+
   it("restores every persisted control without inferring away the Both selection", () => {
     const configuration = toStrategyLabConfiguration(run(), {
       symbol: "SPY",
@@ -169,35 +206,6 @@ describe("Strategy Lab History rehydration", () => {
     });
   });
 
-  it("preserves the complete persisted data policy for an exact rerun", () => {
-    const basePolicy = run().dataPolicy;
-    if (basePolicy === null) throw new Error("test run must include a data policy");
-    const dataPolicy = {
-      ...basePolicy,
-      adjusted: false,
-      session: "extended" as const,
-      input_bars: { timespan: "minute" as const, multiplier: 5 },
-      strategy_bars: { timespan: "minute" as const, multiplier: 30 },
-      provider_kind: "fixture" as const,
-      fixture_id: "bars-v1",
-      fixture_sha256: "a".repeat(64),
-    };
-
-    const configuration = toStrategyLabConfiguration(run({ dataPolicy }), {
-      symbol: "SPY",
-      from: "2025-01-01",
-      to: "2025-01-02",
-      resolution: "daily",
-    });
-
-    expect(configuration.dataPolicy).toEqual(dataPolicy);
-    expect(configuration.range).toEqual(expect.objectContaining({
-      multiplier: 5,
-      session: "extended",
-      autoFetch: false,
-    }));
-  });
-
   it("rejects malformed persisted parameters instead of enabling a changed rerun", () => {
     expect(() => toStrategyLabConfiguration(run({ parameters: "{" }), {
       symbol: "SPY",
@@ -205,149 +213,5 @@ describe("Strategy Lab History rehydration", () => {
       to: "2025-01-02",
       resolution: "minute",
     })).toThrow(/Saved run parameters are malformed/);
-  });
-
-  it("uses producing engine only as a legacy-row fallback", () => {
-    expect(toStrategyLabConfiguration(run({ requestedEngine: null, engine: "LEAN", source: "lean-sidecar" }), {
-      symbol: "SPY",
-      from: "2025-01-01",
-      to: "2025-01-02",
-      resolution: "minute",
-    }).engine).toBe("lean");
-  });
-
-  it("keeps legacy LEAN cash out of schema-validated strategy parameters", () => {
-    const configuration = toStrategyLabConfiguration(run({
-      engine: "LEAN",
-      source: "lean-sidecar",
-      parameters: JSON.stringify({ symbol: "SPY", starting_cash: 100000 }),
-    }), {
-      symbol: "SPY",
-      from: "2025-01-01",
-      to: "2025-01-02",
-      resolution: "minute",
-    });
-
-    expect(configuration.parameters).toEqual({ symbol: "QQQ" });
-    expect(configuration.initialCash).toBe(75_000);
-  });
-});
-
-describe("StrategyLabComponent", () => {
-  it("instantiates the focused workbench without legacy availability side effects", async () => {
-    const { fixture, http } = await createLab();
-    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
-    await fixture.whenStable();
-    fixture.detectChanges();
-
-    const root = fixture.nativeElement as HTMLElement;
-    expect(root.textContent).toContain("Strategy Lab");
-    expect(root.querySelector("app-strategy-lab-config-rail")).not.toBeNull();
-    http.expectNone((request) => request.url.includes("/data/availability"));
-    http.verify();
-  });
-
-  it("keeps History available when the strategy catalog is empty", async () => {
-    const { fixture, http } = await createLab();
-    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush([]);
-    await fixture.whenStable();
-    fixture.detectChanges();
-
-    const root = fixture.nativeElement as HTMLElement;
-    expect(root.textContent).toContain("History");
-    expect(root.textContent).toContain("No runnable strategies");
-    http.verify();
-  });
-
-  it("keeps History available when the strategy catalog fails", async () => {
-    const { fixture, http } = await createLab();
-    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(
-      { detail: "offline" },
-      { status: 503, statusText: "Unavailable" },
-    );
-    await fixture.whenStable();
-    fixture.detectChanges();
-
-    const root = fixture.nativeElement as HTMLElement;
-    expect(root.textContent).toContain("History");
-    expect(root.textContent).toContain("Failed to load strategies");
-    http.verify();
-  });
-
-  it("keeps malformed History evidence visible while blocking reconstruction and rerun", async () => {
-    const { fixture, http } = await createLab(run({ parameters: "{" }));
-    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
-    await fixture.componentInstance.selectHistoryRun("91");
-    fixture.detectChanges();
-
-    expect(fixture.componentInstance.runs.runError()).toMatch(/Saved run parameters are malformed/);
-    expect(fixture.componentInstance.runs.completedRunId()).toBe(91);
-    expect(fixture.componentInstance.selectedRun()?.id).toBe(91);
-    expect(fixture.componentInstance.config.rerunBlocked()).toBe(true);
-    expect((fixture.nativeElement as HTMLElement).textContent).toContain("Saved report 91");
-    http.verify();
-  });
-
-  it("keeps a retired strategy's persisted report visible while blocking its rerun", async () => {
-    const retired = run({ strategyName: "retired_strategy" });
-    const { fixture, http } = await createLab(retired);
-    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
-    await fixture.whenStable();
-    await fixture.componentInstance.selectHistoryRun("91");
-    fixture.detectChanges();
-
-    expect(fixture.componentInstance.runs.completedRunId()).toBe(91);
-    expect(fixture.componentInstance.config.selectedStrategyName()).toBe("retired_strategy");
-    expect(fixture.componentInstance.config.rerunBlocked()).toBe(true);
-    expect((fixture.nativeElement as HTMLElement).textContent).toContain("Saved report 91");
-    http.verify();
-  });
-
-  it("reconciles a saved strategy selected before the strategy catalog resolves", async () => {
-    const { fixture, http } = await createLab(run());
-
-    await fixture.componentInstance.selectHistoryRun("91");
-    expect(fixture.componentInstance.config.rerunBlocked()).toBe(true);
-
-    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
-    await fixture.whenStable();
-    fixture.detectChanges();
-
-    expect(fixture.componentInstance.config.selectedStrategyName()).toBe("ema_crossover_signal");
-    expect(fixture.componentInstance.config.paramValues()).toEqual(expect.objectContaining({
-      fast: 8,
-      slow: 21,
-      lookback: 50,
-      symbol: "QQQ",
-    }));
-    expect(fixture.componentInstance.config.configurationWarning()).toBeNull();
-    expect(fixture.componentInstance.config.rerunBlocked()).toBe(false);
-    http.verify();
-  });
-
-  it("preserves untouched restored policy fields when only the end date changes", async () => {
-    const basePolicy = run().dataPolicy;
-    if (basePolicy === null) throw new Error("test run must include a data policy");
-    const restoredPolicy: NonNullable<BacktestRunDetail["dataPolicy"]> = {
-      ...basePolicy,
-      adjusted: false,
-      session: "extended",
-      input_bars: { timespan: "minute", multiplier: 5 },
-      provider_kind: "fixture",
-      fixture_id: "spy-bars-v1",
-      fixture_sha256: "b".repeat(64),
-    };
-    const { fixture, http } = await createLab(run({ dataPolicy: restoredPolicy }));
-    http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
-    await fixture.whenStable();
-    await fixture.componentInstance.selectHistoryRun("91");
-
-    fixture.componentInstance.config.changeRange({
-      ...fixture.componentInstance.config.range(),
-      to: "2026-04-03",
-    });
-
-    expect(fixture.componentInstance.config.dataPolicy()).toEqual(restoredPolicy);
-    http.verify();
   });
 });

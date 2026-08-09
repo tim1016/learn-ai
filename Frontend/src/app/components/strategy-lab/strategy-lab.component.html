@@ -1,11 +1,4 @@
 <main class="strategy-lab">
-  <app-page-header
-    title="Strategy Lab"
-    icon="pi-chart-line"
-    [hasTabs]="true"
-    subtitle="Run a strategy, inspect its evidence, and compare Python with LEAN from one diagnostic workbench."
-  />
-
   <p-tabs [(value)]="config.activeTab">
       <p-tablist>
         <p-tab value="configuration"><i class="pi pi-sliders-h" aria-hidden="true"></i> Workbench</p-tab>
@@ -14,60 +7,49 @@
 
       <p-tabpanels>
         <p-tabpanel value="configuration">
-          @if (config.strategiesLoading()) {
-            <div class="lab-notice" role="status">Loading strategies…</div>
-            @if (runs.completedRunId(); as runId) {
-              <section class="workbench__stage" aria-label="Saved strategy evidence">
-                <app-engine-run-report [runId]="runId" [runDetail]="selectedRun()" />
-              </section>
-            }
-          } @else if (config.strategiesError(); as error) {
-            <div class="lab-notice lab-notice--error" role="alert">Failed to load strategies: {{ error }}</div>
-            @if (runs.completedRunId(); as runId) {
-              <section class="workbench__stage" aria-label="Saved strategy evidence">
-                <app-engine-run-report [runId]="runId" [runDetail]="selectedRun()" />
-              </section>
-            }
-          } @else if (config.strategies().length === 0) {
-            <div class="lab-notice" role="status">No runnable strategies are currently registered.</div>
-            @if (runs.completedRunId(); as runId) {
-              <section class="workbench__stage" aria-label="Saved strategy evidence">
-                <app-engine-run-report [runId]="runId" [runDetail]="selectedRun()" />
-              </section>
-            }
-          } @else {
-            <div class="workbench" [class.workbench--rail-collapsed]="config.configNavCollapsed()">
-            <app-strategy-lab-config-rail
-              [collapsed]="config.configNavCollapsed()"
-              [engine]="config.engine()"
-              [range]="config.range()"
-              [dataPolicy]="config.dataPolicy()"
-              [strategies]="config.selectableStrategies()"
-              [selectedStrategyName]="config.selectedStrategyName()"
-              [paramValues]="config.paramValues()"
-              [fillMode]="config.fillMode()"
-              [initialCash]="config.initialCash()"
-              [commissionPerOrder]="config.commissionPerOrder()"
-              [tickerPool]="config.tickerPool"
-              [recentTickers]="config.recentTickers"
-              [running]="runs.running()"
-              [runBlocked]="config.rerunBlocked()"
-              [launcherBlocksRun]="runs.leanLauncherBlocksRun()"
-              [launcherStatus]="runs.leanLauncherStatus()"
-              [launcherDetail]="runs.leanLauncherDetail()"
-              [launcherCommand]="runs.leanLauncherCommand"
-              [leanTemplateLabel]="config.leanTemplateLabel()"
-              (collapseToggled)="config.toggleConfigNav()"
-              (engineChanged)="config.changeEngine($event)"
-              (rangeChange)="config.changeRange($event)"
-              (strategySelected)="selectStrategy($event)"
-              (parameterChanged)="config.updateParameter($event.field, $event.rawValue, $event.type)"
-              (fillModeChanged)="config.fillMode.set($event)"
-              (initialCashChanged)="config.initialCash.set($event)"
-              (commissionChanged)="config.commissionPerOrder.set($event)"
-              (launcherCheckRequested)="runs.checkLeanLauncher()"
-              (runRequested)="runs.run()"
-            />
+          <div class="workbench">
+            <aside class="workbench__rail" aria-label="Run controls">
+              @if (config.strategiesLoading()) {
+                <div class="lab-notice" role="status">Loading strategies…</div>
+              } @else if (config.strategiesError(); as error) {
+                <div class="lab-notice lab-notice--error" role="alert">Failed to load strategies: {{ error }}</div>
+              } @else if (config.strategies().length === 0) {
+                <div class="lab-notice" role="status">No runnable strategies are currently registered.</div>
+              } @else {
+                <app-strategy-lab-config-rail
+                  [collapsed]="config.configNavCollapsed()"
+                  [engine]="config.engine()"
+                  [range]="config.range()"
+                  [dataPolicy]="config.dataPolicy()"
+                  [strategies]="config.selectableStrategies()"
+                  [selectedStrategyName]="config.selectedStrategyName()"
+                  [paramValues]="config.paramValues()"
+                  [fillMode]="config.fillMode()"
+                  [initialCash]="config.initialCash()"
+                  [commissionPerOrder]="config.commissionPerOrder()"
+                  [tickerPool]="config.tickerPool"
+                  [recentTickers]="config.recentTickers"
+                  [running]="runs.running()"
+                  [runBlocked]="config.rerunBlocked()"
+                  [launcherBlocksRun]="runs.leanLauncherBlocksRun()"
+                  [launcherStatus]="runs.leanLauncherStatus()"
+                  [launcherDetail]="runs.leanLauncherDetail()"
+                  [launcherCommand]="runs.leanLauncherCommand"
+                  [leanTemplateLabel]="config.leanTemplateLabel()"
+                  (collapseToggled)="config.toggleConfigNav()"
+                  (engineChanged)="config.changeEngine($event)"
+                  (rangeChange)="config.changeRange($event)"
+                  (strategySelected)="selectStrategy($event)"
+                  (parameterChanged)="config.updateParameter($event.field, $event.rawValue, $event.type)"
+                  (fillModeChanged)="config.fillMode.set($event)"
+                  (initialCashChanged)="config.initialCash.set($event)"
+                  (commissionChanged)="config.commissionPerOrder.set($event)"
+                  (launcherCheckRequested)="runs.checkLeanLauncher()"
+                  (runRequested)="runs.run()"
+                />
+              }
+
+            </aside>
 
             <section class="workbench__stage" aria-label="Strategy evidence">
               @if (runs.running()) {
@@ -82,24 +64,15 @@
                 <div class="lab-notice lab-notice--error" role="alert">{{ error }}</div>
               }
 
-              @if (runs.completedRunId(); as runId) {
-                <app-engine-run-report
-                  [runId]="runId"
-                  [runDetail]="selectedRun()"
-                  (rerun)="runs.run()"
-                />
-              } @else {
-                <app-validation-stage-placeholder
-                  [symbol]="config.effectiveSymbol()"
-                  [resolution]="config.resolution()"
-                  [fillMode]="config.fillMode()"
-                  [engine]="config.engine()"
-                  [dataPolicyNote]="config.dataPolicyNote()"
-                />
-              }
+              <app-validation-stage-placeholder
+                [symbol]="config.effectiveSymbol()"
+                [resolution]="config.resolution()"
+                [fillMode]="config.fillMode()"
+                [engine]="config.engine()"
+                [dataPolicyNote]="config.dataPolicyNote()"
+              />
             </section>
-            </div>
-          }
+          </div>
         </p-tabpanel>
 
         <p-tabpanel value="history">

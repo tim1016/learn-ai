@@ -19,6 +19,8 @@ export interface TradingSeries {
   type: "line" | "area" | "histogram";
   points: TradingPoint[];
   lineWidth?: 1 | 2 | 3 | 4;
+  /** Display interpolation only; producer values remain unchanged. */
+  lineType?: "straight" | "steps";
 }
 
 export interface TradingSubPane {

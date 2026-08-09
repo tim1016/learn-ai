@@ -3,29 +3,29 @@
     <div class="run-report__empty">Loading run…</div>
   } @else if (run(); as currentRun) {
     @if (engineResult(); as result) {
-      <app-strategy-lab-verdict
-        [verdict]="verdict()"
-        [parity]="parity()"
-        [tradeCount]="currentRun.totalTrades"
-        (rerun)="rerun.emit()"
-      />
+      <div class="run-report__layout">
+        <app-strategy-lab-results-summary
+          [result]="result"
+          [verdict]="verdict()"
+        />
 
-      <app-strategy-lab-metrics [result]="result" />
+        <section class="run-report__evidence" aria-label="Price and realized equity evidence">
+          @for (notice of reportNotices(); track notice) {
+            <p class="run-report__notice" role="note">{{ notice }}</p>
+          }
 
-      @for (notice of reportNotices(); track notice) {
-        <p class="run-report__notice" role="note">{{ notice }}</p>
-      }
-
-      <app-strategy-lab-chart
-        [run]="currentRun"
-        [markers]="markers()"
-        [equityPoints]="equityPoints()"
-      />
+          <app-strategy-lab-chart
+            [run]="currentRun"
+            [markers]="markers()"
+            [equityPoints]="equityPoints()"
+          />
+        </section>
+      </div>
 
       <app-strategy-lab-deep-dives
         [result]="result"
-        [commissionPerOrder]="currentRun.commissionPerOrder"
         [tradesTruncated]="currentRun.tradesTruncated"
+        [parity]="parity()"
       />
     }
   } @else if (loadError()) {

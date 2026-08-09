@@ -1,9 +1,9 @@
-import { ChangeDetectionStrategy, Component, inject, signal } from "@angular/core";
+import { ChangeDetectionStrategy, Component, inject } from "@angular/core";
+import { ActivatedRoute, Router } from "@angular/router";
 import { firstValueFrom } from "rxjs";
 import { Apollo } from "apollo-angular";
 import { Tab, TabList, TabPanel, TabPanels, Tabs } from "primeng/tabs";
 
-import { PageHeaderComponent } from "../../shared/page-header/page-header.component";
 import { RunDockComponent } from "../../shared/run-dock/run-dock.component";
 import {
   RUN_DOCK_SOURCE,
@@ -14,26 +14,13 @@ import {
   type BacktestRunDetail,
   type BacktestRunDetailQueryResult,
 } from "../../graphql/backtest-runs.query";
-import { RunReportComponent } from "../engine-lab/run-report/run-report.component";
 import { EngineLabRunHistoryComponent } from "../lean-engine/engine-lab-run-history/engine-lab-run-history.component";
 import { EngineRunDockSource } from "../lean-engine/engine-run-dock-source";
 import { ValidationStagePlaceholderComponent } from "../lean-engine/validation-stage-placeholder/validation-stage-placeholder.component";
 import { StrategyLabConfigRailComponent } from "./strategy-lab-config-rail/strategy-lab-config-rail.component";
-import type { TickerRange } from "../../shared/ticker-range-picker";
-import type { DataPolicy } from "../../models/data-policy";
 import { StrategyLabConfigStore } from "./strategy-lab-config.store";
 import { StrategyLabRunner } from "./strategy-lab-runner.service";
-import { parseStrategyParameters, type EngineChoice } from "./strategy-lab.models";
-
-export interface StrategyLabConfiguration {
-  engine: EngineChoice;
-  range: TickerRange;
-  parameters: Record<string, unknown>;
-  fillMode: "signal_bar_close" | "next_bar_open";
-  initialCash: number;
-  commissionPerOrder: number;
-  dataPolicy: DataPolicy | null;
-}
+import { toStrategyLabConfiguration } from "./strategy-lab.models";
 
 /**
  * Strategy Lab's focused product shell. Configuration and run orchestration
@@ -43,7 +30,6 @@ export interface StrategyLabConfiguration {
 @Component({
   selector: "app-strategy-lab",
   imports: [
-    PageHeaderComponent,
     Tabs,
     TabList,
     Tab,
@@ -52,7 +38,6 @@ export interface StrategyLabConfiguration {
     StrategyLabConfigRailComponent,
     EngineLabRunHistoryComponent,
     ValidationStagePlaceholderComponent,
-    RunReportComponent,
     RunDockComponent,
   ],
   templateUrl: "./strategy-lab.component.html",
@@ -68,36 +53,46 @@ export interface StrategyLabConfiguration {
 })
 export class StrategyLabComponent {
   private readonly apollo = inject(Apollo);
+  private readonly router = inject(Router);
+  private readonly route = inject(ActivatedRoute);
   readonly config = inject(StrategyLabConfigStore);
   readonly runs = inject(StrategyLabRunner);
-  readonly selectedRun = signal<BacktestRunDetail | null>(null);
+
+  private readonly restoreRunId = parseRunId(this.route.snapshot.queryParamMap.get("restoreRun"));
 
   constructor() {
-    void this.config.loadStrategies();
+    const strategiesReady = this.config.loadStrategies();
+    if (this.restoreRunId !== null) {
+      this.runs.clearRunError();
+      void this.restoreSavedRun(this.restoreRunId, strategiesReady);
+    }
   }
 
-  async selectHistoryRun(id: string): Promise<void> {
+  selectHistoryRun(id: string): void {
     const numericId = Number(id);
     if (!Number.isInteger(numericId) || numericId <= 0) {
       this.runs.runError.set("That saved run has an invalid identifier.");
       return;
     }
 
+    void this.router.navigate(["/strategy-lab/runs", numericId]);
+  }
+
+  private async restoreSavedRun(runId: number, strategiesReady: Promise<void>): Promise<void> {
+    await strategiesReady;
     try {
       const response = await firstValueFrom(
         this.apollo.query<BacktestRunDetailQueryResult>({
           query: BACKTEST_RUN_DETAIL_QUERY,
-          variables: { id: numericId },
+          variables: { id: runId },
           fetchPolicy: "network-only",
         }),
       );
       const run = response.data?.backtestRun;
       if (run === null || run === undefined) {
-        this.runs.runError.set(`Saved run #${numericId} was not found.`);
+        this.runs.runError.set(`Saved run #${runId} was not found.`);
         return;
       }
-      this.runs.completedRunId.set(run.id);
-      this.selectedRun.set(run);
       this.config.activeTab.set("configuration");
       try {
         this.restoreConfiguration(run);
@@ -129,44 +124,11 @@ export class StrategyLabComponent {
 
   selectStrategy(name: string): void {
     this.config.selectStrategy(name);
-    this.runs.clearReport();
-    this.selectedRun.set(null);
+    this.runs.clearRunError();
   }
 }
 
-export function toStrategyLabConfiguration(
-  run: BacktestRunDetail,
-  currentRange: TickerRange,
-): StrategyLabConfiguration {
-  const parameters = parseStrategyParameters(run.parameters);
-  const symbol = run.dataPolicy?.symbol ?? run.symbol ?? readString(parameters, "symbol") ?? "SPY";
-  const policy = run.dataPolicy;
-  const timespan = policy?.input_bars.timespan;
-  return {
-    engine: run.requestedEngine ?? inferRequestedEngine(run),
-    range: {
-      ...currentRange,
-      symbol: symbol.toUpperCase(),
-      from: run.startDate,
-      to: run.endDate,
-      resolution: timespan === "day" ? "daily" : timespan ?? "minute",
-      multiplier: policy?.input_bars.multiplier ?? 1,
-      session: policy?.session === "extended" ? "extended" : "rth",
-      autoFetch: policy?.provider_kind !== "fixture",
-    },
-    parameters: { ...parameters, symbol: symbol.toUpperCase() },
-    fillMode: run.fillMode === "next_bar_open" ? "next_bar_open" : "signal_bar_close",
-    initialCash: run.initialCash,
-    commissionPerOrder: run.commissionPerOrder ?? 0,
-    dataPolicy: policy ?? null,
-  };
-}
-
-function readString(value: Record<string, unknown>, key: string): string | null {
-  const candidate = value[key];
-  return typeof candidate === "string" && candidate.trim() ? candidate : null;
-}
-
-function inferRequestedEngine(run: BacktestRunDetail): EngineChoice {
-  return run.engine === "LEAN" || run.source === "lean-sidecar" ? "lean" : "python";
+function parseRunId(value: string | null): number | null {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }

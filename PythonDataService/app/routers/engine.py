@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import time
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
@@ -48,7 +49,12 @@ from app.engine.execution.execution_config import ExecutionConfig
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode
 from app.engine.execution.sizing import LeanSetHoldingsSizing
-from app.engine.results.equity_downsample import from_engine_curve
+from app.engine.results.equity_downsample import (
+    RealizedEquityTrade,
+    build_realized_equity_envelope,
+    build_run_equity_envelope,
+    from_engine_curve,
+)
 from app.engine.results.lean_statistics import compute_lean_statistics
 from app.engine.results.statistics import summarize
 from app.engine.results.trade_record import TradeRecord
@@ -395,6 +401,7 @@ class EngineTradeResponse(BaseModel):
     pnl_pct: float
     result: str
     signal_reason: str = ""
+    is_synthetic_exit: bool = False
 
 
 class EngineBacktestResponse(BaseModel):
@@ -582,6 +589,7 @@ def _format_trade(index: int, trade: Any) -> EngineTradeResponse:
         pnl_pct=float(trade.pnl_pct),
         result=trade.result,
         signal_reason=getattr(trade, "signal_reason", "") or "",
+        is_synthetic_exit=bool(getattr(trade, "is_synthetic_exit", False)),
     )
 
 
@@ -1534,6 +1542,79 @@ def _save_study_sync(
     def canonical_stat(key: str, fallback: float | int | None) -> float | int | None:
         return stats.get(key, fallback)
 
+    try:
+        persisted_trades = [
+            {
+                "tradeType": "Buy",
+                "entryTimestamp": t.entry_time,
+                "exitTimestamp": t.exit_time,
+                "entryPrice": t.entry_price,
+                "exitPrice": t.exit_price,
+                "quantity": t.quantity,
+                # Dollar P&L net of commission, matching LEAN's persisted
+                # ``t.pnL`` semantics. The engine charges ``commission_per_order``
+                # on both entry and exit fills, so each round-trip incurs
+                # ``2 × commission_per_order``.
+                "pnL": t.pnl_pts * t.quantity - 2 * commission_per_order,
+                "cumulativePnL": 0,  # not tracked per-trade in engine format
+                "signalReason": t.signal_reason,
+                "isSyntheticExit": t.is_synthetic_exit,
+            }
+            for t in response.trades
+        ]
+        mark_to_market = from_engine_curve(
+            response.equity_curve,
+            trade_timestamps={t["entryTimestamp"] for t in persisted_trades}
+            | {t["exitTimestamp"] for t in persisted_trades},
+        )
+        mark_points = mark_to_market["points"]
+        chart_start_candidates = [int(point["t"]) for point in mark_points]
+        chart_end_candidates = [int(point["t"]) for point in mark_points]
+        # A zero-trade run still has consolidated chart bars. They provide the
+        # producer-authored session bounds for its required flat realized curve;
+        # never synthesize a timestamp from an ISO date or UTC midnight here.
+        chart_start_candidates.extend(
+            int(bar["t"])
+            for bar in response.chart_bars
+            if bar.get("t") is not None
+        )
+        chart_end_candidates.extend(
+            int(bar["t"])
+            for bar in response.chart_bars
+            if bar.get("t") is not None
+        )
+        chart_start_candidates.extend(int(trade["entryTimestamp"]) for trade in persisted_trades)
+        chart_end_candidates.extend(int(trade["exitTimestamp"]) for trade in persisted_trades)
+        if not chart_start_candidates or not chart_end_candidates:
+            raise ValueError("Engine run has no timestamps for the strict run report")
+        realized = build_realized_equity_envelope(
+            initial_cash=Decimal(str(response.initial_cash)),
+            trades=[
+                RealizedEquityTrade(
+                    trade_number=index + 1,
+                    exit_ms_utc=int(trade["exitTimestamp"]),
+                    pnl=Decimal(str(trade["pnL"])),
+                )
+                for index, trade in enumerate(persisted_trades)
+            ],
+            start_ms_utc=min(chart_start_candidates),
+            end_ms_utc=max(chart_end_candidates),
+        )
+        realized_final_equity = realized["points"][-1]["e"]
+        if not math.isclose(
+            realized_final_equity,
+            response.final_equity,
+            rel_tol=0.0,
+            abs_tol=1e-6,
+        ):
+            raise ValueError(
+                "realized equity does not reconcile with the completed engine final equity "
+                "within atol=1e-6, rtol=0"
+            )
+    except (KeyError, TypeError, ValueError):
+        logger.exception("[ENGINE] Study save report preparation failed — study not persisted")
+        return None
+
     body: dict[str, Any] = {
         "symbol": symbol,
         "strategyName": response.strategy_name,
@@ -1584,10 +1665,7 @@ def _save_study_sync(
         "verdictGrade": response.run_verdict.grade if response.run_verdict else None,
         "verdictSignal": response.run_verdict.signal if response.run_verdict else None,
         "equityCurveJson": json.dumps(
-            from_engine_curve(
-                response.equity_curve,
-                trade_timestamps={t.entry_time for t in response.trades} | {t.exit_time for t in response.trades},
-            )
+            build_run_equity_envelope(mark_to_market=mark_to_market, realized=realized)
         ),
         # Frozen at run time — the persisted run is the single render
         # source for the workbench and the run-detail page, so the atlas
@@ -1605,28 +1683,7 @@ def _save_study_sync(
             else None
         ),
         "insightSummaryJson": json.dumps(response.insight_summary) if response.insight_summary else None,
-        # Dollar PnL net of commission, matching LEAN's persisted
-        # ``t.pnL`` semantics. The engine charges ``commission_per_order``
-        # on both entry and exit fills, so each round-trip incurs
-        # ``2 × commission_per_order``. Without this scaling the
-        # persisted ``BacktestTrade.PnL`` column silently disagreed with
-        # the engine's own ``net_profit`` by a factor of ``quantity``
-        # and the per-trade commission. See
-        # ``.claude/rules/numerical-rigor.md`` → ``PNL_DRIFT``.
-        "trades": [
-            {
-                "tradeType": "Buy",
-                "entryTimestamp": t.entry_time,
-                "exitTimestamp": t.exit_time,
-                "entryPrice": t.entry_price,
-                "exitPrice": t.exit_price,
-                "quantity": t.quantity,
-                "pnL": t.pnl_pts * t.quantity - 2 * commission_per_order,
-                "cumulativePnL": 0,  # not tracked per-trade in engine format
-                "signalReason": t.signal_reason,
-            }
-            for t in response.trades
-        ],
+        "trades": persisted_trades,
     }
 
     try:
