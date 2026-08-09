@@ -12633,6 +12633,11 @@ export interface components {
             indicators?: {
                 [key: string]: number;
             };
+            /**
+             * Is Synthetic Exit
+             * @default false
+             */
+            is_synthetic_exit?: boolean;
             /** Pnl Pct */
             pnl_pct: number;
             /** Pnl Pts */
