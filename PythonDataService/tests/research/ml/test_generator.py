@@ -169,7 +169,8 @@ import sys  # noqa: E402
 @pytest.mark.slow
 def test_cli_generates_real_artifact_for_one_day(tmp_path: Path) -> None:
     """Smoke test: run the CLI against one locally cached LEAN session."""
-    cache_root = Path(__file__).resolve().parents[3] / "lean-cache"
+    service_root = Path(__file__).resolve().parents[3]
+    cache_root = service_root / "lean-cache"
     spy_minute_dir = cache_root / "equity" / "usa" / "minute" / "spy"
     archives = sorted(spy_minute_dir.glob("2*_trade.zip"))
     if not archives:
@@ -189,7 +190,14 @@ def test_cli_generates_real_artifact_for_one_day(tmp_path: Path) -> None:
     ]
     env = os.environ.copy()
     env["LEAN_DATA_CACHE"] = str(cache_root)
-    result = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=120)
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=service_root,
+        timeout=120,
+    )
     assert result.returncode == 0, result.stderr
     set_id = result.stdout.strip()
     assert (tmp_path / set_id / "manifest.json").is_file()

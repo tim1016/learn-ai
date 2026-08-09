@@ -1028,6 +1028,22 @@ async def test_recovery_commits_projection_and_marks_live(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_recovery_marks_an_empty_existing_journal_live(tmp_path: Path) -> None:
+    path = tmp_path / "accounts" / ACCOUNT / "clerk_journal.jsonl"
+    path.parent.mkdir(parents=True)
+    path.touch()
+    store = _Store()
+
+    count = await recover_account_transaction_feed(
+        artifacts_root=tmp_path, account_id=ACCOUNT, store=store, updated_at_ms=100
+    )
+
+    assert count == 0
+    assert store.cursor is None
+    assert store.feed[0] == "live"
+
+
+@pytest.mark.asyncio
 async def test_recovery_stops_at_its_byte_bounded_batch_limit(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
