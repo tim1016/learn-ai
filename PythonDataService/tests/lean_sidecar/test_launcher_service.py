@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -240,12 +241,17 @@ class TestLauncherAppConcurrency:
     ) -> None:
         from app.lean_sidecar.launcher import app as launcher_app_module
 
+        launch_started = threading.Event()
+        release_launch = threading.Event()
+
         def slow_launch(request: LaunchRequest, *, artifacts_root: Path) -> LaunchResponse:
-            time.sleep(0.3)
+            launch_started.set()
+            if not release_launch.wait(timeout=2):
+                raise AssertionError("test did not release the blocked launch")
             return LaunchResponse(
                 run_id=request.run_id,
                 exit_code=0,
-                duration_ms=300,
+                duration_ms=1,
                 timed_out=False,
                 log_tail="ok",
                 lean_errors={},
@@ -277,19 +283,23 @@ class TestLauncherAppConcurrency:
                     headers=headers,
                 )
             )
-            await asyncio.sleep(0)
+            assert await asyncio.to_thread(launch_started.wait, 1)
 
-            started = time.perf_counter()
-            metadata_response = await client.post(
-                "/extract-metadata",
-                json={"run_id": "run_concurrent", "image_digest": DUMMY_DIGEST},
-                headers=headers,
-            )
-            elapsed = time.perf_counter() - started
-            launch_response = await launch_task
+            try:
+                metadata_response = await asyncio.wait_for(
+                    client.post(
+                        "/extract-metadata",
+                        json={"run_id": "run_concurrent", "image_digest": DUMMY_DIGEST},
+                        headers=headers,
+                    ),
+                    timeout=1,
+                )
+                assert not release_launch.is_set()
+            finally:
+                release_launch.set()
+                launch_response = await asyncio.wait_for(launch_task, timeout=1)
 
         assert metadata_response.status_code == 200, metadata_response.text
-        assert elapsed < 0.2
         assert launch_response.status_code == 200, launch_response.text
 
 
