@@ -218,7 +218,7 @@ The data-plane container `polygon-data-service` runs inside podman (see `compose
 - Runs beside the data-plane with access to the Podman API — **not** inside `polygon-data-service`.
 - Accepts a request over a **unix domain socket** bind-mounted into `polygon-data-service` (Linux/macOS) **or** localhost + shared-secret token (Windows dev hosts). The Windows token path is documented as the fallback and not used in any production-shaped deployment.
 - Request payload is minimal — `{ run_id, image, limits }`. The launcher resolves `run_id` to a host-absolute workspace path itself using its configured artifacts root; the data plane never sends paths.
-- Validates the resolved path is under the configured root, the workspace directory exists, and the requested image matches an allow-list of pinned digests.
+- Validates the resolved path is under the configured root, the workspace directory exists, and the requested image matches the current launcher allow-list. Historical validated digests are excluded from HTTP launches; only the developer-only golden-fixture regeneration command can opt into the separate reconciliation-fixture allow-list, and it records the selected digest in the new fixture manifest.
 - Invokes `podman run` with the flags in *Container execution boundary* above.
 - Returns `{ exit_code, duration_ms, log_tail }` and persists container stdout/stderr plus launcher diagnostics to `workspace/launcher/launcher.log`. LEAN owns `workspace/output/logs.txt`; the launcher must never overwrite LEAN artifacts.
 

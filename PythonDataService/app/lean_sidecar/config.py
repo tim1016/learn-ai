@@ -141,9 +141,16 @@ ALLOWED_IMAGE_DIGESTS: frozenset[str] = frozenset(
     for d in (
         PINNED_LEAN_IMAGE_DIGEST_AMD64,
         PINNED_LEAN_IMAGE_DIGEST_ARM64,
-        HISTORICAL_LEAN_IMAGE_DIGEST_ARM64,
     )
     if d is not None
+)
+
+# Historical images are intentionally excluded from the launcher-facing
+# allow-list above. They remain available only to the developer-only golden
+# fixture regeneration workflow, which must opt into this broader policy
+# explicitly and records the selected digest in the regenerated manifest.
+RECONCILIATION_FIXTURE_IMAGE_DIGESTS: frozenset[str] = ALLOWED_IMAGE_DIGESTS | frozenset(
+    d for d in (HISTORICAL_LEAN_IMAGE_DIGEST_ARM64,) if d is not None
 )
 
 # Per-digest container platform. The runner derives ``--platform <value>``

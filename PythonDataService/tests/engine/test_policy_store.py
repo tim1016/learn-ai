@@ -131,6 +131,38 @@ def test_snapshot_minute_trade_zips_changes_when_one_input_byte_changes(tmp_path
     assert after["fixture_sha256"] != before["fixture_sha256"]
 
 
+def test_snapshot_minute_trade_zips_rejects_path_unsafe_symbol(tmp_path: Path):
+    with pytest.raises(SymbolValidationError):
+        snapshot_minute_trade_zips(
+            [tmp_path],
+            symbol="../evil",
+            start=date(2026, 1, 5),
+            end=date(2026, 1, 5),
+            adjusted=False,
+            session="regular",
+        )
+
+
+def test_snapshot_minute_trade_zips_ignores_symlink_that_escapes_root(tmp_path: Path):
+    root = tmp_path / "root"
+    outside = tmp_path / "outside"
+    symbol_parent = root / "equity" / "usa" / "minute"
+    symbol_parent.mkdir(parents=True)
+    outside.mkdir()
+    (outside / "20260105_trade.zip").write_bytes(b"outside-root")
+    (symbol_parent / "spy").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(FileNotFoundError, match="no minute trade zips"):
+        snapshot_minute_trade_zips(
+            [root],
+            symbol="SPY",
+            start=date(2026, 1, 5),
+            end=date(2026, 1, 5),
+            adjusted=False,
+            session="regular",
+        )
+
+
 def test_record_fetch_creates_and_appends(tmp_path: Path):
     record_fetch(
         tmp_path,

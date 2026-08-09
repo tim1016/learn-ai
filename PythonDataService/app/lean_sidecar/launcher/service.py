@@ -137,7 +137,12 @@ def check_pinned_image() -> LauncherImageReadiness:
     )
 
 
-def launch(request: LaunchRequest, *, artifacts_root: Path) -> LaunchResponse:
+def launch(
+    request: LaunchRequest,
+    *,
+    artifacts_root: Path,
+    allowed_image_digests: frozenset[str] | None = None,
+) -> LaunchResponse:
     """Validate, plan, execute, and persist the launcher log.
 
     Order of operations is load-bearing for safety:
@@ -150,7 +155,9 @@ def launch(request: LaunchRequest, *, artifacts_root: Path) -> LaunchResponse:
 
     Writing the plan before execution means a launcher crash mid-run
     still leaves an audit trail of "the launcher tried to invoke
-    exactly this".
+    exactly this". HTTP callers never supply ``allowed_image_digests``;
+    the explicit override exists only for the developer-only reconciliation
+    fixture generator, whose historical pins are isolated from live requests.
     """
     try:
         workspace = resolve_workspace(request.run_id, artifacts_root)
@@ -183,6 +190,7 @@ def launch(request: LaunchRequest, *, artifacts_root: Path) -> LaunchResponse:
                 request.image_digest,
                 limits=limits,
                 hardening_profile=HardeningProfile(request.hardening_profile),
+                allowed_image_digests=allowed_image_digests,
             )
         else:
             plan = build_command(
@@ -190,6 +198,7 @@ def launch(request: LaunchRequest, *, artifacts_root: Path) -> LaunchResponse:
                 request.image_digest,
                 limits=limits,
                 hardening_flags=tuple(request.hardening_flags),
+                allowed_image_digests=allowed_image_digests,
             )
     except RunnerConfigurationError as e:
         # The runner itself decides which configuration is acceptable

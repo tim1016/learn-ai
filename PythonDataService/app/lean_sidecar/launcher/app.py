@@ -106,12 +106,14 @@ app = FastAPI(
 
 
 def _clear_completed_pinned_image_probe(probe: asyncio.Task[LauncherImageReadiness]) -> None:
+    """Drop the shared probe only when its own completion callback runs."""
     global _pinned_image_probe
     if _pinned_image_probe is probe:
         _pinned_image_probe = None
 
 
 async def _refresh_pinned_image_readiness() -> LauncherImageReadiness:
+    """Run one blocking Podman image probe outside the event loop."""
     global _pinned_image_readiness, _pinned_image_readiness_at
     image = await run_in_threadpool(check_pinned_image)
     _pinned_image_readiness = image
@@ -120,6 +122,7 @@ async def _refresh_pinned_image_readiness() -> LauncherImageReadiness:
 
 
 async def _get_pinned_image_readiness() -> LauncherImageReadiness:
+    """Return a fresh cached result while coalescing concurrent probes."""
     global _pinned_image_probe
     if (
         _pinned_image_readiness is not None

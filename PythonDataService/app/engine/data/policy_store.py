@@ -141,14 +141,19 @@ def snapshot_minute_trade_zips(
     current = start
     while current <= end:
         filename = f"{current.strftime('%Y%m%d')}_trade.zip"
-        source = next(
-            (
-                candidate
-                for root in roots
-                if (candidate := Path(root) / logical_root / filename).is_file()
-            ),
-            None,
-        )
+        source: Path | None = None
+        for root in roots:
+            root_real = os.path.realpath(os.fspath(root))
+            root_prefix = root_real.rstrip(os.sep) + os.sep
+            candidate_real = os.path.realpath(
+                os.path.join(root_real, os.fspath(logical_root), filename)
+            )
+            if not candidate_real.startswith(root_prefix):
+                continue
+            candidate = Path(candidate_real)
+            if candidate.is_file():
+                source = candidate
+                break
         if source is not None:
             files.append(
                 {

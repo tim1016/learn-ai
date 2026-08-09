@@ -49,6 +49,7 @@ from app.lean_sidecar.config import (  # noqa: E402
     DEFAULT_RUN_LIMITS,
     LEAN_IMAGE_REPO,
     PINNED_LEAN_IMAGE_DIGEST,
+    RECONCILIATION_FIXTURE_IMAGE_DIGESTS,
 )
 from app.lean_sidecar.cross_runner import CrossRunOrderEvent, run_engine_lab_on_workspace  # noqa: E402
 from app.lean_sidecar.launcher.models import LaunchRequest  # noqa: E402
@@ -97,6 +98,15 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         type=str,
         help="Regenerate all three cells for one ticker.",
     )
+    p.add_argument(
+        "--image-digest",
+        choices=sorted(RECONCILIATION_FIXTURE_IMAGE_DIGESTS),
+        default=PINNED_LEAN_IMAGE_DIGEST,
+        help=(
+            "Pinned LEAN digest to reproduce. Defaults to the current pin; "
+            "retained historical choices are accepted only by this fixture workflow."
+        ),
+    )
     return p.parse_args(argv)
 
 
@@ -115,7 +125,7 @@ def _resolve_target_cells(ns: argparse.Namespace) -> list[Cell]:
     raise SystemExit("no target specified")
 
 
-def _stage_lean_run(cell: Cell, output_dir: Path) -> None:
+def _stage_lean_run(cell: Cell, output_dir: Path, *, image_digest: str) -> None:
     """Run LEAN sidecar for one cell; write outputs to output_dir/lean/.
 
     Sequence:
@@ -131,8 +141,8 @@ def _stage_lean_run(cell: Cell, output_dir: Path) -> None:
     container invocation itself. The workspace ends up under
     DEFAULT_ARTIFACTS_ROOT (same root the launcher normally uses).
     """
-    if PINNED_LEAN_IMAGE_DIGEST is None:
-        raise RuntimeError("PINNED_LEAN_IMAGE_DIGEST is not set; run scripts/lean_sidecar_pin_image.py first")
+    if image_digest not in RECONCILIATION_FIXTURE_IMAGE_DIGESTS:
+        raise RuntimeError(f"image digest {image_digest!r} is not authorized for fixture regeneration")
 
     capture = FIXTURE_ROOT / "_lean_data_capture" / cell.ticker
 
@@ -154,7 +164,7 @@ def _stage_lean_run(cell: Cell, output_dir: Path) -> None:
     # Stage image metadata (market-hours, symbol-properties) from the
     # pinned LEAN image so LEAN's initialization succeeds.
     logger.info("  staging LEAN image metadata ...")
-    stage_lean_metadata_from_image(workspace, PINNED_LEAN_IMAGE_DIGEST)
+    stage_lean_metadata_from_image(workspace, image_digest)
 
     # Stage algorithm source.
     stage_algorithm_source(workspace, EMA_CROSSOVER_SIGNAL_SOURCE)
@@ -179,7 +189,7 @@ def _stage_lean_run(cell: Cell, output_dir: Path) -> None:
     logger.info("  launching LEAN container (run_id=%s) ...", run_id)
     launch_request = LaunchRequest(
         run_id=run_id,
-        image_digest=PINNED_LEAN_IMAGE_DIGEST,
+        image_digest=image_digest,
         cpus=DEFAULT_RUN_LIMITS.cpus,
         memory_mb=DEFAULT_RUN_LIMITS.memory_mb,
         pids_limit=DEFAULT_RUN_LIMITS.pids_limit,
@@ -189,7 +199,11 @@ def _stage_lean_run(cell: Cell, output_dir: Path) -> None:
         hardening_profile="with_tmpfs_256m",
     )
     t0 = time.monotonic()
-    launch_resp = launch(launch_request, artifacts_root=DEFAULT_ARTIFACTS_ROOT)
+    launch_resp = launch(
+        launch_request,
+        artifacts_root=DEFAULT_ARTIFACTS_ROOT,
+        allowed_image_digests=RECONCILIATION_FIXTURE_IMAGE_DIGESTS,
+    )
     elapsed_s = time.monotonic() - t0
     logger.info("  LEAN exit_code=%d  is_clean=%s  %.0fs", launch_resp.exit_code, launch_resp.is_clean, elapsed_s)
 
@@ -311,7 +325,7 @@ def _assert_lean_observations_complete(cell: Cell, lean_dir: Path) -> None:
         )
 
 
-def _build_manifest_dict(cell: Cell, staging: Path) -> dict:
+def _build_manifest_dict(cell: Cell, staging: Path, *, image_digest: str) -> dict:
     """Build the CellManifest payload with fresh artifact hashes.
 
     All four artifact files (orders.json, state.csv, observations.csv,
@@ -365,9 +379,9 @@ def _build_manifest_dict(cell: Cell, staging: Path) -> dict:
     # upstream-image reproducibility. The CellManifest pattern admits
     # both prefixes; W6mo cells were captured against the upstream
     # image and keep the docker.io prefix in their committed manifests.
-    bare_digest = PINNED_LEAN_IMAGE_DIGEST  # "sha256:..."
+    bare_digest = image_digest
     if not bare_digest.startswith("sha256:"):
-        raise RuntimeError(f"PINNED_LEAN_IMAGE_DIGEST unexpected format: {bare_digest!r}")
+        raise RuntimeError(f"LEAN image digest has unexpected format: {bare_digest!r}")
     container_image_digest = f"{LEAN_IMAGE_REPO}@{bare_digest}"
 
     # --- strategy constants and runtime parameters (mirror the LEAN twin) ---
@@ -456,6 +470,7 @@ def _write_cell_atomically(
     cell: Cell,
     staged_lean_dir: Path,
     reconciliation: dict,
+    image_digest: str,
 ) -> None:
     """Replace the committed cell directory in one rename; write
     manifest.json + attribution.md + reconciliation_pinned.json.
@@ -475,7 +490,7 @@ def _write_cell_atomically(
         encoding="utf-8",
     )
 
-    manifest_dict = _build_manifest_dict(cell, staging)
+    manifest_dict = _build_manifest_dict(cell, staging, image_digest=image_digest)
     (staging / "manifest.json").write_text(
         json.dumps(manifest_dict, indent=2, sort_keys=True),
         encoding="utf-8",
@@ -534,7 +549,7 @@ def _emit_failure_report(cell: Cell, report: CellRunReport, root: Path) -> None:
     (failure_dir / "report.json").write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
-def regenerate_one_cell(cell: Cell) -> bool:
+def regenerate_one_cell(cell: Cell, *, image_digest: str) -> bool:
     """Regenerate one cell. Returns True on pass, False on fail."""
     with tempfile.TemporaryDirectory() as tmp:
         tmp_root = Path(tmp)
@@ -544,7 +559,7 @@ def regenerate_one_cell(cell: Cell) -> bool:
         eng_out.mkdir()
 
         try:
-            _stage_lean_run(cell, lean_out)
+            _stage_lean_run(cell, lean_out, image_digest=image_digest)
             # Post-run completeness gate: a clean exit code is not proof the
             # backtest covered the whole window (see _assert_lean_observations_complete).
             _assert_lean_observations_complete(cell, lean_out / "lean")
@@ -593,6 +608,7 @@ def regenerate_one_cell(cell: Cell) -> bool:
             cell=cell,
             staged_lean_dir=lean_out / "lean",
             reconciliation=reconciliation,
+            image_digest=image_digest,
         )
         return True
 
@@ -603,6 +619,9 @@ def main(argv: list[str] | None = None) -> int:
         format="%(message)s",  # Plain output matches the previous print() format
     )
     ns = _parse_args(argv if argv is not None else sys.argv[1:])
+    if ns.image_digest is None:
+        logger.error("No current LEAN image digest is pinned.")
+        return 2
     cells = _resolve_target_cells(ns)
     if not cells:
         logger.error("No cells matched the selection.")
@@ -611,7 +630,7 @@ def main(argv: list[str] | None = None) -> int:
     failures: list[str] = []
     for c in cells:
         logger.info("--- %s ---", c.cell_id)
-        if regenerate_one_cell(c):
+        if regenerate_one_cell(c, image_digest=ns.image_digest):
             logger.info("  passed")
         else:
             failures.append(c.cell_id)

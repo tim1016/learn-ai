@@ -1,11 +1,11 @@
-import { TestBed } from '@angular/core/testing';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
 import { provideZonelessChangeDetection } from '@angular/core';
 import { Apollo } from 'apollo-angular';
 import { of } from 'rxjs';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { LeanEngineComponent } from './lean-engine.component';
 import { JobsService } from '../../services/jobs.service';
@@ -248,6 +248,15 @@ describe('LeanEngineComponent engine selector', () => {
     return { startJob, startTrustedRun, nextTradingDayOpen, diagnose, NEXT_TRADING_DAY_OPEN_MS };
   }
 
+  function renderedRunError(fixture: ComponentFixture<LeanEngineComponent>): string {
+    fixture.componentInstance.strategiesLoading.set(false);
+    fixture.detectChanges();
+    const host: HTMLElement = fixture.nativeElement;
+    const notice = host.querySelector<HTMLElement>('.notice.error');
+    expect(notice).not.toBeNull();
+    return notice?.textContent ?? '';
+  }
+
   it('exposes an engine signal that defaults to python and accepts lean', () => {
     configureTestBed();
     const fixture = TestBed.createComponent(LeanEngineComponent);
@@ -483,10 +492,9 @@ describe('LeanEngineComponent engine selector', () => {
     component.selectedStrategyName.set('ema_crossover_signal');
 
     await component.run();
-
     expect(diagnose).toHaveBeenCalledTimes(1);
     expect(startJob).not.toHaveBeenCalled();
-    expect(component.runError()).toContain('Build the configured local LEAN derivative');
+    expect(renderedRunError(fixture)).toContain('Build the configured local LEAN derivative');
   });
 
   it('does not submit either engine when both mode has no LEAN validation template', async () => {
@@ -509,10 +517,11 @@ describe('LeanEngineComponent engine selector', () => {
     component.selectedStrategyName.set('ema_crossover_signal');
 
     await component.run();
-
     expect(diagnose).not.toHaveBeenCalled();
     expect(startJob).not.toHaveBeenCalled();
-    expect(component.runError()).toBe('Select a strategy with an aligned LEAN validation template.');
+    expect(renderedRunError(fixture)).toContain(
+      'Select a strategy with an aligned LEAN validation template.',
+    );
   });
 
   it('refreshes a stale ready launcher state before submitting either engine', async () => {
@@ -666,9 +675,10 @@ describe('LeanEngineComponent engine selector', () => {
     component.selectedStrategyName.set('ema_crossover_signal');
 
     await component.run();
-
     expect(startJob).not.toHaveBeenCalled();
-    expect(component.runError()).toBe('Select a strategy with an aligned LEAN validation template.');
+    expect(renderedRunError(fixture)).toContain(
+      'Select a strategy with an aligned LEAN validation template.',
+    );
   });
 
   it('submits the deployment-validation LEAN template for the matching Python strategy', async () => {
@@ -736,11 +746,10 @@ describe('LeanEngineComponent engine selector', () => {
     component.selectedStrategyName.set('ema_crossover_signal');
 
     await component.run();
-
     expect(diagnose).toHaveBeenCalledTimes(1);
     expect(startJob).not.toHaveBeenCalled();
     expect(component.leanLauncherStatus()).toBe('blocked');
-    expect(component.runError()).toContain('Start the launcher');
+    expect(renderedRunError(fixture)).toContain('Start the launcher');
   });
 
   it('blocks a LEAN run when the reachable launcher is missing its pinned image', async () => {
@@ -783,11 +792,10 @@ describe('LeanEngineComponent engine selector', () => {
     component.selectedStrategyName.set('ema_crossover_signal');
 
     await component.run();
-
     expect(diagnose).toHaveBeenCalledTimes(1);
     expect(startJob).not.toHaveBeenCalled();
     expect(component.leanLauncherStatus()).toBe('blocked');
-    expect(component.runError()).toContain('Build the configured local LEAN derivative');
+    expect(renderedRunError(fixture)).toContain('Build the configured local LEAN derivative');
   });
 
   it('allows LEAN runs when launcher health passes with non-fatal warnings', async () => {

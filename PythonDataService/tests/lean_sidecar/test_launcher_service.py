@@ -104,7 +104,9 @@ class TestLaunchValidation:
 
 
 class TestPinnedImageReadiness:
-    def test_reports_local_pinned_image_as_ready(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_check_pinned_image_reports_local_pinned_image_as_ready(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from app.lean_sidecar.launcher import service as launcher_service
 
         monkeypatch.setattr(launcher_service, "PINNED_LEAN_IMAGE_DIGEST", DUMMY_DIGEST)
@@ -120,7 +122,7 @@ class TestPinnedImageReadiness:
             detail="Pinned LEAN image is present in Podman's local image store.",
         )
 
-    def test_reports_missing_local_pinned_image_without_running_a_container(
+    def test_check_pinned_image_reports_missing_local_image_without_running_a_container(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from app.lean_sidecar.launcher import service as launcher_service
@@ -136,7 +138,7 @@ class TestPinnedImageReadiness:
         assert readiness.failure_reason == "missing"
         assert readiness.detail == "Pinned LEAN image is not present in Podman's local image store."
 
-    def test_reports_podman_operational_failures_without_calling_them_missing(
+    def test_check_pinned_image_reports_podman_operational_failure_without_calling_it_missing(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from app.lean_sidecar.launcher import service as launcher_service
@@ -152,7 +154,7 @@ class TestPinnedImageReadiness:
         assert readiness.failure_reason == "check_failed"
         assert "exit code 125" in readiness.detail
 
-    def test_bounds_image_probe_below_the_diagnostics_timeout(
+    def test_check_pinned_image_bounds_probe_below_the_diagnostics_timeout(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from app.lean_sidecar.launcher import service as launcher_service
@@ -200,7 +202,7 @@ class TestLauncherAppConcurrency:
             assert (tmp_path / ".launcher-token").is_file()
 
     @pytest.mark.asyncio
-    async def test_concurrent_healthz_requests_share_one_pinned_image_probe(
+    async def test_healthz_coalesces_concurrent_pinned_image_probes(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from app.lean_sidecar.launcher import app as launcher_app_module
