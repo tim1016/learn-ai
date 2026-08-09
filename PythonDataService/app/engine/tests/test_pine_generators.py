@@ -18,12 +18,12 @@ from app.engine.pine_generators import (
     generate_strategy_b_pine,
     generate_strategy_c_pine,
 )
-from app.main import app
-from app.routers.engine import (
+from app.engine.strategy.registry import (
     RsiRangeStrategyAParams,
     RsiRangeStrategyBParams,
     RsiRangeStrategyCParams,
 )
+from app.main import app
 
 
 def test_strategy_a_generator_embeds_user_params():
@@ -93,7 +93,7 @@ async def test_pine_endpoint_returns_attachment():
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
-            "/api/engine/strategies/rsi_range_a/pine",
+            "/api/engine/strategies/spy_strategy_a/pine",
             json={
                 "symbol": "SPY",
                 "ema_fast_period": 20,
@@ -112,7 +112,7 @@ async def test_pine_endpoint_returns_attachment():
         )
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/plain")
-    assert "rsi_range_a.pine" in resp.headers["content-disposition"]
+    assert "spy_strategy_a.pine" in resp.headers["content-disposition"]
     assert "//@version=6" in resp.text
 
 
@@ -141,7 +141,7 @@ async def test_pine_endpoint_422_for_invalid_params():
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(
-            "/api/engine/strategies/rsi_range_a/pine",
+            "/api/engine/strategies/spy_strategy_a/pine",
             json={"ema_fast_period": "not-an-int"},
         )
     assert resp.status_code == 422
