@@ -114,6 +114,7 @@ type BacktestRunDetailType {
   commissionPerOrder: Decimal
   parityGroupId: String
   trades: [BacktestRunTradeDetailType!]!
+  tradesTruncated: Boolean!
   parityVerdicts: [BacktestRunParityVerdictType!]!
 }
 
@@ -149,7 +150,7 @@ type BacktestRunNodeType {
   verdictGrade: String
   verdictSignal: String
   parityGroupId: String
-  trades: [BacktestRunTradeSummaryType!]!
+  hasSyntheticExit: Boolean!
 }
 
 type BacktestRunNotesResult {
@@ -181,10 +182,6 @@ type BacktestRunTradeDetailType {
   pnlPts: Decimal!
   pnlPct: Decimal!
   signalReason: String!
-  isSyntheticExit: Boolean!
-}
-
-type BacktestRunTradeSummaryType {
   isSyntheticExit: Boolean!
 }
 

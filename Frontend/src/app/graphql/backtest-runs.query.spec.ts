@@ -45,6 +45,12 @@ function dataPolicySelection(): SelectionSetNode {
 }
 
 describe("BACKTEST_RUNS_QUERY — DataPolicy snake_case alias contract (PR B.3)", () => {
+  it("requests the bounded synthetic-exit summary instead of every trade row", () => {
+    const nodes = findField(findField(operation().selectionSet, "backtestRuns")?.selectionSet, "nodes");
+    expect(findField(nodes?.selectionSet, "hasSyntheticExit")).toBeDefined();
+    expect(findField(nodes?.selectionSet, "trades")).toBeUndefined();
+  });
+
   it.each<[string, string]>([
     ["inputBars", "input_bars"],
     ["strategyBars", "strategy_bars"],
@@ -80,4 +86,12 @@ describe("BACKTEST_RUN_DETAIL_QUERY — Strategy Lab rehydration contract", () =
       expect(findField(detail?.selectionSet, name)).toBeDefined();
     },
   );
+
+  it("selects the bounded-ledger receipt", () => {
+    const def = BACKTEST_RUN_DETAIL_QUERY.definitions.find(
+      (candidate): candidate is OperationDefinitionNode => candidate.kind === "OperationDefinition",
+    );
+    const detail = findField(def?.selectionSet, "backtestRun");
+    expect(findField(detail?.selectionSet, "tradesTruncated")).toBeDefined();
+  });
 });

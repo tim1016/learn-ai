@@ -2,7 +2,7 @@ import { provideZonelessChangeDetection } from "@angular/core";
 import { Component, input } from "@angular/core";
 import { ComponentFixture, TestBed } from "@angular/core/testing";
 import { Apollo } from "apollo-angular";
-import { from } from "rxjs";
+import { concat, from, NEVER, type Observable, of, throwError } from "rxjs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { BacktestRunDetail, BacktestRunDetailTrade } from "../../../graphql/backtest-runs.query";
@@ -110,6 +110,7 @@ function makeRun(overrides: Partial<BacktestRunDetail> = {}): BacktestRunDetail 
     insightSummaryJson: null,
     parityGroupId: null,
     trades: [makeTrade()],
+    tradesTruncated: false,
     parityVerdicts: [],
     ...overrides,
   };
@@ -117,13 +118,21 @@ function makeRun(overrides: Partial<BacktestRunDetail> = {}): BacktestRunDetail 
 
 let watchQueryMock: ReturnType<typeof vi.fn>;
 
+interface WatchResult {
+  data?: { backtestRun?: BacktestRunDetail | null };
+  loading?: boolean;
+}
+
 async function renderReport(
   run: BacktestRunDetail | null,
   supplyRunDetail = false,
   watchedRuns: (BacktestRunDetail | null)[] = [run],
+  valueChanges?: Observable<WatchResult>,
 ): Promise<ComponentFixture<RunReportComponent>> {
   watchQueryMock = vi.fn(() => ({
-    valueChanges: from(watchedRuns.map((backtestRun) => ({ data: { backtestRun } }))),
+    valueChanges: valueChanges ?? from(
+      watchedRuns.map((backtestRun) => ({ data: { backtestRun } })),
+    ),
     stopPolling: vi.fn(),
   }));
   const apolloMock = {
@@ -232,6 +241,51 @@ describe("RunReportComponent", () => {
 
     expect(watchQueryMock).toHaveBeenCalledOnce();
     expect(fixture.componentInstance.run()?.parityVerdicts[0].status).toBe("matched");
+  });
+
+  it("keeps the loading state while Apollo has no network result", async () => {
+    const fixture = await renderReport(
+      null,
+      false,
+      [],
+      concat(of({ loading: true, data: undefined }), NEVER),
+    );
+    fixture.detectChanges();
+
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
+    expect(text).toContain("Loading run…");
+    expect(text).not.toContain("Run not found.");
+    expect(watchQueryMock).toHaveBeenCalledWith(expect.objectContaining({
+      fetchPolicy: "network-only",
+    }));
+  });
+
+  it("labels large ledgers as bounded evidence while retaining full-run metrics", async () => {
+    const fixture = await renderReport(makeRun({
+      totalTrades: 19_861,
+      tradesTruncated: true,
+    }));
+
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
+    expect(text).toContain("most recent 1 of 19,861 trades");
+    expect(text).toContain("Headline metrics use the complete persisted run.");
+    expect(text).toContain("1 recent of 19861 completed trades");
+    expect(text).toContain("Loaded 1");
+    expect(text).not.toContain("All 1");
+  });
+
+  it("does not mislabel transport failures as missing runs", async () => {
+    const fixture = await renderReport(
+      null,
+      false,
+      [],
+      throwError(() => new Error("gateway timeout")),
+    );
+    fixture.detectChanges();
+
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
+    expect(text).toContain("Run report could not be loaded.");
+    expect(text).not.toContain("Run not found.");
   });
 
   it("reports missing validation analytics honestly for legacy rows", async () => {

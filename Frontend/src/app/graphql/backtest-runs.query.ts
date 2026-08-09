@@ -52,9 +52,7 @@ export const BACKTEST_RUNS_QUERY = gql`
           fixture_id: fixtureId
           fixture_sha256: fixtureSha256
         }
-        trades {
-          isSyntheticExit
-        }
+        hasSyntheticExit
       }
     }
   }
@@ -191,6 +189,7 @@ export const BACKTEST_RUN_DETAIL_QUERY = gql`
         signalReason
         isSyntheticExit
       }
+      tradesTruncated
       parityVerdicts {
         id
         status
@@ -225,7 +224,7 @@ export interface BacktestRunNode {
   notes: string | null;
   /** PR B — canonical DataPolicy block. Null on legacy rows (predate the column). */
   dataPolicy: DataPolicy | null;
-  trades: { isSyntheticExit: boolean }[];
+  hasSyntheticExit: boolean;
 }
 
 export interface BacktestRunsConnection {
@@ -278,6 +277,8 @@ export interface BacktestRunDetail {
   insightSummaryJson: string | null;
   parityGroupId: string | null;
   trades: BacktestRunDetailTrade[];
+  /** True when the detail response contains only the newest bounded trade evidence. */
+  tradesTruncated: boolean;
   parityVerdicts: { id: number; status: string; verdictJson: string; createdAt: number }[];
 }
 
@@ -331,7 +332,7 @@ export function toRunHistoryRow(node: BacktestRunNode): RunHistoryRow {
     executedAt: node.executedAt,
     totalTrades: node.totalTrades,
     totalPnl: node.totalPnL,
-    hasSyntheticExit: node.trades.some((t) => t.isSyntheticExit),
+    hasSyntheticExit: node.hasSyntheticExit,
     leanRunId: node.leanRunId,
     dataPolicy: node.dataPolicy,
     notes: node.notes,

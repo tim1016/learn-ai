@@ -1,11 +1,53 @@
 using Backend.GraphQL;
 using Backend.Models.MarketData;
+using Backend.Tests.Helpers;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Backend.Tests.Unit.GraphQL;
 
 public class BacktestRunDetailQueryTests
 {
+    [Fact]
+    public async Task GetBacktestRun_LargeLedger_ReturnsBoundedRecentTradeEvidence()
+    {
+        await using var db = TestDbContextFactory.Create();
+        var start = new DateTime(2026, 1, 2, 14, 30, 0, DateTimeKind.Utc);
+        var execution = new StrategyExecution
+        {
+            Ticker = new Ticker { Symbol = "SPY", Name = "SPY", Market = "stocks" },
+            Source = "engine",
+            StrategyName = "deployment_validation",
+            TotalTrades = 501,
+            Trades = Enumerable.Range(0, 501)
+                .Select(index => new BacktestTrade
+                {
+                    TradeType = "Buy",
+                    EntryTimestamp = start.AddMinutes(index),
+                    ExitTimestamp = start.AddMinutes(index + 1),
+                    EntryPrice = 500m,
+                    ExitPrice = 501m,
+                    Quantity = 1m,
+                    PnL = 1m,
+                })
+                .ToList(),
+        };
+        db.StrategyExecutions.Add(execution);
+        await db.SaveChangesAsync();
+
+        var detail = await new BacktestRunDetailQuery().GetBacktestRun(
+            execution.Id,
+            db,
+            NullLogger<BacktestRunDetailQuery>.Instance,
+            CancellationToken.None);
+
+        Assert.NotNull(detail);
+        Assert.True(detail.TradesTruncated);
+        Assert.Equal(501, detail.TotalTrades);
+        Assert.Equal(500, detail.Trades.Count);
+        Assert.Equal(start.AddMinutes(1), DateTimeOffset.FromUnixTimeMilliseconds(detail.Trades[0].EntryTimestamp).UtcDateTime);
+        Assert.Equal(start.AddMinutes(500), DateTimeOffset.FromUnixTimeMilliseconds(detail.Trades[^1].EntryTimestamp).UtcDateTime);
+    }
+
     [Fact]
     public void FromExecution_ExposesOperatorRequestedEngineForHistoryRehydration()
     {

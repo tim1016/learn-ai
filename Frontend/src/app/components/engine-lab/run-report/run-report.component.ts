@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, inject, input, output } from "@angular/core";
 import { rxResource } from "@angular/core/rxjs-interop";
 import { Apollo } from "apollo-angular";
-import { map, of } from "rxjs";
+import { filter, map, of } from "rxjs";
 
 import type { RunVerdict } from "../../../api/run-verdict.types";
 import {
@@ -55,26 +55,30 @@ export class RunReportComponent {
       const ref = this.apollo.watchQuery<BacktestRunDetailQueryResult>({
         query: BACKTEST_RUN_DETAIL_QUERY,
         variables: { id: params },
-        fetchPolicy: "cache-and-network",
+        fetchPolicy: "network-only",
         pollInterval: 5000,
       });
-      return ref.valueChanges.pipe(map((result): BacktestRunDetail | null => {
-        const run = (result.data?.backtestRun as BacktestRunDetail | null | undefined) ?? null;
-        if (!run || !run.parityVerdicts.some((verdict) => verdict.status === "pending")) {
-          ref.stopPolling();
-        }
-        return run;
-      }));
+      return ref.valueChanges.pipe(
+        filter((result) => !result.loading),
+        map((result): BacktestRunDetail | null => {
+          const run = (result.data?.backtestRun as BacktestRunDetail | null | undefined) ?? null;
+          if (!run || !run.parityVerdicts.some((verdict) => verdict.status === "pending")) {
+            ref.stopPolling();
+          }
+          return run;
+        }),
+      );
     },
   });
 
   readonly run = computed(() => {
-    const refreshed = this.runResource.value();
+    const refreshed = this.runResource.hasValue() ? this.runResource.value() : null;
     if (refreshed?.id === this.runId()) return refreshed;
     const supplied = this.runDetail();
     return supplied?.id === this.runId() ? supplied : null;
   });
   readonly loading = computed(() => this.runResource.isLoading() && !this.run());
+  readonly loadError = computed(() => this.runResource.error());
 
   readonly verdict = computed<RunVerdict | null>(() => {
     const json = this.run()?.verdictJson;
@@ -161,6 +165,12 @@ export class RunReportComponent {
       notices.push("Validation analytics were not recorded for this run.");
     } else if (run.validationAnalytics.error) {
       notices.push(run.validationAnalytics.error);
+    }
+
+    if (run.tradesTruncated) {
+      notices.push(
+        `Showing the most recent ${run.trades.length.toLocaleString()} of ${run.totalTrades.toLocaleString()} trades in the chart markers and ledger. Headline metrics use the complete persisted run.`,
+      );
     }
 
     return notices;

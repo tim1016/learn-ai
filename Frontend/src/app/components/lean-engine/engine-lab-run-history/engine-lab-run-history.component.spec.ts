@@ -84,7 +84,7 @@ function baseNode(over: Partial<BacktestRunNode> = {}): BacktestRunNode {
       fixture_id: null,
       fixture_sha256: null,
     },
-    trades: [{ isSyntheticExit: false }],
+    hasSyntheticExit: false,
     ...over,
   };
 }
@@ -100,7 +100,7 @@ const FAKE_NODES: BacktestRunNode[] = [
     executedAt: Date.UTC(2026, 4, 19, 8, 5),
     totalTrades: 1,
     totalPnL: -5.0,
-    trades: [{ isSyntheticExit: true }],
+    hasSyntheticExit: true,
   }),
 ];
 
@@ -207,7 +207,7 @@ describe("EngineLabRunHistoryComponent", () => {
         executedAt: Date.UTC(2026, 4, 19, 9, 0),
         totalTrades: 0,
         totalPnL: 0,
-        trades: [],
+        hasSyntheticExit: false,
       }),
     ];
     const fixture = await setup(makeApollo(nodes));
