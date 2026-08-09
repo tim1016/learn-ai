@@ -1,0 +1,283 @@
+{
+  "artifacts": {
+    "attribution.md": {
+      "sha256": "8d1ce6b07b9d0504afe8cfe409160193b6040af0fbe5dd5de25ea15ae619a768",
+      "size_bytes": 2109
+    },
+    "expected/pair.json": {
+      "sha256": "ab07c780f834e1b542c50856487a585c0ac796c20073032d7b65ad32abc5ae55",
+      "size_bytes": 61113
+    },
+    "input/bars-manifest.json": {
+      "sha256": "a15898bd08555e02b4680aafebcde7a4905f34070f59c6cbfbc9d53cb0b02869",
+      "size_bytes": 5235
+    },
+    "normalized/result.json": {
+      "sha256": "38e5c574080f2352a69e47e9ecd2bd5d003ff34ac2e2da10a12570a936bba33e",
+      "size_bytes": 322555
+    },
+    "source/lean-run-manifest.json": {
+      "sha256": "08b8e51c5758ee45b162626eaae090db416add8eb515d4497281511a9ecfbb51",
+      "size_bytes": 19426
+    },
+    "workspace/data/alternative/interest-rate/usa/interest-rate.csv": {
+      "sha256": "1d0e6f2ab20e61a4330e8a38735bc73cde4034e7293a45d23b5ebdc6467f7899",
+      "size_bytes": 904
+    },
+    "workspace/data/equity/usa/daily/spy.zip": {
+      "sha256": "ac729288f828a314bbd452454080e3b13ef230d0cf9c63703232ceb724cdb24f",
+      "size_bytes": 572
+    },
+    "workspace/data/equity/usa/minute/spy/20260708_quote.zip": {
+      "sha256": "3104ed675a62cd1544e82ba3da3f697c18bdf8756ccafd71b703f7160e01ecdc",
+      "size_bytes": 3295
+    },
+    "workspace/data/equity/usa/minute/spy/20260708_trade.zip": {
+      "sha256": "1416395568a1a3746228d499807ef04530cbbb7e5662d05f968a925f72bab665",
+      "size_bytes": 12728
+    },
+    "workspace/data/equity/usa/minute/spy/20260709_quote.zip": {
+      "sha256": "bb340db12f9b91ba643a7c81fa1116708c456ae64f285c3d3b7d010c5020e7ad",
+      "size_bytes": 3131
+    },
+    "workspace/data/equity/usa/minute/spy/20260709_trade.zip": {
+      "sha256": "8f61d7990445c406233c7fe53e37d4fae8e5b1ac3c07be2efab6b2db2c0bdbca",
+      "size_bytes": 11532
+    },
+    "workspace/data/equity/usa/minute/spy/20260710_quote.zip": {
+      "sha256": "b8ddb824db4431fe93bb68583bc7e92c50c87dbca7fb91b0d51b81a8443b98b0",
+      "size_bytes": 3188
+    },
+    "workspace/data/equity/usa/minute/spy/20260710_trade.zip": {
+      "sha256": "3d36cdbe835e56ef3228520c239512736fc15549146d3c282a463d5df9df38a2",
+      "size_bytes": 11207
+    },
+    "workspace/data/equity/usa/minute/spy/20260713_quote.zip": {
+      "sha256": "791c003afc159d9df7f453e7414024ecc2f985dc846f42ee210d0cab8dafa9bd",
+      "size_bytes": 3198
+    },
+    "workspace/data/equity/usa/minute/spy/20260713_trade.zip": {
+      "sha256": "4a4e4d28c8f687200d9110fc7d77f5221e06d114206ffb8f3dbef489f8703414",
+      "size_bytes": 12343
+    },
+    "workspace/data/equity/usa/minute/spy/20260714_quote.zip": {
+      "sha256": "4f3670d01f8815358c00559c14bf995530e72cfd9bf6aad5152e57d043a92789",
+      "size_bytes": 3142
+    },
+    "workspace/data/equity/usa/minute/spy/20260714_trade.zip": {
+      "sha256": "0a72150561c2246a2b9055207b7862549eb4f84afc6f732c351fb65a66aa0e1a",
+      "size_bytes": 11572
+    },
+    "workspace/data/equity/usa/minute/spy/20260715_quote.zip": {
+      "sha256": "0f0ff027a1f9f400246aa8ae1d0d62805b737297b99998bc6a811e6214ca8279",
+      "size_bytes": 3339
+    },
+    "workspace/data/equity/usa/minute/spy/20260715_trade.zip": {
+      "sha256": "147a362702a08337fb93436dd2db7a622fb9e74adf85329fcd1b849a1d9739bb",
+      "size_bytes": 11668
+    },
+    "workspace/data/equity/usa/minute/spy/20260716_quote.zip": {
+      "sha256": "9d0c4a8177b080bec1504acf0c764e7879ac1239bbeb04610452cdabf743f69d",
+      "size_bytes": 3295
+    },
+    "workspace/data/equity/usa/minute/spy/20260716_trade.zip": {
+      "sha256": "2aebd03fb551dc9f11d629c5460337ab041edb5ec044bcea0d9d4ebf42e21599",
+      "size_bytes": 12103
+    },
+    "workspace/data/equity/usa/minute/spy/20260717_quote.zip": {
+      "sha256": "05dc7c73509bce0d6284386f3beb9998752284e03302dda96a3c2a34789c0976",
+      "size_bytes": 3323
+    },
+    "workspace/data/equity/usa/minute/spy/20260717_trade.zip": {
+      "sha256": "f6d6e281ea4523e584dd8c9a684861861f782c5c3f07a6402f97cbc4e5a7140d",
+      "size_bytes": 12651
+    },
+    "workspace/data/equity/usa/minute/spy/20260720_quote.zip": {
+      "sha256": "e51fc72c31896fc05b293246349b47ba09177e491aac357c151fc5acd9ab6481",
+      "size_bytes": 3293
+    },
+    "workspace/data/equity/usa/minute/spy/20260720_trade.zip": {
+      "sha256": "84884fed6f7af212237c6204f99b97b7ae8fe257355cda59816015d0682edc4b",
+      "size_bytes": 12105
+    },
+    "workspace/data/equity/usa/minute/spy/20260721_quote.zip": {
+      "sha256": "04230bfa8769d15a65da6f1c98359e84f3cb4a964b3d9375a63e767b211de3c1",
+      "size_bytes": 3081
+    },
+    "workspace/data/equity/usa/minute/spy/20260721_trade.zip": {
+      "sha256": "7c63cb0efb0fb7d57731a4955fd67dd99e4bd0d02e7d1740ab756294eacf1dd8",
+      "size_bytes": 11584
+    },
+    "workspace/data/equity/usa/minute/spy/20260722_quote.zip": {
+      "sha256": "3a42994ab8cb1cf38f1490a1873abc9315a8ae0ccf0ef8172e21ef9c980c164b",
+      "size_bytes": 3140
+    },
+    "workspace/data/equity/usa/minute/spy/20260722_trade.zip": {
+      "sha256": "9fb393be52ac87c30385e9660e71e8c270a69028dd8a0bb024f5c88b7b02d756",
+      "size_bytes": 12318
+    },
+    "workspace/data/equity/usa/minute/spy/20260723_quote.zip": {
+      "sha256": "39c8553c7ab64aaf52d91ccc8335f414ebbc330bb447667ae5a1f80e71150af6",
+      "size_bytes": 3363
+    },
+    "workspace/data/equity/usa/minute/spy/20260723_trade.zip": {
+      "sha256": "9c6a4337e847fa42e1430d445f8f27498447d96a5373a6bb1614f61713524304",
+      "size_bytes": 12552
+    },
+    "workspace/data/equity/usa/minute/spy/20260724_quote.zip": {
+      "sha256": "0ce02edcf2ed22365669ca5aa83b9317e4a0793f1d6b2654f82e85bdba37dad3",
+      "size_bytes": 3324
+    },
+    "workspace/data/equity/usa/minute/spy/20260724_trade.zip": {
+      "sha256": "9ccf19f0db41504845339687368f9b84efa3f6b6784023655c0207520cfa809d",
+      "size_bytes": 11913
+    },
+    "workspace/data/equity/usa/minute/spy/20260727_quote.zip": {
+      "sha256": "f86d34434c78220ef14c7cee39635237f620d1772b965329a00195b9de2134d7",
+      "size_bytes": 3333
+    },
+    "workspace/data/equity/usa/minute/spy/20260727_trade.zip": {
+      "sha256": "0a50991c0e8263d18046f63b7f35714159de3d15d170f6673bc13549ce0ea616",
+      "size_bytes": 12099
+    },
+    "workspace/data/equity/usa/minute/spy/20260728_quote.zip": {
+      "sha256": "099a5d9f8c670d7898befffd17eadaab3b7d22cca1bcd983b2e6d787be16a9f1",
+      "size_bytes": 3216
+    },
+    "workspace/data/equity/usa/minute/spy/20260728_trade.zip": {
+      "sha256": "e56d92c54cfc9ec9110c28b136df50aee80b4aa8db47453d5130e0f2657bbeca",
+      "size_bytes": 12423
+    },
+    "workspace/data/equity/usa/minute/spy/20260729_quote.zip": {
+      "sha256": "2e87851989531969e1f87c1dd716a3daef84bdb088bb02566c5897381756d75a",
+      "size_bytes": 3466
+    },
+    "workspace/data/equity/usa/minute/spy/20260729_trade.zip": {
+      "sha256": "b54d8c775884b1ce25ed64d1400a3e8cb560bbb738cf5f5f0cad98723ada120f",
+      "size_bytes": 13449
+    },
+    "workspace/data/equity/usa/minute/spy/20260730_quote.zip": {
+      "sha256": "0020b202c1e03d1d5976471bbc07fadb75efc387c837179b141adde4d59768c0",
+      "size_bytes": 3233
+    },
+    "workspace/data/equity/usa/minute/spy/20260730_trade.zip": {
+      "sha256": "5fcff6c2e2d3f13a21990890da033fd2e4475b91b9e2cb53c693813775fcbe40",
+      "size_bytes": 13135
+    },
+    "workspace/data/equity/usa/minute/spy/20260731_quote.zip": {
+      "sha256": "44668d95b3078af0702e134800285002162ab3e75dcfaede8be865593e253162",
+      "size_bytes": 3389
+    },
+    "workspace/data/equity/usa/minute/spy/20260731_trade.zip": {
+      "sha256": "dc5ce887925e859bd3030ecbb29ee4d9ef3a6ca4b3e116a0355ecc77085fade1",
+      "size_bytes": 12721
+    },
+    "workspace/data/equity/usa/minute/spy/20260803_quote.zip": {
+      "sha256": "a04f42aba191ef113f4cbb9f06a353d73594573c349608a518207f8d5649b46b",
+      "size_bytes": 3289
+    },
+    "workspace/data/equity/usa/minute/spy/20260803_trade.zip": {
+      "sha256": "be4d265b2515c8e77e60c9619a2d21e154cb019a6f43a7c6f014b22f21912ec7",
+      "size_bytes": 12174
+    },
+    "workspace/data/equity/usa/minute/spy/20260804_quote.zip": {
+      "sha256": "c4bd547c63e7292acef37743798443409aa6bc3af64415c9ace10db48354c9fc",
+      "size_bytes": 3357
+    },
+    "workspace/data/equity/usa/minute/spy/20260804_trade.zip": {
+      "sha256": "03045930124948bf48551a554dc45b1c5b78920a1ce33e729478d4c53f6e89ed",
+      "size_bytes": 12681
+    },
+    "workspace/data/equity/usa/minute/spy/20260805_quote.zip": {
+      "sha256": "7b20312c63c1161279639e9f5b17ebdfeeaf7ceb9c175df0b640feb85cc04aa6",
+      "size_bytes": 3240
+    },
+    "workspace/data/equity/usa/minute/spy/20260805_trade.zip": {
+      "sha256": "7e42d680fd24f0542950caac50c16cb7fcac29be696ab5e0b0cc958b48732261",
+      "size_bytes": 12544
+    },
+    "workspace/data/equity/usa/minute/spy/20260806_quote.zip": {
+      "sha256": "6878a5a633620be354dab68a09bf6e1e847e19709ed9bcadf43ae3341348d555",
+      "size_bytes": 3163
+    },
+    "workspace/data/equity/usa/minute/spy/20260806_trade.zip": {
+      "sha256": "313644a15f6113723c0a1b9b8825944542d3ca70aa58bf07c81b38ada2b3e985",
+      "size_bytes": 11561
+    },
+    "workspace/data/equity/usa/minute/spy/20260807_quote.zip": {
+      "sha256": "5af64c9cbbe674802ef585e385cc8bcec66b12c5baf5f5a8d6f5a28fdc74cc7f",
+      "size_bytes": 3178
+    },
+    "workspace/data/equity/usa/minute/spy/20260807_trade.zip": {
+      "sha256": "17fa33e107cd8464a35632a64742fabf169314e45d188e60e31ffca41b6c25fc",
+      "size_bytes": 11108
+    },
+    "workspace/data/market-hours/market-hours-database.json": {
+      "sha256": "0a36677e269a4a8b4bbac20014ab9feb2f1273b27caa18f9c3cc37644e9f8545",
+      "size_bytes": 3142300
+    },
+    "workspace/data/symbol-properties/security-database.csv": {
+      "sha256": "f44be6a97ccd3ea4e89574b3982f053f0a0dac418c0096447805058be755dd66",
+      "size_bytes": 158
+    },
+    "workspace/data/symbol-properties/symbol-properties-database.csv": {
+      "sha256": "7d1ea07fc2897904c8b02b81bbe3c09e25e98c3bc69085ccdc0ff926a5432491",
+      "size_bytes": 685171
+    },
+    "workspace/output/MyAlgorithm-order-events.json": {
+      "sha256": "acaf45d3ef0903c7b8b5c97a708bce15a2d7830951a11fd14c45c5a19b6e0727",
+      "size_bytes": 6533
+    },
+    "workspace/output/MyAlgorithm-summary.json": {
+      "sha256": "f29608a58601bc0c055a8ac1f0c4004cc2383052606c315a3dfc307c43030ebf",
+      "size_bytes": 4931
+    },
+    "workspace/output/MyAlgorithm.json": {
+      "sha256": "88ceae78149711f942dec5ef914125787269bced0782f2a889c99841da251b13",
+      "size_bytes": 87925
+    },
+    "workspace/output/storage/observations.csv": {
+      "sha256": "655b36dde451f87495f638f743dbdd11fd2ae1ab255747f06c678ce02207ed89",
+      "size_bytes": 455801
+    },
+    "workspace/output/storage/state.csv": {
+      "sha256": "1a05ef481b30e42856370176341c0f5fda503a4d278f65daec0d06435ace7e13",
+      "size_bytes": 50372
+    },
+    "workspace/project/config.json": {
+      "sha256": "7d620a1bf83db94f5c000a0de4b6bddaecd9a5ad7afbb9dd51a6b801a9e4e936",
+      "size_bytes": 617
+    },
+    "workspace/project/main.py.txt": {
+      "sha256": "7bd99036d8e98526bc5b75c6760b67960ae676c6dfc667c9b442df95a2c6d581",
+      "size_bytes": 6511
+    }
+  },
+  "bar_fixture_id": "bar-store-v1-6e96f0f2c5383e2d",
+  "bar_fixture_sha256": "6e96f0f2c5383e2d1ad40f7308433aacc862bbfd6a9828f0b263cade70f0460e",
+  "captured_at_ms_utc": 1786240821262,
+  "comparison_contract_id": "us-equity-raw-ibkr-v1",
+  "fixture_id": "engine-lab-compatibility-95-96-v1",
+  "fixture_schema_version": 1,
+  "generator": "scripts/pin_engine_lab_compatibility_golden.py",
+  "generator_sha256": "9d4951ac4c8b9790a79354f28f508ebf2568312f0bfa9f6c6c823d1dc66fadd6",
+  "lean_image_digest": "sha256:3dd003372f1ef1981b4e80038e3f1c557f1fe414d1be531f485ef870f81a5771",
+  "lean_source_commit": "261366a7e26ae942df858ab20df4fef8fa07de67",
+  "normalized_result_sha256": "38e5c574080f2352a69e47e9ecd2bd5d003ff34ac2e2da10a12570a936bba33e",
+  "oracle": "QuantConnect LEAN run 96 paired with Python Engine Lab run 95",
+  "parity_group_id": "pg-d2236694f523410fbb91",
+  "source_manifest_sha256": "08b8e51c5758ee45b162626eaae090db416add8eb515d4497281511a9ecfbb51",
+  "source_runs": {
+    "lean": 96,
+    "python": 95
+  },
+  "timestamp_convention": "int64_ms_utc",
+  "tolerances": {
+    "fill_price_atol": "0.01",
+    "native_statistics_atol": "0.0000500001",
+    "pnl_atol": "0.000001",
+    "quantities": "0",
+    "rtol": "0",
+    "timestamps_ms": "0"
+  }
+}

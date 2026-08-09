@@ -40,6 +40,63 @@ summary {
   font-size: var(--fs-xs);
 }
 
+.lean-analysis__note,
+.lean-analysis__finding {
+  margin: 0;
+  padding: var(--space-3);
+}
+
+.lean-analysis__note {
+  color: var(--text-subtle);
+  font-size: var(--fs-xs);
+}
+
+.lean-analysis__finding {
+  border-top: 1px solid var(--border);
+  border-left: 3px solid var(--warn);
+
+  h3,
+  p {
+    margin: 0 0 var(--space-2);
+  }
+
+  h3 {
+    color: var(--text-primary);
+    font-size: var(--fs-sm);
+  }
+
+  p,
+  li {
+    color: var(--text-subtle);
+    font-size: var(--fs-xs);
+  }
+
+  > span {
+    display: block;
+    margin: var(--space-3) 0 var(--space-1);
+    color: var(--text-muted);
+    font-size: var(--fs-xxs);
+    font-weight: var(--fw-bold);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  pre {
+    max-height: 260px;
+    margin: 0;
+    overflow: auto;
+    color: var(--text-secondary);
+    font: var(--fs-xs)/1.45 var(--font-mono);
+    white-space: pre-wrap;
+  }
+
+  ul {
+    margin: 0;
+    padding: 0;
+    list-style-position: inside;
+  }
+}
+
 .fee-readout {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));

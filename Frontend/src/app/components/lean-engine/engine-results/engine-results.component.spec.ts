@@ -1,5 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { provideZonelessChangeDetection } from '@angular/core';
+import { By } from '@angular/platform-browser';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -7,6 +8,7 @@ import {
   EngineResultsComponent,
   LeanStatistics,
 } from './engine-results.component';
+import { LeanStatisticsComponent } from '../lean-statistics/lean-statistics.component';
 
 // ─────────────────────────────────────────────────────────────────────────
 // Bug B regression coverage. The frontend's LeanStatistics interface
@@ -39,13 +41,30 @@ function emptyLeanStats(): LeanStatistics {
       average_profit_loss: 9, average_profit: 9, average_loss: 0,
       average_trade_duration: '0:10:00', average_winning_trade_duration: '0:10:00',
       average_losing_trade_duration: '0:00:00',
+      median_trade_duration: '0:10:00', median_winning_trade_duration: '0:10:00',
+      median_losing_trade_duration: '0:00:00',
       max_consecutive_winning_trades: 1, max_consecutive_losing_trades: 0,
+      profit_loss_ratio: 0, win_loss_ratio: 0, win_rate: 1, loss_rate: 0,
+      average_mae: 0, average_mfe: 0, largest_mae: 0, largest_mfe: 0,
+      maximum_closed_trade_drawdown: 0, maximum_intra_trade_drawdown: 0,
       profit_factor: 0, profit_to_max_drawdown_ratio: 0,
       profit_loss_standard_deviation: 0, profit_loss_downside_deviation: 0,
       sharpe_ratio: 0, sortino_ratio: 0, total_fees: 1,
+      maximum_end_trade_drawdown: 0, average_end_trade_drawdown: 0,
+      maximum_drawdown_duration: '0:00:00',
     },
     runtime: {
-      equity: 100009, fees: 1, net_profit: 9, total_return: 0.0009, total_orders: 1,
+      equity: 100009, fees: 1, holdings: 0, net_profit: 9,
+      probabilistic_sharpe_ratio: 0, total_return: 0.0009,
+      unrealized: 0, volume: 1000, total_orders: 1,
+    },
+    namespaces: {
+      status: 'match',
+      source_commit: '261366a7e26ae942df858ab20df4fef8fa07de67',
+      absolute_tolerance: 0.0000500001,
+      native_metric_count: 66,
+      formatted_metric_count: 25,
+      divergences: [],
     },
   };
 }
@@ -83,10 +102,73 @@ function makeComponent(result: EngineResultData): EngineResultsComponent {
 }
 
 describe('EngineResultsComponent.leanStats', () => {
+  it('renders every native LEAN analysis finding with its sample and solutions', () => {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({ providers: [provideZonelessChangeDetection()] });
+    const fixture = TestBed.createComponent(EngineResultsComponent);
+    fixture.componentRef.setInput('result', baseResult({
+      lean_analysis: [
+        {
+          name: 'StatisticalSignificanceOfDailyReturnsAnalysis',
+          issue: 'The p-value is above 0.05.',
+          sample: { pValue: '0.0684907141208504' },
+          solutions: ['Review the trading rules.', 'Review the universe.'],
+        },
+      ],
+    }));
+    fixture.detectChanges();
+
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+    expect(text).toContain('LEAN native analysis');
+    expect(text).toContain('Statistical Significance Of Daily Returns');
+    expect(text).toContain('0.0684907141208504');
+    expect(text).toContain('Review the trading rules.');
+    expect(text).toContain('Review the universe.');
+  });
+
   it('returns the canonical shape verbatim when portfolio/trade/runtime are present', () => {
     const lean = emptyLeanStats();
     const cmp = makeComponent(baseResult({ lean_statistics: lean }));
     expect(cmp.leanStats()).toBe(lean);
+  });
+
+  it('renders all native portfolio, trade, and runtime fields plus the parity receipt', () => {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({ providers: [provideZonelessChangeDetection()] });
+    const fixture = TestBed.createComponent(EngineResultsComponent);
+    const leanStats = emptyLeanStats();
+    Object.assign(leanStats.trade, {
+      average_mae: -453.056,
+      average_mfe: 129.5,
+      largest_mae: -885.78,
+      largest_mfe: 268.81,
+      profit_loss_standard_deviation: 382.5295,
+      profit_loss_downside_deviation: 83.0247,
+    });
+    fixture.componentRef.setInput('result', baseResult({ lean_statistics: leanStats }));
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.textContent).toContain('LEAN-native calculation receipt: match');
+    expect(root.textContent).toContain('66 native values and 25 dashboard values');
+
+    const nativeStats = fixture.debugElement.query(By.directive(LeanStatisticsComponent))
+      .componentInstance as LeanStatisticsComponent;
+    nativeStats.showFullStats.set(true);
+    fixture.detectChanges();
+
+    expect(root.querySelectorAll('.lean-stats-panel .kpi-cell')).toHaveLength(75);
+    expect(root.textContent).toContain('Portfolio Turnover');
+    expect(root.textContent).toContain('Median Win Duration');
+    expect(root.textContent).toContain('Largest MAE');
+    expect(root.textContent).toContain('Max Intra-trade Drawdown');
+    expect(root.textContent).toContain('Native Runtime Snapshot');
+    expect(root.textContent).toContain('Runtime PSR');
+    expect(root.textContent).toContain('$-453.06');
+    expect(root.textContent).toContain('$129.50');
+    expect(root.textContent).toContain('$382.53');
+    expect(root.textContent).toContain('$83.02');
+    expect(root.textContent).not.toContain('-45305.60%');
   });
 
   it('returns null when lean_statistics is null (no dashboard rendered)', () => {

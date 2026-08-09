@@ -80,6 +80,8 @@ public class BacktestRunPersistenceServiceTests
             VerdictGrade = "A",
             VerdictSignal = "Paper-trade",
             ParityGroupId = "parity-123",
+            LeanAnalysisJson = """[{"name":"ExecutionSpeedAnalysis","sample":"7k"}]""",
+            FillMode = "signal_bar_close",
         };
 
         var id = await service.PersistAsync(payload, CancellationToken.None);
@@ -96,6 +98,8 @@ public class BacktestRunPersistenceServiceTests
         Assert.Equal("A", row.VerdictGrade);
         Assert.Equal("Paper-trade", row.VerdictSignal);
         Assert.Equal("parity-123", row.ParityGroupId);
+        Assert.Equal("""[{"name":"ExecutionSpeedAnalysis","sample":"7k"}]""", row.LeanAnalysisJson);
+        Assert.Equal("signal_bar_close", row.FillMode);
 
         var trade = await db.BacktestTrades.SingleAsync(t => t.StrategyExecutionId == id);
         Assert.Equal(100m, trade.EntryPrice);

@@ -1,7 +1,7 @@
 # LEAN Sidecar Lab
 
 **Status:** Phase 5g.3 shipped (2026-06-13) — launcher + cross_runner + cross_reconciler + determinism gate + UI run-history + form rehydration + lean_error_categories + custom-algorithm textarea; reconciliation-grade template + self-reconciler + Phase 1c sandbox + Phase 4a-e UI complete. Per-phase build notes (Phases 1a–5g.3) were pruned 2026-07-04 once shipped; detail is in git history.
-**Last reviewed:** 2026-06-14
+**Last reviewed:** 2026-08-08
 **Pairs with:** `docs/architecture/engine-authority-map.md`, `docs/references/lean-engine.md`, `.claude/rules/numerical-rigor.md`
 
 This document is the authority for the **LEAN Lab** feature — a UI surface in learn-ai where the user pastes or edits a real `QCAlgorithm` and runs it through an isolated official LEAN runner sidecar. It exists because the alternative ("just shell out to LEAN from FastAPI") quietly violates several invariants this repo depends on.
@@ -17,7 +17,7 @@ sidecar runs (baseline, with `--cap-drop=ALL`, and the xfailed
 `--read-only` documented in the security section).
 
 **Pinned LEAN image (Phase 1c derivative):**
-`localhost/learn-ai/lean-sandbox@sha256:0b8d4e381b63daaa4cebbea7af294cc5b140793a6fd13f8c9cfd63ef2a2fb24d`
+`localhost/learn-ai/lean-sandbox@sha256:3dd003372f1ef1981b4e80038e3f1c557f1fe414d1be531f485ef870f81a5771`
 
 Built locally from upstream base
 `docker.io/quantconnect/lean@sha256:4934c22c2b080a688f25b571746603e01533c5e581499d8457e5624a132ba77b`
@@ -30,6 +30,16 @@ relaxes `/root` from mode 0700 to 0755 so the Phase-1c
 side-by-side with the image's original 10.0.2 runtime. The 10.0.9
 runtime is the accepted AppleHV/CoreCLR SIGILL fix for wide-window
 native arm64 LEAN runs on this host.
+
+**Local-image readiness is mandatory.** This pinned reference must be
+present in the launcher's *local* Podman image store. The launcher
+checks it with `podman image exists` as part of `/healthz`; a reachable
+HTTP process alone is not runnable readiness. If the derivative was
+pruned or never built, Podman tries to pull this local-only reference
+from `localhost` and exits 125. Rebuild with the `podman build` command
+in `PythonDataService/lean_sidecar/Dockerfile.arm64-dotnet109`, update
+the arm64 pin from the resulting local digest, and restart the launcher
+before submitting a LEAN run.
 
 ---
 
@@ -208,7 +218,7 @@ The data-plane container `polygon-data-service` runs inside podman (see `compose
 - Runs beside the data-plane with access to the Podman API — **not** inside `polygon-data-service`.
 - Accepts a request over a **unix domain socket** bind-mounted into `polygon-data-service` (Linux/macOS) **or** localhost + shared-secret token (Windows dev hosts). The Windows token path is documented as the fallback and not used in any production-shaped deployment.
 - Request payload is minimal — `{ run_id, image, limits }`. The launcher resolves `run_id` to a host-absolute workspace path itself using its configured artifacts root; the data plane never sends paths.
-- Validates the resolved path is under the configured root, the workspace directory exists, and the requested image matches an allow-list of pinned digests.
+- Validates the resolved path is under the configured root, the workspace directory exists, and the requested image matches the current launcher allow-list. Historical validated digests are excluded from HTTP launches; only the developer-only golden-fixture regeneration command can opt into the separate reconciliation-fixture allow-list, and it records the selected digest in the new fixture manifest.
 - Invokes `podman run` with the flags in *Container execution boundary* above.
 - Returns `{ exit_code, duration_ms, log_tail }` and persists container stdout/stderr plus launcher diagnostics to `workspace/launcher/launcher.log`. LEAN owns `workspace/output/logs.txt`; the launcher must never overwrite LEAN artifacts.
 
@@ -261,12 +271,16 @@ Verification on a fresh clone / new machine:
    ```bash
    curl -s http://localhost:8000/api/lean-sidecar/diagnose | jq
    ```
-   Expect `overall_status: "pass"` with four rows: `launcher_url`,
-   `launcher_url_parseable`, `launcher_token`, `launcher_healthz`.
+   Expect `overall_status: "pass"` with five rows: `launcher_url`,
+   `launcher_url_parseable`, `launcher_token`, `launcher_healthz`, and
+   `launcher_image`. The last row confirms the exact pinned image exists
+   locally; a 200 response from the launcher without that image is a
+   blocked, non-runnable state.
 
 The diagnostics endpoint is read-only — it probes the launcher's
-unauthenticated `/healthz` and inspects the local token-resolution
-path; it never spawns a sidecar run. The endpoint is implemented in
+unauthenticated `/healthz`, which performs only `podman image exists`,
+and inspects the local token-resolution path; it never spawns a sidecar
+run. The endpoint is implemented in
 `PythonDataService/app/lean_sidecar/diagnostics.py` and exposed by the
 `/api/lean-sidecar/*` router. Override `LEAN_LAUNCHER_URL` only for
 non-standard runtimes (remote launcher, non-default port); the default

@@ -12,7 +12,7 @@
 
       <app-strategy-lab-metrics [result]="result" />
 
-      @if (reportNotice(); as notice) {
+      @for (notice of reportNotices(); track notice) {
         <p class="run-report__notice" role="note">{{ notice }}</p>
       }
 

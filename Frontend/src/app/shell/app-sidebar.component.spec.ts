@@ -20,57 +20,16 @@ class FakeLiveRunsService {
 }
 
 describe('AppSidebarComponent', () => {
-  it('surfaces the broker session mirror route in the Interactive Broker menu', () => {
+  it('does not expose the retired Interactive Broker menu', () => {
     const fixture = setup();
 
-    clickGroup(fixture, 'Interactive Broker');
-
-    const link = Array.from(
-      (fixture.nativeElement as HTMLElement).querySelectorAll<HTMLAnchorElement>(
-        'a.nav-link',
+    const groups = Array.from(
+      (fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>(
+        'button.nav-group-header',
       ),
-    ).find((candidate) => candidate.textContent?.includes('Session Mirror'));
+    ).map((button) => button.textContent?.trim());
 
-    expect(link?.getAttribute('href')).toBe('/broker/session-mirror');
-  });
-
-  it('surfaces deploy, offline replay, and the operator manual beside bots', () => {
-    const fixture = setup();
-
-    clickGroup(fixture, 'Interactive Broker');
-
-    const links = navLinks(fixture);
-    expect(links.get('Deploy')).toBe('/broker/deploy');
-    expect(links.get('Bots')).toBe('/brokers/alpaca/bots');
-    expect(links.get('Offline Replay')).toBe('/broker/offline-replay');
-    expect(links.get('Bot Manual')).toBe('/brokers/alpaca/manual');
-  });
-
-  it('marks the most specific Interactive Broker route active when the URL has a manual fragment', async () => {
-    const fixture = setup();
-    const router = TestBed.inject(Router);
-    router.resetConfig([{ path: 'brokers/alpaca/manual', component: AppSidebarComponent }]);
-
-    await router.navigateByUrl('/brokers/alpaca/manual#document-5-the-bot-lifecycle');
-    fixture.detectChanges();
-
-    const activeLabels = Array.from(
-      (fixture.nativeElement as HTMLElement).querySelectorAll<HTMLAnchorElement>('a.nav-link.active'),
-    ).map((link) => link.textContent?.trim());
-
-    expect(activeLabels).toEqual(['Bot Manual']);
-  });
-
-  it('uses Accounts as the Interactive Broker account navigation slot', () => {
-    const fixture = setup();
-
-    clickGroup(fixture, 'Interactive Broker');
-
-    const links = navLinks(fixture);
-    expect(links.get('Accounts')).toBe('/broker/accounts');
-    expect(links.has('Account Monitor')).toBe(false);
-    expect(links.has('Broker Status')).toBe(false);
-    expect(links.has('Reconciliation')).toBe(false);
+    expect(groups).not.toContain('Interactive Broker');
   });
 
   it('adds Alpaca as a sibling broker group with one Deploy entry', () => {
@@ -112,15 +71,14 @@ describe('AppSidebarComponent', () => {
     expect(links.get('Options Surface (3D)')).toBe('/broker/options-surface');
   });
 
-  it('keeps live options visualizations out of the Interactive Broker menu', () => {
+  it('keeps live options visualizations in the Options menu', () => {
     const fixture = setup();
 
-    clickGroup(fixture, 'Interactive Broker');
+    clickGroup(fixture, 'Options');
 
     const labels = Array.from(navLinks(fixture).keys());
-    expect(labels).toContain('Session Mirror');
-    expect(labels).not.toContain('Options Chain (Live)');
-    expect(labels).not.toContain('Options Surface (3D)');
+    expect(labels).toContain('Options Chain (Live)');
+    expect(labels).toContain('Options Surface (3D)');
   });
 
   it('keeps validation and engine tooling under Strategy Tools', () => {

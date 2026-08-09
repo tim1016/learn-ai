@@ -2,9 +2,11 @@ import {
   ChangeDetectionStrategy,
   Component,
   ElementRef,
+  InjectionToken,
   OnDestroy,
   computed,
   effect,
+  inject,
   input,
   model,
   output,
@@ -60,6 +62,10 @@ interface PaneChart {
 }
 
 const AXIS_COLUMN_WIDTH = 68;
+export const TRADING_CHART_FACTORY = new InjectionToken<typeof createChart>(
+  "TRADING_CHART_FACTORY",
+  { providedIn: "root", factory: () => createChart },
+);
 const THEME = {
   bg: "#131722",
   grid: "rgba(42, 46, 57, 0.5)",
@@ -85,6 +91,8 @@ const THEME = {
   },
 })
 export class TradingChartComponent implements OnDestroy {
+  private readonly createChart = inject(TRADING_CHART_FACTORY);
+
   readonly candles = input<readonly TradingCandle[]>([]);
   readonly overlays = input<readonly TradingSeries[]>([]);
   readonly equity = input<readonly TradingSeries[]>([]);
@@ -176,7 +184,7 @@ export class TradingChartComponent implements OnDestroy {
       const element = elements[index].nativeElement;
       const isBottom = index === panes.length - 1;
       const height = pane.kind === "price" ? 430 : 170;
-      const chart = createChart(element, {
+      const chart = this.createChart(element, {
         width: element.clientWidth,
         height,
         layout: { background: { color: THEME.bg }, textColor: THEME.text },

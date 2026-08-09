@@ -5,9 +5,34 @@ import { ReceiptLabelPipe } from "../../../shared/pipes/receipt-label.pipe";
 
 export interface StrategyLabParityView {
   status: string;
+  createdAt?: number;
   reason: string | null;
   countsByCategory: { category: string; count: number }[];
-  divergences: { category: string; message: string }[];
+  divergences: {
+    category: string;
+    message: string;
+    trade_number?: number | null;
+    ms_utc?: number | null;
+  }[];
+  nativeMetricParity?: {
+    status: string;
+    native_metric_count?: number;
+    formatted_metric_count?: number;
+    divergence_count?: number;
+    source_commit?: string | null;
+  } | null;
+  readinessParity?: {
+    status: string;
+    compared_field_count?: number;
+    mismatched_fields?: string[];
+  } | null;
+  inputParity?: {
+    status: string;
+    compared_field_count?: number;
+    fixture_id?: string | null;
+    fixture_sha256?: string | null;
+    mismatched_fields?: string[];
+  } | null;
 }
 
 @Component({

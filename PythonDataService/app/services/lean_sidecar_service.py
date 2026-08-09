@@ -32,9 +32,11 @@ from zoneinfo import ZoneInfo
 from app.config import settings
 from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.config import (
+    COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1,
     DEFAULT_ARTIFACTS_ROOT,
     DEFAULT_RUN_LIMITS,
     PINNED_LEAN_IMAGE_DIGEST,
+    runtime_provenance_for_digest,
 )
 from app.lean_sidecar.launcher.models import LaunchRequest, LaunchResponse
 from app.lean_sidecar.launcher_client import post_launch
@@ -49,6 +51,7 @@ from app.lean_sidecar.manifest import (
     hash_staged_files,
     sha256_file,
     sha256_text,
+    staged_data_snapshot_sha256,
     write_manifest,
 )
 from app.lean_sidecar.normalized_parser import (
@@ -396,6 +399,21 @@ def _runtime_polygon_adjustment(data_policy: DataPolicy) -> Literal["raw"]:
     return "raw"
 
 
+def _assert_compatibility_fixture_receipt(
+    *,
+    expected_id: str | None,
+    expected_sha256: str | None,
+    actual: dict[str, object],
+    phase: str,
+) -> None:
+    """Fail closed when the LEAN side no longer sees Python's pinned bytes."""
+    if actual.get("fixture_id") != expected_id or actual.get("fixture_sha256") != expected_sha256:
+        raise LeanSidecarServiceError(
+            f"compatibility_fixture_{phase}_mismatch: expected={expected_id!r} "
+            f"actual={actual.get('fixture_id')!r}"
+        )
+
+
 def _assert_adjustment_vocabulary_consistent(
     *,
     adjusted: bool,
@@ -526,14 +544,48 @@ async def run_trusted_sample(
     data_source = request.data_policy.source
     polygon_adjustment = _runtime_polygon_adjustment(request.data_policy)
 
-    # Roots of the shared bar store when the run stages from it (live
-    # polygon runs). ``None`` for synthetic and fixture-replay runs,
-    # which stage their own bars directly.
+    # Roots of the shared bar store when the run stages from it. ``None``
+    # for synthetic and standalone recorded-fixture replays.
     store_roots: list[Path] | None = None
+    compatibility_fixture = bool(
+        request.data_policy.provider_kind == "fixture"
+        and request.data_policy.fixture_id
+        and request.data_policy.fixture_id.startswith("bar-store-v1-")
+    )
 
     if data_source == "synthetic":
         trading_dates = _iter_trading_dates(request.start_date, request.end_date)
         bars_by_date = [(d, _generate_synthetic_bars(request.symbol, d)) for d in trading_dates]
+    elif data_source == "polygon" and compatibility_fixture:
+        from app.engine.data.lean_format import LeanMinuteDataReader
+        from app.engine.data.policy_store import resolve_data_roots, snapshot_minute_trade_zips
+
+        store_roots = resolve_data_roots(source="polygon", adjusted=request.data_policy.adjusted)
+        receipt = snapshot_minute_trade_zips(
+            store_roots,
+            symbol=request.symbol,
+            start=request.start_date,
+            end=request.end_date,
+            adjusted=request.data_policy.adjusted,
+            session=request.data_policy.session,
+        )
+        _assert_compatibility_fixture_receipt(
+            expected_id=request.data_policy.fixture_id,
+            expected_sha256=request.data_policy.fixture_sha256,
+            actual=receipt,
+            phase="source",
+        )
+        reader = LeanMinuteDataReader(store_roots, session=request.data_policy.session)
+        bars_by_date = [
+            (trading_date, reader.read_day(request.symbol, trading_date))
+            for trading_date in reader.iter_dates(request.symbol, request.start_date, request.end_date)
+        ]
+        bars_by_date = [(trading_date, bars) for trading_date, bars in bars_by_date if bars]
+        if not bars_by_date:
+            raise LeanSidecarServiceError(
+                f"compatibility_fixture_empty: {request.data_policy.fixture_id}"
+            )
+        trading_dates = [d for d, _ in bars_by_date]
     elif data_source == "polygon" and request.data_policy.provider_kind == "fixture":
         # Fixture replay (parity tests / freshness canary): stage the
         # recorded bars exactly as captured, bypassing the store — the
@@ -612,6 +664,23 @@ async def run_trusted_sample(
         )
     else:
         bar_zip_paths = list(stage_minute_bars(workspace, symbol=request.symbol, bars_by_date=bars_by_date))
+    if compatibility_fixture:
+        from app.engine.data.policy_store import snapshot_minute_trade_zips
+
+        staged_receipt = snapshot_minute_trade_zips(
+            [workspace.data_dir],
+            symbol=request.symbol,
+            start=request.start_date,
+            end=request.end_date,
+            adjusted=request.data_policy.adjusted,
+            session=request.data_policy.session,
+        )
+        _assert_compatibility_fixture_receipt(
+            expected_id=request.data_policy.fixture_id,
+            expected_sha256=request.data_policy.fixture_sha256,
+            actual=staged_receipt,
+            phase="staging",
+        )
     # Phase 5c: stage synthetic minute QUOTE zips alongside the trade
     # zips. LEAN's default minute subscription requests both; without
     # the quote zip the log carries known-noise ``Cannot find file:
@@ -883,6 +952,23 @@ def _build_manifest(
     # that want "what's the sha for this path?" without traversing
     # the tuple.
     staged_zip_sha256 = {sf.path_in_workspace: sf.sha256 for sf in bar_zips}
+    staged_data = StagedDataManifest(
+        # Phase 5c: include the quote zips alongside trade + daily
+        # in the manifest's staged-data hash list. Reproducibility
+        # requires every byte LEAN saw to be hashed.
+        bar_zips=bar_zips,
+        market_hours_database=(
+            _hash_paths_in_workspace(workspace, [market_hours])[0] if market_hours is not None else None
+        ),
+        symbol_properties_database=(
+            _hash_paths_in_workspace(workspace, [symbol_properties])[0] if symbol_properties is not None else None
+        ),
+    )
+    runtime_provenance = runtime_provenance_for_digest(PINNED_LEAN_IMAGE_DIGEST)
+    if runtime_provenance is None:
+        raise LeanSidecarServiceError(
+            f"lean_runtime_provenance_unpinned: digest={PINNED_LEAN_IMAGE_DIGEST!r}"
+        )
     return RunManifest(
         schema_version=MANIFEST_SCHEMA_VERSION,
         run_id=request.run_id,
@@ -891,24 +977,16 @@ def _build_manifest(
         algorithm_language="Python",
         config_json_sha256=sha256_file(config_path),
         lean_image_digest=PINNED_LEAN_IMAGE_DIGEST or "",
+        lean_runtime_provenance=runtime_provenance,
         launcher_version_sha256=LAUNCHER_VERSION_HASH,
         normalized_parser_version=NORMALIZED_PARSER_VERSION,
-        staged_data=StagedDataManifest(
-            # Phase 5c: include the quote zips alongside trade + daily
-            # in the manifest's staged-data hash list. Reproducibility
-            # requires every byte LEAN saw to be hashed.
-            bar_zips=bar_zips,
-            market_hours_database=(
-                _hash_paths_in_workspace(workspace, [market_hours])[0] if market_hours is not None else None
-            ),
-            symbol_properties_database=(
-                _hash_paths_in_workspace(workspace, [symbol_properties])[0] if symbol_properties is not None else None
-            ),
-        ),
+        staged_data=staged_data,
         data_policy=_build_data_policy(request),
-        # Trusted sample stages raw deci-cent bars without factor/map
-        # adjustments; this is the non-reconciliation policy.
-        data_adjustment_policy="pre_adjusted_non_reconciliation",
+        data_adjustment_policy=(
+            "raw_exact_bar_snapshot"
+            if request.parity_group_id is not None and not request.data_policy.adjusted
+            else "pre_adjusted_non_reconciliation"
+        ),
         data_normalization_mode="Raw",
         fill_forward=False,
         # Phase 5b: when the caller pastes their own source, we can't
@@ -953,8 +1031,13 @@ def _build_manifest(
             start_ms=request.start_ms_utc,
             end_ms=request.end_ms_utc,
         ),
-        # ``effective_algorithm_window_ms`` derived from the parsed
-        # equity curve when available. Phase 5d/5e together close
+        input_snapshot_sha256=staged_data_snapshot_sha256(staged_data),
+        comparison_contract_id=(
+            COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1 if request.parity_group_id is not None else None
+        ),
+        comparison_group_id=request.parity_group_id,
+        # ``effective_algorithm_window_ms`` comes from LEAN's executed
+        # algorithm configuration, never a chart endpoint. Phase 5d/5e close
         # invariant #16: ``staged_data_window_ms`` is the ET-midnight
         # envelope of staged trading days (5d), and
         # ``bars_consumed_by_symbol`` is the observations.csv line
@@ -969,8 +1052,8 @@ def _build_manifest(
         finished_at_ms=finished_ms,
         exit_code=exit_code,
         notes=(
-            "Phase 3a — normalized parser populates effective_algorithm_window_ms; "
-            "staged_data_window_ms and bars_consumed_by_symbol still pending Phase 3b.",
+            "lean-native-r1 — full-result parser populates the executed algorithm window; "
+            "artifact-specific chart endpoints remain separate evidence.",
             is_clean_note,
             error_cats_note,
             f"normalized_parser={'present' if normalized else 'absent'}",
@@ -992,25 +1075,22 @@ def _build_manifest(
 
 
 def _effective_window_from_normalized(normalized: NormalizedResult | None) -> WindowMs | None:
-    """Derive the effective-algorithm window from the parsed equity curve.
+    """Return LEAN's executed algorithm-configuration window.
 
-    LEAN samples equity at bar boundaries; the first and last points
-    are the algorithm's actual run window after any internal date
-    clipping. Returning ``None`` when the curve is empty or the
-    parser didn't run keeps the manifest faithful — a missing window
-    is not the same as a window of length zero.
+    Chart endpoints describe an artifact, not the run contract. In particular,
+    ``MyAlgorithm-summary.json`` can end sessions before the full result. The
+    full result's ``algorithmConfiguration`` is therefore the only normalized
+    source accepted here.
     """
-    if normalized is None or normalized.first_equity_ms_utc is None:
+    if normalized is None or normalized.algorithm_start_ms_utc is None:
         return None
-    if normalized.last_equity_ms_utc is None:
+    if normalized.algorithm_end_ms_utc is None:
         return None
-    # WindowMs requires start < end; if LEAN somehow emitted a
-    # single-point curve, return None rather than fabricate a window.
-    if normalized.first_equity_ms_utc >= normalized.last_equity_ms_utc:
+    if normalized.algorithm_start_ms_utc >= normalized.algorithm_end_ms_utc:
         return None
     return WindowMs(
-        start_ms=normalized.first_equity_ms_utc,
-        end_ms=normalized.last_equity_ms_utc,
+        start_ms=normalized.algorithm_start_ms_utc,
+        end_ms=normalized.algorithm_end_ms_utc,
     )
 
 

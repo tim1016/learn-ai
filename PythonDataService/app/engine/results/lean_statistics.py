@@ -12,21 +12,35 @@ Reference: docs/spy-lean-output/verify.py and source-map.md
 
 from __future__ import annotations
 
+import bisect
+import csv
 import math
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal
+from pathlib import Path
 from statistics import mean
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
+from app.engine.results.lean_statistics_format import (
+    format_lean_statistics_summary as _format_lean_statistics_summary,
+)
 from app.engine.results.trade_record import TradeRecord
+
+# Backwards-compatible public import while formatting lives in its focused
+# source-equivalence module.
+format_lean_statistics_summary = _format_lean_statistics_summary
 
 # ═══════════════════════════════════════════════════════════════════════
 # Math helpers (matching MathNet.Numerics and LEAN's Statistics.cs)
 # ═══════════════════════════════════════════════════════════════════════
 
 TRADING_DAYS_PER_YEAR = 252
+LEAN_STATISTICS_SOURCE_COMMIT = "261366a7e26ae942df858ab20df4fef8fa07de67"
 
 
 def _variance(xs: list[float]) -> float:
@@ -129,6 +143,399 @@ def _inv_normal_cdf(mu: float, sigma: float, p: float) -> float:
             (((dd[0] * q + dd[1]) * q + dd[2]) * q + dd[3]) * q + 1
         )
     return mu + sigma * x
+
+
+def _chart_values(
+    charts: Mapping[str, Any],
+    chart_name: str,
+    series_name: str,
+) -> list[list[Any]]:
+    chart = charts.get(chart_name)
+    if not isinstance(chart, Mapping):
+        raise ValueError(f"LEAN chart missing: {chart_name}")
+    series = chart.get("series")
+    if not isinstance(series, Mapping):
+        raise ValueError(f"LEAN chart series missing: {chart_name}")
+    item = series.get(series_name)
+    if not isinstance(item, Mapping) or not isinstance(item.get("values"), list):
+        raise ValueError(f"LEAN series missing: {chart_name}/{series_name}")
+    values = item["values"]
+    if not all(isinstance(row, list) for row in values):
+        raise ValueError(f"LEAN series values invalid: {chart_name}/{series_name}")
+    return values
+
+
+def _load_interest_rates(path: Path) -> tuple[list[date], list[Decimal]]:
+    dates: list[date] = []
+    rates: list[Decimal] = []
+    with path.open(encoding="utf-8", newline="") as handle:
+        for row in csv.DictReader(handle):
+            dates.append(date.fromisoformat(row["DATE"]))
+            rates.append(Decimal(row["PCREDIT8"]) / Decimal(100))
+    if not dates:
+        raise ValueError(f"LEAN interest-rate fixture is empty: {path}")
+    return dates, rates
+
+
+def _average_risk_free_rate(equity_ms: Sequence[int], path: Path) -> Decimal:
+    dates, rates = _load_interest_rates(path)
+    selected: list[Decimal] = []
+    for ms_utc in equity_ms:
+        sample_date = datetime.fromtimestamp(ms_utc / 1000, tz=UTC).date()
+        index = max(0, bisect.bisect_right(dates, sample_date) - 1)
+        selected.append(rates[index])
+    return sum(selected, Decimal(0)) / Decimal(len(selected))
+
+
+def _decimal(value: Any) -> Decimal:
+    return Decimal(str(value))
+
+
+def reproduce_lean_total_performance(
+    normalized_result: Mapping[str, Any],
+    *,
+    interest_rate_csv: Path,
+) -> dict[str, dict[str, Any]]:
+    """Independently reproduce LEAN's native portfolio and trade statistics.
+
+    Formula/reference: QuantConnect LEAN source commit
+    ``261366a7e26ae942df858ab20df4fef8fa07de67``:
+    ``StatisticsBuilder.cs``, ``PortfolioStatistics.cs``,
+    ``TradeStatistics.cs`` and ``Statistics.cs``. Inputs are the exact native
+    primitive vectors retained by ``lean-native-r1``; the function never reads
+    LEAN's reported portfolio/trade statistic values.
+
+    Validated against: ``tests/engine/results/test_lean_native_statistics.py``
+    and the immutable ``lean-statistics-oracle-v1`` fixture.
+    """
+    charts = normalized_result.get("full_charts")
+    total_performance = normalized_result.get("total_performance")
+    profit_loss_points = normalized_result.get("profit_loss")
+    algorithm_configuration = normalized_result.get("algorithm_configuration")
+    if not isinstance(charts, Mapping):
+        raise ValueError("normalized full_charts missing")
+    if not isinstance(total_performance, Mapping):
+        raise ValueError("normalized total_performance missing")
+    if not isinstance(profit_loss_points, list):
+        raise ValueError("normalized profit_loss missing")
+    if not isinstance(algorithm_configuration, Mapping):
+        raise ValueError("normalized algorithm_configuration missing")
+
+    equity_rows = _chart_values(charts, "Strategy Equity", "Equity")
+    performance_rows = _chart_values(charts, "Strategy Equity", "Return")
+    benchmark_rows = _chart_values(charts, "Benchmark", "Benchmark")
+    turnover_rows = _chart_values(charts, "Portfolio Turnover", "Portfolio Turnover")
+    if len(equity_rows) < 2 or len(performance_rows) < 4 or len(benchmark_rows) < 4:
+        raise ValueError("LEAN primitive series has insufficient observations")
+
+    equity_ms = [int(row[0]) for row in equity_rows]
+    equity_values = [_decimal(row[4] if len(row) >= 5 else row[1]) for row in equity_rows]
+    # StatisticsBuilder.PreprocessPerformanceValues: skip Day 0 + Day 1,
+    # then convert chart percentages to fractional returns.
+    performance = [float(_decimal(row[1]) / Decimal(100)) for row in performance_rows[2:]]
+    benchmark_levels = [float(_decimal(row[1])) for row in benchmark_rows]
+    benchmark_changes = [
+        (benchmark_levels[index] / benchmark_levels[index - 1]) - 1.0
+        if benchmark_levels[index - 1] != 0
+        else 0.0
+        for index in range(1, len(benchmark_levels))
+    ][1:]
+    if len(performance) != len(benchmark_changes):
+        raise ValueError(
+            "LEAN benchmark/performance primitive lengths differ: "
+            f"{len(benchmark_changes)} != {len(performance)}"
+        )
+
+    trading_days_per_year = int(algorithm_configuration.get("tradingDaysPerYear") or TRADING_DAYS_PER_YEAR)
+    start_equity = _decimal(
+        (algorithm_configuration.get("parameters") or {}).get("starting_cash", equity_values[0])
+        if isinstance(algorithm_configuration.get("parameters"), Mapping)
+        else equity_values[0]
+    )
+    end_equity = equity_values[-1]
+    risk_free_rate = _average_risk_free_rate(equity_ms, interest_rate_csv)
+
+    profit_loss = sorted(
+        (
+            int(point["ms_utc"]),
+            _decimal(point["value"]),
+        )
+        for point in profit_loss_points
+        if isinstance(point, Mapping)
+    )
+    running_capital = start_equity
+    win_returns: list[Decimal] = []
+    loss_returns: list[Decimal] = []
+    for _, pnl in profit_loss:
+        rate = pnl / running_capital if running_capital else Decimal(0)
+        (win_returns if pnl > 0 else loss_returns).append(rate)
+        running_capital += pnl
+
+    closed_trades = total_performance.get("closedTrades")
+    if not isinstance(closed_trades, list):
+        raise ValueError("normalized totalPerformance.closedTrades missing")
+    native_trade = _reproduce_lean_trade_statistics(closed_trades)
+    wins = int(native_trade["numberOfWinningTrades"])
+    losses = int(native_trade["numberOfLosingTrades"])
+    total_trades = wins + losses
+    average_win_rate = sum(win_returns, Decimal(0)) / len(win_returns) if win_returns else Decimal(0)
+    average_loss_rate = sum(loss_returns, Decimal(0)) / len(loss_returns) if loss_returns else Decimal(0)
+    profit_loss_ratio = average_win_rate / abs(average_loss_rate) if average_loss_rate else Decimal(0)
+    win_rate = Decimal(wins) / total_trades if total_trades else Decimal(0)
+    loss_rate = Decimal(losses) / total_trades if total_trades else Decimal(0)
+
+    annual_variance = _variance(performance) * trading_days_per_year
+    annual_standard_deviation = math.sqrt(annual_variance)
+    annual_performance = (mean(performance) + 1.0) ** trading_days_per_year - 1.0
+    downside = [value for value in performance if value < 0]
+    annual_downside_deviation = math.sqrt(_variance(downside) * trading_days_per_year)
+    sharpe = (
+        (annual_performance - float(risk_free_rate)) / annual_standard_deviation
+        if annual_standard_deviation
+        else 0.0
+    )
+    sortino = (
+        (annual_performance - float(risk_free_rate)) / annual_downside_deviation
+        if annual_downside_deviation
+        else 0.0
+    )
+    benchmark_variance = _variance(benchmark_changes)
+    beta = _covariance(performance, benchmark_changes) / benchmark_variance if benchmark_variance else 0.0
+    benchmark_annual_performance = (mean(benchmark_changes) + 1.0) ** trading_days_per_year - 1.0
+    alpha = (
+        annual_performance
+        - (float(risk_free_rate) + beta * (benchmark_annual_performance - float(risk_free_rate)))
+        if beta
+        else 0.0
+    )
+    tracking_error = math.sqrt(
+        _variance([a - b for a, b in zip(performance, benchmark_changes, strict=True)])
+        * trading_days_per_year
+    )
+    information_ratio = (
+        (annual_performance - benchmark_annual_performance) / tracking_error if tracking_error else 0.0
+    )
+    treynor_ratio = (annual_performance - float(risk_free_rate)) / beta if beta else 0.0
+    observed_sharpe = mean(performance) / _stddev(performance) if _stddev(performance) else 0.0
+    benchmark_sharpe = 1.0 / math.sqrt(trading_days_per_year)
+    estimate_variance = (
+        1.0
+        - _skewness(performance) * observed_sharpe
+        + ((_kurtosis(performance) - 1.0) / 4.0) * observed_sharpe**2
+    ) / (len(performance) - 1)
+    psr_z = (observed_sharpe - benchmark_sharpe) / math.sqrt(estimate_variance) if estimate_variance > 0 else 0.0
+
+    peak = equity_values[0]
+    peak_ms = equity_ms[0]
+    drawdown_start_ms: int | None = None
+    max_drawdown = Decimal(0)
+    max_recovery_days = Decimal(0)
+    for ms_utc, equity in zip(equity_ms, equity_values, strict=True):
+        if equity >= peak:
+            if drawdown_start_ms is not None:
+                max_recovery_days = max(
+                    max_recovery_days,
+                    Decimal(ms_utc - drawdown_start_ms) / Decimal(86_400_000),
+                )
+                drawdown_start_ms = None
+            peak = equity
+            peak_ms = ms_utc
+        current_drawdown = equity / peak - 1
+        if current_drawdown < 0:
+            max_drawdown = min(max_drawdown, current_drawdown)
+            if drawdown_start_ms is None:
+                drawdown_start_ms = peak_ms
+
+    fraction_years = Decimal(equity_ms[-1] - equity_ms[0]) / Decimal(86_400_000) / Decimal(365)
+    cagr = (
+        (float(end_equity / start_equity) ** (1.0 / float(fraction_years))) - 1.0
+        if fraction_years and start_equity
+        else 0.0
+    )
+    var_window = performance[-trading_days_per_year:]
+    var_mean = mean(var_window)
+    var_std = _stddev(var_window)
+    turnover = mean([float(_decimal(row[1])) for row in turnover_rows]) if turnover_rows else 0.0
+
+    portfolio = {
+        "averageWinRate": average_win_rate,
+        "averageLossRate": average_loss_rate,
+        "profitLossRatio": profit_loss_ratio,
+        "winRate": win_rate,
+        "lossRate": loss_rate,
+        "expectancy": win_rate * profit_loss_ratio - loss_rate,
+        "startEquity": start_equity,
+        "endEquity": end_equity,
+        "compoundingAnnualReturn": cagr,
+        "drawdown": round(abs(max_drawdown), 3),
+        "totalNetProfit": end_equity / start_equity - 1 if start_equity else Decimal(0),
+        "sharpeRatio": sharpe,
+        "probabilisticSharpeRatio": _normal_cdf(psr_z),
+        "sortinoRatio": sortino,
+        "alpha": alpha,
+        "beta": beta,
+        "annualStandardDeviation": annual_standard_deviation,
+        "annualVariance": annual_variance,
+        "informationRatio": information_ratio,
+        "trackingError": tracking_error,
+        "treynorRatio": treynor_ratio,
+        "portfolioTurnover": turnover,
+        "valueAtRisk99": round(_inv_normal_cdf(var_mean, var_std, 0.01), 3),
+        "valueAtRisk95": round(_inv_normal_cdf(var_mean, var_std, 0.05), 3),
+        "drawdownRecovery": int(max_recovery_days),
+    }
+    return {"portfolioStatistics": portfolio, "tradeStatistics": native_trade}
+
+
+def _duration_seconds(value: str) -> Decimal:
+    day_split = value.split(".", maxsplit=1)
+    days = Decimal(0)
+    clock = value
+    if len(day_split) == 2 and ":" in day_split[1]:
+        days = Decimal(day_split[0])
+        clock = day_split[1]
+    hours, minutes, seconds = clock.split(":")
+    return days * Decimal(86_400) + Decimal(hours) * Decimal(3_600) + Decimal(minutes) * 60 + Decimal(seconds)
+
+
+def _format_timespan(total_seconds: Decimal) -> str:
+    ticks = int((total_seconds * Decimal(10_000_000)).to_integral_value())
+    days, ticks = divmod(ticks, 864_000_000_000)
+    hours, ticks = divmod(ticks, 36_000_000_000)
+    minutes, ticks = divmod(ticks, 600_000_000)
+    seconds, fraction = divmod(ticks, 10_000_000)
+    prefix = f"{days}." if days else ""
+    suffix = f".{fraction:07d}" if fraction else ""
+    return f"{prefix}{hours:02d}:{minutes:02d}:{seconds:02d}{suffix}"
+
+
+def _reproduce_lean_trade_statistics(closed_trades: Sequence[Any]) -> dict[str, Any]:
+    trades = [trade for trade in closed_trades if isinstance(trade, Mapping)]
+    if not trades:
+        return {}
+    pnl = [_decimal(trade["profitLoss"]) for trade in trades]
+    wins = [trade for trade in trades if _decimal(trade["profitLoss"]) > 0]
+    losses = [trade for trade in trades if _decimal(trade["profitLoss"]) <= 0]
+    total_profit = sum((_decimal(trade["profitLoss"]) for trade in wins), Decimal(0))
+    total_loss = sum((_decimal(trade["profitLoss"]) for trade in losses), Decimal(0))
+    average_pnl = sum(pnl, Decimal(0)) / len(pnl)
+    pnl_std = Decimal(str(_stddev([float(value) for value in pnl])))
+    downside_std = Decimal(str(_stddev([float(_decimal(trade["profitLoss"])) for trade in losses])))
+
+    max_wins = max_losses = current_wins = current_losses = 0
+    total_pnl = max_total_pnl = max_total_pnl_with_mfe = Decimal(0)
+    maximum_closed_drawdown = maximum_intra_drawdown = Decimal(0)
+    last_peak_ms = int(trades[0]["entryTime"])
+    maximum_drawdown_ms = 0
+    in_drawdown = False
+    for trade in trades:
+        trade_pnl = _decimal(trade["profitLoss"])
+        mae = _decimal(trade["mae"])
+        mfe = _decimal(trade["mfe"])
+        max_total_pnl_with_mfe = max(max_total_pnl_with_mfe, total_pnl + mfe)
+        maximum_intra_drawdown = min(
+            maximum_intra_drawdown,
+            total_pnl + mae - max_total_pnl_with_mfe,
+        )
+        total_pnl += trade_pnl
+        if trade_pnl > 0:
+            current_wins += 1
+            current_losses = 0
+            max_wins = max(max_wins, current_wins)
+            if total_pnl > max_total_pnl:
+                if in_drawdown:
+                    maximum_drawdown_ms = max(
+                        maximum_drawdown_ms,
+                        int(trade["exitTime"]) - last_peak_ms,
+                    )
+                max_total_pnl = total_pnl
+                last_peak_ms = int(trade["exitTime"])
+                in_drawdown = False
+        else:
+            current_wins = 0
+            current_losses += 1
+            max_losses = max(max_losses, current_losses)
+            maximum_closed_drawdown = min(maximum_closed_drawdown, total_pnl - max_total_pnl)
+            in_drawdown = True
+
+    durations = [_duration_seconds(str(trade["duration"])) for trade in trades]
+    win_durations = [_duration_seconds(str(trade["duration"])) for trade in wins]
+    loss_durations = [_duration_seconds(str(trade["duration"])) for trade in losses]
+
+    def average(values: Sequence[Decimal]) -> Decimal:
+        return sum(values, Decimal(0)) / len(values) if values else Decimal(0)
+
+    def online_duration_average(values: Sequence[Decimal]) -> Decimal:
+        # TradeStatistics updates TimeSpan incrementally. TimeSpan.FromSeconds
+        # truncates the fractional tick toward zero, so a simple arithmetic
+        # mean differs by a few microseconds after dozens of observations.
+        ticks = 0
+        for count, value in enumerate(values, start=1):
+            value_ticks = int(value * Decimal(10_000_000))
+            # C# computes through ``TimeSpan.TotalSeconds`` (double) before
+            # converting the increment back to ticks.
+            delta_ticks = int(((value_ticks / 10_000_000) - (ticks / 10_000_000)) / count * 10_000_000)
+            ticks += delta_ticks
+        return Decimal(ticks) / Decimal(10_000_000)
+
+    def median(values: Sequence[Decimal]) -> Decimal:
+        ordered = sorted(values)
+        middle = len(ordered) // 2
+        return ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2
+
+    average_mfe = average([_decimal(trade["mfe"]) for trade in trades])
+    return {
+        "startDateTime": min(int(trade["entryTime"]) for trade in trades),
+        "endDateTime": max(int(trade["exitTime"]) for trade in trades),
+        "totalNumberOfTrades": len(trades),
+        "numberOfWinningTrades": len(wins),
+        "numberOfLosingTrades": len(losses),
+        "totalProfitLoss": total_pnl,
+        "totalProfit": total_profit,
+        "totalLoss": total_loss,
+        "largestProfit": max((_decimal(trade["profitLoss"]) for trade in wins), default=Decimal(0)),
+        "largestLoss": min((_decimal(trade["profitLoss"]) for trade in losses), default=Decimal(0)),
+        "averageProfitLoss": average_pnl,
+        "averageProfit": total_profit / len(wins) if wins else Decimal(0),
+        "averageLoss": total_loss / len(losses) if losses else Decimal(0),
+        "averageTradeDuration": _format_timespan(online_duration_average(durations)),
+        "averageWinningTradeDuration": _format_timespan(online_duration_average(win_durations)),
+        "averageLosingTradeDuration": _format_timespan(online_duration_average(loss_durations)),
+        "medianTradeDuration": _format_timespan(median(durations)),
+        "medianWinningTradeDuration": _format_timespan(median(win_durations)),
+        "medianLosingTradeDuration": _format_timespan(median(loss_durations)),
+        "maxConsecutiveWinningTrades": max_wins,
+        "maxConsecutiveLosingTrades": max_losses,
+        "profitLossRatio": (
+            (total_profit / len(wins)) / abs(total_loss / len(losses)) if wins and losses and total_loss else Decimal(0)
+        ),
+        "winLossRatio": Decimal(len(wins)) / len(losses) if losses else Decimal(10) if wins else Decimal(0),
+        "winRate": Decimal(len(wins)) / len(trades),
+        "lossRate": Decimal(len(losses)) / len(trades),
+        "averageMAE": average([_decimal(trade["mae"]) for trade in trades]),
+        "averageMFE": average_mfe,
+        "largestMAE": min((_decimal(trade["mae"]) for trade in trades), default=Decimal(0)),
+        "largestMFE": max((_decimal(trade["mfe"]) for trade in trades), default=Decimal(0)),
+        "maximumClosedTradeDrawdown": maximum_closed_drawdown,
+        "maximumIntraTradeDrawdown": maximum_intra_drawdown,
+        "profitLossStandardDeviation": pnl_std,
+        "profitLossDownsideDeviation": downside_std,
+        "profitFactor": total_profit / abs(total_loss) if total_profit and total_loss < 0 else Decimal(10) if total_profit else Decimal(0),
+        "sharpeRatio": average_pnl / pnl_std if pnl_std else Decimal(0),
+        "sortinoRatio": average_pnl / downside_std if downside_std else Decimal(0),
+        "profitToMaxDrawdownRatio": (
+            total_pnl / abs(maximum_closed_drawdown)
+            if total_pnl and maximum_closed_drawdown < 0
+            else Decimal(10) if total_pnl else Decimal(0)
+        ),
+        "maximumEndTradeDrawdown": max(
+            (_decimal(trade["endTradeDrawdown"]) for trade in trades),
+            default=Decimal(0),
+        ),
+        "averageEndTradeDrawdown": average_pnl - average_mfe,
+        "maximumDrawdownDuration": _format_timespan(Decimal(maximum_drawdown_ms) / Decimal(1000)),
+        "totalFees": sum((_decimal(trade["totalFees"]) for trade in trades), Decimal(0)),
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════

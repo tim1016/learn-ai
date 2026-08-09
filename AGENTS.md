@@ -16,6 +16,26 @@ Work in the deprecated IBKR areas is allowed only when the task explicitly conce
 
 The README's auto-generated Features inventory (the `AUTO-UPDATED:FEATURES` block managed by `auto-readme-tick`) still *documents* the IBKR paper-trading surfaces because that code physically exists. That inventory is descriptive, not an endorsement: this rule and the README's top-of-file deprecation banner govern what to build on. New bot-control work targets Alpaca Broker V2 (`/brokers/alpaca/...`) regardless of what the generated feature list enumerates.
 
+## STOP: legacy IBKR broker navigation is deprecated
+
+The **Interactive Broker** sidebar group and its former application pages are
+deprecated and unmaintained. They must not be developed, maintained, expanded,
+or restored as a parallel product area. The Alpaca account desk is the sole
+broker-control entry point.
+
+- Retired sidebar group: `Interactive Broker`
+- Compatibility-only UI routes: `/broker`, `/broker/accounts`,
+  `/broker/accounts/:accountId`, `/broker/account-monitor`,
+  `/broker/reconciliation`, `/broker/orders`, `/broker/session-mirror`,
+  `/broker/paper-run`, `/broker/instances`, `/broker/instances/:id`,
+  `/broker/bots`, `/broker/bots/:id`, `/broker/offline-replay`,
+  `/broker/bot-manual`, and `/broker/deploy`
+
+Those URLs may exist only as redirects to an Alpaca surface for bookmarked
+links. Do not attach a component, provider, guard, API expansion, or new UI
+behavior to them. Work in these routes or the formerly routed Angular pages is
+allowed only for removal, decommissioning, or migration to Alpaca Broker V2.
+
 ## Guiding philosophy
 
 1. **Math rigor before stack hygiene.** This repo's primary job is porting mathematical logic from reference sources and proving numerical equivalence. Stack conventions matter but never override math correctness.

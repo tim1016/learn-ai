@@ -12315,6 +12315,11 @@ export interface components {
              * @default 1
              */
             commission_per_order?: number;
+            /**
+             * Compatibility Profile
+             * @description Pinned cross-engine execution contract. The v1 profile requires raw regular-session minute bars and enables LEAN SetHoldings sizing, IBKR equity fees, and stale session-close next-open fills.
+             */
+            compatibility_profile?: "us-equity-raw-ibkr-v1" | null;
             /** @description Canonical DataPolicy block (PR B). When omitted, synthesized from ``params.symbol`` + ``resolution`` with ``adjusted=true`` and ``session='regular'``. Required when ``params.symbol`` is absent (no source of truth for the synthesizer). */
             data_policy?: components["schemas"]["_EngineDataPolicyModel"] | null;
             /**
@@ -15861,7 +15866,7 @@ export interface components {
         };
         /**
          * LeanRuntimeStatsResponse
-         * @description LEAN runtimeStatistics — 5 key fields.
+         * @description Typed projection of every LEAN runtime statistic plus order count.
          */
         LeanRuntimeStatsResponse: {
             /**
@@ -15875,10 +15880,20 @@ export interface components {
              */
             fees?: number;
             /**
+             * Holdings
+             * @default 0
+             */
+            holdings?: number;
+            /**
              * Net Profit
              * @default 0
              */
             net_profit?: number;
+            /**
+             * Probabilistic Sharpe Ratio
+             * @default 0
+             */
+            probabilistic_sharpe_ratio?: number;
             /**
              * Total Orders
              * @default 0
@@ -15889,6 +15904,16 @@ export interface components {
              * @default 0
              */
             total_return?: number;
+            /**
+             * Unrealized
+             * @default 0
+             */
+            unrealized?: number;
+            /**
+             * Volume
+             * @default 0
+             */
+            volume?: number;
         };
         /**
          * LeanStatisticsResponse
@@ -15901,9 +15926,14 @@ export interface components {
         };
         /**
          * LeanTradeStatsResponse
-         * @description LEAN TradeStatistics — key fields matching TS.cs.
+         * @description LEAN TradeStatistics — every field emitted by LEAN's result DTO.
          */
         LeanTradeStatsResponse: {
+            /**
+             * Average End Trade Drawdown
+             * @default 0
+             */
+            average_end_trade_drawdown?: number;
             /**
              * Average Losing Trade Duration
              * @default
@@ -15914,6 +15944,16 @@ export interface components {
              * @default 0
              */
             average_loss?: number;
+            /**
+             * Average Mae
+             * @default 0
+             */
+            average_mae?: number;
+            /**
+             * Average Mfe
+             * @default 0
+             */
+            average_mfe?: number;
             /**
              * Average Profit
              * @default 0
@@ -15942,10 +15982,25 @@ export interface components {
              */
             largest_loss?: number;
             /**
+             * Largest Mae
+             * @default 0
+             */
+            largest_mae?: number;
+            /**
+             * Largest Mfe
+             * @default 0
+             */
+            largest_mfe?: number;
+            /**
              * Largest Profit
              * @default 0
              */
             largest_profit?: number;
+            /**
+             * Loss Rate
+             * @default 0
+             */
+            loss_rate?: number;
             /**
              * Max Consecutive Losing Trades
              * @default 0
@@ -15956,6 +16011,41 @@ export interface components {
              * @default 0
              */
             max_consecutive_winning_trades?: number;
+            /**
+             * Maximum Closed Trade Drawdown
+             * @default 0
+             */
+            maximum_closed_trade_drawdown?: number;
+            /**
+             * Maximum Drawdown Duration
+             * @default
+             */
+            maximum_drawdown_duration?: string;
+            /**
+             * Maximum End Trade Drawdown
+             * @default 0
+             */
+            maximum_end_trade_drawdown?: number;
+            /**
+             * Maximum Intra Trade Drawdown
+             * @default 0
+             */
+            maximum_intra_trade_drawdown?: number;
+            /**
+             * Median Losing Trade Duration
+             * @default
+             */
+            median_losing_trade_duration?: string;
+            /**
+             * Median Trade Duration
+             * @default
+             */
+            median_trade_duration?: string;
+            /**
+             * Median Winning Trade Duration
+             * @default
+             */
+            median_winning_trade_duration?: string;
             /**
              * Number Of Losing Trades
              * @default 0
@@ -15976,6 +16066,11 @@ export interface components {
              * @default 0
              */
             profit_loss_downside_deviation?: number;
+            /**
+             * Profit Loss Ratio
+             * @default 0
+             */
+            profit_loss_ratio?: number;
             /**
              * Profit Loss Standard Deviation
              * @default 0
@@ -16023,6 +16118,16 @@ export interface components {
              * @default 0
              */
             total_profit_loss?: number;
+            /**
+             * Win Loss Ratio
+             * @default 0
+             */
+            win_loss_ratio?: number;
+            /**
+             * Win Rate
+             * @default 0
+             */
+            win_rate?: number;
         };
         /**
          * LegDiagnostic
@@ -20480,6 +20585,8 @@ export interface components {
         };
         /** RunVerdict */
         RunVerdict: {
+            /** Available Required Metrics */
+            available_required_metrics: number;
             cleanliness?: components["schemas"]["RunVerdictCleanliness"] | null;
             /** Composite */
             composite: number | null;
@@ -20498,12 +20605,23 @@ export interface components {
             headline: string;
             /** Missing Metrics */
             missing_metrics?: string[];
+            /** Missing Required Metrics */
+            missing_required_metrics?: string[];
             /** Normalized Weights */
             normalized_weights: boolean;
+            /** Parity Signature */
+            parity_signature?: Record<string, never>;
             /** Red Flags */
             red_flags?: string[];
+            /** Required Metrics */
+            required_metrics: number;
             /** Signal */
             signal: ("Deploy" | "Paper-trade" | "Iterate" | "Rework" | "Reject") | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "complete" | "incomplete" | "unavailable" | "failed";
             /** Verdict Version */
             verdict_version: number;
         };

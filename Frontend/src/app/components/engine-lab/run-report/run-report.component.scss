@@ -14,3 +14,14 @@
   color: var(--text-subtle);
   font-size: var(--fs-sm);
 }
+
+.parity-receipts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  margin-top: 0.55rem;
+  padding-top: 0.45rem;
+  border-top: 1px solid var(--border-light, #2a2e39);
+  color: var(--text-subtle, #9598a1);
+  font-size: 0.72rem;
+}

@@ -276,6 +276,93 @@ def _sortino(returns: Sequence[float], periods_per_year: int) -> float | None:
     return (mean / downside_std) * math.sqrt(periods_per_year)
 
 
+def _sample_standard_deviation(values: Sequence[float]) -> float | None:
+    """Sample standard deviation (n-1), matching the ratio estimators here."""
+    if len(values) < 2:
+        return None
+    mean = sum(values) / len(values)
+    return math.sqrt(sum((value - mean) ** 2 for value in values) / (len(values) - 1))
+
+
+def _probabilistic_sharpe_ratio(returns: Sequence[float]) -> float | None:
+    """Probability that the unannualized Sharpe exceeds zero.
+
+    Formula: Bailey & López de Prado's PSR with benchmark Sharpe 0 and
+    Pearson kurtosis. This platform-canonical confidence metric is calculated
+    from the exact return vector supplied to the other compatibility metrics;
+    it is intentionally distinct from LEAN's native interest-rate-aware PSR.
+    """
+    n = len(returns)
+    std = _sample_standard_deviation(returns)
+    if n < 3 or std is None or std == 0:
+        return None
+    mean = sum(returns) / n
+    observed_sharpe = mean / std
+    centered = [value - mean for value in returns]
+    population_variance = sum(value * value for value in centered) / n
+    if population_variance <= 0:
+        return None
+    population_std = math.sqrt(population_variance)
+    skew = sum((value / population_std) ** 3 for value in centered) / n
+    pearson_kurtosis = sum((value / population_std) ** 4 for value in centered) / n
+    denominator_squared = (
+        1.0
+        - skew * observed_sharpe
+        + ((pearson_kurtosis - 1.0) / 4.0) * observed_sharpe * observed_sharpe
+    )
+    if denominator_squared <= 0:
+        return None
+    z_score = observed_sharpe * math.sqrt(n - 1) / math.sqrt(denominator_squared)
+    return 0.5 * (1.0 + math.erf(z_score / math.sqrt(2.0)))
+
+
+def _max_consecutive_losses(trades: Sequence[_TradeLike]) -> int:
+    maximum = current = 0
+    for trade in trades:
+        if float(trade.pnl_pct) < 0:
+            current += 1
+            maximum = max(maximum, current)
+        else:
+            current = 0
+    return maximum
+
+
+def _drawdown_recovery_days(initial_equity: float, trades: Sequence[_TradeLike]) -> int | None:
+    """Longest peak-to-recovery calendar duration on a closed-trade ledger.
+
+    The ledger must expose ``entry_time`` and ``exit_time``. An unrecovered
+    drawdown is measured from its peak through the final closed trade, which
+    makes the value defined without inventing a future recovery timestamp.
+    """
+    if not trades:
+        return None
+    first_entry = getattr(trades[0], "entry_time", None)
+    if not isinstance(first_entry, datetime):
+        return None
+    equity = peak = initial_equity
+    peak_time = first_entry
+    longest_seconds = 0.0
+    in_drawdown = False
+    final_exit: datetime | None = None
+    for trade in trades:
+        exit_time = getattr(trade, "exit_time", None)
+        if not isinstance(exit_time, datetime):
+            return None
+        final_exit = exit_time
+        equity *= 1.0 + float(trade.pnl_pct)
+        if equity >= peak:
+            if in_drawdown:
+                longest_seconds = max(longest_seconds, (exit_time - peak_time).total_seconds())
+            peak = equity
+            peak_time = exit_time
+            in_drawdown = False
+        else:
+            in_drawdown = True
+    if in_drawdown and final_exit is not None:
+        longest_seconds = max(longest_seconds, (final_exit - peak_time).total_seconds())
+    return max(0, int(longest_seconds // 86_400))
+
+
 def _resample_to_daily(points: Sequence[EquityPoint]) -> list[float]:
     if not points:
         return []
@@ -532,6 +619,19 @@ def summarize(
         trading_days=trading_days,
         equity_curve=equity_curve,
     )
+    if equity_curve:
+        metric_returns = _daily_returns(_resample_to_daily(equity_curve))
+        periods_per_year = TRADING_DAYS_PER_YEAR
+    else:
+        metric_returns = [float(trade.pnl_pct) for trade in trades]
+        periods_per_year = (
+            max(1, round(TRADING_DAYS_PER_YEAR * len(trades) / trading_days))
+            if trading_days and trades
+            else TRADING_DAYS_PER_YEAR
+        )
+    annual_standard_deviation = _sample_standard_deviation(metric_returns)
+    if annual_standard_deviation is not None:
+        annual_standard_deviation *= math.sqrt(periods_per_year)
     result: dict[str, float | int | None] = {
         # Trade-level
         "total_trades": ts.total_trades,
@@ -546,6 +646,10 @@ def summarize(
         "profit_factor": _finite_or_none(ts.profit_factor),
         "expectancy_pct": _finite_or_none(ts.expectancy_pct),
         "payoff_ratio": _finite_or_none(ts.payoff_ratio),
+        "max_consecutive_losing_trades": _max_consecutive_losses(trades),
+        "trade_sharpe_ratio": _finite_or_none(
+            _sharpe([float(trade.pnl_pct) for trade in trades], TRADING_DAYS_PER_YEAR)
+        ),
         # Portfolio-level
         "net_profit": _finite_or_none(ps.net_profit),
         "net_profit_pct": _finite_or_none(ps.net_profit_pct),
@@ -554,6 +658,9 @@ def summarize(
         "sortino_ratio": _finite_or_none(ps.sortino_ratio),
         "calmar_ratio": _finite_or_none(ps.calmar_ratio),
         "cagr": _finite_or_none(ps.cagr),
+        "annual_standard_deviation": _finite_or_none(annual_standard_deviation),
+        "drawdown_recovery": _drawdown_recovery_days(initial_cash, trades),
+        "probabilistic_sharpe_ratio": _finite_or_none(_probabilistic_sharpe_ratio(metric_returns)),
         "mae_pct": _finite_or_none(ps.mae_pct),
         "mfe_pct": _finite_or_none(ps.mfe_pct),
     }

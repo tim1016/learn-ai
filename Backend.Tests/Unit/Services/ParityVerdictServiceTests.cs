@@ -11,6 +11,67 @@ namespace Backend.Tests.Unit.Services;
 
 public class ParityVerdictServiceTests
 {
+    private const string MatchingRunVerdict = """
+        {
+          "verdict_version": 2,
+          "status": "complete",
+          "composite": 76,
+          "grade": "A",
+          "signal": "Paper-trade",
+          "red_flags": [],
+          "dimensions": [{"key":"return_quality","score":70,"sub_scores":[]}],
+          "missing_metrics": [],
+          "missing_required_metrics": [],
+          "available_required_metrics": 17,
+          "required_metrics": 17,
+          "normalized_weights": false,
+          "parity_signature": {
+            "contract_id": "readiness-core-v2",
+            "absolute_tolerance": "0.000000000001",
+            "status": "complete",
+            "composite": 76,
+            "grade": "A",
+            "signal": "Paper-trade",
+            "red_flags": [],
+            "missing_required_metrics": [],
+            "available_required_metrics": 17,
+            "required_metrics": 17,
+            "normalized_weights": false,
+            "required_inputs": []
+          }
+        }
+        """;
+
+    private const string MatchingNativeStatistics = """
+        {
+          "namespaces": {
+            "status": "match",
+            "contract_id": "lean-native-statistics-commit",
+            "source_commit": "commit",
+            "absolute_tolerance": 0.0000500001,
+            "native_metric_count": 66,
+            "formatted_metric_count": 25,
+            "divergences": []
+          }
+        }
+        """;
+
+    private const string MatchingDataPolicy = """
+        {
+          "source": "polygon",
+          "symbol": "SPY",
+          "adjusted": false,
+          "session": "regular",
+          "input_bars": {"timespan":"minute","multiplier":1},
+          "strategy_bars": {"timespan":"minute","multiplier":15},
+          "timestamp_policy": "bar_close_ms_utc",
+          "timezone": "America/New_York",
+          "provider_kind": "fixture",
+          "fixture_id": "bar-store-v1-exact",
+          "fixture_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+        """;
+
     private static ParityVerdictService CreateService(
         Backend.Data.AppDbContext db,
         CompareTradesResponse comparison)
@@ -34,6 +95,12 @@ public class ParityVerdictServiceTests
             Source = "engine",
             StrategyName = "spy_ema_crossover",
             ParityGroupId = group,
+            RunVerdictJson = MatchingRunVerdict,
+            DataPolicyJson = MatchingDataPolicy,
+            InitialCash = 100_000m,
+            StartDate = "2026-01-05",
+            EndDate = "2026-01-06",
+            FillMode = "signal_bar_close",
         };
         var right = new StrategyExecution
         {
@@ -42,6 +109,13 @@ public class ParityVerdictServiceTests
             StrategyName = "ema_crossover",
             LeanRunId = $"companion-{group}",
             ParityGroupId = group,
+            RunVerdictJson = MatchingRunVerdict,
+            LeanStatisticsJson = MatchingNativeStatistics,
+            DataPolicyJson = MatchingDataPolicy,
+            InitialCash = 100_000m,
+            StartDate = "2026-01-05",
+            EndDate = "2026-01-06",
+            FillMode = "signal_bar_close",
         };
         db.StrategyExecutions.AddRange(left, right);
         await db.SaveChangesAsync();
@@ -83,6 +157,10 @@ public class ParityVerdictServiceTests
         Assert.Equal(rightId, row.RightExecutionId);
         Assert.Equal(leftId, row.LeftExecutionId);
         Assert.Contains("\"status\":\"agree\"", row.VerdictJson);
+        Assert.Contains("\"native_metric_parity\":{\"status\":\"match\"", row.VerdictJson);
+        Assert.Contains("\"readiness_parity\":{\"status\":\"match\"", row.VerdictJson);
+        Assert.Contains("\"compared_field_count\":17", row.VerdictJson);
+        Assert.Contains("\"input_parity\":{\"status\":\"match\"", row.VerdictJson);
     }
 
     [Fact]
@@ -111,6 +189,93 @@ public class ParityVerdictServiceTests
 
         var row = await db.ParityVerdicts.SingleAsync(v => v.ParityGroupId == "pg-final");
         Assert.Equal("run_failed", row.Status);
+    }
+
+    [Fact]
+    public async Task Compute_ReadinessMismatch_FreezesDivergedWithExactFieldReceipt()
+    {
+        var db = TestDbContextFactory.Create();
+        var (_, rightId) = await SeedGroupAsync(db, "pg-readiness");
+        var right = await db.StrategyExecutions.SingleAsync(e => e.Id == rightId);
+        right.RunVerdictJson = MatchingRunVerdict.Replace("\"grade\": \"A\"", "\"grade\": \"B\"");
+        await db.SaveChangesAsync();
+        var service = CreateService(db, NoDivergences());
+
+        await service.ComputeForLeanRunAsync(rightId, "pg-readiness", CancellationToken.None);
+
+        var row = await db.ParityVerdicts.SingleAsync(v => v.ParityGroupId == "pg-readiness");
+        Assert.Equal("diverged", row.Status);
+        Assert.Contains("production_readiness_mismatch", row.VerdictJson);
+        Assert.Contains("\"mismatched_fields\":[\"parity_signature\"]", row.VerdictJson);
+    }
+
+    [Fact]
+    public async Task Compute_ReadinessReceipt_IgnoresNonCanonicalPresentationNoise()
+    {
+        var db = TestDbContextFactory.Create();
+        var (_, rightId) = await SeedGroupAsync(db, "pg-readiness-noise");
+        var right = await db.StrategyExecutions.SingleAsync(e => e.Id == rightId);
+        right.RunVerdictJson = MatchingRunVerdict.Replace("\"score\":70", "\"score\":71");
+        await db.SaveChangesAsync();
+        var service = CreateService(db, NoDivergences());
+
+        await service.ComputeForLeanRunAsync(rightId, "pg-readiness-noise", CancellationToken.None);
+
+        var row = await db.ParityVerdicts.SingleAsync(v => v.ParityGroupId == "pg-readiness-noise");
+        Assert.Equal("agree", row.Status);
+        Assert.Contains("\"readiness_parity\":{\"status\":\"match\"", row.VerdictJson);
+    }
+
+    [Fact]
+    public async Task Compute_NativeMetricMismatch_FreezesDiverged()
+    {
+        var db = TestDbContextFactory.Create();
+        var (_, rightId) = await SeedGroupAsync(db, "pg-native");
+        var right = await db.StrategyExecutions.SingleAsync(e => e.Id == rightId);
+        right.LeanStatisticsJson = MatchingNativeStatistics.Replace("\"status\": \"match\"", "\"status\": \"mismatch\"");
+        await db.SaveChangesAsync();
+        var service = CreateService(db, NoDivergences());
+
+        await service.ComputeForLeanRunAsync(rightId, "pg-native", CancellationToken.None);
+
+        var row = await db.ParityVerdicts.SingleAsync(v => v.ParityGroupId == "pg-native");
+        Assert.Equal("diverged", row.Status);
+        Assert.Contains("lean_native_metric_mismatch", row.VerdictJson);
+    }
+
+    [Fact]
+    public async Task Compute_MissingMetricReceipt_FreezesUnavailableInsteadOfFalseAgreement()
+    {
+        var db = TestDbContextFactory.Create();
+        var (_, rightId) = await SeedGroupAsync(db, "pg-unavailable");
+        var right = await db.StrategyExecutions.SingleAsync(e => e.Id == rightId);
+        right.LeanStatisticsJson = "{}";
+        await db.SaveChangesAsync();
+        var service = CreateService(db, NoDivergences());
+
+        await service.ComputeForLeanRunAsync(rightId, "pg-unavailable", CancellationToken.None);
+
+        var row = await db.ParityVerdicts.SingleAsync(v => v.ParityGroupId == "pg-unavailable");
+        Assert.Equal("unavailable", row.Status);
+        Assert.Contains("lean_native_metric_parity_unavailable", row.VerdictJson);
+    }
+
+    [Fact]
+    public async Task Compute_SharedFixtureMismatch_FreezesDiverged()
+    {
+        var db = TestDbContextFactory.Create();
+        var (_, rightId) = await SeedGroupAsync(db, "pg-input");
+        var right = await db.StrategyExecutions.SingleAsync(e => e.Id == rightId);
+        right.DataPolicyJson = MatchingDataPolicy.Replace("bar-store-v1-exact", "bar-store-v1-changed");
+        await db.SaveChangesAsync();
+        var service = CreateService(db, NoDivergences());
+
+        await service.ComputeForLeanRunAsync(rightId, "pg-input", CancellationToken.None);
+
+        var row = await db.ParityVerdicts.SingleAsync(v => v.ParityGroupId == "pg-input");
+        Assert.Equal("diverged", row.Status);
+        Assert.Contains("compatibility_input_mismatch", row.VerdictJson);
+        Assert.Contains("fixture_id", row.VerdictJson);
     }
 
     [Fact]

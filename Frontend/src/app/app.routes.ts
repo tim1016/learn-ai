@@ -1,19 +1,36 @@
 import { ChangeDetectionStrategy, Component } from "@angular/core";
 import { Routes } from "@angular/router";
-import { AccountDeskHoldingsStore } from "./components/broker/account-desk/account-desk-holdings-store.service";
-import { AccountDeskEventsStore } from "./components/broker/account-desk/account-desk-events-store.service";
-import { AccountDeskDirectoryStore } from "./components/broker/account-desk/account-desk-directory-store.service";
-import { AccountDeskFleetStore } from "./components/broker/account-desk/account-desk-fleet-store.service";
-import { AccountDeskGuidanceStore } from "./components/broker/account-desk/account-desk-guidance-store.service";
-import { AccountDeskRecoveryStore } from "./components/broker/account-desk/account-desk-recovery-store.service";
-import { AccountDeskSurfaceStore } from "./components/broker/account-desk/account-desk-surface-store.service";
-import { AccountDeskTransactionHistoryStore } from "./components/broker/account-desk/account-desk-transaction-history-store.service";
 import { brokerBotsRedirectGuard } from "./components/broker/v2-panel/lib/broker-bots-redirect.guard";
 
 // Nominal component target for the brokerBotsRedirectGuard route.
 // The guard always returns a UrlTree so this component never renders.
 @Component({ template: '', changeDetection: ChangeDetectionStrategy.OnPush })
 class NeverRendersComponent {}
+
+/**
+ * Retired Interactive Broker navigation.
+ *
+ * These compatibility aliases preserve bookmarked URLs while directing users
+ * to the sole supported broker-control product: Alpaca Broker V2. They must
+ * remain redirect-only; do not attach UI, providers, guards, or new behavior.
+ */
+const RETIRED_IBKR_NAVIGATION_ROUTES: Routes = [
+  { path: "broker", redirectTo: "brokers/alpaca", pathMatch: "full" },
+  { path: "broker/accounts", redirectTo: "brokers/alpaca", pathMatch: "full" },
+  { path: "broker/accounts/:accountId", redirectTo: "brokers/alpaca", pathMatch: "full" },
+  { path: "broker/account-monitor", redirectTo: "brokers/alpaca", pathMatch: "full" },
+  { path: "broker/reconciliation", redirectTo: "brokers/alpaca", pathMatch: "full" },
+  { path: "broker/orders", redirectTo: "brokers/alpaca", pathMatch: "full" },
+  { path: "broker/session-mirror", redirectTo: "brokers/alpaca", pathMatch: "full" },
+  { path: "broker/paper-run", redirectTo: "brokers/alpaca/bots", pathMatch: "full" },
+  { path: "broker/instances", redirectTo: "brokers/alpaca/bots", pathMatch: "full" },
+  { path: "broker/instances/:id", redirectTo: "brokers/alpaca/bots", pathMatch: "full" },
+  { path: "broker/bots", redirectTo: "brokers/alpaca/bots", pathMatch: "full" },
+  { path: "broker/bots/:id", redirectTo: "brokers/alpaca/bots", pathMatch: "full" },
+  { path: "broker/offline-replay", redirectTo: "brokers/alpaca", pathMatch: "full" },
+  { path: "broker/bot-manual", redirectTo: "brokers/alpaca/manual", pathMatch: "full" },
+  { path: "broker/deploy", redirectTo: "brokers/alpaca/deploy", pathMatch: "full" },
+];
 
 export const routes: Routes = [
   { path: "", redirectTo: "/data-lab", pathMatch: "full" },
@@ -222,13 +239,7 @@ export const routes: Routes = [
       ).then((m) => m.AlpacaBotControlExampleComponent),
   },
   {
-    path: "broker",
-    redirectTo: "broker/accounts",
-    pathMatch: "full",
-  },
-  {
-    // One broker-aware Deploy page. IBKR keeps its established adapter while
-    // broker-v2 accounts can provide an account-scoped deployment contract.
+    // Broker-aware deployment uses the broker-v2 account-scoped contract.
     path: "brokers/:broker/accounts/:accountId/deploy",
     loadComponent: () =>
       import(
@@ -280,75 +291,7 @@ export const routes: Routes = [
         "./components/broker/broker-options-surface/broker-options-surface.component"
       ).then((m) => m.BrokerOptionsSurfaceComponent),
   },
-  {
-    path: "broker/accounts",
-    providers: [AccountDeskDirectoryStore],
-    loadComponent: () =>
-      import(
-        "./components/broker/account-roster/account-roster-page.component"
-      ).then((m) => m.AccountRosterPageComponent),
-  },
-  {
-    path: "broker/accounts/:accountId",
-    providers: [AccountDeskSurfaceStore, AccountDeskHoldingsStore, AccountDeskEventsStore, AccountDeskDirectoryStore, AccountDeskFleetStore, AccountDeskGuidanceStore, AccountDeskRecoveryStore, AccountDeskTransactionHistoryStore],
-    loadComponent: () =>
-      import(
-        "./components/broker/account-desk/account-desk-page.component"
-      ).then((m) => m.AccountDeskPageComponent),
-  },
-  {
-    path: "broker/account-monitor",
-    loadComponent: () =>
-      import(
-        "./components/broker/account-monitor-redirect/account-monitor-redirect.component"
-      ).then((m) => m.AccountMonitorRedirectComponent),
-  },
-  {
-    path: "broker/reconciliation",
-    redirectTo: "broker/accounts",
-    pathMatch: "full",
-  },
-  {
-    path: "broker/orders",
-    loadComponent: () =>
-      import(
-        "./components/broker/broker-orders/broker-orders.component"
-      ).then((m) => m.BrokerOrdersComponent),
-  },
-  {
-    path: "broker/session-mirror",
-    loadComponent: () =>
-      import(
-        "./components/broker/broker-session-mirror/broker-session-mirror.component"
-      ).then((m) => m.BrokerSessionMirrorComponent),
-  },
-  {
-    path: "broker/paper-run",
-    redirectTo: "brokers/alpaca/bots",
-    pathMatch: "full",
-  },
-  {
-    path: "broker/instances",
-    redirectTo: "brokers/alpaca/bots",
-    pathMatch: "full",
-  },
-  {
-    path: "broker/bots",
-    redirectTo: "brokers/alpaca/bots",
-    pathMatch: "full",
-  },
-  {
-    path: "broker/offline-replay",
-    loadComponent: () =>
-      import(
-        "./components/broker/offline-replay/offline-replay-page.component"
-      ).then((m) => m.OfflineReplayPageComponent),
-  },
-  {
-    path: "broker/bot-manual",
-    redirectTo: "brokers/alpaca/manual",
-    pathMatch: "full",
-  },
+  ...RETIRED_IBKR_NAVIGATION_ROUTES,
   {
     path: "broker/desert-oasis",
     loadComponent: () =>
@@ -362,24 +305,6 @@ export const routes: Routes = [
       import(
         "./components/broker/bot-sprite-gallery/bot-sprite-gallery.component"
       ).then((m) => m.BotSpriteGalleryComponent),
-  },
-  {
-    path: "broker/bots/:id",
-    redirectTo: "brokers/alpaca/bots",
-    pathMatch: "full",
-  },
-  {
-    path: "broker/instances/:id",
-    redirectTo: "brokers/alpaca/bots",
-    pathMatch: "full",
-  },
-  {
-    // Legacy IBKR URL retained as an alias of the single Broker Deploy page.
-    path: "broker/deploy",
-    loadComponent: () =>
-      import(
-        "./components/broker/broker-deploy-page/broker-deploy-page.component"
-      ).then((m) => m.BrokerDeployPageComponent),
   },
   {
     path: "edge",

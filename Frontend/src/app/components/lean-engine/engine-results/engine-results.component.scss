@@ -232,7 +232,8 @@
 // Secondary drawer — collapsed by default
 // ═══════════════════════════════════════════════════════════════════
 .secondary-drawer,
-.lean-stats-drawer {
+.lean-stats-drawer,
+.lean-analysis-drawer {
   margin: 0 0 12px;
   background: $bg-surface;
   border: 1px solid $border;
@@ -272,6 +273,73 @@
     flex-direction: column;
     gap: 12px;
   }
+}
+
+.lean-analysis-note {
+  margin: 0;
+  color: $text-secondary;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.lean-analysis-list {
+  display: grid;
+  gap: 10px;
+}
+
+.lean-analysis-card {
+  padding: 14px;
+  border: 1px solid $border-light;
+  border-left: 3px solid $warn;
+  border-radius: 6px;
+  background: $bg-elevated;
+
+  h4 {
+    margin: 0 0 6px;
+    color: $text-primary;
+    font-size: 13px;
+  }
+
+  p {
+    margin: 0 0 12px;
+    color: $text-secondary;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+}
+
+.lean-analysis-evidence,
+.lean-analysis-solutions {
+  > span {
+    display: block;
+    margin-bottom: 5px;
+    color: $text-muted;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+}
+
+.lean-analysis-evidence pre {
+  max-height: 260px;
+  margin: 0 0 12px;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid $border;
+  border-radius: 4px;
+  background: $bg-surface;
+  color: $text-secondary;
+  font: 11px/1.45 $font-mono;
+  white-space: pre-wrap;
+}
+
+.lean-analysis-solutions ul {
+  margin: 0;
+  padding-left: 18px;
+  color: $text-secondary;
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 // ═══════════════════════════════════════════════════════════════════

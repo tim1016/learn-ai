@@ -81,6 +81,8 @@ public sealed record BacktestRunDetailType
     public decimal? SortinoRatio { get; init; }
     public decimal? ProfitFactor { get; init; }
     public string? LeanStatisticsJson { get; init; }
+    [GraphQLName("leanAnalysisJson")]
+    public string? LeanAnalysisJson { get; init; }
     public string? VerdictJson { get; init; }
     public int? VerdictVersion { get; init; }
     public string? VerdictGrade { get; init; }
@@ -129,6 +131,7 @@ public sealed record BacktestRunDetailType
             SortinoRatio = leanKpis?.SortinoRatio ?? execution.SortinoRatio,
             ProfitFactor = leanKpis?.ProfitFactor ?? execution.ProfitFactor,
             LeanStatisticsJson = execution.LeanStatisticsJson,
+            LeanAnalysisJson = execution.LeanAnalysisJson,
             VerdictJson = execution.RunVerdictJson,
             VerdictVersion = execution.VerdictVersion,
             VerdictGrade = execution.VerdictGrade,

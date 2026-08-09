@@ -55,6 +55,7 @@ import type { EngineValidationAnalytics } from "./engine-results/engine-validati
 
 /** Engine choice on the unified launch surface. */
 export type EngineChoice = "python" | "lean" | "both";
+const COMPATIBILITY_PROFILE = "us-equity-raw-ibkr-v1";
 type LeanLauncherStatus = "unknown" | "checking" | "ready" | "blocked";
 
 /**
@@ -384,7 +385,10 @@ export abstract class LeanEngineController implements OnInit {
    * from the current form state. The shape mirrors the Python and .NET
    * sides exactly so the compare-view can gate on equality.
    *
-   * The hidden defaults are documented in
+   * Single-engine runs retain the documented research default of adjusted
+   * bars. Compatibility mode uses raw bars because the server-owned LEAN
+   * companion rejects adjusted input rather than pretending it is comparable.
+   * The remaining hidden defaults are documented in
    * `docs/superpowers/specs/2026-05-19-pr-b-engine-lab-unified-design.md`
    * § 4.4: ``adjusted=true`` (pre-adjusted Polygon staging), regular
    * session, and input bars at the resolution toggle. ``strategy_bars``
@@ -398,7 +402,7 @@ export abstract class LeanEngineController implements OnInit {
     return {
       source: 'polygon',
       symbol: this.effectiveSymbol(),
-      adjusted: true,
+      adjusted: this.engine() !== 'both',
       session: 'regular',
       input_bars: { timespan, multiplier: 1 },
       strategy_bars: strategyBars,
@@ -618,7 +622,7 @@ export abstract class LeanEngineController implements OnInit {
   private engineLabel(engine: EngineChoice): string {
     if (engine === "python") return "Python (in-process)";
     if (engine === "lean") return "LEAN (sidecar)";
-    return "Both engines";
+    return "Compatibility pair (raw bars)";
   }
 
   readonly engineSummary = computed(() => this.engineLabel(this.engine()));
@@ -646,7 +650,7 @@ export abstract class LeanEngineController implements OnInit {
       case "checking":
         return "Checking launcher…";
       case "blocked":
-        return "Launcher not running";
+        return "Launcher unavailable";
       default:
         return "Launcher not checked";
     }
@@ -1005,15 +1009,35 @@ export abstract class LeanEngineController implements OnInit {
   private leanJobId = signal<string | null>(null);
 
   async run(): Promise<void> {
-    if (this.engine() === "both") {
-      await Promise.all([this.runPython(), this.runLean()]);
-      return;
+    const engine = this.engine();
+    if (engine === "lean" || engine === "both") {
+      if (this.leanValidationTemplate() === null) {
+        const message = "Select a strategy with an aligned LEAN validation template.";
+        this.runError.set(message);
+        this.setRunStatus("failed", "LEAN validation template unavailable", message);
+        return;
+      }
+      if (!(await this.ensureLeanLauncherReady())) return;
     }
-    if (this.engine() === "lean") {
+
+    if (engine === "lean") {
       await this.runLean();
       return;
     }
+    // Both mode submits exactly one Python anchor. The server persists it,
+    // mints the parity group, and dispatches the one linked LEAN companion.
+    // Launching a second client-side LEAN job created unrelated runs 81/82.
     await this.runPython();
+  }
+
+  private async ensureLeanLauncherReady(): Promise<boolean> {
+    await this.checkLeanLauncher();
+    if (this.leanLauncherStatus() === "ready") return true;
+
+    const message = this.leanLauncherDetail() || "Start the LEAN launcher before running.";
+    this.runError.set(message);
+    this.setRunStatus("failed", "LEAN launcher unavailable", message);
+    return false;
   }
 
   private async runPython(): Promise<void> {
@@ -1042,6 +1066,8 @@ export abstract class LeanEngineController implements OnInit {
       params: this.paramValues(),
       auto_fetch: this.autoFetch(),
       resolution: this.resolution(),
+      compatibility_profile:
+        this.engine() === "both" ? COMPATIBILITY_PROFILE : null,
       // PR B (2026-05-19) — canonical DataPolicy block on every engine
       // submission. The Python router accepts the block as-is and echoes
       // it in the response; the persistence layer writes it into the new
@@ -1086,16 +1112,6 @@ export abstract class LeanEngineController implements OnInit {
       this.runError.set(message);
       this.setRunStatus("failed", "LEAN validation template unavailable", message);
       return;
-    }
-
-    if (this.leanLauncherStatus() !== "ready") {
-      await this.checkLeanLauncher();
-      if (this.leanLauncherStatus() !== "ready") {
-        const message = this.leanLauncherDetail() || "Start the LEAN launcher before running.";
-        this.runError.set(message);
-        this.setRunStatus("failed", "LEAN launcher unavailable", message);
-        return;
-      }
     }
 
     this.running.set(true);
@@ -1189,13 +1205,16 @@ export abstract class LeanEngineController implements OnInit {
 
   private applyLeanLauncherReport(report: LeanLauncherDiagnosticReport): void {
     const launcher = report.checks.find((check) => check.name === "launcher_healthz");
-    if (launcher?.status === "pass") {
+    const failure = report.checks.find((check) => check.status === "fail");
+    if (launcher?.status === "pass" && report.overall_status !== "fail" && failure === undefined) {
       this.leanLauncherStatus.set("ready");
       this.leanLauncherDetail.set(launcher.detail);
       return;
     }
     this.leanLauncherStatus.set("blocked");
-    this.leanLauncherDetail.set(launcher?.fix ?? launcher?.detail ?? "LEAN launcher is not reachable.");
+    this.leanLauncherDetail.set(
+      failure?.fix ?? failure?.detail ?? launcher?.fix ?? launcher?.detail ?? "LEAN launcher is not reachable.",
+    );
   }
 
   /**

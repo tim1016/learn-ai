@@ -303,7 +303,11 @@ def _require_podman() -> str:
     return podman
 
 
-def _require_image_in_allowlist(image_digest: str) -> str:
+def _require_image_in_allowlist(
+    image_digest: str,
+    *,
+    allowed_image_digests: frozenset[str] | None = None,
+) -> str:
     """Verify ``image_digest`` is in the static allow-list.
 
     Accepts either a bare ``sha256:...`` digest or
@@ -313,11 +317,12 @@ def _require_image_in_allowlist(image_digest: str) -> str:
     bare = image_digest.split("@", 1)[-1]
     if not bare.startswith("sha256:"):
         raise RunnerConfigurationError(f"image must be pinned by sha256 digest, got {image_digest!r}")
-    if not ALLOWED_IMAGE_DIGESTS:
+    allowlist = ALLOWED_IMAGE_DIGESTS if allowed_image_digests is None else allowed_image_digests
+    if not allowlist:
         raise RunnerConfigurationError(
             "no LEAN image digests pinned yet — pin one in config.py before invoking the runner"
         )
-    if bare not in ALLOWED_IMAGE_DIGESTS:
+    if bare not in allowlist:
         raise RunnerConfigurationError(f"image digest {bare} is not in ALLOWED_IMAGE_DIGESTS")
     return f"{LEAN_IMAGE_REPO}@{bare}"
 
@@ -391,6 +396,7 @@ def build_command(
     limits: RunLimits = DEFAULT_RUN_LIMITS,
     hardening_flags: tuple[str, ...] = (),
     hardening_profile: HardeningProfile | None = None,
+    allowed_image_digests: frozenset[str] | None = None,
 ) -> RunnerPlan:
     """Construct the `podman run` argv for this workspace + image.
 
@@ -434,7 +440,10 @@ def build_command(
     if not workspace.workspace_dir.is_dir():
         raise RunnerConfigurationError(f"workspace path is not a directory: {workspace.workspace_dir}")
 
-    image_reference = _require_image_in_allowlist(image_digest)
+    image_reference = _require_image_in_allowlist(
+        image_digest,
+        allowed_image_digests=allowed_image_digests,
+    )
     platform = _platform_for_digest(image_digest)
     podman = _require_podman()
 

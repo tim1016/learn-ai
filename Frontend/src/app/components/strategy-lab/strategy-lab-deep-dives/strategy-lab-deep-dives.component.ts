@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, input } from "@angular/co
 
 import type {
   EngineResultData,
+  LeanAnalysisFinding,
   LeanStatistics,
 } from "../../lean-engine/engine-results/engine-results.component";
 import { TradeLedgerComponent } from "../../lean-engine/engine-results/trade-ledger/trade-ledger.component";
@@ -23,6 +24,22 @@ export class StrategyLabDeepDivesComponent {
     const stats = this.result().lean_statistics;
     return stats?.portfolio && stats.trade && stats.runtime ? stats : null;
   });
+
+  readonly leanAnalysis = computed<LeanAnalysisFinding[]>(() =>
+    this.result().lean_analysis ?? [],
+  );
+
+  formatLeanAnalysisName(name: string): string {
+    return name
+      .replace(/Analysis$/, "")
+      .replace(/([a-z0-9])([A-Z])/g, "$1 $2");
+  }
+
+  formatLeanSample(sample: unknown): string {
+    if (sample === null || sample === undefined) return "No sample supplied.";
+    if (typeof sample === "string") return sample;
+    return JSON.stringify(sample, null, 2);
+  }
 
   formatCurrency(value: number | null | undefined): string {
     if (value === null || value === undefined || Number.isNaN(value)) return "—";

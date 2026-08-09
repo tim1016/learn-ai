@@ -78,6 +78,21 @@ public record PersistLeanRunPayload(
     [JsonPropertyName("validation_analytics_json")]
     public string? ValidationAnalyticsJson { get; init; }
 
+    /// <summary>
+    /// Complete lossless LEAN analysis catalog (name, issue, arbitrary sample,
+    /// and every proposed solution). Stored separately from learn-ai's own
+    /// validation analytics so the independent Oracle remains identifiable.
+    /// </summary>
+    [JsonPropertyName("lean_analysis_json")]
+    public string? LeanAnalysisJson { get; init; }
+
+    /// <summary>
+    /// Platform-facing execution contract. Compatibility companions send the
+    /// exact shared mode; legacy standalone LEAN callers may omit it.
+    /// </summary>
+    [JsonPropertyName("fill_mode")]
+    public string? FillMode { get; init; }
+
     [JsonPropertyName("parity_group_id")]
     public string? ParityGroupId { get; init; }
 }

@@ -32,6 +32,7 @@ function run(overrides: Partial<BacktestRunDetail> = {}): BacktestRunDetail {
     sortinoRatio: 1.4,
     profitFactor: 2,
     leanStatisticsJson: null,
+    leanAnalysisJson: null,
     verdictJson: null,
     verdictVersion: null,
     verdictGrade: null,

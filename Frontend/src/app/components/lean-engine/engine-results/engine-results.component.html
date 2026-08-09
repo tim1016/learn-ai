@@ -251,4 +251,46 @@
   </details>
 }
 
+@if (leanAnalysis(); as findings) {
+  @if (findings.length > 0) {
+    <details class="lean-analysis-drawer" open>
+      <summary class="lean-analysis-drawer__head">
+        <i class="pi pi-search"></i>
+        <span>LEAN native analysis</span>
+        <span class="lean-analysis-drawer__hint">
+          {{ findings.length }} Oracle finding{{ findings.length === 1 ? '' : 's' }} · complete samples &amp; solutions
+        </span>
+      </summary>
+      <div class="lean-analysis-drawer__body">
+        <p class="lean-analysis-note">
+          These findings come directly from the pinned LEAN sidecar. They are evidence, not
+          learn-ai readiness inputs, and are shown without changing their meaning.
+        </p>
+        <div class="lean-analysis-list">
+          @for (finding of findings; track $index) {
+            <article class="lean-analysis-card">
+              <h4>{{ formatLeanAnalysisName(finding.name) }}</h4>
+              <p>{{ finding.issue }}</p>
+              <div class="lean-analysis-evidence">
+                <span>LEAN sample</span>
+                <pre>{{ formatLeanSample(finding.sample) }}</pre>
+              </div>
+              @if (finding.solutions.length > 0) {
+                <div class="lean-analysis-solutions">
+                  <span>LEAN suggestions</span>
+                  <ul>
+                    @for (solution of finding.solutions; track $index) {
+                      <li>{{ solution }}</li>
+                    }
+                  </ul>
+                </div>
+              }
+            </article>
+          }
+        </div>
+      </div>
+    </details>
+  }
+}
+
 <app-engine-trade-ledger [trades]="r.trades" />

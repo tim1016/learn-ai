@@ -101,6 +101,7 @@ type BacktestRunDetailType {
   sortinoRatio: Decimal
   profitFactor: Decimal
   leanStatisticsJson: String
+  leanAnalysisJson: String
   verdictJson: String
   verdictVersion: Int
   verdictGrade: String
@@ -1559,6 +1560,7 @@ type StrategyExecution {
   annualStandardDeviation: Decimal!
   drawdownRecoveryDays: Int!
   leanStatisticsJson: String
+  leanAnalysisJson: String
   runVerdictJson: String
   verdictVersion: Int
   verdictGrade: String
@@ -2604,6 +2606,7 @@ input StrategyExecutionFilterInput {
   annualStandardDeviation: DecimalOperationFilterInput
   drawdownRecoveryDays: IntOperationFilterInput
   leanStatisticsJson: StringOperationFilterInput
+  leanAnalysisJson: StringOperationFilterInput
   runVerdictJson: StringOperationFilterInput
   verdictVersion: IntOperationFilterInput
   verdictGrade: StringOperationFilterInput
@@ -2658,6 +2661,7 @@ input StrategyExecutionSortInput {
   annualStandardDeviation: SortEnumType @cost(weight: "10")
   drawdownRecoveryDays: SortEnumType @cost(weight: "10")
   leanStatisticsJson: SortEnumType @cost(weight: "10")
+  leanAnalysisJson: SortEnumType @cost(weight: "10")
   runVerdictJson: SortEnumType @cost(weight: "10")
   verdictVersion: SortEnumType @cost(weight: "10")
   verdictGrade: SortEnumType @cost(weight: "10")

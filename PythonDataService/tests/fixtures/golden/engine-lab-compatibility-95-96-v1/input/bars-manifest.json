@@ -1,0 +1,148 @@
+{
+  "adjusted": false,
+  "files": [
+    {
+      "path": "equity/usa/minute/spy/20260708_trade.zip",
+      "sha256": "1416395568a1a3746228d499807ef04530cbbb7e5662d05f968a925f72bab665",
+      "size_bytes": 12728,
+      "trading_date": "2026-07-08"
+    },
+    {
+      "path": "equity/usa/minute/spy/20260709_trade.zip",
+      "sha256": "8f61d7990445c406233c7fe53e37d4fae8e5b1ac3c07be2efab6b2db2c0bdbca",
+      "size_bytes": 11532,
+      "trading_date": "2026-07-09"
+    },
+    {
+      "path": "equity/usa/minute/spy/20260710_trade.zip",
+      "sha256": "3d36cdbe835e56ef3228520c239512736fc15549146d3c282a463d5df9df38a2",
+      "size_bytes": 11207,
+      "trading_date": "2026-07-10"
+    },
+    {
+      "path": "equity/usa/minute/spy/20260713_trade.zip",
+      "sha256": "4a4e4d28c8f687200d9110fc7d77f5221e06d114206ffb8f3dbef489f8703414",
+      "size_bytes": 12343,
+      "trading_date": "2026-07-13"
+    },
+    {
+      "path": "equity/usa/minute/spy/20260714_trade.zip",
+      "sha256": "0a72150561c2246a2b9055207b7862549eb4f84afc6f732c351fb65a66aa0e1a",
+      "size_bytes": 11572,
+      "trading_date": "2026-07-14"
+    },
+    {
+      "path": "equity/usa/minute/spy/20260715_trade.zip",
+      "sha256": "147a362702a08337fb93436dd2db7a622fb9e74adf85329fcd1b849a1d9739bb",
+      "size_bytes": 11668,
+      "trading_date": "2026-07-15"
+    },
+    {
+      "path": "equity/usa/minute/spy/20260716_trade.zip",
+      "sha256": "2aebd03fb551dc9f11d629c5460337ab041edb5ec044bcea0d9d4ebf42e21599",
+      "size_bytes": 12103,
+      "trading_date": "2026-07-16"
+    },
+    {
+      "path": "equity/usa/minute/spy/20260717_trade.zip",
+      "sha256": "f6d6e281ea4523e584dd8c9a684861861f782c5c3f07a6402f97cbc4e5a7140d",
+      "size_bytes": 12651,
+      "trading_date": "2026-07-17"
+    },
+    {
+      "path": "equity/usa/minute/spy/20260720_trade.zip",
+      "sha256": "84884fed6f7af212237c6204f99b97b7ae8fe257355cda59816015d0682edc4b",
+      "size_bytes": 12105,
+      "trading_date": "2026-07-20"
+    },
+    {
+      "path": "equity/usa/minute/spy/20260721_trade.zip",
+      "sha256": "7c63cb0efb0fb7d57731a4955fd67dd99e4bd0d02e7d1740ab756294eacf1dd8",
+      "size_bytes": 11584,
+      "trading_date": "2026-07-21"
+    },
+    {
+      "path": "equity/usa/minute/spy/20260722_trade.zip",
+      "sha256": "9fb393be52ac87c30385e9660e71e8c270a69028dd8a0bb024f5c88b7b02d756",
+      "size_bytes": 12318,
+      "trading_date": "2026-07-22"
+    },
+    {
+      "path": "equity/usa/minute/spy/20260723_trade.zip",
+      "sha256": "9c6a4337e847fa42e1430d445f8f27498447d96a5373a6bb1614f61713524304",
+      "size_bytes": 12552,
+      "trading_date": "2026-07-23"
+    },
+    {
+      "path": "equity/usa/minute/spy/20260724_trade.zip",
+      "sha256": "9ccf19f0db41504845339687368f9b84efa3f6b6784023655c0207520cfa809d",
+      "size_bytes": 11913,
+      "trading_date": "2026-07-24"
+    },
+    {
+      "path": "equity/usa/minute/spy/20260727_trade.zip",
+      "sha256": "0a50991c0e8263d18046f63b7f35714159de3d15d170f6673bc13549ce0ea616",
+      "size_bytes": 12099,
+      "trading_date": "2026-07-27"
+    },
+    {
+      "path": "equity/usa/minute/spy/20260728_trade.zip",
+      "sha256": "e56d92c54cfc9ec9110c28b136df50aee80b4aa8db47453d5130e0f2657bbeca",
+      "size_bytes": 12423,
+      "trading_date": "2026-07-28"
+    },
+    {
+      "path": "equity/usa/minute/spy/20260729_trade.zip",
+      "sha256": "b54d8c775884b1ce25ed64d1400a3e8cb560bbb738cf5f5f0cad98723ada120f",
+      "size_bytes": 13449,
+      "trading_date": "2026-07-29"
+    },
+    {
+      "path": "equity/usa/minute/spy/20260730_trade.zip",
+      "sha256": "5fcff6c2e2d3f13a21990890da033fd2e4475b91b9e2cb53c693813775fcbe40",
+      "size_bytes": 13135,
+      "trading_date": "2026-07-30"
+    },
+    {
+      "path": "equity/usa/minute/spy/20260731_trade.zip",
+      "sha256": "dc5ce887925e859bd3030ecbb29ee4d9ef3a6ca4b3e116a0355ecc77085fade1",
+      "size_bytes": 12721,
+      "trading_date": "2026-07-31"
+    },
+    {
+      "path": "equity/usa/minute/spy/20260803_trade.zip",
+      "sha256": "be4d265b2515c8e77e60c9619a2d21e154cb019a6f43a7c6f014b22f21912ec7",
+      "size_bytes": 12174,
+      "trading_date": "2026-08-03"
+    },
+    {
+      "path": "equity/usa/minute/spy/20260804_trade.zip",
+      "sha256": "03045930124948bf48551a554dc45b1c5b78920a1ce33e729478d4c53f6e89ed",
+      "size_bytes": 12681,
+      "trading_date": "2026-08-04"
+    },
+    {
+      "path": "equity/usa/minute/spy/20260805_trade.zip",
+      "sha256": "7e42d680fd24f0542950caac50c16cb7fcac29be696ab5e0b0cc958b48732261",
+      "size_bytes": 12544,
+      "trading_date": "2026-08-05"
+    },
+    {
+      "path": "equity/usa/minute/spy/20260806_trade.zip",
+      "sha256": "313644a15f6113723c0a1b9b8825944542d3ca70aa58bf07c81b38ada2b3e985",
+      "size_bytes": 11561,
+      "trading_date": "2026-08-06"
+    },
+    {
+      "path": "equity/usa/minute/spy/20260807_trade.zip",
+      "sha256": "17fa33e107cd8464a35632a64742fabf169314e45d188e60e31ffca41b6c25fc",
+      "size_bytes": 11108,
+      "trading_date": "2026-08-07"
+    }
+  ],
+  "fixture_id": "bar-store-v1-6e96f0f2c5383e2d",
+  "fixture_sha256": "6e96f0f2c5383e2d1ad40f7308433aacc862bbfd6a9828f0b263cade70f0460e",
+  "schema_version": 1,
+  "session": "regular",
+  "symbol": "SPY"
+}

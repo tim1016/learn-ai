@@ -12,12 +12,16 @@ import json
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 import httpx
 
 from app.engine.results.equity_downsample import from_lean_curve
+from app.engine.results.statistics import summarize
+from app.engine.strategy.base import LoggedTrade
 from app.models.responses import (
     LeanPortfolioStatsResponse,
     LeanRuntimeStatsResponse,
@@ -28,8 +32,18 @@ from app.schemas.run_verdict import RunVerdictCleanliness
 from app.services.engine_validation_analytics import (
     ValidationEquityPoint,
     ValidationTrade,
+    build_compatibility_equity_curve,
     build_validation_analytics_envelope,
     compute_engine_validation_analytics,
+)
+from app.services.lean_statistics_adapter import (
+    NormalizedResult,
+    _format_duration_seconds,
+    _lean_native_parity_envelope,
+    _parse_dollar,
+    _parse_int,
+    _parse_pct,
+    _parse_ratio,
 )
 from app.services.run_verdict_service import compute_run_verdict, failed_run_verdict
 from app.utils.timestamps import now_ms_utc
@@ -201,28 +215,6 @@ def compute_aggregates(
     )
 
 
-@dataclass
-class NormalizedResult:
-    """Schema-versioned view of normalized/result.json."""
-
-    parser_version: str
-    order_events: list[dict[str, Any]]
-    equity_curve: list[dict[str, Any]]
-    statistics: dict[str, Any]
-    runtime_statistics: dict[str, Any]
-
-    @classmethod
-    def from_path(cls, path: Path) -> NormalizedResult:
-        data = json.loads(path.read_text())
-        return cls(
-            parser_version=data.get("parser_version", "unknown"),
-            order_events=data.get("order_events") or [],
-            equity_curve=data.get("equity_curve") or [],
-            statistics=data.get("statistics") or {},
-            runtime_statistics=data.get("runtime_statistics") or {},
-        )
-
-
 def _algorithm_name_for_run(template: str | None, algorithm_source: str | None) -> str:
     """Pick the persisted algorithm_name based on which run type was requested.
 
@@ -281,95 +273,6 @@ def _brokerage_policy_from_manifest(
     return None
 
 
-def _parse_pct(raw: Any) -> float:
-    """Parse a LEAN STATISTICS percent string like ``"12.345%"`` → ``0.12345``.
-
-    Returns 0.0 on missing / unparseable input. LEAN emits these as
-    locale-free strings with a trailing ``%``; bare numbers (no ``%``)
-    are interpreted as already-fractional (e.g. ``"0.05"`` → ``0.05``).
-    """
-    if raw is None:
-        return 0.0
-    if isinstance(raw, (int, float)):
-        return float(raw)
-    s = str(raw).strip()
-    if not s:
-        return 0.0
-    try:
-        if s.endswith("%"):
-            return float(s[:-1].replace(",", "").strip()) / 100.0
-        return float(s.replace(",", "").strip())
-    except ValueError:
-        return 0.0
-
-
-def _parse_dollar(raw: Any) -> float:
-    """Parse a LEAN STATISTICS dollar string like ``"$95,343.16"`` → ``95343.16``.
-
-    Returns 0.0 on missing / unparseable input. Handles a leading ``$``
-    and embedded commas.
-    """
-    if raw is None:
-        return 0.0
-    if isinstance(raw, (int, float)):
-        return float(raw)
-    s = str(raw).strip()
-    if not s:
-        return 0.0
-    s = s.replace("$", "").replace(",", "").strip()
-    try:
-        return float(s)
-    except ValueError:
-        return 0.0
-
-
-def _parse_ratio(raw: Any) -> float:
-    """Parse a LEAN STATISTICS ratio string like ``"-1.072"`` → ``-1.072``.
-
-    Returns 0.0 on missing / unparseable input. Tolerates a trailing
-    ``%`` defensively in case LEAN evolves a field's formatting.
-    """
-    if raw is None:
-        return 0.0
-    if isinstance(raw, (int, float)):
-        return float(raw)
-    s = str(raw).strip().replace(",", "")
-    if not s:
-        return 0.0
-    if s.endswith("%"):
-        s = s[:-1].strip()
-    try:
-        return float(s)
-    except ValueError:
-        return 0.0
-
-
-def _parse_int(raw: Any) -> int:
-    """Parse an integer-shaped LEAN STATISTICS value. Returns 0 on failure."""
-    if raw is None:
-        return 0
-    if isinstance(raw, (int, float)):
-        return int(raw)
-    s = str(raw).strip().replace(",", "")
-    if not s:
-        return 0
-    try:
-        return int(float(s))
-    except ValueError:
-        return 0
-
-
-def _format_duration_seconds(total_seconds: float) -> str:
-    """Format an average trade duration as ``"H:MM:SS"`` (matches LEAN TS.cs)."""
-    if total_seconds <= 0:
-        return "0:00:00"
-    total = round(total_seconds)
-    hours = total // 3600
-    minutes = (total % 3600) // 60
-    seconds = total % 60
-    return f"{hours}:{minutes:02d}:{seconds:02d}"
-
-
 # Mapping from LEAN STATISTICS:: key → (portfolio-stat attr, parser).
 # Keep alphabetical-ish by attr name for grep. Keys are exactly the
 # strings LEAN emits — case-sensitive.
@@ -401,32 +304,117 @@ def _normalized_to_lean_statistics_response(
     paired_trades: Sequence[PairedTrade],
     starting_cash: float,
     total_fees: float,
+    *,
+    total_performance: Mapping[str, Any] | None = None,
+    runtime_statistics: Mapping[str, Any] | None = None,
+    total_orders: int | None = None,
 ) -> LeanStatisticsResponse:
     """Build the canonical ``LeanStatisticsResponse`` from a LEAN sidecar run.
 
-    The shape (``{portfolio, trade, runtime}``) matches the engine
-    path's emission so the frontend's ``LeanStatistics`` interface
-    renders both runs identically. LEAN's raw ``STATISTICS::`` block
-    is a flat string-keyed dict; this helper applies typed parsing
-    and computes trade-level aggregates from the paired-trade list
-    (the order-event reconstruction the persistence layer already
-    performs).
-
-    Fields LEAN does not surface in ``STATISTICS::`` (VaR 99/95,
-    average_win_rate, average_loss_rate) default to 0.0 — they are
-    populated only on the engine path which computes them directly
-    from daily-perf series.
-
-    NOTE: ``trade.sharpe_ratio`` / ``trade.sortino_ratio`` cannot be
-    reproduced from sidecar paired trades because LEAN doesn't pass
-    through the per-trade ``pnl_pct`` series. They stay 0 here; the
-    engine path computes them directly from ``TradeRecord.pnl_pct``.
+    New normalized artifacts carry LEAN's lossless ``totalPerformance``
+    object. When present, this adapter projects those Oracle-authored values
+    field-for-field and performs no statistical recomputation. The legacy
+    flat-statistics/fill reconstruction remains only for old normalized files
+    that predate ``lean-native-r1``.
     """
     port = LeanPortfolioStatsResponse()
     trade = LeanTradeStatsResponse()
     runtime = LeanRuntimeStatsResponse()
 
-    # ─── Portfolio statistics from LEAN's STATISTICS:: dict ─────────
+    native = total_performance or {}
+    native_portfolio = native.get("portfolioStatistics")
+    native_trade = native.get("tradeStatistics")
+    if isinstance(native_portfolio, Mapping) and isinstance(native_trade, Mapping):
+        portfolio_fields: dict[str, tuple[str, Any]] = {
+            "averageWinRate": ("average_win_rate", _parse_ratio),
+            "averageLossRate": ("average_loss_rate", _parse_ratio),
+            "profitLossRatio": ("profit_loss_ratio", _parse_ratio),
+            "winRate": ("win_rate", _parse_ratio),
+            "lossRate": ("loss_rate", _parse_ratio),
+            "expectancy": ("expectancy", _parse_ratio),
+            "startEquity": ("start_equity", _parse_ratio),
+            "endEquity": ("end_equity", _parse_ratio),
+            "totalNetProfit": ("total_net_profit", _parse_ratio),
+            "compoundingAnnualReturn": ("compounding_annual_return", _parse_ratio),
+            "sharpeRatio": ("sharpe_ratio", _parse_ratio),
+            "sortinoRatio": ("sortino_ratio", _parse_ratio),
+            "probabilisticSharpeRatio": ("probabilistic_sharpe_ratio", _parse_ratio),
+            "annualStandardDeviation": ("annual_standard_deviation", _parse_ratio),
+            "annualVariance": ("annual_variance", _parse_ratio),
+            "alpha": ("alpha", _parse_ratio),
+            "beta": ("beta", _parse_ratio),
+            "informationRatio": ("information_ratio", _parse_ratio),
+            "trackingError": ("tracking_error", _parse_ratio),
+            "treynorRatio": ("treynor_ratio", _parse_ratio),
+            "drawdown": ("drawdown", _parse_ratio),
+            "drawdownRecovery": ("drawdown_recovery", _parse_int),
+            "valueAtRisk99": ("value_at_risk_99", _parse_ratio),
+            "valueAtRisk95": ("value_at_risk_95", _parse_ratio),
+            "portfolioTurnover": ("portfolio_turnover", _parse_ratio),
+        }
+        trade_fields: dict[str, tuple[str, Any]] = {
+            "startDateTime": ("start_date_time", _parse_int),
+            "endDateTime": ("end_date_time", _parse_int),
+            "totalNumberOfTrades": ("total_number_of_trades", _parse_int),
+            "numberOfWinningTrades": ("number_of_winning_trades", _parse_int),
+            "numberOfLosingTrades": ("number_of_losing_trades", _parse_int),
+            "totalProfitLoss": ("total_profit_loss", _parse_ratio),
+            "totalProfit": ("total_profit", _parse_ratio),
+            "totalLoss": ("total_loss", _parse_ratio),
+            "largestProfit": ("largest_profit", _parse_ratio),
+            "largestLoss": ("largest_loss", _parse_ratio),
+            "averageProfitLoss": ("average_profit_loss", _parse_ratio),
+            "averageProfit": ("average_profit", _parse_ratio),
+            "averageLoss": ("average_loss", _parse_ratio),
+            "averageTradeDuration": ("average_trade_duration", str),
+            "averageWinningTradeDuration": ("average_winning_trade_duration", str),
+            "averageLosingTradeDuration": ("average_losing_trade_duration", str),
+            "medianTradeDuration": ("median_trade_duration", str),
+            "medianWinningTradeDuration": ("median_winning_trade_duration", str),
+            "medianLosingTradeDuration": ("median_losing_trade_duration", str),
+            "maxConsecutiveWinningTrades": ("max_consecutive_winning_trades", _parse_int),
+            "maxConsecutiveLosingTrades": ("max_consecutive_losing_trades", _parse_int),
+            "profitLossRatio": ("profit_loss_ratio", _parse_ratio),
+            "winLossRatio": ("win_loss_ratio", _parse_ratio),
+            "winRate": ("win_rate", _parse_ratio),
+            "lossRate": ("loss_rate", _parse_ratio),
+            "averageMAE": ("average_mae", _parse_ratio),
+            "averageMFE": ("average_mfe", _parse_ratio),
+            "largestMAE": ("largest_mae", _parse_ratio),
+            "largestMFE": ("largest_mfe", _parse_ratio),
+            "maximumClosedTradeDrawdown": ("maximum_closed_trade_drawdown", _parse_ratio),
+            "maximumIntraTradeDrawdown": ("maximum_intra_trade_drawdown", _parse_ratio),
+            "profitLossStandardDeviation": ("profit_loss_standard_deviation", _parse_ratio),
+            "profitLossDownsideDeviation": ("profit_loss_downside_deviation", _parse_ratio),
+            "profitFactor": ("profit_factor", _parse_ratio),
+            "sharpeRatio": ("sharpe_ratio", _parse_ratio),
+            "sortinoRatio": ("sortino_ratio", _parse_ratio),
+            "profitToMaxDrawdownRatio": ("profit_to_max_drawdown_ratio", _parse_ratio),
+            "maximumEndTradeDrawdown": ("maximum_end_trade_drawdown", _parse_ratio),
+            "averageEndTradeDrawdown": ("average_end_trade_drawdown", _parse_ratio),
+            "maximumDrawdownDuration": ("maximum_drawdown_duration", str),
+            "totalFees": ("total_fees", _parse_ratio),
+        }
+        for key, (attr, parser) in portfolio_fields.items():
+            if key in native_portfolio:
+                setattr(port, attr, parser(native_portfolio[key]))
+        for key, (attr, parser) in trade_fields.items():
+            if key in native_trade:
+                setattr(trade, attr, parser(native_trade[key]))
+
+        raw_runtime = runtime_statistics or {}
+        runtime.equity = _parse_dollar(raw_runtime.get("Equity"))
+        runtime.fees = _parse_dollar(raw_runtime.get("Fees"))
+        runtime.holdings = _parse_dollar(raw_runtime.get("Holdings"))
+        runtime.net_profit = _parse_dollar(raw_runtime.get("Net Profit"))
+        runtime.probabilistic_sharpe_ratio = _parse_pct(raw_runtime.get("Probabilistic Sharpe Ratio"))
+        runtime.total_return = _parse_pct(raw_runtime.get("Return"))
+        runtime.unrealized = _parse_dollar(raw_runtime.get("Unrealized"))
+        runtime.volume = _parse_dollar(raw_runtime.get("Volume"))
+        runtime.total_orders = total_orders if total_orders is not None else len(paired_trades) * 2
+        return LeanStatisticsResponse(portfolio=port, trade=trade, runtime=runtime)
+
+    # Legacy normalized-result fallback (pre lean-native-r1).
     for key, attr, parser in _PORTFOLIO_STAT_MAPPING:
         if key in normalized_statistics:
             setattr(port, attr, parser(normalized_statistics[key]))
@@ -602,12 +590,32 @@ def build_persist_payload(
         paired_trades=paired_trades,
         starting_cash=starting_cash,
         total_fees=total_fees,
+        total_performance=normalized.total_performance,
+        runtime_statistics=normalized.runtime_statistics,
+        total_orders=len(normalized.orders),
     ).model_dump(mode="json")
+    lean_statistics["namespaces"] = _lean_native_parity_envelope(normalized, workspace_path)
+
+    platform_statistics = (
+        _compatibility_ledger_statistics(
+            paired_trades=paired_trades,
+            starting_cash=starting_cash,
+            final_equity=agg.final_equity,
+            start_date_ms=start_date_ms,
+            end_date_ms=end_date_ms,
+        )
+        if parity_group_id is not None
+        else {}
+    )
 
     return {
         "lean_run_id": run_id,
         "source": "lean-sidecar",
         "requested_engine": requested_engine,
+        # The registered compatibility contract fixes the platform-facing
+        # execution label to signal-bar-close. Standalone LEAN runs retain the
+        # legacy sidecar label because they do not claim a common fill contract.
+        "fill_mode": "signal_bar_close" if parity_group_id is not None else "lean-sidecar",
         "strategy_name": algorithm_name,
         "symbol": symbol,
         "starting_cash": starting_cash,
@@ -642,6 +650,7 @@ def build_persist_payload(
         # helper below applies typed parsing + paired-trade aggregation
         # so both engines persist the same shape.
         "lean_statistics": lean_statistics,
+        "lean_analysis_json": json.dumps(normalized.analysis, sort_keys=True),
         # PR B P1 fix — forward the manifest's brokerage/data_policy so the
         # .NET row is the truthful record. ``commission_per_order`` stays at
         # 0 for LEAN: LEAN charges per-fill (captured in ``total_fees``),
@@ -657,7 +666,14 @@ def build_persist_payload(
                 trade_timestamps={t.entry_ms_utc for t in paired_trades} | {t.exit_ms_utc for t in paired_trades},
             )
         ),
-        "validation_analytics_json": _validation_analytics_json(paired_trades, normalized.equity_curve),
+        "validation_analytics_json": _validation_analytics_json(
+            paired_trades,
+            normalized.equity_curve,
+            starting_cash=starting_cash,
+            start_date_ms=start_date_ms,
+            end_date_ms=end_date_ms,
+            compatibility_mode=parity_group_id is not None,
+        ),
         # Engine Lab parity — only successful runs carry the group id.
         # Failed runs never trigger verdict computation at persist time;
         # the job worker marks the group run_failed instead.
@@ -667,27 +683,87 @@ def build_persist_payload(
         total_pnl=agg.total_pnl,
         total_fees=total_fees,
         win_rate=agg.win_rate,
+        statistics=platform_statistics,
         lean_statistics=lean_statistics,
         cleanliness=cleanliness,
     )
 
 
-def _trade_return(trade: PairedTrade) -> float:
-    """Per-trade fractional return on deployed capital, net of fees.
+def _compatibility_ledger_statistics(
+    *,
+    paired_trades: Sequence[PairedTrade],
+    starting_cash: float,
+    final_equity: float,
+    start_date_ms: int,
+    end_date_ms: int,
+) -> dict[str, float | int | None]:
+    """Project a linked LEAN ledger into platform-canonical statistics.
 
-    LEAN's paired trades carry dollar PnL; the validation analytics
-    consume fractional returns (the engine path's ``pnl_pct``
-    convention). Deployed capital is ``entry_price × quantity``.
+    Formula: per-trade return = (exit_price - entry_price) / entry_price;
+    portfolio metrics use ``statistics.summarize`` without an engine-native
+    equity curve, so both engines consume the same closed-trade observations.
+    Reference: ``app.engine.results.statistics`` and the compatibility contract
+    in ``docs/references/reconciliations/engine-lab-runs-75-76-statistics-validation-plan.md``.
+    Canonical implementation: this adapter plus ``statistics.summarize``.
+    Validated against: ``test_compatibility_pair_scores_the_same_closed_trade_ledger_contract``.
+
+    LEAN's chart series is intentionally excluded: its native chart cadence is
+    sparse and is not an equivalent statistical sample to the Python curve.
+    Native LEAN statistics remain persisted separately as Oracle evidence.
     """
-    deployed = trade.entry_price * trade.quantity
-    if deployed == 0:
+    ledger: list[LoggedTrade] = []
+    for trade in paired_trades:
+        entry_price = Decimal(str(trade.entry_price))
+        exit_price = Decimal(str(trade.exit_price))
+        pnl_points = exit_price - entry_price
+        pnl_pct = pnl_points / entry_price if entry_price != 0 else Decimal(0)
+        ledger.append(
+            LoggedTrade(
+                entry_time=datetime.fromtimestamp(trade.entry_ms_utc / 1000, tz=UTC),
+                entry_price=entry_price,
+                exit_time=datetime.fromtimestamp(trade.exit_ms_utc / 1000, tz=UTC),
+                exit_price=exit_price,
+                quantity=int(trade.quantity),
+                pnl_pts=pnl_points,
+                pnl_pct=pnl_pct,
+                result="WIN" if pnl_points >= 0 else "LOSS",
+            )
+        )
+
+    start_date = datetime.fromtimestamp(start_date_ms / 1000, tz=UTC).date()
+    end_date = datetime.fromtimestamp(end_date_ms / 1000, tz=UTC).date()
+    calendar_days = (end_date - start_date).days
+    trading_days = max(1, round(calendar_days * 252 / 365)) if calendar_days > 0 else None
+    return summarize(
+        initial_cash=starting_cash,
+        final_equity=final_equity,
+        trades=ledger,
+        trading_days=trading_days,
+        equity_curve=None,
+    )
+
+
+def _trade_return(trade: PairedTrade) -> float:
+    """Per-trade price return used by platform validation analytics.
+
+    The Python engine's ``LoggedTrade.pnl_pct`` is the entry-to-exit price
+    return and excludes sizing/fees. Compatibility analytics intentionally use
+    that same return-normalized definition on both engines; dollar PnL and fees
+    remain separate headline/readiness inputs.
+    """
+    if trade.entry_price == 0:
         return 0.0
-    return trade.pnl / deployed
+    return (trade.exit_price - trade.entry_price) / trade.entry_price
 
 
 def _validation_analytics_json(
     paired_trades: Sequence[PairedTrade],
     equity_curve: Sequence[dict[str, Any]],
+    *,
+    starting_cash: float,
+    start_date_ms: int,
+    end_date_ms: int,
+    compatibility_mode: bool,
 ) -> str | None:
     """Frozen validation-analytics envelope for a LEAN run, or None.
 
@@ -696,20 +772,29 @@ def _validation_analytics_json(
     the engine router's behavior for its own runs.
     """
     try:
+        validation_trades = [
+            ValidationTrade(
+                trade_number=t.trade_number,
+                entry_ms_utc=t.entry_ms_utc,
+                exit_ms_utc=t.exit_ms_utc,
+                pnl_pct=_trade_return(t),
+            )
+            for t in paired_trades
+        ]
+        validation_equity = [
+            ValidationEquityPoint(timestamp_ms_utc=int(p["ms_utc"]), equity=float(p["value"]))
+            for p in equity_curve
+        ]
+        if compatibility_mode:
+            validation_equity = build_compatibility_equity_curve(
+                validation_trades,
+                start_ms_utc=start_date_ms,
+                end_ms_utc=end_date_ms + 86_400_000,
+                initial_equity=starting_cash,
+            )
         analytics = compute_engine_validation_analytics(
-            trades=[
-                ValidationTrade(
-                    trade_number=t.trade_number,
-                    entry_ms_utc=t.entry_ms_utc,
-                    exit_ms_utc=t.exit_ms_utc,
-                    pnl_pct=_trade_return(t),
-                )
-                for t in paired_trades
-            ],
-            equity_curve=[
-                ValidationEquityPoint(timestamp_ms_utc=int(p["ms_utc"]), equity=float(p["value"]))
-                for p in equity_curve
-            ],
+            trades=validation_trades,
+            equity_curve=validation_equity,
         )
     except (ValueError, KeyError, TypeError) as exc:
         logger.warning("Validation analytics unavailable for LEAN run: %s", exc)
@@ -784,12 +869,13 @@ def _run_verdict_fields(
     total_pnl: float,
     total_fees: float,
     win_rate: float,
+    statistics: Mapping[str, Any],
     lean_statistics: dict[str, Any],
     cleanliness: RunVerdictCleanliness | Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     verdict = compute_run_verdict(
         {
-            "statistics": {},
+            "statistics": dict(statistics),
             "win_rate": win_rate,
             "total_trades": total_trades,
             "net_profit": total_pnl,

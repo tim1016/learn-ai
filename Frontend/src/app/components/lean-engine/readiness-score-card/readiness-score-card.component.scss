@@ -103,10 +103,23 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 2rem;
+    flex-direction: column;
+    gap: 0.125rem;
     color: $text-muted;
     border: 2px dashed $border-light;
     border-radius: 50%;
+
+    strong {
+      font-family: $font-mono;
+      font-size: 1.25rem;
+      color: $text-primary;
+    }
+
+    span {
+      font-size: 0.625rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
   }
 }
 

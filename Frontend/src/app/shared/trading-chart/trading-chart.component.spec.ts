@@ -2,51 +2,43 @@ import { provideZonelessChangeDetection } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const chartHarness = vi.hoisted(() => {
-  const charts: {
+import { TradingChartComponent, TRADING_CHART_FACTORY } from "./trading-chart.component";
+
+const chartHarness: {
+  charts: {
     options: Record<string, unknown>;
     rangeCallback: ((range: { from: number; to: number } | null) => void) | null;
     setVisibleLogicalRange: ReturnType<typeof vi.fn>;
-  }[] = [];
-  return { charts };
+  }[];
+} = { charts: [] };
+
+const createChart = vi.fn((_element: HTMLElement, options: Record<string, unknown>) => {
+  const timeScale = {
+    fitContent: vi.fn(),
+    getVisibleLogicalRange: vi.fn(() => ({ from: 0, to: 10 })),
+    setVisibleLogicalRange: vi.fn(),
+    subscribeVisibleLogicalRangeChange: vi.fn((callback) => {
+      entry.rangeCallback = callback;
+    }),
+  };
+  const series = {
+    setData: vi.fn(),
+    createPriceLine: vi.fn(),
+  };
+  const entry = {
+    options,
+    rangeCallback: null as ((range: { from: number; to: number } | null) => void) | null,
+    setVisibleLogicalRange: timeScale.setVisibleLogicalRange,
+  };
+  chartHarness.charts.push(entry);
+  return {
+    addSeries: vi.fn(() => series),
+    timeScale: vi.fn(() => timeScale),
+    priceScale: vi.fn(() => ({ applyOptions: vi.fn() })),
+    applyOptions: vi.fn(),
+    remove: vi.fn(),
+  };
 });
-
-vi.mock("lightweight-charts", () => ({
-  AreaSeries: "AreaSeries",
-  CandlestickSeries: "CandlestickSeries",
-  HistogramSeries: "HistogramSeries",
-  LineSeries: "LineSeries",
-  createSeriesMarkers: vi.fn(),
-  createChart: vi.fn((_element: HTMLElement, options: Record<string, unknown>) => {
-    const timeScale = {
-      fitContent: vi.fn(),
-      getVisibleLogicalRange: vi.fn(() => ({ from: 0, to: 10 })),
-      setVisibleLogicalRange: vi.fn(),
-      subscribeVisibleLogicalRangeChange: vi.fn((callback) => {
-        entry.rangeCallback = callback;
-      }),
-    };
-    const series = {
-      setData: vi.fn(),
-      createPriceLine: vi.fn(),
-    };
-    const entry = {
-      options,
-      rangeCallback: null as ((range: { from: number; to: number } | null) => void) | null,
-      setVisibleLogicalRange: timeScale.setVisibleLogicalRange,
-    };
-    chartHarness.charts.push(entry);
-    return {
-      addSeries: vi.fn(() => series),
-      timeScale: vi.fn(() => timeScale),
-      priceScale: vi.fn(() => ({ applyOptions: vi.fn() })),
-      applyOptions: vi.fn(),
-      remove: vi.fn(),
-    };
-  }),
-}));
-
-import { TradingChartComponent } from "./trading-chart.component";
 
 describe("TradingChartComponent", () => {
   beforeEach(() => {
@@ -63,7 +55,10 @@ describe("TradingChartComponent", () => {
   it("uses one axis column, one bottom time axis, and broadcasts one logical range to every pane", async () => {
     await TestBed.configureTestingModule({
       imports: [TradingChartComponent],
-      providers: [provideZonelessChangeDetection()],
+      providers: [
+        provideZonelessChangeDetection(),
+        { provide: TRADING_CHART_FACTORY, useValue: createChart },
+      ],
     }).compileComponents();
     const fixture = TestBed.createComponent(TradingChartComponent);
     fixture.componentRef.setInput("candles", [
@@ -93,7 +88,10 @@ describe("TradingChartComponent", () => {
   it("creates the indicator picker rail only after expansion", async () => {
     await TestBed.configureTestingModule({
       imports: [TradingChartComponent],
-      providers: [provideZonelessChangeDetection()],
+      providers: [
+        provideZonelessChangeDetection(),
+        { provide: TRADING_CHART_FACTORY, useValue: createChart },
+      ],
     }).compileComponents();
     const fixture = TestBed.createComponent(TradingChartComponent);
     fixture.detectChanges();

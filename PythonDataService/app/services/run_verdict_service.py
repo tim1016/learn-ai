@@ -1,10 +1,11 @@
-"""Run verdict authoring for Engine Lab.
+"""Run verdict v2 authoring for Engine Lab.
 
-Formula: Weighted production-readiness composite from five 0-100 dimensions
-  with unavailable sub-scores omitted and scored dimensions reweighted.
-Reference: Frontend/src/app/components/lean-engine/readiness-score-card/
-  readiness-score.util.ts at commit fe0e9e1c1, intentionally ported before
-  deleting the frontend scorer.
+Formula: If all 17 required sub-scores exist, readiness = round_half_up(
+  Σ fixed_dimension_weight[d] · dimension_score[d]); otherwise the verdict is
+  incomplete and has no composite, grade, or deployment signal.
+Reference: docs/references/reconciliations/
+  engine-lab-runs-75-76-statistics-validation-plan.md § "Replace dynamic
+  readiness reweighting with a fixed completeness contract".
 Canonical implementation: this file.
 Validated against: PythonDataService/tests/services/test_run_verdict_parity.py.
 """
@@ -14,6 +15,7 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Mapping
+from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Any
 
 from app.schemas.run_verdict import (
@@ -25,7 +27,80 @@ from app.schemas.run_verdict import (
     RunVerdictSubScore,
 )
 
-RUN_VERDICT_VERSION = 1
+RUN_VERDICT_VERSION = 2
+
+# V2 freezes the old scorer's relative 25:20:20:20 intent once at the
+# definition level. It never changes weights based on which values a run happens
+# to omit. Alpha Calibration remains visible but ungraded until a future verdict
+# version defines and validates those metrics.
+CORE_DIMENSION_WEIGHTS: dict[str, float] = {
+    "return_quality": 25 / 85,
+    "risk_control": 20 / 85,
+    "trade_edge": 20 / 85,
+    "stat_confidence": 20 / 85,
+}
+REQUIRED_SUB_SCORE_KEYS: dict[str, frozenset[str]] = {
+    "return_quality": frozenset({"sharpe", "sortino", "cagr", "calmar", "annual_vol"}),
+    "risk_control": frozenset({"max_dd", "recovery", "cons_losses"}),
+    "trade_edge": frozenset({"pf", "expectancy", "win_rate", "payoff", "fee_drag"}),
+    "stat_confidence": frozenset({"psr", "sample", "skepticism", "trade_gap"}),
+}
+REQUIRED_METRIC_COUNT = sum(len(keys) for keys in REQUIRED_SUB_SCORE_KEYS.values())
+READINESS_PARITY_CONTRACT_ID = "readiness-core-v2"
+READINESS_PARITY_ABSOLUTE_TOLERANCE = Decimal("0.000000000001")
+
+
+def build_run_verdict_parity_signature(verdict: RunVerdict) -> dict[str, Any]:
+    """Freeze the 17 readiness inputs without engine-specific float noise.
+
+    Python authors this receipt so transport layers only compare canonical
+    evidence. Raw input values are quantized at 1e-12, far below any published
+    display or scoring threshold, before exact JSON comparison.
+    """
+
+    def canonical_raw(value: float | None) -> str | None:
+        if value is None:
+            return None
+        if not math.isfinite(value):
+            return str(value)
+        rounded = Decimal(str(value)).quantize(
+            READINESS_PARITY_ABSOLUTE_TOLERANCE,
+            rounding=ROUND_HALF_EVEN,
+        )
+        if rounded == 0:
+            rounded = abs(rounded)
+        return format(rounded, "f")
+
+    required_inputs = [
+        {
+            "dimension": dimension.key,
+            "metric": sub_score.key,
+            "raw_value": canonical_raw(sub_score.raw_value),
+            "score": sub_score.score,
+            "display": sub_score.display,
+        }
+        for dimension in verdict.dimensions
+        for sub_score in dimension.sub_scores
+        if sub_score.key in REQUIRED_SUB_SCORE_KEYS.get(dimension.key, frozenset())
+    ]
+    return {
+        "contract_id": READINESS_PARITY_CONTRACT_ID,
+        "absolute_tolerance": str(READINESS_PARITY_ABSOLUTE_TOLERANCE),
+        "status": verdict.status,
+        "composite": verdict.composite,
+        "grade": verdict.grade,
+        "signal": verdict.signal,
+        "red_flags": verdict.red_flags,
+        "missing_required_metrics": verdict.missing_required_metrics,
+        "available_required_metrics": verdict.available_required_metrics,
+        "required_metrics": verdict.required_metrics,
+        "normalized_weights": verdict.normalized_weights,
+        "required_inputs": required_inputs,
+    }
+
+
+def _with_parity_signature(verdict: RunVerdict) -> RunVerdict:
+    return verdict.model_copy(update={"parity_signature": build_run_verdict_parity_signature(verdict)})
 
 
 def compute_run_verdict(
@@ -35,11 +110,17 @@ def compute_run_verdict(
     generated_at_ms: int | None = None,
     cleanliness: RunVerdictCleanliness | Mapping[str, Any] | None = None,
 ) -> RunVerdict:
+    """Score platform-canonical metrics; retain LEAN-native fields as evidence.
+
+    ``lean_statistics`` remains on the input model for persisted-envelope
+    compatibility, but verdict v2 deliberately never reads it. Native LEAN
+    values have their own definition and cannot backfill a platform metric.
+    """
     data = _coerce_input(payload)
     generated = generated_at_ms if generated_at_ms is not None else int(time.time() * 1000)
     clean = _coerce_cleanliness(cleanliness)
 
-    if data is None or data.statistics is None:
+    if data is None:
         verdict = _empty_verdict(
             headline="Run a backtest to generate a Production Readiness score.",
             engine=engine,
@@ -52,7 +133,7 @@ def compute_run_verdict(
         _score_return_quality(data),
         _score_risk_control(data),
         _score_trade_edge(data),
-        _score_statistical_confidence(data, engine),
+        _score_statistical_confidence(data),
         _score_alpha_calibration(),
     ]
     missing_metrics = [
@@ -61,30 +142,50 @@ def compute_run_verdict(
         for sub in dimension.sub_scores
         if sub.score is None
     ]
-    scored = [dimension for dimension in dimensions if dimension.score is not None]
-    total_weight = sum(d.weight for d in scored)
-    normalized_weights = total_weight > 0 and abs(total_weight - 1) > 1e-6
+    missing_required_metrics = _missing_required_metrics(dimensions)
+    available_required_metrics = REQUIRED_METRIC_COUNT - len(missing_required_metrics)
 
-    if not scored or total_weight == 0:
-        return RunVerdict(
+    if missing_required_metrics:
+        status = "unavailable" if available_required_metrics == 0 else "incomplete"
+        if status == "unavailable":
+            headline = "Not enough required evidence to grade Production Readiness."
+        else:
+            headline = (
+                "Production Readiness incomplete — "
+                f"{available_required_metrics}/{REQUIRED_METRIC_COUNT} required metrics available. "
+                f"Missing: {', '.join(missing_required_metrics)}."
+            )
+        verdict = RunVerdict(
             verdict_version=RUN_VERDICT_VERSION,
+            status=status,
             engine=engine,
             generated_at_ms=generated,
             composite=None,
             grade=None,
             signal=None,
-            headline="Not enough data to grade.",
+            headline=headline,
             red_flags=[],
             dimensions=dimensions,
             missing_metrics=missing_metrics,
+            missing_required_metrics=missing_required_metrics,
+            available_required_metrics=available_required_metrics,
+            required_metrics=REQUIRED_METRIC_COUNT,
             normalized_weights=False,
             cleanliness=clean,
         )
+        return _apply_cleanliness(verdict)
 
-    composite = _round_half_up(sum((d.score or 0) * (d.weight / total_weight) for d in scored))
-    grade, signal, headline = _grade_and_signal(composite, len(missing_metrics))
+    dimension_by_key = {dimension.key: dimension for dimension in dimensions}
+    composite = _round_half_up(
+        sum(
+            (dimension_by_key[key].score or 0) * weight
+            for key, weight in CORE_DIMENSION_WEIGHTS.items()
+        )
+    )
+    grade, signal, headline = _grade_and_signal(composite)
     verdict = RunVerdict(
         verdict_version=RUN_VERDICT_VERSION,
+        status="complete",
         engine=engine,
         generated_at_ms=generated,
         composite=composite,
@@ -94,7 +195,10 @@ def compute_run_verdict(
         red_flags=[],
         dimensions=dimensions,
         missing_metrics=missing_metrics,
-        normalized_weights=normalized_weights,
+        missing_required_metrics=[],
+        available_required_metrics=REQUIRED_METRIC_COUNT,
+        required_metrics=REQUIRED_METRIC_COUNT,
+        normalized_weights=False,
         cleanliness=clean,
     )
     return _apply_cleanliness(verdict)
@@ -112,14 +216,17 @@ def failed_run_verdict(error: str, *, generated_at_ms: int | None = None) -> Run
             error_counts={"runtime_error": 1},
         ),
     )
-    return verdict.model_copy(
-        update={
-            "composite": 0,
-            "grade": "F",
-            "signal": "Reject",
-            "headline": "Reject - " + verdict.headline,
-            "red_flags": ["lean_run_failed"],
-        }
+    return _with_parity_signature(
+        verdict.model_copy(
+            update={
+                "status": "failed",
+                "composite": 0,
+                "grade": "F",
+                "signal": "Reject",
+                "headline": "Reject - " + verdict.headline,
+                "red_flags": ["lean_run_failed"],
+            }
+        )
     )
 
 
@@ -150,6 +257,7 @@ def _empty_verdict(
 ) -> RunVerdict:
     return RunVerdict(
         verdict_version=RUN_VERDICT_VERSION,
+        status="unavailable",
         engine=engine,
         generated_at_ms=generated_at_ms,
         composite=None,
@@ -159,6 +267,9 @@ def _empty_verdict(
         red_flags=[],
         dimensions=[],
         missing_metrics=[],
+        missing_required_metrics=[],
+        available_required_metrics=0,
+        required_metrics=REQUIRED_METRIC_COUNT,
         normalized_weights=False,
         cleanliness=cleanliness,
     )
@@ -166,34 +277,30 @@ def _empty_verdict(
 
 def _apply_cleanliness(verdict: RunVerdict) -> RunVerdict:
     if verdict.cleanliness is None or verdict.cleanliness.is_clean:
-        return verdict
+        return _with_parity_signature(verdict)
     headline = "LEAN run is not reconciliation-clean. " + verdict.headline
-    return verdict.model_copy(
-        update={
-            "signal": "Rework",
-            "headline": headline,
-            "red_flags": [*verdict.red_flags, "lean_run_not_clean"],
-        }
-    )
+    update: dict[str, Any] = {
+        "signal": "Rework",
+        "headline": headline,
+        "red_flags": [*verdict.red_flags, "lean_run_not_clean"],
+    }
+    return _with_parity_signature(verdict.model_copy(update=update))
 
 
 def _score_return_quality(r: RunVerdictInput) -> RunVerdictDimension:
     stats = r.statistics or {}
-    lean = _lean_portfolio(r)
+    cagr = _num(stats.get("cagr"))
     sub_scores = [
-        _grade_sharpe_sub(_first_not_none(_num(stats.get("sharpe_ratio")), _num(lean.get("sharpe_ratio")))),
-        _grade_sortino_sub(_first_not_none(_num(stats.get("sortino_ratio")), _num(lean.get("sortino_ratio")))),
-        _grade_cagr_sub(_num(lean.get("compounding_annual_return"))),
-        _grade_calmar_sub(
-            _first_not_none(_num(stats.get("max_drawdown_pct")), _num(lean.get("drawdown"))),
-            _num(lean.get("compounding_annual_return")),
-        ),
-        _grade_annual_vol_sub(_num(lean.get("annual_standard_deviation"))),
+        _grade_sharpe_sub(_num(stats.get("sharpe_ratio"))),
+        _grade_sortino_sub(_num(stats.get("sortino_ratio"))),
+        _grade_cagr_sub(cagr),
+        _grade_calmar_sub(_num(stats.get("max_drawdown_pct")), cagr),
+        _grade_annual_vol_sub(_num(stats.get("annual_standard_deviation"))),
     ]
     return _dimension(
         "return_quality",
         "Return Quality",
-        0.25,
+        CORE_DIMENSION_WEIGHTS["return_quality"],
         sub_scores,
         "Does the strategy make money efficiently per unit of risk?",
     )
@@ -201,19 +308,17 @@ def _score_return_quality(r: RunVerdictInput) -> RunVerdictDimension:
 
 def _score_risk_control(r: RunVerdictInput) -> RunVerdictDimension:
     stats = r.statistics or {}
-    lean = _lean_portfolio(r)
-    trade = _lean_trade(r)
     sub_scores = [
-        _grade_max_drawdown_sub(_first_not_none(_num(stats.get("max_drawdown_pct")), _num(lean.get("drawdown")))),
-        _grade_recovery_sub(_num(lean.get("drawdown_recovery"))),
-        _grade_consecutive_losses_sub(_num(trade.get("max_consecutive_losing_trades"))),
+        _grade_max_drawdown_sub(_num(stats.get("max_drawdown_pct"))),
+        _grade_recovery_sub(_num(stats.get("drawdown_recovery"))),
+        _grade_consecutive_losses_sub(_num(stats.get("max_consecutive_losing_trades"))),
         _sub("dd_duration", "Drawdown duration", None, None, "-", "Not yet computed - needs equity-curve timestamps."),
         _sub("downside_vol", "Downside volatility", None, None, "-", "Planned - uses Sortino's sigma_d separately."),
     ]
     return _dimension(
         "risk_control",
         "Risk Control",
-        0.20,
+        CORE_DIMENSION_WEIGHTS["risk_control"],
         sub_scores,
         "Does the strategy preserve capital when it's wrong?",
     )
@@ -221,41 +326,40 @@ def _score_risk_control(r: RunVerdictInput) -> RunVerdictDimension:
 
 def _score_trade_edge(r: RunVerdictInput) -> RunVerdictDimension:
     stats = r.statistics or {}
-    trade = _lean_trade(r)
-    payoff = _payoff_ratio(_num(trade.get("average_profit")), _num(trade.get("average_loss")))
     sub_scores = [
-        _grade_profit_factor_sub(_first_not_none(_num(stats.get("profit_factor")), _num(trade.get("profit_factor")))),
+        _grade_profit_factor_sub(_num(stats.get("profit_factor"))),
         _grade_expectancy_sub(_num(stats.get("expectancy_pct"))),
         _grade_win_rate_sub(_num(r.win_rate)),
-        _grade_payoff_sub(payoff),
+        _grade_payoff_sub(_num(stats.get("payoff_ratio"))),
         _grade_fee_drag_sub(_num(r.net_profit), _num(r.total_fees)),
     ]
-    return _dimension("trade_edge", "Trade Edge", 0.20, sub_scores, "Is there a real per-trade edge after costs?")
+    return _dimension(
+        "trade_edge",
+        "Trade Edge",
+        CORE_DIMENSION_WEIGHTS["trade_edge"],
+        sub_scores,
+        "Is there a real per-trade edge after costs?",
+    )
 
 
-def _score_statistical_confidence(r: RunVerdictInput, engine: EngineKind) -> RunVerdictDimension:
+def _score_statistical_confidence(r: RunVerdictInput) -> RunVerdictDimension:
     stats = r.statistics or {}
-    lean = _lean_portfolio(r)
-    trade = _lean_trade(r)
-    portfolio_sharpe = _first_not_none(_num(stats.get("sharpe_ratio")), _num(lean.get("sharpe_ratio")))
-    trade_sharpe = _num(trade.get("sharpe_ratio"))
-    if engine == "lean" and trade_sharpe == 0:
-        trade_sharpe = None
+    portfolio_sharpe = _num(stats.get("sharpe_ratio"))
     sub_scores = [
-        _grade_psr_sub(_num(lean.get("probabilistic_sharpe_ratio"))),
+        _grade_psr_sub(_num(stats.get("probabilistic_sharpe_ratio"))),
         _grade_sample_size_sub(_num(r.total_trades)),
         _grade_skepticism_sub(
             portfolio_sharpe,
-            _first_not_none(_num(stats.get("profit_factor")), _num(trade.get("profit_factor"))),
+            _num(stats.get("profit_factor")),
             _num(r.win_rate),
         ),
-        _grade_trade_gap_sub(portfolio_sharpe, trade_sharpe),
+        _grade_trade_gap_sub(portfolio_sharpe, _num(stats.get("trade_sharpe_ratio"))),
         _sub("benchmark", "Benchmark outperformance", None, None, "-", "Planned - requires a Buy-and-Hold return series alongside the backtest."),
     ]
     return _dimension(
         "stat_confidence",
         "Statistical Confidence",
-        0.20,
+        CORE_DIMENSION_WEIGHTS["stat_confidence"],
         sub_scores,
         "Is the edge trustworthy, or sample-size / overfitting noise?",
     )
@@ -272,7 +376,7 @@ def _score_alpha_calibration() -> RunVerdictDimension:
     return RunVerdictDimension(
         key="alpha_calibration",
         label="Alpha Calibration",
-        weight=0.15,
+        weight=0.0,
         score=None,
         sub_scores=sub_scores,
         summary="Does the alpha model's confidence match its empirical accuracy?",
@@ -286,29 +390,30 @@ def _dimension(
     sub_scores: list[RunVerdictSubScore],
     summary: str,
 ) -> RunVerdictDimension:
+    required_keys = REQUIRED_SUB_SCORE_KEYS[key]
     return RunVerdictDimension(
         key=key,
         label=label,
         weight=weight,
-        score=_average_subs(sub_scores),
+        score=_score_required_subs(sub_scores, required_keys),
         sub_scores=sub_scores,
         summary=summary,
     )
 
 
-def _lean_portfolio(r: RunVerdictInput) -> Mapping[str, Any]:
-    lean = r.lean_statistics or {}
-    portfolio = lean.get("portfolio") if isinstance(lean, Mapping) else None
-    return portfolio if isinstance(portfolio, Mapping) else {}
+def _missing_required_metrics(dimensions: list[RunVerdictDimension]) -> list[str]:
+    missing: list[str] = []
+    for dimension in dimensions:
+        required_keys = REQUIRED_SUB_SCORE_KEYS.get(dimension.key, frozenset())
+        missing.extend(
+            f"{dimension.label}: {sub_score.label}"
+            for sub_score in dimension.sub_scores
+            if sub_score.key in required_keys and sub_score.score is None
+        )
+    return missing
 
 
-def _lean_trade(r: RunVerdictInput) -> Mapping[str, Any]:
-    lean = r.lean_statistics or {}
-    trade = lean.get("trade") if isinstance(lean, Mapping) else None
-    return trade if isinstance(trade, Mapping) else {}
-
-
-def _grade_and_signal(score: int, missing_count: int) -> tuple[str, str, str]:
+def _grade_and_signal(score: int) -> tuple[str, str, str]:
     if score >= 85:
         grade, signal, headline = "A+", "Deploy", "Institutional-grade. Ready for live deployment at standard size."
     elif score >= 70:
@@ -321,8 +426,6 @@ def _grade_and_signal(score: int, missing_count: int) -> tuple[str, str, str]:
         grade, signal, headline = "D", "Rework", "Fundamental issues. Rework the thesis, not just the parameters."
     else:
         grade, signal, headline = "F", "Reject", "Reject — the backtest does not clear baseline viability."
-    if missing_count > 5:
-        headline += f" {missing_count} sub-scores unavailable; grade may move once missing metrics are computed."
     return grade, signal, headline
 
 
@@ -641,11 +744,17 @@ def _grade_trade_gap_sub(portfolio: float | None, trade: float | None) -> RunVer
     return base.model_copy(update={"score": 2, "note": "Severe gap - performance bursts between long idle periods."})
 
 
-def _average_subs(subs: list[RunVerdictSubScore]) -> int | None:
-    scored = [sub for sub in subs if isinstance(sub.score, int)]
-    if not scored:
+def _score_required_subs(
+    subs: list[RunVerdictSubScore],
+    required_keys: frozenset[str],
+) -> int | None:
+    required = [sub for sub in subs if sub.key in required_keys]
+    if len(required) != len(required_keys):
+        missing_keys = sorted(required_keys - {sub.key for sub in required})
+        raise ValueError(f"Run verdict definition is missing required sub-scores: {missing_keys}")
+    if any(sub.score is None for sub in required):
         return None
-    return _round_half_up((sum(sub.score or 0 for sub in scored) / (len(scored) * 20)) * 100)
+    return _round_half_up((sum(sub.score or 0 for sub in required) / (len(required) * 20)) * 100)
 
 
 def _round_half_up(value: float) -> int:
@@ -666,22 +775,9 @@ def _num(v: Any) -> float | None:
     return parsed
 
 
-def _first_not_none(*values: float | None) -> float | None:
-    for value in values:
-        if value is not None:
-            return value
-    return None
-
-
 def _ratio_display(v: float | None) -> str:
     if v is None:
         return "-"
     if not math.isfinite(v):
         return "∞"
     return f"{v:.2f}"
-
-
-def _payoff_ratio(avg_win: float | None, avg_loss: float | None) -> float | None:
-    if avg_win is None or avg_loss is None or avg_loss == 0:
-        return None
-    return abs(avg_win / avg_loss)

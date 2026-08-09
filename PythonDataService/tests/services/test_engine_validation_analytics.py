@@ -7,6 +7,7 @@ import pytest
 from app.services.engine_validation_analytics import (
     ValidationEquityPoint,
     ValidationTrade,
+    build_compatibility_equity_curve,
     compute_engine_validation_analytics,
 )
 
@@ -80,3 +81,27 @@ def test_validation_analytics_rejects_non_monotonic_equity() -> None:
                 ValidationEquityPoint(timestamp, 101_000.0),
             ],
         )
+
+
+def test_compatibility_equity_curve_compounds_common_trade_returns_and_pins_endpoints() -> None:
+    start = _ms(2026, 1, 5, 0)
+    end = _ms(2026, 1, 10, 0)
+    trades = [
+        _trade(1, _ms(2026, 1, 5), _ms(2026, 1, 6), 0.10),
+        _trade(2, _ms(2026, 1, 7), _ms(2026, 1, 8), -0.05),
+    ]
+
+    curve = build_compatibility_equity_curve(
+        trades,
+        start_ms_utc=start,
+        end_ms_utc=end,
+        initial_equity=100_000,
+    )
+
+    assert [point.timestamp_ms_utc for point in curve] == [
+        start,
+        _ms(2026, 1, 6),
+        _ms(2026, 1, 8),
+        end,
+    ]
+    assert curve[-1].equity == pytest.approx(104_500, abs=1e-9)

@@ -21,6 +21,11 @@ import httpx
 import pytest
 import respx
 
+from app.models.responses import (
+    LeanPortfolioStatsResponse,
+    LeanStatisticsResponse,
+    LeanTradeStatsResponse,
+)
 from app.routers.engine import (
     EngineBacktestResponse,
     EngineTradeResponse,
@@ -154,6 +159,52 @@ def test_save_study_payload_preserves_unavailable_risk_metrics_as_null() -> None
     assert captured["sharpeRatio"] is None
     assert captured["sortinoRatio"] is None
     assert captured["profitFactor"] is None
+
+
+@respx.mock
+def test_save_study_payload_uses_canonical_engine_statistics_for_headlines() -> None:
+    """Run 77 regression: persisted headlines and readiness share metric identities."""
+    response = _response_with_trade(quantity=10, pnl_pts=2.0)
+    response.statistics = {
+        "max_drawdown_pct": 0.0257,
+        "sharpe_ratio": 1.43,
+        "sortino_ratio": 2.59,
+        "profit_factor": 2.00,
+        "cagr": 0.0398,
+    }
+    response.lean_statistics = LeanStatisticsResponse(
+        portfolio=LeanPortfolioStatsResponse(
+            drawdown=0.0191,
+            sharpe_ratio=1.54,
+            sortino_ratio=1.00,
+            compounding_annual_return=0.0412,
+        ),
+        trade=LeanTradeStatsResponse(profit_factor=1.86),
+    )
+    captured: dict[str, Any] = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(201, json={"id": 101})
+
+    respx.post("http://localhost:5000/api/studies").mock(side_effect=_capture)
+
+    _save_study_sync(
+        response=response,
+        symbol="SPY",
+        start_date="2025-01-06",
+        end_date="2025-01-10",
+        resolution="minute",
+        params_json="{}",
+        duration_ms=1,
+        commission_per_order=0.0,
+    )
+
+    assert captured["maxDrawdown"] == pytest.approx(0.0257, abs=1e-12)
+    assert captured["sharpeRatio"] == pytest.approx(1.43, abs=1e-12)
+    assert captured["sortinoRatio"] == pytest.approx(2.59, abs=1e-12)
+    assert captured["profitFactor"] == pytest.approx(2.00, abs=1e-12)
+    assert captured["compoundingAnnualReturn"] == pytest.approx(0.0398, abs=1e-12)
 
 
 @respx.mock

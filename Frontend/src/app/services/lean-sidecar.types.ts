@@ -128,7 +128,7 @@ export interface LeanSidecarErrorEnvelope {
   message: string;
 }
 
-export type LeanLauncherCheckStatus = "pass" | "fail" | "warn";
+export type LeanLauncherCheckStatus = "pass" | "fail" | "warn" | "skip";
 
 export interface LeanLauncherDiagnosticCheck {
   name: string;

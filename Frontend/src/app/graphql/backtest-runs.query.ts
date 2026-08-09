@@ -99,6 +99,7 @@ export const BACKTEST_RUN_DETAIL_QUERY = gql`
       sortinoRatio
       profitFactor
       leanStatisticsJson
+      leanAnalysisJson
       verdictJson
       verdictVersion
       verdictGrade
@@ -264,6 +265,8 @@ export interface BacktestRunDetail {
   sortinoRatio: number | null;
   profitFactor: number | null;
   leanStatisticsJson: string | null;
+  /** Complete native LEAN analysis catalog, preserved as JSON. */
+  leanAnalysisJson: string | null;
   verdictJson: string | null;
   verdictVersion: number | null;
   verdictGrade: string | null;

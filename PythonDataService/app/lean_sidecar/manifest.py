@@ -16,10 +16,12 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Iterable, Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
+
+from app.lean_sidecar.config import LeanRuntimeProvenance
 
 # Bump only when the manifest schema changes in a non-additive way. Phase
 # 1 fixtures are pinned against schema 1; raising this forces fixtures to
@@ -46,7 +48,10 @@ from typing import Any, Literal
 #       field (``"live"`` for live Polygon runs, ``"fixture"`` for
 #       replay-driven parity runs). The old class name is retained as a
 #       ``DeprecationWarning`` alias in ``app.lean_sidecar.data_policy``.
-MANIFEST_SCHEMA_VERSION = 4
+#   5 — 2026-08-08: Pins the LEAN source commit and binary/PDB hashes,
+#       adds a canonical staged-input snapshot hash, and records comparison
+#       contract/group identities for paired compatibility runs.
+MANIFEST_SCHEMA_VERSION = 5
 
 # Note tag that the manifest writer adds to ``notes`` so downstream
 # readers (the cross-engine reconciler, the run-history sidebar) can
@@ -91,6 +96,7 @@ def sha256_text(text: str) -> str:
 
 DataAdjustmentPolicy = Literal[
     "raw_with_factor_map_files",
+    "raw_exact_bar_snapshot",
     "pre_adjusted_non_reconciliation",
 ]
 
@@ -203,6 +209,7 @@ class RunManifest:
     # LEAN runtime
     config_json_sha256: str
     lean_image_digest: str
+    lean_runtime_provenance: LeanRuntimeProvenance
     launcher_version_sha256: str
     normalized_parser_version: str
 
@@ -224,6 +231,9 @@ class RunManifest:
 
     # Windows — recorded independently per §"Date-window and bar-consumption"
     requested_window_ms: WindowMs
+    input_snapshot_sha256: str
+    comparison_contract_id: str | None = None
+    comparison_group_id: str | None = None
     staged_data_window_ms: WindowMs | None = None
     effective_algorithm_window_ms: WindowMs | None = None
 
@@ -260,7 +270,7 @@ def _as_jsonable(value: Any) -> Any:
     int64-ms-UTC rule applies to every persisted timestamp.
     """
     if hasattr(value, "__dataclass_fields__"):
-        return {k: _as_jsonable(v) for k, v in asdict(value).items()}
+        return {item.name: _as_jsonable(getattr(value, item.name)) for item in fields(value)}
     if isinstance(value, Mapping):
         return {k: _as_jsonable(v) for k, v in value.items()}
     if isinstance(value, tuple):
@@ -273,6 +283,16 @@ def _as_jsonable(value: Any) -> Any:
             "at the ingestion boundary before passing through."
         )
     return value
+
+
+def staged_data_snapshot_sha256(staged_data: StagedDataManifest) -> str:
+    """Hash the canonical staged-data receipt independently of file ordering."""
+    payload = json.dumps(
+        _as_jsonable(staged_data),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return sha256_text(payload)
 
 
 def write_manifest(manifest: RunManifest, dest: Path) -> Path:

@@ -21,6 +21,34 @@
     <i class="pi pi-refresh" aria-hidden="true"></i> Re-run
   </button>
 
+  @if (parity(); as p) {
+    @if (p.reason) {
+      <p class="verdict-line__reason">{{ p.reason }}</p>
+    }
+    @if (p.inputParity || p.nativeMetricParity || p.readinessParity) {
+      <div class="verdict-line__receipts" aria-label="Compatibility calculation receipts">
+        @if (p.inputParity; as input) {
+          <span>
+            Shared fixture: <strong>{{ input.status | receiptLabel }}</strong>
+            @if (input.fixture_id) { · {{ input.fixture_id }} }
+          </span>
+        }
+        @if (p.nativeMetricParity; as native) {
+          <span>
+            LEAN-native values: <strong>{{ native.status | receiptLabel }}</strong>
+            @if (native.native_metric_count !== undefined) { · {{ native.native_metric_count }} checked }
+          </span>
+        }
+        @if (p.readinessParity; as readiness) {
+          <span>
+            Readiness fields: <strong>{{ readiness.status | receiptLabel }}</strong>
+            @if (readiness.compared_field_count !== undefined) { · {{ readiness.compared_field_count }} checked }
+          </span>
+        }
+      </div>
+    }
+  }
+
   @if (parityExpanded() && parity(); as p) {
     <div class="verdict-line__breakdown">
       @for (entry of p.countsByCategory; track entry.category) {

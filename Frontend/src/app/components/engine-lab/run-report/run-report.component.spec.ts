@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { BacktestRunDetail, BacktestRunDetailTrade } from "../../../graphql/backtest-runs.query";
 import { StrategyLabChartComponent } from "../../strategy-lab/strategy-lab-chart/strategy-lab-chart.component";
-import { RunReportComponent, toEngineTrade } from "./run-report.component";
+import { parseLeanAnalysis, RunReportComponent, toEngineTrade } from "./run-report.component";
 
 @Component({
   selector: "app-strategy-lab-chart",
@@ -68,6 +68,7 @@ function makeRun(overrides: Partial<BacktestRunDetail> = {}): BacktestRunDetail 
     sortinoRatio: 1.4,
     profitFactor: 2.1,
     leanStatisticsJson: null,
+    leanAnalysisJson: null,
     verdictJson: JSON.stringify({
       verdict_version: 1,
       engine: "python",
@@ -160,6 +161,27 @@ afterEach(() => {
 });
 
 describe("RunReportComponent", () => {
+  it("preserves every valid native LEAN analysis finding and arbitrary sample shape", () => {
+    const parsed = parseLeanAnalysis(JSON.stringify([
+      {
+        name: "FlatEquityCurveAnalysis",
+        issue: "The curve is flat.",
+        sample: [{ start: 1_700_000_000_000, end: 1_700_086_400_000, trading_days: 2 }],
+        solutions: ["Check warm-up.", "Check subscriptions."],
+      },
+      {
+        name: "StatisticalSignificanceOfDailyReturnsAnalysis",
+        issue: "The p-value is above 0.05.",
+        sample: { pValue: "0.0684907141208504" },
+        solutions: ["Review the trading rules."],
+      },
+    ]));
+
+    expect(parsed).toHaveLength(2);
+    expect(parsed[0].solutions).toEqual(["Check warm-up.", "Check subscriptions."]);
+    expect(parsed[1].sample).toEqual({ pValue: "0.0684907141208504" });
+  });
+
   it("renders the persisted verdict and condensed metrics without restating configuration", async () => {
     const { fixture, httpMock } = await renderReport(makeRun());
     httpMock.expectOne((req) => req.url.includes("/api/engine/bars")).flush({
@@ -249,6 +271,50 @@ describe("RunReportComponent", () => {
     expect(text).toContain("Validation analytics were not recorded for this run.");
   });
 
+  it("explains the native LEAN chart cadence without treating it as a KPI source", async () => {
+    const { fixture, httpMock } = await renderReport(makeRun({ source: "lean-sidecar", engine: "LEAN" }));
+    httpMock.expectOne((req) => req.url.includes("/api/engine/bars")).flush({
+      policy_key: "polygon-adjusted",
+      symbol: "SPY",
+      count: 0,
+      bars: [],
+      coverage: { expected_days: 2, available_days: 2, is_complete: true, missing_days: [] },
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
+    expect(text).toContain("native Strategy Equity chart");
+    expect(text).toContain("can be sparse or end before the terminal portfolio value");
+    expect(text).toContain("never from interpolating this chart");
+  });
+
+  it("keeps native LEAN findings available in a collapsed deep dive", async () => {
+    const { fixture, httpMock } = await renderReport(makeRun({
+      leanAnalysisJson: JSON.stringify([{
+        name: "FlatEquityCurveAnalysis",
+        issue: "The curve is flat.",
+        sample: { trading_days: 2 },
+        solutions: ["Check subscriptions."],
+      }]),
+    }));
+    httpMock.expectOne((req) => req.url.includes("/api/engine/bars")).flush({
+      policy_key: "polygon-adjusted",
+      symbol: "SPY",
+      count: 0,
+      bars: [],
+      coverage: { expected_days: 2, available_days: 2, is_complete: true, missing_days: [] },
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.textContent).toContain("LEAN native analysis");
+    expect(root.textContent).toContain("Flat Equity Curve");
+    expect(root.textContent).toContain("Check subscriptions.");
+    expect([...root.querySelectorAll("details")].every((detail) => !detail.open)).toBe(true);
+  });
+
   it("renders 'Run not found' when the id does not resolve", async () => {
     const { fixture } = await renderReport(null);
     const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
@@ -305,6 +371,44 @@ describe("RunReportComponent", () => {
     expect(root.textContent).toContain("fill differs by $0.03");
   });
 
+  it("shows native and readiness receipts and explains a readiness mismatch", async () => {
+    const fixture = await renderWithParity({
+      status: "diverged",
+      verdictJson: JSON.stringify({
+        schema_version: 2,
+        status: "diverged",
+        reason: "production_readiness_mismatch",
+        counts_by_category: {},
+        divergences: [],
+        native_metric_parity: {
+          status: "match",
+          native_metric_count: 66,
+          formatted_metric_count: 25,
+        },
+        readiness_parity: {
+          status: "mismatch",
+          compared_field_count: 17,
+          mismatched_fields: ["parity_signature"],
+        },
+        input_parity: {
+          status: "match",
+          compared_field_count: 15,
+          fixture_id: "bar-store-v1-exact",
+          fixture_sha256: "a".repeat(64),
+          mismatched_fields: [],
+        },
+      }),
+    });
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
+    expect(text).toContain("different production-readiness evidence");
+    expect(text).toContain("LEAN-native values:");
+    expect(text).toContain("66 checked");
+    expect(text).toContain("Readiness fields:");
+    expect(text).toContain("17 checked");
+    expect(text).toContain("Shared fixture:");
+    expect(text).toContain("bar-store-v1-exact");
+  });
+
   it("explains honest unavailability with trader copy", async () => {
     const fixture = await renderWithParity({
       status: "unavailable",
@@ -312,6 +416,19 @@ describe("RunReportComponent", () => {
     });
     const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
     expect(text).toContain("parity: Unavailable");
+  });
+
+  it("explains that an ordinary raw run did not opt into the compatibility contract", async () => {
+    const fixture = await renderWithParity({
+      status: "unavailable",
+      verdictJson: JSON.stringify({
+        schema_version: 1,
+        status: "unavailable",
+        reason: "execution_profile_unsupported",
+      }),
+    });
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
+    expect(text).toContain("Start a Compatibility pair");
   });
 });
 

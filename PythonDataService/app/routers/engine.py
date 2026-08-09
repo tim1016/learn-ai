@@ -15,7 +15,7 @@ import json
 import logging
 import time
 from collections.abc import Callable
-from datetime import date, datetime
+from datetime import UTC, date, datetime, timedelta
 from datetime import time as time_of_day
 from decimal import Decimal
 from pathlib import Path
@@ -42,8 +42,11 @@ from app.engine.data.policy_store import (
 )
 from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import BacktestEngine
+from app.engine.execution.commission import IbkrEquityCommissionModel
 from app.engine.execution.execution_config import ExecutionConfig
+from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode
+from app.engine.execution.sizing import LeanSetHoldingsSizing
 from app.engine.results.equity_downsample import from_engine_curve
 from app.engine.results.lean_statistics import compute_lean_statistics
 from app.engine.results.statistics import summarize
@@ -62,16 +65,20 @@ from app.services.engine_bars_service import read_consolidated_bars
 from app.services.engine_validation_analytics import (
     ValidationEquityPoint,
     ValidationTrade,
+    build_compatibility_equity_curve,
     build_validation_analytics_envelope,
     compute_engine_validation_analytics,
 )
-from app.services.parity_companion import dispatch_parity_companion, new_parity_group_id
+from app.services.parity_companion import (
+    COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1,
+    dispatch_parity_companion,
+    new_parity_group_id,
+)
 from app.services.run_verdict_service import compute_run_verdict
 from app.utils.timestamps import now_ms_utc, to_ms_utc
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
 
 def _public_params_schema(reg: StrategyRegistration) -> dict[str, Any]:
     schema = reg.param_schema.model_json_schema()
@@ -236,6 +243,14 @@ class EngineBacktestRequest(BaseModel):
         False,
         description="Fetch missing data from Polygon into the cache before running",
     )
+    compatibility_profile: Literal["us-equity-raw-ibkr-v1"] | None = Field(
+        None,
+        description=(
+            "Pinned cross-engine execution contract. The v1 profile requires raw "
+            "regular-session minute bars and enables LEAN SetHoldings sizing, IBKR "
+            "equity fees, and stale session-close next-open fills."
+        ),
+    )
 
     # PR B (2026-05-19) — canonical DataPolicy block. Optional on the wire
     # so legacy callers (any pre-PR-B UI build) still work; when omitted, a
@@ -292,6 +307,25 @@ class EngineBacktestRequest(BaseModel):
             input_bars=_EngineBarsSpecModel(timespan=timespan, multiplier=1),
             strategy_bars=_EngineBarsSpecModel(timespan=timespan, multiplier=1),
         )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_compatibility_profile(self) -> EngineBacktestRequest:
+        if self.compatibility_profile is None:
+            return self
+        if self.data_policy is None or self.data_policy.adjusted:
+            raise ValueError("us-equity-raw-ibkr-v1 requires raw bars (adjusted=false)")
+        if self.data_policy.session != "regular" or self.resolution != "minute":
+            raise ValueError("us-equity-raw-ibkr-v1 requires regular-session minute bars")
+        if self.fill_mode != "signal_bar_close":
+            raise ValueError("us-equity-raw-ibkr-v1 requires fill_mode=signal_bar_close")
+        if (
+            self.slippage_per_share != 0
+            or self.limit_penetration != 0
+            or self.session_entry_cutoff is not None
+            or self.force_flat_at is not None
+        ):
+            raise ValueError("us-equity-raw-ibkr-v1 does not permit execution overrides")
         return self
 
 
@@ -844,6 +878,57 @@ def run_engine_backtest(
     )
 
 
+def _build_backtest_engine(
+    *,
+    reader: LeanMinuteDataReader | LeanDailyDataReader,
+    execution_config: ExecutionConfig,
+    request: EngineBacktestRequest,
+) -> BacktestEngine:
+    """Apply the selected execution contract at one construction boundary."""
+    if request.compatibility_profile is None:
+        return BacktestEngine(
+            data_source=reader,
+            execution_config=execution_config,
+        )
+
+    fee_model = IbkrEquityCommissionModel()
+    return BacktestEngine(
+        data_source=reader,
+        execution_config=execution_config,
+        sizing_model=LeanSetHoldingsSizing(fee_model=fee_model),
+        fill_model=FillModel(
+            mode=_parse_fill_mode(request.fill_mode),
+            fee_model=fee_model,
+            fill_stale_signal_at_current_open=True,
+        ),
+    )
+
+
+def _pin_compatibility_fixture(
+    request: EngineBacktestRequest,
+    data_roots: list[Path],
+) -> None:
+    """Freeze the exact minute-zip bytes consumed by a compatibility pair."""
+    if request.compatibility_profile != COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1:
+        return
+    if request.data_policy is None or request.from_date is None or request.to_date is None:
+        return
+
+    from app.engine.data.policy_store import snapshot_minute_trade_zips
+
+    receipt = snapshot_minute_trade_zips(
+        data_roots,
+        symbol=request.data_policy.symbol,
+        start=_parse_iso_date(request.from_date, "from_date"),
+        end=_parse_iso_date(request.to_date, "to_date"),
+        adjusted=request.data_policy.adjusted,
+        session=request.data_policy.session,
+    )
+    request.data_policy.provider_kind = "fixture"
+    request.data_policy.fixture_id = str(receipt["fixture_id"])
+    request.data_policy.fixture_sha256 = str(receipt["fixture_sha256"])
+
+
 def execute_engine_backtest(
     *,
     request: EngineBacktestRequest,
@@ -944,6 +1029,14 @@ def execute_engine_backtest(
                     error=f"auto_fetch failed: {exc}",
                 )
 
+    try:
+        _pin_compatibility_fixture(request, data_roots)
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"compatibility_fixture_unavailable: {exc}",
+        ) from exc
+
     reader: LeanMinuteDataReader | LeanDailyDataReader
     if request.resolution == "daily":
         reader = LeanDailyDataReader(data_roots)
@@ -968,9 +1061,10 @@ def execute_engine_backtest(
         force_flat_at=request.force_flat_at,
         limit_penetration=Decimal(str(request.limit_penetration)),
     )
-    engine = BacktestEngine(
-        data_source=reader,
+    engine = _build_backtest_engine(
+        reader=reader,
         execution_config=execution_config,
+        request=request,
     )
 
     original_initialize = strategy.initialize
@@ -1040,12 +1134,20 @@ def execute_engine_backtest(
         else None
     )
 
+    # A compatibility pair must grade the same statistical sample. LEAN's
+    # native chart is sparse, so the pinned profile uses the common closed-
+    # trade ledger on both sides while retaining each native curve as evidence.
+    statistics_equity_points = (
+        None
+        if request.compatibility_profile == COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1
+        else equity_points
+    )
     stats = summarize(
         initial_cash=float(result.initial_cash),
         final_equity=float(result.final_equity),
         trades=trades,
         trading_days=trading_days,
-        equity_curve=equity_points,
+        equity_curve=statistics_equity_points,
     )
 
     # ── LEAN-parity statistics ──────────────────────────────────────
@@ -1124,23 +1226,38 @@ def execute_engine_backtest(
 
     validation_analytics: EngineValidationAnalyticsResponse | None = None
     try:
+        validation_trades = [
+            ValidationTrade(
+                trade_number=trade.trade_number,
+                entry_ms_utc=trade.entry_time,
+                exit_ms_utc=trade.exit_time,
+                pnl_pct=trade.pnl_pct,
+            )
+            for trade in formatted
+        ]
+        validation_equity = [
+            ValidationEquityPoint(
+                timestamp_ms_utc=point["timestamp"],
+                equity=point["equity"],
+            )
+            for point in equity_curve_dicts
+        ]
+        if (
+            request.compatibility_profile == COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1
+            and request.from_date is not None
+            and request.to_date is not None
+        ):
+            start_day = date.fromisoformat(request.from_date)
+            end_day = date.fromisoformat(request.to_date) + timedelta(days=1)
+            validation_equity = build_compatibility_equity_curve(
+                validation_trades,
+                start_ms_utc=int(datetime.combine(start_day, datetime.min.time(), tzinfo=UTC).timestamp() * 1000),
+                end_ms_utc=int(datetime.combine(end_day, datetime.min.time(), tzinfo=UTC).timestamp() * 1000),
+                initial_equity=float(result.initial_cash),
+            )
         validation_analytics = compute_engine_validation_analytics(
-            trades=[
-                ValidationTrade(
-                    trade_number=trade.trade_number,
-                    entry_ms_utc=trade.entry_time,
-                    exit_ms_utc=trade.exit_time,
-                    pnl_pct=trade.pnl_pct,
-                )
-                for trade in formatted
-            ],
-            equity_curve=[
-                ValidationEquityPoint(
-                    timestamp_ms_utc=point["timestamp"],
-                    equity=point["equity"],
-                )
-                for point in equity_curve_dicts
-            ],
+            trades=validation_trades,
+            equity_curve=validation_equity,
         )
     except Exception as exc:
         logger.exception("[ENGINE] Validation analytics rejected engine output")
@@ -1300,9 +1417,17 @@ def _save_study_sync(
     backend_url = getattr(settings, "BACKEND_URL", "http://localhost:5000")
     url = f"{backend_url}/api/studies"
 
-    # Extract LEAN portfolio stats for the top-level columns
+    # Engine ``statistics`` is the canonical source for headline metric
+    # identities. ``lean_statistics`` is an explicitly separate compatibility
+    # projection and may only fill fields the canonical payload does not yet
+    # publish. Before verdict v2, preferring the projection made run 77 display
+    # Sharpe 1.54 while its readiness input used canonical Sharpe 1.43.
+    stats = response.statistics
     lp = response.lean_statistics.portfolio if response.lean_statistics else None
     lt = response.lean_statistics.trade if response.lean_statistics else None
+
+    def canonical_stat(key: str, fallback: float | int | None) -> float | int | None:
+        return stats.get(key, fallback)
 
     body: dict[str, Any] = {
         "symbol": symbol,
@@ -1318,16 +1443,16 @@ def _save_study_sync(
         "winningTrades": response.winning_trades,
         "losingTrades": response.losing_trades,
         "totalPnL": response.net_profit,
-        "maxDrawdown": lp.drawdown if lp else response.statistics.get("max_drawdown_pct", 0),
-        "sharpeRatio": lp.sharpe_ratio if lp else response.statistics.get("sharpe_ratio", 0),
+        "maxDrawdown": canonical_stat("max_drawdown_pct", lp.drawdown if lp else None),
+        "sharpeRatio": canonical_stat("sharpe_ratio", lp.sharpe_ratio if lp else None),
         "initialCash": response.initial_cash,
         "finalEquity": response.final_equity,
         "totalFees": response.total_fees,
         "winRate": response.win_rate,
-        "compoundingAnnualReturn": lp.compounding_annual_return if lp else 0,
-        "sortinoRatio": lp.sortino_ratio if lp else response.statistics.get("sortino_ratio", 0),
+        "compoundingAnnualReturn": canonical_stat("cagr", lp.compounding_annual_return if lp else None),
+        "sortinoRatio": canonical_stat("sortino_ratio", lp.sortino_ratio if lp else None),
         "probabilisticSharpeRatio": lp.probabilistic_sharpe_ratio if lp else 0,
-        "profitFactor": lt.profit_factor if lt else response.statistics.get("profit_factor", 0),
+        "profitFactor": canonical_stat("profit_factor", lt.profit_factor if lt else None),
         "alpha": lp.alpha if lp else 0,
         "beta": lp.beta if lp else 0,
         "informationRatio": lp.information_ratio if lp else 0,

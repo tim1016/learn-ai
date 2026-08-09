@@ -1,5 +1,22 @@
 <!-- Always-visible: Return + Risk + Drawdown -->
 <div class="lean-stats-panel">
+  @if (stats().namespaces; as receipt) {
+    <div class="native-receipt" [class.native-receipt--match]="receipt.status === 'match'" [class.native-receipt--mismatch]="receipt.status === 'mismatch'">
+      <i class="pi" [class.pi-verified]="receipt.status === 'match'" [class.pi-exclamation-triangle]="receipt.status !== 'match'"></i>
+      <div>
+        <strong>LEAN-native calculation receipt: {{ receipt.status }}</strong>
+        @if (receipt.status === 'match') {
+          <span>Independent Python reproduction matched {{ receipt.native_metric_count ?? 0 }} native values and {{ receipt.formatted_metric_count ?? 0 }} dashboard values.</span>
+        } @else {
+          <span>{{ receipt.reason ?? 'One or more reproduced LEAN values differ from the native result.' }}</span>
+        }
+      </div>
+      @if (receipt.source_commit) {
+        <code>{{ receipt.source_commit.slice(0, 12) }}</code>
+      }
+    </div>
+  }
+
   <section class="kpi-section">
     <h4 class="section-title">
       <i class="pi pi-chart-line"></i> Returns
@@ -8,7 +25,7 @@
       @for (item of returnMetrics; track item.label) {
         <div class="kpi-cell" [pTooltip]="item.tooltip" tooltipPosition="top">
           <span class="kpi-label">{{ item.label }}</span>
-          <span class=  "kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
+          <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
           <span class="kpi-source">{{ item.source }}</span>
         </div>
       }
@@ -49,7 +66,7 @@
   <button class="expand-toggle" (click)="showFullStats.set(!showFullStats())">
     <i class="pi" [class.pi-chevron-right]="!showFullStats()" [class.pi-chevron-down]="showFullStats()"></i>
     <span>{{ showFullStats() ? 'Hide' : 'Show' }} Full Statistics</span>
-    <span class="expand-badge">4 more sections</span>
+    <span class="expand-badge">7 more sections</span>
   </button>
 
   @if (showFullStats()) {
@@ -59,6 +76,21 @@
       </h4>
       <div class="kpi-grid kpi-grid--5">
         @for (item of benchmarkMetrics; track item.label) {
+          <div class="kpi-cell" [pTooltip]="item.tooltip" tooltipPosition="top">
+            <span class="kpi-label">{{ item.label }}</span>
+            <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
+            <span class="kpi-source">{{ item.source }}</span>
+          </div>
+        }
+      </div>
+    </section>
+
+    <section class="kpi-section">
+      <h4 class="section-title">
+        <i class="pi pi-users"></i> Trade Population &amp; Rates
+      </h4>
+      <div class="kpi-grid kpi-grid--5">
+        @for (item of tradePopulationMetrics; track item.label) {
           <div class="kpi-cell" [pTooltip]="item.tooltip" tooltipPosition="top">
             <span class="kpi-label">{{ item.label }}</span>
             <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
@@ -88,7 +120,22 @@
         <i class="pi pi-bolt"></i> Streaks &amp; Duration
       </h4>
       <div class="kpi-grid kpi-grid--5">
-        @for (item of streakMetrics; track item.label) {
+        @for (item of durationMetrics; track item.label) {
+          <div class="kpi-cell" [pTooltip]="item.tooltip" tooltipPosition="top">
+            <span class="kpi-label">{{ item.label }}</span>
+            <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
+            <span class="kpi-source">{{ item.source }}</span>
+          </div>
+        }
+      </div>
+    </section>
+
+    <section class="kpi-section">
+      <h4 class="section-title">
+        <i class="pi pi-arrows-h"></i> Excursion &amp; Trade Drawdown
+      </h4>
+      <div class="kpi-grid kpi-grid--4">
+        @for (item of tradeExcursionMetrics; track item.label) {
           <div class="kpi-cell" [pTooltip]="item.tooltip" tooltipPosition="top">
             <span class="kpi-label">{{ item.label }}</span>
             <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
@@ -104,6 +151,21 @@
       </h4>
       <div class="kpi-grid kpi-grid--4">
         @for (item of distributionMetrics; track item.label) {
+          <div class="kpi-cell" [pTooltip]="item.tooltip" tooltipPosition="top">
+            <span class="kpi-label">{{ item.label }}</span>
+            <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
+            <span class="kpi-source">{{ item.source }}</span>
+          </div>
+        }
+      </div>
+    </section>
+
+    <section class="kpi-section">
+      <h4 class="section-title">
+        <i class="pi pi-cog"></i> Native Runtime Snapshot
+      </h4>
+      <div class="kpi-grid kpi-grid--5">
+        @for (item of runtimeMetrics; track item.label) {
           <div class="kpi-cell" [pTooltip]="item.tooltip" tooltipPosition="top">
             <span class="kpi-label">{{ item.label }}</span>
             <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>

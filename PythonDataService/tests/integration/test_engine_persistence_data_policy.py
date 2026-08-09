@@ -16,6 +16,23 @@ schema layer.
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
+
+
+def _raw_policy() -> dict[str, object]:
+    return {
+        "source": "polygon",
+        "symbol": "SPY",
+        "adjusted": False,
+        "session": "regular",
+        "input_bars": {"timespan": "minute", "multiplier": 1},
+        "strategy_bars": {"timespan": "minute", "multiplier": 15},
+        "timestamp_policy": "bar_close_ms_utc",
+        "timezone": "America/New_York",
+        "provider_kind": "live",
+        "fixture_id": None,
+        "fixture_sha256": None,
+    }
 
 
 @pytest.mark.asyncio
@@ -133,3 +150,77 @@ async def test_engine_backtest_defers_data_policy_when_symbol_absent() -> None:
     )
 
     assert req.data_policy is None
+
+
+def test_compatibility_profile_rejects_adjusted_input() -> None:
+    from app.routers.engine import EngineBacktestRequest
+
+    policy = _raw_policy()
+    policy["adjusted"] = True
+
+    with pytest.raises(ValidationError, match="requires raw bars"):
+        EngineBacktestRequest(
+            strategy_name="ema_crossover_signal",
+            params={"symbol": "SPY"},
+            from_date="2025-01-13",
+            to_date="2025-01-17",
+            resolution="minute",
+            compatibility_profile="us-equity-raw-ibkr-v1",
+            data_policy=policy,
+        )
+
+
+def test_compatibility_profile_wires_lean_sizing_fees_and_stale_fills(tmp_path) -> None:
+    from app.engine.data.lean_format import LeanMinuteDataReader
+    from app.engine.execution.commission import IbkrEquityCommissionModel
+    from app.engine.execution.execution_config import ExecutionConfig
+    from app.engine.execution.sizing import LeanSetHoldingsSizing
+    from app.routers.engine import EngineBacktestRequest, _build_backtest_engine
+
+    request = EngineBacktestRequest(
+        strategy_name="ema_crossover_signal",
+        params={"symbol": "SPY"},
+        from_date="2025-01-13",
+        to_date="2025-01-17",
+        resolution="minute",
+        compatibility_profile="us-equity-raw-ibkr-v1",
+        data_policy=_raw_policy(),
+    )
+
+    engine = _build_backtest_engine(
+        reader=LeanMinuteDataReader(tmp_path),
+        execution_config=ExecutionConfig(),
+        request=request,
+    )
+
+    assert isinstance(engine.sizing_model, LeanSetHoldingsSizing)
+    assert isinstance(engine.sizing_model.fee_model, IbkrEquityCommissionModel)
+    assert isinstance(engine.fill_model.fee_model, IbkrEquityCommissionModel)
+    assert engine.fill_model.fill_stale_signal_at_current_open is True
+
+
+def test_compatibility_profile_pins_exact_shared_bar_fixture(tmp_path) -> None:
+    from app.routers.engine import EngineBacktestRequest, _pin_compatibility_fixture
+
+    trade_dir = tmp_path / "equity" / "usa" / "minute" / "spy"
+    trade_dir.mkdir(parents=True)
+    (trade_dir / "20250113_trade.zip").write_bytes(b"day-one")
+    (trade_dir / "20250114_trade.zip").write_bytes(b"day-two")
+    request = EngineBacktestRequest(
+        strategy_name="ema_crossover_signal",
+        params={"symbol": "SPY"},
+        from_date="2025-01-13",
+        to_date="2025-01-14",
+        resolution="minute",
+        compatibility_profile="us-equity-raw-ibkr-v1",
+        data_policy=_raw_policy(),
+    )
+
+    _pin_compatibility_fixture(request, [tmp_path])
+
+    assert request.data_policy is not None
+    assert request.data_policy.provider_kind == "fixture"
+    assert request.data_policy.fixture_id is not None
+    assert request.data_policy.fixture_id.startswith("bar-store-v1-")
+    assert request.data_policy.fixture_sha256 is not None
+    assert len(request.data_policy.fixture_sha256) == 64

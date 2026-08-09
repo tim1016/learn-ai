@@ -37,19 +37,23 @@ Concurrency: writers must hold :func:`symbol_write_lock` for the
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import logging
 import os
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from datetime import date, timedelta
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
 
 PROVENANCE_SCHEMA_VERSION = 1
 
 BarSource = Literal["polygon"]
+COMPATIBILITY_FIXTURE_SCHEMA_VERSION = 1
+COMPATIBILITY_FIXTURE_ID_PREFIX = "bar-store-v1-"
 
 
 def resolve_cache_root() -> Path:
@@ -112,6 +116,78 @@ def resolve_data_roots(*, source: BarSource, adjusted: bool) -> list[Path]:
     policy_root.mkdir(parents=True, exist_ok=True)
     roots.append(policy_root)
     return roots
+
+
+def snapshot_minute_trade_zips(
+    roots: Sequence[Path],
+    *,
+    symbol: str,
+    start: date,
+    end: date,
+    adjusted: bool,
+    session: Literal["regular", "extended"],
+) -> dict[str, Any]:
+    """Hash the exact reference-first minute zips a Python run will read.
+
+    The digest excludes host paths and wall-clock data. A LEAN companion can
+    therefore resolve the same logical days from the shared store, recompute
+    the digest, and reject the run if any byte changed after the Python run.
+    """
+    if start > end:
+        raise ValueError(f"snapshot start must be <= end; got {start}..{end}")
+    safe_symbol = _safe_symbol(symbol)
+    logical_root = Path("equity") / "usa" / "minute" / safe_symbol.lower()
+    files: list[dict[str, Any]] = []
+    current = start
+    while current <= end:
+        filename = f"{current.strftime('%Y%m%d')}_trade.zip"
+        source: Path | None = None
+        for root in roots:
+            root_real = os.path.realpath(os.fspath(root))
+            root_prefix = root_real.rstrip(os.sep) + os.sep
+            candidate_real = os.path.realpath(
+                os.path.join(root_real, os.fspath(logical_root), filename)
+            )
+            if not candidate_real.startswith(root_prefix):
+                continue
+            candidate = Path(candidate_real)
+            if candidate.is_file():
+                source = candidate
+                break
+        if source is not None:
+            files.append(
+                {
+                    "trading_date": current.isoformat(),
+                    "path": (logical_root / filename).as_posix(),
+                    "sha256": _sha256_file(source),
+                    "size_bytes": source.stat().st_size,
+                }
+            )
+        current += timedelta(days=1)
+    if not files:
+        raise FileNotFoundError(f"no minute trade zips for {safe_symbol} in {start}..{end}")
+
+    receipt: dict[str, Any] = {
+        "schema_version": COMPATIBILITY_FIXTURE_SCHEMA_VERSION,
+        "symbol": safe_symbol,
+        "adjusted": adjusted,
+        "session": session,
+        "files": files,
+    }
+    canonical = json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    digest = hashlib.sha256(canonical).hexdigest()
+    return receipt | {
+        "fixture_id": f"{COMPATIBILITY_FIXTURE_ID_PREFIX}{digest[:16]}",
+        "fixture_sha256": digest,
+    }
+
+
+def _sha256_file(path: Path, *, chunk_size: int = 1 << 20) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(chunk_size):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def _safe_symbol(symbol: str) -> str:
