@@ -3,7 +3,6 @@ import { rxResource } from "@angular/core/rxjs-interop";
 import { Apollo } from "apollo-angular";
 import { filter, map, of } from "rxjs";
 
-import type { RunVerdict } from "../../../api/run-verdict.types";
 import {
   BACKTEST_RUN_DETAIL_QUERY,
   type BacktestRunDetail,
@@ -19,19 +18,18 @@ import type {
 } from "../../lean-engine/engine-results/engine-results.component";
 import { StrategyLabChartComponent } from "../../strategy-lab/strategy-lab-chart/strategy-lab-chart.component";
 import { StrategyLabDeepDivesComponent } from "../../strategy-lab/strategy-lab-deep-dives/strategy-lab-deep-dives.component";
-import { StrategyLabMetricsComponent } from "../../strategy-lab/strategy-lab-metrics/strategy-lab-metrics.component";
+import { ResultsSummaryComponent } from "../../strategy-lab/results-summary/results-summary.component";
 import {
-  StrategyLabVerdictComponent,
+  parseRunVerdict,
   type StrategyLabParityView,
-} from "../../strategy-lab/strategy-lab-verdict/strategy-lab-verdict.component";
+} from "../../strategy-lab/strategy-lab.models";
 
-/** One persisted-run renderer shared by Workbench and the run-detail route. */
+/** Persisted-run evidence rendered inside the Strategy Lab Workbench stage. */
 @Component({
   selector: "app-engine-run-report",
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    StrategyLabVerdictComponent,
-    StrategyLabMetricsComponent,
+    ResultsSummaryComponent,
     StrategyLabChartComponent,
     StrategyLabDeepDivesComponent,
   ],
@@ -43,7 +41,7 @@ export class RunReportComponent {
 
   readonly runId = input.required<number>();
   readonly runDetail = input<BacktestRunDetail | null>(null);
-  readonly rerun = output();
+  readonly runRefreshed = output<BacktestRunDetail>();
 
   private readonly runResource = rxResource<BacktestRunDetail | null, number | null>({
     params: () => {
@@ -61,10 +59,18 @@ export class RunReportComponent {
       return ref.valueChanges.pipe(
         filter((result) => !result.loading),
         map((result): BacktestRunDetail | null => {
+          // Apollo can surface a GraphQL validation error alongside an empty
+          // result. Propagate it to rxResource so an unavailable report is not
+          // incorrectly presented as a missing run.
+          if (result.error) {
+            ref.stopPolling();
+            throw result.error;
+          }
           const run = (result.data?.backtestRun as BacktestRunDetail | null | undefined) ?? null;
           if (!run || !run.parityVerdicts.some((verdict) => verdict.status === "pending")) {
             ref.stopPolling();
           }
+          if (run) this.runRefreshed.emit(run);
           return run;
         }),
       );
@@ -80,15 +86,7 @@ export class RunReportComponent {
   readonly loading = computed(() => this.runResource.isLoading() && !this.run());
   readonly loadError = computed(() => this.runResource.error());
 
-  readonly verdict = computed<RunVerdict | null>(() => {
-    const json = this.run()?.verdictJson;
-    if (!json) return null;
-    try {
-      return JSON.parse(json) as RunVerdict;
-    } catch {
-      return null;
-    }
-  });
+  readonly verdict = computed(() => parseRunVerdict(this.run()?.verdictJson ?? null));
 
   readonly engineResult = computed<EngineResultData | null>(() => {
     const run = this.run();
@@ -143,7 +141,7 @@ export class RunReportComponent {
   );
 
   readonly equityPoints = computed<TradingPoint[]>(() =>
-    this.run()?.equityCurve?.points.map((point) => ({ timeMs: point.t, value: point.e })) ?? [],
+    this.run()?.equityCurve?.realized?.points.map((point) => ({ timeMs: point.t, value: point.e })) ?? [],
   );
 
   readonly reportNotices = computed<string[]>(() => {
@@ -152,12 +150,16 @@ export class RunReportComponent {
 
     const notices: string[] = [];
     if (!run.equityCurve) {
-      notices.push("Equity curve was not recorded for this run.");
+      notices.push("This run has no strict dual-curve report.");
     } else if (run.equityCurve.error) {
       notices.push(run.equityCurve.error);
+    } else if (run.equityCurve.realized?.error) {
+      notices.push(run.equityCurve.realized.error);
+    } else if (run.equityCurve.markToMarket?.error) {
+      notices.push(run.equityCurve.markToMarket.error);
     } else if (run.source === "lean-sidecar") {
       notices.push(
-        "LEAN curve note: this is the native Strategy Equity chart at LEAN's emitted sampling cadence. It can be sparse or end before the terminal portfolio value; headline KPIs come from the native result and closed-trade ledger, never from interpolating this chart.",
+        "The realized-equity staircase books net P&L only at exits. Native LEAN mark-to-market evidence remains available for its canonical risk statistics and audit receipt.",
       );
     }
 

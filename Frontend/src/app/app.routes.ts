@@ -156,8 +156,8 @@ export const routes: Routes = [
   {
     path: "strategy-lab/runs/:id",
     loadComponent: () =>
-      import("./components/engine-lab/run-detail/engine-run-detail.component").then(
-        (m) => m.EngineRunDetailComponent
+      import("./components/strategy-lab/strategy-lab.component").then(
+        (m) => m.StrategyLabComponent
       ),
   },
   {

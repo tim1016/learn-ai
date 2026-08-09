@@ -1,0 +1,26 @@
+<aside class="results-sidebar" aria-label="Supplementary run statistics">
+  <header>
+    <h2>More statistics</h2>
+    <small>Producer-scored evidence</small>
+  </header>
+
+  @if (metrics().length > 0) {
+    <ol class="results-sidebar__metrics">
+      @for (metric of metrics(); track metric.key) {
+        <li [attr.data-band]="metric.band" [attr.title]="metric.note">
+          <span>{{ metric.label }}</span>
+          <strong>{{ metric.display }}</strong>
+        </li>
+      }
+    </ol>
+  } @else {
+    <p class="results-sidebar__empty">No supplementary scored statistics were recorded.</p>
+  }
+
+  @if (parityStatus(); as status) {
+    <section class="results-sidebar__compatibility" [attr.data-band]="parityBand()" aria-label="Compatibility status">
+      <span>Compatibility</span>
+      <strong>{{ status | receiptLabel }}</strong>
+    </section>
+  }
+</aside>

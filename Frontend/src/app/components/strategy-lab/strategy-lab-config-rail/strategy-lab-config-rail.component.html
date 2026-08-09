@@ -1,22 +1,29 @@
 @if (collapsed()) {
-  <nav class="config-strip" aria-label="Collapsed strategy configuration">
-    <button type="button" class="config-strip__expand" aria-label="Expand configuration" (click)="collapseToggled.emit()">
-      <i class="pi pi-angle-right" aria-hidden="true"></i>
-    </button>
-    <span class="config-strip__rule"></span>
-    <button type="button" aria-label="Edit engine" title="Engine" (click)="collapseToggled.emit()"><i class="pi pi-code"></i></button>
-    <button type="button" aria-label="Edit instrument" title="Instrument" (click)="collapseToggled.emit()"><i class="pi pi-chart-line"></i></button>
-    <button type="button" aria-label="Edit time window" title="Time window" (click)="collapseToggled.emit()"><i class="pi pi-calendar"></i></button>
-    <button type="button" aria-label="Edit strategy" title="Strategy" (click)="collapseToggled.emit()"><i class="pi pi-sliders-h"></i></button>
-  </nav>
+  <section class="config-strip" aria-label="Collapsed strategy configuration">
+    <header>
+      <div class="config-strip__title">
+        <span>Configuration</span>
+        <small>Current run inputs</small>
+      </div>
+      <button type="button" class="config-strip__expand" aria-label="Expand configuration" (click)="collapseToggled.emit()">
+        Edit <i class="pi pi-angle-down" aria-hidden="true"></i>
+      </button>
+    </header>
+    <dl class="config-strip__facts" aria-label="Current configuration summary">
+      <div><dt>Engine</dt><dd>{{ engineLabel() }}</dd></div>
+      <div><dt>Instrument</dt><dd>{{ range().symbol }}</dd></div>
+      <div><dt>Strategy</dt><dd>{{ strategyLabel() }}</dd></div>
+      <div><dt>Window</dt><dd>{{ windowLabel() }}</dd></div>
+    </dl>
+  </section>
 } @else {
   <aside class="config-rail" aria-label="Strategy configuration">
     <header class="config-rail__header">
       <div><span>Configuration</span><small>Exact run inputs</small></div>
-      <button type="button" aria-label="Collapse configuration" (click)="collapseToggled.emit()"><i class="pi pi-angle-left"></i></button>
+      <button type="button" aria-label="Collapse configuration" (click)="collapseToggled.emit()"><i class="pi pi-angle-up" aria-hidden="true"></i></button>
     </header>
 
-    <section class="rail-field" aria-labelledby="engine-label">
+    <section class="rail-field rail-field--engine" aria-labelledby="engine-label">
       <div class="rail-field__label" id="engine-label">Engine</div>
       <div class="engine-choice" role="radiogroup" aria-labelledby="engine-label">
         @for (choice of engineChoices; track choice) {
@@ -40,11 +47,14 @@
 
     <app-time-window-card [(value)]="range" appearance="flat" />
 
-    <section class="rail-field" aria-labelledby="strategy-label">
+    <section class="rail-field rail-field--strategy" aria-labelledby="strategy-label">
       <label class="rail-field__label" id="strategy-label" for="strategy-picker">Strategy</label>
-      <select id="strategy-picker" [value]="selectedStrategyName() ?? ''" (change)="onStrategyEvent($event)">
+      <select id="strategy-picker" (change)="onStrategyEvent($event)">
         @for (strategy of strategies(); track strategy.name) {
-          <option [value]="strategy.name">{{ strategy.display_name }}</option>
+          <option
+            [value]="strategy.name"
+            [selected]="strategy.name === selectedStrategyName()"
+          >{{ strategy.display_name }}</option>
         }
       </select>
     </section>

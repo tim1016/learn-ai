@@ -5,7 +5,7 @@ import { ActivatedRoute, type ParamMap } from "@angular/router";
 import { firstValueFrom, map } from "rxjs";
 
 import { environment } from "../../../environments/environment";
-import type { DataPolicy } from "../../models/data-policy";
+import { toDataPolicyPayload, type DataPolicy } from "../../models/data-policy";
 import { toMostRecentWeekday } from "../../shared/date/weekday";
 import { TICKER_POOL, RECENT_TICKERS } from "../../shared/ticker-catalog";
 import type { TickerRange } from "../../shared/ticker-range-picker";
@@ -43,7 +43,6 @@ export class StrategyLabConfigStore {
   private readonly appliedLaunchParamsKey = signal<string | null>(null);
   private readonly retainingHistoricalSelection = signal(false);
   private readonly configNavOverride = signal<"expanded" | "collapsed" | null>(loadNavOverride());
-  private autoCollapsedRunId: number | null = null;
 
   readonly engine = signal<EngineChoice>("python");
   readonly strategies = signal<StrategyInfo[]>([]);
@@ -297,7 +296,7 @@ export class StrategyLabConfigStore {
   }
 
   restoreDataPolicy(policy: DataPolicy | null): void {
-    this.restoredDataPolicy.set(policy);
+    this.restoredDataPolicy.set(policy === null ? null : toDataPolicyPayload(policy));
     this.reconcileHistoricalSelection();
   }
 
@@ -334,12 +333,6 @@ export class StrategyLabConfigStore {
     const collapsed = !this.configNavCollapsed();
     this.configNavCollapsed.set(collapsed);
     this.configNavOverride.set(collapsed ? "collapsed" : "expanded");
-  }
-
-  collapseForRun(runId: number): void {
-    if (runId === this.autoCollapsedRunId) return;
-    this.autoCollapsedRunId = runId;
-    if (this.configNavOverride() !== "expanded") this.configNavCollapsed.set(true);
   }
 
   private applyLaunchParams(params: EngineLaunchParams): void {

@@ -3,32 +3,32 @@ import { ChangeDetectionStrategy, Component, computed, input } from "@angular/co
 import type {
   EngineResultData,
   LeanAnalysisFinding,
-  LeanStatistics,
 } from "../../lean-engine/engine-results/engine-results.component";
+import { LeanStatisticsComponent } from "../../lean-engine/lean-statistics/lean-statistics.component";
+import { ReceiptLabelPipe } from "../../../shared/pipes/receipt-label.pipe";
 import { TradeLedgerComponent } from "../../lean-engine/engine-results/trade-ledger/trade-ledger.component";
 import { ValidationAtlasComponent } from "../../lean-engine/engine-results/validation-atlas/validation-atlas.component";
-import { LeanStatisticsComponent } from "../../lean-engine/lean-statistics/lean-statistics.component";
+import type { StrategyLabParityView } from "../strategy-lab.models";
 
 @Component({
   selector: "app-strategy-lab-deep-dives",
-  imports: [LeanStatisticsComponent, TradeLedgerComponent, ValidationAtlasComponent],
+  imports: [TradeLedgerComponent, ValidationAtlasComponent, LeanStatisticsComponent, ReceiptLabelPipe],
   templateUrl: "./strategy-lab-deep-dives.component.html",
   styleUrl: "./strategy-lab-deep-dives.component.scss",
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class StrategyLabDeepDivesComponent {
   readonly result = input.required<EngineResultData>();
-  readonly commissionPerOrder = input<number | null>(null);
   readonly tradesTruncated = input(false);
-
-  readonly leanStats = computed<LeanStatistics | null>(() => {
-    const stats = this.result().lean_statistics;
-    return stats?.portfolio && stats.trade && stats.runtime ? stats : null;
-  });
+  readonly parity = input<StrategyLabParityView | null>(null);
 
   readonly leanAnalysis = computed<LeanAnalysisFinding[]>(() =>
     this.result().lean_analysis ?? [],
   );
+  readonly leanStatistics = computed(() => {
+    const statistics = this.result().lean_statistics;
+    return statistics?.portfolio && statistics.trade && statistics.runtime ? statistics : null;
+  });
 
   formatLeanAnalysisName(name: string): string {
     return name
@@ -42,12 +42,4 @@ export class StrategyLabDeepDivesComponent {
     return JSON.stringify(sample, null, 2);
   }
 
-  formatCurrency(value: number | null | undefined): string {
-    if (value === null || value === undefined || Number.isNaN(value)) return "—";
-    return new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency: "USD",
-      maximumFractionDigits: 2,
-    }).format(value);
-  }
 }

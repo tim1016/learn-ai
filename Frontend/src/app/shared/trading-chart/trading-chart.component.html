@@ -2,14 +2,17 @@
   class="trading-chart"
   [class.trading-chart--expanded]="expanded()"
   [attr.data-pane-count]="panes().length"
-  aria-label="Synchronized strategy chart"
+  aria-label="Shared-time-scale strategy chart"
 >
   <header class="trading-chart__header">
     @if (quote(); as tickerQuote) {
       <app-ticker-quote [quote]="tickerQuote" tone="inverse" />
     }
     <span class="trading-chart__timeframe">{{ timeframeLabel() }}</span>
-    <div class="trading-chart__chips" aria-label="Active indicators">
+    <div class="trading-chart__chips" aria-label="Chart panes and active indicators">
+      @for (pane of panes(); track pane.id) {
+        <span class="trading-chart__pane-chip">{{ pane.label }}</span>
+      }
       @for (indicator of activeIndicators(); track indicator.id) {
         <span class="trading-chart__chip">
           <i [style.background]="indicator.color" aria-hidden="true"></i>
@@ -32,22 +35,14 @@
   </header>
 
   <div class="trading-chart__body">
-    <div class="trading-chart__stack">
-      @for (pane of panes(); track pane.id; let last = $last) {
-        <section
-          class="trading-chart__pane"
-          [class.trading-chart__pane--price]="pane.kind === 'price'"
-          [attr.data-pane-id]="pane.id"
-          [attr.data-time-axis]="last ? 'visible' : 'hidden'"
-          [attr.data-grid-column-width]="68"
-          [attr.data-timeline-size]="candles().length"
-          [attr.data-logical-range]="logicalRangeLabel()"
-          [attr.aria-label]="pane.label + ' pane'"
-        >
-          <span class="trading-chart__pane-label">{{ pane.label }}</span>
-          <div #paneCanvas class="trading-chart__canvas"></div>
-        </section>
-      }
+    <div class="trading-chart__canvas-wrap">
+      <div #chartCanvas class="trading-chart__canvas" [style.--chart-height.px]="chartHeight()"></div>
+      <a
+        class="trading-chart__attribution sr-only"
+        href="https://www.tradingview.com/"
+        target="_blank"
+        rel="noopener noreferrer"
+      >Charts by TradingView</a>
     </div>
 
     @if (expanded()) {

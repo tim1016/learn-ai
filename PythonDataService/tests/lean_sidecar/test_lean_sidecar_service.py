@@ -23,6 +23,31 @@ def _make_data_policy(*, source: str = "synthetic", strategy_multiplier: int = 1
     )
 
 
+@pytest.mark.asyncio
+async def test_trusted_run_rejects_stale_persistence_before_staging(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import lean_sidecar_service as service
+    from app.services.lean_sidecar_persistence import StaleLeanPersistenceSourceError
+
+    def reject_stale_source() -> None:
+        raise StaleLeanPersistenceSourceError(
+            "restart the Python data service before starting another compatibility run"
+        )
+
+    monkeypatch.setattr(service, "assert_lean_persistence_source_current", reject_stale_source)
+    request = service.TrustedRunRequest(
+        run_id="stale-persistence-guard",
+        start_ms_utc=1_736_175_600_000,
+        end_ms_utc=1_736_607_600_000,
+        starting_cash=100_000.0,
+        data_policy=_make_data_policy(),
+    )
+
+    with pytest.raises(StaleLeanPersistenceSourceError, match="restart the Python data service"):
+        await service.run_trusted_sample(request)
+
+
 def test_trusted_run_request_exposes_symbol_via_data_policy() -> None:
     from app.services.lean_sidecar_service import TrustedRunRequest
 

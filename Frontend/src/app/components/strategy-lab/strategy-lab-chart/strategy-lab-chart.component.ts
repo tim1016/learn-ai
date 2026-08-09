@@ -217,9 +217,10 @@ export class StrategyLabChartComponent {
       : [
           {
             id: "equity",
-            name: "Equity",
+            name: "Realized equity",
             color: "#7aa9ff",
             type: "area",
+            lineType: "steps",
             points: [...this.equityPoints()],
           },
         ],

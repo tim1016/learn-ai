@@ -1,5 +1,11 @@
 # Strategy Lab redesign — Workbench UX + shared synced chart
 
+> **Superseded in part:** The approved Results hierarchy, realized-equity
+> contract, native single-chart pane decision, Workbench/Results separation,
+> runtime-history reset boundary, and fixture-preservation rules now live in
+> `docs/prds/strategy-lab-results-experience.md`. Where the two documents
+> conflict, that PRD governs implementation.
+
 **Date:** 2026-08-09
 **Status:** Draft for review
 **Scope:** Spec 1 of 2. This spec covers the **Strategy Lab** (renamed Engine Lab) redesign and the extraction of a **shared TradingChart component**. A follow-up **Spec 2 (Data Lab TradingView reskin)** is captured at the end but is out of scope here.

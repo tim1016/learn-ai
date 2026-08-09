@@ -4,6 +4,20 @@
   min-width: 0;
 }
 
+.run-report__layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: start;
+  min-width: 0;
+}
+
+.run-report__evidence {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
 .run-report__empty,
 .run-report__notice {
   margin: 0;

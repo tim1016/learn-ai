@@ -79,6 +79,7 @@ from app.lean_sidecar.workspace import Workspace, resolve_workspace
 from app.schemas.run_verdict import RunVerdictCleanliness
 from app.services.lean_sidecar_persistence import (
     _algorithm_name_for_run,
+    assert_lean_persistence_source_current,
     build_persist_payload,
     persist_via_dotnet,
 )
@@ -501,6 +502,8 @@ async def run_trusted_sample(
     as before — the existing ``/api/lean-sidecar/trusted-run`` endpoint
     (used by test infra and reconcile scripts) calls it with no hooks.
     """
+    assert_lean_persistence_source_current()
+
     _emit_phase = on_phase or (lambda _name: None)
     _emit_log = on_log or (lambda _msg: None)
 
@@ -840,6 +843,7 @@ async def run_trusted_sample(
     # AFTER the manifest is finalized so workspace_path is stable. A
     # persistence failure is logged but does NOT abort the run — the
     # workspace artifacts on disk are the authoritative record.
+    assert_lean_persistence_source_current()
     persist_payload = build_persist_payload(
         workspace_path=workspace.root,
         run_id=request.run_id,

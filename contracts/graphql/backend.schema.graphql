@@ -106,7 +106,7 @@ type BacktestRunDetailType {
   verdictVersion: Int
   verdictGrade: String
   verdictSignal: String
-  equityCurve: BacktestRunEquityCurveType
+  equityCurve: BacktestRunEquityCurvesType
   validationAnalytics: BacktestRunValidationAnalyticsType
   insightSummaryJson: String
   dataPolicyJson: String
@@ -116,6 +116,13 @@ type BacktestRunDetailType {
   trades: [BacktestRunTradeDetailType!]!
   tradesTruncated: Boolean!
   parityVerdicts: [BacktestRunParityVerdictType!]!
+}
+
+type BacktestRunEquityCurvesType {
+  schemaVersion: Int!
+  error: String
+  markToMarket: BacktestRunEquityCurveType
+  realized: BacktestRunEquityCurveType
 }
 
 type BacktestRunEquityCurveType {

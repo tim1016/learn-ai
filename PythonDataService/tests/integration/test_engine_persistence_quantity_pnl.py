@@ -94,6 +94,10 @@ def test_save_study_payload_includes_quantity_and_dollar_pnl() -> None:
     assert trade["quantity"] == 140
     # 140 × 1.45 − 2 × 1.0 = 201.00 (net of round-trip commission).
     assert trade["pnL"] == pytest.approx(201.0, abs=1e-9)
+    equity = json.loads(captured["equityCurveJson"])
+    assert equity["schema_version"] == 2
+    assert equity["realized"]["cadence"] == "trade_exit"
+    assert equity["realized"]["points"][-1]["e"] == pytest.approx(100_201.0, abs=1e-6)
 
 
 @respx.mock
@@ -124,6 +128,56 @@ def test_save_study_payload_with_zero_commission() -> None:
     trade = captured["trades"][0]
     assert trade["quantity"] == 10
     assert trade["pnL"] == pytest.approx(20.0, abs=1e-9)
+
+
+@respx.mock
+def test_save_study_payload_keeps_a_zero_trade_run_flat_until_its_last_chart_bar() -> None:
+    """A data-backed zero-trade run persists a valid flat staircase.
+
+    Chart-bar timestamps are producer-authored session evidence. This guards
+    against manufacturing UTC-midnight timestamps merely to draw a flat line.
+    """
+    response = EngineBacktestResponse(
+        success=True,
+        strategy_name="ema_crossover",
+        fill_mode="signal_bar_close",
+        initial_cash=100_000.0,
+        final_equity=100_000.0,
+        net_profit=0.0,
+        total_fees=0.0,
+        total_trades=0,
+        winning_trades=0,
+        losing_trades=0,
+        win_rate=0.0,
+        chart_bars=[
+            {"t": 1_736_173_800_000},
+            {"t": 1_736_179_200_000},
+        ],
+    )
+    captured: dict[str, Any] = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(200, json={"id": 98})
+
+    respx.post("http://localhost:5000/api/studies").mock(side_effect=_capture)
+
+    study_id = _save_study_sync(
+        response=response,
+        symbol="SPY",
+        start_date="2025-01-06",
+        end_date="2025-01-10",
+        resolution="minute",
+        params_json="{}",
+        duration_ms=1,
+    )
+
+    assert study_id == 98
+    equity = json.loads(captured["equityCurveJson"])
+    assert equity["realized"]["points"] == [
+        {"t": 1_736_173_800_000, "e": 100_000.0},
+        {"t": 1_736_179_200_000, "e": 100_000.0},
+    ]
 
 
 @respx.mock

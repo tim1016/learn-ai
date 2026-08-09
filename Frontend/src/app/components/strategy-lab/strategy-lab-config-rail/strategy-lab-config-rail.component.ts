@@ -61,6 +61,14 @@ export class StrategyLabConfigRailComponent {
   readonly selectedStrategy = computed(() =>
     this.strategies().find((strategy) => strategy.name === this.selectedStrategyName()) ?? null,
   );
+  readonly engineLabel = computed(() => {
+    const engine = this.engine();
+    return engine === "lean" ? "LEAN" : engine === "both" ? "Both" : "Python";
+  });
+  readonly strategyLabel = computed(() =>
+    this.selectedStrategy()?.display_name ?? this.selectedStrategyName() ?? "No strategy",
+  );
+  readonly windowLabel = computed(() => `${this.range().from} → ${this.range().to}`);
 
   readonly parameterEntries = computed(() => {
     const properties = this.selectedStrategy()?.params_schema.properties ?? {};
@@ -92,7 +100,7 @@ export class StrategyLabConfigRailComponent {
     }
     return {
       kind: "run",
-      label: this.engine() === "both" ? "Run both engines" : "Run validation",
+      label: "Run validation",
       disabled: recoveryDisabled || unavailableStrategy || this.runBlocked(),
     };
   });

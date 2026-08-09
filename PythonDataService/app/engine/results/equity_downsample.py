@@ -11,7 +11,9 @@ Validated against: PythonDataService/tests/engine/results/test_equity_downsample
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any, Literal
 
 MAX_EQUITY_POINTS = 10_000
@@ -23,10 +25,19 @@ class EquityCurvePoint:
     e: float
 
 
+@dataclass(frozen=True)
+class RealizedEquityTrade:
+    """One persisted closed-trade contribution to realized equity."""
+
+    trade_number: int
+    exit_ms_utc: int
+    pnl: Decimal
+
+
 def build_equity_curve_envelope(
     points: list[EquityCurvePoint],
     *,
-    cadence: Literal["strategy_bar_close", "lean_chart_sampling"],
+    cadence: Literal["strategy_bar_close", "lean_chart_sampling", "trade_exit"],
     trade_timestamps: set[int] | None = None,
     max_points: int = MAX_EQUITY_POINTS,
 ) -> dict[str, Any]:
@@ -43,6 +54,84 @@ def build_equity_curve_envelope(
             "kept_points": len(kept),
         },
         "points": [{"t": point.t, "e": point.e} for point in kept],
+    }
+
+
+def build_realized_equity_envelope(
+    *,
+    initial_cash: Decimal | float,
+    trades: Sequence[RealizedEquityTrade],
+    start_ms_utc: int,
+    end_ms_utc: int,
+) -> dict[str, Any]:
+    """Build the closed-trade equity staircase for a persisted run.
+
+    Formula: E_0 = initial_cash; E_i = E_(i-1) + net_pnl_i, with each
+      net P&L booked at the closed trade's ``exit_ms_utc``.
+    Reference: Internal persisted-trade accounting contract; the same net P&L
+      values are stored in ``BacktestTrade.PnL``.
+    Canonical implementation: this file.
+    Validated against: PythonDataService/tests/engine/results/test_equity_downsample.py.
+
+    Equal exit timestamps fold deterministically in trade-number order.  The
+    first point is the run's initial equity and the optional final point holds
+    the final result to the end of the chart window.  Unlike a visual envelope
+    of mark-to-market evidence, every closed-trade step is retained.
+    """
+    if start_ms_utc <= 0 or end_ms_utc <= 0:
+        raise ValueError("realized equity bounds must be positive int64 ms UTC timestamps")
+    if end_ms_utc < start_ms_utc:
+        raise ValueError("realized equity end timestamp must not precede its start timestamp")
+
+    initial = _to_decimal(initial_cash)
+    ordered = sorted(trades, key=lambda trade: (trade.exit_ms_utc, trade.trade_number))
+    if any(trade.exit_ms_utc <= start_ms_utc for trade in ordered):
+        raise ValueError("closed-trade exits must follow the realized equity start timestamp")
+    if any(trade.exit_ms_utc > end_ms_utc for trade in ordered):
+        raise ValueError("closed-trade exits must fall within the realized equity bounds")
+
+    points = [EquityCurvePoint(t=start_ms_utc, e=float(initial))]
+    equity = initial
+    index = 0
+    while index < len(ordered):
+        exit_ms_utc = ordered[index].exit_ms_utc
+        exit_pnl = Decimal("0")
+        while index < len(ordered) and ordered[index].exit_ms_utc == exit_ms_utc:
+            exit_pnl += ordered[index].pnl
+            index += 1
+        equity += exit_pnl
+        points.append(EquityCurvePoint(t=exit_ms_utc, e=float(equity)))
+
+    if end_ms_utc > points[-1].t:
+        points.append(EquityCurvePoint(t=end_ms_utc, e=float(equity)))
+
+    # Every exit is evidence. Passing the exact count prevents the generic
+    # display downsampler from dropping a completed-trade step.
+    return build_equity_curve_envelope(
+        points,
+        cadence="trade_exit",
+        trade_timestamps={trade.exit_ms_utc for trade in ordered},
+        max_points=max(MAX_EQUITY_POINTS, len(points)),
+    )
+
+
+def build_run_equity_envelope(
+    *,
+    mark_to_market: dict[str, Any],
+    realized: dict[str, Any],
+) -> dict[str, Any]:
+    """Create the strict persisted dual-curve report envelope.
+
+    Formula: none; this is a typed transport envelope for independently
+      producer-authored mark-to-market and realized-equity series.
+    Reference: docs/prds/strategy-lab-results-experience.md § 9–10.
+    Canonical implementation: this file.
+    Validated against: PythonDataService/tests/engine/results/test_equity_downsample.py.
+    """
+    return {
+        "schema_version": 2,
+        "mark_to_market": mark_to_market,
+        "realized": realized,
     }
 
 
@@ -137,3 +226,11 @@ def _required_indexes(points: list[EquityCurvePoint], trade_marks: set[int]) -> 
             low_since_peak = point.e
             required.add(i)
     return required
+
+
+def _to_decimal(value: Decimal | float) -> Decimal:
+    if isinstance(value, Decimal):
+        return value
+    if not math.isfinite(value):
+        raise ValueError("realized equity values must be finite")
+    return Decimal(str(value))

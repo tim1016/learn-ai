@@ -8,6 +8,7 @@ aggregate KPIs, and writes one StrategyExecution row + N BacktestTrade rows.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from collections.abc import Mapping, Sequence
@@ -19,7 +20,12 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import httpx
 
-from app.engine.results.equity_downsample import from_lean_curve
+from app.engine.results.equity_downsample import (
+    RealizedEquityTrade,
+    build_realized_equity_envelope,
+    build_run_equity_envelope,
+    from_lean_curve,
+)
 from app.engine.results.statistics import summarize
 from app.engine.strategy.base import LoggedTrade
 from app.models.responses import (
@@ -52,6 +58,41 @@ if TYPE_CHECKING:
     from app.lean_sidecar.manifest import RunManifest
 
 logger = logging.getLogger(__name__)
+
+
+class StaleLeanPersistenceSourceError(RuntimeError):
+    """Raised when this worker is executing an outdated persistence module."""
+
+
+def _persistence_source_sha256() -> str:
+    try:
+        return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    except OSError as exc:
+        raise StaleLeanPersistenceSourceError(
+            "Cannot verify the loaded LEAN persistence source; restart the Python data service "
+            "before starting another compatibility run."
+        ) from exc
+
+
+_LOADED_PERSISTENCE_SOURCE_SHA256 = _persistence_source_sha256()
+
+
+def assert_lean_persistence_source_current() -> None:
+    """Reject a run when reload-disabled workers no longer match disk source.
+
+    Uvicorn reload is deliberately disabled for LEAN jobs because a reload can
+    orphan the external engine process. This explicit check keeps that safety
+    property while preventing an old in-memory persistence function from
+    silently running after its source has been edited.
+    """
+    current_sha256 = _persistence_source_sha256()
+    if current_sha256 != _LOADED_PERSISTENCE_SOURCE_SHA256:
+        raise StaleLeanPersistenceSourceError(
+            "LEAN persistence source changed after this worker started "
+            f"(loaded={_LOADED_PERSISTENCE_SOURCE_SHA256[:12]}, "
+            f"current={current_sha256[:12]}); restart the Python data service "
+            "before starting another compatibility run."
+        )
 
 
 @dataclass
@@ -608,6 +649,38 @@ def build_persist_payload(
         else {}
     )
 
+    mark_to_market = from_lean_curve(
+        normalized.equity_curve,
+        trade_timestamps={t.entry_ms_utc for t in paired_trades} | {t.exit_ms_utc for t in paired_trades},
+    )
+    mark_timestamps = [int(point["t"]) for point in mark_to_market["points"]]
+    # ``start_date_ms`` / ``end_date_ms`` are persisted trading-date
+    # anchors and may be UTC midnight.  They are not safe chart bounds: a
+    # close on the final session necessarily occurs later than that day's
+    # midnight.  The strict report instead starts and ends at the timestamps
+    # actually covered by LEAN's curve/trade evidence, matching PRD §9.2.
+    covered_start_ms = min(
+        [*mark_timestamps, *(trade.entry_ms_utc for trade in paired_trades)],
+        default=start_date_ms,
+    )
+    covered_end_ms = max(
+        [*mark_timestamps, *(trade.exit_ms_utc for trade in paired_trades)],
+        default=end_date_ms,
+    )
+    realized = build_realized_equity_envelope(
+        initial_cash=Decimal(str(starting_cash)),
+        trades=[
+            RealizedEquityTrade(
+                trade_number=trade.trade_number,
+                exit_ms_utc=trade.exit_ms_utc,
+                pnl=Decimal(str(trade.pnl)),
+            )
+            for trade in paired_trades
+        ],
+        start_ms_utc=covered_start_ms,
+        end_ms_utc=covered_end_ms,
+    )
+
     return {
         "lean_run_id": run_id,
         "source": "lean-sidecar",
@@ -661,10 +734,7 @@ def build_persist_payload(
         "brokerage_policy": _brokerage_policy_from_manifest(manifest),
         "commission_per_order": 0.0,
         "equity_curve_json": json.dumps(
-            from_lean_curve(
-                normalized.equity_curve,
-                trade_timestamps={t.entry_ms_utc for t in paired_trades} | {t.exit_ms_utc for t in paired_trades},
-            )
+            build_run_equity_envelope(mark_to_market=mark_to_market, realized=realized)
         ),
         "validation_analytics_json": _validation_analytics_json(
             paired_trades,

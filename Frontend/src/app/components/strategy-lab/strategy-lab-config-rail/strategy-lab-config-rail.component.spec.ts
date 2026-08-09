@@ -83,13 +83,35 @@ describe("StrategyLabConfigRailComponent", () => {
     expect(advanced?.textContent).toContain("LEAN launcher");
   });
 
-  it("renders only the recall icon strip when collapsed", async () => {
+  it("shows the restored strategy when it is not the first available option", async () => {
+    const fixture = await createRail();
+    fixture.componentRef.setInput("strategies", [{
+      ...STRATEGY,
+      name: "deployment_validation",
+      display_name: "Deployment Validation",
+    }, STRATEGY]);
+    fixture.detectChanges();
+
+    const picker = (fixture.nativeElement as HTMLElement)
+      .querySelector<HTMLSelectElement>("#strategy-picker");
+    expect(picker?.value).toBe("ema_crossover_signal");
+    expect(picker?.selectedOptions[0]?.textContent).toContain("EMA crossover");
+  });
+
+  it("collapses vertically while retaining the full side-rail width", async () => {
     const fixture = await createRail(true);
     const root = fixture.nativeElement as HTMLElement;
 
     expect(root.querySelector(".config-rail")).toBeNull();
     expect(root.querySelector(".config-strip")).not.toBeNull();
-    expect(root.querySelectorAll(".config-strip button")).toHaveLength(5);
+    expect(root.textContent).toContain("Configuration");
+    expect(root.textContent).toContain("Both");
+    expect(root.textContent).toContain("SPY");
+    expect(root.textContent).toContain("EMA crossover");
+    expect(root.querySelector(".config-strip__facts")).not.toBeNull();
+    expect(root.querySelector("select")).toBeNull();
+    expect(root.querySelector("app-instrument-card")).toBeNull();
+    expect(root.querySelectorAll(".config-strip button")).toHaveLength(1);
     expect(root.querySelector<HTMLButtonElement>("[aria-label='Expand configuration']")).not.toBeNull();
   });
 
