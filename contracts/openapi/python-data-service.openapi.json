@@ -15327,6 +15327,17 @@
             "title": "Params",
             "type": "object"
           },
+          "requested_engine": {
+            "default": "python",
+            "description": "Operator-selected execution mode, persisted for exact History rehydration.",
+            "enum": [
+              "python",
+              "lean",
+              "both"
+            ],
+            "title": "Requested Engine",
+            "type": "string"
+          },
           "resolution": {
             "default": "minute",
             "description": "Data resolution: 'minute' (default) or 'daily'",
@@ -39850,6 +39861,17 @@
             ],
             "description": "Parity group shared with the Python engine run this LEAN run validates.",
             "title": "Parity Group Id"
+          },
+          "requested_engine": {
+            "default": "lean",
+            "description": "Operator-selected execution mode, persisted for exact History rehydration.",
+            "enum": [
+              "python",
+              "lean",
+              "both"
+            ],
+            "title": "Requested Engine",
+            "type": "string"
           },
           "run_id": {
             "description": "Slug matching ^[a-z0-9][a-z0-9_-]{2,63}$",

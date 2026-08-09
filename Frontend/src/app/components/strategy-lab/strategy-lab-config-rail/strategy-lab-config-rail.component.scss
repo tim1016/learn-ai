@@ -1,0 +1,181 @@
+:host {
+  display: block;
+  min-width: 0;
+}
+
+.config-rail,
+.config-strip {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+
+.config-rail__header,
+.config-rail__footer,
+.rail-field,
+.advanced > summary,
+.advanced-row,
+.advanced-params,
+.lean-launcher {
+  padding: var(--space-3);
+}
+
+.config-rail__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+
+  div { display: grid; gap: 2px; }
+  span { color: var(--text-primary); font-weight: var(--fw-semi); }
+  small { color: var(--text-muted); font-size: var(--fs-xxs); }
+  button { border: 0; background: transparent; color: var(--text-subtle); cursor: pointer; }
+}
+
+.rail-field,
+app-instrument-card,
+app-time-window-card,
+.advanced,
+.config-rail__footer {
+  border-bottom: 1px solid var(--border);
+}
+
+.rail-field {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.rail-field__label,
+.advanced-params legend {
+  color: var(--text-subtle);
+  font: 700 var(--fs-xxs)/1 var(--font-sans);
+  letter-spacing: var(--ls-caps);
+  text-transform: uppercase;
+}
+
+select,
+input {
+  width: 100%;
+  height: 34px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  background: var(--bg-sunken);
+  color: var(--text-primary);
+  font-size: var(--fs-xs);
+
+  &:focus { border-color: var(--accent); outline: none; }
+}
+
+.engine-choice {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  overflow: hidden;
+
+  button {
+    height: 32px;
+    border: 0;
+    border-right: 1px solid var(--border-light);
+    background: var(--bg-sunken);
+    color: var(--text-subtle);
+    font: 600 var(--fs-xxs)/1 var(--font-mono);
+    cursor: pointer;
+
+    &:last-child { border-right: 0; }
+  }
+}
+
+.engine-choice__active {
+  color: var(--text-primary) !important;
+  background: var(--accent-soft) !important;
+}
+
+.advanced > summary {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-2);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: var(--fs-xs);
+
+  span { color: var(--text-muted); text-align: right; font-size: var(--fs-xxs); }
+}
+
+.advanced-row {
+  display: flex;
+  justify-content: space-between;
+  border-top: 1px solid var(--border);
+  color: var(--text-subtle);
+  font-size: var(--fs-xs);
+
+  strong { color: var(--text-secondary); }
+}
+
+.advanced-params {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+
+  label { display: grid; grid-template-columns: 1fr 130px; align-items: center; gap: var(--space-2); }
+  label span { color: var(--text-subtle); font-size: var(--fs-xs); }
+}
+
+.lean-launcher {
+  display: grid;
+  gap: var(--space-2);
+  border-top: 1px solid var(--border);
+  color: var(--text-subtle);
+  font-size: var(--fs-xs);
+
+  div { display: flex; justify-content: space-between; }
+  p { margin: 0; }
+  code { overflow-wrap: anywhere; color: var(--text-muted); font-size: 9px; }
+  button { justify-self: start; }
+}
+
+.config-rail__footer {
+  border-bottom: 0;
+}
+
+.run-button {
+  width: 100%;
+  min-height: 38px;
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--text-on-accent);
+  font-weight: var(--fw-semi);
+  cursor: pointer;
+
+  &:disabled { opacity: 0.45; cursor: not-allowed; }
+}
+
+.config-strip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+
+  button {
+    width: 34px;
+    height: 34px;
+    border: 0;
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--text-subtle);
+    cursor: pointer;
+
+    &:hover,
+    &:focus-visible { background: var(--bg-hover); color: var(--text-primary); outline: 1px solid var(--accent); }
+  }
+}
+
+.config-strip__rule {
+  width: 24px;
+  border-top: 1px solid var(--border-light);
+}

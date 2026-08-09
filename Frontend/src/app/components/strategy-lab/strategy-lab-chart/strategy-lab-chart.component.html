@@ -1,0 +1,17 @@
+<app-trading-chart
+  [candles]="candles()"
+  [overlays]="overlays()"
+  [equity]="equity()"
+  [subPanes]="subPanes()"
+  [markers]="markers()"
+  [quote]="quote()"
+  [timeframeLabel]="timeframeLabel()"
+  [activeIndicators]="activeIndicators()"
+  [indicatorCategories]="catalog.categories()"
+  [indicatorCatalogLoading]="catalog.loading()"
+  (indicatorAdded)="addIndicator($event)"
+  (indicatorRemoved)="removeIndicator($event)"
+/>
+@if (indicatorNotice(); as notice) {
+  <p class="chart-notice" role="note">{{ notice }}</p>
+}

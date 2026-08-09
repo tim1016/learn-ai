@@ -22,8 +22,7 @@
 
     <app-time-window-card
       [value]="singleProjection()"
-      (valueChange)="onSinglePatch($event)"
-      [legendTreatment]="legendTreatment()" />
+      (valueChange)="onSinglePatch($event)" />
 
     @if (!hideSampling()) {
       <app-sampling-card

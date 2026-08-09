@@ -3,7 +3,7 @@ import { RouterLink } from "@angular/router";
 
 import { RunReportComponent } from "../run-report/run-report.component";
 
-/** Route wrapper for /engine/runs/:id — the report itself is the shared
+/** Route wrapper for /strategy-lab/runs/:id — the report itself is the shared
  *  RunReportComponent, the exact tree the workbench renders after a run. */
 @Component({
   selector: "app-engine-run-detail",
@@ -11,7 +11,7 @@ import { RunReportComponent } from "../run-report/run-report.component";
   imports: [RouterLink, RunReportComponent],
   template: `
     <main class="run-detail">
-      <a class="back-link" routerLink="/engine">Back to Engine Lab</a>
+      <a class="back-link" routerLink="/strategy-lab">Back to Strategy Lab</a>
       @if (runId(); as id) {
         <app-engine-run-report [runId]="id" />
       } @else {

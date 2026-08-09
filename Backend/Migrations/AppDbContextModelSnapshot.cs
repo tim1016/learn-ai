@@ -782,6 +782,10 @@ namespace Backend.Migrations
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)");
 
+                    b.Property<string>("RequestedEngine")
+                        .HasMaxLength(12)
+                        .HasColumnType("varchar(12)");
+
                     b.Property<decimal>("FinalEquity")
                         .HasPrecision(18, 2)
                         .HasColumnType("numeric(18,2)");

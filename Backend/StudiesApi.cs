@@ -12,6 +12,9 @@ namespace Backend;
 /// </summary>
 public static class StudiesApi
 {
+    private static bool IsRequestedEngine(string value)
+        => value is "python" or "lean" or "both";
+
     public static void MapStudiesEndpoints(this WebApplication app)
     {
         var group = app.MapGroup("/api/studies").WithTags("Studies");
@@ -29,6 +32,9 @@ public static class StudiesApi
         AppDbContext db,
         CancellationToken ct)
     {
+        if (!IsRequestedEngine(request.RequestedEngine))
+            return Results.BadRequest(new { error = "requestedEngine must be python, lean, or both" });
+
         var tradeTimestampError = ValidateSaveStudyTradeTimestamps(request);
         if (tradeTimestampError is not null)
             return Results.BadRequest(new { error = tradeTimestampError });
@@ -78,6 +84,7 @@ public static class StudiesApi
             DrawdownRecoveryDays = request.DrawdownRecoveryDays,
             LeanStatisticsJson = request.LeanStatisticsJson,
             Source = request.Source ?? "engine",
+            RequestedEngine = request.RequestedEngine,
             FillMode = request.FillMode ?? "signal_bar_close",
             Notes = request.Notes,
             ExecutedAt = DateTime.UtcNow,
@@ -364,6 +371,7 @@ public record SaveStudyRequest
     public string? Timespan { get; init; }
     public string? FillMode { get; init; }
     public string? Source { get; init; }
+    public string RequestedEngine { get; init; } = "python";
     public int TotalTrades { get; init; }
     public int WinningTrades { get; init; }
     public int LosingTrades { get; init; }

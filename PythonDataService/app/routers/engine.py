@@ -152,6 +152,10 @@ class EngineBacktestRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     strategy_name: str = Field(..., description="Registered strategy identifier")
+    requested_engine: Literal["python", "lean", "both"] = Field(
+        "python",
+        description="Operator-selected execution mode, persisted for exact History rehydration.",
+    )
     fill_mode: str = Field(
         "signal_bar_close",
         description="Fill mode: signal_bar_close or next_bar_open",
@@ -1199,6 +1203,7 @@ def execute_engine_backtest(
         params_json=json.dumps(request.params) if request.params else "{}",
         duration_ms=int((time.time() - _run_start) * 1000),
         commission_per_order=float(request.commission_per_order),
+        requested_engine=request.requested_engine,
         parity_group_id=parity_group_id,
     )
 
@@ -1281,6 +1286,7 @@ def _save_study_sync(
     params_json: str,
     duration_ms: int,
     commission_per_order: float = 0.0,
+    requested_engine: Literal["python", "lean", "both"] = "python",
     parity_group_id: str | None = None,
 ) -> int | None:
     """POST the backtest result to the .NET backend for persistence.
@@ -1307,6 +1313,7 @@ def _save_study_sync(
         "timespan": resolution,
         "fillMode": response.fill_mode,
         "source": "engine",
+        "requestedEngine": requested_engine,
         "totalTrades": response.total_trades,
         "winningTrades": response.winning_trades,
         "losingTrades": response.losing_trades,

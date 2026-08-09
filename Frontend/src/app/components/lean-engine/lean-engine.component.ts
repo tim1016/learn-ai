@@ -1,6 +1,7 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  Directive,
   OnInit,
   computed,
   effect,
@@ -164,14 +165,14 @@ type RunPhase =
   | "completed"
   | "failed";
 
-interface ParamsSchema {
+export interface ParamsSchema {
   title?: string;
   type?: string;
   properties?: Record<string, ParamProperty>;
   required?: string[];
 }
 
-interface ParamProperty {
+export interface ParamProperty {
   type?: string;
   default?: unknown;
   minimum?: number;
@@ -247,33 +248,13 @@ interface DataAvailability {
   sources: Record<string, string[]>;
 }
 
-@Component({
-  selector: "app-lean-engine",
-  imports: [
-    CommonModule, FormsModule, RouterModule, ButtonModule,
-    Tabs, TabList, Tab, TabPanel, TabPanels,
-    RunReportComponent, EngineLabRunHistoryComponent,
-    ValidationStagePlaceholderComponent,
-    StrategyDetailTabComponent,
-    ConfigSectionComponent,
-    PageHeaderComponent,
-    CopyButtonComponent,
-    TickerRangePickerComponent,
-    RunDockComponent,
-  ],
-  changeDetection: ChangeDetectionStrategy.OnPush,
-  templateUrl: "./lean-engine.component.html",
-  styleUrls: ["./lean-engine.component.scss"],
-  providers: [
-    // Engine Lab's own dock source — maps JobsService state for engine-type
-    // jobs onto the generic dock contract. Provided component-level so the
-    // service lifecycle stays scoped to this page.
-    EngineRunDockSource,
-    { provide: RUN_DOCK_SOURCE, useExisting: EngineRunDockSource },
-    { provide: RUN_DOCK_STORAGE_KEY, useValue: "run-dock-expanded:engine-lab" },
-  ],
-})
-export class LeanEngineComponent implements OnInit {
+/**
+ * Headless orchestration shared by the retired Engine Lab view and Strategy
+ * Lab. A viewless directive base prevents Strategy Lab from inheriting
+ * another component's metadata or template semantics.
+ */
+@Directive()
+export abstract class LeanEngineController implements OnInit {
   private http = inject(HttpClient);
   private route = inject(ActivatedRoute);
   private jobsService = inject(JobsService);
@@ -321,8 +302,8 @@ export class LeanEngineComponent implements OnInit {
   // Default range = most recent one month ending yesterday. Matches the
   // Data Lab convention so users have a sensible window pre-populated
   // without any clicks. The quick-range buttons below can swap this out.
-  readonly startDate = signal<string>(LeanEngineComponent.defaultStart());
-  readonly endDate = signal<string>(LeanEngineComponent.defaultEnd());
+  readonly startDate = signal<string>(LeanEngineController.defaultStart());
+  readonly endDate = signal<string>(LeanEngineController.defaultEnd());
   readonly initialCash = signal<number>(100000);
 
   readonly commissionPerOrder = signal<number>(1.0);
@@ -440,8 +421,8 @@ export class LeanEngineComponent implements OnInit {
    */
   readonly dataPolicyNote = computed(() => {
     const policy = this.dataPolicy();
-    const input = LeanEngineComponent.barLabel(policy.input_bars);
-    const strategy = LeanEngineComponent.barLabel(policy.strategy_bars);
+    const input = LeanEngineController.barLabel(policy.input_bars);
+    const strategy = LeanEngineController.barLabel(policy.strategy_bars);
     return input === strategy
       ? `Strategy evaluates ${strategy} bars.`
       : `Input ${input} bars are consolidated → strategy evaluates ${strategy} bars.`;
@@ -477,8 +458,8 @@ export class LeanEngineComponent implements OnInit {
    *  ``run()`` body read from. */
   readonly rangeState = signal<TickerRange>({
     symbol: "SPY",
-    from: LeanEngineComponent.defaultStart(),
-    to: LeanEngineComponent.defaultEnd(),
+    from: LeanEngineController.defaultStart(),
+    to: LeanEngineController.defaultEnd(),
     resolution: "minute",
     autoFetch: true,
   });
@@ -600,10 +581,10 @@ export class LeanEngineComponent implements OnInit {
    * run won't re-collapse a rail the user deliberately pinned open.
    */
   private readonly configNavOverride = signal<"expanded" | "collapsed" | null>(
-    LeanEngineComponent.loadNavOverride(),
+    LeanEngineController.loadNavOverride(),
   );
   readonly configNavCollapsed = signal<boolean>(
-    LeanEngineComponent.loadNavOverride() === "collapsed",
+    LeanEngineController.loadNavOverride() === "collapsed",
   );
   private autoCollapsedRunId: number | null = null;
 
@@ -674,7 +655,7 @@ export class LeanEngineComponent implements OnInit {
   private static loadNavOverride(): "expanded" | "collapsed" | null {
     try {
       if (typeof localStorage === "undefined") return null;
-      const value = localStorage.getItem(LeanEngineComponent.CONFIG_NAV_KEY);
+      const value = localStorage.getItem(LeanEngineController.CONFIG_NAV_KEY);
       return value === "expanded" || value === "collapsed" ? value : null;
     } catch {
       // Storage disabled (private mode / blocked) — no override.
@@ -690,9 +671,9 @@ export class LeanEngineComponent implements OnInit {
       try {
         if (typeof localStorage !== "undefined") {
           if (override) {
-            localStorage.setItem(LeanEngineComponent.CONFIG_NAV_KEY, override);
+            localStorage.setItem(LeanEngineController.CONFIG_NAV_KEY, override);
           } else {
-            localStorage.removeItem(LeanEngineComponent.CONFIG_NAV_KEY);
+            localStorage.removeItem(LeanEngineController.CONFIG_NAV_KEY);
           }
         }
       } catch {
@@ -908,17 +889,17 @@ export class LeanEngineComponent implements OnInit {
     }
 
     if (params.strategy) {
-      this.runError.set(`Strategy "${params.strategy}" is not registered in Engine Lab.`);
+      this.runError.set(`Strategy "${params.strategy}" is not registered in Strategy Lab.`);
     }
     this.activeTab.set(params.tab === "history" ? "history" : "configuration");
   }
 
   private findLaunchStrategy(key: string): StrategyInfo | null {
-    const normalizedKey = LeanEngineComponent.normalizeStrategyKey(key);
+    const normalizedKey = LeanEngineController.normalizeStrategyKey(key);
     return this.strategies().find((strategy) =>
       strategy.name === key ||
       strategy.name.toLowerCase() === key.toLowerCase() ||
-      LeanEngineComponent.normalizeStrategyKey(strategy.name) === normalizedKey
+      LeanEngineController.normalizeStrategyKey(strategy.name) === normalizedKey
     ) ?? null;
   }
 
@@ -1054,6 +1035,7 @@ export class LeanEngineComponent implements OnInit {
     // EngineBacktestRequest.
     const backtest: Record<string, unknown> = {
       strategy_name: name,
+      requested_engine: this.engine(),
       fill_mode: this.fillMode(),
       initial_cash: this.initialCash(),
       commission_per_order: this.commissionPerOrder(),
@@ -1157,6 +1139,7 @@ export class LeanEngineComponent implements OnInit {
       const id = await this.jobsService.startJob("lean_engine_run", {
         request: {
           run_id: this.composeRunId(),
+          requested_engine: this.engine(),
           template,
           starting_cash: this.initialCash(),
           start_ms_utc: this.composeStartMs(),
@@ -1502,11 +1485,11 @@ export class LeanEngineComponent implements OnInit {
   // Polygon's perspective) and walks the start back by N calendar days.
   // ------------------------------------------------------------------
   setPresetRange(daysBack: number): void {
-    const end = LeanEngineComponent.yesterday();
+    const end = LeanEngineController.yesterday();
     const start = new Date(end);
     start.setDate(start.getDate() - daysBack);
-    this.startDate.set(LeanEngineComponent.toIso(toMostRecentWeekday(start)));
-    this.endDate.set(LeanEngineComponent.toIso(toMostRecentWeekday(end)));
+    this.startDate.set(LeanEngineController.toIso(toMostRecentWeekday(start)));
+    this.endDate.set(LeanEngineController.toIso(toMostRecentWeekday(end)));
   }
 
   private static yesterday(): Date {
@@ -1526,14 +1509,14 @@ export class LeanEngineComponent implements OnInit {
   // Walk back to the most recent weekday. The lean sidecar rejects any
   // start that isn't a session open (lean_sidecar.py:374) and we don't
   private static defaultEnd(): string {
-    return LeanEngineComponent.toIso(toMostRecentWeekday(LeanEngineComponent.yesterday()));
+    return LeanEngineController.toIso(toMostRecentWeekday(LeanEngineController.yesterday()));
   }
 
   private static defaultStart(): string {
-    const end = LeanEngineComponent.yesterday();
+    const end = LeanEngineController.yesterday();
     const start = new Date(end);
     start.setDate(start.getDate() - 30);
-    return LeanEngineComponent.toIso(toMostRecentWeekday(start));
+    return LeanEngineController.toIso(toMostRecentWeekday(start));
   }
 
   // ------------------------------------------------------------------
@@ -1551,3 +1534,29 @@ export class LeanEngineComponent implements OnInit {
     }));
   }
 }
+
+/** Compatibility component retained only for the legacy redirected surface. */
+@Component({
+  selector: "app-lean-engine",
+  imports: [
+    CommonModule, FormsModule, RouterModule, ButtonModule,
+    Tabs, TabList, Tab, TabPanel, TabPanels,
+    RunReportComponent, EngineLabRunHistoryComponent,
+    ValidationStagePlaceholderComponent,
+    StrategyDetailTabComponent,
+    ConfigSectionComponent,
+    PageHeaderComponent,
+    CopyButtonComponent,
+    TickerRangePickerComponent,
+    RunDockComponent,
+  ],
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  templateUrl: "./lean-engine.component.html",
+  styleUrls: ["./lean-engine.component.scss"],
+  providers: [
+    EngineRunDockSource,
+    { provide: RUN_DOCK_SOURCE, useExisting: EngineRunDockSource },
+    { provide: RUN_DOCK_STORAGE_KEY, useValue: "run-dock-expanded:engine-lab" },
+  ],
+})
+export class LeanEngineComponent extends LeanEngineController {}

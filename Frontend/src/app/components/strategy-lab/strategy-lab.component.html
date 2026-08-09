@@ -1,0 +1,92 @@
+<main class="strategy-lab">
+  <app-page-header
+    title="Strategy Lab"
+    icon="pi-chart-line"
+    [hasTabs]="true"
+    subtitle="Run a strategy, inspect its evidence, and compare Python with LEAN from one diagnostic workbench."
+  />
+
+  @if (strategiesLoading()) {
+    <div class="lab-notice" role="status">Loading strategies…</div>
+  }
+
+  @if (strategiesError(); as error) {
+    <div class="lab-notice lab-notice--error" role="alert">Failed to load strategies: {{ error }}</div>
+  }
+
+  @if (!strategiesLoading() && strategies().length > 0) {
+    <p-tabs [(value)]="activeTab">
+      <p-tablist>
+        <p-tab value="configuration"><i class="pi pi-sliders-h" aria-hidden="true"></i> Workbench</p-tab>
+        <p-tab value="history"><i class="pi pi-history" aria-hidden="true"></i> History</p-tab>
+      </p-tablist>
+
+      <p-tabpanels>
+        <p-tabpanel value="configuration">
+          <div class="workbench" [class.workbench--rail-collapsed]="configNavCollapsed()">
+            <app-strategy-lab-config-rail
+              [collapsed]="configNavCollapsed()"
+              [engine]="engine()"
+              [(range)]="rangeState"
+              [strategies]="selectableStrategies()"
+              [selectedStrategyName]="selectedStrategyName()"
+              [paramValues]="paramValues()"
+              [fillMode]="fillMode()"
+              [initialCash]="initialCash()"
+              [commissionPerOrder]="commissionPerOrder()"
+              [tickerPool]="tickerPool"
+              [recentTickers]="recentTickers"
+              [running]="running()"
+              [launcherBlocksRun]="leanLauncherBlocksRun()"
+              [launcherStatus]="leanLauncherStatus()"
+              [launcherDetail]="leanLauncherDetail()"
+              [launcherCommand]="leanLauncherCommand"
+              [leanTemplateLabel]="leanValidationTemplate() ? leanTemplateLabel(leanValidationTemplate()!) : null"
+              (collapseToggled)="toggleConfigNav()"
+              (engineChanged)="engine.set($event)"
+              (strategySelected)="onStrategyChange($event)"
+              (parameterChanged)="onParamChange($event.field, $event.rawValue, $event.type)"
+              (fillModeChanged)="fillMode.set($event)"
+              (initialCashChanged)="initialCash.set($event)"
+              (commissionChanged)="commissionPerOrder.set($event)"
+              (launcherCheckRequested)="checkLeanLauncher()"
+              (runRequested)="run()"
+            />
+
+            <section class="workbench__stage" aria-label="Strategy evidence">
+              @if (running()) {
+                <div class="run-status" role="status" aria-live="polite">
+                  <span class="run-status__pulse" aria-hidden="true"></span>
+                  <strong>{{ runStatusBanner() || "Running validation…" }}</strong>
+                  @if (runPhaseDetail()) { <span>{{ runPhaseDetail() }}</span> }
+                </div>
+              }
+
+              @if (runError(); as error) {
+                <div class="lab-notice lab-notice--error" role="alert">{{ error }}</div>
+              }
+
+              @if (completedRunId(); as runId) {
+                <app-engine-run-report [runId]="runId" (rerun)="run()" />
+              } @else {
+                <app-validation-stage-placeholder
+                  [symbol]="effectiveSymbol()"
+                  [resolution]="resolution()"
+                  [fillMode]="fillMode()"
+                  [engine]="engine()"
+                  [dataPolicyNote]="dataPolicyNote()"
+                />
+              }
+            </section>
+          </div>
+        </p-tabpanel>
+
+        <p-tabpanel value="history">
+          <app-engine-lab-run-history (runSelected)="selectHistoryRun($event)" />
+        </p-tabpanel>
+      </p-tabpanels>
+    </p-tabs>
+  }
+
+  <app-run-dock />
+</main>

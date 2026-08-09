@@ -37,6 +37,9 @@ public record PersistLeanRunPayload(
     [JsonPropertyName("data_policy_json")]
     public string? DataPolicyJson { get; init; }
 
+    [JsonPropertyName("requested_engine")]
+    public string RequestedEngine { get; init; } = "lean";
+
     /// <summary>
     /// PR B — commission per order in dollars. Python engine sends the
     /// configured commission; LEAN sends the fee actually charged by the

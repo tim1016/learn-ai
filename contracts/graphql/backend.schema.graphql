@@ -78,6 +78,7 @@ type BacktestRunDetailType {
   id: Int!
   engine: Engine!
   source: String!
+  requestedEngine: String
   strategyName: String!
   symbol: String!
   leanRunId: String
@@ -109,6 +110,7 @@ type BacktestRunDetailType {
   insightSummaryJson: String
   dataPolicyJson: String
   dataPolicy: DataPolicyType
+  commissionPerOrder: Decimal
   parityGroupId: String
   trades: [BacktestRunTradeDetailType!]!
   parityVerdicts: [BacktestRunParityVerdictType!]!
@@ -1527,6 +1529,7 @@ type StrategyExecution {
   tickerId: Int!
   ticker: Ticker!
   strategyName: String!
+  requestedEngine: String
   parameters: String!
   startDate: String!
   endDate: String!

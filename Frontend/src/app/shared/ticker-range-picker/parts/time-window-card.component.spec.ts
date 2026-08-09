@@ -1,10 +1,7 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TimeWindowCardComponent } from './time-window-card.component';
-import type {
-  AvailabilityCell,
-  TickerRange,
-} from '../ticker-range-picker.types';
+import type { TickerRange } from '../ticker-range-picker.types';
 
 describe('TimeWindowCardComponent', () => {
   const baseValue: TickerRange = {
@@ -108,30 +105,12 @@ describe('TimeWindowCardComponent', () => {
     });
   });
 
-  it('renders the availability strip when cells are provided', () => {
-    const cells: AvailabilityCell[] = [
-      { date: '2025-04-01', status: 'complete' },
-      { date: '2025-04-02', status: 'partial' },
-      { date: '2025-04-03', status: 'missing' },
-    ];
-    fixture.componentRef.setInput('availability', cells);
+  it('does not render a per-day availability strip or legend', () => {
     fixture.detectChanges();
 
-    const cellEls = fixture.nativeElement.querySelectorAll('.strip__cell');
-    expect(cellEls.length).toBe(3);
-  });
-
-  it('exposes summary and dominant computeds derived from availability', () => {
-    fixture.componentRef.setInput('availability', [
-      { date: '2025-04-01', status: 'complete' },
-      { date: '2025-04-02', status: 'complete' },
-      { date: '2025-04-03', status: 'hole' },
-    ] as AvailabilityCell[]);
-    fixture.detectChanges();
-
-    expect(component.summary().complete).toBe(2);
-    expect(component.summary().hole).toBe(1);
-    expect(component.dominant()).toBe('hole');
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.querySelector('.availability-strip')).toBeNull();
+    expect(root.querySelector('.availability-legend')).toBeNull();
   });
 
   it('updateFrom mutates value().from immutably', () => {

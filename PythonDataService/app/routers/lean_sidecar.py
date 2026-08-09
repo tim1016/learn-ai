@@ -221,6 +221,11 @@ class TrustedRunRequestModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    requested_engine: Literal["python", "lean", "both"] = Field(
+        "lean",
+        description="Operator-selected execution mode, persisted for exact History rehydration.",
+    )
+
     run_id: str = Field(
         ...,
         pattern=RUN_ID_PATTERN.pattern,
@@ -597,6 +602,7 @@ async def post_trusted_run(payload: TrustedRunRequestModel) -> TrustedRunRespons
         algorithm_source=payload.algorithm_source,
         template=payload.template,
         data_policy=data_policy,
+        requested_engine=payload.requested_engine,
         parity_group_id=payload.parity_group_id,
     )
     try:

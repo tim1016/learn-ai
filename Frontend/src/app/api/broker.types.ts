@@ -12344,6 +12344,13 @@ export interface components {
             /** Params */
             params?: Record<string, never>;
             /**
+             * Requested Engine
+             * @description Operator-selected execution mode, persisted for exact History rehydration.
+             * @default python
+             * @enum {string}
+             */
+            requested_engine?: "python" | "lean" | "both";
+            /**
              * Resolution
              * @description Data resolution: 'minute' (default) or 'daily'
              * @default minute
@@ -23138,6 +23145,13 @@ export interface components {
              * @description Parity group shared with the Python engine run this LEAN run validates.
              */
             parity_group_id?: string | null;
+            /**
+             * Requested Engine
+             * @description Operator-selected execution mode, persisted for exact History rehydration.
+             * @default lean
+             * @enum {string}
+             */
+            requested_engine?: "python" | "lean" | "both";
             /**
              * Run Id
              * @description Slug matching ^[a-z0-9][a-z0-9_-]{2,63}$

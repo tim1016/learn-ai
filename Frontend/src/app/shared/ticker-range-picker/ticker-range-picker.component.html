@@ -1,8 +1,5 @@
 <div class="picker-v2"
-     [class.picker-v2--embedded]="presentation() === 'embedded'"
-     [class.picker-v2--legend-tinted]="legendTreatment() === 'tinted-bold'"
-     [class.picker-v2--legend-solid]="legendTreatment() === 'solid-bold'"
-     [class.picker-v2--legend-icon]="legendTreatment() === 'icon-glyph'">
+     [class.picker-v2--embedded]="presentation() === 'embedded'">
 
   <!-- ── Outer card head: title + summary ──────────────────────── -->
   @if (presentation() === 'card') {
@@ -32,9 +29,7 @@
       [recent]="recent()" />
 
     <app-time-window-card
-      [(value)]="value"
-      [availability]="availability()"
-      [legendTreatment]="legendTreatment()" />
+      [(value)]="value" />
 
     @if (!hideSampling()) {
       <app-sampling-card

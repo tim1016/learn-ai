@@ -50,6 +50,25 @@ async def test_engine_backtest_request_accepts_data_policy_block() -> None:
     assert req.data_policy.strategy_bars.multiplier == 15
 
 
+def test_engine_backtest_request_pins_requested_engine_vocabulary() -> None:
+    """The operator's Python/LEAN/Both choice is persisted, never inferred."""
+    from pydantic import ValidationError
+
+    from app.routers.engine import EngineBacktestRequest
+
+    request = EngineBacktestRequest(
+        strategy_name="spy_ema_crossover",
+        requested_engine="both",
+    )
+    assert request.requested_engine == "both"
+
+    with pytest.raises(ValidationError, match="requested_engine"):
+        EngineBacktestRequest(
+            strategy_name="spy_ema_crossover",
+            requested_engine="maybe",  # type: ignore[arg-type]
+        )
+
+
 @pytest.mark.asyncio
 async def test_engine_backtest_synthesizes_data_policy_from_legacy_fields() -> None:
     """A request without ``data_policy`` synthesizes it from symbol + resolution."""

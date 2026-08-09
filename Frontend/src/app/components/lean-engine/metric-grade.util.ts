@@ -10,11 +10,102 @@ export interface HeroGrade {
   band: Band;
   subtitle: string;
   targetRange: string;
-  /** Anchor id in the Engine Docs tab; used to deep-link from tooltips. */
+  /** Anchor in Strategy Lab's calculation reference. */
   docAnchor: string;
 }
 
-const DOC_ROUTE = "/engine-docs";
+const DOC_ROUTE = "/strategy-lab/docs";
+
+export type StrategyMetricId =
+  | "net-profit"
+  | "profit-factor"
+  | "expectancy"
+  | "sharpe"
+  | "sortino"
+  | "max-drawdown"
+  | "win-rate"
+  | "trades";
+
+export interface MetricHelp {
+  id: StrategyMetricId;
+  label: string;
+  definition: string;
+  formula: string;
+  source: string;
+  docAnchor: string;
+}
+
+/**
+ * Presentation copy only. These formulas document the canonical engine code;
+ * Angular never recomputes a persisted metric. The source field is deliberately
+ * visible in the popover and pinned by a drift-guard test.
+ */
+export const STRATEGY_METRIC_HELP: Readonly<Record<StrategyMetricId, MetricHelp>> = {
+  "net-profit": {
+    id: "net-profit",
+    label: "Net P&L",
+    definition: "The dollars left after the run closes, relative to starting cash and after recorded fees.",
+    formula: "final equity − initial cash",
+    source: "PythonDataService/app/engine/results/statistics.py::compute_portfolio_statistics",
+    docAnchor: anchor("net-profit"),
+  },
+  "profit-factor": {
+    id: "profit-factor",
+    label: "Profit factor",
+    definition: "How many dollars winning trades made for each dollar losing trades gave back.",
+    formula: "Σ winning trade returns ÷ |Σ losing trade returns|",
+    source: "PythonDataService/app/engine/results/statistics.py::compute_trade_statistics",
+    docAnchor: anchor("profit-factor"),
+  },
+  expectancy: {
+    id: "expectancy",
+    label: "Expectancy",
+    definition: "The average percentage return contributed by one completed trade.",
+    formula: "Σ trade returns ÷ total trades",
+    source: "PythonDataService/app/engine/results/statistics.py::compute_trade_statistics",
+    docAnchor: anchor("expectancy"),
+  },
+  sharpe: {
+    id: "sharpe",
+    label: "Sharpe",
+    definition: "Annualized return earned per unit of total return variability.",
+    formula: "mean(daily returns) ÷ sample stdev(daily returns) × √252",
+    source: "PythonDataService/app/engine/results/statistics.py::_sharpe",
+    docAnchor: anchor("sharpe"),
+  },
+  sortino: {
+    id: "sortino",
+    label: "Sortino",
+    definition: "Annualized return earned per unit of downside-only variability.",
+    formula: "mean(daily returns) ÷ √(Σ negative return² ÷ N) × √252",
+    source: "PythonDataService/app/engine/results/statistics.py::_sortino",
+    docAnchor: anchor("sortino"),
+  },
+  "max-drawdown": {
+    id: "max-drawdown",
+    label: "Max drawdown",
+    definition: "The deepest percentage fall from a prior equity peak to a later trough.",
+    formula: "maxₜ((running peakₜ − equityₜ) ÷ running peakₜ)",
+    source: "PythonDataService/app/engine/results/statistics.py::max_drawdown",
+    docAnchor: anchor("max-drawdown"),
+  },
+  "win-rate": {
+    id: "win-rate",
+    label: "Win rate",
+    definition: "The share of completed trades whose return was greater than zero.",
+    formula: "winning trades ÷ total trades",
+    source: "PythonDataService/app/engine/results/statistics.py::compute_trade_statistics",
+    docAnchor: anchor("win-rate"),
+  },
+  trades: {
+    id: "trades",
+    label: "Trades",
+    definition: "The number of completed round trips recorded by the run.",
+    formula: "count(completed trades)",
+    source: "PythonDataService/app/engine/results/statistics.py::compute_trade_statistics",
+    docAnchor: anchor("trades"),
+  },
+};
 
 export function gradeSharpe(v: number | null | undefined): HeroGrade {
   const a = anchor("sharpe");

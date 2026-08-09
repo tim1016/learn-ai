@@ -1,13 +1,26 @@
 import { provideHttpClient } from "@angular/common/http";
 import { HttpTestingController, provideHttpClientTesting } from "@angular/common/http/testing";
 import { provideZonelessChangeDetection } from "@angular/core";
+import { Component, input } from "@angular/core";
 import { ComponentFixture, TestBed } from "@angular/core/testing";
 import { Apollo } from "apollo-angular";
 import { of } from "rxjs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { BacktestRunDetail, BacktestRunDetailTrade } from "../../../graphql/backtest-runs.query";
+import { StrategyLabChartComponent } from "../../strategy-lab/strategy-lab-chart/strategy-lab-chart.component";
 import { RunReportComponent, toEngineTrade } from "./run-report.component";
+
+@Component({
+  selector: "app-strategy-lab-chart",
+  template: "<div data-testid=\"strategy-chart\">Synced strategy chart</div>",
+})
+class StrategyLabChartStubComponent {
+  readonly run = input.required<BacktestRunDetail>();
+  readonly candles = input<unknown[]>([]);
+  readonly markers = input<unknown[]>([]);
+  readonly equityPoints = input<unknown[]>([]);
+}
 
 function makeTrade(overrides: Partial<BacktestRunDetailTrade> = {}): BacktestRunDetailTrade {
   return {
@@ -31,9 +44,11 @@ function makeRun(overrides: Partial<BacktestRunDetail> = {}): BacktestRunDetail 
     id: 44,
     engine: "PYTHON",
     source: "engine",
+    requestedEngine: "both",
     strategyName: "spy_ema_crossover",
     symbol: "SPY",
     leanRunId: null,
+    parameters: JSON.stringify({ short: 5, long: 10, symbol: "SPY" }),
     startDate: "2026-01-05",
     endDate: "2026-01-06",
     fillMode: "signal_bar_close",
@@ -45,6 +60,7 @@ function makeRun(overrides: Partial<BacktestRunDetail> = {}): BacktestRunDetail 
     winRate: 1,
     totalPnL: 48,
     initialCash: 100_000,
+    commissionPerOrder: 1,
     finalEquity: 100_048,
     totalFees: 2,
     maxDrawdown: 0.01,
@@ -120,7 +136,12 @@ async function renderReport(run: BacktestRunDetail | null): Promise<{
       provideHttpClientTesting(),
       { provide: Apollo, useValue: apolloMock },
     ],
-  }).compileComponents();
+  })
+    .overrideComponent(RunReportComponent, {
+      remove: { imports: [StrategyLabChartComponent] },
+      add: { imports: [StrategyLabChartStubComponent] },
+    })
+    .compileComponents();
 
   const fixture = TestBed.createComponent(RunReportComponent);
   fixture.componentRef.setInput("runId", 44);
@@ -139,7 +160,7 @@ afterEach(() => {
 });
 
 describe("RunReportComponent", () => {
-  it("renders the persisted run's headline and verdict from GraphQL", async () => {
+  it("renders the persisted verdict and condensed metrics without restating configuration", async () => {
     const { fixture, httpMock } = await renderReport(makeRun());
     httpMock.expectOne((req) => req.url.includes("/api/engine/bars")).flush({
       policy_key: "polygon-adjusted",
@@ -152,10 +173,18 @@ describe("RunReportComponent", () => {
     fixture.detectChanges();
 
     const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
-    expect(text).toContain("spy_ema_crossover / SPY");
-    expect(text).toContain("run #44");
-    expect(text).toContain("Profitable but thin sample.");
-    expect(text).toContain("Grade B");
+    expect(text).toContain("Diagnostic complete");
+    expect(text).toContain("B · 72");
+    expect(text).toContain("Net P&L");
+    expect(text).toContain("Synced strategy chart");
+    expect(text).not.toContain("spy_ema_crossover / SPY");
+    expect(text).not.toContain("run #44");
+    expect([...((fixture.nativeElement as HTMLElement).querySelectorAll("details"))]
+      .every((detail) => !detail.open)).toBe(true);
+    expect(fixture.componentInstance.markers()).toEqual([
+      expect.objectContaining({ color: "#26a69a", text: "BUY · WIN" }),
+      expect.objectContaining({ color: "#26a69a", text: "SELL · +$48.00" }),
+    ]);
   });
 
   it("requests bars using the persisted DataPolicy dimensions", async () => {
@@ -217,7 +246,7 @@ describe("RunReportComponent", () => {
     fixture.detectChanges();
 
     const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
-    expect(text).toContain("Validation analytics not recorded for this run.");
+    expect(text).toContain("Validation analytics were not recorded for this run.");
   });
 
   it("renders 'Run not found' when the id does not resolve", async () => {
@@ -251,7 +280,7 @@ describe("RunReportComponent", () => {
       verdictJson: JSON.stringify({ schema_version: 1, status: "pending", reason: null }),
     });
     const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
-    expect(text).toContain("LEAN validating companion is running");
+    expect(text).toContain("parity: Pending");
   });
 
   it("shows divergence categories when the engines disagree", async () => {
@@ -267,10 +296,13 @@ describe("RunReportComponent", () => {
         ],
       }),
     });
-    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
-    expect(text).toContain("The engines disagree");
-    expect(text).toContain("2");
-    expect(text).toContain("Show 2 divergence details");
+    const root = fixture.nativeElement as HTMLElement;
+    const parityButton = root.querySelector<HTMLButtonElement>(".verdict-line__parity");
+    expect(parityButton?.textContent).toContain("Diverged");
+    parityButton?.click();
+    fixture.detectChanges();
+    expect(root.textContent).toContain("Fill Price Drift");
+    expect(root.textContent).toContain("fill differs by $0.03");
   });
 
   it("explains honest unavailability with trader copy", async () => {
@@ -279,7 +311,7 @@ describe("RunReportComponent", () => {
       verdictJson: JSON.stringify({ schema_version: 1, status: "unavailable", reason: "no_lean_counterpart" }),
     });
     const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
-    expect(text).toContain("No LEAN counterpart is registered for this strategy.");
+    expect(text).toContain("parity: Unavailable");
   });
 });
 

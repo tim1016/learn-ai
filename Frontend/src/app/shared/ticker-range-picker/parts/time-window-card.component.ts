@@ -5,22 +5,14 @@ import {
   input,
   model,
 } from '@angular/core';
-import { CommonModule } from '@angular/common';
-import { FormsModule } from '@angular/forms';
 
 import {
   daysBetween,
-  dominantState,
   isoDate,
-  summarizeAvailability,
   weekdaysBetween,
-  type AvailabilityCell,
-  type DominantState,
   type TickerRange,
 } from '../ticker-range-picker.types';
 import { toMostRecentWeekday } from '../../date/weekday';
-
-export type LegendTreatment = 'tinted-bold' | 'solid-bold' | 'icon-glyph';
 
 interface Preset {
   days: number;
@@ -38,20 +30,15 @@ const PRESETS: readonly Preset[] = [
 
 @Component({
   selector: 'app-time-window-card',
-  imports: [CommonModule, FormsModule],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './time-window-card.component.html',
   styleUrls: ['./time-window-card.component.scss'],
 })
 export class TimeWindowCardComponent {
   readonly value = model.required<TickerRange>();
-  readonly availability = input<readonly AvailabilityCell[]>([]);
-  readonly legendTreatment = input<LegendTreatment>('tinted-bold');
+  readonly appearance = input<'card' | 'flat'>('card');
 
   readonly presets = PRESETS;
-
-  readonly summary = computed(() => summarizeAvailability(this.availability()));
-  readonly dominant = computed<DominantState>(() => dominantState(this.summary()));
 
   readonly spanDays = computed(() => {
     const v = this.value();
@@ -59,8 +46,6 @@ export class TimeWindowCardComponent {
   });
 
   readonly spanBusinessDays = computed(() => {
-    const summaryDays = this.summary().weekdays;
-    if (summaryDays > 0) return summaryDays;
     const v = this.value();
     return weekdaysBetween(v.from, v.to);
   });
@@ -70,16 +55,22 @@ export class TimeWindowCardComponent {
     return PRESETS.find((p) => Math.abs(s - p.days) < 2)?.days ?? null;
   });
 
-  trackByDay(_: number, c: AvailabilityCell): string {
-    return c.date;
-  }
-
   updateFrom(v: string): void {
     this.value.set({ ...this.value(), from: v });
   }
 
   updateTo(v: string): void {
     this.value.set({ ...this.value(), to: v });
+  }
+
+  updateFromEvent(event: Event): void {
+    const target = event.target;
+    if (target instanceof HTMLInputElement) this.updateFrom(target.value);
+  }
+
+  updateToEvent(event: Event): void {
+    const target = event.target;
+    if (target instanceof HTMLInputElement) this.updateTo(target.value);
   }
 
   applyPreset(days: number): void {

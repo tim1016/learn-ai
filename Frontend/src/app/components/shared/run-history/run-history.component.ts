@@ -12,7 +12,7 @@ import type { DataPolicy } from "../../../models/data-policy";
 import { TimestampDisplayPipe } from "../../../shared/timestamp";
 
 const ENGINE_LABELS: Record<EngineSourceLiteral, string> = {
-  engine: "Engine Lab",
+  engine: "Python",
   "strategy-lab": "Strategy Lab",
   "lean-sidecar": "LEAN",
 };

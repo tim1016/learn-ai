@@ -1,0 +1,78 @@
+:host {
+  display: block;
+  min-width: 0;
+}
+
+.strategy-lab {
+  display: grid;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.workbench {
+  display: grid;
+  grid-template-columns: minmax(260px, 300px) minmax(0, 1fr);
+  gap: var(--space-4);
+  min-width: 0;
+  align-items: start;
+}
+
+.workbench--rail-collapsed {
+  grid-template-columns: 52px minmax(0, 1fr);
+}
+
+.workbench__stage {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.lab-notice,
+.run-status {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  padding: var(--space-3);
+  font-size: var(--fs-xs);
+}
+
+.lab-notice--error {
+  border-color: color-mix(in srgb, var(--danger) 42%, var(--border));
+  color: var(--danger);
+}
+
+.run-status {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.run-status span:last-child {
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-status__pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+
+:host ::ng-deep .p-tabpanels,
+:host ::ng-deep .p-tabpanel {
+  padding: 0;
+  background: transparent;
+}
+
+@media (max-width: 900px) {
+  .workbench,
+  .workbench--rail-collapsed {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

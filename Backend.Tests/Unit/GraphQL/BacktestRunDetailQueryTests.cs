@@ -7,6 +7,42 @@ namespace Backend.Tests.Unit.GraphQL;
 public class BacktestRunDetailQueryTests
 {
     [Fact]
+    public void FromExecution_ExposesOperatorRequestedEngineForHistoryRehydration()
+    {
+        var execution = new StrategyExecution
+        {
+            Ticker = new Ticker { Symbol = "SPY", Name = "SPY", Market = "stocks" },
+            Source = "engine",
+            RequestedEngine = "both",
+            StrategyName = "ema_crossover",
+            Parameters = """{"fast":8,"slow":21}""",
+            CommissionPerOrder = 0.35m,
+        };
+
+        var detail = BacktestRunDetailType.FromExecution(execution, [], NullLogger.Instance);
+
+        Assert.Equal("both", detail.RequestedEngine);
+        Assert.Equal("""{"fast":8,"slow":21}""", detail.Parameters);
+        Assert.Equal(0.35m, detail.CommissionPerOrder);
+    }
+
+    [Fact]
+    public void FromExecution_PreservesMissingRequestedEngineForLegacyFallback()
+    {
+        var execution = new StrategyExecution
+        {
+            Ticker = new Ticker { Symbol = "SPY", Name = "SPY", Market = "stocks" },
+            Source = "lean-sidecar",
+            StrategyName = "ema_crossover",
+            RequestedEngine = null,
+        };
+
+        var detail = BacktestRunDetailType.FromExecution(execution, [], NullLogger.Instance);
+
+        Assert.Null(detail.RequestedEngine);
+    }
+
+    [Fact]
     public void FromExecution_ValidEquityEnvelope_ParsesPoints()
     {
         var execution = new StrategyExecution

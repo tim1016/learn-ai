@@ -9,6 +9,13 @@
   gap: 10px;
   min-width: 0;
 
+  &--flat {
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    padding: var(--space-4);
+  }
+
   &__head {
     display: flex;
     align-items: center;
@@ -107,115 +114,3 @@
     color: var(--accent);
   }
 }
-
-// ── Availability strip ───────────────────────────────────────────────
-.strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px;
-
-  &__cell {
-    width: 9px;
-    height: 14px;
-    border-radius: 1px;
-    background: var(--day-missing);
-
-    &--complete { background: var(--day-complete); }
-    &--partial  { background: var(--day-partial); }
-    &--missing  { background: var(--day-missing); }
-    &--hole     { background: var(--day-hole); }
-    &--weekend  { background: var(--bg-canvas); opacity: 0.5; }
-  }
-}
-
-// ── Smart-legend chips ───────────────────────────────────────────────
-.legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.legend-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 22px;
-  padding: 0 8px;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-pill);
-  font-size: 10px;
-  color: var(--text-subtle);
-  font-weight: var(--fw-medium);
-
-  &__icon {
-    display: none;
-    font-size: 9px;
-  }
-
-  &__swatch {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-  }
-
-  &__count {
-    color: var(--text-primary);
-    font-weight: var(--fw-bold);
-  }
-
-  &--complete .legend-chip__swatch { background: var(--bull); }
-  &--partial  .legend-chip__swatch { background: var(--warn); }
-  &--hole     .legend-chip__swatch { background: var(--bear); }
-  &--missing  .legend-chip__swatch { background: var(--text-subtle); }
-
-  &--dominant {
-    font-weight: var(--fw-semi);
-
-    &.legend-chip--complete {
-      background: var(--bull-soft);
-      border-color: rgba(38, 166, 154, 0.30);
-      color: var(--bull);
-      .legend-chip__count { color: var(--bull); }
-    }
-    &.legend-chip--partial {
-      background: var(--warn-soft);
-      border-color: rgba(255, 152, 0, 0.30);
-      color: var(--warn);
-      .legend-chip__count { color: var(--warn); }
-    }
-    &.legend-chip--hole {
-      background: var(--bear-soft);
-      border-color: rgba(239, 83, 80, 0.30);
-      color: var(--bear);
-      .legend-chip__count { color: var(--bear); }
-    }
-    &.legend-chip--missing {
-      background: var(--bg-hover);
-      border-color: var(--border-light);
-      color: var(--text-primary);
-    }
-  }
-}
-
-// ── Solid-bold treatment ───────────────────────────────────────────
-.time-window--legend-solid .legend-chip--dominant {
-  &.legend-chip--complete { background: var(--bull); color: #0b0e14; border-color: var(--bull);
-    .legend-chip__count { color: #0b0e14; } .legend-chip__swatch { display: none; } }
-  &.legend-chip--partial  { background: var(--warn); color: #0b0e14; border-color: var(--warn);
-    .legend-chip__count { color: #0b0e14; } .legend-chip__swatch { display: none; } }
-  &.legend-chip--hole     { background: var(--bear); color: #fff; border-color: var(--bear);
-    .legend-chip__count { color: #fff; } .legend-chip__swatch { display: none; } }
-  &.legend-chip--missing  { background: var(--text-subtle); color: var(--bg-canvas); border-color: var(--text-subtle);
-    .legend-chip__count { color: var(--bg-canvas); } .legend-chip__swatch { display: none; } }
-}
-
-// ── Icon-glyph treatment ───────────────────────────────────────────
-.time-window--legend-icon .legend-chip {
-  .legend-chip__swatch { display: none; }
-  .legend-chip__icon   { display: inline-flex; }
-}
-.time-window--legend-icon .legend-chip--complete .legend-chip__icon { color: var(--bull); }
-.time-window--legend-icon .legend-chip--partial  .legend-chip__icon { color: var(--warn); }
-.time-window--legend-icon .legend-chip--hole     .legend-chip__icon { color: var(--bear); }
-.time-window--legend-icon .legend-chip--missing  .legend-chip__icon { color: var(--text-subtle); }

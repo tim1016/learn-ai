@@ -562,3 +562,28 @@
     border-left: 2px solid $border;
   }
 }
+
+.metric-definition {
+  scroll-margin-top: 5rem;
+  padding: 1rem 0;
+  border-bottom: 1px solid $border;
+
+  &:last-child {
+    border-bottom: 0;
+  }
+
+  h4,
+  p {
+    margin: 0 0 0.5rem;
+  }
+
+  code,
+  small {
+    display: block;
+  }
+
+  small {
+    margin-top: 0.5rem;
+    color: $text-muted;
+  }
+}

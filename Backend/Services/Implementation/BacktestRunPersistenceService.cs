@@ -54,6 +54,9 @@ public class BacktestRunPersistenceService : IBacktestRunPersistenceService
         if (payload.Source == "engine" && !string.IsNullOrWhiteSpace(payload.LeanRunId))
             throw new ArgumentException("lean_run_id must be null when source='engine'", nameof(payload));
 
+        if (payload.RequestedEngine is not ("python" or "lean" or "both"))
+            throw new ArgumentException("requested_engine must be python, lean, or both", nameof(payload));
+
         // Idempotency: only applies to lean-sidecar runs, where lean_run_id is the natural key.
         // Engine runs have no external idempotency key — every persist creates a new row.
         if (payload.Source == "lean-sidecar")
@@ -120,6 +123,7 @@ public class BacktestRunPersistenceService : IBacktestRunPersistenceService
                 ? null
                 : JsonSerializer.Serialize(payload.LeanStatistics),
             Source = payload.Source,
+            RequestedEngine = payload.RequestedEngine,
             LeanRunId = payload.LeanRunId,
             FillMode = payload.Source == "engine" ? "signal_bar_close" : "lean-sidecar",
             ExecutedAt = DateTime.UtcNow,

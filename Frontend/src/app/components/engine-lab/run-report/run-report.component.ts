@@ -1,5 +1,5 @@
 import { HttpClient } from "@angular/common/http";
-import { ChangeDetectionStrategy, Component, computed, inject, input } from "@angular/core";
+import { ChangeDetectionStrategy, Component, computed, inject, input, output } from "@angular/core";
 import { rxResource } from "@angular/core/rxjs-interop";
 import { Apollo } from "apollo-angular";
 import { catchError, map, of } from "rxjs";
@@ -8,31 +8,38 @@ import { environment } from "../../../../environments/environment";
 import type { RunVerdict } from "../../../api/run-verdict.types";
 import {
   BACKTEST_RUN_DETAIL_QUERY,
-  BacktestRunDetail,
-  BacktestRunDetailQueryResult,
-  BacktestRunDetailTrade,
+  type BacktestRunDetail,
+  type BacktestRunDetailQueryResult,
+  type BacktestRunDetailTrade,
 } from "../../../graphql/backtest-runs.query";
-import { CopyButtonComponent } from "../../../shared/copy-button/copy-button.component";
-import { ReceiptLabelPipe } from "../../../shared/pipes/receipt-label.pipe";
-import { TimestampDisplayComponent, TimestampDisplayPipe } from "../../../shared/timestamp";
+import type { TradingCandle, TradingMarker, TradingPoint } from "../../../shared/trading-chart";
 import type {
-  ChartBar,
-  EngineTradeForChart,
-  EquityCurvePoint,
-} from "../../lean-engine/engine-chart/engine-chart.component";
-import {
   EngineResultData,
-  EngineResultsComponent,
   EngineTrade,
   LeanStatistics,
 } from "../../lean-engine/engine-results/engine-results.component";
+import { StrategyLabChartComponent } from "../../strategy-lab/strategy-lab-chart/strategy-lab-chart.component";
+import { StrategyLabDeepDivesComponent } from "../../strategy-lab/strategy-lab-deep-dives/strategy-lab-deep-dives.component";
+import { StrategyLabMetricsComponent } from "../../strategy-lab/strategy-lab-metrics/strategy-lab-metrics.component";
+import {
+  StrategyLabVerdictComponent,
+  type StrategyLabParityView,
+} from "../../strategy-lab/strategy-lab-verdict/strategy-lab-verdict.component";
 
-/** Wire shape of GET /api/engine/bars (PythonDataService). */
+interface EngineBar {
+  t: number;
+  o: number;
+  h: number;
+  l: number;
+  c: number;
+  v: number;
+}
+
 interface EngineBarsResponse {
   policy_key: string;
   symbol: string;
   count: number;
-  bars: ChartBar[];
+  bars: EngineBar[];
   coverage: {
     expected_days: number;
     available_days: number;
@@ -58,67 +65,53 @@ type BarsState =
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-/**
- * The single run report: renders a persisted run — and only a persisted
- * run — through the same component tree for the workbench post-run stage
- * and the /engine/runs/:id route. Bars come from the shared bar store
- * (the bytes the engine consumed); everything else comes from the
- * persisted row. There is no transient-payload render path.
- */
+/** One persisted-run renderer shared by Workbench and the run-detail route. */
 @Component({
   selector: "app-engine-run-report",
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    EngineResultsComponent,
-    ReceiptLabelPipe,
-    TimestampDisplayComponent,
-    TimestampDisplayPipe,
-    CopyButtonComponent,
+    StrategyLabVerdictComponent,
+    StrategyLabMetricsComponent,
+    StrategyLabChartComponent,
+    StrategyLabDeepDivesComponent,
   ],
   templateUrl: "./run-report.component.html",
-  styleUrls: ["./run-report.component.scss"],
+  styleUrl: "./run-report.component.scss",
 })
 export class RunReportComponent {
   private readonly apollo = inject(Apollo);
   private readonly http = inject(HttpClient);
 
   readonly runId = input.required<number>();
+  readonly rerun = output();
 
   private readonly runResource = rxResource<BacktestRunDetail | null, number>({
     params: () => this.runId(),
     stream: ({ params }) => {
-      // Poll while a parity verdict is pending (the async LEAN companion
-      // is still running); stop the moment every verdict is terminal so
-      // settled reports cost nothing.
       const ref = this.apollo.watchQuery<BacktestRunDetailQueryResult>({
         query: BACKTEST_RUN_DETAIL_QUERY,
         variables: { id: params },
         fetchPolicy: "cache-and-network",
         pollInterval: 5000,
       });
-      return ref.valueChanges.pipe(
-        map((result): BacktestRunDetail | null => {
-          const run = (result.data?.backtestRun as BacktestRunDetail | null | undefined) ?? null;
-          if (!run || !run.parityVerdicts.some((v) => v.status === "pending")) {
-            ref.stopPolling();
-          }
-          return run;
-        }),
-      );
+      return ref.valueChanges.pipe(map((result): BacktestRunDetail | null => {
+        const run = (result.data?.backtestRun as BacktestRunDetail | null | undefined) ?? null;
+        if (!run || !run.parityVerdicts.some((verdict) => verdict.status === "pending")) {
+          ref.stopPolling();
+        }
+        return run;
+      }));
     },
   });
 
   readonly run = computed(() => this.runResource.value() ?? null);
   readonly loading = computed(() => this.runResource.isLoading() && !this.run());
 
-  /** Bars request derived from the persisted DataPolicy — the report
-   *  charts exactly the policy the run recorded, or nothing. */
   private readonly barsQuery = computed<BarsQuery | null>(() => {
     const run = this.run();
     const policy = run?.dataPolicy;
     const bars = policy?.strategy_bars;
-    if (!run || !policy || !bars) return null;
-    if (!ISO_DATE.test(run.startDate) || !ISO_DATE.test(run.endDate)) return null;
+    if (!run || !policy || !bars || !ISO_DATE.test(run.startDate) || !ISO_DATE.test(run.endDate)) return null;
     return {
       symbol: run.symbol,
       from_date: run.startDate,
@@ -140,34 +133,40 @@ export class RunReportComponent {
         });
       }
       return this.http
-        .get<EngineBarsResponse>(`${environment.pythonServiceUrl}/api/engine/bars`, {
-          params: { ...params },
-        })
+        .get<EngineBarsResponse>(`${environment.pythonServiceUrl}/api/engine/bars`, { params: { ...params } })
         .pipe(
           map((response): BarsState => ({ kind: "loaded", response })),
-          catchError(() =>
-            of<BarsState>({
-              kind: "unavailable",
-              reason: "Bar store unreachable — price chart unavailable for this run.",
-            }),
-          ),
+          catchError(() => of<BarsState>({
+            kind: "unavailable",
+            reason: "Bar store unreachable — price chart unavailable for this run.",
+          })),
         );
     },
   });
 
-  private readonly barsState = computed<BarsState>(() => this.barsResource.value() ?? { kind: "pending" });
+  private readonly barsState = computed<BarsState>(() =>
+    this.barsResource.value() ?? { kind: "pending" },
+  );
 
-  readonly chartBars = computed<ChartBar[]>(() => {
+  readonly candles = computed<TradingCandle[]>(() => {
     const state = this.barsState();
-    return state.kind === "loaded" ? state.response.bars : [];
+    if (state.kind !== "loaded") return [];
+    return state.response.bars.map((bar) => ({
+      timeMs: bar.t,
+      open: bar.o,
+      high: bar.h,
+      low: bar.l,
+      close: bar.c,
+      volume: bar.v,
+    }));
   });
 
   readonly barsNotice = computed<string | null>(() => {
     const state = this.barsState();
     if (state.kind === "unavailable") return state.reason;
     if (state.kind === "loaded" && !state.response.coverage.is_complete) {
-      const c = state.response.coverage;
-      return `Bar store covers ${c.available_days} of ${c.expected_days} weekdays in this window — missing days are shown as gaps, not fetched.`;
+      const coverage = state.response.coverage;
+      return `Bar store covers ${coverage.available_days} of ${coverage.expected_days} weekdays; missing sessions remain visible as gaps.`;
     }
     return null;
   });
@@ -203,7 +202,6 @@ export class RunReportComponent {
         sharpe_ratio: run.sharpeRatio,
         sortino_ratio: run.sortinoRatio,
         profit_factor: run.profitFactor,
-        // Not persisted as a column — rendered as an honest dash.
         expectancy_pct: null,
       },
       lean_statistics: parseLeanStatistics(run.leanStatisticsJson),
@@ -213,97 +211,71 @@ export class RunReportComponent {
     };
   });
 
-  readonly chartTrades = computed<EngineTradeForChart[]>(() =>
-    (this.run()?.trades ?? []).map((t) => ({
-      entry_time: t.entryTimestamp,
-      exit_time: t.exitTimestamp,
-      entry_price: t.entryPrice,
-      exit_price: t.exitPrice,
-      pnl_pts: t.pnlPts,
-      result: t.pnL > 0 ? "WIN" : "LOSS",
-    })),
+  readonly markers = computed<TradingMarker[]>(() =>
+    (this.run()?.trades ?? []).flatMap((trade) => {
+      const won = trade.pnL >= 0;
+      const color = won ? "#26a69a" : "#ef5350";
+      return [{
+        timeMs: trade.entryTimestamp,
+        position: "belowBar" as const,
+        color,
+        shape: "arrowUp" as const,
+        text: `BUY · ${won ? "WIN" : "LOSS"}`,
+      },
+      {
+        timeMs: trade.exitTimestamp,
+        position: "aboveBar" as const,
+        color,
+        shape: "arrowDown" as const,
+        text: `SELL · ${won ? "+" : ""}${formatMoney(trade.pnL)}`,
+      }];
+    }),
   );
 
-  readonly equityCurve = computed<EquityCurvePoint[]>(
-    () => this.run()?.equityCurve?.points.map((p) => ({ timestamp: p.t, equity: p.e })) ?? [],
+  readonly equityPoints = computed<TradingPoint[]>(() =>
+    this.run()?.equityCurve?.points.map((point) => ({ timeMs: point.t, value: point.e })) ?? [],
   );
 
-  readonly equityNotice = computed<string | null>(() => {
-    const curve = this.run()?.equityCurve;
-    if (!curve) return "Equity curve not recorded for this run.";
-    if (curve.error) return curve.error;
-    return null;
-  });
-
-  readonly analyticsNotice = computed<string | null>(() => {
+  readonly reportNotice = computed<string | null>(() => {
     const run = this.run();
     if (!run) return null;
-    if (run.validationAnalytics?.error) return run.validationAnalytics.error;
-    if (!run.validationAnalytics) return "Validation analytics not recorded for this run.";
+    if (this.barsNotice()) return this.barsNotice();
+    if (run.equityCurve?.error) return run.equityCurve.error;
+    if (!run.equityCurve) return "Equity curve was not recorded for this run.";
     return null;
   });
 
-  /** Latest parity disposition for this run (a run appears on the left
-   *  side as the Python original or the right side as the LEAN
-   *  companion — both render the same frozen verdict). */
-  readonly parity = computed<ParityView | null>(() => {
+  readonly parity = computed<StrategyLabParityView | null>(() => {
     const verdicts = this.run()?.parityVerdicts ?? [];
     if (verdicts.length === 0) return null;
-    const latest = [...verdicts].sort((a, b) => b.createdAt - a.createdAt)[0];
+    const latest = [...verdicts].sort((left, right) => right.createdAt - left.createdAt)[0];
     return toParityView(latest);
   });
-
-  readonly resolutionLabel = computed<string>(() => {
-    const bars = this.run()?.dataPolicy?.strategy_bars;
-    if (!bars) return "";
-    const unit = bars.timespan === "minute" ? "m" : bars.timespan === "hour" ? "h" : "d";
-    return `${bars.multiplier}${unit}`;
-  });
-}
-
-/** Template view-model for the parity panel. */
-export interface ParityView {
-  status: string;
-  createdAt: number;
-  reason: string | null;
-  countsByCategory: { category: string; count: number }[];
-  divergences: ParityDivergenceView[];
-}
-
-export interface ParityDivergenceView {
-  category: string;
-  trade_number: number | null;
-  ms_utc: number | null;
-  message: string;
 }
 
 const UNAVAILABLE_REASON_COPY: Record<string, string> = {
   no_lean_counterpart: "No LEAN counterpart is registered for this strategy.",
-  adjustment_unsupported: "LEAN validates raw bars only — run with adjusted=false to get a companion.",
+  adjustment_unsupported: "LEAN validates raw bars only; run with adjusted data disabled.",
   resolution_unsupported: "LEAN companions run on minute resolution only.",
   window_unsupported: "The run has no explicit date window for the companion to reproduce.",
 };
 
-function toParityView(verdict: { status: string; verdictJson: string; createdAt: number }): ParityView {
+function toParityView(verdict: { status: string; verdictJson: string }): StrategyLabParityView {
   let parsed: {
     reason?: string | null;
     counts_by_category?: Record<string, number>;
-    divergences?: ParityDivergenceView[];
+    divergences?: { category: string; message: string }[];
   } = {};
   try {
     parsed = JSON.parse(verdict.verdictJson) as typeof parsed;
   } catch {
-    // Unreadable verdict JSON degrades to status-only display.
+    // Status-only is the honest fallback for an unreadable legacy payload.
   }
-  const rawReason = parsed.reason ?? null;
+  const reason = parsed.reason ?? null;
   return {
     status: verdict.status,
-    createdAt: verdict.createdAt,
-    reason: rawReason ? (UNAVAILABLE_REASON_COPY[rawReason] ?? rawReason) : null,
-    countsByCategory: Object.entries(parsed.counts_by_category ?? {}).map(([category, count]) => ({
-      category,
-      count,
-    })),
+    reason: reason ? (UNAVAILABLE_REASON_COPY[reason] ?? reason) : null,
+    countsByCategory: Object.entries(parsed.counts_by_category ?? {}).map(([category, count]) => ({ category, count })),
     divergences: parsed.divergences ?? [],
   };
 }
@@ -328,8 +300,16 @@ function parseLeanStatistics(json: string | null): LeanStatistics | null {
   if (!json) return null;
   try {
     const parsed = JSON.parse(json) as LeanStatistics;
-    return parsed?.portfolio && parsed?.trade && parsed?.runtime ? parsed : null;
+    return parsed?.portfolio && parsed.trade && parsed.runtime ? parsed : null;
   } catch {
     return null;
   }
+}
+
+function formatMoney(value: number): string {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 2,
+  }).format(value);
 }

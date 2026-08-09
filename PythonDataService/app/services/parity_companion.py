@@ -208,6 +208,7 @@ def _launch_companion_job(
             "start_ms_utc": start_ms,
             "end_ms_utc": end_ms,
             "starting_cash": request.initial_cash if request.initial_cash is not None else 100_000.0,
+            "requested_engine": request.requested_engine,
             "template": registration.lean_twin,
             "data_policy": request.data_policy.model_dump(),
             "parity_group_id": parity_group_id,

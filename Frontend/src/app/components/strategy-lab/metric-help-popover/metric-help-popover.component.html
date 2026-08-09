@@ -1,0 +1,20 @@
+<button
+  type="button"
+  class="metric-help__trigger"
+  [attr.aria-label]="'How ' + metric().label + ' is calculated'"
+  [attr.aria-expanded]="open()"
+  (click)="toggle()"
+>?</button>
+
+@if (open()) {
+  <aside class="metric-help__popover" role="dialog" [attr.aria-label]="metric().label + ' definition'">
+    <div class="metric-help__head">
+      <strong>{{ metric().label }}</strong>
+      <button type="button" class="metric-help__close" aria-label="Close metric help" (click)="close()">×</button>
+    </div>
+    <p>{{ metric().definition }}</p>
+    <code>{{ metric().formula }}</code>
+    <span class="metric-help__source">{{ metric().source }}</span>
+    <a [attr.href]="metric().docAnchor">Full definition →</a>
+  </aside>
+}

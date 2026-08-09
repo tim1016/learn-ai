@@ -47,6 +47,23 @@ def test_pair_empty_events_returns_empty_list() -> None:
     assert open_lot is None
 
 
+def test_failed_lean_payload_preserves_requested_engine_for_history(tmp_path: Path) -> None:
+    from app.services.lean_sidecar_persistence import build_persist_payload
+
+    payload = build_persist_payload(
+        workspace_path=tmp_path,
+        run_id="history-rehydrate",
+        starting_cash=100_000,
+        symbol="SPY",
+        algorithm_name="ema_crossover",
+        start_date_ms=1_700_000_000_000,
+        end_date_ms=1_700_000_600_000,
+        requested_engine="both",
+    )
+
+    assert payload["requested_engine"] == "both"
+
+
 def test_pair_skips_non_filled_events() -> None:
     events = [
         {**_filled_event(1, "buy", 1_700_000_000_000, 100.0, 10), "status": "submitted"},

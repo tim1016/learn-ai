@@ -386,6 +386,7 @@ public class BacktestRunPersistenceServiceTests
             DataPolicyJson = CanonicalDataPolicyJson,
             CommissionPerOrder = 1m,
             BrokeragePolicy = "algorithm_default",
+            RequestedEngine = "both",
         };
 
         var id = await service.PersistAsync(payload, CancellationToken.None);
@@ -395,6 +396,22 @@ public class BacktestRunPersistenceServiceTests
         Assert.Equal(CanonicalDataPolicyJson, row.DataPolicyJson);
         Assert.Equal(1m, row.CommissionPerOrder);
         Assert.Equal("algorithm_default", row.BrokeragePolicy);
+        Assert.Equal("both", row.RequestedEngine);
+    }
+
+    [Fact]
+    public async Task PersistAsync_InvalidRequestedEngine_RejectsAtBoundary()
+    {
+        var service = CreateService(out _);
+        var payload = BuildPayload(leanRunId: "ui_run_bad_requested_engine") with
+        {
+            RequestedEngine = "maybe",
+        };
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(
+            () => service.PersistAsync(payload, CancellationToken.None));
+
+        Assert.Contains("requested_engine", error.Message);
     }
 
     [Fact]

@@ -55,6 +55,7 @@ public sealed record BacktestRunDetailType
     public int Id { get; init; }
     public Engine Engine { get; init; }
     public string Source { get; init; } = "";
+    public string? RequestedEngine { get; init; }
     public string StrategyName { get; init; } = "";
     public string Symbol { get; init; } = "";
     public string? LeanRunId { get; init; }
@@ -89,6 +90,7 @@ public sealed record BacktestRunDetailType
     public string? InsightSummaryJson { get; init; }
     public string? DataPolicyJson { get; init; }
     public DataPolicyType? DataPolicy => DataPolicyType.TryParse(DataPolicyJson);
+    public decimal? CommissionPerOrder { get; init; }
     public string? ParityGroupId { get; init; }
     public IReadOnlyList<BacktestRunTradeDetailType> Trades { get; init; } = [];
     public IReadOnlyList<BacktestRunParityVerdictType> ParityVerdicts { get; init; } = [];
@@ -104,6 +106,7 @@ public sealed record BacktestRunDetailType
             Id = execution.Id,
             Engine = EngineExtensions.FromSource(execution.Source),
             Source = execution.Source,
+            RequestedEngine = execution.RequestedEngine,
             StrategyName = execution.StrategyName,
             Symbol = execution.Ticker.Symbol,
             LeanRunId = execution.LeanRunId,
@@ -134,6 +137,7 @@ public sealed record BacktestRunDetailType
             ValidationAnalytics = ParseValidationAnalytics(execution.ValidationAnalyticsJson, execution.Id, logger),
             InsightSummaryJson = execution.InsightSummaryJson,
             DataPolicyJson = execution.DataPolicyJson,
+            CommissionPerOrder = execution.CommissionPerOrder,
             ParityGroupId = execution.ParityGroupId,
             Trades = execution.Trades
                 .OrderBy(t => t.EntryTimestamp)

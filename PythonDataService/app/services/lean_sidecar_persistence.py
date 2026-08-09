@@ -13,7 +13,7 @@ import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import httpx
 
@@ -513,6 +513,7 @@ def build_persist_payload(
     manifest: RunManifest | Mapping[str, Any] | None = None,
     cleanliness: RunVerdictCleanliness | Mapping[str, Any] | None = None,
     parity_group_id: str | None = None,
+    requested_engine: Literal["python", "lean", "both"] = "lean",
 ) -> dict[str, Any]:
     """Build a JSON-serializable payload to POST to the .NET persist endpoint.
 
@@ -556,6 +557,7 @@ def build_persist_payload(
             workspace_path=workspace_path,
             error="No normalized/result.json — LEAN run did not produce output",
             manifest=manifest,
+            requested_engine=requested_engine,
         )
 
     try:
@@ -592,6 +594,7 @@ def build_persist_payload(
             workspace_path=workspace_path,
             error=f"normalization_error: {type(exc).__name__}: {exc}",
             manifest=manifest,
+            requested_engine=requested_engine,
         )
 
     lean_statistics = _normalized_to_lean_statistics_response(
@@ -604,6 +607,7 @@ def build_persist_payload(
     return {
         "lean_run_id": run_id,
         "source": "lean-sidecar",
+        "requested_engine": requested_engine,
         "strategy_name": algorithm_name,
         "symbol": symbol,
         "starting_cash": starting_cash,
@@ -730,12 +734,14 @@ def _failed_run_payload(
     workspace_path: Path,
     error: str,
     manifest: RunManifest | Mapping[str, Any] | None = None,
+    requested_engine: Literal["python", "lean", "both"] = "lean",
 ) -> dict[str, Any]:
     """Build a zero-trade payload for a LEAN run that failed or produced no result."""
     failed_verdict = failed_run_verdict(error)
     return {
         "lean_run_id": run_id,
         "source": "lean-sidecar",
+        "requested_engine": requested_engine,
         "strategy_name": algorithm_name,
         "symbol": symbol,
         "starting_cash": starting_cash,

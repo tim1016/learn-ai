@@ -1,4 +1,4 @@
-<section #rootEl class="group" aria-label="Instrument">
+<section #rootEl class="group" [class.group--flat]="appearance() === 'flat'" aria-label="Instrument">
   <header class="group__head">
     <span class="group__eyebrow">
       <span class="group__eyebrow-dot group__eyebrow-dot--accent"></span>
@@ -39,8 +39,8 @@
           type="text"
           class="ticker-box__input mono"
           placeholder="Search symbol or name…"
-          [ngModel]="query()"
-          (ngModelChange)="onSearchInput($event)"
+          [value]="query()"
+          (input)="onSearchInputEvent($event)"
           (click)="$event.stopPropagation()"
           (keydown)="$event.stopPropagation()"
           #searchInput
