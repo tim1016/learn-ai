@@ -19,6 +19,7 @@ import { LeanStatisticsComponent } from "../../lean-engine/lean-statistics/lean-
 export class StrategyLabDeepDivesComponent {
   readonly result = input.required<EngineResultData>();
   readonly commissionPerOrder = input<number | null>(null);
+  readonly tradesTruncated = input(false);
 
   readonly leanStats = computed<LeanStatistics | null>(() => {
     const stats = this.result().lean_statistics;

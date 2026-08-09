@@ -14,6 +14,10 @@ namespace Backend.GraphQL;
 [ExtendObjectType<Query>]
 public class BacktestRunDetailQuery
 {
+    // Run totals remain authoritative on StrategyExecution; this bounds only
+    // the automatic chart-marker and ledger evidence carried by the report.
+    private const int ReportTradeLimit = 500;
+
     [GraphQLName("backtestRun")]
     public async Task<BacktestRunDetailType?> GetBacktestRun(
         int id,
@@ -24,11 +28,22 @@ public class BacktestRunDetailQuery
         var execution = await context.StrategyExecutions
             .AsNoTracking()
             .Include(e => e.Ticker)
-            .Include(e => e.Trades)
             .FirstOrDefaultAsync(e => e.Id == id, ct);
 
         if (execution is null)
             return null;
+
+        var recentTrades = await context.BacktestTrades
+            .AsNoTracking()
+            .Where(t => t.StrategyExecutionId == id)
+            .OrderByDescending(t => t.EntryTimestamp)
+            .ThenByDescending(t => t.Id)
+            .Take(ReportTradeLimit + 1)
+            .ToListAsync(ct);
+        var tradesTruncated = recentTrades.Count > ReportTradeLimit;
+        if (tradesTruncated)
+            recentTrades.RemoveAt(recentTrades.Count - 1);
+        recentTrades.Reverse();
 
         var parityVerdicts = await context.ParityVerdicts
             .AsNoTracking()
@@ -46,7 +61,12 @@ public class BacktestRunDetailQuery
             })
             .ToListAsync(ct);
 
-        return BacktestRunDetailType.FromExecution(execution, parityVerdicts, logger);
+        return BacktestRunDetailType.FromExecution(
+            execution,
+            parityVerdicts,
+            logger,
+            recentTrades,
+            tradesTruncated);
     }
 }
 
@@ -95,12 +115,15 @@ public sealed record BacktestRunDetailType
     public decimal? CommissionPerOrder { get; init; }
     public string? ParityGroupId { get; init; }
     public IReadOnlyList<BacktestRunTradeDetailType> Trades { get; init; } = [];
+    public bool TradesTruncated { get; init; }
     public IReadOnlyList<BacktestRunParityVerdictType> ParityVerdicts { get; init; } = [];
 
     public static BacktestRunDetailType FromExecution(
         StrategyExecution execution,
         IReadOnlyList<BacktestRunParityVerdictType> parityVerdicts,
-        ILogger logger)
+        ILogger logger,
+        IReadOnlyList<BacktestTrade>? trades = null,
+        bool tradesTruncated = false)
     {
         var leanKpis = ParseLeanKpis(execution, logger);
         return new BacktestRunDetailType
@@ -142,10 +165,11 @@ public sealed record BacktestRunDetailType
             DataPolicyJson = execution.DataPolicyJson,
             CommissionPerOrder = execution.CommissionPerOrder,
             ParityGroupId = execution.ParityGroupId,
-            Trades = execution.Trades
+            Trades = (trades ?? execution.Trades)
                 .OrderBy(t => t.EntryTimestamp)
                 .Select(BacktestRunTradeDetailType.FromTrade)
                 .ToList(),
+            TradesTruncated = tradesTruncated,
             ParityVerdicts = parityVerdicts,
         };
     }

@@ -87,10 +87,7 @@ public class BacktestRunsQuery
                 VerdictGrade = s.VerdictGrade,
                 VerdictSignal = s.VerdictSignal,
                 ParityGroupId = s.ParityGroupId,
-                Trades = s.Trades.Select(t => new BacktestRunTradeSummaryType
-                {
-                    IsSyntheticExit = t.IsSyntheticExit,
-                }).ToList(),
+                HasSyntheticExit = s.Trades.Any(t => t.IsSyntheticExit),
             });
     }
 }
@@ -120,7 +117,7 @@ public sealed record BacktestRunNodeType
     public string? VerdictGrade { get; init; }
     public string? VerdictSignal { get; init; }
     public string? ParityGroupId { get; init; }
-    public IReadOnlyList<BacktestRunTradeSummaryType> Trades { get; init; } = [];
+    public bool HasSyntheticExit { get; init; }
 
     // Keep this materialized mapping aligned with GetBacktestRuns' projection.
     public static BacktestRunNodeType FromExecution(StrategyExecution execution) => new()
@@ -143,14 +140,6 @@ public sealed record BacktestRunNodeType
         VerdictGrade = execution.VerdictGrade,
         VerdictSignal = execution.VerdictSignal,
         ParityGroupId = execution.ParityGroupId,
-        Trades = execution.Trades.Select(t => new BacktestRunTradeSummaryType
-        {
-            IsSyntheticExit = t.IsSyntheticExit,
-        }).ToList(),
+        HasSyntheticExit = execution.Trades.Any(t => t.IsSyntheticExit),
     };
-}
-
-public sealed record BacktestRunTradeSummaryType
-{
-    public bool IsSyntheticExit { get; init; }
 }

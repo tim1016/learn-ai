@@ -25,8 +25,11 @@
       <app-strategy-lab-deep-dives
         [result]="result"
         [commissionPerOrder]="currentRun.commissionPerOrder"
+        [tradesTruncated]="currentRun.tradesTruncated"
       />
     }
+  } @else if (loadError()) {
+    <div class="run-report__empty">Run report could not be loaded. Try again from History.</div>
   } @else {
     <div class="run-report__empty">Run not found.</div>
   }

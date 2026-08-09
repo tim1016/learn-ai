@@ -1,7 +1,11 @@
 <section class="ledger" aria-labelledby="trade-ledger-title">
   <header>
     <div><p>Execution audit</p><h2 id="trade-ledger-title">Trade history</h2></div>
-    <div class="counts"><span>All {{ trades().length }}</span><span>{{ winners() }} winners</span><span>{{ losses() }} losses</span></div>
+    <div class="counts">
+      <span>{{ isTruncated() ? "Loaded" : "All" }} {{ trades().length }}</span>
+      <span>{{ winners() }} {{ isTruncated() ? "loaded winners" : "winners" }}</span>
+      <span>{{ losses() }} {{ isTruncated() ? "loaded losses" : "losses" }}</span>
+    </div>
   </header>
   @if (trades().length > 0) {
     <div class="table-wrap">
@@ -23,6 +27,18 @@
         </tbody>
       </table>
     </div>
-    <footer><span>Showing {{ visibleTrades().length }} of {{ trades().length }} closed trades · viewer-local time</span><button type="button" (click)="toggleExpanded()">{{ expanded() ? 'Show recent trades' : 'Open complete trade ledger' }}</button></footer>
+    <footer>
+      <span>
+        @if (isTruncated()) {
+          Showing {{ visibleTrades().length }} of the {{ trades().length }} most recent trades
+          ({{ totalTradeCount() }} total) · viewer-local time
+        } @else {
+          Showing {{ visibleTrades().length }} of {{ trades().length }} closed trades · viewer-local time
+        }
+      </span>
+      <button type="button" (click)="toggleExpanded()">
+        {{ expanded() ? "Show recent trades" : isTruncated() ? "Open loaded trade ledger" : "Open complete trade ledger" }}
+      </button>
+    </footer>
   } @else { <p class="empty-state">This run did not close any trades.</p> }
 </section>

@@ -66,9 +66,20 @@
   </details>
 
   <details>
-    <summary><span>Trade ledger</span><small>{{ r.trades.length }} completed trades</small></summary>
+    <summary>
+      <span>Trade ledger</span>
+      @if (tradesTruncated()) {
+        <small>{{ r.trades.length }} recent of {{ r.total_trades }} completed trades</small>
+      } @else {
+        <small>{{ r.total_trades }} completed trades</small>
+      }
+    </summary>
     <div class="deep-dives__body">
-      <app-engine-trade-ledger [trades]="r.trades" />
+      <app-engine-trade-ledger
+        [trades]="r.trades"
+        [totalTradeCount]="r.total_trades"
+        [tradesTruncated]="tradesTruncated()"
+      />
     </div>
   </details>
 </section>

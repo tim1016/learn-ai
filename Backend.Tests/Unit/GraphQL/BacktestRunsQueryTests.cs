@@ -143,7 +143,7 @@ public class BacktestRunsQueryTests
     }
 
     [Fact]
-    public async Task GetBacktestRuns_NewFields_LeanRunIdAndIsSyntheticExitExposed()
+    public async Task GetBacktestRuns_NewFields_LeanRunIdAndSyntheticExitSummaryExposed()
     {
         var (query, db) = await BuildAsync();
 
@@ -152,8 +152,7 @@ public class BacktestRunsQueryTests
         Assert.Single(result);
         var execution = result[0];
         Assert.Equal("run-lean-001", execution.LeanRunId);
-        Assert.NotEmpty(execution.Trades);
-        Assert.True(execution.Trades[0].IsSyntheticExit);
+        Assert.True(execution.HasSyntheticExit);
     }
 
     [Fact]

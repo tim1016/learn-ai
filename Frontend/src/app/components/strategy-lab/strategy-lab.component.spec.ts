@@ -72,6 +72,7 @@ function run(overrides: Partial<BacktestRunDetail> = {}): BacktestRunDetail {
     insightSummaryJson: null,
     parityGroupId: null,
     trades: [],
+    tradesTruncated: false,
     parityVerdicts: [],
     ...overrides,
   };

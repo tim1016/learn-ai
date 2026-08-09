@@ -13,7 +13,14 @@ import type { EngineTrade } from '../engine-results.component';
 })
 export class TradeLedgerComponent {
   readonly trades = input.required<EngineTrade[]>();
+  readonly totalTradeCount = input<number | null>(null);
+  readonly tradesTruncated = input(false);
   readonly expanded = signal(false);
+
+  readonly isTruncated = computed(() =>
+    this.tradesTruncated()
+      || (this.totalTradeCount() ?? this.trades().length) > this.trades().length,
+  );
 
   readonly visibleTrades = computed(() => {
     const newestFirst = [...this.trades()].reverse();
