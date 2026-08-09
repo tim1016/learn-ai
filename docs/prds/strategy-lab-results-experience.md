@@ -215,6 +215,12 @@ On successful persistence, Workbench navigates to the canonical Results route
 for the new run. It does not embed the complete Results component tree beneath
 the form.
 
+The persistence source is asserted before a new LEAN run stages any data. If it
+changes after that run has launched, the worker persists the completed result
+from its already-loaded source, returns the persisted run identity, and directs
+the operator to Results. It logs that the data service must restart before the
+next run; it does not discard a completed run or retry work mid-run.
+
 ### 7.3 History
 
 Selecting a completed run navigates to that run's Results route. History does
@@ -352,7 +358,9 @@ flat segment, a terminal point at the run's last covered timestamp.
 All timestamps are `int64 ms UTC`. Accumulation uses the producer's canonical
 accounting precision and explicit `atol=1e-6, rtol=0` validation for accumulated
 P&L. Equal exit timestamps use stable trade-number order and result in one
-deterministically aggregated timestamp point.
+deterministically aggregated timestamp point. An exit equal to the first or
+last covered timestamp owns that boundary timestamp with its post-exit value;
+the producer does not emit a duplicate anchor.
 
 The final realized value must equal persisted initial cash plus persisted total
 closed-trade P&L within the pinned tolerance. A synthetic terminal exit is a
@@ -372,9 +380,11 @@ and engine authority map in the same PR as its canonical producer.
 ## 10. Persisted report contract
 
 The runtime report envelope advances to a strict version that includes both
-curve identities and typed metadata. Existing runtime runs are removed, so the
-new reader does not require a permanent legacy branch or a best-effort fallback
-that could mislabel mark-to-market points as realized equity.
+curve identities and typed metadata. Until the authorized runtime-history reset
+has actually completed, the reader keeps a narrow legacy branch: a bare
+pre-v2 curve is explicitly exposed as legacy mark-to-market evidence and its
+realized curve is marked unavailable. It never relabels those points as
+realized equity.
 
 The boundary guarantees:
 
@@ -443,7 +453,10 @@ attribution.
 ## 13. Runtime-history reset
 
 The user has authorized deletion of all existing runtime-generated Strategy Lab
-runs because the report contract is intentionally forward-only.
+runs because the report contract is intentionally forward-only. This reset has
+not been executed by this PR: the exact scoped counts and targets remain a
+runtime-operation prerequisite. The temporary legacy reader in §10 stays until
+that separately reported deletion completes.
 
 Before deletion, the implementation must resolve and report exact counts for:
 

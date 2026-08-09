@@ -95,6 +95,14 @@ class _EntryThenExitStrategy(Strategy):
         self.on_force_flat_called = True
 
 
+class _EndHookLiquidatingStrategy(_EntryThenExitStrategy):
+    """Leaves the position open until the end hook requests liquidation."""
+
+    def on_end_of_algorithm(self) -> None:
+        assert self.ctx is not None
+        self.ctx.liquidate(self._symbol)
+
+
 class _EntryOnEveryBarStrategy(Strategy):
     """Tries to open a long position on every ``on_bar`` callback.
     Used for session-cutoff tests where we want to verify the cutoff
@@ -270,6 +278,23 @@ def test_force_flat_closes_open_position_at_configured_time():
     assert close_event.fill_price == Decimal("505")
     assert close_event.direction is Direction.SHORT
     assert close_event.fill_quantity == -100
+
+
+def test_end_hook_liquidation_is_materialized_as_a_synthetic_terminal_exit():
+    """The final close must be a ledger-ready fill, not an open MTM position."""
+    bars = [_bar(15, 30), _bar(15, 31), _bar(15, 32, close="505")]
+    strategy = _EndHookLiquidatingStrategy()
+
+    _run(bars, strategy)
+
+    assert len(strategy.order_events) == 2
+    close_event = strategy.order_events[-1]
+    assert close_event.tag == "EndOfAlgorithm"
+    assert close_event.direction is Direction.SHORT
+    assert close_event.fill_quantity == -100
+    assert close_event.fill_price == Decimal("505")
+    assert strategy.ctx is not None
+    assert strategy.ctx.portfolio.get_position("SPY").quantity == 0
 
 
 def test_force_flat_invokes_on_force_flat_state_sync_hook():

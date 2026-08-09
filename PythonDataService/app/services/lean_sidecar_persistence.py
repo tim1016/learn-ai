@@ -914,10 +914,8 @@ def _failed_run_payload(
         # elsewhere in the payload already conveys the failure. The
         # frontend's defensive guard accepts this shape and renders an
         # empty dashboard rather than crashing on a flat error dict.
-        # The diagnostic ``error`` string previously stashed here is
-        # now only surfaced via ``logger.warning`` at the call site so
-        # the .NET row's ``lean_statistics`` column always has the
-        # canonical shape.
+        # The diagnostic is carried in the versioned equity envelope,
+        # keeping ``lean_statistics`` a parseable canonical shape.
         "lean_statistics": LeanStatisticsResponse().model_dump(mode="json"),
         # Even on failed runs we forward the manifest fields if available;
         # the .NET service preserves NULL when the manifest is unavailable
@@ -925,6 +923,22 @@ def _failed_run_payload(
         "data_policy_json": _data_policy_json_from_manifest(manifest),
         "brokerage_policy": _brokerage_policy_from_manifest(manifest),
         "commission_per_order": 0.0,
+        "equity_curve_json": json.dumps({
+            "schema_version": 2,
+            "error": error,
+            "mark_to_market": {
+                "cadence": "lean_chart_sampling",
+                "downsample": {"raw_points": 0, "kept_points": 0},
+                "points": [],
+                "error": error,
+            },
+            "realized": {
+                "cadence": "trade_exit",
+                "downsample": {"raw_points": 0, "kept_points": 0},
+                "points": [],
+                "error": error,
+            },
+        }),
         "validation_analytics_json": None,
         "run_verdict_json": failed_verdict.model_dump_json(),
         "verdict_version": failed_verdict.verdict_version,

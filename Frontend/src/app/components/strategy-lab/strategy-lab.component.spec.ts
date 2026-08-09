@@ -153,21 +153,26 @@ describe("Strategy Lab saved configuration", () => {
     const saved = run();
     const { fixture, http } = await createLab({ restoreRun: saved.id, backtestRun: saved });
     http.expectOne((request) => request.url.endsWith("/api/engine/strategies")).flush(strategyCatalog());
+    const root = fixture.nativeElement as HTMLElement;
     await vi.waitFor(() => {
-      expect(fixture.componentInstance.config.engine()).toBe("both");
+      expect(root.querySelector(".config-rail")).not.toBeNull();
     });
     fixture.detectChanges();
 
-    expect(fixture.componentInstance.config.range()).toEqual(expect.objectContaining({
-      symbol: "QQQ",
-      from: "2026-03-02",
-      to: "2026-04-02",
-      resolution: "minute",
-    }));
-    expect(fixture.componentInstance.config.fillMode()).toBe("next_bar_open");
-    expect(fixture.componentInstance.config.initialCash()).toBe(75_000);
-    expect(fixture.componentInstance.config.commissionPerOrder()).toBe(0.35);
-    const root = fixture.nativeElement as HTMLElement;
+    expect(root.querySelector<HTMLElement>("[role='radio'][aria-checked='true']")?.textContent?.trim()).toBe("both");
+    expect(root.querySelector("app-instrument-card .ticker-box__symbol")?.textContent?.trim()).toBe("QQQ");
+    const dates = root.querySelectorAll<HTMLInputElement>("app-time-window-card input[type='date']");
+    expect(dates[0]?.value).toBe("2026-03-02");
+    expect(dates[1]?.value).toBe("2026-04-02");
+
+    const advanced = root.querySelector<HTMLDetailsElement>("details.advanced");
+    if (!advanced) throw new Error("Advanced configuration controls are missing");
+    advanced.open = true;
+    fixture.detectChanges();
+    expect(root.querySelector<HTMLSelectElement>("details.advanced select")?.value).toBe("next_bar_open");
+    const executionInputs = root.querySelectorAll<HTMLInputElement>("details.advanced fieldset:last-of-type input");
+    expect(executionInputs[0]?.value).toBe("75000");
+    expect(executionInputs[1]?.value).toBe("0.35");
     expect(root.querySelector("app-engine-run-report")).toBeNull();
     expect(root.querySelector("app-strategy-lab-results-sidebar")).toBeNull();
     http.verify();

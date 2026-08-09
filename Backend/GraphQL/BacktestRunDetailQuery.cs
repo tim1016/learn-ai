@@ -301,8 +301,19 @@ public sealed record BacktestRunDetailType
         {
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
-            if (!root.TryGetProperty("schema_version", out var versionElement) ||
-                !versionElement.TryGetInt32(out var schemaVersion) || schemaVersion != 2)
+            if (!root.TryGetProperty("schema_version", out var versionElement))
+            {
+                return new BacktestRunEquityCurvesType
+                {
+                    SchemaVersion = 1,
+                    MarkToMarket = ParseLegacyCurve(root),
+                    Realized = new BacktestRunEquityCurveType
+                    {
+                        Error = "Realized equity was not recorded for this legacy run.",
+                    },
+                };
+            }
+            if (!versionElement.TryGetInt32(out var schemaVersion) || schemaVersion != 2)
             {
                 return new BacktestRunEquityCurvesType
                 {
@@ -313,6 +324,7 @@ public sealed record BacktestRunDetailType
             return new BacktestRunEquityCurvesType
             {
                 SchemaVersion = schemaVersion,
+                Error = ReadError(root),
                 MarkToMarket = ParseCurve(root, "mark_to_market"),
                 Realized = ParseCurve(root, "realized"),
             };
@@ -336,16 +348,35 @@ public sealed record BacktestRunDetailType
         {
             return new BacktestRunEquityCurveType
             {
-                Error = $"Equity report is missing its {propertyName} curve.",
+                Error = $"Equity report is missing its {CurveLabel(propertyName)} curve.",
             };
         }
 
+        return ParseCurveValue(curve, propertyName);
+    }
+
+    private static BacktestRunEquityCurveType ParseLegacyCurve(JsonElement curve) =>
+        ParseCurveValue(curve, "mark_to_market");
+
+    private static BacktestRunEquityCurveType ParseCurveValue(JsonElement curve, string propertyName)
+    {
         var cadence = curve.TryGetProperty("cadence", out var cadenceElement) &&
             cadenceElement.ValueKind == JsonValueKind.String
                 ? cadenceElement.GetString()
                 : null;
         var rawPoints = ReadPointCount(curve, "raw_points");
         var keptPoints = ReadPointCount(curve, "kept_points");
+        var error = ReadError(curve);
+        if (error is not null)
+        {
+            return new BacktestRunEquityCurveType
+            {
+                Cadence = cadence,
+                RawPoints = rawPoints,
+                KeptPoints = keptPoints,
+                Error = error,
+            };
+        }
         if (!HasExpectedCadence(propertyName, cadence))
         {
             return new BacktestRunEquityCurveType
@@ -353,7 +384,7 @@ public sealed record BacktestRunDetailType
                 Cadence = cadence,
                 RawPoints = rawPoints,
                 KeptPoints = keptPoints,
-                Error = $"{propertyName} curve has an unsupported cadence.",
+                Error = $"{CurveLabel(propertyName)} curve has an unsupported cadence.",
             };
         }
         if (!curve.TryGetProperty("points", out var points) || points.ValueKind != JsonValueKind.Array)
@@ -363,7 +394,7 @@ public sealed record BacktestRunDetailType
                 Cadence = cadence,
                 RawPoints = rawPoints,
                 KeptPoints = keptPoints,
-                Error = $"{propertyName} curve is missing points.",
+                Error = $"{CurveLabel(propertyName)} curve is missing points.",
             };
         }
 
@@ -380,7 +411,7 @@ public sealed record BacktestRunDetailType
                     Cadence = cadence,
                     RawPoints = rawPoints,
                     KeptPoints = keptPoints,
-                    Error = $"{propertyName} curve has invalid or non-increasing points.",
+                    Error = $"{CurveLabel(propertyName)} curve has invalid or non-increasing points.",
                 };
             }
             parsed.Add(new BacktestRunEquityPointType(timestamp, equity));
@@ -396,10 +427,18 @@ public sealed record BacktestRunDetailType
         };
     }
 
+    private static string? ReadError(JsonElement element) =>
+        element.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String
+            ? error.GetString()
+            : null;
+
     private static bool HasExpectedCadence(string propertyName, string? cadence) =>
         propertyName == "realized"
             ? cadence == "trade_exit"
             : cadence is "strategy_bar_close" or "lean_chart_sampling";
+
+    private static string CurveLabel(string propertyName) =>
+        propertyName == "mark_to_market" ? "Mark-to-market" : "Realized";
 
     private static int ReadPointCount(JsonElement curve, string propertyName)
     {

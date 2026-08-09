@@ -98,14 +98,13 @@ A new **presentation-only** Angular component (working name `TradingChartCompone
 - **Equity pane** — the persisted equity-curve envelope as an area series.
 - **N indicator panes** — one per oscillator-style indicator (RSI, MACD, …).
 
-### 8.2 The alignment requirement (core of the fix)
+### 8.2 Superseded chart implementation note
 
-Today Engine Lab renders the candlestick chart and the equity chart as **two independent charts**, each calling `fitContent()` separately → their x-axes drift. Data Lab syncs the **logical range** across panes but the price pane and sub-panes still **do not draw the same vertical gridlines / time ticks**.
-
-`TradingChartComponent` must guarantee, across **every** pane:
-1. **Logical-range sync** — adopt Data Lab's proven pattern: `subscribeVisibleLogicalRangeChange` ⇄ `setVisibleLogicalRange`, guarded by a single `_isSyncing` reentrancy flag + `requestAnimationFrame` to prevent ping-pong.
-2. **Pixel-aligned axis column** — every pane pins the same right-price-scale `minimumWidth` so drawing areas start at the same x.
-3. **Shared vertical gridlines & one time axis** — the panes render the **same vertical time gridlines at the same x**, and only the bottom pane shows the time axis. This is the piece neither page has today: the equity dip and an indicator reading line up under the exact candle that drove them.
+The former logical-range synchronization design is superseded. Strategy Lab
+uses one native multi-pane chart instance with a single time scale; the current
+implementation contract is `docs/prds/strategy-lab-results-experience.md` §11.
+This historical draft must not be used to reintroduce per-pane chart instances,
+logical-range relays, or reentrancy synchronization.
 
 ### 8.3 Data-source-agnostic inputs
 
@@ -133,10 +132,10 @@ On first render the chart auto-overlays **the strategy's own signal indicators**
 
 **Page order (post-run):** verdict line → condensed metric strip → chart → collapsed deep-dive sections.
 
-**History tab → repopulate config + render results.** Selecting a historical run:
-- Loads that run's **full configuration** back into the rail controls (engine, instrument, time window, strategy + params, Advanced execution settings) — the rail stays collapsed but is recallable.
-- Renders that run's **persisted results** (verdict, metrics, chart) via the shared `RunReportComponent`.
-- Makes **re-run** meaningful (tweak a loaded config and re-run).
+**History and Results composition (superseded).** The current contract is that
+History opens the read-only Results route. Results loads persisted evidence;
+only its **Back to workbench** action restores a saved configuration for
+editing. See the governing PRD §7 and §12.
 - **Dependency:** repopulation needs the run to persist the full config set. The run already records `DataPolicy` (symbol/resolution/dates). **Verify strategy params + execution settings (fill/cash/commission) + engine are persisted and query-exposed; add the missing fields to `StrategyExecution`/the detail query if not.** This is the one backend touch this spec may require; if fields are missing, that's a small additive migration (hand-mirrored DDL per the repo's `EnsureCreated` gotcha).
 
 ## 10. Component architecture & decomposition
@@ -150,7 +149,9 @@ The 1,572-line `LeanEngineComponent` is decomposed (thermo-review will require t
 - **`MetricHelpPopoverComponent`** — definition + formula + docs link; fed from `metric-grade.util.ts` (extended with formulas + provenance).
 - **`TradingChartComponent`** (shared, §8) + a thin **Strategy-Lab chart adapter** mapping run data → chart inputs.
 - **Deep-dive sections** — collapsible wrappers around the existing analytics components.
-- **`RunReportComponent`** (kept, refactored to the new layout) remains the single render source for both the Workbench post-run stage and `/strategy-lab/runs/:id`, so they cannot diverge.
+- **`RunReportComponent`** renders evidence only inside the read-only Results
+  route. The Workbench owns editable configuration and never embeds persisted
+  results. This supersedes the earlier shared-composition proposal; see PRD §7.
 
 Old surfaces removed/retired: the dynamic strategy-detail tab, the standalone readiness/deploy-gate card, the pre-run promotional banner, and (in Spec 1) the unsynced `engine-chart` dual-chart.
 
@@ -159,7 +160,8 @@ Old surfaces removed/retired: the dynamic strategy-detail tab, the standalone re
 1. Config rail (signals) → **Run validation** → `JobsService.startJob(...)` (Python) / LEAN job → SSE phase line.
 2. On completion → persisted run id → `RunReportComponent` fetches the run (`BACKTEST_RUN_DETAIL_QUERY`, polling while parity pending).
 3. `RunReportComponent` renders verdict line and metric strip; the Strategy-Lab chart makes one atomic `/api/engine/chart` request that reads the run's exact policy-keyed bar store and computes strategy indicators through the canonical engine implementations before adapting them to `TradingChartComponent`.
-4. History select → set config signals from the run + route to `RunReportComponent`.
+4. History select → route to read-only Results. Back to workbench restores the
+   saved configuration explicitly.
 
 ## 12. Testing
 

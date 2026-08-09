@@ -114,12 +114,24 @@ export interface StrategyLabConfiguration {
   dataPolicy: DataPolicy | null;
 }
 
+export interface ParsedRunVerdict {
+  verdict: RunVerdict | null;
+  error: string | null;
+}
+
 export function parseRunVerdict(value: string | null): RunVerdict | null {
-  if (!value) return null;
+  return parseRunVerdictEnvelope(value).verdict;
+}
+
+export function parseRunVerdictEnvelope(value: string | null): ParsedRunVerdict {
+  if (!value) return { verdict: null, error: null };
   try {
-    return JSON.parse(value) as RunVerdict;
+    const parsed: unknown = JSON.parse(value);
+    return isRunVerdict(parsed)
+      ? { verdict: parsed, error: null }
+      : { verdict: null, error: "Persisted verdict data is incomplete or malformed." };
   } catch {
-    return null;
+    return { verdict: null, error: "Persisted verdict data is malformed." };
   }
 }
 
@@ -195,4 +207,62 @@ function isParameterValue(value: unknown): value is StrategyParameterValue {
   if (typeof value === "number") return Number.isFinite(value);
   if (Array.isArray(value)) return value.every(isParameterValue);
   return isParameterRecord(value);
+}
+
+function isRunVerdict(value: unknown): value is RunVerdict {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value["verdict_version"] === "number" &&
+    typeof value["engine"] === "string" &&
+    typeof value["generated_at_ms"] === "number" &&
+    isNullableNumber(value["composite"]) &&
+    isNullableString(value["grade"]) &&
+    isNullableString(value["signal"]) &&
+    typeof value["headline"] === "string" &&
+    isStringArray(value["red_flags"]) &&
+    Array.isArray(value["dimensions"]) && value["dimensions"].every(isRunVerdictDimension) &&
+    isStringArray(value["missing_metrics"]) &&
+    typeof value["normalized_weights"] === "boolean" &&
+    (value["cleanliness"] === null || isRecord(value["cleanliness"]))
+  );
+}
+
+function isRunVerdictDimension(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value["key"] === "string" &&
+    typeof value["label"] === "string" &&
+    typeof value["weight"] === "number" &&
+    isNullableNumber(value["score"]) &&
+    typeof value["summary"] === "string" &&
+    Array.isArray(value["sub_scores"]) && value["sub_scores"].every(isRunVerdictSubScore)
+  );
+}
+
+function isRunVerdictSubScore(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value["key"] === "string" &&
+    typeof value["label"] === "string" &&
+    isNullableNumber(value["score"]) &&
+    isNullableNumber(value["raw_value"]) &&
+    typeof value["display"] === "string" &&
+    typeof value["note"] === "string"
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNullableNumber(value: unknown): boolean {
+  return value === null || (typeof value === "number" && Number.isFinite(value));
+}
+
+function isNullableString(value: unknown): boolean {
+  return value === null || typeof value === "string";
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
 }

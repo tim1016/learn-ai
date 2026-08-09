@@ -87,6 +87,10 @@ class LoggedTrade:
     result: str  # "WIN" or "LOSS"
     indicators: dict[str, Decimal] = field(default_factory=dict)
     signal_reason: str = ""
+    # True only when the engine materializes an end-of-algorithm close after
+    # the final data bar. Consumers must distinguish that terminal estimate
+    # from an exit produced by the strategy's normal signal path.
+    is_synthetic_exit: bool = False
 
     def __getattr__(self, name: str) -> Decimal:
         """Delegate unknown attribute access into the ``indicators`` bag.

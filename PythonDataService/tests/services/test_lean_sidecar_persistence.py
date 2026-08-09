@@ -1396,6 +1396,10 @@ def test_failed_run_payload_emits_canonical_shape(tmp_path: Path) -> None:
     assert verdict["grade"] == "F"
     assert verdict["signal"] == "Reject"
     assert "lean_run_failed" in verdict["red_flags"]
+    equity = json.loads(payload["equity_curve_json"])
+    assert equity["schema_version"] == 2
+    assert equity["mark_to_market"]["error"] == "No normalized/result.json — LEAN run did not produce output"
+    assert equity["realized"]["error"] == "No normalized/result.json — LEAN run did not produce output"
 
 
 @pytest.mark.asyncio

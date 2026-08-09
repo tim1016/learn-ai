@@ -66,17 +66,18 @@ def build_realized_equity_envelope(
 ) -> dict[str, Any]:
     """Build the closed-trade equity staircase for a persisted run.
 
-    Formula: E_0 = initial_cash; E_i = E_(i-1) + net_pnl_i, with each
-      net P&L booked at the closed trade's ``exit_ms_utc``.
-    Reference: Internal persisted-trade accounting contract; the same net P&L
-      values are stored in ``BacktestTrade.PnL``.
+    Formula: E(t) = initial_cash + sum(net_pnl_i for closed trades where exit_i <= t).
+    Reference: [realized-equity-staircase-v1](../../../../docs/references/realized-equity-staircase-v1.md)
+      — the persisted ``BacktestTrade.PnL`` accounting contract.
     Canonical implementation: this file.
-    Validated against: PythonDataService/tests/engine/results/test_equity_downsample.py.
+    Validated against: PythonDataService/tests/engine/results/test_equity_downsample.py::test_realized_equity_matches_golden_fixture.
 
-    Equal exit timestamps fold deterministically in trade-number order.  The
-    first point is the run's initial equity and the optional final point holds
-    the final result to the end of the chart window.  Unlike a visual envelope
-    of mark-to-market evidence, every closed-trade step is retained.
+    Equal exit timestamps fold deterministically in trade-number order. When
+    an exit falls exactly on a run boundary, its aggregated post-exit value
+    owns that timestamp rather than creating duplicate points. The optional
+    final point holds the final result to the end of the chart window. Unlike
+    a visual envelope of mark-to-market evidence, every closed-trade step is
+    retained.
     """
     if start_ms_utc <= 0 or end_ms_utc <= 0:
         raise ValueError("realized equity bounds must be positive int64 ms UTC timestamps")
@@ -85,13 +86,16 @@ def build_realized_equity_envelope(
 
     initial = _to_decimal(initial_cash)
     ordered = sorted(trades, key=lambda trade: (trade.exit_ms_utc, trade.trade_number))
-    if any(trade.exit_ms_utc <= start_ms_utc for trade in ordered):
-        raise ValueError("closed-trade exits must follow the realized equity start timestamp")
+    if any(trade.exit_ms_utc < start_ms_utc for trade in ordered):
+        raise ValueError("closed-trade exits must not precede the realized equity start timestamp")
     if any(trade.exit_ms_utc > end_ms_utc for trade in ordered):
         raise ValueError("closed-trade exits must fall within the realized equity bounds")
 
-    points = [EquityCurvePoint(t=start_ms_utc, e=float(initial))]
     equity = initial
+    points: list[EquityCurvePoint] = []
+    if not ordered or ordered[0].exit_ms_utc > start_ms_utc:
+        points.append(EquityCurvePoint(t=start_ms_utc, e=float(equity)))
+
     index = 0
     while index < len(ordered):
         exit_ms_utc = ordered[index].exit_ms_utc
@@ -102,6 +106,8 @@ def build_realized_equity_envelope(
         equity += exit_pnl
         points.append(EquityCurvePoint(t=exit_ms_utc, e=float(equity)))
 
+    if not points:
+        points.append(EquityCurvePoint(t=start_ms_utc, e=float(equity)))
     if end_ms_utc > points[-1].t:
         points.append(EquityCurvePoint(t=end_ms_utc, e=float(equity)))
 

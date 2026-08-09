@@ -1,4 +1,4 @@
-import { Component, input, provideZonelessChangeDetection } from "@angular/core";
+import { Component, computed, input, provideZonelessChangeDetection } from "@angular/core";
 import { ComponentFixture, TestBed } from "@angular/core/testing";
 import { Apollo } from "apollo-angular";
 import { from } from "rxjs";
@@ -8,11 +8,20 @@ import type { BacktestRunDetail, BacktestRunDetailTrade } from "../../../graphql
 import { StrategyLabChartComponent } from "../../strategy-lab/strategy-lab-chart/strategy-lab-chart.component";
 import { parseLeanAnalysis, RunReportComponent, toEngineTrade } from "./run-report.component";
 
-@Component({ selector: "app-strategy-lab-chart", template: "<div data-testid=\"strategy-chart\">Shared-time-scale strategy chart</div>" })
+@Component({
+  selector: "app-strategy-lab-chart",
+  template: `
+    <div data-testid="strategy-chart">Shared-time-scale strategy chart</div>
+    <output data-testid="strategy-chart-markers">{{ markersJson() }}</output>
+    <output data-testid="strategy-chart-equity">{{ equityPointsJson() }}</output>
+  `,
+})
 class StrategyLabChartStubComponent {
   readonly run = input.required<BacktestRunDetail>();
   readonly markers = input<unknown[]>([]);
   readonly equityPoints = input<unknown[]>([]);
+  readonly markersJson = computed(() => JSON.stringify(this.markers()));
+  readonly equityPointsJson = computed(() => JSON.stringify(this.equityPoints()));
 }
 
 function makeTrade(overrides: Partial<BacktestRunDetailTrade> = {}): BacktestRunDetailTrade {
@@ -150,13 +159,14 @@ describe("RunReportComponent", () => {
 
   it("uses the producer-authored realized staircase instead of mark-to-market points", async () => {
     const fixture = await renderReport(makeRun(), true);
+    const root = fixture.nativeElement as HTMLElement;
 
     expect(watchQueryMock).not.toHaveBeenCalled();
-    expect(fixture.componentInstance.equityPoints()).toEqual([
+    expect(root.querySelector("[data-testid='strategy-chart-equity']")?.textContent).toBe(JSON.stringify([
       { timeMs: Date.UTC(2026, 0, 5, 15, 0), value: 100_000 },
       { timeMs: makeTrade().exitTimestamp, value: 100_048 },
       { timeMs: Date.UTC(2026, 0, 6, 21, 0), value: 100_048 },
-    ]);
+    ]));
   });
 
   it("does not mislabel a report-query failure as a missing run", async () => {
@@ -173,11 +183,12 @@ describe("RunReportComponent", () => {
 
   it("keeps buy and sell markers tied to persisted trade outcomes", async () => {
     const fixture = await renderReport(makeRun({ trades: [makeTrade({ pnL: 0, pnlPts: 0, pnlPct: 0 })] }));
+    const markers = (fixture.nativeElement as HTMLElement)
+      .querySelector("[data-testid='strategy-chart-markers']")?.textContent;
 
-    expect(fixture.componentInstance.markers()).toEqual([
-      expect.objectContaining({ color: "#90a4ae", text: "BUY · BREAK EVEN" }),
-      expect.objectContaining({ color: "#90a4ae", text: "SELL · $0.00" }),
-    ]);
+    expect(markers).toContain('"color":"#90a4ae"');
+    expect(markers).toContain("BUY · BREAK EVEN");
+    expect(markers).toContain("SELL · $0.00");
   });
 
   it("makes a missing realized curve explicit instead of relabeling mark-to-market evidence", async () => {
@@ -191,7 +202,17 @@ describe("RunReportComponent", () => {
     }));
 
     expect((fixture.nativeElement as HTMLElement).textContent).toContain("Realized equity unavailable.");
-    expect(fixture.componentInstance.equityPoints()).toEqual([]);
+    expect((fixture.nativeElement as HTMLElement)
+      .querySelector("[data-testid='strategy-chart-equity']")?.textContent).toBe("[]");
+  });
+
+  it("renders a notice for a structurally malformed persisted verdict", async () => {
+    const fixture = await renderReport(makeRun({ verdictJson: "{}" }));
+
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain(
+      "Persisted verdict data is incomplete or malformed.",
+    );
+    expect(fixture.componentInstance.verdict()).toBeNull();
   });
 
   it("preserves every valid native LEAN analysis finding and arbitrary sample shape", () => {

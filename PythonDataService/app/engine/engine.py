@@ -212,7 +212,13 @@ class BacktestEngine:
             pos = portfolio.get_position(order.symbol)
             return abs(pos.quantity + order.quantity) > abs(pos.quantity)
 
-        def _force_flat_close(pos_qty: int, symbol: str, bar: TradeBar) -> OrderEvent:
+        def _force_flat_close(
+            pos_qty: int,
+            symbol: str,
+            bar: TradeBar,
+            *,
+            tag: str = "ForceFlat",
+        ) -> OrderEvent:
             """Synthesize a market-close fill at the current minute's
             close. Bypasses ``fill_model.fill_market_order`` so force-
             flat works identically under any configured fill mode
@@ -233,7 +239,7 @@ class BacktestEngine:
                 fill_quantity=close_qty,
                 direction=direction,
                 fee=self.fill_model.compute_fee(quantity=int(close_qty), fill_price=fill_price),
-                tag="ForceFlat",
+                tag=tag,
             )
 
         previous_minute_bar: TradeBar | None = None
@@ -466,6 +472,34 @@ class BacktestEngine:
                     _register_bracket_if_needed(order, event)
 
         strategy.on_end_of_algorithm()
+
+        # A strategy can request ``liquidate`` in its end hook, but there is
+        # no next market bar on which the normal fill loop can execute it.
+        # Materialize only a reducing terminal order at the final observed
+        # close so final equity and the closed-trade ledger reconcile. The
+        # explicit tag lets the persisted report disclose this synthetic exit.
+        if previous_minute_bar is not None:
+            for order in portfolio.drain_pending():
+                if order.order_type is not OrderType.MARKET or _is_entry_order(order):
+                    continue
+                position = portfolio.get_position(order.symbol)
+                if position.quantity == 0:
+                    continue
+                prior_trade_count = len(getattr(strategy, "trade_log", []))
+                event = _force_flat_close(
+                    position.quantity,
+                    order.symbol,
+                    previous_minute_bar,
+                    tag="EndOfAlgorithm",
+                )
+                portfolio.apply_fill(event)
+                order_events.append(event)
+                strategy.on_order_event(event)
+                trade_log = getattr(strategy, "trade_log", [])
+                if len(trade_log) > prior_trade_count:
+                    completed_trade = trade_log[-1]
+                    completed_trade.signal_reason = "EndOfAlgorithm (synthetic exit)"
+                    completed_trade.is_synthetic_exit = True
 
         # Score any remaining active insights with the final prices.
         if previous_minute_bar is not None:

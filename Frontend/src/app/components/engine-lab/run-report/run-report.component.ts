@@ -20,7 +20,7 @@ import { StrategyLabChartComponent } from "../../strategy-lab/strategy-lab-chart
 import { StrategyLabDeepDivesComponent } from "../../strategy-lab/strategy-lab-deep-dives/strategy-lab-deep-dives.component";
 import { ResultsSummaryComponent } from "../../strategy-lab/results-summary/results-summary.component";
 import {
-  parseRunVerdict,
+  parseRunVerdictEnvelope,
   type StrategyLabParityView,
 } from "../../strategy-lab/strategy-lab.models";
 
@@ -86,7 +86,8 @@ export class RunReportComponent {
   readonly loading = computed(() => this.runResource.isLoading() && !this.run());
   readonly loadError = computed(() => this.runResource.error());
 
-  readonly verdict = computed(() => parseRunVerdict(this.run()?.verdictJson ?? null));
+  readonly verdictEnvelope = computed(() => parseRunVerdictEnvelope(this.run()?.verdictJson ?? null));
+  readonly verdict = computed(() => this.verdictEnvelope().verdict);
 
   readonly engineResult = computed<EngineResultData | null>(() => {
     const run = this.run();
@@ -149,6 +150,8 @@ export class RunReportComponent {
     if (!run) return [];
 
     const notices: string[] = [];
+    const verdictError = this.verdictEnvelope().error;
+    if (verdictError) notices.push(verdictError);
     if (!run.equityCurve) {
       notices.push("This run has no strict dual-curve report.");
     } else if (run.equityCurve.error) {

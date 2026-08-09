@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
@@ -10,6 +12,15 @@ from app.engine.results.equity_downsample import (
     build_equity_curve_envelope,
     build_realized_equity_envelope,
     build_run_equity_envelope,
+)
+
+GOLDEN_FIXTURE = (
+    Path(__file__).resolve().parents[2]
+    / "fixtures"
+    / "golden"
+    / "engine-results"
+    / "ENG-006"
+    / "v1"
 )
 
 
@@ -133,13 +144,84 @@ def test_realized_equity_zero_trade_run_stays_flat() -> None:
     assert envelope["points"] == [{"t": 1_000, "e": 100.0}, {"t": 2_000, "e": 100.0}]
 
 
-def test_realized_equity_rejects_exit_at_or_before_start() -> None:
-    with pytest.raises(ValueError, match="must follow"):
+def test_realized_equity_rejects_exit_before_start() -> None:
+    with pytest.raises(ValueError, match="must not precede"):
         build_realized_equity_envelope(
             initial_cash=100.0,
-            trades=[RealizedEquityTrade(1, 1_000, Decimal("1"))],
+            trades=[RealizedEquityTrade(1, 999, Decimal("1"))],
             start_ms_utc=1_000,
             end_ms_utc=2_000,
+        )
+
+
+def test_realized_equity_rejects_exit_after_end() -> None:
+    with pytest.raises(ValueError, match="within the realized equity bounds"):
+        build_realized_equity_envelope(
+            initial_cash=100.0,
+            trades=[RealizedEquityTrade(1, 3_000, Decimal("1"))],
+            start_ms_utc=1_000,
+            end_ms_utc=2_000,
+        )
+
+
+def test_realized_equity_rejects_non_positive_bounds() -> None:
+    with pytest.raises(ValueError, match="positive int64 ms UTC"):
+        build_realized_equity_envelope(
+            initial_cash=100.0,
+            trades=[],
+            start_ms_utc=0,
+            end_ms_utc=2_000,
+        )
+
+
+def test_realized_equity_rejects_inverted_bounds() -> None:
+    with pytest.raises(ValueError, match="must not precede"):
+        build_realized_equity_envelope(
+            initial_cash=100.0,
+            trades=[],
+            start_ms_utc=2_000,
+            end_ms_utc=1_000,
+        )
+
+
+def test_realized_equity_rejects_non_finite_initial_cash() -> None:
+    with pytest.raises(ValueError, match="finite"):
+        build_realized_equity_envelope(
+            initial_cash=float("nan"),
+            trades=[],
+            start_ms_utc=1_000,
+            end_ms_utc=2_000,
+        )
+
+
+def test_realized_equity_matches_golden_fixture() -> None:
+    """ENG-006: independently hand-computed Decimal staircase receipts."""
+    inputs = json.loads((GOLDEN_FIXTURE / "input.json").read_text(encoding="utf-8"))
+    expected = json.loads((GOLDEN_FIXTURE / "output.json").read_text(encoding="utf-8"))
+    expected_by_name = {case["name"]: case for case in expected["cases"]}
+
+    for case in inputs["cases"]:
+        envelope = build_realized_equity_envelope(
+            initial_cash=Decimal(case["initial_cash"]),
+            trades=[
+                RealizedEquityTrade(
+                    trade_number=trade["trade_number"],
+                    exit_ms_utc=trade["exit_ms_utc"],
+                    pnl=Decimal(trade["pnl"]),
+                )
+                for trade in case["trades"]
+            ],
+            start_ms_utc=case["start_ms_utc"],
+            end_ms_utc=case["end_ms_utc"],
+        )
+
+        actual_points = envelope["points"]
+        expected_points = expected_by_name[case["name"]]["points"]
+        assert [point["t"] for point in actual_points] == [point["t"] for point in expected_points]
+        assert [point["e"] for point in actual_points] == pytest.approx(
+            [point["e"] for point in expected_points],
+            abs=1e-6,
+            rel=0,
         )
 
 

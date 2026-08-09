@@ -33,7 +33,12 @@ from app.routers.engine import (
 )
 
 
-def _response_with_trade(*, quantity: int, pnl_pts: float) -> EngineBacktestResponse:
+def _response_with_trade(
+    *,
+    quantity: int,
+    pnl_pts: float,
+    commission_per_order: float = 0.0,
+) -> EngineBacktestResponse:
     trade = EngineTradeResponse(
         trade_number=1,
         entry_time=1_736_173_800_000,
@@ -52,9 +57,9 @@ def _response_with_trade(*, quantity: int, pnl_pts: float) -> EngineBacktestResp
         strategy_name="ema_crossover",
         fill_mode="signal_bar_close",
         initial_cash=100_000.0,
-        final_equity=100_000.0 + quantity * pnl_pts - 2,
-        net_profit=quantity * pnl_pts - 2,
-        total_fees=2.0,
+        final_equity=100_000.0 + quantity * pnl_pts - 2 * commission_per_order,
+        net_profit=quantity * pnl_pts - 2 * commission_per_order,
+        total_fees=2 * commission_per_order,
         total_trades=1,
         winning_trades=1 if pnl_pts >= 0 else 0,
         losing_trades=0 if pnl_pts >= 0 else 1,
@@ -68,7 +73,11 @@ def test_save_study_payload_includes_quantity_and_dollar_pnl() -> None:
     """The persisted trade must carry the resolved fill quantity and PnL in
     dollars net of the round-trip commission (entry fee + exit fee).
     """
-    response = _response_with_trade(quantity=140, pnl_pts=1.45)
+    response = _response_with_trade(
+        quantity=140,
+        pnl_pts=1.45,
+        commission_per_order=1.0,
+    )
     captured: dict[str, Any] = {}
 
     def _capture(request: httpx.Request) -> httpx.Response:
@@ -131,6 +140,35 @@ def test_save_study_payload_with_zero_commission() -> None:
 
 
 @respx.mock
+def test_save_study_payload_preserves_a_synthetic_terminal_exit_receipt() -> None:
+    """The end-of-algorithm close remains visibly identified in history."""
+    response = _response_with_trade(quantity=10, pnl_pts=2.0)
+    response.trades[0].is_synthetic_exit = True
+    response.trades[0].signal_reason = "EndOfAlgorithm (synthetic exit)"
+    captured: dict[str, Any] = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(200, json={"id": 97})
+
+    respx.post("http://localhost:5000/api/studies").mock(side_effect=_capture)
+
+    _save_study_sync(
+        response=response,
+        symbol="SPY",
+        start_date="2025-01-06",
+        end_date="2025-01-10",
+        resolution="minute",
+        params_json="{}",
+        duration_ms=1,
+    )
+
+    persisted = captured["trades"][0]
+    assert persisted["isSyntheticExit"] is True
+    assert persisted["signalReason"] == "EndOfAlgorithm (synthetic exit)"
+
+
+@respx.mock
 def test_save_study_payload_keeps_a_zero_trade_run_flat_until_its_last_chart_bar() -> None:
     """A data-backed zero-trade run persists a valid flat staircase.
 
@@ -178,6 +216,64 @@ def test_save_study_payload_keeps_a_zero_trade_run_flat_until_its_last_chart_bar
         {"t": 1_736_173_800_000, "e": 100_000.0},
         {"t": 1_736_179_200_000, "e": 100_000.0},
     ]
+
+
+@respx.mock
+def test_save_study_preparation_failure_does_not_abort_a_completed_run() -> None:
+    """Absent producer timestamps leave persistence best-effort, never fatal."""
+    response = EngineBacktestResponse(
+        success=True,
+        strategy_name="ema_crossover",
+        fill_mode="signal_bar_close",
+        initial_cash=100_000.0,
+        final_equity=100_000.0,
+        net_profit=0.0,
+        total_fees=0.0,
+        total_trades=0,
+        winning_trades=0,
+        losing_trades=0,
+        win_rate=0.0,
+    )
+    route = respx.post("http://localhost:5000/api/studies").mock(
+        return_value=httpx.Response(200, json={"id": 96})
+    )
+
+    study_id = _save_study_sync(
+        response=response,
+        symbol="SPY",
+        start_date="2025-01-06",
+        end_date="2025-01-10",
+        resolution="minute",
+        params_json="{}",
+        duration_ms=1,
+    )
+
+    assert study_id is None
+    assert route.called is False
+
+
+@respx.mock
+def test_save_study_rejects_a_non_reconciling_realized_equity_ledger() -> None:
+    """The persisted staircase must agree with headline final equity to 1e-6."""
+    response = _response_with_trade(quantity=10, pnl_pts=2.0)
+    response.final_equity += 0.01
+    route = respx.post("http://localhost:5000/api/studies").mock(
+        return_value=httpx.Response(200, json={"id": 95})
+    )
+
+    study_id = _save_study_sync(
+        response=response,
+        symbol="SPY",
+        start_date="2025-01-06",
+        end_date="2025-01-10",
+        resolution="minute",
+        params_json="{}",
+        duration_ms=1,
+        commission_per_order=0.0,
+    )
+
+    assert study_id is None
+    assert route.called is False
 
 
 @respx.mock

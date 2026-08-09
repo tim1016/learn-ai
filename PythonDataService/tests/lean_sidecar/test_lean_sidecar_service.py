@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 
@@ -48,7 +50,7 @@ async def test_trusted_run_rejects_stale_persistence_before_staging(
         await service.run_trusted_sample(request)
 
 
-def test_completed_run_skips_persistence_when_source_changes(
+def test_completed_run_warns_when_source_changes_after_launch(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -60,8 +62,51 @@ def test_completed_run_skips_persistence_when_source_changes(
 
     monkeypatch.setattr(service, "assert_lean_persistence_source_current", reject_stale_source)
 
-    assert service._can_persist_completed_run("completed-run") is False
-    assert "Skipping persistence for completed LEAN run completed-run" in caplog.text
+    service._warn_if_persistence_source_changed("completed-run")
+
+    assert "Persisting completed LEAN run completed-run" in caplog.text
+    assert "restart the Python data service before starting another run" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_completed_run_persists_after_source_changes_mid_run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """A completed launch produces a history row despite a stale worker warning."""
+    from app.services import lean_sidecar_service as service
+    from app.services.lean_sidecar_persistence import StaleLeanPersistenceSourceError
+
+    request = service.TrustedRunRequest(
+        run_id="completed-stale-source",
+        start_ms_utc=1_736_175_600_000,
+        end_ms_utc=1_736_607_600_000,
+        starting_cash=100_000.0,
+        data_policy=_make_data_policy(),
+    )
+    persisted_payload = {"lean_run_id": request.run_id}
+
+    def reject_stale_source() -> None:
+        raise StaleLeanPersistenceSourceError("restart the Python data service")
+
+    async def capture_persist(*, payload, base_url: str) -> int:
+        assert payload is persisted_payload
+        assert base_url == "http://backend"
+        return 73
+
+    monkeypatch.setattr(service, "assert_lean_persistence_source_current", reject_stale_source)
+    monkeypatch.setattr(service, "build_persist_payload", lambda **_kwargs: persisted_payload)
+    monkeypatch.setattr(service, "persist_via_dotnet", capture_persist)
+
+    study_id = await service._persist_completed_run(
+        request=request,
+        workspace=SimpleNamespace(root=tmp_path),
+        manifest=SimpleNamespace(),
+        response=SimpleNamespace(is_clean=True, lean_errors={}),
+        backend_url="http://backend",
+    )
+
+    assert study_id == 73
 
 
 def test_trusted_run_request_exposes_symbol_via_data_policy() -> None:

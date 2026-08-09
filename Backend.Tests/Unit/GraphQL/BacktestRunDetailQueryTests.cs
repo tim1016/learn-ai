@@ -169,6 +169,37 @@ public class BacktestRunDetailQueryTests
     }
 
     [Fact]
+    public void FromExecution_LegacyBareEquityCurve_PreservesMarkToMarketAndMarksRealizedUnavailable()
+    {
+        var execution = new StrategyExecution
+        {
+            Ticker = new Ticker { Symbol = "SPY", Name = "SPY", Market = "stocks" },
+            Source = "engine",
+            StrategyName = "ema_crossover",
+            EquityCurveJson = """
+            {
+              "cadence": "strategy_bar_close",
+              "downsample": { "raw_points": 2, "kept_points": 2 },
+              "points": [
+                { "t": 1700000000000, "e": 100000.00 },
+                { "t": 1700000060000, "e": 100010.00 }
+              ]
+            }
+            """,
+        };
+
+        var detail = BacktestRunDetailType.FromExecution(execution, [], NullLogger.Instance);
+
+        Assert.Equal(1, detail.EquityCurve!.SchemaVersion);
+        Assert.Equal("strategy_bar_close", detail.EquityCurve.MarkToMarket!.Cadence);
+        Assert.Equal(2, detail.EquityCurve.MarkToMarket.Points.Count);
+        Assert.Equal(100010.00m, detail.EquityCurve.MarkToMarket.Points[1].E);
+        Assert.Equal(
+            "Realized equity was not recorded for this legacy run.",
+            detail.EquityCurve.Realized!.Error);
+    }
+
+    [Fact]
     public void FromExecution_CorruptEquityEnvelope_ReturnsUnreadableReceipt()
     {
         var execution = new StrategyExecution
@@ -205,7 +236,7 @@ public class BacktestRunDetailQueryTests
 
         var detail = BacktestRunDetailType.FromExecution(execution, [], NullLogger.Instance);
 
-        Assert.Equal("realized curve has an unsupported cadence.", detail.EquityCurve!.Realized!.Error);
+        Assert.Equal("Realized curve has an unsupported cadence.", detail.EquityCurve!.Realized!.Error);
     }
 
     [Fact]

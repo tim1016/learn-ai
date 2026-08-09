@@ -128,6 +128,7 @@ public static class StudiesApi
                     PnL = t.PnL,
                     CumulativePnL = t.CumulativePnL,
                     SignalReason = t.SignalReason ?? "",
+                    IsSyntheticExit = t.IsSyntheticExit,
                 });
             }
         }
@@ -457,6 +458,7 @@ public record SaveStudyTrade
     public decimal PnL { get; init; }
     public decimal CumulativePnL { get; init; }
     public string? SignalReason { get; init; }
+    public bool IsSyntheticExit { get; init; }
 }
 
 public record UpdateNotesRequest
