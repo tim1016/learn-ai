@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from app.lean_sidecar.config import PINNED_LEAN_RUNTIME_PROVENANCE_ARM64
 from app.lean_sidecar.manifest import (
     MANIFEST_SCHEMA_VERSION,
     BarsSpec,
@@ -28,6 +29,7 @@ from app.lean_sidecar.manifest import (
     sha256_bytes,
     sha256_file,
     sha256_text,
+    staged_data_snapshot_sha256,
     write_manifest,
 )
 from app.utils.timestamps import now_ms_utc
@@ -58,6 +60,7 @@ def _sample_manifest(run_id: str = "run_smoke") -> RunManifest:
         algorithm_language="Python",
         config_json_sha256="1" * 64,
         lean_image_digest="sha256:" + "a" * 64,
+        lean_runtime_provenance=PINNED_LEAN_RUNTIME_PROVENANCE_ARM64,
         launcher_version_sha256="2" * 64,
         normalized_parser_version="phase-1-spike-0",
         staged_data=StagedDataManifest(),
@@ -74,6 +77,7 @@ def _sample_manifest(run_id: str = "run_smoke") -> RunManifest:
             start_ms=1_736_121_600_000,
             end_ms=1_736_553_600_000,
         ),
+        input_snapshot_sha256=staged_data_snapshot_sha256(StagedDataManifest()),
     )
 
 
@@ -134,6 +138,11 @@ class TestWriteManifest:
         assert parsed["data_policy"]["source"] == "synthetic"
         assert parsed["data_policy"]["input_bars"]["multiplier"] == 1
         assert parsed["data_policy"]["strategy_bars"]["multiplier"] == 1
+        assert parsed["lean_runtime_provenance"]["lean_version"] == "17748"
+        assert parsed["lean_runtime_provenance"]["source_commit"] == (
+            "261366a7e26ae942df858ab20df4fef8fa07de67"
+        )
+        assert len(parsed["input_snapshot_sha256"]) == 64
 
     def test_refuses_datetime_objects(self, tmp_path: Path) -> None:
         manifest = _sample_manifest()
@@ -194,5 +203,37 @@ def test_data_policy_round_trips_synthetic_shape() -> None:
     assert dp.fixture_id is None
 
 
-def test_manifest_schema_version_is_4() -> None:
-    assert MANIFEST_SCHEMA_VERSION == 4
+def test_manifest_schema_version_is_5() -> None:
+    assert MANIFEST_SCHEMA_VERSION == 5
+
+
+def test_staged_snapshot_hash_is_deterministic_and_mutation_sensitive() -> None:
+    first = StagedDataFile(path_in_workspace="equity/usa/a.zip", sha256="a" * 64, size_bytes=10)
+    second = StagedDataFile(path_in_workspace="equity/usa/b.zip", sha256="b" * 64, size_bytes=20)
+    original = StagedDataManifest(bar_zips=(first, second))
+    replay = StagedDataManifest(bar_zips=(first, second))
+    mutated = StagedDataManifest(
+        bar_zips=(first, replace(second, sha256="c" * 64)),
+    )
+
+    assert staged_data_snapshot_sha256(original) == staged_data_snapshot_sha256(replay)
+    assert staged_data_snapshot_sha256(original) != staged_data_snapshot_sha256(mutated)
+
+
+def test_runtime_provenance_verifier_reports_exact_binary_mismatch() -> None:
+    from scripts.lean_sidecar_pin_image import compare_runtime_receipt
+
+    expected = PINNED_LEAN_RUNTIME_PROVENANCE_ARM64
+    receipt = {
+        "image_digest": expected.image_digest,
+        "lean_version": expected.lean_version,
+        "source_link_commits": [expected.source_commit],
+        "binary_sha256": dict(expected.binary_sha256),
+        "pdb_sha256": dict(expected.pdb_sha256),
+    }
+    receipt["binary_sha256"]["QuantConnect.Common.dll"] = "0" * 64
+
+    mismatches = compare_runtime_receipt(receipt)
+
+    assert len(mismatches) == 1
+    assert mismatches[0].startswith("binary_sha256.QuantConnect.Common.dll:")

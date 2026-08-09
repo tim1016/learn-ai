@@ -54,6 +54,7 @@ import type { EngineValidationAnalytics } from "./engine-results/engine-validati
 
 /** Engine choice on the unified launch surface. */
 export type EngineChoice = "python" | "lean" | "both";
+const COMPATIBILITY_PROFILE = "us-equity-raw-ibkr-v1";
 type LeanLauncherStatus = "unknown" | "checking" | "ready" | "blocked";
 
 /**
@@ -403,7 +404,10 @@ export class LeanEngineComponent implements OnInit {
    * from the current form state. The shape mirrors the Python and .NET
    * sides exactly so the compare-view can gate on equality.
    *
-   * The hidden defaults are documented in
+   * Single-engine runs retain the documented research default of adjusted
+   * bars. Compatibility mode uses raw bars because the server-owned LEAN
+   * companion rejects adjusted input rather than pretending it is comparable.
+   * The remaining hidden defaults are documented in
    * `docs/superpowers/specs/2026-05-19-pr-b-engine-lab-unified-design.md`
    * § 4.4: ``adjusted=true`` (pre-adjusted Polygon staging), regular
    * session, and input bars at the resolution toggle. ``strategy_bars``
@@ -417,7 +421,7 @@ export class LeanEngineComponent implements OnInit {
     return {
       source: 'polygon',
       symbol: this.effectiveSymbol(),
-      adjusted: true,
+      adjusted: this.engine() !== 'both',
       session: 'regular',
       input_bars: { timespan, multiplier: 1 },
       strategy_bars: strategyBars,
@@ -637,7 +641,7 @@ export class LeanEngineComponent implements OnInit {
   private engineLabel(engine: EngineChoice): string {
     if (engine === "python") return "Python (in-process)";
     if (engine === "lean") return "LEAN (sidecar)";
-    return "Both engines";
+    return "Compatibility pair (raw bars)";
   }
 
   readonly engineSummary = computed(() => this.engineLabel(this.engine()));
@@ -1035,14 +1039,13 @@ export class LeanEngineComponent implements OnInit {
       if (!(await this.ensureLeanLauncherReady())) return;
     }
 
-    if (engine === "both") {
-      await Promise.all([this.runPython(), this.runLean()]);
-      return;
-    }
     if (engine === "lean") {
       await this.runLean();
       return;
     }
+    // Both mode submits exactly one Python anchor. The server persists it,
+    // mints the parity group, and dispatches the one linked LEAN companion.
+    // Launching a second client-side LEAN job created unrelated runs 81/82.
     await this.runPython();
   }
 
@@ -1081,6 +1084,8 @@ export class LeanEngineComponent implements OnInit {
       params: this.paramValues(),
       auto_fetch: this.autoFetch(),
       resolution: this.resolution(),
+      compatibility_profile:
+        this.engine() === "both" ? COMPATIBILITY_PROFILE : null,
       // PR B (2026-05-19) — canonical DataPolicy block on every engine
       // submission. The Python router accepts the block as-is and echoes
       // it in the response; the persistence layer writes it into the new

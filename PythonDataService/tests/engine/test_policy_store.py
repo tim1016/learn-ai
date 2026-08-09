@@ -17,6 +17,7 @@ from app.engine.data.policy_store import (
     resolve_cache_root,
     resolve_data_roots,
     resolve_policy_root,
+    snapshot_minute_trade_zips,
     symbol_write_lock,
 )
 from app.lean_sidecar.workspace import SymbolValidationError
@@ -58,6 +59,76 @@ def test_resolve_data_roots_skips_missing_reference(monkeypatch, tmp_path: Path)
     roots = resolve_data_roots(source="polygon", adjusted=False)
 
     assert roots == [tmp_path / "store" / "polygon-raw"]
+
+
+def test_snapshot_minute_trade_zips_is_path_independent_and_reference_first(tmp_path: Path):
+    reference = tmp_path / "reference"
+    cache = tmp_path / "cache"
+    logical = Path("equity/usa/minute/spy")
+    (reference / logical).mkdir(parents=True)
+    (cache / logical).mkdir(parents=True)
+    (reference / logical / "20260105_trade.zip").write_bytes(b"reference-day-one")
+    (cache / logical / "20260105_trade.zip").write_bytes(b"shadowed-cache-day-one")
+    (cache / logical / "20260106_trade.zip").write_bytes(b"cache-day-two")
+
+    receipt = snapshot_minute_trade_zips(
+        [reference, cache],
+        symbol="SPY",
+        start=date(2026, 1, 5),
+        end=date(2026, 1, 6),
+        adjusted=False,
+        session="regular",
+    )
+
+    assert receipt["fixture_id"].startswith("bar-store-v1-")
+    assert len(receipt["fixture_sha256"]) == 64
+    assert [item["path"] for item in receipt["files"]] == [
+        "equity/usa/minute/spy/20260105_trade.zip",
+        "equity/usa/minute/spy/20260106_trade.zip",
+    ]
+    assert receipt["files"][0]["size_bytes"] == len(b"reference-day-one")
+
+    relocated_reference = tmp_path / "elsewhere" / "reference"
+    relocated_cache = tmp_path / "elsewhere" / "cache"
+    (relocated_reference / logical).mkdir(parents=True)
+    (relocated_cache / logical).mkdir(parents=True)
+    (relocated_reference / logical / "20260105_trade.zip").write_bytes(b"reference-day-one")
+    (relocated_cache / logical / "20260106_trade.zip").write_bytes(b"cache-day-two")
+    relocated = snapshot_minute_trade_zips(
+        [relocated_reference, relocated_cache],
+        symbol="SPY",
+        start=date(2026, 1, 5),
+        end=date(2026, 1, 6),
+        adjusted=False,
+        session="regular",
+    )
+    assert relocated["fixture_sha256"] == receipt["fixture_sha256"]
+
+
+def test_snapshot_minute_trade_zips_changes_when_one_input_byte_changes(tmp_path: Path):
+    logical = tmp_path / "equity/usa/minute/spy"
+    logical.mkdir(parents=True)
+    path = logical / "20260105_trade.zip"
+    path.write_bytes(b"first")
+    before = snapshot_minute_trade_zips(
+        [tmp_path],
+        symbol="SPY",
+        start=date(2026, 1, 5),
+        end=date(2026, 1, 5),
+        adjusted=False,
+        session="regular",
+    )
+    path.write_bytes(b"second")
+    after = snapshot_minute_trade_zips(
+        [tmp_path],
+        symbol="SPY",
+        start=date(2026, 1, 5),
+        end=date(2026, 1, 5),
+        adjusted=False,
+        session="regular",
+    )
+
+    assert after["fixture_sha256"] != before["fixture_sha256"]
 
 
 def test_record_fetch_creates_and_appends(tmp_path: Path):

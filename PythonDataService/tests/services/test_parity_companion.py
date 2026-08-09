@@ -11,9 +11,8 @@ import respx
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.routers.engine import EngineBacktestRequest
 from app.services.parity_companion import (
-    REASON_ADJUSTMENT,
+    REASON_EXECUTION_PROFILE,
     REASON_NO_TWIN,
-    REASON_RESOLUTION,
     REASON_WINDOW,
     companion_ineligibility_reason,
     dispatch_parity_companion,
@@ -31,6 +30,7 @@ def _request(**overrides) -> EngineBacktestRequest:
         "from_date": "2026-01-05",
         "to_date": "2026-01-06",
         "resolution": "minute",
+        "compatibility_profile": "us-equity-raw-ibkr-v1",
         "data_policy": {
             "source": "polygon",
             "symbol": "SPY",
@@ -56,19 +56,9 @@ def test_new_parity_group_id_is_run_id_safe():
         ("spy_orb", {}, REASON_NO_TWIN),
         (
             "spy_ema_crossover",
-            {
-                "data_policy": {
-                    "source": "polygon",
-                    "symbol": "SPY",
-                    "adjusted": True,
-                    "session": "regular",
-                    "input_bars": {"timespan": "minute", "multiplier": 1},
-                    "strategy_bars": {"timespan": "minute", "multiplier": 15},
-                }
-            },
-            REASON_ADJUSTMENT,
+            {"compatibility_profile": None},
+            REASON_EXECUTION_PROFILE,
         ),
-        ("spy_ema_crossover", {"resolution": "daily"}, REASON_RESOLUTION),
         ("spy_ema_crossover", {"from_date": None, "to_date": None, "params": {"symbol": "SPY"}}, REASON_WINDOW),
         ("spy_ema_crossover", {}, None),
     ],

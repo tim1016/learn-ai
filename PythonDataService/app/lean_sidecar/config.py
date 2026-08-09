@@ -9,8 +9,10 @@ Authority: ``docs/architecture/lean-sidecar-lab.md`` §"Runner choice".
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 
 # ---------------------------------------------------------------------------
 # Image allow-list
@@ -81,6 +83,58 @@ PINNED_LEAN_IMAGE_DIGEST_ARM64: str | None = "sha256:3dd003372f1ef1981b4e80038e3
 HISTORICAL_LEAN_IMAGE_DIGEST_ARM64: str | None = "sha256:0b8d4e381b63daaa4cebbea7af294cc5b140793a6fd13f8c9cfd63ef2a2fb24d"
 
 PINNED_LEAN_IMAGE_DIGEST: str | None = PINNED_LEAN_IMAGE_DIGEST_ARM64
+
+COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1 = "us-equity-raw-ibkr-v1"
+
+
+@dataclass(frozen=True, slots=True)
+class LeanRuntimeProvenance:
+    """Source and binary identity for one immutable LEAN runtime image."""
+
+    image_digest: str
+    upstream_image_digest: str
+    lean_version: str
+    source_commit: str
+    source_link_url_template: str
+    binary_sha256: Mapping[str, str]
+    pdb_sha256: Mapping[str, str]
+
+
+PINNED_LEAN_RUNTIME_PROVENANCE_ARM64 = LeanRuntimeProvenance(
+    image_digest=PINNED_LEAN_IMAGE_DIGEST_ARM64,
+    upstream_image_digest="sha256:4934c22c2b080a688f25b571746603e01533c5e581499d8457e5624a132ba77b",
+    lean_version="17748",
+    source_commit="261366a7e26ae942df858ab20df4fef8fa07de67",
+    source_link_url_template=(
+        "https://raw.githubusercontent.com/QuantConnect/Lean/"
+        "261366a7e26ae942df858ab20df4fef8fa07de67/*"
+    ),
+    binary_sha256=MappingProxyType(
+        {
+            "QuantConnect.Common.dll": "827339fd94aef0ea71f8576d918e0a361ef858f9d2159a4bb2293018a9a57cbc",
+            "QuantConnect.Lean.Engine.dll": "b0eeec4f21b5a4cb458923ca7eb32e34b7ce39f22edd5377da0dfd13d81cf12a",
+            "QuantConnect.Lean.Launcher.dll": "b2004a97d5ee8f323ff5d342a6f10d57705f088cf417ee551681e708b7a93f0b",
+        }
+    ),
+    pdb_sha256=MappingProxyType(
+        {
+            "QuantConnect.Common.pdb": "2d5f78082f8850a4e05bdfe775b23101ab3189e585f279b7961a1a083c8aad61",
+            "QuantConnect.Lean.Engine.pdb": "1d6f3ed66be0a6c989afff852bbbd01447914bbe915be89780e5d0e829178930",
+            "QuantConnect.Lean.Launcher.pdb": "30788cd31dd9ddd953edbdaef116423afdfc4adfaa356b37a71e03e1f9948788",
+        }
+    ),
+)
+
+PINNED_LEAN_RUNTIME_PROVENANCE: Mapping[str, LeanRuntimeProvenance] = MappingProxyType(
+    {PINNED_LEAN_RUNTIME_PROVENANCE_ARM64.image_digest: PINNED_LEAN_RUNTIME_PROVENANCE_ARM64}
+)
+
+
+def runtime_provenance_for_digest(digest: str | None) -> LeanRuntimeProvenance | None:
+    """Return the audit pin for ``digest`` or ``None`` when uncertified."""
+    if digest is None:
+        return None
+    return PINNED_LEAN_RUNTIME_PROVENANCE.get(digest)
 
 ALLOWED_IMAGE_DIGESTS: frozenset[str] = frozenset(
     d

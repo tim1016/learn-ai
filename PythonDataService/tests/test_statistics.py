@@ -355,6 +355,41 @@ EXPECTED_SNAPSHOT = {
 
 
 class TestSummarizeSnapshot:
+    def test_closed_trade_ledger_authors_all_readiness_inputs(self) -> None:
+        """A compatibility ledger must be complete without a display curve."""
+        base = datetime(2024, 1, 2, 10, 0)
+        trades = [
+            FakeTrade(Decimal("10"), Decimal("0.10"), "WIN", base, base + timedelta(days=1)),
+            FakeTrade(
+                Decimal("-5"),
+                Decimal("-0.05"),
+                "LOSS",
+                base + timedelta(days=2),
+                base + timedelta(days=3),
+            ),
+            FakeTrade(
+                Decimal("2"),
+                Decimal("0.02"),
+                "WIN",
+                base + timedelta(days=4),
+                base + timedelta(days=5),
+            ),
+        ]
+
+        stats = summarize(
+            initial_cash=100_000,
+            final_equity=107_000,
+            trades=trades,
+            trading_days=252,
+            equity_curve=None,
+        )
+
+        assert stats["annual_standard_deviation"] == pytest.approx(0.13)
+        assert stats["drawdown_recovery"] == 4
+        assert stats["max_consecutive_losing_trades"] == 1
+        assert stats["probabilistic_sharpe_ratio"] is not None
+        assert stats["trade_sharpe_ratio"] == pytest.approx(4.9350815176447504)
+
     def test_trade_level_metrics_frozen(self) -> None:
         """Assert trade-level metrics match frozen expected values.
 

@@ -25,6 +25,7 @@ import {
   EngineResultsComponent,
   EngineTrade,
   LeanStatistics,
+  LeanAnalysisFinding,
 } from "../../lean-engine/engine-results/engine-results.component";
 
 /** Wire shape of GET /api/engine/bars (PythonDataService). */
@@ -207,6 +208,7 @@ export class RunReportComponent {
         expectancy_pct: null,
       },
       lean_statistics: parseLeanStatistics(run.leanStatisticsJson),
+      lean_analysis: parseLeanAnalysis(run.leanAnalysisJson),
       trades: run.trades.map(toEngineTrade),
       log_lines: [],
       validation_analytics: analytics && !analytics.error ? analytics : null,
@@ -229,9 +231,13 @@ export class RunReportComponent {
   );
 
   readonly equityNotice = computed<string | null>(() => {
-    const curve = this.run()?.equityCurve;
+    const run = this.run();
+    const curve = run?.equityCurve;
     if (!curve) return "Equity curve not recorded for this run.";
     if (curve.error) return curve.error;
+    if (run?.source === "lean-sidecar") {
+      return "LEAN curve note: this is the native Strategy Equity chart at LEAN's emitted sampling cadence. It can be sparse or end before the terminal portfolio value; headline KPIs come from the native result and closed-trade ledger, never from interpolating this chart.";
+    }
     return null;
   });
 
@@ -261,6 +267,26 @@ export class RunReportComponent {
   });
 }
 
+export function parseLeanAnalysis(json: string | null): LeanAnalysisFinding[] {
+  if (!json) return [];
+  try {
+    const value: unknown = JSON.parse(json);
+    if (!Array.isArray(value)) return [];
+    return value.filter((finding): finding is LeanAnalysisFinding => {
+      if (!finding || typeof finding !== "object") return false;
+      const item = finding as Record<string, unknown>;
+      return (
+        typeof item["name"] === "string" &&
+        typeof item["issue"] === "string" &&
+        Array.isArray(item["solutions"]) &&
+        item["solutions"].every((solution) => typeof solution === "string")
+      );
+    });
+  } catch {
+    return [];
+  }
+}
+
 /** Template view-model for the parity panel. */
 export interface ParityView {
   status: string;
@@ -268,6 +294,31 @@ export interface ParityView {
   reason: string | null;
   countsByCategory: { category: string; count: number }[];
   divergences: ParityDivergenceView[];
+  nativeMetricParity: NativeMetricParityView | null;
+  readinessParity: ReadinessParityView | null;
+  inputParity: InputParityView | null;
+}
+
+export interface NativeMetricParityView {
+  status: string;
+  native_metric_count?: number;
+  formatted_metric_count?: number;
+  divergence_count?: number;
+  source_commit?: string | null;
+}
+
+export interface ReadinessParityView {
+  status: string;
+  compared_field_count?: number;
+  mismatched_fields?: string[];
+}
+
+export interface InputParityView {
+  status: string;
+  compared_field_count?: number;
+  fixture_id?: string | null;
+  fixture_sha256?: string | null;
+  mismatched_fields?: string[];
 }
 
 export interface ParityDivergenceView {
@@ -279,9 +330,18 @@ export interface ParityDivergenceView {
 
 const UNAVAILABLE_REASON_COPY: Record<string, string> = {
   no_lean_counterpart: "No LEAN counterpart is registered for this strategy.",
+  execution_profile_unsupported:
+    "Start a Compatibility pair so both engines use the pinned sizing, fill, and fee contract.",
   adjustment_unsupported: "LEAN validates raw bars only — run with adjusted=false to get a companion.",
   resolution_unsupported: "LEAN companions run on minute resolution only.",
   window_unsupported: "The run has no explicit date window for the companion to reproduce.",
+  lean_native_metric_mismatch: "The reproduced LEAN-native statistics differ from LEAN's own result.",
+  production_readiness_mismatch: "The two engines produced different production-readiness evidence.",
+  lean_native_metric_parity_unavailable: "LEAN-native calculation evidence is incomplete, so agreement cannot be claimed.",
+  production_readiness_parity_unavailable: "One run has no comparable production-readiness envelope.",
+  trade_reconciliation_diverged: "One or more trades differ between the engines.",
+  compatibility_input_mismatch: "The runs did not consume the same pinned data or compatibility settings.",
+  compatibility_input_parity_unavailable: "The shared input fixture receipt is incomplete.",
 };
 
 function toParityView(verdict: { status: string; verdictJson: string; createdAt: number }): ParityView {
@@ -289,6 +349,9 @@ function toParityView(verdict: { status: string; verdictJson: string; createdAt:
     reason?: string | null;
     counts_by_category?: Record<string, number>;
     divergences?: ParityDivergenceView[];
+    native_metric_parity?: NativeMetricParityView;
+    readiness_parity?: ReadinessParityView;
+    input_parity?: InputParityView;
   } = {};
   try {
     parsed = JSON.parse(verdict.verdictJson) as typeof parsed;
@@ -305,6 +368,9 @@ function toParityView(verdict: { status: string; verdictJson: string; createdAt:
       count,
     })),
     divergences: parsed.divergences ?? [],
+    nativeMetricParity: parsed.native_metric_parity ?? null,
+    readinessParity: parsed.readiness_parity ?? null,
+    inputParity: parsed.input_parity ?? null,
   };
 }
 

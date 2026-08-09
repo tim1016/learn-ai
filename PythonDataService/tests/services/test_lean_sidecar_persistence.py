@@ -237,6 +237,10 @@ def _write_fixture_workspace(
     order_events: list[dict],
     equity_curve: list[dict],
     statistics: dict | None = None,
+    runtime_statistics: dict | None = None,
+    total_performance: dict | None = None,
+    orders: dict | None = None,
+    analysis: list[dict] | None = None,
 ) -> Path:
     """Build a minimal LEAN workspace with normalized/result.json."""
     ws = base / run_id
@@ -251,7 +255,10 @@ def _write_fixture_workspace(
         "equity_curve": equity_curve,
         "order_events": order_events,
         "statistics": statistics or {},
-        "runtime_statistics": {},
+        "runtime_statistics": runtime_statistics or {},
+        "total_performance": total_performance or {},
+        "orders": orders or {},
+        "analysis": analysis or [],
     }
     (ws / "normalized" / "result.json").write_text(json.dumps(result))
     return ws
@@ -338,9 +345,9 @@ def test_build_persist_payload_pairs_round_trip(tmp_path: Path) -> None:
     assert payload["total_pnl"] == pytest.approx(9.0)
     assert payload["total_fees"] == pytest.approx(1.0)
     verdict = json.loads(payload["run_verdict_json"])
-    assert verdict["verdict_version"] == 1
+    assert verdict["verdict_version"] == 2
     assert verdict["engine"] == "lean"
-    assert payload["verdict_version"] == 1
+    assert payload["verdict_version"] == 2
     assert payload["verdict_grade"] == verdict["grade"]
     assert payload["verdict_signal"] == verdict["signal"]
     equity = json.loads(payload["equity_curve_json"])
@@ -365,11 +372,77 @@ def test_build_persist_payload_pairs_round_trip(tmp_path: Path) -> None:
     # on the flat shape; see PR description for both-bugs context.
     assert "lean_statistics" in payload
     stats = payload["lean_statistics"]
-    assert set(stats.keys()) == {"portfolio", "trade", "runtime"}
+    assert set(stats.keys()) == {"portfolio", "trade", "runtime", "namespaces"}
+    assert stats["namespaces"]["status"] == "unavailable"
+    assert stats["namespaces"]["reason"] == "lean_interest_rate_fixture_missing"
     assert stats["portfolio"]["start_equity"] == pytest.approx(100_000.0)
     assert stats["portfolio"]["end_equity"] == pytest.approx(100_009.0)
     assert stats["trade"]["total_number_of_trades"] == 1
     assert stats["runtime"]["total_orders"] == 1
+
+
+def test_compatibility_pair_scores_the_same_closed_trade_ledger_contract(tmp_path: Path) -> None:
+    """A linked LEAN run must author platform metrics, not leave them missing."""
+    from app.services.lean_sidecar_persistence import build_persist_payload
+
+    start_ms = 1_672_531_200_000  # 2023-01-01 UTC
+    end_ms = 1_704_067_200_000  # 2024-01-01 UTC: exactly 252 estimated trading days
+    ws = _write_fixture_workspace(
+        tmp_path,
+        "compatibility_readiness",
+        order_events=[
+            _filled_event(1, "buy", start_ms + 60_000, 100.0, 1_000),
+            _filled_event(2, "sell", start_ms + 120_000, 110.0, 1_000),
+            _filled_event(3, "buy", start_ms + 180_000, 100.0, 1_000),
+            _filled_event(4, "sell", start_ms + 240_000, 95.0, 1_000),
+            _filled_event(5, "buy", start_ms + 300_000, 100.0, 1_000),
+            _filled_event(6, "sell", start_ms + 360_000, 102.0, 1_000),
+        ],
+        # Deliberately sparse: compatibility readiness is defined from the
+        # common closed-trade ledger, not LEAN's chart-sampling cadence.
+        equity_curve=[
+            {"ms_utc": start_ms, "value": 100_000.0},
+            {"ms_utc": end_ms, "value": 107_000.0},
+        ],
+    )
+
+    payload = build_persist_payload(
+        workspace_path=ws,
+        run_id="compatibility_readiness",
+        starting_cash=100_000.0,
+        symbol="SPY",
+        algorithm_name="ema_crossover_signal",
+        start_date_ms=start_ms,
+        end_date_ms=end_ms,
+        parity_group_id="pg-golden-compatibility",
+    )
+
+    verdict = json.loads(payload["run_verdict_json"])
+    assert payload["fill_mode"] == "signal_bar_close"
+    assert verdict["status"] == "complete"
+    assert verdict["available_required_metrics"] == 17
+    assert verdict["required_metrics"] == 17
+    assert verdict["grade"] == "A"
+    assert verdict["signal"] == "Paper-trade"
+
+    raw_values = {
+        sub["key"]: sub["raw_value"]
+        for dimension in verdict["dimensions"]
+        for sub in dimension["sub_scores"]
+    }
+    assert raw_values["sharpe"] == pytest.approx(0.5384615384615384)
+    assert raw_values["sortino"] == pytest.approx(1.4)
+    assert raw_values["cagr"] == pytest.approx(0.07)
+    assert raw_values["calmar"] == pytest.approx(1.4)
+    assert raw_values["max_dd"] == pytest.approx(0.05)
+    assert raw_values["pf"] == pytest.approx(2.4)
+    assert raw_values["expectancy"] == pytest.approx(0.023333333333333334)
+    assert raw_values["payoff"] == pytest.approx(1.2)
+    assert raw_values["annual_vol"] == pytest.approx(0.13)
+    assert raw_values["recovery"] == 0
+    assert raw_values["cons_losses"] == 1
+    assert raw_values["psr"] == pytest.approx(0.6709689487120769)
+    assert raw_values["trade_gap"] == pytest.approx(4.396619979183212)
 
 
 def test_build_persist_payload_includes_validation_analytics_envelope(tmp_path: Path) -> None:
@@ -424,8 +497,9 @@ def test_build_persist_payload_includes_validation_analytics_envelope(tmp_path: 
     assert envelope["computed_at_ms"] > 0
     analytics = envelope["analytics"]
     assert len(analytics["timing_cells"]) == 1
-    # pnl=9.0 on 10 shares @ $100 deployed → 0.9% fractional return.
-    assert analytics["timing_cells"][0]["average_return"] == pytest.approx(0.009)
+    # Platform validation analytics use the same entry-to-exit price return
+    # as Python LoggedTrade.pnl_pct; fees remain separate evidence.
+    assert analytics["timing_cells"][0]["average_return"] == pytest.approx(0.01)
     assert {h["key"] for h in analytics["horizons"]} == {"2w", "1m", "3m", "6m", "1y", "2y"}
 
 
@@ -477,6 +551,40 @@ def test_build_persist_payload_analytics_null_when_equity_curve_invalid(tmp_path
     )
 
     assert payload["validation_analytics_json"] is None
+
+
+def test_compatibility_analytics_use_common_trade_curve_not_native_lean_chart(tmp_path: Path) -> None:
+    from app.services.lean_sidecar_persistence import build_persist_payload
+
+    ws = _write_fixture_workspace(
+        tmp_path,
+        "ui_run_compatibility_analytics",
+        order_events=[
+            _filled_event(1, "buy", 1_700_000_060_000, 100.0, 10, fee=0.5),
+            _filled_event(2, "sell", 1_700_000_600_000, 101.0, 10, fee=0.5),
+        ],
+        # Deliberately unusable as analytics input. A compatibility run must
+        # still use the common closed-trade curve and preserve this separately.
+        equity_curve=[
+            {"ms_utc": 1_700_000_600_000, "value": 1.0},
+            {"ms_utc": 1_700_000_600_000, "value": 999_999.0},
+        ],
+    )
+
+    payload = build_persist_payload(
+        workspace_path=ws,
+        run_id="ui_run_compatibility_analytics",
+        starting_cash=100_000.0,
+        symbol="SPY",
+        algorithm_name="ema_crossover",
+        start_date_ms=1_700_000_000_000,
+        end_date_ms=1_700_086_400_000,
+        parity_group_id="pg-common-analytics",
+    )
+
+    envelope = json.loads(payload["validation_analytics_json"])
+    assert envelope["analytics"]["timing_cells"][0]["average_return"] == pytest.approx(0.01)
+    assert payload["equity_curve_json"] is not None
 
 
 def test_build_persist_payload_folds_unclean_lean_run_into_verdict(tmp_path: Path) -> None:
@@ -973,6 +1081,154 @@ def test_normalized_to_lean_statistics_response_full_mapping() -> None:
     assert resp.runtime.fees == pytest.approx(2.0)
     assert resp.runtime.net_profit == pytest.approx(-2.0)
     assert resp.runtime.total_orders == 2
+
+
+def test_normalized_to_lean_statistics_response_uses_native_total_performance() -> None:
+    """Native LEAN DTO values are Oracle data and must not be recomputed."""
+    from app.services.lean_sidecar_persistence import _normalized_to_lean_statistics_response
+
+    total_performance = {
+        "portfolioStatistics": {
+            "averageWinRate": "0.0034",
+            "averageLossRate": "-0.0033",
+            "profitLossRatio": "1.0462",
+            "winRate": "0.6575",
+            "lossRate": "0.3425",
+            "expectancy": "0.3454",
+            "startEquity": "100000",
+            "endEquity": "108540.932",
+            "compoundingAnnualReturn": "0.0418",
+            "drawdown": "0.026",
+            "totalNetProfit": "0.0854",
+            "sharpeRatio": "-1.0125",
+            "probabilisticSharpeRatio": "0.5967",
+            "sortinoRatio": "-0.6035",
+            "alpha": "0",
+            "beta": "0",
+            "annualStandardDeviation": "0.0256",
+            "annualVariance": "0.0007",
+            "informationRatio": "1.1351",
+            "trackingError": "0.0256",
+            "treynorRatio": "0",
+            "portfolioTurnover": "0.1989",
+            "valueAtRisk99": "-0.003",
+            "valueAtRisk95": "-0.002",
+            "drawdownRecovery": "85",
+        },
+        "tradeStatistics": {
+            "startDateTime": 1_725_559_200_000,
+            "endDateTime": 1_786_114_800_000,
+            "totalNumberOfTrades": 73,
+            "numberOfWinningTrades": 48,
+            "numberOfLosingTrades": 25,
+            "totalProfitLoss": "8686.96",
+            "totalProfit": "17526.81",
+            "totalLoss": "-8839.85",
+            "largestProfit": "2769.55",
+            "largestLoss": "-1126.25",
+            "averageProfitLoss": "118.9995",
+            "averageProfit": "365.1419",
+            "averageLoss": "-353.5940",
+            "averageTradeDuration": "02:12:28.7671249",
+            "averageWinningTradeDuration": "02:42:26.2500011",
+            "averageLosingTradeDuration": "01:14:57.5999994",
+            "medianTradeDuration": "01:15:00",
+            "medianWinningTradeDuration": "01:15:00",
+            "medianLosingTradeDuration": "01:15:00",
+            "maxConsecutiveWinningTrades": 7,
+            "maxConsecutiveLosingTrades": 4,
+            "profitLossRatio": "1.0327",
+            "winLossRatio": "1.92",
+            "winRate": "0.6575",
+            "lossRate": "0.3425",
+            "averageMAE": "-289.4808",
+            "averageMFE": "379.2373",
+            "largestMAE": "-1546.57",
+            "largestMFE": "2769.55",
+            "maximumClosedTradeDrawdown": "-2887.88",
+            "maximumIntraTradeDrawdown": "-3393.93",
+            "profitLossStandardDeviation": "526.7964",
+            "profitLossDownsideDeviation": "298.1239",
+            "profitFactor": "1.9827",
+            "sharpeRatio": "0.2259",
+            "sortinoRatio": "0.3992",
+            "profitToMaxDrawdownRatio": "3.0081",
+            "maximumEndTradeDrawdown": "1752.32",
+            "averageEndTradeDrawdown": "-260.2378",
+            "maximumDrawdownDuration": "83.19:15:00",
+            "totalFees": "146.02",
+        },
+    }
+    response = _normalized_to_lean_statistics_response(
+        # Deliberately contradictory legacy values prove native precedence.
+        normalized_statistics={"Sharpe Ratio": "99", "Profit Factor": "99"},
+        paired_trades=[],
+        starting_cash=1.0,
+        total_fees=999.0,
+        total_performance=total_performance,
+        runtime_statistics={
+            "Equity": "$108,540.93",
+            "Fees": "-$146.02",
+            "Holdings": "$0.00",
+            "Net Profit": "$8,540.93",
+            "Probabilistic Sharpe Ratio": "59.675%",
+            "Return": "8.54 %",
+            "Unrealized": "$0.00",
+            "Volume": "$15,538,707.42",
+        },
+        total_orders=146,
+    )
+
+    assert response.portfolio.sharpe_ratio == pytest.approx(-1.0125)
+    assert response.portfolio.sortino_ratio == pytest.approx(-0.6035)
+    assert response.portfolio.end_equity == pytest.approx(108_540.932)
+    assert response.portfolio.value_at_risk_99 == pytest.approx(-0.003)
+    assert response.trade.total_number_of_trades == 73
+    assert response.trade.profit_factor == pytest.approx(1.9827)
+    assert response.trade.sharpe_ratio == pytest.approx(0.2259)
+    assert response.trade.average_mae == pytest.approx(-289.4808)
+    assert response.trade.maximum_drawdown_duration == "83.19:15:00"
+    assert response.runtime.fees == pytest.approx(-146.02)
+    assert response.runtime.probabilistic_sharpe_ratio == pytest.approx(0.59675)
+    assert response.runtime.total_orders == 146
+
+
+def test_build_persist_payload_preserves_every_lean_analysis_record(tmp_path: Path) -> None:
+    from app.services.lean_sidecar_persistence import build_persist_payload
+
+    findings = [
+        {
+            "name": "FlatEquityCurveAnalysis",
+            "issue": "The equity curve is flat for several days in a row.",
+            "sample": [{"start": 1_700_000_000_000, "end": 1_700_086_400_000, "trading_days": 2}],
+            "solutions": ["Check warm-up.", "Check subscriptions."],
+        },
+        {
+            "name": "StatisticalSignificanceOfDailyReturnsAnalysis",
+            "issue": "The p-value is above 0.05.",
+            "sample": {"pValue": "0.0684907141208504"},
+            "solutions": ["Review the trading rules."],
+        },
+    ]
+    ws = _write_fixture_workspace(
+        tmp_path,
+        "lean_analysis",
+        order_events=[],
+        equity_curve=[{"ms_utc": 1_700_000_000_000, "value": 100_000.0}],
+        analysis=findings,
+    )
+
+    payload = build_persist_payload(
+        workspace_path=ws,
+        run_id="lean_analysis",
+        starting_cash=100_000.0,
+        symbol="SPY",
+        algorithm_name="ema_crossover",
+        start_date_ms=1_700_000_000_000,
+        end_date_ms=1_700_086_400_000,
+    )
+
+    assert json.loads(payload["lean_analysis_json"]) == findings
 
 
 def test_normalized_to_lean_statistics_response_missing_keys() -> None:

@@ -25,16 +25,19 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
+from app.lean_sidecar.manifest import sha256_file
 from app.lean_sidecar.workspace import Workspace
 
 # Bumped any time the parser's output schema changes in a non-additive
 # way. The manifest records this; a different value invalidates
 # reconciliation fixtures built against the prior parser version.
-NORMALIZED_PARSER_VERSION = "phase-3a-r1"
+NORMALIZED_PARSER_VERSION = "lean-native-r1"
 
 
 class NormalizedParserError(RuntimeError):
@@ -116,6 +119,42 @@ class NormalizedOrderEvent(BaseModel):
     message: str | None = None
 
 
+class NormalizedArtifactReceipt(BaseModel):
+    """Immutable identity and size metadata for one LEAN-authored artifact."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    relative_path: str
+    sha256: str
+    size_bytes: int
+    row_count: int | None = None
+
+
+class NormalizedProfitLossPoint(BaseModel):
+    """One entry from LEAN's timestamp-keyed ``profitLoss`` object."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ms_utc: int
+    value: str
+
+
+class NormalizedLeanAnalysis(BaseModel):
+    """One complete LEAN-authored analysis finding.
+
+    The analysis catalog is intentionally open-ended. LEAN can add new sample
+    shapes without a learn-ai release; ``JsonValue`` preserves those shapes
+    while the ingestion boundary converts timestamp fields to int64 ms UTC.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    name: str
+    issue: str
+    sample: JsonValue = None
+    solutions: list[str] = Field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # Top-level result
 # ---------------------------------------------------------------------------
@@ -124,13 +163,11 @@ class NormalizedOrderEvent(BaseModel):
 class NormalizedResult(BaseModel):
     """The parsed LEAN backtest result.
 
-    What's omitted by design (Phase 3a):
-      * Per-order detail beyond order events (the Orders dict is in
-        LEAN's full ``<algorithm-id>.json`` — Phase 3b will fold it in
-        once order-aggregation semantics are pinned).
-      * Trade-pair P&L (LEAN's ``TotalPerformance.ClosedTrades``) —
-        Phase 5 reconciliation work.
-      * Charts other than the strategy equity curve.
+    The full ``<algorithm-id>.json`` is the native evidence source. LEAN's
+    reduced ``-summary.json`` is retained separately and can never replace the
+    full artifact silently. Numeric lexemes on the lossless native surfaces
+    remain strings; typed display projections such as ``equity_curve`` are
+    explicitly derived conveniences.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -146,13 +183,36 @@ class NormalizedResult(BaseModel):
     )
     runtime_statistics: dict[str, str] = Field(default_factory=dict)
     equity_curve: list[NormalizedEquityPoint] = Field(default_factory=list)
+    summary_statistics: dict[str, str] = Field(default_factory=dict)
+    summary_runtime_statistics: dict[str, str] = Field(default_factory=dict)
+    summary_equity_curve: list[NormalizedEquityPoint] = Field(default_factory=list)
     order_events: list[NormalizedOrderEvent] = Field(default_factory=list)
+    algorithm_configuration: dict[str, JsonValue] = Field(default_factory=dict)
+    algorithm_start_ms_utc: int | None = None
+    algorithm_end_ms_utc: int | None = None
+    state: dict[str, JsonValue] = Field(default_factory=dict)
+    total_performance: dict[str, JsonValue] = Field(default_factory=dict)
+    orders: dict[str, JsonValue] = Field(default_factory=dict)
+    profit_loss: list[NormalizedProfitLossPoint] = Field(default_factory=list)
+    rolling_window: dict[str, JsonValue] = Field(default_factory=dict)
+    analysis: list[NormalizedLeanAnalysis] = Field(default_factory=list)
+    full_charts: dict[str, JsonValue] = Field(default_factory=dict)
+    summary_charts: dict[str, JsonValue] = Field(default_factory=dict)
+    data_monitor: dict[str, JsonValue] = Field(default_factory=dict)
+    artifacts: dict[str, NormalizedArtifactReceipt] = Field(default_factory=dict)
     # Derived: simple counts the frontend usually wants without re-walking
     # the equity curve or order events.
     total_order_events: int
     total_equity_points: int
+    total_summary_equity_points: int = 0
+    total_orders: int = 0
+    total_closed_trades: int = 0
+    total_rolling_windows: int = 0
+    total_analyses: int = 0
     first_equity_ms_utc: int | None = Field(default=None)
     last_equity_ms_utc: int | None = Field(default=None)
+    first_summary_equity_ms_utc: int | None = Field(default=None)
+    last_summary_equity_ms_utc: int | None = Field(default=None)
 
 
 # ---------------------------------------------------------------------------
@@ -169,21 +229,30 @@ class _LeanArtifactPaths:
     find files by suffix instead of by full name.
     """
 
+    full_result: Path
     summary: Path
     order_events: Path | None
+    data_monitor: Path | None
+    observations: Path | None
+    state_export: Path | None
+    other_artifacts: tuple[Path, ...]
     algorithm_id: str
 
 
+def _one_optional(paths: list[Path], *, label: str) -> Path | None:
+    if len(paths) > 1:
+        joined = ", ".join(path.name for path in paths)
+        raise NormalizedParserError(f"multiple {label} artifacts found: {joined}")
+    return paths[0] if paths else None
+
+
 def _locate_lean_artifacts(output_dir: Path) -> _LeanArtifactPaths:
-    """Find LEAN's summary + order-events files in ``output_dir``.
+    """Bind every retained artifact to the summary's algorithm ID.
 
     The two filenames look like ``<algo>-summary.json`` and
-    ``<algo>-order-events.json``. The summary is the source of truth
-    for the algorithm-id; the order-events file MUST match that same
-    prefix exactly. Without the explicit binding, a workspace that
-    contains stale events from a previous run (different algorithm-id
-    that happens to sort first) would corrupt the parsed events count
-    and any downstream reconciliation built on it.
+    ``<algo>.json``. The full result is mandatory and is the native source of
+    truth. Every algorithm-prefixed side artifact MUST match the same ID;
+    otherwise stale output could contaminate a run.
     """
     if not output_dir.is_dir():
         raise NormalizedParserError(f"output directory missing: {output_dir}")
@@ -191,11 +260,20 @@ def _locate_lean_artifacts(output_dir: Path) -> _LeanArtifactPaths:
     summary_candidates = sorted(output_dir.glob("*-summary.json"))
     if not summary_candidates:
         raise NormalizedParserError(f"no *-summary.json under {output_dir}; LEAN did not write a backtest summary")
+    if len(summary_candidates) > 1:
+        joined = ", ".join(path.name for path in summary_candidates)
+        raise NormalizedParserError(f"multiple summary artifacts found: {joined}")
     summary = summary_candidates[0]
 
     # Derive algorithm-id from the summary filename (the part before
     # ``-summary.json``).
     algorithm_id = summary.name[: -len("-summary.json")]
+
+    full_result = output_dir / f"{algorithm_id}.json"
+    if not full_result.exists():
+        raise NormalizedParserError(
+            f"matching full result missing for algorithm {algorithm_id!r}: {full_result}"
+        )
 
     # Bind the order-events file to the same algorithm-id. A
     # ``<other-algo>-order-events.json`` left over from a prior run
@@ -204,9 +282,34 @@ def _locate_lean_artifacts(output_dir: Path) -> _LeanArtifactPaths:
     expected_events = output_dir / f"{algorithm_id}-order-events.json"
     order_events = expected_events if expected_events.exists() else None
 
+    data_monitor = _one_optional(
+        sorted(output_dir.glob("data-monitor-report-*.json")),
+        label="data-monitor report",
+    )
+    storage_dir = output_dir / "storage"
+    observations = storage_dir / "observations.csv"
+    state_export = storage_dir / "state.csv"
+
+    known = {
+        full_result,
+        summary,
+        *(path for path in (order_events, data_monitor) if path is not None),
+        *(path for path in (observations, state_export) if path.exists()),
+    }
+    other_artifacts = tuple(
+        path
+        for path in sorted(output_dir.rglob("*"))
+        if path.is_file() and path not in known
+    )
+
     return _LeanArtifactPaths(
+        full_result=full_result,
         summary=summary,
         order_events=order_events,
+        data_monitor=data_monitor,
+        observations=observations if observations.exists() else None,
+        state_export=state_export if state_export.exists() else None,
+        other_artifacts=other_artifacts,
         algorithm_id=algorithm_id,
     )
 
@@ -219,6 +322,206 @@ def _unix_seconds_to_ms_utc(seconds: float | int) -> int:
     resolution is not meaningful (LEAN samples on bar boundaries).
     """
     return int(float(seconds) * 1000)
+
+
+_TEMPORAL_FIELD_NAMES = frozenset(
+    {
+        "time",
+        "createdTime",
+        "lastFillTime",
+        "lastUpdateTime",
+        "canceledTime",
+        "entryTime",
+        "exitTime",
+        "startDateTime",
+        "endDateTime",
+        "startDate",
+        "endDate",
+        "StartTime",
+        "EndTime",
+        "start",
+        "end",
+    }
+)
+
+
+def _reject_nonfinite_json(value: str) -> None:
+    raise ValueError(f"non-finite JSON number is forbidden: {value}")
+
+
+def _read_json(path: Path, *, label: str, lossless_numbers: bool) -> JsonValue:
+    """Read one LEAN artifact while preserving floating-point lexemes.
+
+    LEAN's full-precision objects frequently serialize decimals as JSON strings,
+    but charts, orders and analysis samples contain JSON numbers. Parsing those
+    through binary float would make the normalized artifact a lossy Oracle, so
+    the lossless path keeps every non-integer numeric lexeme as text.
+    """
+    try:
+        body = path.read_text(encoding="utf-8")
+        if lossless_numbers:
+            return json.loads(
+                body,
+                parse_float=str,
+                parse_constant=_reject_nonfinite_json,
+            )
+        return json.loads(body, parse_constant=_reject_nonfinite_json)
+    except (OSError, ValueError) as exc:
+        raise NormalizedParserError(f"could not read {label} {path}: {exc}") from exc
+
+
+def _object_field(container: dict[str, Any], key: str, *, label: str) -> dict[str, Any]:
+    value = container.get(key)
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise NormalizedParserError(f"{label} '{key}' must be a JSON object or null, got {type(value).__name__}")
+    return value
+
+
+def _parse_lean_instant(value: str, *, allow_naive_utc: bool) -> int:
+    """Convert one LEAN result timestamp to canonical int64 ms UTC.
+
+    Some LEAN analysis records serialize the first interval with ``Z`` and
+    subsequent intervals without a suffix even though all values originate from
+    the same UTC series. ``allow_naive_utc`` is restricted to that analysis
+    surface and versioned by ``NORMALIZED_PARSER_VERSION``; every other native
+    timestamp must carry an explicit offset.
+    """
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise NormalizedParserError(f"invalid LEAN timestamp {value!r}") from exc
+    if parsed.tzinfo is None:
+        if not allow_naive_utc:
+            raise NormalizedParserError(f"ambiguous LEAN timestamp has no UTC offset: {value!r}")
+        parsed = parsed.replace(tzinfo=UTC)
+    return int(parsed.astimezone(UTC).timestamp() * 1000)
+
+
+def _normalize_native_value(value: Any, *, allow_naive_utc: bool = False) -> JsonValue:
+    if isinstance(value, dict):
+        normalized: dict[str, JsonValue] = {}
+        for key, child in value.items():
+            if not isinstance(key, str):
+                raise NormalizedParserError(f"LEAN JSON object key must be text, got {type(key).__name__}")
+            if key in _TEMPORAL_FIELD_NAMES and isinstance(child, str) and "T" in child:
+                normalized[key] = _parse_lean_instant(child, allow_naive_utc=allow_naive_utc)
+            else:
+                normalized[key] = _normalize_native_value(child, allow_naive_utc=allow_naive_utc)
+        return normalized
+    if isinstance(value, list):
+        return [_normalize_native_value(child, allow_naive_utc=allow_naive_utc) for child in value]
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    raise NormalizedParserError(f"unsupported LEAN JSON value type: {type(value).__name__}")
+
+
+def _normalize_charts(charts: dict[str, Any]) -> dict[str, JsonValue]:
+    """Normalize every chart timestamp to ms while retaining all series."""
+    normalized = _normalize_native_value(charts)
+    assert isinstance(normalized, dict)
+    for chart_name, chart_value in normalized.items():
+        if not isinstance(chart_value, dict):
+            raise NormalizedParserError(f"chart {chart_name!r} must be a JSON object")
+        series = chart_value.get("series")
+        if series is None:
+            continue
+        if not isinstance(series, dict):
+            raise NormalizedParserError(f"chart {chart_name!r} series must be a JSON object")
+        for series_name, series_value in series.items():
+            if not isinstance(series_value, dict):
+                raise NormalizedParserError(
+                    f"chart {chart_name!r} series {series_name!r} must be a JSON object"
+                )
+            values = series_value.get("values")
+            if values is None:
+                continue
+            if not isinstance(values, list):
+                raise NormalizedParserError(
+                    f"chart {chart_name!r} series {series_name!r} values must be an array"
+                )
+            for row in values:
+                if not isinstance(row, list) or not row:
+                    continue
+                try:
+                    row[0] = _unix_seconds_to_ms_utc(row[0])
+                except (TypeError, ValueError) as exc:
+                    raise NormalizedParserError(
+                        f"chart {chart_name!r} series {series_name!r} has invalid timestamp {row[0]!r}"
+                    ) from exc
+    return normalized
+
+
+def _parse_profit_loss(raw: Any) -> list[NormalizedProfitLossPoint]:
+    if raw is None:
+        return []
+    if not isinstance(raw, dict):
+        raise NormalizedParserError(f"full result 'profitLoss' must be a JSON object or null, got {type(raw).__name__}")
+    points: list[NormalizedProfitLossPoint] = []
+    for instant, value in raw.items():
+        if not isinstance(instant, str):
+            raise NormalizedParserError("LEAN profitLoss timestamp key must be text")
+        points.append(
+            NormalizedProfitLossPoint(
+                ms_utc=_parse_lean_instant(instant, allow_naive_utc=False),
+                value=str(value),
+            )
+        )
+    points.sort(key=lambda point: point.ms_utc)
+    return points
+
+
+def _parse_analysis(raw: Any) -> list[NormalizedLeanAnalysis]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise NormalizedParserError(f"full result 'analysis' must be an array or null, got {type(raw).__name__}")
+    findings: list[NormalizedLeanAnalysis] = []
+    for index, finding in enumerate(raw):
+        if not isinstance(finding, dict):
+            raise NormalizedParserError(f"analysis[{index}] must be a JSON object")
+        normalized = _normalize_native_value(finding, allow_naive_utc=True)
+        assert isinstance(normalized, dict)
+        try:
+            findings.append(NormalizedLeanAnalysis.model_validate(normalized))
+        except Exception as exc:
+            raise NormalizedParserError(f"analysis[{index}] failed to parse: {exc}") from exc
+    return findings
+
+
+def _line_count(path: Path) -> int:
+    with path.open("rb") as handle:
+        return sum(1 for _ in handle)
+
+
+def _artifact_receipt(path: Path, output_dir: Path, *, count_rows: bool = False) -> NormalizedArtifactReceipt:
+    return NormalizedArtifactReceipt(
+        relative_path=path.relative_to(output_dir).as_posix(),
+        sha256=sha256_file(path),
+        size_bytes=path.stat().st_size,
+        row_count=_line_count(path) if count_rows else None,
+    )
+
+
+def _artifact_receipts(paths: _LeanArtifactPaths, output_dir: Path) -> dict[str, NormalizedArtifactReceipt]:
+    receipts = {
+        "full_result": _artifact_receipt(paths.full_result, output_dir),
+        "summary_result": _artifact_receipt(paths.summary, output_dir),
+    }
+    optional = (
+        ("order_events", paths.order_events, False),
+        ("data_monitor", paths.data_monitor, False),
+        ("observations", paths.observations, True),
+        ("state_export", paths.state_export, True),
+    )
+    for key, path, count_rows in optional:
+        if path is not None:
+            receipts[key] = _artifact_receipt(path, output_dir, count_rows=count_rows)
+    for path in paths.other_artifacts:
+        receipts[f"other:{path.relative_to(output_dir).as_posix()}"] = _artifact_receipt(path, output_dir)
+    return receipts
 
 
 def _parse_equity_curve(summary: dict) -> list[NormalizedEquityPoint]:
@@ -278,42 +581,81 @@ def parse_workspace(workspace: Workspace) -> NormalizedResult:
     """
     paths = _locate_lean_artifacts(workspace.output_dir)
 
-    try:
-        summary_raw = json.loads(paths.summary.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as e:
-        raise NormalizedParserError(f"could not read {paths.summary}: {e}") from e
+    summary_raw = _read_json(paths.summary, label="summary", lossless_numbers=True)
     if not isinstance(summary_raw, dict):
         raise NormalizedParserError(f"summary file {paths.summary} is not a JSON object")
+    full_raw = _read_json(paths.full_result, label="full result", lossless_numbers=True)
+    if not isinstance(full_raw, dict):
+        raise NormalizedParserError(f"full result file {paths.full_result} is not a JSON object")
 
-    # Defensive: LEAN's schema may emit ``null`` or a non-object for
-    # these fields under partial-failure conditions. A bare ``.items()``
-    # on ``None`` raises ``AttributeError``, which the orchestrator's
-    # ``except NormalizedParserError`` would NOT catch — failing the
-    # whole trusted-run request instead of returning normalized=None
-    # as the run-completion contract promises.
-    raw_stats = summary_raw.get("statistics")
-    raw_runtime = summary_raw.get("runtimeStatistics")
-    if raw_stats is not None and not isinstance(raw_stats, dict):
-        raise NormalizedParserError(
-            f"summary 'statistics' must be a JSON object or null, got {type(raw_stats).__name__}"
-        )
-    if raw_runtime is not None and not isinstance(raw_runtime, dict):
-        raise NormalizedParserError(
-            f"summary 'runtimeStatistics' must be a JSON object or null, got {type(raw_runtime).__name__}"
-        )
-    statistics = {k: str(v) for k, v in (raw_stats or {}).items()}
-    runtime_statistics = {k: str(v) for k, v in (raw_runtime or {}).items()}
-    equity_curve = _parse_equity_curve(summary_raw)
+    raw_stats = _object_field(full_raw, "statistics", label="full result")
+    raw_runtime = _object_field(full_raw, "runtimeStatistics", label="full result")
+    raw_summary_stats = _object_field(summary_raw, "statistics", label="summary")
+    raw_summary_runtime = _object_field(summary_raw, "runtimeStatistics", label="summary")
+    statistics = {str(key): str(value) for key, value in raw_stats.items()}
+    runtime_statistics = {str(key): str(value) for key, value in raw_runtime.items()}
+    summary_statistics = {str(key): str(value) for key, value in raw_summary_stats.items()}
+    summary_runtime_statistics = {str(key): str(value) for key, value in raw_summary_runtime.items()}
+
+    raw_full_charts = _object_field(full_raw, "charts", label="full result")
+    raw_summary_charts = _object_field(summary_raw, "charts", label="summary")
+    equity_curve = _parse_equity_curve(full_raw)
+    summary_equity_curve = _parse_equity_curve(summary_raw)
+    full_charts = _normalize_charts(raw_full_charts)
+    summary_charts = _normalize_charts(raw_summary_charts)
+
+    raw_algorithm_configuration = _object_field(
+        full_raw,
+        "algorithmConfiguration",
+        label="full result",
+    )
+    algorithm_configuration = _normalize_native_value(raw_algorithm_configuration)
+    assert isinstance(algorithm_configuration, dict)
+    algorithm_start_ms_utc = algorithm_configuration.get("startDate")
+    algorithm_end_ms_utc = algorithm_configuration.get("endDate")
+    if algorithm_start_ms_utc is not None and not isinstance(algorithm_start_ms_utc, int):
+        raise NormalizedParserError("algorithmConfiguration.startDate did not normalize to int64 ms UTC")
+    if algorithm_end_ms_utc is not None and not isinstance(algorithm_end_ms_utc, int):
+        raise NormalizedParserError("algorithmConfiguration.endDate did not normalize to int64 ms UTC")
+
+    raw_state = _object_field(full_raw, "state", label="full result")
+    state = _normalize_native_value(raw_state)
+    assert isinstance(state, dict)
+    raw_total_performance = _object_field(full_raw, "totalPerformance", label="full result")
+    total_performance = _normalize_native_value(raw_total_performance)
+    assert isinstance(total_performance, dict)
+    raw_orders = _object_field(full_raw, "orders", label="full result")
+    orders = _normalize_native_value(raw_orders)
+    assert isinstance(orders, dict)
+    raw_rolling_window = _object_field(full_raw, "rollingWindow", label="full result")
+    rolling_window = _normalize_native_value(raw_rolling_window)
+    assert isinstance(rolling_window, dict)
+    profit_loss = _parse_profit_loss(full_raw.get("profitLoss"))
+    analysis = _parse_analysis(full_raw.get("analysis"))
 
     order_events: list[NormalizedOrderEvent] = []
     if paths.order_events is not None:
-        try:
-            events_raw = json.loads(paths.order_events.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as e:
-            raise NormalizedParserError(f"could not read {paths.order_events}: {e}") from e
+        events_raw = _read_json(paths.order_events, label="order events", lossless_numbers=False)
         if not isinstance(events_raw, list):
             raise NormalizedParserError(f"order-events file {paths.order_events} is not a JSON array")
         order_events = _parse_order_events(events_raw)
+
+    data_monitor: dict[str, JsonValue] = {}
+    if paths.data_monitor is not None:
+        data_monitor_raw = _read_json(paths.data_monitor, label="data-monitor report", lossless_numbers=True)
+        if not isinstance(data_monitor_raw, dict):
+            raise NormalizedParserError(f"data-monitor report {paths.data_monitor} is not a JSON object")
+        normalized_monitor = _normalize_native_value(data_monitor_raw)
+        assert isinstance(normalized_monitor, dict)
+        data_monitor = normalized_monitor
+
+    closed_trades = total_performance.get("closedTrades")
+    if closed_trades is None:
+        total_closed_trades = 0
+    elif isinstance(closed_trades, list):
+        total_closed_trades = len(closed_trades)
+    else:
+        raise NormalizedParserError("totalPerformance.closedTrades must be an array or null")
 
     return NormalizedResult(
         parser_version=NORMALIZED_PARSER_VERSION,
@@ -321,11 +663,34 @@ def parse_workspace(workspace: Workspace) -> NormalizedResult:
         statistics=statistics,
         runtime_statistics=runtime_statistics,
         equity_curve=equity_curve,
+        summary_statistics=summary_statistics,
+        summary_runtime_statistics=summary_runtime_statistics,
+        summary_equity_curve=summary_equity_curve,
         order_events=order_events,
+        algorithm_configuration=algorithm_configuration,
+        algorithm_start_ms_utc=algorithm_start_ms_utc,
+        algorithm_end_ms_utc=algorithm_end_ms_utc,
+        state=state,
+        total_performance=total_performance,
+        orders=orders,
+        profit_loss=profit_loss,
+        rolling_window=rolling_window,
+        analysis=analysis,
+        full_charts=full_charts,
+        summary_charts=summary_charts,
+        data_monitor=data_monitor,
+        artifacts=_artifact_receipts(paths, workspace.output_dir),
         total_order_events=len(order_events),
         total_equity_points=len(equity_curve),
+        total_summary_equity_points=len(summary_equity_curve),
+        total_orders=len(orders),
+        total_closed_trades=total_closed_trades,
+        total_rolling_windows=len(rolling_window),
+        total_analyses=len(analysis),
         first_equity_ms_utc=equity_curve[0].ms_utc if equity_curve else None,
         last_equity_ms_utc=equity_curve[-1].ms_utc if equity_curve else None,
+        first_summary_equity_ms_utc=(summary_equity_curve[0].ms_utc if summary_equity_curve else None),
+        last_summary_equity_ms_utc=(summary_equity_curve[-1].ms_utc if summary_equity_curve else None),
     )
 
 

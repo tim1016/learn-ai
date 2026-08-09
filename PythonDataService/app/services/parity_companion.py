@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from app.config import settings
+from app.lean_sidecar.config import COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1
 
 if TYPE_CHECKING:
     from app.engine.strategy.registry import StrategyRegistration
@@ -41,10 +42,10 @@ logger = logging.getLogger(__name__)
 
 PARITY_VERDICT_SCHEMA_VERSION = 1
 _HTTP_TIMEOUT_S = 5.0
-
 # Reasons for the honest ``unavailable`` disposition.
 REASON_NO_TWIN = "no_lean_counterpart"
 REASON_ADJUSTMENT = "adjustment_unsupported"
+REASON_EXECUTION_PROFILE = "execution_profile_unsupported"
 REASON_RESOLUTION = "resolution_unsupported"
 REASON_WINDOW = "window_unsupported"
 
@@ -66,6 +67,8 @@ def companion_ineligibility_reason(
     """
     if registration.lean_twin is None:
         return REASON_NO_TWIN
+    if request.compatibility_profile != COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1:
+        return REASON_EXECUTION_PROFILE
     if request.data_policy is None or request.data_policy.adjusted:
         return REASON_ADJUSTMENT
     if request.resolution != "minute":

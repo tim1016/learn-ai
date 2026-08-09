@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 Grade = Literal["A+", "A", "B", "C", "D", "F"]
 Signal = Literal["Deploy", "Paper-trade", "Iterate", "Rework", "Reject"]
 EngineKind = Literal["python", "lean"]
+RunVerdictStatus = Literal["complete", "incomplete", "unavailable", "failed"]
 
 
 class RunVerdictSubScore(BaseModel):
@@ -37,6 +38,7 @@ class RunVerdictCleanliness(BaseModel):
 
 class RunVerdict(BaseModel):
     verdict_version: int
+    status: RunVerdictStatus
     engine: EngineKind
     generated_at_ms: int
     composite: int | None
@@ -46,8 +48,12 @@ class RunVerdict(BaseModel):
     red_flags: list[str] = Field(default_factory=list)
     dimensions: list[RunVerdictDimension] = Field(default_factory=list)
     missing_metrics: list[str] = Field(default_factory=list)
+    missing_required_metrics: list[str] = Field(default_factory=list)
+    available_required_metrics: int
+    required_metrics: int
     normalized_weights: bool
     cleanliness: RunVerdictCleanliness | None = None
+    parity_signature: dict[str, Any] = Field(default_factory=dict)
 
 
 class RunVerdictInput(BaseModel):
@@ -57,4 +63,3 @@ class RunVerdictInput(BaseModel):
     net_profit: float | None = None
     total_fees: float | None = None
     lean_statistics: dict[str, Any] | None = None
-

@@ -6,6 +6,39 @@
   margin-bottom: 1.5rem;
 }
 
+.native-receipt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 1rem;
+  padding: 10px 12px;
+  color: $text-secondary;
+  background: $bg-surface;
+  border: 1px solid $border;
+  border-radius: 8px;
+  font-size: 0.72rem;
+
+  > div {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  strong { color: $text-primary; }
+  code { color: $text-muted; font-size: 0.65rem; }
+
+  &--match {
+    border-color: color-mix(in srgb, $bull 45%, $border);
+    .pi { color: $bull; }
+  }
+
+  &--mismatch {
+    border-color: color-mix(in srgb, $bear 55%, $border);
+    .pi { color: $bear; }
+  }
+}
+
 // ─── Section ──────────────────────────────────────────
 .kpi-section {
   margin-bottom: 1rem;

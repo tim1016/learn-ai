@@ -124,6 +124,15 @@ describe('LeanEngineComponent.composeDataPolicy', () => {
     expect(dp.strategy_bars).toEqual({ timespan: 'minute', multiplier: 1 });
   });
 
+  it('uses raw bars for the server-owned compatibility pair', () => {
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    const component = fixture.componentInstance;
+
+    component.engine.set('both');
+
+    expect(component.composeDataPolicy().adjusted).toBe(false);
+  });
+
   it('falls back to SPY when no symbol is configured (matches effectiveSymbol)', () => {
     const fixture = TestBed.createComponent(LeanEngineComponent);
     const component = fixture.componentInstance;
@@ -405,7 +414,7 @@ describe('LeanEngineComponent engine selector', () => {
     });
   });
 
-  it('starts Python and LEAN jobs together in validation mode', async () => {
+  it('starts one raw Python anchor and lets the server create its linked LEAN companion', async () => {
     const { startJob } = configureTestBed();
     const fixture = TestBed.createComponent(LeanEngineComponent);
     fixture.detectChanges();
@@ -427,10 +436,11 @@ describe('LeanEngineComponent engine selector', () => {
 
     await component.run();
 
-    expect(startJob.mock.calls.map((call) => call[0])).toEqual([
-      'engine_backtest',
-      'lean_engine_run',
-    ]);
+    expect(startJob).toHaveBeenCalledTimes(1);
+    expect(startJob.mock.calls[0][0]).toBe('engine_backtest');
+    const envelope = startJob.mock.calls[0][1] as { backtest: Record<string, unknown> };
+    expect(envelope.backtest['compatibility_profile']).toBe('us-equity-raw-ibkr-v1');
+    expect(envelope.backtest['data_policy']).toMatchObject({ adjusted: false });
   });
 
   it('blocks both engines before either job is submitted when the pinned image is unavailable', async () => {

@@ -130,6 +130,44 @@ def compute_engine_validation_analytics(
     )
 
 
+def build_compatibility_equity_curve(
+    trades: Sequence[ValidationTrade],
+    *,
+    start_ms_utc: int,
+    end_ms_utc: int,
+    initial_equity: float,
+) -> list[ValidationEquityPoint]:
+    """Build the shared return-normalized curve used only by paired runs.
+
+    Native Python and LEAN charts have different sampling contracts. This
+    curve compounds the common closed-trade return ledger, combining trades
+    that exit at the same millisecond, and pins both window endpoints. It is a
+    platform analytics primitive, never a replacement for either native chart.
+    """
+    if start_ms_utc <= 0 or end_ms_utc <= start_ms_utc:
+        raise ValueError("compatibility equity window must be positive and increasing")
+    if initial_equity <= 0 or not math.isfinite(initial_equity):
+        raise ValueError("compatibility initial equity must be positive and finite")
+
+    returns_by_exit: dict[int, list[float]] = defaultdict(list)
+    for trade in trades:
+        if trade.exit_ms_utc < start_ms_utc or trade.exit_ms_utc > end_ms_utc:
+            raise ValueError(f"trade {trade.trade_number} exits outside the compatibility window")
+        returns_by_exit[trade.exit_ms_utc].append(trade.pnl_pct)
+
+    equity = initial_equity
+    points = [ValidationEquityPoint(timestamp_ms_utc=start_ms_utc, equity=equity)]
+    for exit_ms_utc, returns in sorted(returns_by_exit.items()):
+        equity *= math.prod(1.0 + value for value in returns)
+        if exit_ms_utc == start_ms_utc:
+            points[0] = ValidationEquityPoint(timestamp_ms_utc=start_ms_utc, equity=equity)
+        else:
+            points.append(ValidationEquityPoint(timestamp_ms_utc=exit_ms_utc, equity=equity))
+    if points[-1].timestamp_ms_utc < end_ms_utc:
+        points.append(ValidationEquityPoint(timestamp_ms_utc=end_ms_utc, equity=equity))
+    return points
+
+
 def _validate_inputs(
     *,
     trades: Sequence[ValidationTrade],
@@ -278,4 +316,3 @@ def _compute_rolling_stability(
             )
         )
     return points
-

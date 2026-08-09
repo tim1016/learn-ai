@@ -1,0 +1,199 @@
+{
+  "generated_at_ms": 1700000000000,
+  "cases": [
+    {
+      "id": "run_77_canonical_metrics_incomplete",
+      "engine": "python",
+      "input": {
+        "statistics": {
+          "sharpe_ratio": 1.43,
+          "sortino_ratio": 2.59,
+          "max_drawdown_pct": 0.0257,
+          "profit_factor": 2.0,
+          "expectancy_pct": 0.00111,
+          "payoff_ratio": 0.97
+        },
+        "win_rate": 0.6575,
+        "total_trades": 73,
+        "net_profit": 8184.95,
+        "total_fees": 146.0,
+        "lean_statistics": {
+          "portfolio": {
+            "compounding_annual_return": 0.0398,
+            "annual_standard_deviation": 0.0257,
+            "probabilistic_sharpe_ratio": 0.8006,
+            "drawdown_recovery": 68
+          },
+          "trade": {
+            "sharpe_ratio": 4.03,
+            "max_consecutive_losing_trades": 4
+          }
+        }
+      },
+      "expected": {
+        "status": "incomplete",
+        "available_required_metrics": 10,
+        "required_metrics": 17,
+        "missing_required_metrics": [
+          "Return Quality: CAGR",
+          "Return Quality: Calmar ratio",
+          "Return Quality: Annual volatility",
+          "Risk Control: Drawdown recovery",
+          "Risk Control: Max consecutive losers",
+          "Statistical Confidence: Probabilistic Sharpe",
+          "Statistical Confidence: Trade vs Portfolio Sharpe gap"
+        ],
+        "composite": null,
+        "grade": null,
+        "signal": null,
+        "normalized_weights": false,
+        "dimension_scores": {
+          "return_quality": null,
+          "risk_control": null,
+          "trade_edge": 82,
+          "stat_confidence": null,
+          "alpha_calibration": null
+        }
+      }
+    },
+    {
+      "id": "run_78_missing_required_evidence",
+      "engine": "lean",
+      "input": {
+        "statistics": {},
+        "win_rate": 0.6575,
+        "total_trades": 73,
+        "net_profit": 8540.93,
+        "total_fees": 146.02,
+        "lean_statistics": {
+          "portfolio": {
+            "compounding_annual_return": 0.0418,
+            "annual_standard_deviation": 0.026,
+            "probabilistic_sharpe_ratio": 0.5967,
+            "drawdown": 0.026,
+            "drawdown_recovery": 85,
+            "sharpe_ratio": -1.01,
+            "sortino_ratio": -0.6
+          },
+          "trade": {
+            "profit_factor": 1.96,
+            "sharpe_ratio": 0,
+            "max_consecutive_losing_trades": 4,
+            "average_profit": 102,
+            "average_loss": -100
+          }
+        }
+      },
+      "expected": {
+        "status": "incomplete",
+        "available_required_metrics": 4,
+        "required_metrics": 17,
+        "missing_required_metrics": [
+          "Return Quality: Sharpe ratio",
+          "Return Quality: Sortino ratio",
+          "Return Quality: CAGR",
+          "Return Quality: Calmar ratio",
+          "Return Quality: Annual volatility",
+          "Risk Control: Max drawdown",
+          "Risk Control: Drawdown recovery",
+          "Risk Control: Max consecutive losers",
+          "Trade Edge: Profit factor",
+          "Trade Edge: Expectancy / trade",
+          "Trade Edge: Payoff ratio",
+          "Statistical Confidence: Probabilistic Sharpe",
+          "Statistical Confidence: Trade vs Portfolio Sharpe gap"
+        ],
+        "composite": null,
+        "grade": null,
+        "signal": null,
+        "normalized_weights": false,
+        "dimension_scores": {
+          "return_quality": null,
+          "risk_control": null,
+          "trade_edge": null,
+          "stat_confidence": null,
+          "alpha_calibration": null
+        }
+      }
+    },
+    {
+      "id": "complete_platform_contract",
+      "engine": "python",
+      "input": {
+        "statistics": {
+          "sharpe_ratio": 1.43,
+          "sortino_ratio": 2.59,
+          "max_drawdown_pct": 0.0257,
+          "profit_factor": 2.0,
+          "expectancy_pct": 0.00111,
+          "payoff_ratio": 0.97,
+          "cagr": 0.0398,
+          "annual_standard_deviation": 0.0257,
+          "drawdown_recovery": 68,
+          "max_consecutive_losing_trades": 4,
+          "probabilistic_sharpe_ratio": 0.8006,
+          "trade_sharpe_ratio": 4.03
+        },
+        "win_rate": 0.6575,
+        "total_trades": 73,
+        "net_profit": 8184.95,
+        "total_fees": 146.0,
+        "lean_statistics": {
+          "portfolio": {
+            "sharpe_ratio": -999.0,
+            "sortino_ratio": -999.0
+          },
+          "trade": {
+            "profit_factor": 999.0
+          }
+        }
+      },
+      "expected": {
+        "status": "complete",
+        "available_required_metrics": 17,
+        "required_metrics": 17,
+        "missing_required_metrics": [],
+        "composite": 76,
+        "grade": "A",
+        "signal": "Paper-trade",
+        "normalized_weights": false,
+        "dimension_scores": {
+          "return_quality": 76,
+          "risk_control": 73,
+          "trade_edge": 82,
+          "stat_confidence": 74,
+          "alpha_calibration": null
+        }
+      }
+    },
+    {
+      "id": "no_required_evidence",
+      "engine": "python",
+      "input": {
+        "statistics": {},
+        "win_rate": null,
+        "total_trades": null,
+        "net_profit": null,
+        "total_fees": null,
+        "lean_statistics": null
+      },
+      "expected": {
+        "status": "unavailable",
+        "available_required_metrics": 0,
+        "required_metrics": 17,
+        "missing_required_metrics_count": 17,
+        "composite": null,
+        "grade": null,
+        "signal": null,
+        "normalized_weights": false,
+        "dimension_scores": {
+          "return_quality": null,
+          "risk_control": null,
+          "trade_edge": null,
+          "stat_confidence": null,
+          "alpha_calibration": null
+        }
+      }
+    }
+  ]
+}
