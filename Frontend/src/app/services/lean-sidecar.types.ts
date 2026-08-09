@@ -23,6 +23,8 @@ import type { DataPolicy } from "../models/data-policy";
 export interface TrustedRunRequest {
   /** Strict slug ``^[a-z0-9][a-z0-9_-]{2,63}$``. */
   run_id: string;
+  /** Operator-selected execution mode persisted with the resulting run. */
+  requested_engine?: "python" | "lean" | "both";
   /**
    * Equity ticker, ``^[A-Za-z0-9.\-]{1,16}$``. Defaults to SPY on the server.
    *

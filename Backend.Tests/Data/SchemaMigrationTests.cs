@@ -1,5 +1,6 @@
 using Backend.Data;
 using Backend.Models.MarketData;
+using Backend.Tests.Helpers;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
@@ -7,7 +8,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using System.Reflection;
-using Xunit.Sdk;
 
 namespace Backend.Tests.Data;
 
@@ -114,9 +114,7 @@ public class SchemaMigrationTests
     [Trait("Category", "PostgresIntegration")]
     public async Task DatabaseInitializer_FreshDatabase_AppliesEveryMigrationAndLeavesNonePending()
     {
-        var baseConnectionString = RequirePostgresConnectionString();
-
-        await using var database = await TemporaryPostgresDatabase.CreateAsync(baseConnectionString);
+        await using var database = await PostgresIntegrationTestDatabase.CreateAsync();
         using var services = new ServiceCollection()
             .AddDbContext<AppDbContext>(options => options.UseNpgsql(database.ConnectionString))
             .BuildServiceProvider();
@@ -164,9 +162,8 @@ public class SchemaMigrationTests
     [Trait("Category", "PostgresIntegration")]
     public async Task RepairLegacySchemaDrift_RecreatesTheCanonicalRawSqlCatalog()
     {
-        var baseConnectionString = RequirePostgresConnectionString();
-        await using var cleanDatabase = await TemporaryPostgresDatabase.CreateAsync(baseConnectionString);
-        await using var legacyDatabase = await TemporaryPostgresDatabase.CreateAsync(baseConnectionString);
+        await using var cleanDatabase = await PostgresIntegrationTestDatabase.CreateAsync();
+        await using var legacyDatabase = await PostgresIntegrationTestDatabase.CreateAsync();
         using var cleanServices = CreateServices(cleanDatabase.ConnectionString);
         using var legacyServices = CreateServices(legacyDatabase.ConnectionString);
 
@@ -200,9 +197,8 @@ public class SchemaMigrationTests
     [Trait("Category", "PostgresIntegration")]
     public async Task ReconcileLegacySchemaRepairContract_UpdatesDatabasesThatAlreadyAppliedTheInitialRepair()
     {
-        var baseConnectionString = RequirePostgresConnectionString();
-        await using var cleanDatabase = await TemporaryPostgresDatabase.CreateAsync(baseConnectionString);
-        await using var upgradedDatabase = await TemporaryPostgresDatabase.CreateAsync(baseConnectionString);
+        await using var cleanDatabase = await PostgresIntegrationTestDatabase.CreateAsync();
+        await using var upgradedDatabase = await PostgresIntegrationTestDatabase.CreateAsync();
         using var cleanServices = CreateServices(cleanDatabase.ConnectionString);
         using var upgradedServices = CreateServices(upgradedDatabase.ConnectionString);
 
@@ -238,9 +234,7 @@ public class SchemaMigrationTests
     [Trait("Category", "PostgresIntegration")]
     public async Task RepairLegacySchemaDrift_PopulatedGreekColumns_AbortsDestructiveDrop()
     {
-        var baseConnectionString = RequirePostgresConnectionString();
-
-        await using var database = await TemporaryPostgresDatabase.CreateAsync(baseConnectionString);
+        await using var database = await PostgresIntegrationTestDatabase.CreateAsync();
         using var services = new ServiceCollection()
             .AddDbContext<AppDbContext>(options => options.UseNpgsql(database.ConnectionString))
             .BuildServiceProvider();
@@ -295,9 +289,7 @@ public class SchemaMigrationTests
     [Trait("Category", "PostgresIntegration")]
     public async Task AssertRelationExistsAsync_MissingRelation_Throws()
     {
-        var baseConnectionString = RequirePostgresConnectionString();
-
-        await using var database = await TemporaryPostgresDatabase.CreateAsync(baseConnectionString);
+        await using var database = await PostgresIntegrationTestDatabase.CreateAsync();
         await using var connection = new NpgsqlConnection(database.ConnectionString);
         await connection.OpenAsync();
 
@@ -453,18 +445,6 @@ public class SchemaMigrationTests
         return (bool)(await command.ExecuteScalarAsync())!;
     }
 
-    private static string RequirePostgresConnectionString()
-    {
-        var connectionString = Environment.GetEnvironmentVariable("BACKEND_TEST_POSTGRES_CONNECTION_STRING");
-        if (string.IsNullOrWhiteSpace(connectionString))
-        {
-            throw SkipException.ForSkip(
-                "PostgreSQL migration integration tests require BACKEND_TEST_POSTGRES_CONNECTION_STRING.");
-        }
-
-        return connectionString;
-    }
-
     private static async Task AssertRelationExistsAsync(NpgsqlConnection connection, string relationName)
     {
         await using var command = new NpgsqlCommand("SELECT to_regclass(@relationName)::text;", connection);
@@ -496,55 +476,5 @@ public class SchemaMigrationTests
         }
 
         throw new FileNotFoundException($"Could not locate {Path.Combine(relativePathSegments)} from the test runtime directories.");
-    }
-
-    private sealed class TemporaryPostgresDatabase : IAsyncDisposable
-    {
-        private readonly string _adminConnectionString;
-        private readonly string _databaseName;
-
-        private TemporaryPostgresDatabase(string adminConnectionString, string connectionString, string databaseName)
-        {
-            _adminConnectionString = adminConnectionString;
-            ConnectionString = connectionString;
-            _databaseName = databaseName;
-        }
-
-        public string ConnectionString { get; }
-
-        public static async Task<TemporaryPostgresDatabase> CreateAsync(string baseConnectionString)
-        {
-            var connectionStringBuilder = new NpgsqlConnectionStringBuilder(baseConnectionString);
-            var databaseName = $"backend_migrations_{Guid.NewGuid():N}";
-            connectionStringBuilder.Database = "postgres";
-            var adminConnectionString = connectionStringBuilder.ConnectionString;
-
-            await using (var connection = new NpgsqlConnection(adminConnectionString))
-            {
-                await connection.OpenAsync();
-                await using var command = new NpgsqlCommand($"CREATE DATABASE \"{databaseName}\";", connection);
-                await command.ExecuteNonQueryAsync();
-            }
-
-            connectionStringBuilder.Database = databaseName;
-            return new TemporaryPostgresDatabase(adminConnectionString, connectionStringBuilder.ConnectionString, databaseName);
-        }
-
-        public async ValueTask DisposeAsync()
-        {
-            await using var connection = new NpgsqlConnection(_adminConnectionString);
-            await connection.OpenAsync();
-
-            await using (var terminateConnections = new NpgsqlCommand(
-                             "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = @databaseName AND pid <> pg_backend_pid();",
-                             connection))
-            {
-                terminateConnections.Parameters.AddWithValue("databaseName", _databaseName);
-                await terminateConnections.ExecuteNonQueryAsync();
-            }
-
-            await using var dropDatabase = new NpgsqlCommand($"DROP DATABASE IF EXISTS \"{_databaseName}\";", connection);
-            await dropDatabase.ExecuteNonQueryAsync();
-        }
     }
 }

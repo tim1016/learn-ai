@@ -174,6 +174,26 @@ def test_params_schema_is_round_trippable_json():
         assert json.loads(dumped) == s["params_schema"]
 
 
+def test_registry_exposes_strategy_bar_cadence_without_frontend_name_heuristics():
+    strategies = {strategy["name"]: strategy for strategy in _list_strategies()}
+
+    assert strategies["ema_crossover_signal"]["strategy_bars"] == {
+        "timespan": "minute",
+        "multiplier": 15,
+        "parameter": None,
+    }
+    assert strategies["sma_crossover"]["strategy_bars"] == {
+        "timespan": "minute",
+        "multiplier": 15,
+        "parameter": "resolution_minutes",
+    }
+    assert strategies["daily_sma_crossover"]["strategy_bars"] == {
+        "timespan": "day",
+        "multiplier": 1,
+        "parameter": None,
+    }
+
+
 def test_build_callable_constructs_orb_with_default_params():
     """Smoke check: the registered build lambda accepts a default-params
     instance and returns a SpyOpeningRangeBreakout.

@@ -104,6 +104,14 @@ public class StrategyExecution
     [MaxLength(20)]
     public string Source { get; set; } = "engine";
 
+    /// <summary>
+    /// Operator-selected execution mode (python, lean, or both). This is
+    /// distinct from Source, which records the engine that produced this row.
+    /// </summary>
+    [MaxLength(12)]
+    [Column(TypeName = "varchar(12)")]
+    public string? RequestedEngine { get; set; }
+
     [MaxLength(128)]
     public string? LeanRunId { get; set; }
 

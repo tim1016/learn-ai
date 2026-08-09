@@ -7,7 +7,6 @@ import {
   output,
   signal,
 } from "@angular/core";
-import { Router } from "@angular/router";
 import { Apollo } from "apollo-angular";
 import { toSignal } from "@angular/core/rxjs-interop";
 import { firstValueFrom } from "rxjs";
@@ -53,7 +52,6 @@ const ENGINE_JOB_TYPES = new Set<string>(["engine_backtest", "lean_engine_run"])
 })
 export class EngineLabRunHistoryComponent {
   private readonly apollo = inject(Apollo);
-  private readonly router = inject(Router);
   private readonly jobsService = inject(JobsService);
   /** Job ids we've already refetched for. Without this, every signal tick
    *  while a completed engine job sits in `JobsService.jobs` would refire
@@ -147,7 +145,7 @@ export class EngineLabRunHistoryComponent {
   }
 
   onRowSelected(id: string): void {
-    void this.router.navigate(["/engine/runs", id]);
+    this.runSelected.emit(id);
   }
 
   // ------------------------------------------------------------------

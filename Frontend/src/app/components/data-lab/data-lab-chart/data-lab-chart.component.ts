@@ -16,6 +16,11 @@ import {
 } from 'lightweight-charts';
 import { environment } from '../../../../environments/environment';
 import { QualityModalComponent } from '../quality-modal/quality-modal.component';
+import type {
+  ChartIndicatorEntry,
+  ChartIndicatorPoint,
+  ChartIndicatorResult,
+} from '../../../shared/trading-chart';
 
 // ──────────────────────────────────────────────
 // Types
@@ -29,21 +34,6 @@ export interface ChartBar {
   v: number;
   session?: string;
   synthetic?: boolean;
-}
-
-export interface IndicatorPoint {
-  t: number;
-  value: number | null;
-}
-
-export interface ChartIndicatorResult {
-  id: string;
-  panel: string;
-  type: string;
-  color: string;
-  data: IndicatorPoint[] | Record<string, IndicatorPoint[]>;
-  refs: number[];
-  default_visible?: boolean;
 }
 
 export interface GapDetail {
@@ -79,11 +69,6 @@ export interface ChartDataResponse {
   meta: { cached_resample: boolean; cached_indicators: boolean };
 }
 
-export interface ChartIndicatorEntry {
-  name: string;
-  params: Record<string, number>;
-}
-
 interface SubPanel {
   id: string;
   container: HTMLDivElement;
@@ -98,7 +83,7 @@ interface ChartRequestErrorDetail {
   recommended_timeframe?: string;
 }
 
-function hasIndicatorValue(point: IndicatorPoint): point is IndicatorPoint & { value: number } {
+function hasIndicatorValue(point: ChartIndicatorPoint): point is ChartIndicatorPoint & { value: number } {
   return point.value !== null;
 }
 
@@ -611,7 +596,7 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
 
     for (const ind of overlayResults) {
       if (ind.type === 'line' && Array.isArray(ind.data)) {
-        const lineData: LineData[] = (ind.data as IndicatorPoint[])
+        const lineData: LineData[] = (ind.data as ChartIndicatorPoint[])
           .filter(hasIndicatorValue)
           .map(p => ({
             time: (p.t / 1000) as UTCTimestamp,
@@ -735,7 +720,7 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
 
     for (const ind of indicators) {
       if (ind.type === 'macd' && !Array.isArray(ind.data)) {
-        const macdData = ind.data as Record<string, IndicatorPoint[]>;
+        const macdData = ind.data as Record<string, ChartIndicatorPoint[]>;
 
         // Histogram — gradient opacity based on momentum
         if (macdData['histogram']) {
@@ -802,7 +787,7 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
           priceLineVisible: false,
           lastValueVisible: false,
         });
-        const lineData: LineData[] = (ind.data as IndicatorPoint[])
+        const lineData: LineData[] = (ind.data as ChartIndicatorPoint[])
           .filter(hasIndicatorValue)
           .map(p => ({ time: (p.t / 1000) as UTCTimestamp, value: p.value }))
           .sort((a, b) => (a.time as number) - (b.time as number));

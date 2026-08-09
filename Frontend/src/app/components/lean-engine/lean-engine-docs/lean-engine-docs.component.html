@@ -1,8 +1,28 @@
 <div class="engine-docs mt-4 max-w-5xl">
   <app-page-header
-    title="Engine Docs"
+    title="Strategy Lab calculations"
     subtitle="How the LEAN-compatible backtest engine turns raw minute bars into trade verdicts and summary statistics. Formulas match PythonDataService/app/engine/ line-for-line."
   />
+
+  <section class="doc-section" aria-labelledby="metric-calculations-title">
+    <div class="section-header">
+      <i class="pi pi-calculator section-icon" aria-hidden="true"></i>
+      <h3 id="metric-calculations-title">Metric calculation reference</h3>
+    </div>
+    <p class="section-description">
+      These are the exact definitions surfaced by the Strategy Lab metric help. Values are computed and persisted by Python; this page documents them only.
+    </p>
+    <div class="doc-card">
+      @for (metric of strategyMetricHelp; track metric.id) {
+        <article class="metric-definition" [id]="metric.id">
+          <h4>{{ metric.label }}</h4>
+          <p>{{ metric.definition }}</p>
+          <code>{{ metric.formula }}</code>
+          <small>Canonical source: {{ metric.source }}</small>
+        </article>
+      }
+    </div>
+  </section>
 
   <!-- ═══ TL;DR ═══ -->
   <section class="doc-section">

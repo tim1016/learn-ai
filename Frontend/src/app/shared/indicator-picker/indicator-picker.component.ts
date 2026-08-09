@@ -43,7 +43,7 @@ interface DecoratedIndicator extends IndicatorInfo {
 })
 export class IndicatorPickerComponent implements AfterViewChecked {
   // ── Inputs ──────────────────────────────────────────────────
-  readonly categories = input<IndicatorCategory[]>([]);
+  readonly categories = input<readonly IndicatorCategory[]>([]);
   /** Names of indicators with one or more active instances. Multiple occurrences
    *  of the same name drive the `+N` badge on that row. */
   readonly activeKeys = input<readonly string[]>([]);

@@ -4,9 +4,9 @@ import { firstValueFrom } from 'rxjs';
 import { environment } from '../../environments/environment';
 import type {
   ChartBar,
-  ChartIndicatorResult,
   QualityReport,
 } from '../components/data-lab/data-lab-chart/data-lab-chart.component';
+import type { ChartIndicatorResult } from '../shared/trading-chart';
 
 // ─────────────────────────────────────────────────────────────
 // Public interfaces (consumed by components)

@@ -292,6 +292,29 @@ class RsiRangeStrategyCParams(StrategyParamsBase):
     resolution_minutes: int = Field(15, ge=1, le=1440, description="Bar resolution.")
 
 
+@dataclass(frozen=True, slots=True)
+class ChartParamRef:
+    """Reference to one validated strategy parameter in a chart recipe."""
+
+    field: str
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyChartIndicator:
+    """Declarative indicator recipe owned by the registered strategy."""
+
+    name: str
+    params: dict[str, int | float | ChartParamRef]
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyBarCadence:
+    """Declarative bar cadence resolved from validated strategy parameters."""
+
+    timespan: Literal["minute", "day"]
+    multiplier: int | ChartParamRef
+
+
 @dataclass
 class StrategyRegistration:
     display_name: str
@@ -367,6 +390,11 @@ class StrategyRegistration:
     # sharing a parity_group_id (see app/services/parity_companion.py).
     # None → honest "parity unavailable — no LEAN counterpart".
     lean_twin: str | None = None
+    # Evidence-chart recipe resolved from the same validated parameter model
+    # the strategy executes. Keeping this on the registration prevents the UI
+    # from guessing strategy semantics from parameter names.
+    chart_indicators: tuple[StrategyChartIndicator, ...] = ()
+    strategy_bars: StrategyBarCadence = StrategyBarCadence("minute", 1)
 
 
 _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
@@ -470,6 +498,12 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "15-minute label offset that is cosmetic, not a fill-time bug.",
         ],
         param_schema=EmaCrossoverParams,
+        chart_indicators=(
+            StrategyChartIndicator("ema", {"length": 5}),
+            StrategyChartIndicator("ema", {"length": 10}),
+            StrategyChartIndicator("rsi", {"length": 14}),
+        ),
+        strategy_bars=StrategyBarCadence("minute", 15),
         build=lambda p: EmaCrossoverSignalAlgorithm(
             symbol=p.symbol,  # type: ignore[attr-defined]
         ),
@@ -541,6 +575,11 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "will often show only 1–4 trades.",
         ],
         param_schema=SmaCrossoverParams,
+        chart_indicators=(
+            StrategyChartIndicator("sma", {"length": ChartParamRef("short_window")}),
+            StrategyChartIndicator("sma", {"length": ChartParamRef("long_window")}),
+        ),
+        strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
         build=lambda p: SmaCrossoverAlgorithm(
             symbol=p.symbol,  # type: ignore[attr-defined]
             short_window=p.short_window,  # type: ignore[attr-defined]
@@ -609,6 +648,11 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "exports a date (no time) for daily fills.",
         ],
         param_schema=DailySmaCrossoverParams,
+        chart_indicators=(
+            StrategyChartIndicator("sma", {"length": ChartParamRef("short_window")}),
+            StrategyChartIndicator("sma", {"length": ChartParamRef("long_window")}),
+        ),
+        strategy_bars=StrategyBarCadence("day", 1),
         build=lambda p: SmaCrossoverAlgorithm(
             symbol=p.symbol,  # type: ignore[attr-defined]
             short_window=p.short_window,  # type: ignore[attr-defined]
@@ -679,6 +723,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "(viewer-local-tz exports, bar-start vs bar-end labeling).",
         ],
         param_schema=RsiMeanReversionParams,
+        chart_indicators=(StrategyChartIndicator("rsi", {"length": ChartParamRef("window")}),),
+        strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
         build=lambda p: RsiMeanReversionAlgorithm(
             symbol=p.symbol,  # type: ignore[attr-defined]
             window=p.window,  # type: ignore[attr-defined]
@@ -776,6 +822,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "versions had this bug and produced 0 ORBs completed.",
         ],
         param_schema=OrbParams,
+        strategy_bars=StrategyBarCadence("minute", 15),
         build=lambda p: SpyOpeningRangeBreakout(
             symbol=p.symbol,  # type: ignore[attr-defined]
             orb_bars=p.orb_bars,  # type: ignore[attr-defined]
@@ -843,6 +890,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         ],
         lean_twin="deployment_validation",
         param_schema=DeploymentValidationParams,
+        strategy_bars=StrategyBarCadence("minute", 1),
         hidden_params={"trade_symbol"},
         action_plan_contract="single_long_stock",
         build=lambda p: DeploymentValidationConsecutiveGreen(
@@ -960,6 +1008,12 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "All EMA/RSI gotchas from ema_crossover apply here unchanged.",
         ],
         param_schema=EmaCrossoverOptionsParams,
+        chart_indicators=(
+            StrategyChartIndicator("ema", {"length": ChartParamRef("ema_fast_period")}),
+            StrategyChartIndicator("ema", {"length": ChartParamRef("ema_slow_period")}),
+            StrategyChartIndicator("rsi", {"length": ChartParamRef("rsi_period")}),
+        ),
+        strategy_bars=StrategyBarCadence("minute", ChartParamRef("timeframe_minutes")),
         build=lambda p: SpyEmaCrossoverOptionsAlgorithm(
             symbol=p.symbol,  # type: ignore[attr-defined]
             ema_fast_period=p.ema_fast_period,  # type: ignore[attr-defined]
@@ -1056,6 +1110,21 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "No SL/TP — TV defaults. Worst-case drawdown per trade is unbounded until ADX drops below 15.",
         ],
         param_schema=RsiRangeStrategyAParams,
+        chart_indicators=(
+            StrategyChartIndicator("ema", {"length": ChartParamRef("ema_fast_period")}),
+            StrategyChartIndicator("ema", {"length": ChartParamRef("ema_slow_period")}),
+            StrategyChartIndicator(
+                "macd",
+                {
+                    "fast": ChartParamRef("macd_fast"),
+                    "slow": ChartParamRef("macd_slow"),
+                    "signal": ChartParamRef("macd_signal"),
+                },
+            ),
+            StrategyChartIndicator("rsi", {"length": ChartParamRef("rsi_period")}),
+            StrategyChartIndicator("adx", {"length": ChartParamRef("adx_period")}),
+        ),
+        strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
         pine_generator=generate_strategy_a_pine,
         build=lambda p: SpyStrategyAAlgorithm(
             symbol=p.symbol,  # type: ignore[attr-defined]
@@ -1136,6 +1205,26 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "first possible trade.",
         ],
         param_schema=RsiRangeStrategyBParams,
+        chart_indicators=(
+            StrategyChartIndicator(
+                "supertrend",
+                {
+                    "length": ChartParamRef("supertrend_atr_period"),
+                    "multiplier": ChartParamRef("supertrend_multiplier"),
+                },
+            ),
+            StrategyChartIndicator(
+                "macd",
+                {
+                    "fast": ChartParamRef("macd_fast"),
+                    "slow": ChartParamRef("macd_slow"),
+                    "signal": ChartParamRef("macd_signal"),
+                },
+            ),
+            StrategyChartIndicator("rsi", {"length": ChartParamRef("rsi_period")}),
+            StrategyChartIndicator("adx", {"length": ChartParamRef("adx_period")}),
+        ),
+        strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
         pine_generator=generate_strategy_b_pine,
         build=lambda p: SpyStrategyBAlgorithm(
             symbol=p.symbol,  # type: ignore[attr-defined]
@@ -1203,6 +1292,11 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "TV screenshot had C's exit rule cropped; we inherit A's.",
         ],
         param_schema=RsiRangeStrategyCParams,
+        chart_indicators=(
+            StrategyChartIndicator("rsi", {"length": ChartParamRef("rsi_period")}),
+            StrategyChartIndicator("adx", {"length": ChartParamRef("adx_period")}),
+        ),
+        strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
         pine_generator=generate_strategy_c_pine,
         build=lambda p: SpyStrategyCAlgorithm(
             symbol=p.symbol,  # type: ignore[attr-defined]
@@ -1232,9 +1326,11 @@ _STRATEGY_REGISTRY["spy_ema_crossover"] = replace(
 )
 
 
-
 __all__ = [
     "_STRATEGY_REGISTRY",
+    "ChartParamRef",
+    "StrategyBarCadence",
+    "StrategyChartIndicator",
     "StrategyParamsBase",
     "StrategyRegistration",
 ]

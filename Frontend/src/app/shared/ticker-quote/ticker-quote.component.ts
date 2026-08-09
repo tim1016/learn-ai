@@ -15,7 +15,7 @@ export interface TickerQuoteView {
   exchange?: string | null;
   price: number;
   change?: number | null;
-  changePercent: number;
+  changePercent: number | null;
   logoSlug?: string | null;
   currencySymbol?: string;
 }
@@ -50,13 +50,14 @@ export class TickerQuoteComponent {
 
   readonly trend = computed(() => {
     const pct = this.quote().changePercent;
+    if (pct === null) return 'unavailable' as const;
     if (pct > 0) return 'positive' as const;
     if (pct < 0) return 'negative' as const;
     return 'flat' as const;
   });
 
   readonly signPrefix = computed(() =>
-    this.quote().changePercent > 0 ? '+' : '',
+    (this.quote().changePercent ?? 0) > 0 ? '+' : '',
   );
 
   readonly caretClass = computed(() => {
@@ -68,6 +69,7 @@ export class TickerQuoteComponent {
 
   readonly changeAriaLabel = computed(() => {
     const pct = this.quote().changePercent;
+    if (pct === null) return 'change unavailable';
     const t = this.trend();
     const abs = Math.abs(pct).toFixed(2);
     if (t === 'positive') return `up ${abs} percent`;
@@ -92,7 +94,9 @@ export class TickerQuoteComponent {
     const changeStr = q.change === null || q.change === undefined
       ? ''
       : ` (${q.change < 0 ? '-' : sign}${currency}${formatNumber(Math.abs(q.change), this.locale, '1.2-2')})`;
-    const pctStr = `${sign}${formatNumber(q.changePercent, this.locale, '1.2-2')}%`;
+    const pctStr = q.changePercent === null
+      ? 'change unavailable'
+      : `${sign}${formatNumber(q.changePercent, this.locale, '1.2-2')}%`;
     const identity = name ? `${name} (${q.ticker})` : q.ticker;
     return `${identity} — ${priceStr}${changeStr}, ${pctStr}`;
   });

@@ -59,9 +59,7 @@ class TestLeanEngineRunPhaseRegistry:
     def test_friendly_labels_are_present_and_sentence_case(self) -> None:
         for phase in LEAN_ENGINE_RUN_PHASES:
             assert phase.label, f"phase {phase.id} has empty friendly label"
-            assert phase.label[0].isupper(), (
-                f"phase {phase.id} label should be sentence case: {phase.label!r}"
-            )
+            assert phase.label[0].isupper(), f"phase {phase.id} label should be sentence case: {phase.label!r}"
 
     def test_friendly_lookup_returns_registered_label(self) -> None:
         for phase in LEAN_ENGINE_RUN_PHASES:
@@ -117,6 +115,7 @@ class TestRunTrustedSamplePhaseSequence:
         import app.services.lean_sidecar_service as lean_sidecar_service
 
         completed_results: list[dict[str, Any]] = []
+        trusted_requests: list[Any] = []
 
         class _Cancel:
             def raise_if_cancelled(self) -> None:
@@ -143,7 +142,8 @@ class TestRunTrustedSamplePhaseSequence:
             thread.join(timeout=5)
             assert not thread.is_alive()
 
-        async def fake_run_trusted_sample(*_args: Any, **_kwargs: Any) -> TrustedRunResult:
+        async def fake_run_trusted_sample(*args: Any, **_kwargs: Any) -> TrustedRunResult:
+            trusted_requests.append(args[0])
             normalized = NormalizedResult(
                 parser_version="test",
                 algorithm_id="MyAlgorithm",
@@ -197,6 +197,7 @@ class TestRunTrustedSamplePhaseSequence:
                 job_id="job-1",
                 request={
                     "run_id": "unit_lean_result",
+                    "requested_engine": "both",
                     "start_ms_utc": 1_736_778_600_000,
                     "end_ms_utc": 1_736_865_000_000,
                     "starting_cash": 100_000,
@@ -220,6 +221,8 @@ class TestRunTrustedSamplePhaseSequence:
 
         assert response == {"job_id": "job-1", "status": "queued"}
         assert len(completed_results) == 1
+        assert len(trusted_requests) == 1
+        assert trusted_requests[0].requested_engine == "both"
         completed = completed_results[0]
         assert completed["manifest_path"] == "/tmp/manifest.json"
         assert completed["workspace_root"] == "/tmp/workspace"

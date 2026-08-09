@@ -200,7 +200,7 @@ describe('StrategyValidationComponent', () => {
     expect(screen.queryByText(/DeploymentValidationConsecutiveGreen/)).toBeNull();
   });
 
-  it('links the selected strategy directly into Engine Lab validation mode', async () => {
+  it('links the selected strategy directly into Strategy Lab validation mode', async () => {
     await render(StrategyValidationComponent, {
       providers: [
         provideRouter([]),
@@ -208,9 +208,9 @@ describe('StrategyValidationComponent', () => {
       ],
     });
 
-    const link = await screen.findByRole('link', { name: /Validate in Engine Lab/ });
+    const link = await screen.findByRole('link', { name: /Diagnose in Strategy Lab/ });
 
-    expect(link.getAttribute('href')).toContain('/engine?');
+    expect(link.getAttribute('href')).toContain('/strategy-lab?');
     expect(link.getAttribute('href')).toContain('strategy=deployment_validation');
     expect(link.getAttribute('href')).toContain('engine=both');
     expect(link.getAttribute('href')).toContain('symbol=SPY');
@@ -255,7 +255,7 @@ describe('StrategyValidationComponent', () => {
       ],
     });
 
-    const link = await screen.findByRole('link', { name: /Validate in Engine Lab/ });
+    const link = await screen.findByRole('link', { name: /Diagnose in Strategy Lab/ });
 
     expect(screen.getByText('Not recorded')).toBeTruthy();
     expect(link.getAttribute('href')).toContain('engine=python');
@@ -319,7 +319,7 @@ describe('StrategyValidationComponent', () => {
     expect(service.getDetail).toHaveBeenCalledWith('ema_crossover_signal');
   });
 
-  it('opens the requested strategy audit copy from an Engine Lab link', async () => {
+  it('opens the requested strategy audit copy from a Strategy Lab link', async () => {
     await render(StrategyValidationComponent, {
       providers: [
         provideRouter([]),

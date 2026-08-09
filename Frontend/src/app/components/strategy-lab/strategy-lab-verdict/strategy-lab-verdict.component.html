@@ -1,0 +1,62 @@
+<section class="verdict-line" [attr.data-band]="band()" aria-label="Run verdict">
+  <span class="verdict-line__band" aria-hidden="true"></span>
+  <strong class="verdict-line__grade">{{ grade() }}</strong>
+  <span class="verdict-line__headline">Diagnostic complete</span>
+  <span class="verdict-line__trades">{{ tradeCount() }} trade{{ tradeCount() === 1 ? "" : "s" }}</span>
+  @if (parity(); as p) {
+    @if (p.status === "diverged") {
+      <button
+        type="button"
+        class="verdict-line__parity"
+        [attr.aria-expanded]="parityExpanded()"
+        (click)="toggleParity()"
+      >parity: {{ p.status | receiptLabel }}</button>
+    } @else {
+      <span class="verdict-line__parity">parity: {{ p.status | receiptLabel }}</span>
+    }
+  } @else {
+    <span class="verdict-line__parity">parity: unavailable</span>
+  }
+  <button type="button" class="verdict-line__rerun" (click)="rerun.emit()" aria-label="Run this configuration again">
+    <i class="pi pi-refresh" aria-hidden="true"></i> Re-run
+  </button>
+
+  @if (parity(); as p) {
+    @if (p.reason) {
+      <p class="verdict-line__reason">{{ p.reason }}</p>
+    }
+    @if (p.inputParity || p.nativeMetricParity || p.readinessParity) {
+      <div class="verdict-line__receipts" aria-label="Compatibility calculation receipts">
+        @if (p.inputParity; as input) {
+          <span>
+            Shared fixture: <strong>{{ input.status | receiptLabel }}</strong>
+            @if (input.fixture_id) { · {{ input.fixture_id }} }
+          </span>
+        }
+        @if (p.nativeMetricParity; as native) {
+          <span>
+            LEAN-native values: <strong>{{ native.status | receiptLabel }}</strong>
+            @if (native.native_metric_count !== undefined) { · {{ native.native_metric_count }} checked }
+          </span>
+        }
+        @if (p.readinessParity; as readiness) {
+          <span>
+            Readiness fields: <strong>{{ readiness.status | receiptLabel }}</strong>
+            @if (readiness.compared_field_count !== undefined) { · {{ readiness.compared_field_count }} checked }
+          </span>
+        }
+      </div>
+    }
+  }
+
+  @if (parityExpanded() && parity(); as p) {
+    <div class="verdict-line__breakdown">
+      @for (entry of p.countsByCategory; track entry.category) {
+        <span>{{ entry.category | receiptLabel }} <strong>{{ entry.count }}</strong></span>
+      }
+      @for (item of p.divergences; track $index) {
+        <p><strong>{{ item.category | receiptLabel }}</strong> {{ item.message }}</p>
+      }
+    </div>
+  }
+</section>

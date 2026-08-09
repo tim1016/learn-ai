@@ -4,6 +4,7 @@ import { AccordionModule } from "primeng/accordion";
 import { DividerModule } from "primeng/divider";
 import { KatexDirective } from "../../../shared/katex.directive";
 import { PageHeaderComponent } from "../../../shared/page-header/page-header.component";
+import { STRATEGY_METRIC_HELP } from "../metric-grade.util";
 import {
   BenchmarkScorecardComponent,
   ScorecardResultLike,
@@ -102,6 +103,7 @@ interface CopyBlock {
   styleUrls: ["./lean-engine-docs.component.scss"],
 })
 export class LeanEngineDocsComponent {
+  readonly strategyMetricHelp = Object.values(STRATEGY_METRIC_HELP);
   /** Live backtest result from the parent. When null, the scorecard renders
    *  an empty state and nudges the user to run a backtest first. */
   readonly result = input<ScorecardResultLike | null>(null);

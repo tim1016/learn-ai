@@ -101,10 +101,9 @@ const NAV: NavGroup[] = [
     icon: 'pi pi-briefcase',
     items: [
       { label: 'Strategy Validation', route: '/strategy-validation' },
-      // PR B.5 (2026-05-19) — Engine Lab subsumes the standalone
-      // LEAN Lab via the Engine dropdown; /lean-lab redirects here.
+      // Strategy Lab owns the one-strategy diagnostic and LEAN parity launch.
       { label: 'Strategy Spec', route: '/spec-strategy' },
-      { label: 'Engine Lab', route: '/engine' },
+      { label: 'Strategy Lab', route: '/strategy-lab' },
     ],
   },
   {

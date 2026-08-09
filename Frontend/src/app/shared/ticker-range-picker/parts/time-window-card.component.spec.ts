@@ -1,10 +1,7 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TimeWindowCardComponent } from './time-window-card.component';
-import type {
-  AvailabilityCell,
-  TickerRange,
-} from '../ticker-range-picker.types';
+import type { AvailabilityCell, TickerRange } from '../ticker-range-picker.types';
 
 describe('TimeWindowCardComponent', () => {
   const baseValue: TickerRange = {
@@ -117,21 +114,17 @@ describe('TimeWindowCardComponent', () => {
     fixture.componentRef.setInput('availability', cells);
     fixture.detectChanges();
 
-    const cellEls = fixture.nativeElement.querySelectorAll('.strip__cell');
-    expect(cellEls.length).toBe(3);
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.querySelectorAll('.strip__cell')).toHaveLength(3);
+    expect(root.querySelector('.legend')).not.toBeNull();
   });
 
-  it('exposes summary and dominant computeds derived from availability', () => {
-    fixture.componentRef.setInput('availability', [
-      { date: '2025-04-01', status: 'complete' },
-      { date: '2025-04-02', status: 'complete' },
-      { date: '2025-04-03', status: 'hole' },
-    ] as AvailabilityCell[]);
+  it('keeps availability absent for consumers that do not provide it', () => {
     fixture.detectChanges();
 
-    expect(component.summary().complete).toBe(2);
-    expect(component.summary().hole).toBe(1);
-    expect(component.dominant()).toBe('hole');
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.querySelector('.strip')).toBeNull();
+    expect(root.querySelector('.legend')).toBeNull();
   });
 
   it('updateFrom mutates value().from immutably', () => {

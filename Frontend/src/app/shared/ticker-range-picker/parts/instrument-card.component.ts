@@ -4,14 +4,11 @@ import {
   computed,
   effect,
   ElementRef,
-  HostListener,
   input,
   model,
   signal,
   viewChild,
 } from '@angular/core';
-import { CommonModule } from '@angular/common';
-import { FormsModule } from '@angular/forms';
 import { Tooltip } from 'primeng/tooltip';
 
 import {
@@ -31,15 +28,19 @@ const EXCHANGE_NAMES: Readonly<Record<string, string>> = {
 
 @Component({
   selector: 'app-instrument-card',
-  imports: [CommonModule, FormsModule, Tooltip],
+  imports: [Tooltip],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './instrument-card.component.html',
   styleUrls: ['./instrument-card.component.scss'],
+  host: {
+    '(document:mousedown)': 'onDocumentMouseDown($event)',
+  },
 })
 export class InstrumentCardComponent {
   readonly value = model.required<TickerRange>();
   readonly tickerPool = input<readonly TickerOption[]>([]);
   readonly recent = input<readonly string[]>([]);
+  readonly appearance = input<'card' | 'flat'>('card');
 
   private readonly rootEl =
     viewChild.required<ElementRef<HTMLElement>>('rootEl');
@@ -131,7 +132,6 @@ export class InstrumentCardComponent {
     }
   }
 
-  @HostListener('document:mousedown', ['$event'])
   onDocumentMouseDown(event: MouseEvent): void {
     const host = this.rootEl().nativeElement;
     if (!host.contains(event.target as Node)) {
@@ -141,6 +141,11 @@ export class InstrumentCardComponent {
 
   onSearchInput(value: string): void {
     this.query.set(value);
+  }
+
+  onSearchInputEvent(event: Event): void {
+    const target = event.target;
+    if (target instanceof HTMLInputElement) this.onSearchInput(target.value);
   }
 
   pickTicker(t: TickerOption): void {

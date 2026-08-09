@@ -34,10 +34,7 @@ const RETIRED_IBKR_NAVIGATION_ROUTES: Routes = [
 
 export const routes: Routes = [
   { path: "", redirectTo: "/data-lab", pathMatch: "full" },
-  // PR B.5 (2026-05-19) — /lean-lab is retired; the LEAN sidecar
-  // launch surface now lives behind the Engine dropdown on /engine.
-  // Prefix match covers any operator-bookmarked sub-paths.
-  { path: "lean-lab", redirectTo: "engine", pathMatch: "prefix" },
+  { path: "lean-lab", redirectTo: "strategy-lab", pathMatch: "full" },
   {
     path: "jobs-demo",
     loadComponent: () =>
@@ -157,17 +154,24 @@ export const routes: Routes = [
       ).then((m) => m.DataQualityDocsComponent),
   },
   {
-    path: "engine/runs/:id",
+    path: "strategy-lab/runs/:id",
     loadComponent: () =>
       import("./components/engine-lab/run-detail/engine-run-detail.component").then(
         (m) => m.EngineRunDetailComponent
       ),
   },
   {
-    path: "engine",
+    path: "strategy-lab/docs",
     loadComponent: () =>
-      import("./components/lean-engine/lean-engine.component").then(
-        (m) => m.LeanEngineComponent
+      import("./components/lean-engine/lean-engine-docs/lean-engine-docs.component").then(
+        (m) => m.LeanEngineDocsComponent
+      ),
+  },
+  {
+    path: "strategy-lab",
+    loadComponent: () =>
+      import("./components/strategy-lab/strategy-lab.component").then(
+        (m) => m.StrategyLabComponent
       ),
   },
   {
@@ -179,12 +183,27 @@ export const routes: Routes = [
   },
   {
     path: "engine/docs",
-    redirectTo: "engine",
+    redirectTo: "strategy-lab/docs",
+    pathMatch: "full",
+  },
+  {
+    path: "engine-docs",
+    redirectTo: "strategy-lab/docs",
+    pathMatch: "full",
+  },
+  {
+    path: "engine/runs/:id",
+    redirectTo: "strategy-lab/runs/:id",
+    pathMatch: "full",
+  },
+  {
+    path: "engine",
+    redirectTo: "strategy-lab",
     pathMatch: "full",
   },
   {
     path: "lean-engine",
-    redirectTo: "engine",
+    redirectTo: "strategy-lab",
     pathMatch: "full",
   },
   {

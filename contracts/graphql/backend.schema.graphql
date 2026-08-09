@@ -78,6 +78,7 @@ type BacktestRunDetailType {
   id: Int!
   engine: Engine!
   source: String!
+  requestedEngine: String
   strategyName: String!
   symbol: String!
   leanRunId: String
@@ -110,6 +111,7 @@ type BacktestRunDetailType {
   insightSummaryJson: String
   dataPolicyJson: String
   dataPolicy: DataPolicyType
+  commissionPerOrder: Decimal
   parityGroupId: String
   trades: [BacktestRunTradeDetailType!]!
   parityVerdicts: [BacktestRunParityVerdictType!]!
@@ -1566,6 +1568,7 @@ type StrategyExecution {
   insightSummaryJson: String
   validationAnalyticsJson: String
   source: String!
+  requestedEngine: String
   leanRunId: String
   notes: String
   fillMode: String!
@@ -2612,6 +2615,7 @@ input StrategyExecutionFilterInput {
   insightSummaryJson: StringOperationFilterInput
   validationAnalyticsJson: StringOperationFilterInput
   source: StringOperationFilterInput
+  requestedEngine: StringOperationFilterInput
   leanRunId: StringOperationFilterInput
   notes: StringOperationFilterInput
   fillMode: StringOperationFilterInput
@@ -2667,6 +2671,7 @@ input StrategyExecutionSortInput {
   insightSummaryJson: SortEnumType @cost(weight: "10")
   validationAnalyticsJson: SortEnumType @cost(weight: "10")
   source: SortEnumType @cost(weight: "10")
+  requestedEngine: SortEnumType @cost(weight: "10")
   leanRunId: SortEnumType @cost(weight: "10")
   notes: SortEnumType @cost(weight: "10")
   fillMode: SortEnumType @cost(weight: "10")

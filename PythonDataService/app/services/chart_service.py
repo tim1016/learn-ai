@@ -131,6 +131,12 @@ _INDICATOR_REFS: dict[str, list[float]] = {
 }
 
 
+def indicator_presentation(name: str) -> tuple[str, str, list[float]]:
+    """Return non-numerical chart presentation metadata for an indicator."""
+    panel = "main" if name in _OVERLAY_INDICATORS else name
+    return panel, _INDICATOR_COLORS.get(name, "#607D8B"), list(_INDICATOR_REFS.get(name, []))
+
+
 # ──────────────────────────────────────────────
 # LRU + TTL Cache
 # ──────────────────────────────────────────────
@@ -854,6 +860,22 @@ def _format_indicator_results(
             r["default_visible"] = base_name in DEFAULT_VISIBLE_INDICATORS
 
     return results
+
+
+def compute_indicator_results(
+    bars: pd.DataFrame,
+    indicators: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Compute and format indicators on caller-owned canonical bars.
+
+    Unlike :func:`get_chart_data`, this entry point performs no provider fetch,
+    resampling, or session filtering. It is used by the engine evidence chart
+    after the policy-keyed bar reader has produced the exact strategy bars.
+    The numerical implementation remains
+    :func:`dataset_service.calculate_dynamic_indicators`.
+    """
+    enriched, metadata = _compute_indicators(bars, indicators)
+    return _format_indicator_results(enriched, metadata, indicators)
 
 
 # ──────────────────────────────────────────────

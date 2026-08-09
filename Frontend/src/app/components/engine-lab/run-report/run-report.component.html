@@ -1,120 +1,33 @@
 <section class="run-report">
   @if (loading()) {
-    <div class="empty-state">Loading run…</div>
-  } @else if (run(); as r) {
-    <header class="report-header">
-      <div>
-        <p class="eyebrow">{{ r.engine }} · {{ r.source }}</p>
-        <h2>{{ r.strategyName }} / {{ r.symbol }}</h2>
-        <p class="meta">
-          {{ r.startDate }} → {{ r.endDate }} · executed
-          <app-timestamp-display [value]="r.executedAt" mode="local" />
-        </p>
-      </div>
-      <span class="run-id-chip copyable">
-        run #{{ r.id }}
-        <app-copy-button [text]="'' + r.id" ariaLabel="Copy run id" />
-      </span>
-    </header>
-
-    @if (parity(); as p) {
-      <section class="parity-panel" [attr.data-status]="p.status" aria-label="Cross-engine parity verdict">
-        <div class="parity-head">
-          <span class="parity-chip">{{ p.status | receiptLabel }}</span>
-          <span class="parity-title">LEAN validation</span>
-          <span class="parity-meta">
-            recorded <app-timestamp-display [value]="p.createdAt" mode="local" />
-          </span>
-        </div>
-        @switch (p.status) {
-          @case ("pending") {
-            <p class="parity-body">
-              LEAN validating companion is running — the frozen parity verdict lands here when it
-              finishes. If this stays pending well past a normal run, the companion likely stalled.
-            </p>
-          }
-          @case ("agree") {
-            <p class="parity-body">Trades, production readiness, and LEAN-native calculations all passed the compatibility contract.</p>
-          }
-          @case ("diverged") {
-            <p class="parity-body">{{ p.reason ?? "The engines disagree." }}</p>
-            @if (p.countsByCategory.length > 0) {
-              <ul class="parity-counts">
-                @for (entry of p.countsByCategory; track entry.category) {
-                  <li><span>{{ entry.category | receiptLabel }}</span><strong>{{ entry.count }}</strong></li>
-                }
-              </ul>
-            }
-            @if (p.divergences.length > 0) {
-              <details class="parity-divergences">
-                <summary>Show {{ p.divergences.length }} divergence details</summary>
-                <ul>
-                  @for (d of p.divergences; track $index) {
-                    <li>
-                      <span class="parity-chip">{{ d.category | receiptLabel }}</span>
-                      {{ d.message }}
-                    </li>
-                  }
-                </ul>
-              </details>
-            }
-          }
-          @case ("unavailable") {
-            <p class="parity-body">{{ p.reason ?? "Parity validation is unavailable for this run." }}</p>
-          }
-          @default {
-            <p class="parity-body">
-              The LEAN companion did not produce a verdict{{ p.reason ? ": " + p.reason : "." }}
-            </p>
-          }
-        }
-        @if (p.inputParity || p.nativeMetricParity || p.readinessParity) {
-          <div class="parity-receipts" aria-label="Compatibility calculation receipts">
-            @if (p.inputParity; as input) {
-              <span>Shared fixture: <strong>{{ input.status | receiptLabel }}</strong>
-                @if (input.fixture_id) { · {{ input.fixture_id }} }
-              </span>
-            }
-            @if (p.nativeMetricParity; as native) {
-              <span>LEAN-native values: <strong>{{ native.status | receiptLabel }}</strong>
-                @if (native.native_metric_count) { · {{ native.native_metric_count }} checked }
-              </span>
-            }
-            @if (p.readinessParity; as readiness) {
-              <span>Readiness fields: <strong>{{ readiness.status | receiptLabel }}</strong>
-                @if (readiness.compared_field_count) { · {{ readiness.compared_field_count }} checked }
-              </span>
-            }
-          </div>
-        }
-      </section>
-    }
-
-    @if (barsNotice(); as notice) {
-      <p class="report-notice" role="note">{{ notice }}</p>
-    }
-    @if (equityNotice(); as notice) {
-      <p class="report-notice" role="note">{{ notice }}</p>
-    }
-    @if (analyticsNotice(); as notice) {
-      <p class="report-notice" role="note">{{ notice }}</p>
-    }
-
+    <div class="run-report__empty">Loading run…</div>
+  } @else if (run(); as currentRun) {
     @if (engineResult(); as result) {
-      <app-engine-results
-        [result]="result"
+      <app-strategy-lab-verdict
         [verdict]="verdict()"
-        [symbol]="r.symbol"
-        [chartBars]="chartBars()"
-        [chartTrades]="chartTrades()"
-        [equityCurve]="equityCurve()"
-        [runStamp]="r.executedAt | timestampDisplay"
-        [fromDate]="r.startDate"
-        [toDate]="r.endDate"
-        [resolution]="resolutionLabel()"
+        [parity]="parity()"
+        [tradeCount]="currentRun.totalTrades"
+        (rerun)="rerun.emit()"
+      />
+
+      <app-strategy-lab-metrics [result]="result" />
+
+      @for (notice of reportNotices(); track notice) {
+        <p class="run-report__notice" role="note">{{ notice }}</p>
+      }
+
+      <app-strategy-lab-chart
+        [run]="currentRun"
+        [markers]="markers()"
+        [equityPoints]="equityPoints()"
+      />
+
+      <app-strategy-lab-deep-dives
+        [result]="result"
+        [commissionPerOrder]="currentRun.commissionPerOrder"
       />
     }
   } @else {
-    <div class="empty-state">Run not found.</div>
+    <div class="run-report__empty">Run not found.</div>
   }
 </section>

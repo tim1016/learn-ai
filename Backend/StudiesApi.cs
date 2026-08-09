@@ -29,6 +29,18 @@ public static class StudiesApi
         AppDbContext db,
         CancellationToken ct)
     {
+        var source = request.Source ?? "engine";
+        if (!RequestedEngineContract.IsValidForSource(
+                source,
+                request.RequestedEngine,
+                allowLegacyNull: false))
+        {
+            return Results.BadRequest(new
+            {
+                error = "requestedEngine must match source (engine: python|both; lean-sidecar: lean|both)",
+            });
+        }
+
         var tradeTimestampError = ValidateSaveStudyTradeTimestamps(request);
         if (tradeTimestampError is not null)
             return Results.BadRequest(new { error = tradeTimestampError });
@@ -77,7 +89,8 @@ public static class StudiesApi
             AnnualStandardDeviation = request.AnnualStandardDeviation,
             DrawdownRecoveryDays = request.DrawdownRecoveryDays,
             LeanStatisticsJson = request.LeanStatisticsJson,
-            Source = request.Source ?? "engine",
+            Source = source,
+            RequestedEngine = request.RequestedEngine,
             FillMode = request.FillMode ?? "signal_bar_close",
             Notes = request.Notes,
             ExecutedAt = DateTime.UtcNow,
@@ -240,7 +253,12 @@ public static class StudiesApi
         if (execution == null)
             return Results.NotFound(new { error = $"Study {id} not found" });
 
-        return Results.Ok(new StudyDetailResponse
+        return Results.Ok(ToStudyDetailResponse(execution));
+    }
+
+    internal static StudyDetailResponse ToStudyDetailResponse(StrategyExecution execution)
+    {
+        return new StudyDetailResponse
         {
             Id = execution.Id,
             Symbol = execution.Ticker.Symbol,
@@ -251,6 +269,7 @@ public static class StudiesApi
             Timespan = execution.Timespan,
             FillMode = execution.FillMode,
             Source = execution.Source,
+            RequestedEngine = execution.RequestedEngine,
             InitialCash = execution.InitialCash,
             FinalEquity = execution.FinalEquity,
             TotalFees = execution.TotalFees,
@@ -290,7 +309,7 @@ public static class StudiesApi
                 CumulativePnL = t.CumulativePnL,
                 SignalReason = t.SignalReason,
             }).ToList(),
-        });
+        };
     }
 
     // ── PATCH /api/studies/{id}/notes — update notes ──────────────
@@ -364,6 +383,7 @@ public record SaveStudyRequest
     public string? Timespan { get; init; }
     public string? FillMode { get; init; }
     public string? Source { get; init; }
+    public string RequestedEngine { get; init; } = "python";
     public int TotalTrades { get; init; }
     public int WinningTrades { get; init; }
     public int LosingTrades { get; init; }
@@ -486,6 +506,7 @@ public record StudyListItem
 
 public record StudyDetailResponse : StudyListItem
 {
+    public string? RequestedEngine { get; init; }
     public decimal TotalFees { get; init; }
     public decimal InformationRatio { get; init; }
     public decimal TrackingError { get; init; }

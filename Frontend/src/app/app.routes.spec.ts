@@ -5,6 +5,25 @@ import { AlpacaBotControlExampleComponent } from './components/examples/alpaca-b
 import { routes } from './app.routes';
 
 describe('routes', () => {
+  it('uses Strategy Lab as the canonical workbench and redirects legacy Engine Lab paths', () => {
+    expect(routes.find((route) => route.path === 'strategy-lab')?.loadComponent).toBeDefined();
+    expect(routes.find((route) => route.path === 'strategy-lab/runs/:id')?.loadComponent).toBeDefined();
+    for (const path of ['engine', 'lean-engine', 'lean-lab']) {
+      expect(routes.find((route) => route.path === path)).toMatchObject({
+        redirectTo: 'strategy-lab',
+        pathMatch: 'full',
+      });
+    }
+    expect(routes.find((route) => route.path === 'engine/runs/:id')).toMatchObject({
+      redirectTo: 'strategy-lab/runs/:id',
+      pathMatch: 'full',
+    });
+    expect(routes.find((route) => route.path === 'engine-docs')).toMatchObject({
+      redirectTo: 'strategy-lab/docs',
+      pathMatch: 'full',
+    });
+  });
+
   it('uses one Broker Deploy page for Alpaca Broker V2 routes', async () => {
     const paths = [
       'brokers/:broker/deploy',

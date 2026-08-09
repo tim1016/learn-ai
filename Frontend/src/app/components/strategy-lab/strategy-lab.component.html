@@ -1,0 +1,112 @@
+<main class="strategy-lab">
+  <app-page-header
+    title="Strategy Lab"
+    icon="pi-chart-line"
+    [hasTabs]="true"
+    subtitle="Run a strategy, inspect its evidence, and compare Python with LEAN from one diagnostic workbench."
+  />
+
+  <p-tabs [(value)]="config.activeTab">
+      <p-tablist>
+        <p-tab value="configuration"><i class="pi pi-sliders-h" aria-hidden="true"></i> Workbench</p-tab>
+        <p-tab value="history"><i class="pi pi-history" aria-hidden="true"></i> History</p-tab>
+      </p-tablist>
+
+      <p-tabpanels>
+        <p-tabpanel value="configuration">
+          @if (config.strategiesLoading()) {
+            <div class="lab-notice" role="status">Loading strategies…</div>
+            @if (runs.completedRunId(); as runId) {
+              <section class="workbench__stage" aria-label="Saved strategy evidence">
+                <app-engine-run-report [runId]="runId" [runDetail]="selectedRun()" />
+              </section>
+            }
+          } @else if (config.strategiesError(); as error) {
+            <div class="lab-notice lab-notice--error" role="alert">Failed to load strategies: {{ error }}</div>
+            @if (runs.completedRunId(); as runId) {
+              <section class="workbench__stage" aria-label="Saved strategy evidence">
+                <app-engine-run-report [runId]="runId" [runDetail]="selectedRun()" />
+              </section>
+            }
+          } @else if (config.strategies().length === 0) {
+            <div class="lab-notice" role="status">No runnable strategies are currently registered.</div>
+            @if (runs.completedRunId(); as runId) {
+              <section class="workbench__stage" aria-label="Saved strategy evidence">
+                <app-engine-run-report [runId]="runId" [runDetail]="selectedRun()" />
+              </section>
+            }
+          } @else {
+            <div class="workbench" [class.workbench--rail-collapsed]="config.configNavCollapsed()">
+            <app-strategy-lab-config-rail
+              [collapsed]="config.configNavCollapsed()"
+              [engine]="config.engine()"
+              [range]="config.range()"
+              [dataPolicy]="config.dataPolicy()"
+              [strategies]="config.selectableStrategies()"
+              [selectedStrategyName]="config.selectedStrategyName()"
+              [paramValues]="config.paramValues()"
+              [fillMode]="config.fillMode()"
+              [initialCash]="config.initialCash()"
+              [commissionPerOrder]="config.commissionPerOrder()"
+              [tickerPool]="config.tickerPool"
+              [recentTickers]="config.recentTickers"
+              [running]="runs.running()"
+              [runBlocked]="config.rerunBlocked()"
+              [launcherBlocksRun]="runs.leanLauncherBlocksRun()"
+              [launcherStatus]="runs.leanLauncherStatus()"
+              [launcherDetail]="runs.leanLauncherDetail()"
+              [launcherCommand]="runs.leanLauncherCommand"
+              [leanTemplateLabel]="config.leanTemplateLabel()"
+              (collapseToggled)="config.toggleConfigNav()"
+              (engineChanged)="config.changeEngine($event)"
+              (rangeChange)="config.changeRange($event)"
+              (strategySelected)="selectStrategy($event)"
+              (parameterChanged)="config.updateParameter($event.field, $event.rawValue, $event.type)"
+              (fillModeChanged)="config.fillMode.set($event)"
+              (initialCashChanged)="config.initialCash.set($event)"
+              (commissionChanged)="config.commissionPerOrder.set($event)"
+              (launcherCheckRequested)="runs.checkLeanLauncher()"
+              (runRequested)="runs.run()"
+            />
+
+            <section class="workbench__stage" aria-label="Strategy evidence">
+              @if (runs.running()) {
+                <div class="run-status" role="status" aria-live="polite">
+                  <span class="run-status__pulse" aria-hidden="true"></span>
+                  <strong>{{ runs.runStatusBanner() || "Running validation…" }}</strong>
+                  @if (runs.runPhaseDetail()) { <span>{{ runs.runPhaseDetail() }}</span> }
+                </div>
+              }
+
+              @if (runs.runError() ?? config.configurationWarning(); as error) {
+                <div class="lab-notice lab-notice--error" role="alert">{{ error }}</div>
+              }
+
+              @if (runs.completedRunId(); as runId) {
+                <app-engine-run-report
+                  [runId]="runId"
+                  [runDetail]="selectedRun()"
+                  (rerun)="runs.run()"
+                />
+              } @else {
+                <app-validation-stage-placeholder
+                  [symbol]="config.effectiveSymbol()"
+                  [resolution]="config.resolution()"
+                  [fillMode]="config.fillMode()"
+                  [engine]="config.engine()"
+                  [dataPolicyNote]="config.dataPolicyNote()"
+                />
+              }
+            </section>
+            </div>
+          }
+        </p-tabpanel>
+
+        <p-tabpanel value="history">
+          <app-engine-lab-run-history (runSelected)="selectHistoryRun($event)" />
+        </p-tabpanel>
+      </p-tabpanels>
+  </p-tabs>
+
+  <app-run-dock />
+</main>

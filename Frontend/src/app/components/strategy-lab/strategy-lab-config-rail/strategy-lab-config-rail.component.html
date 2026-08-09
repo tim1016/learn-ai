@@ -1,0 +1,124 @@
+@if (collapsed()) {
+  <nav class="config-strip" aria-label="Collapsed strategy configuration">
+    <button type="button" class="config-strip__expand" aria-label="Expand configuration" (click)="collapseToggled.emit()">
+      <i class="pi pi-angle-right" aria-hidden="true"></i>
+    </button>
+    <span class="config-strip__rule"></span>
+    <button type="button" aria-label="Edit engine" title="Engine" (click)="collapseToggled.emit()"><i class="pi pi-code"></i></button>
+    <button type="button" aria-label="Edit instrument" title="Instrument" (click)="collapseToggled.emit()"><i class="pi pi-chart-line"></i></button>
+    <button type="button" aria-label="Edit time window" title="Time window" (click)="collapseToggled.emit()"><i class="pi pi-calendar"></i></button>
+    <button type="button" aria-label="Edit strategy" title="Strategy" (click)="collapseToggled.emit()"><i class="pi pi-sliders-h"></i></button>
+  </nav>
+} @else {
+  <aside class="config-rail" aria-label="Strategy configuration">
+    <header class="config-rail__header">
+      <div><span>Configuration</span><small>Exact run inputs</small></div>
+      <button type="button" aria-label="Collapse configuration" (click)="collapseToggled.emit()"><i class="pi pi-angle-left"></i></button>
+    </header>
+
+    <section class="rail-field" aria-labelledby="engine-label">
+      <div class="rail-field__label" id="engine-label">Engine</div>
+      <div class="engine-choice" role="radiogroup" aria-labelledby="engine-label">
+        @for (choice of engineChoices; track choice) {
+          <button
+            type="button"
+            role="radio"
+            [attr.aria-checked]="engine() === choice"
+            [class.engine-choice__active]="engine() === choice"
+            (click)="selectEngine(choice)"
+          >{{ choice }}</button>
+        }
+      </div>
+    </section>
+
+    <app-instrument-card
+      [(value)]="range"
+      appearance="flat"
+      [tickerPool]="tickerPool()"
+      [recent]="recentTickers()"
+    />
+
+    <app-time-window-card [(value)]="range" appearance="flat" />
+
+    <section class="rail-field" aria-labelledby="strategy-label">
+      <label class="rail-field__label" id="strategy-label" for="strategy-picker">Strategy</label>
+      <select id="strategy-picker" [value]="selectedStrategyName() ?? ''" (change)="onStrategyEvent($event)">
+        @for (strategy of strategies(); track strategy.name) {
+          <option [value]="strategy.name">{{ strategy.display_name }}</option>
+        }
+      </select>
+    </section>
+
+    <details class="advanced">
+      <summary>Advanced <span>Sampling, parameters, execution</span></summary>
+      <div class="advanced-row">
+        <span>Sampling</span><strong class="mono">{{ samplingSummary() }}</strong>
+      </div>
+
+      @if (engine() !== "lean" && parameterEntries().length > 0) {
+        <fieldset class="advanced-params">
+          <legend>Strategy parameters</legend>
+          @for (entry of parameterEntries(); track entry.field) {
+            <label>
+              <span>{{ entry.property.title ?? entry.field }}</span>
+              <input
+                [type]="entry.property.type === 'integer' || entry.property.type === 'number' ? 'number' : 'text'"
+                [value]="paramValues()[entry.field] ?? ''"
+                [min]="entry.property.minimum ?? null"
+                [max]="entry.property.maximum ?? null"
+                (input)="onParameterEvent(entry.field, entry.property.type, $event)"
+              />
+            </label>
+          }
+        </fieldset>
+      }
+
+      <fieldset class="advanced-params">
+        <legend>Execution</legend>
+        @if (engine() !== "lean") {
+          <label>
+            <span>Fill mode</span>
+            <select [value]="fillMode()" (change)="onFillModeEvent($event)">
+              <option value="signal_bar_close">Signal bar close</option>
+              <option value="next_bar_open">Next bar open</option>
+            </select>
+          </label>
+        }
+        <label>
+          <span>Initial cash</span>
+          <input type="number" min="0" [value]="initialCash()" (input)="onInitialCashEvent($event)" />
+        </label>
+        @if (engine() !== "lean") {
+          <label>
+            <span>Commission / order</span>
+            <input type="number" min="0" step="0.01" [value]="commissionPerOrder()" (input)="onCommissionEvent($event)" />
+          </label>
+        } @else {
+          <p>Strategy parameters, fills, and fees are defined by the aligned LEAN template.</p>
+        }
+      </fieldset>
+
+      @if (engine() !== "python") {
+        <section class="lean-launcher" aria-label="LEAN launcher">
+          <div><span>LEAN launcher</span><strong>{{ launcherStatus() }}</strong></div>
+          @if (leanTemplateLabel()) { <p>{{ leanTemplateLabel() }}</p> }
+          @if (launcherDetail()) { <p>{{ launcherDetail() }}</p> }
+          <code>{{ launcherCommand() }}</code>
+          <button type="button" (click)="launcherCheckRequested.emit()">Check launcher</button>
+        </section>
+      }
+    </details>
+
+    <footer class="config-rail__footer">
+      <button
+        type="button"
+        class="run-button"
+        [disabled]="primaryAction().disabled"
+        (click)="activatePrimaryAction()"
+      >
+        <i class="pi" [class.pi-spin]="running()" [class.pi-spinner]="running()" [class.pi-play]="!running()"></i>
+        {{ running() ? "Running…" : primaryAction().label }}
+      </button>
+    </footer>
+  </aside>
+}

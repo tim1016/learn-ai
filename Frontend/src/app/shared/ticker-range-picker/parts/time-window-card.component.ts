@@ -5,8 +5,6 @@ import {
   input,
   model,
 } from '@angular/core';
-import { CommonModule } from '@angular/common';
-import { FormsModule } from '@angular/forms';
 
 import {
   daysBetween,
@@ -38,18 +36,17 @@ const PRESETS: readonly Preset[] = [
 
 @Component({
   selector: 'app-time-window-card',
-  imports: [CommonModule, FormsModule],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './time-window-card.component.html',
   styleUrls: ['./time-window-card.component.scss'],
 })
 export class TimeWindowCardComponent {
   readonly value = model.required<TickerRange>();
+  readonly appearance = input<'card' | 'flat'>('card');
   readonly availability = input<readonly AvailabilityCell[]>([]);
   readonly legendTreatment = input<LegendTreatment>('tinted-bold');
 
   readonly presets = PRESETS;
-
   readonly summary = computed(() => summarizeAvailability(this.availability()));
   readonly dominant = computed<DominantState>(() => dominantState(this.summary()));
 
@@ -70,8 +67,8 @@ export class TimeWindowCardComponent {
     return PRESETS.find((p) => Math.abs(s - p.days) < 2)?.days ?? null;
   });
 
-  trackByDay(_: number, c: AvailabilityCell): string {
-    return c.date;
+  trackByDay(_: number, cell: AvailabilityCell): string {
+    return cell.date;
   }
 
   updateFrom(v: string): void {
@@ -80,6 +77,16 @@ export class TimeWindowCardComponent {
 
   updateTo(v: string): void {
     this.value.set({ ...this.value(), to: v });
+  }
+
+  updateFromEvent(event: Event): void {
+    const target = event.target;
+    if (target instanceof HTMLInputElement) this.updateFrom(target.value);
+  }
+
+  updateToEvent(event: Event): void {
+    const target = event.target;
+    if (target instanceof HTMLInputElement) this.updateTo(target.value);
   }
 
   applyPreset(days: number): void {

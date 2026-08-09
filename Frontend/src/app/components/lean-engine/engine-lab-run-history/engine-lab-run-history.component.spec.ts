@@ -172,10 +172,10 @@ describe("EngineLabRunHistoryComponent", () => {
     expect(html).toContain("AAPL");
   });
 
-  it("renders Engine column badges (Engine Lab / LEAN)", async () => {
+  it("renders Engine column badges (Python / LEAN)", async () => {
     const fixture = await setup();
     const html = (fixture.nativeElement as HTMLElement).textContent ?? "";
-    expect(html).toContain("Engine Lab");
+    expect(html).toContain("Python");
     expect(html).toContain("LEAN");
   });
 

@@ -74,6 +74,18 @@ describe('TickerQuoteComponent', () => {
       expect(change.textContent?.trim()).not.toMatch(/^\+/);
     });
 
+    it('renders an em dash when changePercent is unavailable', async () => {
+      const { container } = await render(TickerQuoteComponent, {
+        inputs: { quote: { ...BASE_QUOTE, changePercent: null } },
+      });
+
+      const change = requireElement(
+        container.querySelector('.ticker-quote__change'),
+        '.ticker-quote__change',
+      );
+      expect(change.textContent?.trim()).toBe('—');
+    });
+
     it('shows pi-caret-up for positive in card mode', async () => {
       const { container } = await render(TickerQuoteComponent, {
         inputs: { quote: BASE_QUOTE, mode: 'card' },

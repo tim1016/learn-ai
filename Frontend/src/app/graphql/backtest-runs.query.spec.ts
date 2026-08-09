@@ -5,7 +5,7 @@ import {
   SelectionNode,
   SelectionSetNode,
 } from "graphql";
-import { BACKTEST_RUNS_QUERY } from "./backtest-runs.query";
+import { BACKTEST_RUN_DETAIL_QUERY, BACKTEST_RUNS_QUERY } from "./backtest-runs.query";
 
 /**
  * PR B.3 regression — the canonical ``DataPolicy`` wire contract is
@@ -65,6 +65,19 @@ describe("BACKTEST_RUNS_QUERY — DataPolicy snake_case alias contract (PR B.3)"
       const field = findField(dataPolicySelection(), name);
       expect(field).toBeDefined();
       expect(field?.alias).toBeUndefined();
+    },
+  );
+});
+
+describe("BACKTEST_RUN_DETAIL_QUERY — Strategy Lab rehydration contract", () => {
+  it.each(["requestedEngine", "parameters", "fillMode", "initialCash", "commissionPerOrder"])(
+    "selects '%s'",
+    (name) => {
+      const def = BACKTEST_RUN_DETAIL_QUERY.definitions.find(
+        (candidate): candidate is OperationDefinitionNode => candidate.kind === "OperationDefinition",
+      );
+      const detail = findField(def?.selectionSet, "backtestRun");
+      expect(findField(detail?.selectionSet, name)).toBeDefined();
     },
   );
 });

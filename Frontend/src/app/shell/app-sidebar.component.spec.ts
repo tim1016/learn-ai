@@ -90,7 +90,7 @@ describe('AppSidebarComponent', () => {
     expect(links.get('Strategy Validation')).toBe('/strategy-validation');
     expect(links.has('Deploy')).toBe(false);
     expect(links.get('Strategy Spec')).toBe('/spec-strategy');
-    expect(links.get('Engine Lab')).toBe('/engine');
+    expect(links.get('Strategy Lab')).toBe('/strategy-lab');
     expect(links.has('Dashboard')).toBe(false);
     expect(links.has('Tracked Instruments')).toBe(false);
   });

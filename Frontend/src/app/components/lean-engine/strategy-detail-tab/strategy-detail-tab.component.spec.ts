@@ -2,7 +2,7 @@ import { provideZonelessChangeDetection } from '@angular/core';
 import { fireEvent, render, screen } from '@testing-library/angular';
 import { describe, expect, it } from 'vitest';
 
-import type { StrategyInfo } from '../lean-engine.component';
+import type { StrategyInfo } from '../../strategy-lab/strategy-lab.models';
 import { StrategyDetailTabComponent } from './strategy-detail-tab.component';
 
 const STRATEGY: StrategyInfo = {
@@ -11,6 +11,7 @@ const STRATEGY: StrategyInfo = {
   description: 'Fast/slow EMA cross on SPY.',
   params_schema: {},
   supported_resolutions: ['minute', 'daily'],
+  strategy_bars: { timespan: 'minute', multiplier: 15, parameter: null },
   gotchas: ['Warmup needs 200 bars'],
 };
 

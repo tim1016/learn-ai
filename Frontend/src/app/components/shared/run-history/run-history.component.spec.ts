@@ -76,7 +76,7 @@ describe("RunHistoryComponent", () => {
       row({ id: "3", source: "lean-sidecar" }),
     ]);
     const t = text(fixture);
-    expect(t).toContain("Engine Lab");
+    expect(t).toContain("Python");
     expect(t).toContain("Strategy Lab");
     expect(t).toContain("LEAN");
   });

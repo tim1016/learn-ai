@@ -1,0 +1,14 @@
+:host {
+  display: block;
+  min-width: 0;
+}
+
+.chart-notice {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-light);
+  border-top: 0;
+  color: var(--text-subtle);
+  background: var(--bg-surface);
+  font-size: var(--fs-xs);
+}

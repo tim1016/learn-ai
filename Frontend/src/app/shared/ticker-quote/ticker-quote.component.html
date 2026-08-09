@@ -22,6 +22,10 @@
     @if (isCard()) {
       <i [class]="caretClass()" aria-hidden="true"></i>
     }
-    <span>{{ signPrefix() }}{{ quote().changePercent | number:'1.2-2' }}%</span>
+    @if (quote().changePercent !== null) {
+      <span>{{ signPrefix() }}{{ quote().changePercent | number:'1.2-2' }}%</span>
+    } @else {
+      <span>—</span>
+    }
   </span>
 </span>

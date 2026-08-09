@@ -10,6 +10,13 @@
   gap: 10px;
   min-width: 0;
 
+  &--flat {
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    padding: var(--space-4);
+  }
+
   &__head {
     display: flex;
     align-items: center;

@@ -146,6 +146,7 @@ class TrustedRunRequest:
     start_ms_utc: int
     end_ms_utc: int
     data_policy: DataPolicy
+    requested_engine: Literal["python", "lean", "both"] = "lean"
     # Phase 4c — None means "use the bundled trusted sample selected
     # by ``template`` below". When provided, must be valid Python
     # source defining a ``MyAlgorithm`` class (LeanConfig.
@@ -859,6 +860,7 @@ async def run_trusted_sample(
             error_counts={category: len(errors) for category, errors in response.lean_errors.items() if errors},
         ),
         parity_group_id=request.parity_group_id,
+        requested_engine=request.requested_engine,
     )
     _emit_phase("persisting")
     _emit_log("Persisting run to history")

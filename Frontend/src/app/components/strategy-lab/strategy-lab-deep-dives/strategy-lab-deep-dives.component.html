@@ -1,0 +1,74 @@
+@let r = result();
+<section class="deep-dives" aria-label="Run deep dives">
+  <details>
+    <summary><span>LEAN statistics</span><small>Portfolio, trade, and runtime fields</small></summary>
+    <div class="deep-dives__body">
+      @if (leanStats(); as stats) {
+        <app-lean-statistics [stats]="stats" />
+      } @else {
+        <p class="deep-dives__empty">LEAN statistics were not recorded for this run.</p>
+      }
+    </div>
+  </details>
+
+  @if (leanAnalysis(); as findings) {
+    @if (findings.length > 0) {
+      <details>
+        <summary>
+          <span>LEAN native analysis</span>
+          <small>{{ findings.length }} Oracle finding{{ findings.length === 1 ? "" : "s" }} with complete evidence</small>
+        </summary>
+        <div class="deep-dives__body lean-analysis">
+          <p class="lean-analysis__note">
+            These findings come directly from the pinned LEAN sidecar and do not change the learn-ai readiness score.
+          </p>
+          @for (finding of findings; track $index) {
+            <article class="lean-analysis__finding">
+              <h3>{{ formatLeanAnalysisName(finding.name) }}</h3>
+              <p>{{ finding.issue }}</p>
+              <span>LEAN sample</span>
+              <pre>{{ formatLeanSample(finding.sample) }}</pre>
+              @if (finding.solutions.length > 0) {
+                <span>LEAN suggestions</span>
+                <ul>
+                  @for (solution of finding.solutions; track $index) {
+                    <li>{{ solution }}</li>
+                  }
+                </ul>
+              }
+            </article>
+          }
+        </div>
+      </details>
+    }
+  }
+
+  <details>
+    <summary><span>Fee &amp; sequencing</span><small>Execution costs and return cadence</small></summary>
+    <div class="fee-readout">
+      <span>Total fees <strong>{{ formatCurrency(r.total_fees) }}</strong></span>
+      <span>Commission / order <strong>{{ formatCurrency(commissionPerOrder()) }}</strong></span>
+      <span>Fill mode <strong>{{ r.fill_mode === "signal_bar_close" ? "Signal close" : "Next open" }}</strong></span>
+      <span>Portfolio Sharpe <strong>{{ r.statistics['sharpe_ratio'] ?? "—" }}</strong></span>
+      <span>Trade Sharpe <strong>{{ leanStats()?.trade?.sharpe_ratio ?? "—" }}</strong></span>
+    </div>
+  </details>
+
+  <details>
+    <summary><span>Validation atlas</span><small>Horizons, timing, seasonality, stability</small></summary>
+    <div class="deep-dives__body">
+      @if (r.validation_analytics; as analytics) {
+        <app-validation-atlas [analytics]="analytics" />
+      } @else {
+        <p class="deep-dives__empty">Validation analytics were not recorded for this run.</p>
+      }
+    </div>
+  </details>
+
+  <details>
+    <summary><span>Trade ledger</span><small>{{ r.trades.length }} completed trades</small></summary>
+    <div class="deep-dives__body">
+      <app-engine-trade-ledger [trades]="r.trades" />
+    </div>
+  </details>
+</section>

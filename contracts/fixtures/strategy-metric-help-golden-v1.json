@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "canonical_source": "PythonDataService/app/engine/results/statistics.py",
+  "absolute_tolerance": 1e-12,
+  "relative_tolerance": 0,
+  "inputs": {
+    "initial_cash": 100000,
+    "final_equity": 112860,
+    "trading_days": 5,
+    "trade_returns": [0.1, -0.05, 0.2, 0.0],
+    "equity_points": [
+      { "t": 1704211200000, "equity": 100000 },
+      { "t": 1704297600000, "equity": 110000 },
+      { "t": 1704384000000, "equity": 99000 },
+      { "t": 1704470400000, "equity": 118800 },
+      { "t": 1704556800000, "equity": 112860 }
+    ]
+  },
+  "expected": {
+    "net-profit": 12860,
+    "profit-factor": 6.000000000000001,
+    "expectancy": 0.0625,
+    "sharpe": 4.323460152737353,
+    "sortino": 10.64894360957931,
+    "max-drawdown": 0.1,
+    "win-rate": 0.5,
+    "trades": 4
+  }
+}

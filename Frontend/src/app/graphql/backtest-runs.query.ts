@@ -75,9 +75,11 @@ export const BACKTEST_RUN_DETAIL_QUERY = gql`
       id
       engine
       source
+      requestedEngine
       strategyName
       symbol
       leanRunId
+      parameters
       startDate
       endDate
       fillMode
@@ -89,6 +91,7 @@ export const BACKTEST_RUN_DETAIL_QUERY = gql`
       winRate
       totalPnL
       initialCash
+      commissionPerOrder
       finalEquity
       totalFees
       maxDrawdown
@@ -238,9 +241,11 @@ export interface BacktestRunDetail {
   id: number;
   engine: Engine;
   source: "engine" | "strategy-lab" | "lean-sidecar";
+  requestedEngine: "python" | "lean" | "both" | null;
   strategyName: string;
   symbol: string;
   leanRunId: string | null;
+  parameters: string | null;
   startDate: string;
   endDate: string;
   fillMode: string;
@@ -252,6 +257,7 @@ export interface BacktestRunDetail {
   winRate: number;
   totalPnL: number;
   initialCash: number;
+  commissionPerOrder: number | null;
   finalEquity: number;
   totalFees: number;
   maxDrawdown: number;
