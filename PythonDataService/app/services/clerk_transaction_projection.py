@@ -335,15 +335,38 @@ def _read_bounded_complete_tail(
     if not window:
         return None
     bounded = window[:max_read_bytes]
-    line_ends = [index + 1 for index, value in enumerate(bounded) if value == ord("\n")]
-    if not line_ends:
+    consumed_end = 0
+    for _ in range(MAX_JOURNAL_TAIL_RECORDS):
+        newline_index = bounded.find(b"\n", consumed_end)
+        if newline_index < 0:
+            break
+        consumed_end = newline_index + 1
+    if consumed_end == 0:
         if len(window) > max_read_bytes:
             raise ClerkTransactionProjectionCorrupt(
                 f"{broker} Clerk journal record exceeds the projection read bound"
             )
         return None
-    consumed_end = line_ends[min(len(line_ends), MAX_JOURNAL_TAIL_RECORDS) - 1]
     return bounded[:consumed_end], consumed_end < len(window)
+
+
+def _has_complete_appended_record(*, journal_path: Path, offset: int, broker: str) -> bool:
+    """Return whether a later bounded tail contains a complete record.
+
+    Recovery needs this only to decide whether to schedule another bounded
+    projection pass.  Parsing that next record here would validate it twice:
+    once for the look-ahead and again when the next tail projects it.
+    """
+
+    return (
+        _read_bounded_complete_tail(
+            journal_path=journal_path,
+            offset=offset,
+            broker=broker,
+            max_read_bytes=MAX_PROJECTION_READ_BYTES,
+        )
+        is not None
+    )
 
 
 def read_appended_clerk_journal(
@@ -368,7 +391,8 @@ def read_appended_clerk_journal(
     consumed, has_more = bounded
     transactions: list[ClerkTransactionRow] = []
     events: list[ClerkTransactionEventRow] = []
-    for line in consumed.splitlines():
+    lines = consumed.splitlines()
+    for line in lines:
         try:
             entry = AccountClerkJournalEntry.model_validate_json(line)
         except Exception as exc:
@@ -390,7 +414,7 @@ def read_appended_clerk_journal(
         next_journal_seq=last_seq,
         transactions=transactions,
         events=events,
-        source_record_count=len(consumed.splitlines()),
+        source_record_count=len(lines),
         has_more_complete_records=has_more,
         journal_generation=_journal_generation(journal_path) or "",
     )
@@ -419,7 +443,8 @@ def read_appended_alpaca_journal(
     consumed, has_more = bounded
     transactions: list[ClerkTransactionRow] = []
     events: list[ClerkTransactionEventRow] = []
-    for line in consumed.splitlines():
+    lines = consumed.splitlines()
+    for line in lines:
         try:
             entry = OrderJournalEntry.model_validate_json(line)
         except Exception as exc:
@@ -442,7 +467,7 @@ def read_appended_alpaca_journal(
         next_journal_seq=last_seq,
         transactions=transactions,
         events=events,
-        source_record_count=len(consumed.splitlines()),
+        source_record_count=len(lines),
         has_more_complete_records=has_more,
         journal_generation=_journal_generation(journal_path) or "",
     )
@@ -592,8 +617,11 @@ async def recover_account_transaction_feed(
             )
             projected += count
             cursor = await store.read_cursor(account_id, str(path))
-            pending = read_appended_clerk_journal(account_id=account_id, journal_path=path, cursor=cursor)
-            if pending is None:
+            if not _has_complete_appended_record(
+                journal_path=path,
+                offset=cursor.last_byte_offset if cursor else 0,
+                broker="IBKR",
+            ):
                 await store.set_feed_status(
                     account_id,
                     "live",
@@ -661,8 +689,11 @@ async def recover_alpaca_account_transaction_feed(
                 updated_at_ms=now,
             )
             cursor = await store.read_cursor(account_id, str(path))
-            pending = read_appended_alpaca_journal(account_id=account_id, journal_path=path, cursor=cursor)
-            if pending is None:
+            if not _has_complete_appended_record(
+                journal_path=path,
+                offset=cursor.last_byte_offset if cursor else 0,
+                broker="Alpaca",
+            ):
                 await store.set_feed_status(
                     account_id,
                     "live",
@@ -739,12 +770,11 @@ async def rebuild_account_transaction_projection(
                     allow_rebuilding=True,
                 )
             cursor = await store.read_cursor(account_id, str(path))
-            pending = (
-                read_appended_clerk_journal(account_id=account_id, journal_path=path, cursor=cursor)
-                if broker == "ibkr"
-                else read_appended_alpaca_journal(account_id=account_id, journal_path=path, cursor=cursor)
-            )
-            if pending is None:
+            if not _has_complete_appended_record(
+                journal_path=path,
+                offset=cursor.last_byte_offset if cursor else 0,
+                broker="IBKR" if broker == "ibkr" else "Alpaca",
+            ):
                 await store.set_feed_status(
                     account_id,
                     "live",
