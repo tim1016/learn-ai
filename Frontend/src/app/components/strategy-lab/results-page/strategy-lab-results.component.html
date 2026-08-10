@@ -5,19 +5,7 @@
   </a>
 
   @if (runId(); as id) {
-    <div class="results-page__layout">
-      <aside class="results-page__rail" aria-label="Read-only run evidence">
-        @if (run(); as currentRun) {
-          <app-strategy-lab-results-sidebar [run]="currentRun" />
-        } @else {
-          <p class="results-page__loading" role="status">Loading run statistics…</p>
-        }
-      </aside>
-
-      <section class="results-page__report" aria-label="Persisted strategy results">
-        <app-engine-run-report [runId]="id" (runRefreshed)="acceptRun($event)" />
-      </section>
-    </div>
+    <app-engine-run-report [runId]="id" />
   } @else {
     <section class="results-page__error" role="alert">Run not found.</section>
   }

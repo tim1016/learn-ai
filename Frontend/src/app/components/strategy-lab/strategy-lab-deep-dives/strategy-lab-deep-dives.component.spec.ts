@@ -12,7 +12,7 @@ class LeanStatisticsStubComponent {
 }
 
 describe("StrategyLabDeepDivesComponent", () => {
-  it("keeps detailed compatibility and native statistics in collapsed disclosures", async () => {
+  it("keeps evidence controls in the rail and opens selected detail in a drawer", async () => {
     await TestBed.configureTestingModule({
       imports: [StrategyLabDeepDivesComponent],
       providers: [provideZonelessChangeDetection()],
@@ -37,11 +37,16 @@ describe("StrategyLabDeepDivesComponent", () => {
     fixture.detectChanges();
 
     const root = fixture.nativeElement as HTMLElement;
-    const compatibility = root.querySelector<HTMLDetailsElement>("[data-testid='compatibility-deep-dive']");
-    const native = root.querySelector<HTMLDetailsElement>("[data-testid='lean-statistics-deep-dive']");
-    expect(compatibility?.open).toBe(false);
-    expect(native?.open).toBe(false);
-    expect(compatibility?.textContent).toContain("Counts differ");
-    expect(native?.querySelector("app-lean-statistics")).not.toBeNull();
+    const compatibility = [...root.querySelectorAll<HTMLButtonElement>(".evidence-menu__item")]
+      .find((button) => button.textContent?.includes("Compatibility evidence"));
+    expect(compatibility?.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(root.querySelector("details")).toBeNull();
+    expect(root.textContent).toContain("Native LEAN statistics");
+
+    compatibility?.click();
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    expect(document.body.textContent).toContain("Counts differ");
   });
 });

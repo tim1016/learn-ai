@@ -207,7 +207,10 @@ export class StrategyLabChartComponent {
   });
 
   private readonly normalizedIndicators = computed(() =>
-    normalizeIndicatorResults(this.response()?.indicators ?? []),
+    normalizeIndicatorResults(
+      this.response()?.indicators ?? [],
+      this.response()?.indicator_specs ?? [],
+    ),
   );
   readonly overlays = computed<TradingSeries[]>(() => this.normalizedIndicators().overlays);
   readonly subPanes = computed<TradingSubPane[]>(() => this.normalizedIndicators().subPanes);

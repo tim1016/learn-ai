@@ -74,14 +74,17 @@ describe("TradingChartComponent", () => {
     expect(createChart).toHaveBeenCalledOnce();
     expect(chartHarness.addSeries.mock.calls.map((call) => call[2])).toEqual([0, 0, 1, 2]);
     expect(chartHarness.timeScale.fitContent).toHaveBeenCalledOnce();
-    expect(chartHarness.paneHeights[0]).toHaveBeenCalledWith(430);
-    expect(chartHarness.paneHeights[1]).toHaveBeenCalledWith(170);
-    expect(chartHarness.paneHeights[2]).toHaveBeenCalledWith(170);
+    expect(chartHarness.paneHeights[0]).toHaveBeenCalledWith(470);
+    expect(chartHarness.paneHeights[1]).toHaveBeenCalledWith(205);
+    expect(chartHarness.paneHeights[2]).toHaveBeenCalledWith(185);
     expect((chartHarness.options?.["layout"] as { attributionLogo: boolean }).attributionLogo).toBe(false);
 
     const root = fixture.nativeElement as HTMLElement;
     expect(root.querySelectorAll(".trading-chart__canvas")).toHaveLength(1);
     expect(root.querySelector(".trading-chart__attribution")?.textContent).toContain("TradingView");
+    expect(root.querySelector(".trading-chart__pane-legend")?.textContent).toContain("Candlesticks, volume, trades");
+    expect(root.querySelector(".trading-chart__pane-legend")?.textContent).toContain("Realized equity");
+    expect(root.querySelector(".trading-chart__pane-legend")?.textContent).toContain("RSI");
   });
 
   it("converts milliseconds only at the chart boundary without collapsing sub-second points", async () => {

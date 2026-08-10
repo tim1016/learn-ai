@@ -47,14 +47,19 @@ import type {
 interface PaneModel {
   id: string;
   label: string;
+  description: string;
   kind: "price" | "equity" | "indicator";
+  height: number;
   series: TradingSeries[];
   referenceLevels: number[];
 }
 
 const AXIS_COLUMN_WIDTH = 68;
-const PRICE_PANE_HEIGHT = 430;
-const SECONDARY_PANE_HEIGHT = 170;
+const PANE_HEIGHTS = {
+  price: 470,
+  equity: 205,
+  indicator: 185,
+} as const;
 export const TRADING_CHART_FACTORY = new InjectionToken<typeof createChart>(
   "TRADING_CHART_FACTORY",
   { providedIn: "root", factory: () => createChart },
@@ -110,7 +115,9 @@ export class TradingChartComponent implements OnDestroy {
     const result: PaneModel[] = [{
       id: "price",
       label: "Price",
+      description: "Candlesticks, volume, trades, and price overlays",
       kind: "price",
+      height: PANE_HEIGHTS.price,
       series: this.overlays().map((series) => ({ ...series })),
       referenceLevels: [],
     }];
@@ -118,7 +125,9 @@ export class TradingChartComponent implements OnDestroy {
       result.push({
         id: "equity",
         label: "Realized equity",
+        description: seriesNames(this.equity()),
         kind: "equity",
+        height: PANE_HEIGHTS.equity,
         series: this.equity().map((series) => ({ ...series })),
         referenceLevels: [],
       });
@@ -128,7 +137,9 @@ export class TradingChartComponent implements OnDestroy {
         result.push({
           id: pane.id,
           label: pane.label,
+          description: seriesNames(pane.series),
           kind: "indicator",
+          height: PANE_HEIGHTS.indicator,
           series: pane.series.map((series) => ({ ...series })),
           referenceLevels: [...(pane.referenceLevels ?? [])],
         });
@@ -137,7 +148,7 @@ export class TradingChartComponent implements OnDestroy {
     return result;
   });
   readonly chartHeight = computed(() => this.panes().reduce(
-    (height, pane) => height + (pane.kind === "price" ? PRICE_PANE_HEIGHT : SECONDARY_PANE_HEIGHT),
+    (height, pane) => height + pane.height,
     0,
   ));
 
@@ -206,9 +217,7 @@ export class TradingChartComponent implements OnDestroy {
       this.renderNormalizedSeries(chart, pane.series, pane.referenceLevels, index + 1);
     });
     this.renderNormalizedSeries(chart, panes[0]?.series ?? [], [], 0);
-    chart.panes().forEach((pane, index) => {
-      pane.setHeight(panes[index]?.kind === "price" ? PRICE_PANE_HEIGHT : SECONDARY_PANE_HEIGHT);
-    });
+    chart.panes().forEach((pane, index) => pane.setHeight(panes[index]?.height ?? PANE_HEIGHTS.indicator));
     chart.timeScale().fitContent();
     this.chart = chart;
     this.observeResize(element);
@@ -342,4 +351,8 @@ function toChartTime(timeMs: number): UTCTimestamp {
 
 function sortByTime<T extends { time: Time }>(left: T, right: T): number {
   return Number(left.time) - Number(right.time);
+}
+
+function seriesNames(series: readonly TradingSeries[]): string {
+  return series.map((item) => item.name).join(" · ");
 }

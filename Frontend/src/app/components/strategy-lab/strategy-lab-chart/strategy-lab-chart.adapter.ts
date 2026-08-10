@@ -8,6 +8,12 @@ import type {
 
 export const SERIES_COLORS = ["#ffb300", "#ff6d00", "#7aa9ff", "#ab47bc", "#26a69a", "#ec407a"];
 
+export interface ChartIndicatorSpec {
+  id: string;
+  name: string;
+  label: string;
+}
+
 export function indicatorMatches(
   leftName: string,
   leftParams: Record<string, number>,
@@ -27,37 +33,57 @@ export function timeframeKey(timespan: string, multiplier: number): string {
   return `${multiplier}m`;
 }
 
-export function normalizeIndicatorResults(results: readonly ChartIndicatorResult[]): {
+export function normalizeIndicatorResults(
+  results: readonly ChartIndicatorResult[],
+  specs: readonly ChartIndicatorSpec[] = [],
+): {
   overlays: TradingSeries[];
   subPanes: TradingSubPane[];
 } {
   const overlays: TradingSeries[] = [];
   const paneMap = new Map<string, TradingSubPane>();
+  const specsById = new Map(specs.map((spec) => [spec.id, spec]));
   results.forEach((result, resultIndex) => {
-    const series = normalizeResultSeries(result, resultIndex);
-    if (result.panel === "main") {
+    const spec = specsById.get(result.id);
+    const series = normalizeResultSeries(result, resultIndex, spec);
+    const panel = resolvePanel(result, spec);
+    if (panel.id === "main") {
       overlays.push(...series);
       return;
     }
-    const pane = paneMap.get(result.panel) ?? {
-      id: result.panel,
-      label: result.panel.toUpperCase(),
+    const pane = paneMap.get(panel.id) ?? {
+      id: panel.id,
+      label: panel.label,
       series: [],
       referenceLevels: [],
     };
     pane.series.push(...series);
     pane.referenceLevels = [...new Set([...(pane.referenceLevels ?? []), ...(result.refs ?? [])])];
-    paneMap.set(result.panel, pane);
+    paneMap.set(panel.id, pane);
   });
   return { overlays, subPanes: [...paneMap.values()] };
 }
 
-function normalizeResultSeries(result: ChartIndicatorResult, resultIndex: number): TradingSeries[] {
+function resolvePanel(
+  result: ChartIndicatorResult,
+  spec: ChartIndicatorSpec | undefined,
+): { id: string; label: string } {
+  // EMA is evidence in its own right. Keeping it off price candles makes
+  // crossovers readable without altering any producer-owned values.
+  if (spec?.name.toLowerCase() === "ema") return { id: "ema", label: "EMA" };
+  return { id: result.panel, label: result.panel.toUpperCase() };
+}
+
+function normalizeResultSeries(
+  result: ChartIndicatorResult,
+  resultIndex: number,
+  spec: ChartIndicatorSpec | undefined,
+): TradingSeries[] {
   const color = result.color || SERIES_COLORS[resultIndex % SERIES_COLORS.length];
   if (Array.isArray(result.data)) {
     return [{
       id: result.id,
-      name: result.id,
+      name: spec?.label ?? result.id,
       color,
       type: result.type === "histogram" ? "histogram" : "line",
       points: toTradingPoints(result.data),
@@ -65,7 +91,7 @@ function normalizeResultSeries(result: ChartIndicatorResult, resultIndex: number
   }
   return Object.entries(result.data).map(([name, points], index) => ({
     id: `${result.id}-${name}`,
-    name,
+    name: `${spec?.label ?? result.id} · ${name}`,
     color: index === 0 ? color : SERIES_COLORS[(resultIndex + index) % SERIES_COLORS.length],
     type: name.toLowerCase().includes("hist") ? "histogram" : "line",
     points: toTradingPoints(points),

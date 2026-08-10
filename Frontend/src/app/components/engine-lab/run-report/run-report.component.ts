@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject, input, output } from "@angular/core";
+import { ChangeDetectionStrategy, Component, computed, inject, input } from "@angular/core";
 import { rxResource } from "@angular/core/rxjs-interop";
 import { Apollo } from "apollo-angular";
 import { filter, map, of } from "rxjs";
@@ -19,6 +19,7 @@ import type {
 import { StrategyLabChartComponent } from "../../strategy-lab/strategy-lab-chart/strategy-lab-chart.component";
 import { StrategyLabDeepDivesComponent } from "../../strategy-lab/strategy-lab-deep-dives/strategy-lab-deep-dives.component";
 import { ResultsSummaryComponent } from "../../strategy-lab/results-summary/results-summary.component";
+import { ResultsSidebarComponent } from "../../strategy-lab/results-sidebar/results-sidebar.component";
 import {
   parseRunVerdictEnvelope,
   type StrategyLabParityView,
@@ -30,6 +31,7 @@ import {
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     ResultsSummaryComponent,
+    ResultsSidebarComponent,
     StrategyLabChartComponent,
     StrategyLabDeepDivesComponent,
   ],
@@ -41,7 +43,6 @@ export class RunReportComponent {
 
   readonly runId = input.required<number>();
   readonly runDetail = input<BacktestRunDetail | null>(null);
-  readonly runRefreshed = output<BacktestRunDetail>();
 
   private readonly runResource = rxResource<BacktestRunDetail | null, number | null>({
     params: () => {
@@ -70,7 +71,6 @@ export class RunReportComponent {
           if (!run || !run.parityVerdicts.some((verdict) => verdict.status === "pending")) {
             ref.stopPolling();
           }
-          if (run) this.runRefreshed.emit(run);
           return run;
         }),
       );
