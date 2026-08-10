@@ -1,16 +1,15 @@
 # ADR 0035: Alpaca Account Clerk — event-sourced SQLite authority (append-only log + folded state), no Postgres in scope
 
 - **Date:** 2026-08-04
-- **Status:** Proposed. Alpaca paper generation 1 is active (#1383 Phase 1
-  complete). Acceptance is gated on #1383 Phase 2 — supervised paper
-  qualification across multiple market sessions with an operator present,
-  covering the full required scenario set (ENTER acknowledgement/partial
-  fill/duplicate evidence, lost-submit and lost-cancel recovery, trade-update
-  gap plus REST reconciliation, restart with accepted/unknown work, verified
-  backup/restore/mirror-rebuild rehearsal, and stable advancing/unchanged SSE
-  revisions) — plus publication of the closure package. Live-money trading
-  remains disabled throughout and is out of scope for this ADR (Alpaca paper
-  only, this ADR does not gate or enable live-money).
+- **Status:** Accepted for Alpaca paper only on 2026-08-10. Generation 1 is
+  active. Acceptance is supported by the deterministic/adversarial qualification
+  suite, verified online backup and recovery evidence, no-fallback authority
+  guards, and the UI-driven one-share SPY ENTER/EXIT/Stop/reconcile ceremony in
+  [`alpaca-sqlite-clerk-paper-soak-2026-08-07.md`](../../audits/alpaca-sqlite-clerk-paper-soak-2026-08-07.md).
+  The earlier multi-session fault matrix remains historical governance and
+  post-acceptance hardening; it is not represented as having been run. Live-money
+  trading remains disabled and is out of scope (this ADR neither gates nor enables
+  live-money).
 - **Context:** Alpaca Account Clerk control-plane; the SQLite control-plane PRD
   (`docs/prds/alpaca-account-clerk-sqlite-control-plane.md`); an architecture
   grilling session on 2026-08-04.
@@ -43,8 +42,8 @@
     implementation-substrate supersession, not a philosophy reversal.
 
   IBKR is unchanged; all four ADRs remain in force everywhere else in the
-  repository. None of the above supersession takes effect until this ADR's
-  Status changes to Accepted.
+  repository. The acceptance status above activates exactly these Alpaca-clerk
+  supersessions and no broader ones.
 
 ## Context
 
@@ -53,16 +52,20 @@
 > qualification artifacts. Alpaca paper account generation 1 was then activated
 > under #1383; the phase 1 receipt is recorded in
 > `docs/audits/alpaca-sqlite-clerk-phase-1-cutover-2026-08-06.md`. This activation
-> does not accept the ADR: supervised multi-session paper qualification remains.
-> Accounts without a valid activation fence continue to use the legacy JSONL
-> Clerk.
+> preceded acceptance. On 2026-08-10 the evidence-driven amendment in
+> `docs/prds/alpaca-sqlite-ui-paper-acceptance-and-ibkr-control-retirement.md`
+> accepted the ADR for Alpaca paper after a complete UI-driven paper round trip
+> and terminal reconstruction. Accounts without a valid activation fence continue
+> to use the legacy JSONL Clerk; an invalid activated authority fails closed and
+> never falls back.
 
-The Alpaca Account Clerk today (`PythonDataService/app/broker/alpaca/clerk/`,
-~6,745 lines) is an in-process async service whose durable authority is two
+At proposal time, the Alpaca Account Clerk
+(`PythonDataService/app/broker/alpaca/clerk/`, ~6,745 lines) was an in-process
+async service whose durable authority was two
 append-only JSONL files per account (`order_inbox.jsonl`, `order_journal.jsonl`),
-each fsync'd before broker contact. Every current-state question is answered by
+each fsync'd before broker contact. Every current-state question was answered by
 folding the **entire** journal from byte 0 (O(n) per submit/cancel/reconcile).
-Around that sit: an in-process `asyncio.Lock` plus a documented
+Around that sat: an in-process `asyncio.Lock` plus a documented
 single-uvicorn-worker correctness requirement (two workers silently corrupt
 state); a hand-rolled file idempotency ledger (`CustodyResolutionStore`); a
 best-effort JSONL→Postgres projection (cursor-tail reader + inode/prefix-hash
@@ -256,5 +259,12 @@ Implementation evidence for both gates is published in
 adversarial correctness matrix (atomicity, idempotency, broker races, custody/
 uncertainty, database failure incl. mirror-rebuild and hash-chain verification,
 UI delivery), and (b) the performance budgets at the 1/10/100-bot and
-10k/100k/1M-row fixtures. Human review and activation remain in #1383, so this
-ADR intentionally remains Proposed. Live-money trading stays disabled throughout.
+10k/100k/1M-row fixtures. The 2026-08-10 acceptance ceremony added live
+Alpaca-paper proof of exactly one one-share ENTER and one strategy-owned EXIT,
+capture-before-contact identity continuity, SQLite-attributed exposure, broker
+fills, terminal flatness, Stop, reconciliation, reload reconstruction, and
+side-effect-free evidence inspection. The closure record is the soak report and
+the execution PRD linked above. Remaining injected-fault and multi-session rows
+are tracked in [issue #1440](https://github.com/tim1016/learn-ai/issues/1440) as
+post-acceptance hardening and are not claims of completed live execution.
+Live-money trading stays disabled throughout.

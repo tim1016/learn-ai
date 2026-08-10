@@ -234,6 +234,20 @@ describe('TraderLensComponent — trader evidence', () => {
     ).not.toBeNull();
     expect(screen.getByText('Fills today')).toBeTruthy();
   });
+
+  it('does not claim there were no fills when the custody fold marks fill history unavailable', async () => {
+    const panel: BotPanelView = {
+      ...BASE_PANEL,
+      mode: 'trade',
+      fills_today: null,
+    };
+    await render(TraderLensComponent, {
+      inputs: { panel, profile: PROFILE, liveChart: null, histChart: null },
+    });
+
+    expect(screen.getByText('Fill history unavailable from active custody folds.')).toBeTruthy();
+    expect(screen.queryByText('No fills today.')).toBeNull();
+  });
 });
 
 describe('TraderLensComponent — live fallback chip', () => {

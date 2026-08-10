@@ -1,5 +1,10 @@
 # Bots first-paint performance budget
 
+> **Historical IBKR surface:** Issue #1225 measured the now-retired
+> `/broker/bots` page. That compatibility URL redirects to Alpaca Broker V2 and must
+> not regain a component. The Alpaca account-scoped measurements in the final section
+> remain current; the earlier IBKR numbers are retained only as performance provenance.
+
 Issue #1225 Slice 7 establishes a render budget for `/broker/bots`.
 
 ## Measurement fixture
