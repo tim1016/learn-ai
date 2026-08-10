@@ -9,10 +9,7 @@
       <app-ticker-quote [quote]="tickerQuote" tone="inverse" />
     }
     <span class="trading-chart__timeframe">{{ timeframeLabel() }}</span>
-    <div class="trading-chart__chips" aria-label="Chart panes and active indicators">
-      @for (pane of panes(); track pane.id) {
-        <span class="trading-chart__pane-chip">{{ pane.label }}</span>
-      }
+    <div class="trading-chart__chips" aria-label="Active indicators">
       @for (indicator of activeIndicators(); track indicator.id) {
         <span class="trading-chart__chip">
           <i [style.background]="indicator.color" aria-hidden="true"></i>
@@ -33,6 +30,15 @@
       (click)="toggleExpanded()"
     ><i class="pi" [class.pi-window-maximize]="!expanded()" [class.pi-window-minimize]="expanded()" aria-hidden="true"></i></button>
   </header>
+
+  <div class="trading-chart__pane-legend" aria-label="Chart pane descriptions">
+    @for (pane of panes(); track pane.id) {
+      <div class="trading-chart__pane-legend-item">
+        <strong>{{ pane.label }}</strong>
+        <span>{{ pane.description }}</span>
+      </div>
+    }
+  </div>
 
   <div class="trading-chart__body">
     <div class="trading-chart__canvas-wrap">

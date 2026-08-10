@@ -25,36 +25,12 @@
   color: var(--text-primary);
 }
 
-.results-page__layout {
-  display: grid;
-  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
-  gap: var(--space-4);
-  align-items: start;
-  min-width: 0;
-}
-
-.results-page__rail,
-.results-page__report {
-  min-width: 0;
-}
-
-.results-page__loading,
 .results-page__error {
   margin: 0;
   padding: var(--space-3);
   border: 1px solid var(--border-light);
   border-radius: var(--radius);
   background: var(--bg-surface);
-  color: var(--text-secondary);
-  font-size: var(--fs-xs);
-}
-
-.results-page__error {
   color: var(--danger);
-}
-
-@media (max-width: 900px) {
-  .results-page__layout {
-    grid-template-columns: minmax(0, 1fr);
-  }
+  font-size: var(--fs-xs);
 }

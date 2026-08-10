@@ -4,29 +4,34 @@
   } @else if (run(); as currentRun) {
     @if (engineResult(); as result) {
       <div class="run-report__layout">
-        <app-strategy-lab-results-summary
-          [result]="result"
-          [verdict]="verdict()"
-        />
-
-        <section class="run-report__evidence" aria-label="Price and realized equity evidence">
-          @for (notice of reportNotices(); track notice) {
-            <p class="run-report__notice" role="note">{{ notice }}</p>
-          }
-
-          <app-strategy-lab-chart
-            [run]="currentRun"
-            [markers]="markers()"
-            [equityPoints]="equityPoints()"
+        <aside class="run-report__rail" aria-label="Run statistics and evidence">
+          <app-strategy-lab-results-sidebar [run]="currentRun" />
+          <app-strategy-lab-deep-dives
+            [result]="result"
+            [tradesTruncated]="currentRun.tradesTruncated"
+            [parity]="parity()"
           />
+        </aside>
+
+        <section class="run-report__content" aria-label="Persisted strategy results">
+          <app-strategy-lab-results-summary
+            [result]="result"
+            [verdict]="verdict()"
+          />
+
+          <section class="run-report__evidence" aria-label="Price and realized equity evidence">
+            @for (notice of reportNotices(); track notice) {
+              <p class="run-report__notice" role="note">{{ notice }}</p>
+            }
+
+            <app-strategy-lab-chart
+              [run]="currentRun"
+              [markers]="markers()"
+              [equityPoints]="equityPoints()"
+            />
+          </section>
         </section>
       </div>
-
-      <app-strategy-lab-deep-dives
-        [result]="result"
-        [tradesTruncated]="currentRun.tradesTruncated"
-        [parity]="parity()"
-      />
     }
   } @else if (loadError()) {
     <div class="run-report__empty">Run report could not be loaded. Try again from History.</div>

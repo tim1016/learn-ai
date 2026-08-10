@@ -96,20 +96,39 @@ describe("Strategy Lab chart adapter", () => {
     )).toBe(true);
   });
 
-  it("preserves exact server timestamps when adapting indicator points", () => {
+  it("keeps EMA values and timestamps together in a dedicated indicator pane", () => {
     const timestamps = [1_767_626_100_000, 1_767_627_000_000];
     const normalized = normalizeIndicatorResults([
       {
-        id: "ema_5",
+        id: "ema-length-5",
         panel: "main",
         type: "line",
         color: "#ffb300",
         refs: [],
         data: timestamps.map((t, index) => ({ t, value: 500 + index })),
       },
+      {
+        id: "ema-length-10",
+        panel: "main",
+        type: "line",
+        color: "#ff6d00",
+        refs: [],
+        data: timestamps.map((t, index) => ({ t, value: 499 + index })),
+      },
+    ], [
+      { id: "ema-length-5", name: "ema", label: "EMA 5" },
+      { id: "ema-length-10", name: "ema", label: "EMA 10" },
     ]);
 
-    expect(normalized.overlays[0].points.map((point) => point.timeMs)).toEqual(timestamps);
+    expect(normalized.overlays).toEqual([]);
+    expect(normalized.subPanes).toEqual([expect.objectContaining({
+      id: "ema",
+      label: "EMA",
+      series: [
+        expect.objectContaining({ name: "EMA 5", points: timestamps.map((timeMs, index) => ({ timeMs, value: 500 + index })) }),
+        expect.objectContaining({ name: "EMA 10", points: timestamps.map((timeMs, index) => ({ timeMs, value: 499 + index })) }),
+      ],
+    })]);
   });
 
   it("formats the persisted strategy timeframe without inferring a new cadence", () => {
@@ -185,7 +204,7 @@ describe("StrategyLabChartComponent", () => {
       coverage: { expected_days: 2, available_days: 1, is_complete: false, missing_session_ms_utc: [1_767_711_000_000] },
       indicator_specs: [{ id: "ema-length-5", name: "ema", params: { length: 5 }, label: "EMA 5", strategy_default: true }],
       indicators: [{
-        id: "ema_5",
+        id: "ema-length-5",
         panel: "main",
         type: "line",
         color: "#ffb300",
@@ -197,7 +216,8 @@ describe("StrategyLabChartComponent", () => {
     fixture.detectChanges();
 
     expect(fixture.componentInstance.candles().map((bar) => bar.timeMs)).toEqual(timestamps);
-    expect(fixture.componentInstance.overlays()[0].points.map((point) => point.timeMs)).toEqual(timestamps);
+    expect(fixture.componentInstance.overlays()).toEqual([]);
+    expect(fixture.componentInstance.subPanes()[0]?.series[0]?.points.map((point) => point.timeMs)).toEqual(timestamps);
     expect(fixture.componentInstance.indicatorNotice()).toContain("covers 1 of 2 sessions");
     http.verify();
   });

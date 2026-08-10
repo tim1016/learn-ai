@@ -1,0 +1,21 @@
+<section class="lean-analysis" aria-label="LEAN native analysis details">
+  <p class="lean-analysis__note">
+    These findings come directly from the pinned LEAN sidecar and do not change the learn-ai readiness score.
+  </p>
+  @for (finding of findings(); track finding.name) {
+    <article class="lean-analysis__finding">
+      <h3>{{ formatName(finding.name) }}</h3>
+      <p>{{ finding.issue }}</p>
+      <span>LEAN sample</span>
+      <pre>{{ formatSample(finding.sample) }}</pre>
+      @if (finding.solutions.length > 0) {
+        <span>LEAN suggestions</span>
+        <ul>
+          @for (solution of finding.solutions; track solution) {
+            <li>{{ solution }}</li>
+          }
+        </ul>
+      }
+    </article>
+  }
+</section>

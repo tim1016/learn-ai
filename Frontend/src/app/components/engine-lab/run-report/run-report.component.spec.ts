@@ -142,7 +142,7 @@ afterEach(() => {
 });
 
 describe("RunReportComponent", () => {
-  it("renders the grade-led KPI row and chart without duplicating navigation or configuration", async () => {
+  it("renders the grade-led KPI row with its statistics and evidence rail", async () => {
     const fixture = await renderReport(makeRun());
     const root = fixture.nativeElement as HTMLElement;
     const text = root.textContent ?? "";
@@ -152,7 +152,8 @@ describe("RunReportComponent", () => {
     expect(text).toContain("Shared-time-scale strategy chart");
     expect(text).not.toContain("Back to workbench");
     expect(text).not.toContain("Run configuration");
-    expect(text).not.toContain("More statistics");
+    expect(text).toContain("More statistics");
+    expect(text).toContain("Validation atlas");
     expect(text).not.toContain("Diagnostic complete");
     expect(root.querySelector("app-strategy-lab-verdict")).toBeNull();
   });

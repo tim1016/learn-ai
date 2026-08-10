@@ -1,0 +1,28 @@
+@let view = parity();
+<section class="compatibility" aria-label="Compatibility evidence details">
+  @if (view.reason) { <p>{{ view.reason }}</p> }
+  @if (view.inputParity; as input) {
+    <p>Shared fixture: <strong>{{ input.status | receiptLabel }}</strong>@if (input.fixture_id) { · {{ input.fixture_id }} }</p>
+  }
+  @if (view.nativeMetricParity; as native) {
+    <p>LEAN-native values: <strong>{{ native.status | receiptLabel }}</strong></p>
+  }
+  @if (view.readinessParity; as readiness) {
+    <p>Readiness fields: <strong>{{ readiness.status | receiptLabel }}</strong></p>
+  }
+  @if (view.countsByCategory.length) {
+    <dl class="compatibility__counts">
+      @for (entry of view.countsByCategory; track entry.category) {
+        <div><dt>{{ entry.category | receiptLabel }}</dt><dd>{{ entry.count }}</dd></div>
+      }
+    </dl>
+  }
+  @if (view.divergences.length) {
+    <section class="compatibility__differences" aria-label="Compatibility differences">
+      <h3>Differences</h3>
+      @for (item of view.divergences; track item.category + ':' + item.message) {
+        <p><strong>{{ item.category | receiptLabel }}</strong> {{ item.message }}</p>
+      }
+    </section>
+  }
+</section>

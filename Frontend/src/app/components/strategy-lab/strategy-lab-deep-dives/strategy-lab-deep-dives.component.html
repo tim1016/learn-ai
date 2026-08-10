@@ -1,111 +1,69 @@
-@let r = result();
-<section class="deep-dives" aria-label="Run deep dives">
-  @if (parity(); as p) {
-    <details data-testid="compatibility-deep-dive">
-      <summary>
-        <span>Compatibility evidence</span>
-        <small>{{ p.status | receiptLabel }}</small>
-      </summary>
-      <div class="deep-dives__body compatibility">
-        @if (p.reason) { <p>{{ p.reason }}</p> }
-        @if (p.inputParity; as input) {
-          <p>Shared fixture: <strong>{{ input.status | receiptLabel }}</strong>@if (input.fixture_id) { · {{ input.fixture_id }} }</p>
+<section class="evidence-menu" aria-label="Run evidence">
+  <header>
+    <h2>Evidence</h2>
+    <small>Open detailed run receipts</small>
+  </header>
+
+  @for (section of sections(); track section.id) {
+    <button
+      type="button"
+      class="evidence-menu__item"
+      aria-haspopup="dialog"
+      (click)="open(section)"
+    >
+      <span>
+        <strong>{{ section.label }}</strong>
+        @if (section.summary.kind === "receipt") {
+          <small>{{ section.summary.value | receiptLabel }}</small>
+        } @else {
+          <small>{{ section.summary.value }}</small>
         }
-        @if (p.nativeMetricParity; as native) {
-          <p>LEAN-native values: <strong>{{ native.status | receiptLabel }}</strong></p>
-        }
-        @if (p.readinessParity; as readiness) {
-          <p>Readiness fields: <strong>{{ readiness.status | receiptLabel }}</strong></p>
-        }
-        @if (p.countsByCategory.length) {
-          <dl class="compatibility__counts">
-            @for (entry of p.countsByCategory; track entry.category) {
-              <div><dt>{{ entry.category | receiptLabel }}</dt><dd>{{ entry.count }}</dd></div>
-            }
-          </dl>
-        }
-        @if (p.divergences.length) {
-          <section class="compatibility__differences" aria-label="Compatibility differences">
-            <h3>Differences</h3>
-            @for (item of p.divergences; track $index) {
-              <p><strong>{{ item.category | receiptLabel }}</strong> {{ item.message }}</p>
-            }
-          </section>
-        }
-      </div>
-    </details>
+      </span>
+      <i class="pi pi-angle-right" aria-hidden="true"></i>
+    </button>
   }
-
-  @if (leanStatistics(); as stats) {
-    <details data-testid="lean-statistics-deep-dive">
-      <summary>
-        <span>Native LEAN statistics</span>
-        <small>Complete engine-authored statistics catalog</small>
-      </summary>
-      <div class="deep-dives__body deep-dives__body--wide">
-        <app-lean-statistics [stats]="stats" />
-      </div>
-    </details>
-  }
-
-  @if (leanAnalysis(); as findings) {
-    @if (findings.length > 0) {
-      <details>
-        <summary>
-          <span>LEAN native analysis</span>
-          <small>{{ findings.length }} Oracle finding{{ findings.length === 1 ? "" : "s" }} with complete evidence</small>
-        </summary>
-        <div class="deep-dives__body lean-analysis">
-          <p class="lean-analysis__note">
-            These findings come directly from the pinned LEAN sidecar and do not change the learn-ai readiness score.
-          </p>
-          @for (finding of findings; track $index) {
-            <article class="lean-analysis__finding">
-              <h3>{{ formatLeanAnalysisName(finding.name) }}</h3>
-              <p>{{ finding.issue }}</p>
-              <span>LEAN sample</span>
-              <pre>{{ formatLeanSample(finding.sample) }}</pre>
-              @if (finding.solutions.length > 0) {
-                <span>LEAN suggestions</span>
-                <ul>
-                  @for (solution of finding.solutions; track $index) {
-                    <li>{{ solution }}</li>
-                  }
-                </ul>
-              }
-            </article>
-          }
-        </div>
-      </details>
-    }
-  }
-
-  <details>
-    <summary><span>Validation atlas</span><small>Horizons, timing, seasonality, stability</small></summary>
-    <div class="deep-dives__body">
-      @if (r.validation_analytics; as analytics) {
-        <app-validation-atlas [analytics]="analytics" />
-      } @else {
-        <p class="deep-dives__empty">Validation analytics were not recorded for this run.</p>
-      }
-    </div>
-  </details>
-
-  <details>
-    <summary>
-      <span>Trade ledger</span>
-      @if (tradesTruncated()) {
-        <small>{{ r.trades.length }} recent of {{ r.total_trades }} completed trades</small>
-      } @else {
-        <small>{{ r.total_trades }} completed trades</small>
-      }
-    </summary>
-    <div class="deep-dives__body">
-      <app-engine-trade-ledger
-        [trades]="r.trades"
-        [totalTradeCount]="r.total_trades"
-        [tradesTruncated]="tradesTruncated()"
-      />
-    </div>
-  </details>
 </section>
+
+@if (selectedSection(); as section) {
+  <p-drawer
+    [visible]="true"
+    (visibleChange)="onDrawerVisibilityChange($event)"
+    position="right"
+    [modal]="true"
+    [dismissible]="true"
+    [style]="{ width: 'min(960px, 92vw)' }"
+  >
+    <ng-template #header>
+      <div class="evidence-drawer__header">
+        <span>Run evidence</span>
+        <h3>{{ section.label }}</h3>
+      </div>
+    </ng-template>
+
+    @switch (section.id) {
+      @case ("compatibility") {
+        @if (parity(); as view) { <app-strategy-lab-compatibility-evidence [parity]="view" /> }
+      }
+      @case ("statistics") {
+        @if (leanStatistics(); as statistics) { <app-lean-statistics [stats]="statistics" /> }
+      }
+      @case ("analysis") {
+        <app-strategy-lab-lean-analysis [findings]="leanAnalysis()" />
+      }
+      @case ("atlas") {
+        @if (result().validation_analytics; as analytics) {
+          <app-validation-atlas [analytics]="analytics" />
+        } @else {
+          <p class="evidence-drawer__empty">Validation analytics were not recorded for this run.</p>
+        }
+      }
+      @case ("ledger") {
+        <app-engine-trade-ledger
+          [trades]="result().trades"
+          [totalTradeCount]="result().total_trades"
+          [tradesTruncated]="tradesTruncated()"
+        />
+      }
+    }
+  </p-drawer>
+}
