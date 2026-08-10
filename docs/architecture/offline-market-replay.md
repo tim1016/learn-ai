@@ -1,9 +1,14 @@
 # Offline market replay
 
-**Status:** Implemented for SPY and TSLA  
-**Last reviewed:** 2026-07-29  
-**Operator surface:** `/broker/offline-replay`  
+**Status:** Runtime/API preserved; former broker UI retired
+**Last reviewed:** 2026-08-10
+**Operator surface:** None. `/broker/offline-replay` is a redirect-only compatibility URL.
 **API:** `/api/offline-replay`
+
+> **Retirement note:** the replay engine and its test evidence remain useful research
+> infrastructure, but the former IBKR broker-area page is no longer a product surface.
+> Do not restore a component, provider, guard, or behavior on the compatibility route.
+> Any future replay UI needs a separately approved, non-IBKR product home.
 
 ## Purpose
 
@@ -148,6 +153,6 @@ feed/broker boundaries without forking `LiveEngine`.
   `PythonDataService/tests/services/test_offline_replay_service.py`
 - FastAPI contracts:
   `PythonDataService/tests/routers/test_offline_replay.py`
-- Angular service and operator surface:
+- Historical Angular service and former operator-surface coverage:
   `Frontend/src/app/services/offline-replay.service.spec.ts` and
   `Frontend/src/app/components/broker/offline-replay/offline-replay-page.component.spec.ts`

@@ -5,11 +5,14 @@
 > document — when this page disagrees with code, the code is right and
 > this page must be updated in the same PR.
 >
-> **Authority boundary (2026-07-22):** this document covers the IBKR integration.
-> The current Clerk, lifecycle, Bot Control, and trader-operating behavior is owned by
-> [`bot-control-operator-manual.md`](bot-control-operator-manual.md), ADR-0030,
-> ADR-0026, and the engine authority map. Do not use the historical deployment plan or
-> a changelog entry below as an operator procedure.
+> **Retirement boundary (2026-08-10):** this document covers the surviving IBKR
+> integration as infrastructure and historical engine context. The IBKR broker-control
+> product, sidebar group, bot list, bot panel, account pages, manual-order page, and
+> replay page are retired. Their `/broker...` URLs are redirect-only compatibility
+> aliases to Alpaca Broker V2. Current bot-control operation is owned by
+> [`broker-v2-operator-manual.md`](broker-v2-operator-manual.md). The IBKR adapter may
+> supply an internal market-data/feed dependency; it is not a second control product
+> and must not regain broker-control navigation or trading/lifecycle mutation UI.
 >
 > **Sibling docs** (different jobs, do not duplicate):
 > - [`architecture/ibkr-integration-tdd.md`](architecture/ibkr-integration-tdd.md) — design rationale (why we chose `ib_async`, four-layer paper safety, SSE everywhere). Read first to understand "why."
@@ -18,7 +21,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/broker/ibkr/*` or `PythonDataService/app/engine/live/*`. Same-PR rule: if you touch those files, update the matching section here and bump **Last reviewed**.
 >
-> **Last reviewed:** 2026-07-23 (live-run evidence and validation status reconciled).
+> **Last reviewed:** 2026-08-10 (IBKR product-control retirement reconciled).
 
 ---
 
@@ -31,7 +34,7 @@
 - [4. Broker module surface (`app/broker/ibkr/`)](#4-broker-module-surface-appbrokeribkr)
 - [5. REST + SSE endpoints (`/api/broker/*`)](#5-rest--sse-endpoints-apibroker)
 - [6. Live runtime (`app/engine/live/`)](#6-live-runtime-appengineLive)
-- [7. Frontend pages (`/broker/*`)](#7-frontend-pages-broker)
+- [7. Retired frontend boundary (`/broker/*`)](#7-retired-frontend-boundary-broker)
 - [8. Persistence](#8-persistence)
 - [9. Diagnostics](#9-diagnostics)
 - [10. Test coverage](#10-test-coverage)
@@ -51,11 +54,10 @@ It does **not** answer:
 - Whether multi-symbol live trading is supported. **It is not.** `LiveEngine` raises `NotImplementedError` if `len(ctx.symbols) != 1`. See `live_engine.py:106`.
 - Whether the backtest math is correct. That is the strategy / engine math layer's job; see [`feature-runner-authority.md`](feature-runner-authority.md) for research, and the SPY parity tests at `app/engine/tests/test_spy_*` for backtest math.
 
-**Authority precedence** for IBKR integration behavior when this doc, the TDD, and
-the code disagree: code wins, then this doc, then the TDD. For Clerk/lifecycle and
-operator behavior, ADR-0030/ADR-0026 and the Bot Control manual take precedence over
-this integration reference. The TDD captures design intent which can be older than the
-implementation.
+**Authority precedence** for surviving IBKR integration behavior when this doc, the
+TDD, and the code disagree: code wins, then this doc, then the TDD. For current
+Alpaca Clerk/lifecycle and operator behavior, ADR-0035 and the Broker V2 manual take
+precedence. The retired IBKR Bot Control manual is historical provenance only.
 
 ---
 
@@ -87,10 +89,10 @@ implementation.
    └─────────────────────┘         │  one ib_async import  │
                                    └───────────────────────┘
                                                 ▲
-                                                │ REST + SSE
+                                                │ curated feed/status data
                                    ┌────────────┴───────────┐
-                                   │  Frontend /broker/*    │
-                                   │  Angular 22 SPA        │
+                                   │ Alpaca V2 + internal   │
+                                   │ feed consumers         │
                                    └────────────────────────┘
 ```
 
@@ -326,25 +328,23 @@ The gate skips on CI when `lean-cache/` is absent (gitignored runtime data — p
 
 ---
 
-## 7. Frontend pages (`/broker/*`)
+## 7. Retired frontend boundary (`/broker/*`)
 
-Standalone Angular 22 components, signal-driven, OnPush, gated by `BrokerHealthService.bannerState`.
+There is no current IBKR broker-control frontend. The former `Interactive Broker`
+sidebar group is absent, and the compatibility paths named in `AGENTS.md` are plain
+Angular redirects to `/brokers/alpaca...`; they load no IBKR component, provider,
+guard, or mutation behavior. Focused route and sidebar tests pin that boundary.
 
-| Route | Component | Purpose | Gates |
-|---|---|---|---|
-| `/broker` | `BrokerStatusComponent` | Connection card (mode, account, sentinel), account snapshot, positions table, **Diagnose** button (PR #77) with per-check pills + fix hints. | Always visible. Account/positions cards hide when disconnected. |
-| `/broker/options-chain` | `BrokerOptionsChainComponent` | SSE-driven chain table; multi-strike select, NBBO + greeks, debounce-coalesced. | Locked unless `isPaperConnected()`. |
-| `/broker/accounts/:accountId` | `AccountDeskPageComponent` | Account Truth, broker snapshot, ownership, account recovery proof, reconciliation status, and backend-authored recovery actions. | Account-scoped evidence is rendered through trader and operator lenses. |
-| `/broker/account-monitor` | `AccountMonitorRedirectComponent` | Legacy bookmark redirect to the selected Account Desk. | Redirects to `/broker/accounts/:accountId` when exactly one account is available; otherwise opens the account roster. |
-| `/broker/orders` | `BrokerOrdersComponent` | Manual paper-order form with what-if preview, server-minted manual namespace, account-truth order ledger, cancel affordance for live working orders, and order-event SSE. | Locked unless paper-connected (defense-in-depth on the four-layer safety). |
+Some shared Angular services still read IBKR connection, capability, account, or
+market-data evidence because the current Alpaca deployment-validation runtime retains
+an internal IBKR feed dependency. Those consumers do not create an IBKR product area
+and must not be used to restore the retired pages. Alpaca account, deploy, roster, bot
+panel, lifecycle, custody, and reconciliation actions remain under
+`/brokers/alpaca...` and `/api/brokers/alpaca...`.
 
-**Shared services**:
-
-- `BrokerHealthService` — singleton 5-second poll of `/api/broker/health`. Exposes `health`, `bannerState`, `isPaperConnected` signals. The shell paper/live/disconnected banner reads from this.
-- `BrokerService` — `firstValueFrom`-wrapped REST client for the non-SSE endpoints.
-- `broker-sse.ts` — `EventSource` helper that each SSE-consuming page owns explicitly (no global SSE manager).
-
-**Type generation**: REST-shaped models in `Frontend/src/app/api/broker.types.ts` are regenerated from the Python service's OpenAPI spec. SSE-only payloads (`IbkrChainSnapshot`, `IbkrPnLTick`, `IbkrOrderEvent`) and recently-added broker/account-truth types (`DiagnosticReport`, `AccountTruthResponse`, `IbkrOrderWhatIfPreview`) are hand-mirrored in `broker-models.ts` until the next regeneration. See `Frontend/AGENTS.md` for the regenerate command.
+REST-shaped models in `Frontend/src/app/api/broker.types.ts` remain generated from the
+Python OpenAPI schema where active consumers require them. Their presence is not a
+navigation or product-control contract.
 
 ---
 
@@ -456,29 +456,27 @@ Tracked deliberately. None of these are accidental gaps; each is documented and 
 ## 12. Platform-owner integration preflight (not a Bot Control procedure)
 
 This is infrastructure context for the platform owner. Operators use the UI-first
-procedure in `docs/bot-control-operator-manual.md`; it is the only current Bot Control
-and Clerk operating manual.
+procedure in `docs/broker-v2-operator-manual.md`; the retired IBKR Bot Control manual
+is historical only.
 
 Run these checks before turning the runner loose:
 
 1. **Platform configuration** must select the paper account, paper port, and the
-   approved host allowlist. The deployed daemon policy is the authority; an operator
-   does not change it through the Bot Control surface.
+   approved host allowlist. The deployed feed policy is infrastructure authority; an
+   operator does not change it through a retired IBKR surface.
 2. **NYSE/ARCA real-time market-data subscription** active on the linked live account. Paper inherits — see TDD §2.4.
 3. **IB Gateway** running, logged into the paper account, "Read-Only API" is OFF, and the API tab's "Trusted IPs" includes:
    - **`127.0.0.1`** (host loopback) — required by the host daemon and its bot children.
    - The configured data-plane bridge address — required only when the platform's
      infrastructure health/diagnostic routes use it.
 
-   The platform owner maintains these settings. Bot operators use the diagnostics and
-   launch evidence surfaced by the application rather than a host command.
+   The platform owner maintains these settings. Alpaca operators use the Broker V2
+   feed/status evidence rather than a retired IBKR page.
 4. **`GET /api/broker/health`** returns `connected: true, is_paper: true` and the account ID begins with `DU`.
-5. **`GET /api/broker/diagnose`** returns `overall_status: pass` (or click the **Diagnose** button on `/broker`).
+5. **`GET /api/broker/diagnose`** returns `overall_status: pass` when the infrastructure diagnostic is required.
 6. **Project-scope tests** green: `pytest PythonDataService/tests/ -k "not slow"`. 1797+ pass; the replay parity test must skip with the `lean-cache` message on a clean CI runner or pass locally where the cache is materialized.
-7. **Operator path** uses Bot Control and Account Desk, never a one-off CLI start.
-   The authenticated host daemon owns process launch and allocates distinct client ids;
-   the UI/manual surface displays its evidence and directs recovery. See
-   `docs/bot-control-operator-manual.md`.
+7. **Operator path** uses Alpaca Broker V2 and its Account Desk, never a retired IBKR
+   route or one-off trading command. See `docs/broker-v2-operator-manual.md`.
 
 If any of these fails, fix it before running. The diagnostic endpoint will tell you which layer is the blocker.
 

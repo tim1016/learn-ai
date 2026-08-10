@@ -22,6 +22,7 @@
     @if (isPaperExecution()) {
       <app-trades-today-list
         [fills]="liveFillMarkers()"
+        [fillCount]="panel().fills_today"
         [feeFidelity]="profile().fee_fidelity"
         [tradingDateMs]="tradingDateMs()"
       />

@@ -455,7 +455,58 @@ control revision and does not preserve prior reset provenance; and filesystem-ty
 detection remains a denylist that cannot enforce the Linux mount check on non-Linux
 hosts. Production remains constrained to the Linux/XFS named-volume topology.
 
-## Final governance (do not complete early)
+## Authority-substrate retirement evidence refresh — 2026-08-10
+
+**Status: COMPLETE for the activated Alpaca paper custody scope.** This status is
+limited to retiring the legacy JSONL custody writers, file idempotency ledger, and
+Clerk Postgres lifecycle projection in favor of the activation-selected SQLite
+authority. It does not complete the separate live-qualification and ADR-acceptance
+gate below.
+
+A fresh verified online backup completed at `1786381437981` ms UTC while the Clerk
+remained online. The backup ceremony uses SQLite's online-backup API and does not
+perform a broker call or author a custody transition. Its receipt recorded:
+
+- account `PA3KWXU1C4C3`, authority generation `1`, schema version `6`, and unchanged
+  database identity `03ed49bd38bb1f3a6462f81706e7dec2`;
+- control revision, transition count, and finalized mirror sequence all at `326`;
+- finalized transition hash
+  `259b11dfb514a4f0ec4b1198500dbbe91c1c85e018ef552a43157ee07314ecd0`;
+- verified snapshot SHA-256
+  `08566ad523bcff4d3aa0b6289af9060b2eab31c437d27682a6e4be8b6ab234d6`;
+- bundle
+  `accounts/alpaca/PA3KWXU1C4C3/verified-backups/backup-g1-1786381437981-08566ad523bcff4d`.
+
+The focused offline authority-retirement suite passed `82` tests. The exercised
+contracts prove that a valid activation opens and recovers only SQLite; an invalid,
+substituted, unavailable, or lease-blocked activated database fails closed without
+constructing the legacy Clerk; cutover quarantines the exact legacy authority files;
+catalog quarantine is account-scoped and content-addressed; the legacy lifecycle
+Postgres runtime/contract is retired; SQLite DDL preserves transition immutability and
+enforces idempotency at the SQL boundary; and HTTP command retries resolve through the
+SQLite authority. The passing files were:
+
+- `tests/contracts/test_alpaca_active_authority_wiring.py`;
+- `tests/contracts/test_legacy_lifecycle_projection_retirement.py`;
+- `tests/broker/alpaca/clerk/test_active_authority.py`;
+- `tests/broker/alpaca/clerk/sqlite/test_cutover.py`;
+- `tests/broker/alpaca/clerk/sqlite/test_catalog_quarantine.py`;
+- `tests/broker/alpaca/clerk/sqlite/test_schema_parity.py`;
+- `tests/routers/test_alpaca_clerk_sqlite.py`.
+
+This evidence does **not** claim that every JSONL or file artifact in the repository
+has been deleted. The activated path intentionally retains the write-only finalized
+transition mirror for corruption recovery, the account-external established-generation
+registry needed to detect authority deletion, and the read-only signal-decision journal
+used by the panel. Those artifacts cannot submit an order, own custody, authorize a
+lifecycle mutation, reconcile broker state, or act as a fallback authority. IBKR and
+generic broker-capture JSONL artifacts are outside this Alpaca-only retirement scope.
+
+## Historical governance before the evidence-driven amendment
+
+These rows preserve the original multi-session closure bar. They are intentionally
+not checked retroactively. The approved 2026-08-10 PRD replaced them as the ADR
+acceptance gate and moved the unrun scenarios to post-acceptance hardening.
 
 - [ ] All required live scenarios passed across multiple market sessions.
 - [ ] Final account proof is fresh, flat, and order-free.
@@ -466,16 +517,137 @@ hosts. Production remains constrained to the Linux/XFS named-volume topology.
 - [ ] ADR 0035's precise ADR 0001/0008/0030/0033 supersession text retained.
 - [ ] Live-money trading remains disabled.
 
+**Prior verdict (superseded on 2026-08-10): RECOVERED / PARTIALLY QUALIFIED /
+REQUEST CHANGES / STILL BLOCKED FROM CLOSURE.** At that point #1409 had to remain
+open. The mirror rebuild and three-bar run had recovered a healthy sequence-326
+authority, but the changes still required review, merge, and a new live
+requalification. That historical judgment remains accurate for the evidence then
+available.
+
+## UI-driven acceptance campaign — 2026-08-10
+
+The approved evidence amendment is
+[`alpaca-sqlite-ui-paper-acceptance-and-ibkr-control-retirement.md`](../prds/alpaca-sqlite-ui-paper-acceptance-and-ibkr-control-retirement.md).
+The campaign used only rendered Alpaca Broker V2 controls and evidence on paper
+account `PA3KWXU1C4C3`; no direct HTTP, trading CLI, SQLite inspection, browser
+`fetch`, or guard bypass participated in the ceremony.
+
+| Fact | UI-visible evidence |
+| --- | --- |
+| Identity | Bot `sqlite-ui-accept-0810`; lifecycle run `36eef5961dfa4c6697d3109a065d9742`; Deployment Validation; SPY; Paper; one share; carryover forbidden |
+| Deploy | Receipt `alpaca-paper-deploy:PA3KWXU1C4C3:sqlite-ui-accept-0810:1786384614022`; on duty, advancing feed, zero pre-ENTER orders |
+| ENTER | Effect `effect:sqlite-ui-accept-0810:encoded-MTc4NjM4NDY4MDAwMDpFTlRFUg`; client order `learn-ai/sqlite-ui-accept-0810/v1:KCq7OE8DSe-UgX5Y1kLaBQ`; Alpaca order `bae47099-fc66-4da9-8de9-c34de9ada8a5`; BUY 1 SPY at `$772.74`, filled `12:58:07` CT |
+| ENTER attribution | Bot Trader exposure and Alpaca Account Desk both showed exactly one SPY share at average `$772.74`; no duplicate command, effect, order, or economic fill |
+| EXIT | Third-subsequent-bar effect `effect:sqlite-ui-accept-0810:encoded-MTc4NjM4NDg2MDAwMDpFWElU`; client order `learn-ai/sqlite-ui-accept-0810/v1:t5WWgHc6aoonBNHQCrcrdA`; Alpaca order `b513fd2f-28ee-4d65-9f73-a3956d8f616a`; SELL 1 SPY at `$772.83`, filled `13:01:06` CT |
+| Terminal chain | **Attributed exposure flat** (`EXIT_ATTRIBUTED_FLAT`) and **Reconciliation completed** at `13:01:13` CT; zero positions and working orders |
+| Stop/reconcile | Stop receipt `cmd:PA3KWXU1C4C3:sqlite-ui-accept-0810:36eef5961dfa4c6697d3109a065d9742:STOP:STOPPED` at `13:02:29` CT; final `reconciliation:345` at `13:02:47` CT |
+| Reconstruction | Reload remained Off duty / Runtime idle / Stopped flat. Signal raw evidence, Audit trail, and Run evidence were read without mutation; the journal remained `18` events. |
+| Final account | Paper; Clerk generation `1` healthy; no position, working-order identity, hold, uncertainty, or account freeze; reconciliation clean |
+
+One contradiction was found during the review: the Trader lens said **No fills today**
+while SQLite correctly exposed the legacy fill-history fold as unavailable and the
+Account Desk showed the fill. The regression-first frontend fix now renders **Fill
+history unavailable from active custody folds** for `fills_today = null`, reserves
+**No fills today** for a verified zero, and handles known fills outside the chart
+window separately. Fourteen focused tests pass. The live stopped bot rendered the
+corrected copy after reload, with no false-zero copy and the journal still at `18`
+events.
+
+The live chain is not asked to stand in for injected corruption. It composes with the
+existing adversarial qualification artifacts, the human-approved mirror-rebuild
+evidence, the verified generation-1 online backup above, and the `82` focused
+activation/no-fallback/cutover/schema/retirement tests. Together they cover the
+normal broker path and the failure/recovery invariants without claiming the historical
+multi-session matrix was run.
+
+## Acceptance governance — 2026-08-10
+
+- [x] UI proved the intended Alpaca Paper account and healthy activated generation.
+- [x] Exactly one strategy-owned ENTER and one strategy-owned EXIT retained one
+      command/effect/order/fill identity chain and real paper fill prices.
+- [x] SQLite attribution and broker account exposure agreed after ENTER and at flat.
+- [x] Stop and reconciliation completed with zero working orders, unresolved custody,
+      holds, or uncertainty.
+- [x] Reload and read-only evidence interactions preserved stopped-flat state and the
+      exact `18`-event journal.
+- [x] The presentation discrepancy was fixed regression-first and revalidated live.
+- [x] ADR 0035 is Accepted for Alpaca paper only and its precise Alpaca-only
+      ADR 0001/0008/0030/0033 supersession boundary is retained.
+- [x] Live-money remains disabled.
+- [x] Unrun multi-session/fault scenarios remain explicit post-acceptance hardening,
+      not retroactive passes.
+
 ## Final verdict
 
-**RECOVERED / PARTIALLY QUALIFIED / REQUEST CHANGES / STILL BLOCKED FROM
-CLOSURE.** Issue #1409
-must remain open. The human-approved mirror rebuild preserved the corrupt
-authority files, restored the verified sequence-323 head, and the subsequent
-three-bar run, Stop, reconciliation, offline integrity check, mirror check, and
-restart advanced the healthy authority to sequence 326 while remaining flat
-and order-free. The data service was healthy and the bot stopped at the end of
-that recorded session. The local fixes and adversarial remediations must be
-committed, independently reviewed, merged, and live-requalified; #1413's historical
-trigger remains unresolved; and the remaining multi-session race/fault scenarios and
-ADR acceptance must complete before the final governance checklist can be satisfied.
+**ACCEPTED FOR ALPACA PAPER ONLY.** The one-share UI-driven campaign closed the
+remaining normal-path proof gap and ended fresh, flat, reconciled, order-free, and
+stopped. The existing deterministic/adversarial/recovery/backup evidence remains the
+receipt for fault paths. Live-money remains disabled. Issue #1409 remains open only
+until this acceptance change merges, per the PRD; #1411, #1413, and #1416 may be
+reconciled against their amended evidence bars. Residual multi-session and injected-
+fault live rehearsal belongs in one bounded post-acceptance hardening issue.
+
+## Follow-on four-bot churn experiment — 2026-08-10
+
+At the operator's request, the earlier four-symbol paper experiment was repeated after
+the acceptance bot had stopped flat. Rendered Alpaca order history identified the
+original set as AAPL, NVDA, SPY, and TSLA. All operations again used only Alpaca
+Broker V2 UI controls. Each bot used Deployment Validation, Paper, one share, and
+carryover forbidden.
+
+| Symbol / bot | Deploy receipt | Initial run |
+| --- | --- | --- |
+| AAPL / `sqlite-cohort-aapl-0810` | `alpaca-paper-deploy:PA3KWXU1C4C3:sqlite-cohort-aapl-0810:1786386138128` | `322e6c94e9f242688f0850614a248955` |
+| NVDA / `sqlite-cohort-nvda-0810` | `alpaca-paper-deploy:PA3KWXU1C4C3:sqlite-cohort-nvda-0810:1786386223600` | `6df49ed4ad0941e6a37c1b24636f00f4` |
+| SPY / `sqlite-cohort-spy-0810` | `alpaca-paper-deploy:PA3KWXU1C4C3:sqlite-cohort-spy-0810:1786386279237` | `3cfa570d77e7492c9c4139b7b00a85bb` |
+| TSLA / `sqlite-cohort-tsla-0810` | `alpaca-paper-deploy:PA3KWXU1C4C3:sqlite-cohort-tsla-0810:1786386332177` | `b87b776935c34ed49ab3951f94d384af` |
+
+Deployment naturally staggered because each new market-data consumer made the Clerk
+channel unhealthy until its first closed-bar observation. The UI blocked the next
+launch while Market Data was unhealthy and Execution was healthy; after the next bar,
+all six admission gates returned Ready. No gate was bypassed. The roster then showed
+all four Working under SQLite Account Clerk custody with both channels healthy.
+
+The supported live tweak was lifecycle churn, not an in-place configuration edit:
+strategy instances are immutable. While AAPL held one attributed share and NVDA/SPY
+remained live, flat TSLA stopped with
+`cmd:PA3KWXU1C4C3:sqlite-cohort-tsla-0810:b87b776935c34ed49ab3951f94d384af:STOP:STOPPED`,
+then resumed from the same immutable configuration as new run
+`a9ed403b413549f58bf870b9eeff33e1` (UI receipt
+`6984c8f7-a73d-40ec-bfd3-cd933b158904`). That new run produced its own complete
+ENTER/EXIT cycle. TSLA then stopped flat under the new run and was replaced by GOOGL,
+preserving four active bots:
+
+- GOOGL deploy receipt
+  `alpaca-paper-deploy:PA3KWXU1C4C3:sqlite-cohort-googl-0810:1786387174010`;
+- GOOGL run `e046716277c14b279974a2173b3bc196`;
+- replacement active set AAPL, NVDA, SPY, and GOOGL; TSLA off duty.
+
+The account reached a clean peak of three simultaneous one-share positions (SPY,
+NVDA, and GOOGL). Account Clerk generation `1` remained healthy and explicitly
+reported no active hold or unresolved uncertainty. No working order identity,
+unexpected position, custody block, duplicate effect, emergency flatten, or manual
+trade appeared.
+
+| Symbol | Observed completed paper cycles |
+| --- | --- |
+| AAPL | BUY 1 at `$306.74` (`13:27:06` CT) → SELL 1 at `$306.70` (`13:30:05`); BUY 1 at `$306.94` (`13:32:05`) → SELL 1 at `$306.83` (`13:35:06`) |
+| SPY | BUY 1 at `$772.61` (`13:29:05`) → SELL 1 at `$772.52` (`13:32:05`); BUY 1 at `$772.58` (`13:40:05`) → SELL 1 at `$772.90` (`13:43:05`) |
+| TSLA | Resumed run BUY 1 at `$328.94` (`13:35:05`) → SELL 1 at `$328.48` (`13:38:06`) |
+| NVDA | BUY 1 at `$218.64` (`13:41:05`) → SELL 1 at `$218.71` (`13:44:05`) |
+| GOOGL | BUY 1 at `$354.81` (`13:41:06`) → SELL 1 at `$355.34` (`13:44:06`) |
+
+Wind-down was flat-only. AAPL, SPY, GOOGL, and NVDA were each stopped after their
+own strategy EXIT reached flat; TSLA had already stopped flat for the replacement.
+The stop receipts bound the expected run IDs. Final Account Desk proof showed Paper,
+equity/cash `$100,002.31`, zero long and short market value, no positions, no verified
+working orders, no hold or uncertainty, and healthy generation `1`. Final
+reconciliation was `reconciliation:475`. The refreshed roster showed all five
+experiment instances Off duty and Flat, with Market Data and Execution healthy and no
+custody block.
+
+**Verdict: PASS.** The repeat proved four concurrent immutable SQLite-governed bots,
+namespace-separated exposure, flat stop/resume with a new run identity, a live
+four-for-four symbol substitution, three-way simultaneous exposure, and a clean
+strategy-owned/flat-only wind-down. It did not attempt unsupported in-place parameter
+mutation or any live-money action.
