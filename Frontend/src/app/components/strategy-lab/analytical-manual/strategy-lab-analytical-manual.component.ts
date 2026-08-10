@@ -141,6 +141,11 @@ export class StrategyLabAnalyticalManualComponent {
     },
   });
   readonly hasRunContext = computed(() => {
+    // resource().value() throws (not just returns undefined) once the
+    // resource has settled into an error state -- a transient GraphQL or
+    // network failure must not crash this computed; treat it as "not
+    // recorded" the same way a loading/idle resource already reads as.
+    if (this.runReceipt.error()) return false;
     const receipt = this.runReceipt.value();
     if (!receipt) return false;
     const selected = this.selectedVariant();

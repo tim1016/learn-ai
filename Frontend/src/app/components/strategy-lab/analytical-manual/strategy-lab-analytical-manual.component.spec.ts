@@ -2,7 +2,7 @@ import { provideZonelessChangeDetection } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
 import { ActivatedRoute, convertToParamMap } from "@angular/router";
 import { Apollo } from "apollo-angular";
-import { of } from "rxjs";
+import { of, throwError } from "rxjs";
 import { describe, expect, it, vi } from "vitest";
 
 import type { MetricVariant } from "./analytical-metric-catalog.models";
@@ -85,7 +85,8 @@ describe("resolveMetricContext", () => {
 
 async function renderManual(options: {
   queryParams: Record<string, string>;
-  metricDocumentation: { metricId: string; variantId: string; producer: string; contractId: string | null; contractProvenance: string }[] | null;
+  metricDocumentation?: { metricId: string; variantId: string; producer: string; contractId: string | null; contractProvenance: string }[] | null;
+  queryError?: Error;
 }) {
   const params = convertToParamMap(options.queryParams);
   await TestBed.configureTestingModule({
@@ -97,7 +98,9 @@ async function renderManual(options: {
         provide: Apollo,
         useValue: {
           query: vi.fn(() =>
-            of({ data: { backtestRun: { metricDocumentation: options.metricDocumentation } } }),
+            options.queryError
+              ? throwError(() => options.queryError)
+              : of({ data: { backtestRun: { metricDocumentation: options.metricDocumentation ?? null } } }),
           ),
         },
       },
@@ -147,5 +150,20 @@ describe("StrategyLabAnalyticalManualComponent — used-by-this-run trust bounda
     expect(fixture.componentInstance.hasRunContext()).toBe(true);
     const root = fixture.nativeElement as HTMLElement;
     expect(root.textContent).toContain("Used by this run");
+  });
+
+  it("does not throw or claim used-by-this-run when the run receipt query fails", async () => {
+    const fixture = await renderManual({
+      queryParams: { run: "42", metric: "sharpe", variant: "sharpe.lean_native.v1", producer: "lean_native" },
+      queryError: new Error("network error"),
+    });
+
+    // resource().value() throws once the resource settles into an error
+    // state; hasRunContext must guard on .error() first rather than
+    // propagate that throw into a transient backend hiccup crashing the page.
+    expect(() => fixture.componentInstance.hasRunContext()).not.toThrow();
+    expect(fixture.componentInstance.hasRunContext()).toBe(false);
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.textContent).not.toContain("Used by this run");
   });
 });
