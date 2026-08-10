@@ -108,6 +108,7 @@ type BacktestRunDetailType {
   verdictSignal: String
   equityCurve: BacktestRunEquityCurvesType
   validationAnalytics: BacktestRunValidationAnalyticsType
+  metricDocumentation: [MetricDocumentationContextType!]!
   insightSummaryJson: String
   dataPolicyJson: String
   dataPolicy: DataPolicyType
@@ -611,6 +612,14 @@ type MarketMoversResult {
   tickers: [StockTickerSnapshotResult!]!
   count: Int!
   error: String
+}
+
+type MetricDocumentationContextType {
+  metricId: String!
+  variantId: String!
+  producer: String!
+  contractId: String
+  contractProvenance: String!
 }
 
 type MethodologyType {

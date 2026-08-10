@@ -1,0 +1,10 @@
+{
+  "fixture_id": "strategy-lab-analytical-manual-v1",
+  "fixture_version": 1,
+  "files": {
+    "fixture.json": {
+      "sha256": "479b975f26e4014b17196d0a0a8c4c7c82ca066156641076fb87b047c01ed6d0"
+    }
+  },
+  "timestamp_contract": "All documented fixture timestamps are Unix epoch int64 milliseconds UTC."
+}

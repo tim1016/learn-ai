@@ -27,6 +27,20 @@ MetricValueState = Literal[
     "sentinel",
     "not_applicable",
 ]
+MetricCategory = Literal[
+    "returns",
+    "risk",
+    "drawdown",
+    "benchmark",
+    "trade_population",
+    "trade_economics",
+    "duration",
+    "excursion",
+    "statistical_confidence",
+    "validation_atlas",
+    "runtime_snapshot",
+    "verdict_policy",
+]
 
 
 class VariableDefinition(BaseModel):
@@ -57,11 +71,13 @@ class MetricVariant(BaseModel):
     variant_id: str = Field(pattern=r"^[a-z][a-z0-9_.-]*$")
     contract_id: str | None = None
     producer: MetricProducer
+    category: MetricCategory
     label: str = Field(min_length=1)
     definition: str = Field(min_length=1)
     interpretation: str = Field(min_length=1)
     common_misreadings: tuple[str, ...] = ()
     aliases: tuple[str, ...] = ()
+    source_keys: tuple[str, ...] = ()
     search_terms: tuple[str, ...] = ()
     formula_latex: str | None = None
     variables: tuple[VariableDefinition, ...] = ()
@@ -102,13 +118,19 @@ class AnalyticalMetricCatalog(BaseModel):
 
     @model_validator(mode="after")
     def validate_variant_links(self) -> AnalyticalMetricCatalog:
-        variant_ids = {variant.variant_id for variant in self.variants}
-        if len(variant_ids) != len(self.variants):
+        variants_by_id = {variant.variant_id: variant for variant in self.variants}
+        if len(variants_by_id) != len(self.variants):
             raise ValueError("variant_id values must be unique")
         for variant in self.variants:
-            missing = set(variant.alternative_variant_ids) - variant_ids
+            missing = set(variant.alternative_variant_ids) - set(variants_by_id)
             if missing:
                 raise ValueError(f"{variant.variant_id} references missing alternatives: {sorted(missing)}")
+            for alternative_id in variant.alternative_variant_ids:
+                alternative = variants_by_id[alternative_id]
+                if alternative.metric_id != variant.metric_id:
+                    raise ValueError(f"{variant.variant_id} comparison must target the same metric_id")
+                if variant.variant_id not in alternative.alternative_variant_ids:
+                    raise ValueError(f"{variant.variant_id} comparison must be reciprocal with {alternative_id}")
         return self
 
 
@@ -117,6 +139,7 @@ PLATFORM_SHARPE_VARIANT = MetricVariant(
     variant_id="sharpe.platform.v1",
     contract_id="platform-sharpe-v1",
     producer="platform",
+    category="statistical_confidence",
     label="Sharpe ratio",
     definition="Annualized average return per unit of observed return variability.",
     interpretation="Use it to compare return against the variability of the same documented return series.",
@@ -174,6 +197,7 @@ LEAN_NATIVE_SHARPE_VARIANT = MetricVariant(
     variant_id="sharpe.lean_native.v1",
     contract_id="lean-statistics-oracle-v1",
     producer="lean_native",
+    category="statistical_confidence",
     label="Sharpe ratio",
     definition="LEAN-native annual performance above its selected risk-free rate, divided by annual standard deviation.",
     interpretation="Use it to audit the native LEAN result under its pinned source and primary-credit-rate inputs.",
@@ -236,11 +260,24 @@ LEAN_NATIVE_SHARPE_VARIANT = MetricVariant(
 
 
 def catalog() -> AnalyticalMetricCatalog:
-    """Return the minimal v1 tracer catalog in its authored display order."""
+    """Compose every Python-authored catalog shard through the shared schema."""
 
+    from app.research.documentation.analytical_metric_catalog_entries import (
+        LEAN_NATIVE_CATALOG_VARIANTS,
+    )
+    from app.research.documentation.analytical_metric_catalog_results_entries import (
+        RESULTS_CATALOG_VARIANTS,
+    )
+
+    raw_variants = (
+        PLATFORM_SHARPE_VARIANT.model_dump(mode="json"),
+        LEAN_NATIVE_SHARPE_VARIANT.model_dump(mode="json"),
+        *LEAN_NATIVE_CATALOG_VARIANTS,
+        *RESULTS_CATALOG_VARIANTS,
+    )
     return AnalyticalMetricCatalog(
         catalog_version=CATALOG_VERSION,
-        variants=(PLATFORM_SHARPE_VARIANT, LEAN_NATIVE_SHARPE_VARIANT),
+        variants=tuple(MetricVariant.model_validate(raw) for raw in raw_variants),
     )
 
 

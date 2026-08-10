@@ -480,6 +480,10 @@ def _reproduce_lean_trade_statistics(closed_trades: Sequence[Any]) -> dict[str, 
 
     def median(values: Sequence[Decimal]) -> Decimal:
         ordered = sorted(values)
+        if not ordered:
+            # LEAN's empty trade subset has a zero duration summary; avoid
+            # manufacturing a missing value when every closed trade has one sign.
+            return Decimal(0)
         middle = len(ordered) // 2
         return ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2
 

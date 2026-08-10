@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, input } from "@angular/core";
+import { ChangeDetectionStrategy, Component, computed, input } from "@angular/core";
 
 import type { RunVerdict } from "../../../api/run-verdict.types";
 import type { MetricDocumentationContext } from "../../../graphql/backtest-runs.query";

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 from pathlib import Path
 
+from app.engine.results.lean_statistics import _reproduce_lean_trade_statistics
 from app.research.documentation.analytical_metric_catalog_entries import (
     LEAN_NATIVE_CATALOG_VARIANTS,
     LEAN_ORACLE_FIXTURE,
@@ -13,6 +15,7 @@ from app.research.documentation.analytical_metric_catalog_entries import (
     LEAN_PORTFOLIO_VARIANTS,
     LEAN_RUNTIME_SOURCE_KEYS,
     LEAN_RUNTIME_VARIANTS,
+    LEAN_SENTINEL_TEST,
     LEAN_SOURCE_COMMIT,
     LEAN_TRADE_ORACLE_KEYS,
     LEAN_TRADE_VARIANTS,
@@ -27,7 +30,7 @@ ORACLE_RESULT = (
 
 
 def _source_keys(variants: tuple[dict[str, object], ...]) -> set[str]:
-    return {str(entry["aliases"][0]) for entry in variants}
+    return {str(entry["source_keys"][0]) for entry in variants}
 
 
 def _oracle_key_sets() -> tuple[set[str], set[str]]:
@@ -91,7 +94,7 @@ def test_all_native_entries_carry_pinned_provenance_and_existing_evidence_receip
 
 
 def test_lean_trade_profit_factor_keeps_the_finite_no_loss_sentinel_distinct() -> None:
-    profit_factor = next(entry for entry in LEAN_TRADE_VARIANTS if entry["aliases"][0] == "profitFactor")
+    profit_factor = next(entry for entry in LEAN_TRADE_VARIANTS if entry["source_keys"] == ("profitFactor",))
     states = {state["state"]: state for state in profit_factor["value_states"]}
 
     assert states["sentinel"]["display"] == "10 when total profit is positive and there is no loss denominator."
@@ -100,6 +103,28 @@ def test_lean_trade_profit_factor_keeps_the_finite_no_loss_sentinel_distinct() -
     assert "not emitted" in states["infinite"]["display"]
     assert states["zero"]["display"] == "0 (a valid native numeric result)"
     assert "unavailable" in states["unavailable"]["display"].lower()
+
+
+def test_lean_trade_sentinels_match_the_canonical_reproducer() -> None:
+    winning_trade = {
+        "entryTime": 1_700_000_000_000,
+        "exitTime": 1_700_000_060_000,
+        "profitLoss": "25",
+        "mae": "0",
+        "mfe": "25",
+        "duration": "00:01:00",
+        "endTradeDrawdown": "0",
+        "totalFees": "0",
+    }
+
+    reproduced = _reproduce_lean_trade_statistics([winning_trade])
+
+    assert reproduced["profitFactor"] == Decimal(10)
+    assert reproduced["winLossRatio"] == Decimal(10)
+    assert reproduced["profitToMaxDrawdownRatio"] == Decimal(10)
+    for source_key in ("profitFactor", "winLossRatio", "profitToMaxDrawdownRatio"):
+        entry = next(entry for entry in LEAN_TRADE_VARIANTS if entry["source_keys"] == (source_key,))
+        assert LEAN_SENTINEL_TEST in entry["validating_tests"]
 
 
 def test_declared_platform_alternatives_use_the_cross_slice_stable_ids() -> None:
@@ -114,3 +139,10 @@ def test_declared_platform_alternatives_use_the_cross_slice_stable_ids() -> None
         "profit_factor.platform.v1",
         "sortino.platform.v1",
     }
+
+
+def test_runtime_order_count_is_not_misattributed_to_runtime_statistics() -> None:
+    total_orders = next(entry for entry in LEAN_RUNTIME_VARIANTS if entry["source_keys"] == ("Total Orders",))
+
+    assert "total_orders" in str(total_orders["source_reference"])
+    assert "Result.RuntimeStatistics" not in str(total_orders["source_reference"])

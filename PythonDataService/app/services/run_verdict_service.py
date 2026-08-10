@@ -50,6 +50,29 @@ REQUIRED_METRIC_COUNT = sum(len(keys) for keys in REQUIRED_SUB_SCORE_KEYS.values
 READINESS_PARITY_CONTRACT_ID = "readiness-core-v2"
 READINESS_PARITY_ABSOLUTE_TOLERANCE = Decimal("0.000000000001")
 
+# Catalog prose is kept beside the fixed scorer so documentation cannot drift
+# into a second threshold registry. The catalog imports these descriptions; it
+# never owns or evaluates the policy.
+VERDICT_POLICY_DOCUMENTATION: dict[str, str] = {
+    "sharpe": "<0: 0; <0.5: 4; <1: 10; <1.5: 15; <2: 18; <3: 20; otherwise: 12.",
+    "sortino": "<0.5: 3; <1: 8; <1.5: 13; <2.5: 18; <4: 20; otherwise: 14.",
+    "cagr": "≤0: 0; <4%: 6; <8%: 11; <15%: 16; <30%: 20; otherwise: 14.",
+    "calmar": "<0: 0; <0.5: 5; <1: 10; <3: 15; <5: 20; otherwise: 14.",
+    "annual_volatility": "<3%: 20; <10%: 17; <20%: 13; <35%: 8; otherwise: 3.",
+    "maximum_drawdown": "<2%: 17; <5%: 20; <10%: 18; <15%: 14; <20%: 8; <30%: 4; otherwise: 0.",
+    "recovery_duration": "≤10 days: 20; ≤30: 16; ≤60: 12; ≤120: 8; ≤252: 4; otherwise: 1.",
+    "max_consecutive_losers": "≤3: 20; ≤5: 16; ≤8: 10; ≤12: 5; otherwise: 0.",
+    "profit_factor": "<1: 0; <1.25: 6; <1.75: 12; <3: 18; <4: 20; otherwise: 10. Infinite value scores 10.",
+    "expectancy": "≤0: 0; <0.1%: 8; <0.5%: 14; <2%: 20; otherwise: 18.",
+    "win_rate": "<30%: 4; <50%: 10; <55%: 14; <75%: 20; <85%: 16; otherwise: 6.",
+    "payoff_ratio": "<0.5: 4; <1: 10; <1.5: 15; <3: 20; otherwise: 16.",
+    "fee_drag": "Gross profit ≤0: 0; otherwise <5%: 20; <15%: 16; <30%: 11; <50%: 5; otherwise: 1.",
+    "probabilistic_sharpe": "<50%: 2; <80%: 8; <95%: 14; <99%: 20; otherwise: 18.",
+    "sample_size": "<20: 2; <50: 7; <100: 13; <250: 18; otherwise: 20.",
+    "skepticism_penalty": "Start at 20; subtract 8 for Sharpe >3, 6 for finite profit factor >4, and 6 for win rate >85%; floor at 0.",
+    "trade_portfolio_sharpe_gap": "<1: 20; <2: 16; <3: 12; <5: 6; otherwise: 2.",
+}
+
 
 def build_run_verdict_parity_signature(verdict: RunVerdict) -> dict[str, Any]:
     """Freeze the 17 readiness inputs without engine-specific float noise.

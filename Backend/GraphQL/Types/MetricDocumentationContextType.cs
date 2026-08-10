@@ -16,6 +16,6 @@ public sealed record MetricDocumentationContextType
     public bool IsValid() =>
         !string.IsNullOrWhiteSpace(MetricId) &&
         !string.IsNullOrWhiteSpace(VariantId) &&
-        Producer is "platform" or "lean_native" or "lean_runtime" or "validation_analytics" or "verdict_policy" &&
+        !string.IsNullOrWhiteSpace(Producer) &&
         ContractProvenance is "" or "recorded" or "inferred";
 }

@@ -90,4 +90,39 @@ describe("EvidenceGradeComponent", () => {
     expect(screen.getByText(/No research conclusion was produced/)).toBeTruthy();
     expect(screen.queryByText("F")).toBeNull();
   });
+
+  it("treats a historical verdict without a persisted status as legacy rather than complete", async () => {
+    await render(EvidenceGradeComponent, {
+      inputs: { verdict: verdict({ status: undefined, grade: "A", composite: 76 }) },
+    });
+
+    expect(screen.getByText(/did not record a status/)).toBeTruthy();
+    expect(screen.queryByText("Frozen policy score: 76/100")).toBeNull();
+    expect(document.querySelector("[data-status='legacy']")).toBeTruthy();
+  });
+
+  it("renders producer-authored unavailable evidence instead of suppressing it", async () => {
+    await render(EvidenceGradeComponent, {
+      inputs: {
+        verdict: verdict({
+          status: "unavailable",
+          composite: null,
+          grade: null,
+          evidence_action: null,
+          signal: null,
+          available_required_metrics: 0,
+          missing_required_evidence: [{
+            key: "sharpe",
+            label: "Return Quality: Sharpe ratio",
+            producer: "platform",
+            reason: "The persisted equity curve is unavailable.",
+          }],
+        }),
+      },
+    });
+
+    expect(screen.getByText(/Required evidence is unavailable/)).toBeTruthy();
+    expect(screen.getByText("Return Quality: Sharpe ratio")).toBeTruthy();
+    expect(screen.getByText("The persisted equity curve is unavailable.")).toBeTruthy();
+  });
 });

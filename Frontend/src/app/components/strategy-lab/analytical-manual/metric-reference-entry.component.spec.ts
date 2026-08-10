@@ -9,12 +9,14 @@ const FORMULA_UNAVAILABLE_VARIANT: MetricVariant = {
   metric_id: "reported_value",
   variant_id: "reported_value.lean_runtime.v1",
   contract_id: null,
-  producer: "lean_runtime",
+    producer: "lean_runtime",
+    category: "runtime_snapshot",
   label: "Reported value",
   definition: "A runtime-reported value.",
   interpretation: "Read it as a report, not an independently documented formula.",
   common_misreadings: [],
   aliases: [],
+  source_keys: [],
   search_terms: [],
   formula_latex: null,
   variables: [],
@@ -46,6 +48,28 @@ describe("MetricReferenceEntryComponent", () => {
       providers: [provideRouter([])],
     });
 
-    expect(screen.getByRole("status").textContent).toContain("Formula unavailable for this documented contract.");
+    expect(screen.getByRole("status").textContent).toContain("Reported value; no local formula contract.");
+  });
+
+  it("renders a display formula and keeps malformed formula text out of the DOM as markup", async () => {
+    const { container, rerender } = await render(MetricReferenceEntryComponent, {
+      inputs: {
+        variant: { ...FORMULA_UNAVAILABLE_VARIANT, formula_latex: "\\frac{r}{\\sigma}" },
+        alternative: null,
+        runId: null,
+      },
+      providers: [provideRouter([])],
+    });
+
+    expect(container.querySelector(".katex-display")).toBeTruthy();
+    await rerender({
+      componentInputs: {
+        variant: { ...FORMULA_UNAVAILABLE_VARIANT, formula_latex: "\\notACommand{<img src=x>}" },
+        alternative: null,
+        runId: null,
+      },
+    });
+
+    expect(container.querySelector("img")).toBeNull();
   });
 });

@@ -307,9 +307,10 @@ export interface BacktestRunDetail {
 export interface MetricDocumentationContext {
   metricId: string;
   variantId: string;
-  producer: "platform" | "lean_native" | "lean_runtime" | "validation_analytics" | "verdict_policy";
+  /** Python-authored provenance token; the client only transports and labels it. */
+  producer: string;
   contractId: string | null;
-  contractProvenance: "recorded" | "inferred";
+  contractProvenance: string;
 }
 
 /** Frozen validation-analytics envelope: canonical snake_case analytics

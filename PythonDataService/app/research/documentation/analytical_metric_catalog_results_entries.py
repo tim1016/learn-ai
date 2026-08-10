@@ -7,6 +7,8 @@ each entry; Angular only renders the generated catalog.
 
 from __future__ import annotations
 
+from app.services.run_verdict_service import VERDICT_POLICY_DOCUMENTATION
+
 from .analytical_metric_catalog import MetricVariant, ValueState
 
 _PLATFORM_UNAVAILABLE = ValueState(
@@ -31,6 +33,54 @@ _INFINITE = ValueState(
 )
 
 
+def _evidence_for(canonical_symbol: str) -> tuple[tuple[str, ...], str | None]:
+    """Return the real receipt for each published Results producer."""
+
+    if canonical_symbol == "PythonDataService/app/engine/results/equity_downsample.py::build_realized_equity_envelope":
+        return (
+            ("PythonDataService/tests/engine/results/test_equity_downsample.py::test_realized_equity_matches_golden_fixture",),
+            "PythonDataService/tests/fixtures/golden/engine-results/ENG-006/v1/",
+        )
+    if canonical_symbol == "PythonDataService/app/services/engine_validation_analytics.py::build_compatibility_equity_curve":
+        return (
+            ("PythonDataService/tests/services/test_engine_validation_analytics.py::test_compatibility_equity_curve_compounds_common_trade_returns_and_pins_endpoints",),
+            None,
+        )
+    if canonical_symbol.startswith("Backend/"):
+        return (
+            ("Backend.Tests/Unit/GraphQL/BacktestRunDetailQueryTests.cs",),
+            None,
+        )
+    if "run_verdict_service.py" in canonical_symbol:
+        return (
+            ("PythonDataService/tests/services/test_run_verdict_parity.py",),
+            "PythonDataService/tests/fixtures/golden/run-verdict-v2/fixture.json",
+        )
+    return (
+        ("PythonDataService/tests/test_statistics.py",),
+        "contracts/fixtures/strategy-metric-help-golden-v1.json",
+    )
+
+
+def _platform_category(metric_id: str, label: str, definition: str) -> str:
+    """Return the Python-authored navigation taxonomy for platform Results entries."""
+
+    text = f"{metric_id} {label} {definition}".lower()
+    if "drawdown" in text:
+        return "drawdown"
+    if "duration" in text:
+        return "duration"
+    if any(token in text for token in ("completed_trades", "winning_trades", "losing_trades", "sample_size", "win rate")):
+        return "trade_population"
+    if any(token in text for token in ("sharpe", "sortino", "volatility", "calmar")):
+        return "statistical_confidence"
+    if any(token in text for token in ("profit", "expectancy", "payoff", "fee")):
+        return "trade_economics"
+    if "risk" in text or "var" in text:
+        return "risk"
+    return "returns"
+
+
 def _platform_metric(
     metric_id: str,
     label: str,
@@ -44,11 +94,13 @@ def _platform_metric(
     value_states: tuple[ValueState, ...] = (_VALID_ZERO, _PLATFORM_UNAVAILABLE),
     alternative_variant_ids: tuple[str, ...] = (),
 ) -> MetricVariant:
+    validating_tests, fixture_or_receipt = _evidence_for(canonical_symbol)
     return MetricVariant(
         metric_id=metric_id,
         variant_id=f"{metric_id}.platform.v1",
         contract_id="platform-results-statistics-v1",
         producer="platform",
+        category=_platform_category(metric_id, label, definition),
         label=label,
         definition=definition,
         interpretation="Read this value together with its producer, input evidence, and any unavailable state.",
@@ -65,8 +117,8 @@ def _platform_metric(
         value_states=value_states,
         canonical_symbol=canonical_symbol,
         source_reference=None,
-        validating_tests=("PythonDataService/tests/test_statistics.py",),
-        fixture_or_receipt="PythonDataService/tests/fixtures/golden/engine-results/ENG-006/v1/",
+        validating_tests=validating_tests,
+        fixture_or_receipt=fixture_or_receipt,
         numerical_tolerance=None,
         results_surfaces=("Strategy Lab Results",),
         verdict_membership=verdict_membership,
@@ -86,6 +138,7 @@ def _verdict_policy(
         variant_id=f"verdict_policy.{key}.v2",
         contract_id="readiness-core-v2",
         producer="verdict_policy",
+        category="verdict_policy",
         label=label,
         definition=(
             f"Frozen Backtest Evidence Grade v2 policy for {label}. {thresholds} "
@@ -137,6 +190,7 @@ def _validation_metric(
         variant_id=f"{metric_id}.validation_analytics.v1",
         contract_id="engine-validation-analytics-v1",
         producer="validation_analytics",
+        category="validation_atlas",
         label=label,
         definition=definition,
         interpretation="An exploratory validation view. Read its coverage and observation count before generalizing from it.",
@@ -177,7 +231,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         input_series="Persisted run configuration.",
         units="USD",
         formatting="currency, two decimal places",
-        canonical_symbol="PythonDataService/app/engine/results/statistics.py::compute_portfolio_statistics",
+        canonical_symbol="Backend/Models/MarketData/StrategyExecution.cs::InitialCash",
     ),
     _platform_metric(
         "final_equity",
@@ -186,7 +240,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         input_series="Persisted final equity evidence.",
         units="USD",
         formatting="currency, two decimal places",
-        canonical_symbol="PythonDataService/app/engine/results/statistics.py::compute_portfolio_statistics",
+        canonical_symbol="Backend/Models/MarketData/StrategyExecution.cs::FinalEquity",
     ),
     _platform_metric(
         "total_fees",
@@ -201,7 +255,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "completed_trades",
         "Completed trades",
         "Count of completed round trips in the authoritative full-run ledger.",
-        input_series="Authoritative closed-trade ledger, not the displayed recent-500 projection.",
+        input_series="Authoritative full-run ledger of closed trades, not the displayed recent-500 projection.",
         units="trades",
         formatting="integer",
         canonical_symbol="PythonDataService/app/engine/results/statistics.py::compute_trade_statistics",
@@ -234,7 +288,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         canonical_symbol="PythonDataService/app/engine/results/statistics.py::compute_trade_statistics",
         verdict_membership="Trade Edge required input.",
         value_states=(_VALID_ZERO, _INFINITE, _PLATFORM_UNAVAILABLE),
-        alternative_variant_ids=("lean_native.trade.profitFactor.v1",),
+        alternative_variant_ids=("lean_native.trade.profit_factor.v1",),
     ),
     _platform_metric(
         "expectancy",
@@ -284,7 +338,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
                 scoring_behavior="No negative platform return observations makes Sortino unavailable. It is not displayed or scored as zero.",
             ),
         ),
-        alternative_variant_ids=("lean_native.portfolio.sortinoRatio.v1",),
+        alternative_variant_ids=("lean_native.portfolio.sortino_ratio.v1",),
     ),
     _platform_metric(
         "maximum_drawdown",
@@ -431,7 +485,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         input_series="Persisted realized-equity curve.",
         units="USD",
         formatting="currency chart",
-        canonical_symbol="Frontend/src/app/components/engine-lab/run-report/run-report.component.ts",
+        canonical_symbol="PythonDataService/app/engine/results/equity_downsample.py::build_realized_equity_envelope",
         value_states=(_PLATFORM_UNAVAILABLE,),
     ),
     _platform_metric(
@@ -451,103 +505,103 @@ VERDICT_POLICY_VARIANTS: tuple[MetricVariant, ...] = (
     _verdict_policy(
         "sharpe",
         "Sharpe ratio policy input",
-        "<0: 0; <0.5: 4; <1: 10; <1.5: 15; <2: 18; <3: 20; otherwise: 12.",
+        VERDICT_POLICY_DOCUMENTATION["sharpe"],
         input_series="sharpe.platform.v1",
     ),
     _verdict_policy(
         "sortino",
         "Sortino ratio policy input",
-        "<0.5: 3; <1: 8; <1.5: 13; <2.5: 18; <4: 20; otherwise: 14.",
+        VERDICT_POLICY_DOCUMENTATION["sortino"],
         input_series="sortino.platform.v1",
     ),
     _verdict_policy(
         "cagr",
         "CAGR policy input",
-        "≤0: 0; <4%: 6; <8%: 11; <15%: 16; <30%: 20; otherwise: 14.",
+        VERDICT_POLICY_DOCUMENTATION["cagr"],
         input_series="cagr.platform.v1",
     ),
     _verdict_policy(
         "calmar",
         "Calmar policy input",
-        "<0: 0; <0.5: 5; <1: 10; <3: 15; <5: 20; otherwise: 14.",
+        VERDICT_POLICY_DOCUMENTATION["calmar"],
         input_series="calmar.platform.v1",
     ),
     _verdict_policy(
         "annual_volatility",
         "Annual volatility policy input",
-        "<3%: 20; <10%: 17; <20%: 13; <35%: 8; otherwise: 3.",
+        VERDICT_POLICY_DOCUMENTATION["annual_volatility"],
         input_series="annual_volatility.platform.v1",
     ),
     _verdict_policy(
         "maximum_drawdown",
         "Maximum drawdown policy input",
-        "<2%: 17; <5%: 20; <10%: 18; <15%: 14; <20%: 8; <30%: 4; otherwise: 0.",
+        VERDICT_POLICY_DOCUMENTATION["maximum_drawdown"],
         input_series="maximum_drawdown.platform.v1",
     ),
     _verdict_policy(
         "recovery_duration",
         "Drawdown recovery policy input",
-        "≤10 days: 20; ≤30: 16; ≤60: 12; ≤120: 8; ≤252: 4; otherwise: 1.",
+        VERDICT_POLICY_DOCUMENTATION["recovery_duration"],
         input_series="recovery_duration.platform.v1",
     ),
     _verdict_policy(
         "max_consecutive_losers",
         "Max consecutive losers policy input",
-        "≤3: 20; ≤5: 16; ≤8: 10; ≤12: 5; otherwise: 0.",
+        VERDICT_POLICY_DOCUMENTATION["max_consecutive_losers"],
         input_series="max_consecutive_losers.platform.v1",
     ),
     _verdict_policy(
         "profit_factor",
         "Profit factor policy input",
-        "<1: 0; <1.25: 6; <1.75: 12; <3: 18; <4: 20; otherwise: 10. Infinite value scores 10.",
+        VERDICT_POLICY_DOCUMENTATION["profit_factor"],
         input_series="profit_factor.platform.v1",
     ),
     _verdict_policy(
         "expectancy",
         "Expectancy policy input",
-        "≤0: 0; <0.1%: 8; <0.5%: 14; <2%: 20; otherwise: 18.",
+        VERDICT_POLICY_DOCUMENTATION["expectancy"],
         input_series="expectancy.platform.v1",
     ),
     _verdict_policy(
         "win_rate",
         "Win rate policy input",
-        "<30%: 4; <50%: 10; <55%: 14; <75%: 20; <85%: 16; otherwise: 6.",
+        VERDICT_POLICY_DOCUMENTATION["win_rate"],
         input_series="win_rate.platform.v1",
     ),
     _verdict_policy(
         "payoff_ratio",
         "Payoff ratio policy input",
-        "<0.5: 4; <1: 10; <1.5: 15; <3: 20; otherwise: 16.",
+        VERDICT_POLICY_DOCUMENTATION["payoff_ratio"],
         input_series="payoff_ratio.platform.v1",
     ),
     _verdict_policy(
         "fee_drag",
         "Fee drag policy input",
-        "Gross profit ≤0: 0; otherwise <5%: 20; <15%: 16; <30%: 11; <50%: 5; otherwise: 1.",
+        VERDICT_POLICY_DOCUMENTATION["fee_drag"],
         input_series="fee_drag.platform.v1",
     ),
     _verdict_policy(
         "probabilistic_sharpe",
         "Probabilistic Sharpe policy input",
-        "<50%: 2; <80%: 8; <95%: 14; <99%: 20; otherwise: 18.",
+        VERDICT_POLICY_DOCUMENTATION["probabilistic_sharpe"],
         input_series="probabilistic_sharpe.platform.v1",
     ),
     _verdict_policy(
         "sample_size",
         "Sample size policy input",
-        "<20: 2; <50: 7; <100: 13; <250: 18; otherwise: 20.",
+        VERDICT_POLICY_DOCUMENTATION["sample_size"],
         input_series="sample_size.platform.v1",
     ),
     _verdict_policy(
         "skepticism_penalty",
         "Skepticism policy input",
-        "Start at 20; subtract 8 for Sharpe >3, 6 for finite profit factor >4, and 6 for win rate >85%; floor at 0.",
+        VERDICT_POLICY_DOCUMENTATION["skepticism_penalty"],
         input_series="skepticism_penalty.platform.v1",
     ),
     _verdict_policy(
         "trade_portfolio_sharpe_gap",
         "Trade versus portfolio Sharpe-gap policy input",
-        "<1: 20; <2: 16; <3: 12; <5: 6; otherwise: 2.",
+        VERDICT_POLICY_DOCUMENTATION["trade_portfolio_sharpe_gap"],
         input_series="trade_portfolio_sharpe_gap.platform.v1",
     ),
 )

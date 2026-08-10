@@ -10,6 +10,7 @@ from app.research.documentation.analytical_metric_catalog_results_entries import
     RESULTS_CATALOG_VARIANTS,
     VERDICT_POLICY_VARIANTS,
 )
+from app.services.run_verdict_service import VERDICT_POLICY_DOCUMENTATION
 
 
 def test_results_catalog_covers_all_frozen_verdict_inputs_as_policy_concepts() -> None:
@@ -42,12 +43,30 @@ def test_results_catalog_covers_all_frozen_verdict_inputs_as_policy_concepts() -
 def test_results_catalog_preserves_sortino_unavailability_and_full_run_projection_distinctions() -> None:
     entries = {entry.variant_id: entry for entry in PLATFORM_HEADLINE_VARIANTS}
 
+    expected_platform_ids = {
+        "net_pnl.platform.v1", "initial_cash.platform.v1", "final_equity.platform.v1", "total_fees.platform.v1",
+        "completed_trades.platform.v1", "winning_trades.platform.v1", "losing_trades.platform.v1",
+        "profit_factor.platform.v1", "expectancy.platform.v1", "payoff_ratio.platform.v1", "win_rate.platform.v1",
+        "sortino.platform.v1", "maximum_drawdown.platform.v1", "cagr.platform.v1", "calmar.platform.v1",
+        "annual_volatility.platform.v1", "recovery_duration.platform.v1", "max_consecutive_losers.platform.v1",
+        "fee_drag.platform.v1", "probabilistic_sharpe.platform.v1", "sample_size.platform.v1",
+        "skepticism_penalty.platform.v1", "trade_portfolio_sharpe_gap.platform.v1", "full_run_totals.platform.v1",
+        "recent_trade_ledger.platform.v1", "realized_equity.platform.v1", "risk_statistic_input_curve.platform.v1",
+    }
+
+    assert set(entries) == expected_platform_ids
     sortino = entries["sortino.platform.v1"]
     assert {state.state for state in sortino.value_states} == {"zero", "unavailable"}
     assert "not displayed or scored as zero" in sortino.value_states[1].scoring_behavior
-    assert "authoritative full-run ledger" in entries["completed_trades.platform.v1"].input_series
+    assert "authoritative full-run ledger" in entries["completed_trades.platform.v1"].input_series.lower()
     assert "recent up to 500 trades" in entries["recent_trade_ledger.platform.v1"].definition
     assert "can differ" in entries["risk_statistic_input_curve.platform.v1"].definition
+    assert {state.state for state in entries["profit_factor.platform.v1"].value_states} == {"zero", "infinite", "unavailable"}
+    assert {state.state for state in entries["cagr.platform.v1"].value_states} == {"zero", "undefined", "unavailable"}
+    assert entries["realized_equity.platform.v1"].canonical_symbol.endswith("equity_downsample.py::build_realized_equity_envelope")
+    assert entries["realized_equity.platform.v1"].fixture_or_receipt == "PythonDataService/tests/fixtures/golden/engine-results/ENG-006/v1/"
+    assert entries["initial_cash.platform.v1"].canonical_symbol.endswith("StrategyExecution.cs::InitialCash")
+    assert entries["final_equity.platform.v1"].canonical_symbol.endswith("StrategyExecution.cs::FinalEquity")
 
 
 def test_performance_memory_entries_cover_horizon_timing_seasonality_and_overlapping_rolls() -> None:
@@ -77,3 +96,14 @@ def test_results_catalog_variant_ids_are_unique() -> None:
     variant_ids = [str(entry["variant_id"]) for entry in RESULTS_CATALOG_VARIANTS]
 
     assert len(variant_ids) == len(set(variant_ids))
+
+
+def test_policy_entries_derive_their_threshold_prose_from_the_scorer_owned_descriptor() -> None:
+    policy_by_id = {entry.variant_id: entry for entry in VERDICT_POLICY_VARIANTS}
+
+    assert set(VERDICT_POLICY_DOCUMENTATION) == {
+        variant_id.removeprefix("verdict_policy.").removesuffix(".v2")
+        for variant_id in policy_by_id
+    }
+    for key, description in VERDICT_POLICY_DOCUMENTATION.items():
+        assert description in policy_by_id[f"verdict_policy.{key}.v2"].definition

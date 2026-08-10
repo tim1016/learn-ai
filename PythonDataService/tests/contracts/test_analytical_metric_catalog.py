@@ -7,10 +7,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from app.research.documentation.analytical_metric_catalog import (
     CATALOG_VERSION,
     LEAN_NATIVE_SHARPE_VARIANT,
     PLATFORM_SHARPE_VARIANT,
+    AnalyticalMetricCatalog,
     catalog,
     metric_documentation_context_for_source,
 )
@@ -22,12 +25,20 @@ GENERATOR_PATH = REPOSITORY_ROOT / "PythonDataService" / "scripts" / "export_ana
 
 def test_catalog_contains_the_two_source_aware_sharpe_variants() -> None:
     result = catalog()
+    variants = {variant.variant_id: variant for variant in result.variants}
 
     assert result.catalog_version == CATALOG_VERSION
-    assert [variant.variant_id for variant in result.variants] == [
-        "sharpe.platform.v1",
-        "sharpe.lean_native.v1",
-    ]
+    assert len(result.variants) == 132
+    assert {"sharpe.platform.v1", "sharpe.lean_native.v1"} <= set(variants)
+    assert all(
+        alternative in variants
+        for variant in result.variants
+        for alternative in variant.alternative_variant_ids
+    )
+    assert {variant.category for variant in result.variants} == {
+        "returns", "risk", "drawdown", "benchmark", "trade_population", "trade_economics",
+        "duration", "excursion", "statistical_confidence", "validation_atlas", "runtime_snapshot", "verdict_policy",
+    }
     assert PLATFORM_SHARPE_VARIANT.formula_latex is not None
     assert LEAN_NATIVE_SHARPE_VARIANT.formula_latex is not None
     assert PLATFORM_SHARPE_VARIANT.alternative_variant_ids == (LEAN_NATIVE_SHARPE_VARIANT.variant_id,)
@@ -54,6 +65,15 @@ def test_new_run_context_records_the_producer_and_contract() -> None:
             "contract_id": "lean-statistics-oracle-v1",
         },
     )
+
+
+def test_catalog_rejects_broken_comparison_references() -> None:
+    broken_platform = PLATFORM_SHARPE_VARIANT.model_copy(
+        update={"alternative_variant_ids": ("missing.variant.v1",)},
+    )
+
+    with pytest.raises(ValueError, match="missing alternatives"):
+        AnalyticalMetricCatalog(catalog_version=CATALOG_VERSION, variants=(broken_platform, LEAN_NATIVE_SHARPE_VARIANT))
 
 
 def test_committed_catalog_matches_deterministic_generator() -> None:

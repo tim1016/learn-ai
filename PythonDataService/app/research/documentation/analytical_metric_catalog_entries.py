@@ -13,8 +13,9 @@ authority.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
-from typing import Final, Literal, TypedDict
+from typing import Final, Literal
 
 LEAN_SOURCE_COMMIT: Final = "261366a7e26ae942df858ab20df4fef8fa07de67"
 LEAN_SOURCE_REFERENCE: Final = (
@@ -26,6 +27,10 @@ LEAN_ORACLE_FIXTURE: Final = "PythonDataService/tests/fixtures/golden/lean-stati
 LEAN_ORACLE_TEST: Final = (
     "PythonDataService/tests/test_lean_statistics.py::"
     "test_every_native_portfolio_and_trade_metric_matches_oracle"
+)
+LEAN_SENTINEL_TEST: Final = (
+    "PythonDataService/tests/research/documentation/test_analytical_metric_catalog_entries.py::"
+    "test_lean_trade_sentinels_match_the_canonical_reproducer"
 )
 LEAN_ORACLE_TOLERANCE: Final = "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)"
 
@@ -120,47 +125,6 @@ LEAN_RUNTIME_SOURCE_KEYS: Final[frozenset[str]] = frozenset(
 )
 
 
-class CatalogEntry(TypedDict):
-    """Serialized shape consumed by ``MetricVariant.model_validate``.
-
-    The Pydantic model belongs to the trust-spine module so this content shard
-    cannot become a second schema authority.  This typed mapping still makes
-    every required generated field explicit in this self-contained shard.
-    """
-
-    metric_id: str
-    variant_id: str
-    contract_id: str | None
-    producer: Literal["lean_native", "lean_runtime"]
-    label: str
-    definition: str
-    interpretation: str
-    common_misreadings: tuple[str, ...]
-    aliases: tuple[str, ...]
-    search_terms: tuple[str, ...]
-    formula_latex: str | None
-    variables: tuple[dict[str, str], ...]
-    input_series: str
-    units: str
-    output_scale: str
-    formatting: str
-    sampling_cadence: str
-    annualization: str | None
-    benchmark: str | None
-    risk_free_rate: str | None
-    cost_treatment: str
-    timezone_convention: str
-    value_states: tuple[dict[str, str], ...]
-    canonical_symbol: str
-    source_reference: str | None
-    validating_tests: tuple[str, ...]
-    fixture_or_receipt: str | None
-    numerical_tolerance: str | None
-    results_surfaces: tuple[str, ...]
-    verdict_membership: str | None
-    alternative_variant_ids: tuple[str, ...]
-
-
 @dataclass(frozen=True, slots=True)
 class _MetricSpec:
     key: str
@@ -183,6 +147,48 @@ class _MetricSpec:
 
 def _variables(items: tuple[tuple[str, str], ...]) -> tuple[dict[str, str], ...]:
     return tuple({"symbol": symbol, "definition": definition} for symbol, definition in items)
+
+
+def _snake_case(value: str) -> str:
+    acronym_split = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", value)
+    camel_split = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", acronym_split)
+    return re.sub(r"[^a-z0-9]+", "_", camel_split.lower()).strip("_")
+
+
+_SEMANTIC_METRIC_IDS: Final[dict[str, str]] = {
+    "drawdown": "maximum_drawdown",
+    "sortinoRatio": "sortino",
+    "profitFactor": "profit_factor",
+    "sharpeRatio": "sharpe",
+    "winRate": "win_rate",
+}
+
+
+def _semantic_metric_id(spec: _MetricSpec) -> str:
+    return _SEMANTIC_METRIC_IDS.get(spec.key, _snake_case(spec.key))
+
+
+def _native_category(spec: _MetricSpec, section: Literal["portfolio", "trade"]) -> str:
+    """Return the Python-authored navigation taxonomy for a native entry."""
+
+    text = f"{spec.key} {spec.label} {spec.definition}".lower()
+    if "benchmark" in text or spec.key in {"alpha", "beta", "informationRatio", "trackingError", "treynorRatio"}:
+        return "benchmark"
+    if "drawdown" in text:
+        return "drawdown"
+    if "duration" in text:
+        return "duration"
+    if any(token in text for token in ("mae", "mfe", "excursion")):
+        return "excursion"
+    if any(token in text for token in ("sharpe", "sortino", "variance", "deviation")):
+        return "statistical_confidence"
+    if section == "trade" and any(token in text for token in ("number", "count", "win rate", "loss rate")):
+        return "trade_population"
+    if section == "trade":
+        return "trade_economics"
+    if "risk" in text or "valueatrisk" in text:
+        return "risk"
+    return "returns"
 
 
 def _value_states(*, sentinel: str | None = None) -> tuple[dict[str, str], ...]:
@@ -216,7 +222,7 @@ def _value_states(*, sentinel: str | None = None) -> tuple[dict[str, str], ...]:
     return tuple(states)
 
 
-def _native_entry(spec: _MetricSpec, *, section: Literal["portfolio", "trade"]) -> CatalogEntry:
+def _native_entry(spec: _MetricSpec, *, section: Literal["portfolio", "trade"]) -> dict[str, object]:
     if section == "portfolio":
         canonical_symbol = "app.engine.results.lean_statistics.reproduce_lean_total_performance"
         source_files = "PortfolioStatistics.cs, Statistics.cs, StatisticsBuilder.cs"
@@ -234,15 +240,17 @@ def _native_entry(spec: _MetricSpec, *, section: Literal["portfolio", "trade"]) 
         cost_treatment = "Trade P&L and totalFees retain the account-currency values emitted in each closed-trade primitive."
 
     return {
-        "metric_id": spec.metric_id,
-        "variant_id": f"lean_native.{section}.{spec.metric_id.removeprefix(f'lean_{section}_')}.v1",
+        "metric_id": _semantic_metric_id(spec),
+        "variant_id": f"lean_native.{section}.{_snake_case(spec.key)}.v1",
         "contract_id": "lean-native-statistics-oracle-v1",
         "producer": "lean_native",
+        "category": _native_category(spec, section),
         "label": spec.label,
         "definition": spec.definition,
         "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
         "common_misreadings": (spec.edge_behavior,),
-        "aliases": (spec.key, *spec.aliases),
+        "aliases": spec.aliases,
+        "source_keys": (spec.key,),
         "search_terms": (spec.key, spec.label, section, "LEAN", "native statistics", "StatisticsBuilder"),
         "formula_latex": spec.formula_latex,
         "variables": _variables(spec.variables),
@@ -269,7 +277,10 @@ def _native_entry(spec: _MetricSpec, *, section: Literal["portfolio", "trade"]) 
         ),
         "canonical_symbol": canonical_symbol,
         "source_reference": f"{LEAN_SOURCE_REFERENCE}; {source_files}",
-        "validating_tests": (LEAN_ORACLE_TEST,),
+        "validating_tests": (
+            LEAN_ORACLE_TEST,
+            *((LEAN_SENTINEL_TEST,) if spec.key in {"profitFactor", "winLossRatio", "profitToMaxDrawdownRatio"} else ()),
+        ),
         "fixture_or_receipt": LEAN_ORACLE_FIXTURE,
         "numerical_tolerance": LEAN_ORACLE_TOLERANCE,
         "results_surfaces": ("strategy_lab.results.lean_native_statistics",),
@@ -364,25 +375,38 @@ _RUNTIME_SPECS: Final[tuple[_MetricSpec, ...]] = (
 )
 
 
-def _runtime_entry(spec: _MetricSpec) -> CatalogEntry:
+def _runtime_entry(spec: _MetricSpec) -> dict[str, object]:
+    is_normalized_order_count = spec.key == "Total Orders"
     return {
-        "metric_id": spec.metric_id,
-        "variant_id": f"lean_runtime.{spec.metric_id.removeprefix('lean_runtime_')}.v1",
+        "metric_id": _semantic_metric_id(spec),
+        "variant_id": f"lean_runtime.{_snake_case(spec.key)}.v1",
         "contract_id": "lean-native-statistics-oracle-v1",
         "producer": "lean_runtime",
+        "category": "runtime_snapshot",
         "label": spec.label,
         "definition": spec.definition,
         "interpretation": "This is a native runtime-reported value. The catalog documents its source and display contract without claiming a local formula.",
         "common_misreadings": (spec.edge_behavior,),
-        "aliases": (spec.key, *spec.aliases),
-        "search_terms": (spec.key, spec.label, "runtime", "LEAN", "Result.RuntimeStatistics"),
+        "aliases": spec.aliases,
+        "source_keys": (spec.key,),
+        "search_terms": (
+            spec.key,
+            spec.label,
+            "runtime",
+            "LEAN",
+            "normalized order count" if is_normalized_order_count else "Result.RuntimeStatistics",
+        ),
         "formula_latex": None,
         "variables": (),
         "input_series": spec.input_series,
         "units": spec.units,
         "output_scale": spec.output_scale,
         "formatting": spec.formatting,
-        "sampling_cadence": "One retained LEAN Result.RuntimeStatistics snapshot at run completion.",
+        "sampling_cadence": (
+            "One retained normalized order count at run completion."
+            if is_normalized_order_count
+            else "One retained LEAN Result.RuntimeStatistics snapshot at run completion."
+        ),
         "annualization": None,
         "benchmark": None,
         "risk_free_rate": None,
@@ -390,9 +414,14 @@ def _runtime_entry(spec: _MetricSpec) -> CatalogEntry:
         "timezone_convention": "Runtime has no timestamp value. Any related run timestamp remains int64 ms UTC and displays in the viewer's local timezone.",
         "value_states": _value_states(),
         "canonical_symbol": "app.services.lean_sidecar_persistence._normalized_to_lean_statistics_response",
-        "source_reference": f"{LEAN_SOURCE_REFERENCE}; Result.RuntimeStatistics native output",
+        "source_reference": (
+            f"Learn-AI normalized LEAN result total_orders field, derived from the pinned LEAN source result "
+            f"order collection @ {LEAN_SOURCE_COMMIT}; this displayed count is separate from the runtime-statistics map."
+            if is_normalized_order_count
+            else f"{LEAN_SOURCE_REFERENCE}; Result.RuntimeStatistics native output"
+        ),
         "validating_tests": (
-            "PythonDataService/tests/test_lean_statistics.py::test_persisted_native_parity_receipt_is_a_complete_match",
+            "PythonDataService/tests/test_lean_statistics.py::test_formatted_lean_dashboard_strings_match_oracle",
         ),
         "fixture_or_receipt": LEAN_ORACLE_FIXTURE,
         "numerical_tolerance": None,
@@ -408,14 +437,14 @@ def _runtime_entry(spec: _MetricSpec) -> CatalogEntry:
 # collision.  All other 24 portfolio keys are supplied here.
 TRACER_OWNED_PORTFOLIO_KEYS: Final[frozenset[str]] = frozenset({"sharpeRatio"})
 
-LEAN_PORTFOLIO_VARIANTS: Final[tuple[CatalogEntry, ...]] = tuple(
+LEAN_PORTFOLIO_VARIANTS: Final[tuple[dict[str, object], ...]] = tuple(
     _native_entry(spec, section="portfolio") for spec in _PORTFOLIO_SPECS
 )
-LEAN_TRADE_VARIANTS: Final[tuple[CatalogEntry, ...]] = tuple(
+LEAN_TRADE_VARIANTS: Final[tuple[dict[str, object], ...]] = tuple(
     _native_entry(spec, section="trade") for spec in _TRADE_SPECS
 )
-LEAN_RUNTIME_VARIANTS: Final[tuple[CatalogEntry, ...]] = tuple(_runtime_entry(spec) for spec in _RUNTIME_SPECS)
-LEAN_NATIVE_CATALOG_VARIANTS: Final[tuple[CatalogEntry, ...]] = (
+LEAN_RUNTIME_VARIANTS: Final[tuple[dict[str, object], ...]] = tuple(_runtime_entry(spec) for spec in _RUNTIME_SPECS)
+LEAN_NATIVE_CATALOG_VARIANTS: Final[tuple[dict[str, object], ...]] = (
     *LEAN_PORTFOLIO_VARIANTS,
     *LEAN_TRADE_VARIANTS,
     *LEAN_RUNTIME_VARIANTS,

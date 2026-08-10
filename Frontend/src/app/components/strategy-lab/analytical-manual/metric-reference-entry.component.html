@@ -5,7 +5,7 @@
       <p class="metric-entry__eyebrow">{{ item.metric_id }}</p>
       <h2 id="metric-entry-title">{{ item.label }}</h2>
     </div>
-    <span class="metric-entry__producer">{{ item.producer.replaceAll('_', ' ') }}</span>
+    <span class="metric-entry__producer">{{ item.producer | receiptLabel }}</span>
   </header>
 
   <p class="metric-entry__definition">{{ item.definition }}</p>
@@ -23,18 +23,23 @@
         </dl>
       }
     } @else {
-      <p class="metric-entry__fallback" role="status">Formula unavailable for this documented contract.</p>
+      <p class="metric-entry__fallback" role="status">Reported value; no local formula contract.</p>
     }
   </section>
 
   <dl class="metric-entry__facts">
+    @if (item.contract_id) { <div><dt>Calculation contract</dt><dd><code>{{ item.contract_id }}</code></dd></div> }
     <div><dt>Inputs</dt><dd>{{ item.input_series }}</dd></div>
     <div><dt>Sampling</dt><dd>{{ item.sampling_cadence }}</dd></div>
     <div><dt>Units</dt><dd>{{ item.units }} · {{ item.output_scale }} · {{ item.formatting }}</dd></div>
     @if (item.annualization) { <div><dt>Annualization</dt><dd>{{ item.annualization }}</dd></div> }
     @if (item.risk_free_rate) { <div><dt>Risk-free rate</dt><dd>{{ item.risk_free_rate }}</dd></div> }
     <div><dt>Canonical implementation</dt><dd><code>{{ item.canonical_symbol }}</code></dd></div>
+    @if (item.source_keys.length > 0) { <div><dt>Producer source keys</dt><dd><code>{{ item.source_keys.join(', ') }}</code></dd></div> }
+    @if (item.source_reference) { <div><dt>Source reference</dt><dd>{{ item.source_reference }}</dd></div> }
     @if (item.fixture_or_receipt) { <div><dt>Evidence</dt><dd><code>{{ item.fixture_or_receipt }}</code></dd></div> }
+    @if (item.validating_tests.length > 0) { <div><dt>Validating tests</dt><dd><code>{{ item.validating_tests.join(', ') }}</code></dd></div> }
+    @if (item.numerical_tolerance) { <div><dt>Tolerance</dt><dd>{{ item.numerical_tolerance }}</dd></div> }
   </dl>
 
   @if (item.value_states.length > 0) {
@@ -50,7 +55,7 @@
 
   @if (alternative(); as other) {
     <a class="metric-entry__compare" routerLink="/strategy-lab/docs" [queryParams]="compareQuery()">
-      Compare with… {{ other.producer.replaceAll('_', ' ') }}
+      Compare with… {{ other.producer | receiptLabel }}
     </a>
   }
   @if (runId(); as id) {

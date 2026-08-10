@@ -17,11 +17,13 @@ export interface MetricVariant {
   variant_id: string;
   contract_id: string | null;
   producer: MetricProducer;
+  category: string;
   label: string;
   definition: string;
   interpretation: string;
   common_misreadings: string[];
   aliases: string[];
+  source_keys: string[];
   search_terms: string[];
   formula_latex: string | null;
   variables: VariableDefinition[];
@@ -49,12 +51,4 @@ export interface MetricVariant {
 export interface AnalyticalMetricCatalog {
   catalog_version: number;
   variants: MetricVariant[];
-}
-
-export interface MetricDocumentationContext {
-  metricId: string;
-  variantId: string;
-  producer: MetricProducer;
-  contractId: string | null;
-  contractProvenance: "recorded" | "inferred";
 }
