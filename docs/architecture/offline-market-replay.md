@@ -55,7 +55,7 @@ The resulting boundary is:
 
 ```mermaid
 flowchart LR
-    C["Offline replay control panel"] --> A["FastAPI replay coordinator"]
+    C["Historical replay UI (not shipped)"] -.-> A["FastAPI replay coordinator"]
     A --> D["Polygon-adjusted LEAN minute cache"]
     D --> V["Strict timestamp and alignment validation"]
     V --> K["Shared virtual clock"]
