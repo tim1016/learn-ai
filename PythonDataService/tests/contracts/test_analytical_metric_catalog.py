@@ -45,6 +45,25 @@ def test_catalog_contains_the_two_source_aware_sharpe_variants() -> None:
     assert LEAN_NATIVE_SHARPE_VARIANT.alternative_variant_ids == (PLATFORM_SHARPE_VARIANT.variant_id,)
 
 
+def test_catalog_never_lets_two_variants_share_metric_id_and_producer() -> None:
+    # frontend resolveMetricContext() filters by metric_id then .find()s a
+    # producer match; two distinct variants sharing (metric_id, producer)
+    # means one is unreachable and the other is picked arbitrarily. Portfolio
+    # vs. trade Sortino/Sharpe/Win rate previously collapsed to the same
+    # semantic metric_id despite being genuinely different calculations.
+    result = catalog()
+    seen: dict[tuple[str, str], str] = {}
+    collisions: list[str] = []
+    for variant in result.variants:
+        key = (variant.metric_id, variant.producer)
+        if key in seen:
+            collisions.append(f"{key} claimed by both {seen[key]} and {variant.variant_id}")
+        else:
+            seen[key] = variant.variant_id
+
+    assert collisions == []
+
+
 def test_new_run_context_records_the_producer_and_contract() -> None:
     platform = metric_documentation_context_for_source("engine")
     lean = metric_documentation_context_for_source("lean-sidecar")
@@ -76,6 +95,34 @@ def test_catalog_rejects_broken_comparison_references() -> None:
         AnalyticalMetricCatalog(catalog_version=CATALOG_VERSION, variants=(broken_platform, LEAN_NATIVE_SHARPE_VARIANT))
 
 
+def test_catalog_rejects_duplicate_variant_ids() -> None:
+    with pytest.raises(ValueError, match="must be unique"):
+        AnalyticalMetricCatalog(
+            catalog_version=CATALOG_VERSION,
+            variants=(PLATFORM_SHARPE_VARIANT, PLATFORM_SHARPE_VARIANT),
+        )
+
+
+def test_catalog_rejects_cross_metric_comparisons() -> None:
+    foreign = LEAN_NATIVE_SHARPE_VARIANT.model_copy(update={"metric_id": "sortino"})
+
+    with pytest.raises(ValueError, match="same metric_id"):
+        AnalyticalMetricCatalog(
+            catalog_version=CATALOG_VERSION,
+            variants=(PLATFORM_SHARPE_VARIANT, foreign),
+        )
+
+
+def test_catalog_rejects_one_sided_comparisons() -> None:
+    one_sided = LEAN_NATIVE_SHARPE_VARIANT.model_copy(update={"alternative_variant_ids": ()})
+
+    with pytest.raises(ValueError, match="reciprocal"):
+        AnalyticalMetricCatalog(
+            catalog_version=CATALOG_VERSION,
+            variants=(PLATFORM_SHARPE_VARIANT, one_sided),
+        )
+
+
 def test_committed_catalog_matches_deterministic_generator() -> None:
     result = subprocess.run(
         [sys.executable, str(GENERATOR_PATH), "--check"],
@@ -83,6 +130,7 @@ def test_committed_catalog_matches_deterministic_generator() -> None:
         check=False,
         capture_output=True,
         text=True,
+        timeout=120,
     )
 
     assert result.returncode == 0, result.stderr

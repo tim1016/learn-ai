@@ -30,6 +30,24 @@ describe("MetricHelpPopoverComponent", () => {
       .toContain("/strategy-lab/docs?metric=sharpe");
   });
 
+  it("maps a legacy kebab-case help id to the catalog's stable metric id when no context is recorded", async () => {
+    await TestBed.configureTestingModule({
+      imports: [MetricHelpPopoverComponent, RouterTestingModule],
+      providers: [provideZonelessChangeDetection()],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(MetricHelpPopoverComponent);
+    fixture.componentRef.setInput("metric", STRATEGY_METRIC_HELP["max-drawdown"]);
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    root.querySelector<HTMLButtonElement>("button")?.click();
+    fixture.detectChanges();
+
+    const link = root.querySelector<HTMLAnchorElement>("a");
+    expect(link?.getAttribute("href")).toContain("metric=maximum_drawdown");
+    expect(link?.getAttribute("href")).not.toContain("metric=max-drawdown");
+  });
+
   it("links a persisted LEAN value directly to its recorded producer contract", async () => {
     await TestBed.configureTestingModule({
       imports: [MetricHelpPopoverComponent, RouterTestingModule],

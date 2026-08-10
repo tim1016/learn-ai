@@ -48,7 +48,11 @@ def _write_atomically(path: Path, text: str) -> None:
         temporary.flush()
         os.fsync(temporary.fileno())
         temporary_path = Path(temporary.name)
-    os.replace(temporary_path, path)
+    try:
+        os.replace(temporary_path, path)
+    except OSError:
+        temporary_path.unlink(missing_ok=True)
+        raise
 
 
 def _check(path: Path, actual: str) -> int:

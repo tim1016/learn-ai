@@ -162,7 +162,7 @@
       "alternative_variant_ids": [],
       "annualization": "Daily observations, 252 trading days per year.",
       "benchmark": "Aligned LEAN benchmark return series.",
-      "canonical_symbol": "app.engine.results.lean_statistics.reproduce_lean_total_performance",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::reproduce_lean_total_performance",
       "category": "benchmark",
       "common_misreadings": [
         "Returns zero when beta is zero in the pinned implementation."
@@ -176,7 +176,7 @@
       "input_series": "Preprocessed daily strategy and benchmark return vectors plus dated LEAN interest-rate observations.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Alpha",
-      "metric_id": "alpha",
+      "metric_id": "lean_portfolio_alpha",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "ratio",
       "producer": "lean_native",
@@ -240,7 +240,7 @@
       "alternative_variant_ids": [],
       "annualization": "N = tradingDaysPerYear (252 unless the run config says otherwise).",
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics.reproduce_lean_total_performance",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::reproduce_lean_total_performance",
       "category": "statistical_confidence",
       "common_misreadings": [
         "Returns zero for insufficient or constant return observations."
@@ -254,7 +254,7 @@
       "input_series": "Preprocessed daily Strategy Equity/Return samples.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Annual Standard Deviation",
-      "metric_id": "annual_standard_deviation",
+      "metric_id": "lean_portfolio_annual_standard_deviation",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "ratio",
       "producer": "lean_native",
@@ -310,7 +310,7 @@
       "alternative_variant_ids": [],
       "annualization": "N = tradingDaysPerYear (252 unless the run config says otherwise).",
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics.reproduce_lean_total_performance",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::reproduce_lean_total_performance",
       "category": "statistical_confidence",
       "common_misreadings": [
         "Returns zero for insufficient or constant return observations."
@@ -324,7 +324,7 @@
       "input_series": "Preprocessed daily Strategy Equity/Return samples.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Annual Variance",
-      "metric_id": "annual_variance",
+      "metric_id": "lean_portfolio_annual_variance",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "ratio",
       "producer": "lean_native",
@@ -380,7 +380,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics.reproduce_lean_total_performance",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::reproduce_lean_total_performance",
       "category": "returns",
       "common_misreadings": [
         "Returns zero when no loss-rate observations are present."
@@ -394,7 +394,7 @@
       "input_series": "Closed-trade profit/loss series and running capital.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Average Loss Rate",
-      "metric_id": "average_loss_rate",
+      "metric_id": "lean_portfolio_average_loss_rate",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "ratio",
       "producer": "lean_native",
@@ -450,7 +450,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics.reproduce_lean_total_performance",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::reproduce_lean_total_performance",
       "category": "returns",
       "common_misreadings": [
         "Returns zero when no profitable closed-trade observations are present."
@@ -464,7 +464,7 @@
       "input_series": "Closed-trade profit/loss series and running capital.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Average Win Rate",
-      "metric_id": "average_win_rate",
+      "metric_id": "lean_portfolio_average_win_rate",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "ratio",
       "producer": "lean_native",
@@ -520,7 +520,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": "Aligned LEAN benchmark return series.",
-      "canonical_symbol": "app.engine.results.lean_statistics.reproduce_lean_total_performance",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::reproduce_lean_total_performance",
       "category": "benchmark",
       "common_misreadings": [
         "Returns zero when benchmark variance is zero."
@@ -534,7 +534,7 @@
       "input_series": "Aligned daily strategy and benchmark return vectors.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Beta",
-      "metric_id": "beta",
+      "metric_id": "lean_portfolio_beta",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "ratio",
       "producer": "lean_native",
@@ -590,7 +590,7 @@
       "alternative_variant_ids": [],
       "annualization": "Calendar years = elapsed ms / 86,400,000 / 365.",
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics.reproduce_lean_total_performance",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::reproduce_lean_total_performance",
       "category": "returns",
       "common_misreadings": [
         "Uses calendar duration / 365, not trading duration / 252."
@@ -604,7 +604,7 @@
       "input_series": "First and final Strategy Equity values and their timestamps.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Compounding Annual Return",
-      "metric_id": "compounding_annual_return",
+      "metric_id": "lean_portfolio_compounding_annual_return",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "ratio",
       "producer": "lean_native",
@@ -666,7 +666,7 @@
       ],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics.reproduce_lean_total_performance",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::reproduce_lean_total_performance",
       "category": "drawdown",
       "common_misreadings": [
         "LEAN retains scale-3 rounding for this native value."
@@ -732,7 +732,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics.reproduce_lean_total_performance",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::reproduce_lean_total_performance",
       "category": "drawdown",
       "common_misreadings": [
         "Returns zero when no completed peak-to-recovery interval is observed."
@@ -746,7 +746,7 @@
       "input_series": "Full Strategy Equity chart timestamps and values.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Drawdown Recovery",
-      "metric_id": "drawdown_recovery",
+      "metric_id": "lean_portfolio_drawdown_recovery",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "integer",
       "producer": "lean_native",
@@ -802,7 +802,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics.reproduce_lean_total_performance",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::reproduce_lean_total_performance",
       "category": "returns",
       "common_misreadings": [
         "A sparse native chart is not interpolated to manufacture an end value."
@@ -816,7 +816,7 @@
       "input_series": "Final full Strategy Equity chart value.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "End Equity",
-      "metric_id": "end_equity",
+      "metric_id": "lean_portfolio_end_equity",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "currency",
       "producer": "lean_native",
@@ -868,7 +868,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics.reproduce_lean_total_performance",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::reproduce_lean_total_performance",
       "category": "returns",
       "common_misreadings": [
         "This is not the platform arithmetic mean trade-return definition."
@@ -882,7 +882,7 @@
       "input_series": "Native portfolio win rate, loss rate, and profit/loss ratio.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "LEAN Expectancy",
-      "metric_id": "expectancy",
+      "metric_id": "lean_portfolio_expectancy",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "ratio",
       "producer": "lean_native",
@@ -942,7 +942,7 @@
       "alternative_variant_ids": [],
       "annualization": "Daily observations, 252 trading days per year.",
       "benchmark": "Aligned LEAN benchmark return series.",
-      "canonical_symbol": "app.engine.results.lean_statistics.reproduce_lean_total_performance",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::reproduce_lean_total_performance",
       "category": "benchmark",
       "common_misreadings": [
         "Returns zero when tracking error is zero."
@@ -956,7 +956,7 @@
       "input_series": "Aligned preprocessed daily strategy and benchmark returns.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Information Ratio",
-      "metric_id": "information_ratio",
+      "metric_id": "lean_portfolio_information_ratio",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "ratio",
       "producer": "lean_native",
@@ -1016,7 +1016,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics.reproduce_lean_total_performance",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::reproduce_lean_total_performance",
       "category": "returns",
       "common_misreadings": [
         "Returns zero when no closed trades are supplied."
@@ -1030,7 +1030,7 @@
       "input_series": "Closed-trade P&L classifications.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Loss Rate",
-      "metric_id": "loss_rate",
+      "metric_id": "lean_portfolio_loss_rate",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "ratio",
       "producer": "lean_native",
@@ -1086,7 +1086,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics.reproduce_lean_total_performance",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::reproduce_lean_total_performance",
       "category": "returns",
       "common_misreadings": [
         "Returns zero when the retained turnover series is absent or all values are zero."
@@ -1100,7 +1100,7 @@
       "input_series": "Native Portfolio Turnover chart series.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Portfolio Turnover",
-      "metric_id": "portfolio_turnover",
+      "metric_id": "lean_portfolio_turnover",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "ratio",
       "producer": "lean_native",
@@ -1152,7 +1152,7 @@
       "alternative_variant_ids": [],
       "annualization": "Benchmark uses N = tradingDaysPerYear.",
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics.reproduce_lean_total_performance",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::reproduce_lean_total_performance",
       "category": "statistical_confidence",
       "common_misreadings": [
         "Returns zero when the estimator variance is not positive."
@@ -1166,7 +1166,7 @@
       "input_series": "Preprocessed daily strategy returns.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Probabilistic Sharpe Ratio",
-      "metric_id": "probabilistic_sharpe_ratio",
+      "metric_id": "lean_portfolio_probabilistic_sharpe_ratio",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "0 to 1",
       "producer": "lean_native",
@@ -1226,7 +1226,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics.reproduce_lean_total_performance",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::reproduce_lean_total_performance",
       "category": "returns",
       "common_misreadings": [
         "Returns zero when the average loss-rate denominator is zero."
@@ -1240,7 +1240,7 @@
       "input_series": "Capital-normalized closed-trade win/loss rates.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Portfolio Profit/Loss Ratio",
-      "metric_id": "profit_loss_ratio",
+      "metric_id": "lean_portfolio_profit_loss_ratio",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "ratio",
       "producer": "lean_native",
@@ -1298,7 +1298,7 @@
       ],
       "annualization": "Daily observations, 252 trading days per year.",
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics.reproduce_lean_total_performance",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::reproduce_lean_total_performance",
       "category": "statistical_confidence",
       "common_misreadings": [
         "Returns zero when annualized downside deviation is zero; this is a valid native zero, not platform unavailability."
@@ -1372,7 +1372,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics.reproduce_lean_total_performance",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::reproduce_lean_total_performance",
       "category": "returns",
       "common_misreadings": [
         "Uses the retained run configuration; no current account balance is inferred."
@@ -1386,7 +1386,7 @@
       "input_series": "Algorithm configuration starting_cash (falling back to the first equity value only when unavailable).",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Start Equity",
-      "metric_id": "start_equity",
+      "metric_id": "lean_portfolio_start_equity",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "currency",
       "producer": "lean_native",
@@ -1438,7 +1438,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics.reproduce_lean_total_performance",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::reproduce_lean_total_performance",
       "category": "returns",
       "common_misreadings": [
         "Returns zero when start equity is zero in the pinned implementation."
@@ -1452,7 +1452,7 @@
       "input_series": "Start and final Strategy Equity values.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Total Net Profit",
-      "metric_id": "total_net_profit",
+      "metric_id": "lean_portfolio_total_net_profit",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "ratio",
       "producer": "lean_native",
@@ -1508,7 +1508,7 @@
       "alternative_variant_ids": [],
       "annualization": "Daily observations, 252 trading days per year.",
       "benchmark": "Aligned LEAN benchmark return series.",
-      "canonical_symbol": "app.engine.results.lean_statistics.reproduce_lean_total_performance",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::reproduce_lean_total_performance",
       "category": "benchmark",
       "common_misreadings": [
         "Returns zero for insufficient or identical active-return observations."
@@ -1522,7 +1522,7 @@
       "input_series": "Aligned preprocessed daily strategy and benchmark return vectors.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Tracking Error",
-      "metric_id": "tracking_error",
+      "metric_id": "lean_portfolio_tracking_error",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "ratio",
       "producer": "lean_native",
@@ -1582,7 +1582,7 @@
       "alternative_variant_ids": [],
       "annualization": "Daily observations, 252 trading days per year.",
       "benchmark": "Aligned LEAN benchmark return series.",
-      "canonical_symbol": "app.engine.results.lean_statistics.reproduce_lean_total_performance",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::reproduce_lean_total_performance",
       "category": "benchmark",
       "common_misreadings": [
         "Returns zero when beta is zero."
@@ -1596,7 +1596,7 @@
       "input_series": "Annual strategy performance, dated LEAN rate, and beta.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Treynor Ratio",
-      "metric_id": "treynor_ratio",
+      "metric_id": "lean_portfolio_treynor_ratio",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "ratio",
       "producer": "lean_native",
@@ -1656,7 +1656,7 @@
       "alternative_variant_ids": [],
       "annualization": "Window N = tradingDaysPerYear; result itself is a daily-return quantile.",
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics.reproduce_lean_total_performance",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::reproduce_lean_total_performance",
       "category": "risk",
       "common_misreadings": [
         "Normal-model quantile rounded by LEAN to three decimals."
@@ -1670,7 +1670,7 @@
       "input_series": "Last N preprocessed daily strategy returns.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Value at Risk 95%",
-      "metric_id": "value_at_risk95",
+      "metric_id": "lean_portfolio_value_at_risk_95",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "ratio",
       "producer": "lean_native",
@@ -1726,7 +1726,7 @@
       "alternative_variant_ids": [],
       "annualization": "Window N = tradingDaysPerYear; result itself is a daily-return quantile.",
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics.reproduce_lean_total_performance",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::reproduce_lean_total_performance",
       "category": "risk",
       "common_misreadings": [
         "Normal-model quantile rounded by LEAN to three decimals."
@@ -1740,7 +1740,7 @@
       "input_series": "Last N preprocessed daily strategy returns.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Value at Risk 99%",
-      "metric_id": "value_at_risk99",
+      "metric_id": "lean_portfolio_value_at_risk_99",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "ratio",
       "producer": "lean_native",
@@ -1796,7 +1796,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics.reproduce_lean_total_performance",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::reproduce_lean_total_performance",
       "category": "returns",
       "common_misreadings": [
         "Returns zero when no closed trades are supplied."
@@ -1810,7 +1810,7 @@
       "input_series": "Closed-trade P&L classifications.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Portfolio Win Rate",
-      "metric_id": "win_rate",
+      "metric_id": "lean_portfolio_win_rate",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "ratio",
       "producer": "lean_native",
@@ -1866,7 +1866,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "drawdown",
       "common_misreadings": [
         "Preserves LEAN's end-trade drawdown convention; it is not the portfolio equity drawdown."
@@ -1880,7 +1880,7 @@
       "input_series": "Ordered closed trades, their P&L, and maximum favorable excursion primitives.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Average End-Trade Drawdown",
-      "metric_id": "average_end_trade_drawdown",
+      "metric_id": "lean_trade_average_end_trade_drawdown",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "currency",
       "producer": "lean_native",
@@ -1932,7 +1932,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "duration",
       "common_misreadings": [
         "Returns a zero duration when no losing trades are supplied; online tick truncation is preserved."
@@ -1946,7 +1946,7 @@
       "input_series": "Closed trades with non-positive P&L and their duration primitives.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Average Losing Trade Duration",
-      "metric_id": "average_losing_trade_duration",
+      "metric_id": "lean_trade_average_losing_duration",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "TimeSpan",
       "producer": "lean_native",
@@ -2002,7 +2002,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "trade_population",
       "common_misreadings": [
         "Returns zero when no loss observations are present."
@@ -2016,7 +2016,7 @@
       "input_series": "Closed-trade P&L values classified as losses.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Average Loss",
-      "metric_id": "average_loss",
+      "metric_id": "lean_trade_average_loss",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "currency",
       "producer": "lean_native",
@@ -2068,7 +2068,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "excursion",
       "common_misreadings": [
         "Uses account-currency excursion values; it is not a percentage loss."
@@ -2082,7 +2082,7 @@
       "input_series": "Closed-trade MAE primitives.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Average MAE",
-      "metric_id": "average_mae",
+      "metric_id": "lean_trade_average_mae",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "currency",
       "producer": "lean_native",
@@ -2134,7 +2134,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "excursion",
       "common_misreadings": [
         "Uses account-currency excursion values; it is not a realized-profit total."
@@ -2148,7 +2148,7 @@
       "input_series": "Closed-trade MFE primitives.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Average MFE",
-      "metric_id": "average_mfe",
+      "metric_id": "lean_trade_average_mfe",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "currency",
       "producer": "lean_native",
@@ -2200,7 +2200,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "trade_population",
       "common_misreadings": [
         "Returns zero when no winning trades are present."
@@ -2214,7 +2214,7 @@
       "input_series": "Closed-trade P&L values classified as wins.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Average Profit",
-      "metric_id": "average_profit",
+      "metric_id": "lean_trade_average_profit",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "currency",
       "producer": "lean_native",
@@ -2266,7 +2266,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "trade_population",
       "common_misreadings": [
         "Returns zero when no closed trades are supplied."
@@ -2280,7 +2280,7 @@
       "input_series": "All closed-trade P&L values.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Average P&L",
-      "metric_id": "average_profit_loss",
+      "metric_id": "lean_trade_average_profit_loss",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "currency",
       "producer": "lean_native",
@@ -2336,7 +2336,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "duration",
       "common_misreadings": [
         "Online double conversion and tick truncation are part of the pinned result; a simple arithmetic mean can differ by microseconds."
@@ -2350,7 +2350,7 @@
       "input_series": "All closed-trade duration primitives.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Average Trade Duration",
-      "metric_id": "average_trade_duration",
+      "metric_id": "lean_trade_average_duration",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "TimeSpan",
       "producer": "lean_native",
@@ -2406,7 +2406,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "duration",
       "common_misreadings": [
         "Returns a zero duration when no winning trades are supplied; online tick truncation is preserved."
@@ -2420,7 +2420,7 @@
       "input_series": "Closed trades with positive P&L and their duration primitives.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Average Winning Trade Duration",
-      "metric_id": "average_winning_trade_duration",
+      "metric_id": "lean_trade_average_winning_duration",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "TimeSpan",
       "producer": "lean_native",
@@ -2476,7 +2476,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "trade_economics",
       "common_misreadings": [
         "Absent when no closed trade supplies an exit timestamp."
@@ -2490,7 +2490,7 @@
       "input_series": "Closed-trade exit timestamps.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Last Exit",
-      "metric_id": "end_date_time",
+      "metric_id": "lean_trade_end_datetime",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "timestamp",
       "producer": "lean_native",
@@ -2542,7 +2542,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "trade_population",
       "common_misreadings": [
         "Returns zero when no loss is present."
@@ -2556,7 +2556,7 @@
       "input_series": "Closed-trade loss P&L values.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Largest Loss",
-      "metric_id": "largest_loss",
+      "metric_id": "lean_trade_largest_loss",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "currency",
       "producer": "lean_native",
@@ -2608,7 +2608,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "excursion",
       "common_misreadings": [
         "Returns zero when no closed trades are supplied."
@@ -2622,7 +2622,7 @@
       "input_series": "Closed-trade MAE primitives.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Largest MAE",
-      "metric_id": "largest_mae",
+      "metric_id": "lean_trade_largest_mae",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "currency",
       "producer": "lean_native",
@@ -2674,7 +2674,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "excursion",
       "common_misreadings": [
         "Returns zero when no closed trades are supplied."
@@ -2688,7 +2688,7 @@
       "input_series": "Closed-trade MFE primitives.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Largest MFE",
-      "metric_id": "largest_mfe",
+      "metric_id": "lean_trade_largest_mfe",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "currency",
       "producer": "lean_native",
@@ -2740,7 +2740,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "trade_population",
       "common_misreadings": [
         "Returns zero when no win is present."
@@ -2754,7 +2754,7 @@
       "input_series": "Closed-trade winning P&L values.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Largest Profit",
-      "metric_id": "largest_profit",
+      "metric_id": "lean_trade_largest_profit",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "currency",
       "producer": "lean_native",
@@ -2806,7 +2806,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "trade_population",
       "common_misreadings": [
         "Returns zero when no closed trades are supplied."
@@ -2820,7 +2820,7 @@
       "input_series": "Closed-trade P&L classifications.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Trade Loss Rate",
-      "metric_id": "loss_rate",
+      "metric_id": "lean_trade_loss_rate",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "ratio",
       "producer": "lean_native",
@@ -2876,7 +2876,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "trade_economics",
       "common_misreadings": [
         "Returns zero when no losing run occurs."
@@ -2890,7 +2890,7 @@
       "input_series": "Closed trades in LEAN's supplied order.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Max Consecutive Losses",
-      "metric_id": "max_consecutive_losing_trades",
+      "metric_id": "lean_trade_max_consecutive_losses",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "integer",
       "producer": "lean_native",
@@ -2942,7 +2942,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "trade_economics",
       "common_misreadings": [
         "Returns zero when no winning run occurs."
@@ -2956,7 +2956,7 @@
       "input_series": "Closed trades in LEAN's supplied order.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Max Consecutive Wins",
-      "metric_id": "max_consecutive_winning_trades",
+      "metric_id": "lean_trade_max_consecutive_wins",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "integer",
       "producer": "lean_native",
@@ -3008,7 +3008,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "drawdown",
       "common_misreadings": [
         "This excludes intra-trade movement and is distinct from portfolio drawdown."
@@ -3022,7 +3022,7 @@
       "input_series": "Ordered closed-trade P&L sequence.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Maximum Closed-Trade Drawdown",
-      "metric_id": "maximum_closed_trade_drawdown",
+      "metric_id": "lean_trade_maximum_closed_drawdown",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "currency",
       "producer": "lean_native",
@@ -3074,7 +3074,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "drawdown",
       "common_misreadings": [
         "Returns zero duration when no completed closed-trade drawdown recovery occurs."
@@ -3088,7 +3088,7 @@
       "input_series": "Ordered closed-trade P&L and entry/exit timestamps.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Maximum Drawdown Duration",
-      "metric_id": "maximum_drawdown_duration",
+      "metric_id": "lean_trade_maximum_drawdown_duration",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "TimeSpan",
       "producer": "lean_native",
@@ -3144,7 +3144,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "drawdown",
       "common_misreadings": [
         "This is a native trade-end drawdown field, not a portfolio equity drawdown."
@@ -3158,7 +3158,7 @@
       "input_series": "Closed-trade endTradeDrawdown primitives.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Maximum End-Trade Drawdown",
-      "metric_id": "maximum_end_trade_drawdown",
+      "metric_id": "lean_trade_maximum_end_drawdown",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "currency",
       "producer": "lean_native",
@@ -3210,7 +3210,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "drawdown",
       "common_misreadings": [
         "It includes intra-trade excursions and therefore differs from closed-trade drawdown."
@@ -3224,7 +3224,7 @@
       "input_series": "Ordered closed trades with MAE, MFE, and P&L primitives.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Maximum Intra-Trade Drawdown",
-      "metric_id": "maximum_intra_trade_drawdown",
+      "metric_id": "lean_trade_maximum_intra_drawdown",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "currency",
       "producer": "lean_native",
@@ -3284,7 +3284,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "duration",
       "common_misreadings": [
         "Returns zero duration when no losing-trade durations exist."
@@ -3298,7 +3298,7 @@
       "input_series": "Durations of closed trades classified as losses.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Median Losing Trade Duration",
-      "metric_id": "median_losing_trade_duration",
+      "metric_id": "lean_trade_median_losing_duration",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "TimeSpan",
       "producer": "lean_native",
@@ -3354,7 +3354,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "duration",
       "common_misreadings": [
         "Returns zero duration when no trade durations exist."
@@ -3368,7 +3368,7 @@
       "input_series": "Durations of all closed trades.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Median Trade Duration",
-      "metric_id": "median_trade_duration",
+      "metric_id": "lean_trade_median_duration",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "TimeSpan",
       "producer": "lean_native",
@@ -3424,7 +3424,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "duration",
       "common_misreadings": [
         "Returns zero duration when no winning-trade durations exist."
@@ -3438,7 +3438,7 @@
       "input_series": "Durations of closed trades classified as wins.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Median Winning Trade Duration",
-      "metric_id": "median_winning_trade_duration",
+      "metric_id": "lean_trade_median_winning_duration",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "TimeSpan",
       "producer": "lean_native",
@@ -3494,7 +3494,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "trade_population",
       "common_misreadings": [
         "Zero is a valid count, not unavailable."
@@ -3508,7 +3508,7 @@
       "input_series": "Closed-trade P&L classifications.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Losing Trades",
-      "metric_id": "number_of_losing_trades",
+      "metric_id": "lean_trade_number_losing",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "integer",
       "producer": "lean_native",
@@ -3560,7 +3560,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "trade_population",
       "common_misreadings": [
         "Zero is a valid count, not unavailable."
@@ -3574,7 +3574,7 @@
       "input_series": "Closed-trade P&L classifications.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Winning Trades",
-      "metric_id": "number_of_winning_trades",
+      "metric_id": "lean_trade_number_winning",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "integer",
       "producer": "lean_native",
@@ -3628,7 +3628,7 @@
       ],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "trade_population",
       "common_misreadings": [
         "When positive profit exists without a loss denominator, pinned LEAN emits the finite sentinel 10 — not infinity, zero, or unavailable."
@@ -3705,7 +3705,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "statistical_confidence",
       "common_misreadings": [
         "Returns zero when fewer than two loss observations are supplied."
@@ -3719,7 +3719,7 @@
       "input_series": "Loss-classified closed-trade P&L values.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "P&L Downside Deviation",
-      "metric_id": "profit_loss_downside_deviation",
+      "metric_id": "lean_trade_profit_loss_downside_deviation",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "currency",
       "producer": "lean_native",
@@ -3771,7 +3771,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "trade_economics",
       "common_misreadings": [
         "Returns zero when a required win/loss denominator is absent."
@@ -3785,7 +3785,7 @@
       "input_series": "Winning and losing closed-trade account-currency P&L values.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Trade Profit/Loss Ratio",
-      "metric_id": "profit_loss_ratio",
+      "metric_id": "lean_trade_profit_loss_ratio",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "ratio",
       "producer": "lean_native",
@@ -3841,7 +3841,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "statistical_confidence",
       "common_misreadings": [
         "Returns zero when fewer than two P&L observations are supplied."
@@ -3855,7 +3855,7 @@
       "input_series": "All closed-trade P&L values.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "P&L Standard Deviation",
-      "metric_id": "profit_loss_standard_deviation",
+      "metric_id": "lean_trade_profit_loss_standard_deviation",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "currency",
       "producer": "lean_native",
@@ -3907,7 +3907,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "drawdown",
       "common_misreadings": [
         "Returns LEAN's finite 10 sentinel for positive P&L without a closed-drawdown denominator."
@@ -3921,7 +3921,7 @@
       "input_series": "Ordered closed-trade P&L and closed-trade drawdown.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Profit to Maximum Drawdown Ratio",
-      "metric_id": "profit_to_max_drawdown_ratio",
+      "metric_id": "lean_trade_profit_to_max_drawdown_ratio",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "ratio",
       "producer": "lean_native",
@@ -3988,7 +3988,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "statistical_confidence",
       "common_misreadings": [
         "Not annualized; returns zero when P&L standard deviation is zero."
@@ -4002,7 +4002,7 @@
       "input_series": "All closed-trade account-currency P&L values.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Trade Sharpe Ratio",
-      "metric_id": "sharpe",
+      "metric_id": "lean_trade_sharpe_ratio",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "ratio",
       "producer": "lean_native",
@@ -4058,7 +4058,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "statistical_confidence",
       "common_misreadings": [
         "Not annualized; returns zero when downside deviation is zero."
@@ -4072,7 +4072,7 @@
       "input_series": "All closed-trade P&L and losing-P&L subsets.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Trade Sortino Ratio",
-      "metric_id": "sortino",
+      "metric_id": "lean_trade_sortino_ratio",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "ratio",
       "producer": "lean_native",
@@ -4128,7 +4128,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "trade_economics",
       "common_misreadings": [
         "Absent when no closed trade supplies an entry timestamp."
@@ -4142,7 +4142,7 @@
       "input_series": "Closed-trade entry timestamps.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "First Entry",
-      "metric_id": "start_date_time",
+      "metric_id": "lean_trade_start_datetime",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "timestamp",
       "producer": "lean_native",
@@ -4194,7 +4194,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "trade_economics",
       "common_misreadings": [
         "A fee is not subtracted again from a native P&L value that already reflects LEAN's accounting."
@@ -4208,7 +4208,7 @@
       "input_series": "Closed-trade totalFees primitives.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Trade Fees",
-      "metric_id": "total_fees",
+      "metric_id": "lean_trade_total_fees",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "currency",
       "producer": "lean_native",
@@ -4260,7 +4260,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "trade_population",
       "common_misreadings": [
         "Returns zero when there are no losing P&L observations."
@@ -4274,7 +4274,7 @@
       "input_series": "Loss-classified closed-trade P&L values.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Total Loss",
-      "metric_id": "total_loss",
+      "metric_id": "lean_trade_total_loss",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "currency",
       "producer": "lean_native",
@@ -4326,7 +4326,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "trade_population",
       "common_misreadings": [
         "The full native population can differ from a separately truncated display ledger."
@@ -4340,7 +4340,7 @@
       "input_series": "Closed-trade population supplied by the retained native result.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Closed Trades",
-      "metric_id": "total_number_of_trades",
+      "metric_id": "lean_trade_total_number",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "integer",
       "producer": "lean_native",
@@ -4392,7 +4392,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "trade_population",
       "common_misreadings": [
         "Returns zero when there are no winning P&L observations."
@@ -4406,7 +4406,7 @@
       "input_series": "Winning closed-trade P&L values.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Total Profit",
-      "metric_id": "total_profit",
+      "metric_id": "lean_trade_total_profit",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "currency",
       "producer": "lean_native",
@@ -4458,7 +4458,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "trade_population",
       "common_misreadings": [
         "This is account-currency P&L, not a percentage return."
@@ -4472,7 +4472,7 @@
       "input_series": "All closed-trade P&L values.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Total P&L",
-      "metric_id": "total_profit_loss",
+      "metric_id": "lean_trade_total_profit_loss",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "currency",
       "producer": "lean_native",
@@ -4524,7 +4524,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "trade_population",
       "common_misreadings": [
         "Returns LEAN's finite 10 sentinel when wins exist with no losing-count denominator."
@@ -4538,7 +4538,7 @@
       "input_series": "Closed-trade P&L classifications.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Win/Loss Count Ratio",
-      "metric_id": "win_loss_ratio",
+      "metric_id": "lean_trade_win_loss_ratio",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "ratio",
       "producer": "lean_native",
@@ -4605,7 +4605,7 @@
       "alternative_variant_ids": [],
       "annualization": null,
       "benchmark": null,
-      "canonical_symbol": "app.engine.results.lean_statistics._reproduce_lean_trade_statistics",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics",
       "category": "trade_population",
       "common_misreadings": [
         "Returns zero when no closed trades are supplied."
@@ -4619,7 +4619,7 @@
       "input_series": "Closed-trade P&L classifications.",
       "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
       "label": "Trade Win Rate",
-      "metric_id": "win_rate",
+      "metric_id": "lean_trade_win_rate",
       "numerical_tolerance": "abs <= 0.0000500001, rtol = 0 (native four-decimal oracle)",
       "output_scale": "ratio",
       "producer": "lean_native",
@@ -4691,7 +4691,7 @@
       "input_series": "Reported Result.RuntimeStatistics[Equity] string parsed without recomputation.",
       "interpretation": "This is a native runtime-reported value. The catalog documents its source and display contract without claiming a local formula.",
       "label": "Runtime Equity",
-      "metric_id": "equity",
+      "metric_id": "lean_runtime_equity",
       "numerical_tolerance": null,
       "output_scale": "currency",
       "producer": "lean_runtime",
@@ -4753,7 +4753,7 @@
       "input_series": "Reported Result.RuntimeStatistics[Fees] string parsed without recomputation.",
       "interpretation": "This is a native runtime-reported value. The catalog documents its source and display contract without claiming a local formula.",
       "label": "Runtime Fees",
-      "metric_id": "fees",
+      "metric_id": "lean_runtime_fees",
       "numerical_tolerance": null,
       "output_scale": "currency",
       "producer": "lean_runtime",
@@ -4815,7 +4815,7 @@
       "input_series": "Reported Result.RuntimeStatistics[Holdings] string parsed without recomputation.",
       "interpretation": "This is a native runtime-reported value. The catalog documents its source and display contract without claiming a local formula.",
       "label": "Runtime Holdings",
-      "metric_id": "holdings",
+      "metric_id": "lean_runtime_holdings",
       "numerical_tolerance": null,
       "output_scale": "currency",
       "producer": "lean_runtime",
@@ -4877,7 +4877,7 @@
       "input_series": "Reported Result.RuntimeStatistics[Net Profit] string parsed without recomputation.",
       "interpretation": "This is a native runtime-reported value. The catalog documents its source and display contract without claiming a local formula.",
       "label": "Runtime Net Profit",
-      "metric_id": "net_profit",
+      "metric_id": "lean_runtime_net_profit",
       "numerical_tolerance": null,
       "output_scale": "currency",
       "producer": "lean_runtime",
@@ -4940,7 +4940,7 @@
       "input_series": "Reported Result.RuntimeStatistics[Probabilistic Sharpe Ratio] percentage string parsed without recomputation.",
       "interpretation": "This is a native runtime-reported value. The catalog documents its source and display contract without claiming a local formula.",
       "label": "Runtime PSR",
-      "metric_id": "probabilistic_sharpe_ratio",
+      "metric_id": "lean_runtime_probabilistic_sharpe_ratio",
       "numerical_tolerance": null,
       "output_scale": "0 to 1",
       "producer": "lean_runtime",
@@ -5003,7 +5003,7 @@
       "input_series": "Reported Result.RuntimeStatistics[Return] percentage string parsed without recomputation.",
       "interpretation": "This is a native runtime-reported value. The catalog documents its source and display contract without claiming a local formula.",
       "label": "Runtime Total Return",
-      "metric_id": "return",
+      "metric_id": "lean_runtime_total_return",
       "numerical_tolerance": null,
       "output_scale": "ratio",
       "producer": "lean_runtime",
@@ -5066,7 +5066,7 @@
       "input_series": "Reported Result.RuntimeStatistics[Unrealized] string parsed without recomputation.",
       "interpretation": "This is a native runtime-reported value. The catalog documents its source and display contract without claiming a local formula.",
       "label": "Runtime Unrealized P&L",
-      "metric_id": "unrealized",
+      "metric_id": "lean_runtime_unrealized",
       "numerical_tolerance": null,
       "output_scale": "currency",
       "producer": "lean_runtime",
@@ -5128,7 +5128,7 @@
       "input_series": "Reported Result.RuntimeStatistics[Volume] string parsed without recomputation.",
       "interpretation": "This is a native runtime-reported value. The catalog documents its source and display contract without claiming a local formula.",
       "label": "Runtime Volume",
-      "metric_id": "volume",
+      "metric_id": "lean_runtime_volume",
       "numerical_tolerance": null,
       "output_scale": "currency",
       "producer": "lean_runtime",
@@ -5191,7 +5191,7 @@
       "input_series": "Retained normalized order count; the display projection does not recalculate it from trades.",
       "interpretation": "This is a native runtime-reported value. The catalog documents its source and display contract without claiming a local formula.",
       "label": "Runtime Orders",
-      "metric_id": "total_orders",
+      "metric_id": "lean_runtime_total_orders",
       "numerical_tolerance": null,
       "output_scale": "integer",
       "producer": "lean_runtime",
@@ -5240,7 +5240,7 @@
       "annualization": null,
       "benchmark": null,
       "canonical_symbol": "PythonDataService/app/engine/results/statistics.py::compute_portfolio_statistics",
-      "category": "trade_economics",
+      "category": "returns",
       "common_misreadings": [
         "A familiar label is not interchangeable with a different producer's calculation."
       ],
@@ -5421,7 +5421,7 @@
       "contract_id": "platform-results-statistics-v1",
       "cost_treatment": "Uses persisted platform run evidence; no value is recomputed in the documentation client.",
       "definition": "Sum of fees recorded for the authoritative run.",
-      "fixture_or_receipt": "contracts/fixtures/strategy-metric-help-golden-v1.json",
+      "fixture_or_receipt": null,
       "formatting": "currency, two decimal places",
       "formula_latex": null,
       "input_series": "Persisted execution fee ledger.",
@@ -5537,7 +5537,7 @@
       "contract_id": "platform-results-statistics-v1",
       "cost_treatment": "Uses persisted platform run evidence; no value is recomputed in the documentation client.",
       "definition": "Completed trades with a return greater than zero.",
-      "fixture_or_receipt": "contracts/fixtures/strategy-metric-help-golden-v1.json",
+      "fixture_or_receipt": null,
       "formatting": "integer",
       "formula_latex": null,
       "input_series": "Authoritative closed-trade return ledger.",
@@ -5595,7 +5595,7 @@
       "contract_id": "platform-results-statistics-v1",
       "cost_treatment": "Uses persisted platform run evidence; no value is recomputed in the documentation client.",
       "definition": "Completed trades with a return below zero.",
-      "fixture_or_receipt": "contracts/fixtures/strategy-metric-help-golden-v1.json",
+      "fixture_or_receipt": null,
       "formatting": "integer",
       "formula_latex": null,
       "input_series": "Authoritative closed-trade return ledger.",
@@ -5776,7 +5776,7 @@
       "contract_id": "platform-results-statistics-v1",
       "cost_treatment": "Uses persisted platform run evidence; no value is recomputed in the documentation client.",
       "definition": "Average winning return divided by the absolute average losing return.",
-      "fixture_or_receipt": "contracts/fixtures/strategy-metric-help-golden-v1.json",
+      "fixture_or_receipt": null,
       "formatting": "two decimal places or ∞",
       "formula_latex": null,
       "input_series": "Completed trade percentage returns separated by sign.",
@@ -6010,14 +6010,14 @@
       "annualization": null,
       "benchmark": null,
       "canonical_symbol": "PythonDataService/app/engine/results/statistics.py::compute_portfolio_statistics",
-      "category": "duration",
+      "category": "returns",
       "common_misreadings": [
         "A familiar label is not interchangeable with a different producer's calculation."
       ],
       "contract_id": "platform-results-statistics-v1",
       "cost_treatment": "Uses persisted platform run evidence; no value is recomputed in the documentation client.",
       "definition": "Platform compound annual growth rate calculated from the producing run's trading-duration convention.",
-      "fixture_or_receipt": "contracts/fixtures/strategy-metric-help-golden-v1.json",
+      "fixture_or_receipt": null,
       "formatting": "percentage, two decimal places",
       "formula_latex": null,
       "input_series": "Platform equity curve or documented compatibility input series.",
@@ -6138,7 +6138,7 @@
       "contract_id": "platform-results-statistics-v1",
       "cost_treatment": "Uses persisted platform run evidence; no value is recomputed in the documentation client.",
       "definition": "Annualized standard deviation provided by the platform statistics producer.",
-      "fixture_or_receipt": "contracts/fixtures/strategy-metric-help-golden-v1.json",
+      "fixture_or_receipt": null,
       "formatting": "percentage, two decimal places",
       "formula_latex": null,
       "input_series": "Platform return observations.",
@@ -6196,7 +6196,7 @@
       "contract_id": "platform-results-statistics-v1",
       "cost_treatment": "Uses persisted platform run evidence; no value is recomputed in the documentation client.",
       "definition": "Longest peak-to-recovery calendar duration in whole days on the closed-trade ledger.",
-      "fixture_or_receipt": "contracts/fixtures/strategy-metric-help-golden-v1.json",
+      "fixture_or_receipt": null,
       "formatting": "integer days",
       "formula_latex": null,
       "input_series": "Completed trades with entry and exit timestamps.",
@@ -6252,14 +6252,14 @@
       "annualization": null,
       "benchmark": null,
       "canonical_symbol": "PythonDataService/app/engine/results/statistics.py::_max_consecutive_losses",
-      "category": "returns",
+      "category": "risk",
       "common_misreadings": [
         "A familiar label is not interchangeable with a different producer's calculation."
       ],
       "contract_id": "platform-results-statistics-v1",
       "cost_treatment": "Uses persisted platform run evidence; no value is recomputed in the documentation client.",
       "definition": "Longest contiguous count of completed trades with negative percentage return.",
-      "fixture_or_receipt": "contracts/fixtures/strategy-metric-help-golden-v1.json",
+      "fixture_or_receipt": null,
       "formatting": "integer",
       "formula_latex": null,
       "input_series": "Completed trade percentage returns in ledger order.",
@@ -6375,7 +6375,7 @@
       "contract_id": "platform-results-statistics-v1",
       "cost_treatment": "Uses persisted platform run evidence; no value is recomputed in the documentation client.",
       "definition": "Platform probability that its unannualized Sharpe exceeds zero under the documented return-vector contract.",
-      "fixture_or_receipt": "contracts/fixtures/strategy-metric-help-golden-v1.json",
+      "fixture_or_receipt": null,
       "formatting": "percentage, two decimal places",
       "formula_latex": null,
       "input_series": "The platform return vector, sample standard deviation, skew, and Pearson kurtosis.",
@@ -6819,7 +6819,7 @@
       "fixture_or_receipt": "PythonDataService/tests/fixtures/golden/run-verdict-v2/fixture.json",
       "formatting": "integer points",
       "formula_latex": null,
-      "input_series": "sharpe.platform.v1",
+      "input_series": "The platform's sharpe value, sourced from its sharpe.platform.v1 catalog entry.",
       "interpretation": "Use it to audit the fixed policy receipt, not to infer a cause or permission to trade.",
       "label": "Sharpe ratio policy input",
       "metric_id": "verdict_policy_sharpe",
@@ -6875,7 +6875,7 @@
       "fixture_or_receipt": "PythonDataService/tests/fixtures/golden/run-verdict-v2/fixture.json",
       "formatting": "integer points",
       "formula_latex": null,
-      "input_series": "sortino.platform.v1",
+      "input_series": "The platform's sortino value, sourced from its sortino.platform.v1 catalog entry.",
       "interpretation": "Use it to audit the fixed policy receipt, not to infer a cause or permission to trade.",
       "label": "Sortino ratio policy input",
       "metric_id": "verdict_policy_sortino",
@@ -6931,7 +6931,7 @@
       "fixture_or_receipt": "PythonDataService/tests/fixtures/golden/run-verdict-v2/fixture.json",
       "formatting": "integer points",
       "formula_latex": null,
-      "input_series": "cagr.platform.v1",
+      "input_series": "The platform's cagr value, sourced from its cagr.platform.v1 catalog entry.",
       "interpretation": "Use it to audit the fixed policy receipt, not to infer a cause or permission to trade.",
       "label": "CAGR policy input",
       "metric_id": "verdict_policy_cagr",
@@ -6987,7 +6987,7 @@
       "fixture_or_receipt": "PythonDataService/tests/fixtures/golden/run-verdict-v2/fixture.json",
       "formatting": "integer points",
       "formula_latex": null,
-      "input_series": "calmar.platform.v1",
+      "input_series": "The platform's calmar value, sourced from its calmar.platform.v1 catalog entry.",
       "interpretation": "Use it to audit the fixed policy receipt, not to infer a cause or permission to trade.",
       "label": "Calmar policy input",
       "metric_id": "verdict_policy_calmar",
@@ -7043,7 +7043,7 @@
       "fixture_or_receipt": "PythonDataService/tests/fixtures/golden/run-verdict-v2/fixture.json",
       "formatting": "integer points",
       "formula_latex": null,
-      "input_series": "annual_volatility.platform.v1",
+      "input_series": "The platform's annual volatility value, sourced from its annual_volatility.platform.v1 catalog entry.",
       "interpretation": "Use it to audit the fixed policy receipt, not to infer a cause or permission to trade.",
       "label": "Annual volatility policy input",
       "metric_id": "verdict_policy_annual_volatility",
@@ -7099,7 +7099,7 @@
       "fixture_or_receipt": "PythonDataService/tests/fixtures/golden/run-verdict-v2/fixture.json",
       "formatting": "integer points",
       "formula_latex": null,
-      "input_series": "maximum_drawdown.platform.v1",
+      "input_series": "The platform's maximum drawdown value, sourced from its maximum_drawdown.platform.v1 catalog entry.",
       "interpretation": "Use it to audit the fixed policy receipt, not to infer a cause or permission to trade.",
       "label": "Maximum drawdown policy input",
       "metric_id": "verdict_policy_maximum_drawdown",
@@ -7155,7 +7155,7 @@
       "fixture_or_receipt": "PythonDataService/tests/fixtures/golden/run-verdict-v2/fixture.json",
       "formatting": "integer points",
       "formula_latex": null,
-      "input_series": "recovery_duration.platform.v1",
+      "input_series": "The platform's recovery duration value, sourced from its recovery_duration.platform.v1 catalog entry.",
       "interpretation": "Use it to audit the fixed policy receipt, not to infer a cause or permission to trade.",
       "label": "Drawdown recovery policy input",
       "metric_id": "verdict_policy_recovery_duration",
@@ -7211,7 +7211,7 @@
       "fixture_or_receipt": "PythonDataService/tests/fixtures/golden/run-verdict-v2/fixture.json",
       "formatting": "integer points",
       "formula_latex": null,
-      "input_series": "max_consecutive_losers.platform.v1",
+      "input_series": "The platform's max consecutive losers value, sourced from its max_consecutive_losers.platform.v1 catalog entry.",
       "interpretation": "Use it to audit the fixed policy receipt, not to infer a cause or permission to trade.",
       "label": "Max consecutive losers policy input",
       "metric_id": "verdict_policy_max_consecutive_losers",
@@ -7267,7 +7267,7 @@
       "fixture_or_receipt": "PythonDataService/tests/fixtures/golden/run-verdict-v2/fixture.json",
       "formatting": "integer points",
       "formula_latex": null,
-      "input_series": "profit_factor.platform.v1",
+      "input_series": "The platform's profit factor value, sourced from its profit_factor.platform.v1 catalog entry.",
       "interpretation": "Use it to audit the fixed policy receipt, not to infer a cause or permission to trade.",
       "label": "Profit factor policy input",
       "metric_id": "verdict_policy_profit_factor",
@@ -7323,7 +7323,7 @@
       "fixture_or_receipt": "PythonDataService/tests/fixtures/golden/run-verdict-v2/fixture.json",
       "formatting": "integer points",
       "formula_latex": null,
-      "input_series": "expectancy.platform.v1",
+      "input_series": "The platform's expectancy value, sourced from its expectancy.platform.v1 catalog entry.",
       "interpretation": "Use it to audit the fixed policy receipt, not to infer a cause or permission to trade.",
       "label": "Expectancy policy input",
       "metric_id": "verdict_policy_expectancy",
@@ -7379,7 +7379,7 @@
       "fixture_or_receipt": "PythonDataService/tests/fixtures/golden/run-verdict-v2/fixture.json",
       "formatting": "integer points",
       "formula_latex": null,
-      "input_series": "win_rate.platform.v1",
+      "input_series": "The platform's win rate value, sourced from its win_rate.platform.v1 catalog entry.",
       "interpretation": "Use it to audit the fixed policy receipt, not to infer a cause or permission to trade.",
       "label": "Win rate policy input",
       "metric_id": "verdict_policy_win_rate",
@@ -7435,7 +7435,7 @@
       "fixture_or_receipt": "PythonDataService/tests/fixtures/golden/run-verdict-v2/fixture.json",
       "formatting": "integer points",
       "formula_latex": null,
-      "input_series": "payoff_ratio.platform.v1",
+      "input_series": "The platform's payoff ratio value, sourced from its payoff_ratio.platform.v1 catalog entry.",
       "interpretation": "Use it to audit the fixed policy receipt, not to infer a cause or permission to trade.",
       "label": "Payoff ratio policy input",
       "metric_id": "verdict_policy_payoff_ratio",
@@ -7491,7 +7491,7 @@
       "fixture_or_receipt": "PythonDataService/tests/fixtures/golden/run-verdict-v2/fixture.json",
       "formatting": "integer points",
       "formula_latex": null,
-      "input_series": "fee_drag.platform.v1",
+      "input_series": "The platform's fee drag value, sourced from its fee_drag.platform.v1 catalog entry.",
       "interpretation": "Use it to audit the fixed policy receipt, not to infer a cause or permission to trade.",
       "label": "Fee drag policy input",
       "metric_id": "verdict_policy_fee_drag",
@@ -7547,7 +7547,7 @@
       "fixture_or_receipt": "PythonDataService/tests/fixtures/golden/run-verdict-v2/fixture.json",
       "formatting": "integer points",
       "formula_latex": null,
-      "input_series": "probabilistic_sharpe.platform.v1",
+      "input_series": "The platform's probabilistic sharpe value, sourced from its probabilistic_sharpe.platform.v1 catalog entry.",
       "interpretation": "Use it to audit the fixed policy receipt, not to infer a cause or permission to trade.",
       "label": "Probabilistic Sharpe policy input",
       "metric_id": "verdict_policy_probabilistic_sharpe",
@@ -7603,7 +7603,7 @@
       "fixture_or_receipt": "PythonDataService/tests/fixtures/golden/run-verdict-v2/fixture.json",
       "formatting": "integer points",
       "formula_latex": null,
-      "input_series": "sample_size.platform.v1",
+      "input_series": "The platform's sample size value, sourced from its sample_size.platform.v1 catalog entry.",
       "interpretation": "Use it to audit the fixed policy receipt, not to infer a cause or permission to trade.",
       "label": "Sample size policy input",
       "metric_id": "verdict_policy_sample_size",
@@ -7659,7 +7659,7 @@
       "fixture_or_receipt": "PythonDataService/tests/fixtures/golden/run-verdict-v2/fixture.json",
       "formatting": "integer points",
       "formula_latex": null,
-      "input_series": "skepticism_penalty.platform.v1",
+      "input_series": "The platform's skepticism penalty value, sourced from its skepticism_penalty.platform.v1 catalog entry.",
       "interpretation": "Use it to audit the fixed policy receipt, not to infer a cause or permission to trade.",
       "label": "Skepticism policy input",
       "metric_id": "verdict_policy_skepticism_penalty",
@@ -7715,7 +7715,7 @@
       "fixture_or_receipt": "PythonDataService/tests/fixtures/golden/run-verdict-v2/fixture.json",
       "formatting": "integer points",
       "formula_latex": null,
-      "input_series": "trade_portfolio_sharpe_gap.platform.v1",
+      "input_series": "The platform's trade portfolio sharpe gap value, sourced from its trade_portfolio_sharpe_gap.platform.v1 catalog entry.",
       "interpretation": "Use it to audit the fixed policy receipt, not to infer a cause or permission to trade.",
       "label": "Trade versus portfolio Sharpe-gap policy input",
       "metric_id": "verdict_policy_trade_portfolio_sharpe_gap",

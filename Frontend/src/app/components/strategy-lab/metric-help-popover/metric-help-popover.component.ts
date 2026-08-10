@@ -2,7 +2,23 @@ import { ChangeDetectionStrategy, Component, computed, input, signal } from "@an
 import { RouterLink } from "@angular/router";
 
 import type { MetricDocumentationContext } from "../../../graphql/backtest-runs.query";
-import type { MetricHelp } from "../../lean-engine/metric-grade.util";
+import type { MetricHelp, StrategyMetricId } from "../../lean-engine/metric-grade.util";
+
+// STRATEGY_METRIC_HELP.id is a legacy kebab-case identifier (e.g. "net-profit");
+// the analytical metric catalog uses different stable ids (e.g. "net_pnl"). This
+// maps every legacy id to its catalog metric_id so an unrecorded-context link
+// still resolves to the requested metric's definition instead of catalog's
+// fallback (Sharpe) entry.
+const CATALOG_METRIC_ID: Readonly<Record<StrategyMetricId, string>> = {
+  "net-profit": "net_pnl",
+  "profit-factor": "profit_factor",
+  expectancy: "expectancy",
+  sharpe: "sharpe",
+  sortino: "sortino",
+  "max-drawdown": "maximum_drawdown",
+  "win-rate": "win_rate",
+  trades: "completed_trades",
+};
 
 @Component({
   selector: "app-metric-help-popover",
@@ -21,7 +37,7 @@ export class MetricHelpPopoverComponent {
   readonly open = signal(false);
   readonly docsQuery = computed(() => {
     const context = this.context();
-    if (!context) return { metric: this.metric().id };
+    if (!context) return { metric: CATALOG_METRIC_ID[this.metric().id] };
     return {
       metric: context.metricId,
       variant: context.variantId,

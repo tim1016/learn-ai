@@ -1404,6 +1404,11 @@ def test_failed_run_payload_emits_canonical_shape(tmp_path: Path) -> None:
     assert verdict["signal"] is None
     assert verdict["evidence_action"] is None
     assert "lean_run_failed" in verdict["red_flags"]
+    # A failed run's lean_statistics above is an all-zero placeholder, not a
+    # normalized result — recording sharpe.lean_native.v1 "recorded" provenance
+    # against it would claim LEAN computed a real Sharpe value. No context is
+    # recorded; the Backend infers provenance from execution.Source instead.
+    assert json.loads(payload["metric_documentation_json"]) == []
     equity = json.loads(payload["equity_curve_json"])
     assert equity["schema_version"] == 2
     assert equity["mark_to_market"]["error"] == "No normalized/result.json — LEAN run did not produce output"

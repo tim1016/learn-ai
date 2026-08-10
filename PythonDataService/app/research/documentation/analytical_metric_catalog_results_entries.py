@@ -7,9 +7,11 @@ each entry; Angular only renders the generated catalog.
 
 from __future__ import annotations
 
+from typing import Final
+
 from app.services.run_verdict_service import VERDICT_POLICY_DOCUMENTATION
 
-from .analytical_metric_catalog import MetricVariant, ValueState
+from .analytical_metric_catalog import MetricCategory, MetricVariant, ValueState
 
 _PLATFORM_UNAVAILABLE = ValueState(
     state="unavailable",
@@ -33,7 +35,26 @@ _INFINITE = ValueState(
 )
 
 
-def _evidence_for(canonical_symbol: str) -> tuple[tuple[str, ...], str | None]:
+# metric_ids whose numeric value is actually asserted by
+# strategy-metric-help-golden-v1.json (see tests/fixtures/test_strategy_metric_help_golden.py
+# for the exact PortfolioStatistics/TradeStatistics field each key checks).
+# Every other platform metric_id -- including Backtest Evidence Grade
+# sub-scores and raw result statistics like total_fees or cagr -- is not
+# covered by that fixture and must not cite it as a receipt it doesn't have.
+_STRATEGY_METRIC_HELP_GOLDEN_METRIC_IDS: Final[frozenset[str]] = frozenset(
+    {
+        "net_pnl",
+        "profit_factor",
+        "expectancy",
+        "sortino",
+        "maximum_drawdown",
+        "win_rate",
+        "completed_trades",
+    }
+)
+
+
+def _evidence_for(metric_id: str, canonical_symbol: str) -> tuple[tuple[str, ...], str | None]:
     """Return the real receipt for each published Results producer."""
 
     if canonical_symbol == "PythonDataService/app/engine/results/equity_downsample.py::build_realized_equity_envelope":
@@ -56,29 +77,12 @@ def _evidence_for(canonical_symbol: str) -> tuple[tuple[str, ...], str | None]:
             ("PythonDataService/tests/services/test_run_verdict_parity.py",),
             "PythonDataService/tests/fixtures/golden/run-verdict-v2/fixture.json",
         )
-    return (
-        ("PythonDataService/tests/test_statistics.py",),
-        "contracts/fixtures/strategy-metric-help-golden-v1.json",
+    fixture_or_receipt = (
+        "contracts/fixtures/strategy-metric-help-golden-v1.json"
+        if metric_id in _STRATEGY_METRIC_HELP_GOLDEN_METRIC_IDS
+        else None
     )
-
-
-def _platform_category(metric_id: str, label: str, definition: str) -> str:
-    """Return the Python-authored navigation taxonomy for platform Results entries."""
-
-    text = f"{metric_id} {label} {definition}".lower()
-    if "drawdown" in text:
-        return "drawdown"
-    if "duration" in text:
-        return "duration"
-    if any(token in text for token in ("completed_trades", "winning_trades", "losing_trades", "sample_size", "win rate")):
-        return "trade_population"
-    if any(token in text for token in ("sharpe", "sortino", "volatility", "calmar")):
-        return "statistical_confidence"
-    if any(token in text for token in ("profit", "expectancy", "payoff", "fee")):
-        return "trade_economics"
-    if "risk" in text or "var" in text:
-        return "risk"
-    return "returns"
+    return (("PythonDataService/tests/test_statistics.py",), fixture_or_receipt)
 
 
 def _platform_metric(
@@ -86,6 +90,7 @@ def _platform_metric(
     label: str,
     definition: str,
     *,
+    category: MetricCategory,
     input_series: str,
     units: str,
     formatting: str,
@@ -94,13 +99,13 @@ def _platform_metric(
     value_states: tuple[ValueState, ...] = (_VALID_ZERO, _PLATFORM_UNAVAILABLE),
     alternative_variant_ids: tuple[str, ...] = (),
 ) -> MetricVariant:
-    validating_tests, fixture_or_receipt = _evidence_for(canonical_symbol)
+    validating_tests, fixture_or_receipt = _evidence_for(metric_id, canonical_symbol)
     return MetricVariant(
         metric_id=metric_id,
         variant_id=f"{metric_id}.platform.v1",
         contract_id="platform-results-statistics-v1",
         producer="platform",
-        category=_platform_category(metric_id, label, definition),
+        category=category,
         label=label,
         definition=definition,
         interpretation="Read this value together with its producer, input evidence, and any unavailable state.",
@@ -130,8 +135,6 @@ def _verdict_policy(
     key: str,
     label: str,
     thresholds: str,
-    *,
-    input_series: str,
 ) -> MetricVariant:
     return MetricVariant(
         metric_id=f"verdict_policy_{key}",
@@ -151,7 +154,10 @@ def _verdict_policy(
         ),
         aliases=(key.replace("_", " "), "Backtest Evidence Grade input"),
         search_terms=("17 inputs", "fixed policy", "v2", "evidence grade"),
-        input_series=input_series,
+        # The 17-input policy scores a producer-recorded value; it does not
+        # redefine it. Point at the platform variant that owns the definition
+        # instead of restating (or, as before this fix, leaking) its raw id.
+        input_series=f"The platform's {key.replace('_', ' ')} value, sourced from its {key}.platform.v1 catalog entry.",
         units="0–20 policy points",
         output_scale="fixed sub-score before dimension aggregation",
         formatting="integer points",
@@ -219,6 +225,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "net_pnl",
         "Net P&L",
         "Final equity less initial cash after recorded fees.",
+        category="returns",
         input_series="Initial cash and final equity from the authoritative full run.",
         units="USD",
         formatting="currency, two decimal places",
@@ -228,6 +235,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "initial_cash",
         "Initial cash",
         "Cash recorded at the start of the authoritative run.",
+        category="returns",
         input_series="Persisted run configuration.",
         units="USD",
         formatting="currency, two decimal places",
@@ -237,6 +245,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "final_equity",
         "Final equity",
         "Equity recorded at the end of the authoritative run.",
+        category="returns",
         input_series="Persisted final equity evidence.",
         units="USD",
         formatting="currency, two decimal places",
@@ -246,6 +255,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "total_fees",
         "Total fees",
         "Sum of fees recorded for the authoritative run.",
+        category="trade_economics",
         input_series="Persisted execution fee ledger.",
         units="USD",
         formatting="currency, two decimal places",
@@ -255,6 +265,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "completed_trades",
         "Completed trades",
         "Count of completed round trips in the authoritative full-run ledger.",
+        category="trade_population",
         input_series="Authoritative full-run ledger of closed trades, not the displayed recent-500 projection.",
         units="trades",
         formatting="integer",
@@ -264,6 +275,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "winning_trades",
         "Winning trades",
         "Completed trades with a return greater than zero.",
+        category="trade_population",
         input_series="Authoritative closed-trade return ledger.",
         units="trades",
         formatting="integer",
@@ -273,6 +285,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "losing_trades",
         "Losing trades",
         "Completed trades with a return below zero.",
+        category="trade_population",
         input_series="Authoritative closed-trade return ledger.",
         units="trades",
         formatting="integer",
@@ -282,6 +295,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "profit_factor",
         "Profit factor",
         "Gross winning trade returns divided by the absolute gross losing trade returns.",
+        category="trade_economics",
         input_series="Completed trade percentage returns.",
         units="ratio",
         formatting="two decimal places or ∞",
@@ -294,6 +308,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "expectancy",
         "Expectancy / trade",
         "Arithmetic mean completed-trade percentage return.",
+        category="trade_economics",
         input_series="Completed trade percentage returns.",
         units="percentage return",
         formatting="percentage, three decimal places",
@@ -304,6 +319,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "payoff_ratio",
         "Payoff ratio",
         "Average winning return divided by the absolute average losing return.",
+        category="trade_economics",
         input_series="Completed trade percentage returns separated by sign.",
         units="ratio",
         formatting="two decimal places or ∞",
@@ -315,6 +331,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "win_rate",
         "Win rate",
         "Winning completed trades divided by all completed trades.",
+        category="trade_population",
         input_series="Completed trade percentage returns.",
         units="fraction",
         formatting="percentage, two decimal places",
@@ -325,6 +342,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "sortino",
         "Sortino ratio",
         "Annualized mean return divided by annualized downside deviation of the selected platform return observations.",
+        category="statistical_confidence",
         input_series="Platform return observations selected by the statistics producer.",
         units="ratio",
         formatting="two decimal places",
@@ -344,6 +362,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "maximum_drawdown",
         "Maximum drawdown",
         "Largest fall from a running equity peak to a later trough.",
+        category="drawdown",
         input_series="Platform equity curve observations.",
         units="fraction",
         formatting="percentage, two decimal places",
@@ -355,6 +374,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "cagr",
         "CAGR",
         "Platform compound annual growth rate calculated from the producing run's trading-duration convention.",
+        category="returns",
         input_series="Platform equity curve or documented compatibility input series.",
         units="fraction",
         formatting="percentage, two decimal places",
@@ -366,6 +386,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "calmar",
         "Calmar ratio",
         "Platform CAGR divided by platform maximum drawdown when both inputs are defined and drawdown is positive.",
+        category="drawdown",
         input_series="Platform CAGR and maximum drawdown.",
         units="ratio",
         formatting="two decimal places",
@@ -377,6 +398,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "annual_volatility",
         "Annual volatility",
         "Annualized standard deviation provided by the platform statistics producer.",
+        category="statistical_confidence",
         input_series="Platform return observations.",
         units="fraction",
         formatting="percentage, two decimal places",
@@ -387,6 +409,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "recovery_duration",
         "Drawdown recovery",
         "Longest peak-to-recovery calendar duration in whole days on the closed-trade ledger.",
+        category="drawdown",
         input_series="Completed trades with entry and exit timestamps.",
         units="days",
         formatting="integer days",
@@ -398,6 +421,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "max_consecutive_losers",
         "Max consecutive losers",
         "Longest contiguous count of completed trades with negative percentage return.",
+        category="risk",
         input_series="Completed trade percentage returns in ledger order.",
         units="trades",
         formatting="integer",
@@ -408,6 +432,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "fee_drag",
         "Fee drag on gross",
         "Recorded total fees divided by net profit plus fees when gross profit is positive.",
+        category="trade_economics",
         input_series="Persisted net profit and fee total.",
         units="fraction",
         formatting="percentage, two decimal places",
@@ -419,6 +444,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "probabilistic_sharpe",
         "Probabilistic Sharpe",
         "Platform probability that its unannualized Sharpe exceeds zero under the documented return-vector contract.",
+        category="statistical_confidence",
         input_series="The platform return vector, sample standard deviation, skew, and Pearson kurtosis.",
         units="probability",
         formatting="percentage, two decimal places",
@@ -430,6 +456,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "sample_size",
         "Sample size (trades)",
         "Number of completed trades in the authoritative full-run ledger.",
+        category="trade_population",
         input_series="Authoritative full-run closed-trade ledger.",
         units="trades",
         formatting="integer",
@@ -440,6 +467,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "skepticism_penalty",
         "Skepticism penalty",
         "A fixed policy adjustment driven by extreme platform Sharpe, profit factor, or win rate observations.",
+        category="trade_population",
         input_series="Platform Sharpe, profit factor, and win rate.",
         units="policy points",
         formatting="integer points",
@@ -451,6 +479,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "trade_portfolio_sharpe_gap",
         "Trade versus portfolio Sharpe gap",
         "Trade Sharpe minus platform portfolio Sharpe when both persisted values are available.",
+        category="statistical_confidence",
         input_series="Platform portfolio Sharpe and persisted trade Sharpe.",
         units="ratio difference",
         formatting="two decimal places",
@@ -462,6 +491,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "full_run_totals",
         "Authoritative full-run totals",
         "Totals and statistics computed from the complete persisted run, even when the UI projects only recent ledger rows.",
+        category="returns",
         input_series="Complete persisted trade and equity evidence.",
         units="context",
         formatting="plain language",
@@ -472,6 +502,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "recent_trade_ledger",
         "Recent 500-trade ledger",
         "The most recent up to 500 trades displayed for interaction; it is not the authority for full-run totals or statistics.",
+        category="returns",
         input_series="Recent chronological projection of the authoritative closed-trade ledger.",
         units="trades",
         formatting="integer rows",
@@ -482,6 +513,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "realized_equity",
         "Realized equity",
         "Equity that books net P&L at completed trade exits for the primary visual narrative.",
+        category="returns",
         input_series="Persisted realized-equity curve.",
         units="USD",
         formatting="currency chart",
@@ -492,6 +524,7 @@ PLATFORM_HEADLINE_VARIANTS: tuple[MetricVariant, ...] = (
         "risk_statistic_input_curve",
         "Risk-statistic input curve",
         "Canonical mark-to-market or compatibility evidence used by the producing risk statistic; it can differ from the realized-equity display curve.",
+        category="risk",
         input_series="Persisted mark-to-market or compatibility curve identified by the producing metric contract.",
         units="USD or normalized equity",
         formatting="producer-specific",
@@ -506,103 +539,86 @@ VERDICT_POLICY_VARIANTS: tuple[MetricVariant, ...] = (
         "sharpe",
         "Sharpe ratio policy input",
         VERDICT_POLICY_DOCUMENTATION["sharpe"],
-        input_series="sharpe.platform.v1",
     ),
     _verdict_policy(
         "sortino",
         "Sortino ratio policy input",
         VERDICT_POLICY_DOCUMENTATION["sortino"],
-        input_series="sortino.platform.v1",
     ),
     _verdict_policy(
         "cagr",
         "CAGR policy input",
         VERDICT_POLICY_DOCUMENTATION["cagr"],
-        input_series="cagr.platform.v1",
     ),
     _verdict_policy(
         "calmar",
         "Calmar policy input",
         VERDICT_POLICY_DOCUMENTATION["calmar"],
-        input_series="calmar.platform.v1",
     ),
     _verdict_policy(
         "annual_volatility",
         "Annual volatility policy input",
         VERDICT_POLICY_DOCUMENTATION["annual_volatility"],
-        input_series="annual_volatility.platform.v1",
     ),
     _verdict_policy(
         "maximum_drawdown",
         "Maximum drawdown policy input",
         VERDICT_POLICY_DOCUMENTATION["maximum_drawdown"],
-        input_series="maximum_drawdown.platform.v1",
     ),
     _verdict_policy(
         "recovery_duration",
         "Drawdown recovery policy input",
         VERDICT_POLICY_DOCUMENTATION["recovery_duration"],
-        input_series="recovery_duration.platform.v1",
     ),
     _verdict_policy(
         "max_consecutive_losers",
         "Max consecutive losers policy input",
         VERDICT_POLICY_DOCUMENTATION["max_consecutive_losers"],
-        input_series="max_consecutive_losers.platform.v1",
     ),
     _verdict_policy(
         "profit_factor",
         "Profit factor policy input",
         VERDICT_POLICY_DOCUMENTATION["profit_factor"],
-        input_series="profit_factor.platform.v1",
     ),
     _verdict_policy(
         "expectancy",
         "Expectancy policy input",
         VERDICT_POLICY_DOCUMENTATION["expectancy"],
-        input_series="expectancy.platform.v1",
     ),
     _verdict_policy(
         "win_rate",
         "Win rate policy input",
         VERDICT_POLICY_DOCUMENTATION["win_rate"],
-        input_series="win_rate.platform.v1",
     ),
     _verdict_policy(
         "payoff_ratio",
         "Payoff ratio policy input",
         VERDICT_POLICY_DOCUMENTATION["payoff_ratio"],
-        input_series="payoff_ratio.platform.v1",
     ),
     _verdict_policy(
         "fee_drag",
         "Fee drag policy input",
         VERDICT_POLICY_DOCUMENTATION["fee_drag"],
-        input_series="fee_drag.platform.v1",
     ),
     _verdict_policy(
         "probabilistic_sharpe",
         "Probabilistic Sharpe policy input",
         VERDICT_POLICY_DOCUMENTATION["probabilistic_sharpe"],
-        input_series="probabilistic_sharpe.platform.v1",
     ),
     _verdict_policy(
         "sample_size",
         "Sample size policy input",
         VERDICT_POLICY_DOCUMENTATION["sample_size"],
-        input_series="sample_size.platform.v1",
     ),
     _verdict_policy(
         "skepticism_penalty",
         "Skepticism policy input",
         VERDICT_POLICY_DOCUMENTATION["skepticism_penalty"],
-        input_series="skepticism_penalty.platform.v1",
     ),
     _verdict_policy(
         "trade_portfolio_sharpe_gap",
         "Trade versus portfolio Sharpe-gap policy input",
         VERDICT_POLICY_DOCUMENTATION["trade_portfolio_sharpe_gap"],
-        input_series="trade_portfolio_sharpe_gap.platform.v1",
     ),
 )
 

@@ -1,8 +1,6 @@
+"""Results-domain coverage tests for the analytical metric catalog shard."""
+
 from __future__ import annotations
-
-import pytest
-
-pytest.importorskip("app.research.documentation.analytical_metric_catalog")
 
 from app.research.documentation.analytical_metric_catalog_results_entries import (
     PERFORMANCE_MEMORY_VARIANTS,
@@ -67,6 +65,73 @@ def test_results_catalog_preserves_sortino_unavailability_and_full_run_projectio
     assert entries["realized_equity.platform.v1"].fixture_or_receipt == "PythonDataService/tests/fixtures/golden/engine-results/ENG-006/v1/"
     assert entries["initial_cash.platform.v1"].canonical_symbol.endswith("StrategyExecution.cs::InitialCash")
     assert entries["final_equity.platform.v1"].canonical_symbol.endswith("StrategyExecution.cs::FinalEquity")
+
+
+def test_platform_headline_entries_carry_their_own_authored_category() -> None:
+    # Categories are authored explicitly per entry, not inferred from prose
+    # substrings -- an editorial change to a definition must not silently
+    # relocate a metric (net_pnl's "after recorded fees" used to false-match
+    # trade_economics; max_consecutive_losers' "completed trades" -- with a
+    # space, unlike the "completed_trades" token -- fell through to returns).
+    expected_categories = {
+        "net_pnl": "returns",
+        "initial_cash": "returns",
+        "final_equity": "returns",
+        "total_fees": "trade_economics",
+        "completed_trades": "trade_population",
+        "winning_trades": "trade_population",
+        "losing_trades": "trade_population",
+        "profit_factor": "trade_economics",
+        "expectancy": "trade_economics",
+        "payoff_ratio": "trade_economics",
+        "win_rate": "trade_population",
+        "sortino": "statistical_confidence",
+        "maximum_drawdown": "drawdown",
+        "cagr": "returns",
+        "calmar": "drawdown",
+        "annual_volatility": "statistical_confidence",
+        "recovery_duration": "drawdown",
+        "max_consecutive_losers": "risk",
+        "fee_drag": "trade_economics",
+        "probabilistic_sharpe": "statistical_confidence",
+        "sample_size": "trade_population",
+        "skepticism_penalty": "trade_population",
+        "trade_portfolio_sharpe_gap": "statistical_confidence",
+        "full_run_totals": "returns",
+        "recent_trade_ledger": "returns",
+        "realized_equity": "returns",
+        "risk_statistic_input_curve": "risk",
+    }
+
+    entries = {entry.metric_id: entry for entry in PLATFORM_HEADLINE_VARIANTS}
+    assert set(entries) == set(expected_categories)
+    for metric_id, category in expected_categories.items():
+        assert entries[metric_id].category == category, metric_id
+
+
+def test_platform_headline_fixture_receipt_is_only_claimed_for_covered_metrics() -> None:
+    # strategy-metric-help-golden-v1.json only asserts these 7 platform
+    # concepts (see tests/fixtures/test_strategy_metric_help_golden.py);
+    # citing it for e.g. total_fees or cagr would claim a receipt the fixture
+    # doesn't actually cover.
+    golden_covered = {"net_pnl", "profit_factor", "expectancy", "sortino", "maximum_drawdown", "win_rate", "completed_trades"}
+    entries = {entry.metric_id: entry for entry in PLATFORM_HEADLINE_VARIANTS}
+
+    for metric_id, entry in entries.items():
+        if metric_id in golden_covered:
+            assert entry.fixture_or_receipt == "contracts/fixtures/strategy-metric-help-golden-v1.json", metric_id
+        elif entry.canonical_symbol.startswith(("Backend/", "PythonDataService/app/engine/results/equity_downsample.py")) or any(
+            marker in entry.canonical_symbol for marker in ("engine_validation_analytics.py", "run_verdict_service.py")
+        ):
+            continue  # These branches have their own dedicated receipts, asserted elsewhere.
+        else:
+            assert entry.fixture_or_receipt is None, metric_id
+
+
+def test_verdict_policy_input_series_is_prose_not_a_bare_variant_id() -> None:
+    for entry in VERDICT_POLICY_VARIANTS:
+        assert " " in entry.input_series, entry.variant_id
+        assert not entry.input_series.endswith(".platform.v1"), entry.variant_id
 
 
 def test_performance_memory_entries_cover_horizon_timing_seasonality_and_overlapping_rolls() -> None:

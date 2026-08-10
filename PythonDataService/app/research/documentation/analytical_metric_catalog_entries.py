@@ -165,7 +165,17 @@ _SEMANTIC_METRIC_IDS: Final[dict[str, str]] = {
 
 
 def _semantic_metric_id(spec: _MetricSpec) -> str:
-    return _SEMANTIC_METRIC_IDS.get(spec.key, _snake_case(spec.key))
+    # AnalyticalMetricCatalog's own validator requires a declared alternative
+    # pair to share metric_id, so a spec that names its platform alternative
+    # (e.g. portfolio Sortino -> sortino.platform.v1) must keep the shared
+    # semantic id. Every other portable LEAN key keeps its own unique,
+    # section-qualified spec.metric_id (e.g. "lean_trade_sortino_ratio")
+    # instead of collapsing to the same id as its portfolio/trade
+    # counterpart or the tracer-owned sharpe.lean_native.v1 -- two
+    # lean_native entries must not collide on (metric_id, producer).
+    if spec.alternatives:
+        return _SEMANTIC_METRIC_IDS.get(spec.key, _snake_case(spec.key))
+    return spec.metric_id
 
 
 def _native_category(spec: _MetricSpec, section: Literal["portfolio", "trade"]) -> str:
@@ -222,9 +232,22 @@ def _value_states(*, sentinel: str | None = None) -> tuple[dict[str, str], ...]:
     return tuple(states)
 
 
+# Single mapping for both the sentinel prose and its validating-test
+# attachment below, so a fourth sentinel metric added to only one of the two
+# places is impossible -- it would produce an entry with a sentinel state and
+# no validating test, silently unverified.
+_TRADE_SENTINELS: Final[dict[str, str]] = {
+    "profitFactor": "10 when total profit is positive and there is no loss denominator.",
+    "winLossRatio": "10 when there are winning trades and no losing-trade count denominator.",
+    "profitToMaxDrawdownRatio": (
+        "10 when total P&L is positive and maximum closed-trade drawdown has no denominator."
+    ),
+}
+
+
 def _native_entry(spec: _MetricSpec, *, section: Literal["portfolio", "trade"]) -> dict[str, object]:
     if section == "portfolio":
-        canonical_symbol = "app.engine.results.lean_statistics.reproduce_lean_total_performance"
+        canonical_symbol = "PythonDataService/app/engine/results/lean_statistics.py::reproduce_lean_total_performance"
         source_files = "PortfolioStatistics.cs, Statistics.cs, StatisticsBuilder.cs"
         cadence = (
             "Daily LEAN equity/performance samples after StatisticsBuilder preprocessing: "
@@ -234,7 +257,7 @@ def _native_entry(spec: _MetricSpec, *, section: Literal["portfolio", "trade"]) 
             "Use retained LEAN native primitives as emitted. Do not subtract fees a second time from equity or returns."
         )
     else:
-        canonical_symbol = "app.engine.results.lean_statistics._reproduce_lean_trade_statistics"
+        canonical_symbol = "PythonDataService/app/engine/results/lean_statistics.py::_reproduce_lean_trade_statistics"
         source_files = "TradeStatistics.cs, Statistics.cs"
         cadence = "One ordered observation per closed trade from LEAN totalPerformance.closedTrades."
         cost_treatment = "Trade P&L and totalFees retain the account-currency values emitted in each closed-trade primitive."
@@ -264,22 +287,12 @@ def _native_entry(spec: _MetricSpec, *, section: Literal["portfolio", "trade"]) 
         "risk_free_rate": spec.risk_free_rate,
         "cost_treatment": cost_treatment,
         "timezone_convention": "Source timestamps are int64 ms UTC; timestamp display uses the viewer's local timezone.",
-        "value_states": _value_states(
-            sentinel=(
-                "10 when total profit is positive and there is no loss denominator."
-                if spec.key == "profitFactor"
-                else "10 when there are winning trades and no losing-trade count denominator."
-                if spec.key == "winLossRatio"
-                else "10 when total P&L is positive and maximum closed-trade drawdown has no denominator."
-                if spec.key == "profitToMaxDrawdownRatio"
-                else None
-            ),
-        ),
+        "value_states": _value_states(sentinel=_TRADE_SENTINELS.get(spec.key)),
         "canonical_symbol": canonical_symbol,
         "source_reference": f"{LEAN_SOURCE_REFERENCE}; {source_files}",
         "validating_tests": (
             LEAN_ORACLE_TEST,
-            *((LEAN_SENTINEL_TEST,) if spec.key in {"profitFactor", "winLossRatio", "profitToMaxDrawdownRatio"} else ()),
+            *((LEAN_SENTINEL_TEST,) if spec.key in _TRADE_SENTINELS else ()),
         ),
         "fixture_or_receipt": LEAN_ORACLE_FIXTURE,
         "numerical_tolerance": LEAN_ORACLE_TOLERANCE,

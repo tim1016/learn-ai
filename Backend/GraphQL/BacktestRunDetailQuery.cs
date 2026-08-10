@@ -162,7 +162,7 @@ public sealed record BacktestRunDetailType
             VerdictSignal = execution.VerdictSignal,
             EquityCurve = ParseEquityCurve(execution.EquityCurveJson, execution.Id, logger),
             ValidationAnalytics = ParseValidationAnalytics(execution.ValidationAnalyticsJson, execution.Id, logger),
-            MetricDocumentation = ParseMetricDocumentation(execution, leanKpis, logger),
+            MetricDocumentation = ParseMetricDocumentation(execution, logger),
             InsightSummaryJson = execution.InsightSummaryJson,
             DataPolicyJson = execution.DataPolicyJson,
             CommissionPerOrder = execution.CommissionPerOrder,
@@ -241,7 +241,6 @@ public sealed record BacktestRunDetailType
 
     private static IReadOnlyList<MetricDocumentationContextType> ParseMetricDocumentation(
         StrategyExecution execution,
-        BacktestRunLeanKpiType? leanKpis,
         ILogger logger)
     {
         if (!string.IsNullOrWhiteSpace(execution.MetricDocumentationJson))
@@ -251,14 +250,22 @@ public sealed record BacktestRunDetailType
                 var recorded = JsonSerializer.Deserialize<List<MetricDocumentationContextType>>(
                     execution.MetricDocumentationJson,
                     SnakeCaseJson);
-                if (recorded is not null && recorded.All(context => context.IsValid()))
+                // Count: > 0 matters here: [] deserializes successfully and
+                // .All() is vacuously true on an empty sequence, so without
+                // the count check an empty recorded list would short-circuit
+                // to "no contexts" instead of falling through to inference.
+                if (recorded is { Count: > 0 } && recorded.All(context => context.IsValid()))
                 {
                     return recorded
                         .Select(context => context with { ContractProvenance = "recorded" })
                         .ToList();
                 }
+
+                logger.LogWarning(
+                    "StrategyExecution {ExecutionId} metric documentation JSON is empty or invalid; inferring context",
+                    execution.Id);
             }
-            catch (JsonException ex)
+            catch (Exception ex) when (ex is JsonException or InvalidOperationException or NotSupportedException)
             {
                 logger.LogWarning(
                     ex,
@@ -267,7 +274,13 @@ public sealed record BacktestRunDetailType
             }
         }
 
-        var variant = execution.Source == "lean-sidecar" && leanKpis?.SharpeRatio is not null
+        // Branch on producer identity (execution.Source) alone. Gating on a
+        // particular field's presence (e.g. leanKpis?.SharpeRatio) conflates
+        // "LEAN produced this row" with "LEAN emitted a Sharpe value" -- a
+        // legacy lean-sidecar row with no portfolio.sharpe_ratio, or a failed
+        // LEAN run whose statistics default to null, is still LEAN-produced
+        // and must not be inferred as the platform contract.
+        var variant = execution.Source == "lean-sidecar"
             ? new MetricDocumentationContextType
             {
                 MetricId = "sharpe",

@@ -25,6 +25,12 @@ export class ResultsSummaryComponent {
   readonly sharpeDocumentation = computed(
     () => this.metricDocumentation().find((context) => context.metricId === "sharpe") ?? null,
   );
+  readonly sortinoDocumentation = computed(
+    () => this.metricDocumentation().find((context) => context.metricId === "sortino") ?? null,
+  );
+  readonly maxDrawdownDocumentation = computed(
+    () => this.metricDocumentation().find((context) => context.metricId === "maximum_drawdown") ?? null,
+  );
   currency(value: number | null | undefined): string {
     if (!isFiniteNumber(value)) return "—";
     return new Intl.NumberFormat("en-US", {

@@ -1,12 +1,19 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from "@angular/core";
+import { ChangeDetectionStrategy, Component, computed, inject, resource, signal } from "@angular/core";
 import { RouterLink, ActivatedRoute, type ParamMap } from "@angular/router";
 import { toSignal } from "@angular/core/rxjs-interop";
+import { Apollo } from "apollo-angular";
+import { firstValueFrom } from "rxjs";
 
 import analyticalMetricCatalog from "@repo-contracts/strategy-lab/analytical-metric-catalog-v1.json";
 
 import { MetricReferenceEntryComponent } from "./metric-reference-entry.component";
 import { ReceiptLabelPipe } from "../../../shared/pipes/receipt-label.pipe";
 import type { AnalyticalMetricCatalog, MetricProducer, MetricVariant } from "./analytical-metric-catalog.models";
+import {
+  BACKTEST_RUN_DETAIL_QUERY,
+  type BacktestRunDetailQueryResult,
+  type MetricDocumentationContext,
+} from "../../../graphql/backtest-runs.query";
 
 const CATALOG: AnalyticalMetricCatalog = analyticalMetricCatalog;
 
@@ -101,6 +108,7 @@ export function filterMetricVariants(
 })
 export class StrategyLabAnalyticalManualComponent {
   private readonly route = inject(ActivatedRoute);
+  private readonly apollo = inject(Apollo);
   private readonly queryParams = toSignal(this.route.queryParamMap, { initialValue: this.route.snapshot.queryParamMap });
 
   readonly search = signal("");
@@ -116,7 +124,28 @@ export class StrategyLabAnalyticalManualComponent {
     const selected = this.selectedVariant();
     return CATALOG.variants.find((variant) => selected.alternative_variant_ids.includes(variant.variant_id)) ?? null;
   });
-  readonly hasRunContext = computed(() => this.runId() !== null && readRequest(this.queryParams()).variantId !== null);
+  // A URL can name any run id and variant it likes; that alone does not mean
+  // the run actually used that variant. Load the run's real GraphQL receipt
+  // and only claim "used by this run" when the selected variant appears in it.
+  private readonly runReceipt = resource({
+    params: () => this.runId() ?? undefined,
+    loader: async ({ params: runId }): Promise<MetricDocumentationContext[]> => {
+      const response = await firstValueFrom(
+        this.apollo.query<BacktestRunDetailQueryResult>({
+          query: BACKTEST_RUN_DETAIL_QUERY,
+          variables: { id: runId },
+          fetchPolicy: "cache-first",
+        }),
+      );
+      return response.data?.backtestRun?.metricDocumentation ?? [];
+    },
+  });
+  readonly hasRunContext = computed(() => {
+    const receipt = this.runReceipt.value();
+    if (!receipt) return false;
+    const selected = this.selectedVariant();
+    return receipt.some((context) => context.variantId === selected.variant_id);
+  });
   readonly filteredVariants = computed(() => filterMetricVariants(CATALOG.variants, {
     search: this.search(),
     category: this.category(),

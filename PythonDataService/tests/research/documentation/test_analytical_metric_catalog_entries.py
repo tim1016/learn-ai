@@ -69,12 +69,28 @@ def test_lean_catalog_runtime_entries_remain_separate_from_66_value_parity_inven
 
 def test_all_native_entries_carry_pinned_provenance_and_existing_evidence_receipts() -> None:
     fixture_path = REPOSITORY_ROOT / LEAN_ORACLE_FIXTURE
-    test_path, _ = LEAN_ORACLE_TEST.split("::", maxsplit=1)
+    test_path, node_id = LEAN_ORACLE_TEST.split("::", maxsplit=1)
 
     assert fixture_path.is_dir()
     assert (REPOSITORY_ROOT / test_path).is_file()
+    assert f"def {node_id}(" in (REPOSITORY_ROOT / test_path).read_text(encoding="utf-8")
     manifest = json.loads((fixture_path / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["lean_source_commit"] == LEAN_SOURCE_COMMIT
+
+    # Every distinct validating_tests path::node_id pair across the catalog
+    # must resolve to a real function -- not just the path from
+    # LEAN_ORACLE_TEST. Renaming a validating test would otherwise leave
+    # catalog entries citing a test that no longer exists while this check
+    # still passes.
+    all_validating_tests = {
+        validating_test
+        for entry in LEAN_NATIVE_CATALOG_VARIANTS
+        for validating_test in entry["validating_tests"]
+    }
+    for validating_test in all_validating_tests:
+        path, node = validating_test.split("::", maxsplit=1)
+        source = (REPOSITORY_ROOT / path).read_text(encoding="utf-8")
+        assert f"def {node}(" in source, validating_test
 
     for entry in LEAN_NATIVE_CATALOG_VARIANTS:
         assert LEAN_SOURCE_COMMIT in str(entry["source_reference"])

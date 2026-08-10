@@ -1,7 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { provideZonelessChangeDetection } from "@angular/core";
+import { TestBed } from "@angular/core/testing";
+import { ActivatedRoute, convertToParamMap } from "@angular/router";
+import { Apollo } from "apollo-angular";
+import { of } from "rxjs";
+import { describe, expect, it, vi } from "vitest";
 
 import type { MetricVariant } from "./analytical-metric-catalog.models";
-import { filterMetricVariants, resolveMetricContext } from "./strategy-lab-analytical-manual.component";
+import {
+  StrategyLabAnalyticalManualComponent,
+  filterMetricVariants,
+  resolveMetricContext,
+} from "./strategy-lab-analytical-manual.component";
 
 const VARIANTS: MetricVariant[] = [
   {
@@ -72,4 +81,71 @@ describe("resolveMetricContext", () => {
     expect(filterMetricVariants(VARIANTS, { ...base, contextualVariantId: "sharpe.platform.v1", usedByThisRun: true })).toEqual([]);
   });
 
+});
+
+async function renderManual(options: {
+  queryParams: Record<string, string>;
+  metricDocumentation: { metricId: string; variantId: string; producer: string; contractId: string | null; contractProvenance: string }[] | null;
+}) {
+  const params = convertToParamMap(options.queryParams);
+  await TestBed.configureTestingModule({
+    imports: [StrategyLabAnalyticalManualComponent],
+    providers: [
+      provideZonelessChangeDetection(),
+      { provide: ActivatedRoute, useValue: { queryParamMap: of(params), snapshot: { queryParamMap: params } } },
+      {
+        provide: Apollo,
+        useValue: {
+          query: vi.fn(() =>
+            of({ data: { backtestRun: { metricDocumentation: options.metricDocumentation } } }),
+          ),
+        },
+      },
+    ],
+  }).compileComponents();
+  const fixture = TestBed.createComponent(StrategyLabAnalyticalManualComponent);
+  fixture.detectChanges();
+  await fixture.whenStable();
+  fixture.detectChanges();
+  return fixture;
+}
+
+describe("StrategyLabAnalyticalManualComponent — used-by-this-run trust boundary", () => {
+  it("does not claim a hand-authored URL's variant was used by the run when the run's receipt disagrees", async () => {
+    const fixture = await renderManual({
+      queryParams: { run: "42", metric: "sharpe", variant: "sharpe.lean_native.v1", producer: "lean_native" },
+      metricDocumentation: [
+        {
+          metricId: "sharpe",
+          variantId: "sharpe.platform.v1",
+          producer: "platform",
+          contractId: "platform-sharpe-v1",
+          contractProvenance: "recorded",
+        },
+      ],
+    });
+
+    expect(fixture.componentInstance.hasRunContext()).toBe(false);
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.textContent).not.toContain("Used by this run");
+  });
+
+  it("claims used-by-this-run only once the run's real receipt names the selected variant", async () => {
+    const fixture = await renderManual({
+      queryParams: { run: "42", metric: "sharpe", variant: "sharpe.lean_native.v1", producer: "lean_native" },
+      metricDocumentation: [
+        {
+          metricId: "sharpe",
+          variantId: "sharpe.lean_native.v1",
+          producer: "lean_native",
+          contractId: "lean-statistics-oracle-v1",
+          contractProvenance: "recorded",
+        },
+      ],
+    });
+
+    expect(fixture.componentInstance.hasRunContext()).toBe(true);
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.textContent).toContain("Used by this run");
+  });
 });

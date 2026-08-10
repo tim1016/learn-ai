@@ -922,10 +922,12 @@ def _failed_run_payload(
         # The diagnostic is carried in the versioned equity envelope,
         # keeping ``lean_statistics`` a parseable canonical shape.
         "lean_statistics": LeanStatisticsResponse().model_dump(mode="json"),
-        "metric_documentation_json": json.dumps(
-            metric_documentation_context_for_source("lean-sidecar"),
-            sort_keys=True,
-        ),
+        # No recorded documentation context: lean_statistics above is an
+        # all-zero placeholder, not a normalized result, so there is no real
+        # sharpe.lean_native.v1 evidence to attach "recorded" provenance to.
+        # The Backend falls back to inferring provenance from execution.Source
+        # for this row, at the appropriately lower "inferred" confidence.
+        "metric_documentation_json": json.dumps((), sort_keys=True),
         # Even on failed runs we forward the manifest fields if available;
         # the .NET service preserves NULL when the manifest is unavailable
         # rather than fabricating ``algorithm_default``.

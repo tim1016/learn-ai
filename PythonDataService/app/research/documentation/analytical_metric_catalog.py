@@ -281,7 +281,9 @@ def catalog() -> AnalyticalMetricCatalog:
     )
 
 
-def metric_documentation_context_for_source(source: str) -> tuple[dict[str, str], ...]:
+def metric_documentation_context_for_source(
+    source: Literal["engine", "lean-sidecar"],
+) -> tuple[dict[str, str], ...]:
     """Return persistable documentation context for a newly-produced run.
 
     Source is a producer boundary, not a calculation.  The Backend carries this

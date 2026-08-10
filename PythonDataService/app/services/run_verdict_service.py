@@ -47,7 +47,12 @@ REQUIRED_SUB_SCORE_KEYS: dict[str, frozenset[str]] = {
     "stat_confidence": frozenset({"psr", "sample", "skepticism", "trade_gap"}),
 }
 REQUIRED_METRIC_COUNT = sum(len(keys) for keys in REQUIRED_SUB_SCORE_KEYS.values())
-READINESS_PARITY_CONTRACT_ID = "readiness-core-v2"
+# Bump whenever build_run_verdict_parity_signature's returned keys change shape.
+# ParityVerdictService.CompareReadiness compares the whole object with
+# JsonElement.DeepEquals; an unversioned shape change makes an old persisted
+# signature diverge from a freshly computed one for a reason that has nothing
+# to do with evidence quality.
+READINESS_PARITY_CONTRACT_ID = "readiness-core-v3"
 READINESS_PARITY_ABSOLUTE_TOLERANCE = Decimal("0.000000000001")
 
 # Catalog prose is kept beside the fixed scorer so documentation cannot drift
@@ -314,11 +319,16 @@ def _apply_cleanliness(verdict: RunVerdict) -> RunVerdict:
         return _with_parity_signature(verdict)
     headline = "LEAN run is not reconciliation-clean. " + verdict.headline
     update: dict[str, Any] = {
-        "evidence_action": "Inspect reconciliation discrepancies before relying on this evidence",
         "signal": "Rework",
         "headline": headline,
         "red_flags": [*verdict.red_flags, "lean_run_not_clean"],
     }
+    # Only a complete verdict has a composite/grade for this to act on. An
+    # incomplete/unavailable verdict already renders "no composite, grade, or
+    # action was produced" (evidence-grade.component.html); adding an action
+    # here would contradict that and read as a real evidence-grade action.
+    if verdict.status == "complete":
+        update["evidence_action"] = "Inspect reconciliation discrepancies before relying on this evidence"
     return _with_parity_signature(verdict.model_copy(update=update))
 
 
@@ -327,7 +337,7 @@ def _score_return_quality(r: RunVerdictInput) -> RunVerdictDimension:
     cagr = _num(stats.get("cagr"))
     sub_scores = [
         _grade_sharpe_sub(_num(stats.get("sharpe_ratio"))),
-        _grade_sortino_sub(_num(stats.get("sortino_ratio"))),
+        _grade_sortino_sub(_num(stats.get("sortino_ratio")), provided="sortino_ratio" in stats),
         _grade_cagr_sub(cagr),
         _grade_calmar_sub(_num(stats.get("max_drawdown_pct")), cagr),
         _grade_annual_vol_sub(_num(stats.get("annual_standard_deviation"))),
@@ -556,10 +566,15 @@ def _grade_sharpe_sub(v: float | None) -> RunVerdictSubScore:
     )
 
 
-def _grade_sortino_sub(v: float | None) -> RunVerdictSubScore:
+def _grade_sortino_sub(v: float | None, *, provided: bool) -> RunVerdictSubScore:
     base = _sub("sortino", "Sortino ratio", None, v, "-" if v is None else f"{v:.2f}", "")
     if v is None:
-        return base.model_copy(update={"note": "No negative returns this window."})
+        # A null sortino_ratio the producer actually sent is a real, well-defined
+        # state (e.g. no negative returns this window). A sortino_ratio the
+        # payload never included is a different state -- we don't know why it's
+        # missing -- and must not borrow that specific claim.
+        note = "No negative returns this window." if provided else "Not provided by engine."
+        return base.model_copy(update={"note": note})
     if v < 0.5:
         return base.model_copy(update={"score": 3, "note": "Downside risk dominates."})
     if v < 1.0:
