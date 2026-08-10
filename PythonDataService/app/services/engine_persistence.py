@@ -17,11 +17,13 @@ The HTTP transport is shared with the LEAN path via
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
+from app.research.documentation.analytical_metric_catalog import metric_documentation_context_for_source
 from app.services.lean_sidecar_persistence import persist_via_dotnet
 
 __all__ = [
@@ -144,6 +146,10 @@ def build_engine_persist_payload(
             for t in trades
         ],
         "lean_statistics": extra_statistics or {},
+        "metric_documentation_json": json.dumps(
+            metric_documentation_context_for_source("engine"),
+            sort_keys=True,
+        ),
     }
 
 

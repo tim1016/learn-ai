@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, input } from "@angular/core";
 
 import type { RunVerdict } from "../../../api/run-verdict.types";
+import type { MetricDocumentationContext } from "../../../graphql/backtest-runs.query";
 import type { EngineResultData } from "../../lean-engine/engine-results/engine-results.component";
 import { STRATEGY_METRIC_HELP } from "../../lean-engine/metric-grade.util";
 import { MetricHelpPopoverComponent } from "../metric-help-popover/metric-help-popover.component";
@@ -16,7 +17,13 @@ import { MetricHelpPopoverComponent } from "../metric-help-popover/metric-help-p
 export class ResultsSummaryComponent {
   readonly result = input.required<EngineResultData>();
   readonly verdict = input<RunVerdict | null>(null);
+  readonly metricDocumentation = input<MetricDocumentationContext[]>([]);
+  readonly runId = input<number | null>(null);
   readonly help = STRATEGY_METRIC_HELP;
+
+  readonly sharpeDocumentation = computed(
+    () => this.metricDocumentation().find((context) => context.metricId === "sharpe") ?? null,
+  );
 
   readonly grade = computed(() => this.verdict()?.grade ?? "—");
   readonly score = computed(() => {

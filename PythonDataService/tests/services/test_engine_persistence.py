@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 
 import httpx
@@ -121,6 +122,12 @@ class TestBuildEnginePersistPayload:
         assert payload["final_equity"] == 100_010.0
         assert payload["total_fees"] == 0.0
         assert payload["win_rate"] == 1.0
+        assert json.loads(payload["metric_documentation_json"]) == [{
+            "contract_id": "platform-sharpe-v1",
+            "metric_id": "sharpe",
+            "producer": "platform",
+            "variant_id": "sharpe.platform.v1",
+        }]
         assert len(payload["trades"]) == 1
         assert payload["trades"][0]["trade_number"] == 1
         assert payload["trades"][0]["entry_price"] == 100.0

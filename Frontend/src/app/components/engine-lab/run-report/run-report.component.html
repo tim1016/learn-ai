@@ -17,6 +17,8 @@
           <app-strategy-lab-results-summary
             [result]="result"
             [verdict]="verdict()"
+            [metricDocumentation]="currentRun.metricDocumentation ?? []"
+            [runId]="currentRun.id"
           />
 
           <section class="run-report__evidence" aria-label="Price and realized equity evidence">

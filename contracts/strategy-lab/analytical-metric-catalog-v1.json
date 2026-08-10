@@ -1,0 +1,157 @@
+{
+  "catalog_version": 1,
+  "variants": [
+    {
+      "aliases": [
+        "Sharpe",
+        "sharpe ratio",
+        "risk-adjusted return"
+      ],
+      "alternative_variant_ids": [
+        "sharpe.lean_native.v1"
+      ],
+      "annualization": "sqrt(252) for daily returns; trade fallback scales by the documented trading-day coverage",
+      "benchmark": null,
+      "canonical_symbol": "PythonDataService/app/engine/results/statistics.py::_sharpe",
+      "common_misreadings": [
+        "It is not a probability of future profit.",
+        "It is not interchangeable with LEAN-native Sharpe."
+      ],
+      "contract_id": "platform-sharpe-v1",
+      "cost_treatment": "Uses the persisted equity/trade inputs; fees are not subtracted again by this metric.",
+      "definition": "Annualized average return per unit of observed return variability.",
+      "fixture_or_receipt": "contracts/fixtures/strategy-metric-help-golden-v1.json",
+      "formatting": "two decimal places",
+      "formula_latex": "\\operatorname{Sharpe}=\\frac{\\bar r}{s_r}\\sqrt{252}",
+      "input_series": "Daily returns resampled from the recorded equity curve; without that curve, per-trade returns from the reconstructed all-in trade curve.",
+      "interpretation": "Use it to compare return against the variability of the same documented return series.",
+      "label": "Sharpe ratio",
+      "metric_id": "sharpe",
+      "numerical_tolerance": "absolute=1e-12, relative=0",
+      "output_scale": "annualized ratio",
+      "producer": "platform",
+      "results_surfaces": [
+        "Strategy Lab Results summary"
+      ],
+      "risk_free_rate": "0 under the platform contract",
+      "sampling_cadence": "daily when an equity curve is retained; otherwise completed trades",
+      "search_terms": [
+        "volatility",
+        "daily returns",
+        "annualized",
+        "sqrt 252"
+      ],
+      "source_reference": "Sharpe (1994), \"The Sharpe Ratio\", Journal of Portfolio Management 21(1), §IV.",
+      "timezone_convention": "UTC timestamps at storage and wire boundaries; daily resampling follows the producing run.",
+      "units": "ratio",
+      "validating_tests": [
+        "PythonDataService/tests/fixtures/test_strategy_metric_help_golden.py::test_strategy_metric_help_matches_canonical_golden_values",
+        "PythonDataService/tests/test_statistics.py"
+      ],
+      "value_states": [
+        {
+          "display": "Unavailable",
+          "scoring_behavior": "Not a zero; downstream policy must treat missing evidence explicitly.",
+          "state": "unavailable"
+        },
+        {
+          "display": "Unavailable",
+          "scoring_behavior": "Returned when fewer than two observations or zero sample deviation makes the ratio undefined.",
+          "state": "undefined"
+        }
+      ],
+      "variables": [
+        {
+          "definition": "mean of the selected return observations",
+          "symbol": "\\bar r"
+        },
+        {
+          "definition": "sample standard deviation of those return observations",
+          "symbol": "s_r"
+        }
+      ],
+      "variant_id": "sharpe.platform.v1",
+      "verdict_membership": "Platform verdict policy may consume its platform metric; this entry does not define a grade."
+    },
+    {
+      "aliases": [
+        "LEAN Sharpe",
+        "native Sharpe",
+        "sharpe ratio"
+      ],
+      "alternative_variant_ids": [
+        "sharpe.platform.v1"
+      ],
+      "annualization": "annual performance and annual standard deviation use the configured LEAN trading-days-per-year value",
+      "benchmark": "Not used in the Sharpe numerator; LEAN benchmark inputs support other native metrics.",
+      "canonical_symbol": "PythonDataService/app/engine/results/lean_statistics.py::reproduce_lean_total_performance",
+      "common_misreadings": [
+        "It is not the platform Sharpe under a different input and risk-free-rate contract.",
+        "A familiar label does not make two producer variants numerically interchangeable."
+      ],
+      "contract_id": "lean-statistics-oracle-v1",
+      "cost_treatment": "Native LEAN portfolio result; fee effects are represented by LEAN's portfolio evidence.",
+      "definition": "LEAN-native annual performance above its selected risk-free rate, divided by annual standard deviation.",
+      "fixture_or_receipt": "PythonDataService/tests/fixtures/golden/lean-statistics-oracle-v1/",
+      "formatting": "native result precision; Results currently displays two decimal places",
+      "formula_latex": "\\operatorname{Sharpe}_{LEAN}=\\frac{R_{annual}-r_f}{\\sigma_{annual}}",
+      "input_series": "LEAN Strategy Return chart observations after the pinned preprocessing: discard day 0 and day 1, then convert percentages to fractional returns.",
+      "interpretation": "Use it to audit the native LEAN result under its pinned source and primary-credit-rate inputs.",
+      "label": "Sharpe ratio",
+      "metric_id": "sharpe",
+      "numerical_tolerance": "Pinned by the LEAN native-statistics oracle receipt; see docs/references/lean-native-statistics-oracle-v1.md.",
+      "output_scale": "annualized ratio",
+      "producer": "lean_native",
+      "results_surfaces": [
+        "Strategy Lab Results summary for LEAN-native runs"
+      ],
+      "risk_free_rate": "Average dated LEAN primary-credit-rate observations retained in the oracle fixture.",
+      "sampling_cadence": "LEAN Strategy Return observations",
+      "search_terms": [
+        "lean",
+        "risk-free",
+        "annual performance",
+        "annual standard deviation"
+      ],
+      "source_reference": "QuantConnect LEAN commit 261366a7e26ae942df858ab20df4fef8fa07de67; Common/Statistics/PortfolioStatistics.cs and Statistics.cs.",
+      "timezone_convention": "Source chart timestamps are normalized to int64 ms UTC at system boundaries.",
+      "units": "ratio",
+      "validating_tests": [
+        "PythonDataService/tests/test_lean_statistics.py::test_oracle_reproduction_matches_native_statistics"
+      ],
+      "value_states": [
+        {
+          "display": "0.00",
+          "scoring_behavior": "A valid native zero remains zero and is not treated as missing.",
+          "state": "zero"
+        },
+        {
+          "display": "Engine-defined finite value",
+          "scoring_behavior": "Preserve the pinned LEAN behavior; do not reinterpret it as a platform result.",
+          "state": "sentinel"
+        },
+        {
+          "display": "Unavailable",
+          "scoring_behavior": "Missing native evidence is not a zero and must not be backfilled from the platform variant.",
+          "state": "unavailable"
+        }
+      ],
+      "variables": [
+        {
+          "definition": "LEAN annual performance from the preprocessed return vector",
+          "symbol": "R_{annual}"
+        },
+        {
+          "definition": "average dated LEAN risk-free rate selected for the equity sample",
+          "symbol": "r_f"
+        },
+        {
+          "definition": "annual standard deviation from sample variance times trading days per year",
+          "symbol": "\\sigma_{annual}"
+        }
+      ],
+      "variant_id": "sharpe.lean_native.v1",
+      "verdict_membership": "Not a platform-verdict input; native parity evidence remains separately identifiable."
+    }
+  ]
+}

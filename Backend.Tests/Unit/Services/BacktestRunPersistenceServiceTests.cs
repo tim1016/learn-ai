@@ -82,6 +82,9 @@ public class BacktestRunPersistenceServiceTests
             ParityGroupId = "parity-123",
             LeanAnalysisJson = """[{"name":"ExecutionSpeedAnalysis","sample":"7k"}]""",
             FillMode = "signal_bar_close",
+            MetricDocumentationJson = """
+            [{"metric_id":"sharpe","variant_id":"sharpe.lean_native.v1","producer":"lean_native","contract_id":"lean-statistics-oracle-v1"}]
+            """,
         };
 
         var id = await service.PersistAsync(payload, CancellationToken.None);
@@ -102,6 +105,7 @@ public class BacktestRunPersistenceServiceTests
         Assert.Equal("parity-123", row.ParityGroupId);
         Assert.Equal("""[{"name":"ExecutionSpeedAnalysis","sample":"7k"}]""", row.LeanAnalysisJson);
         Assert.Equal("signal_bar_close", row.FillMode);
+        Assert.Equal(payload.MetricDocumentationJson, row.MetricDocumentationJson);
 
         var trade = await db.BacktestTrades.SingleAsync(t => t.StrategyExecutionId == id);
         Assert.Equal(100m, trade.EntryPrice);

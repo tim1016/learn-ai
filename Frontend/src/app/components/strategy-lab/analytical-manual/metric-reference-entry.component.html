@@ -1,0 +1,59 @@
+@let item = variant();
+<article class="metric-entry" [id]="item.variant_id" aria-labelledby="metric-entry-title">
+  <header class="metric-entry__header">
+    <div>
+      <p class="metric-entry__eyebrow">{{ item.metric_id }}</p>
+      <h2 id="metric-entry-title">{{ item.label }}</h2>
+    </div>
+    <span class="metric-entry__producer">{{ item.producer.replaceAll('_', ' ') }}</span>
+  </header>
+
+  <p class="metric-entry__definition">{{ item.definition }}</p>
+  <p>{{ item.interpretation }}</p>
+
+  <section aria-labelledby="metric-formula-title">
+    <h3 id="metric-formula-title">Formula</h3>
+    @if (item.formula_latex; as formula) {
+      <div class="metric-entry__formula"><span [appKatex]="formula" [displayMode]="true"></span></div>
+      @if (item.variables.length > 0) {
+        <dl class="metric-entry__variables">
+          @for (variable of item.variables; track variable.symbol) {
+            <div><dt><span [appKatex]="variable.symbol"></span></dt><dd>{{ variable.definition }}</dd></div>
+          }
+        </dl>
+      }
+    } @else {
+      <p class="metric-entry__fallback" role="status">Formula unavailable for this documented contract.</p>
+    }
+  </section>
+
+  <dl class="metric-entry__facts">
+    <div><dt>Inputs</dt><dd>{{ item.input_series }}</dd></div>
+    <div><dt>Sampling</dt><dd>{{ item.sampling_cadence }}</dd></div>
+    <div><dt>Units</dt><dd>{{ item.units }} · {{ item.output_scale }} · {{ item.formatting }}</dd></div>
+    @if (item.annualization) { <div><dt>Annualization</dt><dd>{{ item.annualization }}</dd></div> }
+    @if (item.risk_free_rate) { <div><dt>Risk-free rate</dt><dd>{{ item.risk_free_rate }}</dd></div> }
+    <div><dt>Canonical implementation</dt><dd><code>{{ item.canonical_symbol }}</code></dd></div>
+    @if (item.fixture_or_receipt) { <div><dt>Evidence</dt><dd><code>{{ item.fixture_or_receipt }}</code></dd></div> }
+  </dl>
+
+  @if (item.value_states.length > 0) {
+    <section aria-labelledby="metric-states-title">
+      <h3 id="metric-states-title">Value states</h3>
+      <ul class="metric-entry__states">
+        @for (state of item.value_states; track state.state) {
+          <li><strong>{{ state.state }}</strong> — {{ state.display }}. {{ state.scoring_behavior }}</li>
+        }
+      </ul>
+    </section>
+  }
+
+  @if (alternative(); as other) {
+    <a class="metric-entry__compare" routerLink="/strategy-lab/docs" [queryParams]="compareQuery()">
+      Compare with… {{ other.producer.replaceAll('_', ' ') }}
+    </a>
+  }
+  @if (runId(); as id) {
+    <a class="metric-entry__back" [routerLink]="['/strategy-lab/runs', id]">Back to run</a>
+  }
+</article>

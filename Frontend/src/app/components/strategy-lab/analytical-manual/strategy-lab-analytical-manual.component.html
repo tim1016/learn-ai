@@ -1,0 +1,48 @@
+<main class="analytical-manual">
+  <header class="analytical-manual__hero">
+    <p class="analytical-manual__eyebrow">Strategy Lab manual</p>
+    <h1>Read the evidence before reading the formula.</h1>
+    <p>Results can share a label while using different producers. This manual starts with the run's recorded context, then exposes the documented calculation contract.</p>
+  </header>
+
+  <section class="analytical-manual__guide" aria-labelledby="reading-guide-title">
+    <h2 id="reading-guide-title">Read a run in this order</h2>
+    <ol>
+      <li>Confirm the run inputs, data window, fills, costs, and producer.</li>
+      <li>Read return and drawdown together.</li>
+      <li>Check the number of observations before relying on a ratio.</li>
+      <li>Use the evidence grade as product policy, not proof of deployability.</li>
+      <li>Investigate unavailable evidence instead of treating it as zero.</li>
+    </ol>
+  </section>
+
+  <section class="analytical-manual__reference" aria-labelledby="reference-title">
+    <div class="analytical-manual__reference-head">
+      <div>
+        <h2 id="reference-title">Metric reference</h2>
+        <p>{{ filteredVariants().length }} documented {{ filteredVariants().length === 1 ? 'variant' : 'variants' }}</p>
+      </div>
+      <label>
+        <span>Search metric definitions</span>
+        <input type="search" [value]="search()" (input)="updateSearch($event)" placeholder="Sharpe, volatility, LEAN…" />
+      </label>
+    </div>
+
+    @if (resolution().warning; as warning) {
+      <p class="analytical-manual__warning" role="status">{{ warning }}</p>
+    }
+
+    <app-metric-reference-entry [variant]="selectedVariant()" [alternative]="alternative()" [runId]="runId()" />
+
+    <nav class="analytical-manual__results" aria-label="Matching metric variants">
+      @for (variant of filteredVariants(); track variant.variant_id) {
+        <a routerLink="/strategy-lab/docs" [queryParams]="{ metric: variant.metric_id, variant: variant.variant_id, producer: variant.producer, contract: variant.contract_id ?? undefined, run: runId() ?? undefined }">
+          <strong>{{ variant.label }}</strong>
+          <span>{{ variant.producer.replaceAll('_', ' ') }}</span>
+        </a>
+      } @empty {
+        <p role="status">No documented metrics match your search.</p>
+      }
+    </nav>
+  </section>
+</main>

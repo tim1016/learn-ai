@@ -34,6 +34,7 @@ from app.models.responses import (
     LeanStatisticsResponse,
     LeanTradeStatsResponse,
 )
+from app.research.documentation.analytical_metric_catalog import metric_documentation_context_for_source
 from app.schemas.run_verdict import RunVerdictCleanliness
 from app.services.engine_validation_analytics import (
     ValidationEquityPoint,
@@ -723,6 +724,10 @@ def build_persist_payload(
         # helper below applies typed parsing + paired-trade aggregation
         # so both engines persist the same shape.
         "lean_statistics": lean_statistics,
+        "metric_documentation_json": json.dumps(
+            metric_documentation_context_for_source("lean-sidecar"),
+            sort_keys=True,
+        ),
         "lean_analysis_json": json.dumps(normalized.analysis, sort_keys=True),
         # PR B P1 fix — forward the manifest's brokerage/data_policy so the
         # .NET row is the truthful record. ``commission_per_order`` stays at
@@ -917,6 +922,10 @@ def _failed_run_payload(
         # The diagnostic is carried in the versioned equity envelope,
         # keeping ``lean_statistics`` a parseable canonical shape.
         "lean_statistics": LeanStatisticsResponse().model_dump(mode="json"),
+        "metric_documentation_json": json.dumps(
+            metric_documentation_context_for_source("lean-sidecar"),
+            sort_keys=True,
+        ),
         # Even on failed runs we forward the manifest fields if available;
         # the .NET service preserves NULL when the manifest is unavailable
         # rather than fabricating ``algorithm_default``.

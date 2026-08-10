@@ -979,6 +979,12 @@ def test_build_persist_payload_forwards_brokerage_and_data_policy_from_manifest_
 
     assert payload["brokerage_policy"] == "interactive_brokers"
     assert payload["commission_per_order"] == 0.0
+    assert json.loads(payload["metric_documentation_json"]) == [{
+        "contract_id": "lean-statistics-oracle-v1",
+        "metric_id": "sharpe",
+        "producer": "lean_native",
+        "variant_id": "sharpe.lean_native.v1",
+    }]
     assert payload["data_policy_json"] is not None
     parsed_dp = json.loads(payload["data_policy_json"])
     assert parsed_dp["source"] == "polygon"

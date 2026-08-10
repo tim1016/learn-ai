@@ -363,4 +363,70 @@ public class BacktestRunDetailQueryTests
         Assert.Equal(2.10m, detail.SortinoRatio);
         Assert.Equal(2.35m, detail.ProfitFactor);
     }
+
+    [Fact]
+    public void FromExecution_RecordedDocumentationContext_PreservesTheProducerAndContract()
+    {
+        var execution = new StrategyExecution
+        {
+            Ticker = new Ticker { Symbol = "SPY", Name = "SPY", Market = "stocks" },
+            Source = "lean-sidecar",
+            StrategyName = "ema_crossover",
+            MetricDocumentationJson = """
+            [{
+              "metric_id": "sharpe",
+              "variant_id": "sharpe.lean_native.v1",
+              "producer": "lean_native",
+              "contract_id": "lean-statistics-oracle-v1"
+            }]
+            """,
+        };
+
+        var detail = BacktestRunDetailType.FromExecution(execution, [], NullLogger.Instance);
+
+        var context = Assert.Single(detail.MetricDocumentation);
+        Assert.Equal("sharpe", context.MetricId);
+        Assert.Equal("sharpe.lean_native.v1", context.VariantId);
+        Assert.Equal("lean_native", context.Producer);
+        Assert.Equal("lean-statistics-oracle-v1", context.ContractId);
+        Assert.Equal("recorded", context.ContractProvenance);
+    }
+
+    [Fact]
+    public void FromExecution_LegacyLeanSharpe_InfersTheDisplayedNativeVariant()
+    {
+        var execution = new StrategyExecution
+        {
+            Ticker = new Ticker { Symbol = "SPY", Name = "SPY", Market = "stocks" },
+            Source = "lean-sidecar",
+            StrategyName = "ema_crossover",
+            LeanStatisticsJson = """{"portfolio":{"sharpe_ratio":1.45}}""",
+        };
+
+        var detail = BacktestRunDetailType.FromExecution(execution, [], NullLogger.Instance);
+
+        var context = Assert.Single(detail.MetricDocumentation);
+        Assert.Equal("sharpe.lean_native.v1", context.VariantId);
+        Assert.Equal("lean_native", context.Producer);
+        Assert.Equal("inferred", context.ContractProvenance);
+    }
+
+    [Fact]
+    public void FromExecution_LegacyPlatformSharpe_InfersThePlatformVariant()
+    {
+        var execution = new StrategyExecution
+        {
+            Ticker = new Ticker { Symbol = "SPY", Name = "SPY", Market = "stocks" },
+            Source = "engine",
+            StrategyName = "ema_crossover",
+            SharpeRatio = 1.45m,
+        };
+
+        var detail = BacktestRunDetailType.FromExecution(execution, [], NullLogger.Instance);
+
+        var context = Assert.Single(detail.MetricDocumentation);
+        Assert.Equal("sharpe.platform.v1", context.VariantId);
+        Assert.Equal("platform", context.Producer);
+        Assert.Equal("inferred", context.ContractProvenance);
+    }
 }

@@ -818,6 +818,9 @@ namespace Backend.Migrations
                         .HasPrecision(18, 8)
                         .HasColumnType("numeric(18,8)");
 
+                    b.Property<string>("MetricDocumentationJson")
+                        .HasColumnType("jsonb");
+
                     b.Property<int>("Multiplier")
                         .HasColumnType("integer");
 

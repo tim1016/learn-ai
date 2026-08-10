@@ -109,6 +109,7 @@ public sealed record BacktestRunDetailType
     public string? VerdictSignal { get; init; }
     public BacktestRunEquityCurvesType? EquityCurve { get; init; }
     public BacktestRunValidationAnalyticsType? ValidationAnalytics { get; init; }
+    public IReadOnlyList<MetricDocumentationContextType> MetricDocumentation { get; init; } = [];
     public string? InsightSummaryJson { get; init; }
     public string? DataPolicyJson { get; init; }
     public DataPolicyType? DataPolicy => DataPolicyType.TryParse(DataPolicyJson);
@@ -161,6 +162,7 @@ public sealed record BacktestRunDetailType
             VerdictSignal = execution.VerdictSignal,
             EquityCurve = ParseEquityCurve(execution.EquityCurveJson, execution.Id, logger),
             ValidationAnalytics = ParseValidationAnalytics(execution.ValidationAnalyticsJson, execution.Id, logger),
+            MetricDocumentation = ParseMetricDocumentation(execution, leanKpis, logger),
             InsightSummaryJson = execution.InsightSummaryJson,
             DataPolicyJson = execution.DataPolicyJson,
             CommissionPerOrder = execution.CommissionPerOrder,
@@ -235,6 +237,55 @@ public sealed record BacktestRunDetailType
         public decimal? SharpeRatio { get; init; }
         public decimal? SortinoRatio { get; init; }
         public decimal? ProfitFactor { get; init; }
+    }
+
+    private static IReadOnlyList<MetricDocumentationContextType> ParseMetricDocumentation(
+        StrategyExecution execution,
+        BacktestRunLeanKpiType? leanKpis,
+        ILogger logger)
+    {
+        if (!string.IsNullOrWhiteSpace(execution.MetricDocumentationJson))
+        {
+            try
+            {
+                var recorded = JsonSerializer.Deserialize<List<MetricDocumentationContextType>>(
+                    execution.MetricDocumentationJson,
+                    SnakeCaseJson);
+                if (recorded is not null && recorded.All(context => context.IsValid()))
+                {
+                    return recorded
+                        .Select(context => context with { ContractProvenance = "recorded" })
+                        .ToList();
+                }
+            }
+            catch (JsonException ex)
+            {
+                logger.LogWarning(
+                    ex,
+                    "StrategyExecution {ExecutionId} metric documentation JSON is unreadable; inferring context",
+                    execution.Id);
+            }
+        }
+
+        var variant = execution.Source == "lean-sidecar" && leanKpis?.SharpeRatio is not null
+            ? new MetricDocumentationContextType
+            {
+                MetricId = "sharpe",
+                VariantId = "sharpe.lean_native.v1",
+                Producer = "lean_native",
+                ContractId = "lean-statistics-oracle-v1",
+                ContractProvenance = "inferred",
+            }
+            : new MetricDocumentationContextType
+            {
+                MetricId = "sharpe",
+                VariantId = "sharpe.platform.v1",
+                Producer = "platform",
+                ContractId = "platform-sharpe-v1",
+                ContractProvenance = "inferred",
+            };
+
+        return [variant];
     }
 
     private static readonly JsonSerializerOptions SnakeCaseJson = new()
