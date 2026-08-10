@@ -146,12 +146,14 @@ Live requalification is still required before #1411 can close.
 ## Session B/C re-tier (b) acceptance amendment — pre-session
 
 **Status:** OPERATOR APPROVED by **Inkant Awasthi** at `1786370622000` ms UTC on
-2026-08-10. This amendment is recorded before any new live session; it does not
-itself authorize a lifecycle action, fault arming, or broker order. The first
-Scenario receipt filed for Session B (and again for Session C), using the
-Scenario receipt template below, must carry forward this supervising operator
-and sign-off time in its "Supervising operator / sign-off" field before
-Scenario 0 starts.
+2026-08-10. This is the one-time policy sign-off for the amendment itself; it
+does not authorize a lifecycle action, fault arming, or broker order, and it
+does not stand in for in-session supervision. Before Scenario 0 starts, the
+first Scenario receipt filed for Session B (and again, independently, for
+Session C), using the Scenario receipt template below, must record — in its
+"Supervising operator / sign-off" field — the operator who actually
+supervises that live session and the contemporaneous sign-off time, which may
+differ from the amendment approver and time recorded above.
 
 The campaign adopts the following re-tier (b) rule:
 
@@ -170,10 +172,16 @@ The campaign adopts the following re-tier (b) rule:
   `CLERK_OBSERVATION_CLOCK_NOT_APPLICABLE`, as already used in the Pre-live
   rehearsal table below); no other phrasing is permitted, and neither variant
   ever checks a required-live box.
-- **Session order:** Scenario 0 is the live feed gate and runs before every
-  custody row. Qualification B and Qualification C are separate NYSE sessions;
-  no retry overwrites a failed attempt or collapses the two-session evidence
-  requirement.
+- **Session order:** For Qualification B and Qualification C, Scenario 0 is
+  the live feed gate and runs before every custody row in that session; the
+  historical Session A rows in the Required live scenarios table below
+  (Scenario 0 `ABORT` alongside custody `PASS` rows) predate this amendment
+  and do not satisfy the gate. Qualification B and Qualification C must each
+  independently satisfy every still-`PENDING` row in that table with their
+  own live confirmation and Scenario receipt — no row is satisfied by
+  reusing or referencing the other session's evidence. Qualification B and
+  Qualification C are separate NYSE sessions; no retry overwrites a failed
+  attempt or collapses the two-session evidence requirement.
 
 Operational-authority expansion and live-money trading remain frozen throughout
 this campaign.
@@ -387,10 +395,16 @@ Open-order proof:
 Operator action:
 Warning/error log reference:
 Verdict: PASS | SAFE FAILURE | ABORT
-Abort class (required if ABORT): feed-abort | custody-abort | unclassified | n/a
+Abort class (n/a for PASS or SAFE FAILURE; required for ABORT): feed-abort | custody-abort | unclassified
 ```
 
 ## Abort and incident record
+
+Every new row records one of `feed-abort`, `custody-abort`, or `unclassified`
+in Abort class; `unclassified` requires durable operator/reviewer follow-up
+classification and fails closed as `custody-abort` until classified.
+`N/A — predates the Abort taxonomy amendment` is reserved for the rows below
+that predate this amendment; it is not a valid value for a new row.
 
 | Time (ms UTC) | Phase/date label (prose) | Condition | Scope | Abort class | Action | Final broker proof | Defect issue |
 | --- | --- | --- | --- | --- | --- | --- | --- |
