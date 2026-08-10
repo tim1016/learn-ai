@@ -1,10 +1,6 @@
 @let r = result();
 <section class="results-summary" aria-label="Run result summary">
-  <div class="results-summary__grade" [attr.data-band]="gradeBand()">
-    <span class="results-summary__grade-label">Validation grade</span>
-    <strong>{{ grade() }}</strong>
-    <span>{{ score() }}</span>
-  </div>
+  <app-strategy-lab-evidence-grade [verdict]="verdict()" />
 
   <div class="results-summary__metrics" aria-label="Core statistics">
     <div class="results-summary__metric-group">

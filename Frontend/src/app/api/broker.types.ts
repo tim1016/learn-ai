@@ -20746,6 +20746,18 @@ export interface components {
              * @enum {string}
              */
             engine: "python" | "lean";
+            /** Evidence Action */
+            evidence_action?:
+                | (
+                    | "Advance to independent validation"
+                    | "Continue forward and out-of-sample validation"
+                    | "Investigate identified weaknesses"
+                    | "Revise the hypothesis or validation design"
+                    | "Substantial rework is required"
+                    | "Rework the tested strategy hypothesis and validate independently"
+                    | "Inspect reconciliation discrepancies before relying on this evidence"
+                )
+                | null;
             /** Generated At Ms */
             generated_at_ms: number;
             /** Grade */
@@ -20754,6 +20766,8 @@ export interface components {
             headline: string;
             /** Missing Metrics */
             missing_metrics?: string[];
+            /** Missing Required Evidence */
+            missing_required_evidence?: components["schemas"]["RunVerdictMissingEvidence"][];
             /** Missing Required Metrics */
             missing_required_metrics?: string[];
             /** Normalized Weights */
@@ -20784,6 +20798,17 @@ export interface components {
             is_clean: boolean;
             /** Is Reconciliation Grade */
             is_reconciliation_grade: boolean;
+        };
+        /** RunVerdictMissingEvidence */
+        RunVerdictMissingEvidence: {
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /** Producer */
+            producer: "platform";
+            /** Reason */
+            reason: string;
         };
         /** RunVerdictDimension */
         RunVerdictDimension: {

@@ -1,0 +1,47 @@
+@if (verdict(); as currentVerdict) {
+  <section class="evidence-grade" [attr.data-status]="currentVerdict.status ?? 'complete'" aria-labelledby="evidence-grade-title">
+    <div class="evidence-grade__heading">
+      <p class="evidence-grade__eyebrow" id="evidence-grade-title">Backtest Evidence Grade</p>
+      @if (currentVerdict.status === 'failed') {
+        <strong class="evidence-grade__failure">Run failed</strong>
+      } @else if (currentVerdict.grade) {
+        <strong class="evidence-grade__grade">{{ currentVerdict.grade }}</strong>
+      } @else if (coverage(); as coverage) {
+        <strong class="evidence-grade__coverage">{{ coverage }}</strong>
+      } @else {
+        <strong class="evidence-grade__unavailable">—</strong>
+      }
+    </div>
+
+    <div class="evidence-grade__body">
+      @if (currentVerdict.status === 'complete' && currentVerdict.grade) {
+        <p class="evidence-grade__score">Frozen policy score: {{ currentVerdict.composite }}/100</p>
+      } @else if (currentVerdict.status === 'incomplete') {
+        <p class="evidence-grade__score">{{ coverage() }} required inputs available; no composite, grade, or action was produced.</p>
+      } @else if (currentVerdict.status === 'failed') {
+        <p class="evidence-grade__score">No research conclusion was produced from this failed run.</p>
+      } @else {
+        <p class="evidence-grade__score">No Backtest Evidence Grade is available for this run.</p>
+      }
+
+      <p class="evidence-grade__headline">{{ currentVerdict.headline }}</p>
+      @if (currentVerdict.evidence_action; as action) {
+        <p class="evidence-grade__action">Next validation step: {{ action }}.</p>
+      }
+      <p class="evidence-grade__limit">This frozen 17-input policy summarizes backtest evidence; it does not authorize trading.</p>
+
+      @if (currentVerdict.status === 'incomplete' && missingEvidence().length > 0) {
+        <ul class="evidence-grade__missing" aria-label="Missing required evidence">
+          @for (item of missingEvidence(); track item.label) {
+            <li><strong>{{ item.label }}</strong><span>{{ item.reason }}</span></li>
+          }
+        </ul>
+      }
+    </div>
+  </section>
+} @else {
+  <section class="evidence-grade evidence-grade--empty" aria-label="Backtest Evidence Grade">
+    <p class="evidence-grade__eyebrow">Backtest Evidence Grade</p>
+    <p>No frozen evidence grade was recorded for this run.</p>
+  </section>
+}

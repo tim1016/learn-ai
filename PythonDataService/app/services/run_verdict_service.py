@@ -24,6 +24,7 @@ from app.schemas.run_verdict import (
     RunVerdictCleanliness,
     RunVerdictDimension,
     RunVerdictInput,
+    RunVerdictMissingEvidence,
     RunVerdictSubScore,
 )
 
@@ -89,9 +90,11 @@ def build_run_verdict_parity_signature(verdict: RunVerdict) -> dict[str, Any]:
         "status": verdict.status,
         "composite": verdict.composite,
         "grade": verdict.grade,
+        "evidence_action": verdict.evidence_action,
         "signal": verdict.signal,
         "red_flags": verdict.red_flags,
         "missing_required_metrics": verdict.missing_required_metrics,
+        "missing_required_evidence": [item.model_dump(mode="json") for item in verdict.missing_required_evidence],
         "available_required_metrics": verdict.available_required_metrics,
         "required_metrics": verdict.required_metrics,
         "normalized_weights": verdict.normalized_weights,
@@ -122,7 +125,7 @@ def compute_run_verdict(
 
     if data is None:
         verdict = _empty_verdict(
-            headline="Run a backtest to generate a Production Readiness score.",
+            headline="Run a backtest to produce backtest evidence.",
             engine=engine,
             generated_at_ms=generated,
             cleanliness=clean,
@@ -143,15 +146,16 @@ def compute_run_verdict(
         if sub.score is None
     ]
     missing_required_metrics = _missing_required_metrics(dimensions)
+    missing_required_evidence = _missing_required_evidence(dimensions)
     available_required_metrics = REQUIRED_METRIC_COUNT - len(missing_required_metrics)
 
     if missing_required_metrics:
         status = "unavailable" if available_required_metrics == 0 else "incomplete"
         if status == "unavailable":
-            headline = "Not enough required evidence to grade Production Readiness."
+            headline = "Not enough required evidence to produce a Backtest Evidence Grade."
         else:
             headline = (
-                "Production Readiness incomplete — "
+                "Backtest Evidence Grade incomplete — "
                 f"{available_required_metrics}/{REQUIRED_METRIC_COUNT} required metrics available. "
                 f"Missing: {', '.join(missing_required_metrics)}."
             )
@@ -162,12 +166,14 @@ def compute_run_verdict(
             generated_at_ms=generated,
             composite=None,
             grade=None,
+            evidence_action=None,
             signal=None,
             headline=headline,
             red_flags=[],
             dimensions=dimensions,
             missing_metrics=missing_metrics,
             missing_required_metrics=missing_required_metrics,
+            missing_required_evidence=missing_required_evidence,
             available_required_metrics=available_required_metrics,
             required_metrics=REQUIRED_METRIC_COUNT,
             normalized_weights=False,
@@ -182,7 +188,7 @@ def compute_run_verdict(
             for key, weight in CORE_DIMENSION_WEIGHTS.items()
         )
     )
-    grade, signal, headline = _grade_and_signal(composite)
+    grade, signal, evidence_action, headline = _grade_and_signal(composite)
     verdict = RunVerdict(
         verdict_version=RUN_VERDICT_VERSION,
         status="complete",
@@ -190,12 +196,14 @@ def compute_run_verdict(
         generated_at_ms=generated,
         composite=composite,
         grade=grade,
+        evidence_action=evidence_action,
         signal=signal,
         headline=headline,
         red_flags=[],
         dimensions=dimensions,
         missing_metrics=missing_metrics,
         missing_required_metrics=[],
+        missing_required_evidence=[],
         available_required_metrics=REQUIRED_METRIC_COUNT,
         required_metrics=REQUIRED_METRIC_COUNT,
         normalized_weights=False,
@@ -220,10 +228,11 @@ def failed_run_verdict(error: str, *, generated_at_ms: int | None = None) -> Run
         verdict.model_copy(
             update={
                 "status": "failed",
-                "composite": 0,
-                "grade": "F",
-                "signal": "Reject",
-                "headline": "Reject - " + verdict.headline,
+                "composite": None,
+                "grade": None,
+                "evidence_action": None,
+                "signal": None,
+                "headline": "Run failed — " + verdict.headline,
                 "red_flags": ["lean_run_failed"],
             }
         )
@@ -262,12 +271,14 @@ def _empty_verdict(
         generated_at_ms=generated_at_ms,
         composite=None,
         grade=None,
+        evidence_action=None,
         signal=None,
         headline=headline,
         red_flags=[],
         dimensions=[],
         missing_metrics=[],
         missing_required_metrics=[],
+        missing_required_evidence=[],
         available_required_metrics=0,
         required_metrics=REQUIRED_METRIC_COUNT,
         normalized_weights=False,
@@ -280,6 +291,7 @@ def _apply_cleanliness(verdict: RunVerdict) -> RunVerdict:
         return _with_parity_signature(verdict)
     headline = "LEAN run is not reconciliation-clean. " + verdict.headline
     update: dict[str, Any] = {
+        "evidence_action": "Inspect reconciliation discrepancies before relying on this evidence",
         "signal": "Rework",
         "headline": headline,
         "red_flags": [*verdict.red_flags, "lean_run_not_clean"],
@@ -413,20 +425,70 @@ def _missing_required_metrics(dimensions: list[RunVerdictDimension]) -> list[str
     return missing
 
 
-def _grade_and_signal(score: int) -> tuple[str, str, str]:
+def _missing_required_evidence(
+    dimensions: list[RunVerdictDimension],
+) -> list[RunVerdictMissingEvidence]:
+    missing: list[RunVerdictMissingEvidence] = []
+    for dimension in dimensions:
+        required_keys = REQUIRED_SUB_SCORE_KEYS.get(dimension.key, frozenset())
+        for sub_score in dimension.sub_scores:
+            if sub_score.key not in required_keys or sub_score.score is not None:
+                continue
+            missing.append(
+                RunVerdictMissingEvidence(
+                    key=sub_score.key,
+                    label=f"{dimension.label}: {sub_score.label}",
+                    producer="platform",
+                    reason=sub_score.note,
+                )
+            )
+    return missing
+
+
+def _grade_and_signal(score: int) -> tuple[str, str, str, str]:
     if score >= 85:
-        grade, signal, headline = "A+", "Deploy", "Institutional-grade. Ready for live deployment at standard size."
+        grade, signal, evidence_action, headline = (
+            "A+",
+            "Deploy",
+            "Advance to independent validation",
+            "Very strong backtest evidence; advance to independent validation.",
+        )
     elif score >= 70:
-        grade, signal, headline = "A", "Paper-trade", "Strong backtest. Paper-trade for 30 days before sizing up."
+        grade, signal, evidence_action, headline = (
+            "A",
+            "Paper-trade",
+            "Continue forward and out-of-sample validation",
+            "Strong backtest evidence; continue forward and out-of-sample validation.",
+        )
     elif score >= 55:
-        grade, signal, headline = "B", "Iterate", "Promising edge, but specific weaknesses need addressing before deployment."
+        grade, signal, evidence_action, headline = (
+            "B",
+            "Iterate",
+            "Investigate identified weaknesses",
+            "Promising backtest evidence; investigate identified weaknesses.",
+        )
     elif score >= 40:
-        grade, signal, headline = "C", "Rework", "Material problems — core parameters or logic need revisiting."
+        grade, signal, evidence_action, headline = (
+            "C",
+            "Rework",
+            "Revise the hypothesis or validation design",
+            "Mixed backtest evidence; revise the hypothesis or validation design.",
+        )
     elif score >= 25:
-        grade, signal, headline = "D", "Rework", "Fundamental issues. Rework the thesis, not just the parameters."
+        grade, signal, evidence_action, headline = (
+            "D",
+            "Rework",
+            "Substantial rework is required",
+            "Weak backtest evidence; substantial rework is required.",
+        )
     else:
-        grade, signal, headline = "F", "Reject", "Reject — the backtest does not clear baseline viability."
-    return grade, signal, headline
+        grade, signal, evidence_action, headline = (
+            "F",
+            "Reject",
+            "Rework the tested strategy hypothesis and validate independently",
+            "Insufficient support for the tested strategy hypothesis.",
+        )
+    return grade, signal, evidence_action, headline
 
 
 def _sub(
@@ -463,7 +525,12 @@ def _grade_sharpe_sub(v: float | None) -> RunVerdictSubScore:
         return base.model_copy(update={"score": 18, "note": "Solidly institutional."})
     if v < 3.0:
         return base.model_copy(update={"score": 20, "note": "Elite - verify out-of-sample."})
-    return base.model_copy(update={"score": 12, "note": "Suspiciously high (>3.0) - likely overfit."})
+    return base.model_copy(
+        update={
+            "score": 12,
+            "note": "Extreme Sharpe; inspect sampling, annualization, fills, data leakage, and selection history.",
+        }
+    )
 
 
 def _grade_sortino_sub(v: float | None) -> RunVerdictSubScore:
@@ -601,7 +668,12 @@ def _grade_profit_factor_sub(v: float | None) -> RunVerdictSubScore:
         return base.model_copy(update={"score": 18, "note": "Healthy profit factor."})
     if v < 4.0:
         return base.model_copy(update={"score": 20, "note": "Elite-tier efficiency."})
-    return base.model_copy(update={"score": 10, "note": "PF > 4 is rare OOS - assume overfit until proven."})
+    return base.model_copy(
+        update={
+            "score": 10,
+            "note": "Extreme profit factor; inspect out-of-sample evidence and the loss tail.",
+        }
+    )
 
 
 def _grade_expectancy_sub(v: float | None) -> RunVerdictSubScore:
@@ -633,7 +705,12 @@ def _grade_win_rate_sub(v: float | None) -> RunVerdictSubScore:
         return base.model_copy(update={"score": 20, "note": "Classic mean-reversion range."})
     if v < 0.85:
         return base.model_copy(update={"score": 16, "note": "Very high - confirm with larger sample."})
-    return base.model_copy(update={"score": 6, "note": "Above 85% is a data-leak red flag."})
+    return base.model_copy(
+        update={
+            "score": 6,
+            "note": "Extreme win rate; inspect sample size, payoff, leakage, and fill assumptions.",
+        }
+    )
 
 
 def _grade_payoff_sub(v: float | None) -> RunVerdictSubScore:
@@ -722,7 +799,10 @@ def _grade_skepticism_sub(sharpe: float | None, pf: float | None, win_rate: floa
             "display": "Clean" if not flags else " · ".join(flags),
             "note": "None of the skepticism thresholds tripped."
             if not flags
-            else f"Skeptical thresholds tripped: {', '.join(flags)}. Verify OOS and check for look-ahead bias.",
+            else (
+                f"Investigation triggers: {', '.join(flags)}. Inspect out-of-sample evidence, "
+                "sampling, and fill assumptions; these thresholds do not establish a cause."
+            ),
         }
     )
 

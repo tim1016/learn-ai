@@ -1399,8 +1399,10 @@ def test_failed_run_payload_emits_canonical_shape(tmp_path: Path) -> None:
     assert parsed.trade.total_number_of_trades == 0
     assert parsed.runtime.total_orders == 0
     verdict = json.loads(payload["run_verdict_json"])
-    assert verdict["grade"] == "F"
-    assert verdict["signal"] == "Reject"
+    assert verdict["status"] == "failed"
+    assert verdict["grade"] is None
+    assert verdict["signal"] is None
+    assert verdict["evidence_action"] is None
     assert "lean_run_failed" in verdict["red_flags"]
     equity = json.loads(payload["equity_curve_json"])
     assert equity["schema_version"] == 2

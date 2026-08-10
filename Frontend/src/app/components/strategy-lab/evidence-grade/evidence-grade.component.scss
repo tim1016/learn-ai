@@ -1,0 +1,79 @@
+:host {
+  display: block;
+  min-width: 0;
+}
+
+.evidence-grade {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-3);
+  min-height: 100%;
+  padding: var(--space-3);
+  border-left: 4px solid var(--text-muted);
+}
+
+.evidence-grade[data-status="complete"] { border-left-color: var(--accent); }
+.evidence-grade[data-status="incomplete"],
+.evidence-grade[data-status="unavailable"] { border-left-color: var(--warn); }
+.evidence-grade[data-status="failed"] { border-left-color: var(--bear); }
+
+.evidence-grade__heading {
+  display: grid;
+  align-content: start;
+  gap: var(--space-2);
+}
+
+.evidence-grade__eyebrow {
+  margin: 0;
+  color: var(--text-muted);
+  font: 700 var(--fs-xxs)/1 var(--font-sans);
+  letter-spacing: var(--ls-caps);
+  text-transform: uppercase;
+}
+
+.evidence-grade__grade,
+.evidence-grade__coverage,
+.evidence-grade__unavailable,
+.evidence-grade__failure {
+  color: var(--text-primary);
+  font: 800 2.25rem/.9 var(--font-mono);
+}
+
+.evidence-grade__failure { color: var(--bear); font-size: var(--fs-lg); }
+
+.evidence-grade__body { min-width: 0; }
+
+.evidence-grade__score,
+.evidence-grade__headline,
+.evidence-grade__action,
+.evidence-grade__limit {
+  margin: 0 0 var(--space-2);
+  color: var(--text-subtle);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+.evidence-grade__headline { color: var(--text-primary); }
+.evidence-grade__action { color: var(--accent); font-weight: 650; }
+.evidence-grade__limit { margin-bottom: 0; }
+
+.evidence-grade__missing {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+  padding: var(--space-3);
+  list-style: none;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.evidence-grade__missing li { display: grid; gap: 2px; }
+.evidence-grade__missing strong { color: var(--text-primary); font-size: var(--fs-xs); }
+.evidence-grade__missing span { color: var(--text-subtle); font-size: var(--fs-xs); line-height: 1.4; }
+
+.evidence-grade--empty { display: block; }
+.evidence-grade--empty > p:last-child { margin: var(--space-2) 0 0; color: var(--text-subtle); font-size: var(--fs-xs); }
+
+@media (max-width: 520px) {
+  .evidence-grade { grid-template-columns: minmax(0, 1fr); }
+}

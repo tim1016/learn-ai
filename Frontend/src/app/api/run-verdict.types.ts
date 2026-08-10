@@ -2,6 +2,14 @@
 // Python authors the frozen verdict; the frontend renders it verbatim.
 export type RunVerdictGrade = "A+" | "A" | "B" | "C" | "D" | "F";
 export type RunVerdictSignal = "Deploy" | "Paper-trade" | "Iterate" | "Rework" | "Reject";
+export type RunVerdictEvidenceAction =
+  | "Advance to independent validation"
+  | "Continue forward and out-of-sample validation"
+  | "Investigate identified weaknesses"
+  | "Revise the hypothesis or validation design"
+  | "Substantial rework is required"
+  | "Rework the tested strategy hypothesis and validate independently"
+  | "Inspect reconciliation discrepancies before relying on this evidence";
 export type RunVerdictEngine = "python" | "lean";
 export type RunVerdictStatus = "complete" | "incomplete" | "unavailable" | "failed";
 
@@ -29,6 +37,13 @@ export interface RunVerdictCleanliness {
   error_counts: Record<string, number>;
 }
 
+export interface RunVerdictMissingEvidence {
+  key: string;
+  label: string;
+  producer: "platform";
+  reason: string;
+}
+
 export interface RunVerdict {
   verdict_version: number;
   /** Optional only so historical persisted v1 verdicts continue to render. */
@@ -37,12 +52,14 @@ export interface RunVerdict {
   generated_at_ms: number;
   composite: number | null;
   grade: RunVerdictGrade | null;
+  evidence_action?: RunVerdictEvidenceAction | null;
   signal: RunVerdictSignal | null;
   headline: string;
   red_flags: string[];
   dimensions: RunVerdictDimension[];
   missing_metrics: string[];
   missing_required_metrics?: string[];
+  missing_required_evidence?: RunVerdictMissingEvidence[];
   available_required_metrics?: number;
   required_metrics?: number;
   normalized_weights: boolean;
