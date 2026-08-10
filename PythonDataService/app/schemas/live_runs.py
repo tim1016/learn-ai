@@ -292,7 +292,12 @@ class HostRunnerProcessStatus(BaseModel):
 
 
 class AccountClerkHealth(BaseModel):
-    """Daemon-observed health for the sole clerk of one paper account."""
+    """Process health reported by the host runner's Clerk inventory.
+
+    Not the Alpaca Broker V2 authority selector — see
+    ``active_sqlite_facade`` in ``app/services/sqlite_clerk_compat.py`` for
+    why.
+    """
 
     account_id: str
     generation: int = Field(ge=1)
@@ -312,6 +317,8 @@ class HostRunnerHealth(BaseModel):
     live_runs_root: str
     fetched_at_ms: int
     process: HostRunnerProcessStatus
+    # Process inventory only, not the authority selector — see
+    # active_sqlite_facade in app/services/sqlite_clerk_compat.py.
     clerks: list[AccountClerkHealth] = Field(default_factory=list)
     # Code-freshness: the daemon does not reload on `git pull`, so an operator
     # needs to see whether the running code matches the working tree.

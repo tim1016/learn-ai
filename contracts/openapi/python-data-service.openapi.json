@@ -237,7 +237,7 @@
         "type": "object"
       },
       "AccountClerkHealth": {
-        "description": "Daemon-observed health for the sole clerk of one paper account.",
+        "description": "Process health reported by the host runner's Clerk inventory.\n\nNot the Alpaca Broker V2 authority selector \u2014 see\n``active_sqlite_facade`` in ``app/services/sqlite_clerk_compat.py`` for\nwhy.",
         "properties": {
           "account_id": {
             "title": "Account Id",

@@ -5971,7 +5971,11 @@ export interface components {
         };
         /**
          * AccountClerkHealth
-         * @description Daemon-observed health for the sole clerk of one paper account.
+         * @description Process health reported by the host runner's Clerk inventory.
+         *
+         *     Not the Alpaca Broker V2 authority selector — see
+         *     ``active_sqlite_facade`` in ``app/services/sqlite_clerk_compat.py`` for
+         *     why.
          */
         AccountClerkHealth: {
             /** Account Id */
