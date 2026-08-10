@@ -585,7 +585,8 @@ stopped. The existing deterministic/adversarial/recovery/backup evidence remains
 receipt for fault paths. Live-money remains disabled. Issue #1409 remains open only
 until this acceptance change merges, per the PRD; #1411, #1413, and #1416 may be
 reconciled against their amended evidence bars. Residual multi-session and injected-
-fault live rehearsal belongs in one bounded post-acceptance hardening issue.
+fault live rehearsal belongs in bounded post-acceptance hardening issue
+[#1440](https://github.com/tim1016/learn-ai/issues/1440).
 
 ## Follow-on four-bot churn experiment — 2026-08-10
 

@@ -265,5 +265,6 @@ capture-before-contact identity continuity, SQLite-attributed exposure, broker
 fills, terminal flatness, Stop, reconciliation, reload reconstruction, and
 side-effect-free evidence inspection. The closure record is the soak report and
 the execution PRD linked above. Remaining injected-fault and multi-session rows
-are tracked as post-acceptance hardening and are not claims of completed live
-execution. Live-money trading stays disabled throughout.
+are tracked in [issue #1440](https://github.com/tim1016/learn-ai/issues/1440) as
+post-acceptance hardening and are not claims of completed live execution.
+Live-money trading stays disabled throughout.

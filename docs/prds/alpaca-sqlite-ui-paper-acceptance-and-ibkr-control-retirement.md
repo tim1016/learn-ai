@@ -285,8 +285,9 @@ After the evidence package is independently reviewed:
 5. Close #1409 after the ADR acceptance change merges and its remaining items are
    reconciled against the amended rubric.
 6. Close #1416 after the campaign outcome and operator decision are recorded.
-7. Move any unrequired multi-session/fault evidence to one post-acceptance hardening
-   issue. Do not mark those historical rows completed if they were not run.
+7. Move any unrequired multi-session/fault evidence to post-acceptance hardening
+   issue [#1440](https://github.com/tim1016/learn-ai/issues/1440). Do not mark those
+   historical rows completed if they were not run.
 
 ## 13. Deprecated IBKR broker-control retirement
 
@@ -401,4 +402,5 @@ or generated-type delta was required.
 
 **Decision:** accept ADR 0035 for Alpaca paper only. Live-money remains disabled. The
 historical multi-session injected-fault matrix is not marked complete; it moves to
-post-acceptance hardening rather than remaining an unbounded acceptance blocker.
+[post-acceptance hardening issue #1440](https://github.com/tim1016/learn-ai/issues/1440)
+rather than remaining an unbounded acceptance blocker.
