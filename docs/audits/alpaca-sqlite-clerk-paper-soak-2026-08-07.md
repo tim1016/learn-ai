@@ -142,6 +142,54 @@ Its 55 focused IBKR/feed/admission tests pass. A broader 567-test run passed
 data-plane control-secret guard (403 before their expected handler response).
 Live requalification is still required before #1411 can close.
 
+## Session B/C re-tier (b) acceptance amendment — pre-session
+
+**Status:** OPERATOR APPROVED by **Inkant Awasthi** at `1786370622000` ms UTC on
+2026-08-10. This amendment is recorded before any new live session; it does not
+itself authorize a lifecycle action, fault arming, or broker order. The Session
+B worksheet must carry forward this supervising operator and sign-off time
+before Scenario 0 starts.
+
+The campaign adopts the following re-tier (b) rule:
+
+- **Must be live; no synthetic substitute:** a real Alpaca-paper fill at a
+  real price; live IBKR feed integration; advancing real SSE evidence; fresh
+  Alpaca REST reconciliation following real fills; and evidence from at least
+  two distinct NYSE market sessions.
+- **Deterministic proof plus one live confirmation:** each seam-induced row
+  rehearsed under #1415 (partial/duplicate evidence, lost-submit, cancel/fill
+  race, lost-cancel, trade-update gap, uncertainty isolation/default,
+  restart-with-work, and evidence-station safety) requires its retained
+  rehearsal evidence and one supervised in-session live confirmation. A
+  rehearsal may be labelled only "rehearsed — pending one live confirmation";
+  it never checks a required-live box.
+- **Session order:** Scenario 0 is the live feed gate and runs before every
+  custody row. Qualification B and Qualification C are separate NYSE sessions;
+  no retry overwrites a failed attempt or collapses the two-session evidence
+  requirement.
+
+Operational-authority expansion and live-money trading remain frozen throughout
+this campaign.
+
+### Abort taxonomy
+
+- **Feed-abort:** a live IBKR stream does not produce or advance a required
+  bar, becomes stale, or cannot recover through the bounded resubscribe path
+  during Scenario 0. Stop the attempt before a custody scenario, preserve
+  feed/farm/request/bar/error evidence, capture fresh flat and order-free
+  broker proof, and re-attempt only after the feed gate is re-established. A
+  feed-abort is neither a custody PASS nor a custody defect when no Clerk or
+  broker mutation occurred.
+- **Custody-abort:** any mutation without a finalized intent, duplicate
+  economic effect, mixed writer, fabricated terminal state, unresolved drift,
+  stale evidence authorizing exposure, substituted authority, UI-to-action
+  mismatch, or recovery identity/hash failure. Stop all governed bots,
+  preserve the evidence, open a focused defect, and require its merge and
+  deployment before another qualifying session.
+- **Unclassified condition:** fail closed as a custody-abort until the operator
+  and reviewer classify it from durable evidence. Infrastructure ambiguity
+  never upgrades a custody row or clears a live gate.
+
 ## Required live scenarios
 
 Every row must link the operation-first timeline and record the authority
