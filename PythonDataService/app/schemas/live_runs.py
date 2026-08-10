@@ -294,9 +294,9 @@ class HostRunnerProcessStatus(BaseModel):
 class AccountClerkHealth(BaseModel):
     """Process health reported by the host runner's Clerk inventory.
 
-    This is not the authority selector for Alpaca Broker V2. An account here
-    may belong to a distinct host-runner Clerk; Alpaca's active SQLite
-    authority is selected independently through ``active_sqlite_facade``.
+    Not the Alpaca Broker V2 authority selector — see
+    ``active_sqlite_facade`` in ``app/services/sqlite_clerk_compat.py`` for
+    why.
     """
 
     account_id: str
@@ -317,8 +317,8 @@ class HostRunnerHealth(BaseModel):
     live_runs_root: str
     fetched_at_ms: int
     process: HostRunnerProcessStatus
-    # Process inventory only. Do not use this list to infer the active Alpaca
-    # Broker V2 authority; read the selected SQLite Clerk status instead.
+    # Process inventory only, not the authority selector — see
+    # active_sqlite_facade in app/services/sqlite_clerk_compat.py.
     clerks: list[AccountClerkHealth] = Field(default_factory=list)
     # Code-freshness: the daemon does not reload on `git pull`, so an operator
     # needs to see whether the running code matches the working tree.

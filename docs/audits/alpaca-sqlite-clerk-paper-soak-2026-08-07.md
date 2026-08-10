@@ -88,6 +88,7 @@ the risk but does not close that incident.
 | Qualification A, attempt 2 | 2026-08-07 | yes | PASS for one normal ENTER/EXIT round trip; ABORT for the subsequent truth/restart drill | This report; #1412; #1413 |
 | Recovery and Qualification A, attempt 3 | 2026-08-07 | yes | PASS — current mirror rebuilt the corrupt authority, three advancing closed bars produced durable no-action decisions, Stop/Reconcile/restart remained flat and idle | This report; #1413 |
 | Qualification B | Later market session | pending | PENDING | This report |
+| Qualification C | Later market session | pending | PENDING | This report |
 
 ## Qualification A preflight
 
@@ -146,9 +147,11 @@ Live requalification is still required before #1411 can close.
 
 **Status:** OPERATOR APPROVED by **Inkant Awasthi** at `1786370622000` ms UTC on
 2026-08-10. This amendment is recorded before any new live session; it does not
-itself authorize a lifecycle action, fault arming, or broker order. The Session
-B worksheet must carry forward this supervising operator and sign-off time
-before Scenario 0 starts.
+itself authorize a lifecycle action, fault arming, or broker order. The first
+Scenario receipt filed for Session B (and again for Session C), using the
+Scenario receipt template below, must carry forward this supervising operator
+and sign-off time in its "Supervising operator / sign-off" field before
+Scenario 0 starts.
 
 The campaign adopts the following re-tier (b) rule:
 
@@ -161,8 +164,12 @@ The campaign adopts the following re-tier (b) rule:
   race, lost-cancel, trade-update gap, uncertainty isolation/default,
   restart-with-work, and evidence-station safety) requires its retained
   rehearsal evidence and one supervised in-session live confirmation. A
-  rehearsal may be labelled only "rehearsed — pending one live confirmation";
-  it never checks a required-live box.
+  rehearsal may be labelled only "rehearsed — pending one live confirmation",
+  or "rehearsed with limitations — pending one live confirmation" when a
+  documented limitation applies (for example the feed/UI rows'
+  `CLERK_OBSERVATION_CLOCK_NOT_APPLICABLE`, as already used in the Pre-live
+  rehearsal table below); no other phrasing is permitted, and neither variant
+  ever checks a required-live box.
 - **Session order:** Scenario 0 is the live feed gate and runs before every
   custody row. Qualification B and Qualification C are separate NYSE sessions;
   no retry overwrites a failed attempt or collapses the two-session evidence
@@ -199,7 +206,7 @@ versus observed state, operator action, and warning/error-log reference.
 
 | Scenario | Session | Status | Durable evidence / observation |
 | --- | --- | --- | --- |
-| Read-only IBKR feed reproduction with farm/session, request, bar-count, disconnect, and error callbacks | A | ABORT | Farms `usfarm`, `ushmds`, and `secdefil` reported healthy. The chart consumer attached and received one raw 5-second print at about `16:44:31Z`, then warned at `16:45:01Z` and `16:46:01Z`. The decision consumer attached at `16:45:06.724Z`, received one print at `16:45:10.705Z`, then warned at `16:45:36.821Z` and `16:46:36.909Z`. No disconnect callback explained the stall. #1411. |
+| **Scenario 0** — read-only IBKR feed reproduction with farm/session, request, bar-count, disconnect, and error callbacks; the live feed gate that must pass before any custody row runs | A | ABORT | Farms `usfarm`, `ushmds`, and `secdefil` reported healthy. The chart consumer attached and received one raw 5-second print at about `16:44:31Z`, then warned at `16:45:01Z` and `16:46:01Z`. The decision consumer attached at `16:45:06.724Z`, received one print at `16:45:10.705Z`, then warned at `16:45:36.821Z` and `16:46:36.909Z`. No disconnect callback explained the stall. #1411. |
 | Normal process restart and execution-lease failover | A | PASS after recovery; accepted/unknown restart still pending | The first failover refused the live prior lease and acquired it after expiry. The later corrupt authority was rebuilt from the finalized mirror through sequence 323, then normal stopped-state restarts completed healthy and remained idle. #1413. |
 | Baseline Resume with two-green closed-minute entry gate | A | ABORT | START succeeded as lifecycle run `558d6e5f2dda4772a96a79f32c8ce851`; no durable last bar, decision, effect operation, order, or fill followed because the decision consumer stalled after one print. |
 | ENTER acknowledgement and terminal fill | A | PASS (baseline only) | ENTER `effect:sqlite-market-qual-0807:encoded-MTc4NjEyMjYwMDAwMDpFTlRFUg`; broker order `c09fb7ed-dd7b-4d49-b892-5f62c0130a3a`; BUY 1 SPY filled at about 772.30; source event `1786122606676`, durable record `1786122606786`. |
@@ -364,6 +371,7 @@ Copy one block per attempt. Never overwrite a failed attempt with a retry.
 
 ```text
 Scenario:
+Supervising operator / sign-off (ms UTC):
 Started at (ms UTC):
 Ended at (ms UTC):
 Authority generation / DB identity / control revision:
@@ -379,18 +387,19 @@ Open-order proof:
 Operator action:
 Warning/error log reference:
 Verdict: PASS | SAFE FAILURE | ABORT
+Abort class (required if ABORT): feed-abort | custody-abort | unclassified | n/a
 ```
 
 ## Abort and incident record
 
-| Time (ms UTC) | Phase/date label (prose) | Condition | Scope | Action | Final broker proof | Defect issue |
-| --- | --- | --- | --- | --- | --- | --- |
-| — | Initial canary — 2026-08-07 | IBKR feed stopped after one 5-second print; the never-advanced liveness blind window was characterized as unbounded | Feed admission | Operator stopped the bot; no decision or order occurred | Flat; zero open orders; durable stopped-flat receipt | Existing incident record in the first-canary audit; no new defect per the recorded operator decision |
-| — | Before Qualification A broker contact | SQLite panel health said `Flat Resume ready`, but the presented action list omitted Resume | Broker V2 UI/action policy | Ceremony paused before broker contact; regression-first local fix; service restart and UI verification | Flat; zero working orders; `reconciliation:298` | [#1410](https://github.com/tim1016/learn-ai/issues/1410) |
-| 1786121106666–1786121303876 | Qualification A attempt 1 | Both live IBKR consumers delivered one print and stalled; Trader/Operator continued to present Live/Healthy while durable Bot health had no last bar or decision | Feed delivery and UI truth | Stop bot decisions at `1786121283392`; Reconcile now at `1786121303876`; do not resume | Flat; zero working/unresolved orders; clean `reconciliation:301` | [#1411](https://github.com/tim1016/learn-ai/issues/1411) |
-| 1786122826701–1786122842087 | Qualification A attempt 2 | After a valid round trip the panel reported flatten-required, one uncertain intent, empty selected-effect evidence, and no bar/decision | Broker V2 truth projection | Regression-first local fixes; no broadened exposure | Flat; zero open/working orders; clean `reconciliation:321` | [#1412](https://github.com/tim1016/learn-ai/issues/1412) |
-| 1786123676085–1786123725672 | Qualification A corruption abort | Evidence-station interaction recorded an unintended Resume; projection then reported a malformed SQLite database | UI action routing and SQLite authority | Stop data service; preserve corrupt DB/WAL/SHM; verify current finalized mirror; await human confirmation | Independent Alpaca REST: paper account, no positions, no open orders; mirror ends in `RUN_STOPPED` | [#1413](https://github.com/tim1016/learn-ai/issues/1413) |
-| 1786124232857–1786124632009 | Recovery and Qualification A attempt 3 | Operator-approved recovery of the preceding abort | SQLite authority and supervised paper runtime | Documented `REBUILD_FROM_MIRROR`; preserve corrupt files; verify identity/head; three-bar run; Stop; Reconcile; offline integrity/mirror check; restart idle | Independent Alpaca REST: no positions and no open orders; SQLite revision 326; clean reconciliation; mirror and database heads agree | [#1413](https://github.com/tim1016/learn-ai/issues/1413) |
+| Time (ms UTC) | Phase/date label (prose) | Condition | Scope | Abort class | Action | Final broker proof | Defect issue |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| — | Initial canary — 2026-08-07 | IBKR feed stopped after one 5-second print; the never-advanced liveness blind window was characterized as unbounded | Feed admission | N/A — predates the Abort taxonomy amendment | Operator stopped the bot; no decision or order occurred | Flat; zero open orders; durable stopped-flat receipt | Existing incident record in the first-canary audit; no new defect per the recorded operator decision |
+| — | Before Qualification A broker contact | SQLite panel health said `Flat Resume ready`, but the presented action list omitted Resume | Broker V2 UI/action policy | N/A — predates the Abort taxonomy amendment | Ceremony paused before broker contact; regression-first local fix; service restart and UI verification | Flat; zero working orders; `reconciliation:298` | [#1410](https://github.com/tim1016/learn-ai/issues/1410) |
+| 1786121106666–1786121303876 | Qualification A attempt 1 | Both live IBKR consumers delivered one print and stalled; Trader/Operator continued to present Live/Healthy while durable Bot health had no last bar or decision | Feed delivery and UI truth | N/A — predates the Abort taxonomy amendment | Stop bot decisions at `1786121283392`; Reconcile now at `1786121303876`; do not resume | Flat; zero working/unresolved orders; clean `reconciliation:301` | [#1411](https://github.com/tim1016/learn-ai/issues/1411) |
+| 1786122826701–1786122842087 | Qualification A attempt 2 | After a valid round trip the panel reported flatten-required, one uncertain intent, empty selected-effect evidence, and no bar/decision | Broker V2 truth projection | N/A — predates the Abort taxonomy amendment | Regression-first local fixes; no broadened exposure | Flat; zero open/working orders; clean `reconciliation:321` | [#1412](https://github.com/tim1016/learn-ai/issues/1412) |
+| 1786123676085–1786123725672 | Qualification A corruption abort | Evidence-station interaction recorded an unintended Resume; projection then reported a malformed SQLite database | UI action routing and SQLite authority | N/A — predates the Abort taxonomy amendment | Stop data service; preserve corrupt DB/WAL/SHM; verify current finalized mirror; await human confirmation | Independent Alpaca REST: paper account, no positions, no open orders; mirror ends in `RUN_STOPPED` | [#1413](https://github.com/tim1016/learn-ai/issues/1413) |
+| 1786124232857–1786124632009 | Recovery and Qualification A attempt 3 | Operator-approved recovery of the preceding abort | SQLite authority and supervised paper runtime | N/A — predates the Abort taxonomy amendment | Documented `REBUILD_FROM_MIRROR`; preserve corrupt files; verify identity/head; three-bar run; Stop; Reconcile; offline integrity/mirror check; restart idle | Independent Alpaca REST: no positions and no open orders; SQLite revision 326; clean reconciliation; mirror and database heads agree | [#1413](https://github.com/tim1016/learn-ai/issues/1413) |
 
 Any duplicate economic intent, broker mutation without finalized SQLite intent,
 mixed custody/lifecycle authority writer, unresolved account drift, regressed custody,
