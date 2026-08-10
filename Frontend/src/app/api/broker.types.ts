@@ -20747,17 +20747,7 @@ export interface components {
              */
             engine: "python" | "lean";
             /** Evidence Action */
-            evidence_action?:
-                | (
-                    | "Advance to independent validation"
-                    | "Continue forward and out-of-sample validation"
-                    | "Investigate identified weaknesses"
-                    | "Revise the hypothesis or validation design"
-                    | "Substantial rework is required"
-                    | "Rework the tested strategy hypothesis and validate independently"
-                    | "Inspect reconciliation discrepancies before relying on this evidence"
-                )
-                | null;
+            evidence_action?: ("Advance to independent validation" | "Continue forward and out-of-sample validation" | "Investigate identified weaknesses" | "Revise the hypothesis or validation design" | "Substantial rework is required" | "Rework the tested strategy hypothesis and validate independently" | "Inspect reconciliation discrepancies before relying on this evidence") | null;
             /** Generated At Ms */
             generated_at_ms: number;
             /** Grade */
@@ -20799,17 +20789,6 @@ export interface components {
             /** Is Reconciliation Grade */
             is_reconciliation_grade: boolean;
         };
-        /** RunVerdictMissingEvidence */
-        RunVerdictMissingEvidence: {
-            /** Key */
-            key: string;
-            /** Label */
-            label: string;
-            /** Producer */
-            producer: "platform";
-            /** Reason */
-            reason: string;
-        };
         /** RunVerdictDimension */
         RunVerdictDimension: {
             /** Key */
@@ -20824,6 +20803,27 @@ export interface components {
             summary: string;
             /** Weight */
             weight: number;
+        };
+        /**
+         * RunVerdictMissingEvidence
+         * @description A required platform input that prevented an evidence grade.
+         *
+         *     This is evidence provenance, not a numerical substitution. In particular,
+         *     an unavailable Sortino stays unavailable rather than becoming a score of
+         *     zero in the transport contract.
+         */
+        RunVerdictMissingEvidence: {
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /**
+             * Producer
+             * @constant
+             */
+            producer: "platform";
+            /** Reason */
+            reason: string;
         };
         /** RunVerdictSubScore */
         RunVerdictSubScore: {

@@ -1,3 +1,5 @@
+using HotChocolate;
+
 namespace Backend.GraphQL.Types;
 
 /// <summary>
@@ -13,6 +15,7 @@ public sealed record MetricDocumentationContextType
     public string? ContractId { get; init; }
     public string ContractProvenance { get; init; } = "";
 
+    [GraphQLIgnore]
     public bool IsValid() =>
         !string.IsNullOrWhiteSpace(MetricId) &&
         !string.IsNullOrWhiteSpace(VariantId) &&

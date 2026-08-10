@@ -614,14 +614,6 @@ type MarketMoversResult {
   error: String
 }
 
-type MetricDocumentationContextType {
-  metricId: String!
-  variantId: String!
-  producer: String!
-  contractId: String
-  contractProvenance: String!
-}
-
 type MethodologyType {
   trainMonths: Int!
   testMonths: Int!
@@ -636,6 +628,14 @@ type MethodologyType {
   regimeGateEnabled: Boolean!
   thresholds: [Float!]!
   costBpsOptions: [Float!]!
+}
+
+type MetricDocumentationContextType {
+  metricId: String!
+  variantId: String!
+  producer: String!
+  contractId: String
+  contractProvenance: String!
 }
 
 type MinuteBarResult {
@@ -1580,6 +1580,7 @@ type StrategyExecution {
   equityCurveJson: String
   insightSummaryJson: String
   validationAnalyticsJson: String
+  metricDocumentationJson: String
   source: String!
   requestedEngine: String
   leanRunId: String
@@ -2627,6 +2628,7 @@ input StrategyExecutionFilterInput {
   equityCurveJson: StringOperationFilterInput
   insightSummaryJson: StringOperationFilterInput
   validationAnalyticsJson: StringOperationFilterInput
+  metricDocumentationJson: StringOperationFilterInput
   source: StringOperationFilterInput
   requestedEngine: StringOperationFilterInput
   leanRunId: StringOperationFilterInput
@@ -2683,6 +2685,7 @@ input StrategyExecutionSortInput {
   equityCurveJson: SortEnumType @cost(weight: "10")
   insightSummaryJson: SortEnumType @cost(weight: "10")
   validationAnalyticsJson: SortEnumType @cost(weight: "10")
+  metricDocumentationJson: SortEnumType @cost(weight: "10")
   source: SortEnumType @cost(weight: "10")
   requestedEngine: SortEnumType @cost(weight: "10")
   leanRunId: SortEnumType @cost(weight: "10")

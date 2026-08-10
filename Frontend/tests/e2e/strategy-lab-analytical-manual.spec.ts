@@ -2,6 +2,24 @@ import { expect, test } from '@playwright/test';
 
 test.describe('Strategy Lab analytical manual', () => {
   test('supports keyboard-addressable search, filters, contextual links, and a non-runtime case study', async ({ page }) => {
+    await page.route('http://localhost:5000/graphql', async (route) => {
+      await route.fulfill({
+        json: {
+          data: {
+            backtestRun: {
+              metricDocumentation: [{
+                metricId: 'sharpe',
+                variantId: 'sharpe.lean_native.v1',
+                producer: 'lean_native',
+                contractId: 'lean-statistics-oracle-v1',
+                contractProvenance: 'recorded',
+              }],
+            },
+          },
+        },
+      });
+    });
+
     await page.goto('/strategy-lab/docs?metric=sharpe&variant=sharpe.lean_native.v1&producer=lean_native&contract=lean-statistics-oracle-v1&run=900001');
 
     await expect(page.getByRole('heading', { name: 'Sharpe ratio' })).toBeVisible();
