@@ -48,6 +48,25 @@ describe("MetricHelpPopoverComponent", () => {
     expect(link?.getAttribute("href")).not.toContain("metric=max-drawdown");
   });
 
+  it("keeps the selected run in fallback documentation links", async () => {
+    await TestBed.configureTestingModule({
+      imports: [MetricHelpPopoverComponent, RouterTestingModule],
+      providers: [provideZonelessChangeDetection()],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(MetricHelpPopoverComponent);
+    fixture.componentRef.setInput("metric", STRATEGY_METRIC_HELP["max-drawdown"]);
+    fixture.componentRef.setInput("runId", 42);
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    root.querySelector<HTMLButtonElement>("button")?.click();
+    fixture.detectChanges();
+
+    const link = root.querySelector<HTMLAnchorElement>("a");
+    expect(link?.getAttribute("href")).toContain("metric=maximum_drawdown");
+    expect(link?.getAttribute("href")).toContain("run=42");
+  });
+
   it("links a persisted LEAN value directly to its recorded producer contract", async () => {
     await TestBed.configureTestingModule({
       imports: [MetricHelpPopoverComponent, RouterTestingModule],

@@ -37,7 +37,12 @@ export class MetricHelpPopoverComponent {
   readonly open = signal(false);
   readonly docsQuery = computed(() => {
     const context = this.context();
-    if (!context) return { metric: CATALOG_METRIC_ID[this.metric().id] };
+    if (!context) {
+      return {
+        metric: CATALOG_METRIC_ID[this.metric().id],
+        run: this.runId() ?? undefined,
+      };
+    }
     return {
       metric: context.metricId,
       variant: context.variantId,
