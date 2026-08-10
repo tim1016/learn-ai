@@ -147,8 +147,8 @@ describe("RunReportComponent", () => {
     const root = fixture.nativeElement as HTMLElement;
     const text = root.textContent ?? "";
 
-    expect(text).toContain("Validation grade");
-    expect(text).toContain("72 / 100");
+    expect(text).toContain("Backtest Evidence Grade");
+    expect(text).toContain("no grade is inferred");
     expect(text).toContain("Shared-time-scale strategy chart");
     expect(text).not.toContain("Back to workbench");
     expect(text).not.toContain("Run configuration");

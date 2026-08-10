@@ -8,6 +8,15 @@ from pydantic import BaseModel, Field
 
 Grade = Literal["A+", "A", "B", "C", "D", "F"]
 Signal = Literal["Deploy", "Paper-trade", "Iterate", "Rework", "Reject"]
+EvidenceAction = Literal[
+    "Advance to independent validation",
+    "Continue forward and out-of-sample validation",
+    "Investigate identified weaknesses",
+    "Revise the hypothesis or validation design",
+    "Substantial rework is required",
+    "Rework the tested strategy hypothesis and validate independently",
+    "Inspect reconciliation discrepancies before relying on this evidence",
+]
 EngineKind = Literal["python", "lean"]
 RunVerdictStatus = Literal["complete", "incomplete", "unavailable", "failed"]
 
@@ -36,6 +45,20 @@ class RunVerdictCleanliness(BaseModel):
     error_counts: dict[str, int] = Field(default_factory=dict)
 
 
+class RunVerdictMissingEvidence(BaseModel):
+    """A required platform input that prevented an evidence grade.
+
+    This is evidence provenance, not a numerical substitution. In particular,
+    an unavailable Sortino stays unavailable rather than becoming a score of
+    zero in the transport contract.
+    """
+
+    key: str
+    label: str
+    producer: Literal["platform"]
+    reason: str
+
+
 class RunVerdict(BaseModel):
     verdict_version: int
     status: RunVerdictStatus
@@ -43,12 +66,17 @@ class RunVerdict(BaseModel):
     generated_at_ms: int
     composite: int | None
     grade: Grade | None
+    evidence_action: EvidenceAction | None = None
+    # ``signal`` is the frozen v2 compatibility token. New product surfaces
+    # render ``evidence_action`` so this score is never presented as a trade
+    # deployment authorization.
     signal: Signal | None
     headline: str
     red_flags: list[str] = Field(default_factory=list)
     dimensions: list[RunVerdictDimension] = Field(default_factory=list)
     missing_metrics: list[str] = Field(default_factory=list)
     missing_required_metrics: list[str] = Field(default_factory=list)
+    missing_required_evidence: list[RunVerdictMissingEvidence] = Field(default_factory=list)
     available_required_metrics: int
     required_metrics: int
     normalized_weights: bool

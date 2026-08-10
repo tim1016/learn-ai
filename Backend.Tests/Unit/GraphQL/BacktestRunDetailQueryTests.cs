@@ -363,4 +363,145 @@ public class BacktestRunDetailQueryTests
         Assert.Equal(2.10m, detail.SortinoRatio);
         Assert.Equal(2.35m, detail.ProfitFactor);
     }
+
+    [Fact]
+    public void FromExecution_RecordedDocumentationContext_PreservesTheProducerAndContract()
+    {
+        var execution = new StrategyExecution
+        {
+            Ticker = new Ticker { Symbol = "SPY", Name = "SPY", Market = "stocks" },
+            Source = "lean-sidecar",
+            StrategyName = "ema_crossover",
+            MetricDocumentationJson = """
+            [{
+              "metric_id": "sharpe",
+              "variant_id": "sharpe.lean_native.v1",
+              "producer": "lean_native",
+              "contract_id": "lean-statistics-oracle-v1"
+            }]
+            """,
+        };
+
+        var detail = BacktestRunDetailType.FromExecution(execution, [], NullLogger.Instance);
+
+        var context = Assert.Single(detail.MetricDocumentation);
+        Assert.Equal("sharpe", context.MetricId);
+        Assert.Equal("sharpe.lean_native.v1", context.VariantId);
+        Assert.Equal("lean_native", context.Producer);
+        Assert.Equal("lean-statistics-oracle-v1", context.ContractId);
+        Assert.Equal("recorded", context.ContractProvenance);
+    }
+
+    [Fact]
+    public void FromExecution_LegacyLeanSharpe_InfersTheDisplayedNativeVariant()
+    {
+        var execution = new StrategyExecution
+        {
+            Ticker = new Ticker { Symbol = "SPY", Name = "SPY", Market = "stocks" },
+            Source = "lean-sidecar",
+            StrategyName = "ema_crossover",
+            LeanStatisticsJson = """{"portfolio":{"sharpe_ratio":1.45}}""",
+        };
+
+        var detail = BacktestRunDetailType.FromExecution(execution, [], NullLogger.Instance);
+
+        var context = Assert.Single(detail.MetricDocumentation);
+        Assert.Equal("sharpe.lean_native.v1", context.VariantId);
+        Assert.Equal("lean_native", context.Producer);
+        Assert.Equal("inferred", context.ContractProvenance);
+    }
+
+    [Fact]
+    public void FromExecution_LegacyPlatformSharpe_InfersThePlatformVariant()
+    {
+        var execution = new StrategyExecution
+        {
+            Ticker = new Ticker { Symbol = "SPY", Name = "SPY", Market = "stocks" },
+            Source = "engine",
+            StrategyName = "ema_crossover",
+            SharpeRatio = 1.45m,
+        };
+
+        var detail = BacktestRunDetailType.FromExecution(execution, [], NullLogger.Instance);
+
+        var context = Assert.Single(detail.MetricDocumentation);
+        Assert.Equal("sharpe.platform.v1", context.VariantId);
+        Assert.Equal("platform", context.Producer);
+        Assert.Equal("inferred", context.ContractProvenance);
+    }
+
+    [Fact]
+    public void FromExecution_LeanSharpeAbsent_StillInfersTheNativeVariantNotPlatform()
+    {
+        // A legacy lean-sidecar row with no portfolio.sharpe_ratio, or a failed
+        // LEAN run whose statistics default to null, is still LEAN-produced.
+        // Gating inference on leanKpis?.SharpeRatio (instead of Source alone)
+        // used to mislabel both as the platform contract.
+        var execution = new StrategyExecution
+        {
+            Ticker = new Ticker { Symbol = "SPY", Name = "SPY", Market = "stocks" },
+            Source = "lean-sidecar",
+            StrategyName = "ema_crossover",
+            LeanStatisticsJson = """{"portfolio":{}}""",
+        };
+
+        var detail = BacktestRunDetailType.FromExecution(execution, [], NullLogger.Instance);
+
+        var context = Assert.Single(detail.MetricDocumentation);
+        Assert.Equal("sharpe.lean_native.v1", context.VariantId);
+        Assert.Equal("lean_native", context.Producer);
+        Assert.Equal("inferred", context.ContractProvenance);
+    }
+
+    [Fact]
+    public void FromExecution_EmptyRecordedDocumentationArray_FallsBackToInference()
+    {
+        // [] deserializes successfully; .All() is vacuously true on an empty
+        // sequence. Without an explicit count check this used to short-circuit
+        // to "no contexts" instead of falling through to inference.
+        var execution = new StrategyExecution
+        {
+            Ticker = new Ticker { Symbol = "SPY", Name = "SPY", Market = "stocks" },
+            Source = "lean-sidecar",
+            StrategyName = "ema_crossover",
+            LeanStatisticsJson = """{"portfolio":{"sharpe_ratio":1.45}}""",
+            MetricDocumentationJson = "[]",
+        };
+
+        var detail = BacktestRunDetailType.FromExecution(execution, [], NullLogger.Instance);
+
+        var context = Assert.Single(detail.MetricDocumentation);
+        Assert.Equal("sharpe.lean_native.v1", context.VariantId);
+        Assert.Equal("inferred", context.ContractProvenance);
+    }
+
+    [Fact]
+    public void FromExecution_PartiallyInvalidRecordedDocumentation_DiscardsAllAndFallsBackToInference()
+    {
+        var execution = new StrategyExecution
+        {
+            Ticker = new Ticker { Symbol = "SPY", Name = "SPY", Market = "stocks" },
+            Source = "lean-sidecar",
+            StrategyName = "ema_crossover",
+            LeanStatisticsJson = """{"portfolio":{"sharpe_ratio":1.45}}""",
+            MetricDocumentationJson = """
+            [{
+              "metric_id": "sharpe",
+              "variant_id": "sharpe.lean_native.v1",
+              "producer": "lean_native",
+              "contract_id": "lean-statistics-oracle-v1"
+            }, {
+              "metric_id": "",
+              "variant_id": "sortino.lean_native.v1",
+              "producer": "lean_native",
+              "contract_id": "lean-statistics-oracle-v1"
+            }]
+            """,
+        };
+
+        var detail = BacktestRunDetailType.FromExecution(execution, [], NullLogger.Instance);
+
+        var context = Assert.Single(detail.MetricDocumentation);
+        Assert.Equal("inferred", context.ContractProvenance);
+    }
 }

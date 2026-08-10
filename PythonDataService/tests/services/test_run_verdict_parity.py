@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from app.services.run_verdict_service import compute_run_verdict
+from app.services.run_verdict_service import compute_run_verdict, failed_run_verdict
 
 V1_FIXTURE_PATH = Path(__file__).parents[1] / "fixtures" / "golden" / "run-verdict-v1" / "fixture.json"
 V2_FIXTURE_PATH = Path(__file__).parents[1] / "fixtures" / "golden" / "run-verdict-v2" / "fixture.json"
@@ -296,3 +296,107 @@ def test_removing_required_evidence_revokes_grade_instead_of_improving_it() -> N
     assert verdict.composite is None
     assert verdict.grade is None
     assert verdict.signal is None
+
+
+def test_compute_run_verdict_sortino_omitted_gets_generic_missing_reason() -> None:
+    fixture = json.loads(V2_FIXTURE_PATH.read_text())
+    complete = next(case for case in fixture["cases"] if case["id"] == "complete_platform_contract")
+    payload = deepcopy(complete["input"])
+    del payload["statistics"]["sortino_ratio"]
+
+    verdict = compute_run_verdict(
+        payload,
+        engine="python",
+        generated_at_ms=fixture["generated_at_ms"],
+    )
+
+    assert verdict.status == "incomplete"
+    assert verdict.available_required_metrics == 16
+    assert verdict.composite is None
+    assert verdict.grade is None
+    assert verdict.evidence_action is None
+    assert [item.model_dump() for item in verdict.missing_required_evidence] == [
+        {
+            "key": "sortino",
+            "label": "Return Quality: Sortino ratio",
+            "producer": "platform",
+            "reason": "Not provided by engine.",
+        }
+    ]
+    return_quality = next(dimension for dimension in verdict.dimensions if dimension.key == "return_quality")
+    sortino = next(sub_score for sub_score in return_quality.sub_scores if sub_score.key == "sortino")
+    assert sortino.raw_value is None
+    assert sortino.score is None
+    assert sortino.display == "-"
+
+
+def test_compute_run_verdict_sortino_null_from_producer_reports_no_negative_returns() -> None:
+    fixture = json.loads(V2_FIXTURE_PATH.read_text())
+    complete = next(case for case in fixture["cases"] if case["id"] == "complete_platform_contract")
+    payload = deepcopy(complete["input"])
+    payload["statistics"]["sortino_ratio"] = None
+
+    verdict = compute_run_verdict(
+        payload,
+        engine="python",
+        generated_at_ms=fixture["generated_at_ms"],
+    )
+
+    assert verdict.status == "incomplete"
+    assert [item.model_dump() for item in verdict.missing_required_evidence] == [
+        {
+            "key": "sortino",
+            "label": "Return Quality: Sortino ratio",
+            "producer": "platform",
+            "reason": "No negative returns this window.",
+        }
+    ]
+
+
+def test_compute_run_verdict_evidence_grade_reframes_the_frozen_v2_result_without_changing_its_score() -> None:
+    fixture = json.loads(V2_FIXTURE_PATH.read_text())
+    complete = next(case for case in fixture["cases"] if case["id"] == "complete_platform_contract")
+
+    verdict = compute_run_verdict(
+        complete["input"],
+        engine="python",
+        generated_at_ms=fixture["generated_at_ms"],
+    )
+
+    assert verdict.composite == 76
+    assert verdict.grade == "A"
+    assert verdict.signal == "Paper-trade"
+    assert verdict.evidence_action == "Continue forward and out-of-sample validation"
+    assert verdict.headline == "Strong backtest evidence; continue forward and out-of-sample validation."
+    assert "Production Readiness" not in verdict.headline
+
+
+def test_failed_run_verdict_is_a_run_failure_not_an_f_grade() -> None:
+    verdict = failed_run_verdict("worker did not produce normalized results", generated_at_ms=1_700_000_000_000)
+
+    assert verdict.status == "failed"
+    assert verdict.composite is None
+    assert verdict.grade is None
+    assert verdict.evidence_action is None
+    assert verdict.signal is None
+    assert verdict.headline.startswith("Run failed —")
+
+
+def test_compute_run_verdict_unclean_incomplete_run_has_no_evidence_action() -> None:
+    fixture = json.loads(V2_FIXTURE_PATH.read_text())
+    complete = next(case for case in fixture["cases"] if case["id"] == "complete_platform_contract")
+    payload = deepcopy(complete["input"])
+    del payload["statistics"]["sortino_ratio"]
+
+    verdict = compute_run_verdict(
+        payload,
+        engine="python",
+        generated_at_ms=fixture["generated_at_ms"],
+        cleanliness={"is_clean": False, "is_reconciliation_grade": False, "error_counts": {"drift": 1}},
+    )
+
+    assert verdict.status == "incomplete"
+    assert verdict.composite is None
+    assert verdict.grade is None
+    assert verdict.evidence_action is None
+    assert verdict.signal == "Rework"

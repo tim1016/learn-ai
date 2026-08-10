@@ -1,0 +1,72 @@
+{
+  "fixture_id": "strategy-lab-analytical-manual-v1",
+  "fixture_version": 1,
+  "generated_at_ms": 1735689600000,
+  "run": {
+    "id": 900001,
+    "started_at_ms": 1704067200000,
+    "completed_at_ms": 1735689600000,
+    "metric_documentation": [
+      {
+        "metric_id": "sharpe",
+        "variant_id": "sharpe.platform.v1",
+        "producer": "platform",
+        "contract_id": "platform-sharpe-v1"
+      },
+      {
+        "metric_id": "sharpe",
+        "variant_id": "sharpe.lean_native.v1",
+        "producer": "lean_native",
+        "contract_id": "lean-statistics-oracle-v1"
+      }
+    ],
+    "full_run": {
+      "completed_trades": 867,
+      "recent_trade_ledger_rows": 500,
+      "initial_cash": 100000,
+      "final_equity": 118400,
+      "net_pnl": 18400
+    },
+    "verdict": {
+      "verdict_version": 2,
+      "status": "complete",
+      "available_required_metrics": 17,
+      "required_metrics": 17,
+      "composite": 76,
+      "grade": "A",
+      "evidence_action": "Continue forward and out-of-sample validation",
+      "required_input_keys": [
+        "sharpe", "sortino", "cagr", "calmar", "annual_volatility", "maximum_drawdown",
+        "recovery_duration", "max_consecutive_losers", "profit_factor", "expectancy", "win_rate",
+        "payoff_ratio", "fee_drag", "probabilistic_sharpe", "sample_size", "skepticism_penalty",
+        "trade_portfolio_sharpe_gap"
+      ]
+    },
+    "validation_analytics": {
+      "trailing_horizon_return": 0.084,
+      "timing_timezone": "America/New_York",
+      "rolling_window_trades": 20
+    }
+  },
+  "focused_states": {
+    "platform_sortino_unavailable": {
+      "state": "unavailable",
+      "display": "Unavailable",
+      "reason": "No negative platform return observations makes Sortino unavailable."
+    },
+    "platform_zero": {
+      "state": "zero",
+      "display": "0"
+    },
+    "lean_profit_factor_no_loss": {
+      "state": "sentinel",
+      "display": "10",
+      "source_key": "profitFactor"
+    },
+    "legacy_verdict": {
+      "verdict_version": 1,
+      "status": null,
+      "headline": "Historical verdict without persisted status."
+    }
+  }
+}

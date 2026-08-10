@@ -167,6 +167,13 @@ export const BACKTEST_RUN_DETAIL_QUERY = gql`
           win_rate: winRate
         }
       }
+      metricDocumentation {
+        metricId
+        variantId
+        producer
+        contractId
+        contractProvenance
+      }
       # DataPolicy is the key the run report uses to re-fetch chart bars
       # from the shared bar store (symbol/adjusted/session/timeframe).
       dataPolicy {
@@ -286,6 +293,7 @@ export interface BacktestRunDetail {
   verdictSignal: string | null;
   equityCurve: BacktestRunEquityCurve | null;
   validationAnalytics: BacktestRunValidationAnalytics | null;
+  metricDocumentation?: MetricDocumentationContext[];
   /** Canonical DataPolicy block — the run report's key for re-fetching chart bars. */
   dataPolicy: DataPolicy | null;
   insightSummaryJson: string | null;
@@ -294,6 +302,15 @@ export interface BacktestRunDetail {
   /** True when the detail response contains only the newest bounded trade evidence. */
   tradesTruncated: boolean;
   parityVerdicts: { id: number; status: string; verdictJson: string; createdAt: number }[];
+}
+
+export interface MetricDocumentationContext {
+  metricId: string;
+  variantId: string;
+  /** Python-authored provenance token; the client only transports and labels it. */
+  producer: string;
+  contractId: string | null;
+  contractProvenance: string;
 }
 
 /** Frozen validation-analytics envelope: canonical snake_case analytics

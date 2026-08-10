@@ -163,8 +163,8 @@ export const routes: Routes = [
   {
     path: "strategy-lab/docs",
     loadComponent: () =>
-      import("./components/lean-engine/lean-engine-docs/lean-engine-docs.component").then(
-        (m) => m.LeanEngineDocsComponent
+      import("./components/strategy-lab/analytical-manual/strategy-lab-analytical-manual.component").then(
+        (m) => m.StrategyLabAnalyticalManualComponent
       ),
   },
   {

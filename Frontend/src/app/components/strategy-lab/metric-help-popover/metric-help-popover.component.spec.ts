@@ -1,5 +1,6 @@
 import { provideZonelessChangeDetection } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
+import { RouterTestingModule } from "@angular/router/testing";
 import { describe, expect, it } from "vitest";
 
 import metricGolden from "@repo-contracts/fixtures/strategy-metric-help-golden-v1.json";
@@ -10,7 +11,7 @@ import { MetricHelpPopoverComponent } from "./metric-help-popover.component";
 describe("MetricHelpPopoverComponent", () => {
   it("opens an accessible inline definition with formula, source, and docs link", async () => {
     await TestBed.configureTestingModule({
-      imports: [MetricHelpPopoverComponent],
+      imports: [MetricHelpPopoverComponent, RouterTestingModule],
       providers: [provideZonelessChangeDetection()],
     }).compileComponents();
     const fixture = TestBed.createComponent(MetricHelpPopoverComponent);
@@ -26,7 +27,67 @@ describe("MetricHelpPopoverComponent", () => {
     expect(popover?.textContent).toContain("√252");
     expect(popover?.textContent).toContain("statistics.py::_sharpe");
     expect(popover?.querySelector<HTMLAnchorElement>("a")?.getAttribute("href"))
-      .toBe("/strategy-lab/docs#sharpe");
+      .toContain("/strategy-lab/docs?metric=sharpe");
+  });
+
+  it("maps a legacy kebab-case help id to the catalog's stable metric id when no context is recorded", async () => {
+    await TestBed.configureTestingModule({
+      imports: [MetricHelpPopoverComponent, RouterTestingModule],
+      providers: [provideZonelessChangeDetection()],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(MetricHelpPopoverComponent);
+    fixture.componentRef.setInput("metric", STRATEGY_METRIC_HELP["max-drawdown"]);
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    root.querySelector<HTMLButtonElement>("button")?.click();
+    fixture.detectChanges();
+
+    const link = root.querySelector<HTMLAnchorElement>("a");
+    expect(link?.getAttribute("href")).toContain("metric=maximum_drawdown");
+    expect(link?.getAttribute("href")).not.toContain("metric=max-drawdown");
+  });
+
+  it("keeps the selected run in fallback documentation links", async () => {
+    await TestBed.configureTestingModule({
+      imports: [MetricHelpPopoverComponent, RouterTestingModule],
+      providers: [provideZonelessChangeDetection()],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(MetricHelpPopoverComponent);
+    fixture.componentRef.setInput("metric", STRATEGY_METRIC_HELP["max-drawdown"]);
+    fixture.componentRef.setInput("runId", 42);
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    root.querySelector<HTMLButtonElement>("button")?.click();
+    fixture.detectChanges();
+
+    const link = root.querySelector<HTMLAnchorElement>("a");
+    expect(link?.getAttribute("href")).toContain("metric=maximum_drawdown");
+    expect(link?.getAttribute("href")).toContain("run=42");
+  });
+
+  it("links a persisted LEAN value directly to its recorded producer contract", async () => {
+    await TestBed.configureTestingModule({
+      imports: [MetricHelpPopoverComponent, RouterTestingModule],
+      providers: [provideZonelessChangeDetection()],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(MetricHelpPopoverComponent);
+    fixture.componentRef.setInput("metric", STRATEGY_METRIC_HELP.sharpe);
+    fixture.componentRef.setInput("context", {
+      metricId: "sharpe",
+      variantId: "sharpe.lean_native.v1",
+      producer: "lean_native",
+      contractId: "lean-statistics-oracle-v1",
+      contractProvenance: "recorded",
+    });
+    fixture.componentRef.setInput("runId", 42);
+    fixture.detectChanges();
+
+    const link = (fixture.nativeElement as HTMLElement).querySelector<HTMLAnchorElement>("a");
+    expect(link?.getAttribute("href")).toContain("variant=sharpe.lean_native.v1");
+    expect(link?.getAttribute("href")).toContain("producer=lean_native");
+    expect(link?.getAttribute("href")).toContain("run=42");
   });
 
   it("pins every metric to a visible canonical source and Strategy Lab docs anchor", () => {

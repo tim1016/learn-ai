@@ -99,6 +99,14 @@ public class StrategyExecution
     [Column(TypeName = "jsonb")]
     public string? ValidationAnalyticsJson { get; set; }
 
+    /// <summary>
+    /// Persisted documentation provenance for displayed analytical values.
+    /// Null identifies a legacy row whose context must be inferred from the
+    /// producer evidence that was retained with the run.
+    /// </summary>
+    [Column(TypeName = "jsonb")]
+    public string? MetricDocumentationJson { get; set; }
+
     // ── Metadata ──
     /// <summary>Origin: "engine" or "strategy-lab".</summary>
     [MaxLength(20)]

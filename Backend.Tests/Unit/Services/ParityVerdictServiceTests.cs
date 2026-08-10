@@ -210,6 +210,27 @@ public class ParityVerdictServiceTests
     }
 
     [Fact]
+    public async Task Compute_ReadinessContractVersionDiffers_FreezesUnavailableNotMismatch()
+    {
+        var db = TestDbContextFactory.Create();
+        var (_, rightId) = await SeedGroupAsync(db, "pg-readiness-version");
+        var right = await db.StrategyExecutions.SingleAsync(e => e.Id == rightId);
+        right.RunVerdictJson = MatchingRunVerdict.Replace(
+            "\"contract_id\": \"readiness-core-v2\"",
+            "\"contract_id\": \"readiness-core-v3\"");
+        await db.SaveChangesAsync();
+        var service = CreateService(db, NoDivergences());
+
+        await service.ComputeForLeanRunAsync(rightId, "pg-readiness-version", CancellationToken.None);
+
+        var row = await db.ParityVerdicts.SingleAsync(v => v.ParityGroupId == "pg-readiness-version");
+        Assert.Equal("unavailable", row.Status);
+        Assert.Contains("\"readiness_parity\":{\"status\":\"unavailable\"", row.VerdictJson);
+        Assert.Contains("readiness_contract_version_differs", row.VerdictJson);
+        Assert.DoesNotContain("production_readiness_mismatch", row.VerdictJson);
+    }
+
+    [Fact]
     public async Task Compute_ReadinessReceipt_IgnoresNonCanonicalPresentationNoise()
     {
         var db = TestDbContextFactory.Create();

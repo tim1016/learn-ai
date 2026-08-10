@@ -80,9 +80,10 @@ describe('ValidationAtlasComponent', () => {
     expect(screen.getByText('+2.00%')).toBeTruthy();
     expect(screen.getByText('Needs more data')).toBeTruthy();
     expect(screen.getByText('Entry expectancy by weekday and hour')).toBeTruthy();
-    expect(screen.getByText('n=3')).toBeTruthy();
+    expect(screen.getByText('win +67.00% · n=3')).toBeTruthy();
     expect(screen.getByText('Calendar-month seasonality')).toBeTruthy();
     expect(screen.getByText('Jan')).toBeTruthy();
     expect(screen.getByText('Rolling 20-trade stability')).toBeTruthy();
+    expect(screen.getByText(/correlated views are exploratory/)).toBeTruthy();
   });
 });

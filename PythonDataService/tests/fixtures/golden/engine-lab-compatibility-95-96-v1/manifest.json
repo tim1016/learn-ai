@@ -1,12 +1,12 @@
 {
   "artifacts": {
     "attribution.md": {
-      "sha256": "8d1ce6b07b9d0504afe8cfe409160193b6040af0fbe5dd5de25ea15ae619a768",
-      "size_bytes": 2109
+      "sha256": "a05871cddcf356020608f161c55fde0eda7d0af5bfd7d9cceb1d04cc70f8dc75",
+      "size_bytes": 4495
     },
     "expected/pair.json": {
-      "sha256": "ab07c780f834e1b542c50856487a585c0ac796c20073032d7b65ad32abc5ae55",
-      "size_bytes": 61113
+      "sha256": "57ac96dfd1a3d739b0714a5145966a53c2ea6ca374418652c1f480f4c387c4b6",
+      "size_bytes": 61341
     },
     "input/bars-manifest.json": {
       "sha256": "a15898bd08555e02b4680aafebcde7a4905f34070f59c6cbfbc9d53cb0b02869",

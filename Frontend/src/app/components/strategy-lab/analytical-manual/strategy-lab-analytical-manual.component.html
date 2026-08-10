@@ -1,0 +1,75 @@
+<main class="analytical-manual">
+  <header class="analytical-manual__hero">
+    <p class="analytical-manual__eyebrow">Strategy Lab manual</p>
+    <h1>Read the evidence before reading the formula.</h1>
+    <p>Results can share a label while using different producers. This manual starts with the run's recorded context, then exposes the documented calculation contract.</p>
+  </header>
+
+  <section class="analytical-manual__guide" aria-labelledby="reading-guide-title">
+    <h2 id="reading-guide-title">Read a run in this order</h2>
+    <ol>
+      <li>Confirm the run inputs, data window, fills, costs, and producer.</li>
+      <li>Read return and drawdown together.</li>
+      <li>Check the number of observations before relying on a ratio.</li>
+      <li>Use the evidence grade as product policy, not proof of deployability.</li>
+      <li>Investigate unavailable evidence instead of treating it as zero.</li>
+    </ol>
+  </section>
+
+  <section class="analytical-manual__guide" aria-labelledby="run-130-title">
+    <h2 id="run-130-title">Run 130: illustrative snapshot</h2>
+    <p><strong>Editorial snapshot dated 2026-08-09; not a contract fixture.</strong> A historical run can illustrate incomplete evidence and extreme metrics, but this manual never fetches or depends on that row.</p>
+  </section>
+
+  <section class="analytical-manual__reference" aria-labelledby="reference-title">
+    <div class="analytical-manual__reference-head">
+      <div>
+        <h2 id="reference-title">Metric reference</h2>
+        <p aria-live="polite">{{ filteredVariants().length }} documented {{ filteredVariants().length === 1 ? 'variant' : 'variants' }}</p>
+      </div>
+      <label>
+        <span>Search metric definitions</span>
+        <input type="search" [value]="search()" (input)="updateSearch($event)" placeholder="Sharpe, volatility, LEAN…" />
+      </label>
+    </div>
+
+    <fieldset class="analytical-manual__filters">
+      <legend>Filter metric variants</legend>
+      <label>
+        <span>Category</span>
+        <select [value]="category()" (change)="updateCategory($event)">
+          <option value="all">All categories</option>
+          @for (item of categories; track item) { <option [value]="item">{{ item.replaceAll('_', ' ') }}</option> }
+        </select>
+      </label>
+      <label>
+        <span>Producer</span>
+        <select [value]="producer()" (change)="updateProducer($event)">
+          <option value="all">All producers</option>
+          @for (item of producers; track item) { <option [value]="item">{{ item | receiptLabel }}</option> }
+        </select>
+      </label>
+      @if (hasRunContext()) {
+        <label class="analytical-manual__checkbox"><input type="checkbox" [checked]="usedByThisRun()" (change)="updateUsedByThisRun($event)" /> Used by this run</label>
+      }
+      @if (activeFilterSummary()) { <button type="button" (click)="clearFilters()">Clear filters</button> }
+    </fieldset>
+
+    @if (resolution().warning; as warning) {
+      <p class="analytical-manual__warning" role="status">{{ warning }}</p>
+    }
+
+    <app-metric-reference-entry [variant]="selectedVariant()" [alternative]="alternative()" [runId]="runId()" />
+
+    <nav class="analytical-manual__results" aria-label="Matching metric variants">
+      @for (variant of filteredVariants(); track variant.variant_id) {
+        <a routerLink="/strategy-lab/docs" [queryParams]="{ metric: variant.metric_id, variant: variant.variant_id, producer: variant.producer, contract: variant.contract_id ?? undefined, run: runId() ?? undefined }">
+          <strong>{{ variant.label }}</strong>
+          <span>{{ variant.producer | receiptLabel }}</span>
+        </a>
+      } @empty {
+        <p role="status">No documented metrics match{{ activeFilterSummary() ? ': ' + activeFilterSummary() : '' }}.</p>
+      }
+    </nav>
+  </section>
+</main>

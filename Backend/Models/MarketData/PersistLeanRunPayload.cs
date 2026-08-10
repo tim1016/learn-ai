@@ -79,6 +79,14 @@ public record PersistLeanRunPayload(
     public string? ValidationAnalyticsJson { get; init; }
 
     /// <summary>
+    /// Producer-authored metric documentation context for this run. The JSON
+    /// array carries stable metric, variant, producer, and contract ids; it is
+    /// intentionally separate from calculated statistics.
+    /// </summary>
+    [JsonPropertyName("metric_documentation_json")]
+    public string? MetricDocumentationJson { get; init; }
+
+    /// <summary>
     /// Complete lossless LEAN analysis catalog (name, issue, arbitrary sample,
     /// and every proposed solution). Stored separately from learn-ai's own
     /// validation analytics so the independent Oracle remains identifiable.

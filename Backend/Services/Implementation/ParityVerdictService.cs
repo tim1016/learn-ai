@@ -267,6 +267,15 @@ public class ParityVerdictService : IParityVerdictService
                 leftSignature.ValueKind == JsonValueKind.Object;
             var hasRightSignature = right.RootElement.TryGetProperty("parity_signature", out var rightSignature) &&
                 rightSignature.ValueKind == JsonValueKind.Object;
+            if (hasLeftSignature && hasRightSignature &&
+                ReadString(leftSignature, "contract_id") != ReadString(rightSignature, "contract_id"))
+            {
+                // Both sides carry a signature, but from different contract versions (e.g. one
+                // run predates a schema change to build_run_verdict_parity_signature). A raw
+                // DeepEquals would report "mismatch" for a shape difference that says nothing
+                // about evidence quality, so this is its own non-comparable outcome.
+                return ReadinessParityReceipt.Unavailable("readiness_contract_version_differs");
+            }
             if (hasLeftSignature || hasRightSignature)
             {
                 var matches = hasLeftSignature && hasRightSignature &&

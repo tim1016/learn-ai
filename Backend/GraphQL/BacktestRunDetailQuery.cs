@@ -109,6 +109,7 @@ public sealed record BacktestRunDetailType
     public string? VerdictSignal { get; init; }
     public BacktestRunEquityCurvesType? EquityCurve { get; init; }
     public BacktestRunValidationAnalyticsType? ValidationAnalytics { get; init; }
+    public IReadOnlyList<MetricDocumentationContextType> MetricDocumentation { get; init; } = [];
     public string? InsightSummaryJson { get; init; }
     public string? DataPolicyJson { get; init; }
     public DataPolicyType? DataPolicy => DataPolicyType.TryParse(DataPolicyJson);
@@ -161,6 +162,7 @@ public sealed record BacktestRunDetailType
             VerdictSignal = execution.VerdictSignal,
             EquityCurve = ParseEquityCurve(execution.EquityCurveJson, execution.Id, logger),
             ValidationAnalytics = ParseValidationAnalytics(execution.ValidationAnalyticsJson, execution.Id, logger),
+            MetricDocumentation = ParseMetricDocumentation(execution, logger),
             InsightSummaryJson = execution.InsightSummaryJson,
             DataPolicyJson = execution.DataPolicyJson,
             CommissionPerOrder = execution.CommissionPerOrder,
@@ -235,6 +237,68 @@ public sealed record BacktestRunDetailType
         public decimal? SharpeRatio { get; init; }
         public decimal? SortinoRatio { get; init; }
         public decimal? ProfitFactor { get; init; }
+    }
+
+    private static IReadOnlyList<MetricDocumentationContextType> ParseMetricDocumentation(
+        StrategyExecution execution,
+        ILogger logger)
+    {
+        if (!string.IsNullOrWhiteSpace(execution.MetricDocumentationJson))
+        {
+            try
+            {
+                var recorded = JsonSerializer.Deserialize<List<MetricDocumentationContextType>>(
+                    execution.MetricDocumentationJson,
+                    SnakeCaseJson);
+                // Count: > 0 matters here: [] deserializes successfully and
+                // .All() is vacuously true on an empty sequence, so without
+                // the count check an empty recorded list would short-circuit
+                // to "no contexts" instead of falling through to inference.
+                if (recorded is { Count: > 0 } && recorded.All(context => context.IsValid()))
+                {
+                    return recorded
+                        .Select(context => context with { ContractProvenance = "recorded" })
+                        .ToList();
+                }
+
+                logger.LogWarning(
+                    "StrategyExecution {ExecutionId} metric documentation JSON is empty or invalid; inferring context",
+                    execution.Id);
+            }
+            catch (Exception ex) when (ex is JsonException or InvalidOperationException or NotSupportedException)
+            {
+                logger.LogWarning(
+                    ex,
+                    "StrategyExecution {ExecutionId} metric documentation JSON is unreadable; inferring context",
+                    execution.Id);
+            }
+        }
+
+        // Branch on producer identity (execution.Source) alone. Gating on a
+        // particular field's presence (e.g. leanKpis?.SharpeRatio) conflates
+        // "LEAN produced this row" with "LEAN emitted a Sharpe value" -- a
+        // legacy lean-sidecar row with no portfolio.sharpe_ratio, or a failed
+        // LEAN run whose statistics default to null, is still LEAN-produced
+        // and must not be inferred as the platform contract.
+        var variant = execution.Source == "lean-sidecar"
+            ? new MetricDocumentationContextType
+            {
+                MetricId = "sharpe",
+                VariantId = "sharpe.lean_native.v1",
+                Producer = "lean_native",
+                ContractId = "lean-statistics-oracle-v1",
+                ContractProvenance = "inferred",
+            }
+            : new MetricDocumentationContextType
+            {
+                MetricId = "sharpe",
+                VariantId = "sharpe.platform.v1",
+                Producer = "platform",
+                ContractId = "platform-sharpe-v1",
+                ContractProvenance = "inferred",
+            };
+
+        return [variant];
     }
 
     private static readonly JsonSerializerOptions SnakeCaseJson = new()

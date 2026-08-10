@@ -34427,6 +34427,26 @@
             "title": "Engine",
             "type": "string"
           },
+          "evidence_action": {
+            "anyOf": [
+              {
+                "enum": [
+                  "Advance to independent validation",
+                  "Continue forward and out-of-sample validation",
+                  "Investigate identified weaknesses",
+                  "Revise the hypothesis or validation design",
+                  "Substantial rework is required",
+                  "Rework the tested strategy hypothesis and validate independently",
+                  "Inspect reconciliation discrepancies before relying on this evidence"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence Action"
+          },
           "generated_at_ms": {
             "title": "Generated At Ms",
             "type": "integer"
@@ -34459,6 +34479,13 @@
               "type": "string"
             },
             "title": "Missing Metrics",
+            "type": "array"
+          },
+          "missing_required_evidence": {
+            "items": {
+              "$ref": "#/components/schemas/RunVerdictMissingEvidence"
+            },
+            "title": "Missing Required Evidence",
             "type": "array"
           },
           "missing_required_metrics": {
@@ -34606,6 +34633,35 @@
           "summary"
         ],
         "title": "RunVerdictDimension",
+        "type": "object"
+      },
+      "RunVerdictMissingEvidence": {
+        "description": "A required platform input that prevented an evidence grade.\n\nThis is evidence provenance, not a numerical substitution. In particular,\nan unavailable Sortino stays unavailable rather than becoming a score of\nzero in the transport contract.",
+        "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "producer": {
+            "const": "platform",
+            "title": "Producer"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "producer",
+          "reason"
+        ],
+        "title": "RunVerdictMissingEvidence",
         "type": "object"
       },
       "RunVerdictSubScore": {

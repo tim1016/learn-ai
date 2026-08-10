@@ -979,6 +979,12 @@ def test_build_persist_payload_forwards_brokerage_and_data_policy_from_manifest_
 
     assert payload["brokerage_policy"] == "interactive_brokers"
     assert payload["commission_per_order"] == 0.0
+    assert json.loads(payload["metric_documentation_json"]) == [{
+        "contract_id": "lean-statistics-oracle-v1",
+        "metric_id": "sharpe",
+        "producer": "lean_native",
+        "variant_id": "sharpe.lean_native.v1",
+    }]
     assert payload["data_policy_json"] is not None
     parsed_dp = json.loads(payload["data_policy_json"])
     assert parsed_dp["source"] == "polygon"
@@ -1393,9 +1399,16 @@ def test_failed_run_payload_emits_canonical_shape(tmp_path: Path) -> None:
     assert parsed.trade.total_number_of_trades == 0
     assert parsed.runtime.total_orders == 0
     verdict = json.loads(payload["run_verdict_json"])
-    assert verdict["grade"] == "F"
-    assert verdict["signal"] == "Reject"
+    assert verdict["status"] == "failed"
+    assert verdict["grade"] is None
+    assert verdict["signal"] is None
+    assert verdict["evidence_action"] is None
     assert "lean_run_failed" in verdict["red_flags"]
+    # A failed run's lean_statistics above is an all-zero placeholder, not a
+    # normalized result — recording sharpe.lean_native.v1 "recorded" provenance
+    # against it would claim LEAN computed a real Sharpe value. No context is
+    # recorded; the Backend infers provenance from execution.Source instead.
+    assert json.loads(payload["metric_documentation_json"]) == []
     equity = json.loads(payload["equity_curve_json"])
     assert equity["schema_version"] == 2
     assert equity["mark_to_market"]["error"] == "No normalized/result.json — LEAN run did not produce output"
