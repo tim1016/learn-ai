@@ -18,7 +18,7 @@
       "data": {
         "event": "fill",
         "execution_id": "spy-original-slice-5",
-        "timestamp": "2026-08-10T18:20:00.000Z",
+        "timestamp_ms": 1786386000000,
         "price": "600.00",
         "qty": "5",
         "order": {
@@ -42,6 +42,7 @@
       "side": "BUY",
       "corrected_qty": 3.0,
       "corrected_price": 600.0,
+      "source_event_at_ms": 1786386060000,
       "why": "broker execution correction: original five-share slice reduced to three"
     }
   ],

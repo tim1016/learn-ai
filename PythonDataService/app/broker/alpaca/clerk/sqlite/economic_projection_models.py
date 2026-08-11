@@ -93,6 +93,7 @@ class ExecutionRow:
     fee_fidelity: FeeFidelity
     filled_at_ms: int
     recorded_at_ms: int
+    journal_seq: int = 0
 
 
 @dataclass(frozen=True)

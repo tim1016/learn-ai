@@ -25,10 +25,14 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 import app.routers.clerk_transactions as clerk_transactions_router
-from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime, set_active_clerk_runtime
+from app.broker.alpaca.clerk.active_authority import (
+    ActiveClerkRuntime,
+    ClerkStartupFailure,
+    set_active_clerk_runtime,
+)
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
-from app.routers.clerk_transactions import get_clerk_transaction_store, router
+from app.routers.clerk_transactions import router
 from app.services.clerk_transaction_projection import ClerkTransactionProjectionUnavailable
 
 # The active-SQLite product surface: the sqlite/ package is sole-authority by
@@ -142,7 +146,11 @@ async def test_killing_the_active_sqlite_read_returns_unavailable_never_legacy_d
 
     app = FastAPI()
     app.include_router(router)
-    app.dependency_overrides[get_clerk_transaction_store] = lambda: _PoisonedLegacyStore()
+    monkeypatch.setattr(
+        clerk_transactions_router,
+        "get_clerk_transaction_store",
+        lambda: _PoisonedLegacyStore(),
+    )
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.get("/api/accounts/PA-KILL/transactions")
@@ -156,3 +164,48 @@ async def test_killing_the_active_sqlite_read_returns_unavailable_never_legacy_d
     assert body["feed_state"] == "projection_unavailable"
     assert body["rows"] == []
     assert postgres_calls == []
+
+
+async def test_selected_but_unavailable_sqlite_authority_never_falls_back_to_legacy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An activation record means startup failure is unavailable, not legacy."""
+    set_active_clerk_runtime(
+        ActiveClerkRuntime(
+            authority_kind="unavailable",
+            startup_failure=ClerkStartupFailure(
+                reason_code="SQLITE_CLERK_STARTUP_FAILED",
+                account_id="PA-UNAVAILABLE",
+                scope="ACCOUNT_CLERK",
+                impact="SQLite authority could not start.",
+                recovery="Repair the activated SQLite authority.",
+                observed_at_ms=1,
+                activation_detected=True,
+                authority_generation=1,
+                db_identity_token="identity-1",
+            ),
+        )
+    )
+    legacy_calls: list[str] = []
+
+    class _PoisonedLegacyStore:
+        async def history_page(self, **_kwargs: object) -> None:
+            legacy_calls.append("history_page")
+            raise AssertionError("activated SQLite startup failure must not read legacy history")
+
+    monkeypatch.setattr(
+        clerk_transactions_router,
+        "get_clerk_transaction_store",
+        lambda: _PoisonedLegacyStore(),
+    )
+    app = FastAPI()
+    app.include_router(router)
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/accounts/PA-UNAVAILABLE/transactions")
+    finally:
+        set_active_clerk_runtime(None)
+
+    assert response.status_code == 200
+    assert response.json()["feed_state"] == "projection_unavailable"
+    assert legacy_calls == []

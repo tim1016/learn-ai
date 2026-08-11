@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.models import ExternalOrderResource
@@ -26,6 +26,15 @@ class ExternalOrderAcknowledgementRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     operator: str = Field(min_length=1, max_length=64)
+
+    @field_validator("operator")
+    @classmethod
+    def operator_must_contain_non_whitespace(cls, value: str) -> str:
+        """Preserve meaningful, attributable operator acknowledgement evidence."""
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("operator must contain non-whitespace characters")
+        return normalized
 
 
 class ExternalOrderAcknowledgementResponse(BaseModel):
@@ -63,6 +72,7 @@ class ClerkOrderInstruction(BaseModel):
     quantity: float | None = None
     order_type: str | None = Field(default=None, max_length=16)
     limit_price: float | None = None
+    stop_price: float | None = None
     time_in_force: str | None = Field(default=None, max_length=16)
     outside_rth: bool | None = None
 

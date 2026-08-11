@@ -19,7 +19,10 @@ from app.broker.alpaca.clerk.sqlite.facts import (
 )
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
-from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_acknowledgement
+from app.broker.alpaca.clerk.sqlite.order_evidence import (
+    fold_order_acknowledgement,
+    fold_order_evidence,
+)
 from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
@@ -165,7 +168,7 @@ class SqliteTradeUpdateEvidenceSink:
         recovery_source: str | None,
         recovery_window_limit: int | None,
     ) -> ClerkEntryKind:
-        del recovery_source, recovery_window_limit
+        del recovery_window_limit
         async with self._intake:
             local_order = self._repo.order(client_order_id) if client_order_id else None
             if local_order is None and order is not None:
@@ -222,6 +225,21 @@ class SqliteTradeUpdateEvidenceSink:
             if owner is None:
                 raise RuntimeError(f"SQLite order {local_order.order_ref!r} has no owning effect operation")
 
+            if (
+                recovery_source == "closed_orders_window"
+                and event.event_type in {"fill", "partial_fill"}
+                and event.execution_id is None
+            ):
+                # REST order snapshots carry only cumulative order economics.
+                # Preserve them through the explicitly labelled recovery fold;
+                # do not invent an execution ID just to enter the websocket path.
+                fold_order_evidence(
+                    self._repo,
+                    effect_operation_id=owner.effect_operation_id,
+                    order=order,
+                )
+                return ClerkEntryKind.ORDER_EVENT
+
             if event.event_type in {"fill", "partial_fill"} and event.execution_id is not None:
                 if event.quantity is None or event.price is None:
                     raise ValueError(
@@ -264,10 +282,10 @@ class SqliteTradeUpdateEvidenceSink:
                         blocks_new_exposure=True,
                         allows_reduction=False,
                         reason_code=EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
-                        headline="Exact execution overlaps aggregate recovery evidence",
+                        headline="Exact execution conflicts with prior immutable evidence",
                         explanation=(
-                            "A late websocket execution cannot be safely matched to the "
-                            "order's previously recorded cumulative-recovery fill."
+                            "The received websocket execution cannot be safely merged with "
+                            "the order's prior execution evidence."
                         ),
                         operator_impact=(
                             "New exposure is blocked until this order's execution coverage is reconciled."

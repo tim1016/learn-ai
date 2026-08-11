@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
     set_active_clerk_runtime,
 )
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+from app.broker.alpaca.clerk.sqlite.economic_projection import ExecutionRow
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts
@@ -22,10 +26,14 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
-from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
+from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
 from app.engine.live.order_identity import build_manual_order_namespace, build_order_ref
+from app.services.clerk_transaction_projection import ClerkTransactionProjectionUnavailable
 from app.services.sqlite_clerk_transaction_projection import (
+    _assert_history_hydration_revision,
+    _detail_row,
     _origin_filtered_operation_page,
+    _summary_row,
     classify_transaction_origin,
     sqlite_transaction_detail,
     sqlite_transaction_history,
@@ -334,6 +342,77 @@ def test_transaction_projection_surfaces_single_slice_economics_on_summary(tmp_p
     ) == ("execution-only", 1.0, 501.25, 0.12, "reported")
 
 
+def test_exit_projection_uses_only_reducing_order_execution_economics() -> None:
+    """Linked entry custody must never leak entry fills into an EXIT receipt."""
+    entry = _projected_operation(
+        effect_operation_id="exit-1",
+        strategy_instance_id="spy-bot",
+        order_ref="learn-ai/spy-bot/v1:entry",
+        created_at_ms=1_000,
+    )
+    reducing = ProjectedOrder(
+        order_ref="learn-ai/spy-bot/v1:exit",
+        client_order_id="learn-ai/spy-bot/v1:exit",
+        broker_order_id="broker-exit",
+        role="REDUCING",
+        broker_state="filled",
+        submitted_at_ms=1_001,
+        updated_at_ms=1_002,
+        symbol="SPY",
+    )
+    operation = replace(entry, kind="EXIT", orders=(*entry.orders, reducing))
+    entry_execution = ExecutionRow(
+        fill_id="fill-entry",
+        execution_id="exec-entry",
+        order_ref=entry.orders[0].order_ref,
+        strategy_instance_id="spy-bot",
+        origin="strategy",
+        state="effective",
+        event_kind="fill",
+        symbol="SPY",
+        side=OrderSide.BUY,
+        quantity=1.0,
+        price=500.0,
+        fee=None,
+        fee_fidelity="not_reported",
+        filled_at_ms=1_000,
+        recorded_at_ms=1_000,
+        journal_seq=4,
+    )
+    reducing_execution = replace(
+        entry_execution,
+        fill_id="fill-exit",
+        execution_id="exec-exit",
+        order_ref=reducing.order_ref,
+        side=OrderSide.SELL,
+        price=501.0,
+        journal_seq=7,
+    )
+
+    summary = _summary_row(
+        operation,
+        account_id="PA-ACCOUNT-DESK",
+        execution_summaries={
+            entry.orders[0].order_ref: (entry_execution,),
+            reducing.order_ref: (reducing_execution,),
+        },
+    )
+    detail = _detail_row(
+        operation,
+        (),
+        account_id="PA-ACCOUNT-DESK",
+        executions=(entry_execution, reducing_execution),
+    )
+
+    assert summary.order_ref == reducing.order_ref
+    assert summary.native_execution_id == "exec-exit"
+    assert summary.execution_price == 501.0
+    execution_events = [event for event in detail.events if event.event_kind == "execution_fill"]
+    assert [(event.native_execution_id, event.journal_seq) for event in execution_events] == [
+        ("exec-exit", 7)
+    ]
+
+
 def test_transaction_origin_uses_exact_ownership_ladder_without_namespace_prefix_inference() -> None:
     strategy_ref = "learn-ai/spy-bot/v1:intent-1"
     manual_ref = build_order_ref(build_manual_order_namespace("operator"), "intent-2")
@@ -537,6 +616,23 @@ def test_all_transaction_history_keyset_merges_strategy_and_external_without_dup
     assert external.execution_quantity is None
 
 
+def test_all_history_refuses_typed_hydration_that_crosses_a_control_revision(
+    tmp_path: Path,
+) -> None:
+    repo = ClerkSqliteRepository.initialize(
+        account_id="PA-ACCOUNT-DESK",
+        artifacts_root=tmp_path,
+    )
+    try:
+        before = repo.control_meta_snapshot()
+        after = replace(before, control_revision=before.control_revision + 1)
+
+        with pytest.raises(ClerkTransactionProjectionUnavailable, match="changed during"):
+            _assert_history_hydration_revision(before=before, after=after)
+    finally:
+        repo.close()
+
+
 def _projected_operation(
     *,
     effect_operation_id: str,
@@ -655,4 +751,4 @@ def test_origin_filtered_operation_page_scans_past_a_sparse_first_page() -> None
     assert reader.calls == 2
     assert [row.transaction_id for row in rows] == ["op-manual-1"]
     assert page.next_cursor is None
-    assert len(scanned) == 2
+    assert len(scanned) == 1

@@ -18,6 +18,10 @@ import pytest
 
 from app.broker.alpaca.clerk.sqlite import schema
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.database_verification import (
+    DatabaseVerificationFailed,
+    verify_database,
+)
 from app.broker.alpaca.clerk.sqlite.hashchain import PAYLOAD_COLUMNS, verify_chain
 from app.broker.alpaca.clerk.sqlite.mirror import MirrorChainBroken
 from app.broker.alpaca.clerk.sqlite.repository import (
@@ -60,7 +64,7 @@ def repo(tmp_path: Path):
 
 
 def test_schema_version_includes_execution_authority_tables() -> None:
-    assert schema.SCHEMA_VERSION == 7
+    assert schema.SCHEMA_VERSION == 8
 
 
 def test_stale_schema_version_fails_closed_on_open(tmp_path: Path) -> None:
@@ -88,7 +92,7 @@ def test_future_schema_version_fails_closed_on_open(tmp_path: Path) -> None:
         ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
 
 
-def test_empty_v6_authority_opens_through_the_complete_v7_upgrade(tmp_path: Path) -> None:
+def test_empty_v6_authority_opens_through_the_complete_v8_upgrade(tmp_path: Path) -> None:
     """An operationally empty physical v6 file upgrades atomically on open."""
     clock = _clock_seq()
     r = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
@@ -105,6 +109,7 @@ def test_empty_v6_authority_opens_through_the_complete_v7_upgrade(tmp_path: Path
         "superseded_execution_ref",
         "fee",
         "fee_fidelity",
+        "recorded_transition_sequence",
     ):
         r._conn.execute(f"ALTER TABLE fills DROP COLUMN {column}")
     r._conn.execute("UPDATE control_meta SET schema_version = 6 WHERE id = 1")
@@ -118,7 +123,7 @@ def test_empty_v6_authority_opens_through_the_complete_v7_upgrade(tmp_path: Path
     conn = sqlite3.connect(db_path)
     try:
         version = conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0]
-        assert version == 7
+        assert version == 8
         fills_columns = {row[1] for row in conn.execute("PRAGMA table_info(fills)")}
         assert {
             "execution_id",
@@ -127,11 +132,34 @@ def test_empty_v6_authority_opens_through_the_complete_v7_upgrade(tmp_path: Path
             "superseded_execution_ref",
             "fee",
             "fee_fidelity",
+            "recorded_transition_sequence",
         } <= fills_columns
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         assert {"external_orders", "bot_config", "decision_receipts"} <= tables
     finally:
         conn.close()
+
+
+def test_read_only_verification_rejects_a_data_bearing_v6_authority(tmp_path: Path) -> None:
+    """Cutover planning must not bless a v6 file that cannot migrate safely."""
+    clock = _clock_seq()
+    repository = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+        clock=clock,
+    )
+    repository.register_strategy_instance(
+        strategy_instance_id=SID_A,
+        symbol="SPY",
+        config_hash="config",
+    )
+    repository._conn.execute("UPDATE control_meta SET schema_version = 6 WHERE id = 1")
+    repository._conn.commit()
+    repository.close()
+
+    db_path = tmp_path / "accounts" / "alpaca" / ACCOUNT_ID / "clerk.db"
+    with pytest.raises(DatabaseVerificationFailed, match="data-bearing v6 authority"):
+        verify_database(db_path, expected_account_id=ACCOUNT_ID)
 
 
 def test_is_upgradable_to_current_reflects_the_registered_migration_chain() -> None:

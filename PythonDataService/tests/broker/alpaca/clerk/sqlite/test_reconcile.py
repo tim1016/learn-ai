@@ -25,6 +25,7 @@ from app.broker.alpaca.clerk.sqlite.external_orders import (
     InvalidExternalOrderCursor,
     SqliteExternalOrderReader,
     acknowledge_external_order,
+    observe_external_order,
 )
 from app.broker.alpaca.clerk.sqlite.folds import (
     POSITION_QTY_EPSILON,
@@ -539,10 +540,13 @@ async def test_reconcile_foreign_order_records_external_observation_without_bot_
             "external_order_id": "external-order-1",
             "broker_order_id": "external-order-1",
             "client_order_id": "alpaca-console:operator-order-1",
-            "symbol": "SPY",
-            "side": "BUY",
-            "qty": 1.0,
-            "price": None,
+                "symbol": "SPY",
+                "side": "BUY",
+                "qty": 1.0,
+                "order_type": "market",
+                "limit_price": None,
+                "stop_price": None,
+                "filled_avg_price": None,
             "observed_at_ms": 1_700_000_000_500,
             "acknowledged_at_ms": None,
             "ack_operator": None,
@@ -620,6 +624,37 @@ async def test_external_order_reader_paginates_durable_observations_with_account
         assert first_page.next_cursor is not None
         assert [order.external_order_id for order in second_page.orders] == ["external-1"]
         assert second_page.next_cursor is None
+    finally:
+        reader.close()
+
+
+async def test_external_order_cursor_survives_a_later_broker_snapshot_update(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """The cursor follows immutable first-observation custody, not mutable poll time."""
+    first = _broker_order("alpaca-console:first", order_id="external-1")
+    second = _broker_order("alpaca-console:second", order_id="external-2")
+    await reconcile_account(repo, read=_FakeRead(orders=[first, second]), trade=_FakeTrade())
+    reader = SqliteExternalOrderReader.from_repository(repo)
+    try:
+        first_page = reader.external_orders(page_size=1)
+        assert [order.external_order_id for order in first_page.orders] == ["external-2"]
+        assert first_page.next_cursor is not None
+
+        observe_external_order(
+            repo,
+            order=second.model_copy(
+                update={"filled_avg_price": 101.25, "observed_at_ms": second.observed_at_ms + 1}
+            ),
+        )
+
+        second_page = reader.external_orders(cursor=first_page.next_cursor, page_size=1)
+        refreshed = repo.external_order("external-2")
+        assert [order.external_order_id for order in second_page.orders] == ["external-1"]
+        assert refreshed is not None
+        assert refreshed.order_type == "market"
+        assert refreshed.limit_price is None
+        assert refreshed.filled_avg_price == 101.25
     finally:
         reader.close()
 

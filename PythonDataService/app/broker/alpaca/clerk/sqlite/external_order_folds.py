@@ -39,8 +39,15 @@ def fold_external_order_observed(conn: sqlite3.Connection, payload: dict[str, An
         raise ValueError("external order side must be BUY or SELL")
     if not math.isfinite(facts.qty) or facts.qty < 0:
         raise ValueError("external order quantity must be finite and non-negative")
-    if facts.price is not None and not math.isfinite(facts.price):
-        raise ValueError("external order price must be finite when supplied")
+    if not facts.order_type:
+        raise ValueError("external order type must be non-empty")
+    for price_name, price in (
+        ("limit", facts.limit_price),
+        ("stop", facts.stop_price),
+        ("filled average", facts.filled_avg_price),
+    ):
+        if price is not None and not math.isfinite(price):
+            raise ValueError(f"external order {price_name} price must be finite when supplied")
     if facts.observed_at_ms < 0:
         raise ValueError("external order observed_at_ms must be non-negative")
     if not facts.evidence_refs or not all(facts.evidence_refs):
@@ -48,11 +55,14 @@ def fold_external_order_observed(conn: sqlite3.Connection, payload: dict[str, An
     evidence_refs = sorted(set(facts.evidence_refs))
     conn.execute(
         "INSERT INTO external_orders (external_order_id, broker_order_id, client_order_id, symbol, "
-        "side, qty, price, observed_at_ms, acknowledged_at_ms, ack_operator, evidence_refs_json) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?) "
+        "side, qty, order_type, limit_price, stop_price, filled_avg_price, observed_at_ms, "
+        "acknowledged_at_ms, ack_operator, evidence_refs_json) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?) "
         "ON CONFLICT(broker_order_id) DO UPDATE SET "
         "client_order_id = excluded.client_order_id, symbol = excluded.symbol, "
-        "side = excluded.side, qty = excluded.qty, price = excluded.price, "
+        "side = excluded.side, qty = excluded.qty, order_type = excluded.order_type, "
+        "limit_price = excluded.limit_price, stop_price = excluded.stop_price, "
+        "filled_avg_price = excluded.filled_avg_price, "
         "observed_at_ms = excluded.observed_at_ms, evidence_refs_json = excluded.evidence_refs_json",
         (
             facts.external_order_id,
@@ -61,7 +71,10 @@ def fold_external_order_observed(conn: sqlite3.Connection, payload: dict[str, An
             facts.symbol,
             facts.side,
             facts.qty,
-            facts.price,
+            facts.order_type,
+            facts.limit_price,
+            facts.stop_price,
+            facts.filled_avg_price,
             facts.observed_at_ms,
             canonicalize(evidence_refs),
         ),

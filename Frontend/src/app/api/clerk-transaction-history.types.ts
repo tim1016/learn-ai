@@ -21,6 +21,7 @@ export interface ClerkOrderInstruction {
   readonly quantity: number | null;
   readonly order_type: string | null;
   readonly limit_price: number | null;
+  readonly stop_price: number | null;
   readonly time_in_force: string | null;
   readonly outside_rth: boolean | null;
 }
@@ -140,4 +141,11 @@ export interface ClerkTransactionHistoryResponse {
   readonly custody_summary: ClerkCustodyWindowSummary;
   readonly rows: readonly ClerkTransactionSummary[];
   readonly next_cursor: string | null;
+}
+
+/** Backend receipt for one operator-reviewed external broker order. */
+export interface ExternalOrderAcknowledgement {
+  readonly external_order_id: string;
+  readonly acknowledged_at_ms: number;
+  readonly ack_operator: string;
 }

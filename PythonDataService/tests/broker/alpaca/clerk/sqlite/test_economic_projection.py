@@ -11,6 +11,7 @@ from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
     DEFAULT_RECENT_FILL_LIMIT,
     EconomicProjectionUnavailable,
+    InvalidEconomicCursor,
     MarketMark,
     SqliteEconomicProjectionReader,
 )
@@ -604,6 +605,92 @@ def test_pages_are_keyset_bounded_and_account_rows_preserve_effective_state(tmp_
         repo.close()
 
 
+def test_execution_page_cursor_is_rejected_after_effective_fill_revision(tmp_path: Path) -> None:
+    """A correction changes the leaf set, so continuing an old page would be unsafe."""
+    repo, accepted = _repository(tmp_path)
+    session = session_window_for_date(date(2026, 8, 10))
+    try:
+        _append_slice(
+            repo,
+            accepted,
+            execution_id="exec-cursor-first",
+            side="BUY",
+            quantity=1.0,
+            price=100.0,
+            occurred_at_ms=session.open_ms_utc,
+        )
+        _append_slice(
+            repo,
+            accepted,
+            execution_id="exec-cursor-second",
+            side="BUY",
+            quantity=1.0,
+            price=101.0,
+            occurred_at_ms=session.open_ms_utc + 1_000,
+        )
+        reader = SqliteEconomicProjectionReader.from_repository(repo)
+        try:
+            first = reader.bot_fills(_SID, limit=1)
+            assert first.next_cursor is not None
+            _append_correction(
+                repo,
+                accepted,
+                execution_id="exec-cursor-second-corrected",
+                superseded_execution_ref="exec-cursor-second",
+                quantity=1.0,
+                price=102.0,
+                occurred_at_ms=session.open_ms_utc + 1_000,
+            )
+            with pytest.raises(InvalidEconomicCursor, match="invalid execution page cursor"):
+                reader.bot_fills(_SID, limit=1, cursor=first.next_cursor)
+        finally:
+            reader.close()
+    finally:
+        repo.close()
+
+
+def test_equal_execution_timestamps_follow_durable_custody_sequence(tmp_path: Path) -> None:
+    """FIFO never falls back to lexicographic execution IDs for a timestamp tie."""
+    repo, accepted = _repository(tmp_path)
+    session = session_window_for_date(date(2026, 8, 10))
+    try:
+        _append_slice(
+            repo,
+            accepted,
+            execution_id="exec-z-first",
+            side="BUY",
+            quantity=1.0,
+            price=100.0,
+            occurred_at_ms=session.open_ms_utc,
+        )
+        _append_slice(
+            repo,
+            accepted,
+            execution_id="exec-a-second",
+            side="BUY",
+            quantity=1.0,
+            price=101.0,
+            occurred_at_ms=session.open_ms_utc,
+        )
+        reader = SqliteEconomicProjectionReader.from_repository(repo)
+        try:
+            window = reader.bot_fill_window(
+                _SID,
+                from_ms=session.open_ms_utc,
+                to_ms=session.close_ms_utc,
+            )
+        finally:
+            reader.close()
+
+        assert window is not None
+        assert [fill.event_key for fill in window.fills] == ["exec-z-first", "exec-a-second"]
+        assert [fill.ledger_sequence for fill in window.fills] == sorted(
+            fill.ledger_sequence for fill in window.fills
+        )
+    finally:
+        repo.close()
+
+
 def test_mismatched_effective_fills_and_positions_is_explicitly_unavailable(tmp_path: Path) -> None:
     repo, accepted = _repository(tmp_path)
     session = session_window_for_date(date(2026, 8, 10))
@@ -631,7 +718,10 @@ def test_mismatched_effective_fills_and_positions_is_explicitly_unavailable(tmp_
         repo.close()
 
 
-def test_catalog_rollup_returns_one_revision_for_all_requested_bots(tmp_path: Path) -> None:
+def test_catalog_rollup_returns_one_revision_for_all_requested_bots(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     repo, accepted = _repository(tmp_path)
     session = session_window_for_date(date(2026, 8, 10))
     second_sid = "s2-economic-two"
@@ -652,6 +742,16 @@ def test_catalog_rollup_returns_one_revision_for_all_requested_bots(tmp_path: Pa
         )
         reader = SqliteEconomicProjectionReader.from_repository(repo)
         try:
+            effective_fill_queries: list[tuple[str, ...]] = []
+            original_effective_fill_rows = reader._effective_fill_rows
+
+            def capture_effective_fill_query(**kwargs: object):
+                strategy_instance_ids = kwargs["strategy_instance_ids"]
+                assert isinstance(strategy_instance_ids, tuple)
+                effective_fill_queries.append(strategy_instance_ids)
+                return original_effective_fill_rows(**kwargs)  # type: ignore[arg-type]
+
+            monkeypatch.setattr(reader, "_effective_fill_rows", capture_effective_fill_query)
             rollup = reader.catalog_economic_rollup([_SID, second_sid], session_window=session)
         finally:
             reader.close()
@@ -660,5 +760,35 @@ def test_catalog_rollup_returns_one_revision_for_all_requested_bots(tmp_path: Pa
         assert {snapshot.control_revision for snapshot in rollup.values()} == {
             repo.control_meta_snapshot().control_revision
         }
+        assert effective_fill_queries == [(_SID, second_sid)]
+    finally:
+        repo.close()
+
+
+def test_decision_evidence_updates_bot_and_catalog_activity_without_a_fill(
+    tmp_path: Path,
+) -> None:
+    repo, _accepted = _repository(tmp_path)
+    decision_at_ms = 1_786_368_123_000
+    try:
+        repo.append_decision_receipt(
+            strategy_instance_id=_SID,
+            outcome="no_action",
+            symbol="GOOGL",
+            intent_id=None,
+            order_ref=None,
+            observed_at_ms=decision_at_ms,
+            facts_json='{"bar_ref":"GOOGL@1786368123000","reason_code":"NO_ACTION"}',
+        )
+        reader = SqliteEconomicProjectionReader.from_repository(repo)
+        try:
+            snapshot = reader.bot_economic_snapshot(_SID, session_window=None)
+            rollup = reader.catalog_economic_rollup([_SID], session_window=None)
+        finally:
+            reader.close()
+
+        assert snapshot is not None
+        assert snapshot.last_activity_at_ms == decision_at_ms
+        assert rollup[_SID].last_activity_at_ms == decision_at_ms
     finally:
         repo.close()

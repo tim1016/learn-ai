@@ -1,5 +1,6 @@
 {
   "projection": {
+    "authority_generation": 1,
     "external_orders": [
       {
         "external_order_id": "external-order-1",
@@ -8,7 +9,10 @@
         "symbol": "AAPL",
         "side": "BUY",
         "qty": 2.0,
-        "price": null,
+        "order_type": "market",
+        "limit_price": null,
+        "stop_price": null,
+        "filled_avg_price": null,
         "acknowledged_at_ms": null
       }
     ],

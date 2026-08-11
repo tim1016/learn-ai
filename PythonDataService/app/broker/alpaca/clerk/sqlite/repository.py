@@ -33,7 +33,10 @@ from collections.abc import Callable
 from pathlib import Path
 
 from app.broker.alpaca.clerk.sqlite import reads, writes
-from app.broker.alpaca.clerk.sqlite.decision_receipts import append_decision_receipt_row
+from app.broker.alpaca.clerk.sqlite.decision_receipts import (
+    append_decision_receipt_row,
+    update_decision_receipt_for_bar,
+)
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExecutionCorrectedFacts,
     ExecutionSliceFilledFacts,
@@ -454,11 +457,35 @@ class ClerkSqliteRepository(ClerkSqliteRepositoryReadApi, ClerkSqliteRepositoryE
 
         Outcomes are ``"appended"``, ``"duplicate"``,
         ``"coverage_conflict_raised"``, or
-        ``"coverage_conflict_already_raised"``.
+        ``"coverage_conflict_already_raised"``. A changed delivery that
+        reuses an immutable broker execution ID cannot be a truthful new
+        execution or correction (a correction needs its own broker identity),
+        so it raises the same fail-closed coverage uncertainty instead of
+        silently discarding changed economics.
         """
         with self._write_lock:
             self._assert_not_poisoned()
             self._renew_execution_lease()
+            existing_execution = reads.effective_execution_slice(self._conn, execution_id)
+            if existing_execution is not None:
+                candidate = build_transition()
+                facts = self._validated_execution_slice_transition(
+                    candidate,
+                    execution_id=execution_id,
+                    order_ref=order_ref,
+                )
+                if self._same_execution_slice(existing_execution, facts=facts, order_ref=order_ref):
+                    return "duplicate"
+                if reads.correction_uncertainty_exists(self._conn, execution_id):
+                    return "coverage_conflict_already_raised"
+                uncertainty = build_coverage_conflict()
+                self._validate_execution_coverage_conflict(
+                    uncertainty=uncertainty,
+                    execution_id=execution_id,
+                    order_ref=order_ref,
+                )
+                self.append_transition(uncertainty)
+                return "coverage_conflict_raised"
             if reads.execution_exists(self._conn, execution_id):
                 return "duplicate"
             if reads.cumulative_recovery_fill_exists_for_order(self._conn, order_ref):
@@ -476,16 +503,47 @@ class ClerkSqliteRepository(ClerkSqliteRepositoryReadApi, ClerkSqliteRepositoryE
                 self.append_transition(uncertainty)
                 return "coverage_conflict_raised"
             transition = build_transition()
-            if transition.transition_kind != "EXECUTION_SLICE_FILLED":
-                raise ValueError("exact execution append requires EXECUTION_SLICE_FILLED")
-            facts = ExecutionSliceFilledFacts.from_facts_json(transition.facts_json)
-            validate_execution_slice_facts(facts)
-            if facts.execution_id != execution_id:
-                raise ValueError("execution_id must match the transition facts")
-            if transition.order_ref != order_ref:
-                raise ValueError("order_ref must match the exact execution transition")
+            self._validated_execution_slice_transition(
+                transition,
+                execution_id=execution_id,
+                order_ref=order_ref,
+            )
             self.append_transition(transition)
             return "appended"
+
+    @staticmethod
+    def _validated_execution_slice_transition(
+        transition: TransitionInput,
+        *,
+        execution_id: str,
+        order_ref: str,
+    ) -> ExecutionSliceFilledFacts:
+        """Return validated exact-execution facts with immutable identities aligned."""
+        if transition.transition_kind != "EXECUTION_SLICE_FILLED":
+            raise ValueError("exact execution append requires EXECUTION_SLICE_FILLED")
+        facts = ExecutionSliceFilledFacts.from_facts_json(transition.facts_json)
+        validate_execution_slice_facts(facts)
+        if facts.execution_id != execution_id:
+            raise ValueError("execution_id must match the transition facts")
+        if transition.order_ref != order_ref:
+            raise ValueError("order_ref must match the exact execution transition")
+        return facts
+
+    @staticmethod
+    def _same_execution_slice(
+        existing: dict,
+        *,
+        facts: ExecutionSliceFilledFacts,
+        order_ref: str,
+    ) -> bool:
+        """Whether an execution-ID replay preserves immutable economics."""
+        return (
+            existing["order_ref"] == order_ref
+            and existing["symbol"].upper() == facts.symbol.upper()
+            and existing["side"] == facts.side
+            and float(existing["qty"]) == facts.slice_qty
+            and float(existing["price"]) == facts.slice_price
+        )
 
     @staticmethod
     def _validate_execution_coverage_conflict(
@@ -862,6 +920,34 @@ class ClerkSqliteRepository(ClerkSqliteRepositoryReadApi, ClerkSqliteRepositoryE
                 intent_id=intent_id,
                 order_ref=order_ref,
                 observed_at_ms=observed_at_ms,
+                facts_json=facts_json,
+            )
+
+    def update_decision_receipt_for_bar(
+        self,
+        *,
+        strategy_instance_id: str,
+        bar_ref: str,
+        outcome: str,
+        order_ref: str | None,
+        facts_json: str,
+    ) -> DecisionReceiptResource:
+        """Replace one closed bar's provisional receipt with its final outcome."""
+        if not strategy_instance_id:
+            raise ValueError("strategy_instance_id must be non-empty")
+        if not bar_ref:
+            raise ValueError("bar_ref must be non-empty")
+        if not outcome:
+            raise ValueError("outcome must be non-empty")
+        with self._write_lock:
+            self._assert_not_poisoned()
+            self._renew_execution_lease()
+            return update_decision_receipt_for_bar(
+                self._conn,
+                strategy_instance_id=strategy_instance_id,
+                bar_ref=bar_ref,
+                outcome=outcome,
+                order_ref=order_ref,
                 facts_json=facts_json,
             )
 

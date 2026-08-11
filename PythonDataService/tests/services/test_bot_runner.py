@@ -2423,6 +2423,43 @@ async def test_sqlite_trade_bot_does_not_label_an_uncertain_effect_as_entered(
 
 
 @pytest.mark.asyncio
+async def test_sqlite_trade_bot_records_a_rejected_enter_as_a_blocked_decision(
+    tmp_path: Path,
+) -> None:
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
+    repo.register_strategy_instance(strategy_instance_id=_SID, symbol="SPY", config_hash="config-1")
+    clerk = _FakeClerk(effect_state="rejected", repository=repo)
+    clerk.authority_kind = "sqlite"
+    clerk.account_id = "PA-TEST"
+    feed = _FakeFeed(
+        [_bar(_RTH_MS + offset * 60_000) for offset in range(2)],
+        mode="hold",
+    )
+    registry = _registry(tmp_path, feed)
+    set_alpaca_clerk(clerk)
+    try:
+        await registry.deploy(
+            broker="alpaca",
+            strategy_instance_id=_SID,
+            strategy_key="deployment_validation",
+            symbol="SPY",
+            mode="trade",
+            quantity=1,
+        )
+        await _wait_for(lambda: len(clerk.calls) == 1)
+        await registry.stop("alpaca", _SID)
+
+        decisions = repo.decision_receipt_tail(strategy_instance_id=_SID, limit=2)
+        assert decisions[-1].outcome == "blocked"
+        facts = json.loads(decisions[-1].facts_json)
+        assert facts["reason_code"] == "CLERK_ADMISSION_REJECTED"
+        assert "refusal_reason" in facts
+    finally:
+        set_alpaca_clerk(None)
+        repo.close()
+
+
+@pytest.mark.asyncio
 async def test_decision_receipt_failure_prevents_the_broker_effect(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

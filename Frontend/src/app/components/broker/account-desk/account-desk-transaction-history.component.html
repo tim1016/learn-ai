@@ -83,6 +83,30 @@
   }
 </p-panel>
 
+@if (canAcknowledgeSelectedExternalOrder()) {
+  <section class="external-order-acknowledgement" aria-label="External order acknowledgement">
+    <h3>Review external order</h3>
+    <p>Record your acknowledgement only after reviewing the selected order's evidence.</p>
+    <label>Operator
+      <input
+        [value]="acknowledgementOperator()"
+        (input)="acknowledgementOperator.set(inputValue($event))"
+        autocomplete="username"
+      />
+    </label>
+    @if (acknowledgementError(); as error) { <p role="alert">{{ error }}</p> }
+    <button
+      pButton
+      type="button"
+      severity="warn"
+      [disabled]="!acknowledgementOperator().trim() || acknowledgingExternalOrderId() !== null"
+      (click)="acknowledgeSelectedExternalOrder()"
+    >
+      Acknowledge external order
+    </button>
+  </section>
+}
+
 <app-clerk-transaction-evidence-drawer
   [accountId]="store.accountId()"
   [transaction]="selectedTransaction()"

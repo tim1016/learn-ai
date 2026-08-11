@@ -85,6 +85,7 @@ from app.services.broker_v2_panel.sqlite_panel_source import (
     read_sqlite_decision_receipts,
     read_sqlite_panel_evidence,
     sqlite_authority_active,
+    sqlite_authority_selected_but_unavailable,
 )
 from app.services.strategy_validation_manifest import (
     StrategyValidationManifestError,
@@ -187,7 +188,7 @@ async def validate_account_scope(broker: str, account_id: str, sid: str) -> None
 
 
 def _read_order_journal(broker: str, account_id: str) -> list[OrderJournalEntry]:
-    if sqlite_authority_active(broker):
+    if sqlite_authority_active(broker) or sqlite_authority_selected_but_unavailable(broker):
         return []
     journal = OrderJournal(account_id=account_id, root=get_clerk_settings().dir)
     owner = get_or_create_owner(account_id, broker)
@@ -564,6 +565,11 @@ async def _get_panel_with_entries(
 ) -> tuple[BotPanelView, list[OrderJournalEntry], tuple[FillRecord, ...] | None]:
     """Build one panel and return the exact fill set used by its chart."""
     resolved = await _validate_account(broker, account_id)
+    if sqlite_authority_selected_but_unavailable(broker):
+        raise PanelUnavailableError(
+            "The activated SQLite panel authority is unavailable.",
+            detail="Repair the selected SQLite authority; legacy journal projections are not used.",
+        )
     sqlite_active = sqlite_authority_active(broker)
     captured_now_ms = now_ms if now_ms is not None else now_ms_utc()
     if sqlite_active:

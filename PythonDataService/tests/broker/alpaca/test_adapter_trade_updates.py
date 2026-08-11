@@ -122,6 +122,32 @@ def test_missing_timestamp_fails_fast() -> None:
         from_alpaca_trade_update({"event": "fill", "order": {"status": "filled"}})
 
 
+def test_normalized_timestamp_ms_is_preserved_without_another_conversion() -> None:
+    event = from_alpaca_trade_update(
+        {
+            "event": "fill",
+            "timestamp_ms": 1_786_386_000_000,
+            "execution_id": "normalized-execution",
+            "price": "100.25",
+            "qty": "2",
+        }
+    )
+
+    assert event.occurred_at_ms == 1_786_386_000_000
+
+
+@pytest.mark.parametrize("execution_id", [None, "", "   "])
+def test_fill_without_a_non_blank_execution_id_fails_fast(execution_id: str | None) -> None:
+    with pytest.raises(ValueError, match="missing its execution_id"):
+        from_alpaca_trade_update(
+            {
+                "event": "fill",
+                "timestamp": "2026-07-24T14:42:50.129256359Z",
+                "execution_id": execution_id,
+            }
+        )
+
+
 def test_event_names_match_documented_set() -> None:
     # Pin the documented event vocabulary so a silent drop of a known event surfaces.
     assert {"new", "fill", "partial_fill", "canceled", "expired", "rejected", "replaced"}.issubset(

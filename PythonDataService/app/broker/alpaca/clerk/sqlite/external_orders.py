@@ -72,7 +72,10 @@ def observe_external_order(
         symbol=expected.symbol,
         side=expected.side,
         qty=expected.qty,
-        price=expected.price,
+        order_type=expected.order_type,
+        limit_price=expected.limit_price,
+        stop_price=expected.stop_price,
+        filled_avg_price=expected.filled_avg_price,
         observed_at_ms=expected.observed_at_ms,
         evidence_refs=list(expected.evidence_refs),
     )
@@ -198,7 +201,7 @@ class SqliteExternalOrderReader:
             meta = self._verify_identity()
             rows = reads.external_order_page(
                 self._conn,
-                observed_before_ms=(anchor[0] if anchor is not None else None),
+                observation_sequence_before=(anchor[0] if anchor is not None else None),
                 external_order_id_before=(anchor[1] if anchor is not None else None),
                 lifecycle_state=lifecycle_state,
                 limit=page_size + 1,
@@ -241,7 +244,7 @@ class SqliteExternalOrderReader:
             "db_identity_token": self._db_identity_token,
             "external_order_id": order.external_order_id,
             "lifecycle_state": lifecycle_state,
-            "observed_at_ms": order.observed_at_ms,
+            "observation_sequence": order.observation_sequence,
         }
         return base64.urlsafe_b64encode(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -263,14 +266,14 @@ class SqliteExternalOrderReader:
             or payload.get("authority_generation") != self._authority_generation
             or payload.get("db_identity_token") != self._db_identity_token
             or payload.get("lifecycle_state") != lifecycle_state
-            or not isinstance(payload.get("observed_at_ms"), int)
+            or not isinstance(payload.get("observation_sequence"), int)
             or not isinstance(payload.get("external_order_id"), str)
             or not payload["external_order_id"]
         ):
             raise InvalidExternalOrderCursor(
                 "external-order cursor has a different authority or filter scope"
             )
-        return payload["observed_at_ms"], payload["external_order_id"]
+        return payload["observation_sequence"], payload["external_order_id"]
 
 
 def _observation_from_broker_order(order: BrokerOrder) -> ExternalOrderResource:
@@ -278,7 +281,7 @@ def _observation_from_broker_order(order: BrokerOrder) -> ExternalOrderResource:
     symbol = order.symbol.strip().upper()
     side = order.side.upper()
     qty = order.quantity if order.quantity is not None else order.filled_quantity
-    price = order.limit_price if order.limit_price is not None else order.filled_avg_price
+    order_type = order.order_type.strip().lower()
     if not broker_order_id:
         raise ExternalOrderObservationError("broker order id must be non-empty")
     if not symbol:
@@ -287,10 +290,19 @@ def _observation_from_broker_order(order: BrokerOrder) -> ExternalOrderResource:
         raise ExternalOrderObservationError("external order side must be buy or sell")
     if not math.isfinite(qty) or qty < 0:
         raise ExternalOrderObservationError("external order quantity must be finite and non-negative")
-    if price is not None and not math.isfinite(price):
-        raise ExternalOrderObservationError("external order price must be finite when supplied")
+    if not order_type:
+        raise ExternalOrderObservationError("external order type must be non-empty")
+    for price_name, price in (
+        ("limit", order.limit_price),
+        ("stop", order.stop_price),
+        ("filled average", order.filled_avg_price),
+    ):
+        if price is not None and not math.isfinite(price):
+            raise ExternalOrderObservationError(
+                f"external order {price_name} price must be finite when supplied"
+            )
     return ExternalOrderResource(
-        # Broker order identity is stable and already unique in the v7 table;
+        # Broker order identity is stable and unique in the SQLite fold;
         # reusing it makes the row directly auditable against broker evidence.
         external_order_id=broker_order_id,
         broker_order_id=broker_order_id,
@@ -302,7 +314,10 @@ def _observation_from_broker_order(order: BrokerOrder) -> ExternalOrderResource:
         symbol=symbol,
         side=side,
         qty=qty,
-        price=price,
+        order_type=order_type,
+        limit_price=order.limit_price,
+        stop_price=order.stop_price,
+        filled_avg_price=order.filled_avg_price,
         observed_at_ms=order.observed_at_ms,
         acknowledged_at_ms=None,
         ack_operator=None,

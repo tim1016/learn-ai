@@ -60,7 +60,10 @@ _EXTERNAL_ORDER_COLUMNS: tuple[str, ...] = (
     "symbol",
     "side",
     "qty",
-    "price",
+    "order_type",
+    "limit_price",
+    "stop_price",
+    "filled_avg_price",
     "observed_at_ms",
     "acknowledged_at_ms",
     "ack_operator",
@@ -69,7 +72,7 @@ _EXTERNAL_ORDER_COLUMNS: tuple[str, ...] = (
 
 _EXTERNAL_ORDER_SELECT = (
     ", ".join(f"eo.{column}" for column in _EXTERNAL_ORDER_COLUMNS)
-    + ", (SELECT MAX(ct.sequence) FROM custody_transitions ct "
+    + ", (SELECT MIN(ct.sequence) FROM custody_transitions ct "
     "WHERE ct.broker_order_id = eo.broker_order_id "
     "AND ct.transition_kind = 'EXTERNAL_ORDER_OBSERVED') AS observation_sequence"
     + ", (SELECT MAX(ct.sequence) FROM custody_transitions ct "
@@ -78,7 +81,7 @@ _EXTERNAL_ORDER_SELECT = (
     + ", (SELECT ct.recorded_at_ms FROM custody_transitions ct "
     "WHERE ct.broker_order_id = eo.broker_order_id "
     "AND ct.transition_kind = 'EXTERNAL_ORDER_OBSERVED' "
-    "ORDER BY ct.sequence DESC LIMIT 1) AS observation_recorded_at_ms"
+    "ORDER BY ct.sequence ASC LIMIT 1) AS observation_recorded_at_ms"
     + ", (SELECT ct.recorded_at_ms FROM custody_transitions ct "
     "WHERE ct.broker_order_id = eo.broker_order_id "
     "AND ct.transition_kind = 'EXTERNAL_ORDER_ACKNOWLEDGED' "
@@ -204,12 +207,12 @@ def external_orders(conn: sqlite3.Connection) -> list[ExternalOrderResource]:
 def external_order_page(
     conn: sqlite3.Connection,
     *,
-    observed_before_ms: int | None,
+    observation_sequence_before: int | None,
     external_order_id_before: str | None,
     lifecycle_state: str | None,
     limit: int,
 ) -> list[ExternalOrderResource]:
-    if (observed_before_ms is None) != (external_order_id_before is None):
+    if (observation_sequence_before is None) != (external_order_id_before is None):
         raise ValueError("external-order cursor must include both keyset fields")
     lifecycle_predicate = {
         None: "",
@@ -220,19 +223,30 @@ def external_order_page(
         raise ValueError("external-order lifecycle_state is invalid")
     params: tuple[object, ...]
     where_clauses: list[str] = []
-    if observed_before_ms is None:
+    observation_sequence = (
+        "(SELECT MIN(ct.sequence) FROM custody_transitions ct "
+        "WHERE ct.broker_order_id = eo.broker_order_id "
+        "AND ct.transition_kind = 'EXTERNAL_ORDER_OBSERVED')"
+    )
+    if observation_sequence_before is None:
         params = (limit,)
     else:
         where_clauses.append(
-            "(eo.observed_at_ms < ? OR (eo.observed_at_ms = ? AND eo.external_order_id < ?))"
+            f"({observation_sequence} < ? OR ({observation_sequence} = ? "
+            "AND eo.external_order_id < ?))"
         )
-        params = (observed_before_ms, observed_before_ms, external_order_id_before, limit)
+        params = (
+            observation_sequence_before,
+            observation_sequence_before,
+            external_order_id_before,
+            limit,
+        )
     if lifecycle_predicate:
         where_clauses.append(lifecycle_predicate)
     where = f"WHERE {' AND '.join(where_clauses)} " if where_clauses else ""
     rows = conn.execute(
         f"SELECT {_EXTERNAL_ORDER_SELECT} FROM external_orders eo {where}"
-        "ORDER BY eo.observed_at_ms DESC, eo.external_order_id DESC LIMIT ?",
+        f"ORDER BY {observation_sequence} DESC, eo.external_order_id DESC LIMIT ?",
         params,
     ).fetchall()
     return [_external_order_resource(row) for row in rows]
@@ -441,11 +455,11 @@ def execution_coverage_conflict_uncertainty_exists(
     *,
     order_ref: str,
 ) -> bool:
-    """Whether an exact-after-recovery conflict was already raised for an order.
+    """Whether one exact-execution conflict was already raised for an order.
 
     The rejected exact slice has no ``fills`` row by design. Its durable
     idempotency marker is therefore the typed uncertainty cause, keyed by the
-    order whose aggregate recovery evidence made the slice ambiguous.
+    order whose prior immutable evidence made the slice ambiguous.
     """
     rows = conn.execute(
         "SELECT facts_json FROM custody_transitions WHERE transition_kind = 'UNCERTAINTY_RAISED'"

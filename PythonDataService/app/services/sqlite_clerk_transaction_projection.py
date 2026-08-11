@@ -17,13 +17,17 @@ from app.broker.alpaca.clerk.sqlite.external_orders import (
     SqliteExternalOrderReader,
     acknowledge_external_order,
 )
-from app.broker.alpaca.clerk.sqlite.models import ExternalOrderResource
+from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot, ExternalOrderResource
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     OperationPage,
     ProjectedOperation,
+    ProjectedOrder,
     TimelineEntry,
 )
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
+from app.broker.alpaca.clerk.sqlite.repository_external_order_api import (
+    ExternalOrderNotFoundError,
+)
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.engine.live.order_identity import (
     OwnershipRung,
@@ -52,6 +56,10 @@ _ALL_HISTORY_CURSOR_KIND = "sqlite-account-history-v1"
 # raw pages one request will scan to fill its origin-filtered page before
 # handing the caller a (possibly short) page plus a cursor to continue from.
 _ORIGIN_FILTER_MAX_PAGE_FETCHES = 20
+
+
+class ExternalOrderAcknowledgementNotFound(ValueError):
+    """The active SQLite authority has no requested external-order observation."""
 
 
 def sqlite_transaction_history(
@@ -88,7 +96,7 @@ def sqlite_transaction_history(
         return None
     reader, economic_reader = readers
     try:
-        rows, page, scanned_operations = _origin_filtered_operation_page(
+        rows, page, matching_operations = _origin_filtered_operation_page(
             reader,
             economic_reader,
             account_id=account_id,
@@ -118,7 +126,7 @@ def sqlite_transaction_history(
         high_water_journal_seq=page.high_water_sequence,
         lag_records=0,
         lag_is_lower_bound=False,
-        custody_summary=_all_window_summary(scanned_operations, record_count=len(scanned_operations)),
+        custody_summary=_all_window_summary(matching_operations, record_count=len(rows)),
         rows=rows,
         next_cursor=page.next_cursor,
     )
@@ -148,7 +156,7 @@ def _origin_filtered_operation_page(
     to fill the quota.
     """
     rows: list[ClerkTransactionSummaryRow] = []
-    scanned_operations: list[ProjectedOperation] = []
+    matched_operations: list[ProjectedOperation] = []
     page: OperationPage | None = None
     next_cursor = cursor
     for _ in range(_ORIGIN_FILTER_MAX_PAGE_FETCHES):
@@ -159,23 +167,23 @@ def _origin_filtered_operation_page(
             cursor=next_cursor,
             page_size=limit,
         )
-        scanned_operations.extend(page.operations)
         summaries = economic_reader.effective_execution_summaries(
             tuple(
                 order.order_ref
                 for operation in page.operations
-                for order in operation.orders
+                for order in _economic_orders(operation)
             )
         )
         for operation in page.operations:
             row = _summary_row(operation, account_id=account_id, execution_summaries=summaries)
             if row.transaction_origin == origin:
                 rows.append(row)
+                matched_operations.append(operation)
         next_cursor = page.next_cursor
         if len(rows) >= limit or next_cursor is None:
             break
     assert page is not None
-    return rows, page, scanned_operations
+    return rows, page, matched_operations
 
 
 def sqlite_transaction_detail(
@@ -208,7 +216,7 @@ def sqlite_transaction_detail(
             return True, None
         timeline = reader.operation_timeline(transaction_id)
         executions = economic_reader.effective_order_executions(
-            tuple(order.order_ref for order in operation.orders)
+            tuple(order.order_ref for order in _economic_orders(operation))
         )
     except EconomicProjectionError as exc:
         raise ClerkTransactionProjectionUnavailable(
@@ -240,11 +248,14 @@ def sqlite_acknowledge_external_order(
     clerk = _active_clerk(account_id)
     if clerk is None:
         return None
-    return acknowledge_external_order(
-        clerk.repository,
-        external_order_id=external_order_id,
-        operator=operator,
-    )
+    try:
+        return acknowledge_external_order(
+            clerk.repository,
+            external_order_id=external_order_id,
+            operator=operator,
+        )
+    except ExternalOrderNotFoundError as exc:
+        raise ExternalOrderAcknowledgementNotFound(str(exc)) from exc
 
 
 def _active_readers(
@@ -261,7 +272,20 @@ def _active_readers(
 
 def _active_clerk(account_id: str) -> SqliteAlpacaClerkFacade | None:
     runtime = get_active_clerk_runtime()
-    if runtime is None or runtime.authority_kind != "sqlite":
+    if runtime is None:
+        return None
+    if runtime.authority_kind == "unavailable":
+        failure = runtime.startup_failure
+        if (
+            failure is not None
+            and failure.activation_detected
+            and failure.account_id == account_id
+        ):
+            raise ClerkTransactionProjectionUnavailable(
+                "The selected SQLite Clerk authority is unavailable after startup failure."
+            )
+        return None
+    if runtime.authority_kind != "sqlite":
         return None
     clerk = runtime.clerk
     if not isinstance(clerk, SqliteAlpacaClerkFacade):
@@ -329,7 +353,7 @@ def _all_transaction_history(
             tuple(
                 order.order_ref
                 for operation in operations
-                for order in operation.orders
+                for order in _economic_orders(operation)
             )
         )
     except EconomicProjectionError as exc:
@@ -364,6 +388,10 @@ def _all_transaction_history(
                 "SQLite external-order observation disappeared during account-history hydration."
             )
         rows.append(_external_summary_row(external_order, account_id=account_id))
+    _assert_history_hydration_revision(
+        before=meta,
+        after=clerk.repository.control_meta_snapshot(),
+    )
     next_cursor = (
         _encode_all_history_cursor(
             recorded_at_ms=visible[-1][0],
@@ -392,6 +420,35 @@ def _all_transaction_history(
         rows=rows,
         next_cursor=next_cursor,
     )
+
+
+def _assert_history_hydration_revision(
+    *,
+    before: ControlMetaSnapshot,
+    after: ControlMetaSnapshot,
+) -> None:
+    """Reject a page if separately hydrated folds crossed a SQLite revision.
+
+    The account-history pointer page is read in one SQLite snapshot, while
+    the typed operation, economic, and external-order folds deliberately use
+    their native readers. A changed control revision anywhere during that
+    bounded hydration means those readers could have straddled a writer.
+    Refuse the mixed page so the caller can retry against one stable revision.
+    """
+    if (
+        before.account_id,
+        before.db_identity_token,
+        before.authority_generation,
+        before.control_revision,
+    ) != (
+        after.account_id,
+        after.db_identity_token,
+        after.authority_generation,
+        after.control_revision,
+    ):
+        raise ClerkTransactionProjectionUnavailable(
+            "SQLite account-history changed during typed-fold hydration; retry the page."
+        )
 
 
 def _all_history_pointers(
@@ -649,7 +706,9 @@ def _external_summary_row(
             symbol=order.symbol,
             action=order.side.lower(),
             quantity=order.qty,
-            limit_price=order.price,
+            order_type=order.order_type,
+            limit_price=order.limit_price,
+            stop_price=order.stop_price,
         ),
         strategy_instance_id=None,
         run_id=None,
@@ -737,12 +796,13 @@ def _summary_row(
     account_id: str,
     execution_summaries: dict[str, tuple[ExecutionRow, ...]] | None = None,
 ) -> ClerkTransactionSummaryRow:
-    order = operation.orders[0] if operation.orders else None
+    economic_orders = _economic_orders(operation)
+    order = (economic_orders or operation.orders)[0] if operation.orders else None
     if operation.run_id is None:
         raise RuntimeError("SQLite broker operation is missing its lifecycle run identity")
     executions = tuple(
         execution
-        for projected_order in operation.orders
+        for projected_order in economic_orders
         for execution in (execution_summaries or {}).get(projected_order.order_ref, ())
     )
     execution = executions[0] if len(executions) == 1 else None
@@ -780,6 +840,11 @@ def _detail_row(
     account_id: str,
     executions: tuple[ExecutionRow, ...],
 ) -> ClerkTransactionRow:
+    economic_orders = _economic_orders(operation)
+    economic_order_refs = {order.order_ref for order in economic_orders}
+    economic_executions = tuple(
+        execution for execution in executions if execution.order_ref in economic_order_refs
+    )
     summary = _summary_row(
         operation,
         account_id=account_id,
@@ -789,7 +854,7 @@ def _detail_row(
                 for execution in executions
                 if execution.order_ref == order.order_ref
             )
-            for order in operation.orders
+            for order in economic_orders
         },
     )
     events = [
@@ -814,7 +879,7 @@ def _detail_row(
         )
         for entry in timeline
     ]
-    events.extend(_execution_event_row(operation, execution) for execution in executions)
+    events.extend(_execution_event_row(operation, execution) for execution in economic_executions)
     return ClerkTransactionRow(
         **summary.model_dump(exclude={"event_count"}),
         receipt={
@@ -847,7 +912,7 @@ def _execution_event_row(
         fee_fidelity=execution.fee_fidelity,
         execution_quantity=execution.quantity,
         execution_price=execution.price,
-        journal_seq=operation.latest_transition_sequence,
+        journal_seq=execution.journal_seq,
         recorded_at_ms=execution.recorded_at_ms,
         receipt={
             "fill_id": execution.fill_id,
@@ -859,6 +924,19 @@ def _execution_event_row(
             "side": execution.side.value,
         },
     )
+
+
+def _economic_orders(operation: ProjectedOperation) -> tuple[ProjectedOrder, ...]:
+    """Return only orders allowed to contribute an operation's economics.
+
+    EXIT operations retain entry-order links for custody/audit reconstruction,
+    but their prices and fills must come solely from the newly submitted
+    reducing order. Enter and other operation kinds retain their complete
+    order set.
+    """
+    if operation.kind.upper() != "EXIT":
+        return operation.orders
+    return tuple(order for order in operation.orders if order.role.upper() == "REDUCING")
 
 
 def classify_transaction_origin(

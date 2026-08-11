@@ -40,6 +40,7 @@ from app.services.broker_v2_panel.sqlite_panel_source import (
     read_sqlite_chart_evidence,
     read_sqlite_panel_evidence,
     sqlite_authority_active,
+    sqlite_authority_selected_but_unavailable,
 )
 from app.services.live_chart_window import (
     ChartWindowError,
@@ -112,6 +113,11 @@ async def get_live_chart(
     """Build the LIVE chart from SQLite or normalized legacy fills."""
     resolved = await validate_panel_account_scope(broker, account_id)
     observed_at_ms = now_ms_utc() if now_ms is None else now_ms
+    if sqlite_authority_selected_but_unavailable(broker):
+        raise PanelUnavailableError(
+            "The activated SQLite chart authority is unavailable.",
+            detail="Repair the selected SQLite authority; legacy chart fills are not used.",
+        )
     if sqlite_authority_active(broker):
         try:
             evidence = await read_sqlite_panel_evidence(
@@ -157,7 +163,7 @@ async def get_live_snapshot_parts(
         now_ms=observed_at_ms,
     )
     if fills is None:
-        if sqlite_authority_active(broker):
+        if sqlite_authority_active(broker) or sqlite_authority_selected_but_unavailable(broker):
             raise PanelUnavailableError(
                 "The panel chart fill evidence is unavailable.",
                 detail="The active authority did not return an attributed fill set.",
@@ -182,6 +188,11 @@ async def get_history_chart(
     """Build bounded history from SQLite facts or legacy compatibility fills."""
     resolved = await validate_panel_account_scope(broker, account_id)
     observed_at_ms = now_ms_utc()
+    if sqlite_authority_selected_but_unavailable(broker):
+        raise PanelUnavailableError(
+            "The activated SQLite history-chart authority is unavailable.",
+            detail="Repair the selected SQLite authority; legacy chart fills are not used.",
+        )
     if sqlite_authority_active(broker):
         from_ms, to_ms = history_fill_window(preset, observed_at_ms)
         try:

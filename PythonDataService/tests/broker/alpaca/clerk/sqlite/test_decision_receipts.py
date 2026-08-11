@@ -10,6 +10,8 @@ import pytest
 
 from app.broker.alpaca.clerk.sqlite.decision_receipts import (
     MAX_DECISION_RECEIPT_READ,
+    MAX_DECISION_RECEIPTS_PER_STRATEGY,
+    DecisionReceiptConflictError,
     SqliteDecisionReceipts,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -77,6 +79,85 @@ def test_tail_clamps_and_returns_ascending_suffix(
     assert len(tail) == MAX_DECISION_RECEIPT_READ
     assert tail[0].seq == 3
     assert tail[-1].seq == MAX_DECISION_RECEIPT_READ + 2
+
+
+def test_append_is_idempotent_per_closed_bar_and_rejects_conflicting_replay(
+    receipts: SqliteDecisionReceipts,
+) -> None:
+    first = receipts.append(
+        outcome="enter_intent",
+        symbol="SPY",
+        observed_at_ms=1,
+        intent_id="1:ENTER",
+        facts={"bar_ref": "SPY@1", "reason_code": "STRATEGY_ENTER"},
+    )
+
+    replay = receipts.append(
+        outcome="enter_intent",
+        symbol="SPY",
+        observed_at_ms=2,
+        intent_id="1:ENTER",
+        facts={"bar_ref": "SPY@1", "reason_code": "STRATEGY_ENTER"},
+    )
+
+    assert replay == first
+    with pytest.raises(DecisionReceiptConflictError, match="different decision"):
+        receipts.append(
+            outcome="exit_intent",
+            symbol="SPY",
+            observed_at_ms=3,
+            intent_id="1:EXIT",
+            facts={"bar_ref": "SPY@1", "reason_code": "STRATEGY_EXIT"},
+        )
+
+
+def test_final_outcome_replaces_the_provisional_receipt_without_new_sequence(
+    receipts: SqliteDecisionReceipts,
+) -> None:
+    receipts.append(
+        outcome="enter_intent",
+        symbol="SPY",
+        observed_at_ms=1,
+        intent_id="1:ENTER",
+        facts={"bar_ref": "SPY@1", "reason_code": "STRATEGY_ENTER"},
+    )
+
+    blocked = receipts.update_final_outcome(
+        bar_ref="SPY@1",
+        outcome="blocked",
+        facts={
+            "bar_ref": "SPY@1",
+            "reason_code": "CLERK_ADMISSION_REJECTED",
+            "refusal_reason": "Stream health is stale.",
+        },
+    )
+
+    assert blocked.seq == 1
+    assert blocked.outcome == "blocked"
+    assert json.loads(blocked.facts_json)["refusal_reason"] == "Stream health is stale."
+    assert [receipt.seq for receipt in receipts.tail(2)] == [1]
+
+
+def test_append_prunes_receipts_beyond_the_retention_bound(
+    receipts: SqliteDecisionReceipts,
+    repository: ClerkSqliteRepository,
+) -> None:
+    for index in range(MAX_DECISION_RECEIPTS_PER_STRATEGY + 2):
+        receipts.append(
+            outcome="no_action",
+            symbol="SPY",
+            observed_at_ms=index,
+            facts={"bar_ref": f"SPY@{index}", "reason_code": "NO_ACTION"},
+        )
+
+    retained = repository.decision_receipt_tail(
+        strategy_instance_id="spy-bot",
+        limit=MAX_DECISION_RECEIPTS_PER_STRATEGY,
+    )
+
+    assert len(retained) == MAX_DECISION_RECEIPTS_PER_STRATEGY
+    assert retained[0].seq == 3
+    assert retained[-1].seq == MAX_DECISION_RECEIPTS_PER_STRATEGY + 2
 
 
 def test_by_transaction_matches_intent_or_order_and_stays_bounded(

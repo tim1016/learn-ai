@@ -83,6 +83,9 @@ def _same_observation(
         and existing.symbol == expected.symbol
         and existing.side == expected.side
         and existing.qty == expected.qty
-        and existing.price == expected.price
+        and existing.order_type == expected.order_type
+        and existing.limit_price == expected.limit_price
+        and existing.stop_price == expected.stop_price
+        and existing.filled_avg_price == expected.filled_avg_price
         and existing.evidence_refs == expected.evidence_refs
     )

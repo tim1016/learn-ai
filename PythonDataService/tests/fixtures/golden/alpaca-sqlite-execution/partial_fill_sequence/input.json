@@ -18,7 +18,7 @@
       "data": {
         "event": "partial_fill",
         "execution_id": "nvda-partial-slice-2",
-        "timestamp": "2026-08-10T18:12:00.100Z",
+        "timestamp_ms": 1786385520100,
         "price": "500.00",
         "qty": "2",
         "order": {
@@ -37,7 +37,7 @@
       "data": {
         "event": "fill",
         "execution_id": "nvda-final-slice-5",
-        "timestamp": "2026-08-10T18:12:01.100Z",
+        "timestamp_ms": 1786385521100,
         "price": "501.00",
         "qty": "5",
         "order": {

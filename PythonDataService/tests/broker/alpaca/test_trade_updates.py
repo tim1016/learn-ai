@@ -22,7 +22,6 @@ from typing import Any
 import pytest
 import responses
 
-from app.broker.alpaca.adapter import from_alpaca_trade_update
 from app.broker.alpaca.broker import AlpacaBroker
 from app.broker.alpaca.clerk import journal as journal_module
 from app.broker.alpaca.clerk.clerk import AlpacaClerk
@@ -31,6 +30,7 @@ from app.broker.alpaca.client import AlpacaTradingClient
 from app.broker.alpaca.config import AlpacaSettings
 from app.broker.alpaca.trade_updates import (
     TradeUpdatesConsumer,
+    _from_gap_recovery_event,
     _inject_frame_faults,
     _order_to_event_payload,
     _stream_url,
@@ -170,7 +170,7 @@ def test_gap_reconciled_fill_carries_execution_qty_and_price() -> None:
 
     payload = _order_to_event_payload(order)
     assert payload is not None
-    event = from_alpaca_trade_update(payload)
+    event = _from_gap_recovery_event(payload)
 
     assert event.event_type == "fill"
     assert event.quantity is not None
@@ -995,7 +995,7 @@ async def test_gap_reconcile_uses_the_lifecycle_timestamp_for_fills() -> None:
     payload = _order_to_event_payload(order)
 
     assert payload is not None
-    assert payload["timestamp"] == "2023-11-14T22:13:25Z"
+    assert payload["timestamp_ms"] == filled_at_ms
     assert payload["price"] == 135.8
     assert payload["qty"] == 10.0
 

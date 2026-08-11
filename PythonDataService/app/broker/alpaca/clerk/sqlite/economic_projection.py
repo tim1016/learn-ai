@@ -86,10 +86,11 @@ _EFFECTIVE_FILL_LINEAGE_CTE = """
         parent_execution_id,
         depth,
         root_source_event_at_ms,
-        root_recorded_at_ms
+        root_recorded_at_ms,
+        root_transition_sequence
     ) AS (
         SELECT f.fill_id, f.superseded_execution_ref, 0,
-               f.source_event_at_ms, f.recorded_at_ms
+               f.source_event_at_ms, f.recorded_at_ms, f.recorded_transition_sequence
         FROM fills f
         WHERE NOT EXISTS (
             SELECT 1 FROM fills successor
@@ -97,11 +98,13 @@ _EFFECTIVE_FILL_LINEAGE_CTE = """
         )
         UNION ALL
         SELECT lineage.effective_fill_id, parent.superseded_execution_ref,
-               lineage.depth + 1, parent.source_event_at_ms, parent.recorded_at_ms
+               lineage.depth + 1, parent.source_event_at_ms, parent.recorded_at_ms,
+               parent.recorded_transition_sequence
         FROM lineage
         JOIN fills parent ON parent.execution_id = lineage.parent_execution_id
     ), roots AS (
-        SELECT effective_fill_id, root_source_event_at_ms, root_recorded_at_ms
+        SELECT effective_fill_id, root_source_event_at_ms, root_recorded_at_ms,
+               root_transition_sequence
         FROM lineage
         WHERE parent_execution_id IS NULL
     )"""
@@ -255,15 +258,24 @@ class SqliteEconomicProjectionReader:
         }
         with self._read_transaction():
             meta = self._verified_meta()
-            cursor_key = _decode_cursor(cursor, filters=filters)
+            cursor_key = _decode_cursor(
+                cursor,
+                filters=filters,
+                control_revision=meta.control_revision,
+            )
             rows = self._effective_fill_rows(
-                strategy_instance_id=strategy_instance_id,
+                strategy_instance_ids=(strategy_instance_id,),
                 from_ms=from_ms,
                 to_ms=to_ms,
                 cursor_key=cursor_key,
                 limit=limit,
             )
-        visible, next_cursor = _visible_page(rows, limit=limit, filters=filters)
+        visible, next_cursor = _visible_page(
+            rows,
+            limit=limit,
+            filters=filters,
+            control_revision=meta.control_revision,
+        )
         return FillPage(
             account_id=self._account_id,
             strategy_instance_id=strategy_instance_id,
@@ -299,7 +311,7 @@ class SqliteEconomicProjectionReader:
             if exists is None:
                 return None
             rows = self._effective_fill_rows(
-                strategy_instance_id=strategy_instance_id,
+                strategy_instance_ids=(strategy_instance_id,),
                 from_ms=from_ms,
                 to_ms=to_ms,
                 cursor_key=None,
@@ -312,7 +324,7 @@ class SqliteEconomicProjectionReader:
             fills = tuple(
                 sorted(
                     (_to_fill_record(row, account_id=self._account_id) for row in rows),
-                    key=lambda record: (record.filled_at_ms, record.event_key),
+                    key=lambda record: (record.filled_at_ms, record.ledger_sequence),
                 )
             )
             return FillWindowProjection(
@@ -354,7 +366,11 @@ class SqliteEconomicProjectionReader:
         }
         with self._read_transaction():
             meta = self._verified_meta()
-            cursor_key = _decode_cursor(cursor, filters=filters)
+            cursor_key = _decode_cursor(
+                cursor,
+                filters=filters,
+                control_revision=meta.control_revision,
+            )
             rows = self._account_execution_rows(
                 bot=bot,
                 origin=origin,
@@ -363,7 +379,12 @@ class SqliteEconomicProjectionReader:
                 cursor_key=cursor_key,
                 limit=limit,
             )
-        visible, next_cursor = _visible_page(rows, limit=limit, filters=filters)
+        visible, next_cursor = _visible_page(
+            rows,
+            limit=limit,
+            filters=filters,
+            control_revision=meta.control_revision,
+        )
         return ExecutionPage(
             account_id=self._account_id,
             authority_generation=meta.authority_generation,
@@ -498,7 +519,7 @@ class SqliteEconomicProjectionReader:
         if exists is None:
             return None
         all_rows = self._effective_fill_rows(
-            strategy_instance_id=strategy_instance_id,
+            strategy_instance_ids=(strategy_instance_id,),
             from_ms=None,
             to_ms=None,
             cursor_key=None,
@@ -507,9 +528,10 @@ class SqliteEconomicProjectionReader:
         records = tuple(
             sorted(
                 (_to_fill_record(row, account_id=self._account_id) for row in all_rows),
-                key=lambda record: (record.filled_at_ms, record.event_key),
+                key=lambda record: (record.filled_at_ms, record.ledger_sequence),
             )
         )
+        decision_activity_at_ms = self._decision_activity_at_ms(strategy_instance_id)
         exposure = self._exposure(strategy_instance_id)
         _assert_effective_fills_match_positions(records, exposure)
         coverage = self._execution_coverage(strategy_instance_id, all_rows)
@@ -561,7 +583,10 @@ class SqliteEconomicProjectionReader:
             mark_observed_at_ms=relevant_mark_times,
             fee_fidelity=fee_fidelity,
             execution_coverage=coverage,
-            last_activity_at_ms=max((record.filled_at_ms for record in records), default=None),
+            last_activity_at_ms=_latest_activity_at_ms(
+                max((record.filled_at_ms for record in records), default=None),
+                decision_activity_at_ms,
+            ),
         )
         return SessionEconomicProjection(snapshot=snapshot, session_fills=session_fills)
 
@@ -585,21 +610,38 @@ class SqliteEconomicProjectionReader:
                     unique_ids,
                 ).fetchall()
             }
+            decision_activity_by_strategy = {
+                str(row["strategy_instance_id"]): int(row["last_activity_at_ms"])
+                for row in self._conn.execute(
+                    "SELECT strategy_instance_id, MAX(observed_at_ms) AS last_activity_at_ms "
+                    f"FROM decision_receipts WHERE strategy_instance_id IN ({_placeholders(unique_ids)}) "
+                    "GROUP BY strategy_instance_id",
+                    unique_ids,
+                ).fetchall()
+            }
+            active_ids = tuple(
+                strategy_instance_id
+                for strategy_instance_id in unique_ids
+                if strategy_instance_id in existing
+            )
+            rows_by_strategy = {strategy_instance_id: [] for strategy_instance_id in active_ids}
+            for row in self._effective_fill_rows(
+                strategy_instance_ids=active_ids,
+                from_ms=None,
+                to_ms=None,
+                cursor_key=None,
+                limit=None,
+            ):
+                rows_by_strategy[str(row["strategy_instance_id"])].append(row)
             result: dict[str, EconomicSnapshot] = {}
             for strategy_instance_id in unique_ids:
                 if strategy_instance_id not in existing:
                     continue
-                all_rows = self._effective_fill_rows(
-                    strategy_instance_id=strategy_instance_id,
-                    from_ms=None,
-                    to_ms=None,
-                    cursor_key=None,
-                    limit=None,
-                )
+                all_rows = rows_by_strategy[strategy_instance_id]
                 records = tuple(
                     sorted(
                         (_to_fill_record(row, account_id=self._account_id) for row in all_rows),
-                        key=lambda record: (record.filled_at_ms, record.event_key),
+                        key=lambda record: (record.filled_at_ms, record.ledger_sequence),
                     )
                 )
                 exposure = self._exposure(strategy_instance_id)
@@ -652,9 +694,22 @@ class SqliteEconomicProjectionReader:
                     mark_observed_at_ms=mark_times,
                     fee_fidelity=fee_fidelity,
                     execution_coverage=coverage,
-                    last_activity_at_ms=max((record.filled_at_ms for record in records), default=None),
+                    last_activity_at_ms=_latest_activity_at_ms(
+                        max((record.filled_at_ms for record in records), default=None),
+                        decision_activity_by_strategy.get(strategy_instance_id),
+                    ),
                 )
         return result
+
+    def _decision_activity_at_ms(self, strategy_instance_id: str) -> int | None:
+        row = self._conn.execute(
+            "SELECT MAX(observed_at_ms) AS last_activity_at_ms FROM decision_receipts "
+            "WHERE strategy_instance_id = ?",
+            (strategy_instance_id,),
+        ).fetchone()
+        if row is None or row["last_activity_at_ms"] is None:
+            return None
+        return int(row["last_activity_at_ms"])
 
     def _verified_meta(self) -> ControlMetaSnapshot:
         self._verify_identity()
@@ -682,7 +737,7 @@ class SqliteEconomicProjectionReader:
     def _effective_fill_rows(
         self,
         *,
-        strategy_instance_id: str,
+        strategy_instance_ids: Sequence[str],
         from_ms: int | None,
         to_ms: int | None,
         cursor_key: tuple[int, str] | None,
@@ -695,8 +750,12 @@ class SqliteEconomicProjectionReader:
         session membership; the outer row's ``recorded_at_ms`` remains the
         audit/keyset timestamp.
         """
-        where = ["effective.strategy_instance_id = ?"]
-        params: list[object] = [strategy_instance_id]
+        if not strategy_instance_ids:
+            return []
+        where = [
+            f"effective.strategy_instance_id IN ({_placeholders(strategy_instance_ids)})"
+        ]
+        params: list[object] = [*strategy_instance_ids]
         if from_ms is not None:
             where.append("effective.economic_filled_at_ms >= ?")
             params.append(from_ms)
@@ -716,9 +775,12 @@ class SqliteEconomicProjectionReader:
             {_EFFECTIVE_FILL_LINEAGE_CTE}, effective AS (
                 SELECT f.fill_id, f.order_ref, f.qty, f.price, f.side, f.execution_id,
                        f.evidence_source, f.event_kind, f.fee, f.fee_fidelity,
-                       f.recorded_at_ms, e.strategy_instance_id, s.symbol,
+                       f.recorded_at_ms, f.recorded_transition_sequence,
+                       e.strategy_instance_id, s.symbol,
                        COALESCE(roots.root_source_event_at_ms, roots.root_recorded_at_ms,
                                 f.source_event_at_ms, f.recorded_at_ms) AS economic_filled_at_ms,
+                       COALESCE(roots.root_transition_sequence,
+                                f.recorded_transition_sequence) AS economic_ledger_sequence,
                        COALESCE(f.execution_id, f.fill_id) AS execution_sort_key
                 FROM fills f
                 JOIN orders o ON o.order_ref = f.order_ref
@@ -777,6 +839,7 @@ class SqliteEconomicProjectionReader:
             {_EFFECTIVE_FILL_LINEAGE_CTE}
             SELECT f.fill_id, f.execution_id, f.order_ref, f.qty, f.price, f.side,
                    f.event_kind, f.fee, f.fee_fidelity, f.recorded_at_ms,
+                   f.recorded_transition_sequence,
                    e.strategy_instance_id, s.symbol,
                    CASE WHEN EXISTS (
                        SELECT 1 FROM fills successor
@@ -817,6 +880,7 @@ class SqliteEconomicProjectionReader:
             {_EFFECTIVE_FILL_LINEAGE_CTE}, effective AS (
                 SELECT f.fill_id, f.execution_id, f.order_ref, f.qty, f.price, f.side,
                        f.event_kind, f.fee, f.fee_fidelity, f.recorded_at_ms,
+                       f.recorded_transition_sequence,
                        e.strategy_instance_id, s.symbol,
                        'effective' AS state,
                        COALESCE(roots.root_source_event_at_ms, roots.root_recorded_at_ms,
@@ -893,6 +957,7 @@ def _to_fill_record(row: sqlite3.Row, *, account_id: str) -> FillRecord:
         fill_price=float(row["price"]),
         filled_at_ms=int(row["economic_filled_at_ms"]),
         fee=(float(row["fee"]) if row["fee"] is not None else None),
+        ledger_sequence=_required_ledger_sequence(row, field="economic_ledger_sequence"),
     )
 
 
@@ -917,7 +982,27 @@ def _to_execution_row(row: sqlite3.Row) -> ExecutionRow:
         fee_fidelity=row["fee_fidelity"],
         filled_at_ms=int(row["filled_at_ms"]),
         recorded_at_ms=int(row["recorded_at_ms"]),
+        journal_seq=_required_ledger_sequence(row),
     )
+
+
+def _required_ledger_sequence(
+    row: sqlite3.Row,
+    *,
+    field: str = "recorded_transition_sequence",
+) -> int:
+    """Return a durable execution transition sequence or fail closed.
+
+    A migrated v7 row can lack this value only when the legacy database could
+    not prove which custody transition produced the fill. It must not enter a
+    FIFO tie-breaker or a transaction receipt under a guessed sequence.
+    """
+    value = row[field]
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise EconomicProjectionUnavailable(
+            "SQLite execution lacks durable custody transition provenance."
+        )
+    return value
 
 
 def _assert_effective_fills_match_positions(
@@ -981,6 +1066,7 @@ def _visible_page(
     *,
     limit: int,
     filters: dict[str, object],
+    control_revision: int,
 ) -> tuple[list[sqlite3.Row], str | None]:
     visible = rows[:limit]
     if len(rows) <= limit or not visible:
@@ -991,15 +1077,23 @@ def _visible_page(
         execution_sort_key=(last["execution_sort_key"] if "execution_sort_key" in last
                             else last["execution_id"] or last["fill_id"]),
         filters=filters,
+        control_revision=control_revision,
     )
 
 
-def _encode_cursor(*, recorded_at_ms: int, execution_sort_key: str, filters: dict[str, object]) -> str:
+def _encode_cursor(
+    *,
+    recorded_at_ms: int,
+    execution_sort_key: str,
+    filters: dict[str, object],
+    control_revision: int,
+) -> str:
     payload = json.dumps(
         {
             "filters": filters,
             "recorded_at_ms": recorded_at_ms,
             "execution_sort_key": execution_sort_key,
+            "control_revision": control_revision,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -1007,7 +1101,12 @@ def _encode_cursor(*, recorded_at_ms: int, execution_sort_key: str, filters: dic
     return base64.urlsafe_b64encode(payload).decode("ascii")
 
 
-def _decode_cursor(cursor: str | None, *, filters: dict[str, object]) -> tuple[int, str] | None:
+def _decode_cursor(
+    cursor: str | None,
+    *,
+    filters: dict[str, object],
+    control_revision: int,
+) -> tuple[int, str] | None:
     if cursor is None:
         return None
     try:
@@ -1015,6 +1114,11 @@ def _decode_cursor(cursor: str | None, *, filters: dict[str, object]) -> tuple[i
         payload = json.loads(raw)
         if payload["filters"] != filters:
             raise ValueError("cursor filters do not match request")
+        cursor_revision = payload["control_revision"]
+        if isinstance(cursor_revision, bool) or not isinstance(cursor_revision, int):
+            raise ValueError("cursor execution revision is invalid")
+        if cursor_revision != control_revision:
+            raise ValueError("cursor execution revision does not match request")
         recorded_at_ms = payload["recorded_at_ms"]
         execution_sort_key = payload["execution_sort_key"]
         if (
@@ -1028,6 +1132,15 @@ def _decode_cursor(cursor: str | None, *, filters: dict[str, object]) -> tuple[i
         return recorded_at_ms, execution_sort_key
     except (KeyError, TypeError, ValueError, UnicodeDecodeError) as exc:
         raise InvalidEconomicCursor("invalid execution page cursor") from exc
+
+
+def _latest_activity_at_ms(
+    fill_activity_at_ms: int | None,
+    decision_activity_at_ms: int | None,
+) -> int | None:
+    """Return durable strategy activity without inventing execution evidence."""
+    values = (value for value in (fill_activity_at_ms, decision_activity_at_ms) if value is not None)
+    return max(values, default=None)
 
 
 def _placeholders(values: Sequence[str]) -> str:

@@ -100,7 +100,10 @@ class ExternalOrderResource:
     symbol: str
     side: str
     qty: float
-    price: float | None
+    order_type: str
+    limit_price: float | None
+    stop_price: float | None
+    filled_avg_price: float | None
     observed_at_ms: int
     acknowledged_at_ms: int | None
     ack_operator: str | None

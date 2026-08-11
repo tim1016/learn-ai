@@ -38,8 +38,6 @@ from app.engine.live.order_identity import OwnershipRung, classify_ownership
 from app.lean_sidecar.trading_calendar import SessionWindow
 from conftest import _clock_at
 
-_ATOL = 1e-6
-_RTOL = 0.0
 _FIXTURE_ROOT = Path(__file__).parents[4] / "fixtures" / "golden" / "alpaca-sqlite-execution"
 _FIXTURE_FAMILIES = (
     "googl_round_trip",
@@ -65,12 +63,27 @@ def _load_fixture(family: str) -> tuple[dict[str, Any], dict[str, Any]]:
 
 
 def _assert_execution_frames_are_slice_evidence(fixture_input: Mapping[str, Any]) -> None:
-    """Guard the S0 premise: every fixture fill is an execution, not a total."""
+    """Guard the S0 premise: every fixture *fill* is an execution slice.
+
+    The stream may include non-fill lifecycle callbacks. They are valid source
+    evidence but must not be mistaken for execution slices by the fixture
+    verifier.
+    """
+    execution_frames = 0
     for frame in fixture_input.get("trade_updates", []):
         assert frame["stream"] == "trade_updates"
         payload = frame["data"]
+        timestamp_ms = payload.get("timestamp_ms")
+        assert isinstance(timestamp_ms, int) and not isinstance(timestamp_ms, bool)
+        assert timestamp_ms >= 0
+        assert "timestamp" not in payload
+        if payload.get("event") not in {"fill", "partial_fill"}:
+            continue
         event = from_alpaca_trade_update(payload)
+        execution_frames += 1
         assert event.execution_id == payload["execution_id"]
+        assert event.price == float(payload["price"])
+        assert event.quantity == float(payload["qty"])
         assert event.price is not None
         assert event.quantity is not None
         assert event.quantity > 0
@@ -78,22 +91,32 @@ def _assert_execution_frames_are_slice_evidence(fixture_input: Mapping[str, Any]
         # The per-execution quantity is deliberately distinct from a cumulative
         # order quantity in the partial-fill family. S1 must consume the former.
         assert "filled_qty" in payload["order"]
+        if payload["event"] == "partial_fill":
+            assert float(payload["qty"]) <= float(payload["order"]["filled_qty"])
+    if fixture_input.get("trade_updates"):
+        assert execution_frames > 0
+    for correction in fixture_input.get("authority_corrections", []):
+        source_event_at_ms = correction.get("source_event_at_ms")
+        assert isinstance(source_event_at_ms, int) and not isinstance(source_event_at_ms, bool)
+        assert source_event_at_ms >= 0
 
 
 def _assert_external_order_is_not_bot_owned(fixture_input: Mapping[str, Any]) -> None:
     if "broker_orders" not in fixture_input:
         return
-    order = fixture_input["broker_orders"][0]
-    ownership = classify_ownership(
-        order_ref=order["client_order_id"],
-        perm_id=None,
-        exec_id=None,
-        allowed_namespaces=frozenset(fixture_input["known_bot_namespaces"]),
-        known_intent_ids=frozenset(),
-        known_perm_ids=frozenset(),
-        known_exec_ids=frozenset(),
-    )
-    assert ownership is OwnershipRung.NONE
+    orders = fixture_input["broker_orders"]
+    assert orders, "external-order fixture must declare broker evidence"
+    for order in orders:
+        ownership = classify_ownership(
+            order_ref=order["client_order_id"],
+            perm_id=None,
+            exec_id=None,
+            allowed_namespaces=frozenset(fixture_input["known_bot_namespaces"]),
+            known_intent_ids=frozenset(),
+            known_perm_ids=frozenset(),
+            known_exec_ids=frozenset(),
+        )
+        assert ownership is OwnershipRung.NONE
 
 
 def _fixture_session(fixture_input: Mapping[str, Any]) -> SessionWindow:
@@ -208,7 +231,6 @@ def _project_fixture(
         frames = list(fixture_input.get("trade_updates", []))
         accepted_by_client_order_id: dict[str, EnterSubmission] = {}
         accepted_by_execution_id: dict[str, EnterSubmission] = {}
-        source_time_by_execution_id: dict[str, int] = {}
         execution_order: dict[str, int] = {}
         if frames:
             fixture_strategy_instance_id = str(fixture_input["strategy_instance"]["strategy_instance_id"])
@@ -259,7 +281,6 @@ def _project_fixture(
                 )
                 assert outcome == "appended"
                 accepted_by_execution_id[facts.execution_id] = accepted
-                source_time_by_execution_id[facts.execution_id] = facts.source_event_at_ms
                 execution_order[facts.execution_id] = len(execution_order)
 
         for correction_data in fixture_input.get("authority_corrections", []):
@@ -279,7 +300,7 @@ def _project_fixture(
                     repo,
                     accepted,
                     facts,
-                    source_event_at_ms=source_time_by_execution_id[target_execution_id],
+                    source_event_at_ms=int(correction_data["source_event_at_ms"]),
                 ),
                 build_uncertainty=lambda reason: (_ for _ in ()).throw(AssertionError(reason)),
             )
@@ -323,7 +344,12 @@ def _project_fixture(
                 }
 
             if not frames:
-                return {"projection": {"bot_metrics": actual_metrics}}
+                return {
+                    "projection": {
+                        "authority_generation": repo.control_meta_snapshot().authority_generation,
+                        "bot_metrics": actual_metrics,
+                    }
+                }
 
             fixture_strategy_instance_id = str(fixture_input["strategy_instance"]["strategy_instance_id"])
             strategy_instance_id = fixture_to_ledger_sid[fixture_strategy_instance_id]
@@ -385,6 +411,7 @@ def _project_fixture(
         closed_lots = list(closed_lots_by_execution.values())
         return {
             "projection": {
+                "authority_generation": repo.control_meta_snapshot().authority_generation,
                 "bot_metrics": actual_metrics,
                 "fills": fills,
                 "closed_lots": closed_lots,
@@ -451,13 +478,17 @@ def _project_external_order_fixture(
                 "symbol": row["symbol"],
                 "side": row["side"],
                 "qty": row["qty"],
-                "price": row["price"],
+                "order_type": row["order_type"],
+                "limit_price": row["limit_price"],
+                "stop_price": row["stop_price"],
+                "filled_avg_price": row["filled_avg_price"],
                 "acknowledged_at_ms": row["acknowledged_at_ms"],
             }
             for row in repo.external_orders()
         ]
         return {
             "projection": {
+                "authority_generation": repo.control_meta_snapshot().authority_generation,
                 "bot_metrics": bot_metrics,
                 "external_orders": external_orders,
                 "active_holds": (
@@ -494,12 +525,16 @@ def _fixture_external_order(raw_order: Mapping[str, Any]) -> BrokerOrder:
         symbol=str(raw_order["symbol"]),
         asset_class="us_equity",
         side=str(raw_order["side"]),
-        order_type="market",
+        order_type=str(raw_order.get("order_type", "market")),
         time_in_force="day",
         quantity=float(raw_order["qty"]),
         filled_quantity=float(raw_order["filled_qty"]),
-        limit_price=None,
-        stop_price=None,
+        limit_price=(
+            float(raw_order["limit_price"]) if raw_order.get("limit_price") is not None else None
+        ),
+        stop_price=(
+            float(raw_order["stop_price"]) if raw_order.get("stop_price") is not None else None
+        ),
         filled_avg_price=(
             float(raw_order["filled_avg_price"])
             if raw_order["filled_avg_price"] is not None
@@ -516,29 +551,50 @@ def _fixture_external_order(raw_order: Mapping[str, Any]) -> BrokerOrder:
     )
 
 
-def _assert_optional_float(actual: object, expected: object, *, path: str) -> None:
+def _assert_optional_float(
+    actual: object,
+    expected: object,
+    *,
+    path: str,
+    atol: float,
+    rtol: float,
+) -> None:
     if expected is None:
         assert actual is None, f"{path}: expected unavailable (None), got {actual!r}"
         return
     assert actual is not None, f"{path}: expected {expected!r}, got None"
-    assert math.isclose(float(actual), float(expected), abs_tol=_ATOL, rel_tol=_RTOL), (
+    assert math.isclose(float(actual), float(expected), abs_tol=atol, rel_tol=rtol), (
         f"{path}: expected {expected!r}, got {actual!r} "
-        f"(atol={_ATOL}, rtol={_RTOL})"
+        f"(atol={atol}, rtol={rtol})"
     )
 
 
-def _assert_metric(actual: Mapping[str, Any], expected: Mapping[str, Any], *, path: str) -> None:
+def _assert_metric(
+    actual: Mapping[str, Any],
+    expected: Mapping[str, Any],
+    *,
+    path: str,
+    atol: float,
+    rtol: float,
+) -> None:
     for field in ("fills_today",):
         expected_count = expected[field]
         actual_count = actual[field]
         if expected_count is None:
             assert actual_count is None, f"{path}.{field}: expected None, got {actual_count!r}"
         else:
-            assert isinstance(actual_count, int), f"{path}.{field}: count must be an exact integer"
+            assert isinstance(actual_count, int) and not isinstance(actual_count, bool), (
+                f"{path}.{field}: count must be an exact integer"
+            )
+            assert isinstance(expected_count, int) and not isinstance(expected_count, bool), (
+                f"{path}.{field}: fixture count must be an exact integer"
+            )
             assert actual_count == expected_count, f"{path}.{field}: expected {expected_count}, got {actual_count}"
 
     for field in ("realized_pnl_today", "open_pnl", "position_quantity"):
-        _assert_optional_float(actual[field], expected[field], path=f"{path}.{field}")
+        _assert_optional_float(
+            actual[field], expected[field], path=f"{path}.{field}", atol=atol, rtol=rtol
+        )
     assert actual["marks_complete"] is expected["marks_complete"], f"{path}.marks_complete differs"
 
 
@@ -546,35 +602,46 @@ def _assert_projection(actual: Mapping[str, Any], expected: Mapping[str, Any]) -
     """Assert exact authority facts and P&L at the fixture's pinned tolerance."""
     actual_projection = actual["projection"]
     expected_projection = expected["projection"]
+    assert set(actual_projection) == set(expected_projection)
+    tolerance = expected["tolerance"]
+    assert isinstance(tolerance, Mapping)
+    assert set(tolerance) == {"atol", "rtol"}
+    assert not isinstance(tolerance["atol"], bool)
+    assert not isinstance(tolerance["rtol"], bool)
+    atol = float(tolerance["atol"])
+    rtol = float(tolerance["rtol"])
+    assert atol >= 0
+    assert rtol >= 0
 
     for strategy_instance_id, expected_metric in expected_projection.get("bot_metrics", {}).items():
         _assert_metric(
             actual_projection["bot_metrics"][strategy_instance_id],
             expected_metric,
             path=f"bot_metrics.{strategy_instance_id}",
+            atol=atol,
+            rtol=rtol,
         )
 
     for collection in ("fills", "closed_lots", "external_orders", "active_holds", "available_actions"):
-        if collection in expected_projection:
-            actual_rows = actual_projection[collection]
-            expected_rows = expected_projection[collection]
-            assert len(actual_rows) == len(expected_rows), f"{collection} row count differs"
-            for actual_row, expected_row in zip(actual_rows, expected_rows, strict=True):
-                for field, expected_value in expected_row.items():
-                    actual_value = actual_row[field]
-                    if isinstance(expected_value, float):
-                        assert math.isclose(
-                            float(actual_value),
-                            expected_value,
-                            abs_tol=_ATOL,
-                            rel_tol=_RTOL,
-                        ), (
-                            f"{collection}.{field}: expected {expected_value!r}, got {actual_value!r}"
-                        )
-                    else:
-                        assert actual_value == expected_value, (
-                            f"{collection}.{field}: expected {expected_value!r}, got {actual_value!r}"
-                        )
+        actual_rows = actual_projection.get(collection, [])
+        expected_rows = expected_projection.get(collection, [])
+        assert len(actual_rows) == len(expected_rows), f"{collection} row count differs"
+        for actual_row, expected_row in zip(actual_rows, expected_rows, strict=True):
+            for field, expected_value in expected_row.items():
+                actual_value = actual_row[field]
+                if isinstance(expected_value, float):
+                    assert math.isclose(
+                        float(actual_value),
+                        expected_value,
+                        abs_tol=atol,
+                        rel_tol=rtol,
+                    ), (
+                        f"{collection}.{field}: expected {expected_value!r}, got {actual_value!r}"
+                    )
+                else:
+                    assert actual_value == expected_value, (
+                        f"{collection}.{field}: expected {expected_value!r}, got {actual_value!r}"
+                    )
 
 
 @pytest.mark.parametrize("family", _FIXTURE_FAMILIES)

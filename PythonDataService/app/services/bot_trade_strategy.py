@@ -12,12 +12,12 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 from zoneinfo import ZoneInfo
 
 from app.broker.alpaca.clerk.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.decision_journal import DecisionOutcome
-from app.broker.alpaca.clerk.models import EffectPurpose
+from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
 from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.portfolio import Portfolio
@@ -65,6 +65,10 @@ class StrategyEvaluation:
 
     bar: MarketDataBar
     intents: tuple[SignalIntent, ...]
+
+
+class _EffectReceipt(Protocol):
+    state: object
 
 
 class _RecordingSignalIntentExecutor:
@@ -251,6 +255,14 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
             action_plan=binding.action_plan,
             quantity=binding.quantity,
         )
+        if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
+            _record_blocked_decision(
+                decision_receipts,
+                binding=binding,
+                evaluation=evaluation,
+                intent_id=intent_id,
+                receipt=receipt,
+            )
         logger.info(
             "Trade bot effect accepted",
             extra={
@@ -284,6 +296,39 @@ def _append_decision_receipt(
         intent_id=intent_id or None,
         order_ref=order_ref or None,
     )
+
+
+def _record_blocked_decision(
+    receipts: SqliteDecisionReceipts | None,
+    *,
+    binding: BrokerBotBinding,
+    evaluation: StrategyEvaluation,
+    intent_id: str,
+    receipt: _EffectReceipt,
+) -> None:
+    """Replace a provisional intent with the Clerk's final admission refusal."""
+    if receipts is None:
+        return
+    refusal_reason = str(
+        getattr(receipt, "next_step", None)
+        or getattr(receipt, "explanation", None)
+        or "The Account Clerk rejected this strategy submission."
+    )
+    receipts.update_final_outcome(
+        bar_ref=f"{binding.symbol}@{evaluation.bar.end_ms}",
+        outcome="blocked",
+        order_ref=None,
+        facts={
+            "bar_ref": f"{binding.symbol}@{evaluation.bar.end_ms}",
+            "reason_code": "CLERK_ADMISSION_REJECTED",
+            "refusal_reason": refusal_reason,
+        },
+    )
+
+
+def _effect_state_value(receipt: _EffectReceipt) -> str:
+    state = receipt.state
+    return str(getattr(state, "value", state))
 
 
 async def run_dry_run_bot(

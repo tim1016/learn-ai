@@ -137,6 +137,53 @@ describe('AccountDeskTransactionHistoryComponent', () => {
     expect(screen.getByText('Fees not reported')).toBeTruthy();
   });
 
+  it('records an external-order acknowledgement from the Account Desk evidence flow', async () => {
+    const acknowledgeExternalOrder = vi.fn().mockResolvedValue(undefined);
+    const reload = vi.fn().mockResolvedValue(undefined);
+    const store = {
+      accountId: signal('PA1'),
+      loading: signal(false),
+      errorMessage: signal<string | null>(null),
+      hasLastGood: signal(true),
+      feed: signal({ projection_available: true, canonical_fallback_required: false, feed_state: 'live', feed_headline: 'SQLite projection current', feed_detail: 'Current', high_water_journal_seq: 3, lag_records: 0, lag_is_lower_bound: false, rows: [], next_cursor: null }),
+      rows: signal([
+        sqliteRow({
+          transaction_id: 'external-row',
+          transaction_origin: 'external',
+          strategy_instance_id: null,
+          run_id: null,
+          intent_id: null,
+          order_ref: null,
+          external_order_id: 'alpaca-external-1',
+          lifecycle_state: 'review_required',
+        }),
+      ]),
+      nextCursor: signal<string | null>(null), retry: vi.fn(), loadOlder: vi.fn(),
+      transactionDetail: vi.fn(), load: reload,
+    };
+    await render(AccountDeskTransactionHistoryComponent, {
+      providers: [
+        { provide: AccountDeskTransactionHistoryStore, useValue: store },
+        { provide: BrokerService, useValue: { accountTransaction: vi.fn(), acknowledgeExternalOrder } },
+      ],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /open receipt alpaca-external-1/i }));
+    expect(screen.getByRole('heading', { name: 'Review external order' })).toBeTruthy();
+    const operator = screen.getByRole('textbox', { name: 'Operator' });
+    fireEvent.input(operator, { target: { value: '  trader@example.test  ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Acknowledge external order' }));
+
+    await vi.waitFor(() => {
+      expect(acknowledgeExternalOrder).toHaveBeenCalledWith(
+        'PA1',
+        'alpaca-external-1',
+        'trader@example.test',
+      );
+    });
+    expect(reload).toHaveBeenCalledWith('PA1');
+  });
+
   it('renders unknown custody clocks and epoch provenance for a recorded-only legacy receipt', async () => {
     const detail = vi.fn().mockResolvedValue({
       transaction_id: 'ctxn_legacy', account_id: 'DU1234567', journal_seq: 4, recorded_at_ms: 1_780_000_000_000,

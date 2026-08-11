@@ -39,7 +39,11 @@ CREATE TABLE holds (id INTEGER PRIMARY KEY);
 CREATE TABLE uncertainties (id INTEGER PRIMARY KEY);
 CREATE TABLE reconciliations (id INTEGER PRIMARY KEY);
 CREATE TABLE receipts (id INTEGER PRIMARY KEY);
-CREATE TABLE custody_transitions (id INTEGER PRIMARY KEY);
+CREATE TABLE custody_transitions (
+    sequence INTEGER PRIMARY KEY,
+    order_ref TEXT,
+    facts_json TEXT
+);
 CREATE TABLE mirror_fence (id INTEGER PRIMARY KEY);
 """
 
@@ -87,7 +91,7 @@ def test_schema_creates_all_eighteen_pinned_tables() -> None:
     }
 
 
-def test_v7_execution_provenance_and_bounded_receipts_schema() -> None:
+def test_v8_execution_provenance_and_bounded_receipts_schema() -> None:
     conn = sqlite3.connect(":memory:")
     schema.configure_connection(conn)
     schema.apply_schema(conn)
@@ -103,6 +107,7 @@ def test_v7_execution_provenance_and_bounded_receipts_schema() -> None:
         "superseded_execution_ref",
         "fee",
         "fee_fidelity",
+        "recorded_transition_sequence",
     }
     assert fills_columns["execution_id"][3] == 0
     assert fills_columns["evidence_source"][4] == "'cumulative_recovery'"
@@ -120,14 +125,14 @@ def test_v7_execution_provenance_and_bounded_receipts_schema() -> None:
     } <= index_names
 
 
-def test_empty_v6_authority_migrates_atomically_to_complete_v7_schema() -> None:
+def test_empty_v6_authority_migrates_atomically_to_complete_v8_schema() -> None:
     conn = sqlite3.connect(":memory:")
     schema.configure_connection(conn)
     _empty_v6_authority(conn)
 
     schema.migrate_schema(conn, from_version=6)
 
-    assert conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0] == 7
+    assert conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0] == 8
     assert {
         row[1]
         for row in conn.execute("PRAGMA table_info(fills)")
@@ -163,7 +168,7 @@ def test_data_bearing_v6_authority_fails_closed_without_schema_mutation() -> Non
     conn = sqlite3.connect(":memory:")
     schema.configure_connection(conn)
     _empty_v6_authority(conn)
-    conn.execute("INSERT INTO custody_transitions (id) VALUES (1)")
+    conn.execute("INSERT INTO custody_transitions (sequence) VALUES (1)")
     conn.commit()
     fills_before = list(conn.execute("PRAGMA table_info(fills)"))
 
@@ -177,7 +182,7 @@ def test_data_bearing_v6_authority_fails_closed_without_schema_mutation() -> Non
     ).fetchone() is None
 
 
-def test_v6_to_v7_migration_rolls_back_partial_ddl_on_failure() -> None:
+def test_v6_to_v8_migration_rolls_back_partial_ddl_on_failure() -> None:
     import pytest
 
     conn = sqlite3.connect(":memory:")

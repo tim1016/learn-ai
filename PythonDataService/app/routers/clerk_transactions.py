@@ -4,11 +4,8 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
+from fastapi import APIRouter, HTTPException, Path, Query, status
 
-from app.broker.alpaca.clerk.sqlite.repository_external_order_api import (
-    ExternalOrderNotFoundError,
-)
 from app.schemas.clerk_transaction_projection import (
     ClerkCustodyWindowSummary,
     ClerkTransactionHistoryResponse,
@@ -24,6 +21,7 @@ from app.services.clerk_transaction_projection import (
     transaction_history,
 )
 from app.services.sqlite_clerk_transaction_projection import (
+    ExternalOrderAcknowledgementNotFound,
     sqlite_acknowledge_external_order,
     sqlite_transaction_detail,
     sqlite_transaction_history,
@@ -61,7 +59,7 @@ async def acknowledge_external_order_endpoint(
             external_order_id=external_order_id,
             operator=request.operator,
         )
-    except ExternalOrderNotFoundError as exc:
+    except ExternalOrderAcknowledgementNotFound as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="External order observation was not found for this account.",
@@ -85,7 +83,6 @@ async def get_clerk_transaction_history(
     lifecycle_state: str | None = Query(default=None, min_length=1, max_length=64),
     strategy_instance_id: str | None = Query(default=None, min_length=1, max_length=128),
     run_id: str | None = Query(default=None, min_length=1, max_length=128),
-    store: ClerkTransactionProjectionStore = Depends(get_clerk_transaction_store),
 ) -> ClerkTransactionHistoryResponse:
     """Read one indexed keyset page without broker, Account Truth, or journal I/O."""
 
@@ -102,6 +99,7 @@ async def get_clerk_transaction_history(
         )
         if sqlite_page is not None:
             return sqlite_page
+        store = get_clerk_transaction_store()
         return await transaction_history(
             account_id=account_id,
             limit=limit,
@@ -147,7 +145,6 @@ async def get_clerk_transaction_history(
 async def get_clerk_transaction_detail(
     account_id: str,
     transaction_id: str,
-    store: ClerkTransactionProjectionStore = Depends(get_clerk_transaction_store),
 ) -> ClerkTransactionRow:
     """Read exactly one selected projected receipt; never rescan Clerk or IBKR."""
 
@@ -164,6 +161,7 @@ async def get_clerk_transaction_detail(
                     detail="SQLite Clerk operation was not found for this account.",
                 )
             return sqlite_row
+        store = get_clerk_transaction_store()
         row = await transaction_detail(
             account_id=account_id, transaction_id=transaction_id, store=store
         )

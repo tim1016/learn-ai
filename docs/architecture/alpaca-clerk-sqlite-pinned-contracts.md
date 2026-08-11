@@ -30,6 +30,13 @@
   proving every operational v6 table is empty. A data-bearing v6 authority
   fails closed and remains untouched; the human cutover initializes a clean
   v7 authority generation after the existing account is safely retired.
+- Schema-v8 keeps the exact custody transition sequence which materialized
+  each execution, so equal broker timestamps never force a fabricated
+  secondary ordering key. It also replaces the ambiguous external-order
+  `price` field with the broker's order type plus separate limit, stop, and
+  filled-average prices. The additive v7 → v8 migration backfills only
+  execution rows whose transition facts name their execution identity; any
+  unprovable legacy sequence remains unavailable to sequence-sensitive reads.
 - **Source of truth ranking:** ADR 0035 (decision rationale) →
   `docs/prds/alpaca-account-clerk-sqlite-control-plane.md` §9–§11 (functional
   contract) → this document (concrete, implementable pin). Where this document
@@ -316,7 +323,8 @@ CREATE TABLE fills (
                               CHECK (fee_fidelity IN ('reported','not_reported')),
     source_event_at_ms       INTEGER,                 -- Alpaca's fill timestamp, when supplied
     clerk_observed_at_ms     INTEGER NOT NULL,
-    recorded_at_ms           INTEGER NOT NULL
+    recorded_at_ms           INTEGER NOT NULL,
+    recorded_transition_sequence INTEGER NOT NULL REFERENCES custody_transitions(sequence)
 );
 -- Websocket/activity executions are identity-deduplicated independently of
 -- the legacy synthesized ``fill_id`` used by cumulative recovery.
@@ -333,7 +341,10 @@ CREATE TABLE external_orders (
     symbol                   TEXT NOT NULL,
     side                     TEXT NOT NULL CHECK (side IN ('BUY','SELL')),
     qty                      REAL NOT NULL,
-    price                    REAL,
+    order_type               TEXT NOT NULL,
+    limit_price              REAL,
+    stop_price               REAL,
+    filled_avg_price         REAL,
     observed_at_ms           INTEGER NOT NULL,
     acknowledged_at_ms       INTEGER,
     ack_operator             TEXT,

@@ -557,6 +557,26 @@ def test_trade_health_uses_decision_bar_reference_for_last_evaluated_bar() -> No
     assert panel.health.last_bar_at_ms == _NOW - 60_000
 
 
+def test_trade_health_does_not_relabel_a_later_fill_as_a_evaluated_bar() -> None:
+    decision = decision_receipt(
+        seq=1,
+        ts_ms=_NOW - 100,
+        outcome="no_action",
+        reason_code="NO_ACTION",
+        bar_ref=f"SPY@{_NOW - 60_000}",
+    )
+
+    panel = _panel(
+        _status(mode="trade"),
+        _clerk_status(),
+        [],
+        decision,
+        last_bar_at_ms=_NOW - 1,
+    )
+
+    assert panel.health.last_bar_at_ms == _NOW - 60_000
+
+
 def _station_states(adapted: BotPanelView) -> dict[str, str]:
     return {station.station_id: station.state for station in adapted.rail.stations}
 

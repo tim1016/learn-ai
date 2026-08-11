@@ -16,6 +16,7 @@ import type {
   ClerkTransactionOrigin,
   ClerkTransactionSummary,
 } from '../../../api/clerk-transaction-history.types';
+import { BrokerService } from '../../../services/broker.service';
 import { formatReceiptLabel, ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
 import { ClerkTransactionEvidenceDrawerComponent } from '../clerk-transaction-evidence-drawer/clerk-transaction-evidence-drawer.component';
@@ -38,6 +39,7 @@ import { AccountDeskTransactionHistoryStore } from './account-desk-transaction-h
 })
 export class AccountDeskTransactionHistoryComponent {
   readonly store = inject(AccountDeskTransactionHistoryStore);
+  private readonly broker = inject(BrokerService);
   readonly accountId = input<string | null>(null);
   readonly refreshVersion = input(0);
   private activeAccountId = this.store.accountId();
@@ -47,6 +49,9 @@ export class AccountDeskTransactionHistoryComponent {
   readonly filterLifecycle = signal('');
   readonly filterStrategy = signal('');
   readonly filterRun = signal('');
+  readonly acknowledgementOperator = signal('');
+  readonly acknowledgingExternalOrderId = signal<string | null>(null);
+  readonly acknowledgementError = signal<string | null>(null);
 
   constructor() {
     effect(() => {
@@ -150,5 +155,34 @@ export class AccountDeskTransactionHistoryComponent {
   onReceiptClosed(): void {
     this.selectedTransaction.set(null);
     this.receiptOpener.set(null);
+  }
+
+  canAcknowledgeSelectedExternalOrder(): boolean {
+    const transaction = this.selectedTransaction();
+    return transaction?.transaction_origin === 'external'
+      && transaction.lifecycle_state === 'review_required'
+      && transaction.external_order_id !== null
+      && transaction.external_order_id !== undefined;
+  }
+
+  async acknowledgeSelectedExternalOrder(): Promise<void> {
+    const transaction = this.selectedTransaction();
+    const accountId = this.store.accountId();
+    const externalOrderId = transaction?.external_order_id;
+    const operator = this.acknowledgementOperator().trim();
+    if (!accountId || !externalOrderId || !operator || this.acknowledgingExternalOrderId() !== null) return;
+
+    this.acknowledgingExternalOrderId.set(externalOrderId);
+    this.acknowledgementError.set(null);
+    try {
+      await this.broker.acknowledgeExternalOrder(accountId, externalOrderId, operator);
+      await this.store.load(accountId);
+      this.acknowledgementOperator.set('');
+      this.onReceiptClosed();
+    } catch {
+      this.acknowledgementError.set('Could not acknowledge this external order. Retry after reviewing the evidence.');
+    } finally {
+      this.acknowledgingExternalOrderId.set(null);
+    }
   }
 }

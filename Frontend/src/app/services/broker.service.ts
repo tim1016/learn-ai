@@ -33,6 +33,7 @@ import type {
   ClerkTransactionDetail,
   ClerkTransactionFilters,
   ClerkTransactionHistoryResponse,
+  ExternalOrderAcknowledgement,
 } from '../api/clerk-transaction-history.types';
 import type {
   AccountTruthResponse,
@@ -302,6 +303,19 @@ export class BrokerService {
     return firstValueFrom(
       this.http.get<ClerkTransactionDetail>(
         `${this.accountsBase}/${encodeURIComponent(accountId)}/transactions/${encodeURIComponent(transactionId)}`,
+      ),
+    );
+  }
+
+  acknowledgeExternalOrder(
+    accountId: string,
+    externalOrderId: string,
+    operator: string,
+  ): Promise<ExternalOrderAcknowledgement> {
+    return firstValueFrom(
+      this.http.post<ExternalOrderAcknowledgement>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/transactions/external-orders/${encodeURIComponent(externalOrderId)}/acknowledge`,
+        { operator },
       ),
     );
   }

@@ -17,7 +17,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 PRAGMA_STATEMENTS: tuple[str, ...] = (
     "PRAGMA journal_mode = WAL",
@@ -221,7 +221,8 @@ CREATE TABLE fills (
                               CHECK (fee_fidelity IN ('reported','not_reported')),
     source_event_at_ms       INTEGER,                 -- Alpaca's fill timestamp, when supplied
     clerk_observed_at_ms     INTEGER NOT NULL,
-    recorded_at_ms           INTEGER NOT NULL
+    recorded_at_ms           INTEGER NOT NULL,
+    recorded_transition_sequence INTEGER NOT NULL REFERENCES custody_transitions(sequence)
 );
 -- Websocket/activity executions are identity-deduplicated independently of
 -- the legacy synthesized ``fill_id`` used by cumulative recovery.
@@ -238,7 +239,10 @@ CREATE TABLE external_orders (
     symbol                   TEXT NOT NULL,
     side                     TEXT NOT NULL CHECK (side IN ('BUY','SELL')),
     qty                      REAL NOT NULL,
-    price                    REAL,
+    order_type               TEXT NOT NULL,
+    limit_price              REAL,
+    stop_price               REAL,
+    filled_avg_price         REAL,
     observed_at_ms           INTEGER NOT NULL,
     acknowledged_at_ms       INTEGER,
     ack_operator             TEXT,
@@ -527,6 +531,15 @@ _V6_OPERATIONAL_TABLES: tuple[str, ...] = (
 )
 
 
+def v6_operational_tables_with_rows(conn: sqlite3.Connection) -> tuple[str, ...]:
+    """Return occupied v6 operational tables without changing authority state."""
+    return tuple(
+        table
+        for table in _V6_OPERATIONAL_TABLES
+        if conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone() is not None
+    )
+
+
 def _require_empty_v6_authority(conn: sqlite3.Connection) -> None:
     """Reject a v6 upgrade unless every operational projection is empty.
 
@@ -537,11 +550,7 @@ def _require_empty_v6_authority(conn: sqlite3.Connection) -> None:
     makes an empty claim durable and tamper-resistant enough for this bounded
     additive migration.
     """
-    occupied = [
-        table
-        for table in _V6_OPERATIONAL_TABLES
-        if conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone() is not None
-    ]
+    occupied = v6_operational_tables_with_rows(conn)
     if occupied:
         raise ValueError(
             "v6 -> v7 migration requires an empty authority; operational rows exist in "
@@ -641,6 +650,25 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
         "ON effect_operations(strategy_instance_id, created_at_ms DESC, effect_operation_id DESC)",
     ),
     6: _V6_TO_V7_STATEMENTS,
+    # v7 -> v8: retain the immutable custody transition that materialized each
+    # execution and split external instruction prices from execution averages.
+    # The new fills column is nullable on migrated files because SQLite cannot
+    # add a NOT NULL column without a synthetic default. Legacy rows are
+    # backfilled only when their transition facts name one exact execution;
+    # unprovable sequence order remains unavailable rather than fabricated.
+    7: (
+        "ALTER TABLE fills ADD COLUMN recorded_transition_sequence INTEGER",
+        "UPDATE fills SET recorded_transition_sequence = ("
+        "SELECT ct.sequence FROM custody_transitions ct "
+        "WHERE ct.order_ref = fills.order_ref "
+        "AND fills.execution_id IS NOT NULL "
+        "AND json_extract(ct.facts_json, '$.execution_id') = fills.execution_id "
+        "ORDER BY ct.sequence ASC LIMIT 1)",
+        "ALTER TABLE external_orders ADD COLUMN order_type TEXT",
+        "ALTER TABLE external_orders ADD COLUMN limit_price REAL",
+        "ALTER TABLE external_orders ADD COLUMN stop_price REAL",
+        "ALTER TABLE external_orders ADD COLUMN filled_avg_price REAL",
+    ),
 }
 
 

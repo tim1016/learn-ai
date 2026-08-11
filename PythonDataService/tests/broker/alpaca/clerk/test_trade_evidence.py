@@ -324,6 +324,100 @@ async def test_sqlite_websocket_execution_redelivery_and_restart_append_no_dupli
         restarted.close()
 
 
+async def test_sqlite_rest_recovery_folds_cumulative_fill_without_fabricating_an_execution_id(
+    tmp_path: Path,
+) -> None:
+    repo, order_ref = _initialize_owned_order(tmp_path)
+    recovered_order = _owned_order(order_ref, status="filled")
+    try:
+        kind = await _sqlite_sink(repo).record_lifecycle_event(
+            client_order_id=order_ref,
+            event=BrokerOrderEvent(
+                event_type="fill",
+                occurred_at_ms=1_700_000_000_100,
+                price=recovered_order.filled_avg_price,
+                quantity=recovered_order.filled_quantity,
+                execution_id=None,
+            ),
+            event_key="recovery:closed-order-1",
+            order=recovered_order,
+            recovery_source="closed_orders_window",
+            recovery_window_limit=50,
+        )
+
+        assert kind is ClerkEntryKind.ORDER_EVENT
+        fills = repo.fills_for_order(order_ref)
+        assert len(fills) == 1
+        assert fills[0]["execution_id"] is None
+        assert fills[0]["evidence_source"] == "cumulative_recovery"
+        assert repo.position(STRATEGY_INSTANCE_ID, "SPY") == 5.0
+    finally:
+        repo.close()
+
+
+async def test_sqlite_changed_execution_redelivery_raises_one_coverage_conflict(
+    tmp_path: Path,
+) -> None:
+    repo, order_ref = _initialize_owned_order(tmp_path)
+    original = BrokerOrderEvent(
+        event_type="fill",
+        occurred_at_ms=1_700_000_000_050,
+        price=100.25,
+        quantity=2.0,
+        execution_id="exec-changed-redelivery",
+    )
+    changed = BrokerOrderEvent(
+        event_type="fill",
+        occurred_at_ms=1_700_000_000_051,
+        price=101.25,
+        quantity=3.0,
+        execution_id="exec-changed-redelivery",
+    )
+    try:
+        sink = _sqlite_sink(repo)
+        await sink.record_lifecycle_event(
+            client_order_id=order_ref,
+            event=original,
+            event_key="exec:exec-changed-redelivery:original",
+            order=_owned_order(order_ref, status="filled"),
+            recovery_source=None,
+            recovery_window_limit=None,
+        )
+        await sink.record_lifecycle_event(
+            client_order_id=order_ref,
+            event=changed,
+            event_key="exec:exec-changed-redelivery:changed",
+            order=_owned_order(order_ref, status="filled"),
+            recovery_source=None,
+            recovery_window_limit=None,
+        )
+        await sink.record_lifecycle_event(
+            client_order_id=order_ref,
+            event=changed,
+            event_key="exec:exec-changed-redelivery:changed",
+            order=_owned_order(order_ref, status="filled"),
+            recovery_source=None,
+            recovery_window_limit=None,
+        )
+
+        assert len(repo.fills_for_order(order_ref)) == 1
+        assert repo.position(STRATEGY_INSTANCE_ID, "SPY") == 2.0
+        transition_kinds = [
+            transition["transition_kind"] for transition in repo.transitions_for_order(order_ref)
+        ]
+        assert transition_kinds.count("EXECUTION_SLICE_FILLED") == 1
+        assert transition_kinds.count("UNCERTAINTY_RAISED") == 1
+        admission = decide_capability(
+            repo,
+            capability=Capability.NEW_EXPOSURE,
+            strategy_instance_id=STRATEGY_INSTANCE_ID,
+        )
+        assert admission.allowed is False
+        assert admission.reason_code == EXECUTION_COVERAGE_CONFLICT_REASON_CODE
+    finally:
+        repo.close()
+
+
 async def test_sqlite_late_exact_execution_after_recovery_is_fenced_across_restart(
     tmp_path: Path,
 ) -> None:

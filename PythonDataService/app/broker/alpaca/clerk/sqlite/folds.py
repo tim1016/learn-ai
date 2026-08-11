@@ -698,8 +698,8 @@ def _fold_execution_slice_filled(conn: sqlite3.Connection, payload: dict[str, An
     conn.execute(
         "INSERT INTO fills (fill_id, order_ref, qty, price, side, is_correction, execution_id, "
         "evidence_source, event_kind, superseded_execution_ref, fee, fee_fidelity, "
-        "source_event_at_ms, clerk_observed_at_ms, recorded_at_ms) "
-        "VALUES (?, ?, ?, ?, ?, 0, ?, ?, 'fill', NULL, ?, ?, ?, ?, ?)",
+        "source_event_at_ms, clerk_observed_at_ms, recorded_at_ms, recorded_transition_sequence) "
+        "VALUES (?, ?, ?, ?, ?, 0, ?, ?, 'fill', NULL, ?, ?, ?, ?, ?, ?)",
         (
             facts.execution_id,
             payload["order_ref"],
@@ -713,6 +713,7 @@ def _fold_execution_slice_filled(conn: sqlite3.Connection, payload: dict[str, An
             facts.source_event_at_ms,
             payload["clerk_observed_at_ms"],
             payload["recorded_at_ms"],
+            _this_transition_sequence(conn),
         ),
     )
     _apply_attributed_position_delta(
@@ -770,8 +771,8 @@ def _fold_execution_corrected(conn: sqlite3.Connection, payload: dict[str, Any])
     conn.execute(
         "INSERT INTO fills (fill_id, order_ref, qty, price, side, is_correction, execution_id, "
         "evidence_source, event_kind, superseded_execution_ref, fee, fee_fidelity, "
-        "source_event_at_ms, clerk_observed_at_ms, recorded_at_ms) "
-        "VALUES (?, ?, ?, ?, ?, 1, ?, ?, 'correction', ?, ?, ?, ?, ?, ?)",
+        "source_event_at_ms, clerk_observed_at_ms, recorded_at_ms, recorded_transition_sequence) "
+        "VALUES (?, ?, ?, ?, ?, 1, ?, ?, 'correction', ?, ?, ?, ?, ?, ?, ?)",
         (
             facts.execution_id,
             payload["order_ref"],
@@ -786,6 +787,7 @@ def _fold_execution_corrected(conn: sqlite3.Connection, payload: dict[str, Any])
             payload["source_event_at_ms"],
             payload["clerk_observed_at_ms"],
             payload["recorded_at_ms"],
+            _this_transition_sequence(conn),
         ),
     )
     _apply_attributed_position_delta(
@@ -862,9 +864,9 @@ def _fold_order_fill_observed(conn: sqlite3.Connection, payload: dict[str, Any])
     conn.execute(
         "INSERT INTO fills (fill_id, order_ref, qty, price, side, is_correction, execution_id, "
         "evidence_source, event_kind, superseded_execution_ref, fee, fee_fidelity, "
-        "source_event_at_ms, clerk_observed_at_ms, recorded_at_ms) "
+        "source_event_at_ms, clerk_observed_at_ms, recorded_at_ms, recorded_transition_sequence) "
         "VALUES (?, ?, ?, ?, ?, ?, NULL, 'cumulative_recovery', 'fill', NULL, NULL, "
-        "'not_reported', ?, ?, ?)",
+        "'not_reported', ?, ?, ?, ?)",
         (
             fill_id,
             order_ref,
@@ -875,6 +877,7 @@ def _fold_order_fill_observed(conn: sqlite3.Connection, payload: dict[str, Any])
             payload["source_event_at_ms"],
             payload["clerk_observed_at_ms"],
             payload["recorded_at_ms"],
+            _this_transition_sequence(conn),
         ),
     )
     signed_delta = delta_qty if facts.side == "BUY" else -delta_qty

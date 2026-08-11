@@ -111,6 +111,14 @@ _SQLITE_TRANSITION_COPY: Final[dict[str, tuple[str, str]]] = {
         "Execution correction recorded",
         "The Account Clerk replaced a prior execution slice with corrected broker evidence.",
     ),
+    "EXTERNAL_ORDER_OBSERVED": (
+        "External order observed",
+        "The Account Clerk recorded an order outside the configured bot namespaces.",
+    ),
+    "EXTERNAL_ORDER_ACKNOWLEDGED": (
+        "External order acknowledged",
+        "An operator acknowledged the held external-order evidence.",
+    ),
     "ENTRY_TERMINAL_CONFIRMED": (
         "Entry terminal state confirmed",
         "The Account Clerk confirmed the entry order reached a terminal state.",

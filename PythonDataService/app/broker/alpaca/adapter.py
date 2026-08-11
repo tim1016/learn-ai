@@ -330,12 +330,22 @@ ALPACA_TRADE_UPDATE_EVENTS: frozenset[str] = frozenset(
 def trade_update_occurred_at_ms(payload: Mapping[str, Any]) -> int:
     """Resolve a ``trade_updates`` event's instant as ``int64`` ms UTC.
 
-    Alpaca stamps each frame with a top-level ``timestamp`` (the event instant).
-    A fill/partial_fill also carries the embedded order's ``filled_at``; the
-    event ``timestamp`` is the authoritative per-event instant and is always
-    present, so it is preferred. Fails fast (no timestamp) — a lifecycle event
-    with no instant is corruption, not something to default to "now".
+    Canonical captured frames provide ``timestamp_ms``. Raw Alpaca frames use
+    RFC-3339 ``timestamp`` and are converted exactly once at this ingestion
+    boundary. A fill/partial_fill also carries the embedded order's
+    ``filled_at``; the frame event instant is authoritative. Fails fast (no
+    timestamp) — a lifecycle event with no instant is corruption, not
+    something to default to "now".
     """
+    timestamp_ms = payload.get("timestamp_ms")
+    if timestamp_ms is not None:
+        if (
+            isinstance(timestamp_ms, bool)
+            or not isinstance(timestamp_ms, int)
+            or timestamp_ms < 0
+        ):
+            raise ValueError("Alpaca trade_updates timestamp_ms must be a non-negative int64.")
+        return timestamp_ms
     timestamp = payload.get("timestamp")
     if timestamp:
         return rfc3339_to_ms(str(timestamp))
@@ -346,8 +356,9 @@ def from_alpaca_trade_update(payload: Mapping[str, Any]) -> BrokerOrderEvent:
     """Map one Alpaca ``trade_updates`` ``data`` payload to a ``BrokerOrderEvent``.
 
     ``payload`` is the ``data`` object of a ``{"stream":"trade_updates","data":…}``
-    frame: ``event`` (the lifecycle transition), ``timestamp`` (the event
-    instant), an embedded ``order`` object, and — on a fill/partial_fill —
+    frame: ``event`` (the lifecycle transition), canonical ``timestamp_ms``
+    (or raw vendor ``timestamp`` at the ingestion edge), an embedded ``order``
+    object, and — on a fill/partial_fill —
     top-level ``price``/``qty`` (the **execution slice** that filled, distinct
     from the order's cumulative ``filled_avg_price``/``filled_qty``).
 
@@ -367,16 +378,18 @@ def from_alpaca_trade_update(payload: Mapping[str, Any]) -> BrokerOrderEvent:
             f"Unrecognized Alpaca trade_updates event {event!r}; "
             "alpaca-py may have added a lifecycle event — extend the adapter."
         )
+    occurred_at_ms = trade_update_occurred_at_ms(payload)
+    execution_id = opt_str(payload.get("execution_id"))
+    if execution_id is not None:
+        execution_id = execution_id.strip() or None
+    if event in {"fill", "partial_fill"} and execution_id is None:
+        raise ValueError(f"Alpaca {event} trade_updates event is missing its execution_id.")
     return BrokerOrderEvent(
         event_type=event,
-        occurred_at_ms=trade_update_occurred_at_ms(payload),
+        occurred_at_ms=occurred_at_ms,
         price=opt_float(payload.get("price")),
         quantity=opt_float(payload.get("qty")),
-        execution_id=(
-            opt_str(payload.get("execution_id"))
-            if event in {"fill", "partial_fill"}
-            else None
-        ),
+        execution_id=(execution_id if event in {"fill", "partial_fill"} else None),
     )
 
 

@@ -1,5 +1,6 @@
 {
   "projection": {
+    "authority_generation": 1,
     "bot_metrics": {
       "sqlite-cohort-partial-0810": {
         "fills_today": 2,
@@ -28,7 +29,8 @@
         "quantity": 5.0,
         "price": 501.0
       }
-    ]
+    ],
+    "closed_lots": []
   },
   "tolerance": {
     "atol": 1e-06,

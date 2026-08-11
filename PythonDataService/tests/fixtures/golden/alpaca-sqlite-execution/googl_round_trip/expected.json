@@ -1,5 +1,6 @@
 {
   "projection": {
+    "authority_generation": 1,
     "bot_metrics": {
       "sqlite-cohort-googl-0810": {
         "fills_today": 3,
