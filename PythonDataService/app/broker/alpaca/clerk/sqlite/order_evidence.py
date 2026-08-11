@@ -27,7 +27,14 @@ from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.models import BrokerOrder
 
-__all__ = ["entry_order_symbol", "fold_failed", "fold_order_evidence", "fold_uncertain"]
+__all__ = [
+    "entry_order_symbol",
+    "fold_failed",
+    "fold_order_acknowledgement",
+    "fold_order_evidence",
+    "fold_order_submission_acknowledgement",
+    "fold_uncertain",
+]
 
 
 def entry_order_symbol(repo: ClerkSqliteRepository, order_ref: str) -> str:
@@ -45,17 +52,22 @@ def fold_order_evidence(
     order: BrokerOrder,
     append_stale_ack: bool = True,
 ) -> None:
-    """The one gate for "what does an observed ``BrokerOrder`` mean" — a
-    happy-path submit ack, a resolution's found-order case, and an EXIT's
-    cancel-outcome poll all route through this, not three copies. Folds the
-    fill (if the snapshot reports progress; idempotent and
-    namespace-attributed via ``_fold_order_fill_observed``) *before* the
-    acknowledgement (idempotent on ``orders.broker_state`` via §3c's
-    no-regression rule) — deliberately in that order, not the reverse.
-    These are two independent ``append_transition`` calls, not one atomic
-    commit; if the process dies between them, the recovery sweep re-polls
-    the exact identity and folds the cumulative snapshot again. The fill
-    delta check and acknowledgement monotonicity make that replay safe.
+    """Fold a REST/reconciliation aggregate order observation.
+
+    This is the **cumulative-recovery-only** path.  A ``BrokerOrder`` carries
+    an order-level ``filled_quantity`` / VWAP, not a durable execution
+    identity, so this helper remains appropriate for a bounded REST recovery
+    or reconciliation snapshot but must never be used for a ``trade_updates``
+    websocket frame.  The latter routes the immutable execution slice through
+    ``EXECUTION_SLICE_FILLED`` and calls :func:`fold_order_acknowledgement`
+    separately.
+
+    The cumulative fill (if the snapshot reports progress; idempotent and
+    namespace-attributed via ``_fold_order_fill_observed``) is deliberately
+    folded before the acknowledgement. These are two independent
+    ``append_transition`` calls; if the process dies between them, recovery
+    re-polls the exact identity and its delta/acknowledgement monotonicity
+    makes the replay safe.
 
     A snapshot reporting ``filled_quantity > 0`` with ``filled_avg_price is
     None`` is an anomalous broker response, not a normal transient state —
@@ -70,21 +82,7 @@ def fold_order_evidence(
     assert effect is not None
     order_ref = order.client_order_id
     assert order_ref is not None
-    transitions = repo.transitions_for_order(order_ref)
-    latest_ack = next(
-        (
-            transition
-            for transition in reversed(transitions)
-            if transition["transition_kind"] == "ORDER_SUBMIT_ACKED"
-        ),
-        None,
-    )
-    ack_changed = latest_ack is None or (
-        latest_ack["broker_order_id"] != order.order_id
-        or latest_ack["broker_state"] != order.status
-        or latest_ack["source_event_at_ms"] != order.updated_at_ms
-    )
-    recorded_fill_qty = sum(fill["qty"] for fill in repo.fills_for_order(order_ref))
+    recorded_fill_qty, _ = repo.effective_fill_totals_for_order(order_ref)
     fill_changed = order.filled_quantity - recorded_fill_qty >= FILL_QTY_EPSILON
 
     if order.filled_quantity > 0 and order.filled_avg_price is None:
@@ -125,6 +123,49 @@ def fold_order_evidence(
             )
         )
 
+    fold_order_acknowledgement(
+        repo,
+        effect_operation_id=effect_operation_id,
+        order=order,
+        append_stale_ack=append_stale_ack,
+    )
+
+
+def fold_order_acknowledgement(
+    repo: ClerkSqliteRepository,
+    *,
+    effect_operation_id: str,
+    order: BrokerOrder,
+    append_stale_ack: bool = True,
+) -> None:
+    """Fold only monotonic aggregate order acknowledgement evidence.
+
+    The broker order snapshot records its lifecycle state but not a distinct
+    execution slice.  Keeping this acknowledgement separate means a websocket
+    frame can record its ``execution_id``/quantity/price exactly without
+    accidentally re-deriving another fill from ``order.filled_quantity``.
+    ``fold_order_evidence`` above remains the explicitly labelled recovery
+    path for sources that have no execution identity.
+    """
+    effect = repo.effect_operation(effect_operation_id)
+    assert effect is not None
+    order_ref = order.client_order_id
+    assert order_ref is not None
+    transitions = repo.transitions_for_order(order_ref)
+    latest_ack = next(
+        (
+            transition
+            for transition in reversed(transitions)
+            if transition["transition_kind"] == "ORDER_SUBMIT_ACKED"
+        ),
+        None,
+    )
+    ack_changed = latest_ack is None or (
+        latest_ack["broker_order_id"] != order.order_id
+        or latest_ack["broker_state"] != order.status
+        or latest_ack["source_event_at_ms"] != order.updated_at_ms
+    )
+
     current_order = repo.order(order_ref)
     ack_advances = order_observation_advances(
         current_state=(current_order.broker_state if current_order is not None else None),
@@ -152,6 +193,41 @@ def fold_order_evidence(
                 facts_json=canonicalize({}),
             )
         )
+
+
+def fold_order_submission_acknowledgement(
+    repo: ClerkSqliteRepository,
+    *,
+    effect_operation_id: str,
+    order: BrokerOrder,
+) -> None:
+    """Acknowledge an immediate broker-submit response without fill math.
+
+    Submit responses can embed an aggregate order snapshot.  They are not an
+    execution feed, so they must not bypass the websocket's execution-ID
+    capture or create an ``ORDER_FILL_OBSERVED`` row.  A filled quantity with
+    no aggregate price remains anomalous and is still made uncertain rather
+    than being acknowledged as if the accounting evidence were complete.
+    Exact REST recovery and reconciliation use :func:`fold_order_evidence`.
+    """
+    order_ref = order.client_order_id
+    assert order_ref is not None
+    if order.filled_quantity > 0 and order.filled_avg_price is None:
+        fold_uncertain(
+            repo,
+            effect_operation_id=effect_operation_id,
+            order_ref=order_ref,
+            why=(
+                f"broker reported filled_quantity={order.filled_quantity} with no "
+                "filled_avg_price; withholding the ack to avoid losing the fill"
+            ),
+        )
+        return
+    fold_order_acknowledgement(
+        repo,
+        effect_operation_id=effect_operation_id,
+        order=order,
+    )
 
 
 def fold_uncertain(

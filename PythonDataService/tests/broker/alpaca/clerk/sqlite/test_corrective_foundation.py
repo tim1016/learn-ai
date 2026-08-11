@@ -88,13 +88,8 @@ def test_future_schema_version_fails_closed_on_open(tmp_path: Path) -> None:
         ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
 
 
-def test_v6_authority_fails_closed_without_an_incomplete_v7_upgrade(tmp_path: Path) -> None:
-    """v7 requires new fills columns, so a v6 file must not be version-stamped.
-
-    The clean-slate v7 cutover is the only supported transition. This test
-    makes a physical v6-shaped database and proves opening it neither adds
-    columns/tables nor advances its recorded version.
-    """
+def test_empty_v6_authority_opens_through_the_complete_v7_upgrade(tmp_path: Path) -> None:
+    """An operationally empty physical v6 file upgrades atomically on open."""
     clock = _clock_seq()
     r = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
     r._conn.execute("DROP INDEX ux_fills_execution_id")
@@ -116,26 +111,33 @@ def test_v6_authority_fails_closed_without_an_incomplete_v7_upgrade(tmp_path: Pa
     r._conn.commit()
     r.close()
 
-    with pytest.raises(SchemaVersionMismatch, match="no registered migration from schema_version=6"):
-        ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    reopened = ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    reopened.close()
 
     db_path = tmp_path / "accounts" / "alpaca" / ACCOUNT_ID / "clerk.db"
     conn = sqlite3.connect(db_path)
     try:
         version = conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0]
-        assert version == 6
+        assert version == 7
         fills_columns = {row[1] for row in conn.execute("PRAGMA table_info(fills)")}
-        assert "execution_id" not in fills_columns
+        assert {
+            "execution_id",
+            "evidence_source",
+            "event_kind",
+            "superseded_execution_ref",
+            "fee",
+            "fee_fidelity",
+        } <= fills_columns
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-        assert {"external_orders", "bot_config", "decision_receipts"}.isdisjoint(tables)
+        assert {"external_orders", "bot_config", "decision_receipts"} <= tables
     finally:
         conn.close()
 
 
 def test_is_upgradable_to_current_reflects_the_registered_migration_chain() -> None:
     assert schema.is_upgradable_to_current(schema.SCHEMA_VERSION) is True
-    assert schema.is_upgradable_to_current(6) is False
-    assert schema.is_upgradable_to_current(4) is False
+    assert schema.is_upgradable_to_current(6) is True
+    assert schema.is_upgradable_to_current(4) is True
     assert schema.is_upgradable_to_current(1) is False
 
 

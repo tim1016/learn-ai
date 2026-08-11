@@ -28,6 +28,7 @@ outer ``custody_transitions`` column, so its ``facts_json`` is legitimately
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -328,3 +329,129 @@ class OrderFillObservedFacts:
     @classmethod
     def from_facts_json(cls, facts_json: str) -> OrderFillObservedFacts:
         return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
+class ExecutionSliceFilledFacts:
+    """One immutable broker execution slice, never an order-level total.
+
+    ``execution_id`` is the broker's durable identity and becomes both the
+    capture-path ``fills.execution_id`` and ``fill_id``.  Fees are nullable
+    because Alpaca trade-update frames do not currently report them; the
+    accompanying fidelity flag makes that absence explicit rather than
+    fabricating a zero fee.
+    """
+
+    execution_id: str
+    symbol: str
+    side: str
+    slice_qty: float
+    slice_price: float
+    fee: float | None
+    fee_fidelity: str
+    evidence_source: str
+    source_event_at_ms: int
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> ExecutionSliceFilledFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
+class ExecutionCorrectedFacts:
+    """An auditable effective replacement for one prior execution slice.
+
+    The correction's ``execution_id`` is a distinct broker identity.  The
+    superseded row remains in ``fills`` so every exposure adjustment can be
+    reconstructed from the custody transition stream.
+    """
+
+    execution_id: str
+    superseded_execution_ref: str
+    symbol: str
+    side: str
+    corrected_qty: float
+    corrected_price: float
+    why: str
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> ExecutionCorrectedFacts:
+        return cls(**json.loads(facts_json))
+
+
+def _require_finite_positive(value: float, *, field: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field} must be a number")
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{field} must be finite and positive")
+
+
+def _require_finite_nonnegative(value: float, *, field: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field} must be a number")
+    if not math.isfinite(value) or value < 0:
+        raise ValueError(f"{field} must be finite and non-negative")
+
+
+def validate_execution_slice_facts(facts: ExecutionSliceFilledFacts) -> None:
+    """Reject malformed broker-execution inputs before a custody transition.
+
+    Formula: n/a — input-boundary validation for the execution-slice fold.
+    Reference: docs/prds/2026-08-10-sqlite-sole-authority-alpaca-execution.md
+      § Task S1.2.
+    Canonical implementation: this file.
+    Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
+      test_folds_execution.py::test_execution_slice_filled_rejects_invalid_facts.
+    """
+    if not isinstance(facts.execution_id, str) or not facts.execution_id:
+        raise ValueError("execution_id must be non-empty")
+    if not isinstance(facts.symbol, str) or not facts.symbol:
+        raise ValueError("symbol must be non-empty")
+    if facts.side not in {"BUY", "SELL"}:
+        raise ValueError(f"invalid execution side {facts.side!r}")
+    if facts.evidence_source not in {"websocket", "activity_recovery"}:
+        raise ValueError(f"invalid exact-execution evidence source {facts.evidence_source!r}")
+    if facts.fee_fidelity not in {"reported", "not_reported"}:
+        raise ValueError(f"invalid fee_fidelity {facts.fee_fidelity!r}")
+    _require_finite_positive(facts.slice_qty, field="slice_qty")
+    _require_finite_positive(facts.slice_price, field="slice_price")
+    if facts.fee_fidelity == "reported":
+        if facts.fee is None:
+            raise ValueError("reported fee_fidelity requires fee")
+        _require_finite_nonnegative(facts.fee, field="fee")
+    elif facts.fee is not None:
+        raise ValueError("not_reported fee_fidelity requires fee=None")
+    if isinstance(facts.source_event_at_ms, bool) or not isinstance(facts.source_event_at_ms, int):
+        raise ValueError("source_event_at_ms must be an int64 millisecond timestamp")
+
+
+def validate_execution_corrected_facts(facts: ExecutionCorrectedFacts) -> None:
+    """Reject malformed broker correction inputs before transition admission.
+
+    Formula: n/a — input-boundary validation for replacement execution facts.
+    Reference: docs/prds/2026-08-10-sqlite-sole-authority-alpaca-execution.md
+      § Task S1.2.
+    Canonical implementation: this file.
+    Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
+      test_folds_execution.py::test_execution_correction_invalid_target_raises_uncertainty.
+    """
+    if not isinstance(facts.execution_id, str) or not facts.execution_id:
+        raise ValueError("correction execution_id must be non-empty")
+    if not isinstance(facts.superseded_execution_ref, str) or not facts.superseded_execution_ref:
+        raise ValueError("superseded_execution_ref must be non-empty")
+    if facts.execution_id == facts.superseded_execution_ref:
+        raise ValueError("a correction cannot supersede itself")
+    if not isinstance(facts.symbol, str) or not facts.symbol:
+        raise ValueError("correction symbol must be non-empty")
+    if facts.side not in {"BUY", "SELL"}:
+        raise ValueError(f"invalid correction side {facts.side!r}")
+    _require_finite_positive(facts.corrected_qty, field="corrected_qty")
+    _require_finite_positive(facts.corrected_price, field="corrected_price")
+    if not isinstance(facts.why, str) or not facts.why:
+        raise ValueError("correction why must be non-empty")

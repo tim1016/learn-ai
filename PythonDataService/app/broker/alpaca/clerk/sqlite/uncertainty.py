@@ -21,9 +21,11 @@ from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     BROKER_SNAPSHOT_STALE_REASON_CODE,
+    EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
     EXIT_NOT_FLAT_REASON_CODE,
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
     POSITION_DRIFT_REASON_CODE,
+    ExecutionCoverageConflictCause,
     ExitNotFlatCause,
     PositionDriftCause,
     broker_snapshot_stale_cause_is_valid,
@@ -71,6 +73,14 @@ def _exit_not_flat_cause_is_valid(value: Any) -> bool:
     return True
 
 
+def _execution_coverage_conflict_cause_is_valid(value: Any) -> bool:
+    try:
+        ExecutionCoverageConflictCause.from_mapping(value)
+    except ValueError:
+        return False
+    return True
+
+
 _REASON_POLICIES: dict[str, ReasonPolicy] = {
     POSITION_DRIFT_REASON_CODE: ReasonPolicy(
         scope="ACCOUNT_CLERK",
@@ -95,6 +105,12 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         blocks_new_exposure=True,
         allows_reduction=True,
         cause_is_valid=_exit_not_flat_cause_is_valid,
+    ),
+    EXECUTION_COVERAGE_CONFLICT_REASON_CODE: ReasonPolicy(
+        scope="BOT",
+        blocks_new_exposure=True,
+        allows_reduction=False,
+        cause_is_valid=_execution_coverage_conflict_cause_is_valid,
     ),
 }
 
@@ -462,6 +478,7 @@ def require_admission(repo: ClerkSqliteRepository, *, strategy_instance_id: str)
 __all__ = [
     "BROKER_SNAPSHOT_STALE_REASON_CODE",
     "DRIFT_REDUCTION_EVIDENCE_MAX_AGE_MS",
+    "EXECUTION_COVERAGE_CONFLICT_REASON_CODE",
     "EXIT_NOT_FLAT_REASON_CODE",
     "ORDER_OUTCOME_UNKNOWN_REASON_CODE",
     "POSITION_DRIFT_REASON_CODE",

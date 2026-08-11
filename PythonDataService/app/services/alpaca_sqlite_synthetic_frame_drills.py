@@ -380,7 +380,9 @@ async def cancel_fill_race(artifacts_root: Path) -> SyntheticScenarioObservation
             item["sequence"] for item in entry_transitions if item["transition_kind"] == "ORDER_CANCEL_REQUESTED"
         )
         partial_fill_sequence = next(
-            item["sequence"] for item in entry_transitions if item["transition_kind"] == "ORDER_FILL_OBSERVED"
+            item["sequence"]
+            for item in entry_transitions
+            if item["transition_kind"] == "EXECUTION_SLICE_FILLED"
         )
         terminal_sequence = next(
             item["sequence"] for item in entry_transitions if item["transition_kind"] == "ENTRY_TERMINAL_CONFIRMED"
@@ -426,7 +428,7 @@ async def cancel_fill_race(artifacts_root: Path) -> SyntheticScenarioObservation
                 revision_before=revision,
                 broker_before=before,
                 broker_after=broker.proof(),
-                expected=("cancel requested < partial fill observed < terminal proven; submit one sell for 4"),
+                expected=("cancel requested < execution slice recorded < terminal proven; submit one sell for 4"),
                 observed=(
                     f"seam_permitted={seam_permitted}; seam_exercised={seam_exercised}; "
                     f"frame_events_applied={frame_events_applied}; "

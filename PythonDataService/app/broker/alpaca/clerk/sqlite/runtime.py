@@ -159,22 +159,40 @@ class SqliteAlpacaClerkFacade:
 
     async def register_strategy_run(self, binding: BrokerBotBinding) -> None:
         """Durably register immutable strategy + run before order capability."""
-        from app.services.bot_carryover import configuration_hash
+        from app.services.bot_carryover import configuration_hash, immutable_configuration_payload
 
         async with self._intake:
             config_hash = configuration_hash(binding)
+            config_json = canonicalize(immutable_configuration_payload(binding))
+            display_name = _strategy_display_name(binding.strategy_key)
             existing = self._repo.strategy_instance(binding.strategy_instance_id)
             if existing is None:
                 self._repo.register_strategy_instance(
                     strategy_instance_id=binding.strategy_instance_id,
                     symbol=binding.symbol,
                     config_hash=config_hash,
+                    strategy_key=binding.strategy_key,
+                    display_name=display_name,
+                    config_json=config_json,
                 )
             elif existing["symbol"].upper() != binding.symbol.upper() or existing["config_hash"] != config_hash:
                 raise StrategyRegistrationConflictError(
                     f"strategy instance {binding.strategy_instance_id!r} conflicts with "
                     "its SQLite authority registration"
                 )
+            else:
+                persisted_config = self._repo.bot_config(binding.strategy_instance_id)
+                if (
+                    persisted_config is None
+                    or persisted_config.strategy_key != binding.strategy_key
+                    or persisted_config.display_name != display_name
+                    or persisted_config.config_json != config_json
+                    or persisted_config.config_hash != config_hash
+                ):
+                    raise StrategyRegistrationConflictError(
+                        f"strategy instance {binding.strategy_instance_id!r} conflicts with "
+                        "its SQLite authority configuration"
+                    )
 
             active = self._repo.active_run(binding.strategy_instance_id)
             if active is not None:
@@ -645,6 +663,18 @@ def _durable_decision_id(decision_id: str) -> str:
 
 def _is_working_order(order: OrderResource) -> bool:
     return (order.broker_state or "").lower() in _WORKING_ORDER_STATES
+
+
+def _strategy_display_name(strategy_key: str) -> str:
+    """Resolve the engine-owned immutable presentation label for one strategy."""
+    from app.services.strategy_validation_manifest import strategy_registry_seeds
+
+    for strategy in strategy_registry_seeds():
+        if strategy.strategy_key == strategy_key:
+            return strategy.display_name
+    raise StrategyRegistrationConflictError(
+        f"strategy {strategy_key!r} has no registered immutable display name"
+    )
 
 
 def _entry_symbol(repo: ClerkSqliteRepository, order_ref: str) -> str:

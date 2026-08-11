@@ -59,6 +59,32 @@ class ControlMetaSnapshot:
 
 
 @dataclass(frozen=True)
+class BotConfigResource:
+    """Immutable strategy configuration persisted with a registration."""
+
+    strategy_instance_id: str
+    strategy_key: str
+    display_name: str
+    config_json: str
+    config_hash: str
+    created_at_ms: int
+
+
+@dataclass(frozen=True)
+class DecisionReceiptResource:
+    """One durable strategy-decision receipt from the SQLite authority."""
+
+    strategy_instance_id: str
+    seq: int
+    outcome: str
+    symbol: str | None
+    intent_id: str | None
+    order_ref: str | None
+    observed_at_ms: int
+    facts_json: str
+
+
+@dataclass(frozen=True)
 class CommandResource:
     """The durable command resource ``GET /commands/{command_id}`` returns (R2)."""
 

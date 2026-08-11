@@ -33,6 +33,14 @@ from collections.abc import Callable
 from pathlib import Path
 
 from app.broker.alpaca.clerk.sqlite import reads, writes
+from app.broker.alpaca.clerk.sqlite.decision_receipts import append_decision_receipt_row
+from app.broker.alpaca.clerk.sqlite.facts import (
+    ExecutionCorrectedFacts,
+    ExecutionSliceFilledFacts,
+    UncertaintyRaisedFacts,
+    validate_execution_corrected_facts,
+    validate_execution_slice_facts,
+)
 from app.broker.alpaca.clerk.sqlite.folds import DEFAULT_FOLD_REGISTRY, FoldRegistry
 from app.broker.alpaca.clerk.sqlite.hashchain import (
     GENESIS,
@@ -45,14 +53,15 @@ from app.broker.alpaca.clerk.sqlite.models import (
     CommandCreated,
     CommandExistingConflict,
     CommandExistingSame,
-    CommandResource,
     CommittedTransition,
-    ControlMetaSnapshot,
-    EffectOperationResource,
+    DecisionReceiptResource,
     OperationClaim,
-    OrderResource,
-    RunResource,
     TransitionInput,
+)
+from app.broker.alpaca.clerk.sqlite.repository_read_api import ClerkSqliteRepositoryReadApi
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+    ExecutionCoverageConflictCause,
 )
 from app.utils.timestamps import Clock, now_ms_utc
 
@@ -119,7 +128,7 @@ class OperationClaimError(ClerkSqliteError):
     """Scope D: an ``effect_operations`` claim attempt found a live owner."""
 
 
-class ClerkSqliteRepository:
+class ClerkSqliteRepository(ClerkSqliteRepositoryReadApi):
     """One Alpaca account's event-sourced SQLite authority.
 
     Construct via :meth:`initialize` (a brand-new generation) or
@@ -422,6 +431,145 @@ class ClerkSqliteRepository:
                 control_revision=control_revision,
             )
 
+    def append_execution_slice_if_absent(
+        self,
+        *,
+        execution_id: str,
+        order_ref: str,
+        build_transition: Callable[[], TransitionInput],
+        build_coverage_conflict: Callable[[], TransitionInput],
+    ) -> str:
+        """Append an exact execution or durably fence ambiguous coverage.
+
+        The database check and canonical transition append share the repository
+        write lock and execution lease.  A process-restarted trade-updates
+        consumer therefore cannot add a redundant custody transition after its
+        in-memory dedup map has been lost.  If aggregate cumulative-recovery
+        evidence already exists for the order, its coverage cannot be matched
+        safely to the later exact slice.  The exact slice is not folded; a
+        typed uncertainty fences new exposure instead.
+
+        Outcomes are ``"appended"``, ``"duplicate"``,
+        ``"coverage_conflict_raised"``, or
+        ``"coverage_conflict_already_raised"``.
+        """
+        with self._write_lock:
+            self._assert_not_poisoned()
+            self._renew_execution_lease()
+            if reads.execution_exists(self._conn, execution_id):
+                return "duplicate"
+            if reads.cumulative_recovery_fill_exists_for_order(self._conn, order_ref):
+                if reads.execution_coverage_conflict_uncertainty_exists(
+                    self._conn,
+                    order_ref=order_ref,
+                ):
+                    return "coverage_conflict_already_raised"
+                uncertainty = build_coverage_conflict()
+                self._validate_execution_coverage_conflict(
+                    uncertainty=uncertainty,
+                    execution_id=execution_id,
+                    order_ref=order_ref,
+                )
+                self.append_transition(uncertainty)
+                return "coverage_conflict_raised"
+            transition = build_transition()
+            if transition.transition_kind != "EXECUTION_SLICE_FILLED":
+                raise ValueError("exact execution append requires EXECUTION_SLICE_FILLED")
+            facts = ExecutionSliceFilledFacts.from_facts_json(transition.facts_json)
+            validate_execution_slice_facts(facts)
+            if facts.execution_id != execution_id:
+                raise ValueError("execution_id must match the transition facts")
+            if transition.order_ref != order_ref:
+                raise ValueError("order_ref must match the exact execution transition")
+            self.append_transition(transition)
+            return "appended"
+
+    @staticmethod
+    def _validate_execution_coverage_conflict(
+        *,
+        uncertainty: TransitionInput,
+        execution_id: str,
+        order_ref: str,
+    ) -> None:
+        if uncertainty.transition_kind != "UNCERTAINTY_RAISED":
+            raise ValueError("coverage conflict must raise UNCERTAINTY_RAISED")
+        if uncertainty.order_ref != order_ref or uncertainty.strategy_instance_id is None:
+            raise ValueError("coverage conflict must identify the order and strategy")
+        facts = UncertaintyRaisedFacts.from_facts_json(uncertainty.facts_json)
+        if facts.reason_code != EXECUTION_COVERAGE_CONFLICT_REASON_CODE:
+            raise ValueError("coverage conflict must use the execution coverage reason code")
+        if not facts.blocks_new_exposure:
+            raise ValueError("coverage conflict must block new exposure")
+        if facts.allows_reduction:
+            raise ValueError("coverage conflict must not authorize reduction")
+        cause = ExecutionCoverageConflictCause.from_mapping(facts.cause_facts)
+        if cause.order_ref != order_ref or cause.execution_id != execution_id:
+            raise ValueError("coverage conflict must identify the order and exact execution")
+
+    def append_execution_correction_or_raise(
+        self,
+        *,
+        correction: TransitionInput,
+        build_uncertainty: Callable[[str], TransitionInput],
+    ) -> str:
+        """Validate and append one correction, or durably raise uncertainty.
+
+        An invalid correction must not enter the hash chain as a correction
+        that did not change the economic fold.  The same atomic lock instead
+        appends a typed ``UNCERTAINTY_RAISED`` transition, leaving admission
+        fail-closed until the broker evidence is reconciled.
+        """
+        if correction.transition_kind != "EXECUTION_CORRECTED":
+            raise ValueError("correction append requires EXECUTION_CORRECTED")
+        facts = ExecutionCorrectedFacts.from_facts_json(correction.facts_json)
+        validate_execution_corrected_facts(facts)
+        with self._write_lock:
+            self._assert_not_poisoned()
+            self._renew_execution_lease()
+            if reads.execution_exists(self._conn, facts.execution_id):
+                return "duplicate"
+            if reads.correction_uncertainty_exists(self._conn, facts.execution_id):
+                return "duplicate"
+            invalid_reason = self._execution_correction_invalid_reason(
+                correction=correction,
+                facts=facts,
+            )
+            if invalid_reason is not None:
+                uncertainty = build_uncertainty(invalid_reason)
+                if uncertainty.transition_kind != "UNCERTAINTY_RAISED":
+                    raise ValueError("invalid correction must raise UNCERTAINTY_RAISED")
+                uncertainty_facts = UncertaintyRaisedFacts.from_facts_json(uncertainty.facts_json)
+                if uncertainty_facts.cause_facts.get("execution_id") != facts.execution_id:
+                    raise ValueError("correction uncertainty must identify the broker execution")
+                self.append_transition(uncertainty)
+                return "invalid"
+            self.append_transition(correction)
+            return "appended"
+
+    def _execution_correction_invalid_reason(
+        self,
+        *,
+        correction: TransitionInput,
+        facts: ExecutionCorrectedFacts,
+    ) -> str | None:
+        if correction.order_ref is None or correction.strategy_instance_id is None:
+            return "correction transition is missing order or strategy identity"
+        target = reads.effective_execution_slice(self._conn, facts.superseded_execution_ref)
+        if target is None:
+            return (
+                f"superseded execution {facts.superseded_execution_ref!r} is missing "
+                "or no longer effective"
+            )
+        if target["order_ref"] != correction.order_ref:
+            return "superseded execution belongs to a different order"
+        if target["strategy_instance_id"] != correction.strategy_instance_id:
+            return "superseded execution belongs to a different strategy instance"
+        if target["symbol"].upper() != facts.symbol.upper():
+            return "superseded execution has a different symbol"
+        if target["side"] != facts.side:
+            return "superseded execution has a different side"
+        return None
+
     def _commit_transition_row(
         self, *, sequence: int, prev_hash: str, row_hash: str, payload: dict
     ) -> int:
@@ -514,25 +662,6 @@ class ClerkSqliteRepository:
             )
             return CommandCreated(command=command, committed=committed)
 
-    def get_command(self, command_id: str) -> CommandResource | None:
-        # Locked, not a bare read: the router dispatches Start/Stop/GET via
-        # asyncio.to_thread, so this can genuinely run on a different OS
-        # thread than an in-flight writer using the same cached connection.
-        # Without the lock this can observe another transaction's
-        # uncommitted rows (open-pr-review-2026-08-05.md P1 "Use a
-        # committed-read path for command GETs").
-        with self._write_lock:
-            return reads.command(self._conn, command_id)
-
-    def active_run(self, strategy_instance_id: str) -> RunResource | None:
-        with self._write_lock:
-            row = self._conn.execute(
-                "SELECT run_id, strategy_instance_id, lifecycle_run_id, state, started_at_ms, "
-                "stopped_at_ms FROM runs WHERE strategy_instance_id = ? AND state = 'ACTIVE'",
-                (strategy_instance_id,),
-            ).fetchone()
-            return RunResource(**dict(row)) if row is not None else None
-
     def begin_reconciliation(self) -> None:
         """Install the process-local account gate before reading broker truth."""
         with self._write_lock:
@@ -546,10 +675,6 @@ class ClerkSqliteRepository:
         """Release the account gate only after the final safety verdict is durable."""
         with self._write_lock:
             self._reconciliation_in_progress = False
-
-    def reconciliation_in_progress(self) -> bool:
-        with self._write_lock:
-            return self._reconciliation_in_progress
 
     # ------------------------------------------------------------------
     # Operation claims — CAS fencing before broker contact (Scope D). The
@@ -646,27 +771,38 @@ class ClerkSqliteRepository:
             self._conn.commit()
             return cursor.rowcount == 1
 
-    def verify_operation_claim(self, *, effect_operation_id: str, token: str) -> bool:
-        """True iff ``token`` is the live (unexpired) claim on this operation —
-        later operation updates must present it (Scope D)."""
-        with self._write_lock:
-            row = self._conn.execute(
-                "SELECT claim_token, claim_expires_at_ms FROM effect_operations "
-                "WHERE effect_operation_id = ?",
-                (effect_operation_id,),
-            ).fetchone()
-            if row is None:
-                return False
-            return row["claim_token"] == token and row["claim_expires_at_ms"] >= self._clock()
-
     # ------------------------------------------------------------------
     # Concrete business use of the spine this slice owns
     # ------------------------------------------------------------------
 
     def register_strategy_instance(
-        self, *, strategy_instance_id: str, symbol: str, config_hash: str
+        self,
+        *,
+        strategy_instance_id: str,
+        symbol: str,
+        config_hash: str,
+        strategy_key: str = "repository_direct_registration",
+        display_name: str = "Repository direct registration",
+        config_json: str | None = None,
     ) -> CommittedTransition:
-        """Insert-once bot registration — needs no command/effect lifecycle."""
+        """Insert-once bot registration — needs no command/effect lifecycle.
+
+        The active runtime always supplies all immutable configuration fields.
+        The named defaults preserve the repository's narrow fixture and
+        qualification seam while avoiding a product-visible ``unknown``
+        strategy key for direct registrations.
+        """
+        if not strategy_key:
+            raise ValueError("strategy_key must be non-empty")
+        if not display_name:
+            raise ValueError("display_name must be non-empty")
+        if config_json is None:
+            config_json = canonicalize(
+                {
+                    "strategy_key": strategy_key,
+                    "symbol": symbol,
+                }
+            )
         transition = TransitionInput(
             strategy_instance_id=strategy_instance_id,
             transition_kind="STRATEGY_INSTANCE_REGISTERED",
@@ -675,136 +811,56 @@ class ClerkSqliteRepository:
             operation_state="succeeded",
             clerk_observed_at_ms=self._clock(),
             summary_code="STRATEGY_INSTANCE_REGISTERED",
-            facts_json=canonicalize({"symbol": symbol, "config_hash": config_hash}),
+            facts_json=canonicalize(
+                {
+                    "symbol": symbol,
+                    "config_hash": config_hash,
+                    "strategy_key": strategy_key,
+                    "display_name": display_name,
+                    "config_json": config_json,
+                }
+            ),
         )
         return self.append_transition(transition)
 
-    # ------------------------------------------------------------------
-    # Typed read snapshots — SQL stays private to this module and reads.py
-    # ------------------------------------------------------------------
+    def append_decision_receipt(
+        self,
+        *,
+        strategy_instance_id: str,
+        outcome: str,
+        symbol: str | None,
+        intent_id: str | None,
+        order_ref: str | None,
+        observed_at_ms: int,
+        facts_json: str,
+    ) -> DecisionReceiptResource:
+        """Append one SQLite-only strategy decision receipt with the next seq.
 
-    # Every method below acquires the write coordinator too, not just
-    # writes: it is the single point of synchronized access to a
-    # connection shared across threads (open-pr-review-2026-08-05.md P1
-    # "Use a committed-read path for command GETs"; the reasoning
-    # generalizes to every public read here, not only get_command).
-
-    def control_meta_snapshot(self) -> ControlMetaSnapshot:
+        Decision receipts are durable product evidence, not custody
+        transitions: they deliberately do not participate in the transition
+        hash chain, mirror, or control revision. The repository retains the
+        lease and write coordinator while the receipt store owns allocation
+        and insertion.
+        """
+        if not strategy_instance_id:
+            raise ValueError("strategy_instance_id must be non-empty")
+        if not outcome:
+            raise ValueError("outcome must be non-empty")
+        if observed_at_ms < 0:
+            raise ValueError("observed_at_ms must be non-negative")
         with self._write_lock:
-            return reads.control_meta_snapshot(self._conn)
-
-    def custody_transitions(self) -> list[dict]:
-        with self._write_lock:
-            rows = self._conn.execute(
-                f"SELECT {', '.join(writes.TRANSITION_COLUMNS)} FROM custody_transitions ORDER BY sequence ASC"
-            ).fetchall()
-            return [writes.row_to_payload(row) for row in rows]
-
-    def transitions_for_order(self, order_ref: str) -> list[dict]:
-        """Every transition recorded against one order, sequence-ordered —
-        e.g. #1377's ``enter.py`` uses this to find when an order first
-        became uncertain, for the R4 grace-window comparison."""
-        with self._write_lock:
-            rows = self._conn.execute(
-                f"SELECT {', '.join(writes.TRANSITION_COLUMNS)} FROM custody_transitions "
-                "WHERE order_ref = ? ORDER BY sequence ASC",
-                (order_ref,),
-            ).fetchall()
-            return [writes.row_to_payload(row) for row in rows]
-
-    def has_order_transition(self, *, order_ref: str, transition_kind: str) -> bool:
-        with self._write_lock:
-            row = self._conn.execute(
-                "SELECT 1 FROM custody_transitions WHERE order_ref = ? "
-                "AND transition_kind = ? LIMIT 1",
-                (order_ref, transition_kind),
-            ).fetchone()
-            return row is not None
-
-    def strategy_instances(self) -> list[dict]:
-        with self._write_lock:
-            return reads.strategy_instances(self._conn)
-
-    def strategy_instance(self, strategy_instance_id: str) -> dict | None:
-        with self._write_lock:
-            return reads.strategy_instance(self._conn, strategy_instance_id)
-
-    def effect_operation(self, effect_operation_id: str) -> EffectOperationResource | None:
-        with self._write_lock:
-            return reads.effect_operation(self._conn, effect_operation_id)
-
-    def order(self, order_ref: str) -> OrderResource | None:
-        with self._write_lock:
-            return reads.order(self._conn, order_ref)
-
-    def order_for_effect_operation(self, effect_operation_id: str) -> OrderResource | None:
-        with self._write_lock:
-            return reads.order_for_effect_operation(self._conn, effect_operation_id)
-
-    def orders_for_effect_operation(self, effect_operation_id: str) -> list[OrderResource]:
-        with self._write_lock:
-            return reads.orders_for_effect_operation(self._conn, effect_operation_id)
-
-    def all_order_refs(self) -> frozenset[str]:
-        with self._write_lock:
-            return reads.all_order_refs(self._conn)
-
-    def entry_orders_for_strategy(self, strategy_instance_id: str) -> list[OrderResource]:
-        with self._write_lock:
-            return reads.entry_orders_for_strategy(self._conn, strategy_instance_id)
-
-    def orders_for_strategy(self, strategy_instance_id: str) -> list[OrderResource]:
-        with self._write_lock:
-            return reads.orders_for_strategy(self._conn, strategy_instance_id)
-
-    def active_exit_for_order(self, order_ref: str) -> EffectOperationResource | None:
-        with self._write_lock:
-            return reads.active_exit_for_order(self._conn, order_ref)
-
-    def active_exit_for_strategy(
-        self, strategy_instance_id: str
-    ) -> EffectOperationResource | None:
-        with self._write_lock:
-            return reads.active_exit_for_strategy(self._conn, strategy_instance_id)
-
-    def reconcilable_effect_operations(self) -> list[EffectOperationResource]:
-        with self._write_lock:
-            return reads.reconcilable_effect_operations(self._conn)
-
-    def position(self, strategy_instance_id: str, symbol: str) -> float:
-        with self._write_lock:
-            return reads.position(self._conn, strategy_instance_id, symbol)
-
-    def fills_for_order(self, order_ref: str) -> list[dict]:
-        with self._write_lock:
-            return reads.fills_for_order(self._conn, order_ref)
-
-    def uncertain_orders(self) -> list[OrderResource]:
-        with self._write_lock:
-            return reads.uncertain_orders(self._conn)
-
-    def attributed_positions_by_symbol(self) -> dict[str, float]:
-        with self._write_lock:
-            return reads.attributed_positions_by_symbol(self._conn)
-
-    def attributed_positions_for_strategy(
-        self, strategy_instance_id: str
-    ) -> dict[str, float]:
-        with self._write_lock:
-            return reads.attributed_positions_for_strategy(
-                self._conn, strategy_instance_id
+            self._assert_not_poisoned()
+            self._renew_execution_lease()
+            return append_decision_receipt_row(
+                self._conn,
+                strategy_instance_id=strategy_instance_id,
+                outcome=outcome,
+                symbol=symbol,
+                intent_id=intent_id,
+                order_ref=order_ref,
+                observed_at_ms=observed_at_ms,
+                facts_json=facts_json,
             )
-
-    def active_hold(self, *, scope: str, reason_code: str) -> dict | None:
-        """No ``strategy_instance_id`` filter — safe today because every
-        current caller hardcodes ``scope='ACCOUNT_CLERK'``
-        (``reconcile._raise_account_hold``); a future ``BOT``-scoped hold
-        raiser must add that filter first (see #1380's
-        ``active_uncertainty``, which needs and has it), or two different
-        bots sharing a ``reason_code`` would silently read each other's
-        hold."""
-        with self._write_lock:
-            return reads.active_hold(self._conn, scope=scope, reason_code=reason_code)
 
     def raise_hold_if_none_active(
         self, *, scope: str, reason_code: str, build_transition: Callable[[], TransitionInput]
@@ -861,29 +917,6 @@ class ClerkSqliteRepository:
                 return False
             self.append_transition(build_transition())
             return True
-
-    def active_uncertainty(
-        self, *, scope: str, reason_code: str, strategy_instance_id: str | None
-    ) -> dict | None:
-        with self._write_lock:
-            return reads.active_uncertainty(
-                self._conn,
-                scope=scope,
-                reason_code=reason_code,
-                strategy_instance_id=strategy_instance_id,
-            )
-
-    def active_uncertainties_for_admission(self, *, strategy_instance_id: str) -> list[dict]:
-        with self._write_lock:
-            return reads.active_uncertainties_for_admission(
-                self._conn, strategy_instance_id=strategy_instance_id
-            )
-
-    def active_holds_for_admission(self, *, strategy_instance_id: str) -> list[dict]:
-        with self._write_lock:
-            return reads.active_holds_for_admission(
-                self._conn, strategy_instance_id=strategy_instance_id
-            )
 
     def raise_uncertainty_if_none_active(
         self,

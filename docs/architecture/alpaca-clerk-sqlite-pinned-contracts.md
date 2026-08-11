@@ -25,11 +25,11 @@
   no activated SQLite account to migrate before the human cutover in #1383.
 - The execution-ledger authority expansion is a fresh schema-v7 generation.
   It adds execution provenance to the `fills` fold plus `external_orders`,
-  `bot_config`, and `decision_receipts`. A v6 database cannot be truthfully
-  upgraded with only additive tables/indexes because it lacks the new `fills`
-  columns. Consequently there is deliberately **no v6 → v7 migration**:
-  `open()` fails closed for v6, and the human cutover initializes a clean v7
-  authority generation after the existing account is safely retired.
+  `bot_config`, and `decision_receipts`. The registered v6 → v7 migration is
+  deliberately guarded: it atomically adds the complete v7 DDL only after
+  proving every operational v6 table is empty. A data-bearing v6 authority
+  fails closed and remains untouched; the human cutover initializes a clean
+  v7 authority generation after the existing account is safely retired.
 - **Source of truth ranking:** ADR 0035 (decision rationale) →
   `docs/prds/alpaca-account-clerk-sqlite-control-plane.md` §9–§11 (functional
   contract) → this document (concrete, implementable pin). Where this document
@@ -972,9 +972,11 @@ On every process start, before the Clerk accepts any command:
    account; mismatch fails closed (§9.1).
 5. **Schema** — `control_meta.schema_version` matches the version this Slice
    2+ binary expects. The legacy v4 → v6 index-only path may be upgraded only
-   by its explicitly registered migration; schema v7 is fresh-generation-only
-   because v6 lacks required `fills` columns. Any v6 (or newer) mismatch fails
-   closed rather than being stamped as v7 without the complete DDL.
+   by its explicitly registered migration. The v6 → v7 migration is likewise
+   registered, but only a proven-empty authority may run it: the complete
+   additive DDL (including the new `fills` columns) and version advance share
+   one SQLite transaction. Any data-bearing v6 authority (or any newer
+   mismatch) fails closed without schema mutation.
 6. **Authority generation** — `control_meta.authority_generation` is read and
    becomes part of every subsequent idempotency key and hash-chain check for
    this session (generation itself was already cross-checked against the

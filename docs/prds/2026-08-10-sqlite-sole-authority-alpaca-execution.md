@@ -196,7 +196,12 @@ def test_from_alpaca_trade_update_preserves_execution_id():
 
 - [ ] Add `fills` provenance columns (fold table — **not** hash-participating, safe to add). Backfill semantics: `fill_id` on the capture path is the Alpaca `execution_id`; the cumulative-recovery path keeps the synthesized `order_ref:qty` id but sets `evidence_source='cumulative_recovery'`.
 - [ ] Add `external_orders(external_order_id PK, broker_order_id, client_order_id, symbol, side, qty, price, observed_at_ms, acknowledged_at_ms, ack_operator, evidence_refs_json)`; `bot_config(strategy_instance_id PK FK, strategy_key, display_name, config_json, config_hash, created_at_ms)`; `decision_receipts(strategy_instance_id, seq, outcome, symbol, intent_id, order_ref, observed_at_ms, facts_json, PRIMARY KEY(strategy_instance_id, seq))` with a bounded-tail index.
-- [ ] Bump `SCHEMA_VERSION = 7`. Register the additive `6 → 7` path in `SCHEMA_MIGRATIONS` **only** for index/table-additive DDL against an empty pre-cutover DB (the fresh generation is created via `apply_schema`; no data-bearing ALTER).
+- [ ] Bump `SCHEMA_VERSION = 7`. Register the guarded additive `6 → 7` path
+  in `SCHEMA_MIGRATIONS`: only after proving every operational v6 table is
+  empty, atomically add the execution-provenance `fills` columns, tables, and
+  indexes before advancing the version. A data-bearing v6 authority fails
+  closed and rolls back untouched; the fresh generation is created via
+  `apply_schema`.
 - [ ] Update the pinned-contracts doc §3 to the exact new DDL block; make `test_schema_parity.py` pass byte-for-byte.
 - [ ] Assert boot `verify_chain` / `integrity_check` still pass on a freshly-initialized v7 DB (no hash-participating column added). Commit.
 

@@ -504,11 +504,103 @@ def apply_schema(conn: sqlite3.Connection) -> None:
 # docs/architecture/alpaca-clerk-sqlite-pinned-contracts.md §3's history);
 # ``IF NOT EXISTS`` makes every statement safe to replay.
 #
-# v7 intentionally has no v6 -> v7 entry. The v7 execution authority needs
-# new ``fills`` columns as well as tables/indexes; an index/table-only upgrade
-# would incorrectly stamp a v6 file as v7 while leaving the fold schema
-# incomplete. Schema v7 is therefore initialized only as a fresh authority
-# generation, and v6 startup fails closed.
+# v6 -> v7 is intentionally narrower than the historical index-only upgrades:
+# it adds the execution-ledger columns and tables only after proving that the
+# authority contains no operational rows. A data-bearing v6 authority cannot
+# be made truthful by assigning synthetic execution provenance, so it fails
+# closed and remains untouched for the fresh-generation cutover.
+_V6_OPERATIONAL_TABLES: tuple[str, ...] = (
+    "strategy_instances",
+    "runs",
+    "commands",
+    "effect_operations",
+    "orders",
+    "operation_order_links",
+    "fills",
+    "positions",
+    "holds",
+    "uncertainties",
+    "reconciliations",
+    "receipts",
+    "custody_transitions",
+    "mirror_fence",
+)
+
+
+def _require_empty_v6_authority(conn: sqlite3.Connection) -> None:
+    """Reject a v6 upgrade unless every operational projection is empty.
+
+    ``control_meta`` is deliberately excluded: its singleton establishes the
+    authority identity and is required to advance its schema version. Every
+    other v6 table is an operational fact or its materialized projection;
+    checking all of them, rather than only ``fills`` or the control revision,
+    makes an empty claim durable and tamper-resistant enough for this bounded
+    additive migration.
+    """
+    occupied = [
+        table
+        for table in _V6_OPERATIONAL_TABLES
+        if conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone() is not None
+    ]
+    if occupied:
+        raise ValueError(
+            "v6 -> v7 migration requires an empty authority; operational rows exist in "
+            + ", ".join(occupied)
+        )
+
+
+_V6_TO_V7_STATEMENTS: tuple[str, ...] = (
+    "ALTER TABLE fills ADD COLUMN execution_id TEXT",
+    "ALTER TABLE fills ADD COLUMN evidence_source TEXT NOT NULL "
+    "DEFAULT 'cumulative_recovery' CHECK "
+    "(evidence_source IN ('websocket','activity_recovery','cumulative_recovery'))",
+    "ALTER TABLE fills ADD COLUMN event_kind TEXT NOT NULL DEFAULT 'fill' "
+    "CHECK (event_kind IN ('fill','correction'))",
+    "ALTER TABLE fills ADD COLUMN superseded_execution_ref TEXT",
+    "ALTER TABLE fills ADD COLUMN fee REAL",
+    "ALTER TABLE fills ADD COLUMN fee_fidelity TEXT NOT NULL DEFAULT 'not_reported' "
+    "CHECK (fee_fidelity IN ('reported','not_reported'))",
+    "CREATE UNIQUE INDEX ux_fills_execution_id ON fills(execution_id) "
+    "WHERE execution_id IS NOT NULL",
+    """CREATE TABLE external_orders (
+        external_order_id        TEXT PRIMARY KEY,
+        broker_order_id          TEXT NOT NULL,
+        client_order_id          TEXT NOT NULL,
+        symbol                   TEXT NOT NULL,
+        side                     TEXT NOT NULL CHECK (side IN ('BUY','SELL')),
+        qty                      REAL NOT NULL,
+        price                    REAL,
+        observed_at_ms           INTEGER NOT NULL,
+        acknowledged_at_ms       INTEGER,
+        ack_operator             TEXT,
+        evidence_refs_json       TEXT NOT NULL
+    )""",
+    "CREATE UNIQUE INDEX ux_external_orders_broker_order_id "
+    "ON external_orders(broker_order_id)",
+    """CREATE TABLE bot_config (
+        strategy_instance_id     TEXT PRIMARY KEY REFERENCES strategy_instances(strategy_instance_id),
+        strategy_key             TEXT NOT NULL,
+        display_name             TEXT NOT NULL,
+        config_json              TEXT NOT NULL,
+        config_hash              TEXT NOT NULL,
+        created_at_ms            INTEGER NOT NULL
+    )""",
+    """CREATE TABLE decision_receipts (
+        strategy_instance_id     TEXT NOT NULL REFERENCES strategy_instances(strategy_instance_id),
+        seq                      INTEGER NOT NULL,
+        outcome                  TEXT NOT NULL,
+        symbol                   TEXT,
+        intent_id                TEXT,
+        order_ref                TEXT REFERENCES orders(order_ref),
+        observed_at_ms           INTEGER NOT NULL,
+        facts_json               TEXT NOT NULL,
+        PRIMARY KEY (strategy_instance_id, seq)
+    )""",
+    "CREATE INDEX ix_decision_receipts_strategy_observed_at "
+    "ON decision_receipts(strategy_instance_id, observed_at_ms DESC, seq DESC)",
+)
+
+
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     4: (
         "CREATE INDEX IF NOT EXISTS ix_runs_started_at ON runs(started_at_ms DESC)",
@@ -548,6 +640,7 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
         "CREATE INDEX IF NOT EXISTS ix_effect_operations_strategy_created_at "
         "ON effect_operations(strategy_instance_id, created_at_ms DESC, effect_operation_id DESC)",
     ),
+    6: _V6_TO_V7_STATEMENTS,
 }
 
 
@@ -585,6 +678,8 @@ def migrate_schema(conn: sqlite3.Connection, *, from_version: int) -> None:
                 raise ValueError(
                     f"no registered migration from schema_version={version} to {version + 1}"
                 )
+            if version == 6:
+                _require_empty_v6_authority(conn)
             for statement in statements:
                 conn.execute(statement)
             version += 1
