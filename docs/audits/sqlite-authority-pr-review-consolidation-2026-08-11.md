@@ -196,6 +196,8 @@ service or fallback path to them.
 - Python lint: `ruff check app tests` passed.
 - The generated Python OpenAPI contract was regenerated and its `--check`
   verification passed.
+- Frontend OpenAPI client generation passed after the regenerated contract was
+  committed.
 - SQLite/Alpaca/panel/router/retirement scope: 793 passed.
 - Frontend guard checks passed; 47 PR-scoped Angular tests passed.
 - The broad Python suite's first failure is an untouched deprecated IBKR

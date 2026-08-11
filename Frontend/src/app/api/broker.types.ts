@@ -646,6 +646,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/{account_id}/transactions/external-orders/{external_order_id}/acknowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Acknowledge External Order Endpoint
+         * @description Durably record operator review of one external broker-order observation.
+         */
+        post: operations["acknowledge_external_order_endpoint_api_accounts__account_id__transactions_external_orders__external_order_id__acknowledge_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/{account_id}/transactions/{transaction_id}": {
         parameters: {
             query?: never;
@@ -10415,6 +10435,8 @@ export interface components {
             quantity?: number | null;
             /** Sec Type */
             sec_type?: string | null;
+            /** Stop Price */
+            stop_price?: number | null;
             /** Symbol */
             symbol?: string | null;
             /** Time In Force */
@@ -10524,8 +10546,14 @@ export interface components {
             event_id: string;
             /** Event Kind */
             event_kind: string;
+            /** Execution Price */
+            execution_price?: number | null;
+            /** Execution Quantity */
+            execution_quantity?: number | null;
             /** Fee */
             fee?: number | null;
+            /** Fee Fidelity */
+            fee_fidelity?: ("reported" | "not_reported") | null;
             /** Journal Seq */
             journal_seq: number;
             /** Lifecycle State */
@@ -10596,10 +10624,18 @@ export interface components {
             events?: components["schemas"]["ClerkTransactionEventRow"][];
             /** Exec Id */
             exec_id?: string | null;
+            /** Execution Price */
+            execution_price?: number | null;
+            /** Execution Quantity */
+            execution_quantity?: number | null;
+            /** External Order Id */
+            external_order_id?: string | null;
             /** Fee */
             fee?: number | null;
+            /** Fee Fidelity */
+            fee_fidelity?: ("reported" | "not_reported") | null;
             /** Intent Id */
-            intent_id: string;
+            intent_id?: string | null;
             /** Journal Seq */
             journal_seq: number;
             /** Lifecycle State */
@@ -10612,7 +10648,7 @@ export interface components {
             order_id?: number | null;
             order_instruction?: components["schemas"]["ClerkOrderInstruction"];
             /** Order Ref */
-            order_ref: string;
+            order_ref?: string | null;
             /** Perm Id */
             perm_id?: number | null;
             /** Receipt */
@@ -10620,9 +10656,9 @@ export interface components {
             /** Recorded At Ms */
             recorded_at_ms: number;
             /** Run Id */
-            run_id: string;
+            run_id?: string | null;
             /** Strategy Instance Id */
-            strategy_instance_id: string;
+            strategy_instance_id?: string | null;
             /** Transaction Id */
             transaction_id: string;
             /** Transaction Kind */
@@ -10632,7 +10668,7 @@ export interface components {
              * @default manual
              * @enum {string}
              */
-            transaction_origin?: "manual" | "strategy" | "recovery" | "emergency" | "shutdown" | "force_flat" | "other";
+            transaction_origin?: "manual" | "strategy" | "external" | "unknown" | "recovery" | "emergency" | "shutdown" | "force_flat" | "other";
         };
         /**
          * ClerkTransactionSummaryRow
@@ -10657,10 +10693,18 @@ export interface components {
             event_count: number;
             /** Exec Id */
             exec_id?: string | null;
+            /** Execution Price */
+            execution_price?: number | null;
+            /** Execution Quantity */
+            execution_quantity?: number | null;
+            /** External Order Id */
+            external_order_id?: string | null;
             /** Fee */
             fee?: number | null;
+            /** Fee Fidelity */
+            fee_fidelity?: ("reported" | "not_reported") | null;
             /** Intent Id */
-            intent_id: string;
+            intent_id?: string | null;
             /** Journal Seq */
             journal_seq: number;
             /** Lifecycle State */
@@ -10673,15 +10717,15 @@ export interface components {
             order_id?: number | null;
             order_instruction?: components["schemas"]["ClerkOrderInstruction"];
             /** Order Ref */
-            order_ref: string;
+            order_ref?: string | null;
             /** Perm Id */
             perm_id?: number | null;
             /** Recorded At Ms */
             recorded_at_ms: number;
             /** Run Id */
-            run_id: string;
+            run_id?: string | null;
             /** Strategy Instance Id */
-            strategy_instance_id: string;
+            strategy_instance_id?: string | null;
             /** Transaction Id */
             transaction_id: string;
             /** Transaction Kind */
@@ -10691,7 +10735,7 @@ export interface components {
              * @default manual
              * @enum {string}
              */
-            transaction_origin?: "manual" | "strategy" | "recovery" | "emergency" | "shutdown" | "force_flat" | "other";
+            transaction_origin?: "manual" | "strategy" | "external" | "unknown" | "recovery" | "emergency" | "shutdown" | "force_flat" | "other";
         };
         /** CloseAllAction */
         CloseAllAction: {
@@ -12923,6 +12967,26 @@ export interface components {
             label: string;
             /** Quantity Label */
             quantity_label: string;
+        };
+        /**
+         * ExternalOrderAcknowledgementRequest
+         * @description Operator evidence for reviewing one externally observed broker order.
+         */
+        ExternalOrderAcknowledgementRequest: {
+            /** Operator */
+            operator: string;
+        };
+        /**
+         * ExternalOrderAcknowledgementResponse
+         * @description Durable result of acknowledging one external-order observation.
+         */
+        ExternalOrderAcknowledgementResponse: {
+            /** Ack Operator */
+            ack_operator: string;
+            /** Acknowledged At Ms */
+            acknowledged_at_ms: number;
+            /** External Order Id */
+            external_order_id: string;
         };
         /**
          * FailureRecord
@@ -25469,7 +25533,7 @@ export interface operations {
             query?: {
                 limit?: number;
                 cursor?: string | null;
-                origin?: ("manual" | "strategy" | "recovery" | "emergency" | "shutdown" | "force_flat" | "other") | null;
+                origin?: ("manual" | "strategy" | "external" | "unknown" | "recovery" | "emergency" | "shutdown" | "force_flat" | "other") | null;
                 lifecycle_state?: string | null;
                 strategy_instance_id?: string | null;
                 run_id?: string | null;
@@ -25491,6 +25555,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ClerkTransactionHistoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    acknowledge_external_order_endpoint_api_accounts__account_id__transactions_external_orders__external_order_id__acknowledge_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+                external_order_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExternalOrderAcknowledgementRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExternalOrderAcknowledgementResponse"];
                 };
             };
             /** @description Validation Error */
