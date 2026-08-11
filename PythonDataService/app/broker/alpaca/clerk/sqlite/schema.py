@@ -17,7 +17,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 PRAGMA_STATEMENTS: tuple[str, ...] = (
     "PRAGMA journal_mode = WAL",
@@ -210,10 +210,71 @@ CREATE TABLE fills (
     price                    REAL NOT NULL,
     side                     TEXT NOT NULL CHECK (side IN ('BUY','SELL')),
     is_correction             INTEGER NOT NULL DEFAULT 0,  -- 1 = broker-issued correction, not erasure of prior fact
+    execution_id             TEXT,                   -- Alpaca execution id; null only for cumulative recovery
+    evidence_source          TEXT NOT NULL DEFAULT 'cumulative_recovery'
+                              CHECK (evidence_source IN ('websocket','activity_recovery','cumulative_recovery')),
+    event_kind               TEXT NOT NULL DEFAULT 'fill'
+                              CHECK (event_kind IN ('fill','correction')),
+    superseded_execution_ref TEXT,                   -- correction target; original execution remains auditable
+    fee                      REAL,
+    fee_fidelity             TEXT NOT NULL DEFAULT 'not_reported'
+                              CHECK (fee_fidelity IN ('reported','not_reported')),
     source_event_at_ms       INTEGER,                 -- Alpaca's fill timestamp, when supplied
     clerk_observed_at_ms     INTEGER NOT NULL,
     recorded_at_ms           INTEGER NOT NULL
 );
+-- Websocket/activity executions are identity-deduplicated independently of
+-- the legacy synthesized ``fill_id`` used by cumulative recovery.
+CREATE UNIQUE INDEX ux_fills_execution_id ON fills(execution_id)
+    WHERE execution_id IS NOT NULL;
+
+-- ============================================================
+-- external_orders — broker orders outside a registered bot namespace
+-- ============================================================
+CREATE TABLE external_orders (
+    external_order_id        TEXT PRIMARY KEY,
+    broker_order_id          TEXT NOT NULL,
+    client_order_id          TEXT NOT NULL,
+    symbol                   TEXT NOT NULL,
+    side                     TEXT NOT NULL CHECK (side IN ('BUY','SELL')),
+    qty                      REAL NOT NULL,
+    price                    REAL,
+    observed_at_ms           INTEGER NOT NULL,
+    acknowledged_at_ms       INTEGER,
+    ack_operator             TEXT,
+    evidence_refs_json       TEXT NOT NULL
+);
+CREATE UNIQUE INDEX ux_external_orders_broker_order_id
+    ON external_orders(broker_order_id);
+
+-- ============================================================
+-- bot_config — complete immutable configuration for a registered bot
+-- ============================================================
+CREATE TABLE bot_config (
+    strategy_instance_id     TEXT PRIMARY KEY REFERENCES strategy_instances(strategy_instance_id),
+    strategy_key             TEXT NOT NULL,
+    display_name             TEXT NOT NULL,
+    config_json              TEXT NOT NULL,
+    config_hash              TEXT NOT NULL,
+    created_at_ms            INTEGER NOT NULL
+);
+
+-- ============================================================
+-- decision_receipts — bounded per-bot decision evidence, outside custody log
+-- ============================================================
+CREATE TABLE decision_receipts (
+    strategy_instance_id     TEXT NOT NULL REFERENCES strategy_instances(strategy_instance_id),
+    seq                      INTEGER NOT NULL,
+    outcome                  TEXT NOT NULL,
+    symbol                   TEXT,
+    intent_id                TEXT,
+    order_ref                TEXT REFERENCES orders(order_ref),
+    observed_at_ms           INTEGER NOT NULL,
+    facts_json               TEXT NOT NULL,
+    PRIMARY KEY (strategy_instance_id, seq)
+);
+CREATE INDEX ix_decision_receipts_strategy_observed_at
+    ON decision_receipts(strategy_instance_id, observed_at_ms DESC, seq DESC);
 
 -- ============================================================
 -- positions — current Clerk-attributed exposure; fold of the log, namespace-attributed
@@ -442,6 +503,12 @@ def apply_schema(conn: sqlite3.Connection) -> None:
 # (byte-for-byte the CREATE INDEX statements the v5 bump added over v4 — see
 # docs/architecture/alpaca-clerk-sqlite-pinned-contracts.md §3's history);
 # ``IF NOT EXISTS`` makes every statement safe to replay.
+#
+# v7 intentionally has no v6 -> v7 entry. The v7 execution authority needs
+# new ``fills`` columns as well as tables/indexes; an index/table-only upgrade
+# would incorrectly stamp a v6 file as v7 while leaving the fold schema
+# incomplete. Schema v7 is therefore initialized only as a fresh authority
+# generation, and v6 startup fails closed.
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
     4: (
         "CREATE INDEX IF NOT EXISTS ix_runs_started_at ON runs(started_at_ms DESC)",

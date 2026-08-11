@@ -21,7 +21,7 @@ def test_schema_ddl_matches_pinned_contracts_doc() -> None:
     assert pinned == schema.SCHEMA_DDL
 
 
-def test_schema_creates_all_fifteen_pinned_tables() -> None:
+def test_schema_creates_all_eighteen_pinned_tables() -> None:
     conn = sqlite3.connect(":memory:")
     schema.configure_connection(conn)
     schema.apply_schema(conn)
@@ -40,6 +40,9 @@ def test_schema_creates_all_fifteen_pinned_tables() -> None:
         "orders",
         "operation_order_links",
         "fills",
+        "external_orders",
+        "bot_config",
+        "decision_receipts",
         "positions",
         "holds",
         "uncertainties",
@@ -48,6 +51,39 @@ def test_schema_creates_all_fifteen_pinned_tables() -> None:
         "custody_transitions",
         "mirror_fence",
     }
+
+
+def test_v7_execution_provenance_and_bounded_receipts_schema() -> None:
+    conn = sqlite3.connect(":memory:")
+    schema.configure_connection(conn)
+    schema.apply_schema(conn)
+
+    fills_columns = {
+        row[1]: row
+        for row in conn.execute("PRAGMA table_info(fills)")
+    }
+    assert set(fills_columns) >= {
+        "execution_id",
+        "evidence_source",
+        "event_kind",
+        "superseded_execution_ref",
+        "fee",
+        "fee_fidelity",
+    }
+    assert fills_columns["execution_id"][3] == 0
+    assert fills_columns["evidence_source"][4] == "'cumulative_recovery'"
+    assert fills_columns["event_kind"][4] == "'fill'"
+    assert fills_columns["fee_fidelity"][4] == "'not_reported'"
+
+    index_names = {
+        row[0]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")
+    }
+    assert {
+        "ux_fills_execution_id",
+        "ux_external_orders_broker_order_id",
+        "ix_decision_receipts_strategy_observed_at",
+    } <= index_names
 
 
 def test_partial_unique_indexes_allow_only_one_active_safety_cause() -> None:

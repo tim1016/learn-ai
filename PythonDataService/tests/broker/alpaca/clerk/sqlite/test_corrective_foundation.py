@@ -18,6 +18,7 @@ import pytest
 
 from app.broker.alpaca.clerk.sqlite import schema
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.hashchain import PAYLOAD_COLUMNS, verify_chain
 from app.broker.alpaca.clerk.sqlite.mirror import MirrorChainBroken
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
@@ -58,8 +59,8 @@ def repo(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_schema_version_includes_bounded_projection_indexes() -> None:
-    assert schema.SCHEMA_VERSION == 6
+def test_schema_version_includes_execution_authority_tables() -> None:
+    assert schema.SCHEMA_VERSION == 7
 
 
 def test_stale_schema_version_fails_closed_on_open(tmp_path: Path) -> None:
@@ -87,42 +88,80 @@ def test_future_schema_version_fails_closed_on_open(tmp_path: Path) -> None:
         ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
 
 
-def test_v4_authority_upgrades_in_place_on_open(tmp_path: Path) -> None:
-    """#1396 P2: the v4->v5 SCHEMA_VERSION bump added no upgrade path, so an
-    account initialized on schema-4 could no longer be opened after
-    deployment. Downgrade a real db to look like v4 (drop the v5-only
-    indexes, set schema_version back to 4) and confirm `open()` migrates it
-    in place instead of raising `SchemaVersionMismatch`."""
+def test_v6_authority_fails_closed_without_an_incomplete_v7_upgrade(tmp_path: Path) -> None:
+    """v7 requires new fills columns, so a v6 file must not be version-stamped.
+
+    The clean-slate v7 cutover is the only supported transition. This test
+    makes a physical v6-shaped database and proves opening it neither adds
+    columns/tables nor advances its recorded version.
+    """
     clock = _clock_seq()
     r = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
-    v5_only_indexes = tuple(statement.split()[5] for statement in schema.SCHEMA_MIGRATIONS[4])
-    for index_name in v5_only_indexes:
-        r._conn.execute(f"DROP INDEX {index_name}")
-    r._conn.execute("UPDATE control_meta SET schema_version = 4 WHERE id = 1")
+    r._conn.execute("DROP INDEX ux_fills_execution_id")
+    r._conn.execute("DROP INDEX ux_external_orders_broker_order_id")
+    r._conn.execute("DROP INDEX ix_decision_receipts_strategy_observed_at")
+    r._conn.execute("DROP TABLE decision_receipts")
+    r._conn.execute("DROP TABLE bot_config")
+    r._conn.execute("DROP TABLE external_orders")
+    for column in (
+        "execution_id",
+        "evidence_source",
+        "event_kind",
+        "superseded_execution_ref",
+        "fee",
+        "fee_fidelity",
+    ):
+        r._conn.execute(f"ALTER TABLE fills DROP COLUMN {column}")
+    r._conn.execute("UPDATE control_meta SET schema_version = 6 WHERE id = 1")
     r._conn.commit()
     r.close()
 
-    reopened = ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    with pytest.raises(SchemaVersionMismatch, match="no registered migration from schema_version=6"):
+        ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+
+    db_path = tmp_path / "accounts" / "alpaca" / ACCOUNT_ID / "clerk.db"
+    conn = sqlite3.connect(db_path)
     try:
-        row = reopened._conn.execute(
-            "SELECT schema_version FROM control_meta WHERE id = 1"
-        ).fetchone()
-        assert row["schema_version"] == schema.SCHEMA_VERSION
-        existing_indexes = {
-            index_row[0]
-            for index_row in reopened._conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'index'"
-            )
-        }
-        assert set(v5_only_indexes) <= existing_indexes
+        version = conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0]
+        assert version == 6
+        fills_columns = {row[1] for row in conn.execute("PRAGMA table_info(fills)")}
+        assert "execution_id" not in fills_columns
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        assert {"external_orders", "bot_config", "decision_receipts"}.isdisjoint(tables)
     finally:
-        reopened.close()
+        conn.close()
 
 
 def test_is_upgradable_to_current_reflects_the_registered_migration_chain() -> None:
     assert schema.is_upgradable_to_current(schema.SCHEMA_VERSION) is True
-    assert schema.is_upgradable_to_current(4) is True
+    assert schema.is_upgradable_to_current(6) is False
+    assert schema.is_upgradable_to_current(4) is False
     assert schema.is_upgradable_to_current(1) is False
+
+
+def test_fresh_v7_boot_preserves_hash_chain_and_passes_integrity_check(tmp_path: Path) -> None:
+    clock = _clock_seq()
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    try:
+        assert repo._conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert verify_chain(repo.custody_transitions()) is None
+        assert {
+            "execution_id",
+            "evidence_source",
+            "event_kind",
+            "superseded_execution_ref",
+            "fee",
+            "fee_fidelity",
+        }.isdisjoint(PAYLOAD_COLUMNS)
+    finally:
+        repo.close()
+
+    reopened = ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    try:
+        assert reopened._conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert verify_chain(reopened.custody_transitions()) is None
+    finally:
+        reopened.close()
 
 
 def test_migrate_schema_rejects_an_unregistered_version_without_mutating() -> None:
