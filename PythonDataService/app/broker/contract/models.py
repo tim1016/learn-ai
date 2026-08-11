@@ -183,6 +183,7 @@ class BrokerOrderEvent(_ContractModel):
     occurred_at_ms: int
     price: float | None
     quantity: float | None
+    execution_id: str | None = None
 
 
 class BrokerOrder(_ContractModel):

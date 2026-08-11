@@ -18,9 +18,10 @@ import { AlpacaCustodyResolutionComponent } from './alpaca-custody-resolution.co
 import { AlpacaHoldBannerComponent } from './alpaca-hold-banner.component';
 import { AlpacaOrderEntryComponent } from './alpaca-order-entry.component';
 import { AlpacaSqliteCustodyComponent } from './alpaca-sqlite-custody.component';
-import { AlpacaOrdersTableComponent } from './alpaca-orders-table.component';
 import { AlpacaPositionsTableComponent } from './alpaca-positions-table.component';
 import { BrokersService } from '../../../services/brokers.service';
+import { AccountDeskTransactionHistoryComponent } from '../../broker/account-desk/account-desk-transaction-history.component';
+import { AccountDeskTransactionHistoryStore } from '../../broker/account-desk/account-desk-transaction-history-store.service';
 import { parseManualOrderTicketQuery } from '../../broker/lib/manual-order-navigation';
 
 /**
@@ -36,7 +37,7 @@ import { parseManualOrderTicketQuery } from '../../broker/lib/manual-order-navig
     AlpacaCustodyResolutionComponent,
     AlpacaHoldBannerComponent,
     AlpacaPositionsTableComponent,
-    AlpacaOrdersTableComponent,
+    AccountDeskTransactionHistoryComponent,
     AlpacaOrderEntryComponent,
     AlpacaSqliteCustodyComponent,
     ButtonModule,
@@ -46,6 +47,7 @@ import { parseManualOrderTicketQuery } from '../../broker/lib/manual-order-navig
   templateUrl: './alpaca-desk.component.html',
   styleUrl: './alpaca-desk.component.scss',
   host: { class: 'block h-full' },
+  providers: [AccountDeskTransactionHistoryStore],
 })
 export class AlpacaDeskComponent {
   private readonly route = inject(ActivatedRoute);
@@ -78,7 +80,7 @@ export class AlpacaDeskComponent {
   });
   protected readonly orderEntryOpen = signal(false);
   protected readonly legacyManualOrdersAvailable = signal(false);
-  protected readonly ordersRefreshVersion = signal(0);
+  protected readonly historyRefreshVersion = signal(0);
 
   constructor() {
     effect(() => {
@@ -90,7 +92,7 @@ export class AlpacaDeskComponent {
     });
   }
 
-  protected refreshOrders(): void {
-    this.ordersRefreshVersion.update((version) => version + 1);
+  protected refreshHistory(): void {
+    this.historyRefreshVersion.update((version) => version + 1);
   }
 }

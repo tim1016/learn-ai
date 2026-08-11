@@ -192,6 +192,21 @@ async def _make_entry(
     assert submission.order_ref is not None
     order = repo.order(submission.order_ref)
     assert order is not None and order.broker_order_id is not None
+    if filled_quantity > 0:
+        assert submission.effect_operation_id is not None
+        # Submit responses only acknowledge aggregate state; this helper is
+        # explicitly modelling the later exact REST recovery used by these
+        # EXIT-machine fixtures when no websocket slice is injected.
+        fold_order_evidence(
+            repo,
+            effect_operation_id=submission.effect_operation_id,
+            order=_broker_order(
+                submission.order_ref,
+                status=status,
+                filled_quantity=filled_quantity,
+                filled_avg_price=100.0,
+            ),
+        )
     return submission.order_ref
 
 
@@ -256,12 +271,33 @@ async def test_accept_exit_captures_every_same_symbol_sibling_entry(
             filled_avg_price=101,
         ),
     )
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+    first_resolution = await resolve_exit(
+        repo,
+        effect_operation_id=accepted.effect_operation_id,
+        trade=trade,
+    )
 
     assert set(trade.lookup_calls[:2]) == {first, second}
     assert trade.lookup_calls[2:4] == trade.lookup_calls[:2]
     assert len(trade.submit_calls) == 1
     assert trade.submit_calls[0][0].quantity == pytest.approx(10)
+    assert first_resolution.reducing_order_ref is not None
+    fold_order_evidence(
+        repo,
+        effect_operation_id=accepted.effect_operation_id,
+        order=_broker_order(
+            first_resolution.reducing_order_ref,
+            side="sell",
+            status="filled",
+            filled_quantity=10,
+            filled_avg_price=101,
+        ),
+    )
+    first_resolution = await resolve_exit(
+        repo,
+        effect_operation_id=accepted.effect_operation_id,
+        trade=_FakeTrade(),
+    )
     assert repo.position(SID, "SPY") == pytest.approx(0)
 
 
@@ -743,6 +779,24 @@ async def test_reducing_order_fully_filled_yields_a_succeeded_terminal_receipt(
 
     assert result.reducing_order_ref is not None
     effect = repo.effect_operation(accepted.effect_operation_id)
+    assert effect is not None and effect.state == "unknown"
+    fold_order_evidence(
+        repo,
+        effect_operation_id=accepted.effect_operation_id,
+        order=_broker_order(
+            result.reducing_order_ref,
+            side="sell",
+            status="filled",
+            filled_quantity=10.0,
+            filled_avg_price=101.0,
+        ),
+    )
+    await resolve_exit(
+        repo,
+        effect_operation_id=accepted.effect_operation_id,
+        trade=_FakeTrade(),
+    )
+    effect = repo.effect_operation(accepted.effect_operation_id)
     assert effect is not None and effect.state == "succeeded"
     reducing_order = repo.order(result.reducing_order_ref)
     assert reducing_order is not None and reducing_order.role == "REDUCING"
@@ -958,6 +1012,23 @@ async def test_reducing_order_resolves_without_flattening_folds_a_precise_failur
     )
     result = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
 
+    assert result.reducing_order_ref is not None
+    fold_order_evidence(
+        repo,
+        effect_operation_id=accepted.effect_operation_id,
+        order=_broker_order(
+            result.reducing_order_ref,
+            side="sell",
+            status="canceled",
+            filled_quantity=4.0,
+            filled_avg_price=101.0,
+        ),
+    )
+    await resolve_exit(
+        repo,
+        effect_operation_id=accepted.effect_operation_id,
+        trade=_FakeTrade(),
+    )
     effect = repo.effect_operation(accepted.effect_operation_id)
     assert effect is not None and effect.state == "failed"
     transitions = repo.transitions_for_order(result.reducing_order_ref)  # type: ignore[arg-type]
@@ -1044,7 +1115,7 @@ async def test_late_and_duplicate_entry_evidence_cannot_regress_succeeded_exit(
         entry_order_ref=entry_ref,
     )
     assert accepted.effect_operation_id is not None
-    await resolve_exit(
+    first_resolution = await resolve_exit(
         repo,
         effect_operation_id=accepted.effect_operation_id,
         trade=_FakeTrade(
@@ -1056,6 +1127,23 @@ async def test_late_and_duplicate_entry_evidence_cannot_regress_succeeded_exit(
                 filled_avg_price=101,
             )
         ),
+    )
+    assert first_resolution.reducing_order_ref is not None
+    fold_order_evidence(
+        repo,
+        effect_operation_id=accepted.effect_operation_id,
+        order=_broker_order(
+            first_resolution.reducing_order_ref,
+            side="sell",
+            status="filled",
+            filled_quantity=10,
+            filled_avg_price=101,
+        ),
+    )
+    await resolve_exit(
+        repo,
+        effect_operation_id=accepted.effect_operation_id,
+        trade=_FakeTrade(),
     )
     late = _broker_order(entry_ref, status="accepted").model_copy(
         update={"updated_at_ms": 1_699_999_999_000, "observed_at_ms": 1_700_000_001_000}
@@ -1240,6 +1328,24 @@ async def test_submit_exit_drives_the_full_happy_path_in_one_call(repo: ClerkSql
     )
 
     assert isinstance(result, ExitSubmission)
+    assert result.reducing_order_ref is not None
+    assert result.effect_operation_id is not None
+    fold_order_evidence(
+        repo,
+        effect_operation_id=result.effect_operation_id,
+        order=_broker_order(
+            result.reducing_order_ref,
+            side="sell",
+            status="filled",
+            filled_quantity=10.0,
+            filled_avg_price=101.0,
+        ),
+    )
+    await resolve_exit(
+        repo,
+        effect_operation_id=result.effect_operation_id,
+        trade=_FakeTrade(),
+    )
     effect = repo.effect_operation(result.effect_operation_id)  # type: ignore[arg-type]
     assert effect is not None and effect.state == "succeeded"
     assert repo.position(SID, "SPY") == pytest.approx(0.0)

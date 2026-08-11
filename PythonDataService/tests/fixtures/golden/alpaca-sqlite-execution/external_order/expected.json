@@ -1,0 +1,49 @@
+{
+  "projection": {
+    "authority_generation": 1,
+    "external_orders": [
+      {
+        "external_order_id": "external-order-1",
+        "broker_order_id": "external-order-1",
+        "client_order_id": "alpaca-console:operator-order-1",
+        "symbol": "AAPL",
+        "side": "BUY",
+        "qty": 2.0,
+        "order_type": "market",
+        "limit_price": null,
+        "stop_price": null,
+        "filled_avg_price": null,
+        "acknowledged_at_ms": null
+      }
+    ],
+    "active_holds": [
+      {
+        "scope": "ACCOUNT_CLERK",
+        "reason_code": "UNEXPLAINED_ORDER",
+        "state": "ACTIVE",
+        "evidence_refs": [
+          "external-order-1"
+        ]
+      }
+    ],
+    "available_actions": [
+      {
+        "action": "ACKNOWLEDGE_EXTERNAL_ORDER",
+        "external_order_id": "external-order-1"
+      }
+    ],
+    "bot_metrics": {
+      "sqlite-cohort-googl-0810": {
+        "fills_today": 0,
+        "realized_pnl_today": 0.0,
+        "open_pnl": 0.0,
+        "marks_complete": true,
+        "position_quantity": 0.0
+      }
+    }
+  },
+  "tolerance": {
+    "atol": 1e-06,
+    "rtol": 0.0
+  }
+}

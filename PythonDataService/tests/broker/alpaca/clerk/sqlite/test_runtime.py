@@ -18,6 +18,8 @@ from app.broker.alpaca.clerk.stream_health import StreamHealthGate
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
+from app.services.bot_carryover import configuration_hash, immutable_configuration_payload
+from app.services.strategy_validation_manifest import strategy_registry_seeds
 
 
 class _Broker:
@@ -122,6 +124,20 @@ async def test_registration_precedes_live_enter_and_caller_cancellation_keeps_cu
     binding = _binding()
 
     await facade.register_strategy_run(binding)
+    persisted_config = repo.bot_config(binding.strategy_instance_id)
+    expected_display_name = next(
+        strategy.display_name
+        for strategy in strategy_registry_seeds()
+        if strategy.strategy_key == binding.strategy_key
+    )
+    assert persisted_config is not None
+    assert persisted_config.strategy_key == binding.strategy_key
+    assert persisted_config.display_name == expected_display_name
+    assert persisted_config.config_json == runtime_module.canonicalize(
+        immutable_configuration_payload(binding)
+    )
+    assert persisted_config.config_hash == configuration_hash(binding)
+
     task = asyncio.create_task(
         facade.execute_for_instance(
             strategy_instance_id=binding.strategy_instance_id,

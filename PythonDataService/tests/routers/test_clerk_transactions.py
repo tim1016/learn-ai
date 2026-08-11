@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from app.routers.clerk_transactions import get_clerk_transaction_store, router
+from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime, set_active_clerk_runtime
+from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
+from app.broker.alpaca.clerk.sqlite.models import ExternalOrderResource
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.contract.models import BrokerOrder
+from app.routers.clerk_transactions import router
 from app.schemas.clerk_transaction_projection import (
     ClerkTransactionRow,
     ClerkTransactionSummaryRow,
@@ -76,10 +84,14 @@ class _UnavailableStore:
         raise ClerkTransactionProjectionUnavailable("disabled")
 
 
-async def test_history_endpoint_is_bounded_projection_read_only() -> None:
+async def test_history_endpoint_is_bounded_projection_read_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     app = FastAPI()
     app.include_router(router)
-    app.dependency_overrides[get_clerk_transaction_store] = lambda: _NoIoStore()
+    monkeypatch.setattr(
+        "app.routers.clerk_transactions.get_clerk_transaction_store", lambda: _NoIoStore()
+    )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/api/accounts/DU1219/transactions?limit=25")
     assert response.status_code == 200
@@ -95,7 +107,9 @@ async def test_history_endpoint_is_bounded_projection_read_only() -> None:
     }
 
 
-async def test_history_endpoint_passes_typed_filters_to_the_projection_only() -> None:
+async def test_history_endpoint_passes_typed_filters_to_the_projection_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class _FilteredStore(_NoIoStore):
         async def history_page(
             self,
@@ -121,7 +135,9 @@ async def test_history_endpoint_passes_typed_filters_to_the_projection_only() ->
 
     app = FastAPI()
     app.include_router(router)
-    app.dependency_overrides[get_clerk_transaction_store] = lambda: _FilteredStore()
+    monkeypatch.setattr(
+        "app.routers.clerk_transactions.get_clerk_transaction_store", lambda: _FilteredStore()
+    )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get(
             "/api/accounts/DU1219/transactions",
@@ -136,10 +152,14 @@ async def test_history_endpoint_passes_typed_filters_to_the_projection_only() ->
     assert response.status_code == 200
 
 
-async def test_history_endpoint_reports_unavailable_without_fallback_scan() -> None:
+async def test_history_endpoint_reports_unavailable_without_fallback_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     app = FastAPI()
     app.include_router(router)
-    app.dependency_overrides[get_clerk_transaction_store] = lambda: _UnavailableStore()
+    monkeypatch.setattr(
+        "app.routers.clerk_transactions.get_clerk_transaction_store", lambda: _UnavailableStore()
+    )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/api/accounts/DU1219/transactions")
     assert response.status_code == 200
@@ -156,10 +176,15 @@ async def test_history_endpoint_reports_unavailable_without_fallback_scan() -> N
         _encode_cursor((1, 2**63, "ctxn_opaque")),
     ],
 )
-async def test_history_endpoint_rejects_non_postgres_cursor_coordinates(cursor: str) -> None:
+async def test_history_endpoint_rejects_non_postgres_cursor_coordinates(
+    cursor: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     app = FastAPI()
     app.include_router(router)
-    app.dependency_overrides[get_clerk_transaction_store] = lambda: _NoIoStore()
+    monkeypatch.setattr(
+        "app.routers.clerk_transactions.get_clerk_transaction_store", lambda: _NoIoStore()
+    )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/api/accounts/DU1219/transactions", params={"cursor": cursor})
 
@@ -167,14 +192,149 @@ async def test_history_endpoint_rejects_non_postgres_cursor_coordinates(cursor: 
     assert response.json()["detail"] == "invalid transaction history cursor"
 
 
-async def test_selected_transaction_endpoint_reads_only_the_requested_projection_row() -> None:
+async def test_selected_transaction_endpoint_reads_only_the_requested_projection_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     app = FastAPI()
     app.include_router(router)
-    app.dependency_overrides[get_clerk_transaction_store] = lambda: _NoIoStore()
+    monkeypatch.setattr(
+        "app.routers.clerk_transactions.get_clerk_transaction_store", lambda: _NoIoStore()
+    )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/api/accounts/DU1219/transactions/ctxn_opaque")
     assert response.status_code == 200
     assert response.json()["receipt"] == {"order_ref": "manual/v1:opaque"}
+
+
+async def test_external_order_acknowledgement_endpoint_delegates_only_to_active_sqlite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.routers.clerk_transactions as clerk_transactions_router
+
+    calls: list[tuple[str, str, str]] = []
+
+    def _acknowledge(*, account_id: str, external_order_id: str, operator: str) -> ExternalOrderResource:
+        calls.append((account_id, external_order_id, operator))
+        return ExternalOrderResource(
+            external_order_id=external_order_id,
+            broker_order_id="broker-external-1",
+            client_order_id="alpaca-console:1",
+            symbol="AAPL",
+            side="BUY",
+            qty=2.0,
+            order_type="market",
+            limit_price=None,
+            stop_price=None,
+            filled_avg_price=None,
+            observed_at_ms=1_700_000_000_000,
+            acknowledged_at_ms=1_700_000_000_100,
+            ack_operator=operator,
+            evidence_refs=("broker-external-1",),
+        )
+
+    monkeypatch.setattr(clerk_transactions_router, "sqlite_acknowledge_external_order", _acknowledge)
+    app = FastAPI()
+    app.include_router(router)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/accounts/PA-TEST/transactions/external-orders/external-1/acknowledge",
+            json={"operator": "operator-1"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "external_order_id": "external-1",
+        "acknowledged_at_ms": 1_700_000_000_100,
+        "ack_operator": "operator-1",
+    }
+    assert calls == [("PA-TEST", "external-1", "operator-1")]
+
+
+async def test_external_order_acknowledgement_rejects_blank_operator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.routers.clerk_transactions as clerk_transactions_router
+
+    def must_not_acknowledge(**_kwargs: object) -> None:
+        raise AssertionError("blank acknowledgement must fail at the API boundary")
+
+    monkeypatch.setattr(
+        clerk_transactions_router,
+        "sqlite_acknowledge_external_order",
+        must_not_acknowledge,
+    )
+    app = FastAPI()
+    app.include_router(router)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/accounts/PA-TEST/transactions/external-orders/external-1/acknowledge",
+            json={"operator": "   "},
+        )
+
+    assert response.status_code == 422
+    assert "non-whitespace" in response.text
+
+
+async def test_external_order_acknowledgement_endpoint_durably_releases_only_external_cause(
+    tmp_path: Path,
+) -> None:
+    class _NoBroker:
+        pass
+
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    observed = observe_external_order(
+        repo,
+        order=BrokerOrder(
+            broker="alpaca",
+            order_id="external-1",
+            client_order_id="alpaca-console:operator-order-1",
+            symbol="AAPL",
+            asset_class="us_equity",
+            side="buy",
+            order_type="market",
+            time_in_force="day",
+            quantity=2.0,
+            filled_quantity=0.0,
+            limit_price=None,
+            stop_price=None,
+            filled_avg_price=None,
+            status="accepted",
+            submitted_at_ms=None,
+            created_at_ms=None,
+            updated_at_ms=None,
+            filled_at_ms=None,
+            canceled_at_ms=None,
+            expired_at_ms=None,
+            observed_at_ms=1_700_000_000_000,
+        ),
+    )
+    broker = _NoBroker()
+    set_active_clerk_runtime(
+        ActiveClerkRuntime(
+            authority_kind="sqlite",
+            clerk=SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker),  # type: ignore[arg-type]
+        )
+    )
+    app = FastAPI()
+    app.include_router(router)
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                "/api/accounts/PA-TEST/transactions/external-orders/external-1/acknowledge",
+                json={"operator": "operator-1"},
+            )
+    finally:
+        set_active_clerk_runtime(None)
+
+    try:
+        assert response.status_code == 200
+        assert response.json()["external_order_id"] == observed.external_order_id
+        assert repo.external_order("external-1").acknowledged_at_ms is not None  # type: ignore[union-attr]
+        assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER") is None
+    finally:
+        repo.close()
 
 
 async def test_custody_window_summary_preserves_server_folded_terminal_state_after_reordered_callbacks() -> None:

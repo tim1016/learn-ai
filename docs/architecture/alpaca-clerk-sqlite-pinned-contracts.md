@@ -23,6 +23,20 @@
 - Issue #1395 adds covering read-model indexes for bounded account/bot
   snapshots and timeline pages. `SCHEMA_VERSION` bumps 4 → 5; there is still
   no activated SQLite account to migrate before the human cutover in #1383.
+- The execution-ledger authority expansion is a fresh schema-v7 generation.
+  It adds execution provenance to the `fills` fold plus `external_orders`,
+  `bot_config`, and `decision_receipts`. The registered v6 → v7 migration is
+  deliberately guarded: it atomically adds the complete v7 DDL only after
+  proving every operational v6 table is empty. A data-bearing v6 authority
+  fails closed and remains untouched; the human cutover initializes a clean
+  v7 authority generation after the existing account is safely retired.
+- Schema-v8 keeps the exact custody transition sequence which materialized
+  each execution, so equal broker timestamps never force a fabricated
+  secondary ordering key. It also replaces the ambiguous external-order
+  `price` field with the broker's order type plus separate limit, stop, and
+  filled-average prices. The additive v7 → v8 migration backfills only
+  execution rows whose transition facts name their execution identity; any
+  unprovable legacy sequence remains unavailable to sequence-sensitive reads.
 - **Source of truth ranking:** ADR 0035 (decision rationale) →
   `docs/prds/alpaca-account-clerk-sqlite-control-plane.md` §9–§11 (functional
   contract) → this document (concrete, implementable pin). Where this document
@@ -298,10 +312,75 @@ CREATE TABLE fills (
     price                    REAL NOT NULL,
     side                     TEXT NOT NULL CHECK (side IN ('BUY','SELL')),
     is_correction             INTEGER NOT NULL DEFAULT 0,  -- 1 = broker-issued correction, not erasure of prior fact
+    execution_id             TEXT,                   -- Alpaca execution id; null only for cumulative recovery
+    evidence_source          TEXT NOT NULL DEFAULT 'cumulative_recovery'
+                              CHECK (evidence_source IN ('websocket','activity_recovery','cumulative_recovery')),
+    event_kind               TEXT NOT NULL DEFAULT 'fill'
+                              CHECK (event_kind IN ('fill','correction')),
+    superseded_execution_ref TEXT,                   -- correction target; original execution remains auditable
+    fee                      REAL,
+    fee_fidelity             TEXT NOT NULL DEFAULT 'not_reported'
+                              CHECK (fee_fidelity IN ('reported','not_reported')),
     source_event_at_ms       INTEGER,                 -- Alpaca's fill timestamp, when supplied
     clerk_observed_at_ms     INTEGER NOT NULL,
-    recorded_at_ms           INTEGER NOT NULL
+    recorded_at_ms           INTEGER NOT NULL,
+    recorded_transition_sequence INTEGER NOT NULL REFERENCES custody_transitions(sequence)
 );
+-- Websocket/activity executions are identity-deduplicated independently of
+-- the legacy synthesized ``fill_id`` used by cumulative recovery.
+CREATE UNIQUE INDEX ux_fills_execution_id ON fills(execution_id)
+    WHERE execution_id IS NOT NULL;
+
+-- ============================================================
+-- external_orders — broker orders outside a registered bot namespace
+-- ============================================================
+CREATE TABLE external_orders (
+    external_order_id        TEXT PRIMARY KEY,
+    broker_order_id          TEXT NOT NULL,
+    client_order_id          TEXT NOT NULL,
+    symbol                   TEXT NOT NULL,
+    side                     TEXT NOT NULL CHECK (side IN ('BUY','SELL')),
+    qty                      REAL NOT NULL,
+    order_type               TEXT NOT NULL,
+    limit_price              REAL,
+    stop_price               REAL,
+    filled_avg_price         REAL,
+    observed_at_ms           INTEGER NOT NULL,
+    acknowledged_at_ms       INTEGER,
+    ack_operator             TEXT,
+    evidence_refs_json       TEXT NOT NULL
+);
+CREATE UNIQUE INDEX ux_external_orders_broker_order_id
+    ON external_orders(broker_order_id);
+
+-- ============================================================
+-- bot_config — complete immutable configuration for a registered bot
+-- ============================================================
+CREATE TABLE bot_config (
+    strategy_instance_id     TEXT PRIMARY KEY REFERENCES strategy_instances(strategy_instance_id),
+    strategy_key             TEXT NOT NULL,
+    display_name             TEXT NOT NULL,
+    config_json              TEXT NOT NULL,
+    config_hash              TEXT NOT NULL,
+    created_at_ms            INTEGER NOT NULL
+);
+
+-- ============================================================
+-- decision_receipts — bounded per-bot decision evidence, outside custody log
+-- ============================================================
+CREATE TABLE decision_receipts (
+    strategy_instance_id     TEXT NOT NULL REFERENCES strategy_instances(strategy_instance_id),
+    seq                      INTEGER NOT NULL,
+    outcome                  TEXT NOT NULL,
+    symbol                   TEXT,
+    intent_id                TEXT,
+    order_ref                TEXT REFERENCES orders(order_ref),
+    observed_at_ms           INTEGER NOT NULL,
+    facts_json               TEXT NOT NULL,
+    PRIMARY KEY (strategy_instance_id, seq)
+);
+CREATE INDEX ix_decision_receipts_strategy_observed_at
+    ON decision_receipts(strategy_instance_id, observed_at_ms DESC, seq DESC);
 
 -- ============================================================
 -- positions — current Clerk-attributed exposure; fold of the log, namespace-attributed
@@ -903,8 +982,12 @@ On every process start, before the Clerk accepts any command:
 4. **Account identity** — `control_meta.account_id` matches the requested
    account; mismatch fails closed (§9.1).
 5. **Schema** — `control_meta.schema_version` matches the version this Slice
-   2+ binary expects; an older/newer schema fails closed rather than
-   attempting an implicit migration.
+   2+ binary expects. The legacy v4 → v6 index-only path may be upgraded only
+   by its explicitly registered migration. The v6 → v7 migration is likewise
+   registered, but only a proven-empty authority may run it: the complete
+   additive DDL (including the new `fills` columns) and version advance share
+   one SQLite transaction. Any data-bearing v6 authority (or any newer
+   mismatch) fails closed without schema mutation.
 6. **Authority generation** — `control_meta.authority_generation` is read and
    becomes part of every subsequent idempotency key and hash-chain check for
    this session (generation itself was already cross-checked against the

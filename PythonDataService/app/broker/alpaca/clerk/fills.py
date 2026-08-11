@@ -78,6 +78,9 @@ class FillRecord:
     fill_price: float
     filled_at_ms: int  # int64 ms UTC
     fee: float | None  # None = "not reported"
+    # SQLite sets this to the custody transition that materialized the fill.
+    # Legacy, non-SQLite callers retain the neutral default.
+    ledger_sequence: int = 0
 
 
 def normalize_fill_event(

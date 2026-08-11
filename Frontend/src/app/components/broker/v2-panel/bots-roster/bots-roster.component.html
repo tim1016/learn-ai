@@ -63,7 +63,7 @@
               <a class="bot-identity" [routerLink]="botLink(bot)">
                 <strong>{{ bot.symbol }}</strong>
                 <span class="bot-identity__sid">{{ bot.strategy_instance_id }}</span>
-                <span>{{ bot.strategy_key | receiptLabel }} · {{ bot.mode | receiptLabel }}</span>
+                <span>{{ bot.strategy_label }} · {{ bot.mode | receiptLabel }}</span>
               </a>
             </td>
             <td data-label="State">

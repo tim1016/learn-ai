@@ -52,6 +52,7 @@ function fakeBot(overrides: Partial<BotCatalogView> = {}): BotCatalogView {
     desired_state: 'RUNNING',
     running: true,
     strategy_key: 'deployment_validation',
+    strategy_label: 'Deployment Validation',
     mode: 'trade',
     status_label: 'Working',
     status_explanation: 'Running under Account Clerk custody.',

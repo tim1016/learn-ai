@@ -15,13 +15,51 @@ from app.broker.alpaca.clerk.sqlite import schema
 
 REPO_ROOT = Path(__file__).resolve().parents[6]
 
+_V6_AUTHORITY_DDL = """
+CREATE TABLE control_meta (id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL);
+CREATE TABLE strategy_instances (strategy_instance_id TEXT PRIMARY KEY);
+CREATE TABLE runs (id INTEGER PRIMARY KEY);
+CREATE TABLE commands (id INTEGER PRIMARY KEY);
+CREATE TABLE effect_operations (id INTEGER PRIMARY KEY);
+CREATE TABLE orders (order_ref TEXT PRIMARY KEY);
+CREATE TABLE operation_order_links (id INTEGER PRIMARY KEY);
+CREATE TABLE fills (
+    fill_id TEXT PRIMARY KEY,
+    order_ref TEXT NOT NULL,
+    qty REAL NOT NULL,
+    price REAL NOT NULL,
+    side TEXT NOT NULL,
+    is_correction INTEGER NOT NULL DEFAULT 0,
+    source_event_at_ms INTEGER,
+    clerk_observed_at_ms INTEGER NOT NULL,
+    recorded_at_ms INTEGER NOT NULL
+);
+CREATE TABLE positions (id INTEGER PRIMARY KEY);
+CREATE TABLE holds (id INTEGER PRIMARY KEY);
+CREATE TABLE uncertainties (id INTEGER PRIMARY KEY);
+CREATE TABLE reconciliations (id INTEGER PRIMARY KEY);
+CREATE TABLE receipts (id INTEGER PRIMARY KEY);
+CREATE TABLE custody_transitions (
+    sequence INTEGER PRIMARY KEY,
+    order_ref TEXT,
+    facts_json TEXT
+);
+CREATE TABLE mirror_fence (id INTEGER PRIMARY KEY);
+"""
+
+
+def _empty_v6_authority(conn: sqlite3.Connection) -> None:
+    conn.executescript(_V6_AUTHORITY_DDL)
+    conn.execute("INSERT INTO control_meta (id, schema_version) VALUES (1, 6)")
+    conn.commit()
+
 
 def test_schema_ddl_matches_pinned_contracts_doc() -> None:
     pinned = schema.load_pinned_ddl(REPO_ROOT)
     assert pinned == schema.SCHEMA_DDL
 
 
-def test_schema_creates_all_fifteen_pinned_tables() -> None:
+def test_schema_creates_all_eighteen_pinned_tables() -> None:
     conn = sqlite3.connect(":memory:")
     schema.configure_connection(conn)
     schema.apply_schema(conn)
@@ -40,6 +78,9 @@ def test_schema_creates_all_fifteen_pinned_tables() -> None:
         "orders",
         "operation_order_links",
         "fills",
+        "external_orders",
+        "bot_config",
+        "decision_receipts",
         "positions",
         "holds",
         "uncertainties",
@@ -48,6 +89,114 @@ def test_schema_creates_all_fifteen_pinned_tables() -> None:
         "custody_transitions",
         "mirror_fence",
     }
+
+
+def test_v8_execution_provenance_and_bounded_receipts_schema() -> None:
+    conn = sqlite3.connect(":memory:")
+    schema.configure_connection(conn)
+    schema.apply_schema(conn)
+
+    fills_columns = {
+        row[1]: row
+        for row in conn.execute("PRAGMA table_info(fills)")
+    }
+    assert set(fills_columns) >= {
+        "execution_id",
+        "evidence_source",
+        "event_kind",
+        "superseded_execution_ref",
+        "fee",
+        "fee_fidelity",
+        "recorded_transition_sequence",
+    }
+    assert fills_columns["execution_id"][3] == 0
+    assert fills_columns["evidence_source"][4] == "'cumulative_recovery'"
+    assert fills_columns["event_kind"][4] == "'fill'"
+    assert fills_columns["fee_fidelity"][4] == "'not_reported'"
+
+    index_names = {
+        row[0]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")
+    }
+    assert {
+        "ux_fills_execution_id",
+        "ux_external_orders_broker_order_id",
+        "ix_decision_receipts_strategy_observed_at",
+    } <= index_names
+
+
+def test_empty_v6_authority_migrates_atomically_to_complete_v8_schema() -> None:
+    conn = sqlite3.connect(":memory:")
+    schema.configure_connection(conn)
+    _empty_v6_authority(conn)
+
+    schema.migrate_schema(conn, from_version=6)
+
+    assert conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0] == 8
+    assert {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(fills)")
+    } >= {
+        "execution_id",
+        "evidence_source",
+        "event_kind",
+        "superseded_execution_ref",
+        "fee",
+        "fee_fidelity",
+    }
+    tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )
+    }
+    assert {"external_orders", "bot_config", "decision_receipts"} <= tables
+    indexes = {
+        row[0]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")
+    }
+    assert {
+        "ux_fills_execution_id",
+        "ux_external_orders_broker_order_id",
+        "ix_decision_receipts_strategy_observed_at",
+    } <= indexes
+
+
+def test_data_bearing_v6_authority_fails_closed_without_schema_mutation() -> None:
+    import pytest
+
+    conn = sqlite3.connect(":memory:")
+    schema.configure_connection(conn)
+    _empty_v6_authority(conn)
+    conn.execute("INSERT INTO custody_transitions (sequence) VALUES (1)")
+    conn.commit()
+    fills_before = list(conn.execute("PRAGMA table_info(fills)"))
+
+    with pytest.raises(ValueError, match="requires an empty authority"):
+        schema.migrate_schema(conn, from_version=6)
+
+    assert conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0] == 6
+    assert list(conn.execute("PRAGMA table_info(fills)")) == fills_before
+    assert conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'decision_receipts'"
+    ).fetchone() is None
+
+
+def test_v6_to_v8_migration_rolls_back_partial_ddl_on_failure() -> None:
+    import pytest
+
+    conn = sqlite3.connect(":memory:")
+    schema.configure_connection(conn)
+    _empty_v6_authority(conn)
+    conn.execute("CREATE TABLE external_orders (id INTEGER PRIMARY KEY)")
+    conn.commit()
+    fills_before = list(conn.execute("PRAGMA table_info(fills)"))
+
+    with pytest.raises(sqlite3.OperationalError, match="external_orders"):
+        schema.migrate_schema(conn, from_version=6)
+
+    assert conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0] == 6
+    assert list(conn.execute("PRAGMA table_info(fills)")) == fills_before
 
 
 def test_partial_unique_indexes_allow_only_one_active_safety_cause() -> None:

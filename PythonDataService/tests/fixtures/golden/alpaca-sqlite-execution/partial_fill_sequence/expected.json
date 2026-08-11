@@ -1,0 +1,39 @@
+{
+  "projection": {
+    "authority_generation": 1,
+    "bot_metrics": {
+      "sqlite-cohort-partial-0810": {
+        "fills_today": 2,
+        "realized_pnl_today": 0.0,
+        "open_pnl": 2.0,
+        "marks_complete": true,
+        "position_quantity": 7.0
+      }
+    },
+    "fills": [
+      {
+        "fill_id": "nvda-partial-slice-2",
+        "execution_id": "nvda-partial-slice-2",
+        "strategy_instance_id": "sqlite-cohort-partial-0810",
+        "symbol": "NVDA",
+        "side": "BUY",
+        "quantity": 2.0,
+        "price": 500.0
+      },
+      {
+        "fill_id": "nvda-final-slice-5",
+        "execution_id": "nvda-final-slice-5",
+        "strategy_instance_id": "sqlite-cohort-partial-0810",
+        "symbol": "NVDA",
+        "side": "BUY",
+        "quantity": 5.0,
+        "price": 501.0
+      }
+    ],
+    "closed_lots": []
+  },
+  "tolerance": {
+    "atol": 1e-06,
+    "rtol": 0.0
+  }
+}

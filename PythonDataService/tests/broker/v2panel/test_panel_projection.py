@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Literal
 
+from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.models import (
     AccountFreezeState,
     ChannelHealth,
@@ -17,6 +18,7 @@ from app.broker.alpaca.clerk.models import (
     HoldState,
     ReconciliationSummary,
 )
+from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicSnapshot
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     ClerkProjection,
     ProjectedCommand,
@@ -28,6 +30,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     ProjectionGuidance,
     RecoveryCapability,
 )
+from app.broker.contract.models import OrderSide
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import BotPanelView, MarketPulseView
 from app.schemas.live_runs import BotDutyOutcomeView
@@ -321,6 +324,107 @@ def test_sqlite_adapter_replaces_legacy_custody_with_fold_projection() -> None:
     assert adapted.recent_fills == []
 
 
+def test_sqlite_adapter_projects_execution_economics_and_durable_working_order_details() -> None:
+    """The active SQLite panel renders its one authoritative economic cut."""
+    base = _panel(_status(), _clerk_status(), [])
+    projected_order = ProjectedOrder(
+        order_ref="order:googl",
+        client_order_id="order:googl",
+        broker_order_id="broker-googl",
+        role="ENTRY",
+        broker_state="partially_filled",
+        submitted_at_ms=_NOW - 900,
+        updated_at_ms=_NOW - 300,
+        symbol="GOOGL",
+        side="buy",
+        quantity=5.0,
+        filled_quantity=2.0,
+    )
+    projection = _rail_projection(orders=(projected_order,))
+    fills = (
+        FillRecord(
+            account_id=ACCT,
+            sid=SID,
+            intent_id="googl-enter",
+            order_ref="order:googl",
+            event_key="exec-googl-3",
+            symbol="GOOGL",
+            side=OrderSide.SELL,
+            quantity=2.0,
+            fill_price=195.0,
+            filled_at_ms=_NOW - 100,
+            fee=None,
+        ),
+        FillRecord(
+            account_id=ACCT,
+            sid=SID,
+            intent_id="googl-enter",
+            order_ref="order:googl",
+            event_key="exec-googl-2",
+            symbol="GOOGL",
+            side=OrderSide.BUY,
+            quantity=1.0,
+            fill_price=185.0,
+            filled_at_ms=_NOW - 200,
+            fee=None,
+        ),
+        FillRecord(
+            account_id=ACCT,
+            sid=SID,
+            intent_id="googl-enter",
+            order_ref="order:googl",
+            event_key="exec-googl-1",
+            symbol="GOOGL",
+            side=OrderSide.BUY,
+            quantity=1.0,
+            fill_price=180.0,
+            filled_at_ms=_NOW - 300,
+            fee=None,
+        ),
+    )
+    economics = EconomicSnapshot(
+        account_id=ACCT,
+        strategy_instance_id=SID,
+        authority_generation=4,
+        control_revision=projection.control_revision,
+        session_open_ms=_NOW - 86_400_000,
+        session_close_ms=_NOW + 86_400_000,
+        recent_fills=fills,
+        fills_today=3,
+        exposure={"GOOGL": 0.0},
+        realized_pnl_today=25.0,
+        open_pnl=0.0,
+        marks_complete=True,
+        mark_observed_at_ms={},
+        fee_fidelity="not_reported",
+        execution_coverage="complete",
+        last_activity_at_ms=_NOW - 100,
+    )
+
+    adapted = adapt_sqlite_panel(base, projection, economics=economics)
+
+    assert [(fill.symbol, fill.side, fill.quantity, fill.price) for fill in adapted.recent_fills] == [
+        ("GOOGL", "sell", 2.0, 195.0),
+        ("GOOGL", "buy", 1.0, 185.0),
+        ("GOOGL", "buy", 1.0, 180.0),
+    ]
+    assert adapted.fills_today == 3
+    assert adapted.realized_pnl_today == 25.0
+    assert adapted.open_pnl == 0.0
+    assert [order.model_dump() for order in adapted.working_orders] == [
+        {
+            "order_ref": "order:googl",
+            "broker_order_id": "broker-googl",
+            "symbol": "GOOGL",
+            "side": "buy",
+            "quantity": 5.0,
+            "filled_quantity": 2.0,
+            "status": "partially_filled",
+            "observed_at_ms": _NOW - 300,
+        }
+    ]
+
+
 def _rail_projection(
     *,
     orders: tuple[ProjectedOrder, ...],
@@ -450,6 +554,26 @@ def test_trade_health_uses_decision_bar_reference_for_last_evaluated_bar() -> No
     )
 
     assert panel.health.last_decision_at_ms == _NOW - 100
+    assert panel.health.last_bar_at_ms == _NOW - 60_000
+
+
+def test_trade_health_does_not_relabel_a_later_fill_as_a_evaluated_bar() -> None:
+    decision = decision_receipt(
+        seq=1,
+        ts_ms=_NOW - 100,
+        outcome="no_action",
+        reason_code="NO_ACTION",
+        bar_ref=f"SPY@{_NOW - 60_000}",
+    )
+
+    panel = _panel(
+        _status(mode="trade"),
+        _clerk_status(),
+        [],
+        decision,
+        last_bar_at_ms=_NOW - 1,
+    )
+
     assert panel.health.last_bar_at_ms == _NOW - 60_000
 
 

@@ -163,7 +163,7 @@ async def test_cancel_fill_fault_is_folded_while_cancel_is_in_flight(
     assert observed["clerk_broker_order_id"] == entry_broker_order_id
     assert observed["broker_order_id"] == entry_broker_order_id
     assert cancel_requested < partial_fill < terminal
-    assert "cancel requested < partial fill observed < terminal proven" in (observation.evidence.expected)
+    assert "cancel requested < execution slice recorded < terminal proven" in (observation.evidence.expected)
     assert len(observation.evidence.broker_after.cancel_calls) == 1
 
 
@@ -281,3 +281,6 @@ async def test_disabled_fault_seam_stays_typed_partial(
         assert observation.status is SyntheticScenarioStatus.PARTIAL
         assert observation.fault_seam_exercised is False
         assert any(item.code is FaultSeamLimitationCode.FAULT_SEAM_NOT_PERMITTED for item in observation.limitations)
+        if scenario_id is SyntheticScenarioId.CANCEL_FILL_RACE:
+            observed = dict(field.split("=", maxsplit=1) for field in observation.evidence.observed.split("; "))
+            assert observed["partial_fill_sequence"] == "None"

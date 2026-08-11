@@ -51,6 +51,7 @@ def test_new_event_maps_with_no_fill_price(frames: list[dict[str, Any]]) -> None
     # A ``new`` event has no per-execution price and the order has not filled.
     assert event.price is None
     assert event.quantity is None
+    assert event.execution_id is None
 
 
 def test_partial_fill_maps_the_execution_slice(frames: list[dict[str, Any]]) -> None:
@@ -61,6 +62,7 @@ def test_partial_fill_maps_the_execution_slice(frames: list[dict[str, Any]]) -> 
     # The per-execution price/qty (737.50 × 1), NOT the order's cumulative avg.
     assert event.price is not None and math.isclose(event.price, 737.50, abs_tol=_ATOL, rel_tol=_RTOL)
     assert event.quantity is not None and math.isclose(event.quantity, 1.0, abs_tol=_ATOL, rel_tol=_RTOL)
+    assert event.execution_id == "00000000-0000-0000-0000-000000000098"
 
 
 def test_fill_maps_the_final_execution_slice(frames: list[dict[str, Any]]) -> None:
@@ -71,6 +73,7 @@ def test_fill_maps_the_final_execution_slice(frames: list[dict[str, Any]]) -> No
     # The real execution slice (737.91 × 1).
     assert event.price is not None and math.isclose(event.price, 737.91, abs_tol=_ATOL, rel_tol=_RTOL)
     assert event.quantity is not None and math.isclose(event.quantity, 1.0, abs_tol=_ATOL, rel_tol=_RTOL)
+    assert event.execution_id == "00000000-0000-0000-0000-000000000004"
 
 
 def test_canceled_maps_with_cumulative_fallback(frames: list[dict[str, Any]]) -> None:
@@ -81,6 +84,7 @@ def test_canceled_maps_with_cumulative_fallback(frames: list[dict[str, Any]]) ->
     # No per-execution figures; the order never filled, so both fall back to None.
     assert event.price is None
     assert event.quantity is None
+    assert event.execution_id is None
 
 
 def test_rejected_maps(frames: list[dict[str, Any]]) -> None:
@@ -116,6 +120,32 @@ def test_unrecognized_event_is_surfaced_by_name() -> None:
 def test_missing_timestamp_fails_fast() -> None:
     with pytest.raises(ValueError, match="missing its timestamp"):
         from_alpaca_trade_update({"event": "fill", "order": {"status": "filled"}})
+
+
+def test_normalized_timestamp_ms_is_preserved_without_another_conversion() -> None:
+    event = from_alpaca_trade_update(
+        {
+            "event": "fill",
+            "timestamp_ms": 1_786_386_000_000,
+            "execution_id": "normalized-execution",
+            "price": "100.25",
+            "qty": "2",
+        }
+    )
+
+    assert event.occurred_at_ms == 1_786_386_000_000
+
+
+@pytest.mark.parametrize("execution_id", [None, "", "   "])
+def test_fill_without_a_non_blank_execution_id_fails_fast(execution_id: str | None) -> None:
+    with pytest.raises(ValueError, match="missing its execution_id"):
+        from_alpaca_trade_update(
+            {
+                "event": "fill",
+                "timestamp": "2026-07-24T14:42:50.129256359Z",
+                "execution_id": execution_id,
+            }
+        )
 
 
 def test_event_names_match_documented_set() -> None:

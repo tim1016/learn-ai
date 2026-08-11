@@ -1,0 +1,25 @@
+{
+  "projection": {
+    "authority_generation": 1,
+    "bot_metrics": {
+      "sqlite-cohort-zero-0810": {
+        "fills_today": 0,
+        "realized_pnl_today": 0.0,
+        "open_pnl": 0.0,
+        "marks_complete": true,
+        "position_quantity": 0.0
+      },
+      "sqlite-cohort-unavailable-0810": {
+        "fills_today": null,
+        "realized_pnl_today": null,
+        "open_pnl": null,
+        "marks_complete": null,
+        "position_quantity": null
+      }
+    }
+  },
+  "tolerance": {
+    "atol": 1e-06,
+    "rtol": 0.0
+  }
+}

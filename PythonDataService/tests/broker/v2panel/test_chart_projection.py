@@ -7,11 +7,18 @@ resolver cap is not widened.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
 import pytest
 
+from app.broker.alpaca.adapter import from_alpaca_trade_update
+from app.broker.alpaca.clerk.fills import FillRecord
+from app.broker.contract.models import OrderSide
 from app.data_lake.polygon_fetcher import PolygonBar
 from app.schemas.broker_bots import BotStatusView
-from app.services.broker_v2_panel import panel_data_source
+from app.services.broker_v2_panel import panel_chart_data_source, panel_data_source
 from app.services.broker_v2_panel.chart_projection_service import (
     _MAX_HISTORY_BARS,
     ChartPresetError,
@@ -21,9 +28,72 @@ from app.services.broker_v2_panel.chart_projection_service import (
     live_window,
 )
 from app.services.live_chart_window import MAX_CHART_RANGE_MS, ChartWindowResult
-from tests.broker.v2panel.fixtures import SID, fill_entry
+from tests.broker.v2panel.fixtures import SID
 
 _NOW = 1_700_000_000_000
+_GOOGL_FIXTURE = (
+    Path(__file__).parents[2]
+    / "fixtures"
+    / "golden"
+    / "alpaca-sqlite-execution"
+    / "googl_round_trip"
+)
+
+
+def _sqlite_fill(
+    *,
+    event_key: str,
+    side: OrderSide = OrderSide.BUY,
+    quantity: float = 100.0,
+    price: float = 500.0,
+    filled_at_ms: int = _NOW,
+) -> FillRecord:
+    return FillRecord(
+        account_id="test-acct",
+        sid=SID,
+        intent_id="intent",
+        order_ref=f"learn-ai/{SID}/v1:intent",
+        event_key=event_key,
+        symbol="SPY",
+        side=side,
+        quantity=quantity,
+        fill_price=price,
+        filled_at_ms=filled_at_ms,
+        fee=None,
+    )
+
+
+def _googl_fixture_fills() -> tuple[tuple[FillRecord, ...], int, int, int]:
+    """Build chart inputs from the S0 websocket fixture, never JSONL evidence."""
+    fixture_input = json.loads((_GOOGL_FIXTURE / "input.json").read_text(encoding="utf-8"))
+    expected = json.loads((_GOOGL_FIXTURE / "expected.json").read_text(encoding="utf-8"))
+    strategy = fixture_input["strategy_instance"]
+    fills: list[FillRecord] = []
+    for frame in fixture_input["trade_updates"]:
+        payload = frame["data"]
+        event = from_alpaca_trade_update(payload)
+        order = payload["order"]
+        assert event.execution_id is not None
+        assert event.quantity is not None
+        assert event.price is not None
+        fills.append(
+            FillRecord(
+                account_id=fixture_input["account_id"],
+                sid=strategy["strategy_instance_id"],
+                intent_id=order["client_order_id"].rsplit(":", 1)[1],
+                order_ref=order["client_order_id"],
+                event_key=event.execution_id,
+                symbol=order["symbol"],
+                side=OrderSide(order["side"]),
+                quantity=event.quantity,
+                fill_price=event.price,
+                filled_at_ms=event.occurred_at_ms,
+                fee=None,
+            )
+        )
+    session = fixture_input["session"]
+    fills_today = expected["projection"]["bot_metrics"][strategy["strategy_instance_id"]]["fills_today"]
+    return tuple(fills), int(session["session_open_ms"]), int(session["session_close_ms"]), fills_today
 
 
 def test_seven_day_live_resolver_cap_unchanged() -> None:
@@ -101,10 +171,15 @@ async def test_history_bars_are_polygon_tagged_and_bounded() -> None:
 
 
 async def test_history_fill_markers_within_window() -> None:
-    entries = [
-        fill_entry(sid=SID, intent="i1", ts_ms=_NOW - 30_000, qty=100, price=500.0),
+    fills = [
+        _sqlite_fill(event_key="exec-in-window", filled_at_ms=_NOW - 30_000),
         # Outside the 1D lookback → excluded.
-        fill_entry(sid=SID, intent="i2", ts_ms=_NOW - 5 * 86_400_000, qty=50, price=400.0),
+        _sqlite_fill(
+            event_key="exec-outside-window",
+            quantity=50,
+            price=400.0,
+            filled_at_ms=_NOW - 5 * 86_400_000,
+        ),
     ]
 
     async def _source(symbol, start, end, multiplier, timespan):
@@ -112,7 +187,7 @@ async def test_history_fill_markers_within_window() -> None:
 
     result = await build_history_chart(
         "1D",
-        entries,
+        fills,
         strategy_instance_id=SID,
         symbol="SPY",
         bar_source=_source,
@@ -143,11 +218,11 @@ def test_live_chart_tags_source_and_markers() -> None:
     chart_window = ChartWindowResult(
         bars=[bar], timeframe="1m", resolution="1m", is_streaming=True
     )
-    entries = [fill_entry(sid=SID, intent="i1", ts_ms=_NOW - 30_000)]
+    fills = [_sqlite_fill(event_key="exec-live", filled_at_ms=_NOW - 30_000)]
 
     result = build_live_chart(
         chart_window,
-        entries,
+        fills,
         strategy_instance_id=SID,
         symbol="SPY",
         window=(_NOW - 6 * 60 * 60_000, _NOW + 60_000),
@@ -158,6 +233,28 @@ def test_live_chart_tags_source_and_markers() -> None:
     # The one fill at _NOW-30s falls inside the passed window.
     assert len(result.fill_markers) == 1
     assert result.trading_date_open_ms == _NOW - 6 * 60 * 60_000
+
+
+def test_live_chart_markers_match_googl_fixture_fills_today() -> None:
+    """The S0 GOOGL execution slices produce one chart marker each in-session."""
+    from app.services.live_chart_window import ChartWindowResult
+
+    fills, open_ms, close_ms, fills_today = _googl_fixture_fills()
+    chart = build_live_chart(
+        ChartWindowResult(bars=[], timeframe="1m", resolution="1m", is_streaming=False),
+        fills,
+        strategy_instance_id="sqlite-cohort-googl-0810",
+        symbol="GOOGL",
+        window=(open_ms, close_ms),
+        now_ms=close_ms - 1,
+    )
+
+    assert len(chart.fill_markers) == fills_today == 3
+    assert [marker.order_ref for marker in chart.fill_markers] == [
+        "learn-ai/sqlite-cohort-googl-0810/v1:googl-buy-intent-1",
+        "learn-ai/sqlite-cohort-googl-0810/v1:googl-buy-intent-1",
+        "learn-ai/sqlite-cohort-googl-0810/v1:googl-sell-intent-1",
+    ]
 
 
 def test_live_window_falls_back_when_market_closed() -> None:
@@ -180,10 +277,14 @@ async def test_live_chart_before_session_open_is_empty(
     async def unexpected_resolver(**kwargs) -> ChartWindowResult:
         pytest.fail("the range resolver must not run before the session opens")
 
-    monkeypatch.setattr(panel_data_source, "_validate_account", validate_account)
     monkeypatch.setattr(
-        panel_data_source,
-        "_bot_status",
+        panel_chart_data_source,
+        "validate_panel_account_scope",
+        validate_account,
+    )
+    monkeypatch.setattr(
+        panel_chart_data_source,
+        "read_legacy_chart_status",
         lambda broker, sid: BotStatusView(
             strategy_instance_id=sid,
             broker=broker,
@@ -199,10 +300,18 @@ async def test_live_chart_before_session_open_is_empty(
             last_transition_at_ms=_NOW - 60_000,
         ),
     )
-    monkeypatch.setattr(panel_data_source, "_read_order_journal", lambda *_args: [])
-    monkeypatch.setattr(panel_data_source, "now_ms_utc", lambda: _NOW)
-    monkeypatch.setattr(panel_data_source, "live_window", lambda now_ms: (open_ms, close_ms))
-    monkeypatch.setattr(panel_data_source, "resolve_chart_window", unexpected_resolver)
+    monkeypatch.setattr(panel_chart_data_source, "read_legacy_chart_fills", lambda *_args: ())
+    monkeypatch.setattr(panel_chart_data_source, "now_ms_utc", lambda: _NOW)
+    monkeypatch.setattr(
+        panel_chart_data_source,
+        "live_window",
+        lambda now_ms: (open_ms, close_ms),
+    )
+    monkeypatch.setattr(
+        panel_chart_data_source,
+        "resolve_chart_window",
+        unexpected_resolver,
+    )
 
     result = await panel_data_source.get_live_chart(
         "alpaca", "paper-account", SID, resolution="5s"
@@ -241,10 +350,14 @@ async def test_live_chart_forwards_selected_resolution(
     async def subscribe(symbol: str) -> None:
         subscribed.append(symbol)
 
-    monkeypatch.setattr(panel_data_source, "_validate_account", validate_account)
     monkeypatch.setattr(
-        panel_data_source,
-        "_bot_status",
+        panel_chart_data_source,
+        "validate_panel_account_scope",
+        validate_account,
+    )
+    monkeypatch.setattr(
+        panel_chart_data_source,
+        "read_legacy_chart_status",
         lambda broker, sid: BotStatusView(
             strategy_instance_id=sid,
             broker=broker,
@@ -260,10 +373,14 @@ async def test_live_chart_forwards_selected_resolution(
             last_transition_at_ms=_NOW - 60_000,
         ),
     )
-    monkeypatch.setattr(panel_data_source, "_read_order_journal", lambda *_args: [])
-    monkeypatch.setattr(panel_data_source, "now_ms_utc", lambda: _NOW)
-    monkeypatch.setattr(panel_data_source, "live_window", lambda now_ms: (open_ms, close_ms))
-    monkeypatch.setattr(panel_data_source, "resolve_chart_window", resolver)
+    monkeypatch.setattr(panel_chart_data_source, "read_legacy_chart_fills", lambda *_args: ())
+    monkeypatch.setattr(panel_chart_data_source, "now_ms_utc", lambda: _NOW)
+    monkeypatch.setattr(
+        panel_chart_data_source,
+        "live_window",
+        lambda now_ms: (open_ms, close_ms),
+    )
+    monkeypatch.setattr(panel_chart_data_source, "resolve_chart_window", resolver)
     monkeypatch.setattr(LIVE_BAR_AGGREGATOR, "ensure_subscribed_5s", subscribe)
 
     result = await panel_data_source.get_live_chart(
@@ -273,3 +390,115 @@ async def test_live_chart_forwards_selected_resolution(
     assert captured_request == [("5s", False)]
     assert subscribed == ["SPY"]
     assert result.resolution == "5s"
+
+
+async def test_live_snapshot_normalizes_its_captured_legacy_entries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entries = [object()]
+    expected_fills = (_sqlite_fill(event_key="legacy-captured"),)
+    captured: list[tuple[FillRecord, ...]] = []
+
+    async def panel_with_entries(*_args: object, **_kwargs: object):
+        return SimpleNamespace(symbol="SPY"), entries, None
+
+    async def build_from_fills(
+        _sid: str,
+        _symbol: str,
+        fills: tuple[FillRecord, ...],
+        **_kwargs: object,
+    ) -> SimpleNamespace:
+        captured.append(fills)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(
+        panel_chart_data_source,
+        "get_panel_with_chart_fills",
+        panel_with_entries,
+    )
+    monkeypatch.setattr(panel_chart_data_source, "sqlite_authority_active", lambda _broker: False)
+    monkeypatch.setattr(
+        panel_chart_data_source,
+        "project_instance_fills",
+        lambda received_sid, received_entries: (
+            expected_fills
+            if received_sid == SID and received_entries is entries
+            else pytest.fail("legacy snapshot normalized a different journal cut")
+        ),
+    )
+    monkeypatch.setattr(panel_chart_data_source, "_build_live_chart_from_fills", build_from_fills)
+
+    panel, _chart = await panel_chart_data_source.get_live_snapshot_parts(
+        "alpaca",
+        "paper-account",
+        SID,
+        resolution="1m",
+    )
+
+    assert panel.symbol == "SPY"
+    assert captured == [expected_fills]
+
+
+async def test_active_history_uses_sqlite_chart_evidence_not_legacy_journal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected_fills = (_sqlite_fill(event_key="sqlite-history", filled_at_ms=_NOW - 1),)
+    calls: list[tuple[str, str, str, int, int]] = []
+    status = BotStatusView(
+        strategy_instance_id=SID,
+        broker="alpaca",
+        symbol="SPY",
+        mode="trade",
+        quantity=1,
+        running=True,
+        phase="ON_DUTY",
+        desired_state="RUNNING",
+        active_run_id="run-1",
+        duty_outcome=None,
+        binding_created_at_ms=_NOW - 60_000,
+        last_transition_at_ms=_NOW - 60_000,
+    )
+
+    async def validate_account(_broker: str, account_id: str) -> str:
+        return account_id
+
+    async def chart_evidence(
+        broker: str,
+        account_id: str,
+        sid: str,
+        *,
+        from_ms: int,
+        to_ms: int,
+    ) -> SimpleNamespace:
+        calls.append((broker, account_id, sid, from_ms, to_ms))
+        return SimpleNamespace(status=status, fills=SimpleNamespace(fills=expected_fills))
+
+    async def empty_bars(*_args: object, **_kwargs: object) -> list[PolygonBar]:
+        return []
+
+    monkeypatch.setattr(
+        panel_chart_data_source,
+        "validate_panel_account_scope",
+        validate_account,
+    )
+    monkeypatch.setattr(panel_chart_data_source, "sqlite_authority_active", lambda _broker: True)
+    monkeypatch.setattr(panel_chart_data_source, "now_ms_utc", lambda: _NOW)
+    monkeypatch.setattr(
+        panel_chart_data_source,
+        "history_fill_window",
+        lambda preset, now_ms: (_NOW - 86_400_000, now_ms),
+    )
+    monkeypatch.setattr(panel_chart_data_source, "read_sqlite_chart_evidence", chart_evidence)
+    monkeypatch.setattr(panel_chart_data_source, "read_legacy_chart_status", pytest.fail)
+    monkeypatch.setattr(panel_chart_data_source, "read_legacy_chart_fills", pytest.fail)
+    monkeypatch.setattr(panel_chart_data_source, "fetch_aggregate_bars", empty_bars)
+
+    result = await panel_chart_data_source.get_history_chart(
+        "alpaca",
+        "paper-account",
+        SID,
+        "1D",
+    )
+
+    assert calls == [("alpaca", "paper-account", SID, _NOW - 86_400_000, _NOW)]
+    assert [marker.order_ref for marker in result.fill_markers] == [expected_fills[0].order_ref]

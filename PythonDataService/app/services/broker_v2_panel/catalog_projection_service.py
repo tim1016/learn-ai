@@ -17,6 +17,7 @@ from __future__ import annotations
 from app.broker.alpaca.clerk.fills import project_instance_fills
 from app.broker.alpaca.clerk.models import OrderJournalEntry
 from app.broker.alpaca.clerk.rollup_cache import BotRollup, BotRollupCache
+from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicSnapshot
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import BotCatalogView
 
@@ -27,6 +28,14 @@ _STATUS_LABEL_OFF_DUTY = "Off duty"
 _STATUS_LABEL_RETIRED = "Retired"
 
 
+class SqliteCatalogProjectionUnavailable(RuntimeError):
+    """Activated SQLite roster cannot be projected from complete authority facts."""
+
+
+class SqliteCatalogRevisionMismatch(SqliteCatalogProjectionUnavailable):
+    """Custody and economic SQLite readers observed different revisions."""
+
+
 def status_label_for(status: BotStatusView) -> str:
     """Map a bot's phase + liveness to the closed status vocabulary (§5)."""
     if status.phase == "RETIRED":
@@ -34,6 +43,47 @@ def status_label_for(status: BotStatusView) -> str:
     if status.running:
         return _STATUS_LABEL_WORKING
     return _STATUS_LABEL_OFF_DUTY
+
+
+def sqlite_catalog_rollup(snapshot: EconomicSnapshot) -> BotRollup:
+    """Adapt one S2 economic snapshot to the existing roster rollup contract.
+
+    All execution quantities and P&L values are direct S2 projection outputs;
+    this adapter intentionally does not re-derive a total from fills.
+    """
+    return BotRollup(
+        sid=snapshot.strategy_instance_id,
+        exposure=dict(snapshot.exposure),
+        fills_today=snapshot.fills_today,
+        realized_pnl_today=snapshot.realized_pnl_today,
+        open_pnl=snapshot.open_pnl,
+        last_activity_at_ms=snapshot.last_activity_at_ms,
+        needs_attention=snapshot.execution_coverage != "complete",
+        as_of_ms=snapshot.last_activity_at_ms,
+    )
+
+
+def require_sqlite_catalog_identity(status: BotStatusView) -> BotStatusView:
+    """Reject a roster row whose immutable SQLite config identity is absent.
+
+    ``strategy_key`` is populated from the S1 ``bot_config`` row before this
+    projection runs.  ``unknown`` was a transitional placeholder that is not a
+    valid product identity once SQLite is active.
+    """
+    if (
+        not status.strategy_key
+        or status.strategy_key == "unknown"
+        or not status.strategy_label
+    ):
+        raise SqliteCatalogProjectionUnavailable(
+            f"Bot '{status.strategy_instance_id}' has no immutable SQLite configuration."
+        )
+    return status
+
+
+def _strategy_label_for(status: BotStatusView) -> str:
+    """Return a backend-authored label; SQLite rows keep their persisted name."""
+    return status.strategy_label or status.strategy_key.replace("_", " ").replace("-", " ").title()
 
 
 def _lifecycle_needs_attention(status: BotStatusView) -> bool:
@@ -97,6 +147,7 @@ def compose_catalog_view(
     return BotCatalogView(
         strategy_instance_id=status.strategy_instance_id,
         strategy_key=status.strategy_key,
+        strategy_label=_strategy_label_for(status),
         broker=status.broker,
         account_id=account_id,
         symbol=status.symbol,

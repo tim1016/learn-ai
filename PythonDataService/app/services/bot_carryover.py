@@ -77,12 +77,17 @@ class CarryoverStopCheckpoint(BaseModel):
 
 def configuration_hash(binding: CarryoverBinding) -> str:
     """Hash immutable deployment semantics, excluding per-run identity/time."""
-    payload = binding.model_dump(
+    payload = immutable_configuration_payload(binding)
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def immutable_configuration_payload(binding: CarryoverBinding) -> dict:
+    """Return the exact immutable configuration payload hashed for carryover."""
+    return binding.model_dump(
         mode="json",
         exclude={"run_id", "created_at_ms"},
     )
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
 
 
 def read_checkpoint(path: Path) -> CarryoverStopCheckpoint | None:

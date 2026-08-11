@@ -11,12 +11,24 @@ from __future__ import annotations
 from typing import Protocol
 
 from app.broker.alpaca.clerk.models import ClerkEntryKind
-from app.broker.alpaca.clerk.sqlite.facts import AccountHoldRaisedFacts
+from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
+from app.broker.alpaca.clerk.sqlite.facts import (
+    AccountHoldRaisedFacts,
+    ExecutionSliceFilledFacts,
+    UncertaintyRaisedFacts,
+)
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
-from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
+from app.broker.alpaca.clerk.sqlite.order_evidence import (
+    fold_order_acknowledgement,
+    fold_order_evidence,
+)
 from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+    ExecutionCoverageConflictCause,
+)
 from app.broker.contract.models import BrokerActivity, BrokerOrder, BrokerOrderEvent
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 
@@ -156,9 +168,20 @@ class SqliteTradeUpdateEvidenceSink:
         recovery_source: str | None,
         recovery_window_limit: int | None,
     ) -> ClerkEntryKind:
-        del event, recovery_source, recovery_window_limit
+        del recovery_window_limit
         async with self._intake:
             local_order = self._repo.order(client_order_id) if client_order_id else None
+            if local_order is None and order is not None:
+                # This broker identity is not captured by any bot-owned
+                # order.  Persist it separately from bot economics; the
+                # observation fold raises its own atomic account hold.
+                observe_external_order(
+                    self._repo,
+                    order=order,
+                    proof_reference=event_key,
+                )
+                return ClerkEntryKind.UNEXPLAINED_ORDER
+
             if local_order is None or order is None:
                 evidence_refs = tuple(
                     ref
@@ -201,7 +224,112 @@ class SqliteTradeUpdateEvidenceSink:
                 owner = self._repo.effect_operation(local_order.effect_operation_id)
             if owner is None:
                 raise RuntimeError(f"SQLite order {local_order.order_ref!r} has no owning effect operation")
-            fold_order_evidence(
+
+            if (
+                recovery_source == "closed_orders_window"
+                and event.event_type in {"fill", "partial_fill"}
+                and event.execution_id is None
+            ):
+                # REST order snapshots carry only cumulative order economics.
+                # Preserve them through the explicitly labelled recovery fold;
+                # do not invent an execution ID just to enter the websocket path.
+                fold_order_evidence(
+                    self._repo,
+                    effect_operation_id=owner.effect_operation_id,
+                    order=order,
+                )
+                return ClerkEntryKind.ORDER_EVENT
+
+            if event.event_type in {"fill", "partial_fill"} and event.execution_id is not None:
+                if event.quantity is None or event.price is None:
+                    raise ValueError(
+                        "Alpaca execution event must include a quantity and price when execution_id is set"
+                    )
+                facts = ExecutionSliceFilledFacts(
+                    execution_id=event.execution_id,
+                    symbol=order.symbol,
+                    side=order.side.upper(),
+                    slice_qty=event.quantity,
+                    slice_price=event.price,
+                    fee=None,
+                    fee_fidelity="not_reported",
+                    evidence_source="websocket",
+                    source_event_at_ms=event.occurred_at_ms,
+                )
+
+                def _execution_transition() -> TransitionInput:
+                    return TransitionInput(
+                        strategy_instance_id=owner.strategy_instance_id,
+                        run_id=owner.run_id,
+                        command_id=owner.command_id,
+                        effect_operation_id=owner.effect_operation_id,
+                        order_ref=local_order.order_ref,
+                        broker_order_id=order.order_id,
+                        transition_kind="EXECUTION_SLICE_FILLED",
+                        custody_owner="ACCOUNT_CLERK",
+                        execution_authority="ACCOUNT_CLERK",
+                        operation_state="in_progress",
+                        proof_reference=event_key,
+                        source_event_at_ms=event.occurred_at_ms,
+                        clerk_observed_at_ms=self._repo.clock(),
+                        summary_code="EXECUTION_SLICE_FILLED",
+                        facts_json=facts.to_facts_json(),
+                    )
+
+                def _coverage_conflict_transition() -> TransitionInput:
+                    conflict_facts = UncertaintyRaisedFacts(
+                        severity="error",
+                        blocks_new_exposure=True,
+                        allows_reduction=False,
+                        reason_code=EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+                        headline="Exact execution conflicts with prior immutable evidence",
+                        explanation=(
+                            "The received websocket execution cannot be safely merged with "
+                            "the order's prior execution evidence."
+                        ),
+                        operator_impact=(
+                            "New exposure is blocked until this order's execution coverage is reconciled."
+                        ),
+                        next_step=(
+                            "Reconcile the broker order and its execution slices before resuming."
+                        ),
+                        evidence_refs=[event_key, event.execution_id],
+                        cause_facts=ExecutionCoverageConflictCause(
+                            order_ref=local_order.order_ref,
+                            execution_id=event.execution_id,
+                        ).to_mapping(),
+                    )
+                    return TransitionInput(
+                        strategy_instance_id=owner.strategy_instance_id,
+                        run_id=owner.run_id,
+                        command_id=owner.command_id,
+                        effect_operation_id=owner.effect_operation_id,
+                        order_ref=local_order.order_ref,
+                        broker_order_id=order.order_id,
+                        transition_kind="UNCERTAINTY_RAISED",
+                        custody_owner="ACCOUNT_CLERK",
+                        execution_authority="ACCOUNT_CLERK",
+                        operation_state="succeeded",
+                        proof_reference=event_key,
+                        source_event_at_ms=event.occurred_at_ms,
+                        clerk_observed_at_ms=self._repo.clock(),
+                        summary_code=EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+                        facts_json=conflict_facts.to_facts_json(),
+                    )
+
+                self._repo.append_execution_slice_if_absent(
+                    execution_id=event.execution_id,
+                    order_ref=local_order.order_ref,
+                    build_transition=_execution_transition,
+                    build_coverage_conflict=_coverage_conflict_transition,
+                )
+
+            # A websocket's embedded order is aggregate lifecycle evidence,
+            # never the source of fill math: it may report a cumulative filled
+            # quantity while the frame above contains exactly one execution
+            # slice. REST reconciliation remains the explicitly-labelled
+            # cumulative-recovery path in ``fold_order_evidence``.
+            fold_order_acknowledgement(
                 self._repo,
                 effect_operation_id=owner.effect_operation_id,
                 order=order,

@@ -114,6 +114,7 @@ class BotCatalogView(BaseModel):
 
     strategy_instance_id: str
     strategy_key: str
+    strategy_label: str
     broker: str
     account_id: str
     symbol: str
