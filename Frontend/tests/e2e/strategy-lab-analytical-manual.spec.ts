@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 
 test.describe('Strategy Lab analytical manual', () => {
   test('supports keyboard-addressable search, filters, contextual links, and a non-runtime case study', async ({ page }) => {
-    await page.route('http://localhost:5000/graphql', async (route) => {
+    await page.route('**/graphql', async (route) => {
       await route.fulfill({
         json: {
           data: {

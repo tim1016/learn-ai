@@ -23,8 +23,8 @@
     </h4>
     <div class="kpi-grid kpi-grid--4">
       @for (item of returnMetrics; track item.label) {
-        <div class="kpi-cell" [pTooltip]="item.tooltip" tooltipPosition="top">
-          <span class="kpi-label">{{ item.label }}</span>
+        <div class="kpi-cell">
+          <span class="kpi-label"><span class="kpi-label__text">{{ item.label }}</span><app-metric-help-modal [variantId]="item.documentationVariantId" [label]="item.label" /></span>
           <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
           <span class="kpi-source">{{ item.source }}</span>
         </div>
@@ -38,8 +38,8 @@
     </h4>
     <div class="kpi-grid kpi-grid--4">
       @for (item of riskMetrics; track item.label) {
-        <div class="kpi-cell" [pTooltip]="item.tooltip" tooltipPosition="top">
-          <span class="kpi-label">{{ item.label }}</span>
+        <div class="kpi-cell">
+          <span class="kpi-label"><span class="kpi-label__text">{{ item.label }}</span><app-metric-help-modal [variantId]="item.documentationVariantId" [label]="item.label" /></span>
           <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
           <span class="kpi-source">{{ item.source }}</span>
         </div>
@@ -53,8 +53,8 @@
     </h4>
     <div class="kpi-grid kpi-grid--2">
       @for (item of drawdownMetrics; track item.label) {
-        <div class="kpi-cell" [pTooltip]="item.tooltip" tooltipPosition="top">
-          <span class="kpi-label">{{ item.label }}</span>
+        <div class="kpi-cell">
+          <span class="kpi-label"><span class="kpi-label__text">{{ item.label }}</span><app-metric-help-modal [variantId]="item.documentationVariantId" [label]="item.label" /></span>
           <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
           <span class="kpi-source">{{ item.source }}</span>
         </div>
@@ -76,8 +76,8 @@
       </h4>
       <div class="kpi-grid kpi-grid--5">
         @for (item of benchmarkMetrics; track item.label) {
-          <div class="kpi-cell" [pTooltip]="item.tooltip" tooltipPosition="top">
-            <span class="kpi-label">{{ item.label }}</span>
+          <div class="kpi-cell">
+            <span class="kpi-label"><span class="kpi-label__text">{{ item.label }}</span><app-metric-help-modal [variantId]="item.documentationVariantId" [label]="item.label" /></span>
             <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
             <span class="kpi-source">{{ item.source }}</span>
           </div>
@@ -91,8 +91,8 @@
       </h4>
       <div class="kpi-grid kpi-grid--5">
         @for (item of tradePopulationMetrics; track item.label) {
-          <div class="kpi-cell" [pTooltip]="item.tooltip" tooltipPosition="top">
-            <span class="kpi-label">{{ item.label }}</span>
+          <div class="kpi-cell">
+            <span class="kpi-label"><span class="kpi-label__text">{{ item.label }}</span><app-metric-help-modal [variantId]="item.documentationVariantId" [label]="item.label" /></span>
             <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
             <span class="kpi-source">{{ item.source }}</span>
           </div>
@@ -106,8 +106,8 @@
       </h4>
       <div class="kpi-grid kpi-grid--5">
         @for (item of tradeMetrics; track item.label) {
-          <div class="kpi-cell" [pTooltip]="item.tooltip" tooltipPosition="top">
-            <span class="kpi-label">{{ item.label }}</span>
+          <div class="kpi-cell">
+            <span class="kpi-label"><span class="kpi-label__text">{{ item.label }}</span><app-metric-help-modal [variantId]="item.documentationVariantId" [label]="item.label" /></span>
             <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
             <span class="kpi-source">{{ item.source }}</span>
           </div>
@@ -121,8 +121,8 @@
       </h4>
       <div class="kpi-grid kpi-grid--5">
         @for (item of durationMetrics; track item.label) {
-          <div class="kpi-cell" [pTooltip]="item.tooltip" tooltipPosition="top">
-            <span class="kpi-label">{{ item.label }}</span>
+          <div class="kpi-cell">
+            <span class="kpi-label"><span class="kpi-label__text">{{ item.label }}</span><app-metric-help-modal [variantId]="item.documentationVariantId" [label]="item.label" /></span>
             <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
             <span class="kpi-source">{{ item.source }}</span>
           </div>
@@ -136,8 +136,8 @@
       </h4>
       <div class="kpi-grid kpi-grid--4">
         @for (item of tradeExcursionMetrics; track item.label) {
-          <div class="kpi-cell" [pTooltip]="item.tooltip" tooltipPosition="top">
-            <span class="kpi-label">{{ item.label }}</span>
+          <div class="kpi-cell">
+            <span class="kpi-label"><span class="kpi-label__text">{{ item.label }}</span><app-metric-help-modal [variantId]="item.documentationVariantId" [label]="item.label" /></span>
             <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
             <span class="kpi-source">{{ item.source }}</span>
           </div>
@@ -151,8 +151,8 @@
       </h4>
       <div class="kpi-grid kpi-grid--4">
         @for (item of distributionMetrics; track item.label) {
-          <div class="kpi-cell" [pTooltip]="item.tooltip" tooltipPosition="top">
-            <span class="kpi-label">{{ item.label }}</span>
+          <div class="kpi-cell">
+            <span class="kpi-label"><span class="kpi-label__text">{{ item.label }}</span><app-metric-help-modal [variantId]="item.documentationVariantId" [label]="item.label" /></span>
             <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
             <span class="kpi-source">{{ item.source }}</span>
           </div>
@@ -166,8 +166,8 @@
       </h4>
       <div class="kpi-grid kpi-grid--5">
         @for (item of runtimeMetrics; track item.label) {
-          <div class="kpi-cell" [pTooltip]="item.tooltip" tooltipPosition="top">
-            <span class="kpi-label">{{ item.label }}</span>
+          <div class="kpi-cell">
+            <span class="kpi-label"><span class="kpi-label__text">{{ item.label }}</span><app-metric-help-modal [variantId]="item.documentationVariantId" [label]="item.label" /></span>
             <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
             <span class="kpi-source">{{ item.source }}</span>
           </div>

@@ -9,8 +9,8 @@ import type { MetricVariant } from "./analytical-metric-catalog.models";
 import {
   StrategyLabAnalyticalManualComponent,
   filterMetricVariants,
-  resolveMetricContext,
 } from "./strategy-lab-analytical-manual.component";
+import { resolveMetricContext } from "./metric-context.util";
 
 const VARIANTS: MetricVariant[] = [
   {

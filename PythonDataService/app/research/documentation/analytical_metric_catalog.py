@@ -290,12 +290,29 @@ def metric_documentation_context_for_source(
     recorded metadata verbatim and only falls back to inference for older rows.
     """
 
-    variant = LEAN_NATIVE_SHARPE_VARIANT if source == "lean-sidecar" else PLATFORM_SHARPE_VARIANT
-    return (
+    if source == "lean-sidecar":
+        variants = (
+            ("sharpe", "sharpe.lean_native.v1", "lean-statistics-oracle-v1"),
+            ("sortino", "lean_native.portfolio.sortino_ratio.v1", "lean-native-statistics-oracle-v1"),
+            ("maximum_drawdown", "lean_native.portfolio.drawdown.v1", "lean-native-statistics-oracle-v1"),
+            ("profit_factor", "lean_native.trade.profit_factor.v1", "lean-native-statistics-oracle-v1"),
+        )
+        producer = "lean_native"
+    else:
+        variants = (
+            ("sharpe", "sharpe.platform.v1", "platform-sharpe-v1"),
+            ("sortino", "sortino.platform.v1", "platform-results-statistics-v1"),
+            ("maximum_drawdown", "maximum_drawdown.platform.v1", "platform-results-statistics-v1"),
+            ("profit_factor", "profit_factor.platform.v1", "platform-results-statistics-v1"),
+        )
+        producer = "platform"
+
+    return tuple(
         {
-            "metric_id": variant.metric_id,
-            "variant_id": variant.variant_id,
-            "producer": variant.producer,
-            "contract_id": variant.contract_id or "",
-        },
+            "metric_id": metric_id,
+            "variant_id": variant_id,
+            "producer": producer,
+            "contract_id": contract_id,
+        }
+        for metric_id, variant_id, contract_id in variants
     )

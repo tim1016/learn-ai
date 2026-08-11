@@ -163,6 +163,15 @@ def test_results_catalog_variant_ids_are_unique() -> None:
     assert len(variant_ids) == len(set(variant_ids))
 
 
+def test_results_catalog_has_specific_trader_guidance_for_every_quantity() -> None:
+    generic = "Read this value together with its producer, input evidence, and any unavailable state."
+
+    for entry in (*PLATFORM_HEADLINE_VARIANTS, *VERDICT_POLICY_VARIANTS, *PERFORMANCE_MEMORY_VARIANTS):
+        assert entry.interpretation != generic, entry.variant_id
+        assert len(entry.interpretation) >= 24, entry.variant_id
+        assert entry.common_misreadings, entry.variant_id
+
+
 def test_policy_entries_derive_their_threshold_prose_from_the_scorer_owned_descriptor() -> None:
     policy_by_id = {entry.variant_id: entry for entry in VERDICT_POLICY_VARIANTS}
 
