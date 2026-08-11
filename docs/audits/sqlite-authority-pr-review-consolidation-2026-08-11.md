@@ -199,6 +199,8 @@ service or fallback path to them.
 - Frontend OpenAPI client generation passed after the regenerated contract was
   committed.
 - SQLite/Alpaca/panel/router/retirement scope: 793 passed.
+- SQLite synthetic custody drills: 10 passed, including the disabled fault-seam
+  regression that must remain a typed partial result without a websocket slice.
 - Frontend guard checks passed; 47 PR-scoped Angular tests passed.
 - The broad Python suite's first failure is an untouched deprecated IBKR
   router expectation (current `403`, historical expected `503`); that retired
