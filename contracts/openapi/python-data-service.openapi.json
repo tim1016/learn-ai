@@ -11314,6 +11314,17 @@
             ],
             "title": "Sec Type"
           },
+          "stop_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Price"
+          },
           "symbol": {
             "anyOf": [
               {
@@ -11620,6 +11631,28 @@
             "title": "Event Kind",
             "type": "string"
           },
+          "execution_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Price"
+          },
+          "execution_quantity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Quantity"
+          },
           "fee": {
             "anyOf": [
               {
@@ -11630,6 +11663,21 @@
               }
             ],
             "title": "Fee"
+          },
+          "fee_fidelity": {
+            "anyOf": [
+              {
+                "enum": [
+                  "reported",
+                  "not_reported"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fee Fidelity"
           },
           "journal_seq": {
             "minimum": 1.0,
@@ -11844,6 +11892,41 @@
             ],
             "title": "Exec Id"
           },
+          "execution_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Price"
+          },
+          "execution_quantity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Quantity"
+          },
+          "external_order_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Order Id"
+          },
           "fee": {
             "anyOf": [
               {
@@ -11855,11 +11938,33 @@
             ],
             "title": "Fee"
           },
+          "fee_fidelity": {
+            "anyOf": [
+              {
+                "enum": [
+                  "reported",
+                  "not_reported"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fee Fidelity"
+          },
           "intent_id": {
-            "maxLength": 256,
-            "minLength": 1,
-            "title": "Intent Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intent Id"
           },
           "journal_seq": {
             "minimum": 1.0,
@@ -11912,10 +12017,17 @@
             "$ref": "#/components/schemas/ClerkOrderInstruction"
           },
           "order_ref": {
-            "maxLength": 512,
-            "minLength": 1,
-            "title": "Order Ref",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Order Ref"
           },
           "perm_id": {
             "anyOf": [
@@ -11939,16 +12051,30 @@
             "type": "integer"
           },
           "run_id": {
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Run Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
           },
           "strategy_instance_id": {
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Strategy Instance Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Instance Id"
           },
           "transaction_id": {
             "maxLength": 512,
@@ -11967,6 +12093,8 @@
             "enum": [
               "manual",
               "strategy",
+              "external",
+              "unknown",
               "recovery",
               "emergency",
               "shutdown",
@@ -11983,10 +12111,6 @@
           "journal_seq",
           "recorded_at_ms",
           "transaction_kind",
-          "strategy_instance_id",
-          "run_id",
-          "intent_id",
-          "order_ref",
           "lifecycle_state"
         ],
         "title": "ClerkTransactionRow",
@@ -12037,6 +12161,41 @@
             ],
             "title": "Exec Id"
           },
+          "execution_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Price"
+          },
+          "execution_quantity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Quantity"
+          },
+          "external_order_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Order Id"
+          },
           "fee": {
             "anyOf": [
               {
@@ -12048,11 +12207,33 @@
             ],
             "title": "Fee"
           },
+          "fee_fidelity": {
+            "anyOf": [
+              {
+                "enum": [
+                  "reported",
+                  "not_reported"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fee Fidelity"
+          },
           "intent_id": {
-            "maxLength": 256,
-            "minLength": 1,
-            "title": "Intent Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intent Id"
           },
           "journal_seq": {
             "minimum": 1.0,
@@ -12105,10 +12286,17 @@
             "$ref": "#/components/schemas/ClerkOrderInstruction"
           },
           "order_ref": {
-            "maxLength": 512,
-            "minLength": 1,
-            "title": "Order Ref",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Order Ref"
           },
           "perm_id": {
             "anyOf": [
@@ -12128,16 +12316,30 @@
             "type": "integer"
           },
           "run_id": {
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Run Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
           },
           "strategy_instance_id": {
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Strategy Instance Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Instance Id"
           },
           "transaction_id": {
             "maxLength": 512,
@@ -12156,6 +12358,8 @@
             "enum": [
               "manual",
               "strategy",
+              "external",
+              "unknown",
               "recovery",
               "emergency",
               "shutdown",
@@ -12172,10 +12376,6 @@
           "journal_seq",
           "recorded_at_ms",
           "transaction_kind",
-          "strategy_instance_id",
-          "run_id",
-          "intent_id",
-          "order_ref",
           "lifecycle_state",
           "event_count"
         ],
@@ -17019,6 +17219,53 @@
           "explanation"
         ],
         "title": "ExposureSlice",
+        "type": "object"
+      },
+      "ExternalOrderAcknowledgementRequest": {
+        "additionalProperties": false,
+        "description": "Operator evidence for reviewing one externally observed broker order.",
+        "properties": {
+          "operator": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Operator",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operator"
+        ],
+        "title": "ExternalOrderAcknowledgementRequest",
+        "type": "object"
+      },
+      "ExternalOrderAcknowledgementResponse": {
+        "additionalProperties": false,
+        "description": "Durable result of acknowledging one external-order observation.",
+        "properties": {
+          "ack_operator": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Ack Operator",
+            "type": "string"
+          },
+          "acknowledged_at_ms": {
+            "minimum": 0.0,
+            "title": "Acknowledged At Ms",
+            "type": "integer"
+          },
+          "external_order_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "External Order Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "external_order_id",
+          "acknowledged_at_ms",
+          "ack_operator"
+        ],
+        "title": "ExternalOrderAcknowledgementResponse",
         "type": "object"
       },
       "FailureRecord": {
@@ -44510,6 +44757,8 @@
                   "enum": [
                     "manual",
                     "strategy",
+                    "external",
+                    "unknown",
                     "recovery",
                     "emergency",
                     "shutdown",
@@ -44619,6 +44868,86 @@
           }
         },
         "summary": "Get Clerk Transaction History",
+        "tags": [
+          "clerk-transactions"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/transactions/external-orders/{external_order_id}/acknowledge": {
+      "post": {
+        "description": "Durably record operator review of one external broker-order observation.",
+        "operationId": "acknowledge_external_order_endpoint_api_accounts__account_id__transactions_external_orders__external_order_id__acknowledge_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "external_order_id",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 1,
+              "title": "External Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExternalOrderAcknowledgementRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalOrderAcknowledgementResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Acknowledge External Order Endpoint",
         "tags": [
           "clerk-transactions"
         ]
