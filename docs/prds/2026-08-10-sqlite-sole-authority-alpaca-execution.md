@@ -70,7 +70,7 @@ The report names the slice, the failing gate, the evidence, and the last green c
 
 ### Not AFK — S6 (human + market hours + host data-plane)
 
-The fresh-generation cutover ceremony (stop bots → prove account flat/no working orders → activate new authority generation on v8 → redeploy) and the live paper ENTER→partial/full-fill→EXIT→restart qualification required a human, live market hours, and a **host** data-plane (the container data-plane cannot drive live deploys/Clerk-RPC). S6 was completed on 2026-08-11; its receipts are documented under "Slice S6" below and in the paper-soak audit.
+The fresh-generation cutover ceremony (stop bots → prove account flat/no working orders → activate new authority generation on v8 → redeploy) and the live paper ENTER→broker fill (partial or full)→EXIT→restart qualification required a human, live market hours, and a **host** data-plane (the container data-plane cannot drive live deploys/Clerk-RPC). S6 was completed on 2026-08-11; its receipts and the deterministic/live evidence split are documented under "Slice S6" below and in the paper-soak audit.
 
 ---
 
@@ -186,9 +186,9 @@ def test_from_alpaca_trade_update_preserves_execution_id():
 **Parallel fan-out:** DDL+pinned-contract+parity-test must land **first** (serial); then parallel: (b) facts + new folds; (c) sink capture change; (d) external_orders table+fold; (e) bot_config persistence; (f) decision_receipts table.
 
 **Interfaces produced (consumed by S2+):**
-- `fills` columns: `execution_id TEXT` (the real Alpaca exec id, = `fill_id` on the capture path), `evidence_source TEXT CHECK IN ('websocket','activity_recovery','cumulative_recovery')`, `event_kind TEXT CHECK IN ('fill','correction')`, `superseded_execution_ref TEXT`, `fee REAL`, `fee_fidelity TEXT CHECK IN ('reported','not_reported')`, `source_event_at_ms`, `clerk_observed_at_ms`, `recorded_at_ms`.
+- `fills` columns: `execution_id TEXT` (the real Alpaca exec id, = `fill_id` on the capture path), `evidence_source TEXT CHECK IN ('websocket','activity_recovery','cumulative_recovery')`, `event_kind TEXT CHECK IN ('fill','correction')`, `superseded_execution_ref TEXT`, `fee REAL`, `fee_fidelity TEXT CHECK IN ('reported','not_reported')`, `source_event_at_ms`, `clerk_observed_at_ms`, `recorded_at_ms`, and v8's nullable `recorded_transition_sequence`.
 - New transition kinds: `EXECUTION_SLICE_FILLED`, `EXECUTION_CORRECTED`.
-- Tables: `external_orders`, `bot_config`, `decision_receipts`.
+- Tables: `external_orders` (including v8 `order_type`, `limit_price`, `stop_price`, and `filled_avg_price`), `bot_config`, `decision_receipts`.
 
 ### Task S1.1: v8 schema (DDL + pinned contract + parity test + version)
 
@@ -196,11 +196,14 @@ def test_from_alpaca_trade_update_preserves_execution_id():
 
 - [ ] Add `fills` provenance columns (fold table — **not** hash-participating, safe to add). Backfill semantics: `fill_id` on the capture path is the Alpaca `execution_id`; the cumulative-recovery path keeps the synthesized `order_ref:qty` id but sets `evidence_source='cumulative_recovery'`.
 - [ ] Add `external_orders(external_order_id PK, broker_order_id, client_order_id, symbol, side, qty, price, observed_at_ms, acknowledged_at_ms, ack_operator, evidence_refs_json)`; `bot_config(strategy_instance_id PK FK, strategy_key, display_name, config_json, config_hash, created_at_ms)`; `decision_receipts(strategy_instance_id, seq, outcome, symbol, intent_id, order_ref, observed_at_ms, facts_json, PRIMARY KEY(strategy_instance_id, seq))` with a bounded-tail index.
-- [ ] Bump `SCHEMA_VERSION = 8`. Register the guarded additive `6 → 8` path
-  in `SCHEMA_MIGRATIONS`: only after proving every operational v6 table is
-  empty, atomically add the execution-provenance `fills` columns, tables, and
-  indexes before advancing the version. A data-bearing v6 authority fails
-  closed and rolls back untouched; the fresh generation is created via
+- [ ] Bump `SCHEMA_VERSION = 8`. Register the guarded sequential additive path
+  in `SCHEMA_MIGRATIONS`: entry `6` applies the v6→v7 execution-provenance
+  `fills` columns, tables, and indexes; entry `7` applies v7→v8
+  `fills.recorded_transition_sequence` plus the external-order `order_type`,
+  `limit_price`, `stop_price`, and `filled_avg_price` columns. A caller reaches
+  v8 only by applying both entries in order. The v6→v7 step first proves every
+  operational v6 table empty; a data-bearing v6 authority fails closed and
+  rolls back untouched. A fresh generation is created directly at v8 via
   `apply_schema`.
 - [ ] Update the pinned-contracts doc §3 to the exact new DDL block; make `test_schema_parity.py` pass byte-for-byte.
 - [ ] Assert boot `verify_chain` / `integrity_check` still pass on a freshly-initialized v8 DB (no hash-participating column added). Commit.
@@ -369,10 +372,21 @@ during market hours on 2026-08-11. Post-acceptance fault hardening from #1440 wa
 qualified in the same campaign.
 
 - [x] Stop all bots; block new exposure; verify no working orders; reconcile positions; obtain fresh broker proof of flat/no-open-orders.
-- [x] Online SQLite backup; verify DB/mirror identity + hash. Initialize a **new authority generation** on schema v8 (clean-slate; no import). Redeploy desired instances with full config persisted.
+- [x] With both writers stopped, atomically preserve and verify the exact final generation-1 DB/WAL/mirror set (schema, identity, revision/sequence, head hash, file hashes). Initialize a **new authority generation** on schema v8 (clean-slate; no import), take and verify its transition-free online baseline backup, then redeploy the desired instance with full config persisted.
 - [x] Record `execution_coverage_start_ms`. (No JSONL consulted at read time.)
-- [x] Rebuild the mirror and prove identical fills/positions/lots/rollups reproduce. Reconcile against Alpaca before resuming.
+- [x] Before exposure, verify the clean generation-2 DB/mirror pair at identical genesis and reconcile against Alpaca. After the non-empty paper round trip, rebuild from the mirror and prove identical fills/positions/lots/rollups reproduce, then reconcile flat again.
 - [x] **Qualification gates (all passed on 2026-08-11):** GOOGL shows its fills in bot detail, roster rollup, chart markers, and account history; every account transaction identifies a bot or says external/unknown; websocket redelivery + process restart + REST/activity recovery never duplicate a fill; partial fills preserve every slice; corrections restate exposure + FIFO P&L; external orders never alter a bot's fills/P&L; SQLite/mirror rebuild reproduces identical results; corrupt/missing SQLite ⇒ unavailable/503 (never fallback); a browser network test proves the Alpaca pages never call the generic broker-orders endpoint; DST/half-day/holiday/session-boundary window tests pin fill-count and realized-P&L windows; catalog+panel performance remains within existing budgets; the final supervised one-share paper ENTER→full-fill→EXIT→restart ceremony preserves identical counts, attribution, and P&L. Receipts are in `docs/audits/alpaca-sqlite-clerk-paper-soak-2026-08-07.md`.
+
+**Recorded S6 execution interpretation.** The stopped-writer preservation is the
+final generation-1 recovery artifact; the earlier online backup is retained but is
+not represented as the cutover head. The pre-exposure mirror proof was the exact
+empty genesis pair; the meaningful non-empty rebuild followed the paper round trip.
+The one-share broker ceremony could produce either partial or full execution and in
+fact produced two terminal full fills. It does not claim a live partial. Partial,
+correction, and duplicate/redelivery behavior is supported by the retained
+source-accurate deterministic receipts, while the supervised paper receipt confirms
+the normal broker/UI/restart path. This is the formal evidence split used for #1440's
+“where live confirmation is meaningful” rule.
 
 ---
 

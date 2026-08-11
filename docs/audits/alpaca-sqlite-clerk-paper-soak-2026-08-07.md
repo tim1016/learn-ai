@@ -1,23 +1,21 @@
 # Alpaca SQLite Clerk supervised paper qualification — 2026-08-07
 
-**Status:** PARTIAL QUALIFICATION / RECOVERED AND IDLE — Qualification A
-produced one valid paper round trip, then the restart/UI drill hit the
-corruption abort recorded in
-[#1413](https://github.com/tim1016/learn-ai/issues/1413). The operator-approved
-mirror rebuild subsequently restored the current finalized head without
-changing generation or database identity, and a supervised three-bar run plus
-normal stop/reconciliation/restart completed flat and order-free. Earlier
-defects are tracked by [#1410](https://github.com/tim1016/learn-ai/issues/1410),
-[#1411](https://github.com/tim1016/learn-ai/issues/1411), and
-[#1412](https://github.com/tim1016/learn-ai/issues/1412). This remains partial
-evidence, not #1409 closure evidence.
+**Status:** ACCEPTED FOR CUTOVER ACCOUNT / RECOVERED AND IDLE. This report began
+with the partial generation-1 Qualification A campaign and preserves every abort
+and historical verdict below. The 2026-08-10 evidence amendment and UI ceremony
+accepted generation 1; the 2026-08-11 supervised cutover activated generation 2
+on schema v8 and completed the bounded deterministic/live hardening campaign.
 
-**Scope:** Alpaca paper account `PA3KWXU1C4C3`, SQLite authority generation 1.
-Live-money execution remained disabled. This report carries the remaining
-qualification and governance work from issue
-[#1409](https://github.com/tim1016/learn-ai/issues/1409).
+**Scope:** Alpaca paper account `PA3KWXU1C4C3`. Generation-1 evidence remains
+historical through its preserved final snapshot; generation 2 is active only for
+this account's valid activation fence. Other Alpaca accounts are not covered by
+this receipt. Live-money execution remained disabled. This report carries the
+qualification and governance work from issues
+[#1409](https://github.com/tim1016/learn-ai/issues/1409),
+[#1447](https://github.com/tim1016/learn-ai/issues/1447), and
+[#1440](https://github.com/tim1016/learn-ai/issues/1440).
 
-## Closure rule
+## Historical closure rule (superseded 2026-08-10)
 
 Issue #1409 and ADR 0035 may close only after every required live scenario below
 has passed across multiple operator-supervised market sessions, the final broker
@@ -87,8 +85,10 @@ the risk but does not close that incident.
 | Qualification A | 2026-08-07 | yes | ABORT — Resume-control defect fixed locally, then both IBKR consumers repeated the one-print stall while Broker V2 still presented Live/Healthy; stopped and reconciled flat | This report; #1410; #1411 |
 | Qualification A, attempt 2 | 2026-08-07 | yes | PASS for one normal ENTER/EXIT round trip; ABORT for the subsequent truth/restart drill | This report; #1412; #1413 |
 | Recovery and Qualification A, attempt 3 | 2026-08-07 | yes | PASS — current mirror rebuilt the corrupt authority, three advancing closed bars produced durable no-action decisions, Stop/Reconcile/restart remained flat and idle | This report; #1413 |
-| Qualification B | Later market session | pending | PENDING | This report |
-| Qualification C | Later market session | pending | PENDING | This report |
+| Qualification B | Superseded 2026-08-10 | n/a | NOT RUN — evidence-driven acceptance amendment replaced the historical live matrix | Acceptance-governance section below |
+| Qualification C | Superseded 2026-08-10 | n/a | NOT RUN — unrun fault rows moved to bounded post-acceptance hardening | #1440; combined campaign below |
+| UI acceptance | 2026-08-10 | yes | PASS — one-share SPY round trip, stopped flat, generation 1 accepted for the account | UI-driven acceptance section below |
+| Generation-2 S6 / fault campaign | 2026-08-11 | yes | PASS — clean schema-v8 cutover, one-share GOOGL round trip, restart, restore, and non-empty mirror rebuild | Combined campaign below; committed receipts |
 
 ## Qualification A preflight
 
@@ -664,10 +664,21 @@ post-acceptance fault work in issue #1440. It is a second NYSE session after the
 Before rotation, rendered Alpaca Broker V2 pages showed all nine governed generation-1
 instances Off duty and Flat. A fresh Alpaca broker observation proved account
 `PA3KWXU1C4C3` had no position and no open order at `1786461841537` ms UTC. Both
-authority writers were then stopped. The offline recovery boundary preserved the old
-database and transition mirror at
+authority writers were then stopped. The offline recovery boundary atomically
+preserved the old database, empty WAL, and transition mirror at
 `accounts/alpaca/PA3KWXU1C4C3/recovery-preserved/generation-1-1786461842559-7b8e1312`
-and initialized, without import:
+before initializing generation 2. Read-only verification of that exact final
+generation-1 snapshot recorded schema `6`, identity
+`03ed49bd38bb1f3a6462f81706e7dec2`, control revision/transition count/last sequence
+`762`, integrity `ok`, and last row hash
+`00dc3057a888585561b34cfa5cbaa84bbd61a94e62c057ce0bde29e06a40d21f`.
+Its database and mirror SHA-256 values are respectively
+`5195d3ca6f9718fe9750e7e76f1aafbe05ede67175edcaa4f219e08693d3af73` and
+`6d99984a4d3d1c89040ba9e84dc7e90849d139685daea6fece25efdbe31092af`.
+This stopped-writer preservation is the final generation-1 recovery artifact; the
+earlier sequence-326 online backup is not represented as the cutover head.
+
+The reset then initialized, without import:
 
 - authority generation `2`;
 - schema version `8`;
@@ -678,14 +689,21 @@ and initialized, without import:
 The established-generation and activation registries both bind that exact generation
 and database identity. Offline verification returned `integrity_check=ok`; after the
 service reopened, the rendered Account Desk showed **Healthy · generation 2**, no
-position, working order, hold, or uncertainty. The first fresh reconciliation completed
-as `reconciliation:1`. An online baseline backup then verified schema `8`, generation
-`2`, identity `7f76bfb2d17c08b751fa1edb00fa3f55`, sequence `0`, and hash head `GENESIS`:
+position, working order, hold, or uncertainty. Before any generation-2 transition, an
+online baseline backup verified schema `8`, generation `2`, identity
+`7f76bfb2d17c08b751fa1edb00fa3f55`, sequence `0`, and hash head `GENESIS`:
 
 - bundle
   `accounts/alpaca/PA3KWXU1C4C3/verified-backups/backup-g2-1786462047278-8a114ff41c186e19`;
 - snapshot SHA-256
   `8a114ff41c186e1988ef01dcb32c967346ea9b6831094dedddbac1b245b4fa91`.
+
+After that backup completed, the first fresh reconciliation committed
+`RECONCILIATION_ATTEMPTED` at `1786462310527` ms UTC as sequence `1`, row hash
+`1d976fa7499d05fa408211cbdcdda71e6dfa2917eb41aa9790147d42a3f48904`, and receipt
+`reconciliation:1`. The preserved manifests and reconstructed receipt values are in
+[`alpaca-sqlite-s6-cutover-receipts-2026-08-11.json`](alpaca-sqlite-s6-cutover-receipts-2026-08-11.json);
+the pre-cutover and post-campaign flat broker proofs are checked in beside it.
 
 ### Deterministic and browser qualification
 
@@ -693,7 +711,13 @@ The canonical full qualification passed all performance budgets at 10,000, 100,0
 and 1,000,000 transitions. At the largest scale, p95 latency was `0.192 ms` for the bot
 snapshot, `0.133 ms` for the account snapshot, and `47.521 ms` for a timeline page,
 inside the exclusive `75/100/100 ms` budgets. The report SHA-256 is
-`28a96fa0fdd21f8f414ada23a9705117c5cbe8ab8c0341027b6e270743d8e3`.
+`28a96fa0fdd21f8f414ada23a9705117c5c5cbe8ab8c0341027b6e270743d8e3`.
+The exact generated report is committed as
+[`alpaca-sqlite-clerk-qualification-full-2026-08-11.json`](alpaca-sqlite-clerk-qualification-full-2026-08-11.json)
+and its
+[`Markdown rendering`](alpaca-sqlite-clerk-qualification-full-2026-08-11.md);
+this dated report is distinct from the earlier canonical qualification run retained
+without overwrite.
 
 The qualification's complete SQLite Clerk and Alpaca trade-update surface passed
 `488` tests. A second focused `71`-test pass covered the source-accurate fault seams,
@@ -712,6 +736,15 @@ requests from read-only evidence controls. The browser report SHA-256 is
 `9c1928c060741d5f7550a2a428d70e6716bc17be53b5adc1496ce1b14bd4aede`;
 the campaign-contract SHA-256 remains
 `544cbea3cebf202806972851c64d0da5136b2c44a444a10d07c4ade8bbe7ffb3`.
+
+The live ceremony deliberately remained bounded to one paper share, so Alpaca
+returned terminal full fills; it did not produce or claim a live partial fill. For
+this campaign, the plan's `partial/full-fill` slash denotes the broker outcome that
+may occur, not a requirement to force a partial slice from a one-share order. The
+source-accurate deterministic suite supplies the retained partial-slice, correction,
+and duplicate/redelivery receipts; the supervised paper receipt confirms the normal
+broker/UI/restart path. This is the recorded evidence split for #1440's “where live
+confirmation is meaningful” completion rule.
 
 ### Supervised GOOGL paper ceremony
 
@@ -765,13 +798,15 @@ and the two exact strategy-attributed transaction receipts at projection high-wa
 - **#1447 — PASS.** The clean-slate schema-v8 generation-2 cutover, fresh broker
   proofs, live one-share GOOGL ENTER/full-fill/EXIT, stopped-flat restart, and final
   recovery verification all completed under human supervision.
-- **#1440 — PASS.** The deterministic fault campaign covers lost submit/cancel,
+- **#1440 — PASS under the recorded deterministic/live evidence split.** The
+  deterministic fault campaign covers lost submit/cancel,
   redelivery, cancel/fill races, gaps plus REST recovery, uncertainty isolation,
   in-flight restart, partial/corrected/external fills, session boundaries, and strict
   no-fallback behavior. The live session additionally confirms the normal UI-owned
   route, exact attribution, restart preservation, backup restore, mirror rebuild, and
   fail-closed lease guard.
 
-**Verdict: PASS.** Alpaca paper generation 2 on schema v8 is the accepted active
-SQLite authority. Generation 1 remains preserved as audit evidence; it was not
-imported and is not a product-read fallback.
+**Verdict: PASS for paper account `PA3KWXU1C4C3`.** Its valid activation selects
+generation 2 on schema v8 as the accepted active SQLite authority. Generation 1
+remains preserved as audit evidence; it was not imported and is not a product-read
+fallback. This verdict does not activate generation 2 for any other account.

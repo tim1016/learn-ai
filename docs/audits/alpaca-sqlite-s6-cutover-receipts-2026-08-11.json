@@ -1,0 +1,70 @@
+{
+  "account_id": "PA3KWXU1C4C3",
+  "authority_generation_1_preserved": {
+    "path": "accounts/alpaca/PA3KWXU1C4C3/recovery-preserved/generation-1-1786461842559-7b8e1312",
+    "preserved_at_ms": 1786461842559,
+    "authority_generation": 1,
+    "schema_version": 6,
+    "db_identity_token": "03ed49bd38bb1f3a6462f81706e7dec2",
+    "control_revision": 762,
+    "transition_count": 762,
+    "last_sequence": 762,
+    "last_row_hash": "00dc3057a888585561b34cfa5cbaa84bbd61a94e62c057ce0bde29e06a40d21f",
+    "integrity_check": "ok",
+    "database_sha256": "5195d3ca6f9718fe9750e7e76f1aafbe05ede67175edcaa4f219e08693d3af73",
+    "wal_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "mirror_sha256": "6d99984a4d3d1c89040ba9e84dc7e90849d139685daea6fece25efdbe31092af",
+    "preservation_manifest_sha256": "dcbc04c5eec1db39528195a6bd0985b3edabd63abda3d1a7ea64a9b1b05b2d16"
+  },
+  "authority_generation_2_baseline": {
+    "path": "accounts/alpaca/PA3KWXU1C4C3/verified-backups/backup-g2-1786462047278-8a114ff41c186e19",
+    "created_at_ms": 1786462047278,
+    "authority_generation": 2,
+    "schema_version": 8,
+    "db_identity_token": "7f76bfb2d17c08b751fa1edb00fa3f55",
+    "control_revision": 0,
+    "transition_count": 0,
+    "last_sequence": 0,
+    "last_row_hash": "GENESIS",
+    "snapshot_sha256": "8a114ff41c186e1988ef01dcb32c967346ea9b6831094dedddbac1b245b4fa91",
+    "backup_manifest_sha256": "d2d3c2178204cf856d3a425d0120108696ee49ae2e85a0b8164acf3c4d0f2426"
+  },
+  "first_generation_2_reconciliation": {
+    "reconciliation_id": "reconciliation:1",
+    "recorded_at_ms": 1786462310527,
+    "transition_sequence": 1,
+    "transition_kind": "RECONCILIATION_ATTEMPTED",
+    "row_hash": "1d976fa7499d05fa408211cbdcdda71e6dfa2917eb41aa9790147d42a3f48904"
+  },
+  "authority_generation_2_final_backup": {
+    "path": "accounts/alpaca/PA3KWXU1C4C3/verified-backups/backup-g2-1786463830182-6f64c27588db7416",
+    "created_at_ms": 1786463830182,
+    "authority_generation": 2,
+    "schema_version": 8,
+    "db_identity_token": "7f76bfb2d17c08b751fa1edb00fa3f55",
+    "control_revision": 22,
+    "transition_count": 22,
+    "last_sequence": 22,
+    "last_row_hash": "e38b629805a3fdb4cdcb7ca9a7318632b7c0f7f668ea3baa22f652a2103633f3",
+    "snapshot_sha256": "6f64c27588db7416c1c1173b26d055f1959eceaea064b0ec67c0c77ec305e8b3",
+    "backup_manifest_sha256": "4bcb82fc5070fba65891327208d9766b2c2774cebfc20158779e61a69fba9f14"
+  },
+  "broker_proofs": {
+    "pre_cutover": {
+      "observed_at_ms": 1786461841537,
+      "positions": {},
+      "open_order_ids": [],
+      "source_artifact": "PythonDataService/artifacts/cutovers/2026-08-11/broker-reset-proof-g2.json",
+      "committed_copy": "docs/audits/alpaca-sqlite-s6-broker-pre-cutover-proof-2026-08-11.json",
+      "sha256": "1a27e1ccdb5224f0b708250fdebe2fc7ce572d014b2a0e56adae2ad9a890dc94"
+    },
+    "post_campaign": {
+      "observed_at_ms": 1786463899713,
+      "positions": {},
+      "open_order_ids": [],
+      "source_artifact": "PythonDataService/artifacts/cutovers/2026-08-11/broker-final-proof-g2.json",
+      "committed_copy": "docs/audits/alpaca-sqlite-s6-broker-post-campaign-proof-2026-08-11.json",
+      "sha256": "2f7997f5e720f893c37ed1e578a971de70546ed90165ff26b177899fc22df053"
+    }
+  }
+}

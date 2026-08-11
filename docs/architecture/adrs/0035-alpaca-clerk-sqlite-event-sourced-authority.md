@@ -1,15 +1,18 @@
 # ADR 0035: Alpaca Account Clerk — event-sourced SQLite authority (append-only log + folded state), no Postgres in scope
 
 - **Date:** 2026-08-04
-- **Status:** Accepted for Alpaca paper on 2026-08-10; generation 2 on schema v8
-  is active as of the supervised 2026-08-11 cutover. Acceptance is supported by the deterministic/adversarial
-  qualification suite, verified online backup and recovery evidence, no-fallback
-  authority guards, and the UI-driven one-share SPY ENTER/EXIT/Stop/reconcile
-  ceremony in
+- **Status:** Accepted for Alpaca paper on 2026-08-10. For cutover account
+  `PA3KWXU1C4C3`, generation 2 on schema v8 is active as of the supervised
+  2026-08-11 cutover. Other accounts select SQLite only when their valid,
+  account/generation/database-bound activation fence does so. Acceptance is
+  supported by the deterministic/adversarial qualification suite, verified online
+  backup and recovery evidence, no-fallback authority guards, and the UI-driven
+  one-share SPY ENTER/EXIT/Stop/reconcile ceremony in
   [`alpaca-sqlite-clerk-paper-soak-2026-08-07.md`](../../audits/alpaca-sqlite-clerk-paper-soak-2026-08-07.md).
   The execution-ledger sole-authority expansion below runs in that **fresh schema-v8
-  authority generation**. Generation 1 was preserved intact and generation 2 was
-  initialized clean-slate, with no import, during the human-supervised paper cutover in
+  authority generation** for that account. Generation 1 was preserved intact and
+  generation 2 was initialized clean-slate, with no import, during the
+  human-supervised paper cutover in
   [the execution PRD](../../prds/2026-08-10-sqlite-sole-authority-alpaca-execution.md).
   The earlier multi-session fault matrix remains historical governance. The bounded
   post-acceptance fault campaign and supervised paper receipts completed on
