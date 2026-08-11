@@ -1,0 +1,10 @@
+:host { display: block; }
+
+.trader-explanation { display: grid; gap: var(--space-4); }
+.trader-explanation section { display: grid; gap: var(--space-2); }
+.trader-explanation h3, .trader-explanation p { margin: 0; }
+.trader-explanation__answer { padding: var(--space-3); border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.trader-explanation__definition { color: var(--text-primary); font-size: var(--fs-lg); }
+.trader-explanation ul { display: grid; gap: var(--space-2); margin: 0; padding-left: var(--space-4); }
+.trader-explanation li { color: var(--text-secondary); line-height: 1.5; }
+.trader-explanation li strong { color: var(--text-primary); text-transform: capitalize; }

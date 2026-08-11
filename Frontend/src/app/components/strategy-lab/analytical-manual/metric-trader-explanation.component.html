@@ -1,0 +1,30 @@
+@let item = variant();
+<div class="trader-explanation">
+  <section class="trader-explanation__answer" [attr.aria-labelledby]="item.variant_id + '-trader-answer-title'">
+    <h3 [id]="item.variant_id + '-trader-answer-title'">What this tells you</h3>
+    <p class="trader-explanation__definition">{{ item.definition }}</p>
+    <p>{{ item.interpretation }}</p>
+  </section>
+
+  @if (item.common_misreadings.length > 0) {
+    <section [attr.aria-labelledby]="item.variant_id + '-trader-cautions-title'">
+      <h3 [id]="item.variant_id + '-trader-cautions-title'">Read with care</h3>
+      <ul>
+        @for (caution of item.common_misreadings; track caution) {
+          <li>{{ caution }}</li>
+        }
+      </ul>
+    </section>
+  }
+
+  @if (item.value_states.length > 0) {
+    <section [attr.aria-labelledby]="item.variant_id + '-trader-states-title'">
+      <h3 [id]="item.variant_id + '-trader-states-title'">Value states</h3>
+      <ul>
+        @for (state of item.value_states; track state.state) {
+          <li><strong>{{ state.state }}</strong> — {{ state.display }}{{ state.display.endsWith('.') ? '' : '.' }} {{ state.scoring_behavior }}</li>
+        }
+      </ul>
+    </section>
+  }
+</div>

@@ -393,7 +393,7 @@ public class BacktestRunDetailQueryTests
     }
 
     [Fact]
-    public void FromExecution_LegacyLeanSharpe_InfersTheDisplayedNativeVariant()
+    public void FromExecution_LegacyLeanRun_InfersEveryProducerSensitiveNativeVariant()
     {
         var execution = new StrategyExecution
         {
@@ -405,14 +405,21 @@ public class BacktestRunDetailQueryTests
 
         var detail = BacktestRunDetailType.FromExecution(execution, [], NullLogger.Instance);
 
-        var context = Assert.Single(detail.MetricDocumentation);
-        Assert.Equal("sharpe.lean_native.v1", context.VariantId);
-        Assert.Equal("lean_native", context.Producer);
-        Assert.Equal("inferred", context.ContractProvenance);
+        Assert.Collection(
+            detail.MetricDocumentation,
+            context => Assert.Equal("sharpe.lean_native.v1", context.VariantId),
+            context => Assert.Equal("lean_native.portfolio.sortino_ratio.v1", context.VariantId),
+            context => Assert.Equal("lean_native.portfolio.drawdown.v1", context.VariantId),
+            context => Assert.Equal("lean_native.trade.profit_factor.v1", context.VariantId));
+        Assert.All(detail.MetricDocumentation, context =>
+        {
+            Assert.Equal("lean_native", context.Producer);
+            Assert.Equal("inferred", context.ContractProvenance);
+        });
     }
 
     [Fact]
-    public void FromExecution_LegacyPlatformSharpe_InfersThePlatformVariant()
+    public void FromExecution_LegacyPlatformRun_InfersEveryProducerSensitivePlatformVariant()
     {
         var execution = new StrategyExecution
         {
@@ -424,10 +431,17 @@ public class BacktestRunDetailQueryTests
 
         var detail = BacktestRunDetailType.FromExecution(execution, [], NullLogger.Instance);
 
-        var context = Assert.Single(detail.MetricDocumentation);
-        Assert.Equal("sharpe.platform.v1", context.VariantId);
-        Assert.Equal("platform", context.Producer);
-        Assert.Equal("inferred", context.ContractProvenance);
+        Assert.Collection(
+            detail.MetricDocumentation,
+            context => Assert.Equal("sharpe.platform.v1", context.VariantId),
+            context => Assert.Equal("sortino.platform.v1", context.VariantId),
+            context => Assert.Equal("maximum_drawdown.platform.v1", context.VariantId),
+            context => Assert.Equal("profit_factor.platform.v1", context.VariantId));
+        Assert.All(detail.MetricDocumentation, context =>
+        {
+            Assert.Equal("platform", context.Producer);
+            Assert.Equal("inferred", context.ContractProvenance);
+        });
     }
 
     [Fact]
@@ -447,10 +461,9 @@ public class BacktestRunDetailQueryTests
 
         var detail = BacktestRunDetailType.FromExecution(execution, [], NullLogger.Instance);
 
-        var context = Assert.Single(detail.MetricDocumentation);
-        Assert.Equal("sharpe.lean_native.v1", context.VariantId);
-        Assert.Equal("lean_native", context.Producer);
-        Assert.Equal("inferred", context.ContractProvenance);
+        Assert.Equal(4, detail.MetricDocumentation.Count);
+        Assert.All(detail.MetricDocumentation, context => Assert.Equal("lean_native", context.Producer));
+        Assert.All(detail.MetricDocumentation, context => Assert.Equal("inferred", context.ContractProvenance));
     }
 
     [Fact]
@@ -470,9 +483,9 @@ public class BacktestRunDetailQueryTests
 
         var detail = BacktestRunDetailType.FromExecution(execution, [], NullLogger.Instance);
 
-        var context = Assert.Single(detail.MetricDocumentation);
-        Assert.Equal("sharpe.lean_native.v1", context.VariantId);
-        Assert.Equal("inferred", context.ContractProvenance);
+        Assert.Equal(4, detail.MetricDocumentation.Count);
+        Assert.Contains(detail.MetricDocumentation, context => context.VariantId == "sharpe.lean_native.v1");
+        Assert.All(detail.MetricDocumentation, context => Assert.Equal("inferred", context.ContractProvenance));
     }
 
     [Fact]
@@ -501,7 +514,7 @@ public class BacktestRunDetailQueryTests
 
         var detail = BacktestRunDetailType.FromExecution(execution, [], NullLogger.Instance);
 
-        var context = Assert.Single(detail.MetricDocumentation);
-        Assert.Equal("inferred", context.ContractProvenance);
+        Assert.Equal(4, detail.MetricDocumentation.Count);
+        Assert.All(detail.MetricDocumentation, context => Assert.Equal("inferred", context.ContractProvenance));
     }
 }

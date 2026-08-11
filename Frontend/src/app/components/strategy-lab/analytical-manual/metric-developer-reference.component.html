@@ -1,0 +1,12 @@
+@let item = variant();
+<dl class="developer-reference">
+  <div><dt>Canonical implementation</dt><dd><code>{{ item.canonical_symbol }}</code></dd></div>
+  @if (item.source_keys.length > 0) { <div><dt>Producer source keys</dt><dd>{{ item.source_keys.join(', ') | receiptLabel }}</dd></div> }
+  @if (item.source_reference) { <div><dt>Source reference</dt><dd>{{ item.source_reference }}</dd></div> }
+  @if (item.fixture_or_receipt) { <div><dt>Evidence</dt><dd><code>{{ item.fixture_or_receipt }}</code></dd></div> }
+  @if (item.validating_tests.length > 0) { <div><dt>Validating tests</dt><dd><code>{{ item.validating_tests.join(', ') }}</code></dd></div> }
+  @if (item.numerical_tolerance) { <div><dt>Tolerance</dt><dd>{{ item.numerical_tolerance }}</dd></div> }
+  <div><dt>Timestamp convention</dt><dd>{{ item.timezone_convention }}</dd></div>
+  @if (item.results_surfaces.length > 0) { <div><dt>Results surfaces</dt><dd>{{ item.results_surfaces.join(', ') | receiptLabel }}</dd></div> }
+  @if (item.verdict_membership) { <div><dt>Evidence grade</dt><dd>{{ item.verdict_membership }}</dd></div> }
+</dl>
