@@ -30,7 +30,6 @@ from app.broker.alpaca.clerk import (
     ClerkAdmissionSnapshotChangedError,
     set_alpaca_clerk,
 )
-from app.broker.alpaca.clerk.decision_journal import DecisionJournal, DecisionReceipt
 from app.broker.alpaca.clerk.models import (
     AccountFreezeState,
     ClerkCustodySnapshot,
@@ -42,6 +41,8 @@ from app.broker.alpaca.clerk.models import (
     InstanceCustodyProof,
     ReconciliationVerdict,
 )
+from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
+from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.models import (
@@ -2209,6 +2210,7 @@ class _FakeClerk:
         *,
         should_raise: Exception | None = None,
         effect_state: str = "submitted",
+        repository: ClerkSqliteRepository | None = None,
     ) -> None:
         self.calls: list[dict] = []
         self.stop_cancellations: list[str] = []
@@ -2216,6 +2218,7 @@ class _FakeClerk:
         self.stopped_runs: list[str] = []
         self._should_raise = should_raise
         self._effect_state = effect_state
+        self.repository = repository
 
     async def register_strategy_run(self, binding: BrokerBotBinding) -> None:
         self.registered_runs.append(binding.run_id)
@@ -2337,134 +2340,133 @@ async def test_ema_trade_bot_matches_first_lean_round_trip(
 @pytest.mark.asyncio
 async def test_sqlite_trade_bot_records_every_evaluated_bar_for_panel_health(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    _isolated_clerk_dir: Path,
 ) -> None:
-    clerk = _FakeClerk()
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
+    repo.register_strategy_instance(strategy_instance_id=_SID, symbol="SPY", config_hash="config-1")
+    transitions_before_decisions = repo.custody_transitions()
+    clerk = _FakeClerk(repository=repo)
     clerk.authority_kind = "sqlite"
     clerk.account_id = "PA-TEST"
-    _install_fake_clerk(monkeypatch, clerk)
     feed = _FakeFeed(
         [_bar(_RTH_MS + offset * 60_000) for offset in range(3)],
         mode="hold",
     )
     registry = _registry(tmp_path, feed)
-
-    await registry.deploy(
-        broker="alpaca",
-        strategy_instance_id=_SID,
-        strategy_key="deployment_validation",
-        symbol="SPY",
-        mode="trade",
-        quantity=1,
-    )
-    await _wait_for(lambda: feed.bars_consumed == 3)
-    await _wait_for(
-        lambda: len(
-            DecisionJournal(
-                account_id="PA-TEST",
-                sid=_SID,
-                root=_isolated_clerk_dir,
-            ).tail(3)
+    set_alpaca_clerk(clerk)
+    try:
+        await registry.deploy(
+            broker="alpaca",
+            strategy_instance_id=_SID,
+            strategy_key="deployment_validation",
+            symbol="SPY",
+            mode="trade",
+            quantity=1,
         )
-        == 3
-    )
-    await registry.stop("alpaca", _SID)
+        await _wait_for(lambda: feed.bars_consumed == 3)
+        await _wait_for(lambda: len(repo.decision_receipt_tail(strategy_instance_id=_SID, limit=3)) == 3)
+        await registry.stop("alpaca", _SID)
 
-    decisions = DecisionJournal(
-        account_id="PA-TEST",
-        sid=_SID,
-        root=_isolated_clerk_dir,
-    ).tail(3)
-    assert [decision.outcome for decision in decisions] == [
-        "no_action",
-        "enter_intent",
-        "no_action",
-    ]
-    assert [decision.bar_ref for decision in decisions] == [
-        f"SPY@{_RTH_MS + offset * 60_000 + 60_000}" for offset in range(3)
-    ]
-    assert decisions[1].intent_id.endswith(":ENTER")
-    assert decisions[1].order_ref == ""
+        decisions = repo.decision_receipt_tail(strategy_instance_id=_SID, limit=3)
+        facts = [json.loads(decision.facts_json) for decision in decisions]
+        assert [decision.outcome for decision in decisions] == [
+            "no_action",
+            "enter_intent",
+            "no_action",
+        ]
+        assert [fact["bar_ref"] for fact in facts] == [
+            f"SPY@{_RTH_MS + offset * 60_000 + 60_000}" for offset in range(3)
+        ]
+        assert decisions[1].intent_id.endswith(":ENTER")
+        assert decisions[1].order_ref is None
+        # Decision receipts are product evidence, not custody: recording
+        # three of them across the bot's decision loop must not advance the
+        # hash-chained transition log at all.
+        assert repo.custody_transitions() == transitions_before_decisions
+    finally:
+        set_alpaca_clerk(None)
+        repo.close()
 
 
 @pytest.mark.asyncio
 async def test_sqlite_trade_bot_does_not_label_an_uncertain_effect_as_entered(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    _isolated_clerk_dir: Path,
 ) -> None:
-    clerk = _FakeClerk(effect_state="uncertain")
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
+    repo.register_strategy_instance(strategy_instance_id=_SID, symbol="SPY", config_hash="config-1")
+    clerk = _FakeClerk(effect_state="uncertain", repository=repo)
     clerk.authority_kind = "sqlite"
     clerk.account_id = "PA-TEST"
-    _install_fake_clerk(monkeypatch, clerk)
     feed = _FakeFeed(
         [_bar(_RTH_MS + offset * 60_000) for offset in range(2)],
         mode="hold",
     )
     registry = _registry(tmp_path, feed)
+    set_alpaca_clerk(clerk)
+    try:
+        await registry.deploy(
+            broker="alpaca",
+            strategy_instance_id=_SID,
+            strategy_key="deployment_validation",
+            symbol="SPY",
+            mode="trade",
+            quantity=1,
+        )
+        await _wait_for(lambda: len(clerk.calls) == 1)
+        await registry.stop("alpaca", _SID)
 
-    await registry.deploy(
-        broker="alpaca",
-        strategy_instance_id=_SID,
-        strategy_key="deployment_validation",
-        symbol="SPY",
-        mode="trade",
-        quantity=1,
-    )
-    await _wait_for(lambda: len(clerk.calls) == 1)
-    await registry.stop("alpaca", _SID)
-
-    decisions = DecisionJournal(
-        account_id="PA-TEST",
-        sid=_SID,
-        root=_isolated_clerk_dir,
-    ).tail(2)
-    assert decisions[-1].outcome == "enter_intent"
-    assert decisions[-1].reason_code == "STRATEGY_ENTER"
+        decisions = repo.decision_receipt_tail(strategy_instance_id=_SID, limit=2)
+        assert decisions[-1].outcome == "enter_intent"
+        assert json.loads(decisions[-1].facts_json)["reason_code"] == "STRATEGY_ENTER"
+    finally:
+        set_alpaca_clerk(None)
+        repo.close()
 
 
 @pytest.mark.asyncio
 async def test_decision_receipt_failure_prevents_the_broker_effect(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    _isolated_clerk_dir: Path,
 ) -> None:
-    clerk = _FakeClerk()
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
+    repo.register_strategy_instance(strategy_instance_id=_SID, symbol="SPY", config_hash="config-1")
+    clerk = _FakeClerk(repository=repo)
     clerk.authority_kind = "sqlite"
     clerk.account_id = "PA-TEST"
-    _install_fake_clerk(monkeypatch, clerk)
-    original = DecisionJournal.append_for_bar
+    original = SqliteDecisionReceipts.append
 
     def fail_enter_receipt(
-        self: DecisionJournal,
+        self: SqliteDecisionReceipts,
         **fields: Any,
-    ) -> DecisionReceipt:
+    ) -> DecisionReceiptResource:
         if fields["outcome"] == "enter_intent":
-            raise OSError("injected decision journal failure")
+            raise OSError("injected decision receipt failure")
         return original(self, **fields)
 
-    monkeypatch.setattr(DecisionJournal, "append_for_bar", fail_enter_receipt)
+    monkeypatch.setattr(SqliteDecisionReceipts, "append", fail_enter_receipt)
     feed = _FakeFeed(
         [_bar(_RTH_MS + offset * 60_000) for offset in range(2)],
         mode="hold",
     )
     registry = _registry(tmp_path, feed)
+    set_alpaca_clerk(clerk)
+    try:
+        await registry.deploy(
+            broker="alpaca",
+            strategy_instance_id=_SID,
+            strategy_key="deployment_validation",
+            symbol="SPY",
+            mode="trade",
+            quantity=1,
+        )
+        await _wait_for(lambda: not registry.status("alpaca", _SID).running)
 
-    await registry.deploy(
-        broker="alpaca",
-        strategy_instance_id=_SID,
-        strategy_key="deployment_validation",
-        symbol="SPY",
-        mode="trade",
-        quantity=1,
-    )
-    await _wait_for(lambda: not registry.status("alpaca", _SID).running)
-
-    assert clerk.calls == []
-    outcome = registry.status("alpaca", _SID).duty_outcome
-    assert outcome is not None
-    assert outcome.kind == "CRASHED"
+        assert clerk.calls == []
+        outcome = registry.status("alpaca", _SID).duty_outcome
+        assert outcome is not None
+        assert outcome.kind == "CRASHED"
+    finally:
+        set_alpaca_clerk(None)
+        repo.close()
 
 
 @pytest.mark.asyncio

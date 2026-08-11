@@ -23,7 +23,6 @@ from app.services.clerk_transaction_projection import (
     transaction_detail,
     transaction_history,
 )
-from app.services.clerk_transaction_projection_store import PostgresClerkTransactionProjectionStore
 from app.services.sqlite_clerk_transaction_projection import (
     sqlite_acknowledge_external_order,
     sqlite_transaction_detail,
@@ -34,6 +33,14 @@ router = APIRouter(prefix="/api/accounts", tags=["clerk-transactions"])
 
 
 def get_clerk_transaction_store() -> ClerkTransactionProjectionStore:
+    # Local import: this router is a designated active-SQLite product module
+    # (test_authority_isolation.py enforces it never imports a legacy Postgres
+    # reader at module scope). The Postgres store still backs the FastAPI
+    # `Depends()` fallback below for the non-SQLite (legacy) authority path.
+    from app.services.clerk_transaction_projection_store import (
+        PostgresClerkTransactionProjectionStore,
+    )
+
     return PostgresClerkTransactionProjectionStore()
 
 

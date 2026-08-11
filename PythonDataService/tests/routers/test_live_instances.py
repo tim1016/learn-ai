@@ -118,6 +118,55 @@ async def test_activated_sqlite_roster_skips_legacy_runner_scan(
 
 
 @pytest.mark.asyncio
+async def test_activated_sqlite_roster_never_consults_registry_derived_readiness(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S5.2: the SQLite-active roster reports ephemeral process liveness only.
+
+    ``_resolve_readiness`` derives its verdict from the legacy JSONL
+    account-registry/readiness-sidecar tree — durable-identity reconstruction
+    this slice retires from the active-SQLite path. The roster must report
+    ``UNKNOWN`` from ``BotStatusView`` alone, never call it.
+    """
+    status = BotStatusView(
+        strategy_instance_id="bot-a",
+        strategy_key="deployment_validation",
+        broker="alpaca",
+        symbol="SPY",
+        mode="trade",
+        quantity=1,
+        carryover_policy="FORBID",
+        running=True,
+        phase="ON_DUTY",
+        desired_state="RUNNING",
+        active_run_id="run-a",
+        duty_outcome=None,
+        binding_created_at_ms=1_700_000_000_000,
+        last_transition_at_ms=1_700_000_001_000,
+    )
+    monkeypatch.setattr(
+        live_instances,
+        "read_sqlite_roster_statuses",
+        lambda broker: [status] if broker == "alpaca" else None,
+    )
+
+    def forbidden_readiness(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("SQLite-active roster must not consult registry-derived readiness")
+
+    monkeypatch.setattr(live_instances, "_resolve_readiness", forbidden_readiness)
+
+    rows = await live_instances._build_live_instance_summaries(
+        SimpleNamespace(live_runner_daemon_url="http://unused"),
+        tmp_path,
+        fleet_observation=SimpleNamespace(is_current=False, payload=None),
+    )
+
+    assert rows[0].readiness_verdict == "UNKNOWN"
+    assert rows[0].readiness_as_of_ms == status.last_transition_at_ms
+
+
+@pytest.mark.asyncio
 async def test_sqlite_lifecycle_run_does_not_invent_a_live_process() -> None:
     status = BotStatusView(
         strategy_instance_id="bot-a",

@@ -16,12 +16,9 @@ from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 from app.broker.alpaca.clerk.clerk import get_alpaca_clerk
-from app.broker.alpaca.clerk.decision_journal import (
-    DecisionJournal,
-    DecisionOutcome,
-)
-from app.broker.alpaca.clerk.journal import get_clerk_settings
+from app.broker.alpaca.clerk.decision_journal import DecisionOutcome
 from app.broker.alpaca.clerk.models import EffectPurpose
+from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.portfolio import Portfolio
 from app.engine.execution.signal_intent_executor import SignalIntentExecutionContext
@@ -197,22 +194,24 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
     clerk = get_alpaca_clerk()
     if clerk is None:
         raise RuntimeError("AlpacaClerk is not installed; cannot execute trade-mode decisions.")
-    decision_journal: DecisionJournal | None = None
+    decision_receipts: SqliteDecisionReceipts | None = None
     if getattr(clerk, "authority_kind", "legacy") == "sqlite":
         account_id = getattr(clerk, "account_id", None)
         if not isinstance(account_id, str) or not account_id:
             raise RuntimeError("The active SQLite Clerk has no account identity for decision receipts.")
-        decision_journal = DecisionJournal(
-            account_id=account_id,
-            sid=binding.strategy_instance_id,
-            root=get_clerk_settings().dir,
+        repository = getattr(clerk, "repository", None)
+        if repository is None:
+            raise RuntimeError("The active SQLite Clerk has no repository for decision receipts.")
+        decision_receipts = SqliteDecisionReceipts(
+            repository,
+            strategy_instance_id=binding.strategy_instance_id,
         )
     async for evaluation in strategy_evaluations(binding, feed):
         if len(evaluation.intents) > 1:
             raise RuntimeError("A supported trade strategy emitted multiple intents for one closed bar.")
         if not evaluation.intents:
             _append_decision_receipt(
-                decision_journal,
+                decision_receipts,
                 binding=binding,
                 evaluation=evaluation,
                 outcome="no_action",
@@ -222,7 +221,7 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
         intent = evaluation.intents[0]
         intent_id = f"{intent.bar_close_ms}:{intent.kind.value}"
         _append_decision_receipt(
-            decision_journal,
+            decision_receipts,
             binding=binding,
             evaluation=evaluation,
             outcome=(
@@ -266,7 +265,7 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
 
 
 def _append_decision_receipt(
-    journal: DecisionJournal | None,
+    receipts: SqliteDecisionReceipts | None,
     *,
     binding: BrokerBotBinding,
     evaluation: StrategyEvaluation,
@@ -275,15 +274,15 @@ def _append_decision_receipt(
     intent_id: str = "",
     order_ref: str = "",
 ) -> None:
-    if journal is None:
+    if receipts is None:
         return
-    journal.append_for_bar(
-        ts_ms=now_ms_utc(),
-        bar_ref=f"{binding.symbol}@{evaluation.bar.end_ms}",
+    receipts.append(
         outcome=outcome,
-        reason_code=reason_code,
-        intent_id=intent_id,
-        order_ref=order_ref,
+        symbol=binding.symbol,
+        observed_at_ms=now_ms_utc(),
+        facts={"bar_ref": f"{binding.symbol}@{evaluation.bar.end_ms}", "reason_code": reason_code},
+        intent_id=intent_id or None,
+        order_ref=order_ref or None,
     )
 
 
