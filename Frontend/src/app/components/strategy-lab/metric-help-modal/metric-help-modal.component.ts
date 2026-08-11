@@ -5,11 +5,16 @@ import { Dialog } from "primeng/dialog";
 import analyticalMetricCatalog from "@repo-contracts/strategy-lab/analytical-metric-catalog-v1.json";
 
 import type { MetricDocumentationContext } from "../../../graphql/backtest-runs.query";
-import type { AnalyticalMetricCatalog } from "../analytical-manual/analytical-metric-catalog.models";
+import type { AnalyticalMetricCatalog, MetricVariant } from "../analytical-manual/analytical-metric-catalog.models";
 import { resolveMetricContext } from "../analytical-manual/metric-context.util";
 import { MetricReferenceEntryComponent } from "../analytical-manual/metric-reference-entry.component";
 
 const CATALOG: AnalyticalMetricCatalog = analyticalMetricCatalog;
+
+interface MetricHelpResolution {
+  variant: MetricVariant | null;
+  warning: string | null;
+}
 
 /** Opens the complete backend-authored metric guide without leaving Results. */
 @Component({
@@ -27,11 +32,18 @@ export class MetricHelpModalComponent {
   readonly runId = input<number | null>(null);
   readonly visible = signal(false);
 
-  readonly resolution = computed(() => {
-    const requestedVariant = this.variantId()
-      ? CATALOG.variants.find((variant) => variant.variant_id === this.variantId())
+  readonly resolution = computed<MetricHelpResolution>(() => {
+    const variantId = this.variantId();
+    const requestedVariant = variantId
+      ? CATALOG.variants.find((variant) => variant.variant_id === variantId)
       : null;
     if (requestedVariant) return { variant: requestedVariant, warning: null };
+    if (variantId) {
+      return {
+        variant: null,
+        warning: `The requested metric guide (${variantId}) is unavailable. Reopen it from the current results page.`,
+      };
+    }
 
     const metricId = this.metricId();
     const context = this.context()?.metricId === metricId ? this.context() : null;
@@ -45,10 +57,13 @@ export class MetricHelpModalComponent {
   readonly variant = computed(() => this.resolution().variant);
   readonly alternative = computed(() => {
     const variant = this.variant();
-    return CATALOG.variants.find((candidate) => variant.alternative_variant_ids.includes(candidate.variant_id)) ?? null;
+    return variant
+      ? CATALOG.variants.find((candidate) => variant.alternative_variant_ids.includes(candidate.variant_id)) ?? null
+      : null;
   });
   readonly docsQuery = computed(() => {
     const variant = this.variant();
+    if (!variant) return {};
     return {
       metric: variant.metric_id,
       variant: variant.variant_id,

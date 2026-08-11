@@ -60,8 +60,11 @@ describe("MetricHelpModalComponent", () => {
       },
     });
 
-    expect(fixture.componentInstance.variant().variant_id).toBe("lean_native.portfolio.drawdown.v1");
-    expect(fixture.componentInstance.variant().producer).toBe("lean_native");
+    (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>("button")?.click();
+    fixture.detectChanges();
+
+    expect(document.body.textContent).toContain("Largest Strategy Equity peak-to-trough decline.");
+    expect(document.body.textContent).toContain("depth or persistence of capital stress");
   });
 
   it("opens an exact native-statistics variant without duplicating its authored content", async () => {
@@ -71,7 +74,24 @@ describe("MetricHelpModalComponent", () => {
       label: "Alpha",
     });
 
-    expect(fixture.componentInstance.variant().metric_id).toBe("lean_portfolio_alpha");
-    expect(fixture.componentInstance.variant().interpretation).toContain("differentiated strategy behavior");
+    (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>("button")?.click();
+    fixture.detectChanges();
+
+    expect(document.body.textContent).toContain("CAPM-style annual excess return over the aligned benchmark.");
+    expect(document.body.textContent).toContain("differentiated strategy behavior");
+  });
+
+  it("shows an unavailable-guide warning instead of unrelated documentation for an unknown explicit variant", async () => {
+    const fixture = await renderModal({
+      metricId: undefined,
+      variantId: "stale.metric.v1",
+      label: "Stale metric",
+    });
+
+    (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>("button")?.click();
+    fixture.detectChanges();
+
+    expect(document.body.textContent).toContain("The requested metric guide (stale.metric.v1) is unavailable.");
+    expect(document.body.textContent).not.toContain("Annualized average return per unit of observed return variability.");
   });
 });

@@ -243,6 +243,7 @@ public sealed record BacktestRunDetailType
         StrategyExecution execution,
         ILogger logger)
     {
+        var inferred = InferredMetricDocumentation(execution.Source);
         if (!string.IsNullOrWhiteSpace(execution.MetricDocumentationJson))
         {
             try
@@ -258,6 +259,8 @@ public sealed record BacktestRunDetailType
                 {
                     return recorded
                         .Select(context => context with { ContractProvenance = "recorded" })
+                        .Concat(inferred.Where(inferredContext =>
+                            recorded.All(recordedContext => recordedContext.MetricId != inferredContext.MetricId)))
                         .ToList();
                 }
 
@@ -274,13 +277,18 @@ public sealed record BacktestRunDetailType
             }
         }
 
-        // Branch on producer identity (execution.Source) alone. Gating on a
+        return inferred;
+    }
+
+    private static IReadOnlyList<MetricDocumentationContextType> InferredMetricDocumentation(string source)
+    {
+        // Branch on producer identity (the execution source) alone. Gating on a
         // particular field's presence (e.g. leanKpis?.SharpeRatio) conflates
         // "LEAN produced this row" with "LEAN emitted a Sharpe value" -- a
         // legacy lean-sidecar row with no portfolio.sharpe_ratio, or a failed
         // LEAN run whose statistics default to null, is still LEAN-produced
         // and must not be inferred as the platform contract.
-        return execution.Source == "lean-sidecar"
+        return source == "lean-sidecar"
             ?
             [
                 InferredMetricContext("sharpe", "sharpe.lean_native.v1", "lean_native", "lean-statistics-oracle-v1"),

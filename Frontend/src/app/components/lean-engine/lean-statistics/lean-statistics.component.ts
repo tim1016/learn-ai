@@ -1,5 +1,5 @@
 import {
-  Component, input, signal,
+  Component, computed, input, signal, type Signal,
   ChangeDetectionStrategy,
 } from '@angular/core';
 import type { LeanStatistics } from '../engine-results/engine-results.component';
@@ -13,12 +13,18 @@ interface StatItem {
   source: string;     // LEAN C# source reference
 }
 
+interface StatSection {
+  label: string;
+  iconClass: string;
+  gridClass: string;
+  metrics: Signal<StatItem[]>;
+}
+
 @Component({
   selector: 'app-lean-statistics',
-  standalone: true,
   imports: [MetricHelpModalComponent],
   templateUrl: './lean-statistics.component.html',
-  styleUrls: ['./lean-statistics.component.scss'],
+  styleUrl: './lean-statistics.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class LeanStatisticsComponent {
@@ -26,6 +32,20 @@ export class LeanStatisticsComponent {
 
   showFullStats = signal(false);
 
+  readonly headlineSections: readonly StatSection[] = [
+    { label: 'Returns', iconClass: 'pi pi-chart-line', gridClass: 'kpi-grid kpi-grid--4', metrics: computed(() => this.returnMetrics) },
+    { label: 'Risk', iconClass: 'pi pi-shield', gridClass: 'kpi-grid kpi-grid--4', metrics: computed(() => this.riskMetrics) },
+    { label: 'Drawdown', iconClass: 'pi pi-arrow-down', gridClass: 'kpi-grid kpi-grid--2', metrics: computed(() => this.drawdownMetrics) },
+  ];
+  readonly fullSections: readonly StatSection[] = [
+    { label: 'Benchmark', iconClass: 'pi pi-compass', gridClass: 'kpi-grid kpi-grid--5', metrics: computed(() => this.benchmarkMetrics) },
+    { label: 'Trade Population & Rates', iconClass: 'pi pi-users', gridClass: 'kpi-grid kpi-grid--5', metrics: computed(() => this.tradePopulationMetrics) },
+    { label: 'Trades', iconClass: 'pi pi-dollar', gridClass: 'kpi-grid kpi-grid--5', metrics: computed(() => this.tradeMetrics) },
+    { label: 'Streaks & Duration', iconClass: 'pi pi-bolt', gridClass: 'kpi-grid kpi-grid--5', metrics: computed(() => this.durationMetrics) },
+    { label: 'Excursion & Trade Drawdown', iconClass: 'pi pi-arrows-h', gridClass: 'kpi-grid kpi-grid--4', metrics: computed(() => this.tradeExcursionMetrics) },
+    { label: 'Distribution', iconClass: 'pi pi-chart-bar', gridClass: 'kpi-grid kpi-grid--4', metrics: computed(() => this.distributionMetrics) },
+    { label: 'Native Runtime Snapshot', iconClass: 'pi pi-cog', gridClass: 'kpi-grid kpi-grid--5', metrics: computed(() => this.runtimeMetrics) },
+  ];
   // ── Formatting helpers ──
 
   pct(v: number): string {

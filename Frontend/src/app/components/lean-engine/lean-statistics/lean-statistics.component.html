@@ -17,50 +17,22 @@
     </div>
   }
 
-  <section class="kpi-section">
-    <h4 class="section-title">
-      <i class="pi pi-chart-line"></i> Returns
-    </h4>
-    <div class="kpi-grid kpi-grid--4">
-      @for (item of returnMetrics; track item.label) {
-        <div class="kpi-cell">
-          <span class="kpi-label"><span class="kpi-label__text">{{ item.label }}</span><app-metric-help-modal [variantId]="item.documentationVariantId" [label]="item.label" /></span>
-          <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
-          <span class="kpi-source">{{ item.source }}</span>
-        </div>
-      }
-    </div>
-  </section>
-
-  <section class="kpi-section">
-    <h4 class="section-title">
-      <i class="pi pi-shield"></i> Risk
-    </h4>
-    <div class="kpi-grid kpi-grid--4">
-      @for (item of riskMetrics; track item.label) {
-        <div class="kpi-cell">
-          <span class="kpi-label"><span class="kpi-label__text">{{ item.label }}</span><app-metric-help-modal [variantId]="item.documentationVariantId" [label]="item.label" /></span>
-          <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
-          <span class="kpi-source">{{ item.source }}</span>
-        </div>
-      }
-    </div>
-  </section>
-
-  <section class="kpi-section">
-    <h4 class="section-title">
-      <i class="pi pi-arrow-down"></i> Drawdown
-    </h4>
-    <div class="kpi-grid kpi-grid--2">
-      @for (item of drawdownMetrics; track item.label) {
-        <div class="kpi-cell">
-          <span class="kpi-label"><span class="kpi-label__text">{{ item.label }}</span><app-metric-help-modal [variantId]="item.documentationVariantId" [label]="item.label" /></span>
-          <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
-          <span class="kpi-source">{{ item.source }}</span>
-        </div>
-      }
-    </div>
-  </section>
+  @for (section of headlineSections; track section.label) {
+    <section class="kpi-section">
+      <h4 class="section-title">
+        <i [class]="section.iconClass"></i> {{ section.label }}
+      </h4>
+      <div [class]="section.gridClass">
+        @for (item of section.metrics(); track item.documentationVariantId) {
+          <div class="kpi-cell">
+            <span class="kpi-label"><span class="kpi-label__text">{{ item.label }}</span><app-metric-help-modal [variantId]="item.documentationVariantId" [label]="item.label" /></span>
+            <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
+            <span class="kpi-source">{{ item.source }}</span>
+          </div>
+        }
+      </div>
+    </section>
+  }
 
   <!-- Expandable sections -->
   <button class="expand-toggle" (click)="showFullStats.set(!showFullStats())">
@@ -70,109 +42,21 @@
   </button>
 
   @if (showFullStats()) {
-    <section class="kpi-section">
-      <h4 class="section-title">
-        <i class="pi pi-compass"></i> Benchmark
-      </h4>
-      <div class="kpi-grid kpi-grid--5">
-        @for (item of benchmarkMetrics; track item.label) {
-          <div class="kpi-cell">
-            <span class="kpi-label"><span class="kpi-label__text">{{ item.label }}</span><app-metric-help-modal [variantId]="item.documentationVariantId" [label]="item.label" /></span>
-            <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
-            <span class="kpi-source">{{ item.source }}</span>
-          </div>
-        }
-      </div>
-    </section>
-
-    <section class="kpi-section">
-      <h4 class="section-title">
-        <i class="pi pi-users"></i> Trade Population &amp; Rates
-      </h4>
-      <div class="kpi-grid kpi-grid--5">
-        @for (item of tradePopulationMetrics; track item.label) {
-          <div class="kpi-cell">
-            <span class="kpi-label"><span class="kpi-label__text">{{ item.label }}</span><app-metric-help-modal [variantId]="item.documentationVariantId" [label]="item.label" /></span>
-            <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
-            <span class="kpi-source">{{ item.source }}</span>
-          </div>
-        }
-      </div>
-    </section>
-
-    <section class="kpi-section">
-      <h4 class="section-title">
-        <i class="pi pi-dollar"></i> Trades
-      </h4>
-      <div class="kpi-grid kpi-grid--5">
-        @for (item of tradeMetrics; track item.label) {
-          <div class="kpi-cell">
-            <span class="kpi-label"><span class="kpi-label__text">{{ item.label }}</span><app-metric-help-modal [variantId]="item.documentationVariantId" [label]="item.label" /></span>
-            <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
-            <span class="kpi-source">{{ item.source }}</span>
-          </div>
-        }
-      </div>
-    </section>
-
-    <section class="kpi-section">
-      <h4 class="section-title">
-        <i class="pi pi-bolt"></i> Streaks &amp; Duration
-      </h4>
-      <div class="kpi-grid kpi-grid--5">
-        @for (item of durationMetrics; track item.label) {
-          <div class="kpi-cell">
-            <span class="kpi-label"><span class="kpi-label__text">{{ item.label }}</span><app-metric-help-modal [variantId]="item.documentationVariantId" [label]="item.label" /></span>
-            <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
-            <span class="kpi-source">{{ item.source }}</span>
-          </div>
-        }
-      </div>
-    </section>
-
-    <section class="kpi-section">
-      <h4 class="section-title">
-        <i class="pi pi-arrows-h"></i> Excursion &amp; Trade Drawdown
-      </h4>
-      <div class="kpi-grid kpi-grid--4">
-        @for (item of tradeExcursionMetrics; track item.label) {
-          <div class="kpi-cell">
-            <span class="kpi-label"><span class="kpi-label__text">{{ item.label }}</span><app-metric-help-modal [variantId]="item.documentationVariantId" [label]="item.label" /></span>
-            <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
-            <span class="kpi-source">{{ item.source }}</span>
-          </div>
-        }
-      </div>
-    </section>
-
-    <section class="kpi-section">
-      <h4 class="section-title">
-        <i class="pi pi-chart-bar"></i> Distribution
-      </h4>
-      <div class="kpi-grid kpi-grid--4">
-        @for (item of distributionMetrics; track item.label) {
-          <div class="kpi-cell">
-            <span class="kpi-label"><span class="kpi-label__text">{{ item.label }}</span><app-metric-help-modal [variantId]="item.documentationVariantId" [label]="item.label" /></span>
-            <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
-            <span class="kpi-source">{{ item.source }}</span>
-          </div>
-        }
-      </div>
-    </section>
-
-    <section class="kpi-section">
-      <h4 class="section-title">
-        <i class="pi pi-cog"></i> Native Runtime Snapshot
-      </h4>
-      <div class="kpi-grid kpi-grid--5">
-        @for (item of runtimeMetrics; track item.label) {
-          <div class="kpi-cell">
-            <span class="kpi-label"><span class="kpi-label__text">{{ item.label }}</span><app-metric-help-modal [variantId]="item.documentationVariantId" [label]="item.label" /></span>
-            <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
-            <span class="kpi-source">{{ item.source }}</span>
-          </div>
-        }
-      </div>
-    </section>
+    @for (section of fullSections; track section.label) {
+      <section class="kpi-section">
+        <h4 class="section-title">
+          <i [class]="section.iconClass"></i> {{ section.label }}
+        </h4>
+        <div [class]="section.gridClass">
+          @for (item of section.metrics(); track item.documentationVariantId) {
+            <div class="kpi-cell">
+              <span class="kpi-label"><span class="kpi-label__text">{{ item.label }}</span><app-metric-help-modal [variantId]="item.documentationVariantId" [label]="item.label" /></span>
+              <span class="kpi-value" [class]="item.cssClass ?? ''">{{ item.value }}</span>
+              <span class="kpi-source">{{ item.source }}</span>
+            </div>
+          }
+        </div>
+      </section>
+    }
   }
 </div>

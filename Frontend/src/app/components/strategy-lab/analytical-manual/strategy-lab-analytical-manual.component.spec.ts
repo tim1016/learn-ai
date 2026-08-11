@@ -42,6 +42,14 @@ describe("resolveMetricContext", () => {
     expect(resolution).toMatchObject({ variant: { variant_id: "sharpe.lean_native.v1" }, warning: null });
   });
 
+  it("trims the producer before preserving a requested variant", () => {
+    const resolution = resolveMetricContext(VARIANTS, {
+      metricId: "sharpe", variantId: "sharpe.lean_native.v1", producer: " lean_native ", contractId: "lean-statistics-oracle-v1",
+    });
+
+    expect(resolution).toMatchObject({ variant: { variant_id: "sharpe.lean_native.v1" }, warning: null });
+  });
+
   it("falls back visibly for unknown metric and unknown producer context", () => {
     const unknownMetric = resolveMetricContext(VARIANTS, {
       metricId: "unknown_metric", variantId: null, producer: null, contractId: null,
