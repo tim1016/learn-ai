@@ -18,6 +18,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
     ControlMetaSnapshot,
     DecisionReceiptResource,
     EffectOperationResource,
+    ExternalOrderResource,
     OrderResource,
     RunResource,
 )
@@ -144,6 +145,40 @@ class ClerkSqliteRepositoryReadApi:
                 transaction_ref=transaction_ref,
                 limit=limit,
             )
+
+    def external_order(
+        self: ClerkSqliteRepository,
+        external_order_id: str,
+    ) -> ExternalOrderResource | None:
+        with self._write_lock:
+            return reads.external_order(self._conn, external_order_id)
+
+    def external_order_by_broker_order_id(
+        self: ClerkSqliteRepository,
+        broker_order_id: str,
+    ) -> ExternalOrderResource | None:
+        with self._write_lock:
+            return reads.external_order_by_broker_order_id(self._conn, broker_order_id)
+
+    def external_orders(self: ClerkSqliteRepository) -> list[dict]:
+        """Return all external observations as a compatibility-friendly mapping list."""
+        with self._write_lock:
+            return [
+                {
+                    "external_order_id": order.external_order_id,
+                    "broker_order_id": order.broker_order_id,
+                    "client_order_id": order.client_order_id,
+                    "symbol": order.symbol,
+                    "side": order.side,
+                    "qty": order.qty,
+                    "price": order.price,
+                    "observed_at_ms": order.observed_at_ms,
+                    "acknowledged_at_ms": order.acknowledged_at_ms,
+                    "ack_operator": order.ack_operator,
+                    "evidence_refs": order.evidence_refs,
+                }
+                for order in reads.external_orders(self._conn)
+            ]
 
     def effect_operation(
         self: ClerkSqliteRepository,

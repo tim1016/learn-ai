@@ -26,13 +26,14 @@ from app.broker.alpaca.clerk.sqlite.economic_projection import (
     SqliteEconomicProjectionReader,
 )
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
+from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExecutionCorrectedFacts,
     ExecutionSliceFilledFacts,
 )
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.contract.models import BrokerOrderLeg
+from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
 from app.engine.live.order_identity import OwnershipRung, classify_ownership
 from app.lean_sidecar.trading_calendar import SessionWindow
 from conftest import _clock_at
@@ -393,6 +394,128 @@ def _project_fixture(
         repo.close()
 
 
+def _project_external_order_fixture(
+    fixture_input: Mapping[str, Any],
+    *,
+    tmp_path: Path,
+) -> Mapping[str, Any]:
+    """Replay the external-order fixture through the isolated SQLite fold."""
+    observed_at_ms = int(fixture_input["broker_orders"][0]["observed_at_ms"])
+    repo = ClerkSqliteRepository.initialize(
+        account_id=str(fixture_input["account_id"]),
+        artifacts_root=tmp_path,
+        clock=_clock_at(observed_at_ms + 1),
+    )
+    try:
+        strategy_instance_ids = tuple(str(value) for value in fixture_input["bots_before"])
+        for strategy_instance_id in strategy_instance_ids:
+            repo.register_strategy_instance(
+                strategy_instance_id=strategy_instance_id,
+                symbol="GOOGL",
+                config_hash=f"golden-{strategy_instance_id}",
+            )
+        for raw_order in fixture_input["broker_orders"]:
+            observe_external_order(repo, order=_fixture_external_order(raw_order))
+        session = SessionWindow(
+            session_date=datetime.fromtimestamp(observed_at_ms / 1000, tz=UTC)
+            .astimezone(ZoneInfo("America/New_York"))
+            .date(),
+            open_ms_utc=observed_at_ms - 1,
+            close_ms_utc=observed_at_ms + 1,
+        )
+        reader = SqliteEconomicProjectionReader.from_repository(repo)
+        try:
+            bot_metrics = {}
+            for strategy_instance_id in strategy_instance_ids:
+                snapshot = reader.bot_economic_snapshot(
+                    strategy_instance_id,
+                    session_window=session,
+                    marks={},
+                )
+                assert snapshot is not None
+                bot_metrics[strategy_instance_id] = {
+                    "fills_today": snapshot.fills_today,
+                    "realized_pnl_today": snapshot.realized_pnl_today,
+                    "open_pnl": snapshot.open_pnl,
+                    "position_quantity": snapshot.exposure.get("GOOGL", 0.0),
+                    "marks_complete": snapshot.marks_complete,
+                }
+        finally:
+            reader.close()
+        active = repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER")
+        external_orders = [
+            {
+                "external_order_id": row["external_order_id"],
+                "broker_order_id": row["broker_order_id"],
+                "client_order_id": row["client_order_id"],
+                "symbol": row["symbol"],
+                "side": row["side"],
+                "qty": row["qty"],
+                "price": row["price"],
+                "acknowledged_at_ms": row["acknowledged_at_ms"],
+            }
+            for row in repo.external_orders()
+        ]
+        return {
+            "projection": {
+                "bot_metrics": bot_metrics,
+                "external_orders": external_orders,
+                "active_holds": (
+                    []
+                    if active is None
+                    else [
+                        {
+                            "scope": active["scope"],
+                            "reason_code": active["reason_code"],
+                            "state": active["state"],
+                            "evidence_refs": json.loads(active["evidence_refs_json"]),
+                        }
+                    ]
+                ),
+                "available_actions": [
+                    {
+                        "action": "ACKNOWLEDGE_EXTERNAL_ORDER",
+                        "external_order_id": row["external_order_id"],
+                    }
+                    for row in repo.external_orders()
+                    if row["acknowledged_at_ms"] is None
+                ],
+            }
+        }
+    finally:
+        repo.close()
+
+
+def _fixture_external_order(raw_order: Mapping[str, Any]) -> BrokerOrder:
+    return BrokerOrder(
+        broker="alpaca",
+        order_id=str(raw_order["id"]),
+        client_order_id=str(raw_order["client_order_id"]),
+        symbol=str(raw_order["symbol"]),
+        asset_class="us_equity",
+        side=str(raw_order["side"]),
+        order_type="market",
+        time_in_force="day",
+        quantity=float(raw_order["qty"]),
+        filled_quantity=float(raw_order["filled_qty"]),
+        limit_price=None,
+        stop_price=None,
+        filled_avg_price=(
+            float(raw_order["filled_avg_price"])
+            if raw_order["filled_avg_price"] is not None
+            else None
+        ),
+        status=str(raw_order["status"]),
+        submitted_at_ms=None,
+        created_at_ms=None,
+        updated_at_ms=int(raw_order["observed_at_ms"]),
+        filled_at_ms=None,
+        canceled_at_ms=None,
+        expired_at_ms=None,
+        observed_at_ms=int(raw_order["observed_at_ms"]),
+    )
+
+
 def _assert_optional_float(actual: object, expected: object, *, path: str) -> None:
     if expected is None:
         assert actual is None, f"{path}: expected unavailable (None), got {actual!r}"
@@ -467,17 +590,13 @@ def test_execution_authority_external_fixture_is_not_bot_owned() -> None:
 
 @pytest.mark.parametrize(
     "family",
-    (
-        *(_S2_FAMILIES),
-        pytest.param(
-            "external_order",
-            marks=pytest.mark.xfail(reason="S4 implements external-order observation", strict=True),
-        ),
-    ),
+    (*(_S2_FAMILIES), "external_order"),
 )
 def test_execution_authority_golden(family: str, tmp_path: Path) -> None:
-    if family == "external_order":
-        raise NotImplementedError("S4 implements the external-order authority projection")
     fixture_input, expected = _load_fixture(family)
-    actual = _project_fixture(fixture_input, tmp_path=tmp_path)
+    actual = (
+        _project_external_order_fixture(fixture_input, tmp_path=tmp_path)
+        if family == "external_order"
+        else _project_fixture(fixture_input, tmp_path=tmp_path)
+    )
     _assert_projection(actual, expected)

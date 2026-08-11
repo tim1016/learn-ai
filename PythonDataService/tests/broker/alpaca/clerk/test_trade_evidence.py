@@ -234,6 +234,37 @@ async def test_sqlite_websocket_fill_records_exact_execution_and_separate_ack(
         repo.close()
 
 
+async def test_sqlite_unexplained_trade_update_records_external_order_without_a_bot_fill(
+    tmp_path: Path,
+) -> None:
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    foreign = _owned_order("alpaca-console:operator-order-1").model_copy(
+        update={"order_id": "external-order-1", "symbol": "AAPL", "quantity": 2.0}
+    )
+    try:
+        kind = await _sqlite_sink(repo).record_lifecycle_event(
+            client_order_id=foreign.client_order_id,
+            event=BrokerOrderEvent(
+                event_type="new",
+                occurred_at_ms=foreign.observed_at_ms,
+                price=None,
+                quantity=None,
+            ),
+            event_key="external-order-1|new",
+            order=foreign,
+            recovery_source=None,
+            recovery_window_limit=None,
+        )
+
+        assert kind is ClerkEntryKind.UNEXPLAINED_ORDER
+        assert repo.external_orders()[0]["broker_order_id"] == "external-order-1"
+        assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER") is not None
+        assert repo.attributed_positions_by_symbol() == {}
+        assert repo.fills_for_order("external-order-1") == []
+    finally:
+        repo.close()
+
+
 async def test_sqlite_websocket_execution_redelivery_and_restart_append_no_duplicate_transition(
     tmp_path: Path,
 ) -> None:

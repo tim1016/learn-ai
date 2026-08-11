@@ -3,11 +3,16 @@
 export type ClerkTransactionOrigin =
   | 'manual'
   | 'strategy'
+  | 'external'
+  | 'unknown'
   | 'recovery'
   | 'emergency'
   | 'shutdown'
   | 'force_flat'
   | 'other';
+
+/** SQLite-owned execution-fee provenance; the browser only renders the receipt value. */
+export type ClerkFeeFidelity = 'reported' | 'not_reported';
 
 export interface ClerkOrderInstruction {
   readonly symbol: string | null;
@@ -40,6 +45,9 @@ export interface ClerkTransactionEvent {
   readonly native_execution_id: string | null;
   readonly commission_status: 'unknown' | 'reported';
   readonly fee: number | null;
+  readonly fee_fidelity?: ClerkFeeFidelity | null;
+  readonly execution_quantity?: number | null;
+  readonly execution_price?: number | null;
 }
 
 /** Server-folded custody stages for the bounded evidence window in this response. */
@@ -89,10 +97,11 @@ export interface ClerkTransactionSummary {
   readonly transaction_kind: string;
   readonly transaction_origin?: ClerkTransactionOrigin;
   readonly order_instruction?: ClerkOrderInstruction;
-  readonly strategy_instance_id: string;
-  readonly run_id: string;
-  readonly intent_id: string;
-  readonly order_ref: string;
+  /** Null for external orders that have no Clerk-owned bot identity. */
+  readonly strategy_instance_id: string | null;
+  readonly run_id: string | null;
+  readonly intent_id: string | null;
+  readonly order_ref: string | null;
   readonly order_id: number | null;
   readonly perm_id: number | null;
   readonly exec_id: string | null;
@@ -101,6 +110,12 @@ export interface ClerkTransactionSummary {
   readonly lifecycle_state: string;
   readonly commission_status: 'unknown' | 'reported';
   readonly fee: number | null;
+  /** Execution facts are projected by SQLite; the browser only renders them. */
+  readonly execution_quantity?: number | null;
+  readonly execution_price?: number | null;
+  readonly fee_fidelity?: ClerkFeeFidelity | null;
+  /** Durable identifier for an externally observed Alpaca order. */
+  readonly external_order_id?: string | null;
   readonly event_count: number;
 }
 

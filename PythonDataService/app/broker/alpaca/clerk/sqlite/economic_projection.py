@@ -71,6 +71,41 @@ MAX_FILL_PAGE_LIMIT = 100
 DEFAULT_RECENT_FILL_LIMIT = 20
 DEFAULT_CHART_FILL_WINDOW_LIMIT = 3_000
 MAX_CHART_FILL_WINDOW_LIMIT = 3_000
+MAX_TRANSACTION_DETAIL_EXECUTIONS = 100
+
+# Shared by every reader that must resolve "the fill(s) in effect right now"
+# from a correction chain: walk each fill backward via `superseded_execution_ref`
+# to its root, then keep only fills with no successor (nothing supersedes them).
+# The root's source/recorded time is exposed as `root_source_event_at_ms` /
+# `root_recorded_at_ms` for callers that need the *original* economic time of
+# a corrected fill, not the correction's arrival time. Continue with `, <name>
+# AS (...)` or a direct `SELECT ... LEFT JOIN roots ON ...`.
+_EFFECTIVE_FILL_LINEAGE_CTE = """
+    WITH RECURSIVE lineage(
+        effective_fill_id,
+        parent_execution_id,
+        depth,
+        root_source_event_at_ms,
+        root_recorded_at_ms
+    ) AS (
+        SELECT f.fill_id, f.superseded_execution_ref, 0,
+               f.source_event_at_ms, f.recorded_at_ms
+        FROM fills f
+        WHERE NOT EXISTS (
+            SELECT 1 FROM fills successor
+            WHERE successor.superseded_execution_ref = f.execution_id
+        )
+        UNION ALL
+        SELECT lineage.effective_fill_id, parent.superseded_execution_ref,
+               lineage.depth + 1, parent.source_event_at_ms, parent.recorded_at_ms
+        FROM lineage
+        JOIN fills parent ON parent.execution_id = lineage.parent_execution_id
+    ), roots AS (
+        SELECT effective_fill_id, root_source_event_at_ms, root_recorded_at_ms
+        FROM lineage
+        WHERE parent_execution_id IS NULL
+    )"""
+
 
 class EconomicProjectionError(RuntimeError):
     """SQLite could not produce a coherent execution-economic projection."""
@@ -336,6 +371,64 @@ class SqliteEconomicProjectionReader:
             executions=tuple(_to_execution_row(row) for row in visible),
             next_cursor=next_cursor,
         )
+
+    def effective_execution_summaries(
+        self,
+        order_refs: Sequence[str],
+    ) -> dict[str, tuple[ExecutionRow, ...]]:
+        """Return at most two effective slices for each requested order.
+
+        Transaction-list summaries only expose economics when precisely one
+        effective execution exists.  Reading two rows per order establishes
+        that condition without aggregating price, quantity, or fees in a
+        presentation adapter.  The returned tuples are newest first and are
+        sourced from the same S2 execution-fold read model as account history.
+        """
+        refs = _distinct_order_refs(order_refs)
+        if not refs:
+            return {}
+        with self._read_transaction():
+            self._verified_meta()
+            rows = self._effective_execution_rows_for_orders(
+                refs,
+                per_order_limit=2,
+                total_limit=None,
+            )
+        grouped: dict[str, list[ExecutionRow]] = {order_ref: [] for order_ref in refs}
+        for row in rows:
+            grouped[row["order_ref"]].append(_to_execution_row(row))
+        return {order_ref: tuple(grouped[order_ref]) for order_ref in refs}
+
+    def effective_order_executions(
+        self,
+        order_refs: Sequence[str],
+        *,
+        limit: int = MAX_TRANSACTION_DETAIL_EXECUTIONS,
+    ) -> tuple[ExecutionRow, ...]:
+        """Return every effective execution for one bounded transaction detail.
+
+        Detail views must retain every effective slice rather than inventing
+        aggregate execution economics.  The cap is intentionally fail-closed:
+        callers receive :class:`EconomicProjectionUnavailable` instead of a
+        silently truncated audit trail.
+        """
+        refs = _distinct_order_refs(order_refs)
+        if not refs:
+            return ()
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
+            raise ValueError("execution detail limit must be a positive integer")
+        with self._read_transaction():
+            self._verified_meta()
+            rows = self._effective_execution_rows_for_orders(
+                refs,
+                per_order_limit=None,
+                total_limit=limit,
+            )
+        if len(rows) > limit:
+            raise EconomicProjectionUnavailable(
+                "SQLite transaction execution detail exceeds the safe event limit."
+            )
+        return tuple(_to_execution_row(row) for row in rows)
 
     def bot_economic_snapshot(
         self,
@@ -620,30 +713,7 @@ class SqliteEconomicProjectionReader:
         if limit is not None:
             params.append(limit + 1)
         sql = f"""
-            WITH RECURSIVE lineage(
-                effective_fill_id,
-                parent_execution_id,
-                depth,
-                root_source_event_at_ms,
-                root_recorded_at_ms
-            ) AS (
-                SELECT f.fill_id, f.superseded_execution_ref, 0,
-                       f.source_event_at_ms, f.recorded_at_ms
-                FROM fills f
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM fills successor
-                    WHERE successor.superseded_execution_ref = f.execution_id
-                )
-                UNION ALL
-                SELECT lineage.effective_fill_id, parent.superseded_execution_ref,
-                       lineage.depth + 1, parent.source_event_at_ms, parent.recorded_at_ms
-                FROM lineage
-                JOIN fills parent ON parent.execution_id = lineage.parent_execution_id
-            ), roots AS (
-                SELECT effective_fill_id, root_source_event_at_ms, root_recorded_at_ms
-                FROM lineage
-                WHERE parent_execution_id IS NULL
-            ), effective AS (
+            {_EFFECTIVE_FILL_LINEAGE_CTE}, effective AS (
                 SELECT f.fill_id, f.order_ref, f.qty, f.price, f.side, f.execution_id,
                        f.evidence_source, f.event_kind, f.fee, f.fee_fidelity,
                        f.recorded_at_ms, e.strategy_instance_id, s.symbol,
@@ -704,29 +774,7 @@ class SqliteEconomicProjectionReader:
             params.extend((cursor_key[0], cursor_key[0], cursor_key[1]))
         params.append(limit + 1)
         sql = f"""
-            WITH RECURSIVE lineage(
-                effective_fill_id,
-                parent_execution_id,
-                depth,
-                root_source_event_at_ms,
-                root_recorded_at_ms
-            ) AS (
-                SELECT f.fill_id, f.superseded_execution_ref, 0,
-                       f.source_event_at_ms, f.recorded_at_ms
-                FROM fills f
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM fills successor
-                    WHERE successor.superseded_execution_ref = f.execution_id
-                )
-                UNION ALL
-                SELECT lineage.effective_fill_id, parent.superseded_execution_ref,
-                       lineage.depth + 1, parent.source_event_at_ms, parent.recorded_at_ms
-                FROM lineage JOIN fills parent
-                    ON parent.execution_id = lineage.parent_execution_id
-            ), roots AS (
-                SELECT effective_fill_id, root_source_event_at_ms, root_recorded_at_ms
-                FROM lineage WHERE parent_execution_id IS NULL
-            )
+            {_EFFECTIVE_FILL_LINEAGE_CTE}
             SELECT f.fill_id, f.execution_id, f.order_ref, f.qty, f.price, f.side,
                    f.event_kind, f.fee, f.fee_fidelity, f.recorded_at_ms,
                    e.strategy_instance_id, s.symbol,
@@ -744,6 +792,58 @@ class SqliteEconomicProjectionReader:
             WHERE {' AND '.join(where)}
             ORDER BY f.recorded_at_ms DESC, COALESCE(f.execution_id, f.fill_id) DESC
             LIMIT ?
+        """
+        return self._conn.execute(sql, params).fetchall()
+
+    def _effective_execution_rows_for_orders(
+        self,
+        order_refs: tuple[str, ...],
+        *,
+        per_order_limit: int | None,
+        total_limit: int | None,
+    ) -> list[sqlite3.Row]:
+        """Read current execution leaves for explicit SQLite order identities."""
+        placeholders = _placeholders(order_refs)
+        params: list[object] = [*order_refs]
+        per_order_where = ""
+        if per_order_limit is not None:
+            per_order_where = "WHERE slice_rank <= ?"
+            params.append(per_order_limit)
+        total_limit_sql = ""
+        if total_limit is not None:
+            total_limit_sql = "LIMIT ?"
+            params.append(total_limit + 1)
+        sql = f"""
+            {_EFFECTIVE_FILL_LINEAGE_CTE}, effective AS (
+                SELECT f.fill_id, f.execution_id, f.order_ref, f.qty, f.price, f.side,
+                       f.event_kind, f.fee, f.fee_fidelity, f.recorded_at_ms,
+                       e.strategy_instance_id, s.symbol,
+                       'effective' AS state,
+                       COALESCE(roots.root_source_event_at_ms, roots.root_recorded_at_ms,
+                                f.source_event_at_ms, f.recorded_at_ms) AS filled_at_ms,
+                       COALESCE(f.execution_id, f.fill_id) AS execution_sort_key
+                FROM fills f
+                JOIN orders o ON o.order_ref = f.order_ref
+                JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id
+                JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id
+                JOIN roots ON roots.effective_fill_id = f.fill_id
+                WHERE f.order_ref IN ({placeholders})
+                  AND NOT EXISTS (
+                      SELECT 1 FROM fills successor
+                      WHERE successor.superseded_execution_ref = f.execution_id
+                  )
+            ), ranked AS (
+                SELECT effective.*,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY order_ref
+                           ORDER BY recorded_at_ms DESC, execution_sort_key DESC
+                       ) AS slice_rank
+                FROM effective
+            )
+            SELECT * FROM ranked
+            {per_order_where}
+            ORDER BY recorded_at_ms DESC, execution_sort_key DESC
+            {total_limit_sql}
         """
         return self._conn.execute(sql, params).fetchall()
 
@@ -934,10 +1034,18 @@ def _placeholders(values: Sequence[str]) -> str:
     return ", ".join("?" for _ in values)
 
 
+def _distinct_order_refs(order_refs: Sequence[str]) -> tuple[str, ...]:
+    refs = tuple(dict.fromkeys(order_refs))
+    if any(not isinstance(order_ref, str) or not order_ref for order_ref in refs):
+        raise ValueError("order_refs must contain non-empty strings")
+    return refs
+
+
 __all__ = [
     "DEFAULT_CHART_FILL_WINDOW_LIMIT",
     "DEFAULT_FILL_PAGE_LIMIT",
     "DEFAULT_RECENT_FILL_LIMIT",
+    "MAX_TRANSACTION_DETAIL_EXECUTIONS",
     "EconomicProjectionError",
     "EconomicProjectionIdentityMismatch",
     "EconomicProjectionUnavailable",

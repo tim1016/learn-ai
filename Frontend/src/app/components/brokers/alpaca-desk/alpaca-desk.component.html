@@ -55,9 +55,12 @@
           <span class="section-eyebrow">Activity</span>
           <h2 id="orders-title">Transaction history</h2>
         </div>
-        <span class="section-note">Latest 50</span>
+        <span class="section-note">SQLite projection</span>
       </div>
-      <app-alpaca-orders-table [refreshVersion]="ordersRefreshVersion()" />
+      <app-account-desk-transaction-history
+        [accountId]="ticketAccountId()"
+        [refreshVersion]="historyRefreshVersion()"
+      />
     </section>
   </div>
 </main>
@@ -83,6 +86,6 @@
   <app-alpaca-order-entry
     [initialSymbol]="orderPrefill()?.symbol ?? ''"
     [expectedAccountId]="ticketAccountId() ?? ''"
-    (submissionFinished)="refreshOrders()"
+    (submissionFinished)="refreshHistory()"
   />
 </p-dialog>

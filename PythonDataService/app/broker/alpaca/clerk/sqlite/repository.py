@@ -58,6 +58,9 @@ from app.broker.alpaca.clerk.sqlite.models import (
     OperationClaim,
     TransitionInput,
 )
+from app.broker.alpaca.clerk.sqlite.repository_external_order_api import (
+    ClerkSqliteRepositoryExternalOrderApi,
+)
 from app.broker.alpaca.clerk.sqlite.repository_read_api import ClerkSqliteRepositoryReadApi
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
@@ -128,7 +131,7 @@ class OperationClaimError(ClerkSqliteError):
     """Scope D: an ``effect_operations`` claim attempt found a live owner."""
 
 
-class ClerkSqliteRepository(ClerkSqliteRepositoryReadApi):
+class ClerkSqliteRepository(ClerkSqliteRepositoryReadApi, ClerkSqliteRepositoryExternalOrderApi):
     """One Alpaca account's event-sourced SQLite authority.
 
     Construct via :meth:`initialize` (a brand-new generation) or

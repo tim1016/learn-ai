@@ -2,19 +2,54 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:
+    from app.broker.alpaca.clerk.sqlite.models import ExternalOrderResource
 
 TransactionFeedState = Literal[
     "live", "reconnecting", "rebuilding", "stale", "offline_but_saved", "corrupt", "projection_unavailable"
 ]
 TransactionOrigin = Literal[
-    "manual", "strategy", "recovery", "emergency", "shutdown", "force_flat", "other"
+    "manual", "strategy", "external", "unknown", "recovery", "emergency", "shutdown", "force_flat", "other"
 ]
 TRANSACTION_FEED_STATES = frozenset({
     "live", "reconnecting", "rebuilding", "stale", "offline_but_saved", "corrupt", "projection_unavailable"
 })
+
+
+class ExternalOrderAcknowledgementRequest(BaseModel):
+    """Operator evidence for reviewing one externally observed broker order."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    operator: str = Field(min_length=1, max_length=64)
+
+
+class ExternalOrderAcknowledgementResponse(BaseModel):
+    """Durable result of acknowledging one external-order observation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    external_order_id: str = Field(min_length=1, max_length=256)
+    acknowledged_at_ms: int = Field(ge=0)
+    ack_operator: str = Field(min_length=1, max_length=64)
+
+    @classmethod
+    def from_external_order(
+        cls,
+        resource: ExternalOrderResource,
+    ) -> ExternalOrderAcknowledgementResponse:
+        """Adapt a fold-owned acknowledgement without accepting client fields."""
+        if resource.acknowledged_at_ms is None or resource.ack_operator is None:
+            raise ValueError("external-order acknowledgement is not durably recorded")
+        return cls(
+            external_order_id=resource.external_order_id,
+            acknowledged_at_ms=resource.acknowledged_at_ms,
+            ack_operator=resource.ack_operator,
+        )
 
 
 class ClerkOrderInstruction(BaseModel):
@@ -49,6 +84,9 @@ class ClerkTransactionEventRow(BaseModel):
     native_execution_id: str | None = Field(default=None, max_length=256)
     commission_status: Literal["unknown", "reported"] = "unknown"
     fee: float | None = None
+    fee_fidelity: Literal["reported", "not_reported"] | None = None
+    execution_quantity: float | None = None
+    execution_price: float | None = None
     journal_seq: int = Field(ge=1)
     recorded_at_ms: int = Field(ge=0)
     receipt: dict[str, Any] = Field(default_factory=dict)
@@ -100,10 +138,10 @@ class ClerkTransactionRow(BaseModel):
     transaction_kind: str = Field(min_length=1, max_length=64)
     transaction_origin: TransactionOrigin = "manual"
     order_instruction: ClerkOrderInstruction = Field(default_factory=ClerkOrderInstruction)
-    strategy_instance_id: str = Field(min_length=1, max_length=128)
-    run_id: str = Field(min_length=1, max_length=128)
-    intent_id: str = Field(min_length=1, max_length=256)
-    order_ref: str = Field(min_length=1, max_length=512)
+    strategy_instance_id: str | None = Field(default=None, min_length=1, max_length=128)
+    run_id: str | None = Field(default=None, min_length=1, max_length=128)
+    intent_id: str | None = Field(default=None, min_length=1, max_length=256)
+    order_ref: str | None = Field(default=None, min_length=1, max_length=512)
     order_id: int | None = Field(default=None, ge=0)
     perm_id: int | None = Field(default=None, ge=0)
     exec_id: str | None = Field(default=None, max_length=256)
@@ -112,6 +150,10 @@ class ClerkTransactionRow(BaseModel):
     lifecycle_state: str = Field(min_length=1, max_length=64)
     commission_status: Literal["unknown", "reported"] = "unknown"
     fee: float | None = None
+    fee_fidelity: Literal["reported", "not_reported"] | None = None
+    execution_quantity: float | None = None
+    execution_price: float | None = None
+    external_order_id: str | None = Field(default=None, min_length=1, max_length=256)
     receipt: dict[str, Any] = Field(default_factory=dict)
     events: list[ClerkTransactionEventRow] = Field(default_factory=list)
     custody_timeline: ClerkCustodyTimeline | None = None
@@ -130,10 +172,10 @@ class ClerkTransactionSummaryRow(BaseModel):
     transaction_kind: str = Field(min_length=1, max_length=64)
     transaction_origin: TransactionOrigin = "manual"
     order_instruction: ClerkOrderInstruction = Field(default_factory=ClerkOrderInstruction)
-    strategy_instance_id: str = Field(min_length=1, max_length=128)
-    run_id: str = Field(min_length=1, max_length=128)
-    intent_id: str = Field(min_length=1, max_length=256)
-    order_ref: str = Field(min_length=1, max_length=512)
+    strategy_instance_id: str | None = Field(default=None, min_length=1, max_length=128)
+    run_id: str | None = Field(default=None, min_length=1, max_length=128)
+    intent_id: str | None = Field(default=None, min_length=1, max_length=256)
+    order_ref: str | None = Field(default=None, min_length=1, max_length=512)
     order_id: int | None = Field(default=None, ge=0)
     perm_id: int | None = Field(default=None, ge=0)
     exec_id: str | None = Field(default=None, max_length=256)
@@ -142,6 +184,10 @@ class ClerkTransactionSummaryRow(BaseModel):
     lifecycle_state: str = Field(min_length=1, max_length=64)
     commission_status: Literal["unknown", "reported"] = "unknown"
     fee: float | None = None
+    fee_fidelity: Literal["reported", "not_reported"] | None = None
+    execution_quantity: float | None = None
+    execution_price: float | None = None
+    external_order_id: str | None = Field(default=None, min_length=1, max_length=256)
     event_count: int = Field(ge=1)
 
 

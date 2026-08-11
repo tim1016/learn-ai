@@ -15,6 +15,7 @@ from app.broker.alpaca.clerk.exposure import (
 )
 from app.broker.alpaca.clerk.sqlite.enter import resolve_enter_submission
 from app.broker.alpaca.clerk.sqlite.exit import resolve_exit
+from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.facts import (
     AccountHoldRaisedFacts,
     AccountHoldResolvedFacts,
@@ -255,7 +256,21 @@ def _record_reconciliation_attempt(
 
 
 def _sync_unexplained_order_hold(repo: ClerkSqliteRepository, foreign_orders: tuple[BrokerOrder, ...]) -> None:
-    evidence_refs = sorted(order.order_id for order in foreign_orders)
+    """Reconcile the active hold to this complete broker snapshot only.
+
+    A reviewed external row remains durable audit evidence, but no longer
+    contributes this particular unexplained-order hold.  Other currently
+    unreviewed broker orders remain as independent evidence refs, so an
+    acknowledgement cannot release their account-wide safety fence.
+    """
+    evidence_refs = sorted(
+        order.order_id
+        for order in foreign_orders
+        if (
+            observation := repo.external_order_by_broker_order_id(order.order_id)
+        ) is None
+        or observation.acknowledged_at_ms is None
+    )
     if not evidence_refs:
         facts = AccountHoldResolvedFacts(
             reason_code=UNEXPLAINED_ORDER_REASON_CODE,
@@ -608,6 +623,8 @@ async def _reconcile_account_serialized(
         attributed_positions=attributed_positions,
         known_order_refs=frozenset(known_order_refs),
     )
+    for foreign_order in plan.foreign_orders:
+        observe_external_order(repo, order=foreign_order)
     await asyncio.to_thread(_sync_unexplained_order_hold, repo, plan.foreign_orders)
     await asyncio.to_thread(
         _sync_position_drift,

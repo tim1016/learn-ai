@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from app.broker.alpaca.clerk.models import ClerkEntryKind
+from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.facts import (
     AccountHoldRaisedFacts,
     ExecutionSliceFilledFacts,
@@ -167,6 +168,17 @@ class SqliteTradeUpdateEvidenceSink:
         del recovery_source, recovery_window_limit
         async with self._intake:
             local_order = self._repo.order(client_order_id) if client_order_id else None
+            if local_order is None and order is not None:
+                # This broker identity is not captured by any bot-owned
+                # order.  Persist it separately from bot economics; the
+                # observation fold raises its own atomic account hold.
+                observe_external_order(
+                    self._repo,
+                    order=order,
+                    proof_reference=event_key,
+                )
+                return ClerkEntryKind.UNEXPLAINED_ORDER
+
             if local_order is None or order is None:
                 evidence_refs = tuple(
                     ref

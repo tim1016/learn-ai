@@ -20,6 +20,12 @@ from collections.abc import Callable
 from typing import Any
 
 from app.broker.alpaca.clerk.sqlite import reads
+from app.broker.alpaca.clerk.sqlite.external_order_folds import (
+    fold_external_order_acknowledged as _fold_external_order_acknowledged,
+)
+from app.broker.alpaca.clerk.sqlite.external_order_folds import (
+    fold_external_order_observed as _fold_external_order_observed,
+)
 from app.broker.alpaca.clerk.sqlite.facts import (
     AccountHoldRaisedFacts,
     AccountHoldResolvedFacts,
@@ -982,6 +988,8 @@ DEFAULT_FOLD_REGISTRY.register("RECONCILIATION_ATTEMPTED", _fold_reconciliation_
 DEFAULT_FOLD_REGISTRY.register("ACCOUNT_HOLD_RAISED", _fold_account_hold_raised)
 DEFAULT_FOLD_REGISTRY.register("ACCOUNT_HOLD_REFRESHED", _fold_account_hold_refreshed)
 DEFAULT_FOLD_REGISTRY.register("ACCOUNT_HOLD_RESOLVED", _fold_account_hold_resolved)
+DEFAULT_FOLD_REGISTRY.register("EXTERNAL_ORDER_OBSERVED", _fold_external_order_observed)
+DEFAULT_FOLD_REGISTRY.register("EXTERNAL_ORDER_ACKNOWLEDGED", _fold_external_order_acknowledged)
 DEFAULT_FOLD_REGISTRY.register("UNCERTAINTY_RAISED", _fold_uncertainty_raised)
 DEFAULT_FOLD_REGISTRY.register("UNCERTAINTY_REFRESHED", _fold_uncertainty_refreshed)
 DEFAULT_FOLD_REGISTRY.register("UNCERTAINTY_RESOLVED", _fold_uncertainty_resolved)

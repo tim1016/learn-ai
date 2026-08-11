@@ -262,6 +262,43 @@ class AccountHoldResolvedFacts:
 
 
 @dataclass(frozen=True)
+class ExternalOrderObservedFacts:
+    """A complete immutable observation of a broker order outside bot custody."""
+
+    external_order_id: str
+    broker_order_id: str
+    client_order_id: str
+    symbol: str
+    side: str
+    qty: float
+    price: float | None
+    observed_at_ms: int
+    evidence_refs: list[str]
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> ExternalOrderObservedFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
+class ExternalOrderAcknowledgedFacts:
+    """Operator review of one durable external-order observation only."""
+
+    external_order_id: str
+    ack_operator: str
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> ExternalOrderAcknowledgedFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
 class UncertaintyRaisedFacts:
     """``UNCERTAINTY_RAISED`` (#1380): the R5 envelope, minus what's already
     an outer ``custody_transitions``/``uncertainties`` column —

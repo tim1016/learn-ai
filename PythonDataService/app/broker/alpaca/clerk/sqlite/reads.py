@@ -19,6 +19,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
     ControlMetaSnapshot,
     DecisionReceiptResource,
     EffectOperationResource,
+    ExternalOrderResource,
     OrderResource,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
@@ -50,6 +51,38 @@ _DECISION_RECEIPT_COLUMNS: tuple[str, ...] = (
     "order_ref",
     "observed_at_ms",
     "facts_json",
+)
+
+_EXTERNAL_ORDER_COLUMNS: tuple[str, ...] = (
+    "external_order_id",
+    "broker_order_id",
+    "client_order_id",
+    "symbol",
+    "side",
+    "qty",
+    "price",
+    "observed_at_ms",
+    "acknowledged_at_ms",
+    "ack_operator",
+    "evidence_refs_json",
+)
+
+_EXTERNAL_ORDER_SELECT = (
+    ", ".join(f"eo.{column}" for column in _EXTERNAL_ORDER_COLUMNS)
+    + ", (SELECT MAX(ct.sequence) FROM custody_transitions ct "
+    "WHERE ct.broker_order_id = eo.broker_order_id "
+    "AND ct.transition_kind = 'EXTERNAL_ORDER_OBSERVED') AS observation_sequence"
+    + ", (SELECT MAX(ct.sequence) FROM custody_transitions ct "
+    "WHERE ct.broker_order_id = eo.broker_order_id "
+    "AND ct.transition_kind = 'EXTERNAL_ORDER_ACKNOWLEDGED') AS acknowledgement_sequence"
+    + ", (SELECT ct.recorded_at_ms FROM custody_transitions ct "
+    "WHERE ct.broker_order_id = eo.broker_order_id "
+    "AND ct.transition_kind = 'EXTERNAL_ORDER_OBSERVED' "
+    "ORDER BY ct.sequence DESC LIMIT 1) AS observation_recorded_at_ms"
+    + ", (SELECT ct.recorded_at_ms FROM custody_transitions ct "
+    "WHERE ct.broker_order_id = eo.broker_order_id "
+    "AND ct.transition_kind = 'EXTERNAL_ORDER_ACKNOWLEDGED' "
+    "ORDER BY ct.sequence DESC LIMIT 1) AS acknowledgement_recorded_at_ms"
 )
 
 
@@ -119,6 +152,90 @@ def decision_receipts_by_transaction(
         (strategy_instance_id, transaction_ref, transaction_ref, limit),
     ).fetchall()
     return [DecisionReceiptResource(**dict(row)) for row in reversed(rows)]
+
+
+def _external_order_resource(row: sqlite3.Row) -> ExternalOrderResource:
+    values = {column: row[column] for column in _EXTERNAL_ORDER_COLUMNS}
+    evidence_refs = json.loads(values.pop("evidence_refs_json"))
+    if not isinstance(evidence_refs, list) or not all(isinstance(item, str) for item in evidence_refs):
+        raise ValueError("external order evidence_refs_json must be a string list")
+    return ExternalOrderResource(
+        **values,
+        evidence_refs=tuple(evidence_refs),
+        observation_sequence=row["observation_sequence"],
+        acknowledgement_sequence=row["acknowledgement_sequence"],
+        observation_recorded_at_ms=row["observation_recorded_at_ms"],
+        acknowledgement_recorded_at_ms=row["acknowledgement_recorded_at_ms"],
+    )
+
+
+def external_order(
+    conn: sqlite3.Connection,
+    external_order_id: str,
+) -> ExternalOrderResource | None:
+    row = conn.execute(
+        f"SELECT {_EXTERNAL_ORDER_SELECT} FROM external_orders eo "
+        "WHERE external_order_id = ?",
+        (external_order_id,),
+    ).fetchone()
+    return _external_order_resource(row) if row is not None else None
+
+
+def external_order_by_broker_order_id(
+    conn: sqlite3.Connection,
+    broker_order_id: str,
+) -> ExternalOrderResource | None:
+    row = conn.execute(
+        f"SELECT {_EXTERNAL_ORDER_SELECT} FROM external_orders eo "
+        "WHERE broker_order_id = ?",
+        (broker_order_id,),
+    ).fetchone()
+    return _external_order_resource(row) if row is not None else None
+
+
+def external_orders(conn: sqlite3.Connection) -> list[ExternalOrderResource]:
+    rows = conn.execute(
+        f"SELECT {_EXTERNAL_ORDER_SELECT} FROM external_orders eo "
+        "ORDER BY eo.observed_at_ms DESC, eo.external_order_id DESC"
+    ).fetchall()
+    return [_external_order_resource(row) for row in rows]
+
+
+def external_order_page(
+    conn: sqlite3.Connection,
+    *,
+    observed_before_ms: int | None,
+    external_order_id_before: str | None,
+    lifecycle_state: str | None,
+    limit: int,
+) -> list[ExternalOrderResource]:
+    if (observed_before_ms is None) != (external_order_id_before is None):
+        raise ValueError("external-order cursor must include both keyset fields")
+    lifecycle_predicate = {
+        None: "",
+        "review_required": "eo.acknowledged_at_ms IS NULL",
+        "reviewed": "eo.acknowledged_at_ms IS NOT NULL",
+    }.get(lifecycle_state)
+    if lifecycle_predicate is None:
+        raise ValueError("external-order lifecycle_state is invalid")
+    params: tuple[object, ...]
+    where_clauses: list[str] = []
+    if observed_before_ms is None:
+        params = (limit,)
+    else:
+        where_clauses.append(
+            "(eo.observed_at_ms < ? OR (eo.observed_at_ms = ? AND eo.external_order_id < ?))"
+        )
+        params = (observed_before_ms, observed_before_ms, external_order_id_before, limit)
+    if lifecycle_predicate:
+        where_clauses.append(lifecycle_predicate)
+    where = f"WHERE {' AND '.join(where_clauses)} " if where_clauses else ""
+    rows = conn.execute(
+        f"SELECT {_EXTERNAL_ORDER_SELECT} FROM external_orders eo {where}"
+        "ORDER BY eo.observed_at_ms DESC, eo.external_order_id DESC LIMIT ?",
+        params,
+    ).fetchall()
+    return [_external_order_resource(row) for row in rows]
 
 
 def command(conn: sqlite3.Connection, command_id: str) -> CommandResource | None:

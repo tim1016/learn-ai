@@ -435,6 +435,40 @@ class SqliteClerkProjectionReader:
             operations = self._project_operations(rows)
         return operations[0] if operations else None
 
+    def operations_by_ids(
+        self,
+        effect_operation_ids: Iterable[str],
+    ) -> tuple[ProjectedOperation, ...]:
+        """Read explicit operation identities in caller order from one snapshot."""
+        operation_ids = tuple(dict.fromkeys(effect_operation_ids))
+        if any(not isinstance(operation_id, str) or not operation_id for operation_id in operation_ids):
+            raise ValueError("effect_operation_ids must contain non-empty strings")
+        if not operation_ids:
+            return ()
+        placeholders = ", ".join("?" for _ in operation_ids)
+        with self._read_transaction():
+            self._verify_identity()
+            rows = self._conn.execute(
+                "SELECT e.effect_operation_id, e.kind, e.state, e.custody_owner, "
+                "e.strategy_instance_id, e.run_id, e.created_at_ms, e.updated_at_ms, "
+                "e.terminal_receipt_id, c.command_id, c.kind AS command_kind, "
+                "c.action, c.state AS command_state, c.run_id AS command_run_id, "
+                "c.receipt_id, c.created_at_ms AS command_created_at_ms, "
+                "c.updated_at_ms AS command_updated_at_ms, "
+                "(SELECT MAX(t.sequence) FROM custody_transitions t "
+                "WHERE t.effect_operation_id = e.effect_operation_id) "
+                "AS latest_transition_sequence, "
+                "(SELECT COUNT(*) FROM custody_transitions t "
+                "WHERE t.effect_operation_id = e.effect_operation_id) AS transition_count "
+                "FROM effect_operations e "
+                "JOIN commands c ON c.command_id = e.command_id "
+                f"WHERE e.effect_operation_id IN ({placeholders})",
+                operation_ids,
+            ).fetchall()
+            operations = self._project_operations(rows)
+        by_id = {operation.effect_operation_id: operation for operation in operations}
+        return tuple(by_id[operation_id] for operation_id in operation_ids if operation_id in by_id)
+
     def _verify_identity(self) -> None:
         row = self._conn.execute(
             "SELECT account_id, authority_generation, db_identity_token "

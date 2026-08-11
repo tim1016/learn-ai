@@ -96,6 +96,47 @@ describe('AccountDeskTransactionHistoryComponent', () => {
     expect(screen.getByText(/No projected transactions match/)).toBeTruthy();
   });
 
+  it('renders SQLite origin labels and execution facts without client-side classification', async () => {
+    const store = {
+      accountId: signal('PA1'),
+      loading: signal(false),
+      errorMessage: signal<string | null>(null),
+      hasLastGood: signal(true),
+      feed: signal({ projection_available: true, canonical_fallback_required: false, feed_state: 'live', feed_headline: 'SQLite projection current', feed_detail: 'Current', high_water_journal_seq: 3, lag_records: 0, lag_is_lower_bound: false, rows: [], next_cursor: null }),
+      rows: signal([
+        sqliteRow({ transaction_id: 'strategy-row', transaction_origin: 'strategy', strategy_instance_id: 'bot-googl', run_id: 'run-googl', execution_quantity: 3, execution_price: 175.25, fee_fidelity: 'reported', fee: 0.1 }),
+        sqliteRow({ transaction_id: 'external-row', transaction_origin: 'external', strategy_instance_id: null, run_id: null, intent_id: null, order_ref: null, external_order_id: 'alpaca-external-1', execution_quantity: 1, execution_price: 99.5, fee_fidelity: 'not_reported' }),
+        sqliteRow({ transaction_id: 'unknown-row', transaction_origin: 'unknown', strategy_instance_id: null, run_id: null, intent_id: null, order_ref: null }),
+        sqliteRow({ transaction_id: 'emergency-row', transaction_origin: 'emergency', strategy_instance_id: null, run_id: null, intent_id: null, order_ref: 'emergency/v1:opaque' }),
+      ]),
+      nextCursor: signal<string | null>(null), retry: vi.fn(), loadOlder: vi.fn(), transactionDetail: vi.fn(),
+    };
+    await render(AccountDeskTransactionHistoryComponent, {
+      providers: [
+        { provide: AccountDeskTransactionHistoryStore, useValue: store },
+        { provide: BrokerService, useValue: { accountTransaction: vi.fn() } },
+      ],
+    });
+
+    expect(screen.getByText('Placed by bot-googl')).toBeTruthy();
+    expect(screen.getByText('External / manual')).toBeTruthy();
+    expect(screen.getByText('Unknown — review required')).toBeTruthy();
+    expect(screen.getByText('alpaca-external-1')).toBeTruthy();
+    // A system-initiated safety-flatten origin must never collapse into the
+    // "External / manual" label — that would misrepresent it as an
+    // unattributed order rather than a Clerk-owned safety action. Scope to
+    // the row itself: "Emergency" also appears as an origin-filter option.
+    expect(
+      screen.getByRole('button', { name: /open receipt emergency\/v1:opaque/i }).textContent,
+    ).toContain('Emergency');
+    expect(screen.getByText(/Execution: 3/)).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: /open receipt learn-ai\/bot-default\/v1:intent-default/i })
+        .textContent,
+    ).toMatch(/reported/i);
+    expect(screen.getByText('Fees not reported')).toBeTruthy();
+  });
+
   it('renders unknown custody clocks and epoch provenance for a recorded-only legacy receipt', async () => {
     const detail = vi.fn().mockResolvedValue({
       transaction_id: 'ctxn_legacy', account_id: 'DU1234567', journal_seq: 4, recorded_at_ms: 1_780_000_000_000,
@@ -192,3 +233,21 @@ describe('AccountDeskTransactionHistoryComponent', () => {
     expect(screen.queryByText('stale-account-detail')).toBeNull();
   });
 });
+
+function sqliteRow(overrides: Record<string, unknown>) {
+  return {
+    transaction_id: 'sqlite-row', broker: 'alpaca', account_id: 'PA1', journal_seq: 1,
+    recorded_at_ms: 1_780_000_000_000, transaction_kind: 'sqlite_execution',
+    transaction_origin: 'strategy', strategy_instance_id: 'bot-default', run_id: 'run-default',
+    intent_id: 'intent-default', order_ref: 'learn-ai/bot-default/v1:intent-default',
+    order_id: null, perm_id: null, exec_id: null, native_order_id: 'order-default',
+    native_execution_id: 'execution-default', lifecycle_state: 'filled',
+    commission_status: 'unknown', fee: null, execution_quantity: null, execution_price: null,
+    fee_fidelity: null, event_count: 1,
+    order_instruction: {
+      symbol: 'GOOGL', sec_type: 'us_equity', action: 'buy', quantity: 1,
+      order_type: 'market', limit_price: null, time_in_force: 'day', outside_rth: false,
+    },
+    ...overrides,
+  };
+}
