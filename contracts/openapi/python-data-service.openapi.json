@@ -6357,6 +6357,10 @@
             "title": "Strategy Key",
             "type": "string"
           },
+          "strategy_label": {
+            "title": "Strategy Label",
+            "type": "string"
+          },
           "symbol": {
             "title": "Symbol",
             "type": "string"
@@ -6365,6 +6369,7 @@
         "required": [
           "strategy_instance_id",
           "strategy_key",
+          "strategy_label",
           "broker",
           "account_id",
           "symbol",
@@ -7499,6 +7504,17 @@
             "title": "Strategy Key",
             "type": "string"
           },
+          "strategy_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Label"
+          },
           "symbol": {
             "title": "Symbol",
             "type": "string"
@@ -8522,6 +8538,17 @@
           "event_type": {
             "title": "Event Type",
             "type": "string"
+          },
+          "execution_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Id"
           },
           "occurred_at_ms": {
             "title": "Occurred At Ms",

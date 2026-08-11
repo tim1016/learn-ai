@@ -15,6 +15,7 @@ function fakeBot(overrides: Partial<BotCatalogView> = {}): BotCatalogView {
     desired_state: 'RUNNING',
     running: true,
     strategy_key: 'deployment_validation',
+    strategy_label: 'Deployment Validation',
     mode: 'trade',
     status_label: 'Working',
     status_explanation: 'Running under Account Clerk custody.',
@@ -60,13 +61,14 @@ async function renderRoster(
 describe('BotsRosterComponent', () => {
   it('renders all bot rows', async () => {
     const bots = [
-      fakeBot({ strategy_instance_id: 'spy-01', symbol: 'SPY' }),
+      fakeBot({ strategy_instance_id: 'spy-01', symbol: 'SPY', strategy_label: 'Opening Range Breakout' }),
       fakeBot({ strategy_instance_id: 'qqq-01', symbol: 'QQQ' }),
     ];
     await renderRoster(bots);
 
     expect(await screen.findByText('spy-01')).toBeTruthy();
     expect(screen.getByText('qqq-01')).toBeTruthy();
+    expect(screen.getByText(/Opening Range Breakout/)).toBeTruthy();
   });
 
   it('filters by search term', async () => {
@@ -85,13 +87,21 @@ describe('BotsRosterComponent', () => {
 
   it('filters by the human strategy label', async () => {
     const bots = [
-      fakeBot({ strategy_instance_id: 'validation-01', strategy_key: 'deployment_validation' }),
-      fakeBot({ strategy_instance_id: 'other-01', strategy_key: 'ema_crossover_signal' }),
+      fakeBot({
+        strategy_instance_id: 'validation-01',
+        strategy_key: 'deployment_validation',
+        strategy_label: 'Opening Range Breakout',
+      }),
+      fakeBot({
+        strategy_instance_id: 'other-01',
+        strategy_key: 'ema_crossover_signal',
+        strategy_label: 'Moving Average Crossover',
+      }),
     ];
     await renderRoster(bots);
 
     fireEvent.input(screen.getByRole('searchbox', { name: 'Search bots' }), {
-      target: { value: 'deployment validation' },
+      target: { value: 'opening range breakout' },
     });
 
     expect(await screen.findByText('validation-01')).toBeTruthy();

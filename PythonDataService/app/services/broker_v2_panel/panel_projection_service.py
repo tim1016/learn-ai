@@ -698,7 +698,10 @@ def build_panel(
     return BotPanelView(
         strategy_instance_id=status.strategy_instance_id,
         strategy_key=status.strategy_key,
-        strategy_label=status.strategy_key.replace("_", " ").replace("-", " ").title(),
+        strategy_label=(
+            status.strategy_label
+            or status.strategy_key.replace("_", " ").replace("-", " ").title()
+        ),
         broker=status.broker,
         account_id=account_id,
         symbol=status.symbol,

@@ -9,6 +9,7 @@ import pytest
 
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
+    DEFAULT_RECENT_FILL_LIMIT,
     EconomicProjectionUnavailable,
     MarketMark,
     SqliteEconomicProjectionReader,
@@ -222,6 +223,150 @@ def test_bot_economic_snapshot_uses_effective_execution_slices_and_canonical_fif
         assert snapshot.marks_complete is True
         assert snapshot.fee_fidelity == "not_reported"
         assert snapshot.execution_coverage == "complete"
+    finally:
+        repo.close()
+
+
+def test_session_economic_projection_returns_all_marker_fills_at_snapshot_revision(
+    tmp_path: Path,
+) -> None:
+    """The chart marker set is the exact effective session fill set, not recent tail."""
+    repo, accepted = _repository(tmp_path)
+    session = session_window_for_date(date(2026, 8, 10))
+    try:
+        _append_slice(
+            repo,
+            accepted,
+            execution_id="exec-before-session",
+            side="BUY",
+            quantity=1.0,
+            price=99.0,
+            occurred_at_ms=session.open_ms_utc - 1,
+        )
+        for sequence in range(DEFAULT_RECENT_FILL_LIMIT + 1):
+            _append_slice(
+                repo,
+                accepted,
+                execution_id=f"exec-session-{sequence}",
+                side="BUY",
+                quantity=1.0,
+                price=100.0 + sequence,
+                occurred_at_ms=session.open_ms_utc + sequence * 1_000,
+            )
+
+        reader = SqliteEconomicProjectionReader.from_repository(repo)
+        try:
+            projection = reader.bot_session_economic_projection(
+                _SID,
+                session_window=session,
+            )
+        finally:
+            reader.close()
+
+        assert projection is not None
+        assert projection.snapshot.control_revision == repo.control_meta_snapshot().control_revision
+        assert projection.snapshot.fills_today == DEFAULT_RECENT_FILL_LIMIT + 1
+        assert len(projection.snapshot.recent_fills) == DEFAULT_RECENT_FILL_LIMIT
+        assert projection.session_fills[0].event_key == "exec-session-0"
+        assert projection.session_fills[-1].event_key == f"exec-session-{DEFAULT_RECENT_FILL_LIMIT}"
+        assert len(projection.session_fills) == projection.snapshot.fills_today
+    finally:
+        repo.close()
+
+
+def test_session_economic_projection_uses_verified_zeroes_outside_nyse_session(
+    tmp_path: Path,
+) -> None:
+    """A non-session panel never relabels a prior session's fills as today's."""
+    repo, accepted = _repository(tmp_path)
+    prior_session = session_window_for_date(date(2026, 8, 7))
+    try:
+        _append_slice(
+            repo,
+            accepted,
+            execution_id="exec-prior-session-only",
+            side="BUY",
+            quantity=1.0,
+            price=100.0,
+            occurred_at_ms=prior_session.open_ms_utc + 1_000,
+        )
+        reader = SqliteEconomicProjectionReader.from_repository(repo)
+        try:
+            projection = reader.bot_session_economic_projection(
+                _SID,
+                session_window=None,
+            )
+            rollup = reader.catalog_economic_rollup([_SID], session_window=None)
+        finally:
+            reader.close()
+
+        assert projection is not None
+        assert projection.session_fills == ()
+        assert projection.snapshot.session_open_ms is None
+        assert projection.snapshot.session_close_ms is None
+        assert projection.snapshot.fills_today == 0
+        assert projection.snapshot.realized_pnl_today == pytest.approx(0.0, abs=_ATOL, rel=_RTOL)
+        assert rollup[_SID].fills_today == 0
+        assert rollup[_SID].realized_pnl_today == pytest.approx(0.0, abs=_ATOL, rel=_RTOL)
+    finally:
+        repo.close()
+
+
+def test_bot_fill_window_returns_all_effective_records_or_fails_before_truncation(
+    tmp_path: Path,
+) -> None:
+    """History markers are complete at one revision; a cap is an explicit unavailable state."""
+    repo, accepted = _repository(tmp_path)
+    session = session_window_for_date(date(2026, 8, 10))
+    try:
+        for sequence in range(3):
+            _append_slice(
+                repo,
+                accepted,
+                execution_id=f"exec-history-{sequence}",
+                side="BUY",
+                quantity=1.0,
+                price=100.0 + sequence,
+                occurred_at_ms=session.open_ms_utc + sequence * 1_000,
+            )
+        reader = SqliteEconomicProjectionReader.from_repository(repo)
+        try:
+            window = reader.bot_fill_window(
+                _SID,
+                from_ms=session.open_ms_utc,
+                to_ms=session.close_ms_utc,
+                limit=3,
+            )
+            with pytest.raises(EconomicProjectionUnavailable, match="window limit"):
+                reader.bot_fill_window(
+                    _SID,
+                    from_ms=session.open_ms_utc,
+                    to_ms=session.close_ms_utc,
+                    limit=2,
+                )
+            with pytest.raises(ValueError, match="from_ms"):
+                reader.bot_fill_window(
+                    _SID,
+                    from_ms=True,  # type: ignore[arg-type]
+                    to_ms=session.close_ms_utc,
+                )
+            with pytest.raises(ValueError, match="limit"):
+                reader.bot_fill_window(
+                    _SID,
+                    from_ms=session.open_ms_utc,
+                    to_ms=session.close_ms_utc,
+                    limit=True,  # type: ignore[arg-type]
+                )
+        finally:
+            reader.close()
+
+        assert window is not None
+        assert window.control_revision == repo.control_meta_snapshot().control_revision
+        assert [fill.event_key for fill in window.fills] == [
+            "exec-history-0",
+            "exec-history-1",
+            "exec-history-2",
+        ]
     finally:
         repo.close()
 

@@ -35,7 +35,6 @@ from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
 
 from app.broker.alpaca.clerk.fifo_pnl import (
     ClosedLot,
@@ -45,6 +44,19 @@ from app.broker.alpaca.clerk.fifo_pnl import (
     realized_pnl_for_window,
 )
 from app.broker.alpaca.clerk.fills import FillRecord
+from app.broker.alpaca.clerk.sqlite.economic_projection_models import (
+    EconomicSnapshot,
+    ExecutionCoverage,
+    ExecutionOrigin,
+    ExecutionPage,
+    ExecutionRow,
+    ExecutionState,
+    FeeFidelity,
+    FillPage,
+    FillWindowProjection,
+    MarketMark,
+    SessionEconomicProjection,
+)
 from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
@@ -57,12 +69,8 @@ from app.lean_sidecar.trading_calendar import SessionWindow
 DEFAULT_FILL_PAGE_LIMIT = 50
 MAX_FILL_PAGE_LIMIT = 100
 DEFAULT_RECENT_FILL_LIMIT = 20
-
-ExecutionOrigin = Literal["strategy", "manual", "external", "unknown"]
-ExecutionState = Literal["effective", "superseded"]
-ExecutionCoverage = Literal["complete", "incomplete"]
-FeeFidelity = Literal["reported", "not_reported"]
-
+DEFAULT_CHART_FILL_WINDOW_LIMIT = 3_000
+MAX_CHART_FILL_WINDOW_LIMIT = 3_000
 
 class EconomicProjectionError(RuntimeError):
     """SQLite could not produce a coherent execution-economic projection."""
@@ -82,98 +90,6 @@ class EconomicProjectionUnavailable(EconomicProjectionError):
     Callers must render this as unavailable/hold.  They must not turn a
     mismatched ledger into a verified zero or fall back to another authority.
     """
-
-
-@dataclass(frozen=True)
-class MarketMark:
-    """One mark supplied to the canonical FIFO open-P&L valuation.
-
-    ``observed_at_ms`` is retained with the projection so a price is never
-    presented without the provenance timestamp that describes its freshness.
-    """
-
-    price: float
-    observed_at_ms: int
-
-    def __post_init__(self) -> None:
-        if (
-            isinstance(self.price, bool)
-            or not isinstance(self.price, (int, float))
-            or not math.isfinite(self.price)
-        ):
-            raise ValueError("mark price must be finite")
-        if (
-            isinstance(self.observed_at_ms, bool)
-            or not isinstance(self.observed_at_ms, int)
-            or self.observed_at_ms < 0
-        ):
-            raise ValueError("mark observed_at_ms must be non-negative")
-
-
-@dataclass(frozen=True)
-class FillPage:
-    """One bounded newest-first page of effective bot execution slices."""
-
-    account_id: str
-    strategy_instance_id: str
-    authority_generation: int
-    control_revision: int
-    fills: tuple[FillRecord, ...]
-    next_cursor: str | None
-
-
-@dataclass(frozen=True)
-class ExecutionRow:
-    """One account-history execution row sourced from the SQLite fills fold."""
-
-    fill_id: str
-    execution_id: str | None
-    order_ref: str
-    strategy_instance_id: str
-    origin: ExecutionOrigin
-    state: ExecutionState
-    event_kind: Literal["fill", "correction"]
-    symbol: str
-    side: OrderSide
-    quantity: float
-    price: float
-    fee: float | None
-    fee_fidelity: FeeFidelity
-    filled_at_ms: int
-    recorded_at_ms: int
-
-
-@dataclass(frozen=True)
-class ExecutionPage:
-    """One bounded newest-first account execution page."""
-
-    account_id: str
-    authority_generation: int
-    control_revision: int
-    executions: tuple[ExecutionRow, ...]
-    next_cursor: str | None
-
-
-@dataclass(frozen=True)
-class EconomicSnapshot:
-    """One coherent bot-economic view at one SQLite control revision."""
-
-    account_id: str
-    strategy_instance_id: str
-    authority_generation: int
-    control_revision: int
-    session_open_ms: int
-    session_close_ms: int
-    recent_fills: tuple[FillRecord, ...]
-    fills_today: int
-    exposure: dict[str, float]
-    realized_pnl_today: float
-    open_pnl: float | None
-    marks_complete: bool
-    mark_observed_at_ms: dict[str, int]
-    fee_fidelity: FeeFidelity
-    execution_coverage: ExecutionCoverage
-    last_activity_at_ms: int | None
 
 
 @dataclass
@@ -322,6 +238,56 @@ class SqliteEconomicProjectionReader:
             next_cursor=next_cursor,
         )
 
+    def bot_fill_window(
+        self,
+        strategy_instance_id: str,
+        *,
+        from_ms: int,
+        to_ms: int,
+        limit: int = DEFAULT_CHART_FILL_WINDOW_LIMIT,
+    ) -> FillWindowProjection | None:
+        """Return every effective SQLite fill in a bounded chart window.
+
+        Chart marker consumers need a complete, coherent marker set, not a
+        paginated tail. The configured cap is therefore fail-closed: when the
+        requested window would exceed it, callers receive an explicit
+        unavailable projection instead of silently omitting executions.
+        """
+        _validate_window(from_ms=from_ms, to_ms=to_ms)
+        limit = _bounded_chart_fill_window_limit(limit)
+        with self._read_transaction():
+            meta = self._verified_meta()
+            exists = self._conn.execute(
+                "SELECT 1 FROM strategy_instances WHERE strategy_instance_id = ?",
+                (strategy_instance_id,),
+            ).fetchone()
+            if exists is None:
+                return None
+            rows = self._effective_fill_rows(
+                strategy_instance_id=strategy_instance_id,
+                from_ms=from_ms,
+                to_ms=to_ms,
+                cursor_key=None,
+                limit=limit,
+            )
+            if len(rows) > limit:
+                raise EconomicProjectionUnavailable(
+                    "SQLite chart fill window limit exceeded; narrow the requested range."
+                )
+            fills = tuple(
+                sorted(
+                    (_to_fill_record(row, account_id=self._account_id) for row in rows),
+                    key=lambda record: (record.filled_at_ms, record.event_key),
+                )
+            )
+            return FillWindowProjection(
+                account_id=self._account_id,
+                strategy_instance_id=strategy_instance_id,
+                authority_generation=meta.authority_generation,
+                control_revision=meta.control_revision,
+                fills=fills,
+            )
+
     def account_executions(
         self,
         *,
@@ -375,7 +341,7 @@ class SqliteEconomicProjectionReader:
         self,
         strategy_instance_id: str,
         *,
-        session_window: SessionWindow,
+        session_window: SessionWindow | None,
         marks: Mapping[str, MarketMark] | None = None,
         recent_fill_limit: int = DEFAULT_RECENT_FILL_LIMIT,
     ) -> EconomicSnapshot | None:
@@ -389,74 +355,128 @@ class SqliteEconomicProjectionReader:
         """
         recent_fill_limit = _bounded_limit(recent_fill_limit)
         with self._read_transaction():
-            meta = self._verified_meta()
-            exists = self._conn.execute(
-                "SELECT 1 FROM strategy_instances WHERE strategy_instance_id = ?",
-                (strategy_instance_id,),
-            ).fetchone()
-            if exists is None:
-                return None
-            all_rows = self._effective_fill_rows(
-                strategy_instance_id=strategy_instance_id,
-                from_ms=None,
-                to_ms=None,
-                cursor_key=None,
-                limit=None,
+            projection = self._project_bot_session_economics(
+                strategy_instance_id,
+                session_window=session_window,
+                marks=marks,
+                recent_fill_limit=recent_fill_limit,
             )
-            records = tuple(_to_fill_record(row, account_id=self._account_id) for row in reversed(all_rows))
-            # ``_effective_fill_rows`` is newest-first for page keysets; FIFO
-            # needs the original economic order, then deterministic fill id.
-            records = tuple(sorted(records, key=lambda record: (record.filled_at_ms, record.event_key)))
-            exposure = self._exposure(strategy_instance_id)
-            _assert_effective_fills_match_positions(records, exposure)
-            coverage = self._execution_coverage(strategy_instance_id, all_rows)
-            # The reader's lock covers the incremental cache too: two callers
-            # cannot interleave an append-only cache update after observing
-            # different SQLite revisions.
-            cache = self._fifo_cache.setdefault(strategy_instance_id, _CachedFifo())
-            closed_lots, lots, fee_fidelity = cache.project(records)
-            marks_by_symbol = dict(marks or {})
-            open_result = compute_open_pnl(
-                lots,
-                {symbol: mark.price for symbol, mark in marks_by_symbol.items()},
+        return None if projection is None else projection.snapshot
+
+    def bot_session_economic_projection(
+        self,
+        strategy_instance_id: str,
+        *,
+        session_window: SessionWindow | None,
+        marks: Mapping[str, MarketMark] | None = None,
+        recent_fill_limit: int = DEFAULT_RECENT_FILL_LIMIT,
+    ) -> SessionEconomicProjection | None:
+        """Return a chart-safe fill set and economics from one SQLite revision.
+
+        The explicit session window bounds the complete marker list. ``None``
+        denotes a non-NYSE date and returns verified zero session metrics.
+        Callers use ``snapshot`` for panel economics and ``session_fills`` for
+        chart markers; no JSONL-derived fill source may be combined with this
+        result.
+        """
+        recent_fill_limit = _bounded_limit(recent_fill_limit)
+        with self._read_transaction():
+            return self._project_bot_session_economics(
+                strategy_instance_id,
+                session_window=session_window,
+                marks=marks,
+                recent_fill_limit=recent_fill_limit,
             )
-            relevant_mark_times = {
-                lot.symbol: marks_by_symbol[lot.symbol].observed_at_ms
-                for lot in open_result.open_lots
-                if lot.symbol in marks_by_symbol
-            }
-            recent = tuple(records[-recent_fill_limit:][::-1])
-            return EconomicSnapshot(
-                account_id=self._account_id,
-                strategy_instance_id=strategy_instance_id,
-                authority_generation=meta.authority_generation,
-                control_revision=meta.control_revision,
-                session_open_ms=session_window.open_ms_utc,
-                session_close_ms=session_window.close_ms_utc,
-                recent_fills=recent,
-                fills_today=sum(
-                    session_window.open_ms_utc <= record.filled_at_ms < session_window.close_ms_utc
-                    for record in records
-                ),
-                exposure=exposure,
-                realized_pnl_today=realized_pnl_for_window(
+
+    def _project_bot_session_economics(
+        self,
+        strategy_instance_id: str,
+        *,
+        session_window: SessionWindow | None,
+        marks: Mapping[str, MarketMark] | None,
+        recent_fill_limit: int,
+    ) -> SessionEconomicProjection | None:
+        """Project one bot while the caller holds this reader's read transaction."""
+        meta = self._verified_meta()
+        exists = self._conn.execute(
+            "SELECT 1 FROM strategy_instances WHERE strategy_instance_id = ?",
+            (strategy_instance_id,),
+        ).fetchone()
+        if exists is None:
+            return None
+        all_rows = self._effective_fill_rows(
+            strategy_instance_id=strategy_instance_id,
+            from_ms=None,
+            to_ms=None,
+            cursor_key=None,
+            limit=None,
+        )
+        records = tuple(
+            sorted(
+                (_to_fill_record(row, account_id=self._account_id) for row in all_rows),
+                key=lambda record: (record.filled_at_ms, record.event_key),
+            )
+        )
+        exposure = self._exposure(strategy_instance_id)
+        _assert_effective_fills_match_positions(records, exposure)
+        coverage = self._execution_coverage(strategy_instance_id, all_rows)
+        # The reader's lock covers the incremental cache too: two callers
+        # cannot interleave an append-only cache update after observing
+        # different SQLite revisions.
+        cache = self._fifo_cache.setdefault(strategy_instance_id, _CachedFifo())
+        closed_lots, lots, fee_fidelity = cache.project(records)
+        marks_by_symbol = dict(marks or {})
+        open_result = compute_open_pnl(
+            lots,
+            {symbol: mark.price for symbol, mark in marks_by_symbol.items()},
+        )
+        relevant_mark_times = {
+            lot.symbol: marks_by_symbol[lot.symbol].observed_at_ms
+            for lot in open_result.open_lots
+            if lot.symbol in marks_by_symbol
+        }
+        session_fills = (
+            ()
+            if session_window is None
+            else tuple(
+                record
+                for record in records
+                if session_window.open_ms_utc <= record.filled_at_ms < session_window.close_ms_utc
+            )
+        )
+        snapshot = EconomicSnapshot(
+            account_id=self._account_id,
+            strategy_instance_id=strategy_instance_id,
+            authority_generation=meta.authority_generation,
+            control_revision=meta.control_revision,
+            session_open_ms=(session_window.open_ms_utc if session_window is not None else None),
+            session_close_ms=(session_window.close_ms_utc if session_window is not None else None),
+            recent_fills=tuple(records[-recent_fill_limit:][::-1]),
+            fills_today=len(session_fills),
+            exposure=exposure,
+            realized_pnl_today=(
+                0.0
+                if session_window is None
+                else realized_pnl_for_window(
                     closed_lots,
                     session_open_ms=session_window.open_ms_utc,
                     session_close_ms=session_window.close_ms_utc,
-                ),
-                open_pnl=open_result.value,
-                marks_complete=open_result.marks_complete,
-                mark_observed_at_ms=relevant_mark_times,
-                fee_fidelity=fee_fidelity,
-                execution_coverage=coverage,
-                last_activity_at_ms=max((record.filled_at_ms for record in records), default=None),
-            )
+                )
+            ),
+            open_pnl=open_result.value,
+            marks_complete=open_result.marks_complete,
+            mark_observed_at_ms=relevant_mark_times,
+            fee_fidelity=fee_fidelity,
+            execution_coverage=coverage,
+            last_activity_at_ms=max((record.filled_at_ms for record in records), default=None),
+        )
+        return SessionEconomicProjection(snapshot=snapshot, session_fills=session_fills)
 
     def catalog_economic_rollup(
         self,
         strategy_instance_ids: Sequence[str],
         *,
-        session_window: SessionWindow,
+        session_window: SessionWindow | None,
         marks_by_strategy: Mapping[str, Mapping[str, MarketMark]] | None = None,
     ) -> dict[str, EconomicSnapshot]:
         """Return every requested bot snapshot from one SQLite read transaction."""
@@ -504,23 +524,35 @@ class SqliteEconomicProjectionReader:
                     for lot in open_result.open_lots
                     if lot.symbol in marks
                 }
+                session_fills = (
+                    ()
+                    if session_window is None
+                    else tuple(
+                        record
+                        for record in records
+                        if session_window.open_ms_utc
+                        <= record.filled_at_ms
+                        < session_window.close_ms_utc
+                    )
+                )
                 result[strategy_instance_id] = EconomicSnapshot(
                     account_id=self._account_id,
                     strategy_instance_id=strategy_instance_id,
                     authority_generation=meta.authority_generation,
                     control_revision=meta.control_revision,
-                    session_open_ms=session_window.open_ms_utc,
-                    session_close_ms=session_window.close_ms_utc,
+                    session_open_ms=(session_window.open_ms_utc if session_window is not None else None),
+                    session_close_ms=(session_window.close_ms_utc if session_window is not None else None),
                     recent_fills=tuple(records[-DEFAULT_RECENT_FILL_LIMIT:][::-1]),
-                    fills_today=sum(
-                        session_window.open_ms_utc <= record.filled_at_ms < session_window.close_ms_utc
-                        for record in records
-                    ),
+                    fills_today=len(session_fills),
                     exposure=exposure,
-                    realized_pnl_today=realized_pnl_for_window(
-                        closed_lots,
-                        session_open_ms=session_window.open_ms_utc,
-                        session_close_ms=session_window.close_ms_utc,
+                    realized_pnl_today=(
+                        0.0
+                        if session_window is None
+                        else realized_pnl_for_window(
+                            closed_lots,
+                            session_open_ms=session_window.open_ms_utc,
+                            session_close_ms=session_window.close_ms_utc,
+                        )
                     ),
                     open_pnl=open_result.value,
                     marks_complete=open_result.marks_complete,
@@ -821,6 +853,9 @@ def _assert_effective_fills_match_positions(
 
 
 def _validate_window(*, from_ms: int | None, to_ms: int | None) -> None:
+    for name, value in (("from_ms", from_ms), ("to_ms", to_ms)):
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
+            raise ValueError(f"{name} must be an integer")
     if from_ms is not None and from_ms < 0:
         raise ValueError("from_ms must be non-negative")
     if to_ms is not None and to_ms < 0:
@@ -833,6 +868,12 @@ def _bounded_limit(limit: int) -> int:
     if not isinstance(limit, int) or isinstance(limit, bool):
         raise ValueError("page limit must be an integer")
     return min(max(limit, 1), MAX_FILL_PAGE_LIMIT)
+
+
+def _bounded_chart_fill_window_limit(limit: int) -> int:
+    if not isinstance(limit, int) or isinstance(limit, bool):
+        raise ValueError("chart fill window limit must be an integer")
+    return min(max(limit, 1), MAX_CHART_FILL_WINDOW_LIMIT)
 
 
 def _visible_page(
@@ -894,6 +935,7 @@ def _placeholders(values: Sequence[str]) -> str:
 
 
 __all__ = [
+    "DEFAULT_CHART_FILL_WINDOW_LIMIT",
     "DEFAULT_FILL_PAGE_LIMIT",
     "DEFAULT_RECENT_FILL_LIMIT",
     "EconomicProjectionError",
@@ -903,7 +945,9 @@ __all__ = [
     "ExecutionPage",
     "ExecutionRow",
     "FillPage",
+    "FillWindowProjection",
     "InvalidEconomicCursor",
     "MarketMark",
+    "SessionEconomicProjection",
     "SqliteEconomicProjectionReader",
 ]

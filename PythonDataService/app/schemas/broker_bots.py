@@ -240,6 +240,10 @@ class BotStatusView(BaseModel):
 
     strategy_instance_id: str
     strategy_key: str = "deployment_validation"
+    # The active SQLite roster sources this immutable operator-facing label
+    # from ``bot_config.display_name``. Legacy process-backed rows have no
+    # durable display-name record yet, so only they may leave it absent.
+    strategy_label: str | None = None
     broker: str
     symbol: str
     mode: Literal["log_only", "dry_run", "trade"]

@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, input, output, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
-import { formatReceiptLabel, ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
+import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { fmtInteger, fmtSignedCurrency, fmtSignedQuantity } from '../../format';
 import { BotStatusChipComponent } from '../bot-status-chip/bot-status-chip.component';
@@ -51,7 +51,7 @@ export class BotsRosterComponent {
     const term = this.searchTerm().toLowerCase().trim();
     const filter = this.statusFilter();
     const passed = this.bots().filter((bot) => {
-      const strategyLabel = formatReceiptLabel(bot.strategy_key).toLowerCase();
+      const strategyLabel = bot.strategy_label.toLowerCase();
       const matchesTerm =
         !term ||
         bot.strategy_instance_id.toLowerCase().includes(term) ||

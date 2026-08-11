@@ -46,6 +46,14 @@ class ProjectedOrder:
     broker_state: str | None
     submitted_at_ms: int | None
     updated_at_ms: int
+    # Immutable order-leg facts and effective execution totals are read from
+    # the SQLite authority alongside this working-order projection.  The
+    # optional defaults preserve compatibility for historical projections
+    # that predate those presentation fields.
+    symbol: str | None = None
+    side: str | None = None
+    quantity: float | None = None
+    filled_quantity: float | None = None
 
 
 @dataclass(frozen=True)

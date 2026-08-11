@@ -16,6 +16,11 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from app.broker.alpaca.clerk.sqlite.order_projection import (
+    OrderProjectionReadError,
+    read_current_orders,
+    read_orders_by_operation,
+)
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     ClerkProjection,
     OperationPage,
@@ -610,49 +615,19 @@ class SqliteClerkProjectionReader:
         self,
         operation_ids: tuple[str, ...],
     ) -> dict[str, tuple[ProjectedOrder, ...]]:
-        if not operation_ids:
-            return {}
-        placeholders = ",".join("?" for _ in operation_ids)
-        rows = self._conn.execute(
-            "SELECT owner.effect_operation_id AS owner_effect_operation_id, o.order_ref, "
-            "o.client_order_id, o.broker_order_id, o.role, o.broker_state, o.submitted_at_ms, "
-            "o.updated_at_ms FROM orders o JOIN ("
-            "SELECT effect_operation_id, order_ref FROM operation_order_links "
-            f"WHERE effect_operation_id IN ({placeholders}) UNION "
-            "SELECT effect_operation_id, order_ref FROM orders "
-            f"WHERE effect_operation_id IN ({placeholders})"
-            ") owner ON owner.order_ref = o.order_ref "
-            "ORDER BY o.updated_at_ms ASC, o.order_ref ASC",
-            (*operation_ids, *operation_ids),
-        ).fetchall()
-        grouped: dict[str, list[ProjectedOrder]] = {operation_id: [] for operation_id in operation_ids}
-        for row in rows:
-            grouped[row["owner_effect_operation_id"]].append(
-                ProjectedOrder(
-                    order_ref=row["order_ref"],
-                    client_order_id=row["client_order_id"],
-                    broker_order_id=row["broker_order_id"],
-                    role=row["role"],
-                    broker_state=row["broker_state"],
-                    submitted_at_ms=row["submitted_at_ms"],
-                    updated_at_ms=row["updated_at_ms"],
-                )
-            )
-        return {key: tuple(value) for key, value in grouped.items()}
+        try:
+            return read_orders_by_operation(self._conn, operation_ids)
+        except OrderProjectionReadError as exc:
+            raise ProjectionReadError(str(exc)) from exc
 
     def _current_orders(
         self,
         strategy_instance_id: str | None,
     ) -> tuple[ProjectedOrder, ...]:
-        where, params = _scope_filter("e.strategy_instance_id", strategy_instance_id)
-        rows = self._conn.execute(
-            "SELECT o.order_ref, o.client_order_id, o.broker_order_id, o.role, "
-            "o.broker_state, o.submitted_at_ms, o.updated_at_ms FROM orders o "
-            "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
-            f"{where} ORDER BY o.updated_at_ms ASC, o.order_ref ASC",
-            params,
-        ).fetchall()
-        return tuple(ProjectedOrder(**dict(row)) for row in rows)
+        try:
+            return read_current_orders(self._conn, strategy_instance_id)
+        except OrderProjectionReadError as exc:
+            raise ProjectionReadError(str(exc)) from exc
 
     def _positions(self, strategy_instance_id: str | None) -> tuple[ProjectedPosition, ...]:
         where, params = _scope_filter("strategy_instance_id", strategy_instance_id)

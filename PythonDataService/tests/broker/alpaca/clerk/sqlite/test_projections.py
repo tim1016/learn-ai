@@ -78,6 +78,47 @@ def test_bot_snapshot_reads_fold_state_and_backend_authors_recovery(tmp_path: Pa
     assert "reset_authority" not in actions
 
 
+def test_bot_snapshot_exposes_immutable_order_leg_and_verified_zero_fill_total(
+    tmp_path: Path,
+) -> None:
+    """Working-order presentation reads requested leg data from SQLite facts."""
+    clock = _Clock()
+    repo = _repository(tmp_path, clock)
+    submit_start_run(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        lifecycle_run_id="run-1",
+        clock=clock,
+    )
+    accepted = accept_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="order-details",
+        lifecycle_run_id="run-1",
+        leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=3),
+    )
+    reader = SqliteClerkProjectionReader.from_repository(repo, clock=clock)
+    try:
+        snapshot = reader.bot_snapshot(SID)
+    finally:
+        reader.close()
+        repo.close()
+
+    assert snapshot is not None
+    order = next(
+        order
+        for operation in snapshot.operations
+        for order in operation.orders
+        if order.order_ref == accepted.order_ref
+    )
+    assert order.symbol == "SPY"
+    assert order.side == "buy"
+    assert order.quantity == 3.0
+    assert order.filled_quantity == 0.0
+
+
 def test_bot_uncertainty_does_not_leak_to_another_bot_projection(tmp_path: Path) -> None:
     clock = _Clock()
     repo = _repository(tmp_path, clock)

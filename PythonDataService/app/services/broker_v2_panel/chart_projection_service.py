@@ -12,18 +12,17 @@ Two contracts:
   a response-size bound. Never a lifetime of 1-minute bars in one response.
 
 Both panes decorate bars with truthful ``ibkr`` / ``polygon`` / ``mixed``
-source tags and project fill markers from the S0 ``project_instance_fills``.
+source tags and project fill markers from SQLite-native ``FillRecord`` values.
 All timestamps are ``int64 ms UTC``; "today" is the canonical NY trading date.
 """
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 
-from app.broker.alpaca.clerk.fills import FillRecord, project_instance_fills
-from app.broker.alpaca.clerk.models import OrderJournalEntry
+from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.contract.models import OrderSide
 from app.broker.ibkr.models import IbkrMinuteBar
 from app.data_lake.polygon_fetcher import PolygonBar
@@ -117,16 +116,14 @@ def _fill_to_marker(fill: FillRecord) -> ChartFillMarker:
 
 
 def _markers_in_window(
-    sid: str,
-    entries: list[OrderJournalEntry],
+    fills: Sequence[FillRecord],
     *,
     from_ms: int,
     to_ms: int,
 ) -> list[ChartFillMarker]:
-    fills = project_instance_fills(sid, entries)
     return [
         _fill_to_marker(fill)
-        for fill in fills
+        for fill in sorted(fills, key=lambda fill: (fill.filled_at_ms, fill.event_key))
         if from_ms <= fill.filled_at_ms < to_ms
     ]
 
@@ -156,14 +153,14 @@ def live_window(now_ms: int) -> tuple[int, int]:
 
 def build_live_chart(
     chart_window: ChartWindowResult,
-    entries: list[OrderJournalEntry],
+    fills: Sequence[FillRecord],
     *,
     strategy_instance_id: str,
     symbol: str,
     window: tuple[int, int],
     now_ms: int,
 ) -> ChartLiveResponse:
-    """Build the LIVE pane from a resolved chart window + today's fill markers (§8).
+    """Build the LIVE pane from bars + SQLite-native fill markers (§8).
 
     ``chart_window`` is the output of ``live_chart_window.resolve_chart_window``
     (source tags already truthful). ``window`` is the canonical today-window from
@@ -173,9 +170,7 @@ def build_live_chart(
     open_ms, close_ms = window
 
     bars = [_ibkr_bar_to_chart_bar(bar) for bar in chart_window.bars]
-    markers = _markers_in_window(
-        strategy_instance_id, entries, from_ms=open_ms, to_ms=close_ms
-    )
+    markers = _markers_in_window(fills, from_ms=open_ms, to_ms=close_ms)
     notices = [
         ChartOverlayNoticeView(code=notice.code, message=notice.message, source="polygon")
         for notice in chart_window.overlay_notices
@@ -218,9 +213,15 @@ def _plan_history(preset: ChartHistoryPreset, now_ms: int) -> _HistoryPlan:
     )
 
 
+def history_fill_window(preset: ChartHistoryPreset, now_ms: int) -> tuple[int, int]:
+    """Return the exact half-open fill-marker interval for one history pane."""
+    plan = _plan_history(preset, now_ms)
+    return plan.from_ms, plan.to_ms
+
+
 async def build_history_chart(
     preset: ChartHistoryPreset,
-    entries: list[OrderJournalEntry],
+    fills: Sequence[FillRecord],
     *,
     strategy_instance_id: str,
     symbol: str,
@@ -246,9 +247,7 @@ async def build_history_chart(
         polygon_bars = polygon_bars[-_MAX_HISTORY_BARS:]
 
     bars = [_polygon_bar_to_chart_bar(bar, span_ms=plan.span_ms) for bar in polygon_bars]
-    markers = _markers_in_window(
-        strategy_instance_id, entries, from_ms=plan.from_ms, to_ms=plan.to_ms
-    )
+    markers = _markers_in_window(fills, from_ms=plan.from_ms, to_ms=plan.to_ms)
     return ChartHistoryResponse(
         strategy_instance_id=strategy_instance_id,
         symbol=symbol,

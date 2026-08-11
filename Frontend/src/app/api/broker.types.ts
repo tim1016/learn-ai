@@ -8587,6 +8587,8 @@ export interface components {
             strategy_instance_id: string;
             /** Strategy Key */
             strategy_key: string;
+            /** Strategy Label */
+            strategy_label: string;
             /** Symbol */
             symbol: string;
         };
@@ -8995,6 +8997,8 @@ export interface components {
              * @default deployment_validation
              */
             strategy_key?: string;
+            /** Strategy Label */
+            strategy_label?: string | null;
             /** Symbol */
             symbol: string;
         };
@@ -9333,6 +9337,8 @@ export interface components {
         BrokerOrderEvent: {
             /** Event Type */
             event_type: string;
+            /** Execution Id */
+            execution_id?: string | null;
             /** Occurred At Ms */
             occurred_at_ms: number;
             /** Price */

@@ -5,7 +5,6 @@ account id, the order journal, the decision journals, the bot roster, the clerk
 status, and the live chart aggregator — and delegates every computation to the
 pure projection functions. The router stays transport-only; this facade is the
 single seam that touches process singletons.
-
 Account scope (§3): every method validates ``account_id`` against the broker's
 real account and raises :class:`AccountMismatchError` (→ 404) on a mismatch, so
 a stale deep link never reads another account's evidence.
@@ -19,6 +18,7 @@ from typing import Literal
 from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.clerk import InventoryBaselineRefusedError
 from app.broker.alpaca.clerk.decision_journal import DecisionJournal, DecisionReceipt
+from app.broker.alpaca.clerk.fills import FillRecord, project_instance_fills
 from app.broker.alpaca.clerk.journal import OrderJournal, get_clerk_settings
 from app.broker.alpaca.clerk.models import (
     ClerkStatus,
@@ -28,8 +28,6 @@ from app.broker.alpaca.clerk.models import (
 )
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerAccountSnapshot
-from app.config import settings
-from app.data_lake.polygon_fetcher import fetch_aggregate_bars
 from app.schemas.broker_bots import (
     AlpacaPaperDeployReceipt,
     AlpacaPaperDeployRequest,
@@ -58,10 +56,8 @@ from app.services.broker_v2_panel.action_execution_service import (
     durable_idempotency_store_for,
     execute_action,
 )
-from app.services.broker_v2_panel.chart_projection_service import (
-    build_history_chart,
-    build_live_chart,
-    live_window,
+from app.services.broker_v2_panel.catalog_projection_service import (
+    SqliteCatalogProjectionUnavailable,
 )
 from app.services.broker_v2_panel.market_pulse import build_market_pulse
 from app.services.broker_v2_panel.panel_profile_service import panel_profile_for
@@ -78,22 +74,17 @@ from app.services.broker_v2_panel.paper_deploy_service import (
 from app.services.broker_v2_panel.presented_actions import build_roster_action
 from app.services.broker_v2_panel.sqlite_panel_adapter import (
     adapt_sqlite_panel,
-    build_sqlite_catalog,
 )
 from app.services.broker_v2_panel.sqlite_panel_source import (
     SqlitePanelBotNotFound,
+    SqlitePanelDecisionUnavailable,
+    SqlitePanelEconomicUnavailable,
     execute_sqlite_panel_action,
-    read_sqlite_bot_projection,
-    read_sqlite_catalog_projections,
+    read_sqlite_catalog,
     read_sqlite_clerk_status,
-    read_sqlite_roster_statuses,
+    read_sqlite_decision_receipts,
+    read_sqlite_panel_evidence,
     sqlite_authority_active,
-)
-from app.services.live_chart_window import (
-    ChartWindowError,
-    ChartWindowResult,
-    coerce_chart_timeframe,
-    resolve_chart_window,
 )
 from app.services.strategy_validation_manifest import (
     StrategyValidationManifestError,
@@ -103,7 +94,6 @@ from app.services.strategy_validation_manifest import (
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
-
 
 class PanelDataError(Exception):
     """Base typed panel-data error; the router translates to HTTP."""
@@ -242,7 +232,6 @@ def _bot_status(broker: str, sid: str) -> BotStatusView:
             raise UnknownBotError(str(exc), detail=exc.detail) from exc
         raise PanelUnavailableError(str(exc), detail=exc.detail) from exc
 
-
 def _bot_process_fact(broker: str, sid: str) -> BotProcessFact:
     registry = get_bot_task_registry()
     if registry is None:
@@ -285,6 +274,23 @@ async def _validate_account(broker: str, account_id: str) -> str:
             detail=f"The broker's account is '{real_account_id}'.",
         )
     return real_account_id
+
+
+async def validate_panel_account_scope(broker: str, account_id: str) -> str:
+    return await _validate_account(broker, account_id)
+
+
+def read_legacy_chart_fills(
+    broker: str,
+    account_id: str,
+    strategy_instance_id: str,
+) -> tuple[FillRecord, ...]:
+    return project_instance_fills(strategy_instance_id, _read_order_journal(broker, account_id))
+
+
+def read_legacy_chart_status(broker: str, strategy_instance_id: str) -> BotStatusView:
+    """Read inactive-legacy identity only for the compatibility chart path."""
+    return _bot_status(broker, strategy_instance_id)
 
 
 async def get_authority_facts(
@@ -485,16 +491,15 @@ def _require_alpaca_deploy_request(
 async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:
     """Build the bots-list catalog for one account (§5)."""
     resolved = await _validate_account(broker, account_id)
-    statuses = read_sqlite_roster_statuses(broker)
-    if statuses is not None:
-        sids = [status.strategy_instance_id for status in statuses]
-        projections = await read_sqlite_catalog_projections(broker, resolved, sids)
-        if projections is None:
-            raise PanelUnavailableError(
-                "The activated SQLite bot roster could not be projected.",
-                detail="Refresh after the active Clerk runtime is restored.",
-            )
-        return build_sqlite_catalog(statuses, projections, account_id=resolved)
+    try:
+        sqlite_catalog = await read_sqlite_catalog(broker, resolved)
+    except SqliteCatalogProjectionUnavailable as exc:
+        raise PanelUnavailableError(
+            "The activated SQLite bot roster could not be projected.",
+            detail=str(exc),
+        ) from exc
+    if sqlite_catalog is not None:
+        return sqlite_catalog
 
     statuses = _bot_statuses(broker)
     entries = _read_order_journal(broker, resolved)
@@ -555,10 +560,31 @@ async def _get_panel_with_entries(
     sid: str,
     *,
     transaction_ref: str | None = None,
-) -> tuple[BotPanelView, list[OrderJournalEntry]]:
-    """Build one panel and return the immutable journal cut it consumed."""
+    now_ms: int | None = None,
+) -> tuple[BotPanelView, list[OrderJournalEntry], tuple[FillRecord, ...] | None]:
+    """Build one panel and return the exact fill set used by its chart."""
     resolved = await _validate_account(broker, account_id)
-    status = _bot_status(broker, sid)
+    sqlite_active = sqlite_authority_active(broker)
+    captured_now_ms = now_ms if now_ms is not None else now_ms_utc()
+    if sqlite_active:
+        try:
+            evidence = await read_sqlite_panel_evidence(
+                broker,
+                resolved,
+                sid,
+                now_ms=captured_now_ms,
+            )
+        except (SqlitePanelBotNotFound, SqlitePanelEconomicUnavailable) as exc:
+            raise PanelUnavailableError(
+                "The activated SQLite panel evidence is unavailable.",
+                detail=str(exc),
+            ) from exc
+        if evidence is None:
+            raise UnknownBotError(f"No SQLite custody projection exists for bot '{sid}'.")
+        status = evidence.status
+    else:
+        evidence = None
+        status = _bot_status(broker, sid)
     registry = get_bot_task_registry()
     if registry is None:
         raise PanelUnavailableError(
@@ -581,15 +607,45 @@ async def _get_panel_with_entries(
                 )
         # Preview can reconcile and advance Clerk evidence. Read all projection
         # inputs afterwards so this response is one post-admission evidence cut.
-        status = _bot_status(broker, sid)
-    try:
-        projection = await read_sqlite_bot_projection(broker, resolved, sid)
-    except SqlitePanelBotNotFound as exc:
-        raise UnknownBotError(str(exc)) from exc
-    entries = _read_order_journal(broker, resolved)
+        if sqlite_active:
+            try:
+                evidence = await read_sqlite_panel_evidence(
+                    broker,
+                    resolved,
+                    sid,
+                    now_ms=captured_now_ms,
+                )
+            except (SqlitePanelBotNotFound, SqlitePanelEconomicUnavailable) as exc:
+                raise PanelUnavailableError(
+                    "The activated SQLite panel evidence is unavailable.",
+                    detail=str(exc),
+                ) from exc
+            if evidence is None:
+                raise UnknownBotError(f"No SQLite custody projection exists for bot '{sid}'.")
+            status = evidence.status
+        else:
+            status = _bot_status(broker, sid)
+    projection = evidence.projection if evidence is not None else None
+    session_fills = evidence.economics.session_fills if evidence is not None else None
+    # Active SQLite panels must not even construct legacy journal evidence.
+    entries = [] if sqlite_active else _read_order_journal(broker, resolved)
     binding = registry.binding_for_control(broker, sid)
     clerk_status = await _clerk_status(symbol=binding.symbol)
-    decisions = _recent_decisions(resolved, sid)
+    if sqlite_active:
+        try:
+            decisions = read_sqlite_decision_receipts(broker, sid)
+        except SqlitePanelDecisionUnavailable as exc:
+            raise PanelUnavailableError(
+                "The activated SQLite decision evidence is unavailable.",
+                detail=str(exc),
+            ) from exc
+        if decisions is None:
+            raise PanelUnavailableError(
+                "The activated SQLite decision evidence is unavailable.",
+                detail="The SQLite authority became unavailable during panel projection.",
+            )
+    else:
+        decisions = _recent_decisions(resolved, sid)
     decision = decisions[-1] if decisions else None
 
     if projection is None:
@@ -602,19 +658,15 @@ async def _get_panel_with_entries(
         open_pnl = rollup.open_pnl
         last_bar_at_ms = rollup.last_activity_at_ms
     else:
-        exposure = {
-            position.symbol: position.attributed_qty
-            for position in projection.positions
-            if abs(position.attributed_qty) > 0
-        }
-        fills_today = None
-        realized_pnl_today = None
-        open_pnl = None
-        last_bar_at_ms = None
+        economics = evidence.economics.snapshot
+        exposure = dict(economics.exposure)
+        fills_today = economics.fills_today
+        realized_pnl_today = economics.realized_pnl_today
+        open_pnl = economics.open_pnl
+        last_bar_at_ms = economics.last_activity_at_ms
 
     profile = panel_profile_for(broker)
     flatten_supported = profile.flatten_supported if profile is not None else False
-    now_ms = now_ms_utc()
     from app.marketdata.ibkr_feed import get_market_data_feed
 
     panel = build_panel(
@@ -631,22 +683,36 @@ async def _get_panel_with_entries(
         journal_tail_ref=f"/api/brokers/{broker}/accounts/{resolved}/bots/{sid}/decisions",
         journal_tail_seq=(decision.seq if decision is not None else None),
         flatten_supported=flatten_supported,
-        now_ms=now_ms,
+        now_ms=captured_now_ms,
         selected_transaction_ref=transaction_ref,
         recent_decisions=decisions,
         resume_admission=resume_admission,
         dry_run_activity=registry.dry_run_activity(broker, sid),
         market_pulse=build_market_pulse(
             get_market_data_feed(),
-            now_ms=now_ms,
+            now_ms=captured_now_ms,
             symbol=binding.symbol,
             use_rth=binding.use_rth,
             bot_running=status.running,
         ),
     )
     if projection is not None:
-        panel = adapt_sqlite_panel(panel, projection)
-    return panel, entries
+        panel = adapt_sqlite_panel(
+            panel,
+            projection,
+            economics=evidence.economics.snapshot,
+        )
+    return panel, entries, session_fills
+
+
+async def get_panel_with_chart_fills(
+    broker: str,
+    account_id: str,
+    sid: str,
+    *,
+    now_ms: int,
+) -> tuple[BotPanelView, list[OrderJournalEntry], tuple[FillRecord, ...] | None]:
+    return await _get_panel_with_entries(broker, account_id, sid, now_ms=now_ms)
 
 
 async def get_panel(
@@ -657,65 +723,13 @@ async def get_panel(
     transaction_ref: str | None = None,
 ) -> BotPanelView:
     """Build the current panel projection for one bot (§7)."""
-    panel, _entries = await _get_panel_with_entries(
+    panel, _entries, _session_fills = await _get_panel_with_entries(
         broker,
         account_id,
         sid,
         transaction_ref=transaction_ref,
     )
     return panel
-
-
-async def _build_live_chart_from_entries(
-    sid: str,
-    symbol: str,
-    entries: list[OrderJournalEntry],
-    *,
-    resolution: Literal["5s", "1m"],
-    now_ms: int,
-) -> ChartLiveResponse:
-    """Build a live chart from one already-captured journal cut."""
-    from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
-
-    window = live_window(now_ms)
-    open_ms, close_ms = window
-    if now_ms <= open_ms:
-        chart_window = ChartWindowResult(
-            bars=[],
-            timeframe=resolution,
-            resolution=resolution,
-            is_streaming=False,
-        )
-    else:
-        try:
-            if resolution == "5s":
-                await LIVE_BAR_AGGREGATOR.ensure_subscribed_5s(symbol)
-            else:
-                await LIVE_BAR_AGGREGATOR.ensure_subscribed(symbol)
-            chart_window = await resolve_chart_window(
-                symbol=symbol,
-                timeframe=coerce_chart_timeframe(resolution),
-                from_ms=open_ms,
-                # The resolver rejects a to_ms in the future; an open session's close
-                # is later than now, so clamp the fetch bound. The response window
-                # (below) keeps the true session close.
-                to_ms=min(close_ms, now_ms),
-                now_ms=now_ms,
-                polygon_api_key=settings.POLYGON_API_KEY,
-                live_aggregator=LIVE_BAR_AGGREGATOR,
-                polygon_overlay_enabled=False,
-            )
-        except ChartWindowError as exc:
-            raise PanelDataError("The live chart window is invalid.", detail=str(exc)) from exc
-
-    return build_live_chart(
-        chart_window,
-        entries,
-        strategy_instance_id=sid,
-        symbol=symbol,
-        window=window,
-        now_ms=now_ms,
-    )
 
 
 async def get_live_chart(
@@ -726,15 +740,15 @@ async def get_live_chart(
     resolution: Literal["5s", "1m"] = "1m",
 ) -> ChartLiveResponse:
     """Build the LIVE chart pane for one bot (§8)."""
-    resolved = await _validate_account(broker, account_id)
-    status = _bot_status(broker, sid)
-    entries = _read_order_journal(broker, resolved)
-    return await _build_live_chart_from_entries(
+    from app.services.broker_v2_panel.panel_chart_data_source import (
+        get_live_chart as build_live_chart_response,
+    )
+
+    return await build_live_chart_response(
+        broker,
+        account_id,
         sid,
-        status.symbol,
-        entries,
         resolution=resolution,
-        now_ms=now_ms_utc(),
     )
 
 
@@ -745,42 +759,28 @@ async def get_live_snapshot_parts(
     *,
     resolution: Literal["5s", "1m"],
 ) -> tuple[BotPanelView, ChartLiveResponse]:
-    """Build panel and chart from the same immutable account-journal cut."""
-    panel, entries = await _get_panel_with_entries(broker, account_id, sid)
-    chart = await _build_live_chart_from_entries(
-        sid,
-        panel.symbol,
-        entries,
-        resolution=resolution,
-        now_ms=now_ms_utc(),
+    """Build panel and chart from the same authority-bound fill projection."""
+    from app.services.broker_v2_panel.panel_chart_data_source import (
+        get_live_snapshot_parts as build_live_snapshot_parts,
     )
+
+    panel, chart = await build_live_snapshot_parts(
+        broker,
+        account_id,
+        sid,
+        resolution=resolution,
+    )
+    assert isinstance(panel, BotPanelView)
     return panel, chart
 
 
 async def get_history_chart(broker: str, account_id: str, sid: str, preset: ChartHistoryPreset) -> ChartHistoryResponse:
     """Build the bounded HISTORY chart pane for one bot (§8)."""
-    resolved = await _validate_account(broker, account_id)
-    status = _bot_status(broker, sid)
-    entries = _read_order_journal(broker, resolved)
-
-    async def _bar_source(symbol, start, end, multiplier, timespan):
-        return await fetch_aggregate_bars(
-            symbol,
-            start,
-            end,
-            settings.POLYGON_API_KEY,
-            multiplier=multiplier,
-            timespan=timespan,
-        )
-
-    return await build_history_chart(
-        preset,
-        entries,
-        strategy_instance_id=sid,
-        symbol=status.symbol,
-        bar_source=_bar_source,
-        now_ms=now_ms_utc(),
+    from app.services.broker_v2_panel.panel_chart_data_source import (
+        get_history_chart as build_history_chart_response,
     )
+
+    return await build_history_chart_response(broker, account_id, sid, preset)
 
 
 def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[str, ActionPerformer]:

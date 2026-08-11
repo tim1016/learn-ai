@@ -103,6 +103,14 @@ _SQLITE_TRANSITION_COPY: Final[dict[str, tuple[str, str]]] = {
         "Order fill observed",
         "The Account Clerk recorded broker-authored fill evidence.",
     ),
+    "EXECUTION_SLICE_FILLED": (
+        "Execution slice recorded",
+        "The Account Clerk recorded one broker-reported execution slice.",
+    ),
+    "EXECUTION_CORRECTED": (
+        "Execution correction recorded",
+        "The Account Clerk replaced a prior execution slice with corrected broker evidence.",
+    ),
     "ENTRY_TERMINAL_CONFIRMED": (
         "Entry terminal state confirmed",
         "The Account Clerk confirmed the entry order reached a terminal state.",
