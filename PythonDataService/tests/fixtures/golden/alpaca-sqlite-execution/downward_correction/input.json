@@ -1,0 +1,51 @@
+{
+  "fixture_schema_version": 1,
+  "account_id": "PA-FIXTURE-CORRECTION-0810",
+  "authority_generation": 1,
+  "strategy_instance": {
+    "strategy_instance_id": "sqlite-cohort-correction-0810",
+    "symbol": "SPY",
+    "bot_order_namespace": "learn-ai/sqlite-cohort-correction-0810/v1"
+  },
+  "session": {
+    "session_open_ms": 1786368600000,
+    "session_close_ms": 1786392000000,
+    "timezone": "America/New_York"
+  },
+  "trade_updates": [
+    {
+      "stream": "trade_updates",
+      "data": {
+        "event": "fill",
+        "execution_id": "spy-original-slice-5",
+        "timestamp": "2026-08-10T18:20:00.000Z",
+        "price": "600.00",
+        "qty": "5",
+        "order": {
+          "id": "spy-order-1",
+          "client_order_id": "learn-ai/sqlite-cohort-correction-0810/v1:spy-intent-1",
+          "symbol": "SPY",
+          "side": "buy",
+          "filled_qty": "5",
+          "filled_avg_price": "600.00",
+          "status": "filled"
+        }
+      }
+    }
+  ],
+  "authority_corrections": [
+    {
+      "transition_kind": "EXECUTION_CORRECTED",
+      "execution_id": "spy-corrected-slice-3",
+      "superseded_execution_ref": "spy-original-slice-5",
+      "symbol": "SPY",
+      "side": "BUY",
+      "corrected_qty": 3.0,
+      "corrected_price": 600.0,
+      "why": "broker execution correction: original five-share slice reduced to three"
+    }
+  ],
+  "mark_prices": {
+    "SPY": 600.0
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "projection": {
+    "bot_metrics": {
+      "sqlite-cohort-googl-0810": {
+        "fills_today": 3,
+        "realized_pnl_today": 0.53,
+        "open_pnl": 0.0,
+        "marks_complete": true,
+        "position_quantity": 0.0
+      }
+    },
+    "fills": [
+      {
+        "fill_id": "googl-buy-slice-1",
+        "execution_id": "googl-buy-slice-1",
+        "strategy_instance_id": "sqlite-cohort-googl-0810",
+        "symbol": "GOOGL",
+        "side": "BUY",
+        "quantity": 0.4,
+        "price": 354.81
+      },
+      {
+        "fill_id": "googl-buy-slice-2",
+        "execution_id": "googl-buy-slice-2",
+        "strategy_instance_id": "sqlite-cohort-googl-0810",
+        "symbol": "GOOGL",
+        "side": "BUY",
+        "quantity": 0.6,
+        "price": 354.81
+      },
+      {
+        "fill_id": "googl-sell-slice-1",
+        "execution_id": "googl-sell-slice-1",
+        "strategy_instance_id": "sqlite-cohort-googl-0810",
+        "symbol": "GOOGL",
+        "side": "SELL",
+        "quantity": 1.0,
+        "price": 355.34
+      }
+    ],
+    "closed_lots": [
+      {
+        "strategy_instance_id": "sqlite-cohort-googl-0810",
+        "symbol": "GOOGL",
+        "quantity": 1.0,
+        "realized_pnl": 0.53
+      }
+    ]
+  },
+  "tolerance": {
+    "atol": 1e-06,
+    "rtol": 0.0
+  }
+}
