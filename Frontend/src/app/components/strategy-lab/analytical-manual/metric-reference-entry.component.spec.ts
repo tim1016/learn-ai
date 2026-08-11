@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/angular";
+import { fireEvent, render, screen } from "@testing-library/angular";
 import { provideRouter } from "@angular/router";
 import { describe, expect, it } from "vitest";
 
@@ -48,7 +48,8 @@ describe("MetricReferenceEntryComponent", () => {
       providers: [provideRouter([])],
     });
 
-    expect(screen.getByRole("status").textContent).toContain("Reported value; no local formula contract.");
+    fireEvent.click(screen.getByText("Math & contract"));
+    expect(screen.getByRole("status").textContent).toContain("does not claim a local formula contract");
   });
 
   it("renders a display formula and keeps malformed formula text out of the DOM as markup", async () => {
@@ -61,6 +62,7 @@ describe("MetricReferenceEntryComponent", () => {
       providers: [provideRouter([])],
     });
 
+    fireEvent.click(screen.getByText("Math & contract"));
     expect(container.querySelector(".katex-display")).toBeTruthy();
     await rerender({
       componentInputs: {

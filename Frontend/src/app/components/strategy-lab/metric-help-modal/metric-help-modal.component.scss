@@ -1,0 +1,28 @@
+:host {
+  display: inline-flex;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.metric-help__trigger {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--border-light);
+  border-radius: 50%;
+  color: var(--text-subtle);
+  background: transparent;
+  font: 700 10px/16px var(--font-mono);
+  cursor: pointer;
+}
+
+.metric-help__trigger:hover,
+.metric-help__trigger:focus-visible,
+.metric-help__trigger[aria-expanded="true"] {
+  color: var(--text-primary);
+  border-color: var(--accent);
+  outline: none;
+}
+
+.metric-help__warning { padding: var(--space-3); border-left: 3px solid var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent); }
+.metric-help__manual-link { display: inline-block; margin-top: var(--space-3); color: var(--accent); font-weight: 700; }

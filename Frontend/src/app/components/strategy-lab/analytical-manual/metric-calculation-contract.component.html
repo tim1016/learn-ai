@@ -1,0 +1,29 @@
+@let item = variant();
+<div class="calculation-contract">
+  <section [attr.aria-labelledby]="item.variant_id + '-metric-formula-title'">
+    <h3 [id]="item.variant_id + '-metric-formula-title'">Formula</h3>
+    @if (item.formula_latex; as formula) {
+      <div class="calculation-contract__formula"><span [appKatex]="formula" [displayMode]="true"></span></div>
+      @if (item.variables.length > 0) {
+        <dl class="calculation-contract__variables">
+          @for (variable of item.variables; track variable.symbol) {
+            <div><dt><span [appKatex]="variable.symbol"></span></dt><dd>{{ variable.definition }}</dd></div>
+          }
+        </dl>
+      }
+    } @else {
+      <p class="calculation-contract__fallback" role="status">Reported or policy value; this producer does not claim a local formula contract.</p>
+    }
+  </section>
+
+  <dl class="calculation-contract__facts">
+    @if (item.contract_id) { <div><dt>Calculation contract</dt><dd>{{ item.contract_id | receiptLabel }}</dd></div> }
+    <div><dt>Inputs</dt><dd>{{ item.input_series }}</dd></div>
+    <div><dt>Sampling</dt><dd>{{ item.sampling_cadence }}</dd></div>
+    <div><dt>Units</dt><dd>{{ item.units }} · {{ item.output_scale }} · {{ item.formatting }}</dd></div>
+    @if (item.annualization) { <div><dt>Annualization</dt><dd>{{ item.annualization }}</dd></div> }
+    @if (item.benchmark) { <div><dt>Benchmark</dt><dd>{{ item.benchmark }}</dd></div> }
+    @if (item.risk_free_rate) { <div><dt>Risk-free rate</dt><dd>{{ item.risk_free_rate }}</dd></div> }
+    <div><dt>Costs</dt><dd>{{ item.cost_treatment }}</dd></div>
+  </dl>
+</div>

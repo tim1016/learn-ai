@@ -1,7 +1,8 @@
 import { TestBed } from '@angular/core/testing';
 import { provideZonelessChangeDetection } from '@angular/core';
 import { By } from '@angular/platform-browser';
-import { describe, expect, it } from 'vitest';
+import { provideRouter } from '@angular/router';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   EngineResultData,
@@ -93,7 +94,7 @@ function baseResult(overrides: Partial<EngineResultData> = {}): EngineResultData
 function makeComponent(result: EngineResultData): EngineResultsComponent {
   TestBed.resetTestingModule();
   TestBed.configureTestingModule({
-    providers: [provideZonelessChangeDetection()],
+    providers: [provideZonelessChangeDetection(), provideRouter([])],
   });
   const fixture = TestBed.createComponent(EngineResultsComponent);
   fixture.componentRef.setInput('result', result);
@@ -101,10 +102,14 @@ function makeComponent(result: EngineResultData): EngineResultsComponent {
   return fixture.componentInstance;
 }
 
+afterEach(() => {
+  document.body.querySelectorAll('.p-dialog-mask').forEach((element) => element.remove());
+});
+
 describe('EngineResultsComponent.leanStats', () => {
   it('renders every native LEAN analysis finding with its sample and solutions', () => {
     TestBed.resetTestingModule();
-    TestBed.configureTestingModule({ providers: [provideZonelessChangeDetection()] });
+    TestBed.configureTestingModule({ providers: [provideZonelessChangeDetection(), provideRouter([])] });
     const fixture = TestBed.createComponent(EngineResultsComponent);
     fixture.componentRef.setInput('result', baseResult({
       lean_analysis: [
@@ -134,7 +139,7 @@ describe('EngineResultsComponent.leanStats', () => {
 
   it('renders all native portfolio, trade, and runtime fields plus the parity receipt', () => {
     TestBed.resetTestingModule();
-    TestBed.configureTestingModule({ providers: [provideZonelessChangeDetection()] });
+    TestBed.configureTestingModule({ providers: [provideZonelessChangeDetection(), provideRouter([])] });
     const fixture = TestBed.createComponent(EngineResultsComponent);
     const leanStats = emptyLeanStats();
     Object.assign(leanStats.trade, {
@@ -169,6 +174,14 @@ describe('EngineResultsComponent.leanStats', () => {
     expect(root.textContent).toContain('$382.53');
     expect(root.textContent).toContain('$83.02');
     expect(root.textContent).not.toContain('-45305.60%');
+    expect(root.querySelectorAll('.metric-help__trigger')).toHaveLength(75);
+    expect(document.body.querySelectorAll('.metric-entry')).toHaveLength(0);
+
+    root.querySelector<HTMLButtonElement>('button[aria-label="Open Alpha trader guide"]')?.click();
+    fixture.detectChanges();
+    expect(document.body.querySelectorAll('.metric-entry')).toHaveLength(1);
+    expect(document.body.textContent).toContain('CAPM-style annual excess return over the aligned benchmark.');
+    expect(document.body.textContent).toContain('Math & contract');
   });
 
   it('returns null when lean_statistics is null (no dashboard rendered)', () => {

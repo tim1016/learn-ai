@@ -201,6 +201,31 @@ def _native_category(spec: _MetricSpec, section: Literal["portfolio", "trade"]) 
     return "returns"
 
 
+_NATIVE_TRADER_USE_BY_CATEGORY: Final[dict[str, str]] = {
+    "benchmark": "Use it to judge how much of the result came from benchmark exposure versus differentiated strategy behavior.",
+    "drawdown": "Use it to understand the depth or persistence of capital stress, not just the final return.",
+    "duration": "Use it to understand how long capital stays committed and whether winners and losers occupy time differently.",
+    "excursion": "Use it to inspect the path inside trades and to challenge stop, target, and exit assumptions.",
+    "statistical_confidence": "Use it to judge return variability or estimator strength, always alongside the observation count and return contract.",
+    "trade_population": "Use it to understand the composition of the closed-trade sample before trusting averages or ratios.",
+    "trade_economics": "Use it to inspect the size, consistency, or friction of completed-trade outcomes.",
+    "risk": "Use it to inspect the loss behavior that an ending return can hide.",
+    "returns": "Use it to understand the level or rate of performance produced by the recorded run.",
+}
+
+_NATIVE_TRADER_CAUTION_BY_CATEGORY: Final[dict[str, str]] = {
+    "benchmark": "Changing the benchmark or alignment window changes the economic question answered.",
+    "drawdown": "A backtest records only the path it observed; a smaller historical drawdown is not a loss limit.",
+    "duration": "A typical duration can hide a long tail, so inspect the distribution and the maximum as well.",
+    "excursion": "Excursions depend on the retained intratrade path and should not be read as executable stop or target prices.",
+    "statistical_confidence": "A strong ratio from a short or unusually smooth sample can be fragile out of sample.",
+    "trade_population": "Trade observations may share regimes or signals and should not automatically be treated as independent evidence.",
+    "trade_economics": "A favorable average can conceal skew, concentration, or a small number of dominant trades.",
+    "risk": "Parametric or historical risk summaries do not bound losses outside the observed assumptions and window.",
+    "returns": "Return level alone does not reveal drawdown, capital usage, concentration, or implementation costs.",
+}
+
+
 def _value_states(*, sentinel: str | None = None) -> tuple[dict[str, str], ...]:
     states = [
         {
@@ -246,6 +271,7 @@ _TRADE_SENTINELS: Final[dict[str, str]] = {
 
 
 def _native_entry(spec: _MetricSpec, *, section: Literal["portfolio", "trade"]) -> dict[str, object]:
+    category = _native_category(spec, section)
     if section == "portfolio":
         canonical_symbol = "PythonDataService/app/engine/results/lean_statistics.py::reproduce_lean_total_performance"
         source_files = "PortfolioStatistics.cs, Statistics.cs, StatisticsBuilder.cs"
@@ -267,11 +293,18 @@ def _native_entry(spec: _MetricSpec, *, section: Literal["portfolio", "trade"]) 
         "variant_id": f"lean_native.{section}.{_snake_case(spec.key)}.v1",
         "contract_id": "lean-native-statistics-oracle-v1",
         "producer": "lean_native",
-        "category": _native_category(spec, section),
+        "category": category,
         "label": spec.label,
         "definition": spec.definition,
-        "interpretation": "Read this as a LEAN-native statistic. It is not interchangeable with a similarly named platform metric unless you deliberately compare their contracts.",
-        "common_misreadings": (spec.edge_behavior,),
+        "interpretation": (
+            f"{_NATIVE_TRADER_USE_BY_CATEGORY[category]} Read the value under LEAN's pinned input, "
+            "sampling, and edge-state contract."
+        ),
+        "common_misreadings": (
+            spec.edge_behavior,
+            _NATIVE_TRADER_CAUTION_BY_CATEGORY[category],
+            "A similarly named platform metric can use a different return vector, scale, or edge-state contract.",
+        ),
         "aliases": spec.aliases,
         "source_keys": (spec.key,),
         "search_terms": (spec.key, spec.label, section, "LEAN", "native statistics", "StatisticsBuilder"),
@@ -390,6 +423,17 @@ _RUNTIME_SPECS: Final[tuple[_MetricSpec, ...]] = (
 
 def _runtime_entry(spec: _MetricSpec) -> dict[str, object]:
     is_normalized_order_count = spec.key == "Total Orders"
+    trader_use = {
+        "Equity": "Use this completion snapshot to see the marked portfolio value LEAN reported, then reconcile it with cash, holdings, and open-position evidence.",
+        "Fees": "Use this completion snapshot to see the transaction costs LEAN reported; compare it with turnover and gross performance to assess cost pressure.",
+        "Holdings": "Use this completion snapshot to see the gross market value still represented by positions, regardless of long or short direction.",
+        "Net Profit": "Use this completion snapshot as LEAN's reported run-level profit result, then read it with starting capital, fees, and drawdown.",
+        "Probabilistic Sharpe Ratio": "Use this completion snapshot as LEAN's reported confidence measure for its Sharpe estimate, not as a forecast of the next trade.",
+        "Return": "Use this completion snapshot as LEAN's reported total rate of return over the run window; it is not annualized unless the producer says so.",
+        "Unrealized": "Use this completion snapshot to see P&L still exposed to open positions and estimated exit friction at the end of the run.",
+        "Volume": "Use this completion snapshot to gauge the reported amount traded and investigate whether turnover and costs are plausible for the strategy.",
+        "Total Orders": "Use this completion count to gauge execution activity and reconcile order volume with completed trades, partial fills, and cancellations.",
+    }[spec.key]
     return {
         "metric_id": _semantic_metric_id(spec),
         "variant_id": f"lean_runtime.{_snake_case(spec.key)}.v1",
@@ -398,8 +442,11 @@ def _runtime_entry(spec: _MetricSpec) -> dict[str, object]:
         "category": "runtime_snapshot",
         "label": spec.label,
         "definition": spec.definition,
-        "interpretation": "This is a native runtime-reported value. The catalog documents its source and display contract without claiming a local formula.",
-        "common_misreadings": (spec.edge_behavior,),
+        "interpretation": trader_use,
+        "common_misreadings": (
+            spec.edge_behavior,
+            "This is a retained completion snapshot, not a value recomputed by the manual or a substitute for the full statistics receipt.",
+        ),
         "aliases": spec.aliases,
         "source_keys": (spec.key,),
         "search_terms": (

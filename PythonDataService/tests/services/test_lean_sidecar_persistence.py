@@ -979,12 +979,32 @@ def test_build_persist_payload_forwards_brokerage_and_data_policy_from_manifest_
 
     assert payload["brokerage_policy"] == "interactive_brokers"
     assert payload["commission_per_order"] == 0.0
-    assert json.loads(payload["metric_documentation_json"]) == [{
-        "contract_id": "lean-statistics-oracle-v1",
-        "metric_id": "sharpe",
-        "producer": "lean_native",
-        "variant_id": "sharpe.lean_native.v1",
-    }]
+    assert json.loads(payload["metric_documentation_json"]) == [
+        {
+            "contract_id": "lean-statistics-oracle-v1",
+            "metric_id": "sharpe",
+            "producer": "lean_native",
+            "variant_id": "sharpe.lean_native.v1",
+        },
+        {
+            "contract_id": "lean-native-statistics-oracle-v1",
+            "metric_id": "sortino",
+            "producer": "lean_native",
+            "variant_id": "lean_native.portfolio.sortino_ratio.v1",
+        },
+        {
+            "contract_id": "lean-native-statistics-oracle-v1",
+            "metric_id": "maximum_drawdown",
+            "producer": "lean_native",
+            "variant_id": "lean_native.portfolio.drawdown.v1",
+        },
+        {
+            "contract_id": "lean-native-statistics-oracle-v1",
+            "metric_id": "profit_factor",
+            "producer": "lean_native",
+            "variant_id": "lean_native.trade.profit_factor.v1",
+        },
+    ]
     assert payload["data_policy_json"] is not None
     parsed_dp = json.loads(payload["data_policy_json"])
     assert parsed_dp["source"] == "polygon"

@@ -280,26 +280,36 @@ public sealed record BacktestRunDetailType
         // legacy lean-sidecar row with no portfolio.sharpe_ratio, or a failed
         // LEAN run whose statistics default to null, is still LEAN-produced
         // and must not be inferred as the platform contract.
-        var variant = execution.Source == "lean-sidecar"
-            ? new MetricDocumentationContextType
-            {
-                MetricId = "sharpe",
-                VariantId = "sharpe.lean_native.v1",
-                Producer = "lean_native",
-                ContractId = "lean-statistics-oracle-v1",
-                ContractProvenance = "inferred",
-            }
-            : new MetricDocumentationContextType
-            {
-                MetricId = "sharpe",
-                VariantId = "sharpe.platform.v1",
-                Producer = "platform",
-                ContractId = "platform-sharpe-v1",
-                ContractProvenance = "inferred",
-            };
-
-        return [variant];
+        return execution.Source == "lean-sidecar"
+            ?
+            [
+                InferredMetricContext("sharpe", "sharpe.lean_native.v1", "lean_native", "lean-statistics-oracle-v1"),
+                InferredMetricContext("sortino", "lean_native.portfolio.sortino_ratio.v1", "lean_native", "lean-native-statistics-oracle-v1"),
+                InferredMetricContext("maximum_drawdown", "lean_native.portfolio.drawdown.v1", "lean_native", "lean-native-statistics-oracle-v1"),
+                InferredMetricContext("profit_factor", "lean_native.trade.profit_factor.v1", "lean_native", "lean-native-statistics-oracle-v1"),
+            ]
+            :
+            [
+                InferredMetricContext("sharpe", "sharpe.platform.v1", "platform", "platform-sharpe-v1"),
+                InferredMetricContext("sortino", "sortino.platform.v1", "platform", "platform-results-statistics-v1"),
+                InferredMetricContext("maximum_drawdown", "maximum_drawdown.platform.v1", "platform", "platform-results-statistics-v1"),
+                InferredMetricContext("profit_factor", "profit_factor.platform.v1", "platform", "platform-results-statistics-v1"),
+            ];
     }
+
+    private static MetricDocumentationContextType InferredMetricContext(
+        string metricId,
+        string variantId,
+        string producer,
+        string contractId) =>
+        new()
+        {
+            MetricId = metricId,
+            VariantId = variantId,
+            Producer = producer,
+            ContractId = contractId,
+            ContractProvenance = "inferred",
+        };
 
     private static readonly JsonSerializerOptions SnakeCaseJson = new()
     {

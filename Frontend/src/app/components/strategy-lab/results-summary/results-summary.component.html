@@ -6,26 +6,26 @@
     <div class="results-summary__metric-group">
       <h2>Returns</h2>
       <dl>
-        <div><dt>Net P&amp;L <app-metric-help-popover [metric]="help['net-profit']" /></dt><dd [class.positive]="r.net_profit > 0" [class.negative]="r.net_profit < 0">{{ r.net_profit >= 0 ? "+" : "" }}{{ currency(r.net_profit) }}</dd></div>
-        <div><dt>Profit factor <app-metric-help-popover [metric]="help['profit-factor']" /></dt><dd>{{ number(r.statistics['profit_factor']) }}</dd></div>
+        <div><dt>Net P&amp;L <app-metric-help-modal metricId="net_pnl" label="Net P&amp;L" [runId]="runId()" /></dt><dd [class.positive]="r.net_profit > 0" [class.negative]="r.net_profit < 0">{{ r.net_profit >= 0 ? "+" : "" }}{{ currency(r.net_profit) }}</dd></div>
+        <div><dt>Profit factor <app-metric-help-modal metricId="profit_factor" label="Profit factor" [context]="documentationFor('profit_factor')" [runId]="runId()" /></dt><dd>{{ number(r.statistics['profit_factor']) }}</dd></div>
       </dl>
     </div>
 
     <div class="results-summary__metric-group">
       <h2>Risk-adjusted</h2>
       <dl>
-        <div><dt>Sharpe <app-metric-help-popover [metric]="help.sharpe" [context]="sharpeDocumentation()" [runId]="runId()" /></dt><dd>{{ number(r.statistics['sharpe_ratio']) }}</dd></div>
-        <div><dt>Sortino <app-metric-help-popover [metric]="help.sortino" [context]="sortinoDocumentation()" [runId]="runId()" /></dt><dd>{{ number(r.statistics['sortino_ratio']) }}</dd></div>
-        <div><dt>Max drawdown <app-metric-help-popover [metric]="help['max-drawdown']" [context]="maxDrawdownDocumentation()" [runId]="runId()" /></dt><dd class="negative">{{ percent(r.statistics['max_drawdown_pct']) }}</dd></div>
+        <div><dt>Sharpe <app-metric-help-modal metricId="sharpe" label="Sharpe" [context]="documentationFor('sharpe')" [runId]="runId()" /></dt><dd>{{ number(r.statistics['sharpe_ratio']) }}</dd></div>
+        <div><dt>Sortino <app-metric-help-modal metricId="sortino" label="Sortino" [context]="documentationFor('sortino')" [runId]="runId()" /></dt><dd>{{ number(r.statistics['sortino_ratio']) }}</dd></div>
+        <div><dt>Max drawdown <app-metric-help-modal metricId="maximum_drawdown" label="Max drawdown" [context]="documentationFor('maximum_drawdown')" [runId]="runId()" /></dt><dd class="negative">{{ percent(r.statistics['max_drawdown_pct']) }}</dd></div>
       </dl>
     </div>
 
     <div class="results-summary__metric-group">
       <h2>Activity</h2>
       <dl>
-        <div><dt>Trades <app-metric-help-popover [metric]="help.trades" /></dt><dd>{{ r.total_trades }}</dd><small>{{ r.winning_trades }}W · {{ r.losing_trades }}L</small></div>
-        <div><dt>Win rate <app-metric-help-popover [metric]="help['win-rate']" /></dt><dd>{{ percent(r.win_rate) }}</dd></div>
-        <div><dt>Total fees</dt><dd>{{ currency(r.total_fees) }}</dd></div>
+        <div><dt>Trades <app-metric-help-modal metricId="completed_trades" label="Trades" [runId]="runId()" /></dt><dd>{{ r.total_trades }}</dd><small>{{ r.winning_trades }}W · {{ r.losing_trades }}L</small></div>
+        <div><dt>Win rate <app-metric-help-modal metricId="win_rate" label="Win rate" [runId]="runId()" /></dt><dd>{{ percent(r.win_rate) }}</dd></div>
+        <div><dt>Total fees <app-metric-help-modal metricId="total_fees" label="Total fees" [runId]="runId()" /></dt><dd>{{ currency(r.total_fees) }}</dd></div>
       </dl>
     </div>
   </div>

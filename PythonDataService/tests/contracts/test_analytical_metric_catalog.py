@@ -75,6 +75,24 @@ def test_new_run_context_records_the_producer_and_contract() -> None:
             "producer": "platform",
             "contract_id": "platform-sharpe-v1",
         },
+        {
+            "metric_id": "sortino",
+            "variant_id": "sortino.platform.v1",
+            "producer": "platform",
+            "contract_id": "platform-results-statistics-v1",
+        },
+        {
+            "metric_id": "maximum_drawdown",
+            "variant_id": "maximum_drawdown.platform.v1",
+            "producer": "platform",
+            "contract_id": "platform-results-statistics-v1",
+        },
+        {
+            "metric_id": "profit_factor",
+            "variant_id": "profit_factor.platform.v1",
+            "producer": "platform",
+            "contract_id": "platform-results-statistics-v1",
+        },
     )
     assert lean == (
         {
@@ -83,7 +101,35 @@ def test_new_run_context_records_the_producer_and_contract() -> None:
             "producer": "lean_native",
             "contract_id": "lean-statistics-oracle-v1",
         },
+        {
+            "metric_id": "sortino",
+            "variant_id": "lean_native.portfolio.sortino_ratio.v1",
+            "producer": "lean_native",
+            "contract_id": "lean-native-statistics-oracle-v1",
+        },
+        {
+            "metric_id": "maximum_drawdown",
+            "variant_id": "lean_native.portfolio.drawdown.v1",
+            "producer": "lean_native",
+            "contract_id": "lean-native-statistics-oracle-v1",
+        },
+        {
+            "metric_id": "profit_factor",
+            "variant_id": "lean_native.trade.profit_factor.v1",
+            "producer": "lean_native",
+            "contract_id": "lean-native-statistics-oracle-v1",
+        },
     )
+
+
+def test_every_catalog_variant_has_trader_facing_explanation_and_caution() -> None:
+    for variant in catalog().variants:
+        assert len(variant.definition) >= 12, variant.variant_id
+        assert len(variant.interpretation) >= 24, variant.variant_id
+        assert variant.common_misreadings, variant.variant_id
+
+    generic = "Read this value together with its producer, input evidence, and any unavailable state."
+    assert all(variant.interpretation != generic for variant in catalog().variants)
 
 
 def test_catalog_rejects_broken_comparison_references() -> None:

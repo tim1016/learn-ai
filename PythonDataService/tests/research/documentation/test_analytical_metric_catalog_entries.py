@@ -98,6 +98,8 @@ def test_all_native_entries_carry_pinned_provenance_and_existing_evidence_receip
         assert entry["validating_tests"]
         assert entry["fixture_or_receipt"] == LEAN_ORACLE_FIXTURE
         assert entry["value_states"]
+        assert entry["interpretation"]
+        assert entry["common_misreadings"]
 
     for entry in (*LEAN_PORTFOLIO_VARIANTS, *LEAN_TRADE_VARIANTS):
         assert entry["numerical_tolerance"]

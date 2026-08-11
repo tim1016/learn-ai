@@ -1,0 +1,34 @@
+<button
+  type="button"
+  class="metric-help__trigger"
+  [attr.aria-label]="'Open ' + label() + ' trader guide'"
+  [attr.aria-expanded]="visible()"
+  (click)="open()"
+>?</button>
+
+<p-dialog
+  [visible]="visible()"
+  (visibleChange)="onVisibleChange($event)"
+  [modal]="true"
+  [closable]="true"
+  [dismissableMask]="true"
+  [draggable]="false"
+  [resizable]="false"
+  [style]="{ width: '760px', maxWidth: '96vw' }"
+  [contentStyle]="{ maxHeight: '82vh', overflow: 'auto' }"
+  [header]="label() + ' guide'"
+>
+  @if (visible()) {
+    @if (resolution().warning; as warning) {
+      <p class="metric-help__warning" role="status">{{ warning }}</p>
+    }
+    <app-metric-reference-entry
+      [variant]="variant()"
+      [alternative]="alternative()"
+      [runId]="runId()"
+    />
+    <a class="metric-help__manual-link" routerLink="/strategy-lab/docs" [queryParams]="docsQuery()">
+      Open this quantity in the full Strategy Lab manual
+    </a>
+  }
+</p-dialog>

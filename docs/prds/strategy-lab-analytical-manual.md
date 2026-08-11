@@ -1,7 +1,7 @@
 # PRD — Strategy Lab Evidence-Aware Analytical Manual
 
 - **Date:** 2026-08-09
-- **Status:** Ready for issue approval
+- **Status:** Implemented
 - **Product surfaces:** Strategy Lab Results metric help and `/strategy-lab/docs`
 - **Delivery posture:** Five independently verifiable tracer bullets; all five are required for v1
 - **Builds on:** `strategy-lab-results-experience.md`, the run-verdict v2 contract, the LEAN native statistics oracle, and the existing Strategy Lab validation analytics
@@ -254,22 +254,22 @@ rank, or grade numerical values.
 
 ### 8.4 Metric entry anatomy
 
-Every entry contains, in this order:
+Every entry keeps its display label and producer badge visible, then separates
+the trader and developer reading paths into three tabs:
 
-1. Display label and producer badge.
-2. One-sentence answer to “What does this tell me?”
-3. Current run value when the entry was opened from Results.
-4. Interpretation and common misreadings.
-5. KaTeX-rendered formula.
-6. KaTeX-rendered variable definitions.
-7. Inputs, sampling cadence, units, annualization, risk-free-rate convention,
-   and cost treatment.
-8. Defined edge states and exact UI display for each state.
-9. Verdict-policy membership, if any, clearly separated from the mathematical
-   definition.
-10. Canonical implementation and source reference.
-11. Validating fixture/test, contract identifier, tolerance, and parity status.
-12. **Compare with…** when another producer exposes a similarly named metric.
+1. **Explain** opens by default. It answers “What does this tell me?”, provides
+   the trader interpretation and common misreadings, and defines every possible
+   value state.
+2. **Math & contract** renders the formula and variable definitions through the
+   shared KaTeX directive, followed by inputs, sampling cadence, units,
+   annualization, benchmark, risk-free-rate convention, and cost treatment. A
+   producer-reported or policy value without a local formula says so explicitly.
+3. **Developer reference** contains the canonical implementation, producer
+   keys, source reference, validating fixture/test, contract identifier,
+   tolerance, result surfaces, and verdict-policy membership.
+
+The entry retains **Compare with…** when another producer exposes a similarly
+named metric, and **Back to run** when run context is available.
 
 The alternative is collapsed by default. Opening it navigates to the other
 variant and offers a return link; v1 does not use a default side-by-side layout.
@@ -548,10 +548,13 @@ literature must not overwrite a producer-specific code contract.
 
 ### 15.1 Results metric help
 
-Every documented Results value has an adjacent accessible help action. The
-compact popover shows definition, producer, value state, and a **Full formula
-and evidence** link. It does not embed an abbreviated formula from a separate
-TypeScript registry.
+Every documented Results value and every quantity in the Native LEAN statistics
+grid has an adjacent accessible help action. It opens a modal containing the
+complete three-tab manual entry, defaults to the trader-focused **Explain** tab,
+and links to the same quantity in the full Strategy Lab manual. The modal uses
+the current run's producer context or the native grid's exact catalog variant;
+it does not embed abbreviated tooltip copy or a separate TypeScript definition
+registry.
 
 ### 15.2 Explicit headline provenance
 

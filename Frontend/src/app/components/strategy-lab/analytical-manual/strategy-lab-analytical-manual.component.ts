@@ -9,6 +9,7 @@ import analyticalMetricCatalog from "@repo-contracts/strategy-lab/analytical-met
 import { MetricReferenceEntryComponent } from "./metric-reference-entry.component";
 import { ReceiptLabelPipe } from "../../../shared/pipes/receipt-label.pipe";
 import type { AnalyticalMetricCatalog, MetricProducer, MetricVariant } from "./analytical-metric-catalog.models";
+import { resolveMetricContext, type MetricContextRequest } from "./metric-context.util";
 import {
   BACKTEST_RUN_DETAIL_QUERY,
   type BacktestRunDetailQueryResult,
@@ -16,18 +17,6 @@ import {
 } from "../../../graphql/backtest-runs.query";
 
 const CATALOG: AnalyticalMetricCatalog = analyticalMetricCatalog;
-
-export interface MetricContextRequest {
-  metricId: string | null;
-  variantId: string | null;
-  producer: string | null;
-  contractId: string | null;
-}
-
-export interface MetricContextResolution {
-  variant: MetricVariant;
-  warning: string | null;
-}
 
 export type MetricCategoryFilter = MetricVariant["category"] | "all";
 export type MetricProducerFilter = MetricProducer | "all";
@@ -38,52 +27,6 @@ export interface MetricReferenceFilters {
   producer: MetricProducerFilter;
   contextualVariantId: string | null;
   usedByThisRun: boolean;
-}
-
-/** Resolve a contextual link without manufacturing a producer from a label. */
-export function resolveMetricContext(
-  variants: MetricVariant[],
-  request: MetricContextRequest,
-): MetricContextResolution {
-  const defaultVariant = variants.find((variant) => variant.producer === "platform") ?? variants[0];
-  if (!defaultVariant) throw new Error("The analytical metric catalog must contain at least one variant.");
-  if (!request.metricId) return { variant: defaultVariant, warning: null };
-
-  const metricVariants = variants.filter((variant) => variant.metric_id === request.metricId);
-  if (metricVariants.length === 0) {
-    return { variant: defaultVariant, warning: "The requested metric is not documented; showing the default entry." };
-  }
-
-  const requestedVariant = request.variantId
-    ? metricVariants.find((variant) => variant.variant_id === request.variantId)
-    : undefined;
-  if (requestedVariant && (!request.producer || requestedVariant.producer === request.producer)) {
-    return {
-      variant: requestedVariant,
-      warning: contractWarning(requestedVariant, request.contractId),
-    };
-  }
-
-  const producer = request.producer?.trim() || null;
-  const producerVariant = producer
-    ? metricVariants.find((variant) => variant.producer === producer)
-    : undefined;
-  if (producerVariant) {
-    return {
-      variant: producerVariant,
-      warning: request.variantId
-        ? "The requested variant is unavailable; showing this producer's documented contract."
-        : contractWarning(producerVariant, request.contractId),
-    };
-  }
-
-  const metricDefault = metricVariants.find((variant) => variant.producer === "platform") ?? metricVariants[0];
-  return {
-    variant: metricDefault,
-    warning: request.contractId
-      ? "The requested producer or contract is not documented; showing the default contract for this metric."
-      : "The requested producer is not documented; showing the default contract for this metric.",
-  };
 }
 
 export function filterMetricVariants(
@@ -207,11 +150,6 @@ function readRequest(params: ParamMap): MetricContextRequest {
 function parseRunId(value: string | null): number | null {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
-}
-
-function contractWarning(variant: MetricVariant, requestedContractId: string | null): string | null {
-  if (!requestedContractId || requestedContractId === variant.contract_id) return null;
-  return "The requested calculation contract is not available for this metric variant; review the contract shown below.";
 }
 
 function searchableText(variant: MetricVariant): string {
