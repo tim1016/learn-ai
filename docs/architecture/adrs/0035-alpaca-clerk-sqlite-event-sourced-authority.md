@@ -11,10 +11,10 @@
   authority generation**. Generation 1 was preserved intact and generation 2 was
   initialized clean-slate, with no import, during the human-supervised paper cutover in
   [the execution PRD](../../prds/2026-08-10-sqlite-sole-authority-alpaca-execution.md).
-  The earlier multi-session fault matrix remains historical governance and
-  post-acceptance hardening; it is not represented as having been run. Live-money
-  trading remains disabled and is out of scope (this ADR neither gates nor enables
-  live-money).
+  The earlier multi-session fault matrix remains historical governance. The bounded
+  post-acceptance fault campaign and supervised paper receipts completed on
+  2026-08-11. Live-money trading remains disabled and is out of scope (this ADR
+  neither gates nor enables live-money).
 - **Context:** Alpaca Account Clerk control-plane; the SQLite control-plane PRD
   (`docs/prds/alpaca-account-clerk-sqlite-control-plane.md`); an architecture
   grilling session on 2026-08-04.
