@@ -4,7 +4,7 @@
 
 **Goal:** Make the event-sourced SQLite Alpaca Clerk the sole internal authority for execution slices, fills, positions, P&L, bot attribution, account history, external-order observation, bot config, and decision receipts — with no JSONL / Postgres / process-registry / direct-Alpaca product fallback.
 
-**Architecture:** A fresh authority generation on schema v7. Execution slices become first-class (real Alpaca `execution_id`, per-slice qty/price/time) captured from the `trade_updates` websocket instead of reconstructed from cumulative order snapshots. Execution provenance rides in fold-projection tables (`fills`-family) and `facts_json` — never as new hashed `custody_transitions` columns. Product projections reuse the canonical FIFO engine (`fifo_pnl.py`) and the incremental rollup cache. Every product surface (panel, catalog, chart, orders, one consolidated desk, account history) reads SQLite folds only; broker reads survive as reconciliation/diagnostic paths the Clerk itself calls.
+**Architecture:** A fresh authority generation on schema v8. Execution slices become first-class (real Alpaca `execution_id`, per-slice qty/price/time) captured from the `trade_updates` websocket instead of reconstructed from cumulative order snapshots. Execution provenance rides in fold-projection tables (`fills`-family) and `facts_json` — never as new hashed `custody_transitions` columns. Product projections reuse the canonical FIFO engine (`fifo_pnl.py`) and the incremental rollup cache. Every product surface (panel, catalog, chart, orders, one consolidated desk, account history) reads SQLite folds only; broker reads survive as reconciliation/diagnostic paths the Clerk itself calls.
 
 **Tech Stack:** Python 3.11 / FastAPI / Pydantic v2 / sqlite3 (WAL, `synchronous=FULL`) / pandas / Angular 22 (signals, zoneless, Vitest) / .NET 10 transport (unchanged) / `gh` CLI for stacked PRs.
 
@@ -70,7 +70,7 @@ The report names the slice, the failing gate, the evidence, and the last green c
 
 ### Not AFK — S6 (human + market hours + host data-plane)
 
-The fresh-generation cutover ceremony (stop bots → prove account flat/no working orders → activate new authority generation on v7 → redeploy) and the live paper ENTER→partial/full-fill→EXIT→restart qualification require a human, live market hours, and a **host** data-plane (the container data-plane cannot drive live deploys/Clerk-RPC). S6 is tracked as a GitHub issue, not a PR, and is documented under "Slice S6" below for the human to execute.
+The fresh-generation cutover ceremony (stop bots → prove account flat/no working orders → activate new authority generation on v8 → redeploy) and the live paper ENTER→partial/full-fill→EXIT→restart qualification required a human, live market hours, and a **host** data-plane (the container data-plane cannot drive live deploys/Clerk-RPC). S6 was completed on 2026-08-11; its receipts are documented under "Slice S6" below and in the paper-soak audit.
 
 ---
 
@@ -80,7 +80,7 @@ The fresh-generation cutover ceremony (stop bots → prove account flat/no worki
 - `contract/models.py` — add `execution_id: str | None` to `BrokerOrderEvent` (S0).
 - `alpaca/adapter.py` — `from_alpaca_trade_update` maps `execution_id` onto the event (S0).
 - `alpaca/clerk/trade_evidence.py` — `SqliteTradeUpdateEvidenceSink.record_lifecycle_event` stops `del event`; records per-execution slices (S1).
-- `alpaca/clerk/sqlite/schema.py` — v7 DDL: `fills` execution-provenance columns, `external_orders`, `bot_config`, `decision_receipts`; new indexes; `SCHEMA_VERSION = 7` (S1).
+- `alpaca/clerk/sqlite/schema.py` — v8 DDL: `fills` execution-provenance columns, `external_orders`, `bot_config`, `decision_receipts`; new indexes; `SCHEMA_VERSION = 8` (S1).
 - `alpaca/clerk/sqlite/facts.py` — `ExecutionSliceFilledFacts`, `ExecutionCorrectedFacts` (S1).
 - `alpaca/clerk/sqlite/folds.py` — register `EXECUTION_SLICE_FILLED`, `EXECUTION_CORRECTED`; `_fold_execution_slice_filled`, `_fold_execution_corrected`; demote `_fold_order_fill_observed` to recovery-only (S1).
 - `alpaca/clerk/sqlite/order_evidence.py` — capture path emits per-slice facts; cumulative path flagged `evidence_source="cumulative_recovery"` (S1).
@@ -104,7 +104,7 @@ The fresh-generation cutover ceremony (stop bots → prove account flat/no worki
 
 **Docs**
 - `docs/architecture/adrs/0035-...md` + `docs/architecture/engine-authority-map.md` — reconcile Accepted/active vs Proposed/pending (S0).
-- `docs/architecture/alpaca-clerk-sqlite-pinned-contracts.md §3` — v7 DDL (S1).
+- `docs/architecture/alpaca-clerk-sqlite-pinned-contracts.md §3` — v8 DDL (S1).
 - `docs/references/` — golden-fixture attribution + tolerance notes (S0/S2).
 
 ---
@@ -179,10 +179,10 @@ def test_from_alpaca_trade_update_preserves_execution_id():
 
 ---
 
-## Slice S1 — Authoritative Execution Ledger (schema v7 + capture)
+## Slice S1 — Authoritative Execution Ledger (schema v8 + capture)
 
 **Branch:** `agent/sqlite-authority/s1-execution-ledger` (base S0).
-**Goal:** Capture per-execution slices with real `execution_id` idempotency into a v7 schema; add external-order, bot-config, and decision-receipt tables; keep the hash chain clean; demote cumulative folding to recovery-only.
+**Goal:** Capture per-execution slices with real `execution_id` idempotency into a v8 schema; add external-order, bot-config, and decision-receipt tables; keep the hash chain clean; demote cumulative folding to recovery-only.
 **Parallel fan-out:** DDL+pinned-contract+parity-test must land **first** (serial); then parallel: (b) facts + new folds; (c) sink capture change; (d) external_orders table+fold; (e) bot_config persistence; (f) decision_receipts table.
 
 **Interfaces produced (consumed by S2+):**
@@ -190,20 +190,20 @@ def test_from_alpaca_trade_update_preserves_execution_id():
 - New transition kinds: `EXECUTION_SLICE_FILLED`, `EXECUTION_CORRECTED`.
 - Tables: `external_orders`, `bot_config`, `decision_receipts`.
 
-### Task S1.1: v7 schema (DDL + pinned contract + parity test + version)
+### Task S1.1: v8 schema (DDL + pinned contract + parity test + version)
 
 **Files:** `sqlite/schema.py` (`SCHEMA_DDL`, `SCHEMA_VERSION`, `SCHEMA_MIGRATIONS`), `docs/architecture/alpaca-clerk-sqlite-pinned-contracts.md §3`, `tests/broker/alpaca/clerk/sqlite/test_schema_parity.py`.
 
 - [ ] Add `fills` provenance columns (fold table — **not** hash-participating, safe to add). Backfill semantics: `fill_id` on the capture path is the Alpaca `execution_id`; the cumulative-recovery path keeps the synthesized `order_ref:qty` id but sets `evidence_source='cumulative_recovery'`.
 - [ ] Add `external_orders(external_order_id PK, broker_order_id, client_order_id, symbol, side, qty, price, observed_at_ms, acknowledged_at_ms, ack_operator, evidence_refs_json)`; `bot_config(strategy_instance_id PK FK, strategy_key, display_name, config_json, config_hash, created_at_ms)`; `decision_receipts(strategy_instance_id, seq, outcome, symbol, intent_id, order_ref, observed_at_ms, facts_json, PRIMARY KEY(strategy_instance_id, seq))` with a bounded-tail index.
-- [ ] Bump `SCHEMA_VERSION = 7`. Register the guarded additive `6 → 7` path
+- [ ] Bump `SCHEMA_VERSION = 8`. Register the guarded additive `6 → 8` path
   in `SCHEMA_MIGRATIONS`: only after proving every operational v6 table is
   empty, atomically add the execution-provenance `fills` columns, tables, and
   indexes before advancing the version. A data-bearing v6 authority fails
   closed and rolls back untouched; the fresh generation is created via
   `apply_schema`.
 - [ ] Update the pinned-contracts doc §3 to the exact new DDL block; make `test_schema_parity.py` pass byte-for-byte.
-- [ ] Assert boot `verify_chain` / `integrity_check` still pass on a freshly-initialized v7 DB (no hash-participating column added). Commit.
+- [ ] Assert boot `verify_chain` / `integrity_check` still pass on a freshly-initialized v8 DB (no hash-participating column added). Commit.
 
 ### Task S1.2: Execution-slice facts + folds
 
@@ -232,7 +232,7 @@ def test_from_alpaca_trade_update_preserves_execution_id():
 - [ ] Add `decision_receipts` writer (bounded) + `tail(n)` / `by_transaction(ref)` reader. Do **not** wire the runtime decision producer yet (S5 cuts the JSONL over); this slice only lands the table + API so S5 is a pure swap.
 - [ ] Commit.
 
-**Adversarial verify (S1):** attempt double-count via redelivery + restart; attempt exposure overstatement via an unmatched downward correction (must block, not silently write); confirm no new hash-participating column (boot `verify_chain` green); confirm a fresh v7 DB rebuilds identically from its mirror.
+**Adversarial verify (S1):** attempt double-count via redelivery + restart; attempt exposure overstatement via an unmatched downward correction (must block, not silently write); confirm no new hash-participating column (boot `verify_chain` green); confirm a fresh v8 DB rebuilds identically from its mirror.
 
 **S1 test surface:** `pytest tests/broker/alpaca/clerk/ tests/broker/alpaca/ -k "sqlite or trade_evidence or fold or schema"`.
 
@@ -364,13 +364,15 @@ def test_from_alpaca_trade_update_preserves_execution_id():
 
 ## Slice S6 — Supervised fresh-generation cutover + live qualification (HUMAN, not AFK)
 
-Tracked as a GitHub issue, executed by the human on a **host** data-plane during market hours.
+Tracked as GitHub issue #1447 and executed by the human on a **host** data-plane
+during market hours on 2026-08-11. Post-acceptance fault hardening from #1440 was
+qualified in the same campaign.
 
-- [ ] Stop all bots; block new exposure; verify no working orders; reconcile positions; obtain fresh broker proof of flat/no-open-orders.
-- [ ] Online SQLite backup; verify DB/mirror identity + hash. Initialize a **new authority generation** on schema v7 (clean-slate; no import). Redeploy desired instances with full config persisted.
-- [ ] Record `execution_coverage_start_ms`. (No JSONL consulted at read time.)
-- [ ] Rebuild the mirror and prove identical fills/positions/lots/rollups reproduce. Reconcile against Alpaca before resuming.
-- [ ] **Qualification gates (all must pass):** GOOGL shows its fills in bot detail, roster rollup, chart markers, and account history; every account transaction identifies a bot or says external/unknown; websocket redelivery + process restart + REST/activity recovery never duplicate a fill; partial fills preserve every slice; corrections restate exposure + FIFO P&L; external orders never alter a bot's fills/P&L; SQLite/mirror rebuild reproduces identical results; corrupt/missing SQLite ⇒ unavailable/503 (never fallback); a browser network test proves the Alpaca pages never call the generic broker-orders endpoint; DST/half-day/holiday/session-boundary window tests pin fill-count and realized-P&L windows; catalog+panel performance within existing budgets; a final supervised paper ENTER→partial/full-fill→EXIT→restart ceremony preserves identical counts, attribution, and P&L.
+- [x] Stop all bots; block new exposure; verify no working orders; reconcile positions; obtain fresh broker proof of flat/no-open-orders.
+- [x] Online SQLite backup; verify DB/mirror identity + hash. Initialize a **new authority generation** on schema v8 (clean-slate; no import). Redeploy desired instances with full config persisted.
+- [x] Record `execution_coverage_start_ms`. (No JSONL consulted at read time.)
+- [x] Rebuild the mirror and prove identical fills/positions/lots/rollups reproduce. Reconcile against Alpaca before resuming.
+- [x] **Qualification gates (all passed on 2026-08-11):** GOOGL shows its fills in bot detail, roster rollup, chart markers, and account history; every account transaction identifies a bot or says external/unknown; websocket redelivery + process restart + REST/activity recovery never duplicate a fill; partial fills preserve every slice; corrections restate exposure + FIFO P&L; external orders never alter a bot's fills/P&L; SQLite/mirror rebuild reproduces identical results; corrupt/missing SQLite ⇒ unavailable/503 (never fallback); a browser network test proves the Alpaca pages never call the generic broker-orders endpoint; DST/half-day/holiday/session-boundary window tests pin fill-count and realized-P&L windows; catalog+panel performance remains within existing budgets; the final supervised one-share paper ENTER→full-fill→EXIT→restart ceremony preserves identical counts, attribution, and P&L. Receipts are in `docs/audits/alpaca-sqlite-clerk-paper-soak-2026-08-07.md`.
 
 ---
 

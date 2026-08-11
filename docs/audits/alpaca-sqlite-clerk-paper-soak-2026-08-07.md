@@ -652,3 +652,126 @@ namespace-separated exposure, flat stop/resume with a new run identity, a live
 four-for-four symbol substitution, three-way simultaneous exposure, and a clean
 strategy-owned/flat-only wind-down. It did not attempt unsupported in-place parameter
 mutation or any live-money action.
+
+## Schema-v8 clean-slate cutover and post-acceptance hardening — 2026-08-11
+
+This campaign combines the supervised S6 cutover in issue #1447 with the bounded
+post-acceptance fault work in issue #1440. It is a second NYSE session after the
+2026-08-10 acceptance campaign and remains Alpaca paper only.
+
+### Cutover receipt
+
+Before rotation, rendered Alpaca Broker V2 pages showed all nine governed generation-1
+instances Off duty and Flat. A fresh Alpaca broker observation proved account
+`PA3KWXU1C4C3` had no position and no open order at `1786461841537` ms UTC. Both
+authority writers were then stopped. The offline recovery boundary preserved the old
+database and transition mirror at
+`accounts/alpaca/PA3KWXU1C4C3/recovery-preserved/generation-1-1786461842559-7b8e1312`
+and initialized, without import:
+
+- authority generation `2`;
+- schema version `8`;
+- database identity `7f76bfb2d17c08b751fa1edb00fa3f55`;
+- `execution_coverage_start_ms = 1786461842559`;
+- genesis sequence `0`, hash head `GENESIS`, and zero operational rows.
+
+The established-generation and activation registries both bind that exact generation
+and database identity. Offline verification returned `integrity_check=ok`; after the
+service reopened, the rendered Account Desk showed **Healthy · generation 2**, no
+position, working order, hold, or uncertainty. The first fresh reconciliation completed
+as `reconciliation:1`. An online baseline backup then verified schema `8`, generation
+`2`, identity `7f76bfb2d17c08b751fa1edb00fa3f55`, sequence `0`, and hash head `GENESIS`:
+
+- bundle
+  `accounts/alpaca/PA3KWXU1C4C3/verified-backups/backup-g2-1786462047278-8a114ff41c186e19`;
+- snapshot SHA-256
+  `8a114ff41c186e1988ef01dcb32c967346ea9b6831094dedddbac1b245b4fa91`.
+
+### Deterministic and browser qualification
+
+The canonical full qualification passed all performance budgets at 10,000, 100,000,
+and 1,000,000 transitions. At the largest scale, p95 latency was `0.192 ms` for the bot
+snapshot, `0.133 ms` for the account snapshot, and `47.521 ms` for a timeline page,
+inside the exclusive `75/100/100 ms` budgets. The report SHA-256 is
+`28a96fa0fdd21f8f414ada23a9705117c5cbe8ab8c0341027b6e270743d8e3`.
+
+The qualification's complete SQLite Clerk and Alpaca trade-update surface passed
+`488` tests. A second focused `71`-test pass covered the source-accurate fault seams,
+execution correction/dedup folds, backup/restore/rebuild policy, the bounded UI campaign
+contract, and quiet-stream SSE keepalives. These tests exercise lost-submit exact
+identity, duplicate/redelivered trade updates, cancel/fill and lost-cancel races,
+trade-update gaps followed by REST reconciliation, bot/account uncertainty isolation,
+restart with in-flight work, partial slices, corrections, external/unknown ownership,
+missing/corrupt-authority no-fallback behavior, NYSE DST/half-day/holiday boundaries,
+and verified backup/reopen paths.
+
+The exact five-load/four-reload browser correlation campaign also passed in
+`12.413 s`, with one expected test, no skip, unexpected result, or flake. It measured
+25 evidence interactions over revision sequence `41,41,42,42,43` and zero lifecycle
+requests from read-only evidence controls. The browser report SHA-256 is
+`9c1928c060741d5f7550a2a428d70e6716bc17be53b5adc1496ce1b14bd4aede`;
+the campaign-contract SHA-256 remains
+`544cbea3cebf202806972851c64d0da5136b2c44a444a10d07c4ade8bbe7ffb3`.
+
+### Supervised GOOGL paper ceremony
+
+The operator deployed the immutable one-share Validation configuration as
+`sqlite-s6-googl-0811`. Its first run was
+`a136c43cc0d64227ae469a296c7b2999`; the deployment receipt was
+`alpaca-paper-deploy:PA3KWXU1C4C3:sqlite-s6-googl-0811:1786462670567`. The
+strategy then completed its natural ENTER and EXIT during the regular NYSE session:
+
+| Side | Quantity | Price | Local time | Durable client-order identity |
+|---|---:|---:|---|---|
+| Buy | 1 GOOGL | `$349.65` | `10:51:06` | `learn-ai/sqlite-s6-googl-0811/v1:fS1JVTPTR_-ARSCiC4pqFA` |
+| Sell | 1 GOOGL | `$349.50` | `10:54:06` | `learn-ai/sqlite-s6-googl-0811/v1:beA4WCQr-bu0JDFoukqbog` |
+
+Bot detail rendered both chart markers and both immutable fills. The roster rendered
+two fills, flat exposure, zero open orders, and realized P&L of `-$0.15`. Account
+history rendered both receipts from the SQLite projection with Strategy origin, exact
+bot/run/client-order attribution, and no retired Postgres or broker-history fallback.
+The account returned flat with no working or unresolved order, and reconciliation
+`reconciliation:22` was satisfied.
+
+The first run was stopped with its exact run-bound receipt, then resumed as new run
+`b04b59af84e043cc8436169c99905be8`. The reopened panel preserved exactly two fills,
+`-$0.15` realized P&L, flat exposure, and the original execution identities. That run
+was also stopped with an exact run-bound receipt. The final broker observation at
+`1786463899713` ms UTC independently proved no position and no open order.
+
+### Verified recovery after the live round trip
+
+The final online backup was
+`accounts/alpaca/PA3KWXU1C4C3/verified-backups/backup-g2-1786463830182-6f64c27588db7416`
+with snapshot SHA-256
+`6f64c27588db7416c1c1173b26d055f1959eceaea064b0ec67c0c77ec305e8b3`.
+It verified generation `2`, schema `8`, the original database identity, control revision
+`22`, transition sequence/count `22`, and hash head
+`e38b629805a3fdb4cdcb7ca9a7318632b7c0f7f668ea3baa22f652a2103633f3`.
+
+With both writers stopped, `RESTORE_VERIFIED_BACKUP` preserved the pre-restore
+database and reopened the same two fills, flat position, attribution, identities, and
+P&L. The first `REBUILD_FROM_MIRROR` attempt failed closed while an execution lease
+still had `8624 ms` remaining; no stronger recovery path was attempted. After that
+lease expired, the retry preserved the pre-rebuild database and rebuilt successfully.
+Offline verification reproduced the same generation, schema, database identity,
+revision, sequence/count, and hash head. The rendered post-rebuild Account Desk then
+showed **Healthy · generation 2**, no hold, uncertainty, position, or working order,
+and the two exact strategy-attributed transaction receipts at projection high-water
+`22` with zero lag.
+
+### Combined issue verdict
+
+- **#1447 — PASS.** The clean-slate schema-v8 generation-2 cutover, fresh broker
+  proofs, live one-share GOOGL ENTER/full-fill/EXIT, stopped-flat restart, and final
+  recovery verification all completed under human supervision.
+- **#1440 — PASS.** The deterministic fault campaign covers lost submit/cancel,
+  redelivery, cancel/fill races, gaps plus REST recovery, uncertainty isolation,
+  in-flight restart, partial/corrected/external fills, session boundaries, and strict
+  no-fallback behavior. The live session additionally confirms the normal UI-owned
+  route, exact attribution, restart preservation, backup restore, mirror rebuild, and
+  fail-closed lease guard.
+
+**Verdict: PASS.** Alpaca paper generation 2 on schema v8 is the accepted active
+SQLite authority. Generation 1 remains preserved as audit evidence; it was not
+imported and is not a product-read fallback.

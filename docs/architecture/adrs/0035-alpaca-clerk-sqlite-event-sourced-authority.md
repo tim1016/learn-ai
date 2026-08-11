@@ -1,15 +1,15 @@
 # ADR 0035: Alpaca Account Clerk — event-sourced SQLite authority (append-only log + folded state), no Postgres in scope
 
 - **Date:** 2026-08-04
-- **Status:** Accepted for the existing Alpaca-paper authority on 2026-08-10;
-  generation 1 is active. Acceptance is supported by the deterministic/adversarial
+- **Status:** Accepted for Alpaca paper on 2026-08-10; generation 2 on schema v8
+  is active as of the supervised 2026-08-11 cutover. Acceptance is supported by the deterministic/adversarial
   qualification suite, verified online backup and recovery evidence, no-fallback
   authority guards, and the UI-driven one-share SPY ENTER/EXIT/Stop/reconcile
   ceremony in
   [`alpaca-sqlite-clerk-paper-soak-2026-08-07.md`](../../audits/alpaca-sqlite-clerk-paper-soak-2026-08-07.md).
-  The execution-ledger sole-authority expansion below starts a **fresh schema-v7
-  authority generation**. That generation is planned, not yet initialized or
-  activated; it requires the clean-slate, human-supervised paper cutover in
+  The execution-ledger sole-authority expansion below runs in that **fresh schema-v8
+  authority generation**. Generation 1 was preserved intact and generation 2 was
+  initialized clean-slate, with no import, during the human-supervised paper cutover in
   [the execution PRD](../../prds/2026-08-10-sqlite-sole-authority-alpaca-execution.md).
   The earlier multi-session fault matrix remains historical governance and
   post-acceptance hardening; it is not represented as having been run. Live-money
@@ -186,7 +186,7 @@ following load-bearing decisions.
     `versioned-snapshot-stream`), retiring its 3-endpoint polling; that
     infrastructure is reused, not rebuilt.
 
-13. **The fresh schema-v7 generation owns the complete internal execution
+13. **The fresh schema-v8 generation owns the complete internal execution
     record and its product projections.** Its SQLite folds are the sole internal
     authority for execution slices, effective fills, attributed positions and
     FIFO P&L, bot attribution, account history, external-order observation,
@@ -207,7 +207,7 @@ prove-terminal EXIT; live-idempotent websocket dedup.
 
 ## Fresh-generation execution vocabulary
 
-This vocabulary governs the fresh schema-v7 authority generation described in
+This vocabulary governs the fresh schema-v8 authority generation described in
 decision 13. All persisted times are `int64 ms UTC`; session boundaries come
 from the canonical NYSE calendar, including half-days.
 
