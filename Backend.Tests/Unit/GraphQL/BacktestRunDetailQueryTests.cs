@@ -365,7 +365,7 @@ public class BacktestRunDetailQueryTests
     }
 
     [Fact]
-    public void FromExecution_RecordedDocumentationContext_PreservesTheProducerAndContract()
+    public void FromExecution_PartialRecordedDocumentation_PreservesRecordedContextAndBackfillsProducerContexts()
     {
         var execution = new StrategyExecution
         {
@@ -384,12 +384,31 @@ public class BacktestRunDetailQueryTests
 
         var detail = BacktestRunDetailType.FromExecution(execution, [], NullLogger.Instance);
 
-        var context = Assert.Single(detail.MetricDocumentation);
-        Assert.Equal("sharpe", context.MetricId);
-        Assert.Equal("sharpe.lean_native.v1", context.VariantId);
-        Assert.Equal("lean_native", context.Producer);
-        Assert.Equal("lean-statistics-oracle-v1", context.ContractId);
-        Assert.Equal("recorded", context.ContractProvenance);
+        Assert.Collection(
+            detail.MetricDocumentation,
+            context =>
+            {
+                Assert.Equal("sharpe", context.MetricId);
+                Assert.Equal("sharpe.lean_native.v1", context.VariantId);
+                Assert.Equal("lean_native", context.Producer);
+                Assert.Equal("lean-statistics-oracle-v1", context.ContractId);
+                Assert.Equal("recorded", context.ContractProvenance);
+            },
+            context =>
+            {
+                Assert.Equal("lean_native.portfolio.sortino_ratio.v1", context.VariantId);
+                Assert.Equal("inferred", context.ContractProvenance);
+            },
+            context =>
+            {
+                Assert.Equal("lean_native.portfolio.drawdown.v1", context.VariantId);
+                Assert.Equal("inferred", context.ContractProvenance);
+            },
+            context =>
+            {
+                Assert.Equal("lean_native.trade.profit_factor.v1", context.VariantId);
+                Assert.Equal("inferred", context.ContractProvenance);
+            });
     }
 
     [Fact]

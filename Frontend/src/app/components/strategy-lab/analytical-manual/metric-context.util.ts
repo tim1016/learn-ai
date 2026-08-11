@@ -26,17 +26,17 @@ export function resolveMetricContext(
     return { variant: defaultVariant, warning: "The requested metric is not documented; showing the default entry." };
   }
 
+  const producer = request.producer?.trim() || null;
   const requestedVariant = request.variantId
     ? metricVariants.find((variant) => variant.variant_id === request.variantId)
     : undefined;
-  if (requestedVariant && (!request.producer || requestedVariant.producer === request.producer)) {
+  if (requestedVariant && (!producer || requestedVariant.producer === producer)) {
     return {
       variant: requestedVariant,
       warning: contractWarning(requestedVariant, request.contractId),
     };
   }
 
-  const producer = request.producer?.trim() || null;
   const producerVariant = producer
     ? metricVariants.find((variant) => variant.producer === producer)
     : undefined;

@@ -22,13 +22,15 @@
     @if (resolution().warning; as warning) {
       <p class="metric-help__warning" role="status">{{ warning }}</p>
     }
-    <app-metric-reference-entry
-      [variant]="variant()"
-      [alternative]="alternative()"
-      [runId]="runId()"
-    />
-    <a class="metric-help__manual-link" routerLink="/strategy-lab/docs" [queryParams]="docsQuery()">
-      Open this quantity in the full Strategy Lab manual
-    </a>
+    @if (variant(); as variant) {
+      <app-metric-reference-entry
+        [variant]="variant"
+        [alternative]="alternative()"
+        [runId]="runId()"
+      />
+      <a class="metric-help__manual-link" routerLink="/strategy-lab/docs" [queryParams]="docsQuery()">
+        Open this quantity in the full Strategy Lab manual
+      </a>
+    }
   }
 </p-dialog>

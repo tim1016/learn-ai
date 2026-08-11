@@ -4,6 +4,8 @@ import { By } from '@angular/platform-browser';
 import { provideRouter } from '@angular/router';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import analyticalMetricCatalog from '@repo-contracts/strategy-lab/analytical-metric-catalog-v1.json';
+
 import {
   EngineResultData,
   EngineResultsComponent,
@@ -175,6 +177,11 @@ describe('EngineResultsComponent.leanStats', () => {
     expect(root.textContent).toContain('$83.02');
     expect(root.textContent).not.toContain('-45305.60%');
     expect(root.querySelectorAll('.metric-help__trigger')).toHaveLength(75);
+    const catalogVariantIds = new Set(analyticalMetricCatalog.variants.map((variant) => variant.variant_id));
+    const nativeStatisticVariantIds = [...nativeStats.headlineSections, ...nativeStats.fullSections]
+      .flatMap((section) => section.metrics().map((metric) => metric.documentationVariantId));
+    expect(nativeStatisticVariantIds).toHaveLength(75);
+    expect(nativeStatisticVariantIds.filter((variantId) => !catalogVariantIds.has(variantId))).toEqual([]);
     expect(document.body.querySelectorAll('.metric-entry')).toHaveLength(0);
 
     root.querySelector<HTMLButtonElement>('button[aria-label="Open Alpha trader guide"]')?.click();
