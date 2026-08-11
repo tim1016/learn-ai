@@ -644,11 +644,10 @@ def build_panel(
     health_last_bar_at_ms = (
         _dry_run_last_bar_at_ms(activity)
         if status.mode == "dry_run"
-        else (
-            last_bar_at_ms
-            if last_bar_at_ms is not None
-            else _decision_last_bar_at_ms(latest_decision)
-        )
+        # A decision receipt is the only durable proof that a bar reached the
+        # strategy evaluator. A later fill is execution activity, not proof
+        # that a later bar was evaluated, so it cannot replace this clock.
+        else _decision_last_bar_at_ms(latest_decision) or last_bar_at_ms
     )
     clerk = build_clerk_card(clerk_status, now_ms)
     health = _build_health_card(
@@ -698,7 +697,10 @@ def build_panel(
     return BotPanelView(
         strategy_instance_id=status.strategy_instance_id,
         strategy_key=status.strategy_key,
-        strategy_label=status.strategy_key.replace("_", " ").replace("-", " ").title(),
+        strategy_label=(
+            status.strategy_label
+            or status.strategy_key.replace("_", " ").replace("-", " ").title()
+        ),
         broker=status.broker,
         account_id=account_id,
         symbol=status.symbol,

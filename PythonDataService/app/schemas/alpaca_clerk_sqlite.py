@@ -11,8 +11,8 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.broker.alpaca.clerk.sqlite.models import CommandResource
 from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryActionId
-from app.broker.alpaca.clerk.sqlite.repository import CommandResource
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.projection_models import ClerkProjection, TimelinePage

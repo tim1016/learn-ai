@@ -70,7 +70,7 @@ describe('BrokersService', () => {
     await expect(promise).resolves.toEqual([]);
   });
 
-  it('GETs newest-first order rows for transaction history', async () => {
+  it('keeps generic broker orders available only for diagnostics', async () => {
     const promise = service.listOrders('alpaca', { status: 'all', limit: 50 });
 
     const req = httpMock.expectOne(

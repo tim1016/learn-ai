@@ -22,6 +22,7 @@ export class AccountDeskTransactionHistoryStore {
   private readonly errorState = signal<string | null>(null);
   private readonly filtersState = signal<ClerkTransactionFilters>({});
   private requestGeneration = 0;
+  private refreshPending = false;
 
   readonly accountId = this.accountKey.asReadonly();
   readonly rows = this.rowsState.asReadonly();
@@ -35,12 +36,17 @@ export class AccountDeskTransactionHistoryStore {
   async load(accountId: string): Promise<void> {
     if (this.accountKey() !== accountId) {
       this.requestGeneration += 1;
+      this.refreshPending = false;
       this.accountKey.set(accountId);
       this.rowsState.set([]);
       this.nextCursorState.set(null);
       this.feedState.set(null);
       this.loadingState.set(false);
       this.errorState.set(null);
+    }
+    if (this.loadingState()) {
+      this.refreshPending = true;
+      return;
     }
     await this.fetchPage(null, true);
   }
@@ -56,6 +62,7 @@ export class AccountDeskTransactionHistoryStore {
 
   setFilters(filters: ClerkTransactionFilters): void {
     this.requestGeneration += 1;
+    this.refreshPending = false;
     this.filtersState.set(normalizeFilters(filters));
     this.rowsState.set([]);
     this.nextCursorState.set(null);
@@ -88,7 +95,13 @@ export class AccountDeskTransactionHistoryStore {
         this.errorState.set(extractServerMessage(error, 'Transaction history is unavailable. Retry to request it again.'));
       }
     } finally {
-      if (this.isCurrentRequest(accountId, requestGeneration)) this.loadingState.set(false);
+      if (this.isCurrentRequest(accountId, requestGeneration)) {
+        this.loadingState.set(false);
+        if (this.refreshPending) {
+          this.refreshPending = false;
+          void this.fetchPage(null, true);
+        }
+      }
     }
   }
 

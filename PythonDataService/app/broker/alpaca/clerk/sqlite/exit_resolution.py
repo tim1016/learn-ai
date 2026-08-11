@@ -23,6 +23,7 @@ from app.broker.alpaca.clerk.sqlite.order_evidence import (
     entry_order_symbol,
     fold_failed,
     fold_order_evidence,
+    fold_order_submission_acknowledgement,
     fold_uncertain,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -191,6 +192,24 @@ async def _resolve_claimed(
     if not position_quantity_is_nonzero(final_qty):
         _fold_attributed_flat(repo, effect_operation_id, _primary_entry_ref(repo, entries))
     else:
+        # A synchronous submit response can truthfully say the reducing order
+        # is terminal while its execution slice has not reached the websocket
+        # capture path yet.  That is incomplete custody evidence, not proof
+        # that an EXIT failed to flatten.  Hold the effect unknown until an
+        # exact execution or labelled recovery observation can establish the
+        # economic delta.
+        if not repo.fills_for_order(reducing.order_ref):
+            if effect.state != "unknown":
+                fold_uncertain(
+                    repo,
+                    effect_operation_id=effect_operation_id,
+                    order_ref=reducing.order_ref,
+                    why=(
+                        "Reducing order is terminal but no execution slice has been "
+                        "recorded; awaiting websocket or recovery evidence."
+                    ),
+                )
+            return _snapshot(repo, effect_operation_id)
         fold_failed(
             repo,
             effect_operation_id=effect_operation_id,
@@ -454,7 +473,11 @@ async def _submit_reducing_order(
             ),
         )
         return
-    fold_order_evidence(repo, effect_operation_id=effect_operation_id, order=observed)
+    fold_order_submission_acknowledgement(
+        repo,
+        effect_operation_id=effect_operation_id,
+        order=observed,
+    )
 
 
 def _append_order_phase(

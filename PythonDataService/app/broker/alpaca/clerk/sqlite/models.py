@@ -59,6 +59,64 @@ class ControlMetaSnapshot:
 
 
 @dataclass(frozen=True)
+class BotConfigResource:
+    """Immutable strategy configuration persisted with a registration."""
+
+    strategy_instance_id: str
+    strategy_key: str
+    display_name: str
+    config_json: str
+    config_hash: str
+    created_at_ms: int
+
+
+@dataclass(frozen=True)
+class DecisionReceiptResource:
+    """One durable strategy-decision receipt from the SQLite authority."""
+
+    strategy_instance_id: str
+    seq: int
+    outcome: str
+    symbol: str | None
+    intent_id: str | None
+    order_ref: str | None
+    observed_at_ms: int
+    facts_json: str
+
+
+@dataclass(frozen=True)
+class ExternalOrderResource:
+    """A broker order outside every registered bot namespace.
+
+    This account-scoped evidence intentionally has no strategy, run, order
+    reference, or economic attribution.  Keeping it separate from ``fills``
+    prevents an operator review of an external order from changing a bot's
+    position or P&L.
+    """
+
+    external_order_id: str
+    broker_order_id: str
+    client_order_id: str
+    symbol: str
+    side: str
+    qty: float
+    order_type: str
+    limit_price: float | None
+    stop_price: float | None
+    filled_avg_price: float | None
+    observed_at_ms: int
+    acknowledged_at_ms: int | None
+    ack_operator: str | None
+    evidence_refs: tuple[str, ...]
+    # These are assigned by the durable folds.  ``None`` is only valid for a
+    # not-yet-appended observation value used to plan a transition.
+    observation_sequence: int | None = None
+    acknowledgement_sequence: int | None = None
+    observation_recorded_at_ms: int | None = None
+    acknowledgement_recorded_at_ms: int | None = None
+
+
+@dataclass(frozen=True)
 class CommandResource:
     """The durable command resource ``GET /commands/{command_id}`` returns (R2)."""
 

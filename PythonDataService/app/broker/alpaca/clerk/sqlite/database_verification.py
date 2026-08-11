@@ -64,6 +64,7 @@ def verify_database(
         if control is None:
             raise DatabaseVerificationFailed(f"{path} has no control_meta row")
         _verify_control(
+            conn,
             control,
             path=path,
             expected_account_id=expected_account_id,
@@ -118,6 +119,7 @@ def sha256_file(path: Path) -> str:
 
 
 def _verify_control(
+    conn: sqlite3.Connection,
     control: sqlite3.Row,
     *,
     path: Path,
@@ -131,6 +133,13 @@ def _verify_control(
         raise DatabaseVerificationFailed(
             f"{path} schema_version={control['schema_version']}, expected {schema.SCHEMA_VERSION}"
         )
+    if control["schema_version"] == 6:
+        occupied = schema.v6_operational_tables_with_rows(conn)
+        if occupied:
+            raise DatabaseVerificationFailed(
+                f"{path} data-bearing v6 authority cannot be verified as safely upgradeable: "
+                + ", ".join(occupied)
+            )
     if control["account_id"] != expected_account_id:
         raise DatabaseVerificationFailed(
             f"{path} account_id={control['account_id']!r}, expected {expected_account_id!r}"

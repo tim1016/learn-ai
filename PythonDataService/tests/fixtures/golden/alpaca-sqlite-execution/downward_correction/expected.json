@@ -1,0 +1,43 @@
+{
+  "projection": {
+    "authority_generation": 1,
+    "bot_metrics": {
+      "sqlite-cohort-correction-0810": {
+        "fills_today": 1,
+        "realized_pnl_today": 0.0,
+        "open_pnl": 0.0,
+        "marks_complete": true,
+        "position_quantity": 3.0
+      }
+    },
+    "fills": [
+      {
+        "fill_id": "spy-original-slice-5",
+        "execution_id": "spy-original-slice-5",
+        "strategy_instance_id": "sqlite-cohort-correction-0810",
+        "symbol": "SPY",
+        "side": "BUY",
+        "quantity": 5.0,
+        "event_kind": "fill",
+        "is_effective": false,
+        "superseded_by": "spy-corrected-slice-3"
+      },
+      {
+        "fill_id": "spy-corrected-slice-3",
+        "execution_id": "spy-corrected-slice-3",
+        "strategy_instance_id": "sqlite-cohort-correction-0810",
+        "symbol": "SPY",
+        "side": "BUY",
+        "quantity": 3.0,
+        "event_kind": "correction",
+        "is_effective": true,
+        "superseded_execution_ref": "spy-original-slice-5"
+      }
+    ],
+    "closed_lots": []
+  },
+  "tolerance": {
+    "atol": 1e-06,
+    "rtol": 0.0
+  }
+}

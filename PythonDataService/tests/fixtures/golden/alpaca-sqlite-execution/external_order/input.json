@@ -1,0 +1,29 @@
+{
+  "fixture_schema_version": 1,
+  "account_id": "PA-FIXTURE-EXTERNAL-0810",
+  "authority_generation": 1,
+  "known_bot_namespaces": [
+    "learn-ai/sqlite-cohort-googl-0810/v1"
+  ],
+  "bots_before": {
+    "sqlite-cohort-googl-0810": {
+      "fills_today": 0,
+      "realized_pnl_today": 0.0,
+      "open_pnl": 0.0,
+      "position_quantity": 0.0
+    }
+  },
+  "broker_orders": [
+    {
+      "id": "external-order-1",
+      "client_order_id": "alpaca-console:operator-order-1",
+      "symbol": "AAPL",
+      "side": "buy",
+      "qty": "2",
+      "filled_qty": "0",
+      "filled_avg_price": null,
+      "status": "accepted",
+      "observed_at_ms": 1786370400000
+    }
+  ]
+}

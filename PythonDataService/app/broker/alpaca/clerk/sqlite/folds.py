@@ -19,16 +19,27 @@ import sqlite3
 from collections.abc import Callable
 from typing import Any
 
+from app.broker.alpaca.clerk.sqlite import reads
+from app.broker.alpaca.clerk.sqlite.external_order_folds import (
+    fold_external_order_acknowledged as _fold_external_order_acknowledged,
+)
+from app.broker.alpaca.clerk.sqlite.external_order_folds import (
+    fold_external_order_observed as _fold_external_order_observed,
+)
 from app.broker.alpaca.clerk.sqlite.facts import (
     AccountHoldRaisedFacts,
     AccountHoldResolvedFacts,
     CommandRejectedFacts,
     EnterAcceptedFacts,
+    ExecutionCorrectedFacts,
+    ExecutionSliceFilledFacts,
     ExitAcceptedFacts,
     OrderFillObservedFacts,
     ReconciliationAttemptedFacts,
     RunStartedFacts,
     RunStoppedFacts,
+    validate_execution_corrected_facts,
+    validate_execution_slice_facts,
 )
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.uncertainty_folds import (
@@ -96,6 +107,19 @@ def _fold_strategy_instance_registered(conn: sqlite3.Connection, payload: dict[s
         (
             payload["strategy_instance_id"],
             facts["symbol"],
+            facts["config_hash"],
+            payload["recorded_at_ms"],
+        ),
+    )
+    conn.execute(
+        "INSERT INTO bot_config "
+        "(strategy_instance_id, strategy_key, display_name, config_json, config_hash, created_at_ms) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (
+            payload["strategy_instance_id"],
+            facts["strategy_key"],
+            facts["display_name"],
+            facts["config_json"],
             facts["config_hash"],
             payload["recorded_at_ms"],
         ),
@@ -627,11 +651,166 @@ def position_quantity_is_nonzero(quantity: float) -> bool:
     return abs(quantity) >= POSITION_QTY_EPSILON
 
 
+def _apply_attributed_position_delta(
+    conn: sqlite3.Connection,
+    *,
+    payload: dict[str, Any],
+    symbol: str,
+    side: str,
+    quantity: float,
+) -> None:
+    signed_delta = quantity if side == "BUY" else -quantity
+    conn.execute(
+        "INSERT INTO positions (strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
+        "VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(strategy_instance_id, symbol) DO UPDATE SET "
+        "attributed_qty = attributed_qty + excluded.attributed_qty, "
+        "updated_at_ms = excluded.updated_at_ms",
+        (
+            payload["strategy_instance_id"],
+            symbol.upper(),
+            signed_delta,
+            payload["recorded_at_ms"],
+        ),
+    )
+
+
+def _fold_execution_slice_filled(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Fold one idempotent broker execution slice into exposure.
+
+    Formula: attributed_qty' = attributed_qty + sign(side) * slice_qty.
+    Reference: docs/prds/2026-08-10-sqlite-sole-authority-alpaca-execution.md
+      § Task S1.2 (execution-slice facts + folds).
+    Canonical implementation: this file.
+    Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
+      test_folds_execution.py::test_execution_slice_filled_records_exact_slices.
+    """
+    facts = ExecutionSliceFilledFacts.from_facts_json(payload["facts_json"])
+    validate_execution_slice_facts(facts)
+    if payload["source_event_at_ms"] != facts.source_event_at_ms:
+        raise ValueError("execution source_event_at_ms must match the typed facts")
+
+    already_recorded = conn.execute(
+        "SELECT 1 FROM fills WHERE execution_id = ?", (facts.execution_id,)
+    ).fetchone()
+    if already_recorded is not None:
+        return
+    conn.execute(
+        "INSERT INTO fills (fill_id, order_ref, qty, price, side, is_correction, execution_id, "
+        "evidence_source, event_kind, superseded_execution_ref, fee, fee_fidelity, "
+        "source_event_at_ms, clerk_observed_at_ms, recorded_at_ms, recorded_transition_sequence) "
+        "VALUES (?, ?, ?, ?, ?, 0, ?, ?, 'fill', NULL, ?, ?, ?, ?, ?, ?)",
+        (
+            facts.execution_id,
+            payload["order_ref"],
+            facts.slice_qty,
+            facts.slice_price,
+            facts.side,
+            facts.execution_id,
+            facts.evidence_source,
+            facts.fee,
+            facts.fee_fidelity,
+            facts.source_event_at_ms,
+            payload["clerk_observed_at_ms"],
+            payload["recorded_at_ms"],
+            _this_transition_sequence(conn),
+        ),
+    )
+    _apply_attributed_position_delta(
+        conn,
+        payload=payload,
+        symbol=facts.symbol,
+        side=facts.side,
+        quantity=facts.slice_qty,
+    )
+
+
+def _fold_execution_corrected(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Replace one effective execution while retaining its audit history.
+
+    Formula: attributed_qty' = attributed_qty + sign(side) *
+      (corrected_qty - superseded_qty).
+    Reference: docs/prds/2026-08-10-sqlite-sole-authority-alpaca-execution.md
+      § Task S1.2 (execution-slice facts + folds).
+    Canonical implementation: this file.
+    Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
+      test_folds_execution.py::test_execution_correction_replaces_effective_quantity.
+    """
+    facts = ExecutionCorrectedFacts.from_facts_json(payload["facts_json"])
+    validate_execution_corrected_facts(facts)
+
+    already_recorded = conn.execute(
+        "SELECT 1 FROM fills WHERE execution_id = ?", (facts.execution_id,)
+    ).fetchone()
+    if already_recorded is not None:
+        return
+    superseded = conn.execute(
+        "SELECT f.fill_id, f.order_ref, f.qty, f.price, f.side, f.evidence_source, f.fee, "
+        "f.fee_fidelity, e.strategy_instance_id, s.symbol "
+        "FROM fills f JOIN orders o ON o.order_ref = f.order_ref "
+        "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
+        "JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id "
+        "WHERE f.execution_id = ? "
+        "AND NOT EXISTS (SELECT 1 FROM fills successor "
+        "WHERE successor.superseded_execution_ref = f.execution_id)",
+        (facts.superseded_execution_ref,),
+    ).fetchone()
+    if superseded is None:
+        raise ValueError(
+            f"correction target {facts.superseded_execution_ref!r} is missing or no longer effective"
+        )
+    if superseded["order_ref"] != payload["order_ref"]:
+        raise ValueError("correction target belongs to a different order")
+    if superseded["strategy_instance_id"] != payload["strategy_instance_id"]:
+        raise ValueError("correction target belongs to a different strategy instance")
+    if superseded["symbol"].upper() != facts.symbol.upper():
+        raise ValueError("correction symbol does not match the superseded execution")
+    if superseded["side"] != facts.side:
+        raise ValueError("correction side does not match the superseded execution")
+
+    conn.execute(
+        "INSERT INTO fills (fill_id, order_ref, qty, price, side, is_correction, execution_id, "
+        "evidence_source, event_kind, superseded_execution_ref, fee, fee_fidelity, "
+        "source_event_at_ms, clerk_observed_at_ms, recorded_at_ms, recorded_transition_sequence) "
+        "VALUES (?, ?, ?, ?, ?, 1, ?, ?, 'correction', ?, ?, ?, ?, ?, ?, ?)",
+        (
+            facts.execution_id,
+            payload["order_ref"],
+            facts.corrected_qty,
+            facts.corrected_price,
+            facts.side,
+            facts.execution_id,
+            superseded["evidence_source"],
+            facts.superseded_execution_ref,
+            superseded["fee"],
+            superseded["fee_fidelity"],
+            payload["source_event_at_ms"],
+            payload["clerk_observed_at_ms"],
+            payload["recorded_at_ms"],
+            _this_transition_sequence(conn),
+        ),
+    )
+    _apply_attributed_position_delta(
+        conn,
+        payload=payload,
+        symbol=facts.symbol,
+        side=facts.side,
+        quantity=facts.corrected_qty - superseded["qty"],
+    )
+
+
 def _fold_order_fill_observed(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Namespace-attributed exposure fold: ``positions`` sums only this
     order's owned fills, keyed by ``strategy_instance_id`` — never derived by
     netting the raw broker account position (schema.py comment, preserving
     ``exposure.py`` semantics).
+
+    Formula: delta_qty = cumulative_qty - prior_effective_qty; attributed_qty'
+      = attributed_qty + sign(side) * delta_qty.
+    Reference: docs/references/clerk-fill-quantity-tolerance.md.
+    Canonical implementation: this file.
+    Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
+      test_folds_execution.py::test_cumulative_recovery_fill_is_explicitly_tagged.
 
     The evidence carries Alpaca's REST-reported *cumulative*
     ``filled_quantity``/``filled_avg_price`` for the order, not a
@@ -639,19 +818,21 @@ def _fold_order_fill_observed(conn: sqlite3.Connection, payload: dict[str, Any])
     trade_updates websocket stream, #1378+ territory) — so this fold derives
     the delta qty, delta price, and a dedup identity itself:
 
-    - ``delta_qty = cumulative_filled_quantity - SUM(prior recorded fills'
+    - ``delta_qty = cumulative_filled_quantity - SUM(prior effective fills'
       qty)``, so a sequence of partial fills (e.g. 2 then 5) sums to the
-      right total (5), not their cumulative values (7). Compared against
-      ``FILL_QTY_EPSILON``, not bare ``<= 0`` — quantities are floats
+      right total (5), not their cumulative values (7). Superseded execution
+      rows remain auditable but are deliberately excluded, so a later
+      correction cannot make recovery suppress a genuine new delta. Compared
+      against ``FILL_QTY_EPSILON``, not bare ``<= 0`` — quantities are floats
       (fractional shares), so a re-observation of the same cumulative state
-      can differ from the recorded sum by float64 residue rather than
-      exactly zero (see the tolerance doc).
+      can differ from the effective recorded sum by float64 residue rather
+      than exactly zero (see the tolerance doc).
     - ``delta_price`` is *not* ``facts.avg_price`` copied verbatim:
       Alpaca's ``filled_avg_price`` is the volume-weighted average over the
       *whole* order, so the new delta's own price is
       ``(cumulative_qty * avg_price - prior_qty * prior_avg_price) /
       delta_qty`` — derived from ``SUM(qty * price)`` over this order's
-      already-recorded fills, not the raw cumulative average.
+      effective fills, not the raw cumulative average.
     - ``fill_id`` is built from ``cumulative_filled_quantity`` rounded to
       the same fixed precision as the epsilon gate, not the float's raw
       ``str()`` repr — two observations of a mathematically-identical
@@ -662,12 +843,11 @@ def _fold_order_fill_observed(conn: sqlite3.Connection, payload: dict[str, Any])
     folds no fill row at all — out-of-order evidence never double-counts or
     reverses exposure.
 
-    ``is_correction`` is always recorded ``False`` this slice:
-    :func:`~app.broker.alpaca.clerk.sqlite.enter.fold_order_evidence` never
-    passes ``True``, and a downward correction (a negative ``delta_qty``)
-    returns above before any row is written at all. There is no correction
-    path yet — a broker-issued downward correction permanently overstates
-    attributed exposure until one is built (#1378+ territory).
+    This recovery fold never fabricates a correction identity: it writes only
+    a newly observed positive cumulative delta. Broker corrections instead
+    use ``EXECUTION_CORRECTED``, which names the superseded execution slice.
+    Effective totals exclude those superseded rows, allowing a later recovery
+    snapshot to contribute only its genuinely unrecorded delta.
     """
     facts = OrderFillObservedFacts.from_facts_json(payload["facts_json"])
     order_ref = payload["order_ref"]
@@ -675,19 +855,18 @@ def _fold_order_fill_observed(conn: sqlite3.Connection, payload: dict[str, Any])
     already_recorded = conn.execute("SELECT 1 FROM fills WHERE fill_id = ?", (fill_id,)).fetchone()
     if already_recorded is not None:
         return
-    prior = conn.execute(
-        "SELECT COALESCE(SUM(qty), 0) AS qty, COALESCE(SUM(qty * price), 0) AS cost FROM fills WHERE order_ref = ?",
-        (order_ref,),
-    ).fetchone()
-    delta_qty = facts.cumulative_filled_quantity - prior["qty"]
+    prior_qty, prior_cost = reads.effective_fill_totals_for_order(conn, order_ref)
+    delta_qty = facts.cumulative_filled_quantity - prior_qty
     if delta_qty < FILL_QTY_EPSILON:
         return
-    delta_cost = (facts.avg_price * facts.cumulative_filled_quantity) - prior["cost"]
+    delta_cost = (facts.avg_price * facts.cumulative_filled_quantity) - prior_cost
     delta_price = delta_cost / delta_qty
     conn.execute(
-        "INSERT INTO fills (fill_id, order_ref, qty, price, side, is_correction, "
-        "source_event_at_ms, clerk_observed_at_ms, recorded_at_ms) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO fills (fill_id, order_ref, qty, price, side, is_correction, execution_id, "
+        "evidence_source, event_kind, superseded_execution_ref, fee, fee_fidelity, "
+        "source_event_at_ms, clerk_observed_at_ms, recorded_at_ms, recorded_transition_sequence) "
+        "VALUES (?, ?, ?, ?, ?, ?, NULL, 'cumulative_recovery', 'fill', NULL, NULL, "
+        "'not_reported', ?, ?, ?, ?)",
         (
             fill_id,
             order_ref,
@@ -698,6 +877,7 @@ def _fold_order_fill_observed(conn: sqlite3.Connection, payload: dict[str, Any])
             payload["source_event_at_ms"],
             payload["clerk_observed_at_ms"],
             payload["recorded_at_ms"],
+            _this_transition_sequence(conn),
         ),
     )
     signed_delta = delta_qty if facts.side == "BUY" else -delta_qty
@@ -805,10 +985,14 @@ DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_UNCERTAIN", _fold_order_submit_unce
 # and order_evidence.fold_uncertain's docstrings.
 DEFAULT_FOLD_REGISTRY.register("ORDER_CANCEL_UNCERTAIN", _fold_order_submit_uncertain)
 DEFAULT_FOLD_REGISTRY.register("ORDER_FILL_OBSERVED", _fold_order_fill_observed)
+DEFAULT_FOLD_REGISTRY.register("EXECUTION_SLICE_FILLED", _fold_execution_slice_filled)
+DEFAULT_FOLD_REGISTRY.register("EXECUTION_CORRECTED", _fold_execution_corrected)
 DEFAULT_FOLD_REGISTRY.register("RECONCILIATION_ATTEMPTED", _fold_reconciliation_attempted)
 DEFAULT_FOLD_REGISTRY.register("ACCOUNT_HOLD_RAISED", _fold_account_hold_raised)
 DEFAULT_FOLD_REGISTRY.register("ACCOUNT_HOLD_REFRESHED", _fold_account_hold_refreshed)
 DEFAULT_FOLD_REGISTRY.register("ACCOUNT_HOLD_RESOLVED", _fold_account_hold_resolved)
+DEFAULT_FOLD_REGISTRY.register("EXTERNAL_ORDER_OBSERVED", _fold_external_order_observed)
+DEFAULT_FOLD_REGISTRY.register("EXTERNAL_ORDER_ACKNOWLEDGED", _fold_external_order_acknowledged)
 DEFAULT_FOLD_REGISTRY.register("UNCERTAINTY_RAISED", _fold_uncertainty_raised)
 DEFAULT_FOLD_REGISTRY.register("UNCERTAINTY_REFRESHED", _fold_uncertainty_refreshed)
 DEFAULT_FOLD_REGISTRY.register("UNCERTAINTY_RESOLVED", _fold_uncertainty_resolved)

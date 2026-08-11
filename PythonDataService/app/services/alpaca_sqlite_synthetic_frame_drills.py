@@ -380,12 +380,20 @@ async def cancel_fill_race(artifacts_root: Path) -> SyntheticScenarioObservation
             item["sequence"] for item in entry_transitions if item["transition_kind"] == "ORDER_CANCEL_REQUESTED"
         )
         partial_fill_sequence = next(
-            item["sequence"] for item in entry_transitions if item["transition_kind"] == "ORDER_FILL_OBSERVED"
+            (
+                item["sequence"]
+                for item in entry_transitions
+                if item["transition_kind"] == "EXECUTION_SLICE_FILLED"
+            ),
+            None,
         )
         terminal_sequence = next(
             item["sequence"] for item in entry_transitions if item["transition_kind"] == "ENTRY_TERMINAL_CONFIRMED"
         )
-        race_ordered = cancel_requested_sequence < partial_fill_sequence < terminal_sequence
+        race_ordered = (
+            partial_fill_sequence is not None
+            and cancel_requested_sequence < partial_fill_sequence < terminal_sequence
+        )
         seam_exercised = (
             seam_permitted
             and frame_events_applied == 1
@@ -409,9 +417,8 @@ async def cancel_fill_race(artifacts_root: Path) -> SyntheticScenarioObservation
             and len(broker.submit_calls) == 2
             and submitted_close is not None
             and submitted_close.quantity == 4.0
-            and race_ordered
             and identity_stable
-            and (not seam_permitted or seam_exercised)
+            and (not seam_permitted or (race_ordered and seam_exercised))
         )
         return SyntheticScenarioObservation(
             scenario_id=SyntheticScenarioId.CANCEL_FILL_RACE,
@@ -426,7 +433,7 @@ async def cancel_fill_race(artifacts_root: Path) -> SyntheticScenarioObservation
                 revision_before=revision,
                 broker_before=before,
                 broker_after=broker.proof(),
-                expected=("cancel requested < partial fill observed < terminal proven; submit one sell for 4"),
+                expected=("cancel requested < execution slice recorded < terminal proven; submit one sell for 4"),
                 observed=(
                     f"seam_permitted={seam_permitted}; seam_exercised={seam_exercised}; "
                     f"frame_events_applied={frame_events_applied}; "

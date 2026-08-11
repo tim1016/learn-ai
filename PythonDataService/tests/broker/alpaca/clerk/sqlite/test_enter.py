@@ -611,7 +611,7 @@ async def test_fills_fold_into_namespace_attributed_exposure_not_account_netting
 
     submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=other_sid, lifecycle_run_id=RUN_ID)
     trade_b = _FakeTrade(submit_result=_broker_order("will-be-replaced", filled_quantity=5, filled_avg_price=501.0))
-    await submit_enter(
+    submission_b = await submit_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=other_sid,
@@ -621,6 +621,23 @@ async def test_fills_fold_into_namespace_attributed_exposure_not_account_netting
         trade=trade_b,
     )
 
+    # A synchronous submit response may contain an aggregate filled total,
+    # but the execution websocket is the capture authority. No order-level
+    # fill is derived until the recovery/reconciliation path observes it.
+    assert repo.position(SID, "SPY") == 0.0
+    assert repo.position(other_sid, "SPY") == 0.0
+    assert submission_a.effect_operation_id is not None
+    fold_order_evidence(
+        repo,
+        effect_operation_id=submission_a.effect_operation_id,
+        order=_broker_order(submission_a.order_ref, filled_quantity=3, filled_avg_price=500.0),
+    )
+    assert submission_b.effect_operation_id is not None
+    fold_order_evidence(
+        repo,
+        effect_operation_id=submission_b.effect_operation_id,
+        order=_broker_order(submission_b.order_ref, filled_quantity=5, filled_avg_price=501.0),
+    )
     assert repo.position(SID, "SPY") == 3.0
     assert repo.position(other_sid, "SPY") == 5.0
     fills = repo.fills_for_order(submission_a.order_ref)
@@ -687,12 +704,14 @@ async def test_duplicate_fill_observation_does_not_double_count(
         leg=_leg(quantity=4),
         trade=trade,
     )
-    assert repo.position(SID, "SPY") == 4.0
+    assert repo.position(SID, "SPY") == 0.0
 
-    resolved = await resolve_enter_submission(repo, order_ref=submission.order_ref, trade=trade)
+    assert submission.effect_operation_id is not None
+    filled = _broker_order(submission.order_ref, filled_quantity=4, filled_avg_price=500.0)
+    fold_order_evidence(repo, effect_operation_id=submission.effect_operation_id, order=filled)
+    fold_order_evidence(repo, effect_operation_id=submission.effect_operation_id, order=filled)
     assert repo.position(SID, "SPY") == 4.0  # unchanged
     assert len(repo.fills_for_order(submission.order_ref)) == 1
-    assert resolved.effect_operation_id == submission.effect_operation_id
 
 
 async def test_out_of_order_broker_state_event_does_not_regress_orders_broker_state(

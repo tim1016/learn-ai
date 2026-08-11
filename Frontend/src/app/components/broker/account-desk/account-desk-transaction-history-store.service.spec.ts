@@ -48,6 +48,22 @@ describe('AccountDeskTransactionHistoryStore', () => {
     await Promise.resolve();
     expect(store.loading()).toBe(false);
   });
+
+  it('queues a refresh that arrives while the current page is loading', async () => {
+    let resolveInitial: ((value: ReturnType<typeof historyPage>) => void) | undefined;
+    broker.accountTransactions
+      .mockReturnValueOnce(new Promise<ReturnType<typeof historyPage>>((resolve) => { resolveInitial = resolve; }))
+      .mockResolvedValueOnce(historyPage());
+    const store = TestBed.inject(AccountDeskTransactionHistoryStore);
+
+    void store.load('DU1234567');
+    await store.load('DU1234567');
+    expect(broker.accountTransactions).toHaveBeenCalledTimes(1);
+
+    resolveInitial?.(historyPage());
+    await vi.waitFor(() => expect(broker.accountTransactions).toHaveBeenCalledTimes(2));
+    expect(broker.accountTransactions).toHaveBeenLastCalledWith('DU1234567', null, 25, {});
+  });
 });
 
 function historyPage() {

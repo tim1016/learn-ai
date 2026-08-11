@@ -10,13 +10,20 @@ happens to forward to this module for these queries.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 from app.broker.alpaca.clerk.sqlite.models import (
+    BotConfigResource,
     CommandResource,
     ControlMetaSnapshot,
+    DecisionReceiptResource,
     EffectOperationResource,
+    ExternalOrderResource,
     OrderResource,
+)
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
 )
 
 _COMMAND_COLUMNS: tuple[str, ...] = (
@@ -33,6 +40,52 @@ _COMMAND_COLUMNS: tuple[str, ...] = (
     "receipt_id",
     "created_at_ms",
     "updated_at_ms",
+)
+
+_DECISION_RECEIPT_COLUMNS: tuple[str, ...] = (
+    "strategy_instance_id",
+    "seq",
+    "outcome",
+    "symbol",
+    "intent_id",
+    "order_ref",
+    "observed_at_ms",
+    "facts_json",
+)
+
+_EXTERNAL_ORDER_COLUMNS: tuple[str, ...] = (
+    "external_order_id",
+    "broker_order_id",
+    "client_order_id",
+    "symbol",
+    "side",
+    "qty",
+    "order_type",
+    "limit_price",
+    "stop_price",
+    "filled_avg_price",
+    "observed_at_ms",
+    "acknowledged_at_ms",
+    "ack_operator",
+    "evidence_refs_json",
+)
+
+_EXTERNAL_ORDER_SELECT = (
+    ", ".join(f"eo.{column}" for column in _EXTERNAL_ORDER_COLUMNS)
+    + ", (SELECT MIN(ct.sequence) FROM custody_transitions ct "
+    "WHERE ct.broker_order_id = eo.broker_order_id "
+    "AND ct.transition_kind = 'EXTERNAL_ORDER_OBSERVED') AS observation_sequence"
+    + ", (SELECT MAX(ct.sequence) FROM custody_transitions ct "
+    "WHERE ct.broker_order_id = eo.broker_order_id "
+    "AND ct.transition_kind = 'EXTERNAL_ORDER_ACKNOWLEDGED') AS acknowledgement_sequence"
+    + ", (SELECT ct.recorded_at_ms FROM custody_transitions ct "
+    "WHERE ct.broker_order_id = eo.broker_order_id "
+    "AND ct.transition_kind = 'EXTERNAL_ORDER_OBSERVED' "
+    "ORDER BY ct.sequence ASC LIMIT 1) AS observation_recorded_at_ms"
+    + ", (SELECT ct.recorded_at_ms FROM custody_transitions ct "
+    "WHERE ct.broker_order_id = eo.broker_order_id "
+    "AND ct.transition_kind = 'EXTERNAL_ORDER_ACKNOWLEDGED' "
+    "ORDER BY ct.sequence DESC LIMIT 1) AS acknowledgement_recorded_at_ms"
 )
 
 
@@ -63,6 +116,140 @@ def strategy_instance(conn: sqlite3.Connection, strategy_instance_id: str) -> di
         (strategy_instance_id,),
     ).fetchone()
     return dict(row) if row is not None else None
+
+
+def bot_config(conn: sqlite3.Connection, strategy_instance_id: str) -> BotConfigResource | None:
+    row = conn.execute(
+        "SELECT strategy_instance_id, strategy_key, display_name, config_json, config_hash, created_at_ms "
+        "FROM bot_config WHERE strategy_instance_id = ?",
+        (strategy_instance_id,),
+    ).fetchone()
+    return BotConfigResource(**dict(row)) if row is not None else None
+
+
+def decision_receipt_tail(
+    conn: sqlite3.Connection,
+    *,
+    strategy_instance_id: str,
+    limit: int,
+) -> list[DecisionReceiptResource]:
+    rows = conn.execute(
+        f"SELECT {', '.join(_DECISION_RECEIPT_COLUMNS)} FROM decision_receipts "
+        "WHERE strategy_instance_id = ? ORDER BY seq DESC LIMIT ?",
+        (strategy_instance_id, limit),
+    ).fetchall()
+    return [DecisionReceiptResource(**dict(row)) for row in reversed(rows)]
+
+
+def decision_receipts_by_transaction(
+    conn: sqlite3.Connection,
+    *,
+    strategy_instance_id: str,
+    transaction_ref: str,
+    limit: int,
+) -> list[DecisionReceiptResource]:
+    rows = conn.execute(
+        f"SELECT {', '.join(_DECISION_RECEIPT_COLUMNS)} FROM decision_receipts "
+        "WHERE strategy_instance_id = ? AND (intent_id = ? OR order_ref = ?) "
+        "ORDER BY seq DESC LIMIT ?",
+        (strategy_instance_id, transaction_ref, transaction_ref, limit),
+    ).fetchall()
+    return [DecisionReceiptResource(**dict(row)) for row in reversed(rows)]
+
+
+def _external_order_resource(row: sqlite3.Row) -> ExternalOrderResource:
+    values = {column: row[column] for column in _EXTERNAL_ORDER_COLUMNS}
+    evidence_refs = json.loads(values.pop("evidence_refs_json"))
+    if not isinstance(evidence_refs, list) or not all(isinstance(item, str) for item in evidence_refs):
+        raise ValueError("external order evidence_refs_json must be a string list")
+    return ExternalOrderResource(
+        **values,
+        evidence_refs=tuple(evidence_refs),
+        observation_sequence=row["observation_sequence"],
+        acknowledgement_sequence=row["acknowledgement_sequence"],
+        observation_recorded_at_ms=row["observation_recorded_at_ms"],
+        acknowledgement_recorded_at_ms=row["acknowledgement_recorded_at_ms"],
+    )
+
+
+def external_order(
+    conn: sqlite3.Connection,
+    external_order_id: str,
+) -> ExternalOrderResource | None:
+    row = conn.execute(
+        f"SELECT {_EXTERNAL_ORDER_SELECT} FROM external_orders eo "
+        "WHERE external_order_id = ?",
+        (external_order_id,),
+    ).fetchone()
+    return _external_order_resource(row) if row is not None else None
+
+
+def external_order_by_broker_order_id(
+    conn: sqlite3.Connection,
+    broker_order_id: str,
+) -> ExternalOrderResource | None:
+    row = conn.execute(
+        f"SELECT {_EXTERNAL_ORDER_SELECT} FROM external_orders eo "
+        "WHERE broker_order_id = ?",
+        (broker_order_id,),
+    ).fetchone()
+    return _external_order_resource(row) if row is not None else None
+
+
+def external_orders(conn: sqlite3.Connection) -> list[ExternalOrderResource]:
+    rows = conn.execute(
+        f"SELECT {_EXTERNAL_ORDER_SELECT} FROM external_orders eo "
+        "ORDER BY eo.observed_at_ms DESC, eo.external_order_id DESC"
+    ).fetchall()
+    return [_external_order_resource(row) for row in rows]
+
+
+def external_order_page(
+    conn: sqlite3.Connection,
+    *,
+    observation_sequence_before: int | None,
+    external_order_id_before: str | None,
+    lifecycle_state: str | None,
+    limit: int,
+) -> list[ExternalOrderResource]:
+    if (observation_sequence_before is None) != (external_order_id_before is None):
+        raise ValueError("external-order cursor must include both keyset fields")
+    lifecycle_predicate = {
+        None: "",
+        "review_required": "eo.acknowledged_at_ms IS NULL",
+        "reviewed": "eo.acknowledged_at_ms IS NOT NULL",
+    }.get(lifecycle_state)
+    if lifecycle_predicate is None:
+        raise ValueError("external-order lifecycle_state is invalid")
+    params: tuple[object, ...]
+    where_clauses: list[str] = []
+    observation_sequence = (
+        "(SELECT MIN(ct.sequence) FROM custody_transitions ct "
+        "WHERE ct.broker_order_id = eo.broker_order_id "
+        "AND ct.transition_kind = 'EXTERNAL_ORDER_OBSERVED')"
+    )
+    if observation_sequence_before is None:
+        params = (limit,)
+    else:
+        where_clauses.append(
+            f"({observation_sequence} < ? OR ({observation_sequence} = ? "
+            "AND eo.external_order_id < ?))"
+        )
+        params = (
+            observation_sequence_before,
+            observation_sequence_before,
+            external_order_id_before,
+            limit,
+        )
+    if lifecycle_predicate:
+        where_clauses.append(lifecycle_predicate)
+    where = f"WHERE {' AND '.join(where_clauses)} " if where_clauses else ""
+    rows = conn.execute(
+        f"SELECT {_EXTERNAL_ORDER_SELECT} FROM external_orders eo {where}"
+        f"ORDER BY {observation_sequence} DESC, eo.external_order_id DESC LIMIT ?",
+        params,
+    ).fetchall()
+    return [_external_order_resource(row) for row in rows]
 
 
 def command(conn: sqlite3.Connection, command_id: str) -> CommandResource | None:
@@ -233,12 +420,115 @@ def position(conn: sqlite3.Connection, strategy_instance_id: str, symbol: str) -
 
 def fills_for_order(conn: sqlite3.Connection, order_ref: str) -> list[dict]:
     rows = conn.execute(
-        "SELECT fill_id, order_ref, qty, price, side, is_correction, source_event_at_ms, "
+        "SELECT fill_id, order_ref, qty, price, side, is_correction, execution_id, evidence_source, "
+        "event_kind, superseded_execution_ref, fee, fee_fidelity, source_event_at_ms, "
         "clerk_observed_at_ms, recorded_at_ms FROM fills WHERE order_ref = ? "
         "ORDER BY recorded_at_ms ASC",
         (order_ref,),
     ).fetchall()
     return [dict(row) for row in rows]
+
+
+def execution_exists(conn: sqlite3.Connection, execution_id: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM fills WHERE execution_id = ? LIMIT 1", (execution_id,)
+    ).fetchone()
+    return row is not None
+
+
+def cumulative_recovery_fill_exists_for_order(conn: sqlite3.Connection, order_ref: str) -> bool:
+    """Whether aggregate recovery has already covered part of one order.
+
+    Recovery evidence has no execution identity, so a later exact websocket
+    slice cannot be safely merged into the same order without proving its
+    coverage relationship to the aggregate total.
+    """
+    row = conn.execute(
+        "SELECT 1 FROM fills WHERE order_ref = ? AND evidence_source = 'cumulative_recovery' LIMIT 1",
+        (order_ref,),
+    ).fetchone()
+    return row is not None
+
+
+def execution_coverage_conflict_uncertainty_exists(
+    conn: sqlite3.Connection,
+    *,
+    order_ref: str,
+) -> bool:
+    """Whether one exact-execution conflict was already raised for an order.
+
+    The rejected exact slice has no ``fills`` row by design. Its durable
+    idempotency marker is therefore the typed uncertainty cause, keyed by the
+    order whose prior immutable evidence made the slice ambiguous.
+    """
+    rows = conn.execute(
+        "SELECT facts_json FROM custody_transitions WHERE transition_kind = 'UNCERTAINTY_RAISED'"
+    ).fetchall()
+    for row in rows:
+        facts = json.loads(row["facts_json"])
+        if (
+            facts.get("reason_code") == EXECUTION_COVERAGE_CONFLICT_REASON_CODE
+            and facts.get("cause_facts", {}).get("order_ref") == order_ref
+        ):
+            return True
+    return False
+
+
+def correction_uncertainty_exists(conn: sqlite3.Connection, execution_id: str) -> bool:
+    """Whether an invalid correction already durably raised its uncertainty.
+
+    Invalid corrections intentionally do not create a ``fills`` execution
+    row, so their broker execution identity lives in the typed uncertainty
+    cause. Parsing the small closed transition subset avoids relying on an
+    optional SQLite JSON extension while preserving crash/restart dedup.
+    """
+    rows = conn.execute(
+        "SELECT facts_json FROM custody_transitions WHERE transition_kind = 'UNCERTAINTY_RAISED'"
+    ).fetchall()
+    for row in rows:
+        facts = json.loads(row["facts_json"])
+        if facts.get("cause_facts", {}).get("execution_id") == execution_id:
+            return True
+    return False
+
+
+def effective_execution_slice(conn: sqlite3.Connection, execution_id: str) -> dict | None:
+    """Return one currently effective execution plus its owning bot identity.
+
+    Corrections are append-only replacement rows. A row is effective only
+    while no later row names its execution identity as ``superseded``.
+    """
+    row = conn.execute(
+        "SELECT f.execution_id, f.order_ref, f.qty, f.price, f.side, f.evidence_source, f.fee, "
+        "f.fee_fidelity, e.strategy_instance_id, s.symbol "
+        "FROM fills f JOIN orders o ON o.order_ref = f.order_ref "
+        "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
+        "JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id "
+        "WHERE f.execution_id = ? "
+        "AND NOT EXISTS (SELECT 1 FROM fills successor "
+        "WHERE successor.superseded_execution_ref = f.execution_id)",
+        (execution_id,),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def effective_fill_totals_for_order(conn: sqlite3.Connection, order_ref: str) -> tuple[float, float]:
+    """Return the quantity and cost of the order's current effective leaves.
+
+    Formula: ``effective_qty = SUM(qty)`` and ``effective_cost = SUM(qty * price)``
+    for fills with no successor naming their ``execution_id`` as superseded.
+    Reference: PRD #1441 S1.2 execution corrections.
+    Canonical implementation: this query, reused by cumulative recovery.
+    Validated against: ``test_cumulative_recovery_fill_is_explicitly_tagged``.
+    """
+    row = conn.execute(
+        "SELECT COALESCE(SUM(f.qty), 0) AS qty, COALESCE(SUM(f.qty * f.price), 0) AS cost "
+        "FROM fills f WHERE f.order_ref = ? "
+        "AND NOT EXISTS (SELECT 1 FROM fills successor "
+        "WHERE successor.superseded_execution_ref = f.execution_id)",
+        (order_ref,),
+    ).fetchone()
+    return float(row["qty"]), float(row["cost"])
 
 
 def uncertain_orders(conn: sqlite3.Connection) -> list[OrderResource]:

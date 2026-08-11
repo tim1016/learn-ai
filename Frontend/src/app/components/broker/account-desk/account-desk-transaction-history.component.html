@@ -6,8 +6,10 @@
     <label>Origin
       <select [value]="filterOrigin()" (change)="setOriginFilter($event)">
         <option value="">All origins</option>
-        <option value="manual">{{ 'manual' | receiptLabel }}</option>
         <option value="strategy">{{ 'strategy' | receiptLabel }}</option>
+        <option value="manual">{{ 'manual' | receiptLabel }}</option>
+        <option value="external">{{ 'external' | receiptLabel }}</option>
+        <option value="unknown">{{ 'unknown' | receiptLabel }}</option>
         <option value="recovery">{{ 'recovery' | receiptLabel }}</option>
         <option value="emergency">{{ 'emergency' | receiptLabel }}</option>
         <option value="shutdown">{{ 'shutdown' | receiptLabel }}</option>
@@ -34,12 +36,43 @@
       <p class="state">No projected transactions match this account and filter set.</p>
     } @else if (feed.projection_available) {
       <div class="transaction-grid" role="group" aria-label="Operator transaction history">
-        <div class="transaction-grid__head" aria-hidden="true"><span>Recorded</span><span>Origin and context</span><span>Instruction</span><span>Lifecycle</span><span>Evidence</span></div>
+        <div class="transaction-grid__head" aria-hidden="true"><span>Recorded</span><span>Origin and context</span><span>Instruction and execution</span><span>Lifecycle</span><span>Evidence</span></div>
         @for (row of store.rows(); track trackRow($index, row)) {
-          <button type="button" class="transaction-grid__row" [attr.aria-label]="'Open receipt ' + row.order_ref" (click)="openReceipt(row, $event)">
+          <button type="button" class="transaction-grid__row" [attr.aria-label]="'Open receipt ' + (row.order_ref ?? row.external_order_id ?? row.transaction_id)" (click)="openReceipt(row, $event)">
             <span data-label="Recorded"><app-timestamp-display [value]="row.recorded_at_ms" mode="local" /></span>
-            <span data-label="Origin and context"><strong>{{ origin(row) | receiptLabel }}</strong><code>{{ row.strategy_instance_id }}</code><small>{{ row.run_id }}</small></span>
-            <span data-label="Instruction"><span>{{ instruction(row) }} {{ row.order_instruction?.action | receiptLabel }} {{ row.order_instruction?.order_type | receiptLabel }}</span><code>{{ row.order_ref }}</code><small>{{ row.broker | receiptLabel }}</small></span>
+            <span data-label="Origin and context">
+              <strong>{{ originLabel(row) }}</strong>
+              @if (row.transaction_origin; as origin) {
+                @if (originCodeDistinctFromLabel(origin)) { <small>{{ origin | receiptLabel }}</small> }
+              }
+              @if (row.run_id; as runId) { <code>{{ runId }}</code> }
+            </span>
+            <span data-label="Instruction and execution">
+              <span>{{ instruction(row) }} {{ row.order_instruction?.action | receiptLabel }} {{ row.order_instruction?.order_type | receiptLabel }}</span>
+              @if (row.order_ref; as orderRef) {
+                <code>{{ orderRef }}</code>
+              } @else if (row.external_order_id; as externalOrderId) {
+                <code>{{ externalOrderId }}</code>
+              }
+              @if (row.execution_quantity !== null && row.execution_quantity !== undefined) {
+                <small>
+                  Execution: {{ row.execution_quantity | number: '1.0-4' }}
+                  @if (row.execution_price !== null && row.execution_price !== undefined) {
+                    &#64; {{ row.execution_price | number: '1.2-4' }}
+                  }
+                </small>
+              }
+              @if (row.fee_fidelity; as fidelity) {
+                <small>
+                  @if (fidelity === 'not_reported') {
+                    Fees not reported
+                  } @else {
+                    {{ fidelity | receiptLabel }}
+                    @if (row.fee !== null) { · {{ row.fee | number: '1.2-4' }} }
+                  }
+                </small>
+              }
+            </span>
             <span data-label="Lifecycle">{{ row.lifecycle_state | receiptLabel }}</span>
             <span data-label="Evidence">{{ row.event_count }} event{{ row.event_count === 1 ? '' : 's' }}</span>
           </button>
@@ -49,6 +82,30 @@
     @if (store.nextCursor() !== null) { <button pButton type="button" severity="secondary" [disabled]="store.loading()" (click)="store.loadOlder()">Load older</button> }
   }
 </p-panel>
+
+@if (canAcknowledgeSelectedExternalOrder()) {
+  <section class="external-order-acknowledgement" aria-label="External order acknowledgement">
+    <h3>Review external order</h3>
+    <p>Record your acknowledgement only after reviewing the selected order's evidence.</p>
+    <label>Operator
+      <input
+        [value]="acknowledgementOperator()"
+        (input)="acknowledgementOperator.set(inputValue($event))"
+        autocomplete="username"
+      />
+    </label>
+    @if (acknowledgementError(); as error) { <p role="alert">{{ error }}</p> }
+    <button
+      pButton
+      type="button"
+      severity="warn"
+      [disabled]="!acknowledgementOperator().trim() || acknowledgingExternalOrderId() !== null"
+      (click)="acknowledgeSelectedExternalOrder()"
+    >
+      Acknowledge external order
+    </button>
+  </section>
+}
 
 <app-clerk-transaction-evidence-drawer
   [accountId]="store.accountId()"

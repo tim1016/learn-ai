@@ -486,7 +486,11 @@ class TradeUpdatesConsumer:
         """Parse → dedup (live_idempotent) → attribute one trade-update event."""
         order = data.get("order") or {}
         try:
-            event = adapter.from_alpaca_trade_update(data)
+            event = (
+                _from_gap_recovery_event(data)
+                if from_gap_reconcile
+                else adapter.from_alpaca_trade_update(data)
+            )
             # Map the embedded order in the SAME guard, BEFORE any state mutation.
             # ``from_alpaca_trade_update`` only reads ``event``/``timestamp`` (and
             # the top-level execution slice), so a frame with a malformed ``order``
@@ -705,13 +709,13 @@ class TradeUpdatesConsumer:
 
 
 def _order_to_event_payload(broker_order: BrokerOrder) -> dict[str, Any] | None:
-    """Shape a ``BrokerOrder`` back into a ``trade_updates`` ``data`` payload.
+    """Shape a ``BrokerOrder`` into a canonical REST-recovery event payload.
 
-    The gap-reconcile reads orders (not events), so it reconstructs the minimal
-    ``data`` shape ``from_alpaca_trade_update`` consumes: the order's current
-    ``status`` maps to a lifecycle ``event`` and its ``updated_at`` to the event
-    ``timestamp``. Returns ``None`` when the status has no lifecycle event
-    (e.g. an intermediate state), so nothing is fabricated.
+    The gap-reconcile reads aggregate orders, not execution events. Its
+    ``timestamp_ms`` is canonical boundary data and fill fields remain clearly
+    labelled as cumulative recovery by the selected evidence sink. It never
+    fabricates an execution ID. Returns ``None`` when the status has no
+    lifecycle event (e.g. an intermediate state).
     """
     event = _STATUS_TO_EVENT.get(str(broker_order.status))
     if event is None:
@@ -721,7 +725,7 @@ def _order_to_event_payload(broker_order: BrokerOrder) -> dict[str, Any] | None:
         return None
     payload: dict[str, Any] = {
         "event": event,
-        "timestamp": _ms_to_rfc3339(timestamp_ms),
+        "timestamp_ms": timestamp_ms,
         "order": {
             "id": broker_order.order_id,
             "client_order_id": broker_order.client_order_id,
@@ -749,6 +753,21 @@ def _order_to_event_payload(broker_order: BrokerOrder) -> dict[str, Any] | None:
         payload["price"] = broker_order.filled_avg_price
         payload["qty"] = broker_order.filled_quantity
     return payload
+
+
+def _from_gap_recovery_event(payload: dict[str, Any]) -> BrokerOrderEvent:
+    """Map a synthetic REST order snapshot without impersonating a websocket fill."""
+    event_type = str(payload["event"])
+    if event_type not in adapter.ALPACA_TRADE_UPDATE_EVENTS:
+        raise ValueError(f"Unrecognized Alpaca recovery lifecycle event {event_type!r}.")
+    execution_id = adapter.opt_str(payload.get("execution_id"))
+    return BrokerOrderEvent(
+        event_type=event_type,
+        occurred_at_ms=adapter.trade_update_occurred_at_ms(payload),
+        price=adapter.opt_float(payload.get("price")),
+        quantity=adapter.opt_float(payload.get("qty")),
+        execution_id=(execution_id.strip() or None) if execution_id is not None else None,
+    )
 
 
 # Map a REST order status to the lifecycle event a gap-reconcile synthesizes.

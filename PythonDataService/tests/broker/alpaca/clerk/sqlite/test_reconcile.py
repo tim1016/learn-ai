@@ -21,6 +21,12 @@ import pytest
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter, submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
+from app.broker.alpaca.clerk.sqlite.external_orders import (
+    InvalidExternalOrderCursor,
+    SqliteExternalOrderReader,
+    acknowledge_external_order,
+    observe_external_order,
+)
 from app.broker.alpaca.clerk.sqlite.folds import (
     POSITION_QTY_EPSILON,
     position_quantity_is_nonzero,
@@ -518,6 +524,201 @@ async def test_reconcile_account_raises_an_account_clerk_hold_for_a_foreign_orde
     assert result.verdict == "unexplained_order"
     hold = repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER")
     assert hold is not None and hold["state"] == "ACTIVE"
+
+
+async def test_reconcile_foreign_order_records_external_observation_without_bot_economics(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """A foreign broker order is durable account evidence, never a bot fill."""
+    foreign = _broker_order("alpaca-console:operator-order-1", order_id="external-order-1")
+
+    result = await reconcile_account(repo, read=_FakeRead(orders=[foreign]), trade=_FakeTrade())
+
+    assert result.verdict == "unexplained_order"
+    assert repo.external_orders() == [
+        {
+            "external_order_id": "external-order-1",
+            "broker_order_id": "external-order-1",
+            "client_order_id": "alpaca-console:operator-order-1",
+                "symbol": "SPY",
+                "side": "BUY",
+                "qty": 1.0,
+                "order_type": "market",
+                "limit_price": None,
+                "stop_price": None,
+                "filled_avg_price": None,
+            "observed_at_ms": 1_700_000_000_500,
+            "acknowledged_at_ms": None,
+            "ack_operator": None,
+            "evidence_refs": ("external-order-1",),
+        }
+    ]
+    assert repo.attributed_positions_by_symbol() == {}
+    assert repo.fills_for_order("external-order-1") == []
+
+
+async def test_acknowledging_one_external_order_keeps_another_external_cause_held(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """An acknowledgement can clear only the selected external-order cause."""
+    first = _broker_order("alpaca-console:first", order_id="external-1")
+    second = _broker_order("alpaca-console:second", order_id="external-2")
+    await reconcile_account(repo, read=_FakeRead(orders=[first, second]), trade=_FakeTrade())
+
+    acknowledged = acknowledge_external_order(
+        repo,
+        external_order_id="external-1",
+        operator="operator-1",
+    )
+
+    assert acknowledged.acknowledged_at_ms is not None
+    assert acknowledged.ack_operator == "operator-1"
+    assert acknowledged.observation_sequence >= 1
+    assert acknowledged.acknowledgement_sequence is not None
+    assert acknowledged.observation_recorded_at_ms is not None
+    assert acknowledged.acknowledgement_recorded_at_ms is not None
+    active = repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER")
+    assert active is not None
+    assert active["evidence_refs_json"] == '["external-2"]'
+    assert repo.external_order("external-2").acknowledged_at_ms is None  # type: ignore[union-attr]
+    assert repo.attributed_positions_by_symbol() == {}
+
+
+async def test_acknowledging_external_order_resolves_only_its_hold_and_keeps_audit_row(
+    repo: ClerkSqliteRepository,
+) -> None:
+    foreign = _broker_order("alpaca-console:operator-order-1", order_id="external-order-1")
+    await reconcile_account(repo, read=_FakeRead(orders=[foreign]), trade=_FakeTrade())
+    repo.append_transition(_hold_transition(reason_code="STREAM_HEALTH", evidence_refs=["stream"]))
+
+    acknowledged = acknowledge_external_order(
+        repo,
+        external_order_id="external-order-1",
+        operator="operator-1",
+    )
+
+    assert acknowledged.acknowledged_at_ms is not None
+    assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER") is None
+    assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="STREAM_HEALTH") is not None
+    assert [row["transition_kind"] for row in repo.custody_transitions()].count(
+        "EXTERNAL_ORDER_ACKNOWLEDGED"
+    ) == 1
+
+
+async def test_external_order_reader_paginates_durable_observations_with_account_scoped_cursor(
+    repo: ClerkSqliteRepository,
+) -> None:
+    first = _broker_order("alpaca-console:first", order_id="external-1")
+    second = _broker_order("alpaca-console:second", order_id="external-2")
+    await reconcile_account(repo, read=_FakeRead(orders=[first, second]), trade=_FakeTrade())
+    reader = SqliteExternalOrderReader.from_repository(repo)
+    try:
+        first_page = reader.external_orders(page_size=1)
+        second_page = reader.external_orders(cursor=first_page.next_cursor, page_size=1)
+
+        assert [order.external_order_id for order in first_page.orders] == ["external-2"]
+        assert first_page.orders[0].observation_sequence >= 1
+        assert first_page.orders[0].acknowledgement_sequence is None
+        assert first_page.orders[0].observation_recorded_at_ms is not None
+        assert first_page.orders[0].acknowledgement_recorded_at_ms is None
+        assert first_page.next_cursor is not None
+        assert [order.external_order_id for order in second_page.orders] == ["external-1"]
+        assert second_page.next_cursor is None
+    finally:
+        reader.close()
+
+
+async def test_external_order_cursor_survives_a_later_broker_snapshot_update(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """The cursor follows immutable first-observation custody, not mutable poll time."""
+    first = _broker_order("alpaca-console:first", order_id="external-1")
+    second = _broker_order("alpaca-console:second", order_id="external-2")
+    await reconcile_account(repo, read=_FakeRead(orders=[first, second]), trade=_FakeTrade())
+    reader = SqliteExternalOrderReader.from_repository(repo)
+    try:
+        first_page = reader.external_orders(page_size=1)
+        assert [order.external_order_id for order in first_page.orders] == ["external-2"]
+        assert first_page.next_cursor is not None
+
+        observe_external_order(
+            repo,
+            order=second.model_copy(
+                update={"filled_avg_price": 101.25, "observed_at_ms": second.observed_at_ms + 1}
+            ),
+        )
+
+        second_page = reader.external_orders(cursor=first_page.next_cursor, page_size=1)
+        refreshed = repo.external_order("external-2")
+        assert [order.external_order_id for order in second_page.orders] == ["external-1"]
+        assert refreshed is not None
+        assert refreshed.order_type == "market"
+        assert refreshed.limit_price is None
+        assert refreshed.filled_avg_price == 101.25
+    finally:
+        reader.close()
+
+
+async def test_reconciliation_does_not_append_duplicate_external_fact_for_a_new_poll_time(
+    repo: ClerkSqliteRepository,
+) -> None:
+    foreign = _broker_order("alpaca-console:operator-order-1", order_id="external-order-1")
+    await reconcile_account(repo, read=_FakeRead(orders=[foreign]), trade=_FakeTrade())
+    before = len(repo.custody_transitions())
+
+    await reconcile_account(
+        repo,
+        read=_FakeRead(orders=[foreign.model_copy(update={"observed_at_ms": foreign.observed_at_ms + 1})]),
+        trade=_FakeTrade(),
+    )
+
+    assert len(repo.custody_transitions()) == before
+
+
+async def test_external_order_reader_filters_review_state_without_cross_filter_cursor_reuse(
+    repo: ClerkSqliteRepository,
+) -> None:
+    first = _broker_order("alpaca-console:first", order_id="external-1")
+    second = _broker_order("alpaca-console:second", order_id="external-2")
+    third = _broker_order("alpaca-console:third", order_id="external-3")
+    await reconcile_account(repo, read=_FakeRead(orders=[first, second, third]), trade=_FakeTrade())
+    acknowledge_external_order(repo, external_order_id="external-1", operator="operator-1")
+    reader = SqliteExternalOrderReader.from_repository(repo)
+    try:
+        review_required = reader.external_orders(lifecycle_state="review_required", page_size=1)
+        reviewed = reader.external_orders(lifecycle_state="reviewed", page_size=10)
+
+        assert [order.external_order_id for order in review_required.orders] == ["external-3"]
+        assert review_required.next_cursor is not None
+        assert [order.external_order_id for order in reviewed.orders] == ["external-1"]
+        with pytest.raises(InvalidExternalOrderCursor, match="filter scope"):
+            reader.external_orders(
+                cursor=review_required.next_cursor,
+                lifecycle_state="reviewed",
+                page_size=1,
+            )
+    finally:
+        reader.close()
+
+
+async def test_acknowledgement_does_not_reactivate_stale_external_observations(
+    repo: ClerkSqliteRepository,
+) -> None:
+    stale_first = _broker_order("alpaca-console:first", order_id="external-stale-1")
+    stale_second = _broker_order("alpaca-console:second", order_id="external-stale-2")
+    current = _broker_order("alpaca-console:current", order_id="external-current")
+    await reconcile_account(
+        repo,
+        read=_FakeRead(orders=[stale_first, stale_second]),
+        trade=_FakeTrade(),
+    )
+    await reconcile_account(repo, read=_FakeRead(), trade=_FakeTrade())
+    assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER") is None
+    await reconcile_account(repo, read=_FakeRead(orders=[current]), trade=_FakeTrade())
+
+    acknowledge_external_order(repo, external_order_id="external-current", operator="operator-1")
+
+    assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER") is None
 
 
 async def test_reconcile_account_raises_an_account_clerk_uncertainty_for_position_drift(

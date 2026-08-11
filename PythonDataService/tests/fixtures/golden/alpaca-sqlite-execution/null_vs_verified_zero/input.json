@@ -1,0 +1,24 @@
+{
+  "fixture_schema_version": 1,
+  "account_id": "PA-FIXTURE-NULL-0810",
+  "authority_generation": 1,
+  "session": {
+    "session_open_ms": 1786368600000,
+    "session_close_ms": 1786392000000,
+    "timezone": "America/New_York"
+  },
+  "strategy_instances": [
+    {
+      "strategy_instance_id": "sqlite-cohort-zero-0810",
+      "symbol": "AAPL",
+      "economic_projection_available": true,
+      "trade_updates": []
+    },
+    {
+      "strategy_instance_id": "sqlite-cohort-unavailable-0810",
+      "symbol": "TSLA",
+      "economic_projection_available": false,
+      "unavailable_reason": "economic projection fold is unavailable for this authority cut"
+    }
+  ]
+}

@@ -1,0 +1,77 @@
+{
+  "fixture_schema_version": 1,
+  "account_id": "PA-FIXTURE-GOOGL-0810",
+  "authority_generation": 1,
+  "strategy_instance": {
+    "strategy_instance_id": "sqlite-cohort-googl-0810",
+    "symbol": "GOOGL",
+    "bot_order_namespace": "learn-ai/sqlite-cohort-googl-0810/v1"
+  },
+  "session": {
+    "session_open_ms": 1786368600000,
+    "session_close_ms": 1786392000000,
+    "timezone": "America/New_York"
+  },
+  "trade_updates": [
+    {
+      "stream": "trade_updates",
+      "data": {
+        "event": "partial_fill",
+        "execution_id": "googl-buy-slice-1",
+        "timestamp_ms": 1786387266100,
+        "price": "354.81",
+        "qty": "0.4",
+        "order": {
+          "id": "googl-buy-order-1",
+          "client_order_id": "learn-ai/sqlite-cohort-googl-0810/v1:googl-buy-intent-1",
+          "symbol": "GOOGL",
+          "side": "buy",
+          "filled_qty": "0.4",
+          "filled_avg_price": "354.81",
+          "status": "partially_filled"
+        }
+      }
+    },
+    {
+      "stream": "trade_updates",
+      "data": {
+        "event": "fill",
+        "execution_id": "googl-buy-slice-2",
+        "timestamp_ms": 1786387266600,
+        "price": "354.81",
+        "qty": "0.6",
+        "order": {
+          "id": "googl-buy-order-1",
+          "client_order_id": "learn-ai/sqlite-cohort-googl-0810/v1:googl-buy-intent-1",
+          "symbol": "GOOGL",
+          "side": "buy",
+          "filled_qty": "1.0",
+          "filled_avg_price": "354.81",
+          "status": "filled"
+        }
+      }
+    },
+    {
+      "stream": "trade_updates",
+      "data": {
+        "event": "fill",
+        "execution_id": "googl-sell-slice-1",
+        "timestamp_ms": 1786387446000,
+        "price": "355.34",
+        "qty": "1.0",
+        "order": {
+          "id": "googl-sell-order-1",
+          "client_order_id": "learn-ai/sqlite-cohort-googl-0810/v1:googl-sell-intent-1",
+          "symbol": "GOOGL",
+          "side": "sell",
+          "filled_qty": "1.0",
+          "filled_avg_price": "355.34",
+          "status": "filled"
+        }
+      }
+    }
+  ],
+  "mark_prices": {
+    "GOOGL": 355.34
+  }
+}

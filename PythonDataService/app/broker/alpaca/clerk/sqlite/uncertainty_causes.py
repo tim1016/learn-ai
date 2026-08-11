@@ -15,6 +15,7 @@ POSITION_DRIFT_REASON_CODE = "POSITION_DRIFT"
 BROKER_SNAPSHOT_STALE_REASON_CODE = "BROKER_SNAPSHOT_STALE"
 ORDER_OUTCOME_UNKNOWN_REASON_CODE = "ORDER_OUTCOME_UNKNOWN"
 EXIT_NOT_FLAT_REASON_CODE = "EXIT_NOT_FLAT"
+EXECUTION_COVERAGE_CONFLICT_REASON_CODE = "EXECUTION_COVERAGE_CONFLICT"
 
 
 def _require_exact_keys(value: dict[str, Any], expected: set[str]) -> None:
@@ -107,6 +108,32 @@ class ExitNotFlatCause:
 
 
 @dataclass(frozen=True)
+class ExecutionCoverageConflictCause:
+    """Exact execution that cannot be safely merged with aggregate recovery."""
+
+    order_ref: str
+    execution_id: str
+
+    def to_mapping(self) -> dict[str, str]:
+        return {
+            "order_ref": self.order_ref,
+            "execution_id": self.execution_id,
+        }
+
+    @classmethod
+    def from_mapping(cls, value: Any) -> ExecutionCoverageConflictCause:
+        if not isinstance(value, dict):
+            raise ValueError("execution coverage conflict cause must be an object")
+        _require_exact_keys(value, {"order_ref", "execution_id"})
+        if not all(
+            isinstance(value[field], str) and value[field]
+            for field in ("order_ref", "execution_id")
+        ):
+            raise ValueError("execution coverage conflict fields must be non-empty strings")
+        return cls(order_ref=value["order_ref"], execution_id=value["execution_id"])
+
+
+@dataclass(frozen=True)
 class UnknownOrderIdentity:
     effect_operation_id: str
     order_ref: str
@@ -162,9 +189,11 @@ def broker_snapshot_stale_cause_is_valid(value: Any) -> bool:
 
 __all__ = [
     "BROKER_SNAPSHOT_STALE_REASON_CODE",
+    "EXECUTION_COVERAGE_CONFLICT_REASON_CODE",
     "EXIT_NOT_FLAT_REASON_CODE",
     "ORDER_OUTCOME_UNKNOWN_REASON_CODE",
     "POSITION_DRIFT_REASON_CODE",
+    "ExecutionCoverageConflictCause",
     "ExitNotFlatCause",
     "OrderOutcomeUnknownCause",
     "PositionDriftCause",

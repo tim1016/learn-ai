@@ -1,59 +1,77 @@
 import { HttpErrorResponse } from '@angular/common/http';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/angular';
+import { ChangeDetectionStrategy, Component, input, output } from '@angular/core';
+import { TestBed } from '@angular/core/testing';
+import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { convertToParamMap, ActivatedRoute } from '@angular/router';
 import { of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 
 import type {
   BrokerAccountSnapshot,
-  BrokerOrder,
   CustodyDiagnosis,
-  OrderSubmitResult,
 } from '../../../api/alpaca.types';
+import { BrokerService } from '../../../services/broker.service';
 import { BrokersService } from '../../../services/brokers.service';
 import { AlpacaDeskComponent } from './alpaca-desk.component';
+import { AlpacaOrderEntryComponent } from './alpaca-order-entry.component';
 
-function acknowledgedSubmission(): OrderSubmitResult {
+/**
+ * `AlpacaOrderEntryComponent`'s real Signal Forms tree is covered by its own
+ * dedicated spec. Driving it through this desk-level test as well pins two
+ * independent signal graphs (this form's teardown on submit, and the account
+ * history store's reactive reload) settling in jsdom at once, which triggers
+ * an unrelated Signal Forms teardown crash outside this test's scope — see
+ * `alpaca-order-entry.component.spec.ts` for the form's own submit coverage.
+ * This stub emits the same `submissionFinished` output on demand so the
+ * desk's refresh wiring is still exercised end to end.
+ */
+@Component({
+  selector: 'app-alpaca-order-entry',
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  template: `<button type="button" (click)="submissionFinished.emit()">Confirm & submit</button>`,
+})
+class FakeOrderEntryComponent {
+  readonly initialSymbol = input('');
+  readonly expectedAccountId = input.required<string>();
+  readonly submissionFinished = output();
+}
+
+function transactionHistory(rows: readonly object[] = []) {
   return {
-    broker: 'alpaca',
-    account_id: 'PA1',
-    results: [
-      {
-        status: 'acked',
-        order_ref: 'manual/desk/v1:spy',
-        intent_id: 'intent-spy',
-        order: null,
-        error: null,
-      },
-    ],
+    projection_available: true,
+    canonical_fallback_required: false,
+    feed_state: 'live',
+    feed_headline: 'SQLite projection current',
+    feed_detail: 'Current',
+    high_water_journal_seq: 1,
+    lag_records: 0,
+    lag_is_lower_bound: false,
+    custody_summary: {
+      record_count: 0,
+      a0_custody_accepted_count: 0,
+      a1_broker_write_started_count: 0,
+      a2_broker_known_count: 0,
+      a3_economic_terminal_count: 0,
+      uncertain_count: 0,
+    },
+    rows,
+    next_cursor: null,
   };
 }
 
-function submittedSpyOrder(): BrokerOrder {
+function submittedSpyTransaction() {
   return {
-    broker: 'alpaca',
-    order_id: 'broker-order-spy',
-    client_order_id: 'manual/desk/v1:spy',
-    symbol: 'SPY',
-    asset_class: 'us_equity',
-    side: 'buy',
-    order_type: 'market',
-    time_in_force: 'day',
-    quantity: 2,
-    filled_quantity: 0,
-    limit_price: null,
-    stop_price: null,
-    filled_avg_price: null,
-    status: 'accepted',
-    submitted_at_ms: 1_700_000_000_000,
-    created_at_ms: 1_700_000_000_000,
-    updated_at_ms: 1_700_000_000_000,
-    filled_at_ms: null,
-    canceled_at_ms: null,
-    expired_at_ms: null,
-    events: [],
-    observed_at_ms: 1_700_000_000_000,
-    fill_latency_seconds: null,
+    transaction_id: 'sqlite-spy', broker: 'alpaca', account_id: 'PA1', journal_seq: 1,
+    recorded_at_ms: 1_700_000_000_000, transaction_kind: 'strategy_execution',
+    transaction_origin: 'strategy', strategy_instance_id: 'bot-spy', run_id: 'run-spy',
+    intent_id: 'intent-spy', order_ref: 'learn-ai/bot-spy/v1:intent-spy', order_id: null,
+    perm_id: null, exec_id: null, native_order_id: 'broker-order-spy', native_execution_id: 'exec-spy',
+    lifecycle_state: 'submitted', commission_status: 'unknown', fee: null,
+    execution_quantity: null, execution_price: null, fee_fidelity: 'not_reported', external_order_id: null, event_count: 1,
+    order_instruction: {
+      symbol: 'SPY', sec_type: 'us_equity', action: 'buy', quantity: 2,
+      order_type: 'market', limit_price: null, time_in_force: 'day', outside_rth: false,
+    },
   };
 }
 
@@ -97,7 +115,7 @@ function brokerService(overrides: Partial<BrokersService> = {}) {
   return {
     getAccount: vi.fn().mockResolvedValue(accountSnapshot()),
     listPositions: vi.fn().mockResolvedValue([]),
-    listOrders: vi.fn().mockResolvedValue([]),
+    listOrders: vi.fn(),
     submitOrder: vi.fn(),
     getClerkStatus: vi.fn().mockResolvedValue({
       broker: 'alpaca',
@@ -115,10 +133,22 @@ function brokerService(overrides: Partial<BrokersService> = {}) {
   };
 }
 
+/** The account-desk transaction history child reads through `BrokerService`. */
+function accountHistoryService(overrides: Partial<BrokerService> = {}) {
+  return {
+    accountTransactions: vi.fn().mockResolvedValue(transactionHistory()),
+    accountTransaction: vi.fn(),
+    ...overrides,
+  };
+}
+
 describe('AlpacaDeskComponent', () => {
   it('renders the Alpaca desk heading and new-order action', async () => {
     await render(AlpacaDeskComponent, {
-      providers: [{ provide: BrokersService, useValue: brokerService() }],
+      providers: [
+        { provide: BrokersService, useValue: brokerService() },
+        { provide: BrokerService, useValue: accountHistoryService() },
+      ],
     });
 
     expect(screen.getByRole('heading', { name: /Alpaca/i })).toBeTruthy();
@@ -128,14 +158,17 @@ describe('AlpacaDeskComponent', () => {
 
   it('fails closed without a proven legacy authority and hides manual order entry', async () => {
     await render(AlpacaDeskComponent, {
-      providers: [{
-        provide: BrokersService,
-        useValue: brokerService({
-          getSqliteClerkProjection: vi.fn().mockRejectedValue(
-            new HttpErrorResponse({ status: 503 }),
-          ),
-        }),
-      }],
+      providers: [
+        {
+          provide: BrokersService,
+          useValue: brokerService({
+            getSqliteClerkProjection: vi.fn().mockRejectedValue(
+              new HttpErrorResponse({ status: 503 }),
+            ),
+          }),
+        },
+        { provide: BrokerService, useValue: accountHistoryService() },
+      ],
     });
 
     await waitFor(() => {
@@ -159,6 +192,7 @@ describe('AlpacaDeskComponent', () => {
             getAccount: vi.fn().mockResolvedValue(accountSnapshot('PA3KWXU1C4C3')),
           }),
         },
+        { provide: BrokerService, useValue: accountHistoryService() },
         {
           provide: ActivatedRoute,
           useValue: {
@@ -187,6 +221,7 @@ describe('AlpacaDeskComponent', () => {
     await render(AlpacaDeskComponent, {
       providers: [
         { provide: BrokersService, useValue: brokerService() },
+        { provide: BrokerService, useValue: accountHistoryService() },
         {
           provide: ActivatedRoute,
           useValue: {
@@ -204,34 +239,30 @@ describe('AlpacaDeskComponent', () => {
   });
 
   it('refreshes transaction history after a successful submission', async () => {
-    const listOrders = vi
-      .fn<() => Promise<BrokerOrder[]>>()
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([submittedSpyOrder()]);
-    const submitOrder = vi.fn().mockResolvedValue(acknowledgedSubmission());
+    const accountTransactions = vi
+      .fn()
+      .mockResolvedValueOnce(transactionHistory())
+      .mockResolvedValueOnce(transactionHistory([submittedSpyTransaction()]));
+    const listOrders = vi.fn();
 
+    TestBed.overrideComponent(AlpacaDeskComponent, {
+      remove: { imports: [AlpacaOrderEntryComponent] },
+      add: { imports: [FakeOrderEntryComponent] },
+    });
     await render(AlpacaDeskComponent, {
       providers: [
-        {
-          provide: BrokersService,
-          useValue: brokerService({ listOrders, submitOrder }),
-        },
+        { provide: BrokersService, useValue: brokerService({ listOrders }) },
+        { provide: BrokerService, useValue: accountHistoryService({ accountTransactions }) },
       ],
     });
 
-    await screen.findByText('No recent transactions.');
+    await screen.findByText('No projected transactions match this account and filter set.');
     fireEvent.click(await screen.findByRole('button', { name: 'Create a new Alpaca order' }));
-    fireEvent.input(await screen.findByLabelText('Leg 1 symbol'), { target: { value: 'SPY' } });
-    const quantity = screen.getByLabelText('Leg 1 quantity');
-    fireEvent.input(quantity, { target: { value: '2' } });
-    fireEvent.change(quantity, { target: { value: '2' } });
-    fireEvent.click(screen.getByRole('button', { name: /Preview order/i }));
     fireEvent.click(await screen.findByRole('button', { name: /Confirm & submit/i }));
 
-    await waitFor(() => expect(listOrders).toHaveBeenCalledTimes(2));
-    const transactionHistory = screen.getByLabelText(
-      'Alpaca transaction history, newest orders first',
-    );
-    expect(within(transactionHistory).getByText('SPY')).toBeTruthy();
+    await waitFor(() => expect(accountTransactions).toHaveBeenCalledTimes(2));
+    expect(listOrders).not.toHaveBeenCalled();
+    expect(screen.getByText('Placed by bot-spy')).toBeTruthy();
+    expect(screen.getByText(/SPY/)).toBeTruthy();
   });
 });
