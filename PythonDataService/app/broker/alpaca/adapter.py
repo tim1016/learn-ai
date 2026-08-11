@@ -372,6 +372,11 @@ def from_alpaca_trade_update(payload: Mapping[str, Any]) -> BrokerOrderEvent:
         occurred_at_ms=trade_update_occurred_at_ms(payload),
         price=opt_float(payload.get("price")),
         quantity=opt_float(payload.get("qty")),
+        execution_id=(
+            opt_str(payload.get("execution_id"))
+            if event in {"fill", "partial_fill"}
+            else None
+        ),
     )
 
 
