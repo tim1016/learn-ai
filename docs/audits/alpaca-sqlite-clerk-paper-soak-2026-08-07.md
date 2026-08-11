@@ -1,23 +1,21 @@
 # Alpaca SQLite Clerk supervised paper qualification — 2026-08-07
 
-**Status:** PARTIAL QUALIFICATION / RECOVERED AND IDLE — Qualification A
-produced one valid paper round trip, then the restart/UI drill hit the
-corruption abort recorded in
-[#1413](https://github.com/tim1016/learn-ai/issues/1413). The operator-approved
-mirror rebuild subsequently restored the current finalized head without
-changing generation or database identity, and a supervised three-bar run plus
-normal stop/reconciliation/restart completed flat and order-free. Earlier
-defects are tracked by [#1410](https://github.com/tim1016/learn-ai/issues/1410),
-[#1411](https://github.com/tim1016/learn-ai/issues/1411), and
-[#1412](https://github.com/tim1016/learn-ai/issues/1412). This remains partial
-evidence, not #1409 closure evidence.
+**Status:** ACCEPTED FOR CUTOVER ACCOUNT / RECOVERED AND IDLE. This report began
+with the partial generation-1 Qualification A campaign and preserves every abort
+and historical verdict below. The 2026-08-10 evidence amendment and UI ceremony
+accepted generation 1; the 2026-08-11 supervised cutover activated generation 2
+on schema v8 and completed the bounded deterministic/live hardening campaign.
 
-**Scope:** Alpaca paper account `PA3KWXU1C4C3`, SQLite authority generation 1.
-Live-money execution remained disabled. This report carries the remaining
-qualification and governance work from issue
-[#1409](https://github.com/tim1016/learn-ai/issues/1409).
+**Scope:** Alpaca paper account `PA3KWXU1C4C3`. Generation-1 evidence remains
+historical through its preserved final snapshot; generation 2 is active only for
+this account's valid activation fence. Other Alpaca accounts are not covered by
+this receipt. Live-money execution remained disabled. This report carries the
+qualification and governance work from issues
+[#1409](https://github.com/tim1016/learn-ai/issues/1409),
+[#1447](https://github.com/tim1016/learn-ai/issues/1447), and
+[#1440](https://github.com/tim1016/learn-ai/issues/1440).
 
-## Closure rule
+## Historical closure rule (superseded 2026-08-10)
 
 Issue #1409 and ADR 0035 may close only after every required live scenario below
 has passed across multiple operator-supervised market sessions, the final broker
@@ -87,8 +85,10 @@ the risk but does not close that incident.
 | Qualification A | 2026-08-07 | yes | ABORT — Resume-control defect fixed locally, then both IBKR consumers repeated the one-print stall while Broker V2 still presented Live/Healthy; stopped and reconciled flat | This report; #1410; #1411 |
 | Qualification A, attempt 2 | 2026-08-07 | yes | PASS for one normal ENTER/EXIT round trip; ABORT for the subsequent truth/restart drill | This report; #1412; #1413 |
 | Recovery and Qualification A, attempt 3 | 2026-08-07 | yes | PASS — current mirror rebuilt the corrupt authority, three advancing closed bars produced durable no-action decisions, Stop/Reconcile/restart remained flat and idle | This report; #1413 |
-| Qualification B | Later market session | pending | PENDING | This report |
-| Qualification C | Later market session | pending | PENDING | This report |
+| Qualification B | Superseded 2026-08-10 | n/a | NOT RUN — evidence-driven acceptance amendment replaced the historical live matrix | Acceptance-governance section below |
+| Qualification C | Superseded 2026-08-10 | n/a | NOT RUN — unrun fault rows moved to bounded post-acceptance hardening | #1440; combined campaign below |
+| UI acceptance | 2026-08-10 | yes | PASS — one-share SPY round trip, stopped flat, generation 1 accepted for the account | UI-driven acceptance section below |
+| Generation-2 S6 / fault campaign | 2026-08-11 | yes | PASS — clean schema-v8 cutover, one-share GOOGL round trip, restart, restore, and non-empty mirror rebuild | Combined campaign below; committed receipts |
 
 ## Qualification A preflight
 
@@ -652,3 +652,161 @@ namespace-separated exposure, flat stop/resume with a new run identity, a live
 four-for-four symbol substitution, three-way simultaneous exposure, and a clean
 strategy-owned/flat-only wind-down. It did not attempt unsupported in-place parameter
 mutation or any live-money action.
+
+## Schema-v8 clean-slate cutover and post-acceptance hardening — 2026-08-11
+
+This campaign combines the supervised S6 cutover in issue #1447 with the bounded
+post-acceptance fault work in issue #1440. It is a second NYSE session after the
+2026-08-10 acceptance campaign and remains Alpaca paper only.
+
+### Cutover receipt
+
+Before rotation, rendered Alpaca Broker V2 pages showed all nine governed generation-1
+instances Off duty and Flat. A fresh Alpaca broker observation proved account
+`PA3KWXU1C4C3` had no position and no open order at `1786461841537` ms UTC. Both
+authority writers were then stopped. The offline recovery boundary atomically
+preserved the old database, empty WAL, and transition mirror at
+`accounts/alpaca/PA3KWXU1C4C3/recovery-preserved/generation-1-1786461842559-7b8e1312`
+before initializing generation 2. Read-only verification of that exact final
+generation-1 snapshot recorded schema `6`, identity
+`03ed49bd38bb1f3a6462f81706e7dec2`, control revision/transition count/last sequence
+`762`, integrity `ok`, and last row hash
+`00dc3057a888585561b34cfa5cbaa84bbd61a94e62c057ce0bde29e06a40d21f`.
+Its database and mirror SHA-256 values are respectively
+`5195d3ca6f9718fe9750e7e76f1aafbe05ede67175edcaa4f219e08693d3af73` and
+`6d99984a4d3d1c89040ba9e84dc7e90849d139685daea6fece25efdbe31092af`.
+This stopped-writer preservation is the final generation-1 recovery artifact; the
+earlier sequence-326 online backup is not represented as the cutover head.
+
+The reset then initialized, without import:
+
+- authority generation `2`;
+- schema version `8`;
+- database identity `7f76bfb2d17c08b751fa1edb00fa3f55`;
+- `execution_coverage_start_ms = 1786461842559`;
+- genesis sequence `0`, hash head `GENESIS`, and zero operational rows.
+
+The established-generation and activation registries both bind that exact generation
+and database identity. Offline verification returned `integrity_check=ok`; after the
+service reopened, the rendered Account Desk showed **Healthy · generation 2**, no
+position, working order, hold, or uncertainty. Before any generation-2 transition, an
+online baseline backup verified schema `8`, generation `2`, identity
+`7f76bfb2d17c08b751fa1edb00fa3f55`, sequence `0`, and hash head `GENESIS`:
+
+- bundle
+  `accounts/alpaca/PA3KWXU1C4C3/verified-backups/backup-g2-1786462047278-8a114ff41c186e19`;
+- snapshot SHA-256
+  `8a114ff41c186e1988ef01dcb32c967346ea9b6831094dedddbac1b245b4fa91`.
+
+After that backup completed, the first fresh reconciliation committed
+`RECONCILIATION_ATTEMPTED` at `1786462310527` ms UTC as sequence `1`, row hash
+`1d976fa7499d05fa408211cbdcdda71e6dfa2917eb41aa9790147d42a3f48904`, and receipt
+`reconciliation:1`. The preserved manifests and reconstructed receipt values are in
+[`alpaca-sqlite-s6-cutover-receipts-2026-08-11.json`](alpaca-sqlite-s6-cutover-receipts-2026-08-11.json);
+the pre-cutover and post-campaign flat broker proofs are checked in beside it.
+
+### Deterministic and browser qualification
+
+The canonical full qualification passed all performance budgets at 10,000, 100,000,
+and 1,000,000 transitions. At the largest scale, p95 latency was `0.192 ms` for the bot
+snapshot, `0.133 ms` for the account snapshot, and `47.521 ms` for a timeline page,
+inside the exclusive `75/100/100 ms` budgets. The report SHA-256 is
+`28a96fa0fdd21f8f414ada23a9705117c5c5cbe8ab8c0341027b6e270743d8e3`.
+The exact generated report is committed as
+[`alpaca-sqlite-clerk-qualification-full-2026-08-11.json`](alpaca-sqlite-clerk-qualification-full-2026-08-11.json)
+and its
+[`Markdown rendering`](alpaca-sqlite-clerk-qualification-full-2026-08-11.md);
+this dated report is distinct from the earlier canonical qualification run retained
+without overwrite.
+
+The qualification's complete SQLite Clerk and Alpaca trade-update surface passed
+`488` tests. A second focused `71`-test pass covered the source-accurate fault seams,
+execution correction/dedup folds, backup/restore/rebuild policy, the bounded UI campaign
+contract, and quiet-stream SSE keepalives. These tests exercise lost-submit exact
+identity, duplicate/redelivered trade updates, cancel/fill and lost-cancel races,
+trade-update gaps followed by REST reconciliation, bot/account uncertainty isolation,
+restart with in-flight work, partial slices, corrections, external/unknown ownership,
+missing/corrupt-authority no-fallback behavior, NYSE DST/half-day/holiday boundaries,
+and verified backup/reopen paths.
+
+The exact five-load/four-reload browser correlation campaign also passed in
+`12.413 s`, with one expected test, no skip, unexpected result, or flake. It measured
+25 evidence interactions over revision sequence `41,41,42,42,43` and zero lifecycle
+requests from read-only evidence controls. The browser report SHA-256 is
+`9c1928c060741d5f7550a2a428d70e6716bc17be53b5adc1496ce1b14bd4aede`;
+the campaign-contract SHA-256 remains
+`544cbea3cebf202806972851c64d0da5136b2c44a444a10d07c4ade8bbe7ffb3`.
+
+The live ceremony deliberately remained bounded to one paper share, so Alpaca
+returned terminal full fills; it did not produce or claim a live partial fill. For
+this campaign, the plan's `partial/full-fill` slash denotes the broker outcome that
+may occur, not a requirement to force a partial slice from a one-share order. The
+source-accurate deterministic suite supplies the retained partial-slice, correction,
+and duplicate/redelivery receipts; the supervised paper receipt confirms the normal
+broker/UI/restart path. This is the recorded evidence split for #1440's “where live
+confirmation is meaningful” completion rule.
+
+### Supervised GOOGL paper ceremony
+
+The operator deployed the immutable one-share Validation configuration as
+`sqlite-s6-googl-0811`. Its first run was
+`a136c43cc0d64227ae469a296c7b2999`; the deployment receipt was
+`alpaca-paper-deploy:PA3KWXU1C4C3:sqlite-s6-googl-0811:1786462670567`. The
+strategy then completed its natural ENTER and EXIT during the regular NYSE session:
+
+| Side | Quantity | Price | Local time | Durable client-order identity |
+|---|---:|---:|---|---|
+| Buy | 1 GOOGL | `$349.65` | `10:51:06` | `learn-ai/sqlite-s6-googl-0811/v1:fS1JVTPTR_-ARSCiC4pqFA` |
+| Sell | 1 GOOGL | `$349.50` | `10:54:06` | `learn-ai/sqlite-s6-googl-0811/v1:beA4WCQr-bu0JDFoukqbog` |
+
+Bot detail rendered both chart markers and both immutable fills. The roster rendered
+two fills, flat exposure, zero open orders, and realized P&L of `-$0.15`. Account
+history rendered both receipts from the SQLite projection with Strategy origin, exact
+bot/run/client-order attribution, and no retired Postgres or broker-history fallback.
+The account returned flat with no working or unresolved order, and reconciliation
+`reconciliation:22` was satisfied.
+
+The first run was stopped with its exact run-bound receipt, then resumed as new run
+`b04b59af84e043cc8436169c99905be8`. The reopened panel preserved exactly two fills,
+`-$0.15` realized P&L, flat exposure, and the original execution identities. That run
+was also stopped with an exact run-bound receipt. The final broker observation at
+`1786463899713` ms UTC independently proved no position and no open order.
+
+### Verified recovery after the live round trip
+
+The final online backup was
+`accounts/alpaca/PA3KWXU1C4C3/verified-backups/backup-g2-1786463830182-6f64c27588db7416`
+with snapshot SHA-256
+`6f64c27588db7416c1c1173b26d055f1959eceaea064b0ec67c0c77ec305e8b3`.
+It verified generation `2`, schema `8`, the original database identity, control revision
+`22`, transition sequence/count `22`, and hash head
+`e38b629805a3fdb4cdcb7ca9a7318632b7c0f7f668ea3baa22f652a2103633f3`.
+
+With both writers stopped, `RESTORE_VERIFIED_BACKUP` preserved the pre-restore
+database and reopened the same two fills, flat position, attribution, identities, and
+P&L. The first `REBUILD_FROM_MIRROR` attempt failed closed while an execution lease
+still had `8624 ms` remaining; no stronger recovery path was attempted. After that
+lease expired, the retry preserved the pre-rebuild database and rebuilt successfully.
+Offline verification reproduced the same generation, schema, database identity,
+revision, sequence/count, and hash head. The rendered post-rebuild Account Desk then
+showed **Healthy · generation 2**, no hold, uncertainty, position, or working order,
+and the two exact strategy-attributed transaction receipts at projection high-water
+`22` with zero lag.
+
+### Combined issue verdict
+
+- **#1447 — PASS.** The clean-slate schema-v8 generation-2 cutover, fresh broker
+  proofs, live one-share GOOGL ENTER/full-fill/EXIT, stopped-flat restart, and final
+  recovery verification all completed under human supervision.
+- **#1440 — PASS under the recorded deterministic/live evidence split.** The
+  deterministic fault campaign covers lost submit/cancel,
+  redelivery, cancel/fill races, gaps plus REST recovery, uncertainty isolation,
+  in-flight restart, partial/corrected/external fills, session boundaries, and strict
+  no-fallback behavior. The live session additionally confirms the normal UI-owned
+  route, exact attribution, restart preservation, backup restore, mirror rebuild, and
+  fail-closed lease guard.
+
+**Verdict: PASS for paper account `PA3KWXU1C4C3`.** Its valid activation selects
+generation 2 on schema v8 as the accepted active SQLite authority. Generation 1
+remains preserved as audit evidence; it was not imported and is not a product-read
+fallback. This verdict does not activate generation 2 for any other account.
