@@ -5,13 +5,14 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import {
-  createChart, IChartApi, ISeriesApi,
+  IChartApi, ISeriesApi,
   CandlestickSeries, CandlestickData,
   HistogramSeries, HistogramData,
   AreaSeries, AreaData,
   UTCTimestamp,
   createSeriesMarkers, ISeriesMarkersPluginApi, SeriesMarker, Time,
 } from 'lightweight-charts';
+import { createAppChart } from '../../../shared/charts/chart-utils';
 
 // ──────────────────────────────────────────────
 // Types
@@ -126,7 +127,7 @@ export class EngineChartComponent implements AfterViewInit, OnDestroy {
     const el = this.priceChartEl()?.nativeElement;
     if (!el) return;
 
-    this.priceChart = createChart(el, {
+    this.priceChart = createAppChart(el, {
       width: el.clientWidth,
       height: 560,
       layout: { background: { color: DARK.bg }, textColor: DARK.text },
@@ -188,7 +189,7 @@ export class EngineChartComponent implements AfterViewInit, OnDestroy {
     const el = this.equityChartEl()?.nativeElement;
     if (!el) return;
 
-    this.equityChart = createChart(el, {
+    this.equityChart = createAppChart(el, {
       width: el.clientWidth,
       height: 320,
       layout: { background: { color: DARK.bg }, textColor: DARK.text },

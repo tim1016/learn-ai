@@ -77,8 +77,6 @@ describe("TradingChartComponent", () => {
     expect(chartHarness.paneHeights[0]).toHaveBeenCalledWith(470);
     expect(chartHarness.paneHeights[1]).toHaveBeenCalledWith(205);
     expect(chartHarness.paneHeights[2]).toHaveBeenCalledWith(185);
-    expect((chartHarness.options?.["layout"] as { attributionLogo: boolean }).attributionLogo).toBe(false);
-
     const root = fixture.nativeElement as HTMLElement;
     expect(root.querySelectorAll(".trading-chart__canvas")).toHaveLength(1);
     expect(root.querySelector(".trading-chart__attribution")?.textContent).toContain("TradingView");

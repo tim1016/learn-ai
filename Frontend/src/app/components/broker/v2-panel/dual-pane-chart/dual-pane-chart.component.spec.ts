@@ -1,6 +1,8 @@
 import { render, screen, waitFor } from '@testing-library/angular';
+import { TestBed } from '@angular/core/testing';
 import { beforeEach, describe, it, expect, vi } from 'vitest';
 import {
+  DUAL_PANE_CHART_FACTORY,
   DualPaneChartComponent,
   toSeriesMarkers,
 } from './dual-pane-chart.component';
@@ -16,28 +18,30 @@ const chartMocks = vi.hoisted(() => ({
 
 // Mock lightweight-charts — the actual DOM chart is not exercised in unit tests.
 vi.mock('lightweight-charts', () => {
+  const createSeriesMarkers = vi.fn().mockReturnValue({
+    setMarkers: chartMocks.setMarkers,
+  });
+  return {
+    createSeriesMarkers,
+    CandlestickSeries: 'CandlestickSeries',
+  };
+});
+
+function createMockChart(): object {
   const mockTimeScale = { fitContent: chartMocks.fitContent };
   const createMockSeries = () => ({
     setData: chartMocks.setData,
     update: chartMocks.update,
     applyOptions: vi.fn(),
   });
-  const createSeriesMarkers = vi.fn().mockReturnValue({
-    setMarkers: chartMocks.setMarkers,
-  });
-  const createMockChart = () => ({
+  return {
     addSeries: vi.fn().mockReturnValue(createMockSeries()),
     removeSeries: vi.fn(),
     timeScale: vi.fn().mockReturnValue(mockTimeScale),
     applyOptions: vi.fn(),
     remove: vi.fn(),
-  });
-  return {
-    createChart: chartMocks.createChart.mockImplementation(() => createMockChart()),
-    createSeriesMarkers,
-    CandlestickSeries: 'CandlestickSeries',
   };
-});
+}
 
 interface ChartHarness {
   chart: {
@@ -68,6 +72,12 @@ function liveBar(startMs: number, endMs = startMs + 5_000): ChartBar {
 
 describe('DualPaneChartComponent', () => {
   beforeEach(() => {
+    TestBed.configureTestingModule({
+      providers: [{
+        provide: DUAL_PANE_CHART_FACTORY,
+        useValue: chartMocks.createChart.mockImplementation(() => createMockChart()),
+      }],
+    });
     chartMocks.createChart.mockClear();
     chartMocks.setMarkers.mockClear();
     chartMocks.setData.mockClear();

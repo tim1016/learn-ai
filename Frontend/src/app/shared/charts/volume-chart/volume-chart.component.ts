@@ -4,11 +4,11 @@ import {
   ChangeDetectionStrategy
 } from '@angular/core';
 import {
-  createChart, IChartApi, ISeriesApi,
+  IChartApi, ISeriesApi,
   HistogramSeries, HistogramData, UTCTimestamp
 } from 'lightweight-charts';
 import { StockAggregate } from '../../../graphql/types';
-import { formatTickMark } from '../chart-utils';
+import { createAppChart, formatTickMark } from '../chart-utils';
 
 @Component({
   selector: 'app-volume-chart',
@@ -50,7 +50,7 @@ export class VolumeChartComponent implements AfterViewInit, OnDestroy {
   private initChart(): void {
     const container = this.chartContainer().nativeElement;
     const dark = this.darkMode();
-    this.chart = createChart(container, {
+    this.chart = createAppChart(container, {
       width: container.clientWidth,
       height: this.chartHeight(),
       layout: {

@@ -7,7 +7,7 @@ import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import {
-  createChart, IChartApi, ISeriesApi,
+  IChartApi, ISeriesApi,
   CandlestickSeries, CandlestickData,
   HistogramSeries, HistogramData,
   LineSeries, LineData,
@@ -15,6 +15,7 @@ import {
   UTCTimestamp,
 } from 'lightweight-charts';
 import { environment } from '../../../../environments/environment';
+import { createAppChart } from '../../../shared/charts/chart-utils';
 import { QualityModalComponent } from '../quality-modal/quality-modal.component';
 import type {
   ChartIndicatorEntry,
@@ -443,7 +444,7 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
     const el = this.mainChartContainer()?.nativeElement;
     if (!el) return;
 
-    this.mainChart = createChart(el, {
+    this.mainChart = createAppChart(el, {
       width: el.clientWidth,
       height: 560,
       layout: {
@@ -681,7 +682,7 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
     container.appendChild(label);
     host.appendChild(container);
 
-    const chart = createChart(container, {
+    const chart = createAppChart(container, {
       width: container.clientWidth,
       height: 200,
       layout: {

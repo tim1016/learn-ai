@@ -4,11 +4,11 @@ import {
   ChangeDetectionStrategy
 } from '@angular/core';
 import {
-  createChart, IChartApi, ISeriesApi,
+  IChartApi, ISeriesApi,
   CandlestickSeries, CandlestickData, UTCTimestamp
 } from 'lightweight-charts';
 import { StockAggregate } from '../../../graphql/types';
-import { formatTickMark } from '../chart-utils';
+import { createAppChart, formatTickMark } from '../chart-utils';
 
 @Component({
   selector: 'app-candlestick-chart',
@@ -51,7 +51,7 @@ export class CandlestickChartComponent implements AfterViewInit, OnChanges, OnDe
 
   private createChart(): void {
     const container = this.chartContainer.nativeElement;
-    this.chart = createChart(container, {
+    this.chart = createAppChart(container, {
       width: container.clientWidth,
       height: this.chartHeight,
       layout: {

@@ -19,7 +19,6 @@ import { TableModule } from 'primeng/table';
 import { TagModule } from 'primeng/tag';
 import {
   AreaSeries,
-  createChart,
   IChartApi,
   ISeriesApi,
   type AreaData,
@@ -27,6 +26,7 @@ import {
 } from 'lightweight-charts';
 
 import { StrategyRunsService } from '../../../../services/strategy-runs.service';
+import { createAppChart } from '../../../../shared/charts/chart-utils';
 import type {
   RunLedger,
   StrategyRunResponse,
@@ -182,7 +182,7 @@ export class RunDetailPageComponent implements AfterViewInit, OnDestroy {
     const drawdownEl = this.drawdownChartEl()?.nativeElement;
     if (!equityEl || !drawdownEl) return;
 
-    this.equityChart = createChart(equityEl, this.chartOptions(equityEl));
+    this.equityChart = createAppChart(equityEl, this.chartOptions(equityEl));
     this.equitySeries = this.equityChart.addSeries(AreaSeries, {
       lineColor: EQUITY_COLOR,
       topColor: 'rgba(34, 211, 238, 0.35)',
@@ -194,7 +194,7 @@ export class RunDetailPageComponent implements AfterViewInit, OnDestroy {
       },
     });
 
-    this.drawdownChart = createChart(drawdownEl, this.chartOptions(drawdownEl));
+    this.drawdownChart = createAppChart(drawdownEl, this.chartOptions(drawdownEl));
     this.drawdownSeries = this.drawdownChart.addSeries(AreaSeries, {
       lineColor: DRAWDOWN_COLOR,
       topColor: 'rgba(248, 113, 113, 0.04)',

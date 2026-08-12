@@ -53,6 +53,25 @@ export default tseslint.config(
     },
   },
   {
+    files: ["**/*.ts"],
+    ignores: ["src/app/shared/charts/chart-utils.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "lightweight-charts",
+              importNames: ["createChart"],
+              message:
+                "Use createAppChart from shared/charts/chart-utils so application-wide chart policy is applied.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     files: ["**/*.html"],
     extends: [
       ...angular.configs.templateRecommended,

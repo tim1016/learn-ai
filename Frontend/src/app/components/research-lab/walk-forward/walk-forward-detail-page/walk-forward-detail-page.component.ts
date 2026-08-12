@@ -18,7 +18,6 @@ import { TableModule } from 'primeng/table';
 import { TagModule } from 'primeng/tag';
 import {
   AreaSeries,
-  createChart,
   IChartApi,
   ISeriesApi,
   type AreaData,
@@ -32,6 +31,7 @@ import type {
   WalkForwardStatus,
 } from '../../../../services/walk-forward.types';
 import { TimestampDisplayPipe } from '../../../../shared/timestamp';
+import { createAppChart } from '../../../../shared/charts/chart-utils';
 
 const CHART_THEME = {
   bg: '#0f172a',
@@ -168,7 +168,7 @@ export class WalkForwardDetailPageComponent implements AfterViewInit, OnDestroy 
     const el = this.chartEl()?.nativeElement;
     if (!el) return;
 
-    this.chart = createChart(el, {
+    this.chart = createAppChart(el, {
       width: el.clientWidth,
       height: 300,
       layout: { background: { color: CHART_THEME.bg }, textColor: CHART_THEME.text },
