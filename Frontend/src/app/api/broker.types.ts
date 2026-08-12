@@ -1950,6 +1950,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/accounts/{account_id}/gallery/snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Versioned REST bootstrap for the aggregated bot gallery wall */
+        get: operations["get_gallery_snapshot_api_brokers__broker__accounts__account_id__gallery_snapshot_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/accounts/{account_id}/gallery/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Poll-driven SSE stream of aggregated bot gallery updates */
+        get: operations["stream_gallery_api_brokers__broker__accounts__account_id__gallery_stream_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/activities": {
         parameters: {
             query?: never;
@@ -13502,6 +13536,84 @@ export interface components {
             left: string;
             /** Right */
             right: string;
+        };
+        /**
+         * GalleryBotView
+         * @description One bot's tile state in the gallery wall.
+         */
+        GalleryBotView: {
+            /** Desired State */
+            desired_state: string;
+            /** Fills Today */
+            fills_today: number | null;
+            /** Label */
+            label: string;
+            /** Last Bar At Ms */
+            last_bar_at_ms?: number | null;
+            /** Needs Attention */
+            needs_attention: boolean;
+            /** Open Pnl */
+            open_pnl: number | null;
+            /** Phase */
+            phase: string;
+            primary_action: components["schemas"]["GalleryPrimaryAction"];
+            /** Realized Pnl Today */
+            realized_pnl_today: number | null;
+            /** Running */
+            running: boolean;
+            /** Sid */
+            sid: string;
+            /** Symbol */
+            symbol: string;
+        };
+        /**
+         * GalleryLiveSnapshot
+         * @description Versioned complete state document for the gallery's REST bootstrap and SSE.
+         */
+        GalleryLiveSnapshot: {
+            /** As Of Ms */
+            as_of_ms: number;
+            /** Bots */
+            bots: components["schemas"]["GalleryBotView"][];
+            /** Markers */
+            markers?: {
+                [key: string]: components["schemas"]["ChartFillMarker"][];
+            };
+            /**
+             * Resolution
+             * @default 1m
+             */
+            resolution?: string;
+            /** Stream Epoch */
+            stream_epoch: string;
+            /** Surface Version */
+            surface_version: number;
+            /** Symbols */
+            symbols: components["schemas"]["GallerySymbolBars"][];
+        };
+        /**
+         * GalleryPrimaryAction
+         * @description The single most relevant action for a gallery tile (§ gallery spec).
+         */
+        GalleryPrimaryAction: {
+            /** Action Id */
+            action_id: string;
+            /** Disabled Reason */
+            disabled_reason?: string | null;
+            /** Enabled */
+            enabled: boolean;
+            /** Label */
+            label: string;
+        };
+        /**
+         * GallerySymbolBars
+         * @description Bars for one symbol shared across the tiles that chart it.
+         */
+        GallerySymbolBars: {
+            /** Bars */
+            bars?: components["schemas"]["ChartBar"][];
+            /** Symbol */
+            symbol: string;
         };
         /**
          * GateResult
@@ -27826,6 +27938,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BotPanelView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_gallery_snapshot_api_brokers__broker__accounts__account_id__gallery_snapshot_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GalleryLiveSnapshot"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stream_gallery_api_brokers__broker__accounts__account_id__gallery_stream_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

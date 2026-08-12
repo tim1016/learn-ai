@@ -94,6 +94,14 @@ describe('AppSidebarComponent', () => {
     expect(links.has('Dashboard')).toBe(false);
     expect(links.has('Tracked Instruments')).toBe(false);
   });
+
+  it('links the user-accessible legal notices page from Documentation', () => {
+    const fixture = setup();
+
+    clickGroup(fixture, 'Documentation');
+
+    expect(navLinks(fixture).get('Legal Notices')).toBe('/legal/notices');
+  });
 });
 
 function setup(): ComponentFixture<AppSidebarComponent> {

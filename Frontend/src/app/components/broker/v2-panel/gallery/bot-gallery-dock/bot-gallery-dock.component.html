@@ -1,0 +1,73 @@
+<section class="gallery-dock">
+  <div
+    #galleryGrid
+    cdkDropList
+    cdkDropListOrientation="mixed"
+    class="gallery-dock__grid"
+    [style.grid-template-columns]="'repeat(' + grid().cols + ', 1fr)'"
+    (cdkDropListDropped)="onDropped($event)"
+  >
+    @for (bot of pageBots(); track bot.sid) {
+      <div
+        cdkDrag
+        class="gallery-dock__cell"
+        [attr.data-sid]="bot.sid"
+        [style.grid-column]="'span ' + colSpanFor(bot.sid)"
+        [style.grid-row]="'span ' + rowSpanFor(bot.sid)"
+      >
+        <button
+          type="button"
+          cdkDragHandle
+          class="gallery-dock__drag-handle"
+          [attr.aria-label]="'Reorder ' + bot.symbol + ' tile'"
+          tabindex="-1"
+          aria-hidden="true"
+        >⠿</button>
+
+        <app-bot-tile
+          class="gallery-dock__tile"
+          [bot]="bot"
+          [bars]="barsBySymbol().get(bot.symbol) ?? []"
+          [markers]="markersBySid().get(bot.sid) ?? []"
+          [broker]="broker()"
+          [accountId]="accountId()"
+          [pending]="pendingSids().has(bot.sid)"
+          (action)="forwardAction($event)"
+        />
+
+        <button
+          type="button"
+          class="gallery-dock__resize-handle"
+          [attr.aria-label]="'Resize ' + bot.symbol + ' tile'"
+          tabindex="-1"
+          aria-hidden="true"
+          (pointerdown)="onResizePointerStart($event, bot.sid)"
+        ></button>
+      </div>
+    }
+  </div>
+
+  <footer class="gallery-dock__footer">
+    <button type="button" class="gallery-dock__reset" (click)="onResetLayout()">
+      Reset layout
+    </button>
+
+    <div class="gallery-dock__pager">
+      <button
+        type="button"
+        class="gallery-dock__pager-button"
+        aria-label="Previous page"
+        [disabled]="page() === 0"
+        (click)="goToPage(-1)"
+      >‹</button>
+      <span class="gallery-dock__page-info" role="status" aria-live="polite">page {{ page() + 1 }} of {{ pageCount() }}</span>
+      <button
+        type="button"
+        class="gallery-dock__pager-button"
+        aria-label="Next page"
+        [disabled]="page() === pageCount() - 1"
+        (click)="goToPage(1)"
+      >›</button>
+    </div>
+  </footer>
+</section>

@@ -1,0 +1,111 @@
+@use '../../../styles/tokens' as *;
+
+:host {
+  display: block;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: var(--space-1) var(--space-1) var(--space-10);
+}
+
+.notice-card {
+  padding: var(--space-6);
+  background: $bg-surface;
+  border: 1px solid $border;
+  border-radius: $radius-lg;
+  box-shadow: $shadow-card;
+}
+
+.notice-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid $border;
+
+  h2 {
+    margin: 0;
+    font-size: var(--fs-xl);
+  }
+}
+
+.notice-card__eyebrow {
+  margin: 0 0 var(--space-1);
+  color: $text-subtle;
+  font-family: $font-mono;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semi);
+  letter-spacing: var(--ls-caps);
+  text-transform: uppercase;
+}
+
+.license-badge {
+  flex-shrink: 0;
+  padding: var(--space-1) var(--space-2);
+  color: $accent-text;
+  background: var(--accent-faint);
+  border: 1px solid rgba(41, 98, 255, 0.35);
+  border-radius: $radius-pill;
+  font-family: $font-mono;
+  font-size: var(--fs-xs);
+}
+
+.notice-card__summary {
+  margin: var(--space-5) 0 var(--space-4);
+  max-width: 72ch;
+}
+
+.notice-copy {
+  margin: 0;
+  padding: var(--space-4);
+  color: $text-primary;
+  background: $bg-sunken;
+  border: 1px solid $border-light;
+  border-left: 3px solid $accent;
+  border-radius: $radius;
+  font-family: $font-mono;
+  font-size: var(--fs-sm);
+
+  p {
+    color: inherit;
+  }
+
+  p + p {
+    margin-top: var(--space-2);
+  }
+
+  a {
+    color: $accent-text;
+  }
+}
+
+.notice-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+
+  a {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: $accent-text;
+    font-size: var(--fs-sm);
+    text-decoration: none;
+
+    &:hover {
+      text-decoration: underline;
+      text-underline-offset: 0.2em;
+    }
+  }
+}
+
+@media (max-width: 640px) {
+  .notice-card {
+    padding: var(--space-4);
+  }
+
+  .notice-card__header {
+    flex-direction: column;
+  }
+}

@@ -31,6 +31,7 @@ from app.routers import (
     broker_bots,
     broker_capability,
     broker_session,
+    broker_v2_gallery,
     broker_v2_panel,
     brokers,
     chart,
@@ -680,6 +681,13 @@ app.include_router(
 # every route requires the always-on data-plane control secret.
 app.include_router(
     broker_v2_panel.router,
+    dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
+)
+# Aggregated bot gallery wall (S4 — snapshot + SSE stream across every
+# running bot's tiles and shared per-symbol bars). Same sensitivity as
+# broker_v2_panel: always-on data-plane control secret required.
+app.include_router(
+    broker_v2_gallery.router,
     dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
 )
 # Static fixture-envelope contract for the unlinked Clerk diagnostic gallery.

@@ -235,6 +235,13 @@ export const routes: Routes = [
       ),
   },
   {
+    path: "legal/notices",
+    loadComponent: () =>
+      import(
+        "./components/legal/legal-notices-page/legal-notices-page.component"
+      ).then((m) => m.LegalNoticesPageComponent),
+  },
+  {
     // Unlinked, fixture-only review surface. It imports committed contracts
     // locally and deliberately has no data service or mutation path.
     path: "examples/alpaca-bot-control",
@@ -360,6 +367,14 @@ export const routes: Routes = [
       import(
         './components/broker/v2-panel/bots-list-page/bots-list-page.component'
       ).then((m) => m.BotsListPageComponent),
+  },
+  {
+    // Broker v2 panel — live gallery wall for every running bot in the account.
+    path: 'brokers/:broker/accounts/:accountId/gallery',
+    loadComponent: () =>
+      import(
+        './components/broker/v2-panel/gallery/bot-gallery-page/bot-gallery-page.component'
+      ).then((m) => m.BotGalleryPageComponent),
   },
   {
     // Broker v2 panel — unscoped bots entry point: resolves account then

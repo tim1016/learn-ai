@@ -30,27 +30,11 @@ import type {
   ChartLiveResolution,
   ChartSource,
 } from '../lib/broker-v2-panel.types';
+import { toCandle } from '../lib/chart-bar-mapping';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 
 type ChartPane = 'live' | 'polygon';
-
-/** Map a millisecond UTC ChartBar to lightweight-charts candle data. */
-function toCandle(bar: ChartBar): {
-  time: UTCTimestamp;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-} {
-  return {
-    time: Math.floor(bar.start_ms / 1000) as UTCTimestamp,
-    open: Number(bar.open),
-    high: Number(bar.high),
-    low: Number(bar.low),
-    close: Number(bar.close),
-  };
-}
 
 function sameBar(left: ChartBar, right: ChartBar): boolean {
   return left.start_ms === right.start_ms

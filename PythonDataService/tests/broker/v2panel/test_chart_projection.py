@@ -22,6 +22,7 @@ from app.services.broker_v2_panel import panel_chart_data_source, panel_data_sou
 from app.services.broker_v2_panel.chart_projection_service import (
     _MAX_HISTORY_BARS,
     ChartPresetError,
+    aggregator_bars_to_chart_bars,
     build_history_chart,
     build_live_chart,
     coerce_history_preset,
@@ -196,6 +197,43 @@ async def test_history_fill_markers_within_window() -> None:
     assert len(result.fill_markers) == 1
     assert result.fill_markers[0].side == "buy"
     assert result.fill_markers[0].price == 500.0
+
+
+def test_aggregator_bars_to_chart_bars_maps_fields_and_decimals() -> None:
+    """Extracted helper (shared with GalleryHub): exact field/decimal mapping."""
+    from decimal import Decimal
+
+    from app.broker.ibkr.models import IbkrMinuteBar
+
+    bar = IbkrMinuteBar(
+        symbol="SPY",
+        start_ms=_NOW - 60_000,
+        end_ms=_NOW,
+        open=Decimal("500.10"),
+        high=Decimal("501.25"),
+        low=Decimal("499.75"),
+        close=Decimal("500.50"),
+        volume=1234,
+        fetched_at_ms=_NOW,
+        source="ibkr",
+    )
+
+    result = aggregator_bars_to_chart_bars([bar])
+
+    assert len(result) == 1
+    chart_bar = result[0]
+    assert chart_bar.start_ms == _NOW - 60_000
+    assert chart_bar.end_ms == _NOW
+    assert chart_bar.open == "500.10"
+    assert chart_bar.high == "501.25"
+    assert chart_bar.low == "499.75"
+    assert chart_bar.close == "500.50"
+    assert chart_bar.volume == 1234
+    assert chart_bar.source == "ibkr"
+
+
+def test_aggregator_bars_to_chart_bars_empty_input_returns_empty_list() -> None:
+    assert aggregator_bars_to_chart_bars([]) == []
 
 
 def test_live_chart_tags_source_and_markers() -> None:
