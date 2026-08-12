@@ -235,6 +235,13 @@ export const routes: Routes = [
       ),
   },
   {
+    path: "legal/notices",
+    loadComponent: () =>
+      import(
+        "./components/legal/legal-notices-page/legal-notices-page.component"
+      ).then((m) => m.LegalNoticesPageComponent),
+  },
+  {
     // Unlinked, fixture-only review surface. It imports committed contracts
     // locally and deliberately has no data service or mutation path.
     path: "examples/alpaca-bot-control",
