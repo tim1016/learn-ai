@@ -85,6 +85,11 @@ export function resetLayout(accountId: string): void {
   try {
     localStorage.removeItem(storageKey(accountId));
   } catch (error) {
+    // Same reasoning as loadLayout/saveLayout: storage can be unavailable.
+    // Leaving a stale entry behind isn't a correctness problem here (the
+    // caller resets its own in-memory layout state regardless of whether
+    // the persisted copy was actually cleared), so this is a deliberate
+    // no-op, not a silently swallowed error.
     void error;
   }
 }

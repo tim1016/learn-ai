@@ -80,7 +80,8 @@ export class BotGalleryDockComponent {
 
   private readonly galleryGrid = viewChild<ElementRef<HTMLDivElement>>('galleryGrid');
 
-  protected readonly page = signal(0);
+  /** Raw page-navigation state. The roster can shrink independent of any explicit navigation, so nothing reads this directly — see `page` below. */
+  private readonly pageState = signal(0);
 
   private readonly persistedLayout = signal<readonly TileLayout[]>([]);
   private loadedAccountId: string | null = null;
@@ -107,9 +108,25 @@ export class BotGalleryDockComponent {
     () => new Map(this.effectiveLayout().map((tile) => [tile.sid, tile])),
   );
 
-  private readonly pagedLayout = computed(() => paginate(this.effectiveLayout(), this.page()));
+  // `pages` only depends on the item count, not on which page was
+  // requested — `page: 0` here is an arbitrary valid argument, not a
+  // meaningful "current page". Computed independent of `pageState`/`page`
+  // so `page`'s own clamp below (which reads `pageCount`) can't cycle back
+  // into itself.
+  protected readonly pageCount = computed(() => paginate(this.effectiveLayout(), 0).pages);
 
-  protected readonly pageCount = computed(() => this.pagedLayout().pages);
+  /**
+   * `pageState` clamped to `[0, pageCount)`. The roster can shrink (bots
+   * leaving) independent of any explicit `goToPage` navigation, so every
+   * consumer of "the current page" — the footer text, the Next/Previous
+   * disabled state, and the page-relative index math in `onDropped` /
+   * `onResizePointerStart` — must read through this, never `pageState`
+   * directly, or a stale out-of-range page desyncs the footer ("page 2 of
+   * 1") and can misalign a drop/resize against the wrong slice.
+   */
+  protected readonly page = computed(() => Math.max(0, Math.min(this.pageState(), this.pageCount() - 1)));
+
+  private readonly pagedLayout = computed(() => paginate(this.effectiveLayout(), this.page()));
 
   protected readonly pageTiles = computed(() => this.pagedLayout().pageItems);
 
@@ -133,12 +150,8 @@ export class BotGalleryDockComponent {
       if (this.loadedAccountId === accountId) return;
       this.loadedAccountId = accountId;
       this.persistedLayout.set(loadLayout(accountId));
-      this.page.set(0);
+      this.pageState.set(0);
     });
-  }
-
-  protected trackBySid(_index: number, bot: GalleryBotView): string {
-    return bot.sid;
   }
 
   protected colSpanFor(sid: string): number {
@@ -155,6 +168,13 @@ export class BotGalleryDockComponent {
 
   protected onDropped(event: CdkDragDrop<readonly TileLayout[]>): void {
     if (event.previousIndex === event.currentIndex) return;
+    // `previousIndex`/`currentIndex` are positions within the rendered
+    // `pageBots` DOM order. `pageTiles` (and the `effectiveLayout` offset
+    // math below) can diverge from `pageBots` for one tick during a live
+    // roster delta (a sid present in the persisted layout with no matching
+    // bot yet) — bail rather than apply a move computed against a
+    // different-length array than what the user actually saw.
+    if (this.pageBots().length !== this.pageTiles().length) return;
     const pageStart = this.page() * GALLERY_PAGE_SIZE;
     const next = [...this.effectiveLayout()];
     moveItemInArray(next, pageStart + event.previousIndex, pageStart + event.currentIndex);
@@ -163,13 +183,13 @@ export class BotGalleryDockComponent {
 
   protected goToPage(delta: number): void {
     const next = Math.min(Math.max(this.page() + delta, 0), this.pageCount() - 1);
-    this.page.set(next);
+    this.pageState.set(next);
   }
 
   protected onResetLayout(): void {
     resetLayout(this.accountId());
     this.persistedLayout.set([]);
-    this.page.set(0);
+    this.pageState.set(0);
   }
 
   protected onResizePointerStart(event: PointerEvent, sid: string): void {

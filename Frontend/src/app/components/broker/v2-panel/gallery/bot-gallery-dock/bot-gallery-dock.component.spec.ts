@@ -192,6 +192,38 @@ describe('BotGalleryDockComponent', () => {
     expect(screen.getByRole('button', { name: 'Previous page' })).toHaveProperty('disabled', true);
   });
 
+  it('clamps the page and disables Next when the roster shrinks below the current page', async () => {
+    const { fixture } = await renderDock({ bots: bots(25) });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
+    fixture.detectChanges();
+    expect(screen.getByText('page 2 of 2')).toBeTruthy();
+
+    fixture.componentRef.setInput('bots', bots(15));
+    fixture.detectChanges();
+
+    expect(screen.getByText('page 1 of 1')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Next page' })).toHaveProperty('disabled', true);
+  });
+
+  it('reorders within page 2 without corrupting page 1 (page-relative index math)', async () => {
+    const { fixture } = await renderDock({ bots: bots(25) });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
+    fixture.detectChanges();
+
+    // Page 2 holds sid-20..sid-24 at page-relative indices 0..4; move the
+    // first of those to the end of the page.
+    const dropListDe = fixture.debugElement.query(By.directive(CdkDropList));
+    const dropEvent = { previousIndex: 0, currentIndex: 4 } as unknown as CdkDragDrop<unknown>;
+    dropListDe.triggerEventHandler('cdkDropListDropped', dropEvent);
+    fixture.detectChanges();
+
+    const persistedSids = loadLayout(ACCOUNT_ID).map((tile) => tile.sid);
+    expect(persistedSids.slice(0, 20)).toEqual(bots(20).map((b) => b.sid));
+    expect(persistedSids.slice(20)).toEqual(['sid-21', 'sid-22', 'sid-23', 'sid-24', 'sid-20']);
+  });
+
   it('forwards a tile quick action up through the dock action output', async () => {
     const { onAction } = await renderDock({ bots: bots(1) });
 
