@@ -1,9 +1,12 @@
 import {
+  AfterViewInit,
   ChangeDetectionStrategy,
   Component,
   effect,
   ElementRef,
   input,
+  inject,
+  Injector,
   OnDestroy,
   viewChild,
 } from '@angular/core';
@@ -24,35 +27,39 @@ import type { BrokerPortfolioHistory } from '../../../api/alpaca.types';
   templateUrl: './alpaca-portfolio-history-chart.component.html',
   styleUrl: './alpaca-portfolio-history-chart.component.scss',
 })
-export class AlpacaPortfolioHistoryChartComponent implements OnDestroy {
+export class AlpacaPortfolioHistoryChartComponent implements AfterViewInit, OnDestroy {
   readonly history = input<BrokerPortfolioHistory | undefined>(undefined);
   readonly scopeLabel = input.required<string>();
   readonly unavailable = input(false);
 
+  private readonly injector = inject(Injector);
   private readonly chartContainer = viewChild<ElementRef<HTMLDivElement>>('chartContainer');
   private chart: IChartApi | null = null;
   private series: ISeriesApi<'Line'> | null = null;
   private resizeObserver: ResizeObserver | null = null;
   private chartElement: HTMLDivElement | null = null;
 
-  constructor() {
-    effect(() => {
-      const history = this.history();
-      const container = this.chartContainer();
-      if (history === undefined || container === undefined || history.timestamps.length === 0) {
-        this.destroyChart();
-        return;
-      }
+  ngAfterViewInit(): void {
+    effect(
+      () => {
+        const history = this.history();
+        const container = this.chartContainer();
+        if (history === undefined || container === undefined || history.timestamps.length === 0) {
+          this.destroyChart();
+          return;
+        }
 
-      this.ensureChart(container.nativeElement);
-      this.series?.setData(
-        history.timestamps.map((timestamp, index) => ({
-          time: (timestamp / 1_000) as UTCTimestamp,
-          value: history.equity[index],
-        })),
-      );
-      this.chart?.timeScale().fitContent();
-    });
+        this.ensureChart(container.nativeElement);
+        this.series?.setData(
+          history.timestamps.map((timestamp, index) => ({
+            time: (timestamp / 1_000) as UTCTimestamp,
+            value: history.equity[index],
+          })),
+        );
+        this.chart?.timeScale().fitContent();
+      },
+      { injector: this.injector },
+    );
   }
 
   ngOnDestroy(): void {

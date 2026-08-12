@@ -43,6 +43,7 @@ describe('AlpacaPortfolioHistoryChartComponent', () => {
     });
 
     expect(await screen.findByRole('img', { name: '30D broker equity curve' })).toBeTruthy();
+    await view.fixture.whenStable();
     await waitFor(() =>
       expect(series.setData).toHaveBeenLastCalledWith([
         { time: 1_700_000_000, value: 10_000 },
