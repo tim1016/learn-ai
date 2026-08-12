@@ -26,27 +26,17 @@ import {
   createSeriesMarkers,
 } from 'lightweight-charts';
 import type { ChartBar, ChartFillMarker, GalleryBotView } from '../lib/gallery.types';
+import { toCandle } from '../../lib/chart-bar-mapping';
 import { fmtCurrency, fmtInteger, fmtSignedCurrency, fmtSignedNumber } from '../../../format';
 
-/** Map a millisecond UTC ChartBar to lightweight-charts candle data. */
-function toCandle(bar: ChartBar): {
-  time: UTCTimestamp;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-} {
-  return {
-    time: Math.floor(bar.start_ms / 1000) as UTCTimestamp,
-    open: Number(bar.open),
-    high: Number(bar.high),
-    low: Number(bar.low),
-    close: Number(bar.close),
-  };
-}
-
-/** Map a ChartBar to a volume histogram point, colored by the bar's own direction. */
-function toVolumeBar(bar: ChartBar): { time: UTCTimestamp; value: number; color: string } {
+/**
+ * Map a ChartBar to a volume histogram point, colored by the bar's own
+ * direction. Tile-specific (the volume overlay is not part of
+ * `DualPaneChartComponent`'s market tape), so this stays local rather than
+ * moving into the shared `chart-bar-mapping` module — see `toCandle` there
+ * for the mapping that *is* shared.
+ */
+export function toVolumeBar(bar: ChartBar): { time: UTCTimestamp; value: number; color: string } {
   return {
     time: Math.floor(bar.start_ms / 1000) as UTCTimestamp,
     value: bar.volume,
@@ -55,7 +45,7 @@ function toVolumeBar(bar: ChartBar): { time: UTCTimestamp; value: number; color:
 }
 
 /** Map fills to candle-series markers: buys below the bar, sells above. */
-function toTileMarkers(markers: readonly ChartFillMarker[]): SeriesMarker<UTCTimestamp>[] {
+export function toTileMarkers(markers: readonly ChartFillMarker[]): SeriesMarker<UTCTimestamp>[] {
   return markers
     .map((marker) => {
       const isBuy = marker.side === 'buy';
@@ -87,6 +77,9 @@ function toneOf(value: number): PnlTone {
 @Component({
   selector: 'app-bot-tile',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  host: {
+    '(document:keydown.escape)': 'onEscape()',
+  },
   templateUrl: './bot-tile.component.html',
   styleUrl: './bot-tile.component.scss',
 })
@@ -103,6 +96,8 @@ export class BotTileComponent {
   private readonly destroyRef = inject(DestroyRef);
   private readonly chartContainer =
     viewChild.required<ElementRef<HTMLDivElement>>('chartContainer');
+  private readonly confirmCancelButton =
+    viewChild<ElementRef<HTMLButtonElement>>('confirmCancelButton');
 
   protected readonly confirmOpen = signal(false);
 
@@ -168,6 +163,15 @@ export class BotTileComponent {
 
   constructor() {
     effect(() => this.syncChart());
+    effect(() => {
+      // Move keyboard focus into the confirm when it opens, mirroring
+      // `TypedHaltConfirmComponent` — a wall of tiles with no focus
+      // management would strand keyboard/screen-reader operators on the
+      // toolbar behind the confirm for a live Stop/Resume control.
+      if (this.confirmOpen()) {
+        queueMicrotask(() => this.confirmCancelButton()?.nativeElement.focus());
+      }
+    });
     afterNextRender(() => this.mountChart());
   }
 
@@ -175,6 +179,13 @@ export class BotTileComponent {
     void this.router.navigate([
       '/brokers', this.broker(), 'accounts', this.accountId(), 'bots', this.bot().sid,
     ]);
+  }
+
+  protected onBodySpaceKey(event: Event): void {
+    // Space defaults to page-scroll on a focusable div; suppress that
+    // since Space here activates navigation instead.
+    event.preventDefault();
+    this.onBodyClick();
   }
 
   protected onActionClick(): void {
@@ -190,6 +201,12 @@ export class BotTileComponent {
 
   protected cancelAction(): void {
     this.confirmOpen.set(false);
+  }
+
+  protected onEscape(): void {
+    if (this.confirmOpen()) {
+      this.cancelAction();
+    }
   }
 
   private mountChart(): void {

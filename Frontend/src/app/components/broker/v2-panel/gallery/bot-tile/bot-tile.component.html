@@ -22,7 +22,7 @@
     [attr.aria-label]="'Open ' + bot().symbol + ' · ' + bot().sid + ' detail'"
     (click)="onBodyClick()"
     (keydown.enter)="onBodyClick()"
-    (keydown.space)="onBodyClick()"
+    (keydown.space)="onBodySpaceKey($event)"
   >
     <div #chartContainer class="bot-tile__chart-canvas"></div>
   </div>
@@ -66,7 +66,7 @@
       <div class="bot-tile__confirm" role="alertdialog" aria-label="Confirm quick action">
         <p>{{ confirmText() }}</p>
         <button type="button" (click)="confirmAction()">Confirm</button>
-        <button type="button" (click)="cancelAction()">Cancel</button>
+        <button #confirmCancelButton type="button" (click)="cancelAction()">Cancel</button>
       </div>
     }
   </div>

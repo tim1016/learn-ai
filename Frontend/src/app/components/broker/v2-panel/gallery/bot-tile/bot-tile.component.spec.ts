@@ -1,9 +1,9 @@
 import { Router } from '@angular/router';
-import { fireEvent, render, screen } from '@testing-library/angular';
+import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { ChartBar, GalleryBotView } from '../lib/gallery.types';
-import { BotTileComponent } from './bot-tile.component';
+import type { ChartBar, ChartFillMarker, GalleryBotView } from '../lib/gallery.types';
+import { BotTileComponent, toTileMarkers, toVolumeBar } from './bot-tile.component';
 
 // Mock lightweight-charts — the actual DOM chart is not exercised in unit
 // tests (see dual-pane-chart.component.spec.ts for the grounding pattern).
@@ -211,6 +211,37 @@ describe('BotTileComponent', () => {
     expect(screen.queryByText('Stop SPY · sid-1?')).toBeNull();
   });
 
+  it('moves keyboard focus onto the confirm Cancel button when it opens', async () => {
+    const { container } = await render(BotTileComponent, {
+      inputs: { bot: bot(), bars: [bar()], broker: 'alpaca', accountId: 'PA3' },
+      providers: [routerProvider()],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Stop$/i }));
+
+    await waitFor(() => {
+      const cancel = container.querySelector('.bot-tile__confirm button:last-child');
+      expect(document.activeElement).toBe(cancel);
+    });
+  });
+
+  it('cancels the confirm on Escape without emitting', async () => {
+    const onAction = vi.fn();
+    await render(BotTileComponent, {
+      inputs: { bot: bot(), bars: [bar()], broker: 'alpaca', accountId: 'PA3' },
+      on: { action: onAction },
+      providers: [routerProvider()],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Stop$/i }));
+    expect(screen.getByText('Stop SPY · sid-1?')).toBeTruthy();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(onAction).not.toHaveBeenCalled();
+    expect(screen.queryByText('Stop SPY · sid-1?')).toBeNull();
+  });
+
   it('does not open the confirm when the quick action is disabled', async () => {
     const onAction = vi.fn();
     await render(BotTileComponent, {
@@ -258,5 +289,62 @@ describe('BotTileComponent', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Stop$/i }));
 
     expect(navigate).not.toHaveBeenCalled();
+  });
+});
+
+describe('toVolumeBar', () => {
+  it('floors start_ms to seconds, keeps the raw volume, and colors an up bar green', () => {
+    expect(toVolumeBar(bar({ open: '100', close: '105', volume: 500 }))).toEqual({
+      time: 1_700_000_000,
+      value: 500,
+      color: '#26a69a',
+    });
+  });
+
+  it('colors a down bar red', () => {
+    expect(toVolumeBar(bar({ open: '105', close: '100', volume: 500 }))).toEqual({
+      time: 1_700_000_000,
+      value: 500,
+      color: '#ef5350',
+    });
+  });
+});
+
+describe('toTileMarkers', () => {
+  function fillMarker(overrides: Partial<ChartFillMarker> = {}): ChartFillMarker {
+    return {
+      filled_at_ms: 1_700_000_030_000,
+      side: 'buy',
+      quantity: 2,
+      price: 101,
+      order_ref: 'order-1',
+      ...overrides,
+    };
+  }
+
+  it('maps a buy fill to a green up-arrow below the bar, at the floored second', () => {
+    const [marker] = toTileMarkers([fillMarker()]);
+
+    expect(marker).toEqual({
+      time: 1_700_000_030,
+      position: 'belowBar',
+      color: '#26a69a',
+      shape: 'arrowUp',
+      text: 'BUY 2 @ 101',
+    });
+  });
+
+  it('maps a sell fill to a red down-arrow above the bar', () => {
+    const [marker] = toTileMarkers([
+      fillMarker({ filled_at_ms: 1_700_000_045_000, side: 'sell', quantity: 1, price: 99.5, order_ref: 'order-2' }),
+    ]);
+
+    expect(marker).toEqual({
+      time: 1_700_000_045,
+      position: 'aboveBar',
+      color: '#ef5350',
+      shape: 'arrowDown',
+      text: 'SELL 1 @ 99.5',
+    });
   });
 });
