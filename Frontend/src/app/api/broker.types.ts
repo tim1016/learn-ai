@@ -13545,7 +13545,7 @@ export interface components {
             /** Desired State */
             desired_state: string;
             /** Fills Today */
-            fills_today: number;
+            fills_today: number | null;
             /** Label */
             label: string;
             /** Last Bar At Ms */
@@ -13553,12 +13553,12 @@ export interface components {
             /** Needs Attention */
             needs_attention: boolean;
             /** Open Pnl */
-            open_pnl: number;
+            open_pnl: number | null;
             /** Phase */
             phase: string;
             primary_action: components["schemas"]["GalleryPrimaryAction"];
             /** Realized Pnl Today */
-            realized_pnl_today: number;
+            realized_pnl_today: number | null;
             /** Running */
             running: boolean;
             /** Sid */
