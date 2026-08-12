@@ -8,84 +8,41 @@
           <p-tag severity="warn" value="Paper" />
         </div>
       </div>
-
-      @if (legacyManualOrdersAvailable()) {
-        <p-button
-          label="New order"
-          icon="pi pi-plus"
-          size="small"
-          ariaLabel="Create a new Alpaca order"
-          (onClick)="orderEntryOpen.set(true)"
-        />
-      }
     </div>
 
     <app-alpaca-account-card />
   </header>
 
-  <app-alpaca-hold-banner />
-
-  @if (orderRouteMismatch(); as mismatch) {
-    <p class="order-route-error" role="alert">{{ mismatch }}</p>
-  }
-
-  <app-alpaca-custody-resolution />
-
-  @if (ticketAccountId(); as accountId) {
-    <app-alpaca-sqlite-custody
-      [accountId]="accountId"
-      (legacyAuthorityChanged)="legacyManualOrdersAvailable.set($event)"
-    />
-  }
-
-  <div class="desk-grid">
-    <section class="desk-section positions-section" aria-labelledby="positions-title">
-      <div class="section-heading">
-        <div>
-          <span class="section-eyebrow">Inventory</span>
-          <h2 id="positions-title">Current positions</h2>
-        </div>
-      </div>
-      <app-alpaca-positions-table />
-    </section>
-
-    <section class="desk-section orders-section" aria-labelledby="orders-title">
-      <div class="section-heading">
-        <div>
-          <span class="section-eyebrow">Activity</span>
-          <h2 id="orders-title">Transaction history</h2>
-        </div>
-        <span class="section-note">SQLite projection</span>
-      </div>
-      <app-account-desk-transaction-history
-        [accountId]="ticketAccountId()"
-        [refreshVersion]="historyRefreshVersion()"
-      />
-    </section>
+  <div class="lens-toggle" role="tablist" aria-label="Desk perspective">
+    <button
+      id="alpaca-trader-tab"
+      data-lens="trader"
+      type="button"
+      role="tab"
+      [class.lens-toggle__tab--active]="lens() === 'trader'"
+      [attr.aria-selected]="lens() === 'trader'"
+      [attr.tabindex]="lens() === 'trader' ? 0 : -1"
+      aria-controls="alpaca-trader-panel"
+      (click)="selectLens('trader')"
+      (keydown)="onLensKeydown($event)"
+    >Trader</button>
+    <button
+      id="alpaca-operator-tab"
+      data-lens="operator"
+      type="button"
+      role="tab"
+      [class.lens-toggle__tab--active]="lens() === 'operator'"
+      [attr.aria-selected]="lens() === 'operator'"
+      [attr.tabindex]="lens() === 'operator' ? 0 : -1"
+      aria-controls="alpaca-operator-panel"
+      (click)="selectLens('operator')"
+      (keydown)="onLensKeydown($event)"
+    >Operator</button>
   </div>
+
+  @if (lens() === 'trader') {
+    <app-alpaca-trader-lens />
+  } @else {
+    <app-alpaca-operator-lens />
+  }
 </main>
-
-<p-dialog
-  header="Create Alpaca order"
-  [visible]="legacyManualOrdersAvailable() && orderEntryOpen()"
-  (visibleChange)="orderEntryOpen.set($event)"
-  [modal]="true"
-  [dismissableMask]="true"
-  [style]="{ width: 'min(62rem, calc(100vw - 2rem))' }"
-  styleClass="alpaca-order-dialog"
->
-  <div class="order-dialog-intro">
-    <div>
-      <span class="order-dialog-kicker">
-        {{ ticketAccountId() ?? 'Account unavailable' }} · Equities
-      </span>
-      <p>Choose Market for immediate execution or Limit to set the highest buy or lowest sell price.</p>
-    </div>
-    <span class="order-dialog-safety"><i class="pi pi-shield" aria-hidden="true"></i> Preview required</span>
-  </div>
-  <app-alpaca-order-entry
-    [initialSymbol]="orderPrefill()?.symbol ?? ''"
-    [expectedAccountId]="ticketAccountId() ?? ''"
-    (submissionFinished)="refreshHistory()"
-  />
-</p-dialog>

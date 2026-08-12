@@ -1,98 +1,101 @@
-import {
-  ChangeDetectionStrategy,
-  Component,
-  computed,
-  effect,
-  inject,
-  resource,
-  signal,
-} from '@angular/core';
+import { ChangeDetectionStrategy, Component, effect, inject, linkedSignal } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
-import { ActivatedRoute } from '@angular/router';
-import { ButtonModule } from 'primeng/button';
-import { DialogModule } from 'primeng/dialog';
+import { ActivatedRoute, Router } from '@angular/router';
 import { TagModule } from 'primeng/tag';
 
 import { AlpacaAccountCardComponent } from './alpaca-account-card.component';
-import { AlpacaCustodyResolutionComponent } from './alpaca-custody-resolution.component';
-import { AlpacaHoldBannerComponent } from './alpaca-hold-banner.component';
-import { AlpacaOrderEntryComponent } from './alpaca-order-entry.component';
-import { AlpacaSqliteCustodyComponent } from './alpaca-sqlite-custody.component';
-import { AlpacaPositionsTableComponent } from './alpaca-positions-table.component';
-import { BrokersService } from '../../../services/brokers.service';
-import { AccountDeskTransactionHistoryComponent } from '../../broker/account-desk/account-desk-transaction-history.component';
-import { AccountDeskTransactionHistoryStore } from '../../broker/account-desk/account-desk-transaction-history-store.service';
-import { parseManualOrderTicketQuery } from '../../broker/lib/manual-order-navigation';
+import { AlpacaOperatorLensComponent } from './alpaca-operator-lens.component';
+import { AlpacaOperatorLensDataService } from './alpaca-operator-lens-data.service';
+import { AlpacaTraderLensComponent } from './alpaca-trader-lens.component';
+
+const LENS_STORAGE_KEY = 'learn-ai.alpaca-desk.lens';
+
+type AlpacaDeskLens = 'trader' | 'operator';
+
+function lensFrom(value: string | null): AlpacaDeskLens | null {
+  return value === 'trader' || value === 'operator' ? value : null;
+}
+
+function storedLens(): AlpacaDeskLens | null {
+  if (typeof localStorage === 'undefined') return null;
+  try {
+    return lensFrom(localStorage.getItem(LENS_STORAGE_KEY));
+  } catch (error) {
+    // Storage can be disabled without making the in-memory desk unusable.
+    void error;
+    return null;
+  }
+}
+
+function persistLens(lens: AlpacaDeskLens): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(LENS_STORAGE_KEY, lens);
+  } catch (error) {
+    // Persistence is an enhancement; keep the current session's choice.
+    void error;
+  }
+}
 
 /**
  * Alpaca broker desk (Broker System v2) — the `/brokers/alpaca` route target.
- * Composes the account card, positions/orders tables, and (phase-2 S1) the
- * order-entry panel. Separate from every v1 broker page.
+ * The shell owns the persona choice; each lens owns its own data and content.
  */
 @Component({
   selector: 'app-alpaca-desk',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     AlpacaAccountCardComponent,
-    AlpacaCustodyResolutionComponent,
-    AlpacaHoldBannerComponent,
-    AlpacaPositionsTableComponent,
-    AccountDeskTransactionHistoryComponent,
-    AlpacaOrderEntryComponent,
-    AlpacaSqliteCustodyComponent,
-    ButtonModule,
-    DialogModule,
+    AlpacaOperatorLensComponent,
+    AlpacaTraderLensComponent,
     TagModule,
   ],
   templateUrl: './alpaca-desk.component.html',
   styleUrl: './alpaca-desk.component.scss',
   host: { class: 'block h-full' },
-  providers: [AccountDeskTransactionHistoryStore],
+  providers: [AlpacaOperatorLensDataService],
 })
 export class AlpacaDeskComponent {
   private readonly route = inject(ActivatedRoute);
-  private readonly brokers = inject(BrokersService);
+  private readonly router = inject(Router);
+  private readonly operatorData = inject(AlpacaOperatorLensDataService);
   private readonly queryParams = toSignal(this.route.queryParamMap, {
     initialValue: this.route.snapshot.queryParamMap,
   });
 
-  private readonly routedOrderPrefill = computed(() =>
-    parseManualOrderTicketQuery(this.queryParams()),
+  protected readonly lens = linkedSignal<AlpacaDeskLens>(() =>
+    lensFrom(this.queryParams().get('lens')) ?? storedLens() ?? 'trader',
   );
-  private readonly account = resource({
-    loader: () => this.brokers.getAccount('alpaca'),
-  });
-
-  protected readonly ticketAccountId = computed(() =>
-    this.account.hasValue() ? this.account.value().account_id : null,
-  );
-  protected readonly orderPrefill = computed(() => {
-    const routed = this.routedOrderPrefill();
-    const accountId = this.ticketAccountId();
-    return routed !== null && accountId === routed.accountId ? routed : null;
-  });
-  protected readonly orderRouteMismatch = computed(() => {
-    const routed = this.routedOrderPrefill();
-    const accountId = this.ticketAccountId();
-    return routed !== null && accountId !== null && routed.accountId !== accountId
-      ? `The order link targets account ${routed.accountId}, but Alpaca is connected to ${accountId}. No ticket was opened.`
-      : null;
-  });
-  protected readonly orderEntryOpen = signal(false);
-  protected readonly legacyManualOrdersAvailable = signal(false);
-  protected readonly historyRefreshVersion = signal(0);
 
   constructor() {
     effect(() => {
-      if (!this.legacyManualOrdersAvailable()) {
-        this.orderEntryOpen.set(false);
-      } else if (this.orderPrefill() !== null) {
-        this.orderEntryOpen.set(true);
-      }
+      if (this.lens() === 'operator') this.operatorData.loadOnce();
     });
   }
 
-  protected refreshHistory(): void {
-    this.historyRefreshVersion.update((version) => version + 1);
+  protected selectLens(lens: AlpacaDeskLens): void {
+    if (lens === this.lens()) return;
+    this.lens.set(lens);
+    persistLens(lens);
+    void this.router.navigate([], {
+      relativeTo: this.route,
+      queryParams: { lens },
+      queryParamsHandling: 'merge',
+    });
+  }
+
+  protected onLensKeydown(event: KeyboardEvent): void {
+    const nextLens =
+      event.key === 'ArrowRight' || event.key === 'End'
+        ? 'operator'
+        : event.key === 'ArrowLeft' || event.key === 'Home'
+          ? 'trader'
+          : null;
+    if (nextLens === null) return;
+    event.preventDefault();
+    this.selectLens(nextLens);
+    if (!(event.currentTarget instanceof HTMLElement)) return;
+    const target = event.currentTarget.parentElement?.querySelector(`[data-lens="${nextLens}"]`);
+    if (target instanceof HTMLElement) target.focus();
   }
 }
