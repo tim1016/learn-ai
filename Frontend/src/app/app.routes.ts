@@ -1,6 +1,9 @@
 import { ChangeDetectionStrategy, Component } from "@angular/core";
 import { Routes } from "@angular/router";
-import { brokerBotsRedirectGuard } from "./components/broker/v2-panel/lib/broker-bots-redirect.guard";
+import {
+  brokerBotsRedirectGuard,
+  brokerGalleryRedirectGuard,
+} from "./components/broker/v2-panel/lib/broker-bots-redirect.guard";
 
 // Nominal component target for the brokerBotsRedirectGuard route.
 // The guard always returns a UrlTree so this component never renders.
@@ -381,6 +384,13 @@ export const routes: Routes = [
     // redirects to /brokers/:broker/accounts/:accountId/bots.
     path: 'brokers/:broker/bots',
     canActivate: [brokerBotsRedirectGuard],
+    component: NeverRendersComponent,
+  },
+  {
+    // Gallery is a peer of Bots: resolve the account before loading its
+    // account-scoped live-wall route.
+    path: 'brokers/:broker/gallery',
+    canActivate: [brokerGalleryRedirectGuard],
     component: NeverRendersComponent,
   },
   { path: "**", redirectTo: "/data-lab" },
