@@ -116,21 +116,24 @@ export class AccountDeskTransactionHistoryStore {
 }
 
 function normalizeFilters(filters: ClerkTransactionFilters): ClerkTransactionFilters {
-  const normalized: ClerkTransactionFilters = {
-    origin: filters.origin ?? null,
-    lifecycleState: filters.lifecycleState?.trim() || null,
-    strategyInstanceId: filters.strategyInstanceId?.trim() || null,
-    runId: filters.runId?.trim() || null,
-  };
+  const fromMs = validTimestamp(filters.fromMs);
+  const toMs = validTimestamp(filters.toMs);
   return {
-    ...normalized,
-    ...(filters.fromMs !== undefined ? { fromMs: normalizeTimestamp(filters.fromMs) } : {}),
-    ...(filters.toMs !== undefined ? { toMs: normalizeTimestamp(filters.toMs) } : {}),
+    ...(filters.origin ? { origin: filters.origin } : {}),
+    ...(filters.lifecycleState?.trim() ? { lifecycleState: filters.lifecycleState.trim() } : {}),
+    ...(filters.strategyInstanceId?.trim()
+      ? { strategyInstanceId: filters.strategyInstanceId.trim() }
+      : {}),
+    ...(filters.runId?.trim() ? { runId: filters.runId.trim() } : {}),
+    ...(fromMs !== undefined ? { fromMs } : {}),
+    ...(toMs !== undefined ? { toMs } : {}),
   };
 }
 
-function normalizeTimestamp(value: number | null | undefined): number | null {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
+function validTimestamp(value: number | null | undefined): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : undefined;
 }
 
 function sameFilters(left: ClerkTransactionFilters, right: ClerkTransactionFilters): boolean {

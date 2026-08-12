@@ -42,7 +42,7 @@ describe('AccountDeskTransactionHistoryStore', () => {
     store.setFilters({ origin: 'strategy', lifecycleState: 'submitted' });
 
     expect(broker.accountTransactions).toHaveBeenLastCalledWith('DU1234567', null, 25, {
-      origin: 'strategy', lifecycleState: 'submitted', strategyInstanceId: null, runId: null,
+      origin: 'strategy', lifecycleState: 'submitted',
     });
     resolveInitial?.(historyPage());
     await Promise.resolve();
@@ -73,10 +73,6 @@ describe('AccountDeskTransactionHistoryStore', () => {
     await store.load('DU1234567', { fromMs: 1_700_086_400_000, toMs: 1_700_172_800_000 });
 
     expect(broker.accountTransactions).toHaveBeenLastCalledWith('DU1234567', null, 25, {
-      origin: null,
-      lifecycleState: null,
-      strategyInstanceId: null,
-      runId: null,
       fromMs: 1_700_086_400_000,
       toMs: 1_700_172_800_000,
     });
