@@ -142,23 +142,36 @@ class GalleryHub:
             primary_action=self._primary_action(row),
         )
 
-    async def build_snapshot(self) -> GalleryLiveSnapshot:
-        """Build one versioned snapshot: running bots + deduped per-symbol bars.
+    async def _fetch_running_and_bars(
+        self, *, since_bar_ms: dict[str, int] | None
+    ) -> tuple[list[BotCatalogView], list[GallerySymbolBars]]:
+        """Shared core of ``build_snapshot``/``build_update``: fetch the catalog,
+        filter to running bots, and subscribe-then-read each running symbol's
+        bars exactly once (``running_symbols`` dedup).
 
-        Subscribes each running symbol exactly once (``running_symbols`` dedup)
-        and snapshots the aggregator's ring buffer for it. ``markers`` is left
-        empty — see module docstring.
+        ``since_bar_ms`` is ``None`` for a full snapshot read; when provided,
+        each symbol's bars are read with ``since_ms=since_bar_ms.get(symbol)``
+        so the aggregator returns only bars appended since the caller's
+        last-seen bar (the incremental-update case).
         """
         catalog = await self._catalog_source.get_catalog(self._broker, self._account_id)
         running = [row for row in catalog if getattr(row, "running", False)]
-        symbols = running_symbols(catalog)
         symbol_bars: list[GallerySymbolBars] = []
-        for symbol in symbols:
+        for symbol in running_symbols(catalog):
             await self._aggregator.ensure_subscribed(symbol)
-            raw = self._aggregator.snapshot(symbol)
+            since_ms = since_bar_ms.get(symbol) if since_bar_ms is not None else None
+            raw = self._aggregator.snapshot(symbol, since_ms=since_ms)
             symbol_bars.append(
                 GallerySymbolBars(symbol=symbol, bars=aggregator_bars_to_chart_bars(raw))
             )
+        return running, symbol_bars
+
+    async def build_snapshot(self) -> GalleryLiveSnapshot:
+        """Build one versioned snapshot: running bots + deduped per-symbol bars.
+
+        ``markers`` is left empty — see module docstring.
+        """
+        running, symbol_bars = await self._fetch_running_and_bars(since_bar_ms=None)
         self._last_sids = {row.strategy_instance_id for row in running}
         self._version += 1
         latest_bar_ms = _latest_bar_end_ms(symbol_bars)
@@ -175,24 +188,12 @@ class GalleryHub:
     async def build_update(self, since_bar_ms: dict[str, int]) -> GalleryLiveUpdate:
         """Build one incremental update: new bars per symbol + bot deltas + removals.
 
-        Mirrors ``build_snapshot``'s subscribe-then-read loop, but each running
-        symbol's bars are read with ``since_ms=since_bar_ms.get(symbol)`` so the
-        aggregator returns only bars appended since the caller's last-seen bar.
         Every running bot is re-projected into ``bots_delta`` (no dirty-tracking
         yet). ``removed_sids`` diffs the previous call's running-bot roster
         (tracked in ``self._last_sids``, seeded by ``build_snapshot``) against
         this one. ``markers_delta`` is left empty — see module docstring.
         """
-        catalog = await self._catalog_source.get_catalog(self._broker, self._account_id)
-        running = [row for row in catalog if getattr(row, "running", False)]
-        symbols = running_symbols(catalog)
-        symbol_bars: list[GallerySymbolBars] = []
-        for symbol in symbols:
-            await self._aggregator.ensure_subscribed(symbol)
-            raw = self._aggregator.snapshot(symbol, since_ms=since_bar_ms.get(symbol))
-            symbol_bars.append(
-                GallerySymbolBars(symbol=symbol, bars=aggregator_bars_to_chart_bars(raw))
-            )
+        running, symbol_bars = await self._fetch_running_and_bars(since_bar_ms=since_bar_ms)
         current_sids = {row.strategy_instance_id for row in running}
         removed_sids = sorted(self._last_sids - current_sids)
         self._last_sids = current_sids
