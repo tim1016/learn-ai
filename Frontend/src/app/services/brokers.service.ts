@@ -74,7 +74,7 @@ export class BrokersService {
    */
   listActivities(
     broker = 'alpaca',
-    options: { afterMs?: number; limit?: number } = {},
+    options: { afterMs?: number; currentSession?: boolean; limit?: number } = {},
   ): Promise<BrokerActivity[]> {
     let params = new HttpParams();
     if (options.afterMs != null) {
@@ -82,6 +82,9 @@ export class BrokersService {
     }
     if (options.limit != null) {
       params = params.set('limit', options.limit);
+    }
+    if (options.currentSession) {
+      params = params.set('current_session', true);
     }
     return firstValueFrom(
       this.http.get<BrokerActivity[]>(`${this.base}/${broker}/activities`, { params }),

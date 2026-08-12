@@ -59,6 +59,24 @@ describe('BrokersService', () => {
     await expect(promise).resolves.toEqual([]);
   });
 
+  it('requests the backend-owned current trading session', async () => {
+    const promise = service.listActivities('alpaca', {
+      currentSession: true,
+      limit: 100,
+    });
+
+    const req = httpMock.expectOne(
+      (request) =>
+        request.url === '/api/brokers/alpaca/activities' &&
+        request.params.get('current_session') === 'true' &&
+        request.params.get('limit') === '100' &&
+        !request.params.has('after_ms'),
+    );
+    req.flush([]);
+
+    await expect(promise).resolves.toEqual([]);
+  });
+
   it('coalesces concurrent account reads for the same broker', async () => {
     const first = service.getAccount('alpaca');
     const second = service.getAccount('alpaca');

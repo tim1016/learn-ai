@@ -207,6 +207,18 @@ async def test_history_endpoint_rejects_an_inverted_ms_window() -> None:
     assert response.json()["detail"] == "to_ms must be greater than or equal to from_ms"
 
 
+async def test_history_endpoint_rejects_timestamp_beyond_int64() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/accounts/DU1219/transactions",
+            params={"from_ms": 2**63},
+        )
+
+    assert response.status_code == 422
+
+
 async def test_pnl_attribution_endpoint_passes_the_inclusive_window_to_c2(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -222,8 +234,13 @@ async def test_pnl_attribution_endpoint_passes_the_inclusive_window_to_c2(
             to_ms=to_ms,
             attribution_rows=(),
             realized_pnl_total=12.5,
+            start_open_pnl_total=0.0,
             open_pnl_total=0.0,
+            fee_total=0.0,
+            fee_fidelity="reported",
+            execution_coverage="complete",
             marks_complete=True,
+            start_mark_observed_at_ms={},
             mark_observed_at_ms={},
         )
 

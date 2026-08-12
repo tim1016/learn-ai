@@ -17,6 +17,16 @@
     <app-alpaca-account-card />
   </header>
 
+  <app-alpaca-hold-banner />
+
+  @if (orderRouteMismatch(); as mismatch) {
+    <p class="order-route-notice" role="alert">{{ mismatch }}</p>
+  } @else if (manualOrderNotice(); as notice) {
+    <p class="order-route-notice" role="alert">{{ notice }}</p>
+  }
+
+  <app-alpaca-custody-resolution />
+
   <div class="lens-toggle" role="tablist" aria-label="Desk perspective">
     <button
       id="alpaca-trader-tab"
@@ -45,10 +55,26 @@
   </div>
 
   @if (lens() === 'trader') {
-    <app-alpaca-trader-lens />
+    <app-alpaca-trader-lens [refreshVersion]="historyRefreshVersion()" />
   } @else {
-    <app-alpaca-operator-lens />
+    <app-alpaca-operator-lens [refreshVersion]="historyRefreshVersion()" />
   }
 </main>
 
 <app-alpaca-deploy-drawer [visible]="deployOpen()" (closed)="closeDeploy()" />
+
+<p-dialog
+  header="Create Alpaca order"
+  [visible]="orderEntryOpen()"
+  (visibleChange)="orderEntryOpen.set($event)"
+  [modal]="true"
+  [dismissableMask]="true"
+  [style]="{ width: 'min(62rem, calc(100vw - 2rem))' }"
+  styleClass="alpaca-order-dialog"
+>
+  <app-alpaca-order-entry
+    [initialSymbol]="orderPrefill()?.symbol ?? ''"
+    [expectedAccountId]="ticketAccountId() ?? ''"
+    (submissionFinished)="refreshDesk()"
+  />
+</p-dialog>

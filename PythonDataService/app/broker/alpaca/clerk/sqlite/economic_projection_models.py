@@ -164,8 +164,13 @@ class AccountPnlAttribution:
     to_ms: int
     attribution_rows: tuple[FifoAttributionRow, ...]
     realized_pnl_total: float
+    start_open_pnl_total: float | None
     open_pnl_total: float | None
+    fee_total: float | None
+    fee_fidelity: FeeFidelity
+    execution_coverage: ExecutionCoverage
     marks_complete: bool
+    start_mark_observed_at_ms: dict[str, int]
     mark_observed_at_ms: dict[str, int]
 
 

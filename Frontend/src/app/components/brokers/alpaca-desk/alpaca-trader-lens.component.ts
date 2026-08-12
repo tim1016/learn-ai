@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, input, signal } from '@angular/core';
 
 import type { PortfolioHistoryRange } from '../../../api/alpaca.types';
 import { AccountDeskTransactionHistoryComponent } from '../../broker/account-desk/account-desk-transaction-history.component';
@@ -21,15 +21,13 @@ interface HistoryWindow {
 const SCOPE_OPTIONS: readonly TraderScope[] = ['today', '30d', '60d'];
 
 const SCOPE_CONFIG = {
-  today: { label: 'Today', range: undefined, windowDays: undefined },
-  '30d': { label: '30D', range: '30D', windowDays: 30 },
-  '60d': { label: '60D', range: '60D', windowDays: 60 },
+  today: { label: 'Today', range: undefined },
+  '30d': { label: '30D', range: '30D' },
+  '60d': { label: '60D', range: '60D' },
 } as const satisfies Record<
   TraderScope,
-  { readonly label: string; readonly range: PortfolioHistoryRange | undefined; readonly windowDays: number | undefined }
+  { readonly label: string; readonly range: PortfolioHistoryRange | undefined }
 >;
-
-const MS_PER_DAY = 24 * 60 * 60 * 1_000;
 
 /** Outcomes-focused account view; historical scopes render the C1 broker curve. */
 @Component({
@@ -48,10 +46,10 @@ const MS_PER_DAY = 24 * 60 * 60 * 1_000;
   providers: [AlpacaTraderLensDataService, AccountDeskTransactionHistoryStore],
 })
 export class AlpacaTraderLensComponent {
+  readonly refreshVersion = input(0);
   protected readonly accountData = inject(AlpacaDeskAccountDataService);
   protected readonly traderData = inject(AlpacaTraderLensDataService);
   protected readonly scope = signal<TraderScope>('today');
-  private readonly historyWindowState = signal<HistoryWindow | null>(null);
   protected readonly scopeConfig = SCOPE_CONFIG;
   protected readonly scopeOptions = SCOPE_OPTIONS;
   protected readonly account = computed(() =>
@@ -69,14 +67,6 @@ export class AlpacaTraderLensComponent {
   protected readonly activitiesUnavailable = computed(
     () => this.traderData.activities.error() !== undefined,
   );
-  protected readonly portfolioHistory = computed(() =>
-    this.traderData.portfolioHistory.hasValue()
-      ? this.traderData.portfolioHistory.value()
-      : undefined,
-  );
-  protected readonly portfolioHistoryUnavailable = computed(
-    () => this.traderData.portfolioHistory.error() !== undefined,
-  );
   protected readonly portfolioHistoryProof = computed(() =>
     this.traderData.portfolioHistoryProof.hasValue()
       ? this.traderData.portfolioHistoryProof.value()
@@ -85,18 +75,21 @@ export class AlpacaTraderLensComponent {
   protected readonly portfolioHistoryProofUnavailable = computed(
     () => this.traderData.portfolioHistoryProof.error() !== undefined,
   );
-  protected readonly historyWindow = this.historyWindowState.asReadonly();
+  protected readonly portfolioHistory = computed(
+    () => this.portfolioHistoryProof()?.history,
+  );
+  protected readonly historyWindow = computed<HistoryWindow | null>(() => {
+    const timestamps = this.portfolioHistory()?.timestamps;
+    if (!timestamps?.length) return null;
+    return {
+      fromMs: timestamps[0],
+      toMs: timestamps[timestamps.length - 1],
+    };
+  });
 
   protected selectScope(scope: TraderScope): void {
     this.scope.set(scope);
     const config = SCOPE_CONFIG[scope];
     this.traderData.selectPortfolioHistoryRange(config.range);
-    const { windowDays: days } = config;
-    if (days === undefined) {
-      this.historyWindowState.set(null);
-      return;
-    }
-    const toMs = Date.now();
-    this.historyWindowState.set({ fromMs: toMs - days * MS_PER_DAY, toMs });
   }
 }

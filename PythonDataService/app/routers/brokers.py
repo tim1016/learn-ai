@@ -57,6 +57,7 @@ from app.broker.contract.models import (
 from app.broker.contract.ports import BrokerReadPort
 from app.broker.contract.registry import get_broker_registry
 from app.config import settings
+from app.lean_sidecar.trading_calendar import current_trading_session_window
 from app.schemas.account_pnl_attribution import (
     AccountPnlAttributionResponse,
     AccountPnlReconciliationResponse,
@@ -74,6 +75,7 @@ from app.services.sqlite_clerk_compat import (
     sqlite_custody_diagnosis,
     sqlite_projection,
 )
+from app.utils.timestamps import now_ms_utc
 
 router = APIRouter(prefix="/api/brokers", tags=["brokers-v2"])
 
@@ -167,7 +169,18 @@ async def list_activities(
     broker: str,
     limit: int = Query(default=_DEFAULT_READ_LIMIT, ge=1, le=_MAX_ACTIVITY_LIMIT),
     after_ms: int | None = Query(default=None, ge=0, le=_MAX_INT64_MS),
+    current_session: bool = Query(default=False),
 ) -> list[BrokerActivity]:
+    if current_session and after_ms is not None:
+        raise HTTPException(
+            status_code=422,
+            detail="current_session and after_ms are mutually exclusive",
+        )
+    if current_session:
+        session = current_trading_session_window(now_ms_utc())
+        if session is None:
+            return []
+        after_ms = session.open_ms_utc
     return await _run(
         broker,
         lambda port: port.list_activities(after_ms=after_ms, limit=limit),
@@ -207,21 +220,31 @@ async def get_portfolio_history_proof(
     broker: str,
     history_range: PortfolioHistoryRange = Query(alias="range"),
 ) -> PortfolioHistoryProofResponse:
-    """Bundle C1 broker history with independent C2/C3 proof for Trader lens."""
-    history, positions = await asyncio.gather(
+    """Bundle one C1 history snapshot with independent C2/C3 proof when available."""
+    history_result, positions_result = await asyncio.gather(
         _run(broker, lambda port: port.get_portfolio_history(history_range)),
         _run(broker, lambda port: port.list_positions()),
+        return_exceptions=True,
     )
+    if isinstance(history_result, BaseException):
+        raise history_result
+    history = history_result
+    if isinstance(positions_result, BaseException):
+        return _history_without_proof(
+            history,
+            "Current positions were unavailable, so local FIFO proof could not be built.",
+        )
+    positions = positions_result
     sqlite = active_sqlite_facade(broker)
     if sqlite is None:
-        raise HTTPException(
-            status_code=409,
-            detail="SQLite Clerk authority is not active for this broker.",
+        return _history_without_proof(
+            history,
+            "SQLite Clerk authority is not active for this broker.",
         )
     if not history.timestamps:
-        raise HTTPException(
-            status_code=422,
-            detail="Broker portfolio history has no timestamps for the requested range.",
+        return _history_without_proof(
+            history,
+            "Broker portfolio history has no timestamps for the requested range.",
         )
     try:
         attribution = await asyncio.to_thread(
@@ -237,22 +260,36 @@ async def get_portfolio_history_proof(
                 for position in positions
                 if position.current_price is not None
             },
+            position_quantities={
+                position.symbol.upper(): position.quantity for position in positions
+            },
         )
-    except (ClerkTransactionProjectionUnavailable, EconomicProjectionError) as exc:
-        raise HTTPException(
-            status_code=503,
-            detail="SQLite FIFO attribution is unavailable for this broker.",
-        ) from exc
+    except (ClerkTransactionProjectionUnavailable, EconomicProjectionError):
+        return _history_without_proof(
+            history,
+            "SQLite FIFO attribution is unavailable for this broker.",
+        )
     if attribution is None:
-        raise HTTPException(
-            status_code=409,
-            detail="SQLite Clerk authority changed while loading portfolio history proof.",
+        return _history_without_proof(
+            history,
+            "SQLite Clerk authority changed while loading portfolio history proof.",
         )
     reconciliation = reconcile_broker_curve_to_local_pnl(history, attribution)
     return PortfolioHistoryProofResponse(
         history=history,
         attribution=AccountPnlAttributionResponse.from_projection(attribution),
         reconciliation=AccountPnlReconciliationResponse.from_result(reconciliation),
+    )
+
+
+def _history_without_proof(
+    history: BrokerPortfolioHistory,
+    reason: str,
+) -> PortfolioHistoryProofResponse:
+    """Preserve the C1 chart snapshot when independent proof is unavailable."""
+    return PortfolioHistoryProofResponse(
+        history=history,
+        proof_unavailable_reason=reason,
     )
 
 

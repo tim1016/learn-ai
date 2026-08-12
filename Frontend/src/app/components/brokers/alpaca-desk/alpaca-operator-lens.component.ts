@@ -4,6 +4,7 @@ import {
   ElementRef,
   effect,
   inject,
+  input,
   signal,
   viewChild,
 } from '@angular/core';
@@ -11,6 +12,8 @@ import {
 import { AccountDeskTransactionHistoryComponent } from '../../broker/account-desk/account-desk-transaction-history.component';
 import { AccountDeskTransactionHistoryStore } from '../../broker/account-desk/account-desk-transaction-history-store.service';
 import type { SqliteRecoveryAction } from '../../../api/alpaca.types';
+import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
+import { TimestampDisplayComponent } from '../../../shared/timestamp';
 import { AlpacaSqliteCustodyComponent } from './alpaca-sqlite-custody.component';
 import { AlpacaOperatorLensDataService } from './alpaca-operator-lens-data.service';
 import { AlpacaOperatorPostureComponent } from './alpaca-operator-posture.component';
@@ -23,12 +26,15 @@ import { AlpacaOperatorPostureComponent } from './alpaca-operator-posture.compon
     AccountDeskTransactionHistoryComponent,
     AlpacaOperatorPostureComponent,
     AlpacaSqliteCustodyComponent,
+    ReceiptLabelPipe,
+    TimestampDisplayComponent,
   ],
   providers: [AccountDeskTransactionHistoryStore],
   templateUrl: './alpaca-operator-lens.component.html',
   styleUrl: './alpaca-operator-lens.component.scss',
 })
 export class AlpacaOperatorLensComponent {
+  readonly refreshVersion = input(0);
   private readonly data = inject(AlpacaOperatorLensDataService);
   private readonly custodyPanel = viewChild<ElementRef<HTMLDetailsElement>>('custodyPanel');
   private readonly custody = viewChild(AlpacaSqliteCustodyComponent);

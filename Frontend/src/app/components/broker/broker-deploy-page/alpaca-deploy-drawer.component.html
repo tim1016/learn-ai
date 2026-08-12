@@ -23,7 +23,7 @@
   @if (visible()) {
     @if (resolvedAccountId(); as resolvedAccountId) {
       <app-alpaca-deploy-workflow [accountId]="resolvedAccountId" />
-    } @else if (account.error()) {
+    } @else if (accountUnavailable()) {
       <section class="deploy-context-error" role="alert">
         <strong>Alpaca account context is unavailable.</strong>
         <span>Restore the paper account connection, then reopen Deploy.</span>

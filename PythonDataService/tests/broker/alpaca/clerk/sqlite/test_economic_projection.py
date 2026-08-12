@@ -432,6 +432,8 @@ def test_account_pnl_attribution_includes_both_window_bounds_and_preserves_fifo_
             quantity=1.0,
             price=110.0,
             occurred_at_ms=from_ms,
+            fee=1.0,
+            fee_fidelity="reported",
         )
         _append_slice(
             repo,
@@ -441,11 +443,30 @@ def test_account_pnl_attribution_includes_both_window_bounds_and_preserves_fifo_
             quantity=1.0,
             price=120.0,
             occurred_at_ms=to_ms,
+            fee=2.0,
+            fee_fidelity="reported",
+        )
+        _append_slice(
+            repo,
+            accepted,
+            execution_id="exec-c2-after-window",
+            side="BUY",
+            quantity=1.0,
+            price=999.0,
+            occurred_at_ms=to_ms + 1,
+            fee=0.0,
+            fee_fidelity="reported",
         )
 
         reader = SqliteEconomicProjectionReader.from_repository(repo)
         try:
-            projection = reader.account_pnl_attribution(from_ms=from_ms, to_ms=to_ms)
+            projection = reader.account_pnl_attribution(
+                from_ms=from_ms,
+                to_ms=to_ms,
+                start_marks={
+                    "GOOGL": MarketMark(price=105.0, observed_at_ms=from_ms),
+                },
+            )
         finally:
             reader.close()
 
@@ -461,8 +482,13 @@ def test_account_pnl_attribution_includes_both_window_bounds_and_preserves_fifo_
         assert all(row.entry_strategy_instance_id == _SID for row in projection.attribution_rows)
         assert all(row.exit_strategy_instance_id == _SID for row in projection.attribution_rows)
         assert projection.realized_pnl_total == pytest.approx(30.0, abs=_ATOL, rel=_RTOL)
+        assert projection.start_open_pnl_total == pytest.approx(10.0, abs=_ATOL, rel=_RTOL)
         assert projection.open_pnl_total == pytest.approx(0.0, abs=_ATOL, rel=_RTOL)
+        assert projection.fee_total == pytest.approx(3.0, abs=_ATOL, rel=_RTOL)
+        assert projection.fee_fidelity == "reported"
+        assert projection.execution_coverage == "complete"
         assert projection.marks_complete is True
+        assert projection.start_mark_observed_at_ms == {"GOOGL": from_ms}
         assert projection.mark_observed_at_ms == {}
     finally:
         repo.close()

@@ -21,7 +21,10 @@ from typing import Protocol
 
 from app.broker.alpaca.paths import resolve_contained_path
 from app.broker.contract.models import BrokerAccountSnapshot
-from app.lean_sidecar.trading_calendar import session_windows_ms_utc
+from app.lean_sidecar.trading_calendar import (
+    previous_completed_session_close_ms,
+    session_windows_ms_utc,
+)
 from app.utils.timestamps import Clock, now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -34,6 +37,7 @@ _CAPTURE_RETRY_DELAY_SECONDS = 60.0
 type AccountSnapshotProvider = Callable[[], Awaitable[BrokerAccountSnapshot]]
 type Sleep = Callable[[float], Awaitable[None]]
 type SessionCloseResolver = Callable[[int], int]
+type CompletedSessionCloseResolver = Callable[[int], int | None]
 
 
 class DuplicateDailySovereignEquitySnapshotError(ValueError):
@@ -128,11 +132,15 @@ class DailySovereignEquitySnapshotScheduler:
         clock: Clock = now_ms_utc,
         sleep: Sleep = asyncio.sleep,
         session_close_resolver: SessionCloseResolver | None = None,
+        latest_completed_session_close_resolver: CompletedSessionCloseResolver | None = None,
     ) -> None:
         self._writer = writer
         self._clock = clock
         self._sleep = sleep
         self._session_close_resolver = session_close_resolver or next_nyse_session_close_ms
+        self._latest_completed_session_close_resolver = (
+            latest_completed_session_close_resolver or previous_completed_session_close_ms
+        )
         self._task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
@@ -171,6 +179,11 @@ class DailySovereignEquitySnapshotScheduler:
         return session_close_ms
 
     async def _run(self) -> None:
+        latest_completed_close_ms = self._latest_completed_session_close_resolver(
+            self._clock()
+        )
+        if latest_completed_close_ms is not None:
+            await self._capture_after_session_close(latest_completed_close_ms)
         while True:
             session_close_ms = await self._wait_for_next_session_close()
             await self._capture_after_session_close(session_close_ms)

@@ -1587,6 +1587,33 @@
             "title": "Control Revision",
             "type": "integer"
           },
+          "execution_coverage": {
+            "enum": [
+              "complete",
+              "incomplete"
+            ],
+            "title": "Execution Coverage",
+            "type": "string"
+          },
+          "fee_fidelity": {
+            "enum": [
+              "reported",
+              "not_reported"
+            ],
+            "title": "Fee Fidelity",
+            "type": "string"
+          },
+          "fee_total": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fee Total"
+          },
           "from_ms": {
             "minimum": 0.0,
             "title": "From Ms",
@@ -1618,6 +1645,24 @@
             "title": "Realized Pnl Total",
             "type": "number"
           },
+          "start_mark_observed_at_ms": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Start Mark Observed At Ms",
+            "type": "object"
+          },
+          "start_open_pnl_total": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Open Pnl Total"
+          },
           "to_ms": {
             "minimum": 0.0,
             "title": "To Ms",
@@ -1632,8 +1677,13 @@
           "to_ms",
           "attribution_rows",
           "realized_pnl_total",
+          "start_open_pnl_total",
           "open_pnl_total",
+          "fee_total",
+          "fee_fidelity",
+          "execution_coverage",
           "marks_complete",
+          "start_mark_observed_at_ms",
           "mark_observed_at_ms"
         ],
         "title": "AccountPnlAttributionResponse",
@@ -30050,19 +30100,43 @@
         "description": "C1 + C2 + C3 bundle for the Trader lens historical scope.",
         "properties": {
           "attribution": {
-            "$ref": "#/components/schemas/AccountPnlAttributionResponse"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountPnlAttributionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "history": {
             "$ref": "#/components/schemas/BrokerPortfolioHistory"
           },
+          "proof_unavailable_reason": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proof Unavailable Reason"
+          },
           "reconciliation": {
-            "$ref": "#/components/schemas/AccountPnlReconciliationResponse"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountPnlReconciliationResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
-          "history",
-          "attribution",
-          "reconciliation"
+          "history"
         ],
         "title": "PortfolioHistoryProofResponse",
         "type": "object"
@@ -45442,6 +45516,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 9223372036854775807,
                   "minimum": 0,
                   "type": "integer"
                 },
@@ -45459,6 +45534,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 9223372036854775807,
                   "minimum": 0,
                   "type": "integer"
                 },
@@ -50330,6 +50406,16 @@
             }
           },
           {
+            "in": "query",
+            "name": "current_session",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Current Session",
+              "type": "boolean"
+            }
+          },
+          {
             "in": "header",
             "name": "X-Data-Plane-Control-Secret",
             "required": false,
@@ -52269,7 +52355,7 @@
     },
     "/api/brokers/{broker}/portfolio-history-proof": {
       "get": {
-        "description": "Bundle C1 broker history with independent C2/C3 proof for Trader lens.",
+        "description": "Bundle one C1 history snapshot with independent C2/C3 proof when available.",
         "operationId": "get_portfolio_history_proof_api_brokers__broker__portfolio_history_proof_get",
         "parameters": [
           {

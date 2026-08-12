@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.broker.alpaca.clerk.sqlite.economic_projection_models import AccountPnlAttribution
+from app.broker.alpaca.clerk.sqlite.economic_projection_models import (
+    AccountPnlAttribution,
+    ExecutionCoverage,
+    FeeFidelity,
+)
 from app.broker.contract.models import BrokerPortfolioHistory
 from app.research.parity.qc_reconciler import DivergenceCategory
 from app.services.account_pnl_reconciliation import AccountPnlReconciliation
@@ -39,8 +43,13 @@ class AccountPnlAttributionResponse(BaseModel):
     to_ms: int = Field(ge=0)
     attribution_rows: list[FifoAttributionRowResponse]
     realized_pnl_total: float
+    start_open_pnl_total: float | None
     open_pnl_total: float | None
+    fee_total: float | None
+    fee_fidelity: FeeFidelity
+    execution_coverage: ExecutionCoverage
     marks_complete: bool
+    start_mark_observed_at_ms: dict[str, int]
     mark_observed_at_ms: dict[str, int]
 
     @classmethod
@@ -68,8 +77,13 @@ class AccountPnlAttributionResponse(BaseModel):
                 for row in projection.attribution_rows
             ],
             realized_pnl_total=projection.realized_pnl_total,
+            start_open_pnl_total=projection.start_open_pnl_total,
             open_pnl_total=projection.open_pnl_total,
+            fee_total=projection.fee_total,
+            fee_fidelity=projection.fee_fidelity,
+            execution_coverage=projection.execution_coverage,
             marks_complete=projection.marks_complete,
+            start_mark_observed_at_ms=projection.start_mark_observed_at_ms,
             mark_observed_at_ms=projection.mark_observed_at_ms,
         )
 
@@ -121,5 +135,6 @@ class PortfolioHistoryProofResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     history: BrokerPortfolioHistory
-    attribution: AccountPnlAttributionResponse
-    reconciliation: AccountPnlReconciliationResponse
+    attribution: AccountPnlAttributionResponse | None = None
+    reconciliation: AccountPnlReconciliationResponse | None = None
+    proof_unavailable_reason: str | None = Field(default=None, max_length=512)

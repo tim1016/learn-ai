@@ -1,19 +1,9 @@
 import { Injectable, inject, resource, signal } from '@angular/core';
 
-import type {
-  BrokerPortfolioHistory,
-  PortfolioHistoryProof,
-  PortfolioHistoryRange,
-} from '../../../api/alpaca.types';
+import type { PortfolioHistoryProof, PortfolioHistoryRange } from '../../../api/alpaca.types';
 import { BrokersService } from '../../../services/brokers.service';
 
 const MAX_TODAY_ACTIVITIES = 100;
-
-function viewerDayStartMs(now: Date): number {
-  const start = new Date(now);
-  start.setHours(0, 0, 0, 0);
-  return start.getTime();
-}
 
 /** Trader-lens reads, scoped so the hero and positions table share one fetch. */
 @Injectable()
@@ -27,18 +17,9 @@ export class AlpacaTraderLensDataService {
 
   readonly activities = resource({
     loader: () => this.brokers.listActivities('alpaca', {
-      afterMs: viewerDayStartMs(new Date()),
+      currentSession: true,
       limit: MAX_TODAY_ACTIVITIES,
     }),
-  });
-
-  readonly portfolioHistory = resource<BrokerPortfolioHistory | undefined, unknown>({
-    loader: () => {
-      const range = this.portfolioHistoryRange();
-      return range === undefined
-        ? Promise.resolve(undefined)
-        : this.brokers.getPortfolioHistory('alpaca', range);
-    },
   });
 
   readonly portfolioHistoryProof = resource<PortfolioHistoryProof | undefined, unknown>({
@@ -52,7 +33,6 @@ export class AlpacaTraderLensDataService {
 
   selectPortfolioHistoryRange(range: PortfolioHistoryRange | undefined): void {
     this.portfolioHistoryRange.set(range);
-    this.portfolioHistory.reload();
     this.portfolioHistoryProof.reload();
   }
 }

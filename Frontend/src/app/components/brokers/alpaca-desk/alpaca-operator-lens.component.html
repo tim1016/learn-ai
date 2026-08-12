@@ -29,7 +29,10 @@
         <p class="operator-lens__eyebrow">Forensic evidence</p>
         <h2 id="operator-forensics-title">Transaction history</h2>
       </div>
-      <app-account-desk-transaction-history [accountId]="clerkStatus.account_id" />
+      <app-account-desk-transaction-history
+        [accountId]="clerkStatus.account_id"
+        [refreshVersion]="refreshVersion()"
+      />
     </section>
 
     <section class="operator-lens__deep" aria-label="Deep system evidence">
@@ -43,7 +46,7 @@
       <details>
         <summary>Broker session and capability</summary>
         <dl>
-          <div><dt>Observed</dt><dd>{{ clerkStatus.observed_at_ms }}</dd></div>
+          <div><dt>Observed</dt><dd><app-timestamp-display [value]="clerkStatus.observed_at_ms" mode="local" /></dd></div>
           <div><dt>Channels</dt><dd>{{ clerkStatus.channel_healths?.length ?? 0 }} reported</dd></div>
           <div><dt>Outstanding intents</dt><dd>{{ clerkStatus.outstanding_intents }}</dd></div>
         </dl>
@@ -66,8 +69,8 @@
         <summary>Truth spine</summary>
         @if (projection.value(); as currentProjection) {
           <dl>
-            <div><dt>Custody owner</dt><dd>{{ currentProjection.custody_owner }}</dd></div>
-            <div><dt>Authority health</dt><dd>{{ currentProjection.authority_health }}</dd></div>
+            <div><dt>Custody owner</dt><dd>{{ currentProjection.custody_owner | receiptLabel }}</dd></div>
+            <div><dt>Authority health</dt><dd>{{ currentProjection.authority_health | receiptLabel }}</dd></div>
             <div><dt>Control revision</dt><dd>{{ currentProjection.control_revision }}</dd></div>
           </dl>
         } @else {

@@ -170,6 +170,7 @@ async def test_scheduler_retries_the_same_session_close_after_capture_failure() 
         clock=lambda: session_close_ms - 1_000,
         sleep=record_sleep,
         session_close_resolver=lambda _now_ms: session_close_ms,
+        latest_completed_session_close_resolver=lambda _now_ms: None,
     )
     scheduler.start()
     await asyncio.wait_for(captured.wait(), timeout=1)
@@ -177,3 +178,38 @@ async def test_scheduler_retries_the_same_session_close_after_capture_failure() 
 
     assert captured_closes[:2] == [session_close_ms, session_close_ms]
     assert slept_for[:2] == [1.0, 60.0]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_captures_latest_missed_close_before_waiting_for_next() -> None:
+    missed_close_ms = _ms_utc(2026, 7, 8, 20, 0)
+    next_close_ms = _ms_utc(2026, 7, 9, 20, 0)
+    captured_closes: list[int] = []
+    captured = asyncio.Event()
+
+    class Writer:
+        async def capture(self, *, session_close_ms: int) -> DailySovereignEquitySnapshot:
+            captured_closes.append(session_close_ms)
+            captured.set()
+            return DailySovereignEquitySnapshot(
+                account_id="alpaca-account",
+                session_close_ms=session_close_ms,
+                equity=100_000.0,
+                observed_at_ms=session_close_ms,
+            )
+
+    async def wait_forever(_seconds: float) -> None:
+        await asyncio.Event().wait()
+
+    scheduler = DailySovereignEquitySnapshotScheduler(
+        writer=Writer(),
+        clock=lambda: missed_close_ms + 60_000,
+        sleep=wait_forever,
+        session_close_resolver=lambda _now_ms: next_close_ms,
+        latest_completed_session_close_resolver=lambda _now_ms: missed_close_ms,
+    )
+    scheduler.start()
+    await asyncio.wait_for(captured.wait(), timeout=1)
+    await scheduler.stop()
+
+    assert captured_closes == [missed_close_ms]

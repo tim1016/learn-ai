@@ -183,5 +183,12 @@ describe('AlpacaOperatorLensComponent', () => {
 
     fireEvent.click(screen.getByText('Truth spine'));
     expect(panels[3].open).toBe(true);
+    expect(screen.getAllByText('Account service')).not.toHaveLength(0);
+    expect(screen.getByText('Healthy')).toBeTruthy();
+    expect(screen.queryByText('ACCOUNT_CLERK')).toBeNull();
+    expect(screen.queryByText('healthy')).toBeNull();
+
+    fireEvent.click(screen.getByText('Broker session and capability'));
+    expect(screen.queryByText('1700000000000')).toBeNull();
   });
 });

@@ -19,12 +19,14 @@ describe('AssetIdentityComponent', () => {
       ['XLF', 'sector/financial'],
       ['BTC/USD', 'crypto/XTVCBTC'],
       ['WMT', 'walmart'],
+      ['GLD', 'spdr-gold-trust'],
     ])('resolves the common %s symbol', (symbol, logoId) => {
       expect(resolveTradingViewLogoId(symbol)).toBe(logoId);
     });
 
     it('leaves an unlisted symbol unresolved for the initials fallback', () => {
       expect(resolveTradingViewLogoId('UNKNOWN')).toBeNull();
+      expect(resolveTradingViewLogoId('DIA')).toBeNull();
     });
   });
 

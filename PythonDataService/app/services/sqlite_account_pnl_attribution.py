@@ -25,6 +25,8 @@ def sqlite_account_pnl_attribution(
     from_ms: int,
     to_ms: int,
     marks: Mapping[str, MarketMark] | None = None,
+    start_marks: Mapping[str, MarketMark] | None = None,
+    position_quantities: Mapping[str, float] | None = None,
 ) -> AccountPnlAttribution | None:
     """Return C2 only for the selected SQLite authority, otherwise ``None``.
 
@@ -37,7 +39,13 @@ def sqlite_account_pnl_attribution(
         return None
     reader = SqliteEconomicProjectionReader.from_repository(clerk.repository)
     try:
-        return reader.account_pnl_attribution(from_ms=from_ms, to_ms=to_ms, marks=marks)
+        return reader.account_pnl_attribution(
+            from_ms=from_ms,
+            to_ms=to_ms,
+            marks=marks,
+            start_marks=start_marks,
+            position_quantities=position_quantities,
+        )
     finally:
         reader.close()
 

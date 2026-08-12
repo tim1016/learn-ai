@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/angular';
+import { HttpErrorResponse } from '@angular/common/http';
 import { ActivatedRoute, convertToParamMap, provideRouter, Router } from '@angular/router';
 import { of } from 'rxjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -39,6 +40,19 @@ function brokerService() {
       outstanding_intents: 0,
       observed_at_ms: 1,
     }),
+    getCustodyDiagnosis: vi.fn().mockResolvedValue({
+      broker: 'alpaca',
+      account_id: 'PA1',
+      in_sync: true,
+      observed_at_ms: 1,
+      snapshot_version: 'v1',
+      resolution_posture: 'paper',
+      resolvable: false,
+      blocked_reason: null,
+      divergences: [],
+      resolution_plan: [],
+    }),
+    getSqliteClerkProjection: vi.fn().mockResolvedValue({}),
   };
 }
 
@@ -71,13 +85,15 @@ async function renderDesk(
 describe('AlpacaDeskComponent', () => {
   beforeEach(() => localStorage.clear());
 
-  it('defaults to the Trader lens without loading operator data', async () => {
+  it('defaults to the Trader lens while restoring account safety surfaces', async () => {
     const { brokers } = await renderDesk();
 
     expect(screen.getByRole('tab', { name: 'Trader' }).getAttribute('aria-selected')).toBe('true');
     expect(screen.getByRole('heading', { name: 'Trader desk' })).toBeTruthy();
     expect(screen.queryByRole('heading', { name: 'Operator desk' })).toBeNull();
-    expect(brokers.getClerkStatus).not.toHaveBeenCalled();
+    expect(await screen.findByLabelText('Clerk and broker in sync')).toBeTruthy();
+    expect(brokers.getClerkStatus).toHaveBeenCalledOnce();
+    expect(brokers.getSqliteClerkProjection).not.toHaveBeenCalled();
   });
 
   it('switches instantly, updates the query parameter, persists, and lazy-loads operator data', async () => {
@@ -89,13 +105,13 @@ describe('AlpacaDeskComponent', () => {
     expect(screen.getByRole('heading', { name: 'Operator desk' })).toBeTruthy();
     expect(localStorage.getItem(LENS_STORAGE_KEY)).toBe('operator');
     await vi.waitFor(() => expect(router.url).toContain('lens=operator'));
-    await vi.waitFor(() => expect(brokers.getClerkStatus).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(brokers.getClerkStatus).toHaveBeenCalledTimes(2));
     expect(brokers.getAccount).toHaveBeenCalledOnce();
 
     fireEvent.click(screen.getByRole('tab', { name: 'Trader' }));
     fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
 
-    expect(brokers.getClerkStatus).toHaveBeenCalledOnce();
+    expect(brokers.getClerkStatus).toHaveBeenCalledTimes(2);
     expect(brokers.getAccount).toHaveBeenCalledOnce();
   });
 
@@ -104,7 +120,7 @@ describe('AlpacaDeskComponent', () => {
 
     expect(screen.getByRole('tab', { name: 'Operator' }).getAttribute('aria-selected')).toBe('true');
     expect(screen.getByRole('heading', { name: 'Operator desk' })).toBeTruthy();
-    await vi.waitFor(() => expect(brokers.getClerkStatus).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(brokers.getClerkStatus).toHaveBeenCalledTimes(2));
   });
 
   it('opens Deploy strategy from the desk and closes back to the visible desk', async () => {
@@ -126,6 +142,41 @@ describe('AlpacaDeskComponent', () => {
     await renderDesk({ deploy: '' });
 
     expect(await screen.findByRole('heading', { name: 'Deploy a bot' })).toBeTruthy();
+  });
+
+  it('opens a matching manual-order deep link only under legacy authority', async () => {
+    const brokers = brokerService();
+    brokers.getSqliteClerkProjection.mockRejectedValue(
+      new HttpErrorResponse({ status: 409 }),
+    );
+
+    await renderDesk({ order: 'new', accountId: 'PA1', symbol: 'spy' }, brokers);
+
+    expect(await screen.findByText('Create Alpaca order')).toBeTruthy();
+    expect(await screen.findByDisplayValue('SPY')).toBeTruthy();
+  });
+
+  it('refuses a manual-order link for a different account', async () => {
+    const { brokers } = await renderDesk({
+      order: 'new',
+      accountId: 'PA-OTHER',
+      symbol: 'SPY',
+    });
+
+    expect((await screen.findByRole('alert')).textContent).toContain(
+      'The order link targets account PA-OTHER, but Alpaca is connected to PA1. No ticket was opened.',
+    );
+    expect(screen.queryByRole('heading', { name: 'Create Alpaca order' })).toBeNull();
+    expect(brokers.getSqliteClerkProjection).not.toHaveBeenCalled();
+  });
+
+  it('fails closed with an explicit message under SQLite authority', async () => {
+    await renderDesk({ order: 'new', accountId: 'PA1', symbol: 'SPY' });
+
+    expect(
+      await screen.findByText(/Manual orders are unavailable while SQLite Clerk authority is active/),
+    ).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Create Alpaca order' })).toBeNull();
   });
 
   it('restores the last selected lens when no query parameter is present', async () => {

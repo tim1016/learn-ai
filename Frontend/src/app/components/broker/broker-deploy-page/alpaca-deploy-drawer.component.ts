@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, inject, input, output, re
 import { Drawer } from 'primeng/drawer';
 
 import { BrokersService } from '../../../services/brokers.service';
+import { AlpacaDeskAccountDataService } from '../../brokers/alpaca-desk/alpaca-desk-account-data.service';
 import { AlpacaDeployWorkflowComponent } from './alpaca-deploy-workflow.component';
 
 /**
@@ -24,14 +25,27 @@ export class AlpacaDeployDrawerComponent {
   readonly closed = output();
 
   private readonly brokers = inject(BrokersService);
+  private readonly deskAccountData = inject(AlpacaDeskAccountDataService, { optional: true });
 
   protected readonly account = resource({
-    params: () => (this.visible() && this.accountId().trim() === '' ? 'alpaca' : undefined),
+    params: () => (
+      this.visible() && this.accountId().trim() === '' && this.deskAccountData === null
+        ? 'alpaca'
+        : undefined
+    ),
     loader: ({ params }) => this.brokers.getAccount(params),
   });
 
-  protected readonly resolvedAccountId = computed(() =>
-    this.accountId().trim() || (this.account.hasValue() ? this.account.value().account_id : ''),
+  protected readonly resolvedAccountId = computed(() => {
+    const explicitAccountId = this.accountId().trim();
+    if (explicitAccountId) return explicitAccountId;
+    const sharedAccount = this.deskAccountData?.account;
+    if (sharedAccount?.hasValue()) return sharedAccount.value().account_id;
+    return this.account.hasValue() ? this.account.value().account_id : '';
+  });
+
+  protected readonly accountUnavailable = computed(
+    () => this.deskAccountData?.account.error() !== undefined || this.account.error() !== undefined,
   );
 
   protected close(): void {

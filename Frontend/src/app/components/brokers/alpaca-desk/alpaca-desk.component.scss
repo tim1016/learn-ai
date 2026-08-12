@@ -107,6 +107,15 @@
   outline-offset: 1px;
 }
 
+.order-route-notice {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--warning-border, var(--border-light));
+  border-radius: var(--radius);
+  background: var(--warning-soft, var(--bg-surface));
+  color: var(--text-primary);
+}
+
 @media (max-width: 560px) {
   .alpaca-desk {
     padding: 0.75rem;

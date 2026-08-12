@@ -402,6 +402,8 @@ class SqliteEconomicProjectionReader:
         from_ms: int,
         to_ms: int,
         marks: Mapping[str, MarketMark] | None = None,
+        start_marks: Mapping[str, MarketMark] | None = None,
+        position_quantities: Mapping[str, float] | None = None,
     ) -> AccountPnlAttribution:
         """Return account-wide FIFO attribution for inclusive UTC-ms bounds.
 
@@ -432,6 +434,15 @@ class SqliteEconomicProjectionReader:
                 cursor_key=None,
                 limit=None,
             )
+            coverage_complete = all(
+                self._execution_coverage(strategy_instance_id, all_rows)
+                == "complete"
+                for strategy_instance_id in strategy_instance_ids
+            )
+            external_fill_exists = self._conn.execute(
+                "SELECT 1 FROM external_orders "
+                "WHERE filled_avg_price IS NOT NULL AND ABS(qty) >= 1e-9 LIMIT 1"
+            ).fetchone() is not None
 
         records = tuple(
             sorted(
@@ -439,14 +450,37 @@ class SqliteEconomicProjectionReader:
                 key=lambda record: (record.filled_at_ms, record.ledger_sequence),
             )
         )
+        start_records = tuple(record for record in records if record.filled_at_ms < from_ms)
+        end_records = tuple(record for record in records if record.filled_at_ms <= to_ms)
+        window_records = tuple(
+            record for record in records if from_ms <= record.filled_at_ms <= to_ms
+        )
+        start_marks_by_symbol = dict(start_marks or {})
         marks_by_symbol = dict(marks or {})
+        start_fifo_result = compute_fifo_pnl(
+            start_records,
+            mark_prices={symbol: mark.price for symbol, mark in start_marks_by_symbol.items()},
+        )
         fifo_result = compute_fifo_pnl(
-            records,
+            end_records,
             mark_prices={symbol: mark.price for symbol, mark in marks_by_symbol.items()},
         )
         attribution_rows = tuple(
             _to_fifo_attribution_row(lot) for lot in fifo_result.closed_lots if from_ms <= lot.closed_at_ms <= to_ms
         )
+        all_fees_reported = all(record.fee is not None for record in window_records)
+        local_quantities: dict[str, float] = {}
+        for lot in fifo_result.open_lots:
+            signed_quantity = lot.qty if lot.side is OrderSide.BUY else -lot.qty
+            local_quantities[lot.symbol] = local_quantities.get(lot.symbol, 0.0) + signed_quantity
+        broker_quantities = {
+            symbol.upper(): quantity for symbol, quantity in (position_quantities or {}).items()
+        }
+        position_coverage_complete = position_quantities is None or all(
+            abs(local_quantities.get(symbol, 0.0) - broker_quantities.get(symbol, 0.0)) < 1e-9
+            for symbol in local_quantities.keys() | broker_quantities.keys()
+        )
+        start_marks_complete = start_fifo_result.marks_complete
         return AccountPnlAttribution(
             account_id=self._account_id,
             authority_generation=meta.authority_generation,
@@ -455,8 +489,25 @@ class SqliteEconomicProjectionReader:
             to_ms=to_ms,
             attribution_rows=attribution_rows,
             realized_pnl_total=sum(row.realized_pnl for row in attribution_rows),
+            start_open_pnl_total=start_fifo_result.open_pnl,
             open_pnl_total=fifo_result.open_pnl,
-            marks_complete=fifo_result.marks_complete,
+            fee_total=(
+                sum(record.fee or 0.0 for record in window_records)
+                if all_fees_reported
+                else None
+            ),
+            fee_fidelity="reported" if all_fees_reported else "not_reported",
+            execution_coverage=(
+                "complete"
+                if coverage_complete and not external_fill_exists and position_coverage_complete
+                else "incomplete"
+            ),
+            marks_complete=start_marks_complete and fifo_result.marks_complete,
+            start_mark_observed_at_ms={
+                lot.symbol: start_marks_by_symbol[lot.symbol].observed_at_ms
+                for lot in start_fifo_result.open_lots
+                if lot.symbol in start_marks_by_symbol
+            },
             mark_observed_at_ms={
                 lot.symbol: marks_by_symbol[lot.symbol].observed_at_ms
                 for lot in fifo_result.open_lots

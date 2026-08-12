@@ -2462,7 +2462,7 @@ export interface paths {
         };
         /**
          * Get Portfolio History Proof
-         * @description Bundle C1 broker history with independent C2/C3 proof for Trader lens.
+         * @description Bundle one C1 history snapshot with independent C2/C3 proof when available.
          */
         get: operations["get_portfolio_history_proof_api_brokers__broker__portfolio_history_proof_get"];
         put?: never;
@@ -6609,6 +6609,18 @@ export interface components {
             authority_generation: number;
             /** Control Revision */
             control_revision: number;
+            /**
+             * Execution Coverage
+             * @enum {string}
+             */
+            execution_coverage: "complete" | "incomplete";
+            /**
+             * Fee Fidelity
+             * @enum {string}
+             */
+            fee_fidelity: "reported" | "not_reported";
+            /** Fee Total */
+            fee_total: number | null;
             /** From Ms */
             from_ms: number;
             /** Mark Observed At Ms */
@@ -6621,6 +6633,12 @@ export interface components {
             open_pnl_total: number | null;
             /** Realized Pnl Total */
             realized_pnl_total: number;
+            /** Start Mark Observed At Ms */
+            start_mark_observed_at_ms: {
+                [key: string]: number;
+            };
+            /** Start Open Pnl Total */
+            start_open_pnl_total: number | null;
             /** To Ms */
             to_ms: number;
         };
@@ -18967,9 +18985,11 @@ export interface components {
          * @description C1 + C2 + C3 bundle for the Trader lens historical scope.
          */
         PortfolioHistoryProofResponse: {
-            attribution: components["schemas"]["AccountPnlAttributionResponse"];
+            attribution?: components["schemas"]["AccountPnlAttributionResponse"] | null;
             history: components["schemas"]["BrokerPortfolioHistory"];
-            reconciliation: components["schemas"]["AccountPnlReconciliationResponse"];
+            /** Proof Unavailable Reason */
+            proof_unavailable_reason?: string | null;
+            reconciliation?: components["schemas"]["AccountPnlReconciliationResponse"] | null;
         };
         /**
          * PortfolioHistoryRange
@@ -28248,6 +28268,7 @@ export interface operations {
             query?: {
                 limit?: number;
                 after_ms?: number | null;
+                current_session?: boolean;
             };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;

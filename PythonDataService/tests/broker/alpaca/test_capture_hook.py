@@ -114,3 +114,16 @@ def test_portfolio_history_path_routes_to_portfolio_history_family(tmp_path: Pat
 
     assert len(_records(tmp_path, "portfolio_history")) == 1
     assert journal.records_written == 1
+
+
+@responses.activate
+def test_unrecognized_path_is_not_captured(tmp_path: Path) -> None:
+    journal = _journal(tmp_path)
+    session = Session()
+    install_capture_hook(session, journal)
+    responses.add(responses.GET, f"{_BASE}/v2/watchlists", body=b"[]", status=200)
+
+    session.get(f"{_BASE}/v2/watchlists")
+
+    assert journal.records_written == 0
+    assert list(tmp_path.rglob("*.jsonl")) == []

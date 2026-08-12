@@ -26,9 +26,9 @@
 
   <article class="metric-card">
     <p class="metric-card__label">Fills today</p>
-    @if (fillCount(); as count) {
-      <strong class="metric-card__value">{{ count }}</strong>
-      <p class="metric-card__detail">Broker-reported fills in this local-day window.</p>
+    @if (fillCount() !== undefined) {
+      <strong class="metric-card__value">{{ fillCount() }}</strong>
+      <p class="metric-card__detail">Broker-reported fills in the current NYSE session.</p>
     } @else if (activitiesUnavailable()) {
       <strong class="metric-card__value">—</strong>
       <p class="metric-card__detail">Today's activity is unavailable right now.</p>

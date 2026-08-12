@@ -47,7 +47,7 @@
         <app-alpaca-portfolio-history-chart
           [history]="portfolioHistory()"
           [scopeLabel]="scopeConfig[scope()].label"
-          [unavailable]="portfolioHistoryUnavailable()"
+          [unavailable]="portfolioHistoryProofUnavailable()"
         />
         <app-alpaca-portfolio-reconciliation-proof
           [proof]="portfolioHistoryProof()"
@@ -57,6 +57,7 @@
           [accountId]="account()?.account_id ?? null"
           [fromMs]="historyWindow()?.fromMs ?? null"
           [toMs]="historyWindow()?.toMs ?? null"
+          [refreshVersion]="refreshVersion()"
         />
       </section>
     }

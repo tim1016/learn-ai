@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from app.broker.alpaca.clerk.sqlite.economic_projection_models import AccountPnlAttribution
+from app.broker.alpaca.clerk.sqlite.economic_projection_models import (
+    AccountPnlAttribution,
+    ExecutionCoverage,
+    FeeFidelity,
+)
 from app.broker.contract.models import BrokerPortfolioHistory
 from app.research.parity.qc_reconciler import DivergenceCategory
 from app.services.account_pnl_reconciliation import (
@@ -27,8 +31,13 @@ def _history(equity: list[float]) -> BrokerPortfolioHistory:
 def _attribution(
     *,
     realized_pnl_total: float,
+    start_open_pnl_total: float | None = 0.0,
     open_pnl_total: float | None = 0.0,
+    fee_total: float | None = 0.0,
+    fee_fidelity: FeeFidelity = "reported",
+    execution_coverage: ExecutionCoverage = "complete",
     marks_complete: bool = True,
+    start_mark_observed_at_ms: dict[str, int] | None = None,
     mark_observed_at_ms: dict[str, int] | None = None,
 ) -> AccountPnlAttribution:
     return AccountPnlAttribution(
@@ -39,8 +48,13 @@ def _attribution(
         to_ms=1_700_000_001_000,
         attribution_rows=(),
         realized_pnl_total=realized_pnl_total,
+        start_open_pnl_total=start_open_pnl_total,
         open_pnl_total=open_pnl_total,
+        fee_total=fee_total,
+        fee_fidelity=fee_fidelity,
+        execution_coverage=execution_coverage,
         marks_complete=marks_complete,
+        start_mark_observed_at_ms=start_mark_observed_at_ms or {},
         mark_observed_at_ms=mark_observed_at_ms or {},
     )
 
@@ -97,7 +111,7 @@ def test_reconcile_broker_curve_to_local_pnl_includes_complete_open_pnl() -> Non
     assert result.within_tolerance is True
 
 
-def test_reconcile_broker_curve_to_local_pnl_refuses_mark_from_different_instant() -> None:
+def test_reconcile_broker_curve_to_local_pnl_accepts_mark_in_same_timeframe_bucket() -> None:
     result = reconcile_broker_curve_to_local_pnl(
         _history([10_000.0, 10_030.0]),
         _attribution(
@@ -107,8 +121,64 @@ def test_reconcile_broker_curve_to_local_pnl_refuses_mark_from_different_instant
         ),
     )
 
+    assert result.within_tolerance is True
+
+
+def test_reconcile_broker_curve_to_local_pnl_refuses_mark_in_later_timeframe_bucket() -> None:
+    result = reconcile_broker_curve_to_local_pnl(
+        _history([10_000.0, 10_030.0]),
+        _attribution(
+            realized_pnl_total=25.0,
+            open_pnl_total=5.0,
+            mark_observed_at_ms={"SPY": 1_700_086_401_000},
+        ),
+    )
+
     assert result.within_tolerance is False
     assert [item.category for item in result.divergences] == [DivergenceCategory.FIXTURE_INSUFFICIENT]
+
+
+def test_reconcile_broker_curve_to_local_pnl_subtracts_start_open_pnl_and_fees() -> None:
+    result = reconcile_broker_curve_to_local_pnl(
+        _history([10_000.0, 10_004.0]),
+        _attribution(
+            realized_pnl_total=3.0,
+            start_open_pnl_total=10.0,
+            open_pnl_total=12.0,
+            fee_total=1.0,
+            start_mark_observed_at_ms={"SPY": 1_700_000_000_001},
+            mark_observed_at_ms={"SPY": 1_700_000_001_001},
+        ),
+    )
+
+    assert result.local_delta == pytest.approx(4.0)
+    assert result.within_tolerance is True
+
+
+def test_reconcile_broker_curve_to_local_pnl_refuses_unknown_fees() -> None:
+    result = reconcile_broker_curve_to_local_pnl(
+        _history([10_000.0, 10_025.0]),
+        _attribution(
+            realized_pnl_total=25.0,
+            fee_total=None,
+            fee_fidelity="not_reported",
+        ),
+    )
+
+    assert result.within_tolerance is False
+    assert result.divergences[0].category is DivergenceCategory.FIXTURE_INSUFFICIENT
+    assert "fees" in result.divergences[0].detail
+
+
+def test_reconcile_broker_curve_to_local_pnl_refuses_incomplete_execution_coverage() -> None:
+    result = reconcile_broker_curve_to_local_pnl(
+        _history([10_000.0, 10_025.0]),
+        _attribution(realized_pnl_total=25.0, execution_coverage="incomplete"),
+    )
+
+    assert result.within_tolerance is False
+    assert result.divergences[0].category is DivergenceCategory.FIXTURE_INSUFFICIENT
+    assert "complete broker account" in result.divergences[0].detail
 
 
 def test_reconcile_broker_curve_to_local_pnl_refuses_unmarked_open_lots_as_proof() -> None:

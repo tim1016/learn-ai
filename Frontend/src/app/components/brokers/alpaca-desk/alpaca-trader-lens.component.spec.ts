@@ -147,8 +147,13 @@ function portfolioHistoryProof(): PortfolioHistoryProof {
         exit_strategy_instance_id: 'bot-spy',
       }],
       realized_pnl_total: 100,
+      start_open_pnl_total: 0,
       open_pnl_total: 0,
+      fee_total: 0,
+      fee_fidelity: 'reported',
+      execution_coverage: 'complete',
       marks_complete: true,
+      start_mark_observed_at_ms: {},
       mark_observed_at_ms: {},
     },
     reconciliation: {
@@ -191,7 +196,6 @@ function brokers() {
     getAccount: vi.fn().mockResolvedValue(account()),
     listPositions: vi.fn().mockResolvedValue(positions()),
     listActivities: vi.fn().mockResolvedValue(activities()),
-    getPortfolioHistory: vi.fn().mockResolvedValue(portfolioHistory()),
     getPortfolioHistoryProof: vi.fn().mockResolvedValue(portfolioHistoryProof()),
   };
 }
@@ -223,7 +227,10 @@ describe('AlpacaTraderLensComponent', () => {
     expect(within(hero).getByText('Reconciled account attribution is not available yet.')).toBeTruthy();
     expect(screen.getByRole('list', { name: 'Today at the desk activity' })).toBeTruthy();
     expect(screen.getAllByTitle('NVDA')).not.toHaveLength(0);
-    expect(broker.listActivities).toHaveBeenCalledWith('alpaca', expect.objectContaining({ limit: 100 }));
+    expect(broker.listActivities).toHaveBeenCalledWith(
+      'alpaca',
+      expect.objectContaining({ currentSession: true, limit: 100 }),
+    );
   });
 
   it('renders the broker curve and paged Clerk history for 30D and 60D scopes', async () => {
@@ -235,27 +242,66 @@ describe('AlpacaTraderLensComponent', () => {
     expect(await screen.findByRole('heading', { name: '30D equity curve' })).toBeTruthy();
     expect(await screen.findByRole('img', { name: '30D broker equity curve' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Transaction history' })).toBeTruthy();
-    expect(broker.getPortfolioHistory).toHaveBeenCalledWith('alpaca', '30D');
     expect(broker.getPortfolioHistoryProof).toHaveBeenCalledWith('alpaca', '30D');
     expect(await screen.findByText(/Broker curve agrees with local FIFO P&L within \$0\.000001\./)).toBeTruthy();
     expect(screen.getByRole('table', { name: 'FIFO attribution rows' })).toBeTruthy();
     expect(screen.getAllByTitle('SPY')).not.toHaveLength(0);
     await vi.waitFor(() => expect(clerk.accountTransactions).toHaveBeenCalled());
     const thirtyDayFilters = clerk.accountTransactions.mock.calls.at(-1)?.[3];
-    expect(thirtyDayFilters).toMatchObject({ fromMs: expect.any(Number), toMs: expect.any(Number) });
-    expect(thirtyDayFilters.toMs - thirtyDayFilters.fromMs).toBe(30 * 24 * 60 * 60 * 1_000);
+    expect(thirtyDayFilters).toMatchObject({
+      fromMs: 1_700_000_000_000,
+      toMs: 1_700_086_400_000,
+    });
     expect(screen.queryByRole('heading', { name: 'Today at the desk' })).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: '60D' }));
 
     expect(await screen.findByRole('heading', { name: '60D equity curve' })).toBeTruthy();
     expect(await screen.findByRole('img', { name: '60D broker equity curve' })).toBeTruthy();
-    expect(broker.getPortfolioHistory).toHaveBeenLastCalledWith('alpaca', '60D');
     expect(broker.getPortfolioHistoryProof).toHaveBeenLastCalledWith('alpaca', '60D');
     await vi.waitFor(() => {
       const sixtyDayFilters = clerk.accountTransactions.mock.calls.at(-1)?.[3];
-      expect(sixtyDayFilters.toMs - sixtyDayFilters.fromMs).toBe(60 * 24 * 60 * 60 * 1_000);
+      expect(sixtyDayFilters).toMatchObject({
+        fromMs: 1_700_000_000_000,
+        toMs: 1_700_086_400_000,
+      });
     });
+  });
+
+  it('renders zero fills as a loaded value', async () => {
+    const broker = brokers();
+    broker.listActivities.mockResolvedValue([]);
+    await renderLens(broker);
+
+    const hero = await screen.findByLabelText('Today at a glance');
+    const fills = within(hero).getByText('Fills today').closest('article');
+    expect(fills?.textContent).toContain('0');
+    expect(fills?.textContent).not.toContain('Loading');
+  });
+
+  it('renders backend-authored reconciliation divergences', async () => {
+    const broker = brokers();
+    broker.getPortfolioHistoryProof.mockResolvedValue({
+      ...portfolioHistoryProof(),
+      reconciliation: {
+        broker_delta: 125,
+        local_delta: 100,
+        residual: 25,
+        within_tolerance: false,
+        atol: 0.000001,
+        rtol: 0,
+        divergences: [{
+          category: 'pnl_drift',
+          detail: 'The complete broker and FIFO books differ by $25.',
+        }],
+      },
+    });
+    await renderLens(broker);
+
+    fireEvent.click(screen.getByRole('button', { name: '30D' }));
+
+    expect(await screen.findByText('P&L Drift')).toBeTruthy();
+    expect(screen.getByText('The complete broker and FIFO books differ by $25.')).toBeTruthy();
   });
 
   it('distinguishes an unavailable activity feed from an empty day', async () => {
@@ -270,12 +316,17 @@ describe('AlpacaTraderLensComponent', () => {
 
   it('keeps the broker curve visible when the independent proof is unavailable', async () => {
     const broker = brokers();
-    broker.getPortfolioHistoryProof.mockRejectedValue(new Error('SQLite unavailable'));
+    broker.getPortfolioHistoryProof.mockResolvedValue({
+      history: portfolioHistory(),
+      attribution: null,
+      reconciliation: null,
+      proof_unavailable_reason: 'SQLite FIFO attribution is unavailable for this broker.',
+    });
     await renderLens(broker);
 
     fireEvent.click(screen.getByRole('button', { name: '30D' }));
 
     expect(await screen.findByRole('img', { name: '30D broker equity curve' })).toBeTruthy();
-    expect(await screen.findByText('Portfolio reconciliation proof is unavailable right now.')).toBeTruthy();
+    expect(await screen.findByText('SQLite FIFO attribution is unavailable for this broker.')).toBeTruthy();
   });
 });
