@@ -18,14 +18,11 @@ import type {
   ClerkTransactionSummary,
 } from '../../../api/clerk-transaction-history.types';
 import { BrokerService } from '../../../services/broker.service';
-import { formatReceiptValue, ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
+import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
+import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
-
-interface ReceiptEntry {
-  readonly key: string;
-  readonly label: string;
-  readonly value: string;
-}
+import { ClerkReceiptCustodyTimelineComponent } from './clerk-receipt-custody-timeline.component';
+import { ClerkReceiptEvidenceAccordionsComponent } from './clerk-receipt-evidence-accordions.component';
 
 interface TimelineClock {
   readonly label: string;
@@ -41,7 +38,13 @@ interface ReceiptSelection {
 @Component({
   selector: 'app-clerk-transaction-evidence-drawer',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ReceiptLabelPipe, TimestampDisplayComponent],
+  imports: [
+    ClerkReceiptCustodyTimelineComponent,
+    ClerkReceiptEvidenceAccordionsComponent,
+    AssetIdentityComponent,
+    ReceiptLabelPipe,
+    TimestampDisplayComponent,
+  ],
   templateUrl: './clerk-transaction-evidence-drawer.component.html',
   styleUrl: './clerk-transaction-evidence-drawer.component.scss',
 })
@@ -60,7 +63,6 @@ export class ClerkTransactionEvidenceDrawerComponent {
   readonly detail = signal<ClerkTransactionDetail | null>(null);
   readonly loading = signal(false);
   readonly error = signal<string | null>(null);
-  readonly receiptEntries = computed(() => receiptEntries(this.detail()?.receipt ?? {}));
   readonly custodyClocks = computed(() => custodyClocks(this.detail()?.custody_timeline ?? null));
   readonly epochProvenance = computed(() => epochProvenance(this.detail()));
 
@@ -80,20 +82,7 @@ export class ClerkTransactionEvidenceDrawerComponent {
     });
   }
 
-  trackEvent = (_: number, event: ClerkTransactionDetail['events'][number]): string => event.event_id;
-  trackReceipt = (_: number, entry: ReceiptEntry): string => entry.key;
   trackClock = (_: number, clock: TimelineClock): string => clock.label;
-
-  instruction(receipt: ClerkTransactionSummary | ClerkTransactionDetail): string {
-    const instruction = receipt.order_instruction;
-    return [instruction?.symbol, instruction?.quantity]
-      .filter((value) => value !== null && value !== undefined)
-      .join(' ');
-  }
-
-  eventReceiptEntries(event: ClerkTransactionDetail['events'][number]): readonly ReceiptEntry[] {
-    return receiptEntries(event.receipt);
-  }
 
   close(): void {
     this.requestGeneration.update((generation) => generation + 1);
@@ -199,27 +188,6 @@ function recordedEpochs(receipts: readonly Record<string, unknown>[], key: strin
     }
   }
   return Array.from(epochs).join(', ') || 'Unknown (not recorded)';
-}
-
-function receiptEntries(receipt: Record<string, unknown>): readonly ReceiptEntry[] {
-  return flattenReceiptEntries(receipt, []);
-}
-
-function flattenReceiptEntries(value: unknown, path: readonly string[]): readonly ReceiptEntry[] {
-  if (Array.isArray(value)) {
-    return value.flatMap((item, index) => flattenReceiptEntries(item, [...path, String(index)]));
-  }
-  if (isReceiptRecord(value)) {
-    return Object.entries(value).flatMap(([key, item]) =>
-      flattenReceiptEntries(item, [...path, key]),
-    );
-  }
-  const label = path.join('.');
-  return [{
-    key: label,
-    label,
-    value: typeof value === 'string' ? formatReceiptValue(label, value) : JSON.stringify(value) ?? '',
-  }];
 }
 
 function isReceiptRecord(value: unknown): value is Record<string, unknown> {

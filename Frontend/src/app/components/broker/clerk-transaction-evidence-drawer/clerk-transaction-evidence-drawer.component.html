@@ -1,27 +1,48 @@
 <dialog #drawer class="receipt-drawer" aria-labelledby="receiptDrawerTitle" (close)="onNativeClosed()" (cancel)="close()">
-  <header>
-    <p class="eyebrow">Operator receipt</p>
-    <h2 id="receiptDrawerTitle">Projected transaction evidence</h2>
-    <button type="button" aria-label="Close receipt drawer" (click)="close()">×</button>
+  <header class="receipt-drawer__header">
+    <div>
+      <p class="eyebrow">Operator receipt</p>
+      <h2 id="receiptDrawerTitle">Custody receipt</h2>
+    </div>
+    <button type="button" class="receipt-drawer__close" aria-label="Close receipt drawer" (click)="close()">×</button>
   </header>
   @if (loading()) {
-    <p>Loading the selected receipt…</p>
+    <p class="receipt-drawer__state">Loading the selected receipt…</p>
   } @else if (error(); as error) {
-    <p role="alert">{{ error }}</p>
+    <p class="receipt-drawer__state receipt-drawer__state--error" role="alert">{{ error }}</p>
   } @else if (detail(); as receipt) {
-    <dl class="receipt-summary">
-      <div><dt>Broker</dt><dd>{{ receipt.broker | receiptLabel }}</dd></div>
-      <div><dt>Origin</dt><dd>{{ (receipt.transaction_origin ?? 'manual') | receiptLabel }}</dd></div>
-      <div><dt>Custody account</dt><dd><code>{{ receipt.account_id }}</code></dd></div>
-      <div><dt>Custody manager (bot)</dt><dd><code>{{ receipt.strategy_instance_id }}</code></dd></div>
-      <div><dt>Manager run</dt><dd><code>{{ receipt.run_id }}</code></dd></div>
-      <div><dt>Order reference</dt><dd><code>{{ receipt.order_ref }}</code></dd></div>
-      <div><dt>Instruction</dt><dd>{{ instruction(receipt) }} {{ receipt.order_instruction?.action | receiptLabel }} {{ receipt.order_instruction?.order_type | receiptLabel }}</dd></div>
-      <div><dt>Intent</dt><dd><code>{{ receipt.intent_id }}</code></dd></div>
-      <div><dt>Lifecycle</dt><dd>{{ receipt.lifecycle_state | receiptLabel }}</dd></div>
-      <div><dt>Commission</dt><dd>{{ receipt.commission_status | receiptLabel }}</dd></div>
-    </dl>
-    <section aria-labelledby="custodyClocksTitle">
+    <section class="receipt-identity" aria-label="Selected trade">
+      @if (receipt.order_instruction?.symbol; as symbol) {
+        <app-asset-identity [symbol]="symbol" size="lg" />
+      } @else {
+        <span class="receipt-identity__empty">No instrument recorded</span>
+      }
+      <div class="receipt-identity__facts">
+        <span class="receipt-lifecycle">{{ receipt.lifecycle_state | receiptLabel }}</span>
+        @if (receipt.order_ref; as orderReference) {
+          <span class="receipt-identity__reference"><span>Order reference</span><code>{{ orderReference }}</code></span>
+        } @else if (receipt.external_order_id; as externalOrderId) {
+          <span class="receipt-identity__reference"><span>Order reference</span><code>{{ externalOrderId }}</code></span>
+        }
+      </div>
+    </section>
+
+    <app-clerk-receipt-custody-timeline [timeline]="receipt.custody_timeline" />
+
+    <section class="receipt-facts" aria-labelledby="receiptFactsTitle">
+      <h3 id="receiptFactsTitle">Receipt facts</h3>
+      <dl>
+        <div><dt>Broker</dt><dd>{{ receipt.broker | receiptLabel }}</dd></div>
+        <div><dt>Origin</dt><dd>{{ (receipt.transaction_origin ?? 'manual') | receiptLabel }}</dd></div>
+        <div><dt>Custody account</dt><dd><code>{{ receipt.account_id }}</code></dd></div>
+        <div><dt>Custody manager</dt><dd><code>{{ receipt.strategy_instance_id ?? 'Not recorded' }}</code></dd></div>
+        <div><dt>Manager run</dt><dd><code>{{ receipt.run_id ?? 'Not recorded' }}</code></dd></div>
+        <div><dt>Intent</dt><dd><code>{{ receipt.intent_id ?? 'Not recorded' }}</code></dd></div>
+        <div><dt>Commission</dt><dd>{{ receipt.commission_status | receiptLabel }}</dd></div>
+      </dl>
+    </section>
+
+    <section class="custody-clocks-section" aria-labelledby="custodyClocksTitle">
       <h3 id="custodyClocksTitle">Custody clocks</h3>
       <p>Record order is durable serialization order, not causal broker order.</p>
       <dl class="custody-clocks">
@@ -34,34 +55,7 @@
         <div><dt>Observed epoch provenance</dt><dd><code>{{ epochProvenance().observed }}</code></dd></div>
       </dl>
     </section>
-    <section aria-labelledby="receiptTimelineTitle">
-      <h3 id="receiptTimelineTitle">Projected event timeline</h3>
-      <ol class="receipt-timeline">
-        @for (event of receipt.events; track trackEvent($index, event)) {
-          <li>
-            <app-timestamp-display [value]="event.recorded_at_ms" mode="local" />
-            <strong>{{ event.event_kind | receiptLabel }}</strong>
-            <span>{{ event.lifecycle_state | receiptLabel }}</span>
-            <code>{{ event.callback_identity }}</code>
-            <details>
-              <summary>Event evidence</summary>
-              <dl class="event-receipt">
-                @for (entry of eventReceiptEntries(event); track trackReceipt($index, entry)) {
-                  <div><dt>{{ entry.label | receiptLabel }}</dt><dd><code>{{ entry.value }}</code></dd></div>
-                }
-              </dl>
-            </details>
-          </li>
-        }
-      </ol>
-    </section>
-    <section aria-labelledby="rawReceiptTitle">
-      <h3 id="rawReceiptTitle">Raw receipt evidence</h3>
-      <dl class="raw-receipt">
-        @for (entry of receiptEntries(); track trackReceipt($index, entry)) {
-          <div><dt>{{ entry.label | receiptLabel }}</dt><dd><code>{{ entry.value }}</code></dd></div>
-        }
-      </dl>
-    </section>
+
+    <app-clerk-receipt-evidence-accordions [detail]="receipt" />
   }
 </dialog>
