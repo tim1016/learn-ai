@@ -44,6 +44,13 @@ describe('routes', () => {
     }
   });
 
+  it('keeps unscoped broker bot surfaces behind account-resolving guards', () => {
+    for (const path of ['brokers/:broker/bots', 'brokers/:broker/gallery']) {
+      const route = routes.find((candidate) => candidate.path === path);
+      expect(route?.canActivate).toHaveLength(1);
+    }
+  });
+
   it.each([
     ['broker', 'brokers/alpaca'],
     ['broker/accounts', 'brokers/alpaca'],

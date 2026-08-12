@@ -84,6 +84,7 @@ const NAV: NavGroup[] = [
       { label: 'Accounts', route: '/brokers/alpaca' },
       { label: 'Deploy', route: '/brokers/alpaca/deploy' },
       { label: 'Bots', route: '/brokers/alpaca/bots' },
+      { label: 'Gallery', route: '/brokers/alpaca/gallery' },
     ],
   },
   {
@@ -228,7 +229,7 @@ export class AppSidebarComponent {
   private activeRoute = computed<string | null>(() => {
     const url = this.navigationPath(this.currentUrl());
     const accountScopedBrokerSurface = url.match(
-      /^\/brokers\/([^/]+)\/accounts\/[^/]+\/(deploy|bots)(?:\/|$)/,
+      /^\/brokers\/([^/]+)\/accounts\/[^/]+\/(deploy|bots|gallery)(?:\/|$)/,
     );
     if (accountScopedBrokerSurface) {
       const [, broker, surface] = accountScopedBrokerSurface;
