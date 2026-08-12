@@ -4,6 +4,7 @@ import { ChangeDetectionStrategy, Component, inject, resource } from '@angular/c
 import { BrokersService } from '../../../services/brokers.service';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
+import { AlpacaTraderLensDataService } from './alpaca-trader-lens-data.service';
 
 /**
  * Alpaca open-positions table. Read-only. Four distinct renders: loading,
@@ -18,9 +19,10 @@ import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
   host: { class: 'block' },
 })
 export class AlpacaPositionsTableComponent {
+  private readonly traderData = inject(AlpacaTraderLensDataService, { optional: true });
   private readonly brokers = inject(BrokersService);
 
-  protected readonly positions = resource({
+  protected readonly positions = this.traderData?.positions ?? resource({
     loader: () => this.brokers.listPositions(),
   });
 }

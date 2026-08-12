@@ -1,0 +1,118 @@
+:host {
+  display: block;
+}
+
+.trader-lens {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.trader-lens__header,
+.positions-section__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.trader-lens__header h2,
+.trader-lens__header p,
+.positions-section__header h2,
+.positions-section__header p,
+.history-placeholder h2,
+.history-placeholder p {
+  margin: 0;
+}
+
+.trader-lens__header h2,
+.positions-section__header h2,
+.history-placeholder h2 {
+  color: var(--text-primary);
+  font-size: var(--fs-xl);
+}
+
+.eyebrow {
+  color: var(--text-muted);
+  font-size: var(--fs-xxs);
+  font-weight: var(--fw-semi);
+  letter-spacing: var(--ls-caps);
+  text-transform: uppercase;
+}
+
+.trader-lens__intro,
+.positions-section__header > p,
+.history-placeholder > p:last-child {
+  margin-top: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.scope-control {
+  display: inline-flex;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+}
+
+.scope-control button {
+  min-width: 3.4rem;
+  padding: 0.45rem 0.65rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semi);
+}
+
+.scope-control button:hover,
+.scope-control__button--active {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.scope-control button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.positions-section,
+.history-placeholder {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-card);
+}
+
+.positions-section {
+  overflow: hidden;
+}
+
+.positions-section__header,
+.history-placeholder {
+  padding: clamp(1rem, 2vw, 1.4rem);
+}
+
+.positions-section__header {
+  border-bottom: 1px solid var(--border);
+}
+
+.history-placeholder {
+  display: grid;
+  min-height: 14rem;
+  align-content: center;
+  gap: var(--space-2);
+}
+
+@media (max-width: 560px) {
+  .trader-lens__header,
+  .positions-section__header {
+    align-items: start;
+    flex-direction: column;
+  }
+}

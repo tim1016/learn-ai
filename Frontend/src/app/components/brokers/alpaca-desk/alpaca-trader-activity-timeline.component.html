@@ -1,0 +1,43 @@
+<section class="desk-timeline" aria-labelledby="today-at-desk-heading">
+  <header class="desk-timeline__header">
+    <div>
+      <p class="eyebrow">Activity</p>
+      <h2 id="today-at-desk-heading">Today at the desk</h2>
+    </div>
+    <p>Broker-reported account activity in your local-day window.</p>
+  </header>
+
+  @if (unavailable()) {
+    <p class="state" role="alert">Today's account activity is unavailable right now.</p>
+  } @else if (activities() === undefined) {
+    <p class="state" role="status">Loading today's account activity…</p>
+  } @else if (rows().length === 0) {
+    <p class="state">No account activity has been recorded today.</p>
+  } @else {
+    <p-timeline [value]="rows()" [pt]="timelineAccessibility" align="left" class="trader-timeline">
+      <ng-template #opposite let-item>
+        <app-timestamp-display [value]="item.occurred_at_ms ?? item.observed_at_ms" mode="local" />
+      </ng-template>
+      <ng-template #marker>
+        <span class="trader-timeline__marker" aria-hidden="true"></span>
+      </ng-template>
+      <ng-template #content let-item>
+        <article class="activity-entry">
+          <div class="activity-entry__headline">
+            @if (item.symbol; as symbol) {
+              <app-asset-identity [symbol]="symbol" size="sm" />
+            } @else {
+              <span class="activity-entry__account">Account</span>
+            }
+            <span class="activity-entry__kind">{{ item.activity_type | receiptLabel }}</span>
+          </div>
+          <p class="activity-entry__facts">
+            @if (item.side; as side) { {{ side | receiptLabel }} }
+            @if (item.quantity !== null) { · {{ item.quantity }} shares }
+            @if (item.price !== null) { · {{ item.price | currency: 'USD' }} }
+          </p>
+        </article>
+      </ng-template>
+    </p-timeline>
+  }
+</section>

@@ -41,6 +41,24 @@ describe('BrokersService', () => {
     await promise;
   });
 
+  it('GETs account activity with a bounded int64-ms cursor', async () => {
+    const promise = service.listActivities('alpaca', {
+      afterMs: 1_700_000_000_000,
+      limit: 25,
+    });
+
+    const req = httpMock.expectOne(
+      (request) =>
+        request.url === '/api/brokers/alpaca/activities' &&
+        request.params.get('after_ms') === '1700000000000' &&
+        request.params.get('limit') === '25',
+    );
+    expect(req.request.method).toBe('GET');
+    req.flush([]);
+
+    await expect(promise).resolves.toEqual([]);
+  });
+
   it('coalesces concurrent account reads for the same broker', async () => {
     const first = service.getAccount('alpaca');
     const second = service.getAccount('alpaca');
