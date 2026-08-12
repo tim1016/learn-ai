@@ -53,10 +53,12 @@ class _FakeCatalogSource:
 
 
 class _FakeAggregator:
+    """Mirrors the REAL contract: ``ensure_subscribed`` is async, ``snapshot`` is sync."""
+
     def __init__(self) -> None:
         self.subscribed: list[str] = []
 
-    def ensure_subscribed(self, symbol: str) -> None:
+    async def ensure_subscribed(self, symbol: str) -> None:
         self.subscribed.append(symbol)
 
     def snapshot(self, symbol: str, since_ms: int | None = None) -> list[object]:

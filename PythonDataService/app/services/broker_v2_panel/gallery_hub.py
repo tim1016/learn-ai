@@ -18,7 +18,6 @@ population is deferred to a later task — do not populate it here.
 
 from __future__ import annotations
 
-import time
 from typing import Protocol
 
 from app.schemas.broker_v2_gallery import (
@@ -31,6 +30,7 @@ from app.schemas.broker_v2_panel import BotCatalogView
 from app.services.broker_v2_panel.chart_projection_service import (
     aggregator_bars_to_chart_bars,
 )
+from app.utils.timestamps import now_ms_utc
 
 
 def running_symbols(catalog: list[BotCatalogView]) -> list[str]:
@@ -51,9 +51,15 @@ class GalleryCatalogSource(Protocol):
 
 
 class GalleryBarAggregator(Protocol):
-    """Production implementation: ``LIVE_BAR_AGGREGATOR`` (live_bar_aggregator.py)."""
+    """Production implementation: ``LIVE_BAR_AGGREGATOR`` (live_bar_aggregator.py).
 
-    def ensure_subscribed(self, symbol: str) -> object: ...
+    ``ensure_subscribed`` is ``async`` on the real aggregator (it may start a
+    background task) — every existing call site awaits it
+    (``panel_chart_data_source.py``, ``routers/broker.py``). ``snapshot`` is a
+    synchronous read of the in-memory ring buffer and is never awaited.
+    """
+
+    async def ensure_subscribed(self, symbol: str) -> object: ...
 
     def snapshot(self, symbol: str, since_ms: int | None = None) -> list[object]: ...
 
@@ -115,7 +121,7 @@ class GalleryHub:
         symbols = running_symbols(catalog)
         symbol_bars: list[GallerySymbolBars] = []
         for symbol in symbols:
-            self._aggregator.ensure_subscribed(symbol)
+            await self._aggregator.ensure_subscribed(symbol)
             raw = self._aggregator.snapshot(symbol)
             symbol_bars.append(
                 GallerySymbolBars(symbol=symbol, bars=aggregator_bars_to_chart_bars(raw))
@@ -124,7 +130,7 @@ class GalleryHub:
         return GalleryLiveSnapshot(
             stream_epoch=self._epoch,
             surface_version=self._version,
-            as_of_ms=int(time.time() * 1000),
+            as_of_ms=now_ms_utc(),
             resolution="1m",
             bots=[self._project_bot(row) for row in running],
             symbols=symbol_bars,
