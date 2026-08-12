@@ -71,7 +71,9 @@ _ALLOWED_TO_DIFFER_MANIFEST_FIELDS: frozenset[str] = frozenset(
 
 # Normalized-result fields excluded from the byte-equality check.
 # The payload itself is stable, but LEAN's execution-state envelope records
-# the host container and the wall-clock runtime of each invocation.
+# the host container and the wall-clock runtime of each invocation. This
+# narrow exception is approved in
+# docs/architecture/lean-sidecar-mission-critical.md §D2 (2026-08-12).
 _ALLOWED_TO_DIFFER_NORMALIZED_FIELDS: frozenset[str] = frozenset(set())
 
 _ALLOWED_TO_DIFFER_STATE_FIELDS: frozenset[str] = frozenset(

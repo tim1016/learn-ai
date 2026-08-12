@@ -20,9 +20,19 @@ Run window: 2026-02-09 → 2026-02-12 (engine start_date / end_date). QC's backt
 
 QC's backtest produced **1 fill**: BUY 365 AAPL @ $273.238170408 on 2026-02-10 09:31 ET, fee $1.83.
 
-Our engine produced **1 fill**: BUY 364 AAPL @ $273.178225656 on 2026-02-10 09:31 NY, fee (reconciler-side IBKR) ≈ $1.82.
+The engine's unfiltered event stream now produces **2 fills**: BUY 364 AAPL
+@ $273.178225656 on 2026-02-10 09:31 NY, followed by a synthetic SELL at
+the final observed close tagged `EndOfAlgorithm`. The latter is an accounting
+projection that closes the local ledger after the fixture ends; QC's captured
+run ends with the position open and has no corresponding market fill. The
+parity harness therefore excludes only the tagged synthetic event before
+reconciliation, retaining the market-generated BUY (fee, reconciler-side
+IBKR, ≈ $1.82).
 
-The reconciler aligns these by `(trading_date, side)` → 1 pair, 0 divergences under the agreed tolerances.
+The reconciler aligns the scoped market fills by `(trading_date, side)` → 1
+pair, 0 divergences under the agreed tolerances. This gate validates the
+single real entry fill only; it does not claim that the unmodified terminal
+projection matches QC.
 
 ## Divergence report
 
@@ -36,8 +46,11 @@ The reconciler aligns these by `(trading_date, side)` → 1 pair, 0 divergences 
 | `PNL_DRIFT` | n/a | No round-trip in single-fill scope |
 | `FIXTURE_INSUFFICIENT` | 0 | Minute audit clean — QC's fill price $273.24 falls within the 09:31 minute bar's [low=273.05, high=275.11] |
 | `ORDER_TYPE_MISMATCH` | 0 | Both market orders |
+| Synthetic terminal projection | excluded | Local `EndOfAlgorithm` sell has no QC counterpart because the captured QC position remains open; it is outside the single-fill parity scope. |
 
-**Acceptance:** `report.status == "passed"`. One pinned aligned-fill row asserted in `test_qc_aapl_phase3_trade_parity.py::test_qc_aapl_phase3_trade_level_parity`.
+**Acceptance:** `report.status == "passed"` after the explicitly scoped
+synthetic terminal projection is excluded. One pinned aligned-fill row is
+asserted in `test_qc_aapl_phase3_trade_parity.py::test_qc_aapl_phase3_trade_level_parity`.
 
 ## Tolerances accepted (and why)
 
