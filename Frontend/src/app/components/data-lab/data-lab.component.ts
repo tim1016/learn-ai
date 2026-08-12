@@ -22,6 +22,7 @@ import { ActiveIndicatorGroupComponent, IndicatorGroupItem } from './active-indi
 import { PastChainInspectorComponent } from './past-chain-inspector/past-chain-inspector.component';
 import { IndicatorConfigModalComponent } from './indicator-config-modal/indicator-config-modal.component';
 import { RunDockComponent } from '../../shared/run-dock/run-dock.component';
+import { AssetIdentityComponent } from '../../shared/asset-identity';
 import {
   RUN_DOCK_SOURCE,
   RUN_DOCK_STORAGE_KEY,
@@ -330,7 +331,7 @@ const DEFAULT_ENTRIES: IndicatorEntry[] = [
     DataLabChartComponent, SharedModule, Tooltip,
     PageHeaderComponent, TickerRangePickerComponent,
     ActiveIndicatorCardComponent, ActiveIndicatorGroupComponent, IndicatorConfigModalComponent,
-    PastChainInspectorComponent, RunDockComponent, IndicatorPickerComponent,
+    PastChainInspectorComponent, RunDockComponent, IndicatorPickerComponent, AssetIdentityComponent,
   ],
   templateUrl: './data-lab.component.html',
   styleUrls: ['./data-lab.component.scss'],

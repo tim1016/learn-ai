@@ -24,6 +24,7 @@ import { Dialog } from 'primeng/dialog';
 import { Tooltip } from 'primeng/tooltip';
 import { LineChartComponent } from '../../../shared/charts/line-chart/line-chart.component';
 import { VolumeChartComponent } from '../../../shared/charts/volume-chart/volume-chart.component';
+import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { MarketDataService } from '../../../services/market-data.service';
 import {
   PastChainService,
@@ -40,7 +41,7 @@ type AtmMethod = 'open' | 'prevClose';
   imports: [
     FormsModule,
     Button, Skeleton, Dialog, Tooltip,
-    LineChartComponent, VolumeChartComponent,
+    LineChartComponent, VolumeChartComponent, AssetIdentityComponent,
   ],
   templateUrl: './past-chain-inspector.component.html',
   styleUrls: ['./past-chain-inspector.component.scss'],

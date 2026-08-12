@@ -1794,6 +1794,9 @@
   font-size: 0.72rem;
 
   .meta-ticker {
+    --asset-identity-logo-size: 16px;
+    --asset-identity-symbol-color: #{$accent};
+
     font-weight: 700;
     color: $accent;
     background: rgba($accent, 0.12);
@@ -1948,6 +1951,13 @@
       color: var(--text-primary);
     }
   }
+}
+
+.cp-asset-identity {
+  --asset-identity-logo-size: 18px;
+
+  margin-right: 0.2rem;
+  vertical-align: middle;
 }
 
 .cp-detail {

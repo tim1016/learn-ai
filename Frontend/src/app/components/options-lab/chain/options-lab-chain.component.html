@@ -3,7 +3,7 @@
   <section class="chain-toolbar" role="toolbar" aria-label="Chain filters">
     <div class="ticker-pill mono">
       <span class="dot"></span>
-      <span>{{ ticker() }}</span>
+      <app-asset-identity [symbol]="ticker()" size="sm" tone="inverse" />
       <span
         class="spot-price"
         [class.pos]="spotChangeClass() === 'pos'"
