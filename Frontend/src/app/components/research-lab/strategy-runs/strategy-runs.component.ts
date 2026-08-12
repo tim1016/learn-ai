@@ -14,6 +14,7 @@ import { TagModule } from 'primeng/tag';
 
 import { StrategyRunsService } from '../../../services/strategy-runs.service';
 import type { RunLedger } from '../../../services/strategy-runs.types';
+import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
 import { TimestampDisplayPipe } from '../../../shared/timestamp';
 
 /**
@@ -42,6 +43,7 @@ import { TimestampDisplayPipe } from '../../../shared/timestamp';
     TableModule,
     TagModule,
     DecimalPipe,
+    AssetIdentityComponent,
     TimestampDisplayPipe,
   ],
   templateUrl: './strategy-runs.component.html',

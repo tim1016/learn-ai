@@ -44,6 +44,7 @@ import { DeployStartAdmissionComponent } from './deploy-start-admission.componen
 
 const INSTANCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const SYMBOL_RE = /^[A-Za-z][A-Za-z0-9.-]{0,11}$/;
+const DEPLOY_LENS_QUERY_PARAM = 'deployLens';
 
 interface AlpacaDeployTicket {
   instanceId: string;
@@ -97,7 +98,9 @@ export class AlpacaDeployWorkflowComponent {
   });
 
   protected readonly activeLens = linkedSignal<DeployLens>(() =>
-    this.queryParams().get('lens') === 'operator' ? 'operator' : 'trader',
+    (this.queryParams().get(DEPLOY_LENS_QUERY_PARAM) ?? this.queryParams().get('lens')) === 'operator'
+      ? 'operator'
+      : 'trader',
   );
 
   protected readonly submitting = signal(false);
@@ -201,7 +204,7 @@ export class AlpacaDeployWorkflowComponent {
     this.activeLens.set(lens);
     void this.router.navigate([], {
       relativeTo: this.route,
-      queryParams: { lens },
+      queryParams: { [DEPLOY_LENS_QUERY_PARAM]: lens },
       queryParamsHandling: 'merge',
       replaceUrl: true,
     });

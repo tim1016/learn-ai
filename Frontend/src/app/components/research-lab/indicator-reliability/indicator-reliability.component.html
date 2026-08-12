@@ -150,7 +150,7 @@
           <i class="pi pi-chart-line" aria-hidden="true"></i>
           <span class="font-medium">{{ result()!.display_name }}</span>
           <span class="text-slate-400">on</span>
-          <span class="font-medium mono">{{ result()!.ticker }}</span>
+          <app-asset-identity [symbol]="result()!.ticker" size="sm" />
           <span class="text-slate-400">({{ result()!.start_date }} → {{ result()!.end_date }})</span>
         </div>
         <i class="pi pi-chevron-down text-slate-400" aria-hidden="true"></i>
@@ -185,7 +185,7 @@
       </div>
       <div class="rl-runstrip-field">
         <span class="rl-runstrip-label">Ticker</span>
-        <span class="rl-runstrip-value mono">{{ res.ticker }}</span>
+        <app-asset-identity class="rl-runstrip-value" [symbol]="res.ticker" size="sm" />
       </div>
       <div class="rl-runstrip-field">
         <span class="rl-runstrip-label">Period</span>
@@ -262,7 +262,7 @@
           <!-- Verdict copy -->
           <div class="hero-copy">
             <div class="eyebrow">
-              Verdict · {{ res.display_name }} on <span class="mono">{{ res.ticker }}</span>
+              Verdict · {{ res.display_name }} on <app-asset-identity [symbol]="res.ticker" size="sm" />
               <app-info-icon refKey="verdictBucket" />
             </div>
             <h2 class="hero-headline">
@@ -291,7 +291,7 @@
           <div class="hero-actions">
             <button class="big-action primary" disabled pTooltip="Pre-flight check not wired in v1" tooltipPosition="left">
               <span class="big-action-title">Send to Pre-flight</span>
-              <span class="big-action-sub">{{ best.horizon }}-bar · {{ res.display_name }} · {{ res.ticker }}</span>
+              <span class="big-action-sub">{{ best.horizon }}-bar · {{ res.display_name }} · <app-asset-identity [symbol]="res.ticker" size="sm" /></span>
             </button>
             <button class="big-action" disabled pTooltip="Save to tested indicators not wired in v1" tooltipPosition="left">
               <span class="big-action-title">Save to tested indicators</span>

@@ -4,11 +4,12 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { catchError, finalize, of } from 'rxjs';
 import { PortfolioService } from '../../../services/portfolio.service';
 import { ReconciliationReport } from '../../../graphql/portfolio-types';
+import { AssetIdentityComponent } from '../../../shared/asset-identity';
 
 @Component({
   selector: 'app-reconciliation',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, AssetIdentityComponent],
   templateUrl: './reconciliation.component.html',
   styleUrls: ['./reconciliation.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,

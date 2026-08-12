@@ -39,11 +39,12 @@ describe('AppSidebarComponent', () => {
 
     const links = navLinks(fixture);
     expect(links.get('Accounts')).toBe('/brokers/alpaca');
-    expect(links.get('Deploy')).toBe('/brokers/alpaca/deploy');
+    expect(links.get('Deploy')).toBe('/brokers/alpaca?deploy=');
     expect(links.get('Bots')).toBe('/brokers/alpaca/bots');
+    expect(links.get('Gallery')).toBe('/brokers/alpaca/gallery');
   });
 
-  it('maps account-scoped Alpaca Deploy and Bots routes to their navigation slots', async () => {
+  it('maps account-scoped Alpaca routes to their navigation slots', async () => {
     const fixture = setup();
     const router = TestBed.inject(Router);
     router.resetConfig([{
@@ -51,7 +52,11 @@ describe('AppSidebarComponent', () => {
       component: AppSidebarComponent,
     }]);
 
-    for (const [surface, expectedLabel] of [['deploy', 'Deploy'], ['bots', 'Bots']]) {
+    for (const [surface, expectedLabel] of [
+      ['deploy', 'Deploy'],
+      ['bots', 'Bots'],
+      ['gallery', 'Gallery'],
+    ]) {
       await router.navigateByUrl(`/brokers/alpaca/accounts/PA9/${surface}`);
       fixture.detectChanges();
       const activeLabels = Array.from(

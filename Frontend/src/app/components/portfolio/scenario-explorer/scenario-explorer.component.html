@@ -60,7 +60,7 @@
         <tbody>
           @for (pos of r.positions; track pos.symbol) {
             <tr>
-              <td class="symbol">{{ pos.symbol }}</td>
+              <td class="symbol"><app-asset-identity [symbol]="pos.symbol" size="sm" /></td>
               <td>${{ pos.currentValue | number:'1.2-2' }}</td>
               <td>${{ pos.scenarioValue | number:'1.2-2' }}</td>
               <td [class.positive]="pos.pnLImpact > 0" [class.negative]="pos.pnLImpact < 0">

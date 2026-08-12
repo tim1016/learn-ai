@@ -25,13 +25,14 @@
           <span aria-hidden="true">⊞</span>
           Gallery
         </a>
-        <a
+        <button
+          type="button"
           class="command-button command-button--primary"
-          [routerLink]="['/brokers', broker(), 'accounts', accountId(), 'deploy']"
+          (click)="openDeploy()"
         >
           <span aria-hidden="true">＋</span>
           Deploy strategy
-        </a>
+        </button>
       </div>
     </div>
 
@@ -100,3 +101,9 @@
     }
   </section>
 </main>
+
+<app-alpaca-deploy-drawer
+  [visible]="deployOpen()"
+  [accountId]="accountId()"
+  (closed)="closeDeploy()"
+/>

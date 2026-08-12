@@ -7,11 +7,13 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime, set_active_clerk_runtime
+from app.broker.alpaca.clerk.sqlite.economic_projection_models import AccountPnlAttribution
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.models import ExternalOrderResource
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.models import BrokerOrder
+from app.routers.account_pnl_attribution import router as account_pnl_attribution_router
 from app.routers.clerk_transactions import router
 from app.schemas.clerk_transaction_projection import (
     ClerkTransactionRow,
@@ -54,6 +56,8 @@ class _NoIoStore:
         lifecycle_state=None,
         strategy_instance_id=None,
         run_id=None,
+        from_ms=None,
+        to_ms=None,
     ):
         assert account_id == "DU1219"
         assert limit == 25
@@ -121,6 +125,8 @@ async def test_history_endpoint_passes_typed_filters_to_the_projection_only(
             lifecycle_state=None,
             strategy_instance_id=None,
             run_id=None,
+            from_ms=None,
+            to_ms=None,
         ):
             assert account_id == "DU1219"
             assert limit == 25
@@ -150,6 +156,106 @@ async def test_history_endpoint_passes_typed_filters_to_the_projection_only(
             },
         )
     assert response.status_code == 200
+
+
+async def test_history_endpoint_passes_an_inclusive_ms_window_to_the_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _WindowedStore(_NoIoStore):
+        async def history_page(
+            self,
+            *,
+            account_id: str,
+            limit: int,
+            after,
+            origin=None,
+            lifecycle_state=None,
+            strategy_instance_id=None,
+            run_id=None,
+            from_ms=None,
+            to_ms=None,
+        ):
+            assert account_id == "DU1219"
+            assert limit == 25
+            assert after is None
+            assert (origin, lifecycle_state, strategy_instance_id, run_id) == (None, None, None, None)
+            assert (from_ms, to_ms) == (1_700_000_000_000, 1_700_086_400_000)
+            return [], 12, 0
+
+    app = FastAPI()
+    app.include_router(router)
+    monkeypatch.setattr(
+        "app.routers.clerk_transactions.get_clerk_transaction_store", lambda: _WindowedStore()
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/accounts/DU1219/transactions",
+            params={"limit": 25, "from_ms": 1_700_000_000_000, "to_ms": 1_700_086_400_000},
+        )
+    assert response.status_code == 200
+
+
+async def test_history_endpoint_rejects_an_inverted_ms_window() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/accounts/DU1219/transactions",
+            params={"from_ms": 2, "to_ms": 1},
+        )
+    assert response.status_code == 422
+    assert response.json()["detail"] == "to_ms must be greater than or equal to from_ms"
+
+
+async def test_history_endpoint_rejects_timestamp_beyond_int64() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/accounts/DU1219/transactions",
+            params={"from_ms": 2**63},
+        )
+
+    assert response.status_code == 422
+
+
+async def test_pnl_attribution_endpoint_passes_the_inclusive_window_to_c2(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.routers.account_pnl_attribution as account_pnl_attribution
+
+    def attribution(*, account_id: str, from_ms: int, to_ms: int) -> AccountPnlAttribution:
+        assert (account_id, from_ms, to_ms) == ("DU1219", 1_700_000_000_000, 1_700_086_400_000)
+        return AccountPnlAttribution(
+            account_id=account_id,
+            authority_generation=1,
+            control_revision=2,
+            from_ms=from_ms,
+            to_ms=to_ms,
+            attribution_rows=(),
+            realized_pnl_total=12.5,
+            start_open_pnl_total=0.0,
+            open_pnl_total=0.0,
+            fee_total=0.0,
+            fee_fidelity="reported",
+            execution_coverage="complete",
+            marks_complete=True,
+            start_mark_observed_at_ms={},
+            mark_observed_at_ms={},
+        )
+
+    monkeypatch.setattr(account_pnl_attribution, "sqlite_account_pnl_attribution", attribution)
+    app = FastAPI()
+    app.include_router(account_pnl_attribution_router)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/accounts/DU1219/pnl-attribution",
+            params={"from_ms": 1_700_000_000_000, "to_ms": 1_700_086_400_000},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["realized_pnl_total"] == 12.5
+    assert response.json()["mark_observed_at_ms"] == {}
 
 
 async def test_history_endpoint_reports_unavailable_without_fallback_scan(

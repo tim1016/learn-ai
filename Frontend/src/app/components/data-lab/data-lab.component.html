@@ -107,7 +107,7 @@
                     </div>
                   </div>
                   <div class="session-card-meta">
-                    <span class="meta-ticker">{{ s.ticker }}</span>
+                    <app-asset-identity class="meta-ticker" [symbol]="s.ticker" size="sm" />
                     <span class="meta-range">{{ s.fromDate }} → {{ s.toDate }}</span>
                     <span class="meta-indicators">{{ s.indicatorCount }} indicators</span>
                     @if (s.hasChart) {
@@ -465,14 +465,12 @@
         @let _est = optionsContractEstimate();
         @let _sev = optionsContractEstimateSeverity();
         @let _resWarn = optionsResolutionWarning();
-        @let _expiryWarn = optionsDteDistance() === 0 && !tickerSupportsDaily()
-          ? ticker() + ' does not list daily expirations — at DTE=0 only Fridays will populate. Set DTE distance to land on a listed weekly expiry, or pick a daily-expiry ticker: ' + DAILY_EXPIRY_TICKERS.join(', ') + '.'
-          : '';
+        @let _hasExpiryWarning = optionsDteDistance() === 0 && !tickerSupportsDaily();
 
-        @if (_est.contracts > 0 || _resWarn || _expiryWarn) {
+        @if (_est.contracts > 0 || _resWarn || _hasExpiryWarning) {
           <div class="companion-plan"
-               [class.severity-ok]="_sev === 'ok' && !_resWarn && !_expiryWarn"
-               [class.severity-warn]="_sev === 'warn' || (!!_resWarn || !!_expiryWarn) && _sev !== 'danger'"
+               [class.severity-ok]="_sev === 'ok' && !_resWarn && !_hasExpiryWarning"
+               [class.severity-warn]="_sev === 'warn' || (!!_resWarn || _hasExpiryWarning) && _sev !== 'danger'"
                [class.severity-danger]="_sev === 'danger'">
             <div class="cp-eyebrow">
               Companion plan ·
@@ -480,7 +478,7 @@
                 @case ('danger') { <span class="cp-sev cp-sev-danger">DANGER</span> }
                 @case ('warn')   { <span class="cp-sev cp-sev-warn">WARN</span> }
                 @default {
-                  @if (_resWarn || _expiryWarn) {
+                  @if (_resWarn || _hasExpiryWarning) {
                     <span class="cp-sev cp-sev-warn">WARN</span>
                   } @else {
                     <span class="cp-sev cp-sev-ok">OK</span>
@@ -511,15 +509,18 @@
                   <dd>{{ _resWarn }}</dd>
                 </div>
               }
-              @if (_expiryWarn) {
+              @if (_hasExpiryWarning) {
                 <div class="cp-row">
                   <dt>Expiry coverage</dt>
-                  <dd>{{ _expiryWarn }}</dd>
+                  <dd>
+                    <app-asset-identity class="cp-asset-identity" [symbol]="ticker()" size="sm" />
+                    does not list daily expirations — at DTE=0 only Fridays will populate. Set DTE distance to land on a listed weekly expiry, or pick a daily-expiry ticker: {{ DAILY_EXPIRY_TICKERS.join(', ') }}.
+                  </dd>
                 </div>
               }
             </dl>
 
-            @if (_sev !== 'ok' || _resWarn || _expiryWarn) {
+            @if (_sev !== 'ok' || _resWarn || _hasExpiryWarning) {
               <div class="cp-actions">
                 <button type="button" class="cp-action" (click)="adjustStrikes(-1)"
                         [disabled]="optionsStrikesEachSide() <= 1">
@@ -849,7 +850,11 @@
   <!-- Generate bar -->
   <div class="gen-bar" role="region" aria-label="Generate controls">
     <div class="gen-bar__context mono">
-      <span class="gen-bar__symbol">{{ ticker() || '—' }}</span>
+      @if (ticker()) {
+        <app-asset-identity class="gen-bar__symbol" [symbol]="ticker()" size="sm" />
+      } @else {
+        <span class="gen-bar__symbol">—</span>
+      }
       <span class="gen-bar__sep" aria-hidden="true">·</span>
       <span>{{ fromDate() }} → {{ toDate() }}</span>
       <span class="gen-bar__sep" aria-hidden="true">·</span>

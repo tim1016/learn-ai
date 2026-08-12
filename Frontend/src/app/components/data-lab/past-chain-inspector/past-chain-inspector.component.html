@@ -9,7 +9,11 @@
       <span class="card-subtitle">
         Preview the contracts a bundle run will fetch on
         <code>{{ analysisDate() || '—' }}</code> for
-        <code>{{ ticker() || '—' }}</code>.
+        @if (ticker()) {
+          <app-asset-identity class="card-subtitle__ticker" [symbol]="ticker()" size="sm" />
+        } @else {
+          <code>—</code>
+        }.
       </span>
     </div>
 

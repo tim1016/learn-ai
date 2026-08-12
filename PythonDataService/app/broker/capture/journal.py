@@ -70,7 +70,7 @@ _SECRET_KEY = re.compile(r"key|secret|token|password|authorization|apca", re.IGN
 class CaptureEndpoint(StrEnum):
     """The capture endpoint families (each rotates its own daily file).
 
-    The six REST families landed in phase 1; ``STREAM`` (phase 2, S4) is the
+    The REST families include account portfolio history; ``STREAM`` (phase 2, S4) is the
     verbatim-capture family for the ``trade_updates`` websocket. Every raw frame
     — the auth handshake, subscribe ack, and each lifecycle event — is journaled
     under this family before it is parsed, with secret-like keys redacted (the
@@ -81,6 +81,7 @@ class CaptureEndpoint(StrEnum):
     POSITIONS = "positions"
     ORDERS = "orders"
     ACTIVITIES = "activities"
+    PORTFOLIO_HISTORY = "portfolio_history"
     ASSETS = "assets"
     CLOCK = "clock"
     STREAM = "stream"

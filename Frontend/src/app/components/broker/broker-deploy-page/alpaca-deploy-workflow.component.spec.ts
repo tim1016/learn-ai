@@ -224,7 +224,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
 
     expect(readyHeader.getAttribute('aria-expanded')).toBe('true');
     expect(screen.getByText('Accepted at the current manifest revision.')).toBeTruthy();
-    await vi.waitFor(() => expect(router.url).toContain('lens=operator'));
+    await vi.waitFor(() => expect(router.url).toContain('deployLens=operator'));
   });
 
   it('opens the failed admission gate and folds the blocker into the account banner', async () => {

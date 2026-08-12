@@ -64,11 +64,12 @@ describe('BotsRosterComponent', () => {
       fakeBot({ strategy_instance_id: 'spy-01', symbol: 'SPY', strategy_label: 'Opening Range Breakout' }),
       fakeBot({ strategy_instance_id: 'qqq-01', symbol: 'QQQ' }),
     ];
-    await renderRoster(bots);
+    const { container } = await renderRoster(bots);
 
     expect(await screen.findByText('spy-01')).toBeTruthy();
     expect(screen.getByText('qqq-01')).toBeTruthy();
     expect(screen.getByText(/Opening Range Breakout/)).toBeTruthy();
+    expect(container.querySelectorAll('app-asset-identity')).toHaveLength(2);
   });
 
   it('filters by search term', async () => {

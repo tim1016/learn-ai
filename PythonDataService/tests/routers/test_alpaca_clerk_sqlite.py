@@ -81,6 +81,9 @@ class FakeAlpacaPort:
     async def get_clock_evidence(self):
         raise AssertionError("not called")
 
+    async def get_portfolio_history(self, _history_range: object) -> None:
+        raise AssertionError("not called")
+
     async def submit(self, leg, *, client_order_id):
         raise AssertionError("not called")
 

@@ -4,9 +4,12 @@ import { firstValueFrom } from 'rxjs';
 
 import type {
   BrokerAccountSnapshot,
+  BrokerActivity,
   BrokerOrder,
   BrokerOrderGroup,
   BrokerOrderRequest,
+  BrokerPortfolioHistory,
+  PortfolioHistoryProof,
   BrokerPosition,
   ClerkStatus,
   CustodyDiagnosis,
@@ -14,6 +17,7 @@ import type {
   CustodyResolutionRequest,
   OrderCancelResult,
   OrderSubmitResult,
+  PortfolioHistoryRange,
   SqliteClerkProjection,
   SqliteRecoveryAction,
   SqliteRecoveryActionCheck,
@@ -61,6 +65,51 @@ export class BrokersService {
   listPositions(broker = 'alpaca'): Promise<BrokerPosition[]> {
     return firstValueFrom(
       this.http.get<BrokerPosition[]>(`${this.base}/${broker}/positions`),
+    );
+  }
+
+  /**
+   * Account-wide Alpaca activity, bounded by the data plane. `afterMs` is an
+   * int64 UTC cursor owned by the caller's selected activity window.
+   */
+  listActivities(
+    broker = 'alpaca',
+    options: { afterMs?: number; currentSession?: boolean; limit?: number } = {},
+  ): Promise<BrokerActivity[]> {
+    let params = new HttpParams();
+    if (options.afterMs != null) {
+      params = params.set('after_ms', options.afterMs);
+    }
+    if (options.limit != null) {
+      params = params.set('limit', options.limit);
+    }
+    if (options.currentSession) {
+      params = params.set('current_session', true);
+    }
+    return firstValueFrom(
+      this.http.get<BrokerActivity[]>(`${this.base}/${broker}/activities`, { params }),
+    );
+  }
+
+  /** Broker-owned account equity history; values are rendered without local P&L math. */
+  getPortfolioHistory(
+    broker: string,
+    historyRange: PortfolioHistoryRange,
+  ): Promise<BrokerPortfolioHistory> {
+    const params = new HttpParams().set('range', historyRange);
+    return firstValueFrom(
+      this.http.get<BrokerPortfolioHistory>(`${this.base}/${broker}/portfolio-history`, { params }),
+    );
+  }
+
+  /** C1 curve plus C2/C3 reconciliation proof; the browser derives no P&L. */
+  getPortfolioHistoryProof(
+    broker: string,
+    historyRange: PortfolioHistoryRange,
+  ): Promise<PortfolioHistoryProof> {
+    const params = new HttpParams().set('range', historyRange);
+    return firstValueFrom(
+      this.http.get<PortfolioHistoryProof>(`${this.base}/${broker}/portfolio-history-proof`, { params }),
     );
   }
 

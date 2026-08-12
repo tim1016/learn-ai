@@ -137,7 +137,45 @@ class SessionEconomicProjection:
     session_fills: tuple[FillRecord, ...]
 
 
+@dataclass(frozen=True)
+class FifoAttributionRow:
+    """One account-level FIFO lot closure, with both bot identities retained."""
+
+    symbol: str
+    quantity: float
+    entry_price: float
+    exit_price: float
+    opened_at_ms: int
+    closed_at_ms: int
+    realized_pnl: float
+    fee: float | None
+    entry_strategy_instance_id: str
+    exit_strategy_instance_id: str
+
+
+@dataclass(frozen=True)
+class AccountPnlAttribution:
+    """Complete account FIFO attribution for one inclusive UTC-ms window."""
+
+    account_id: str
+    authority_generation: int
+    control_revision: int
+    from_ms: int
+    to_ms: int
+    attribution_rows: tuple[FifoAttributionRow, ...]
+    realized_pnl_total: float
+    start_open_pnl_total: float | None
+    open_pnl_total: float | None
+    fee_total: float | None
+    fee_fidelity: FeeFidelity
+    execution_coverage: ExecutionCoverage
+    marks_complete: bool
+    start_mark_observed_at_ms: dict[str, int]
+    mark_observed_at_ms: dict[str, int]
+
+
 __all__ = [
+    "AccountPnlAttribution",
     "EconomicSnapshot",
     "ExecutionCoverage",
     "ExecutionOrigin",
@@ -145,6 +183,7 @@ __all__ = [
     "ExecutionRow",
     "ExecutionState",
     "FeeFidelity",
+    "FifoAttributionRow",
     "FillPage",
     "FillWindowProjection",
     "MarketMark",

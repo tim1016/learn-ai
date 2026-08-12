@@ -54,7 +54,7 @@
         <p-tag [severity]="stageBadgeSeverity"
                [value]="'Stage ' + (stageInfo?.stage ?? 0) + ' — ' + (stageInfo?.label ?? 'Rejected')" />
         <h3 class="verdict-block-title">
-          {{ result().featureName }} on {{ result().ticker }}
+          {{ result().featureName }} on <app-asset-identity [symbol]="result().ticker" size="sm" />
         </h3>
       </div>
 
@@ -179,7 +179,7 @@
     <div class="verdict-header">
       <i [class]="isExploratoryOverride ? 'pi pi-info-circle' : (result().passedValidation ? 'pi pi-verified' : 'pi pi-times-circle')" class="verdict-icon"></i>
       <h3 class="verdict-title">
-        {{ result().featureName }} on {{ result().ticker }}
+        {{ result().featureName }} on <app-asset-identity [symbol]="result().ticker" size="sm" />
       </h3>
       <p-tag [severity]="validationSeverity" [value]="validationLabel" />
       <p-tag [severity]="sampleCoverageTierSeverity" [value]="sampleCoverageTierLabel" class="ml-2" />

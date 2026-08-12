@@ -5,11 +5,12 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { catchError, finalize, of } from 'rxjs';
 import { PortfolioService } from '../../../services/portfolio.service';
 import { RiskRule, RiskViolation, DollarDeltaResult } from '../../../graphql/portfolio-types';
+import { AssetIdentityComponent } from '../../../shared/asset-identity';
 
 @Component({
   selector: 'app-risk-panel',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, AssetIdentityComponent],
   templateUrl: './risk-panel.component.html',
   styleUrls: ['./risk-panel.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
