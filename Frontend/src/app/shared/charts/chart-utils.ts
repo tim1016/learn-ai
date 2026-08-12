@@ -16,8 +16,9 @@ import {
 export function createAppChart(
   container: string | HTMLElement,
   options: DeepPartial<ChartOptions> = {},
+  chartFactory: typeof createLightweightChart = createLightweightChart,
 ): IChartApi {
-  return createLightweightChart(container, {
+  return chartFactory(container, {
     ...options,
     layout: {
       ...options.layout,
