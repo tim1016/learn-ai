@@ -6,7 +6,7 @@ import { ValidationStagePlaceholderComponent } from './validation-stage-placehol
 
 describe('ValidationStagePlaceholderComponent', () => {
   it('reflects the current configuration and an honest empty message', async () => {
-    await render(ValidationStagePlaceholderComponent, {
+    const { container } = await render(ValidationStagePlaceholderComponent, {
       inputs: {
         symbol: 'SPY',
         resolution: 'minute',
@@ -16,7 +16,8 @@ describe('ValidationStagePlaceholderComponent', () => {
       providers: [provideZonelessChangeDetection()],
     });
 
-    expect(screen.getByText('SPY validation run')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'SPY validation run' })).toBeTruthy();
+    expect(container.querySelector('app-asset-identity')?.textContent).toContain('SPY');
     expect(screen.getByText('signal close')).toBeTruthy();
     expect(screen.getByText('both')).toBeTruthy();
     expect(

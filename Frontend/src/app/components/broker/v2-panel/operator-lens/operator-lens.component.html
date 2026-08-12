@@ -45,7 +45,7 @@
             @for (order of panel().working_orders; track order.order_ref) {
               <li class="working-order">
                 <div class="working-order__heading">
-                  <strong>{{ order.symbol }}</strong>
+                  <app-asset-identity [symbol]="order.symbol" size="sm" />
                   <span>{{ order.side | receiptLabel }}</span>
                   <span class="working-order__status">{{ order.status | receiptLabel }}</span>
                 </div>

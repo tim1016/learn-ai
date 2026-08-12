@@ -16,6 +16,7 @@ import {
   gradeMaxDrawdown, gradeExpectancy, gradeNetProfit,
 } from '../metric-grade.util';
 import type { RunVerdict } from '../../../api/run-verdict.types';
+import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import type { EngineValidationAnalytics } from './engine-validation-analytics.types';
 import { TradeLedgerComponent } from './trade-ledger/trade-ledger.component';
 import { ValidationAtlasComponent } from './validation-atlas/validation-atlas.component';
@@ -127,7 +128,7 @@ export interface EngineResultData {
   imports: [
     TooltipModule,
     LeanStatisticsComponent, ReadinessScoreCardComponent, EngineChartComponent,
-    TradeLedgerComponent, ValidationAtlasComponent,
+    TradeLedgerComponent, ValidationAtlasComponent, AssetIdentityComponent,
   ],
   templateUrl: './engine-results.component.html',
   styleUrls: ['./engine-results.component.scss'],

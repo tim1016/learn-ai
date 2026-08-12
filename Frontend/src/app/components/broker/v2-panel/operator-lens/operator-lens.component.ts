@@ -20,6 +20,7 @@ import { ClerkCardComponent } from './clerk-card.component';
 import { JournalTailComponent } from './journal-tail.component';
 import { OperatorReadinessComponent } from './operator-readiness.component';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
+import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 import { OperatorRunHistoryComponent } from '../bot-run-history/operator-run-history.component';
 import { OperatorDisclosureCardComponent } from './operator-disclosure-card.component';
 
@@ -48,6 +49,7 @@ import { OperatorDisclosureCardComponent } from './operator-disclosure-card.comp
     ReceiptLabelPipe,
     OperatorRunHistoryComponent,
     OperatorDisclosureCardComponent,
+    AssetIdentityComponent,
   ],
   templateUrl: './operator-lens.component.html',
   styleUrl: './operator-lens.component.scss',

@@ -61,7 +61,7 @@
           <tr [class.roster-row--attention]="bot.needs_attention">
             <td data-label="Bot">
               <a class="bot-identity" [routerLink]="botLink(bot)">
-                <strong>{{ bot.symbol }}</strong>
+                <app-asset-identity [symbol]="bot.symbol" size="sm" />
                 <span class="bot-identity__sid">{{ bot.strategy_instance_id }}</span>
                 <span>{{ bot.strategy_label }} · {{ bot.mode | receiptLabel }}</span>
               </a>

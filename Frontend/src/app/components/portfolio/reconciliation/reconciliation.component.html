@@ -55,7 +55,7 @@
         <tbody>
           @for (d of r.drifts; track d.tickerId) {
             <tr [class]="'drift-' + d.driftType.toLowerCase()">
-              <td class="symbol">{{ d.symbol }}</td>
+              <td class="symbol"><app-asset-identity [symbol]="d.symbol" size="sm" /></td>
               <td>
                 <span class="drift-badge">{{ d.driftType }}</span>
               </td>

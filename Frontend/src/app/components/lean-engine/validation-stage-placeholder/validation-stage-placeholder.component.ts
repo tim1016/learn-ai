@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, input } from '@angular/core';
+import { AssetIdentityComponent } from '../../../shared/asset-identity';
 
 /**
  * Empty state shown before a run completes. The header reflects the real
@@ -8,6 +9,7 @@ import { ChangeDetectionStrategy, Component, input } from '@angular/core';
  */
 @Component({
   selector: 'app-validation-stage-placeholder',
+  imports: [AssetIdentityComponent],
   templateUrl: './validation-stage-placeholder.component.html',
   styleUrl: './validation-stage-placeholder.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,

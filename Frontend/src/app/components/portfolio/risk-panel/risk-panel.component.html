@@ -33,7 +33,7 @@
       <tbody>
         @for (d of deltaResults(); track d.positionId) {
           <tr>
-            <td class="symbol">{{ d.symbol }}</td>
+            <td class="symbol"><app-asset-identity [symbol]="d.symbol" size="sm" /></td>
             <td>{{ d.delta | number:'1.3-3' }}</td>
             <td>${{ d.price | number:'1.2-2' }}</td>
             <td>{{ d.quantity }}</td>
