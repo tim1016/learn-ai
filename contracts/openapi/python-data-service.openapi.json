@@ -18180,8 +18180,15 @@
             "type": "string"
           },
           "fills_today": {
-            "title": "Fills Today",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fills Today"
           },
           "label": {
             "title": "Label",
@@ -18203,8 +18210,15 @@
             "type": "boolean"
           },
           "open_pnl": {
-            "title": "Open Pnl",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Open Pnl"
           },
           "phase": {
             "title": "Phase",
@@ -18214,8 +18228,15 @@
             "$ref": "#/components/schemas/GalleryPrimaryAction"
           },
           "realized_pnl_today": {
-            "title": "Realized Pnl Today",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Realized Pnl Today"
           },
           "running": {
             "title": "Running",
