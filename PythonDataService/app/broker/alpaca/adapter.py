@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -31,6 +31,7 @@ from app.broker.contract.models import (
     BrokerOrder,
     BrokerOrderEvent,
     BrokerOrderLeg,
+    BrokerPortfolioHistory,
     BrokerPosition,
 )
 from app.utils.timestamps import now_ms_utc
@@ -117,6 +118,28 @@ def opt_rfc3339_to_ms(value: Any) -> int | None:
     return rfc3339_to_ms(str(value))
 
 
+def epoch_to_ms(value: Any) -> int:
+    """Normalize Alpaca epoch timestamps to canonical ``int64`` ms UTC.
+
+    Alpaca's portfolio-history documentation describes seconds while one of its
+    published examples uses milliseconds. Accept both vendor representations at
+    this single ingestion boundary, rejecting non-finite and non-numeric input.
+    """
+    if isinstance(value, bool):
+        raise TypeError("Alpaca portfolio-history timestamp must be numeric, not boolean")
+    try:
+        epoch = Decimal(str(value))
+    except (InvalidOperation, ValueError) as exc:
+        raise TypeError("Alpaca portfolio-history timestamp must be numeric") from exc
+    if not epoch.is_finite():
+        raise ValueError("Alpaca portfolio-history timestamp must be finite")
+    # Unix timestamps expressed in seconds are currently 10 digits; milliseconds
+    # are 13. The threshold accepts either documented representation without
+    # guessing at an ISO string or carrying a non-canonical value downstream.
+    milliseconds = epoch * 1_000 if abs(epoch) < Decimal("100000000000") else epoch
+    return int(milliseconds.to_integral_value(rounding=ROUND_HALF_UP))
+
+
 def et_date_to_ms(value: str) -> int:
     """Anchor a bare ``YYYY-MM-DD`` at 00:00 America/New_York → ``int64`` ms UTC.
 
@@ -171,6 +194,19 @@ def from_alpaca_account(
         account_blocked=to_bool(payload["account_blocked"]),
         created_at_ms=opt_rfc3339_to_ms(payload.get("created_at")),
         observed_at_ms=_observed(observed_at_ms),
+    )
+
+
+def from_alpaca_portfolio_history(
+    payload: Mapping[str, Any],
+) -> BrokerPortfolioHistory:
+    """Map Alpaca's account history to the broker-owned C1 curve contract."""
+    return BrokerPortfolioHistory(
+        timestamps=[epoch_to_ms(value) for value in payload["timestamp"]],
+        equity=[to_float(value) for value in payload["equity"]],
+        profit_loss=[to_float(value) for value in payload["profit_loss"]],
+        base_value=opt_float(payload.get("base_value")),
+        timeframe=str(payload["timeframe"]),
     )
 
 

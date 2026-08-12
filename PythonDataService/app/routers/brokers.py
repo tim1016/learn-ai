@@ -46,7 +46,9 @@ from app.broker.contract.models import (
     BrokerOrder,
     BrokerOrderGroup,
     BrokerOrderRequest,
+    BrokerPortfolioHistory,
     BrokerPosition,
+    PortfolioHistoryRange,
 )
 from app.broker.contract.ports import BrokerReadPort
 from app.broker.contract.registry import get_broker_registry
@@ -174,6 +176,15 @@ async def get_clock_evidence(broker: str) -> BrokerClockEvidence:
     # Vendor evidence only — the canonical calendar module remains the sole
     # authority for scheduled session structure (no authority change).
     return await _run(broker, lambda port: port.get_clock_evidence())
+
+
+@router.get("/{broker}/portfolio-history", response_model=BrokerPortfolioHistory)
+async def get_portfolio_history(
+    broker: str,
+    history_range: PortfolioHistoryRange = Query(alias="range"),
+) -> BrokerPortfolioHistory:
+    """Return the broker's authoritative account equity curve for one window."""
+    return await _run(broker, lambda port: port.get_portfolio_history(history_range))
 
 
 def _require_trade_clerk(broker: str) -> AlpacaClerk:

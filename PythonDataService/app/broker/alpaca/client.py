@@ -275,6 +275,21 @@ class AlpacaTradingClient:
     async def get_clock(self) -> dict[str, Any]:
         return await self._call(lambda c: c.get_clock(), describe="clock")
 
+    async def get_portfolio_history(
+        self,
+        *,
+        period: str,
+        timeframe: str,
+    ) -> dict[str, Any]:
+        """GET broker-owned account equity history over the captured SDK session."""
+        return await self._call(
+            lambda c: c.get(
+                "/account/portfolio/history",
+                data={"period": period, "timeframe": timeframe},
+            ),
+            describe="portfolio history",
+        )
+
     # ── Write methods (phase 2) ─────────────────────────────────────────────
 
     async def _rate_limit_backoff(self, exc: BrokerRateLimited) -> None:

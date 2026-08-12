@@ -288,6 +288,8 @@ export class BrokerService {
     if (filters.lifecycleState) params['lifecycle_state'] = filters.lifecycleState;
     if (filters.strategyInstanceId) params['strategy_instance_id'] = filters.strategyInstanceId;
     if (filters.runId) params['run_id'] = filters.runId;
+    if (filters.fromMs !== null && filters.fromMs !== undefined) params['from_ms'] = filters.fromMs;
+    if (filters.toMs !== null && filters.toMs !== undefined) params['to_ms'] = filters.toMs;
     return firstValueFrom(
       this.http.get<ClerkTransactionHistoryResponse>(
         `${this.accountsBase}/${encodeURIComponent(accountId)}/transactions`,

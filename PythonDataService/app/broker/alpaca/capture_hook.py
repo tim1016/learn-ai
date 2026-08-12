@@ -31,7 +31,9 @@ logger = logging.getLogger(__name__)
 def _family_for_path(path: str) -> CaptureEndpoint | None:
     """Map an Alpaca URL path to its capture endpoint family, or ``None``."""
     normalized = path.rstrip("/")
-    # Activities is nested under /account, so it must be checked first.
+    # Nested account routes must be checked before the general account route.
+    if "/account/portfolio/history" in normalized:
+        return CaptureEndpoint.PORTFOLIO_HISTORY
     if "/account/activities" in normalized:
         return CaptureEndpoint.ACTIVITIES
     if normalized.endswith("/account"):

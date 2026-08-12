@@ -54,6 +54,8 @@ class _NoIoStore:
         lifecycle_state=None,
         strategy_instance_id=None,
         run_id=None,
+        from_ms=None,
+        to_ms=None,
     ):
         assert account_id == "DU1219"
         assert limit == 25
@@ -121,6 +123,8 @@ async def test_history_endpoint_passes_typed_filters_to_the_projection_only(
             lifecycle_state=None,
             strategy_instance_id=None,
             run_id=None,
+            from_ms=None,
+            to_ms=None,
         ):
             assert account_id == "DU1219"
             assert limit == 25
@@ -150,6 +154,55 @@ async def test_history_endpoint_passes_typed_filters_to_the_projection_only(
             },
         )
     assert response.status_code == 200
+
+
+async def test_history_endpoint_passes_an_inclusive_ms_window_to_the_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _WindowedStore(_NoIoStore):
+        async def history_page(
+            self,
+            *,
+            account_id: str,
+            limit: int,
+            after,
+            origin=None,
+            lifecycle_state=None,
+            strategy_instance_id=None,
+            run_id=None,
+            from_ms=None,
+            to_ms=None,
+        ):
+            assert account_id == "DU1219"
+            assert limit == 25
+            assert after is None
+            assert (origin, lifecycle_state, strategy_instance_id, run_id) == (None, None, None, None)
+            assert (from_ms, to_ms) == (1_700_000_000_000, 1_700_086_400_000)
+            return [], 12, 0
+
+    app = FastAPI()
+    app.include_router(router)
+    monkeypatch.setattr(
+        "app.routers.clerk_transactions.get_clerk_transaction_store", lambda: _WindowedStore()
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/accounts/DU1219/transactions",
+            params={"limit": 25, "from_ms": 1_700_000_000_000, "to_ms": 1_700_086_400_000},
+        )
+    assert response.status_code == 200
+
+
+async def test_history_endpoint_rejects_an_inverted_ms_window() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/accounts/DU1219/transactions",
+            params={"from_ms": 2, "to_ms": 1},
+        )
+    assert response.status_code == 422
+    assert response.json()["detail"] == "to_ms must be greater than or equal to from_ms"
 
 
 async def test_history_endpoint_reports_unavailable_without_fallback_scan(

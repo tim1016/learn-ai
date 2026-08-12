@@ -1,0 +1,37 @@
+.portfolio-history {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.portfolio-history__header {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+  align-items: end;
+}
+
+.portfolio-history__header h2,
+.portfolio-history__header p,
+.state {
+  margin: 0;
+}
+
+.portfolio-history__header > p,
+.state {
+  color: var(--text-secondary);
+}
+
+.portfolio-history__chart {
+  min-height: 300px;
+}
+
+@media (max-width: 560px) {
+  .portfolio-history__header {
+    align-items: start;
+    flex-direction: column;
+  }
+}
