@@ -4,11 +4,11 @@ import {
   ChangeDetectionStrategy
 } from '@angular/core';
 import {
-  createChart, IChartApi, ISeriesApi,
+  IChartApi, ISeriesApi,
   LineSeries, LineData, UTCTimestamp
 } from 'lightweight-charts';
 import { StockAggregate } from '../../../graphql/types';
-import { formatTickMark } from '../chart-utils';
+import { createAppChart, formatTickMark } from '../chart-utils';
 
 @Component({
   selector: 'app-line-chart',
@@ -50,7 +50,7 @@ export class LineChartComponent implements AfterViewInit, OnDestroy {
 
   private initChart(): void {
     const container = this.chartContainer().nativeElement;
-    this.chart = createChart(container, {
+    this.chart = createAppChart(container, {
       width: container.clientWidth,
       height: this.height(),
       layout: { background: { color: '#ffffff' }, textColor: '#333' },

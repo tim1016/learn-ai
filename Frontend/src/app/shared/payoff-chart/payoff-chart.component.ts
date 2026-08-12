@@ -4,12 +4,13 @@ import {
 } from '@angular/core';
 import { TitleCasePipe } from '@angular/common';
 import {
-  createChart, LineSeries, BaselineSeries, LineStyle, CrosshairMode,
+  LineSeries, BaselineSeries, LineStyle, CrosshairMode,
   type IChartApi, type ISeriesApi, type UTCTimestamp, type MouseEventParams,
 } from 'lightweight-charts';
 import {
   PayoffPoint, ChartCurveData, GreekCurvePoint, GreekType,
 } from '../../graphql/types';
+import { createAppChart } from '../charts/chart-utils';
 
 @Component({
   selector: 'app-payoff-chart',
@@ -87,13 +88,12 @@ export class PayoffChartComponent implements OnDestroy {
     container.addEventListener('wheel', this.onUserZoom, { passive: true });
     container.addEventListener('touchstart', this.onUserZoom, { passive: true });
 
-    this.chart = createChart(container, {
+    this.chart = createAppChart(container, {
       autoSize: true,
       layout: {
         background: { color: 'transparent' },
         textColor: '#9ca3af',
         fontFamily: "'Inter', system-ui, sans-serif",
-        attributionLogo: false,
       },
       grid: {
         vertLines: { color: 'rgba(255, 255, 255, 0.06)' },

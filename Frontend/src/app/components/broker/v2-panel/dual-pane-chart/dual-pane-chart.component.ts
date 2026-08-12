@@ -4,6 +4,7 @@ import {
   Component,
   DestroyRef,
   ElementRef,
+  InjectionToken,
   computed,
   effect,
   inject,
@@ -20,7 +21,6 @@ import {
   type SeriesMarker,
   type Time,
   type UTCTimestamp,
-  createChart,
   createSeriesMarkers,
 } from 'lightweight-charts';
 import type {
@@ -33,6 +33,7 @@ import type {
 import { toCandle } from '../lib/chart-bar-mapping';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { AssetIdentityComponent } from '../../../../shared/asset-identity';
+import { createAppChart } from '../../../../shared/charts/chart-utils';
 
 type ChartPane = 'live' | 'polygon';
 
@@ -113,6 +114,10 @@ export const HISTORY_PRESETS: readonly ChartHistoryPreset[] = [
   '1D', '5D', '1M', '3M', '1Y', 'All',
 ];
 export const LIVE_RESOLUTIONS: readonly ChartLiveResolution[] = ['5s', '1m'];
+export const DUAL_PANE_CHART_FACTORY = new InjectionToken<typeof createAppChart>(
+  'DUAL_PANE_CHART_FACTORY',
+  { providedIn: 'root', factory: () => createAppChart },
+);
 
 /**
  * Source-tabbed market tape for one bot symbol.
@@ -148,6 +153,7 @@ export class DualPaneChartComponent implements AfterViewInit {
   private readonly chartContainer =
     viewChild.required<ElementRef<HTMLDivElement>>('chartContainer');
   private readonly destroyRef = inject(DestroyRef);
+  private readonly createChart = inject(DUAL_PANE_CHART_FACTORY);
 
   protected readonly activePane = signal<ChartPane>('live');
   protected readonly fullscreen = signal(false);
@@ -189,7 +195,7 @@ export class DualPaneChartComponent implements AfterViewInit {
   }
 
   ngAfterViewInit(): void {
-    this.chart = createChart(this.chartContainer().nativeElement, {
+    this.chart = this.createChart(this.chartContainer().nativeElement, {
       layout: {
         background: { color: 'transparent' },
         textColor: '#9598a1',

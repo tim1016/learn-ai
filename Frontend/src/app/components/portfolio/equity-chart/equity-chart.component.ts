@@ -5,9 +5,10 @@ import {
 import { CommonModule } from '@angular/common';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { catchError, finalize, of, forkJoin } from 'rxjs';
-import { createChart, IChartApi, AreaSeries, UTCTimestamp, HistogramSeries } from 'lightweight-charts';
+import { IChartApi, AreaSeries, UTCTimestamp, HistogramSeries } from 'lightweight-charts';
 import { PortfolioService } from '../../../services/portfolio.service';
 import { PortfolioSnapshot, DrawdownPoint, PortfolioMetrics } from '../../../graphql/portfolio-types';
+import { createAppChart } from '../../../shared/charts/chart-utils';
 
 @Component({
   selector: 'app-equity-chart',
@@ -69,7 +70,7 @@ export class EquityChartComponent implements AfterViewInit, OnDestroy {
   private createCharts(): void {
     if (this.equityChartContainer) {
       const container = this.equityChartContainer.nativeElement;
-      this.equityChart = createChart(container, {
+      this.equityChart = createAppChart(container, {
         width: container.clientWidth,
         height: 300,
         layout: { background: { color: '#ffffff' }, textColor: '#333' },
@@ -82,7 +83,7 @@ export class EquityChartComponent implements AfterViewInit, OnDestroy {
 
     if (this.drawdownChartContainer) {
       const container = this.drawdownChartContainer.nativeElement;
-      this.drawdownChart = createChart(container, {
+      this.drawdownChart = createAppChart(container, {
         width: container.clientWidth,
         height: 200,
         layout: { background: { color: '#ffffff' }, textColor: '#333' },
@@ -106,7 +107,7 @@ export class EquityChartComponent implements AfterViewInit, OnDestroy {
       // Remove all existing series by recreating
       this.equityChart.remove();
       const container = this.equityChartContainer.nativeElement;
-      this.equityChart = createChart(container, {
+      this.equityChart = createAppChart(container, {
         width: container.clientWidth,
         height: 300,
         layout: { background: { color: '#ffffff' }, textColor: '#333' },
@@ -136,7 +137,7 @@ export class EquityChartComponent implements AfterViewInit, OnDestroy {
     if (this.drawdownChart && this.drawdownSeries().length) {
       this.drawdownChart.remove();
       const container = this.drawdownChartContainer.nativeElement;
-      this.drawdownChart = createChart(container, {
+      this.drawdownChart = createAppChart(container, {
         width: container.clientWidth,
         height: 200,
         layout: { background: { color: '#ffffff' }, textColor: '#333' },

@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, within } from '@testing-library/angular';
 import { HttpErrorResponse } from '@angular/common/http';
+import { TestBed } from '@angular/core/testing';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MessageService } from 'primeng/api';
 import type {
@@ -9,6 +10,7 @@ import type {
 import { BotPanelShellComponent } from './bot-panel-shell.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { BrokersService } from '../../../../services/brokers.service';
+import { DUAL_PANE_CHART_FACTORY } from '../dual-pane-chart/dual-pane-chart.component';
 import type {
   BotPanelView,
   BotPanelLiveSnapshot,
@@ -19,23 +21,33 @@ import type {
 import { provideRouter, Router } from '@angular/router';
 
 const messageService = { add: vi.fn() };
+const chartMocks = vi.hoisted(() => {
+  const timeScale = { fitContent: vi.fn() };
+  const series = { setData: vi.fn(), update: vi.fn(), applyOptions: vi.fn() };
+  const chart = {
+    addSeries: vi.fn().mockReturnValue(series),
+    timeScale: vi.fn().mockReturnValue(timeScale),
+    applyOptions: vi.fn(),
+    remove: vi.fn(),
+  };
+  return { chart, createChart: vi.fn().mockReturnValue(chart) };
+});
 
 // DualPaneChartComponent -> lightweight-charts: mock for unit tests.
 vi.mock('lightweight-charts', () => {
-  const mockTimeScale = { fitContent: vi.fn() };
-  const createMockSeries = () => ({ setData: vi.fn(), update: vi.fn(), applyOptions: vi.fn() });
   const createSeriesMarkers = vi.fn().mockReturnValue({ setMarkers: vi.fn() });
-  const createMockChart = () => ({
-    addSeries: vi.fn().mockReturnValue(createMockSeries()),
-    timeScale: vi.fn().mockReturnValue(mockTimeScale),
-    applyOptions: vi.fn(),
-    remove: vi.fn(),
-  });
   return {
-    createChart: vi.fn().mockImplementation(() => createMockChart()),
+    createChart: chartMocks.createChart,
     createSeriesMarkers,
     CandlestickSeries: 'CandlestickSeries',
   };
+});
+
+beforeEach(() => {
+  TestBed.configureTestingModule({
+    providers: [{ provide: DUAL_PANE_CHART_FACTORY, useValue: chartMocks.createChart }],
+  });
+  chartMocks.createChart.mockClear();
 });
 
 const PROFILE: PanelProfile = {

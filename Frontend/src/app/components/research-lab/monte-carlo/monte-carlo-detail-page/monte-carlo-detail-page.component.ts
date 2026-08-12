@@ -20,7 +20,6 @@ import {
   IChartApi,
   ISeriesApi,
   LineSeries,
-  createChart,
   type LineData,
   type Time,
 } from 'lightweight-charts';
@@ -31,6 +30,7 @@ import type {
   MonteCarloStatus,
 } from '../../../../services/monte-carlo.types';
 import { TimestampDisplayPipe } from '../../../../shared/timestamp';
+import { createAppChart } from '../../../../shared/charts/chart-utils';
 
 const CHART_THEME = {
   bg: '#0f172a',
@@ -176,7 +176,7 @@ export class MonteCarloDetailPageComponent implements AfterViewInit, OnDestroy {
     const el = this.chartEl()?.nativeElement;
     if (!el) return;
 
-    this.chart = createChart(el, {
+    this.chart = createAppChart(el, {
       width: el.clientWidth,
       height: 320,
       layout: { background: { color: CHART_THEME.bg }, textColor: CHART_THEME.text },

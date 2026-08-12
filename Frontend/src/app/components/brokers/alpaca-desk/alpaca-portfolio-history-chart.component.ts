@@ -6,12 +6,12 @@ import {
   ElementRef,
   input,
   inject,
+  InjectionToken,
   Injector,
   OnDestroy,
   viewChild,
 } from '@angular/core';
 import {
-  createChart,
   IChartApi,
   ISeriesApi,
   LineSeries,
@@ -19,6 +19,12 @@ import {
 } from 'lightweight-charts';
 
 import type { BrokerPortfolioHistory } from '../../../api/alpaca.types';
+import { createAppChart } from '../../../shared/charts/chart-utils';
+
+export const ALPACA_PORTFOLIO_HISTORY_CHART_FACTORY = new InjectionToken<typeof createAppChart>(
+  'ALPACA_PORTFOLIO_HISTORY_CHART_FACTORY',
+  { providedIn: 'root', factory: () => createAppChart },
+);
 
 /** Direct renderer for the broker-owned C1 equity curve; it derives no P&L. */
 @Component({
@@ -33,6 +39,7 @@ export class AlpacaPortfolioHistoryChartComponent implements AfterViewInit, OnDe
   readonly unavailable = input(false);
 
   private readonly injector = inject(Injector);
+  private readonly createChart = inject(ALPACA_PORTFOLIO_HISTORY_CHART_FACTORY);
   private readonly chartContainer = viewChild<ElementRef<HTMLDivElement>>('chartContainer');
   private chart: IChartApi | null = null;
   private series: ISeriesApi<'Line'> | null = null;
@@ -79,7 +86,7 @@ export class AlpacaPortfolioHistoryChartComponent implements AfterViewInit, OnDe
     if (this.chartElement !== container) this.destroyChart();
     if (this.chart !== null) return;
 
-    this.chart = createChart(container, {
+    this.chart = this.createChart(container, {
       width: container.clientWidth,
       height: 300,
       layout: { background: { color: 'transparent' }, textColor: '#aeb6c9' },

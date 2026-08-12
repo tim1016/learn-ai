@@ -12,7 +12,6 @@ import {
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import {
-  createChart,
   CrosshairMode,
   LineSeries, LineStyle,
   type IChartApi, type ISeriesApi,
@@ -31,6 +30,7 @@ import {
   SnapshotContractResult,
 } from '../../graphql/types';
 import { MarketDataService } from '../../services/market-data.service';
+import { createAppChart } from '../../shared/charts/chart-utils';
 import {
   bsDelta, bsGamma,
   bsPrice,
@@ -471,7 +471,6 @@ export class PricingLabComponent implements OnDestroy {
         background: { color: 'transparent' },
         textColor: '#9ca3af',
         fontFamily: "'Inter', system-ui, sans-serif",
-        attributionLogo: false,
       },
       grid: {
         vertLines: { color: 'rgba(255, 255, 255, 0.06)' },
@@ -496,7 +495,7 @@ export class PricingLabComponent implements OnDestroy {
     const container = this.chartEl()?.nativeElement;
     if (!container) return;
 
-    this.chart = createChart(container, this.createChartOptions(
+    this.chart = createAppChart(container, this.createChartOptions(
       (p: number) => p.toFixed(4),
     ));
 
@@ -521,7 +520,7 @@ export class PricingLabComponent implements OnDestroy {
     const container = this.diffChartEl()?.nativeElement;
     if (!container) return;
 
-    this.diffChart = createChart(container, this.createChartOptions(
+    this.diffChart = createAppChart(container, this.createChartOptions(
       (p: number) => p.toExponential(2),
     ));
 

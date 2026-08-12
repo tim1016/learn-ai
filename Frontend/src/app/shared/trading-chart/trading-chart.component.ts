@@ -26,10 +26,10 @@ import {
   type SeriesType,
   type Time,
   type UTCTimestamp,
-  createChart,
   createSeriesMarkers,
 } from "lightweight-charts";
 
+import { createAppChart } from "../charts/chart-utils";
 import type { IndicatorCategory } from "../indicator-catalog/indicator-catalog.service";
 import {
   IndicatorPickerComponent,
@@ -60,9 +60,9 @@ const PANE_HEIGHTS = {
   equity: 205,
   indicator: 185,
 } as const;
-export const TRADING_CHART_FACTORY = new InjectionToken<typeof createChart>(
+export const TRADING_CHART_FACTORY = new InjectionToken<typeof createAppChart>(
   "TRADING_CHART_FACTORY",
-  { providedIn: "root", factory: () => createChart },
+  { providedIn: "root", factory: () => createAppChart },
 );
 const THEME = {
   bg: "#131722",
@@ -187,7 +187,6 @@ export class TradingChartComponent implements OnDestroy {
       layout: {
         background: { color: THEME.bg },
         textColor: THEME.text,
-        attributionLogo: false,
         panes: { enableResize: true, separatorColor: THEME.border, separatorHoverColor: THEME.crosshair },
       },
       grid: {

@@ -7,13 +7,14 @@ import { CommonModule } from '@angular/common';
 import { RouterModule } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import {
-  createChart, IChartApi,
+  IChartApi,
   CandlestickSeries, LineSeries, HistogramSeries,
   CandlestickData, LineData, HistogramData, UTCTimestamp,
 } from 'lightweight-charts';
 import { MarketDataService } from '../../services/market-data.service';
 import { IndicatorTableRow } from '../../graphql/types';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
+import { createAppChart } from '../../shared/charts/chart-utils';
 
 interface CsvRow {
   time: string;
@@ -431,7 +432,7 @@ function byTime(a: { time: unknown }, b: { time: unknown }): number {
 }
 
 function buildChart(container: HTMLElement, height: number): IChartApi {
-  return createChart(container, {
+  return createAppChart(container, {
     width: container.clientWidth,
     height,
     layout: { background: { color: '#1a1a2e' }, textColor: '#c8c8d0' },

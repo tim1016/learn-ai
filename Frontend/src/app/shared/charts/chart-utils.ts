@@ -1,4 +1,31 @@
-import { UTCTimestamp } from 'lightweight-charts';
+import {
+  createChart as createLightweightChart,
+  type ChartOptions,
+  type DeepPartial,
+  type IChartApi,
+  type UTCTimestamp,
+} from 'lightweight-charts';
+
+/**
+ * Create a Lightweight Charts instance with application-wide policy applied.
+ *
+ * TradingView permits the built-in logo to be disabled because the application
+ * publishes the required attribution at `/legal/notices`. Keeping the policy
+ * here prevents individual chart surfaces from drifting.
+ */
+export function createAppChart(
+  container: string | HTMLElement,
+  options: DeepPartial<ChartOptions> = {},
+  chartFactory: typeof createLightweightChart = createLightweightChart,
+): IChartApi {
+  return chartFactory(container, {
+    ...options,
+    layout: {
+      ...options.layout,
+      attributionLogo: false,
+    },
+  });
+}
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
                 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];

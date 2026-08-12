@@ -22,12 +22,12 @@ import {
   type SeriesMarker,
   type Time,
   type UTCTimestamp,
-  createChart,
   createSeriesMarkers,
 } from 'lightweight-charts';
 import type { ChartBar, ChartFillMarker, GalleryBotView } from '../lib/gallery.types';
 import { toCandle } from '../../lib/chart-bar-mapping';
 import { fmtCurrency, fmtInteger, fmtSignedCurrency, fmtSignedNumber } from '../../../format';
+import { createAppChart } from '../../../../../shared/charts/chart-utils';
 import { AssetIdentityComponent } from '../../../../../shared/asset-identity';
 
 /**
@@ -221,7 +221,7 @@ export class BotTileComponent {
 
   private mountChart(): void {
     const container = this.chartContainer().nativeElement;
-    this.chart = createChart(container, {
+    this.chart = createAppChart(container, {
       layout: {
         background: { color: 'transparent' },
         textColor: '#9598a1',

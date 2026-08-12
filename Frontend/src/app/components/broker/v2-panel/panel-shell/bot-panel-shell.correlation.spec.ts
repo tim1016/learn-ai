@@ -1,4 +1,5 @@
 import { Component, signal } from '@angular/core';
+import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { fireEvent, render, screen } from '@testing-library/angular';
 import { MessageService } from 'primeng/api';
@@ -24,17 +25,23 @@ import {
 } from '../../../../../../tests/fixtures/alpaca-clerk-ui-correlation.fixture';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import type { PanelAction } from '../lib/broker-v2-panel.types';
+import { DUAL_PANE_CHART_FACTORY } from '../dual-pane-chart/dual-pane-chart.component';
 import { BotPanelShellComponent } from './bot-panel-shell.component';
 
-vi.mock('lightweight-charts', () => {
+const chartMocks = vi.hoisted(() => {
   const series = { setData: vi.fn(), update: vi.fn(), applyOptions: vi.fn() };
+  const chart = {
+    addSeries: vi.fn().mockReturnValue(series),
+    timeScale: vi.fn().mockReturnValue({ fitContent: vi.fn() }),
+    applyOptions: vi.fn(),
+    remove: vi.fn(),
+  };
+  return { chart, createChart: vi.fn().mockReturnValue(chart) };
+});
+
+vi.mock('lightweight-charts', () => {
   return {
-    createChart: vi.fn().mockReturnValue({
-      addSeries: vi.fn().mockReturnValue(series),
-      timeScale: vi.fn().mockReturnValue({ fitContent: vi.fn() }),
-      applyOptions: vi.fn(),
-      remove: vi.fn(),
-    }),
+    createChart: chartMocks.createChart,
     createSeriesMarkers: vi.fn().mockReturnValue({ setMarkers: vi.fn() }),
     CandlestickSeries: 'CandlestickSeries',
   };
@@ -91,6 +98,10 @@ describe('BotPanelShellComponent #1413 correlation campaign', () => {
 
   beforeEach(() => {
     StubEventSource.instances = [];
+    TestBed.configureTestingModule({
+      providers: [{ provide: DUAL_PANE_CHART_FACTORY, useValue: chartMocks.createChart }],
+    });
+    chartMocks.createChart.mockClear();
   });
 
   afterAll(() => {
