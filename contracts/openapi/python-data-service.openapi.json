@@ -18172,6 +18172,191 @@
         "title": "FreshCross",
         "type": "object"
       },
+      "GalleryBotView": {
+        "description": "One bot's tile state in the gallery wall.",
+        "properties": {
+          "desired_state": {
+            "title": "Desired State",
+            "type": "string"
+          },
+          "fills_today": {
+            "title": "Fills Today",
+            "type": "integer"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "last_bar_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Bar At Ms"
+          },
+          "needs_attention": {
+            "title": "Needs Attention",
+            "type": "boolean"
+          },
+          "open_pnl": {
+            "title": "Open Pnl",
+            "type": "number"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "primary_action": {
+            "$ref": "#/components/schemas/GalleryPrimaryAction"
+          },
+          "realized_pnl_today": {
+            "title": "Realized Pnl Today",
+            "type": "number"
+          },
+          "running": {
+            "title": "Running",
+            "type": "boolean"
+          },
+          "sid": {
+            "title": "Sid",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sid",
+          "symbol",
+          "label",
+          "running",
+          "phase",
+          "desired_state",
+          "needs_attention",
+          "realized_pnl_today",
+          "open_pnl",
+          "fills_today",
+          "primary_action"
+        ],
+        "title": "GalleryBotView",
+        "type": "object"
+      },
+      "GalleryLiveSnapshot": {
+        "description": "Versioned complete state document for the gallery's REST bootstrap and SSE.",
+        "properties": {
+          "as_of_ms": {
+            "title": "As Of Ms",
+            "type": "integer"
+          },
+          "bots": {
+            "items": {
+              "$ref": "#/components/schemas/GalleryBotView"
+            },
+            "title": "Bots",
+            "type": "array"
+          },
+          "markers": {
+            "additionalProperties": {
+              "items": {
+                "$ref": "#/components/schemas/ChartFillMarker"
+              },
+              "type": "array"
+            },
+            "title": "Markers",
+            "type": "object"
+          },
+          "resolution": {
+            "default": "1m",
+            "title": "Resolution",
+            "type": "string"
+          },
+          "stream_epoch": {
+            "title": "Stream Epoch",
+            "type": "string"
+          },
+          "surface_version": {
+            "title": "Surface Version",
+            "type": "integer"
+          },
+          "symbols": {
+            "items": {
+              "$ref": "#/components/schemas/GallerySymbolBars"
+            },
+            "title": "Symbols",
+            "type": "array"
+          }
+        },
+        "required": [
+          "stream_epoch",
+          "surface_version",
+          "as_of_ms",
+          "bots",
+          "symbols"
+        ],
+        "title": "GalleryLiveSnapshot",
+        "type": "object"
+      },
+      "GalleryPrimaryAction": {
+        "description": "The single most relevant action for a gallery tile (\u00a7 gallery spec).",
+        "properties": {
+          "action_id": {
+            "title": "Action Id",
+            "type": "string"
+          },
+          "disabled_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disabled Reason"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action_id",
+          "label",
+          "enabled"
+        ],
+        "title": "GalleryPrimaryAction",
+        "type": "object"
+      },
+      "GallerySymbolBars": {
+        "description": "Bars for one symbol shared across the tiles that chart it.",
+        "properties": {
+          "bars": {
+            "items": {
+              "$ref": "#/components/schemas/ChartBar"
+            },
+            "title": "Bars",
+            "type": "array"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol"
+        ],
+        "title": "GallerySymbolBars",
+        "type": "object"
+      },
       "GateResult": {
         "additionalProperties": false,
         "description": "Canonical lifecycle gate result row.\n\nA gate result is the enforcement-backed predicate clients can\nrender and diagnose. Older readiness rows still expose their\n``name`` / ``status`` / ``severity`` / ``detail`` fields for\ncompatibility; ``GateResult`` is the normalized contract newer\naccount-level gates consume.",
@@ -49493,6 +49678,155 @@
         "summary": "5s-poll panel projection for one bot (\u00a77)",
         "tags": [
           "broker-v2-panel"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/accounts/{account_id}/gallery/snapshot": {
+      "get": {
+        "operationId": "get_gallery_snapshot_api_brokers__broker__accounts__account_id__gallery_snapshot_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GalleryLiveSnapshot"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Versioned REST bootstrap for the aggregated bot gallery wall",
+        "tags": [
+          "broker-v2-gallery"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/accounts/{account_id}/gallery/stream": {
+      "get": {
+        "operationId": "stream_gallery_api_brokers__broker__accounts__account_id__gallery_stream_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Poll-driven SSE stream of aggregated bot gallery updates",
+        "tags": [
+          "broker-v2-gallery"
         ]
       }
     },
