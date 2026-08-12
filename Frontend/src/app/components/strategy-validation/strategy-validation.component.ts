@@ -100,7 +100,7 @@ export class StrategyValidationComponent {
   }
 
   protected deployQueryParams(strategy: StrategyValidationDetail): Record<string, string> {
-    return { strategy: strategy.strategy_key };
+    return { deploy: '', strategy: strategy.strategy_key };
   }
 
   protected engineLabQueryParams(strategy: StrategyValidationDetail): Record<string, string> {

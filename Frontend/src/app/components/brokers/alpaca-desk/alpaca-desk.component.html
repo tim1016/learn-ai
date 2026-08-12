@@ -8,6 +8,10 @@
           <p-tag severity="warn" value="Paper" />
         </div>
       </div>
+      <button type="button" class="deploy-button" (click)="openDeploy()">
+        <span aria-hidden="true">＋</span>
+        Deploy strategy
+      </button>
     </div>
 
     <app-alpaca-account-card />
@@ -46,3 +50,5 @@
     <app-alpaca-operator-lens />
   }
 </main>
+
+<app-alpaca-deploy-drawer [visible]="deployOpen()" (closed)="closeDeploy()" />

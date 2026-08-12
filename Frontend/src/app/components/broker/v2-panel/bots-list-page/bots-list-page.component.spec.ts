@@ -99,6 +99,7 @@ async function renderPage(
 
   const mockPanelService = {
     getCatalog: overrides.getCatalog ?? (() => Promise.resolve(bots)),
+    getDeployView: vi.fn(() => new Promise<never>(() => undefined)),
     getPanel: vi.fn(() => Promise.reject(new Error('full-panel preflight is forbidden'))),
     runBotAction: vi.fn(() =>
       Promise.resolve({
@@ -183,11 +184,17 @@ describe('BotsListPageComponent', () => {
     expect((await screen.findAllByText(/Updated/i)).length).toBeGreaterThan(0);
   });
 
-  it('navigates to the account-scoped Broker Deploy page', async () => {
+  it('opens and closes Deploy strategy over the Bots list', async () => {
     await renderPage([]);
 
-    expect((await screen.findByRole('link', { name: /Deploy strategy/i })).getAttribute('href'))
-      .toBe('/brokers/alpaca/accounts/PA9/deploy');
+    fireEvent.click(await screen.findByRole('button', { name: /Deploy strategy/i }));
+
+    expect(await screen.findByRole('heading', { name: 'Deploy a bot' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close deploy strategy' }));
+
+    expect(screen.queryByRole('heading', { name: 'Deploy a bot' })).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Alpaca bots' })).toBeTruthy();
   });
 
   it('renders the retry state when a transient catalog load fails', async () => {
