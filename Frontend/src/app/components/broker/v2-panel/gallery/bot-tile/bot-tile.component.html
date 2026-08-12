@@ -1,0 +1,73 @@
+<article class="bot-tile" [class.bot-tile--attention]="bot().needs_attention">
+  <header class="bot-tile__header">
+    <span
+      class="bot-tile__dot"
+      [class.bot-tile__dot--running]="bot().running"
+      aria-hidden="true"
+    ></span>
+    <span class="bot-tile__symbol">{{ bot().symbol }}</span>
+    <span class="bot-tile__label">{{ bot().label }}</span>
+    <span class="bot-tile__price">{{ formattedPrice() }}</span>
+    <span
+      class="bot-tile__delta"
+      [class.bot-tile__delta--positive]="deltaTone() === 'positive'"
+      [class.bot-tile__delta--negative]="deltaTone() === 'negative'"
+    >{{ formattedDeltaPct() ?? '—' }}</span>
+  </header>
+
+  <div
+    class="bot-tile__chart"
+    role="button"
+    tabindex="0"
+    [attr.aria-label]="'Open ' + bot().symbol + ' · ' + bot().sid + ' detail'"
+    (click)="onBodyClick()"
+    (keydown.enter)="onBodyClick()"
+    (keydown.space)="onBodyClick()"
+  >
+    <div #chartContainer class="bot-tile__chart-canvas"></div>
+  </div>
+
+  <footer class="bot-tile__footer">
+    <span class="bot-tile__metric">
+      <small>Realized</small>
+      <strong
+        [class.pnl--positive]="realizedTone() === 'positive'"
+        [class.pnl--negative]="realizedTone() === 'negative'"
+        [class.pnl--neutral]="realizedTone() === 'neutral'"
+      >{{ fmtSignedCurrency(bot().realized_pnl_today) }}</strong>
+    </span>
+    <span class="bot-tile__metric">
+      <small>Open</small>
+      <strong
+        [class.pnl--positive]="openTone() === 'positive'"
+        [class.pnl--negative]="openTone() === 'negative'"
+        [class.pnl--neutral]="openTone() === 'neutral'"
+      >{{ fmtSignedCurrency(bot().open_pnl) }}</strong>
+    </span>
+    <span class="bot-tile__metric">
+      <small>Fills</small>
+      <strong>{{ fmtInteger(bot().fills_today) }}</strong>
+    </span>
+  </footer>
+
+  <div class="bot-tile__action">
+    <button
+      type="button"
+      class="bot-tile__action-button"
+      [disabled]="!bot().primary_action.enabled"
+      [attr.title]="actionTitle()"
+      [attr.aria-label]="actionAriaLabel()"
+      (click)="onActionClick()"
+    >
+      {{ bot().primary_action.label }}
+    </button>
+
+    @if (confirmOpen()) {
+      <div class="bot-tile__confirm" role="alertdialog" aria-label="Confirm quick action">
+        <p>{{ confirmText() }}</p>
+        <button type="button" (click)="confirmAction()">Confirm</button>
+        <button type="button" (click)="cancelAction()">Cancel</button>
+      </div>
+    }
+  </div>
+</article>
