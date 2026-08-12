@@ -71,6 +71,8 @@ def sqlite_transaction_history(
     lifecycle_state: str | None,
     strategy_instance_id: str | None,
     run_id: str | None,
+    from_ms: int | None = None,
+    to_ms: int | None = None,
 ) -> ClerkTransactionHistoryResponse | None:
     """Return ``None`` unless SQLite is the boot-selected authority."""
     if origin == "external":
@@ -81,6 +83,8 @@ def sqlite_transaction_history(
             lifecycle_state=lifecycle_state,
             strategy_instance_id=strategy_instance_id,
             run_id=run_id,
+            from_ms=from_ms,
+            to_ms=to_ms,
         )
     if origin is None:
         return _all_transaction_history(
@@ -90,6 +94,8 @@ def sqlite_transaction_history(
             lifecycle_state=lifecycle_state,
             strategy_instance_id=strategy_instance_id,
             run_id=run_id,
+            from_ms=from_ms,
+            to_ms=to_ms,
         )
     readers = _active_readers(account_id)
     if readers is None:
@@ -106,6 +112,8 @@ def sqlite_transaction_history(
             run_id=run_id,
             cursor=cursor,
             limit=limit,
+            from_ms=from_ms,
+            to_ms=to_ms,
         )
     except EconomicProjectionError as exc:
         raise ClerkTransactionProjectionUnavailable(
@@ -143,6 +151,8 @@ def _origin_filtered_operation_page(
     run_id: str | None,
     cursor: str | None,
     limit: int,
+    from_ms: int | None = None,
+    to_ms: int | None = None,
 ) -> tuple[list[ClerkTransactionSummaryRow], OperationPage, list[ProjectedOperation]]:
     """Scan raw operation pages until the origin-filtered page fills.
 
@@ -176,7 +186,11 @@ def _origin_filtered_operation_page(
         )
         for operation in page.operations:
             row = _summary_row(operation, account_id=account_id, execution_summaries=summaries)
-            if row.transaction_origin == origin:
+            if row.transaction_origin == origin and _in_history_window(
+                row.recorded_at_ms,
+                from_ms=from_ms,
+                to_ms=to_ms,
+            ):
                 rows.append(row)
                 matched_operations.append(operation)
         next_cursor = page.next_cursor
@@ -303,6 +317,8 @@ def _all_transaction_history(
     lifecycle_state: str | None,
     strategy_instance_id: str | None,
     run_id: str | None,
+    from_ms: int | None,
+    to_ms: int | None,
 ) -> ClerkTransactionHistoryResponse | None:
     """Merge strategy operations and external observations under one keyset cursor.
 
@@ -320,6 +336,8 @@ def _all_transaction_history(
         "lifecycle_state": lifecycle_state,
         "strategy_instance_id": strategy_instance_id,
         "run_id": run_id,
+        "from_ms": from_ms,
+        "to_ms": to_ms,
     }
     cursor_key = _decode_all_history_cursor(
         cursor,
@@ -335,6 +353,8 @@ def _all_transaction_history(
         lifecycle_state=lifecycle_state,
         strategy_instance_id=strategy_instance_id,
         run_id=run_id,
+        from_ms=from_ms,
+        to_ms=to_ms,
         cursor_key=cursor_key,
         limit=limit,
     )
@@ -460,6 +480,8 @@ def _all_history_pointers(
     lifecycle_state: str | None,
     strategy_instance_id: str | None,
     run_id: str | None,
+    from_ms: int | None,
+    to_ms: int | None,
     cursor_key: tuple[int, str, str] | None,
     limit: int,
 ) -> tuple[list[tuple[int, str, str]], int]:
@@ -476,11 +498,26 @@ def _all_history_pointers(
         if value is not None:
             operation_clauses.append(f"{column} = ?")
             operation_params.append(value)
+    for operator, value in ((">=", from_ms), ("<=", to_ms)):
+        if value is not None:
+            operation_clauses.append(f"e.created_at_ms {operator} ?")
+            operation_params.append(value)
     external_clauses = [
         "EXISTS (SELECT 1 FROM custody_transitions observed "
         "WHERE observed.broker_order_id = eo.broker_order_id "
         "AND observed.transition_kind = 'EXTERNAL_ORDER_OBSERVED')"
     ]
+    external_params: list[object] = []
+    external_recorded_at_ms = (
+        "(SELECT observed.recorded_at_ms FROM custody_transitions observed "
+        "WHERE observed.broker_order_id = eo.broker_order_id "
+        "AND observed.transition_kind = 'EXTERNAL_ORDER_OBSERVED' "
+        "ORDER BY observed.sequence ASC LIMIT 1)"
+    )
+    for operator, value in ((">=", from_ms), ("<=", to_ms)):
+        if value is not None:
+            external_clauses.append(f"{external_recorded_at_ms} {operator} ?")
+            external_params.append(value)
     if strategy_instance_id is not None or run_id is not None:
         external_clauses.append("0")
     elif lifecycle_state == "review_required":
@@ -544,7 +581,7 @@ def _all_history_pointers(
             ORDER BY recorded_at_ms DESC, source DESC, identity DESC
             LIMIT ?
             """,
-            (*operation_params, *cursor_params, limit + 1),
+            (*operation_params, *external_params, *cursor_params, limit + 1),
         ).fetchall()
         high_water = conn.execute(
             "SELECT COALESCE(MAX(sequence), 0) AS sequence FROM custody_transitions"
@@ -568,7 +605,7 @@ def _encode_all_history_cursor(
     identity: str,
     account_id: str,
     authority_generation: int,
-    filters: dict[str, str | None],
+    filters: dict[str, str | int | None],
 ) -> str:
     payload = json.dumps(
         {
@@ -591,7 +628,7 @@ def _decode_all_history_cursor(
     *,
     account_id: str,
     authority_generation: int,
-    filters: dict[str, str | None],
+    filters: dict[str, str | int | None],
 ) -> tuple[int, str, str] | None:
     if cursor is None:
         return None
@@ -627,6 +664,8 @@ def _external_transaction_history(
     lifecycle_state: str | None,
     strategy_instance_id: str | None,
     run_id: str | None,
+    from_ms: int | None,
+    to_ms: int | None,
 ) -> ClerkTransactionHistoryResponse | None:
     """Read a bounded external-only transaction page from its separate fold.
 
@@ -651,7 +690,15 @@ def _external_transaction_history(
             )
         finally:
             reader.close()
-        page_rows = page.orders
+        page_rows = tuple(
+            order
+            for order in page.orders
+            if _in_history_window(
+                _external_observation_provenance(order)[1],
+                from_ms=from_ms,
+                to_ms=to_ms,
+            )
+        )
         next_cursor = page.next_cursor
     rows = [_external_summary_row(order, account_id=account_id) for order in page_rows]
     return ClerkTransactionHistoryResponse(
@@ -788,6 +835,17 @@ def _external_observation_provenance(order: ExternalOrderResource) -> tuple[int,
             "External-order observation lacks durable transition provenance."
         )
     return order.observation_sequence, order.observation_recorded_at_ms
+
+
+def _in_history_window(
+    recorded_at_ms: int,
+    *,
+    from_ms: int | None,
+    to_ms: int | None,
+) -> bool:
+    return (from_ms is None or recorded_at_ms >= from_ms) and (
+        to_ms is None or recorded_at_ms <= to_ms
+    )
 
 
 def _summary_row(

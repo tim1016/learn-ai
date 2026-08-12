@@ -4,11 +4,26 @@ import { describe, expect, it, vi } from 'vitest';
 import type {
   BrokerAccountSnapshot,
   BrokerActivity,
+  BrokerPortfolioHistory,
   BrokerPosition,
 } from '../../../api/alpaca.types';
+import { BrokerService } from '../../../services/broker.service';
 import { BrokersService } from '../../../services/brokers.service';
 import { AlpacaDeskAccountDataService } from './alpaca-desk-account-data.service';
 import { AlpacaTraderLensComponent } from './alpaca-trader-lens.component';
+
+vi.mock('lightweight-charts', () => {
+  const chart = {
+    addSeries: vi.fn().mockReturnValue({ setData: vi.fn() }),
+    applyOptions: vi.fn(),
+    remove: vi.fn(),
+    timeScale: vi.fn().mockReturnValue({ fitContent: vi.fn() }),
+  };
+  return {
+    createChart: vi.fn().mockReturnValue(chart),
+    LineSeries: 'LineSeries',
+  };
+});
 
 function account(): BrokerAccountSnapshot {
   return {
@@ -99,27 +114,65 @@ function activities(): BrokerActivity[] {
   ];
 }
 
+function portfolioHistory(): BrokerPortfolioHistory {
+  return {
+    timestamps: [1_700_000_000_000, 1_700_086_400_000],
+    equity: [10_000, 10_125],
+    profit_loss: [0, 125],
+    base_value: 10_000,
+    timeframe: '1D',
+  };
+}
+
+function transactionHistory() {
+  return {
+    projection_available: true,
+    canonical_fallback_required: false,
+    feed_state: 'live' as const,
+    feed_headline: 'Transaction history current.',
+    feed_detail: 'The Clerk projection is current.',
+    high_water_journal_seq: 1,
+    lag_records: 0,
+    lag_is_lower_bound: false,
+    custody_summary: {
+      record_count: 0,
+      a0_custody_accepted_count: 0,
+      a1_broker_write_started_count: 0,
+      a2_broker_known_count: 0,
+      a3_economic_terminal_count: 0,
+      uncertain_count: 0,
+    },
+    rows: [],
+    next_cursor: null,
+  };
+}
+
 function brokers() {
   return {
     getAccount: vi.fn().mockResolvedValue(account()),
     listPositions: vi.fn().mockResolvedValue(positions()),
     listActivities: vi.fn().mockResolvedValue(activities()),
+    getPortfolioHistory: vi.fn().mockResolvedValue(portfolioHistory()),
   };
 }
 
-async function renderLens(broker = brokers()) {
+async function renderLens(
+  broker = brokers(),
+  clerk = { accountTransactions: vi.fn().mockResolvedValue(transactionHistory()) },
+) {
   await render(AlpacaTraderLensComponent, {
     providers: [
       AlpacaDeskAccountDataService,
       { provide: BrokersService, useValue: broker },
+      { provide: BrokerService, useValue: clerk },
     ],
   });
-  return broker;
+  return { broker, clerk };
 }
 
 describe('AlpacaTraderLensComponent', () => {
   it("renders today's live positions, fill count, and instrument identities", async () => {
-    const broker = await renderLens();
+    const { broker } = await renderLens();
 
     expect(await screen.findAllByTitle('SPY')).not.toHaveLength(0);
     const hero = screen.getByLabelText('Today at a glance');
@@ -133,15 +186,31 @@ describe('AlpacaTraderLensComponent', () => {
     expect(broker.listActivities).toHaveBeenCalledWith('alpaca', expect.objectContaining({ limit: 100 }));
   });
 
-  it('shows an honest future-history placeholder when a wider scope is selected', async () => {
-    await renderLens();
+  it('renders the broker curve and paged Clerk history for 30D and 60D scopes', async () => {
+    const { broker, clerk } = await renderLens();
 
     fireEvent.click(screen.getByRole('button', { name: '30D' }));
 
     expect(screen.getByRole('button', { name: '30D' }).getAttribute('aria-pressed')).toBe('true');
-    expect(screen.getByRole('heading', { name: '30D account history' })).toBeTruthy();
-    expect(screen.getByText(/Broker portfolio history for this window/)).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: '30D equity curve' })).toBeTruthy();
+    expect(await screen.findByRole('img', { name: '30D broker equity curve' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Transaction history' })).toBeTruthy();
+    expect(broker.getPortfolioHistory).toHaveBeenCalledWith('alpaca', '30D');
+    await vi.waitFor(() => expect(clerk.accountTransactions).toHaveBeenCalled());
+    const thirtyDayFilters = clerk.accountTransactions.mock.calls.at(-1)?.[3];
+    expect(thirtyDayFilters).toMatchObject({ fromMs: expect.any(Number), toMs: expect.any(Number) });
+    expect(thirtyDayFilters.toMs - thirtyDayFilters.fromMs).toBe(30 * 24 * 60 * 60 * 1_000);
     expect(screen.queryByRole('heading', { name: 'Today at the desk' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: '60D' }));
+
+    expect(await screen.findByRole('heading', { name: '60D equity curve' })).toBeTruthy();
+    expect(await screen.findByRole('img', { name: '60D broker equity curve' })).toBeTruthy();
+    expect(broker.getPortfolioHistory).toHaveBeenLastCalledWith('alpaca', '60D');
+    await vi.waitFor(() => {
+      const sixtyDayFilters = clerk.accountTransactions.mock.calls.at(-1)?.[3];
+      expect(sixtyDayFilters.toMs - sixtyDayFilters.fromMs).toBe(60 * 24 * 60 * 60 * 1_000);
+    });
   });
 
   it('distinguishes an unavailable activity feed from an empty day', async () => {

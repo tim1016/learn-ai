@@ -247,6 +247,42 @@ class BrokerActivity(_ContractModel):
     observed_at_ms: int
 
 
+class PortfolioHistoryRange(StrEnum):
+    """The account-history windows the broker desk can request."""
+
+    ONE_DAY = "1D"
+    THIRTY_DAYS = "30D"
+    SIXTY_DAYS = "60D"
+
+
+class BrokerPortfolioHistory(_ContractModel):
+    """Broker-reported account equity history without local recomputation.
+
+    ``timestamps`` is canonical ``int64`` ms UTC. The vendor adapter converts
+    Alpaca's epoch values at the external boundary; every money value remains
+    broker-reported.
+    """
+
+    timestamps: list[int]
+    equity: list[float]
+    profit_loss: list[float]
+    base_value: float | None
+    timeframe: str
+
+    @model_validator(mode="after")
+    def _series_are_aligned_and_monotonic(self) -> BrokerPortfolioHistory:
+        """Reject malformed vendor series instead of silently repairing it."""
+        expected_length = len(self.timestamps)
+        if len(self.equity) != expected_length or len(self.profit_loss) != expected_length:
+            raise ValueError("Portfolio-history series must have matching lengths.")
+        if any(
+            current <= previous
+            for previous, current in zip(self.timestamps, self.timestamps[1:], strict=False)
+        ):
+            raise ValueError("Portfolio-history timestamps must be strictly increasing.")
+        return self
+
+
 class BrokerAsset(_ContractModel):
     """A tradable (or listed) instrument descriptor."""
 

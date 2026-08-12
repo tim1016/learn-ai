@@ -13,7 +13,7 @@
           [class.scope-control__button--active]="scope() === scopeOption"
           [attr.aria-pressed]="scope() === scopeOption"
           (click)="selectScope(scopeOption)"
-        >{{ scopeLabels[scopeOption] }}</button>
+        >{{ scopeConfig[scopeOption].label }}</button>
       }
     </div>
   </header>
@@ -43,13 +43,17 @@
       </section>
     }
     @default {
-      <section class="history-placeholder" aria-live="polite">
-        <p class="eyebrow">History</p>
-        <h2>{{ scopeLabels[scope()] }} account history</h2>
-        <p>
-          Broker portfolio history for this window will appear here when the account-history
-          connection is available.
-        </p>
+      <section class="history-workspace" aria-live="polite">
+        <app-alpaca-portfolio-history-chart
+          [history]="portfolioHistory()"
+          [scopeLabel]="scopeConfig[scope()].label"
+          [unavailable]="portfolioHistoryUnavailable()"
+        />
+        <app-account-desk-transaction-history
+          [accountId]="account()?.account_id ?? null"
+          [fromMs]="historyWindow()?.fromMs ?? null"
+          [toMs]="historyWindow()?.toMs ?? null"
+        />
       </section>
     }
   }

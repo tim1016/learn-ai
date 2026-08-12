@@ -145,6 +145,29 @@ def test_account_desk_reads_operation_first_sqlite_projection(tmp_path: Path) ->
             run_id=None,
         )
         assert page is not None
+        recorded_at_ms = page.rows[0].recorded_at_ms
+        in_window_page = sqlite_transaction_history(
+            account_id="PA-ACCOUNT-DESK",
+            limit=25,
+            cursor=None,
+            origin=None,
+            lifecycle_state=None,
+            strategy_instance_id=None,
+            run_id=None,
+            from_ms=recorded_at_ms,
+            to_ms=recorded_at_ms,
+        )
+        outside_window_page = sqlite_transaction_history(
+            account_id="PA-ACCOUNT-DESK",
+            limit=25,
+            cursor=None,
+            origin=None,
+            lifecycle_state=None,
+            strategy_instance_id=None,
+            run_id=None,
+            from_ms=recorded_at_ms + 1,
+            to_ms=recorded_at_ms + 2,
+        )
         active, detail = sqlite_transaction_detail(
             account_id="PA-ACCOUNT-DESK",
             transaction_id=accepted.effect_operation_id or "",
@@ -158,6 +181,10 @@ def test_account_desk_reads_operation_first_sqlite_projection(tmp_path: Path) ->
     assert len(page.rows) == 1
     assert page.rows[0].transaction_id == accepted.effect_operation_id
     assert page.rows[0].event_count == 1
+    assert in_window_page is not None
+    assert [row.transaction_id for row in in_window_page.rows] == [accepted.effect_operation_id]
+    assert outside_window_page is not None
+    assert outside_window_page.rows == []
     assert active is True
     assert detail is not None
     assert detail.events[0].receipt["clerk_observed_at_ms"]

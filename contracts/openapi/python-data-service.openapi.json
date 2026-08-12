@@ -8726,6 +8726,57 @@
         "title": "BrokerOrderRequest",
         "type": "object"
       },
+      "BrokerPortfolioHistory": {
+        "additionalProperties": false,
+        "description": "Broker-reported account equity history without local recomputation.\n\n``timestamps`` is canonical ``int64`` ms UTC. The vendor adapter converts\nAlpaca's epoch values at the external boundary; every money value remains\nbroker-reported.",
+        "properties": {
+          "base_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Value"
+          },
+          "equity": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Equity",
+            "type": "array"
+          },
+          "profit_loss": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Profit Loss",
+            "type": "array"
+          },
+          "timeframe": {
+            "title": "Timeframe",
+            "type": "string"
+          },
+          "timestamps": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Timestamps",
+            "type": "array"
+          }
+        },
+        "required": [
+          "timestamps",
+          "equity",
+          "profit_loss",
+          "base_value",
+          "timeframe"
+        ],
+        "title": "BrokerPortfolioHistory",
+        "type": "object"
+      },
       "BrokerPosition": {
         "additionalProperties": false,
         "description": "A single open position (symbol, quantity, entry, value, unrealized PnL).",
@@ -29755,6 +29806,16 @@
         "title": "PnLPoints",
         "type": "object"
       },
+      "PortfolioHistoryRange": {
+        "description": "The account-history windows the broker desk can request.",
+        "enum": [
+          "1D",
+          "30D",
+          "60D"
+        ],
+        "title": "PortfolioHistoryRange",
+        "type": "string"
+      },
       "PredictionComparison": {
         "additionalProperties": false,
         "description": "Compare a per-bar prediction value against a constant threshold.",
@@ -45035,6 +45096,40 @@
             }
           },
           {
+            "in": "query",
+            "name": "from_ms",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "From Ms"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to_ms",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "To Ms"
+            }
+          },
+          {
             "in": "header",
             "name": "X-Data-Plane-Control-Secret",
             "required": false,
@@ -51762,6 +51857,73 @@
         "summary": "Closed panel capability profile for this broker (\u00a74)",
         "tags": [
           "broker-v2-panel"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/portfolio-history": {
+      "get": {
+        "description": "Return the broker's authoritative account equity curve for one window.",
+        "operationId": "get_portfolio_history_api_brokers__broker__portfolio_history_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "range",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PortfolioHistoryRange"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrokerPortfolioHistory"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Portfolio History",
+        "tags": [
+          "brokers-v2"
         ]
       }
     },

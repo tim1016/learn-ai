@@ -33,11 +33,16 @@ export class AccountDeskTransactionHistoryStore {
   readonly filters = this.filtersState.asReadonly();
   readonly hasLastGood = computed(() => this.feedState() !== null);
 
-  async load(accountId: string): Promise<void> {
-    if (this.accountKey() !== accountId) {
+  async load(
+    accountId: string,
+    filters?: ClerkTransactionFilters,
+  ): Promise<void> {
+    const normalizedFilters = filters === undefined ? this.filtersState() : normalizeFilters(filters);
+    if (this.accountKey() !== accountId || !sameFilters(this.filtersState(), normalizedFilters)) {
       this.requestGeneration += 1;
       this.refreshPending = false;
       this.accountKey.set(accountId);
+      this.filtersState.set(normalizedFilters);
       this.rowsState.set([]);
       this.nextCursorState.set(null);
       this.feedState.set(null);
@@ -111,12 +116,30 @@ export class AccountDeskTransactionHistoryStore {
 }
 
 function normalizeFilters(filters: ClerkTransactionFilters): ClerkTransactionFilters {
-  return {
+  const normalized: ClerkTransactionFilters = {
     origin: filters.origin ?? null,
     lifecycleState: filters.lifecycleState?.trim() || null,
     strategyInstanceId: filters.strategyInstanceId?.trim() || null,
     runId: filters.runId?.trim() || null,
   };
+  return {
+    ...normalized,
+    ...(filters.fromMs !== undefined ? { fromMs: normalizeTimestamp(filters.fromMs) } : {}),
+    ...(filters.toMs !== undefined ? { toMs: normalizeTimestamp(filters.toMs) } : {}),
+  };
+}
+
+function normalizeTimestamp(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function sameFilters(left: ClerkTransactionFilters, right: ClerkTransactionFilters): boolean {
+  return left.origin === right.origin
+    && left.lifecycleState === right.lifecycleState
+    && left.strategyInstanceId === right.strategyInstanceId
+    && left.runId === right.runId
+    && left.fromMs === right.fromMs
+    && left.toMs === right.toMs;
 }
 
 function mergeRows(

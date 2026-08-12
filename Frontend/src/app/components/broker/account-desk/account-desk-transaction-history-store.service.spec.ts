@@ -64,6 +64,23 @@ describe('AccountDeskTransactionHistoryStore', () => {
     await vi.waitFor(() => expect(broker.accountTransactions).toHaveBeenCalledTimes(2));
     expect(broker.accountTransactions).toHaveBeenLastCalledWith('DU1234567', null, 25, {});
   });
+
+  it('replaces a page when its caller-owned history window changes', async () => {
+    broker.accountTransactions.mockResolvedValue(historyPage());
+    const store = TestBed.inject(AccountDeskTransactionHistoryStore);
+
+    await store.load('DU1234567', { fromMs: 1_700_000_000_000, toMs: 1_700_086_400_000 });
+    await store.load('DU1234567', { fromMs: 1_700_086_400_000, toMs: 1_700_172_800_000 });
+
+    expect(broker.accountTransactions).toHaveBeenLastCalledWith('DU1234567', null, 25, {
+      origin: null,
+      lifecycleState: null,
+      strategyInstanceId: null,
+      runId: null,
+      fromMs: 1_700_086_400_000,
+      toMs: 1_700_172_800_000,
+    });
+  });
 });
 
 function historyPage() {

@@ -102,7 +102,7 @@ def test_activities_path_routes_to_activities_family(tmp_path: Path) -> None:
 
 
 @responses.activate
-def test_unknown_path_is_not_captured(tmp_path: Path) -> None:
+def test_portfolio_history_path_routes_to_portfolio_history_family(tmp_path: Path) -> None:
     journal = _journal(tmp_path)
     session = Session()
     install_capture_hook(session, journal)
@@ -112,5 +112,5 @@ def test_unknown_path_is_not_captured(tmp_path: Path) -> None:
 
     session.get(f"{_BASE}/v2/account/portfolio/history")
 
-    assert list(tmp_path.rglob("*.jsonl")) == []
-    assert journal.records_written == 0
+    assert len(_records(tmp_path, "portfolio_history")) == 1
+    assert journal.records_written == 1

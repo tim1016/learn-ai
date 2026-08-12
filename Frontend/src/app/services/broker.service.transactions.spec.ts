@@ -38,4 +38,17 @@ describe('BrokerService Clerk transaction history', () => {
     request.flush({ projection_available: true, canonical_fallback_required: false, high_water_journal_seq: 4, lag_records: 0, lag_is_lower_bound: false, rows: [], next_cursor: null });
     await expect(promise).resolves.toMatchObject({ rows: [] });
   });
+
+  it('sends an inclusive UTC-millisecond history window without browser-side filtering', async () => {
+    const promise = service.accountTransactions('DU1219', null, 25, {
+      fromMs: 1_700_000_000_000,
+      toMs: 1_700_086_400_000,
+    });
+    const request = http.expectOne(
+      '/api/accounts/DU1219/transactions?limit=25&from_ms=1700000000000&to_ms=1700086400000',
+    );
+    expect(request.request.method).toBe('GET');
+    request.flush({ projection_available: true, canonical_fallback_required: false, high_water_journal_seq: 4, lag_records: 0, lag_is_lower_bound: false, rows: [], next_cursor: null });
+    await expect(promise).resolves.toMatchObject({ rows: [] });
+  });
 });

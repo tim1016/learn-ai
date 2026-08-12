@@ -19,7 +19,9 @@ from app.broker.contract.models import (
     BrokerClockEvidence,
     BrokerOrder,
     BrokerOrderLeg,
+    BrokerPortfolioHistory,
     BrokerPosition,
+    PortfolioHistoryRange,
 )
 
 
@@ -70,6 +72,10 @@ class BrokerReadPort(Protocol):
     ) -> list[BrokerAsset]: ...
 
     async def get_clock_evidence(self) -> BrokerClockEvidence: ...
+
+    async def get_portfolio_history(
+        self, history_range: PortfolioHistoryRange
+    ) -> BrokerPortfolioHistory: ...
 
 
 @runtime_checkable

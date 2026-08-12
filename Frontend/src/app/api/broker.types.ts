@@ -2413,6 +2413,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/portfolio-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Portfolio History
+         * @description Return the broker's authoritative account equity curve for one window.
+         */
+        get: operations["get_portfolio_history_api_brokers__broker__portfolio_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/positions": {
         parameters: {
             query?: never;
@@ -9466,6 +9486,26 @@ export interface components {
             legs: components["schemas"]["BrokerOrderLeg"][];
             /** Operator */
             operator: string;
+        };
+        /**
+         * BrokerPortfolioHistory
+         * @description Broker-reported account equity history without local recomputation.
+         *
+         *     ``timestamps`` is canonical ``int64`` ms UTC. The vendor adapter converts
+         *     Alpaca's epoch values at the external boundary; every money value remains
+         *     broker-reported.
+         */
+        BrokerPortfolioHistory: {
+            /** Base Value */
+            base_value: number | null;
+            /** Equity */
+            equity: number[];
+            /** Profit Loss */
+            profit_loss: number[];
+            /** Timeframe */
+            timeframe: string;
+            /** Timestamps */
+            timestamps: number[];
         };
         /**
          * BrokerPosition
@@ -18794,6 +18834,12 @@ export interface components {
             value: number;
         };
         /**
+         * PortfolioHistoryRange
+         * @description The account-history windows the broker desk can request.
+         * @enum {string}
+         */
+        PortfolioHistoryRange: "1D" | "30D" | "60D";
+        /**
          * PredictionComparison
          * @description Compare a per-bar prediction value against a constant threshold.
          */
@@ -25649,6 +25695,8 @@ export interface operations {
                 lifecycle_state?: string | null;
                 strategy_instance_id?: string | null;
                 run_id?: string | null;
+                from_ms?: number | null;
+                to_ms?: number | null;
             };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;
@@ -28889,6 +28937,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PanelProfile"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_portfolio_history_api_brokers__broker__portfolio_history_get: {
+        parameters: {
+            query: {
+                range: components["schemas"]["PortfolioHistoryRange"];
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrokerPortfolioHistory"];
                 };
             };
             /** @description Validation Error */

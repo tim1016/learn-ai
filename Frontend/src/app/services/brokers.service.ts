@@ -8,6 +8,7 @@ import type {
   BrokerOrder,
   BrokerOrderGroup,
   BrokerOrderRequest,
+  BrokerPortfolioHistory,
   BrokerPosition,
   ClerkStatus,
   CustodyDiagnosis,
@@ -15,6 +16,7 @@ import type {
   CustodyResolutionRequest,
   OrderCancelResult,
   OrderSubmitResult,
+  PortfolioHistoryRange,
   SqliteClerkProjection,
   SqliteRecoveryAction,
   SqliteRecoveryActionCheck,
@@ -82,6 +84,17 @@ export class BrokersService {
     }
     return firstValueFrom(
       this.http.get<BrokerActivity[]>(`${this.base}/${broker}/activities`, { params }),
+    );
+  }
+
+  /** Broker-owned account equity history; values are rendered without local P&L math. */
+  getPortfolioHistory(
+    broker: string,
+    historyRange: PortfolioHistoryRange,
+  ): Promise<BrokerPortfolioHistory> {
+    const params = new HttpParams().set('range', historyRange);
+    return firstValueFrom(
+      this.http.get<BrokerPortfolioHistory>(`${this.base}/${broker}/portfolio-history`, { params }),
     );
   }
 

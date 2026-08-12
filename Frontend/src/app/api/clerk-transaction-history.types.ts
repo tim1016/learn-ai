@@ -31,6 +31,9 @@ export interface ClerkTransactionFilters {
   readonly lifecycleState?: string | null;
   readonly strategyInstanceId?: string | null;
   readonly runId?: string | null;
+  /** Inclusive UTC-millisecond bounds owned by the requesting desk scope. */
+  readonly fromMs?: number | null;
+  readonly toMs?: number | null;
 }
 
 export interface ClerkTransactionEvent {
