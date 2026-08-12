@@ -155,6 +155,7 @@ async def lifespan(app: FastAPI):
     )
 
     alpaca_clerk_runtime: ActiveClerkRuntime | None = None
+    sovereign_equity_snapshot_scheduler = None
     if _alpaca_clerk_configuration_is_valid():
         from app.broker.alpaca.clerk.stream_health import build_default_stream_health_gate
 
@@ -243,6 +244,24 @@ async def lifespan(app: FastAPI):
                     "account_id": alpaca_clerk_runtime.startup_failure.account_id,
                 },
             )
+
+        from app.services.sovereign_equity_snapshots import (
+            DailySovereignEquitySnapshotScheduler,
+            DailySovereignEquitySnapshotStore,
+            DailySovereignEquitySnapshotWriter,
+            sovereign_equity_snapshot_database_path,
+        )
+
+        sovereign_equity_snapshot_scheduler = DailySovereignEquitySnapshotScheduler(
+            writer=DailySovereignEquitySnapshotWriter(
+                store=DailySovereignEquitySnapshotStore(
+                    sovereign_equity_snapshot_database_path(get_clerk_settings().dir)
+                ),
+                account_snapshot_provider=alpaca_broker.get_account,
+            )
+        )
+        sovereign_equity_snapshot_scheduler.start()
+        logger.info("Daily sovereign Alpaca equity snapshot scheduler started.")
 
     from app.broker.ibkr.config import get_settings as get_ibkr_settings
 
@@ -473,6 +492,8 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        if sovereign_equity_snapshot_scheduler is not None:
+            await sovereign_equity_snapshot_scheduler.stop()
         # Stop the in-container bot tasks first — they consume the shared
         # MarketDataFeed, which is torn down later in this block. Operator
         # desired-state is preserved; outcomes record SERVICE_SHUTDOWN.
