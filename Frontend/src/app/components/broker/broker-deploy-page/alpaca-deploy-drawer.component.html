@@ -1,0 +1,37 @@
+<p-drawer
+  [visible]="visible()"
+  (visibleChange)="onVisibilityChange($event)"
+  position="right"
+  [modal]="true"
+  [dismissible]="true"
+  [showCloseIcon]="false"
+  styleClass="alpaca-deploy-drawer"
+  [style]="{ width: 'min(1080px, 96vw)' }"
+>
+  <ng-template #header>
+    <div class="deploy-drawer-header">
+      <div>
+        <span>Alpaca paper</span>
+        <h2>Deploy strategy</h2>
+      </div>
+      <button type="button" aria-label="Close deploy strategy" (click)="close()">
+        <i class="pi pi-times" aria-hidden="true"></i>
+      </button>
+    </div>
+  </ng-template>
+
+  @if (visible()) {
+    @if (resolvedAccountId(); as resolvedAccountId) {
+      <app-alpaca-deploy-workflow [accountId]="resolvedAccountId" />
+    } @else if (account.error()) {
+      <section class="deploy-context-error" role="alert">
+        <strong>Alpaca account context is unavailable.</strong>
+        <span>Restore the paper account connection, then reopen Deploy.</span>
+      </section>
+    } @else {
+      <section class="deploy-context-loading" role="status" aria-label="Loading Alpaca deploy context">
+        Resolving Alpaca paper account…
+      </section>
+    }
+  }
+</p-drawer>

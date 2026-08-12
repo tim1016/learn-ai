@@ -3,6 +3,7 @@ import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router } from '@angular/router';
 import { TagModule } from 'primeng/tag';
 
+import { AlpacaDeployDrawerComponent } from '../../broker/broker-deploy-page/alpaca-deploy-drawer.component';
 import { AlpacaAccountCardComponent } from './alpaca-account-card.component';
 import { AlpacaOperatorLensComponent } from './alpaca-operator-lens.component';
 import { AlpacaOperatorLensDataService } from './alpaca-operator-lens-data.service';
@@ -45,6 +46,7 @@ function persistLens(lens: AlpacaDeskLens): void {
   selector: 'app-alpaca-desk',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
+    AlpacaDeployDrawerComponent,
     AlpacaAccountCardComponent,
     AlpacaOperatorLensComponent,
     AlpacaTraderLensComponent,
@@ -66,6 +68,7 @@ export class AlpacaDeskComponent {
   protected readonly lens = linkedSignal<AlpacaDeskLens>(() =>
     lensFrom(this.queryParams().get('lens')) ?? storedLens() ?? 'trader',
   );
+  protected readonly deployOpen = linkedSignal(() => this.queryParams().has('deploy'));
 
   constructor() {
     effect(() => {
@@ -80,6 +83,24 @@ export class AlpacaDeskComponent {
     void this.router.navigate([], {
       relativeTo: this.route,
       queryParams: { lens },
+      queryParamsHandling: 'merge',
+    });
+  }
+
+  protected openDeploy(): void {
+    this.deployOpen.set(true);
+    void this.router.navigate([], {
+      relativeTo: this.route,
+      queryParams: { deploy: '', deployLens: 'trader' },
+      queryParamsHandling: 'merge',
+    });
+  }
+
+  protected closeDeploy(): void {
+    this.deployOpen.set(false);
+    void this.router.navigate([], {
+      relativeTo: this.route,
+      queryParams: { deploy: null, deployLens: null },
       queryParamsHandling: 'merge',
     });
   }

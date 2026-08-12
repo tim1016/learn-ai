@@ -39,7 +39,7 @@ describe('AppSidebarComponent', () => {
 
     const links = navLinks(fixture);
     expect(links.get('Accounts')).toBe('/brokers/alpaca');
-    expect(links.get('Deploy')).toBe('/brokers/alpaca/deploy');
+    expect(links.get('Deploy')).toBe('/brokers/alpaca?deploy=');
     expect(links.get('Bots')).toBe('/brokers/alpaca/bots');
   });
 

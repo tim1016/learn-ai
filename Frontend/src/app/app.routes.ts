@@ -29,7 +29,7 @@ const RETIRED_IBKR_NAVIGATION_ROUTES: Routes = [
   { path: "broker/bots/:id", redirectTo: "brokers/alpaca/bots", pathMatch: "full" },
   { path: "broker/offline-replay", redirectTo: "brokers/alpaca", pathMatch: "full" },
   { path: "broker/bot-manual", redirectTo: "brokers/alpaca/manual", pathMatch: "full" },
-  { path: "broker/deploy", redirectTo: "brokers/alpaca/deploy", pathMatch: "full" },
+  { path: "broker/deploy", redirectTo: "brokers/alpaca?deploy", pathMatch: "full" },
 ];
 
 export const routes: Routes = [
@@ -250,20 +250,16 @@ export const routes: Routes = [
         "./components/examples/alpaca-bot-control/alpaca-bot-control-example.component"
       ).then((m) => m.AlpacaBotControlExampleComponent),
   },
+  // Preserve deploy bookmarks while the desk owns the right-side workflow.
   {
-    // Broker-aware deployment uses the broker-v2 account-scoped contract.
-    path: "brokers/:broker/accounts/:accountId/deploy",
-    loadComponent: () =>
-      import(
-        "./components/broker/broker-deploy-page/broker-deploy-page.component"
-      ).then((m) => m.BrokerDeployPageComponent),
+    path: "brokers/alpaca/accounts/:accountId/deploy",
+    redirectTo: "brokers/alpaca?deploy",
+    pathMatch: "full",
   },
   {
-    path: "brokers/:broker/deploy",
-    loadComponent: () =>
-      import(
-        "./components/broker/broker-deploy-page/broker-deploy-page.component"
-      ).then((m) => m.BrokerDeployPageComponent),
+    path: "brokers/alpaca/deploy",
+    redirectTo: "brokers/alpaca?deploy",
+    pathMatch: "full",
   },
   {
     // Broker System v2 read-only desk — separate from every v1 broker page.

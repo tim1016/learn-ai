@@ -18,6 +18,7 @@ import type { BrokerAccountSnapshot, ClerkStatus } from '../../../../api/alpaca.
 import { BrokersService } from '../../../../services/brokers.service';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
+import { AlpacaDeployDrawerComponent } from '../../broker-deploy-page/alpaca-deploy-drawer.component';
 import { AccountStripComponent } from '../account-strip/account-strip.component';
 import { BotsRosterComponent, type RowActionEvent } from '../bots-roster/bots-roster.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
@@ -38,6 +39,7 @@ interface ScopedSnapshot<T> {
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     AccountStripComponent,
+    AlpacaDeployDrawerComponent,
     BotsRosterComponent,
     RouterLink,
     ReceiptLabelPipe,
@@ -66,6 +68,7 @@ export class BotsListPageComponent {
     null,
   );
   protected readonly pendingBotIds = signal<ReadonlySet<string>>(new Set());
+  protected readonly deployOpen = signal(false);
 
   protected readonly catalog = resource({
     params: () => ({ broker: this.broker(), accountId: this.accountId() }),
@@ -190,6 +193,14 @@ export class BotsListPageComponent {
     this.account.reload();
     this.clerkStatus.reload();
     this.catalog.reload();
+  }
+
+  protected openDeploy(): void {
+    this.deployOpen.set(true);
+  }
+
+  protected closeDeploy(): void {
+    this.deployOpen.set(false);
   }
 
   protected async onRowAction(event: RowActionEvent): Promise<void> {

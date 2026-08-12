@@ -4,6 +4,7 @@ import { of } from 'rxjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BrokersService } from '../../../services/brokers.service';
+import { BrokerV2PanelService } from '../../broker/v2-panel/lib/broker-v2-panel.service';
 import { AlpacaDeskComponent } from './alpaca-desk.component';
 
 const LENS_STORAGE_KEY = 'learn-ai.alpaca-desk.lens';
@@ -55,6 +56,10 @@ async function renderDesk(
         },
       },
       { provide: BrokersService, useValue: brokers },
+      {
+        provide: BrokerV2PanelService,
+        useValue: { getDeployView: () => new Promise<never>(() => undefined) },
+      },
     ],
   });
 
@@ -98,6 +103,27 @@ describe('AlpacaDeskComponent', () => {
     expect(screen.getByRole('tab', { name: 'Operator' }).getAttribute('aria-selected')).toBe('true');
     expect(screen.getByRole('heading', { name: 'Operator desk' })).toBeTruthy();
     await vi.waitFor(() => expect(brokers.getClerkStatus).toHaveBeenCalledOnce());
+  });
+
+  it('opens Deploy strategy from the desk and closes back to the visible desk', async () => {
+    const { router } = await renderDesk();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Deploy strategy' }));
+
+    expect(await screen.findByRole('heading', { name: 'Deploy a bot' })).toBeTruthy();
+    await vi.waitFor(() => expect(router.url).toContain('deploy='));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close deploy strategy' }));
+
+    expect(screen.queryByRole('heading', { name: 'Deploy a bot' })).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Alpaca' })).toBeTruthy();
+    await vi.waitFor(() => expect(router.url).not.toContain('deploy'));
+  });
+
+  it('opens the Deploy drawer from a query deep link', async () => {
+    await renderDesk({ deploy: '' });
+
+    expect(await screen.findByRole('heading', { name: 'Deploy a bot' })).toBeTruthy();
   });
 
   it('restores the last selected lens when no query parameter is present', async () => {

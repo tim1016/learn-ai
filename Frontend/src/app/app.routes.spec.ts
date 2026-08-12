@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 
-import { BrokerDeployPageComponent } from './components/broker/broker-deploy-page/broker-deploy-page.component';
 import { AlpacaBotControlExampleComponent } from './components/examples/alpaca-bot-control/alpaca-bot-control-example.component';
 import { StrategyLabResultsComponent } from './components/strategy-lab/results-page/strategy-lab-results.component';
 import { routes } from './app.routes';
@@ -32,15 +31,12 @@ describe('routes', () => {
     expect(await route.loadComponent()).toBe(StrategyLabResultsComponent);
   });
 
-  it('uses one Broker Deploy page for Alpaca Broker V2 routes', async () => {
-    const paths = [
-      'brokers/:broker/deploy',
-      'brokers/:broker/accounts/:accountId/deploy',
-    ];
-    for (const path of paths) {
-      const route = routes.find((candidate) => candidate.path === path);
-      if (route?.loadComponent === undefined) throw new Error(`Deploy route is missing: ${path}`);
-      expect(await route.loadComponent()).toBe(BrokerDeployPageComponent);
+  it('redirects historical Alpaca Deploy URLs into the desk drawer', () => {
+    for (const path of ['brokers/alpaca/deploy', 'brokers/alpaca/accounts/:accountId/deploy']) {
+      expect(routes.find((candidate) => candidate.path === path)).toMatchObject({
+        redirectTo: 'brokers/alpaca?deploy',
+        pathMatch: 'full',
+      });
     }
   });
 
@@ -59,7 +55,7 @@ describe('routes', () => {
     ['broker/bots/:id', 'brokers/alpaca/bots'],
     ['broker/offline-replay', 'brokers/alpaca'],
     ['broker/bot-manual', 'brokers/alpaca/manual'],
-    ['broker/deploy', 'brokers/alpaca/deploy'],
+    ['broker/deploy', 'brokers/alpaca?deploy'],
   ])('keeps the deprecated %s URL as a redirect to %s', (path, redirectTo) => {
       const route = routes.find((candidate) => candidate.path === path);
 
