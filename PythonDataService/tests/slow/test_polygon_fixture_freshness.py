@@ -27,6 +27,8 @@ from tests._helpers.parity_fixture import parity_fixture_dir
     reason="POLYGON_API_KEY unset; freshness canary needs live Polygon access",
 )
 def test_polygon_fixture_matches_live_refetch() -> None:
+    from polygon.exceptions import BadResponse
+
     from app.lean_sidecar.polygon_canonical import PolygonProvider
     from app.services.polygon_client import PolygonClientService
 
@@ -34,12 +36,17 @@ def test_polygon_fixture_matches_live_refetch() -> None:
     meta = json.loads((fixture_dir / "metadata.json").read_text())
 
     provider = PolygonProvider(polygon=PolygonClientService())
-    live = provider.fetch_minute_bars(
-        symbol=meta["symbol"],
-        start_date=date.fromisoformat(meta["from_date"]),
-        end_date=date.fromisoformat(meta["to_date"]),
-        adjusted=meta["adjusted"],
-    )
+    try:
+        live = provider.fetch_minute_bars(
+            symbol=meta["symbol"],
+            start_date=date.fromisoformat(meta["from_date"]),
+            end_date=date.fromisoformat(meta["to_date"]),
+            adjusted=meta["adjusted"],
+        )
+    except BadResponse as error:
+        if "Unknown API Key" in str(error):
+            pytest.skip("POLYGON_API_KEY was rejected by Polygon; freshness canary needs a valid credential")
+        raise
 
     live_json = json.dumps(live, separators=(",", ":"))
     live_sha = hashlib.sha256(live_json.encode("utf-8")).hexdigest()

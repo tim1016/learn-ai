@@ -70,10 +70,21 @@ _ALLOWED_TO_DIFFER_MANIFEST_FIELDS: frozenset[str] = frozenset(
 )
 
 # Normalized-result fields excluded from the byte-equality check.
-# ``algorithm_id`` is allowed to differ if LEAN ever derives it from
-# the run_id (we don't think it does, but defensive). Otherwise the
-# normalized result must be byte-identical between runs.
+# The payload itself is stable, but LEAN's execution-state envelope records
+# the host container and the wall-clock runtime of each invocation.
 _ALLOWED_TO_DIFFER_NORMALIZED_FIELDS: frozenset[str] = frozenset(set())
+
+_ALLOWED_TO_DIFFER_STATE_FIELDS: frozenset[str] = frozenset(
+    {"EndTime", "Hostname", "StartTime"}
+)
+
+_DETERMINISTIC_ARTIFACT_KEYS: frozenset[str] = frozenset(
+    {
+        "data_monitor",
+        "observations",
+        "order_events",
+    }
+)
 
 
 @pytest.fixture
@@ -128,6 +139,37 @@ def _pick_free_port() -> int:
 def _strip_keys(obj: dict, keys: frozenset[str]) -> dict:
     """Return a shallow copy of obj with the keys removed."""
     return {k: v for k, v in obj.items() if k not in keys}
+
+
+def _artifact_content_fingerprints(normalized: dict) -> list[str]:
+    """Return byte-stable artifact metadata without workspace paths.
+
+    LEAN stamps the full result, summary, launcher log, and request-audit
+    files with wall-clock values. Their parsed semantic contents are asserted
+    by the normalized-result comparison below. The selected artifacts are
+    the output files whose bytes form a deterministic evidence contract.
+    """
+    artifacts = normalized.get("artifacts", {})
+    return [
+        json.dumps(
+            {
+                key: value
+                for key, value in artifacts[artifact_key].items()
+                if key != "relative_path"
+            },
+            sort_keys=True,
+        )
+        for artifact_key in sorted(_DETERMINISTIC_ARTIFACT_KEYS)
+    ]
+
+
+def _normalized_result_for_determinism(normalized: dict) -> dict:
+    """Remove LEAN's execution-instance metadata from a result payload."""
+    stable = _strip_keys(normalized, _ALLOWED_TO_DIFFER_NORMALIZED_FIELDS)
+    state = stable.get("state")
+    if isinstance(state, dict):
+        stable["state"] = _strip_keys(state, _ALLOWED_TO_DIFFER_STATE_FIELDS)
+    return _strip_keys(stable, frozenset({"artifacts"}))
 
 
 async def _post_trusted_run(client: AsyncClient, run_id: str) -> dict:
@@ -195,11 +237,14 @@ class TestDeterminismGate:
         )
 
         # Normalized result: equity_curve + order_events + statistics
-        # must be byte-identical. The serializer is the same so dict
-        # equality is fine; for a tighter check we hash json.dumps with
-        # sort_keys=True.
-        normalized_a_stable = _strip_keys(normalized_a, _ALLOWED_TO_DIFFER_NORMALIZED_FIELDS)
-        normalized_b_stable = _strip_keys(normalized_b, _ALLOWED_TO_DIFFER_NORMALIZED_FIELDS)
+        # must be byte-identical. LEAN also emits timestamped packaging
+        # artifacts, so compare the byte-stable evidence files separately
+        # and exclude the artifact-location map from the payload comparison.
+        assert _artifact_content_fingerprints(normalized_a) == _artifact_content_fingerprints(normalized_b), (
+            "Normalized artifact contents differ across two same-input runs."
+        )
+        normalized_a_stable = _normalized_result_for_determinism(normalized_a)
+        normalized_b_stable = _normalized_result_for_determinism(normalized_b)
         a_serialized = json.dumps(normalized_a_stable, sort_keys=True)
         b_serialized = json.dumps(normalized_b_stable, sort_keys=True)
         assert a_serialized == b_serialized, (

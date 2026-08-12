@@ -66,6 +66,18 @@ def _isolated_launcher_url(monkeypatch: pytest.MonkeyPatch) -> None:
 def patched_pin(monkeypatch: pytest.MonkeyPatch) -> str:
     """Pin a dummy image digest into config so the service does not
     refuse to launch for "no PINNED_LEAN_IMAGE_DIGEST" reasons."""
+    from app.lean_sidecar.config import LeanRuntimeProvenance
+    from app.services import lean_sidecar_service
+
+    test_runtime_provenance = LeanRuntimeProvenance(
+        image_digest=PINNED_DIGEST_FOR_TESTS,
+        upstream_image_digest="sha256:" + "0" * 64,
+        lean_version="test",
+        source_commit="0" * 40,
+        source_link_url_template="https://example.test/lean/*",
+        binary_sha256={},
+        pdb_sha256={},
+    )
     monkeypatch.setattr(sidecar_config, "PINNED_LEAN_IMAGE_DIGEST", PINNED_DIGEST_FOR_TESTS)
     monkeypatch.setattr(
         sidecar_config,
@@ -74,9 +86,12 @@ def patched_pin(monkeypatch: pytest.MonkeyPatch) -> str:
     )
     # Service reads PINNED_LEAN_IMAGE_DIGEST at module-import time
     # too; patch in-place.
-    from app.services import lean_sidecar_service
-
     monkeypatch.setattr(lean_sidecar_service, "PINNED_LEAN_IMAGE_DIGEST", PINNED_DIGEST_FOR_TESTS)
+    monkeypatch.setattr(
+        lean_sidecar_service,
+        "runtime_provenance_for_digest",
+        lambda digest: test_runtime_provenance if digest == PINNED_DIGEST_FOR_TESTS else None,
+    )
     return PINNED_DIGEST_FOR_TESTS
 
 
