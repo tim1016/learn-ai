@@ -58,7 +58,7 @@
   - `GallerySymbolBars(symbol: str, bars: list[ChartBar])`
   - `GalleryLiveSnapshot(stream_epoch: str, surface_version: int, as_of_ms: int, resolution: str, bots: list[GalleryBotView], symbols: list[GallerySymbolBars], markers: dict[str, list[ChartFillMarker]])`
   - `GalleryLiveUpdate(surface_version: int, as_of_ms: int, symbols: list[GallerySymbolBars], markers_delta: dict[str, list[ChartFillMarker]], bots_delta: list[GalleryBotDelta], removed_sids: list[str])`
-  - `GalleryBotDelta(sid: str, realized_pnl_today: float, open_pnl: float, fills_today: int, phase: str, desired_state: str, needs_attention: bool, running: bool, last_bar_at_ms: int | None, primary_action: GalleryPrimaryAction)`
+  - `GalleryBotDelta` — **same shape as `GalleryBotView`** (a delta carries the changed bot's full view, incl. `symbol`/`label`, so the client replaces by `sid`). Implement as `class GalleryBotDelta(GalleryBotView): pass`.
 
 - [ ] **Step 1: Write the failing test**
 
