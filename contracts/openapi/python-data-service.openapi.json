@@ -44639,7 +44639,7 @@
         },
         "summary": "Get Account Pnl Attribution",
         "tags": [
-          "clerk-transactions"
+          "account-pnl-attribution"
         ]
       }
     },

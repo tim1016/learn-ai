@@ -13,6 +13,7 @@ from app.broker.alpaca.clerk.sqlite.models import ExternalOrderResource
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.models import BrokerOrder
+from app.routers.account_pnl_attribution import router as account_pnl_attribution_router
 from app.routers.clerk_transactions import router
 from app.schemas.clerk_transaction_projection import (
     ClerkTransactionRow,
@@ -209,7 +210,7 @@ async def test_history_endpoint_rejects_an_inverted_ms_window() -> None:
 async def test_pnl_attribution_endpoint_passes_the_inclusive_window_to_c2(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import app.routers.clerk_transactions as clerk_transactions_router
+    import app.routers.account_pnl_attribution as account_pnl_attribution
 
     def attribution(*, account_id: str, from_ms: int, to_ms: int) -> AccountPnlAttribution:
         assert (account_id, from_ms, to_ms) == ("DU1219", 1_700_000_000_000, 1_700_086_400_000)
@@ -226,9 +227,9 @@ async def test_pnl_attribution_endpoint_passes_the_inclusive_window_to_c2(
             mark_observed_at_ms={},
         )
 
-    monkeypatch.setattr(clerk_transactions_router, "sqlite_account_pnl_attribution", attribution)
+    monkeypatch.setattr(account_pnl_attribution, "sqlite_account_pnl_attribution", attribution)
     app = FastAPI()
-    app.include_router(router)
+    app.include_router(account_pnl_attribution_router)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get(
             "/api/accounts/DU1219/pnl-attribution",

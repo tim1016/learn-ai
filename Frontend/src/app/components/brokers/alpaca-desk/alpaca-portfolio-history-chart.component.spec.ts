@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/angular';
+import { render, screen, waitFor } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { BrokerPortfolioHistory } from '../../../api/alpaca.types';
@@ -43,10 +43,12 @@ describe('AlpacaPortfolioHistoryChartComponent', () => {
     });
 
     expect(await screen.findByRole('img', { name: '30D broker equity curve' })).toBeTruthy();
-    expect(series.setData).toHaveBeenLastCalledWith([
-      { time: 1_700_000_000, value: 10_000 },
-      { time: 1_700_086_400, value: 10_125 },
-    ]);
+    await waitFor(() =>
+      expect(series.setData).toHaveBeenLastCalledWith([
+        { time: 1_700_000_000, value: 10_000 },
+        { time: 1_700_086_400, value: 10_125 },
+      ]),
+    );
 
     view.fixture.componentRef.setInput('history', { ...history, timestamps: [], equity: [], profit_loss: [] });
     view.fixture.detectChanges();

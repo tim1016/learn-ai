@@ -20,6 +20,7 @@ from app.broker.ibkr.client import (
 from app.config import settings
 from app.engine.live.desired_state import DesiredState
 from app.routers import (
+    account_pnl_attribution,
     account_reconciliation,
     aggregates,
     alpaca_bot_control_examples,
@@ -748,6 +749,7 @@ app.include_router(
     dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
 )
 app.include_router(clerk_transactions.router, dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES)
+app.include_router(account_pnl_attribution.router, dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES)
 # Activation-selected SQLite Alpaca Clerk command and projection surface.
 # The active-authority selector fails closed instead of falling back to JSONL.
 # PROTECTED_DATA_PLANE_READ_DEPENDENCIES (not the mutating-only DEPENDENCIES
