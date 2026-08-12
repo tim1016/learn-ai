@@ -62,6 +62,7 @@ import type {
   TickerRange,
 } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
 import { TICKER_POOL, RECENT_TICKERS } from '../../../shared/ticker-catalog';
+import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
 import { tickerRangeToWire } from '../../../utils/ticker-wire';
 
 /** Snake-case shape returned by /api/jobs-internal/signal-engine worker. */
@@ -108,6 +109,7 @@ interface SignalEngineJobResultRaw {
     ActiveIndicatorCardComponent,
     IndicatorConfigModalComponent,
     TickerRangePickerComponent,
+    AssetIdentityComponent,
   ],
   templateUrl: './signal-runner.component.html',
   styleUrls: ['./signal-runner.component.scss'],

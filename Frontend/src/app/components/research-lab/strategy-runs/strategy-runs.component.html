@@ -77,7 +77,7 @@
             </span>
           }
         </td>
-        <td>{{ run.symbol }}</td>
+        <td><app-asset-identity [symbol]="run.symbol" size="sm" /></td>
         <td class="sr-window-cell">
           {{ run.start_ms | timestampDisplay: 'date-et' }}
           <span class="sr-window-sep">→</span>

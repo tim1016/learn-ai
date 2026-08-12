@@ -294,7 +294,7 @@
       </ng-template>
       <ng-template #body let-row>
         <tr>
-          <td class="font-bold">{{ row.ticker }}</td>
+          <td class="font-bold"><app-asset-identity [symbol]="row.ticker" size="sm" /></td>
           <td [class]="getIcClass(row.meanIc)">{{ row.meanIc | number: '1.4-4' }}</td>
           <td>{{ row.nwTStat | number: '1.2-2' }}</td>
           <td>{{ row.nwPValue | number: '1.4-4' }}</td>

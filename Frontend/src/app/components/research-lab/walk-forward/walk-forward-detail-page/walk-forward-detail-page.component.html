@@ -10,7 +10,7 @@
         />
       </div>
       <div class="wfd-meta">
-        <span><strong>Symbol:</strong> {{ data.config.symbol }}</span>
+        <span><strong>Symbol:</strong> <app-asset-identity [symbol]="data.config.symbol" size="sm" /></span>
         <span><strong>Resolution:</strong> {{ data.config.resolution_minutes }}m</span>
         <span>
           <strong>Window:</strong>

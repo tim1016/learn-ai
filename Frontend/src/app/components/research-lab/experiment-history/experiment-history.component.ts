@@ -18,6 +18,7 @@ import { TagModule } from 'primeng/tag';
 import { MessageModule } from 'primeng/message';
 import { TooltipModule } from 'primeng/tooltip';
 import { DialogModule } from 'primeng/dialog';
+import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
 import { TimestampDisplayPipe } from '../../../shared/timestamp';
 
 interface ColumnHelp {
@@ -39,6 +40,7 @@ interface ColumnHelp {
     MessageModule,
     TooltipModule,
     DialogModule,
+    AssetIdentityComponent,
     TimestampDisplayPipe,
   ],
   templateUrl: './experiment-history.component.html',
