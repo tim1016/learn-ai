@@ -56,6 +56,7 @@ import type {
   TickerRange,
 } from '../../../shared/ticker-range-picker/ticker-range-picker.types';
 import { TICKER_POOL, RECENT_TICKERS } from '../../../shared/ticker-catalog';
+import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
 import { tickerRangeToWire } from '../../../utils/ticker-wire';
 
 /** Shape of the ``target`` payload emitted by ``_serialize_target`` in
@@ -118,6 +119,7 @@ interface FeatureResearchJobResultRaw {
     ActiveIndicatorCardComponent,
     IndicatorConfigModalComponent,
     TickerRangePickerComponent,
+    AssetIdentityComponent,
   ],
   templateUrl: './feature-runner.component.html',
   styleUrls: ['./feature-runner.component.scss'],

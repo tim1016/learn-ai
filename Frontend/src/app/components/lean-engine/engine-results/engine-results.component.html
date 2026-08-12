@@ -16,7 +16,7 @@
 
   <span class="run-summary__divider" aria-hidden="true"></span>
 
-  <span class="run-summary__chip">{{ symbol() }}</span>
+  <app-asset-identity class="run-summary__chip" [symbol]="symbol()" size="sm" />
   @if (rangeLabel()) {
     <span class="run-summary__chip">{{ rangeLabel() }}</span>
   }

@@ -9,9 +9,12 @@ import {
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BrokersService } from '../../../../services/brokers.service';
-import { brokerBotsRedirectGuard } from './broker-bots-redirect.guard';
+import {
+  brokerBotsRedirectGuard,
+  brokerGalleryRedirectGuard,
+} from './broker-bots-redirect.guard';
 
-describe('brokerBotsRedirectGuard', () => {
+describe('broker account surface redirect guards', () => {
   const successTree = new UrlTree();
   const failureTree = new UrlTree();
   const router = {
@@ -33,15 +36,18 @@ describe('brokerBotsRedirectGuard', () => {
     });
   });
 
-  it('redirects to scoped bots path on successful account fetch', async () => {
+  it.each([
+    ['bots', brokerBotsRedirectGuard],
+    ['gallery', brokerGalleryRedirectGuard],
+  ] as const)('redirects the unscoped %s route after a successful account fetch', async (surface, guard) => {
     brokersService.getAccount.mockResolvedValue({ account_id: 'PA9' });
     router.createUrlTree.mockReturnValue(successTree);
 
-    const result = await runGuard('alpaca');
+    const result = await runGuard(guard, 'alpaca');
 
     expect(brokersService.getAccount).toHaveBeenCalledWith('alpaca');
     expect(router.createUrlTree).toHaveBeenCalledWith([
-      '/brokers', 'alpaca', 'accounts', 'PA9', 'bots',
+      '/brokers', 'alpaca', 'accounts', 'PA9', surface,
     ]);
     expect(result).toBe(successTree);
   });
@@ -50,18 +56,18 @@ describe('brokerBotsRedirectGuard', () => {
     brokersService.getAccount.mockRejectedValue(new Error('Network error'));
     router.createUrlTree.mockReturnValue(failureTree);
 
-    const result = await runGuard('alpaca');
+    const result = await runGuard(brokerBotsRedirectGuard, 'alpaca');
 
     expect(router.createUrlTree).toHaveBeenCalledWith(['/brokers', 'alpaca']);
     expect(result).toBe(failureTree);
   });
 });
 
-function runGuard(broker: string) {
+function runGuard(guard: typeof brokerBotsRedirectGuard, broker: string) {
   const route = {
     paramMap: convertToParamMap({ broker }),
   } as ActivatedRouteSnapshot;
   return TestBed.runInInjectionContext(() =>
-    brokerBotsRedirectGuard(route, {} as RouterStateSnapshot),
+    guard(route, {} as RouterStateSnapshot),
   );
 }

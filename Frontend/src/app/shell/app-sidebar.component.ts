@@ -19,6 +19,8 @@ import { BrokerBannerComponent } from './broker-banner.component';
 interface NavItem {
   label: string;
   route: string;
+  queryParams?: Record<string, string>;
+  activePath?: string;
 }
 
 interface NavGroup {
@@ -82,8 +84,14 @@ const NAV: NavGroup[] = [
     icon: 'pi pi-link',
     items: [
       { label: 'Accounts', route: '/brokers/alpaca' },
-      { label: 'Deploy', route: '/brokers/alpaca/deploy' },
+      {
+        label: 'Deploy',
+        route: '/brokers/alpaca',
+        queryParams: { deploy: '' },
+        activePath: '/brokers/alpaca/deploy',
+      },
       { label: 'Bots', route: '/brokers/alpaca/bots' },
+      { label: 'Gallery', route: '/brokers/alpaca/gallery' },
     ],
   },
   {
@@ -121,7 +129,7 @@ const NAV: NavGroup[] = [
   },
 ];
 
-const NAV_ROUTES = NAV.flatMap((group) => group.items.map((item) => item.route)).sort(
+const NAV_ROUTES = NAV.flatMap((group) => group.items.map((item) => item.activePath ?? item.route)).sort(
   (left, right) => right.length - left.length,
 );
 
@@ -157,11 +165,12 @@ const NAV_ROUTES = NAV.flatMap((group) => group.items.map((item) => item.route))
       <nav class="nav-scroll" role="navigation">
         @if (filtered(); as matches) {
           <div class="flat-matches">
-            @for (m of matches; track m.route) {
+            @for (m of matches; track m.label) {
               <a
                 class="nav-link"
-                [class.active]="isActive(m.route)"
+                [class.active]="isActive(m)"
                 [routerLink]="m.route"
+                [queryParams]="m.queryParams"
                 (click)="query.set('')"
               >
                 <span class="nav-link-label">{{ m.label }}</span>
@@ -193,11 +202,12 @@ const NAV_ROUTES = NAV.flatMap((group) => group.items.map((item) => item.route))
 
               @if (openGroups()[g.id]) {
                 <div class="nav-group-items">
-                  @for (item of g.items; track item.route) {
+                  @for (item of g.items; track item.label) {
                     <a
                       class="nav-link"
-                      [class.active]="isActive(item.route)"
+                      [class.active]="isActive(item)"
                       [routerLink]="item.route"
+                      [queryParams]="item.queryParams"
                     >
                       <span class="nav-link-label">{{ item.label }}</span>
                     </a>
@@ -226,9 +236,13 @@ export class AppSidebarComponent {
 
   /** Only the longest route match is active, so `/broker` does not shadow its children. */
   private activeRoute = computed<string | null>(() => {
-    const url = this.navigationPath(this.currentUrl());
+    const currentUrl = this.currentUrl();
+    const url = this.navigationPath(currentUrl);
+    if (url === '/brokers/alpaca' && this.router.parseUrl(currentUrl).queryParams['deploy'] !== undefined) {
+      return '/brokers/alpaca/deploy';
+    }
     const accountScopedBrokerSurface = url.match(
-      /^\/brokers\/([^/]+)\/accounts\/[^/]+\/(deploy|bots)(?:\/|$)/,
+      /^\/brokers\/([^/]+)\/accounts\/[^/]+\/(deploy|bots|gallery)(?:\/|$)/,
     );
     if (accountScopedBrokerSurface) {
       const [, broker, surface] = accountScopedBrokerSurface;
@@ -248,14 +262,14 @@ export class AppSidebarComponent {
    * When query is non-empty, return the matching items flattened across groups.
    * Null means "show the normal grouped tree."
    */
-  filtered = computed<{ label: string; route: string; groupTitle: string }[] | null>(() => {
+  filtered = computed<(NavItem & { groupTitle: string })[] | null>(() => {
     const q = this.query().trim().toLowerCase();
     if (!q) return null;
-    const matches: { label: string; route: string; groupTitle: string }[] = [];
+    const matches: (NavItem & { groupTitle: string })[] = [];
     for (const g of NAV) {
       for (const it of g.items) {
         if ((it.label + ' ' + g.title).toLowerCase().includes(q)) {
-          matches.push({ label: it.label, route: it.route, groupTitle: g.title });
+          matches.push({ ...it, groupTitle: g.title });
         }
       }
     }
@@ -302,12 +316,12 @@ export class AppSidebarComponent {
     this.openGroups.update(state => ({ ...state, [id]: !state[id] }));
   }
 
-  isActive(route: string): boolean {
-    return this.activeRoute() === route;
+  isActive(item: NavItem): boolean {
+    return this.activeRoute() === (item.activePath ?? item.route);
   }
 
   groupHasActive(g: NavGroup): boolean {
-    return g.items.some(it => this.isActive(it.route));
+    return g.items.some(it => this.isActive(it));
   }
 
   private groupContainsUrl(g: NavGroup, url: string): boolean {

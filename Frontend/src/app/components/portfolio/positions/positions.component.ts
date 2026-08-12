@@ -4,11 +4,12 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { catchError, finalize, of } from 'rxjs';
 import { PortfolioService } from '../../../services/portfolio.service';
 import { Position } from '../../../graphql/portfolio-types';
+import { AssetIdentityComponent } from '../../../shared/asset-identity';
 
 @Component({
   selector: 'app-positions',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, AssetIdentityComponent],
   templateUrl: './positions.component.html',
   styleUrls: ['./positions.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,

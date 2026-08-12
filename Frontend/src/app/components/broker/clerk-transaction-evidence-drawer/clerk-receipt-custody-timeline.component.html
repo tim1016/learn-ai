@@ -1,0 +1,28 @@
+<section class="custody-hero" aria-labelledby="custodyTimelineTitle">
+  <div class="custody-hero__heading">
+    <div>
+      <p class="eyebrow">Custody lifecycle</p>
+      <h3 id="custodyTimelineTitle">Where this instruction stands</h3>
+    </div>
+    <p>Each marker is a durable fact. A missing marker is shown as not recorded, never inferred.</p>
+  </div>
+  <ol class="custody-stages">
+    @for (stage of stages(); track trackStage($index, stage)) {
+      <li
+        class="custody-stage"
+        [class.custody-stage--recorded]="stage.state === 'recorded'"
+        [class.custody-stage--awaiting]="stage.state === 'awaiting'"
+      >
+        <span class="custody-stage__marker" aria-hidden="true">{{ stage.code }}</span>
+        <div class="custody-stage__copy">
+          <div class="custody-stage__title-row">
+            <strong>{{ stage.label }}</strong>
+            <span>{{ stage.state === 'recorded' ? 'Recorded' : stage.state === 'awaiting' ? 'Awaiting' : 'Not recorded' }}</span>
+          </div>
+          <span>{{ stage.explanation }}</span>
+          <app-timestamp-display [value]="stage.timestamp" mode="local" fallback="Not recorded" />
+        </div>
+      </li>
+    }
+  </ol>
+</section>

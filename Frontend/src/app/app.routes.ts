@@ -1,6 +1,9 @@
 import { ChangeDetectionStrategy, Component } from "@angular/core";
 import { Routes } from "@angular/router";
-import { brokerBotsRedirectGuard } from "./components/broker/v2-panel/lib/broker-bots-redirect.guard";
+import {
+  brokerBotsRedirectGuard,
+  brokerGalleryRedirectGuard,
+} from "./components/broker/v2-panel/lib/broker-bots-redirect.guard";
 
 // Nominal component target for the brokerBotsRedirectGuard route.
 // The guard always returns a UrlTree so this component never renders.
@@ -29,7 +32,7 @@ const RETIRED_IBKR_NAVIGATION_ROUTES: Routes = [
   { path: "broker/bots/:id", redirectTo: "brokers/alpaca/bots", pathMatch: "full" },
   { path: "broker/offline-replay", redirectTo: "brokers/alpaca", pathMatch: "full" },
   { path: "broker/bot-manual", redirectTo: "brokers/alpaca/manual", pathMatch: "full" },
-  { path: "broker/deploy", redirectTo: "brokers/alpaca/deploy", pathMatch: "full" },
+  { path: "broker/deploy", redirectTo: "brokers/alpaca?deploy", pathMatch: "full" },
 ];
 
 export const routes: Routes = [
@@ -250,20 +253,16 @@ export const routes: Routes = [
         "./components/examples/alpaca-bot-control/alpaca-bot-control-example.component"
       ).then((m) => m.AlpacaBotControlExampleComponent),
   },
+  // Preserve deploy bookmarks while the desk owns the right-side workflow.
   {
-    // Broker-aware deployment uses the broker-v2 account-scoped contract.
-    path: "brokers/:broker/accounts/:accountId/deploy",
-    loadComponent: () =>
-      import(
-        "./components/broker/broker-deploy-page/broker-deploy-page.component"
-      ).then((m) => m.BrokerDeployPageComponent),
+    path: "brokers/alpaca/accounts/:accountId/deploy",
+    redirectTo: "brokers/alpaca?deploy",
+    pathMatch: "full",
   },
   {
-    path: "brokers/:broker/deploy",
-    loadComponent: () =>
-      import(
-        "./components/broker/broker-deploy-page/broker-deploy-page.component"
-      ).then((m) => m.BrokerDeployPageComponent),
+    path: "brokers/alpaca/deploy",
+    redirectTo: "brokers/alpaca?deploy",
+    pathMatch: "full",
   },
   {
     // Broker System v2 read-only desk — separate from every v1 broker page.
@@ -381,6 +380,13 @@ export const routes: Routes = [
     // redirects to /brokers/:broker/accounts/:accountId/bots.
     path: 'brokers/:broker/bots',
     canActivate: [brokerBotsRedirectGuard],
+    component: NeverRendersComponent,
+  },
+  {
+    // Gallery is a peer of Bots: resolve the account before loading its
+    // account-scoped live-wall route.
+    path: 'brokers/:broker/gallery',
+    canActivate: [brokerGalleryRedirectGuard],
     component: NeverRendersComponent,
   },
   { path: "**", redirectTo: "/data-lab" },

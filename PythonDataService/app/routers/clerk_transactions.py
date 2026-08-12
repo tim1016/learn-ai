@@ -28,6 +28,7 @@ from app.services.sqlite_clerk_transaction_projection import (
 )
 
 router = APIRouter(prefix="/api/accounts", tags=["clerk-transactions"])
+_MAX_INT64_MS = 2**63 - 1
 
 
 def get_clerk_transaction_store() -> ClerkTransactionProjectionStore:
@@ -83,8 +84,16 @@ async def get_clerk_transaction_history(
     lifecycle_state: str | None = Query(default=None, min_length=1, max_length=64),
     strategy_instance_id: str | None = Query(default=None, min_length=1, max_length=128),
     run_id: str | None = Query(default=None, min_length=1, max_length=128),
+    from_ms: int | None = Query(default=None, ge=0, le=_MAX_INT64_MS),
+    to_ms: int | None = Query(default=None, ge=0, le=_MAX_INT64_MS),
 ) -> ClerkTransactionHistoryResponse:
     """Read one indexed keyset page without broker, Account Truth, or journal I/O."""
+
+    if from_ms is not None and to_ms is not None and to_ms < from_ms:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="to_ms must be greater than or equal to from_ms",
+        )
 
     try:
         sqlite_page = await asyncio.to_thread(
@@ -96,6 +105,8 @@ async def get_clerk_transaction_history(
             lifecycle_state=lifecycle_state,
             strategy_instance_id=strategy_instance_id,
             run_id=run_id,
+            from_ms=from_ms,
+            to_ms=to_ms,
         )
         if sqlite_page is not None:
             return sqlite_page
@@ -108,6 +119,8 @@ async def get_clerk_transaction_history(
             lifecycle_state=lifecycle_state,
             strategy_instance_id=strategy_instance_id,
             run_id=run_id,
+            from_ms=from_ms,
+            to_ms=to_ms,
             store=store,
         )
     except ClerkTransactionProjectionUnavailable:

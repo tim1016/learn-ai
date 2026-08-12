@@ -145,6 +145,29 @@ def test_account_desk_reads_operation_first_sqlite_projection(tmp_path: Path) ->
             run_id=None,
         )
         assert page is not None
+        recorded_at_ms = page.rows[0].recorded_at_ms
+        in_window_page = sqlite_transaction_history(
+            account_id="PA-ACCOUNT-DESK",
+            limit=25,
+            cursor=None,
+            origin=None,
+            lifecycle_state=None,
+            strategy_instance_id=None,
+            run_id=None,
+            from_ms=recorded_at_ms,
+            to_ms=recorded_at_ms,
+        )
+        outside_window_page = sqlite_transaction_history(
+            account_id="PA-ACCOUNT-DESK",
+            limit=25,
+            cursor=None,
+            origin=None,
+            lifecycle_state=None,
+            strategy_instance_id=None,
+            run_id=None,
+            from_ms=recorded_at_ms + 1,
+            to_ms=recorded_at_ms + 2,
+        )
         active, detail = sqlite_transaction_detail(
             account_id="PA-ACCOUNT-DESK",
             transaction_id=accepted.effect_operation_id or "",
@@ -158,6 +181,10 @@ def test_account_desk_reads_operation_first_sqlite_projection(tmp_path: Path) ->
     assert len(page.rows) == 1
     assert page.rows[0].transaction_id == accepted.effect_operation_id
     assert page.rows[0].event_count == 1
+    assert in_window_page is not None
+    assert [row.transaction_id for row in in_window_page.rows] == [accepted.effect_operation_id]
+    assert outside_window_page is not None
+    assert outside_window_page.rows == []
     assert active is True
     assert detail is not None
     assert detail.events[0].receipt["clerk_observed_at_ms"]
@@ -516,6 +543,76 @@ def test_external_transaction_history_and_detail_stay_outside_bot_economics(tmp_
     assert [event.event_kind for event in detail.events] == ["external_order_observed"]
     assert detail.events[0].journal_seq == observed.observation_sequence
     assert detail.events[0].recorded_at_ms == observed.observation_recorded_at_ms
+
+
+def test_external_history_applies_window_before_keyset_limit(tmp_path: Path) -> None:
+    now_ms = [1_000]
+    repo = ClerkSqliteRepository.initialize(
+        account_id="PA-ACCOUNT-DESK",
+        artifacts_root=tmp_path,
+        clock=lambda: now_ms[0],
+    )
+
+    def order(order_id: str, observed_at_ms: int) -> BrokerOrder:
+        return BrokerOrder(
+            broker="alpaca",
+            order_id=order_id,
+            client_order_id=f"alpaca-console:{order_id}",
+            symbol="SPY",
+            asset_class="us_equity",
+            side="BUY",
+            order_type="market",
+            time_in_force="day",
+            quantity=1.0,
+            filled_quantity=0.0,
+            limit_price=None,
+            stop_price=None,
+            filled_avg_price=None,
+            status="accepted",
+            submitted_at_ms=None,
+            created_at_ms=None,
+            updated_at_ms=None,
+            filled_at_ms=None,
+            canceled_at_ms=None,
+            expired_at_ms=None,
+            observed_at_ms=observed_at_ms,
+        )
+
+    observe_external_order(repo, order=order("older-in-window", 1_000))
+    now_ms[0] = 2_000
+    observe_external_order(repo, order=order("newer-outside-window", 2_000))
+    broker = _UnusedBroker()
+    set_active_clerk_runtime(
+        ActiveClerkRuntime(
+            authority_kind="sqlite",
+            clerk=SqliteAlpacaClerkFacade(
+                repo=repo,
+                read=broker,  # type: ignore[arg-type]
+                trade=broker,  # type: ignore[arg-type]
+            ),
+        )
+    )
+    try:
+        page = sqlite_transaction_history(
+            account_id="PA-ACCOUNT-DESK",
+            limit=1,
+            cursor=None,
+            origin="external",
+            lifecycle_state=None,
+            strategy_instance_id=None,
+            run_id=None,
+            from_ms=1_000,
+            to_ms=1_500,
+        )
+    finally:
+        set_active_clerk_runtime(None)
+        repo.close()
+
+    assert page is not None
+    assert [row.transaction_id for row in page.rows] == [
+        "external-order:older-in-window"
+    ]
+    assert page.next_cursor is None
 
 
 def test_all_transaction_history_keyset_merges_strategy_and_external_without_duplicates(

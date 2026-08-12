@@ -28,6 +28,7 @@ import type { ChartBar, ChartFillMarker, GalleryBotView } from '../lib/gallery.t
 import { toCandle } from '../../lib/chart-bar-mapping';
 import { fmtCurrency, fmtInteger, fmtSignedCurrency, fmtSignedNumber } from '../../../format';
 import { createAppChart } from '../../../../../shared/charts/chart-utils';
+import { AssetIdentityComponent } from '../../../../../shared/asset-identity';
 
 /**
  * Map a ChartBar to a volume histogram point, colored by the bar's own
@@ -77,6 +78,7 @@ function toneOf(value: number | null): PnlTone {
 @Component({
   selector: 'app-bot-tile',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [AssetIdentityComponent],
   host: {
     '(document:keydown.escape)': 'onEscape()',
   },

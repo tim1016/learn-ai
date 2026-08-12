@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, within } from '@testing-library/angular';
 import { HttpErrorResponse } from '@angular/common/http';
+import { TestBed } from '@angular/core/testing';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MessageService } from 'primeng/api';
 import type {
@@ -9,6 +10,7 @@ import type {
 import { BotPanelShellComponent } from './bot-panel-shell.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { BrokersService } from '../../../../services/brokers.service';
+import { DUAL_PANE_CHART_FACTORY } from '../dual-pane-chart/dual-pane-chart.component';
 import type {
   BotPanelView,
   BotPanelLiveSnapshot,
@@ -19,6 +21,7 @@ import type {
 import { provideRouter, Router } from '@angular/router';
 
 const messageService = { add: vi.fn() };
+const chartMocks = vi.hoisted(() => ({ createChart: vi.fn() }));
 
 // DualPaneChartComponent -> lightweight-charts: mock for unit tests.
 vi.mock('lightweight-charts', () => {
@@ -32,10 +35,17 @@ vi.mock('lightweight-charts', () => {
     remove: vi.fn(),
   });
   return {
-    createChart: vi.fn().mockImplementation(() => createMockChart()),
+    createChart: chartMocks.createChart.mockImplementation(() => createMockChart()),
     createSeriesMarkers,
     CandlestickSeries: 'CandlestickSeries',
   };
+});
+
+beforeEach(() => {
+  TestBed.configureTestingModule({
+    providers: [{ provide: DUAL_PANE_CHART_FACTORY, useValue: chartMocks.createChart }],
+  });
+  chartMocks.createChart.mockClear();
 });
 
 const PROFILE: PanelProfile = {

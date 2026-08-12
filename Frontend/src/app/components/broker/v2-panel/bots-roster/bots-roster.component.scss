@@ -141,10 +141,15 @@
   color: inherit;
   text-decoration: none;
 
-  strong { font-size: var(--fs-md); letter-spacing: var(--ls-tight); }
+  app-asset-identity {
+    --asset-identity-symbol-color: var(--text-primary);
+
+    font-size: var(--fs-md);
+    letter-spacing: var(--ls-tight);
+  }
   span:last-child { color: var(--text-subtle); font-size: var(--fs-xs); }
 
-  &:hover strong { color: var(--accent-text); }
+  &:hover app-asset-identity { --asset-identity-symbol-color: var(--accent-text); }
   &:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 }
 

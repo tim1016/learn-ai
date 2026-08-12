@@ -1,0 +1,45 @@
+@if (posture(); as current) {
+  <section
+    class="operator-posture"
+    [class.operator-posture--healthy]="current.disposition === 'healthy'"
+    [class.operator-posture--attention]="current.disposition !== 'healthy'"
+    aria-labelledby="operator-posture-title"
+  >
+    <div>
+      <p class="operator-posture__eyebrow">System posture</p>
+      <h2 id="operator-posture-title">{{ current.headline }}</h2>
+      @if (current.detail) {
+        <p class="operator-posture__detail">{{ current.detail }}</p>
+      }
+    </div>
+
+    @switch (current.disposition) {
+      @case ('fix_here') {
+        @if (isRecoveryAction(current.action)) {
+          <button type="button" (click)="requestRepair(current.action)">
+            {{ current.action.label }}
+          </button>
+        } @else if (current.action; as move) {
+          <button type="button" (click)="requestMove(move)">{{ move.label }}</button>
+        }
+      }
+      @case ('fix_elsewhere') {
+        @if (current.action; as move) {
+          <button type="button" class="operator-posture__link" (click)="requestMove(move)">
+            {{ move.label }}
+          </button>
+        }
+      }
+      @case ('wait') {
+        <p class="operator-posture__status" role="status">Waiting for fresh Clerk evidence.</p>
+      }
+      @case ('terminal') {
+        <p class="operator-posture__status" role="alert">Escalation required.</p>
+      }
+    }
+
+    @if (current.nextStep; as nextStep) {
+      <p class="operator-posture__next"><strong>Next:</strong> {{ nextStep }}</p>
+    }
+  </section>
+}

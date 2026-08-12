@@ -33,11 +33,16 @@ export class AccountDeskTransactionHistoryStore {
   readonly filters = this.filtersState.asReadonly();
   readonly hasLastGood = computed(() => this.feedState() !== null);
 
-  async load(accountId: string): Promise<void> {
-    if (this.accountKey() !== accountId) {
+  async load(
+    accountId: string,
+    filters?: ClerkTransactionFilters,
+  ): Promise<void> {
+    const normalizedFilters = filters === undefined ? this.filtersState() : normalizeFilters(filters);
+    if (this.accountKey() !== accountId || !sameFilters(this.filtersState(), normalizedFilters)) {
       this.requestGeneration += 1;
       this.refreshPending = false;
       this.accountKey.set(accountId);
+      this.filtersState.set(normalizedFilters);
       this.rowsState.set([]);
       this.nextCursorState.set(null);
       this.feedState.set(null);
@@ -111,12 +116,33 @@ export class AccountDeskTransactionHistoryStore {
 }
 
 function normalizeFilters(filters: ClerkTransactionFilters): ClerkTransactionFilters {
+  const fromMs = validTimestamp(filters.fromMs);
+  const toMs = validTimestamp(filters.toMs);
   return {
-    origin: filters.origin ?? null,
-    lifecycleState: filters.lifecycleState?.trim() || null,
-    strategyInstanceId: filters.strategyInstanceId?.trim() || null,
-    runId: filters.runId?.trim() || null,
+    ...(filters.origin ? { origin: filters.origin } : {}),
+    ...(filters.lifecycleState?.trim() ? { lifecycleState: filters.lifecycleState.trim() } : {}),
+    ...(filters.strategyInstanceId?.trim()
+      ? { strategyInstanceId: filters.strategyInstanceId.trim() }
+      : {}),
+    ...(filters.runId?.trim() ? { runId: filters.runId.trim() } : {}),
+    ...(fromMs !== undefined ? { fromMs } : {}),
+    ...(toMs !== undefined ? { toMs } : {}),
   };
+}
+
+function validTimestamp(value: number | null | undefined): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : undefined;
+}
+
+function sameFilters(left: ClerkTransactionFilters, right: ClerkTransactionFilters): boolean {
+  return left.origin === right.origin
+    && left.lifecycleState === right.lifecycleState
+    && left.strategyInstanceId === right.strategyInstanceId
+    && left.runId === right.runId
+    && left.fromMs === right.fromMs
+    && left.toMs === right.toMs;
 }
 
 function mergeRows(

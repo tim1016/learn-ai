@@ -13,10 +13,7 @@ from app.broker.alpaca.clerk.sqlite.economic_projection import (
     ExecutionRow,
     SqliteEconomicProjectionReader,
 )
-from app.broker.alpaca.clerk.sqlite.external_orders import (
-    SqliteExternalOrderReader,
-    acknowledge_external_order,
-)
+from app.broker.alpaca.clerk.sqlite.external_orders import acknowledge_external_order
 from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot, ExternalOrderResource
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     OperationPage,
@@ -71,18 +68,11 @@ def sqlite_transaction_history(
     lifecycle_state: str | None,
     strategy_instance_id: str | None,
     run_id: str | None,
+    from_ms: int | None = None,
+    to_ms: int | None = None,
 ) -> ClerkTransactionHistoryResponse | None:
     """Return ``None`` unless SQLite is the boot-selected authority."""
-    if origin == "external":
-        return _external_transaction_history(
-            account_id=account_id,
-            limit=limit,
-            cursor=cursor,
-            lifecycle_state=lifecycle_state,
-            strategy_instance_id=strategy_instance_id,
-            run_id=run_id,
-        )
-    if origin is None:
+    if origin in {None, "external"}:
         return _all_transaction_history(
             account_id=account_id,
             limit=limit,
@@ -90,6 +80,9 @@ def sqlite_transaction_history(
             lifecycle_state=lifecycle_state,
             strategy_instance_id=strategy_instance_id,
             run_id=run_id,
+            from_ms=from_ms,
+            to_ms=to_ms,
+            origin=origin,
         )
     readers = _active_readers(account_id)
     if readers is None:
@@ -106,6 +99,8 @@ def sqlite_transaction_history(
             run_id=run_id,
             cursor=cursor,
             limit=limit,
+            from_ms=from_ms,
+            to_ms=to_ms,
         )
     except EconomicProjectionError as exc:
         raise ClerkTransactionProjectionUnavailable(
@@ -143,6 +138,8 @@ def _origin_filtered_operation_page(
     run_id: str | None,
     cursor: str | None,
     limit: int,
+    from_ms: int | None = None,
+    to_ms: int | None = None,
 ) -> tuple[list[ClerkTransactionSummaryRow], OperationPage, list[ProjectedOperation]]:
     """Scan raw operation pages until the origin-filtered page fills.
 
@@ -176,7 +173,11 @@ def _origin_filtered_operation_page(
         )
         for operation in page.operations:
             row = _summary_row(operation, account_id=account_id, execution_summaries=summaries)
-            if row.transaction_origin == origin:
+            if row.transaction_origin == origin and _in_history_window(
+                row.recorded_at_ms,
+                from_ms=from_ms,
+                to_ms=to_ms,
+            ):
                 rows.append(row)
                 matched_operations.append(operation)
         next_cursor = page.next_cursor
@@ -303,6 +304,9 @@ def _all_transaction_history(
     lifecycle_state: str | None,
     strategy_instance_id: str | None,
     run_id: str | None,
+    from_ms: int | None,
+    to_ms: int | None,
+    origin: TransactionOrigin | None,
 ) -> ClerkTransactionHistoryResponse | None:
     """Merge strategy operations and external observations under one keyset cursor.
 
@@ -320,6 +324,9 @@ def _all_transaction_history(
         "lifecycle_state": lifecycle_state,
         "strategy_instance_id": strategy_instance_id,
         "run_id": run_id,
+        "from_ms": from_ms,
+        "to_ms": to_ms,
+        "origin": origin,
     }
     cursor_key = _decode_all_history_cursor(
         cursor,
@@ -335,6 +342,9 @@ def _all_transaction_history(
         lifecycle_state=lifecycle_state,
         strategy_instance_id=strategy_instance_id,
         run_id=run_id,
+        from_ms=from_ms,
+        to_ms=to_ms,
+        origin=origin,
         cursor_key=cursor_key,
         limit=limit,
     )
@@ -460,6 +470,9 @@ def _all_history_pointers(
     lifecycle_state: str | None,
     strategy_instance_id: str | None,
     run_id: str | None,
+    from_ms: int | None,
+    to_ms: int | None,
+    origin: TransactionOrigin | None,
     cursor_key: tuple[int, str, str] | None,
     limit: int,
 ) -> tuple[list[tuple[int, str, str]], int]:
@@ -476,12 +489,29 @@ def _all_history_pointers(
         if value is not None:
             operation_clauses.append(f"{column} = ?")
             operation_params.append(value)
+    for operator, value in ((">=", from_ms), ("<=", to_ms)):
+        if value is not None:
+            operation_clauses.append(f"e.created_at_ms {operator} ?")
+            operation_params.append(value)
+    if origin == "external":
+        operation_clauses.append("0")
     external_clauses = [
         "EXISTS (SELECT 1 FROM custody_transitions observed "
         "WHERE observed.broker_order_id = eo.broker_order_id "
         "AND observed.transition_kind = 'EXTERNAL_ORDER_OBSERVED')"
     ]
-    if strategy_instance_id is not None or run_id is not None:
+    external_params: list[object] = []
+    external_recorded_at_ms = (
+        "(SELECT observed.recorded_at_ms FROM custody_transitions observed "
+        "WHERE observed.broker_order_id = eo.broker_order_id "
+        "AND observed.transition_kind = 'EXTERNAL_ORDER_OBSERVED' "
+        "ORDER BY observed.sequence ASC LIMIT 1)"
+    )
+    for operator, value in ((">=", from_ms), ("<=", to_ms)):
+        if value is not None:
+            external_clauses.append(f"{external_recorded_at_ms} {operator} ?")
+            external_params.append(value)
+    if origin not in {None, "external"} or strategy_instance_id is not None or run_id is not None:
         external_clauses.append("0")
     elif lifecycle_state == "review_required":
         external_clauses.append("eo.acknowledged_at_ms IS NULL")
@@ -544,7 +574,7 @@ def _all_history_pointers(
             ORDER BY recorded_at_ms DESC, source DESC, identity DESC
             LIMIT ?
             """,
-            (*operation_params, *cursor_params, limit + 1),
+            (*operation_params, *external_params, *cursor_params, limit + 1),
         ).fetchall()
         high_water = conn.execute(
             "SELECT COALESCE(MAX(sequence), 0) AS sequence FROM custody_transitions"
@@ -568,7 +598,7 @@ def _encode_all_history_cursor(
     identity: str,
     account_id: str,
     authority_generation: int,
-    filters: dict[str, str | None],
+    filters: dict[str, str | int | None],
 ) -> str:
     payload = json.dumps(
         {
@@ -591,7 +621,7 @@ def _decode_all_history_cursor(
     *,
     account_id: str,
     authority_generation: int,
-    filters: dict[str, str | None],
+    filters: dict[str, str | int | None],
 ) -> tuple[int, str, str] | None:
     if cursor is None:
         return None
@@ -617,66 +647,6 @@ def _decode_all_history_cursor(
         return recorded_at_ms, source, identity
     except (KeyError, TypeError, ValueError, UnicodeDecodeError) as exc:
         raise ValueError("transaction history cursor is invalid") from exc
-
-
-def _external_transaction_history(
-    *,
-    account_id: str,
-    limit: int,
-    cursor: str | None,
-    lifecycle_state: str | None,
-    strategy_instance_id: str | None,
-    run_id: str | None,
-) -> ClerkTransactionHistoryResponse | None:
-    """Read a bounded external-only transaction page from its separate fold.
-
-    External observations have their own source-native keyset cursor.  They
-    intentionally do not share a fabricated merge cursor with bot operations;
-    callers select this explicit origin page when reviewing account-scope
-    external evidence.
-    """
-    clerk = _active_clerk(account_id)
-    if clerk is None:
-        return None
-    if strategy_instance_id is not None or run_id is not None:
-        page_rows: tuple[ExternalOrderResource, ...] = ()
-        next_cursor = None
-    else:
-        reader = SqliteExternalOrderReader.from_repository(clerk.repository)
-        try:
-            page = reader.external_orders(
-                cursor=cursor,
-                page_size=limit,
-                lifecycle_state=lifecycle_state,
-            )
-        finally:
-            reader.close()
-        page_rows = page.orders
-        next_cursor = page.next_cursor
-    rows = [_external_summary_row(order, account_id=account_id) for order in page_rows]
-    return ClerkTransactionHistoryResponse(
-        projection_available=True,
-        canonical_fallback_required=False,
-        feed_state="live",
-        feed_headline="SQLite external-order projection live",
-        feed_detail=(
-            "This external-order page comes from the active Account Clerk's separate "
-            "external observation fold; no bot economics or retired Postgres projection was consulted."
-        ),
-        high_water_journal_seq=None,
-        lag_records=0,
-        lag_is_lower_bound=False,
-        custody_summary=ClerkCustodyWindowSummary(
-            record_count=len(rows),
-            a0_custody_accepted_count=0,
-            a1_broker_write_started_count=0,
-            a2_broker_known_count=0,
-            a3_economic_terminal_count=0,
-            uncertain_count=0,
-        ),
-        rows=rows,
-        next_cursor=next_cursor,
-    )
 
 
 def _external_summary_row(
@@ -788,6 +758,17 @@ def _external_observation_provenance(order: ExternalOrderResource) -> tuple[int,
             "External-order observation lacks durable transition provenance."
         )
     return order.observation_sequence, order.observation_recorded_at_ms
+
+
+def _in_history_window(
+    recorded_at_ms: int,
+    *,
+    from_ms: int | None,
+    to_ms: int | None,
+) -> bool:
+    return (from_ms is None or recorded_at_ms >= from_ms) and (
+        to_ms is None or recorded_at_ms <= to_ms
+    )
 
 
 def _summary_row(

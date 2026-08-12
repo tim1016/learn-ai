@@ -1,0 +1,19 @@
+<section class="portfolio-history" aria-labelledby="portfolio-history-heading">
+  <header class="portfolio-history__header">
+    <div>
+      <p class="eyebrow">Broker portfolio history</p>
+      <h2 id="portfolio-history-heading">{{ scopeLabel() }} equity curve</h2>
+    </div>
+    <p>Authoritative account equity reported by Alpaca.</p>
+  </header>
+
+  @if (unavailable()) {
+    <p class="state" role="alert">Broker portfolio history is unavailable right now.</p>
+  } @else if (history() === undefined) {
+    <p class="state" role="status">Loading broker portfolio history…</p>
+  } @else if (history()?.timestamps?.length === 0) {
+    <p class="state">Alpaca has not reported portfolio history for this window.</p>
+  } @else {
+    <div #chartContainer class="portfolio-history__chart" role="img" [attr.aria-label]="scopeLabel() + ' broker equity curve'"></div>
+  }
+</section>

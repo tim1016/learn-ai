@@ -8,6 +8,7 @@ translation — not any vendor. Grows one endpoint block per read-path slice.
 from __future__ import annotations
 
 from collections.abc import Generator
+from datetime import date
 from typing import Any
 
 import pytest
@@ -20,7 +21,9 @@ from app.broker.contract.models import (
     BrokerAsset,
     BrokerClockEvidence,
     BrokerOrder,
+    BrokerPortfolioHistory,
     BrokerPosition,
+    PortfolioHistoryRange,
 )
 from app.broker.contract.registry import (
     get_broker_registry,
@@ -78,6 +81,7 @@ class _FakePort:
         orders: list[BrokerOrder] | None = None,
         activities: list[BrokerActivity] | None = None,
         assets: list[BrokerAsset] | None = None,
+        portfolio_history: BrokerPortfolioHistory | None = None,
         clock: BrokerClockEvidence | None = None,
         error: BrokerError | None = None,
     ) -> None:
@@ -86,9 +90,12 @@ class _FakePort:
         self._orders = orders if orders is not None else []
         self._activities = activities if activities is not None else []
         self._assets = assets if assets is not None else []
+        self._portfolio_history = portfolio_history
         self._clock = clock
         self._error = error
         self.account_calls = 0
+        self.position_calls = 0
+        self.portfolio_history_calls = 0
         self.orders_call: dict[str, str | int | None] | None = None
         self.activities_call: dict[str, int | None] | None = None
         self.assets_call: dict[str, str | int | None] | None = None
@@ -101,9 +108,19 @@ class _FakePort:
         return self._account
 
     async def list_positions(self) -> list[BrokerPosition]:
+        self.position_calls += 1
         if self._error is not None:
             raise self._error
         return self._positions
+
+    async def get_portfolio_history(
+        self,
+        history_range: PortfolioHistoryRange,
+    ) -> BrokerPortfolioHistory:
+        assert history_range is PortfolioHistoryRange.THIRTY_DAYS
+        self.portfolio_history_calls += 1
+        assert self._portfolio_history is not None
+        return self._portfolio_history
 
     async def list_orders(
         self,
@@ -397,6 +414,62 @@ async def test_activities_endpoint_returns_list_and_forwards_query_params() -> N
     assert response.status_code == 200
     assert response.json()[0]["activity_id"] == "act-9"
     assert port.activities_call == {"after_ms": 999, "limit": 5}
+
+
+async def test_portfolio_history_proof_preserves_one_broker_snapshot_when_local_proof_is_unavailable() -> None:
+    history = BrokerPortfolioHistory(
+        timestamps=[1_700_000_000_000, 1_700_086_400_000],
+        equity=[10_000.0, 10_125.0],
+        profit_loss=[0.0, 125.0],
+        base_value=10_000.0,
+        timeframe="1D",
+    )
+    port = _FakePort(portfolio_history=history)
+    get_broker_registry().register(port)
+
+    response = await _get("/api/brokers/alpaca/portfolio-history-proof?range=30D")
+
+    assert response.status_code == 200
+    assert response.json()["history"] == history.model_dump(mode="json")
+    assert response.json()["attribution"] is None
+    assert response.json()["reconciliation"] is None
+    assert "SQLite Clerk authority is not active" in response.json()[
+        "proof_unavailable_reason"
+    ]
+    assert port.portfolio_history_calls == 1
+    assert port.position_calls == 1
+
+
+async def test_activities_current_session_uses_canonical_calendar_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.lean_sidecar.trading_calendar import SessionWindow
+
+    port = _FakePort(activities=[_activity(activity_id="act-session")])
+    get_broker_registry().register(port)
+    monkeypatch.setattr(
+        "app.routers.brokers.current_trading_session_window",
+        lambda _now_ms: SessionWindow(
+            session_date=date(2026, 8, 12),
+            open_ms_utc=1_786_540_200_000,
+            close_ms_utc=1_786_563_600_000,
+        ),
+    )
+
+    response = await _get("/api/brokers/alpaca/activities?current_session=true&limit=5")
+
+    assert response.status_code == 200
+    assert port.activities_call == {"after_ms": 1_786_540_200_000, "limit": 5}
+
+
+async def test_activities_rejects_mixed_explicit_and_session_windows() -> None:
+    get_broker_registry().register(_FakePort())
+
+    response = await _get(
+        "/api/brokers/alpaca/activities?current_session=true&after_ms=1"
+    )
+
+    assert response.status_code == 422
 
 
 @pytest.mark.parametrize(

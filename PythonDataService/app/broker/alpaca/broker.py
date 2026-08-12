@@ -22,7 +22,9 @@ from app.broker.contract.models import (
     BrokerClockEvidence,
     BrokerOrder,
     BrokerOrderLeg,
+    BrokerPortfolioHistory,
     BrokerPosition,
+    PortfolioHistoryRange,
 )
 from app.broker.contract.registry import BrokerRegistry, get_broker_registry
 
@@ -47,6 +49,12 @@ ALPACA_PAPER_CAPABILITIES = BrokerCapabilities(
     max_concurrent_streams=1,
     rest_rate_limit_per_min=200,
 )
+
+_PORTFOLIO_HISTORY_QUERY: dict[PortfolioHistoryRange, tuple[str, str]] = {
+    PortfolioHistoryRange.ONE_DAY: ("1D", "1Min"),
+    PortfolioHistoryRange.THIRTY_DAYS: ("30D", "1D"),
+    PortfolioHistoryRange.SIXTY_DAYS: ("60D", "1D"),
+}
 
 
 class AlpacaBroker:
@@ -113,6 +121,17 @@ class AlpacaBroker:
     async def get_clock_evidence(self) -> BrokerClockEvidence:
         payload = await self._client.get_clock()
         return adapter.from_alpaca_clock(payload)
+
+    async def get_portfolio_history(
+        self, history_range: PortfolioHistoryRange
+    ) -> BrokerPortfolioHistory:
+        """Return the custodian's portfolio curve at the range's safe resolution."""
+        period, timeframe = _PORTFOLIO_HISTORY_QUERY[history_range]
+        payload = await self._client.get_portfolio_history(
+            period=period,
+            timeframe=timeframe,
+        )
+        return adapter.from_alpaca_portfolio_history(payload)
 
     # ── Trade port (phase 2) ────────────────────────────────────────────────
 

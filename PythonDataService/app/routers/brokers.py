@@ -33,6 +33,10 @@ from app.broker.alpaca.clerk import (
     get_alpaca_clerk,
 )
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
+from app.broker.alpaca.clerk.sqlite.economic_projection import (
+    EconomicProjectionError,
+    MarketMark,
+)
 from app.broker.contract.errors import (
     BrokerError,
     BrokerRateLimited,
@@ -46,20 +50,32 @@ from app.broker.contract.models import (
     BrokerOrder,
     BrokerOrderGroup,
     BrokerOrderRequest,
+    BrokerPortfolioHistory,
     BrokerPosition,
+    PortfolioHistoryRange,
 )
 from app.broker.contract.ports import BrokerReadPort
 from app.broker.contract.registry import get_broker_registry
 from app.config import settings
+from app.lean_sidecar.trading_calendar import current_trading_session_window
+from app.schemas.account_pnl_attribution import (
+    AccountPnlAttributionResponse,
+    AccountPnlReconciliationResponse,
+    PortfolioHistoryProofResponse,
+)
 from app.security.data_plane_control import require_data_plane_control_secret
+from app.services.account_pnl_reconciliation import reconcile_broker_curve_to_local_pnl
 from app.services.broker_account_snapshot import resolve_broker_account_snapshot
 from app.services.broker_order_groups import group_orders_by_symbol
+from app.services.clerk_transaction_projection import ClerkTransactionProjectionUnavailable
+from app.services.sqlite_account_pnl_attribution import sqlite_account_pnl_attribution
 from app.services.sqlite_clerk_compat import (
     active_sqlite_facade,
     sqlite_clerk_status,
     sqlite_custody_diagnosis,
     sqlite_projection,
 )
+from app.utils.timestamps import now_ms_utc
 
 router = APIRouter(prefix="/api/brokers", tags=["brokers-v2"])
 
@@ -153,7 +169,18 @@ async def list_activities(
     broker: str,
     limit: int = Query(default=_DEFAULT_READ_LIMIT, ge=1, le=_MAX_ACTIVITY_LIMIT),
     after_ms: int | None = Query(default=None, ge=0, le=_MAX_INT64_MS),
+    current_session: bool = Query(default=False),
 ) -> list[BrokerActivity]:
+    if current_session and after_ms is not None:
+        raise HTTPException(
+            status_code=422,
+            detail="current_session and after_ms are mutually exclusive",
+        )
+    if current_session:
+        session = current_trading_session_window(now_ms_utc())
+        if session is None:
+            return []
+        after_ms = session.open_ms_utc
     return await _run(
         broker,
         lambda port: port.list_activities(after_ms=after_ms, limit=limit),
@@ -174,6 +201,96 @@ async def get_clock_evidence(broker: str) -> BrokerClockEvidence:
     # Vendor evidence only — the canonical calendar module remains the sole
     # authority for scheduled session structure (no authority change).
     return await _run(broker, lambda port: port.get_clock_evidence())
+
+
+@router.get("/{broker}/portfolio-history", response_model=BrokerPortfolioHistory)
+async def get_portfolio_history(
+    broker: str,
+    history_range: PortfolioHistoryRange = Query(alias="range"),
+) -> BrokerPortfolioHistory:
+    """Return the broker's authoritative account equity curve for one window."""
+    return await _run(broker, lambda port: port.get_portfolio_history(history_range))
+
+
+@router.get(
+    "/{broker}/portfolio-history-proof",
+    response_model=PortfolioHistoryProofResponse,
+)
+async def get_portfolio_history_proof(
+    broker: str,
+    history_range: PortfolioHistoryRange = Query(alias="range"),
+) -> PortfolioHistoryProofResponse:
+    """Bundle one C1 history snapshot with independent C2/C3 proof when available."""
+    history_result, positions_result = await asyncio.gather(
+        _run(broker, lambda port: port.get_portfolio_history(history_range)),
+        _run(broker, lambda port: port.list_positions()),
+        return_exceptions=True,
+    )
+    if isinstance(history_result, BaseException):
+        raise history_result
+    history = history_result
+    if isinstance(positions_result, BaseException):
+        return _history_without_proof(
+            history,
+            "Current positions were unavailable, so local FIFO proof could not be built.",
+        )
+    positions = positions_result
+    sqlite = active_sqlite_facade(broker)
+    if sqlite is None:
+        return _history_without_proof(
+            history,
+            "SQLite Clerk authority is not active for this broker.",
+        )
+    if not history.timestamps:
+        return _history_without_proof(
+            history,
+            "Broker portfolio history has no timestamps for the requested range.",
+        )
+    try:
+        attribution = await asyncio.to_thread(
+            sqlite_account_pnl_attribution,
+            account_id=sqlite.account_id,
+            from_ms=history.timestamps[0],
+            to_ms=history.timestamps[-1],
+            marks={
+                position.symbol.upper(): MarketMark(
+                    price=position.current_price,
+                    observed_at_ms=position.observed_at_ms,
+                )
+                for position in positions
+                if position.current_price is not None
+            },
+            position_quantities={
+                position.symbol.upper(): position.quantity for position in positions
+            },
+        )
+    except (ClerkTransactionProjectionUnavailable, EconomicProjectionError):
+        return _history_without_proof(
+            history,
+            "SQLite FIFO attribution is unavailable for this broker.",
+        )
+    if attribution is None:
+        return _history_without_proof(
+            history,
+            "SQLite Clerk authority changed while loading portfolio history proof.",
+        )
+    reconciliation = reconcile_broker_curve_to_local_pnl(history, attribution)
+    return PortfolioHistoryProofResponse(
+        history=history,
+        attribution=AccountPnlAttributionResponse.from_projection(attribution),
+        reconciliation=AccountPnlReconciliationResponse.from_result(reconciliation),
+    )
+
+
+def _history_without_proof(
+    history: BrokerPortfolioHistory,
+    reason: str,
+) -> PortfolioHistoryProofResponse:
+    """Preserve the C1 chart snapshot when independent proof is unavailable."""
+    return PortfolioHistoryProofResponse(
+        history=history,
+        proof_unavailable_reason=reason,
+    )
 
 
 def _require_trade_clerk(broker: str) -> AlpacaClerk:

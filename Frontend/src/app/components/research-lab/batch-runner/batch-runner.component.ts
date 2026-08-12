@@ -38,6 +38,7 @@ import {
 } from '../../../utils/run-log-buffer';
 import { RunProgressPanelComponent } from '../shared/run-progress-panel/run-progress-panel.component';
 import { MultiTickerRangePickerComponent } from '../../../shared/multi-ticker-range-picker/multi-ticker-range-picker.component';
+import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
 import type { MultiTickerRange } from '../../../shared/multi-ticker-range-picker/multi-ticker-range-picker.types';
 import type {
   Resolution,
@@ -161,6 +162,7 @@ interface CrossSectionalJobResultRaw {
     CardModule,
     RunProgressPanelComponent,
     MultiTickerRangePickerComponent,
+    AssetIdentityComponent,
   ],
   templateUrl: './batch-runner.component.html',
   styleUrl: './batch-runner.component.scss',

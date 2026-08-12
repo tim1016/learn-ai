@@ -30,6 +30,7 @@ import type {
   WalkForwardResponse,
   WalkForwardStatus,
 } from '../../../../services/walk-forward.types';
+import { AssetIdentityComponent } from '../../../../shared/asset-identity/asset-identity.component';
 import { TimestampDisplayPipe } from '../../../../shared/timestamp';
 import { createAppChart } from '../../../../shared/charts/chart-utils';
 
@@ -73,6 +74,7 @@ const COMBINED_CURVE_COLOR = '#a78bfa';
     TagModule,
     DecimalPipe,
     PercentPipe,
+    AssetIdentityComponent,
     TimestampDisplayPipe,
   ],
   templateUrl: './walk-forward-detail-page.component.html',

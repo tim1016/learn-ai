@@ -162,6 +162,8 @@ class PostgresClerkTransactionProjectionStore:
         lifecycle_state: str | None,
         strategy_instance_id: str | None,
         run_id: str | None,
+        from_ms: int | None = None,
+        to_ms: int | None = None,
     ) -> tuple[list[ClerkTransactionSummaryRow], int | None, int | None]:
         _ensure_configured()
         conn = await _connection()
@@ -169,7 +171,7 @@ class PostgresClerkTransactionProjectionStore:
             records = await conn.fetch(
                 "SELECT t.transaction_id, t.broker, t.account_id, t.journal_seq, t.recorded_at_ms, t.transaction_kind, t.transaction_origin, t.order_instruction, t.strategy_instance_id, t.run_id, t.intent_id, t.order_ref, t.order_id, t.perm_id, t.exec_id, t.native_order_id, t.native_execution_id, t.lifecycle_state, t.commission_status, t.fee, "
                 "(SELECT COUNT(*)::integer FROM clerk_transaction_events e WHERE e.transaction_id=t.transaction_id) AS event_count "
-                "FROM clerk_transactions t WHERE t.account_id=$1 AND ($2::bigint IS NULL OR (t.recorded_at_ms, t.journal_seq, t.transaction_id) < ($2,$3,$4)) AND ($6::text IS NULL OR t.transaction_origin=$6) AND ($7::text IS NULL OR t.lifecycle_state=$7) AND ($8::text IS NULL OR t.strategy_instance_id=$8) AND ($9::text IS NULL OR t.run_id=$9) "
+                "FROM clerk_transactions t WHERE t.account_id=$1 AND ($2::bigint IS NULL OR (t.recorded_at_ms, t.journal_seq, t.transaction_id) < ($2,$3,$4)) AND ($6::text IS NULL OR t.transaction_origin=$6) AND ($7::text IS NULL OR t.lifecycle_state=$7) AND ($8::text IS NULL OR t.strategy_instance_id=$8) AND ($9::text IS NULL OR t.run_id=$9) AND ($10::bigint IS NULL OR t.recorded_at_ms >= $10) AND ($11::bigint IS NULL OR t.recorded_at_ms <= $11) "
                 "ORDER BY t.recorded_at_ms DESC, t.journal_seq DESC, t.transaction_id DESC LIMIT $5",
                 account_id,
                 after[0] if after else None,
@@ -180,6 +182,8 @@ class PostgresClerkTransactionProjectionStore:
                 lifecycle_state,
                 strategy_instance_id,
                 run_id,
+                from_ms,
+                to_ms,
             )
             metadata = await conn.fetchrow(
                 "SELECT last_journal_seq AS high_water, NULL::bigint AS lag FROM clerk_transaction_projection_cursors WHERE account_id=$1 ORDER BY updated_at_ms DESC LIMIT 1",

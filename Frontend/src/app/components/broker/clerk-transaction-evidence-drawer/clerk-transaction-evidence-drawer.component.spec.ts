@@ -3,6 +3,7 @@ import { TestBed } from '@angular/core/testing';
 import { describe, expect, it, vi } from 'vitest';
 
 import type {
+  ClerkCustodyTimeline,
   ClerkTransactionDetail,
   ClerkTransactionSummary,
 } from '../../../api/clerk-transaction-history.types';
@@ -39,9 +40,10 @@ function detail(
   transactionId: string,
   receipt: Record<string, unknown>,
   events: ClerkTransactionDetail['events'] = [],
+  overrides: Partial<ClerkTransactionDetail> = {},
 ): ClerkTransactionDetail {
   const { event_count: _, ...transaction } = summary(accountId, transactionId);
-  return { ...transaction, receipt, events, custody_timeline: null };
+  return { ...transaction, receipt, events, custody_timeline: null, ...overrides };
 }
 
 function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value: T) => void } {
@@ -153,4 +155,96 @@ describe('ClerkTransactionEvidenceDrawerComponent', () => {
     expect(text).not.toContain('NO_LIVE_BINDING');
     expect(text).toContain('boot-a / 1, boot-b / 2');
   });
+
+  it('shows the custody lifecycle first and keeps evidence accordions collapsed until opened', async () => {
+    const broker = {
+      accountTransaction: vi.fn().mockResolvedValue(detail(
+        'DU1234567',
+        'ctxn_2',
+        { receipt_hash: 'receipt/opaque' },
+        [],
+        {
+          lifecycle_state: 'filled',
+          order_ref: 'order/opaque',
+          order_instruction: {
+            symbol: 'SPY',
+            sec_type: 'STK',
+            action: 'buy',
+            quantity: 2,
+            order_type: 'market',
+            limit_price: null,
+            stop_price: null,
+            time_in_force: 'day',
+            outside_rth: false,
+          },
+          execution_quantity: 2,
+          execution_price: 601.25,
+          custody_timeline: custodyTimeline(),
+        },
+      )),
+    };
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        { provide: BrokerService, useValue: broker },
+      ],
+    });
+    const fixture = TestBed.createComponent(ClerkTransactionEvidenceDrawerComponent);
+    fixture.componentRef.setInput('accountId', 'DU1234567');
+    fixture.componentRef.setInput('transaction', summary('DU1234567', 'ctxn_2'));
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const host = fixture.nativeElement as HTMLElement;
+    expect(host.querySelector('app-asset-identity')?.textContent).toContain('SPY');
+    expect(host.textContent).toContain('Custody lifecycle');
+    expect(host.textContent).toContain('Custody accepted');
+    expect(host.textContent).toContain('Economic terminal');
+
+    const instructionHeader = accordionHeader(host, 'Instruction and execution');
+    const eventsHeader = accordionHeader(host, 'Event log');
+    const rawHeader = accordionHeader(host, 'Raw receipt evidence');
+    expect(instructionHeader.getAttribute('aria-expanded')).toBe('false');
+    expect(eventsHeader.getAttribute('aria-expanded')).toBe('false');
+    expect(rawHeader.getAttribute('aria-expanded')).toBe('false');
+
+    instructionHeader.click();
+    fixture.detectChanges();
+    expect(instructionHeader.getAttribute('aria-expanded')).toBe('true');
+    expect(host.querySelector('.receipt-table')?.textContent).toContain('Requested instruction');
+  });
 });
+
+function accordionHeader(host: HTMLElement, label: string): HTMLElement {
+  const button = Array.from(host.querySelectorAll<HTMLElement>('[role="button"]')).find(
+    (candidate) => candidate.textContent?.includes(label),
+  );
+  if (button === undefined) throw new Error(`Accordion header not found: ${label}`);
+  return button;
+}
+
+function custodyTimeline(): ClerkCustodyTimeline {
+  return {
+    intent_created_at_ms: 1_780_000_000_000,
+    clerk_request_received_at_ms: 1_780_000_000_001,
+    clerk_intake_admitted_at_ms: 1_780_000_000_002,
+    inbox_fsynced_at_ms: 1_780_000_000_003,
+    a0_custody_accepted_at_ms: 1_780_000_000_004,
+    broker_write_started_at_ms: 1_780_000_000_005,
+    broker_call_returned_at_ms: 1_780_000_000_006,
+    broker_ack_recorded_at_ms: 1_780_000_000_007,
+    earliest_broker_source_at_ms: 1_780_000_000_008,
+    first_callback_arrived_at_ms: 1_780_000_000_009,
+    first_callback_recorded_at_ms: 1_780_000_000_010,
+    economic_terminal_recorded_at_ms: 1_780_000_000_011,
+    durations: {
+      request_to_intake_ms: 1,
+      intake_to_a0_ms: 2,
+      a0_to_broker_write_ms: 1,
+      broker_write_to_return_ms: 1,
+      broker_return_to_first_callback_ms: 2,
+      terminal_age_ms: 1,
+    },
+  };
+}

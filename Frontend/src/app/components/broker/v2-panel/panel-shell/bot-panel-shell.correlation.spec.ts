@@ -1,4 +1,5 @@
 import { Component, signal } from '@angular/core';
+import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { fireEvent, render, screen } from '@testing-library/angular';
 import { MessageService } from 'primeng/api';
@@ -24,12 +25,15 @@ import {
 } from '../../../../../../tests/fixtures/alpaca-clerk-ui-correlation.fixture';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import type { PanelAction } from '../lib/broker-v2-panel.types';
+import { DUAL_PANE_CHART_FACTORY } from '../dual-pane-chart/dual-pane-chart.component';
 import { BotPanelShellComponent } from './bot-panel-shell.component';
+
+const chartMocks = vi.hoisted(() => ({ createChart: vi.fn() }));
 
 vi.mock('lightweight-charts', () => {
   const series = { setData: vi.fn(), update: vi.fn(), applyOptions: vi.fn() };
   return {
-    createChart: vi.fn().mockReturnValue({
+    createChart: chartMocks.createChart.mockReturnValue({
       addSeries: vi.fn().mockReturnValue(series),
       timeScale: vi.fn().mockReturnValue({ fitContent: vi.fn() }),
       applyOptions: vi.fn(),
@@ -91,6 +95,10 @@ describe('BotPanelShellComponent #1413 correlation campaign', () => {
 
   beforeEach(() => {
     StubEventSource.instances = [];
+    TestBed.configureTestingModule({
+      providers: [{ provide: DUAL_PANE_CHART_FACTORY, useValue: chartMocks.createChart }],
+    });
+    chartMocks.createChart.mockClear();
   });
 
   afterAll(() => {

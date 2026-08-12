@@ -42,6 +42,9 @@ export class AccountDeskTransactionHistoryComponent {
   private readonly broker = inject(BrokerService);
   readonly accountId = input<string | null>(null);
   readonly refreshVersion = input(0);
+  /** Optional caller-owned UTC window; keeps a history list under its broker curve. */
+  readonly fromMs = input<number | null>(null);
+  readonly toMs = input<number | null>(null);
   private activeAccountId = this.store.accountId();
   readonly selectedTransaction = signal<ClerkTransactionSummary | null>(null);
   readonly receiptOpener = signal<HTMLElement | null>(null);
@@ -57,11 +60,19 @@ export class AccountDeskTransactionHistoryComponent {
     effect(() => {
       const accountId = this.accountId();
       this.refreshVersion();
+      const fromMs = this.fromMs();
+      const toMs = this.toMs();
       // `store.load` reads/writes its own signals (loadingState, accountKey)
       // in its synchronous prefix before its first await. Without untracked,
       // those reads are attributed to this effect, and the effect re-fires
       // every time load's own writes settle them — an unbounded reload loop.
-      if (accountId !== null) untracked(() => void this.store.load(accountId));
+      if (accountId !== null) {
+        untracked(() => void this.store.load(accountId, {
+          ...this.store.filters(),
+          fromMs,
+          toMs,
+        }));
+      }
     });
     effect(() => {
       const accountId = this.store.accountId();
@@ -105,6 +116,8 @@ export class AccountDeskTransactionHistoryComponent {
       lifecycleState: this.filterLifecycle(),
       strategyInstanceId: this.filterStrategy(),
       runId: this.filterRun(),
+      fromMs: this.fromMs(),
+      toMs: this.toMs(),
     };
     this.store.setFilters(filters);
   }
@@ -114,7 +127,7 @@ export class AccountDeskTransactionHistoryComponent {
     this.filterLifecycle.set('');
     this.filterStrategy.set('');
     this.filterRun.set('');
-    this.store.setFilters({});
+    this.store.setFilters({ fromMs: this.fromMs(), toMs: this.toMs() });
   }
 
   originLabel(row: ClerkTransactionSummary): string {

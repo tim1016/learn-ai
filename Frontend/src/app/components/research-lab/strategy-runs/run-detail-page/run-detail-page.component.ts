@@ -34,6 +34,7 @@ import type {
 import { BaselinesSectionComponent } from './baselines-section/baselines-section.component';
 import { MonteCarloSectionComponent } from './monte-carlo-section/monte-carlo-section.component';
 import { WalkForwardSectionComponent } from './walk-forward-section/walk-forward-section.component';
+import { AssetIdentityComponent } from '../../../../shared/asset-identity/asset-identity.component';
 import { TimestampDisplayPipe } from '../../../../shared/timestamp';
 
 const CHART_THEME = {
@@ -78,6 +79,7 @@ const DRAWDOWN_COLOR = '#f87171';
     TagModule,
     DecimalPipe,
     PercentPipe,
+    AssetIdentityComponent,
     TimestampDisplayPipe,
     WalkForwardSectionComponent,
     MonteCarloSectionComponent,

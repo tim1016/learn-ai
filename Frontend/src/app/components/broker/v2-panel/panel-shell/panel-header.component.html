@@ -5,7 +5,7 @@
         {{ panel().broker | receiptLabel }} bots
       </a>
       <span aria-hidden="true">/</span>
-      <span>{{ panel().symbol }}</span>
+      <app-asset-identity [symbol]="panel().symbol" size="sm" />
     </div>
     <div class="control-header__updated">
       Updated <app-timestamp-display [value]="panel().updated_at_ms" mode="local" />
@@ -20,7 +20,7 @@
           @if (tickerQuote(); as quote) {
             <app-ticker-quote [quote]="quote" size="lg" />
           } @else {
-            {{ panel().symbol }}
+            <app-asset-identity [symbol]="panel().symbol" />
           }
         </h1>
         <code>{{ panel().strategy_instance_id }}</code>

@@ -65,6 +65,15 @@ export class AlpacaSqliteCustodyComponent {
     return error instanceof HttpErrorResponse && error.status === 409;
   });
 
+  /**
+   * Executes an exact capability already presented by the current Clerk
+   * projection. The operator posture uses this to keep diagnosis and repair
+   * in one place without recreating confirmation or concurrency handling.
+   */
+  requestPresentedAction(action: SqliteRecoveryAction): void {
+    if (action.available && this.busyActionId() === null) void this.runAction(action);
+  }
+
   constructor() {
     effect(() => {
       if (this.projection.hasValue()) {

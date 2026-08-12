@@ -1,7 +1,11 @@
 import { render, screen } from '@testing-library/angular';
-import { describe, it, expect, vi } from 'vitest';
+import { TestBed } from '@angular/core/testing';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { TraderLensComponent } from './trader-lens.component';
 import type { BotPanelView, PanelProfile, ChartLiveResponse } from '../lib/broker-v2-panel.types';
+import { DUAL_PANE_CHART_FACTORY } from '../dual-pane-chart/dual-pane-chart.component';
+
+const chartMocks = vi.hoisted(() => ({ createChart: vi.fn() }));
 
 // DualPaneChartComponent uses lightweight-charts — mock for unit tests.
 vi.mock('lightweight-charts', () => {
@@ -15,10 +19,17 @@ vi.mock('lightweight-charts', () => {
     remove: vi.fn(),
   });
   return {
-    createChart: vi.fn().mockImplementation(() => createMockChart()),
+    createChart: chartMocks.createChart.mockImplementation(() => createMockChart()),
     createSeriesMarkers,
     CandlestickSeries: 'CandlestickSeries',
   };
+});
+
+beforeEach(() => {
+  TestBed.configureTestingModule({
+    providers: [{ provide: DUAL_PANE_CHART_FACTORY, useValue: chartMocks.createChart }],
+  });
+  chartMocks.createChart.mockClear();
 });
 
 const PROFILE: PanelProfile = {

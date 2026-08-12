@@ -241,6 +241,24 @@ describe('DashboardComponent', () => {
     const secondRow = rows[1].textContent ?? '';
     expect(secondRow).toContain('MSFT');
     expect(secondRow).toContain('Sell');
+
+    const identities = el.querySelectorAll('app-asset-identity');
+    expect(identities).toHaveLength(2);
+    expect(identities[0].textContent).toContain('AAPL');
+    expect(identities[1].textContent).toContain('MSFT');
+  });
+
+  it('preserves the opaque ticker ID when trade metadata is unavailable', () => {
+    hostFixture.detectChanges();
+    flushDashboardLoad({
+      ...mockState,
+      recentTrades: [{ ...mockState.recentTrades[0], ticker: undefined }],
+    });
+    hostFixture.detectChanges();
+
+    const el = getDashboardEl();
+    expect(el.textContent).toContain('ID:1');
+    expect(el.querySelector('app-asset-identity')).toBeNull();
   });
 
   it('should render trade table headers', () => {

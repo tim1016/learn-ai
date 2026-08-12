@@ -227,7 +227,7 @@ describe('StrategyValidationComponent', () => {
     const link = await screen.findByRole('link', { name: /Deploy strategy/ });
 
     expect(link.getAttribute('href'))
-      .toBe('/brokers/alpaca/deploy?strategy=deployment_validation');
+      .toBe('/brokers/alpaca?deploy=&strategy=deployment_validation');
   });
 
   it('does not treat deploy binding as a LEAN validator when validator evidence is missing', async () => {

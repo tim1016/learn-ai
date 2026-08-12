@@ -10,7 +10,7 @@
         />
       </div>
       <div class="rd-meta">
-        <span><strong>Symbol:</strong> {{ data.ledger.symbol }}</span>
+        <span><strong>Symbol:</strong> <app-asset-identity [symbol]="data.ledger.symbol" size="sm" /></span>
         <span><strong>Resolution:</strong> {{ data.ledger.resolution_minutes }}m</span>
         <span>
           <strong>Window:</strong>

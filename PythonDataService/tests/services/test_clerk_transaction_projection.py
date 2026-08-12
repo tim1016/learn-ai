@@ -201,6 +201,8 @@ class _Store:
         lifecycle_state=None,
         strategy_instance_id=None,
         run_id=None,
+        from_ms=None,
+        to_ms=None,
     ):
         assert account_id == ACCOUNT
         rows = sorted(self.rows, key=lambda row: (row.recorded_at_ms, row.journal_seq, row.transaction_id), reverse=True)

@@ -73,7 +73,7 @@ describe('AccountDeskTransactionHistoryComponent', () => {
     const row = screen.getByRole('button', { name: /open receipt manual\/v1:opaque/i });
     fireEvent.click(row);
     expect(detail).toHaveBeenCalledWith('DU1234567', 'ctxn_1');
-    expect(await screen.findByText('Projected transaction evidence')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Custody receipt' })).toBeTruthy();
     expect(screen.getAllByText('manual/v1:opaque').length).toBeGreaterThan(0);
     expect(screen.getAllByText('sha256:opaque').length).toBeGreaterThan(0);
     expect(screen.getByText('Account Clerk Unavailable')).toBeTruthy();

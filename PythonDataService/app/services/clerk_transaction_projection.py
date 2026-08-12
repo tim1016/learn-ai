@@ -122,6 +122,8 @@ class ClerkTransactionProjectionStore(Protocol):
         lifecycle_state: str | None,
         strategy_instance_id: str | None,
         run_id: str | None,
+        from_ms: int | None = None,
+        to_ms: int | None = None,
     ) -> tuple[list[ClerkTransactionSummaryRow], int | None, int | None]: ...
 
     async def transaction_detail(
@@ -917,6 +919,8 @@ async def transaction_history(
     lifecycle_state: str | None = None,
     strategy_instance_id: str | None = None,
     run_id: str | None = None,
+    from_ms: int | None = None,
+    to_ms: int | None = None,
     store: ClerkTransactionProjectionStore | None = None,
 ) -> ClerkTransactionHistoryResponse:
     resolved_store = store or _default_store()
@@ -928,6 +932,8 @@ async def transaction_history(
         lifecycle_state=lifecycle_state,
         strategy_instance_id=strategy_instance_id,
         run_id=run_id,
+        from_ms=from_ms,
+        to_ms=to_ms,
     )
     feed_state, feed_headline, feed_detail, status_high_water, status_lag, lag_is_lower_bound = (
         await resolved_store.feed_status(account_id)

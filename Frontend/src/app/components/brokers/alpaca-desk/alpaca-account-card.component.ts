@@ -5,6 +5,7 @@ import { TagModule } from 'primeng/tag';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import { BrokersService } from '../../../services/brokers.service';
+import { AlpacaDeskAccountDataService } from './alpaca-desk-account-data.service';
 
 /**
  * Alpaca account summary card (equity / cash / buying power / status).
@@ -20,11 +21,12 @@ import { BrokersService } from '../../../services/brokers.service';
   host: { class: 'block' },
 })
 export class AlpacaAccountCardComponent {
+  private readonly deskAccount = inject(AlpacaDeskAccountDataService, { optional: true });
   private readonly brokers = inject(BrokersService);
 
   protected readonly expanded = signal(false);
 
-  protected readonly account = resource({
+  protected readonly account = this.deskAccount?.account ?? resource({
     loader: () => this.brokers.getAccount(),
   });
 }
