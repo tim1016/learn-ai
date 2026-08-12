@@ -3,6 +3,7 @@ import { RouterLink } from '@angular/router';
 
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
+import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 import { fmtInteger, fmtSignedCurrency, fmtSignedQuantity } from '../../format';
 import { BotStatusChipComponent } from '../bot-status-chip/bot-status-chip.component';
 import type { ActionId, BotCatalogView } from '../lib/broker-v2-panel.types';
@@ -22,7 +23,7 @@ interface StatusOption {
 @Component({
   selector: 'app-bots-roster',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, ReceiptLabelPipe, BotStatusChipComponent, TimestampDisplayComponent],
+  imports: [RouterLink, ReceiptLabelPipe, BotStatusChipComponent, TimestampDisplayComponent, AssetIdentityComponent],
   templateUrl: './bots-roster.component.html',
   styleUrl: './bots-roster.component.scss',
   host: { class: 'flex min-h-0 flex-1 flex-col' },

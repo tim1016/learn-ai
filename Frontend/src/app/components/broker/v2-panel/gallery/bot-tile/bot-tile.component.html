@@ -5,7 +5,7 @@
       [class.bot-tile__dot--running]="bot().running"
       aria-hidden="true"
     ></span>
-    <span class="bot-tile__symbol">{{ bot().symbol }}</span>
+    <app-asset-identity class="bot-tile__symbol" [symbol]="bot().symbol" size="sm" />
     <span class="bot-tile__label">{{ bot().label }}</span>
     <span class="bot-tile__price">{{ formattedPrice() }}</span>
     <span

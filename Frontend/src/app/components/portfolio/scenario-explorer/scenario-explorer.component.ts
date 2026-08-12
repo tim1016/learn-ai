@@ -5,11 +5,12 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { catchError, finalize, of } from 'rxjs';
 import { PortfolioService } from '../../../services/portfolio.service';
 import { ScenarioResult } from '../../../graphql/portfolio-types';
+import { AssetIdentityComponent } from '../../../shared/asset-identity';
 
 @Component({
   selector: 'app-scenario-explorer',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, AssetIdentityComponent],
   templateUrl: './scenario-explorer.component.html',
   styleUrls: ['./scenario-explorer.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,

@@ -118,7 +118,13 @@
           <tbody>
             @for (trade of s.recentTrades; track trade.id) {
               <tr>
-                <td>{{ trade.ticker?.symbol ?? 'ID:' + trade.tickerId }}</td>
+                <td>
+                  @if (trade.ticker; as ticker) {
+                    <app-asset-identity [symbol]="ticker.symbol" [name]="ticker.name" size="sm" />
+                  } @else {
+                    {{ 'ID:' + trade.tickerId }}
+                  }
+                </td>
                 <td [class.buy]="trade.side === 'Buy'" [class.sell]="trade.side === 'Sell'">{{ trade.side }}</td>
                 <td>{{ trade.quantity }}</td>
                 <td>${{ trade.price | number:'1.2-2' }}</td>

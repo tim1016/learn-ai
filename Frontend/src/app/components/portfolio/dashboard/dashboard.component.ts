@@ -5,11 +5,12 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { catchError, finalize, of, forkJoin } from 'rxjs';
 import { PortfolioService } from '../../../services/portfolio.service';
 import { PortfolioState, PortfolioValuation, PortfolioMetrics } from '../../../graphql/portfolio-types';
+import { AssetIdentityComponent } from '../../../shared/asset-identity';
 
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, AssetIdentityComponent],
   templateUrl: './dashboard.component.html',
   styleUrls: ['./dashboard.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,

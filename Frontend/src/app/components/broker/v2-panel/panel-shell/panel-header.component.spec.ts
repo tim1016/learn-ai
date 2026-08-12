@@ -135,9 +135,10 @@ async function renderHeader(value: BotPanelView, actionPending = false) {
 
 describe('PanelHeaderComponent', () => {
   it('renders the canonical ticker and an account-scoped manual-order route', async () => {
-    await renderHeader(panel());
+    const { container } = await renderHeader(panel());
 
     expect(await screen.findByTitle(/NVDA —/i)).toBeTruthy();
+    expect(container.querySelector('app-asset-identity')?.textContent).toContain('NVDA');
     expect(screen.getByText('$181.42')).toBeTruthy();
     expect(screen.getByText('+1.35%')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Manual order' }).getAttribute('href')).toBe(

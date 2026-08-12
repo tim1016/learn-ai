@@ -21,6 +21,7 @@ import {
 } from '../../../../shared/ticker-quote/ticker-quote.component';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
+import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
 import { MarketDataService } from '../../../../services/market-data.service';
 import { buildManualOrderTicketNavigation } from '../../lib/manual-order-navigation';
@@ -39,6 +40,7 @@ const RUNNING_STOP_ACTION_IDS: readonly ActionId[] = [
     RouterLink,
     TimestampDisplayComponent,
     TickerQuoteComponent,
+    AssetIdentityComponent,
   ],
   templateUrl: './panel-header.component.html',
   styleUrl: './panel-header.component.scss',

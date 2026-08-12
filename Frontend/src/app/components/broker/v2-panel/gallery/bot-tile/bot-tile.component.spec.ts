@@ -70,7 +70,7 @@ function routerProvider(navigate = vi.fn().mockResolvedValue(true)) {
 
 describe('BotTileComponent', () => {
   it('renders the header identity, live price, and a green delta on an up day', async () => {
-    await render(BotTileComponent, {
+    const { container } = await render(BotTileComponent, {
       inputs: {
         bot: bot(),
         bars: [
@@ -84,6 +84,7 @@ describe('BotTileComponent', () => {
     });
 
     expect(screen.getByText('SPY')).toBeTruthy();
+    expect(container.querySelector('app-asset-identity')?.textContent).toContain('SPY');
     expect(screen.getByText('ORB breakout')).toBeTruthy();
     expect(screen.getByText('$110.00')).toBeTruthy();
     const delta = screen.getByText('+10.00%');

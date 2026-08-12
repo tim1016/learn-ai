@@ -38,7 +38,13 @@
         @for (pos of filteredPositions; track pos.id) {
           <tr class="position-row" (click)="toggleExpand(pos.id)">
             <td class="expand-icon">{{ expandedId() === pos.id ? '▼' : '▶' }}</td>
-            <td class="symbol">{{ pos.ticker?.symbol ?? 'ID:' + pos.tickerId }}</td>
+            <td class="symbol">
+              @if (pos.ticker; as ticker) {
+                <app-asset-identity [symbol]="ticker.symbol" [name]="ticker.name" size="sm" />
+              } @else {
+                {{ 'ID:' + pos.tickerId }}
+              }
+            </td>
             <td>{{ pos.assetType }}</td>
             <td>{{ pos.netQuantity }}</td>
             <td>${{ pos.avgCostBasis | number:'1.2-4' }}</td>

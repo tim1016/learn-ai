@@ -6,6 +6,7 @@ import {
   signal,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { ReliabilityDiagramComponent } from './reliability-diagram/reliability-diagram.component';
 import { AccuracyHeatmapComponent } from './accuracy-heatmap/accuracy-heatmap.component';
 
@@ -64,7 +65,7 @@ export interface InsightSummaryData {
 @Component({
   selector: 'app-insight-panel',
   standalone: true,
-  imports: [CommonModule, ReliabilityDiagramComponent, AccuracyHeatmapComponent],
+  imports: [CommonModule, AssetIdentityComponent, ReliabilityDiagramComponent, AccuracyHeatmapComponent],
   templateUrl: './insight-panel.component.html',
   styleUrls: ['./insight-panel.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
