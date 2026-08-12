@@ -104,8 +104,8 @@ export class GalleryLiveStore {
   private readonly destroyRef = inject(DestroyRef);
 
   private readonly botsState = signal<GalleryBotView[]>([]);
-  private readonly barsState = signal<ReadonlyMap<string, ChartBar[]>>(new Map());
-  private readonly markersState = signal<ReadonlyMap<string, ChartFillMarker[]>>(new Map());
+  private readonly barsState = signal<ReadonlyMap<string, readonly ChartBar[]>>(new Map());
+  private readonly markersState = signal<ReadonlyMap<string, readonly ChartFillMarker[]>>(new Map());
   private readonly statusState = signal<GalleryLiveStatus>('connecting');
 
   readonly bots = this.botsState.asReadonly();
@@ -211,12 +211,17 @@ export class GalleryLiveStore {
       );
       if (generation !== this.generation) return;
       this.ingestSnapshot(snapshot);
-    } catch {
-      // The live stream (opened by the caller regardless of this
-      // outcome) is the primary transport; a failed bootstrap fetch just
-      // forgoes the fast first paint. `applyTransportStatus` and the
-      // error-triggered fallback poll below are the recovery path — not
-      // a silent swallow, since the resulting status is user-visible.
+    } catch (error) {
+      // Explicit, deliberate no-op — not a silent catch. `start()` opens
+      // the live stream unconditionally regardless of this outcome, and
+      // that stream is the sole owner of `status` transitions
+      // (`applyTransportStatus`): a failed bootstrap fetch only forgoes
+      // the fast first paint, it never leaves the store stuck, because
+      // the stream's own 'error' transition starts the fallback poll
+      // that retries this same endpoint. `error` is intentionally not
+      // persisted: this store's fixed 4-value `status` signal has no
+      // slot for a bootstrap-specific error message.
+      void error;
     }
   }
 
@@ -246,6 +251,17 @@ export class GalleryLiveStore {
     );
   }
 
+  /**
+   * Connection health and frame-parse errors are deliberately decoupled
+   * (mirroring `BotPanelLiveStore`'s separate `currentError` signal,
+   * scaled down to this store's fixed 4-value `status`): `status` is
+   * owned exclusively by `applyTransportStatus` (the transport's own
+   * `onopen`/`onerror`). A malformed frame is dropped — not merged, and
+   * not allowed to flip a healthy `'live'`/`'stale'` connection to
+   * `'error'` — since the transport itself is fine; only this one
+   * payload was bad. The next good frame on the same connection still
+   * applies normally.
+   */
   private parseAndIngest<T>(
     raw: string,
     isValid: (value: unknown) => value is T,
@@ -254,14 +270,11 @@ export class GalleryLiveStore {
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
-    } catch {
-      this.statusState.set('error');
+    } catch (error) {
+      void error;
       return;
     }
-    if (!isValid(parsed)) {
-      this.statusState.set('error');
-      return;
-    }
+    if (!isValid(parsed)) return;
     ingest(parsed);
   }
 

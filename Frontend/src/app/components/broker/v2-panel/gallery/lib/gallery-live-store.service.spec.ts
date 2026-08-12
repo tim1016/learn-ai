@@ -219,6 +219,44 @@ describe('GalleryLiveStore', () => {
       expect(store.status()).toBe('stale');
     });
 
+    it('drops a malformed frame without disturbing status, and still applies the next good frame', async () => {
+      const store = TestBed.inject(GalleryLiveStore);
+      const http = TestBed.inject(HttpTestingController);
+
+      const starting = store.start('alpaca', 'PA-1');
+      http.expectOne('/api/brokers/alpaca/accounts/PA-1/gallery/snapshot').flush(snapshot());
+      await starting;
+
+      const source = StubEventSource.instances[0];
+      source.emit('open');
+      expect(store.status()).toBe('live');
+
+      // Invalid JSON.
+      source.emit('update', '{not-valid-json');
+      expect(store.status()).toBe('live');
+
+      // Valid JSON, wrong shape.
+      source.emit('update', JSON.stringify({ nonsense: true }));
+      expect(store.status()).toBe('live');
+
+      // A well-formed frame right after two bad ones still applies —
+      // connection health and frame-parse errors are decoupled.
+      source.emit(
+        'update',
+        JSON.stringify({
+          surface_version: 2,
+          as_of_ms: 1,
+          symbols: [{ symbol: 'SPY', bars: [bar(3_000)] }],
+          markers_delta: {},
+          bots_delta: [bot('sid-9')],
+          removed_sids: [],
+        }),
+      );
+      expect(store.status()).toBe('live');
+      expect(store.bots().map((b) => b.sid)).toEqual(['sid-1', 'sid-2', 'sid-9']);
+      expect(store.barsBySymbol().get('SPY')?.map((b) => b.start_ms)).toEqual([1_000, 2_000, 3_000]);
+    });
+
     it('falls back to 5s polling while the stream is erroring and stops once it reopens', async () => {
       vi.useFakeTimers();
       const store = TestBed.inject(GalleryLiveStore);
@@ -261,6 +299,30 @@ describe('GalleryLiveStore', () => {
         .flush(snapshot({ stream_epoch: 'epoch-b', bots: [bot('sid-only')] }));
       await second;
       expect(store.bots().map((b) => b.sid)).toEqual(['sid-only']);
+    });
+
+    it('preserves state across a same-identity restart instead of clearing it', async () => {
+      const store = TestBed.inject(GalleryLiveStore);
+      const http = TestBed.inject(HttpTestingController);
+
+      const first = store.start('alpaca', 'PA3');
+      http.expectOne('/api/brokers/alpaca/accounts/PA3/gallery/snapshot').flush(snapshot());
+      await first;
+      expect(store.bots().length).toBe(2);
+      expect(store.barsBySymbol().get('SPY')?.length).toBe(2);
+
+      const second = store.start('alpaca', 'PA3');
+      // Unlike the identity-change case above, restarting against the
+      // *same* (broker, accountId) must not blank the wall while the
+      // restart's bootstrap is in flight.
+      expect(store.bots().length).toBe(2);
+      expect(store.barsBySymbol().get('SPY')?.length).toBe(2);
+
+      http
+        .expectOne('/api/brokers/alpaca/accounts/PA3/gallery/snapshot')
+        .flush(snapshot({ surface_version: 2 }));
+      await second;
+      expect(store.bots().length).toBe(2);
     });
   });
 });
