@@ -21,8 +21,10 @@ from __future__ import annotations
 from typing import Protocol
 
 from app.schemas.broker_v2_gallery import (
+    GalleryBotDelta,
     GalleryBotView,
     GalleryLiveSnapshot,
+    GalleryLiveUpdate,
     GalleryPrimaryAction,
     GallerySymbolBars,
 )
@@ -81,6 +83,7 @@ class GalleryHub:
         self._aggregator = aggregator
         self._epoch = f"{broker}:{account_id}"
         self._version = 0
+        self._last_sids: set[str] = set()
 
     def _primary_action(self, row: BotCatalogView) -> GalleryPrimaryAction:
         # running -> Stop, otherwise Resume. Enablement/disabled_reason nuance
@@ -93,8 +96,11 @@ class GalleryHub:
             disabled_reason=None,
         )
 
-    def _project_bot(self, row: BotCatalogView) -> GalleryBotView:
-        return GalleryBotView(
+    def _project_bot(
+        self, row: BotCatalogView, *, model: type[GalleryBotView] = GalleryBotView
+    ) -> GalleryBotView:
+        """Project one catalog row into ``model`` (``GalleryBotView`` or its ``GalleryBotDelta`` subtype)."""
+        return model(
             sid=row.strategy_instance_id,
             symbol=row.symbol,
             label=getattr(row, "strategy_label", ""),
@@ -126,6 +132,7 @@ class GalleryHub:
             symbol_bars.append(
                 GallerySymbolBars(symbol=symbol, bars=aggregator_bars_to_chart_bars(raw))
             )
+        self._last_sids = {row.strategy_instance_id for row in running}
         self._version += 1
         return GalleryLiveSnapshot(
             stream_epoch=self._epoch,
@@ -135,4 +142,38 @@ class GalleryHub:
             bots=[self._project_bot(row) for row in running],
             symbols=symbol_bars,
             markers={},
+        )
+
+    async def build_update(self, since_bar_ms: dict[str, int]) -> GalleryLiveUpdate:
+        """Build one incremental update: new bars per symbol + bot deltas + removals.
+
+        Mirrors ``build_snapshot``'s subscribe-then-read loop, but each running
+        symbol's bars are read with ``since_ms=since_bar_ms.get(symbol)`` so the
+        aggregator returns only bars appended since the caller's last-seen bar.
+        Every running bot is re-projected into ``bots_delta`` (no dirty-tracking
+        yet). ``removed_sids`` diffs the previous call's running-bot roster
+        (tracked in ``self._last_sids``, seeded by ``build_snapshot``) against
+        this one. ``markers_delta`` is left empty — see module docstring.
+        """
+        catalog = await self._catalog_source.get_catalog(self._broker, self._account_id)
+        running = [row for row in catalog if getattr(row, "running", False)]
+        symbols = running_symbols(catalog)
+        symbol_bars: list[GallerySymbolBars] = []
+        for symbol in symbols:
+            await self._aggregator.ensure_subscribed(symbol)
+            raw = self._aggregator.snapshot(symbol, since_ms=since_bar_ms.get(symbol))
+            symbol_bars.append(
+                GallerySymbolBars(symbol=symbol, bars=aggregator_bars_to_chart_bars(raw))
+            )
+        current_sids = {row.strategy_instance_id for row in running}
+        removed_sids = sorted(self._last_sids - current_sids)
+        self._last_sids = current_sids
+        self._version += 1
+        return GalleryLiveUpdate(
+            surface_version=self._version,
+            as_of_ms=now_ms_utc(),
+            symbols=symbol_bars,
+            markers_delta={},
+            bots_delta=[self._project_bot(row, model=GalleryBotDelta) for row in running],
+            removed_sids=removed_sids,
         )

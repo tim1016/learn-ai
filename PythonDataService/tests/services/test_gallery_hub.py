@@ -101,3 +101,37 @@ async def test_build_snapshot_subscribes_once_per_symbol_and_projects_bots() -> 
     assert snap.surface_version == 1
     assert snap.resolution == "1m"
     assert aggregator.subscribed == ["SPY"]  # subscribed exactly once
+
+
+@pytest.mark.asyncio
+async def test_build_update_returns_only_new_bars_and_bumps_version() -> None:
+    rows = [_Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12)]
+    agg = _FakeAggregator()
+    hub = GalleryHub(broker="alpaca", account_id="PA3", catalog_source=_FakeCatalogSource(rows), aggregator=agg)
+
+    first = await hub.build_snapshot()
+    upd = await hub.build_update(since_bar_ms={"SPY": 1_700_000_060_000})
+
+    assert upd.surface_version == first.surface_version + 1
+    assert all(b.symbol == "SPY" for b in upd.symbols)
+    assert upd.bots_delta[0].sid == "Aug11-02"
+    assert upd.markers_delta == {}
+    assert upd.removed_sids == []
+
+
+@pytest.mark.asyncio
+async def test_build_update_removed_sids_when_bot_stops_between_calls() -> None:
+    rows = [
+        _Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12),
+        _Cat2("Aug11-03", "SPY", True, 10.0, 0.0, 3),
+    ]
+    agg = _FakeAggregator()
+    hub = GalleryHub(broker="alpaca", account_id="PA3", catalog_source=_FakeCatalogSource(rows), aggregator=agg)
+    await hub.build_snapshot()
+
+    rows[1].running = False  # bot stops between snapshot and update
+
+    upd = await hub.build_update(since_bar_ms={})
+
+    assert upd.removed_sids == ["Aug11-03"]
+    assert {b.sid for b in upd.bots_delta} == {"Aug11-02"}
