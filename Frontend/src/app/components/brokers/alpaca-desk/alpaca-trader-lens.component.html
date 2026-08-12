@@ -1,0 +1,56 @@
+<section id="alpaca-trader-panel" class="trader-lens" role="tabpanel" aria-labelledby="alpaca-trader-tab">
+  <header class="trader-lens__header">
+    <div>
+      <p class="eyebrow">Account outcomes</p>
+      <h2>Trader desk</h2>
+      <p class="trader-lens__intro">A live view of your Alpaca account, activity, and open exposure.</p>
+    </div>
+
+    <div class="scope-control" aria-label="Account history scope">
+      @for (scopeOption of scopeOptions; track scopeOption) {
+        <button
+          type="button"
+          [class.scope-control__button--active]="scope() === scopeOption"
+          [attr.aria-pressed]="scope() === scopeOption"
+          (click)="selectScope(scopeOption)"
+        >{{ scopeLabels[scopeOption] }}</button>
+      }
+    </div>
+  </header>
+
+  @switch (scope()) {
+    @case ('today') {
+      <app-alpaca-trader-hero
+        [account]="account()"
+        [positions]="positions()"
+        [positionsUnavailable]="positionsUnavailable()"
+        [activities]="activities()"
+        [activitiesUnavailable]="activitiesUnavailable()"
+      />
+      <app-alpaca-trader-activity-timeline
+        [activities]="activities()"
+        [unavailable]="activitiesUnavailable()"
+      />
+      <section class="positions-section" aria-labelledby="open-positions-heading">
+        <header class="positions-section__header">
+          <div>
+            <p class="eyebrow">Portfolio</p>
+            <h2 id="open-positions-heading">Open positions</h2>
+          </div>
+          <p>Live market values from Alpaca.</p>
+        </header>
+        <app-alpaca-positions-table />
+      </section>
+    }
+    @default {
+      <section class="history-placeholder" aria-live="polite">
+        <p class="eyebrow">History</p>
+        <h2>{{ scopeLabels[scope()] }} account history</h2>
+        <p>
+          Broker portfolio history for this window will appear here when the account-history
+          connection is available.
+        </p>
+      </section>
+    }
+  }
+</section>

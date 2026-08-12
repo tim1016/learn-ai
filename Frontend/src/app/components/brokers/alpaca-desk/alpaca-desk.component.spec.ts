@@ -29,6 +29,8 @@ function brokerService() {
       created_at_ms: null,
       observed_at_ms: 1,
     }),
+    listPositions: vi.fn().mockResolvedValue([]),
+    listActivities: vi.fn().mockResolvedValue([]),
     getClerkStatus: vi.fn().mockResolvedValue({
       broker: 'alpaca',
       account_id: 'PA1',

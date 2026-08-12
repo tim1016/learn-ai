@@ -4,6 +4,7 @@ import { firstValueFrom } from 'rxjs';
 
 import type {
   BrokerAccountSnapshot,
+  BrokerActivity,
   BrokerOrder,
   BrokerOrderGroup,
   BrokerOrderRequest,
@@ -61,6 +62,26 @@ export class BrokersService {
   listPositions(broker = 'alpaca'): Promise<BrokerPosition[]> {
     return firstValueFrom(
       this.http.get<BrokerPosition[]>(`${this.base}/${broker}/positions`),
+    );
+  }
+
+  /**
+   * Account-wide Alpaca activity, bounded by the data plane. `afterMs` is an
+   * int64 UTC cursor owned by the caller's selected activity window.
+   */
+  listActivities(
+    broker = 'alpaca',
+    options: { afterMs?: number; limit?: number } = {},
+  ): Promise<BrokerActivity[]> {
+    let params = new HttpParams();
+    if (options.afterMs != null) {
+      params = params.set('after_ms', options.afterMs);
+    }
+    if (options.limit != null) {
+      params = params.set('limit', options.limit);
+    }
+    return firstValueFrom(
+      this.http.get<BrokerActivity[]>(`${this.base}/${broker}/activities`, { params }),
     );
   }
 

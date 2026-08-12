@@ -5,6 +5,7 @@ import { TagModule } from 'primeng/tag';
 
 import { AlpacaDeployDrawerComponent } from '../../broker/broker-deploy-page/alpaca-deploy-drawer.component';
 import { AlpacaAccountCardComponent } from './alpaca-account-card.component';
+import { AlpacaDeskAccountDataService } from './alpaca-desk-account-data.service';
 import { AlpacaOperatorLensComponent } from './alpaca-operator-lens.component';
 import { AlpacaOperatorLensDataService } from './alpaca-operator-lens-data.service';
 import { AlpacaTraderLensComponent } from './alpaca-trader-lens.component';
@@ -55,7 +56,7 @@ function persistLens(lens: AlpacaDeskLens): void {
   templateUrl: './alpaca-desk.component.html',
   styleUrl: './alpaca-desk.component.scss',
   host: { class: 'block h-full' },
-  providers: [AlpacaOperatorLensDataService],
+  providers: [AlpacaDeskAccountDataService, AlpacaOperatorLensDataService],
 })
 export class AlpacaDeskComponent {
   private readonly route = inject(ActivatedRoute);
