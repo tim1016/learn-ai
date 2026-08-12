@@ -144,7 +144,7 @@
 
       <div class="table-footer">
         <span>{{ filteredExperiments().length }} of {{ experiments().length }} experiments</span>
-        <span class="footer-ticker">{{ ticker().toUpperCase() }}</span>
+        <app-asset-identity class="footer-ticker" [symbol]="ticker()" size="sm" />
       </div>
     </div>
   } @else if (!loading()) {

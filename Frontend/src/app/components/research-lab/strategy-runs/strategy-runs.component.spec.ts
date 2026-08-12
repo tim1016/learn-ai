@@ -126,6 +126,13 @@ describe('StrategyRunsComponent', () => {
     expect(component.runs()[0]?.symbol).toBe('SPY');
   });
 
+  it('renders each run symbol through the shared asset identity', () => {
+    const identity = fixture.nativeElement.querySelector('app-asset-identity');
+
+    expect(identity).not.toBeNull();
+    expect(identity.textContent).toContain('SPY');
+  });
+
   it('refresh() re-issues the listRuns call', async () => {
     service.listRuns.mockClear();
     service.listRuns.mockResolvedValueOnce({ runs: [] });

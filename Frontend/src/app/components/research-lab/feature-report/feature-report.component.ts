@@ -24,6 +24,7 @@ import { Select } from 'primeng/select';
 import { AccordionModule } from 'primeng/accordion';
 import { Slider } from 'primeng/slider';
 import { Chart, registerables } from 'chart.js';
+import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
 
 Chart.register(...registerables);
 
@@ -52,7 +53,7 @@ interface CostScenario {
   standalone: true,
   imports: [
     CommonModule, FormsModule, TagModule, TableModule, TooltipModule,
-    Select, AccordionModule, Slider, RobustnessReportComponent,
+    Select, AccordionModule, Slider, RobustnessReportComponent, AssetIdentityComponent,
   ],
   templateUrl: './feature-report.component.html',
   styleUrls: ['./feature-report.component.scss'],

@@ -27,6 +27,7 @@ import { Checkbox } from 'primeng/checkbox';
 import { MultiSelect } from 'primeng/multiselect';
 import { Chart, registerables } from 'chart.js';
 import { InfoIconComponent } from '../../../shared/info-icon/info-icon.component';
+import { AssetIdentityComponent } from '../../../shared/asset-identity/asset-identity.component';
 import { MethodologyDrawerService } from '../../../shared/methodology-drawer/methodology-drawer.service';
 import {
   IndicatorVerdictHeroComponent,
@@ -213,6 +214,7 @@ interface HorizonOption {
     Checkbox,
     MultiSelect,
     InfoIconComponent,
+    AssetIdentityComponent,
     IndicatorVerdictHeroComponent,
     TickerRangePickerComponent,
   ],
