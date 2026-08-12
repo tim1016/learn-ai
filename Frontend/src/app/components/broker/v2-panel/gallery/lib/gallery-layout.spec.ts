@@ -97,6 +97,18 @@ describe('loadLayout / saveLayout / resetLayout', () => {
     expect(loadLayout(accountId)).toEqual([]);
   });
 
+  it('returns [] for a corrupted entry with a NaN, negative, or fractional span', () => {
+    for (const bad of [
+      [{ sid: 'sid-1', colSpan: Number.NaN, rowSpan: 1 }],
+      [{ sid: 'sid-1', colSpan: -1, rowSpan: 1 }],
+      [{ sid: 'sid-1', colSpan: 0, rowSpan: 1 }],
+      [{ sid: 'sid-1', colSpan: 1.5, rowSpan: 1 }],
+    ]) {
+      localStorage.setItem(`gallery-layout:${accountId}`, JSON.stringify(bad));
+      expect(loadLayout(accountId)).toEqual([]);
+    }
+  });
+
   it('returns [] when localStorage.getItem throws', () => {
     const getItemSpy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new Error('storage unavailable');
@@ -123,5 +135,15 @@ describe('loadLayout / saveLayout / resetLayout', () => {
     expect(() => saveLayout(accountId, [{ sid: 'sid-1', colSpan: 1, rowSpan: 1 }])).not.toThrow();
 
     setItemSpy.mockRestore();
+  });
+
+  it('does not throw when resetLayout is called while localStorage.removeItem throws', () => {
+    const removeItemSpy = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+      throw new Error('storage unavailable');
+    });
+
+    expect(() => resetLayout(accountId)).not.toThrow();
+
+    removeItemSpy.mockRestore();
   });
 });

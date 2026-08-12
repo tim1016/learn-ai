@@ -52,6 +52,7 @@
 
   <div class="bot-tile__action">
     <button
+      #actionButton
       type="button"
       class="bot-tile__action-button"
       [disabled]="pending() || !bot().primary_action.enabled"
@@ -64,8 +65,13 @@
     </button>
 
     @if (confirmOpen()) {
-      <div class="bot-tile__confirm" role="alertdialog" aria-label="Confirm quick action">
-        <p>{{ confirmText() }}</p>
+      <div
+        class="bot-tile__confirm"
+        role="alertdialog"
+        aria-label="Confirm quick action"
+        aria-describedby="bot-tile-confirm-{{ bot().sid }}"
+      >
+        <p id="bot-tile-confirm-{{ bot().sid }}">{{ confirmText() }}</p>
         <button type="button" (click)="confirmAction()">Confirm</button>
         <button #confirmCancelButton type="button" (click)="cancelAction()">Cancel</button>
       </div>

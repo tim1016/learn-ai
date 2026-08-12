@@ -58,9 +58,11 @@ def running_symbols(catalog: list[BotCatalogView]) -> list[str]:
 
 
 def _latest_bar_end_ms(symbol_bars: list[GallerySymbolBars]) -> dict[str, int]:
-    """Latest ``end_ms`` per symbol (bars are ``start_ms``-ascending) for
-    ``GalleryBotView.last_bar_at_ms``. Symbols with no bars in this call are
-    omitted, so the bot projection falls back to ``None``."""
+    """Latest ``end_ms`` per symbol (bars are ``start_ms``-ascending) among
+    the bars fetched in one call. Symbols with no new bars in this call are
+    omitted — callers merge this into a cumulative per-symbol map rather
+    than replacing it, since a poll that saw no new bar for a symbol must
+    not blank out that symbol's already-known ``last_bar_at_ms``."""
     return {entry.symbol: entry.bars[-1].end_ms for entry in symbol_bars if entry.bars}
 
 
@@ -101,7 +103,14 @@ class GalleryHub:
         self._aggregator = aggregator
         self._epoch = f"{broker}:{account_id}:{_PROCESS_NONCE}"
         self._version = 0
-        self._last_sids: set[str] = set()
+        # Cumulative per-symbol "latest known bar end_ms", merged (never
+        # replaced) on every fetch — see ``_latest_bar_end_ms``. Safe to
+        # share across every SSE client for this account: it only ever
+        # advances, so whichever client's poll happens to observe a new bar
+        # first, every other client's next projection sees the same value.
+        # Unlike a per-client roster baseline (see ``build_update``), there
+        # is no diff-against-a-snapshot here, so no cross-client race.
+        self._latest_bar_end_ms: dict[str, int] = {}
 
     def _primary_action(self, row: BotCatalogView) -> GalleryPrimaryAction:
         # running -> Stop, otherwise Resume. Enablement/disabled_reason nuance
@@ -119,13 +128,16 @@ class GalleryHub:
         row: BotCatalogView,
         *,
         model: type[GalleryBotView] = GalleryBotView,
-        latest_bar_ms: dict[str, int] | None = None,
     ) -> GalleryBotView:
         """Project one catalog row into ``model`` (``GalleryBotView`` or its ``GalleryBotDelta`` subtype).
 
-        ``last_bar_at_ms`` is looked up by ``row.symbol`` in ``latest_bar_ms``
-        (the per-symbol latest bar ``end_ms`` computed by the caller from the
-        same call's fetched bars) — ``None`` when that symbol has no bars.
+        ``last_bar_at_ms`` is looked up by ``row.symbol`` in the hub's
+        cumulative ``_latest_bar_end_ms`` map — ``None`` when that symbol has
+        never produced a bar. ``realized_pnl_today``/``open_pnl``/
+        ``fills_today`` preserve the catalog's own ``None`` (economics not
+        yet available) rather than coercing it to a fabricated zero — the
+        frontend renders the same dash the roster's ``fmtSignedCurrency``/
+        ``fmtInteger`` already use for ``null``.
         """
         return model(
             sid=row.strategy_instance_id,
@@ -135,10 +147,10 @@ class GalleryHub:
             phase=getattr(row, "phase", ""),
             desired_state=getattr(row, "desired_state", ""),
             needs_attention=getattr(row, "needs_attention", False),
-            realized_pnl_today=getattr(row, "realized_pnl_today", 0.0) or 0.0,
-            open_pnl=getattr(row, "open_pnl", 0.0) or 0.0,
-            fills_today=getattr(row, "fills_today", 0) or 0,
-            last_bar_at_ms=(latest_bar_ms or {}).get(row.symbol),
+            realized_pnl_today=getattr(row, "realized_pnl_today", None),
+            open_pnl=getattr(row, "open_pnl", None),
+            fills_today=getattr(row, "fills_today", None),
+            last_bar_at_ms=self._latest_bar_end_ms.get(row.symbol),
             primary_action=self._primary_action(row),
         )
 
@@ -152,7 +164,10 @@ class GalleryHub:
         ``since_bar_ms`` is ``None`` for a full snapshot read; when provided,
         each symbol's bars are read with ``since_ms=since_bar_ms.get(symbol)``
         so the aggregator returns only bars appended since the caller's
-        last-seen bar (the incremental-update case).
+        last-seen bar (the incremental-update case). Merges this call's
+        latest bar ends into ``self._latest_bar_end_ms`` before returning, so
+        ``_project_bot`` always has the most recent known bar for a symbol
+        even on a poll that saw no new bar for it.
         """
         catalog = await self._catalog_source.get_catalog(self._broker, self._account_id)
         running = [row for row in catalog if getattr(row, "running", False)]
@@ -164,6 +179,7 @@ class GalleryHub:
             symbol_bars.append(
                 GallerySymbolBars(symbol=symbol, bars=aggregator_bars_to_chart_bars(raw))
             )
+        self._latest_bar_end_ms.update(_latest_bar_end_ms(symbol_bars))
         return running, symbol_bars
 
     async def build_snapshot(self) -> GalleryLiveSnapshot:
@@ -172,41 +188,43 @@ class GalleryHub:
         ``markers`` is left empty — see module docstring.
         """
         running, symbol_bars = await self._fetch_running_and_bars(since_bar_ms=None)
-        self._last_sids = {row.strategy_instance_id for row in running}
         self._version += 1
-        latest_bar_ms = _latest_bar_end_ms(symbol_bars)
         return GalleryLiveSnapshot(
             stream_epoch=self._epoch,
             surface_version=self._version,
             as_of_ms=now_ms_utc(),
             resolution="1m",
-            bots=[self._project_bot(row, latest_bar_ms=latest_bar_ms) for row in running],
+            bots=[self._project_bot(row) for row in running],
             symbols=symbol_bars,
             markers={},
         )
 
-    async def build_update(self, since_bar_ms: dict[str, int]) -> GalleryLiveUpdate:
+    async def build_update(
+        self, since_bar_ms: dict[str, int], *, known_sids: set[str]
+    ) -> GalleryLiveUpdate:
         """Build one incremental update: new bars per symbol + bot deltas + removals.
 
         Every running bot is re-projected into ``bots_delta`` (no dirty-tracking
-        yet). ``removed_sids`` diffs the previous call's running-bot roster
-        (tracked in ``self._last_sids``, seeded by ``build_snapshot``) against
-        this one. ``markers_delta`` is left empty — see module docstring.
+        yet). ``known_sids`` is the *caller's own* last-observed running
+        roster — each SSE stream tracks this itself (see the router's
+        ``_gallery_event_source``) rather than the hub holding one shared
+        roster baseline. A single ``GalleryHub`` is cached per account and
+        shared by every concurrent client (reconnects, multiple tabs); a
+        hub-wide baseline would let the first client's poll consume a
+        removal, leaving every other client's ``removed_sids`` empty and its
+        stopped tile stuck forever. ``removed_sids`` diffs ``known_sids``
+        against this call's running roster. ``markers_delta`` is left empty
+        — see module docstring.
         """
         running, symbol_bars = await self._fetch_running_and_bars(since_bar_ms=since_bar_ms)
         current_sids = {row.strategy_instance_id for row in running}
-        removed_sids = sorted(self._last_sids - current_sids)
-        self._last_sids = current_sids
+        removed_sids = sorted(known_sids - current_sids)
         self._version += 1
-        latest_bar_ms = _latest_bar_end_ms(symbol_bars)
         return GalleryLiveUpdate(
             surface_version=self._version,
             as_of_ms=now_ms_utc(),
             symbols=symbol_bars,
             markers_delta={},
-            bots_delta=[
-                self._project_bot(row, model=GalleryBotDelta, latest_bar_ms=latest_bar_ms)
-                for row in running
-            ],
+            bots_delta=[self._project_bot(row, model=GalleryBotDelta) for row in running],
             removed_sids=removed_sids,
         )

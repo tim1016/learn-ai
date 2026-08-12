@@ -20,6 +20,8 @@
           cdkDragHandle
           class="gallery-dock__drag-handle"
           [attr.aria-label]="'Reorder ' + bot.symbol + ' tile'"
+          tabindex="-1"
+          aria-hidden="true"
         >⠿</button>
 
         <app-bot-tile
@@ -37,6 +39,8 @@
           type="button"
           class="gallery-dock__resize-handle"
           [attr.aria-label]="'Resize ' + bot.symbol + ' tile'"
+          tabindex="-1"
+          aria-hidden="true"
           (pointerdown)="onResizePointerStart($event, bot.sid)"
         ></button>
       </div>
@@ -56,7 +60,7 @@
         [disabled]="page() === 0"
         (click)="goToPage(-1)"
       >‹</button>
-      <span class="gallery-dock__page-info">page {{ page() + 1 }} of {{ pageCount() }}</span>
+      <span class="gallery-dock__page-info" role="status" aria-live="polite">page {{ page() + 1 }} of {{ pageCount() }}</span>
       <button
         type="button"
         class="gallery-dock__pager-button"

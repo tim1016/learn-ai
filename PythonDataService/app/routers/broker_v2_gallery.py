@@ -119,6 +119,14 @@ async def _gallery_event_source(hub: GalleryHub, *, cursor: str | None) -> Async
     yield f"id: {current_id}\nevent: snapshot\ndata: {snapshot.model_dump_json()}\n\n"
 
     since_bar_ms = _latest_bar_start_ms(snapshot.symbols)
+    # This stream's own last-observed running roster, passed to every
+    # ``build_update`` call. Deliberately local to this generator (one per
+    # SSE connection) rather than read off ``hub`` — the same account's
+    # ``GalleryHub`` is shared across every concurrent client (reconnects,
+    # multiple tabs), so a hub-wide baseline would let the first client's
+    # poll consume a bot's removal and leave every other client's
+    # ``removed_sids`` empty for it.
+    known_sids = {bot.sid for bot in snapshot.bots}
     last_emit = time.monotonic()
     # No subscription/queue to release on exit: this is a poll loop, not a
     # pub/sub subscriber, so there is nothing to leak when the client
@@ -126,8 +134,12 @@ async def _gallery_event_source(hub: GalleryHub, *, cursor: str | None) -> Async
     # stops at its next ``await``.
     while True:
         await asyncio.sleep(_POLL_INTERVAL_S)
-        update = await hub.build_update(since_bar_ms)
+        update = await hub.build_update(since_bar_ms, known_sids=known_sids)
         since_bar_ms.update(_latest_bar_start_ms(update.symbols))
+        # ``bots_delta`` is always the full running roster (see the hub's
+        # docstring), so it doubles as this stream's next known-roster
+        # baseline with no extra bookkeeping.
+        known_sids = {bot.sid for bot in update.bots_delta}
         has_new_bars = any(entry.bars for entry in update.symbols)
         # ``bots_delta`` is always the full running roster (GalleryHub has no
         # per-bot dirty-tracking yet), so this is effectively "any bot

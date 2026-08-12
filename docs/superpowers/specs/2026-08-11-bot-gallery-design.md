@@ -43,7 +43,7 @@ The real 20-bot bottleneck is the **data layer**, addressed below.
 | Gallery scope | Bots with `running == true` for the account in the route |
 | Tile click | Navigates to that bot's single-bot detail page |
 | Entry point | New route `…/gallery` + a "Gallery" toggle on the bots list page |
-| Tile anatomy | **B**: header (identity + live price/Δ) · chart (candles+volume+fill markers) · footer (realized/open P&L + fills) |
+| Tile anatomy | **B**: header (identity + live price/Δ) · chart (candles+volume; fill markers deferred, see below) · footer (realized/open P&L + fills) |
 | Dock model | **Resizable dock**: auto near-square grid → drag-reorder + resize-to-span |
 | Dock engine | **Angular CDK drag-drop** (already a dep) + custom corner resize; **no** gridster |
 | Overflow (>20) | **Paginate** in pages of 20 (nothing hidden) |
@@ -128,7 +128,9 @@ and ref-counted like `SurfaceHub`:
      `desired_state`, `running`, `needs_attention`, `last_bar_at_ms`, and the current
      posture-appropriate `primary_action` (id + enabled + disabled_reason) for the tile CTA.
    - `symbols`: `{ SYM: { bars: [today's 1m ChartBar tail] } }` (shared across bots on SYM).
-   - `markers`: `{ sid: [ChartFillMarker today] }`.
+   - `markers`: `{ sid: [ChartFillMarker today] }` — **deferred in v1**: `GalleryHub` always
+     emits `markers={}`/`markers_delta={}`; the contract field exists but per-bot fill-marker
+     population is a fast-follow, not shipped SP1 behavior.
 4. **Latest-wins**: `event: snapshot` (full) on connect; `event: update` **deltas**
    (per-symbol new/changed bars via `since_ms`; new fills; changed bot stats; roster
    add/remove); `: keepalive` 15s; `event: reset` (`reason: epoch_changed`); `event: end`.
@@ -153,7 +155,9 @@ reset), and an endpoint test via `httpx.AsyncClient` + `ASGITransport`.
 ## 4. Frontend — components (all new; tile deliberately separate & minimal)
 
 - **`BotTileComponent`** — thin lightweight-charts wrapper: candlestick + volume histogram +
-  fill markers (native `createSeriesMarkers`) + native crosshair. Anatomy **B**: header
+  native crosshair, wired for fill markers (`createSeriesMarkers`) against the always-empty
+  `markers` the hub emits in v1 — see the deferred note above; the plumbing is in place, the
+  data isn't yet. Anatomy **B**: header
   (identity + live price/Δ from the last bar), chart, footer (realized/open P&L + fills).
   Reuses the shared `TickerQuoteComponent`? — **no** at tile scale (too tall); a compact
   inline header instead, but the `receiptLabel`/formatting conventions still apply. Holds its

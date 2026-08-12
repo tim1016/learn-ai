@@ -27,7 +27,6 @@ const MIN_SPAN = 1;
 
 interface ResizeSession {
   readonly sid: string;
-  readonly pointerId: number;
   readonly startColSpan: number;
   readonly startRowSpan: number;
   readonly startClientX: number;
@@ -46,26 +45,30 @@ interface ResizeSession {
  * 2D grid reordering, `moveItemInArray` on drop); drag is restricted to a
  * small grip (`cdkDragHandle`) so it never competes with the tile's own
  * click-to-navigate body or quick-action button. Resize has no CDK
- * primitive, so it's a custom corner handle driven by raw pointer events
- * (`pointerdown` on the handle, `pointermove`/`pointerup` on `document` via
- * host bindings, mirroring `BotTileComponent`'s `document:keydown.escape`
- * pattern), snapping to whole grid cells and clamped to `[1, cols]` /
- * `[1, rows]`.
+ * primitive, so it's a custom corner handle driven by raw pointer events:
+ * `pointerdown` on the handle captures the pointer there
+ * (`setPointerCapture`) and attaches `pointermove`/`pointerup`/
+ * `pointercancel` listeners scoped to that one element for the duration of
+ * the drag, rather than a lifetime `document`-level listener that would run
+ * change detection on every mouse move across the whole page — the one page
+ * designed to hold up to 20 live charts. Snaps to whole grid cells, clamped
+ * to `[1, cols]` / `[1, rows]` of the *current page's* grid.
  *
  * Order + spans persist per account via `gallery-layout.ts`. A roster over
  * `GALLERY_PAGE_SIZE` paginates; reorder/resize act on the current page only
  * — page-relative indices are translated to the full-list offset before
  * mutating so a drop on page 2 doesn't corrupt page 1's order.
+ *
+ * KNOWN LIMITATION: both handles are pointer/touch-only — neither has a
+ * keyboard equivalent yet, so both are marked `tabindex="-1"
+ * aria-hidden="true"` rather than advertising a focusable control that
+ * Enter/Space silently does nothing on. The always-available auto grid is
+ * the working fallback. Real keyboard reorder/resize is a follow-up.
  */
 @Component({
   selector: 'app-bot-gallery-dock',
   imports: [DragDropModule, BotTileComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
-  host: {
-    '(document:pointermove)': 'onResizePointerMove($event)',
-    '(document:pointerup)': 'onResizePointerEnd($event)',
-    '(document:pointercancel)': 'onResizePointerEnd($event)',
-  },
   templateUrl: './bot-gallery-dock.component.html',
   styleUrl: './bot-gallery-dock.component.scss',
 })
@@ -88,8 +91,13 @@ export class BotGalleryDockComponent {
   private readonly persistedLayout = signal<readonly TileLayout[]>([]);
   private loadedAccountId: string | null = null;
   private resizeSession: ResizeSession | null = null;
+  private resizeHandleEl: HTMLElement | null = null;
 
-  protected readonly grid = computed(() => autoDivision(this.bots().length));
+  /** Grid division for the *current page* — a >20-bot roster's page 2 has
+   * far fewer tiles than the full roster, so dividing by `bots().length`
+   * would give it the wrong column count and let resize clamp against
+   * bounds the operator never actually sees rendered. */
+  protected readonly grid = computed(() => autoDivision(this.pageTiles().length));
 
   /** Persisted order/spans synced to the current roster: dropped sids fall away, new sids append at 1x1 in catalog order. */
   protected readonly effectiveLayout = computed<readonly TileLayout[]>(() => {
@@ -202,32 +210,45 @@ export class BotGalleryDockComponent {
     const tile = this.effectiveLayoutBySid().get(sid);
     const gridEl = this.galleryGrid()?.nativeElement;
     if (!tile || !gridEl) return;
-    const { cols } = this.grid();
-    const rowsOnPage = Math.max(1, Math.ceil(this.pageTiles().length / Math.max(cols, 1)));
+    const { cols, rows } = this.grid();
     this.resizeSession = {
       sid,
-      pointerId: event.pointerId,
       startColSpan: tile.colSpan,
       startRowSpan: tile.rowSpan,
       startClientX: event.clientX,
       startClientY: event.clientY,
       cellWidth: gridEl.clientWidth / Math.max(cols, 1) || 1,
-      cellHeight: gridEl.clientHeight / rowsOnPage || 1,
+      cellHeight: gridEl.clientHeight / Math.max(rows, 1) || 1,
     };
+    // Scope the move/end listeners to this one drag rather than binding
+    // them for the component's lifetime — see the class docstring. Capture
+    // ensures they keep firing on this element even if the pointer leaves
+    // it mid-drag, without needing a `pointerId` equality check on every
+    // move.
+    const handle = event.currentTarget as HTMLElement;
+    this.resizeHandleEl = handle;
+    handle.setPointerCapture(event.pointerId);
+    handle.addEventListener('pointermove', this.onResizePointerMove);
+    handle.addEventListener('pointerup', this.onResizePointerEnd);
+    handle.addEventListener('pointercancel', this.onResizePointerEnd);
   }
 
-  protected onResizePointerMove(event: PointerEvent): void {
+  private readonly onResizePointerMove = (event: PointerEvent): void => {
     const session = this.resizeSession;
-    if (!session || event.pointerId !== session.pointerId) return;
+    if (!session) return;
     const deltaCols = Math.round((event.clientX - session.startClientX) / session.cellWidth);
     const deltaRows = Math.round((event.clientY - session.startClientY) / session.cellHeight);
     this.applyResize(session.sid, session.startColSpan + deltaCols, session.startRowSpan + deltaRows);
-  }
+  };
 
-  protected onResizePointerEnd(event: PointerEvent): void {
-    if (!this.resizeSession || event.pointerId !== this.resizeSession.pointerId) return;
+  private readonly onResizePointerEnd = (): void => {
+    const handle = this.resizeHandleEl;
+    handle?.removeEventListener('pointermove', this.onResizePointerMove);
+    handle?.removeEventListener('pointerup', this.onResizePointerEnd);
+    handle?.removeEventListener('pointercancel', this.onResizePointerEnd);
+    this.resizeHandleEl = null;
     this.resizeSession = null;
-  }
+  };
 
   /**
    * Clamps to `[1, cols]` / `[1, rows]` and persists. Kept as its own

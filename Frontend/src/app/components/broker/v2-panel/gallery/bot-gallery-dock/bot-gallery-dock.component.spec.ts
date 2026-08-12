@@ -155,6 +155,17 @@ describe('BotGalleryDockComponent', () => {
     expect(cell?.style.gridRow).toBe('span 2');
   });
 
+  it('hides the pointer-only drag and resize handles from assistive technology', async () => {
+    const { container } = await renderDock({ bots: bots(1) });
+
+    const dragHandle = container.querySelector('.gallery-dock__drag-handle');
+    const resizeHandle = container.querySelector('.gallery-dock__resize-handle');
+    for (const handle of [dragHandle, resizeHandle]) {
+      expect(handle?.getAttribute('tabindex')).toBe('-1');
+      expect(handle?.getAttribute('aria-hidden')).toBe('true');
+    }
+  });
+
   it('"Reset layout" restores the auto catalog order and clears persistence', async () => {
     const { container, fixture } = await renderDock({ bots: bots(4) });
     const dropListDe = fixture.debugElement.query(By.directive(CdkDropList));
@@ -192,6 +203,18 @@ describe('BotGalleryDockComponent', () => {
 
     expect(cellSids(container)).toHaveLength(20);
     expect(screen.getByRole('button', { name: 'Previous page' })).toHaveProperty('disabled', true);
+  });
+
+  it('sizes the grid from the current page, not the full roster', async () => {
+    const { container, fixture } = await renderDock({ bots: bots(21) }); // page 1: 20, page 2: 1
+
+    const grid = container.querySelector<HTMLElement>('.gallery-dock__grid');
+    expect(grid?.style.gridTemplateColumns).toBe('repeat(5, 1fr)'); // ceil(sqrt(20))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
+    fixture.detectChanges();
+
+    expect(grid?.style.gridTemplateColumns).toBe('repeat(1, 1fr)'); // ceil(sqrt(1)), not sqrt(21)
   });
 
   it('clamps the page and disables Next when the roster shrinks below the current page', async () => {

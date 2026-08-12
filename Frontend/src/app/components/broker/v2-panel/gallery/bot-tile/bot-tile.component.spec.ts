@@ -135,6 +135,27 @@ describe('BotTileComponent', () => {
     expect(screen.getByText('3')).toBeTruthy();
   });
 
+  it('renders a dash and neutral tone for unavailable P&L/fills, instead of a fabricated zero', async () => {
+    const { container } = await render(BotTileComponent, {
+      inputs: {
+        bot: bot({ realized_pnl_today: null, open_pnl: null, fills_today: null }),
+        bars: [bar()],
+        broker: 'alpaca',
+        accountId: 'PA3',
+      },
+      providers: [routerProvider()],
+    });
+
+    const [realized, open, fills] = Array.from(
+      container.querySelectorAll('.bot-tile__metric strong'),
+    );
+    expect(realized.textContent?.trim()).toBe('—');
+    expect(realized.classList.contains('pnl--neutral')).toBe(true);
+    expect(open.textContent?.trim()).toBe('—');
+    expect(open.classList.contains('pnl--neutral')).toBe(true);
+    expect(fills.textContent?.trim()).toBe('—');
+  });
+
   it('marks the state dot running when the bot is running', async () => {
     const { container } = await render(BotTileComponent, {
       inputs: { bot: bot({ running: true }), bars: [bar()], broker: 'alpaca', accountId: 'PA3' },
@@ -235,7 +256,7 @@ describe('BotTileComponent', () => {
   });
 
   it('moves keyboard focus onto the confirm Cancel button when it opens', async () => {
-    const { container } = await render(BotTileComponent, {
+    await render(BotTileComponent, {
       inputs: { bot: bot(), bars: [bar()], broker: 'alpaca', accountId: 'PA3' },
       providers: [routerProvider()],
     });
@@ -243,8 +264,7 @@ describe('BotTileComponent', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Stop$/i }));
 
     await waitFor(() => {
-      const cancel = container.querySelector('.bot-tile__confirm button:last-child');
-      expect(document.activeElement).toBe(cancel);
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Cancel' }));
     });
   });
 
@@ -263,6 +283,36 @@ describe('BotTileComponent', () => {
 
     expect(onAction).not.toHaveBeenCalled();
     expect(screen.queryByText('Stop SPY · sid-1?')).toBeNull();
+  });
+
+  it('returns keyboard focus to the action button after cancelling the confirm', async () => {
+    await render(BotTileComponent, {
+      inputs: { bot: bot(), bars: [bar()], broker: 'alpaca', accountId: 'PA3' },
+      providers: [routerProvider()],
+    });
+
+    const actionButton = screen.getByRole('button', { name: /^Stop$/i });
+    fireEvent.click(actionButton);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(actionButton);
+    });
+  });
+
+  it('returns keyboard focus to the action button after cancelling via Escape', async () => {
+    await render(BotTileComponent, {
+      inputs: { bot: bot(), bars: [bar()], broker: 'alpaca', accountId: 'PA3' },
+      providers: [routerProvider()],
+    });
+
+    const actionButton = screen.getByRole('button', { name: /^Stop$/i });
+    fireEvent.click(actionButton);
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(actionButton);
+    });
   });
 
   it('does not open the confirm when the quick action is disabled', async () => {

@@ -29,9 +29,9 @@ export interface GalleryBotView {
   readonly phase: string;
   readonly desired_state: string;
   readonly needs_attention: boolean;
-  readonly realized_pnl_today: number;
-  readonly open_pnl: number;
-  readonly fills_today: number;
+  readonly realized_pnl_today: number | null;
+  readonly open_pnl: number | null;
+  readonly fills_today: number | null;
   readonly last_bar_at_ms: number | null;
   readonly primary_action: GalleryPrimaryAction;
 }

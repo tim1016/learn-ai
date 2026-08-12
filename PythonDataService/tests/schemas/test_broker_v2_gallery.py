@@ -23,7 +23,7 @@ def _bar() -> ChartBar:
     )
 
 
-def test_snapshot_round_trips_and_is_snake_case():
+def test_snapshot_round_trips_and_is_snake_case() -> None:
     snap = GalleryLiveSnapshot(
         stream_epoch="e1",
         surface_version=3,
@@ -56,7 +56,7 @@ def test_snapshot_round_trips_and_is_snake_case():
     assert GalleryLiveSnapshot.model_validate(dumped).surface_version == 3
 
 
-def test_bot_delta_is_self_contained_with_symbol_and_label():
+def test_bot_delta_is_self_contained_with_symbol_and_label() -> None:
     delta = GalleryBotDelta(
         sid="Aug11-02",
         symbol="SPY",

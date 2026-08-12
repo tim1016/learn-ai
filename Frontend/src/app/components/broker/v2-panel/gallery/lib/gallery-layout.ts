@@ -42,12 +42,16 @@ function storageKey(accountId: string): string {
   return `${STORAGE_PREFIX}${accountId}`;
 }
 
+function isSpan(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0;
+}
+
 function isTileLayout(value: unknown): value is TileLayout {
   if (typeof value !== 'object' || value === null) return false;
   const candidate = value as Partial<TileLayout>;
   return typeof candidate.sid === 'string'
-    && typeof candidate.colSpan === 'number'
-    && typeof candidate.rowSpan === 'number';
+    && isSpan(candidate.colSpan)
+    && isSpan(candidate.rowSpan);
 }
 
 /** Persisted layout for `accountId`, or `[]` if none was ever saved, the entry is corrupt, or storage is unavailable. */

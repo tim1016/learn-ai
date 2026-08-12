@@ -62,8 +62,8 @@ export function toTileMarkers(markers: readonly ChartFillMarker[]): SeriesMarker
 
 type PnlTone = 'positive' | 'negative' | 'neutral';
 
-function toneOf(value: number): PnlTone {
-  if (value === 0) return 'neutral';
+function toneOf(value: number | null): PnlTone {
+  if (value === null || value === 0) return 'neutral';
   return value > 0 ? 'positive' : 'negative';
 }
 
@@ -100,6 +100,7 @@ export class BotTileComponent {
     viewChild.required<ElementRef<HTMLDivElement>>('chartContainer');
   private readonly confirmCancelButton =
     viewChild<ElementRef<HTMLButtonElement>>('confirmCancelButton');
+  private readonly actionButton = viewChild<ElementRef<HTMLButtonElement>>('actionButton');
 
   protected readonly confirmOpen = signal(false);
 
@@ -203,6 +204,11 @@ export class BotTileComponent {
 
   protected cancelAction(): void {
     this.confirmOpen.set(false);
+    // The Cancel button that currently holds focus is about to leave the
+    // DOM (the confirm block is `@if`-gated) — without this, a keyboard/AT
+    // operator's focus falls back to `<body>`, stranding them at the top of
+    // the page instead of back on the control they were just using.
+    queueMicrotask(() => this.actionButton()?.nativeElement.focus());
   }
 
   protected onEscape(): void {

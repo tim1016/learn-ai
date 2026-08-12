@@ -39,9 +39,9 @@ class GalleryBotView(BaseModel):
     phase: str
     desired_state: str
     needs_attention: bool
-    realized_pnl_today: float
-    open_pnl: float
-    fills_today: int
+    realized_pnl_today: float | None
+    open_pnl: float | None
+    fills_today: int | None
     last_bar_at_ms: int | None = None
     primary_action: GalleryPrimaryAction
 
