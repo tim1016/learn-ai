@@ -63,6 +63,17 @@ the `order_events` list serialized.
 $0.01, an extra equity point at the end). That's a real determinism bug
 and needs Tim's read on whether to fix LEAN config or relax the gate.
 
+**Tim's decision (2026-08-12):** the normalized LEAN execution-state
+envelope may differ only in `state.StartTime`, `state.EndTime`, and
+`state.Hostname`; they record the wall-clock invocation and ephemeral
+container, not backtest semantics. LEAN's timestamped output packaging
+files (`full_result`, `summary_result`, launcher log, and request-audit
+files) likewise need not be byte-identical. The determinism gate must still
+compare the parsed normalized result after removing only those three state
+fields, plus the byte-stable evidence artifacts (`data_monitor`,
+`observations`, and `order_events`). No additional exception is implied by
+this decision.
+
 ### D3 — LEAN-Lab-vs-Engine-Lab reconciler scope (Phase 5g) — RESOLVED 2026-05-18
 
 Phase 5a is **self-reconciliation** (LEAN's recorded fees vs the canonical

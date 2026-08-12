@@ -54,7 +54,7 @@ The §A test fixtures use synthetic data crafted to match QC's documented shape.
 - **Row count**: 22 daily AAPL predictions (one per trading day in the validation window)
 - **Pinned `prediction_set_hash`**: `b8252cfa9a749f5bf592602f3aebc2b3a4ccc6bb0cd41da48a6db7a581342e0e` (in `tests/research/ml/fixtures/qc_known_hashes.json`)
 - **Pinned `RunLedger.prediction_set_hash`**: `b8252cfa9a749f5bf592602f3aebc2b3a4ccc6bb0cd41da48a6db7a581342e0e` — equals the manifest hash because the runner threads it through unchanged
-- **Pinned `result_hash`**: `2585aadb0e9a22e0b7da4b0b62d4b027acdbaf97695bdff452cc7aa1b23f8446` — covers the (artifact, spec, synthetic AAPL daily bars, engine config) tuple end-to-end
+- **Pinned `result_hash`**: `b2e1ffc871d9f39a04b6975e08f926b1ed2a635a9066551644fa5f306d778713` — covers the (artifact, spec, synthetic AAPL daily bars, engine config) tuple end-to-end. Repinned on 2026-08-12 after the engine began materializing its deliberate terminal `EndOfAlgorithm` close; inputs are unchanged, but the deterministic result now includes that synthetic exit. The prior `f8074881…450180` pin reflected the same fixture before that behavior.
 
 ## §C runtime test setup
 
@@ -66,7 +66,7 @@ Lives at `PythonDataService/tests/research/ml/test_quantconnect_fixture_runtime.
 
 ## Parity claim (current)
 
-> Captured QC export `qc_export.json` — QC's published `GradientBoostingRegressor(random_state=42)` tutorial run against the SP500-constituents universe, AAPL anchor — feeds into our importer, which reproduces `prediction_set_hash = b8252cfa…342e0e` deterministically across re-runs, and every per-row AAPL prediction value the importer emits equals the source JSON value within `atol=1e-9, rtol=0`. The runtime backtest produces a stable `result_hash = 2585aadb…f8446`.
+> Captured QC export `qc_export.json` — QC's published `GradientBoostingRegressor(random_state=42)` tutorial run against the SP500-constituents universe, AAPL anchor — feeds into our importer, which reproduces `prediction_set_hash = b8252cfa…342e0e` deterministically across re-runs, and every per-row AAPL prediction value the importer emits equals the source JSON value within `atol=1e-9, rtol=0`. The runtime backtest produces a stable `result_hash = b2e1ffc8…d778713`.
 
 This **is** literal-QC-published-value parity at the plumbing level: the captured JSON contains QC's actual GBM tutorial output for SP500 constituents over the pinned validation window, and our importer + runner reproduce hashes deterministically against that JSON. The runtime test uses synthetic flat AAPL daily bars (open=high=low=close), not real market data — `result_hash` validates pipeline determinism, not P&L realism (Phase 3 work).
 

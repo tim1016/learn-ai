@@ -49,6 +49,7 @@ _QC_PREDICTIONS_FIXTURE = (
 
 _PREDICTION_SET_ID = "qc_aapl_phase3_acceptance"
 _INITIAL_CASH = Decimal("100000")
+_END_OF_ALGORITHM_TAG = "EndOfAlgorithm"
 
 # Provenance constants for the prediction-set import — mirror PR #215's
 # attribution.md so the imported set hashes deterministically.
@@ -113,14 +114,16 @@ def _aapl_spec() -> StrategySpec:
 
 def _build_our_fills(tmp_path: Path) -> list[OurFill]:
     """Run our engine directly (bypassing run_strategy_spec) and extract
-    every fill from engine_result.order_events.
+    every market-generated fill from engine_result.order_events.
 
     Phase 3.5 scope: single entry fill on 2026-02-10 morning. No exit
     fires (position stays open at backtest end with all-positive predictions
     in the 2-day trailing-window-truncated window). We can't use strategy.trade_log
     because that only captures closed round-trips; we need every fill
-    including the open-position entry. Bypassing run_strategy_spec is the
-    cleanest path — runner integration is covered by
+    including the open-position entry. The engine's ``EndOfAlgorithm`` close
+    is intentionally excluded: it is a synthetic terminal accounting event,
+    while the captured QC run ends with its position open. Bypassing
+    run_strategy_spec is the cleanest path — runner integration is covered by
     test_runner_with_predictions.py.
     """
     artifacts_root = tmp_path / "predictions"
@@ -182,6 +185,8 @@ def _build_our_fills(tmp_path: Path) -> list[OurFill]:
     commission = IbkrEquityCommissionModel()
     fills: list[OurFill] = []
     for event in engine_result.order_events:
+        if event.tag == _END_OF_ALGORITHM_TAG:
+            continue
         side = "buy" if event.direction is Direction.LONG else "sell"
         fee = commission.fee(quantity=abs(event.fill_quantity), fill_price=event.fill_price)
         fills.append(
