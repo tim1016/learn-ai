@@ -90,6 +90,17 @@ def _ibkr_bar_to_chart_bar(bar: IbkrMinuteBar) -> ChartBar:
     )
 
 
+def aggregator_bars_to_chart_bars(bars: Sequence[IbkrMinuteBar]) -> list[ChartBar]:
+    """Map live-aggregator ring-buffer bars to ``ChartBar`` (§8).
+
+    Canonical implementation: this module (extracted from the LIVE-pane
+    mapping originally inlined in ``build_live_chart``). Reused verbatim by
+    the bot gallery's ``GalleryHub`` so the two panes never diverge on
+    decimal/field handling for the same aggregator bar shape.
+    """
+    return [_ibkr_bar_to_chart_bar(bar) for bar in bars]
+
+
 def _polygon_bar_to_chart_bar(bar: PolygonBar, *, span_ms: int) -> ChartBar:
     # Polygon-sourced history bars are truthfully tagged ``polygon`` (§8).
     return ChartBar(
@@ -169,7 +180,7 @@ def build_live_chart(
     """
     open_ms, close_ms = window
 
-    bars = [_ibkr_bar_to_chart_bar(bar) for bar in chart_window.bars]
+    bars = aggregator_bars_to_chart_bars(chart_window.bars)
     markers = _markers_in_window(fills, from_ms=open_ms, to_ms=close_ms)
     notices = [
         ChartOverlayNoticeView(code=notice.code, message=notice.message, source="polygon")
