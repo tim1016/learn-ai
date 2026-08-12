@@ -1,0 +1,79 @@
+<section id="alpaca-operator-panel" class="operator-lens" role="tabpanel" aria-labelledby="alpaca-operator-tab">
+  <header class="operator-lens__heading">
+    <p class="operator-lens__eyebrow">Mechanism and repair</p>
+    <h2>Operator desk</h2>
+    <p>Inspect the active Clerk posture, repair from current evidence, and audit durable receipts.</p>
+  </header>
+
+  @if (status.isLoading()) {
+    <p role="status">Loading operator data…</p>
+  } @else if (status.error()) {
+    <p role="alert">Operator data is unavailable right now.</p>
+  } @else if (status.value(); as clerkStatus) {
+    @if (projection.isLoading()) {
+      <p role="status">Loading Clerk posture…</p>
+    } @else if (projection.value(); as clerkProjection) {
+      <app-alpaca-operator-posture
+        [projection]="clerkProjection"
+        (repairRequested)="openRepair($event)"
+      />
+    } @else {
+      <section class="operator-lens__fallback" aria-label="Clerk posture">
+        <h3>{{ clerkStatus.hold.active ? 'Clerk hold active' : 'Clerk projection unavailable' }}</h3>
+        <p>{{ clerkStatus.hold.reason ?? 'The active Clerk projection could not be read.' }}</p>
+      </section>
+    }
+
+    <section class="operator-lens__forensics" aria-labelledby="operator-forensics-title">
+      <div>
+        <p class="operator-lens__eyebrow">Forensic evidence</p>
+        <h2 id="operator-forensics-title">Transaction history</h2>
+      </div>
+      <app-account-desk-transaction-history [accountId]="clerkStatus.account_id" />
+    </section>
+
+    <section class="operator-lens__deep" aria-label="Deep system evidence">
+      <details #custodyPanel (toggle)="onCustodyToggle($event)">
+        <summary>Custody clocks and recovery</summary>
+        @if (custodyOpened()) {
+          <app-alpaca-sqlite-custody [accountId]="clerkStatus.account_id" />
+        }
+      </details>
+
+      <details>
+        <summary>Broker session and capability</summary>
+        <dl>
+          <div><dt>Observed</dt><dd>{{ clerkStatus.observed_at_ms }}</dd></div>
+          <div><dt>Channels</dt><dd>{{ clerkStatus.channel_healths?.length ?? 0 }} reported</dd></div>
+          <div><dt>Outstanding intents</dt><dd>{{ clerkStatus.outstanding_intents }}</dd></div>
+        </dl>
+      </details>
+
+      <details>
+        <summary>Fleet</summary>
+        @if (projection.value(); as currentProjection) {
+          <dl>
+            <div><dt>Runs</dt><dd>{{ currentProjection.runs.length }}</dd></div>
+            <div><dt>Attributed positions</dt><dd>{{ currentProjection.positions.length }}</dd></div>
+            <div><dt>Open uncertainties</dt><dd>{{ currentProjection.uncertainties.length }}</dd></div>
+          </dl>
+        } @else {
+          <p>Fleet evidence is unavailable until the Clerk projection recovers.</p>
+        }
+      </details>
+
+      <details>
+        <summary>Truth spine</summary>
+        @if (projection.value(); as currentProjection) {
+          <dl>
+            <div><dt>Custody owner</dt><dd>{{ currentProjection.custody_owner }}</dd></div>
+            <div><dt>Authority health</dt><dd>{{ currentProjection.authority_health }}</dd></div>
+            <div><dt>Control revision</dt><dd>{{ currentProjection.control_revision }}</dd></div>
+          </dl>
+        } @else {
+          <p>Truth-spine evidence is unavailable until the Clerk projection recovers.</p>
+        }
+      </details>
+    </section>
+  }
+</section>

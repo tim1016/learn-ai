@@ -1,24 +1,62 @@
-import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  ElementRef,
+  effect,
+  inject,
+  signal,
+  viewChild,
+} from '@angular/core';
 
+import { AccountDeskTransactionHistoryComponent } from '../../broker/account-desk/account-desk-transaction-history.component';
+import { AccountDeskTransactionHistoryStore } from '../../broker/account-desk/account-desk-transaction-history-store.service';
+import type { SqliteRecoveryAction } from '../../../api/alpaca.types';
+import { AlpacaSqliteCustodyComponent } from './alpaca-sqlite-custody.component';
 import { AlpacaOperatorLensDataService } from './alpaca-operator-lens-data.service';
+import { AlpacaOperatorPostureComponent } from './alpaca-operator-posture.component';
 
-/** Seam owned by the diagnostic and repair-focused Operator lens. */
+/** Mechanism, repair, and immutable receipt evidence for the Alpaca desk. */
 @Component({
   selector: 'app-alpaca-operator-lens',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  template: `
-    <section id="alpaca-operator-panel" role="tabpanel" aria-labelledby="alpaca-operator-tab">
-      <h2>Operator desk</h2>
-      @if (status.isLoading()) {
-        <p role="status">Loading operator data…</p>
-      } @else if (status.error()) {
-        <p role="alert">Operator data is unavailable right now.</p>
-      } @else {
-        <p>Operator data is ready.</p>
-      }
-    </section>
-  `,
+  imports: [
+    AccountDeskTransactionHistoryComponent,
+    AlpacaOperatorPostureComponent,
+    AlpacaSqliteCustodyComponent,
+  ],
+  providers: [AccountDeskTransactionHistoryStore],
+  templateUrl: './alpaca-operator-lens.component.html',
+  styleUrl: './alpaca-operator-lens.component.scss',
 })
 export class AlpacaOperatorLensComponent {
-  protected readonly status = inject(AlpacaOperatorLensDataService).status;
+  private readonly data = inject(AlpacaOperatorLensDataService);
+  private readonly custodyPanel = viewChild<ElementRef<HTMLDetailsElement>>('custodyPanel');
+  private readonly custody = viewChild(AlpacaSqliteCustodyComponent);
+
+  protected readonly status = this.data.status;
+  protected readonly projection = this.data.projection;
+  protected readonly custodyOpened = signal(false);
+  private readonly pendingRepair = signal<SqliteRecoveryAction | null>(null);
+
+  constructor() {
+    effect(() => {
+      const action = this.pendingRepair();
+      const custody = this.custody();
+      if (action === null || custody === undefined) return;
+      this.pendingRepair.set(null);
+      custody.requestPresentedAction(action);
+    });
+  }
+
+  protected onCustodyToggle(event: Event): void {
+    if (event.currentTarget instanceof HTMLDetailsElement && event.currentTarget.open) {
+      this.custodyOpened.set(true);
+    }
+  }
+
+  protected openRepair(action: SqliteRecoveryAction): void {
+    this.custodyOpened.set(true);
+    this.pendingRepair.set(action);
+    this.custodyPanel()?.nativeElement.setAttribute('open', '');
+  }
 }
