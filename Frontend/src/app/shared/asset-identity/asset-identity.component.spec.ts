@@ -1,6 +1,9 @@
 import { render, screen } from '@testing-library/angular';
 import { describe, expect, it } from 'vitest';
-import { AssetIdentityComponent } from './asset-identity.component';
+import {
+  AssetIdentityComponent,
+  resolveTradingViewLogoId,
+} from './asset-identity.component';
 
 function requireElement<T extends Element>(node: T | null, selector: string): T {
   if (node === null) throw new Error(`expected ${selector} to render`);
@@ -8,6 +11,23 @@ function requireElement<T extends Element>(node: T | null, selector: string): T 
 }
 
 describe('AssetIdentityComponent', () => {
+  describe('resolveTradingViewLogoId', () => {
+    it.each([
+      ['SPY', 'spdr-sandp500-etf-tr'],
+      ['NASDAQ:QQQ', 'invesco'],
+      ['brk.b', 'berkshire-hathaway'],
+      ['XLF', 'sector/financial'],
+      ['BTC/USD', 'crypto/XTVCBTC'],
+      ['WMT', 'walmart'],
+    ])('resolves the common %s symbol', (symbol, logoId) => {
+      expect(resolveTradingViewLogoId(symbol)).toBe(logoId);
+    });
+
+    it('leaves an unlisted symbol unresolved for the initials fallback', () => {
+      expect(resolveTradingViewLogoId('UNKNOWN')).toBeNull();
+    });
+  });
+
   it('renders a known TradingView logo beside the ticker and asset name', async () => {
     const { container } = await render(AssetIdentityComponent, {
       inputs: { symbol: 'AAPL', name: 'Apple Inc.' },
@@ -19,6 +39,19 @@ describe('AssetIdentityComponent', () => {
     );
     expect(screen.getByText('AAPL')).toBeTruthy();
     expect(screen.getByText('Apple Inc.')).toBeTruthy();
+  });
+
+  it('uses initials without a logo request for an unlisted symbol', async () => {
+    const { container } = await render(AssetIdentityComponent, {
+      inputs: { symbol: 'UNKNOWN' },
+    });
+
+    expect(container.querySelector('img')).toBeNull();
+    const fallback = requireElement(
+      container.querySelector<HTMLElement>('.asset-identity__fallback'),
+      '.asset-identity__fallback',
+    );
+    expect(fallback.textContent).toBe('UNKN');
   });
 
   it('allows explicit TradingView slugs', async () => {

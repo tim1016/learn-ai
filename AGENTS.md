@@ -109,6 +109,7 @@ Full conventions live in `.claude/rules/`. Read the relevant file before signifi
 - Every bug fix ships with a regression test that fails before the fix and passes after.
 - Every port from a reference source ships with (a) a golden fixture test, (b) a `docs/references/` note, (c) the tolerance used and why.
 - Raw backend identifiers in Frontend receipt/evidence UI (`reason_code`, `gate_id`, `source`, receipt labels, and known code-like receipt values such as `NO_LIVE_BINDING` or `broker.connection`) must render through the shared `receiptLabel` pipe. Preserve opaque audit tokens such as intent/order IDs, paths, hashes, refs, and URLs exactly. Do not pipe backend-authored trader/operator prose; that copy should arrive from the backend or from a closed operator-copy map.
+- Tradeable-instrument symbols in Frontend display UI must render through shared `app-asset-identity`, the canonical symbol renderer. Use its compact size in dense rows; plain symbol text remains appropriate in controls such as `<option>` elements and ticker pickers. Do not duplicate logo, slug-resolution, or initials-fallback logic in feature components.
 - When editing an existing file, follow the patterns already in that file. Don't reformat or restyle on the way through.
 - Don't introduce new dependencies without justification. State the alternative considered and why it was rejected.
 - Don't create new files when editing an existing one works. Don't duplicate utility functions — search first.

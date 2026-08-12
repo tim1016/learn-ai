@@ -8,18 +8,91 @@ const MAX_SYMBOL_LENGTH = 24;
 const MAX_FALLBACK_LENGTH = 4;
 const SAFE_LOGO_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
-const KNOWN_TRADINGVIEW_LOGO_SLUGS: Readonly<Record<string, string>> = {
+/**
+ * TradingView logo IDs verified against the provider's symbol pages. Keep the
+ * catalog explicit: guessing a slug sends an avoidable broken-image request.
+ * TradingView attribution for this logo source is published at /legal/notices.
+ */
+const COMMON_TRADINGVIEW_LOGO_IDS: Readonly<Record<string, string>> = {
   AAPL: 'apple',
+  ABBV: 'abbvie',
+  ADBE: 'adobe',
   AMD: 'advanced-micro-devices',
   AMZN: 'amazon',
+  ARKK: 'ark-etf-tr',
+  AVGO: 'broadcom',
+  BAC: 'bank-of-america',
+  'BRK.B': 'berkshire-hathaway',
+  BTCUSD: 'crypto/XTVCBTC',
+  BTCUSDT: 'crypto/XTVCBTC',
+  CAT: 'caterpillar',
+  COIN: 'coinbase',
+  COST: 'costco-wholesale',
+  CRM: 'salesforce',
+  CSCO: 'cisco',
+  CVX: 'chevron',
+  DIA: 'spdr-sandp500-etf-tr',
+  DIS: 'walt-disney',
+  ETHUSD: 'crypto/XTVCETH',
+  ETHUSDT: 'crypto/XTVCETH',
+  F: 'ford',
+  GE: 'ge-aerospace',
+  GLD: 'spdr-sandp500-etf-tr',
+  GOOG: 'alphabet',
   GOOGL: 'alphabet',
-  IWM: 'ishares-russell-2000-etf',
+  GS: 'golden-sachs-etf-trust-goldman',
+  HOOD: 'robinhood',
+  HYG: 'ishares',
+  IBIT: 'ishares',
+  INTC: 'intel',
+  IWM: 'ishares',
+  JNJ: 'johnson-and-johnson',
+  JPM: 'jpmorgan-chase',
+  KO: 'coca-cola',
+  LLY: 'eli-lilly',
+  MA: 'mastercard',
   META: 'meta-platforms',
+  MRK: 'merck-and-co',
+  MS: 'morgan-stanley',
   MSFT: 'microsoft',
+  MU: 'micron-technology',
+  NFLX: 'netflix',
+  NKE: 'nike',
   NVDA: 'nvidia',
-  QQQ: 'invesco-qqq-trust',
-  SPY: 'spdr-s-p-500-etf-tr',
+  ORCL: 'oracle',
+  PEP: 'pepsico',
+  PFE: 'pfizer',
+  PG: 'procter-and-gamble',
+  PLTR: 'palantir',
+  PYPL: 'paypal',
+  QQQ: 'invesco',
+  SHOP: 'shopify',
+  SLV: 'ishares',
+  SMH: 'vaneck',
+  SOXX: 'ishares',
+  SPY: 'spdr-sandp500-etf-tr',
+  SQ: 'block',
+  T: 'at-and-t',
+  TLT: 'ishares',
   TSLA: 'tesla',
+  UBER: 'uber',
+  UNH: 'unitedhealth',
+  V: 'visa',
+  VOO: 'vanguard',
+  VTI: 'vanguard',
+  VZ: 'verizon',
+  WMT: 'walmart',
+  XLB: 'sector/materials',
+  XLE: 'sector/energy',
+  XLF: 'sector/financial',
+  XLI: 'sector/industrial',
+  XLK: 'sector/technology',
+  XLP: 'sector/consumer-staples',
+  XLRE: 'sector/real-estate',
+  XLU: 'sector/utilities',
+  XLV: 'sector/health-care',
+  XLY: 'sector/consumer-discretionary',
+  XOM: 'exxon',
 };
 
 function normalizeAssetSymbol(raw: string): string {
@@ -49,23 +122,13 @@ function tradingViewLogoUrl(
     return explicit ? `${TRADINGVIEW_LOGO_BASE_URL}/${explicit}.svg` : null;
   }
 
-  const slug = logoSlugForSymbol(symbol);
-  return slug ? `${TRADINGVIEW_LOGO_BASE_URL}/${slug}.svg` : null;
+  const logoId = resolveTradingViewLogoId(symbol);
+  return logoId ? `${TRADINGVIEW_LOGO_BASE_URL}/${logoId}.svg` : null;
 }
 
-function logoSlugForSymbol(symbol: string): string | null {
+export function resolveTradingViewLogoId(symbol: string): string | null {
   const root = rootSymbol(symbol);
-  if (!root) return null;
-
-  const known = KNOWN_TRADINGVIEW_LOGO_SLUGS[root];
-  if (known) return known;
-
-  return normalizeTradingViewLogoSlug(
-    root
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, ''),
-  );
+  return root ? COMMON_TRADINGVIEW_LOGO_IDS[root] ?? null : null;
 }
 
 function rootSymbol(symbol: string): string {
