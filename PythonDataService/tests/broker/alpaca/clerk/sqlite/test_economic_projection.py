@@ -406,6 +406,68 @@ def test_snapshot_runs_fifo_over_full_history_not_pre_filtered_session_fills(tmp
         repo.close()
 
 
+def test_account_pnl_attribution_includes_both_window_bounds_and_preserves_fifo_rows(
+    tmp_path: Path,
+) -> None:
+    """C2 reads complete SQLite FIFO history while reporting an inclusive window."""
+    repo, accepted = _repository(tmp_path)
+    session = session_window_for_date(date(2026, 8, 10))
+    from_ms = session.open_ms_utc + 2_000
+    to_ms = session.open_ms_utc + 3_000
+    try:
+        _append_slice(
+            repo,
+            accepted,
+            execution_id="exec-c2-opening-lot",
+            side="BUY",
+            quantity=2.0,
+            price=100.0,
+            occurred_at_ms=session.open_ms_utc + 1_000,
+        )
+        _append_slice(
+            repo,
+            accepted,
+            execution_id="exec-c2-close-at-from",
+            side="SELL",
+            quantity=1.0,
+            price=110.0,
+            occurred_at_ms=from_ms,
+        )
+        _append_slice(
+            repo,
+            accepted,
+            execution_id="exec-c2-close-at-to",
+            side="SELL",
+            quantity=1.0,
+            price=120.0,
+            occurred_at_ms=to_ms,
+        )
+
+        reader = SqliteEconomicProjectionReader.from_repository(repo)
+        try:
+            projection = reader.account_pnl_attribution(from_ms=from_ms, to_ms=to_ms)
+        finally:
+            reader.close()
+
+        assert projection.account_id == _ACCOUNT_ID
+        assert projection.from_ms == from_ms
+        assert projection.to_ms == to_ms
+        assert [row.closed_at_ms for row in projection.attribution_rows] == [from_ms, to_ms]
+        assert [row.realized_pnl for row in projection.attribution_rows] == pytest.approx(
+            [10.0, 20.0],
+            abs=_ATOL,
+            rel=_RTOL,
+        )
+        assert all(row.entry_strategy_instance_id == _SID for row in projection.attribution_rows)
+        assert all(row.exit_strategy_instance_id == _SID for row in projection.attribution_rows)
+        assert projection.realized_pnl_total == pytest.approx(30.0, abs=_ATOL, rel=_RTOL)
+        assert projection.open_pnl_total == pytest.approx(0.0, abs=_ATOL, rel=_RTOL)
+        assert projection.marks_complete is True
+        assert projection.mark_observed_at_ms == {}
+    finally:
+        repo.close()
+
+
 def test_late_correction_keeps_root_execution_time_for_fifo_and_session_window(tmp_path: Path) -> None:
     """A post-close correction must not move the earlier sell's closed-lot date."""
     repo, accepted = _repository(tmp_path)
@@ -451,9 +513,7 @@ def test_late_correction_keeps_root_execution_time_for_fifo_and_session_window(t
 
         assert snapshot.fills_today == 2
         assert snapshot.realized_pnl_today == pytest.approx(18.0, abs=_ATOL, rel=_RTOL)
-        corrected = next(
-            row for row in execution_page.executions if row.execution_id == "exec-root-buy-corrected"
-        )
+        corrected = next(row for row in execution_page.executions if row.execution_id == "exec-root-buy-corrected")
         assert corrected.filled_at_ms == buy_at
         assert corrected.recorded_at_ms != corrected.filled_at_ms
     finally:
@@ -684,9 +744,7 @@ def test_equal_execution_timestamps_follow_durable_custody_sequence(tmp_path: Pa
 
         assert window is not None
         assert [fill.event_key for fill in window.fills] == ["exec-z-first", "exec-a-second"]
-        assert [fill.ledger_sequence for fill in window.fills] == sorted(
-            fill.ledger_sequence for fill in window.fills
-        )
+        assert [fill.ledger_sequence for fill in window.fills] == sorted(fill.ledger_sequence for fill in window.fills)
     finally:
         repo.close()
 

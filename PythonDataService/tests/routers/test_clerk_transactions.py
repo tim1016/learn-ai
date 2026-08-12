@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime, set_active_clerk_runtime
+from app.broker.alpaca.clerk.sqlite.economic_projection_models import AccountPnlAttribution
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.models import ExternalOrderResource
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -203,6 +204,40 @@ async def test_history_endpoint_rejects_an_inverted_ms_window() -> None:
         )
     assert response.status_code == 422
     assert response.json()["detail"] == "to_ms must be greater than or equal to from_ms"
+
+
+async def test_pnl_attribution_endpoint_passes_the_inclusive_window_to_c2(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.routers.clerk_transactions as clerk_transactions_router
+
+    def attribution(*, account_id: str, from_ms: int, to_ms: int) -> AccountPnlAttribution:
+        assert (account_id, from_ms, to_ms) == ("DU1219", 1_700_000_000_000, 1_700_086_400_000)
+        return AccountPnlAttribution(
+            account_id=account_id,
+            authority_generation=1,
+            control_revision=2,
+            from_ms=from_ms,
+            to_ms=to_ms,
+            attribution_rows=(),
+            realized_pnl_total=12.5,
+            open_pnl_total=0.0,
+            marks_complete=True,
+            mark_observed_at_ms={},
+        )
+
+    monkeypatch.setattr(clerk_transactions_router, "sqlite_account_pnl_attribution", attribution)
+    app = FastAPI()
+    app.include_router(router)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/accounts/DU1219/pnl-attribution",
+            params={"from_ms": 1_700_000_000_000, "to_ms": 1_700_086_400_000},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["realized_pnl_total"] == 12.5
+    assert response.json()["mark_observed_at_ms"] == {}
 
 
 async def test_history_endpoint_reports_unavailable_without_fallback_scan(

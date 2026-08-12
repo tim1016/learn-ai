@@ -15,6 +15,14 @@ export type BrokerOrderEvent = components['schemas']['BrokerOrderEvent'];
 export type BrokerPortfolioHistory = components['schemas']['BrokerPortfolioHistory'];
 export type PortfolioHistoryRange = components['schemas']['PortfolioHistoryRange'];
 
+// C1 + C2 + C3 Trader-lens proof. Values are server-owned and generated from
+// the Python OpenAPI contract; the browser only presents them.
+export type AccountFifoAttributionRow = components['schemas']['FifoAttributionRowResponse'];
+export type AccountPnlAttribution = components['schemas']['AccountPnlAttributionResponse'];
+export type AccountPnlDivergence = components['schemas']['AccountPnlDivergenceResponse'];
+export type AccountPnlReconciliation = components['schemas']['AccountPnlReconciliationResponse'];
+export type PortfolioHistoryProof = components['schemas']['PortfolioHistoryProofResponse'];
+
 // Phase-2 order submission (write path). S2 adds limit orders + time-in-force.
 export type BrokerOrderRequest = components['schemas']['BrokerOrderRequest'];
 export type BrokerOrderLeg = components['schemas']['BrokerOrderLeg'];

@@ -9,6 +9,7 @@ import type {
   BrokerOrderGroup,
   BrokerOrderRequest,
   BrokerPortfolioHistory,
+  PortfolioHistoryProof,
   BrokerPosition,
   ClerkStatus,
   CustodyDiagnosis,
@@ -95,6 +96,17 @@ export class BrokersService {
     const params = new HttpParams().set('range', historyRange);
     return firstValueFrom(
       this.http.get<BrokerPortfolioHistory>(`${this.base}/${broker}/portfolio-history`, { params }),
+    );
+  }
+
+  /** C1 curve plus C2/C3 reconciliation proof; the browser derives no P&L. */
+  getPortfolioHistoryProof(
+    broker: string,
+    historyRange: PortfolioHistoryRange,
+  ): Promise<PortfolioHistoryProof> {
+    const params = new HttpParams().set('range', historyRange);
+    return firstValueFrom(
+      this.http.get<PortfolioHistoryProof>(`${this.base}/${broker}/portfolio-history-proof`, { params }),
     );
   }
 

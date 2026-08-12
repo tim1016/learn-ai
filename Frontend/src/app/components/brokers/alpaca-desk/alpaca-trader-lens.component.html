@@ -49,6 +49,10 @@
           [scopeLabel]="scopeConfig[scope()].label"
           [unavailable]="portfolioHistoryUnavailable()"
         />
+        <app-alpaca-portfolio-reconciliation-proof
+          [proof]="portfolioHistoryProof()"
+          [unavailable]="portfolioHistoryProofUnavailable()"
+        />
         <app-account-desk-transaction-history
           [accountId]="account()?.account_id ?? null"
           [fromMs]="historyWindow()?.fromMs ?? null"

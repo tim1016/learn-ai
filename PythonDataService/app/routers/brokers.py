@@ -33,6 +33,10 @@ from app.broker.alpaca.clerk import (
     get_alpaca_clerk,
 )
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
+from app.broker.alpaca.clerk.sqlite.economic_projection import (
+    EconomicProjectionError,
+    MarketMark,
+)
 from app.broker.contract.errors import (
     BrokerError,
     BrokerRateLimited,
@@ -53,9 +57,17 @@ from app.broker.contract.models import (
 from app.broker.contract.ports import BrokerReadPort
 from app.broker.contract.registry import get_broker_registry
 from app.config import settings
+from app.schemas.account_pnl_attribution import (
+    AccountPnlAttributionResponse,
+    AccountPnlReconciliationResponse,
+    PortfolioHistoryProofResponse,
+)
 from app.security.data_plane_control import require_data_plane_control_secret
+from app.services.account_pnl_reconciliation import reconcile_broker_curve_to_local_pnl
 from app.services.broker_account_snapshot import resolve_broker_account_snapshot
 from app.services.broker_order_groups import group_orders_by_symbol
+from app.services.clerk_transaction_projection import ClerkTransactionProjectionUnavailable
+from app.services.sqlite_account_pnl_attribution import sqlite_account_pnl_attribution
 from app.services.sqlite_clerk_compat import (
     active_sqlite_facade,
     sqlite_clerk_status,
@@ -185,6 +197,63 @@ async def get_portfolio_history(
 ) -> BrokerPortfolioHistory:
     """Return the broker's authoritative account equity curve for one window."""
     return await _run(broker, lambda port: port.get_portfolio_history(history_range))
+
+
+@router.get(
+    "/{broker}/portfolio-history-proof",
+    response_model=PortfolioHistoryProofResponse,
+)
+async def get_portfolio_history_proof(
+    broker: str,
+    history_range: PortfolioHistoryRange = Query(alias="range"),
+) -> PortfolioHistoryProofResponse:
+    """Bundle C1 broker history with independent C2/C3 proof for Trader lens."""
+    history, positions = await asyncio.gather(
+        _run(broker, lambda port: port.get_portfolio_history(history_range)),
+        _run(broker, lambda port: port.list_positions()),
+    )
+    sqlite = active_sqlite_facade(broker)
+    if sqlite is None:
+        raise HTTPException(
+            status_code=409,
+            detail="SQLite Clerk authority is not active for this broker.",
+        )
+    if not history.timestamps:
+        raise HTTPException(
+            status_code=422,
+            detail="Broker portfolio history has no timestamps for the requested range.",
+        )
+    try:
+        attribution = await asyncio.to_thread(
+            sqlite_account_pnl_attribution,
+            account_id=sqlite.account_id,
+            from_ms=history.timestamps[0],
+            to_ms=history.timestamps[-1],
+            marks={
+                position.symbol.upper(): MarketMark(
+                    price=position.current_price,
+                    observed_at_ms=position.observed_at_ms,
+                )
+                for position in positions
+                if position.current_price is not None
+            },
+        )
+    except (ClerkTransactionProjectionUnavailable, EconomicProjectionError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="SQLite FIFO attribution is unavailable for this broker.",
+        ) from exc
+    if attribution is None:
+        raise HTTPException(
+            status_code=409,
+            detail="SQLite Clerk authority changed while loading portfolio history proof.",
+        )
+    reconciliation = reconcile_broker_curve_to_local_pnl(history, attribution)
+    return PortfolioHistoryProofResponse(
+        history=history,
+        attribution=AccountPnlAttributionResponse.from_projection(attribution),
+        reconciliation=AccountPnlReconciliationResponse.from_result(reconciliation),
+    )
 
 
 def _require_trade_clerk(broker: str) -> AlpacaClerk:
