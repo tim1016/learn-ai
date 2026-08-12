@@ -178,6 +178,29 @@ describe('BotTileComponent', () => {
     expect(button.title).toBe('Recovery required before resuming.');
   });
 
+  it('disables the quick action and marks it aria-busy when pending', async () => {
+    await render(BotTileComponent, {
+      inputs: { bot: bot(), bars: [bar()], broker: 'alpaca', accountId: 'PA3', pending: true },
+      providers: [routerProvider()],
+    });
+
+    const button = screen.getByRole('button', { name: /Stop/i }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute('aria-busy')).toBe('true');
+    expect(button.textContent?.trim()).toBe('Stop…');
+  });
+
+  it('keeps the quick action actionable when not pending', async () => {
+    await render(BotTileComponent, {
+      inputs: { bot: bot(), bars: [bar()], broker: 'alpaca', accountId: 'PA3', pending: false },
+      providers: [routerProvider()],
+    });
+
+    const button = screen.getByRole('button', { name: /^Stop$/i }) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    expect(button.getAttribute('aria-busy')).toBe('false');
+  });
+
   it('opens an inline confirm on quick-action click and only emits action after confirming', async () => {
     const onAction = vi.fn();
     await render(BotTileComponent, {

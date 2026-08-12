@@ -67,8 +67,15 @@ export class BotGalleryPageComponent {
   private readonly messageService = inject(MessageService);
   private readonly destroyRef = inject(DestroyRef);
 
-  /** Guards against a double-submit while a confirmed click is in flight; not rendered anywhere (the dock has no pending-tile affordance to wire it into). */
-  private readonly pendingSids = signal<ReadonlySet<string>>(new Set());
+  /**
+   * Sids with a confirmed quick action in flight. Drives two things off the
+   * one set: the reentrancy guard in `onAction` (below) and the visual
+   * pending affordance on the tile — passed straight through to the dock's
+   * `pendingSids` input, which forwards `has(bot.sid)` to each
+   * `BotTileComponent`'s `pending` input (disables the button, sets
+   * `aria-busy`). Mirrors `bots-roster`'s `pendingBotIds` pattern.
+   */
+  protected readonly pendingSids = signal<ReadonlySet<string>>(new Set());
 
   protected readonly statusLabel = computed(() => STATUS_LABEL[this.store.status()]);
   protected readonly stale = computed(() => this.store.status() === 'stale');

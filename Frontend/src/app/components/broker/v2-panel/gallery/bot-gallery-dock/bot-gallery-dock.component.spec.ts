@@ -80,6 +80,7 @@ interface RenderInputs {
   markersBySid?: ReadonlyMap<string, readonly ChartFillMarker[]>;
   broker?: string;
   accountId?: string;
+  pendingSids?: ReadonlySet<string>;
 }
 
 async function renderDock(inputs: RenderInputs) {
@@ -91,6 +92,7 @@ async function renderDock(inputs: RenderInputs) {
       markersBySid: inputs.markersBySid ?? new Map(),
       broker: inputs.broker ?? BROKER,
       accountId: inputs.accountId ?? ACCOUNT_ID,
+      pendingSids: inputs.pendingSids ?? new Set(),
     },
     on: { action: onAction },
   });
@@ -231,5 +233,18 @@ describe('BotGalleryDockComponent', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
 
     expect(onAction).toHaveBeenCalledWith({ sid: 'sid-0', actionId: 'stop' });
+  });
+
+  it('forwards pendingSids down to the matching tile only', async () => {
+    await renderDock({ bots: bots(2), pendingSids: new Set(['sid-0']) });
+
+    const buttons = screen.getAllByRole('button', { name: /^Stop…?$/i }) as HTMLButtonElement[];
+    const pending = buttons.filter((button) => button.getAttribute('aria-busy') === 'true');
+    const notPending = buttons.filter((button) => button.getAttribute('aria-busy') === 'false');
+
+    expect(pending).toHaveLength(1);
+    expect(pending[0].disabled).toBe(true);
+    expect(notPending).toHaveLength(1);
+    expect(notPending[0].disabled).toBe(false);
   });
 });

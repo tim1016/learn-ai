@@ -89,6 +89,8 @@ export class BotTileComponent {
   readonly markers = input<readonly ChartFillMarker[]>([]);
   readonly broker = input.required<string>();
   readonly accountId = input.required<string>();
+  /** Set by the dock while this tile's confirmed quick action is in flight — disables the button and marks it `aria-busy` without restyling the rest of the tile. */
+  readonly pending = input<boolean>(false);
 
   readonly action = output<{ sid: string; actionId: string }>();
 

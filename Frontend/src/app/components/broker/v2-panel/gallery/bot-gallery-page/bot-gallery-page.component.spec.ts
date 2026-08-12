@@ -1,7 +1,7 @@
 import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import { fireEvent, render, screen } from '@testing-library/angular';
+import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { MessageService } from 'primeng/api';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -90,16 +90,23 @@ function fakeGalleryStore(overrides: {
   };
 }
 
-async function renderPage(store: FakeGalleryStore) {
+interface PanelServiceOverrides {
+  getPanel?: ReturnType<typeof vi.fn>;
+  runBotAction?: ReturnType<typeof vi.fn>;
+}
+
+async function renderPage(store: FakeGalleryStore, overrides: PanelServiceOverrides = {}) {
   const panelService = {
-    getPanel: vi.fn().mockResolvedValue({ actions: [fakeAction('stop')] }),
-    runBotAction: vi.fn().mockResolvedValue({
-      action_id: 'stop',
-      applied: true,
-      revision: 2,
-      concurrency_token: 'next-token',
-      message: 'Bot stopped.',
-    }),
+    getPanel: overrides.getPanel ?? vi.fn().mockResolvedValue({ actions: [fakeAction('stop')] }),
+    runBotAction:
+      overrides.runBotAction ??
+      vi.fn().mockResolvedValue({
+        action_id: 'stop',
+        applied: true,
+        revision: 2,
+        concurrency_token: 'next-token',
+        message: 'Bot stopped.',
+      }),
   };
   const messageService = { add: vi.fn() };
 
@@ -190,6 +197,31 @@ describe('BotGalleryPageComponent', () => {
       'sid-1',
       fakeAction('stop'),
     );
+  });
+
+  it('marks the sid pending — disabling and aria-busy-ing the tile button — while the action is in flight, and clears it after', async () => {
+    const store = fakeGalleryStore({ status: 'live', bots: [bot({ sid: 'sid-1' })] });
+    let resolveGetPanel!: (value: { actions: PanelAction[] }) => void;
+    const getPanel = vi.fn(
+      () => new Promise<{ actions: PanelAction[] }>((resolve) => { resolveGetPanel = resolve; }),
+    );
+    const { fixture } = await renderPage(store, { getPanel });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Stop$/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    await fixture.whenStable();
+
+    const pendingButton = screen.getByRole('button', { name: /Stop/i }) as HTMLButtonElement;
+    expect(pendingButton.getAttribute('aria-busy')).toBe('true');
+    expect(pendingButton.disabled).toBe(true);
+
+    resolveGetPanel({ actions: [fakeAction('stop')] });
+
+    await waitFor(() => {
+      const settledButton = screen.getByRole('button', { name: /^Stop$/i }) as HTMLButtonElement;
+      expect(settledButton.getAttribute('aria-busy')).toBe('false');
+      expect(settledButton.disabled).toBe(false);
+    });
   });
 
   it('does not call runBotAction when the refreshed panel no longer offers the action', async () => {

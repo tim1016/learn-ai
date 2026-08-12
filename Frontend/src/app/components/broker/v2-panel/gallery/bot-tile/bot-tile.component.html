@@ -54,12 +54,13 @@
     <button
       type="button"
       class="bot-tile__action-button"
-      [disabled]="!bot().primary_action.enabled"
+      [disabled]="pending() || !bot().primary_action.enabled"
+      [attr.aria-busy]="pending()"
       [attr.title]="actionTitle()"
       [attr.aria-label]="actionAriaLabel()"
       (click)="onActionClick()"
     >
-      {{ bot().primary_action.label }}
+      {{ pending() ? bot().primary_action.label + '…' : bot().primary_action.label }}
     </button>
 
     @if (confirmOpen()) {

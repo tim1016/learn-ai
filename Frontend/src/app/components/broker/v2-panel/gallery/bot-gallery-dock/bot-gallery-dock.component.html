@@ -29,6 +29,7 @@
           [markers]="markersBySid().get(bot.sid) ?? []"
           [broker]="broker()"
           [accountId]="accountId()"
+          [pending]="pendingSids().has(bot.sid)"
           (action)="forwardAction($event)"
         />
 
