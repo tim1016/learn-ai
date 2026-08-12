@@ -6,6 +6,7 @@ import type {
   BrokerActivity,
   BrokerPortfolioHistory,
   BrokerPosition,
+  PortfolioHistoryProof,
 } from '../../../api/alpaca.types';
 import { BrokerService } from '../../../services/broker.service';
 import { BrokersService } from '../../../services/brokers.service';
@@ -124,6 +125,44 @@ function portfolioHistory(): BrokerPortfolioHistory {
   };
 }
 
+function portfolioHistoryProof(): PortfolioHistoryProof {
+  return {
+    history: portfolioHistory(),
+    attribution: {
+      account_id: 'PA1',
+      authority_generation: 1,
+      control_revision: 2,
+      from_ms: 1_700_000_000_000,
+      to_ms: 1_700_086_400_000,
+      attribution_rows: [{
+        symbol: 'SPY',
+        quantity: 10,
+        entry_price: 500,
+        exit_price: 510,
+        opened_at_ms: 1_700_000_000_000,
+        closed_at_ms: 1_700_086_400_000,
+        realized_pnl: 100,
+        fee: null,
+        entry_strategy_instance_id: 'bot-spy',
+        exit_strategy_instance_id: 'bot-spy',
+      }],
+      realized_pnl_total: 100,
+      open_pnl_total: 0,
+      marks_complete: true,
+      mark_observed_at_ms: {},
+    },
+    reconciliation: {
+      broker_delta: 125,
+      local_delta: 125,
+      residual: 0,
+      within_tolerance: true,
+      atol: 0.000001,
+      rtol: 0,
+      divergences: [],
+    },
+  };
+}
+
 function transactionHistory() {
   return {
     projection_available: true,
@@ -153,6 +192,7 @@ function brokers() {
     listPositions: vi.fn().mockResolvedValue(positions()),
     listActivities: vi.fn().mockResolvedValue(activities()),
     getPortfolioHistory: vi.fn().mockResolvedValue(portfolioHistory()),
+    getPortfolioHistoryProof: vi.fn().mockResolvedValue(portfolioHistoryProof()),
   };
 }
 
@@ -196,6 +236,10 @@ describe('AlpacaTraderLensComponent', () => {
     expect(await screen.findByRole('img', { name: '30D broker equity curve' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Transaction history' })).toBeTruthy();
     expect(broker.getPortfolioHistory).toHaveBeenCalledWith('alpaca', '30D');
+    expect(broker.getPortfolioHistoryProof).toHaveBeenCalledWith('alpaca', '30D');
+    expect(await screen.findByText(/Broker curve agrees with local FIFO P&L within \$0\.000001\./)).toBeTruthy();
+    expect(screen.getByRole('table', { name: 'FIFO attribution rows' })).toBeTruthy();
+    expect(screen.getAllByTitle('SPY')).not.toHaveLength(0);
     await vi.waitFor(() => expect(clerk.accountTransactions).toHaveBeenCalled());
     const thirtyDayFilters = clerk.accountTransactions.mock.calls.at(-1)?.[3];
     expect(thirtyDayFilters).toMatchObject({ fromMs: expect.any(Number), toMs: expect.any(Number) });
@@ -207,6 +251,7 @@ describe('AlpacaTraderLensComponent', () => {
     expect(await screen.findByRole('heading', { name: '60D equity curve' })).toBeTruthy();
     expect(await screen.findByRole('img', { name: '60D broker equity curve' })).toBeTruthy();
     expect(broker.getPortfolioHistory).toHaveBeenLastCalledWith('alpaca', '60D');
+    expect(broker.getPortfolioHistoryProof).toHaveBeenLastCalledWith('alpaca', '60D');
     await vi.waitFor(() => {
       const sixtyDayFilters = clerk.accountTransactions.mock.calls.at(-1)?.[3];
       expect(sixtyDayFilters.toMs - sixtyDayFilters.fromMs).toBe(60 * 24 * 60 * 60 * 1_000);
@@ -221,5 +266,16 @@ describe('AlpacaTraderLensComponent', () => {
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toContain("Today's account activity is unavailable");
     expect(screen.queryByText('No account activity has been recorded today.')).toBeNull();
+  });
+
+  it('keeps the broker curve visible when the independent proof is unavailable', async () => {
+    const broker = brokers();
+    broker.getPortfolioHistoryProof.mockRejectedValue(new Error('SQLite unavailable'));
+    await renderLens(broker);
+
+    fireEvent.click(screen.getByRole('button', { name: '30D' }));
+
+    expect(await screen.findByRole('img', { name: '30D broker equity curve' })).toBeTruthy();
+    expect(await screen.findByText('Portfolio reconciliation proof is unavailable right now.')).toBeTruthy();
   });
 });

@@ -5,6 +5,7 @@ import { AccountDeskTransactionHistoryComponent } from '../../broker/account-des
 import { AccountDeskTransactionHistoryStore } from '../../broker/account-desk/account-desk-transaction-history-store.service';
 import { AlpacaDeskAccountDataService } from './alpaca-desk-account-data.service';
 import { AlpacaPortfolioHistoryChartComponent } from './alpaca-portfolio-history-chart.component';
+import { AlpacaPortfolioReconciliationProofComponent } from './alpaca-portfolio-reconciliation-proof.component';
 import { AlpacaPositionsTableComponent } from './alpaca-positions-table.component';
 import { AlpacaTraderActivityTimelineComponent } from './alpaca-trader-activity-timeline.component';
 import { AlpacaTraderHeroComponent } from './alpaca-trader-hero.component';
@@ -38,6 +39,7 @@ const MS_PER_DAY = 24 * 60 * 60 * 1_000;
     AlpacaPositionsTableComponent,
     AccountDeskTransactionHistoryComponent,
     AlpacaPortfolioHistoryChartComponent,
+    AlpacaPortfolioReconciliationProofComponent,
     AlpacaTraderActivityTimelineComponent,
     AlpacaTraderHeroComponent,
   ],
@@ -74,6 +76,14 @@ export class AlpacaTraderLensComponent {
   );
   protected readonly portfolioHistoryUnavailable = computed(
     () => this.traderData.portfolioHistory.error() !== undefined,
+  );
+  protected readonly portfolioHistoryProof = computed(() =>
+    this.traderData.portfolioHistoryProof.hasValue()
+      ? this.traderData.portfolioHistoryProof.value()
+      : undefined,
+  );
+  protected readonly portfolioHistoryProofUnavailable = computed(
+    () => this.traderData.portfolioHistoryProof.error() !== undefined,
   );
   protected readonly historyWindow = this.historyWindowState.asReadonly();
 

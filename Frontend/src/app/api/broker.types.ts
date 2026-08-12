@@ -446,6 +446,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/{account_id}/pnl-attribution": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Account Pnl Attribution
+         * @description Return C2's inclusive account FIFO attribution from SQLite folds.
+         */
+        get: operations["get_account_pnl_attribution_api_accounts__account_id__pnl_attribution_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/{account_id}/presented-actions/reconcile-now": {
         parameters: {
             query?: never;
@@ -2425,6 +2445,26 @@ export interface paths {
          * @description Return the broker's authoritative account equity curve for one window.
          */
         get: operations["get_portfolio_history_api_brokers__broker__portfolio_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/portfolio-history-proof": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Portfolio History Proof
+         * @description Bundle C1 broker history with independent C2/C3 proof for Trader lens.
+         */
+        get: operations["get_portfolio_history_proof_api_brokers__broker__portfolio_history_proof_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -6555,6 +6595,63 @@ export interface components {
             strategy_instance_id: string;
             /** Trace Id */
             trace_id: string;
+        };
+        /**
+         * AccountPnlAttributionResponse
+         * @description C2 — inclusive-window FIFO attribution from active SQLite folds.
+         */
+        AccountPnlAttributionResponse: {
+            /** Account Id */
+            account_id: string;
+            /** Attribution Rows */
+            attribution_rows: components["schemas"]["FifoAttributionRowResponse"][];
+            /** Authority Generation */
+            authority_generation: number;
+            /** Control Revision */
+            control_revision: number;
+            /** From Ms */
+            from_ms: number;
+            /** Mark Observed At Ms */
+            mark_observed_at_ms: {
+                [key: string]: number;
+            };
+            /** Marks Complete */
+            marks_complete: boolean;
+            /** Open Pnl Total */
+            open_pnl_total: number | null;
+            /** Realized Pnl Total */
+            realized_pnl_total: number;
+            /** To Ms */
+            to_ms: number;
+        };
+        /**
+         * AccountPnlDivergenceResponse
+         * @description One C3 classification, named by the shared reconciliation taxonomy.
+         */
+        AccountPnlDivergenceResponse: {
+            category: components["schemas"]["DivergenceCategory"];
+            /** Detail */
+            detail: string;
+        };
+        /**
+         * AccountPnlReconciliationResponse
+         * @description C3 — broker-curve and local-FIFO delta comparison.
+         */
+        AccountPnlReconciliationResponse: {
+            /** Atol */
+            atol: number;
+            /** Broker Delta */
+            broker_delta: number;
+            /** Divergences */
+            divergences: components["schemas"]["AccountPnlDivergenceResponse"][];
+            /** Local Delta */
+            local_delta: number;
+            /** Residual */
+            residual: number;
+            /** Rtol */
+            rtol: number;
+            /** Within Tolerance */
+            within_tolerance: boolean;
         };
         /**
          * AccountReconciliationAutomationPolicy
@@ -12295,6 +12392,12 @@ export interface components {
             warnings?: string[];
         };
         /**
+         * DivergenceCategory
+         * @description Categorical divergence types — see numerical-rigor.md.
+         * @enum {string}
+         */
+        DivergenceCategory: "fixture_insufficient" | "decision_mismatch" | "direction_mismatch" | "quantity_mismatch" | "fill_price_drift" | "commission_drift" | "pnl_drift" | "order_type_mismatch";
+        /**
          * DivergenceFacts
          * @description Structured facts that justify a non-``EXPECTED`` verdict.
          *
@@ -13370,6 +13473,32 @@ export interface components {
             reason: string;
             /** Stale */
             stale: boolean;
+        };
+        /**
+         * FifoAttributionRowResponse
+         * @description One backend-computed FIFO lot closure; the browser renders it verbatim.
+         */
+        FifoAttributionRowResponse: {
+            /** Closed At Ms */
+            closed_at_ms: number;
+            /** Entry Price */
+            entry_price: number;
+            /** Entry Strategy Instance Id */
+            entry_strategy_instance_id: string;
+            /** Exit Price */
+            exit_price: number;
+            /** Exit Strategy Instance Id */
+            exit_strategy_instance_id: string;
+            /** Fee */
+            fee?: number | null;
+            /** Opened At Ms */
+            opened_at_ms: number;
+            /** Quantity */
+            quantity: number;
+            /** Realized Pnl */
+            realized_pnl: number;
+            /** Symbol */
+            symbol: string;
         };
         /**
          * FitParamsResponse
@@ -18832,6 +18961,15 @@ export interface components {
             op: "<" | "<=" | "==" | ">=" | ">" | "!=";
             /** Value */
             value: number;
+        };
+        /**
+         * PortfolioHistoryProofResponse
+         * @description C1 + C2 + C3 bundle for the Trader lens historical scope.
+         */
+        PortfolioHistoryProofResponse: {
+            attribution: components["schemas"]["AccountPnlAttributionResponse"];
+            history: components["schemas"]["BrokerPortfolioHistory"];
+            reconciliation: components["schemas"]["AccountPnlReconciliationResponse"];
         };
         /**
          * PortfolioHistoryRange
@@ -25324,6 +25462,42 @@ export interface operations {
             };
         };
     };
+    get_account_pnl_attribution_api_accounts__account_id__pnl_attribution_get: {
+        parameters: {
+            query: {
+                from_ms: number;
+                to_ms: number;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountPnlAttributionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     execute_presented_reconcile_action_endpoint_api_accounts__account_id__presented_actions_reconcile_now_post: {
         parameters: {
             query?: never;
@@ -28972,6 +29146,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BrokerPortfolioHistory"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_portfolio_history_proof_api_brokers__broker__portfolio_history_proof_get: {
+        parameters: {
+            query: {
+                range: components["schemas"]["PortfolioHistoryRange"];
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PortfolioHistoryProofResponse"];
                 };
             };
             /** @description Validation Error */

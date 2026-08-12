@@ -1560,6 +1560,156 @@
         "title": "AccountOwnerSubmitIntent",
         "type": "object"
       },
+      "AccountPnlAttributionResponse": {
+        "additionalProperties": false,
+        "description": "C2 \u2014 inclusive-window FIFO attribution from active SQLite folds.",
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "attribution_rows": {
+            "items": {
+              "$ref": "#/components/schemas/FifoAttributionRowResponse"
+            },
+            "title": "Attribution Rows",
+            "type": "array"
+          },
+          "authority_generation": {
+            "minimum": 0.0,
+            "title": "Authority Generation",
+            "type": "integer"
+          },
+          "control_revision": {
+            "minimum": 0.0,
+            "title": "Control Revision",
+            "type": "integer"
+          },
+          "from_ms": {
+            "minimum": 0.0,
+            "title": "From Ms",
+            "type": "integer"
+          },
+          "mark_observed_at_ms": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Mark Observed At Ms",
+            "type": "object"
+          },
+          "marks_complete": {
+            "title": "Marks Complete",
+            "type": "boolean"
+          },
+          "open_pnl_total": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Open Pnl Total"
+          },
+          "realized_pnl_total": {
+            "title": "Realized Pnl Total",
+            "type": "number"
+          },
+          "to_ms": {
+            "minimum": 0.0,
+            "title": "To Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "account_id",
+          "authority_generation",
+          "control_revision",
+          "from_ms",
+          "to_ms",
+          "attribution_rows",
+          "realized_pnl_total",
+          "open_pnl_total",
+          "marks_complete",
+          "mark_observed_at_ms"
+        ],
+        "title": "AccountPnlAttributionResponse",
+        "type": "object"
+      },
+      "AccountPnlDivergenceResponse": {
+        "additionalProperties": false,
+        "description": "One C3 classification, named by the shared reconciliation taxonomy.",
+        "properties": {
+          "category": {
+            "$ref": "#/components/schemas/DivergenceCategory"
+          },
+          "detail": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Detail",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "detail"
+        ],
+        "title": "AccountPnlDivergenceResponse",
+        "type": "object"
+      },
+      "AccountPnlReconciliationResponse": {
+        "additionalProperties": false,
+        "description": "C3 \u2014 broker-curve and local-FIFO delta comparison.",
+        "properties": {
+          "atol": {
+            "minimum": 0.0,
+            "title": "Atol",
+            "type": "number"
+          },
+          "broker_delta": {
+            "title": "Broker Delta",
+            "type": "number"
+          },
+          "divergences": {
+            "items": {
+              "$ref": "#/components/schemas/AccountPnlDivergenceResponse"
+            },
+            "title": "Divergences",
+            "type": "array"
+          },
+          "local_delta": {
+            "title": "Local Delta",
+            "type": "number"
+          },
+          "residual": {
+            "title": "Residual",
+            "type": "number"
+          },
+          "rtol": {
+            "minimum": 0.0,
+            "title": "Rtol",
+            "type": "number"
+          },
+          "within_tolerance": {
+            "title": "Within Tolerance",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "broker_delta",
+          "local_delta",
+          "residual",
+          "within_tolerance",
+          "atol",
+          "rtol",
+          "divergences"
+        ],
+        "title": "AccountPnlReconciliationResponse",
+        "type": "object"
+      },
       "AccountReconciliationAutomationPolicy": {
         "additionalProperties": false,
         "description": "Durable operator policy for bot-owned trade reconciliation.",
@@ -15309,6 +15459,21 @@
         "title": "DiagnosticsResponse",
         "type": "object"
       },
+      "DivergenceCategory": {
+        "description": "Categorical divergence types \u2014 see numerical-rigor.md.",
+        "enum": [
+          "fixture_insufficient",
+          "decision_mismatch",
+          "direction_mismatch",
+          "quantity_mismatch",
+          "fill_price_drift",
+          "commission_drift",
+          "pnl_drift",
+          "order_type_mismatch"
+        ],
+        "title": "DivergenceCategory",
+        "type": "string"
+      },
       "DivergenceFacts": {
         "additionalProperties": false,
         "description": "Structured facts that justify a non-``EXPECTED`` verdict.\n\nEvery value here must be derivable from the broker event and the\nengine overlay alone \u2014 no speculation, no inferred state. Templates\nthat reference fields here must reference only fields present;\nabsent context means the template cannot be selected.",
@@ -17812,6 +17977,80 @@
           "observed_at_ms"
         ],
         "title": "FeedHealth",
+        "type": "object"
+      },
+      "FifoAttributionRowResponse": {
+        "additionalProperties": false,
+        "description": "One backend-computed FIFO lot closure; the browser renders it verbatim.",
+        "properties": {
+          "closed_at_ms": {
+            "minimum": 0.0,
+            "title": "Closed At Ms",
+            "type": "integer"
+          },
+          "entry_price": {
+            "title": "Entry Price",
+            "type": "number"
+          },
+          "entry_strategy_instance_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Entry Strategy Instance Id",
+            "type": "string"
+          },
+          "exit_price": {
+            "title": "Exit Price",
+            "type": "number"
+          },
+          "exit_strategy_instance_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Exit Strategy Instance Id",
+            "type": "string"
+          },
+          "fee": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fee"
+          },
+          "opened_at_ms": {
+            "minimum": 0.0,
+            "title": "Opened At Ms",
+            "type": "integer"
+          },
+          "quantity": {
+            "title": "Quantity",
+            "type": "number"
+          },
+          "realized_pnl": {
+            "title": "Realized Pnl",
+            "type": "number"
+          },
+          "symbol": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "quantity",
+          "entry_price",
+          "exit_price",
+          "opened_at_ms",
+          "closed_at_ms",
+          "realized_pnl",
+          "entry_strategy_instance_id",
+          "exit_strategy_instance_id"
+        ],
+        "title": "FifoAttributionRowResponse",
         "type": "object"
       },
       "FitParamsResponse": {
@@ -29804,6 +30043,28 @@
           "value"
         ],
         "title": "PnLPoints",
+        "type": "object"
+      },
+      "PortfolioHistoryProofResponse": {
+        "additionalProperties": false,
+        "description": "C1 + C2 + C3 bundle for the Trader lens historical scope.",
+        "properties": {
+          "attribution": {
+            "$ref": "#/components/schemas/AccountPnlAttributionResponse"
+          },
+          "history": {
+            "$ref": "#/components/schemas/BrokerPortfolioHistory"
+          },
+          "reconciliation": {
+            "$ref": "#/components/schemas/AccountPnlReconciliationResponse"
+          }
+        },
+        "required": [
+          "history",
+          "attribution",
+          "reconciliation"
+        ],
+        "title": "PortfolioHistoryProofResponse",
         "type": "object"
       },
       "PortfolioHistoryRange": {
@@ -44303,6 +44564,85 @@
         ]
       }
     },
+    "/api/accounts/{account_id}/pnl-attribution": {
+      "get": {
+        "description": "Return C2's inclusive account FIFO attribution from SQLite folds.",
+        "operationId": "get_account_pnl_attribution_api_accounts__account_id__pnl_attribution_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from_ms",
+            "required": true,
+            "schema": {
+              "minimum": 0,
+              "title": "From Ms",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to_ms",
+            "required": true,
+            "schema": {
+              "minimum": 0,
+              "title": "To Ms",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountPnlAttributionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Account Pnl Attribution",
+        "tags": [
+          "clerk-transactions"
+        ]
+      }
+    },
     "/api/accounts/{account_id}/presented-actions/reconcile-now": {
       "post": {
         "description": "Execute only the currently presented Reconcile Now envelope.",
@@ -51922,6 +52262,73 @@
           }
         },
         "summary": "Get Portfolio History",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/portfolio-history-proof": {
+      "get": {
+        "description": "Bundle C1 broker history with independent C2/C3 proof for Trader lens.",
+        "operationId": "get_portfolio_history_proof_api_brokers__broker__portfolio_history_proof_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "range",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/PortfolioHistoryRange"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortfolioHistoryProofResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Portfolio History Proof",
         "tags": [
           "brokers-v2"
         ]

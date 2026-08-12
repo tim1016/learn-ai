@@ -40,11 +40,13 @@ from app.broker.alpaca.clerk.fifo_pnl import (
     ClosedLot,
     _Lot,
     apply_fill_to_lots,
+    compute_fifo_pnl,
     compute_open_pnl,
     realized_pnl_for_window,
 )
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.sqlite.economic_projection_models import (
+    AccountPnlAttribution,
     EconomicSnapshot,
     ExecutionCoverage,
     ExecutionOrigin,
@@ -52,6 +54,7 @@ from app.broker.alpaca.clerk.sqlite.economic_projection_models import (
     ExecutionRow,
     ExecutionState,
     FeeFidelity,
+    FifoAttributionRow,
     FillPage,
     FillWindowProjection,
     MarketMark,
@@ -391,6 +394,74 @@ class SqliteEconomicProjectionReader:
             control_revision=meta.control_revision,
             executions=tuple(_to_execution_row(row) for row in visible),
             next_cursor=next_cursor,
+        )
+
+    def account_pnl_attribution(
+        self,
+        *,
+        from_ms: int,
+        to_ms: int,
+        marks: Mapping[str, MarketMark] | None = None,
+    ) -> AccountPnlAttribution:
+        """Return account-wide FIFO attribution for inclusive UTC-ms bounds.
+
+        Formula: window realized P&L = ``Σ closed_lot.realized_pnl`` for
+        ``from_ms <= closed_at_ms <= to_ms``; open P&L delegates to the
+        canonical FIFO mark valuation.  The lifetime fill scan is intentional:
+        an in-window sell can close a lot opened before ``from_ms``.
+        Reference: GAAP/IFRS FIFO; Kieso, Weygandt & Warfield, *Intermediate
+          Accounting* (17e), Chapter 8.
+        Canonical implementation: ``app.broker.alpaca.clerk.fifo_pnl``; this
+          SQLite read model only supplies authoritative effective fills.
+        Validated against:
+          ``tests/broker/alpaca/clerk/sqlite/test_economic_projection.py``.
+        """
+        _validate_inclusive_window(from_ms=from_ms, to_ms=to_ms)
+        with self._read_transaction():
+            meta = self._verified_meta()
+            strategy_instance_ids = tuple(
+                str(row["strategy_instance_id"])
+                for row in self._conn.execute(
+                    "SELECT strategy_instance_id FROM strategy_instances ORDER BY strategy_instance_id"
+                ).fetchall()
+            )
+            all_rows = self._effective_fill_rows(
+                strategy_instance_ids=strategy_instance_ids,
+                from_ms=None,
+                to_ms=None,
+                cursor_key=None,
+                limit=None,
+            )
+
+        records = tuple(
+            sorted(
+                (_to_fill_record(row, account_id=self._account_id) for row in all_rows),
+                key=lambda record: (record.filled_at_ms, record.ledger_sequence),
+            )
+        )
+        marks_by_symbol = dict(marks or {})
+        fifo_result = compute_fifo_pnl(
+            records,
+            mark_prices={symbol: mark.price for symbol, mark in marks_by_symbol.items()},
+        )
+        attribution_rows = tuple(
+            _to_fifo_attribution_row(lot) for lot in fifo_result.closed_lots if from_ms <= lot.closed_at_ms <= to_ms
+        )
+        return AccountPnlAttribution(
+            account_id=self._account_id,
+            authority_generation=meta.authority_generation,
+            control_revision=meta.control_revision,
+            from_ms=from_ms,
+            to_ms=to_ms,
+            attribution_rows=attribution_rows,
+            realized_pnl_total=sum(row.realized_pnl for row in attribution_rows),
+            open_pnl_total=fifo_result.open_pnl,
+            marks_complete=fifo_result.marks_complete,
+            mark_observed_at_ms={
+                lot.symbol: marks_by_symbol[lot.symbol].observed_at_ms
+                for lot in fifo_result.open_lots
+                if lot.symbol in marks_by_symbol
+            },
         )
 
     def effective_execution_summaries(
@@ -961,6 +1032,22 @@ def _to_fill_record(row: sqlite3.Row, *, account_id: str) -> FillRecord:
     )
 
 
+def _to_fifo_attribution_row(lot: ClosedLot) -> FifoAttributionRow:
+    """Adapt a canonical FIFO close without recomputing any economic field."""
+    return FifoAttributionRow(
+        symbol=lot.symbol,
+        quantity=lot.qty,
+        entry_price=lot.entry_price,
+        exit_price=lot.exit_price,
+        opened_at_ms=lot.opened_at_ms,
+        closed_at_ms=lot.closed_at_ms,
+        realized_pnl=lot.realized_pnl,
+        fee=lot.fee,
+        entry_strategy_instance_id=lot.entry_strategy_instance_id,
+        exit_strategy_instance_id=lot.exit_strategy_instance_id,
+    )
+
+
 def _to_execution_row(row: sqlite3.Row) -> ExecutionRow:
     try:
         side = OrderSide(row["side"].lower())
@@ -1047,6 +1134,12 @@ def _validate_window(*, from_ms: int | None, to_ms: int | None) -> None:
         raise ValueError("to_ms must be non-negative")
     if from_ms is not None and to_ms is not None and to_ms < from_ms:
         raise ValueError("to_ms must be greater than or equal to from_ms")
+
+
+def _validate_inclusive_window(*, from_ms: int, to_ms: int) -> None:
+    _validate_window(from_ms=from_ms, to_ms=to_ms)
+    if from_ms is None or to_ms is None:
+        raise ValueError("from_ms and to_ms are required")
 
 
 def _bounded_limit(limit: int) -> int:
@@ -1159,12 +1252,14 @@ __all__ = [
     "DEFAULT_FILL_PAGE_LIMIT",
     "DEFAULT_RECENT_FILL_LIMIT",
     "MAX_TRANSACTION_DETAIL_EXECUTIONS",
+    "AccountPnlAttribution",
     "EconomicProjectionError",
     "EconomicProjectionIdentityMismatch",
     "EconomicProjectionUnavailable",
     "EconomicSnapshot",
     "ExecutionPage",
     "ExecutionRow",
+    "FifoAttributionRow",
     "FillPage",
     "FillWindowProjection",
     "InvalidEconomicCursor",

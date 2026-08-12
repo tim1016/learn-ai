@@ -74,6 +74,7 @@ class _Lot:
     cost: float         # cost per share (entry fill price)
     opened_at_ms: int   # int64 ms UTC
     side: OrderSide     # BUY (long lot) or SELL (short lot)
+    strategy_instance_id: str
 
 
 # ── Output models ─────────────────────────────────────────────────────────────
@@ -91,6 +92,8 @@ class ClosedLot:
     closed_at_ms: int     # int64 ms UTC
     realized_pnl: float
     fee: float | None     # None = not reported
+    entry_strategy_instance_id: str = ""
+    exit_strategy_instance_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -203,12 +206,28 @@ def apply_fill_to_lots(
     remaining = qty
 
     if not queue:
-        queue.append(_Lot(qty=remaining, cost=price, opened_at_ms=ts, side=fill.side))
+        queue.append(
+            _Lot(
+                qty=remaining,
+                cost=price,
+                opened_at_ms=ts,
+                side=fill.side,
+                strategy_instance_id=fill.sid,
+            )
+        )
         remaining = 0.0
     else:
         top_lot = queue[0]
         if fill.side == top_lot.side:
-            queue.append(_Lot(qty=remaining, cost=price, opened_at_ms=ts, side=fill.side))
+            queue.append(
+                _Lot(
+                    qty=remaining,
+                    cost=price,
+                    opened_at_ms=ts,
+                    side=fill.side,
+                    strategy_instance_id=fill.sid,
+                )
+            )
             remaining = 0.0
         else:
             while remaining > _ZERO_ABS_TOL and queue and queue[0].side != fill.side:
@@ -228,6 +247,8 @@ def apply_fill_to_lots(
                         closed_at_ms=ts,
                         realized_pnl=r_pnl,
                         fee=fill.fee,
+                        entry_strategy_instance_id=lot.strategy_instance_id,
+                        exit_strategy_instance_id=fill.sid,
                     )
                 )
                 realized_accumulator[0] += r_pnl
@@ -238,7 +259,13 @@ def apply_fill_to_lots(
 
             if remaining > _ZERO_ABS_TOL:
                 queue.append(
-                    _Lot(qty=remaining, cost=price, opened_at_ms=ts, side=fill.side)
+                    _Lot(
+                        qty=remaining,
+                        cost=price,
+                        opened_at_ms=ts,
+                        side=fill.side,
+                        strategy_instance_id=fill.sid,
+                    )
                 )
 
 
