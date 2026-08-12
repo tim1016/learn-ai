@@ -19,6 +19,7 @@ population is deferred to a later task — do not populate it here.
 from __future__ import annotations
 
 from typing import Protocol
+from uuid import uuid4
 
 from app.schemas.broker_v2_gallery import (
     GalleryBotDelta,
@@ -34,6 +35,16 @@ from app.services.broker_v2_panel.chart_projection_service import (
 )
 from app.utils.timestamps import now_ms_utc
 
+# Per-process nonce so a fresh hub after a data-plane restart never produces
+# an epoch byte-identical to the prior process's. Without this, a
+# reconnecting client's stale high cursor (e.g. version 300) would compare
+# equal to the new process's low-numbered epoch (both deterministically
+# "broker:account_id") and the router would never emit `event: reset`,
+# leaving the store's monotonic version guard silently dropping every
+# post-restart frame until the counter climbs back. Mirrors the reference
+# `SurfaceHub`'s per-process nonce.
+_PROCESS_NONCE = uuid4().hex
+
 
 def running_symbols(catalog: list[BotCatalogView]) -> list[str]:
     """Distinct symbols among running bots, in first-seen order."""
@@ -44,6 +55,13 @@ def running_symbols(catalog: list[BotCatalogView]) -> list[str]:
             seen.add(row.symbol)
             out.append(row.symbol)
     return out
+
+
+def _latest_bar_end_ms(symbol_bars: list[GallerySymbolBars]) -> dict[str, int]:
+    """Latest ``end_ms`` per symbol (bars are ``start_ms``-ascending) for
+    ``GalleryBotView.last_bar_at_ms``. Symbols with no bars in this call are
+    omitted, so the bot projection falls back to ``None``."""
+    return {entry.symbol: entry.bars[-1].end_ms for entry in symbol_bars if entry.bars}
 
 
 class GalleryCatalogSource(Protocol):
@@ -81,7 +99,7 @@ class GalleryHub:
         self._account_id = account_id
         self._catalog_source = catalog_source
         self._aggregator = aggregator
-        self._epoch = f"{broker}:{account_id}"
+        self._epoch = f"{broker}:{account_id}:{_PROCESS_NONCE}"
         self._version = 0
         self._last_sids: set[str] = set()
 
@@ -97,9 +115,18 @@ class GalleryHub:
         )
 
     def _project_bot(
-        self, row: BotCatalogView, *, model: type[GalleryBotView] = GalleryBotView
+        self,
+        row: BotCatalogView,
+        *,
+        model: type[GalleryBotView] = GalleryBotView,
+        latest_bar_ms: dict[str, int] | None = None,
     ) -> GalleryBotView:
-        """Project one catalog row into ``model`` (``GalleryBotView`` or its ``GalleryBotDelta`` subtype)."""
+        """Project one catalog row into ``model`` (``GalleryBotView`` or its ``GalleryBotDelta`` subtype).
+
+        ``last_bar_at_ms`` is looked up by ``row.symbol`` in ``latest_bar_ms``
+        (the per-symbol latest bar ``end_ms`` computed by the caller from the
+        same call's fetched bars) — ``None`` when that symbol has no bars.
+        """
         return model(
             sid=row.strategy_instance_id,
             symbol=row.symbol,
@@ -111,7 +138,7 @@ class GalleryHub:
             realized_pnl_today=getattr(row, "realized_pnl_today", 0.0) or 0.0,
             open_pnl=getattr(row, "open_pnl", 0.0) or 0.0,
             fills_today=getattr(row, "fills_today", 0) or 0,
-            last_bar_at_ms=None,
+            last_bar_at_ms=(latest_bar_ms or {}).get(row.symbol),
             primary_action=self._primary_action(row),
         )
 
@@ -134,12 +161,13 @@ class GalleryHub:
             )
         self._last_sids = {row.strategy_instance_id for row in running}
         self._version += 1
+        latest_bar_ms = _latest_bar_end_ms(symbol_bars)
         return GalleryLiveSnapshot(
             stream_epoch=self._epoch,
             surface_version=self._version,
             as_of_ms=now_ms_utc(),
             resolution="1m",
-            bots=[self._project_bot(row) for row in running],
+            bots=[self._project_bot(row, latest_bar_ms=latest_bar_ms) for row in running],
             symbols=symbol_bars,
             markers={},
         )
@@ -169,11 +197,15 @@ class GalleryHub:
         removed_sids = sorted(self._last_sids - current_sids)
         self._last_sids = current_sids
         self._version += 1
+        latest_bar_ms = _latest_bar_end_ms(symbol_bars)
         return GalleryLiveUpdate(
             surface_version=self._version,
             as_of_ms=now_ms_utc(),
             symbols=symbol_bars,
             markers_delta={},
-            bots_delta=[self._project_bot(row, model=GalleryBotDelta) for row in running],
+            bots_delta=[
+                self._project_bot(row, model=GalleryBotDelta, latest_bar_ms=latest_bar_ms)
+                for row in running
+            ],
             removed_sids=removed_sids,
         )

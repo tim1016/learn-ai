@@ -122,6 +122,7 @@ async def test_gallery_snapshot_returns_running_bots(gallery_app) -> None:
     assert "bots" in body and "symbols" in body
     assert {b["sid"] for b in body["bots"]} == {"Aug11-02"}
     assert {s["symbol"] for s in body["symbols"]} == {"SPY"}
+    assert body["bots"][0]["last_bar_at_ms"] == 1_700_000_060_000  # SPY's latest bar end_ms
 
 
 def _frame_payload(frame: str) -> dict:
@@ -170,8 +171,20 @@ async def test_gallery_stream_first_frame_is_snapshot() -> None:
     assert "event: snapshot" in frame
     payload = _frame_payload(frame)
     assert payload["resolution"] == "1m"
-    assert payload["stream_epoch"] == f"{_BROKER}:{_ACCOUNT_ID}"
+    assert payload["stream_epoch"] == hub._epoch
     assert payload["surface_version"] == 1
+
+
+def test_gallery_hub_epoch_has_per_process_nonce() -> None:
+    """The epoch is ``broker:account_id:<nonce>`` — a bare ``broker:account_id``
+    would be byte-identical across a data-plane restart, so a reconnecting
+    client's stale cursor would never mismatch and ``event: reset`` would
+    never fire (see ``gallery_hub.py``'s ``_PROCESS_NONCE`` docstring)."""
+    hub = _fake_hub()
+
+    prefix = f"{_BROKER}:{_ACCOUNT_ID}:"
+    assert hub._epoch.startswith(prefix)
+    assert len(hub._epoch) > len(prefix)
 
 
 async def test_gallery_stream_stale_cursor_emits_reset_first() -> None:
@@ -184,13 +197,13 @@ async def test_gallery_stream_stale_cursor_emits_reset_first() -> None:
     assert "event: reset" in frame
     payload = _frame_payload(frame)
     assert payload["reason"] == "epoch_changed"
-    assert payload["cursor"] == f"{_BROKER}:{_ACCOUNT_ID}:1"
+    assert payload["cursor"] == f"{hub._epoch}:1"
 
 
 async def test_gallery_stream_matching_cursor_skips_reset() -> None:
     """A cursor already on the hub's epoch goes straight to ``event: snapshot``."""
     hub = _fake_hub()
-    matching_cursor = f"{_BROKER}:{_ACCOUNT_ID}:0"
+    matching_cursor = f"{hub._epoch}:0"
 
     frame = await asyncio.wait_for(_read_first_frame(hub, cursor=matching_cursor), timeout=5.0)
 

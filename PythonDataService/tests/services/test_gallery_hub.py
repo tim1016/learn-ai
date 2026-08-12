@@ -101,6 +101,29 @@ async def test_build_snapshot_subscribes_once_per_symbol_and_projects_bots() -> 
     assert snap.surface_version == 1
     assert snap.resolution == "1m"
     assert aggregator.subscribed == ["SPY"]  # subscribed exactly once
+    assert all(b.last_bar_at_ms == 1_700_000_060_000 for b in snap.bots)  # SPY's latest bar end_ms
+
+
+class _EmptyAggregator(_FakeAggregator):
+    """Same subscribe-tracking as ``_FakeAggregator``, but no bars for any symbol."""
+
+    def snapshot(self, symbol: str, since_ms: int | None = None) -> list[object]:
+        return []
+
+
+@pytest.mark.asyncio
+async def test_build_snapshot_last_bar_at_ms_none_when_symbol_has_no_bars() -> None:
+    rows = [_Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12)]
+    hub = GalleryHub(
+        broker="alpaca",
+        account_id="PA3",
+        catalog_source=_FakeCatalogSource(rows),
+        aggregator=_EmptyAggregator(),
+    )
+
+    snap = await hub.build_snapshot()
+
+    assert snap.bots[0].last_bar_at_ms is None
 
 
 @pytest.mark.asyncio
@@ -114,6 +137,7 @@ async def test_build_update_returns_only_new_bars_and_bumps_version() -> None:
 
     assert upd.surface_version == first.surface_version + 1
     assert all(b.symbol == "SPY" for b in upd.symbols)
+    assert upd.bots_delta[0].last_bar_at_ms == 1_700_000_060_000  # SPY's latest bar end_ms
     assert upd.bots_delta[0].sid == "Aug11-02"
     assert upd.markers_delta == {}
     assert upd.removed_sids == []
