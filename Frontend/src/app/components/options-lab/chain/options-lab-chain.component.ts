@@ -17,6 +17,7 @@ import {
   StockTickerSnapshot,
 } from '../../../graphql/types';
 import { ExpirationRibbonComponent } from '../../options-chain-v2/expiration-ribbon/expiration-ribbon.component';
+import { AssetIdentityComponent } from '../../../shared/asset-identity';
 
 interface ChainRow {
   strike: number;
@@ -61,7 +62,7 @@ const EM_DASH = '—';
 @Component({
   selector: 'app-options-lab-chain',
   standalone: true,
-  imports: [ExpirationRibbonComponent, DecimalPipe],
+  imports: [ExpirationRibbonComponent, DecimalPipe, AssetIdentityComponent],
   templateUrl: './options-lab-chain.component.html',
   styleUrls: ['./options-lab-chain.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,

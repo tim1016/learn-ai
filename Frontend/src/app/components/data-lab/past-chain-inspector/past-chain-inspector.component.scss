@@ -52,6 +52,16 @@
   }
 }
 
+.card-subtitle__ticker {
+  --asset-identity-logo-size: 18px;
+  --asset-identity-symbol-color: #93c5fd;
+  --asset-identity-fallback-bg: rgba(59, 130, 246, 0.12);
+  --asset-identity-fallback-border: rgba(59, 130, 246, 0.3);
+
+  margin: 0 0.15rem;
+  vertical-align: middle;
+}
+
 .card-config {
   display: flex;
   gap: 1rem;
