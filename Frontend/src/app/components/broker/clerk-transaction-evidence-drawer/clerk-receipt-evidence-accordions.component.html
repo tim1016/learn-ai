@@ -1,0 +1,57 @@
+<p-accordion class="receipt-accordions">
+  <p-accordion-panel value="instruction">
+    <p-accordion-header>Instruction and execution</p-accordion-header>
+    <p-accordion-content>
+      <table class="receipt-table">
+        <caption>Requested instruction compared with recorded execution</caption>
+        <thead><tr><th scope="col">Field</th><th scope="col">Instruction</th><th scope="col">Execution</th></tr></thead>
+        <tbody>
+          <tr>
+            <th scope="row">Instrument</th>
+            <td>@if (detail().order_instruction?.symbol; as symbol) { <app-asset-identity [symbol]="symbol" size="sm" /> } @else { Not recorded }</td>
+            <td>@if (detail().order_instruction?.symbol; as symbol) { <app-asset-identity [symbol]="symbol" size="sm" /> } @else { Not recorded }</td>
+          </tr>
+          <tr><th scope="row">Side and type</th><td>{{ detail().order_instruction?.action | receiptLabel }} · {{ detail().order_instruction?.order_type | receiptLabel }}</td><td>{{ detail().lifecycle_state | receiptLabel }}</td></tr>
+          <tr><th scope="row">Quantity</th><td>{{ detail().order_instruction?.quantity ?? 'Not recorded' }}</td><td>{{ detail().execution_quantity ?? 'Not recorded' }}</td></tr>
+          <tr><th scope="row">Price</th><td>{{ detail().order_instruction?.limit_price ?? 'Market / not recorded' }}</td><td>{{ detail().execution_price ?? 'Not recorded' }}</td></tr>
+          <tr><th scope="row">Broker identifiers</th><td><code>{{ detail().order_ref ?? detail().external_order_id ?? 'Not recorded' }}</code></td><td><code>{{ detail().exec_id ?? detail().native_execution_id ?? 'Not recorded' }}</code></td></tr>
+        </tbody>
+      </table>
+    </p-accordion-content>
+  </p-accordion-panel>
+  <p-accordion-panel value="events">
+    <p-accordion-header>Event log ({{ detail().events.length }})</p-accordion-header>
+    <p-accordion-content>
+      <ol class="receipt-events">
+        @for (event of detail().events; track trackEvent($index, event)) {
+          <li>
+            <div class="receipt-events__headline">
+              <strong>{{ event.event_kind | receiptLabel }}</strong>
+              <span>{{ event.lifecycle_state | receiptLabel }}</span>
+              <app-timestamp-display [value]="event.recorded_at_ms" mode="local" />
+            </div>
+            <code>{{ event.callback_identity }}</code>
+            <details>
+              <summary>Event evidence</summary>
+              <dl class="event-receipt">
+                @for (entry of eventReceiptEntries(event); track trackReceipt($index, entry)) {
+                  <div><dt>{{ entry.label | receiptLabel }}</dt><dd><code>{{ entry.value }}</code></dd></div>
+                }
+              </dl>
+            </details>
+          </li>
+        }
+      </ol>
+    </p-accordion-content>
+  </p-accordion-panel>
+  <p-accordion-panel value="raw">
+    <p-accordion-header>Raw receipt evidence</p-accordion-header>
+    <p-accordion-content>
+      <dl class="raw-receipt">
+        @for (entry of receiptEntries(); track trackReceipt($index, entry)) {
+          <div><dt>{{ entry.label | receiptLabel }}</dt><dd><code>{{ entry.value }}</code></dd></div>
+        }
+      </dl>
+    </p-accordion-content>
+  </p-accordion-panel>
+</p-accordion>
