@@ -21,21 +21,23 @@ import type {
 import { provideRouter, Router } from '@angular/router';
 
 const messageService = { add: vi.fn() };
-const chartMocks = vi.hoisted(() => ({ createChart: vi.fn() }));
+const chartMocks = vi.hoisted(() => {
+  const timeScale = { fitContent: vi.fn() };
+  const series = { setData: vi.fn(), update: vi.fn(), applyOptions: vi.fn() };
+  const chart = {
+    addSeries: vi.fn().mockReturnValue(series),
+    timeScale: vi.fn().mockReturnValue(timeScale),
+    applyOptions: vi.fn(),
+    remove: vi.fn(),
+  };
+  return { chart, createChart: vi.fn().mockReturnValue(chart) };
+});
 
 // DualPaneChartComponent -> lightweight-charts: mock for unit tests.
 vi.mock('lightweight-charts', () => {
-  const mockTimeScale = { fitContent: vi.fn() };
-  const createMockSeries = () => ({ setData: vi.fn(), update: vi.fn(), applyOptions: vi.fn() });
   const createSeriesMarkers = vi.fn().mockReturnValue({ setMarkers: vi.fn() });
-  const createMockChart = () => ({
-    addSeries: vi.fn().mockReturnValue(createMockSeries()),
-    timeScale: vi.fn().mockReturnValue(mockTimeScale),
-    applyOptions: vi.fn(),
-    remove: vi.fn(),
-  });
   return {
-    createChart: chartMocks.createChart.mockImplementation(() => createMockChart()),
+    createChart: chartMocks.createChart,
     createSeriesMarkers,
     CandlestickSeries: 'CandlestickSeries',
   };

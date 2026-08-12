@@ -28,17 +28,20 @@ import type { PanelAction } from '../lib/broker-v2-panel.types';
 import { DUAL_PANE_CHART_FACTORY } from '../dual-pane-chart/dual-pane-chart.component';
 import { BotPanelShellComponent } from './bot-panel-shell.component';
 
-const chartMocks = vi.hoisted(() => ({ createChart: vi.fn() }));
+const chartMocks = vi.hoisted(() => {
+  const series = { setData: vi.fn(), update: vi.fn(), applyOptions: vi.fn() };
+  const chart = {
+    addSeries: vi.fn().mockReturnValue(series),
+    timeScale: vi.fn().mockReturnValue({ fitContent: vi.fn() }),
+    applyOptions: vi.fn(),
+    remove: vi.fn(),
+  };
+  return { chart, createChart: vi.fn().mockReturnValue(chart) };
+});
 
 vi.mock('lightweight-charts', () => {
-  const series = { setData: vi.fn(), update: vi.fn(), applyOptions: vi.fn() };
   return {
-    createChart: chartMocks.createChart.mockReturnValue({
-      addSeries: vi.fn().mockReturnValue(series),
-      timeScale: vi.fn().mockReturnValue({ fitContent: vi.fn() }),
-      applyOptions: vi.fn(),
-      remove: vi.fn(),
-    }),
+    createChart: chartMocks.createChart,
     createSeriesMarkers: vi.fn().mockReturnValue({ setMarkers: vi.fn() }),
     CandlestickSeries: 'CandlestickSeries',
   };
