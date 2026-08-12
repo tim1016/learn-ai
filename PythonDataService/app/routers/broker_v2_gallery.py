@@ -22,12 +22,17 @@ once built, lives for the process lifetime. Full lifecycle management
 cache) is out of scope for this task.
 
 The stream is poll-driven (``GalleryHub`` has no pub/sub producer): each
-iteration calls ``build_update`` against the last-emitted bar per symbol and
-emits an ``update`` frame only when something actually changed, else a
-``: keepalive`` comment at most every ~15s. The ``cursor`` query parameter and
-``reset`` event mirror ``broker_v2_panel.py``'s ``/live-stream`` reconnect
-handling: a reconnecting client's remembered epoch is compared once against
-the hub's current epoch before entering the loop.
+iteration calls ``build_update`` against the last-emitted bar per symbol.
+``GalleryHub.build_update`` re-projects every running bot into
+``bots_delta`` on every call (no per-bot dirty-tracking yet — see its
+module docstring), so in practice an ``update`` frame is emitted on
+essentially every ~1s poll while any bot is running; only the bar deltas
+are genuinely incremental. The ``: keepalive`` comment (at most every
+~15s) only fires once zero bots are running. The ``cursor`` query
+parameter and ``reset`` event mirror ``broker_v2_panel.py``'s
+``/live-stream`` reconnect handling: a reconnecting client's remembered
+epoch is compared once against the hub's current epoch before entering
+the loop.
 """
 
 from __future__ import annotations
@@ -56,12 +61,24 @@ _POLL_INTERVAL_S = 1.0
 _HUB_CACHE: dict[tuple[str, str], GalleryHub] = {}
 
 
-def get_gallery_hub(broker: str, account_id: str) -> GalleryHub:
+async def get_gallery_hub(broker: str, account_id: str) -> GalleryHub:
     """Return the per-``(broker, account_id)`` cached ``GalleryHub``.
 
     See the module docstring for the cache's known limitation (no
     ref-counting/eviction). A FastAPI dependency so tests can override it via
     ``app.dependency_overrides`` to inject a hub built from fakes.
+
+    ``async def`` (not a plain sync helper) so FastAPI awaits this directly
+    on the event loop instead of running it in a threadpool
+    (``run_in_threadpool``) — the get-or-create check-then-set below has no
+    ``await`` in it, so keeping it on the event loop makes it atomic. A
+    sync ``def`` here would let two concurrent requests for the same
+    ``(broker, account_id)`` (e.g. a gallery page firing ``/snapshot`` and
+    ``/stream`` at once) race on separate threads, each missing the cache
+    and constructing its own ``GalleryHub`` with an independent
+    ``surface_version``/``_last_sids`` — exactly the bug
+    ``get_or_start_live_projection_hub`` (``live_projection.py``) already
+    avoids the same way.
     """
     key = (broker, account_id)
     hub = _HUB_CACHE.get(key)
@@ -112,6 +129,12 @@ async def _gallery_event_source(hub: GalleryHub, *, cursor: str | None) -> Async
         update = await hub.build_update(since_bar_ms)
         since_bar_ms.update(_latest_bar_start_ms(update.symbols))
         has_new_bars = any(entry.bars for entry in update.symbols)
+        # ``bots_delta`` is always the full running roster (GalleryHub has no
+        # per-bot dirty-tracking yet), so this is effectively "any bot
+        # running" rather than "a bot actually changed" — an update frame
+        # goes out on essentially every poll while bots are running. Only
+        # ``has_new_bars``/``removed_sids`` are genuinely incremental.
+        # Keepalive only fires once ``bots_delta`` is empty (zero bots).
         changed = has_new_bars or bool(update.bots_delta) or bool(update.removed_sids)
         now = time.monotonic()
         if changed:

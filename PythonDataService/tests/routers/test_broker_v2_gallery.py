@@ -124,44 +124,75 @@ async def test_gallery_snapshot_returns_running_bots(gallery_app) -> None:
     assert {s["symbol"] for s in body["symbols"]} == {"SPY"}
 
 
-async def test_gallery_stream_first_frame_is_snapshot() -> None:
-    """Assert the SSE stream's first frame is a valid ``event: snapshot``.
+def _frame_payload(frame: str) -> dict:
+    data_line = next(line for line in frame.splitlines() if line.startswith("data: "))
+    return json.loads(data_line[len("data: ") :])
+
+
+async def _read_first_frame(hub: GalleryHub, *, cursor: str | None) -> str:
+    """Drive ``stream_gallery`` directly and return its first SSE frame.
 
     ``httpx.ASGITransport`` collects the ENTIRE ASGI response body before
     returning anything to the client (see
     ``httpx._transports.asgi.ASGITransport.handle_async_request``: it
     ``await``s ``self.app(scope, receive, send)`` to full completion before
     constructing a ``Response``) — verified empirically: driving this
-    never-terminating poll loop through ``client.stream(...)`` hangs until
-    the 5s ``asyncio.wait_for`` guard fires, because the generator never
-    reaches ``more_body=False``. Every existing SSE test in this repo that
-    uses ``client.stream`` (``test_broker_activity.py``,
+    never-terminating poll loop through ``client.stream(...)`` hangs until a
+    wrapping ``asyncio.wait_for`` guard times out, because the generator
+    never reaches ``more_body=False``. Every existing SSE test in this repo
+    that uses ``client.stream`` (``test_broker_activity.py``,
     ``test_panel_router.py``) works around this the same way: the fake
     producer is made to terminate (a sentinel item, or an explicit
     ``publisher.stop()``) so the ASGI call actually completes.
     ``GalleryHub``'s poll loop has no such external stop signal, so this
-    test instead drives the router's actual ``StreamingResponse`` and reads
-    its ``body_iterator`` (the real production async generator) directly,
-    which is the only way to observe one frame without waiting for the
-    (here, infinite) stream to end.
+    instead calls the router's actual ``stream_gallery`` coroutine (the
+    exact function FastAPI would call) and reads its ``StreamingResponse``'s
+    ``body_iterator`` (the real production async generator) directly, which
+    is the only way to observe one frame without waiting for the (here,
+    infinite) stream to end. Callers wrap this in ``asyncio.wait_for`` so a
+    regression here fails fast instead of hanging the suite.
     """
+    response = await broker_v2_gallery.stream_gallery(cursor=cursor, hub=hub)
+    assert response.media_type == "text/event-stream"
+    assert response.headers["cache-control"] == "no-cache"
+    assert response.headers["x-accel-buffering"] == "no"
+    try:
+        return await response.body_iterator.__anext__()
+    finally:
+        await response.body_iterator.aclose()
+
+
+async def test_gallery_stream_first_frame_is_snapshot() -> None:
     hub = _fake_hub()
 
-    async def _read_first_frame() -> str:
-        response = await broker_v2_gallery.stream_gallery(cursor=None, hub=hub)
-        assert response.media_type == "text/event-stream"
-        assert response.headers["cache-control"] == "no-cache"
-        assert response.headers["x-accel-buffering"] == "no"
-        try:
-            return await response.body_iterator.__anext__()
-        finally:
-            await response.body_iterator.aclose()
-
-    frame = await asyncio.wait_for(_read_first_frame(), timeout=5.0)
+    frame = await asyncio.wait_for(_read_first_frame(hub, cursor=None), timeout=5.0)
 
     assert "event: snapshot" in frame
-    data_line = next(line for line in frame.splitlines() if line.startswith("data: "))
-    payload = json.loads(data_line[len("data: ") :])
+    payload = _frame_payload(frame)
     assert payload["resolution"] == "1m"
     assert payload["stream_epoch"] == f"{_BROKER}:{_ACCOUNT_ID}"
     assert payload["surface_version"] == 1
+
+
+async def test_gallery_stream_stale_cursor_emits_reset_first() -> None:
+    """A cursor from a different epoch gets ``event: reset`` before the snapshot."""
+    hub = _fake_hub()
+    stale_cursor = "stale-epoch:0"
+
+    frame = await asyncio.wait_for(_read_first_frame(hub, cursor=stale_cursor), timeout=5.0)
+
+    assert "event: reset" in frame
+    payload = _frame_payload(frame)
+    assert payload["reason"] == "epoch_changed"
+    assert payload["cursor"] == f"{_BROKER}:{_ACCOUNT_ID}:1"
+
+
+async def test_gallery_stream_matching_cursor_skips_reset() -> None:
+    """A cursor already on the hub's epoch goes straight to ``event: snapshot``."""
+    hub = _fake_hub()
+    matching_cursor = f"{_BROKER}:{_ACCOUNT_ID}:0"
+
+    frame = await asyncio.wait_for(_read_first_frame(hub, cursor=matching_cursor), timeout=5.0)
+
+    assert "event: reset" not in frame
+    assert "event: snapshot" in frame
