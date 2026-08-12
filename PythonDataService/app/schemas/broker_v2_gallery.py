@@ -46,21 +46,12 @@ class GalleryBotView(BaseModel):
     primary_action: GalleryPrimaryAction
 
 
-class GalleryBotDelta(BaseModel):
-    """Incremental per-bot update carried in a ``GalleryLiveUpdate``."""
+class GalleryBotDelta(GalleryBotView):
+    """Incremental per-bot update carried in a ``GalleryLiveUpdate``.
 
-    model_config = ConfigDict(frozen=True)
-
-    sid: str
-    realized_pnl_today: float
-    open_pnl: float
-    fills_today: int
-    phase: str
-    desired_state: str
-    needs_attention: bool
-    running: bool
-    last_bar_at_ms: int | None = None
-    primary_action: GalleryPrimaryAction
+    Self-contained: a delta carries the changed bot's full view (including
+    ``symbol``/``label``) so the client can replace a bot by ``sid`` alone.
+    """
 
 
 class GallerySymbolBars(BaseModel):
