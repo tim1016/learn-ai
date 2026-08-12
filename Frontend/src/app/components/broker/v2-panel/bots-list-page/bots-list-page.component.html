@@ -19,6 +19,13 @@
           {{ refreshing() ? 'Refreshing' : 'Refresh' }}
         </button>
         <a
+          class="command-button command-button--quiet"
+          [routerLink]="['/brokers', broker(), 'accounts', accountId(), 'gallery']"
+        >
+          <span aria-hidden="true">⊞</span>
+          Gallery
+        </a>
+        <a
           class="command-button command-button--primary"
           [routerLink]="['/brokers', broker(), 'accounts', accountId(), 'deploy']"
         >

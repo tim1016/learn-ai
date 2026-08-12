@@ -362,6 +362,14 @@ export const routes: Routes = [
       ).then((m) => m.BotsListPageComponent),
   },
   {
+    // Broker v2 panel — live gallery wall for every running bot in the account.
+    path: 'brokers/:broker/accounts/:accountId/gallery',
+    loadComponent: () =>
+      import(
+        './components/broker/v2-panel/gallery/bot-gallery-page/bot-gallery-page.component'
+      ).then((m) => m.BotGalleryPageComponent),
+  },
+  {
     // Broker v2 panel — unscoped bots entry point: resolves account then
     // redirects to /brokers/:broker/accounts/:accountId/bots.
     path: 'brokers/:broker/bots',

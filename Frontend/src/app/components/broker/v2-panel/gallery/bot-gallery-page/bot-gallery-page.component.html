@@ -1,0 +1,56 @@
+<main class="gallery-page" aria-labelledby="gallery-page-title">
+  <header class="gallery-page__toolbar">
+    <h1 id="gallery-page-title">Bot gallery</h1>
+    <div class="gallery-page__meta">
+      <span class="gallery-page__timeframe">Today · 1m</span>
+      <span
+        class="gallery-page__status"
+        [class.gallery-page__status--stale]="stale()"
+        [class.gallery-page__status--error]="viewState() === 'error'"
+        role="status"
+      >{{ statusLabel() }}</span>
+    </div>
+  </header>
+
+  @switch (viewState()) {
+    @case ('loading') {
+      <div class="gallery-page__skeleton" role="status" aria-label="Loading bot gallery">
+        @for (cell of [1, 2, 3, 4]; track cell) {
+          <span aria-hidden="true"></span>
+        }
+      </div>
+    }
+    @case ('error') {
+      <div class="gallery-page__error" role="alert">
+        <strong>Gallery feed unavailable</strong>
+        <span>The live bot feed could not be reached. No bots are currently showing.</span>
+      </div>
+    }
+    @case ('empty') {
+      <div class="gallery-page__empty" role="status">
+        <strong>No running bots</strong>
+        <span>Nothing is running for this account right now.</span>
+        <a
+          class="gallery-page__empty-link"
+          [routerLink]="['/brokers', broker(), 'accounts', accountId(), 'bots']"
+        >View bots roster</a>
+      </div>
+    }
+    @default {
+      @if (stale()) {
+        <div class="gallery-page__stale-banner" role="status">
+          Live feed delayed — showing the last known bars and stats.
+        </div>
+      }
+      <app-bot-gallery-dock
+        class="gallery-page__dock"
+        [bots]="store.bots()"
+        [barsBySymbol]="store.barsBySymbol()"
+        [markersBySid]="store.markersBySid()"
+        [broker]="broker()"
+        [accountId]="accountId()"
+        (action)="onAction($event)"
+      />
+    }
+  }
+</main>
