@@ -54,7 +54,10 @@ export default tseslint.config(
   },
   {
     files: ["**/*.ts"],
-    ignores: ["src/app/shared/charts/chart-utils.ts"],
+    ignores: [
+      "src/app/shared/charts/chart-utils.ts",
+      "src/app/shared/charts/chart-utils.spec.ts",
+    ],
     rules: {
       "no-restricted-imports": [
         "error",

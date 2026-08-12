@@ -1,18 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-
-const chartMocks = vi.hoisted(() => ({
-  createChart: vi.fn(() => ({})),
-}));
+import { createChart } from 'lightweight-charts';
 
 vi.mock('lightweight-charts', () => ({
-  createChart: chartMocks.createChart,
+  createChart: vi.fn(() => ({})),
 }));
 
 import { createAppChart } from './chart-utils';
 
 describe('createAppChart', () => {
   beforeEach(() => {
-    chartMocks.createChart.mockClear();
+    vi.mocked(createChart).mockClear();
   });
 
   it('preserves caller layout options while forcing the attribution logo off', () => {
@@ -26,7 +23,7 @@ describe('createAppChart', () => {
       },
     });
 
-    expect(chartMocks.createChart).toHaveBeenCalledWith(container, {
+    expect(createChart).toHaveBeenCalledWith(container, {
       width: 640,
       layout: {
         textColor: '#f0f3fa',

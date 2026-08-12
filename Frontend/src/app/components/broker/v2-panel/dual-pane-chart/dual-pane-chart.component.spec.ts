@@ -22,6 +22,7 @@ vi.mock('lightweight-charts', () => {
     setMarkers: chartMocks.setMarkers,
   });
   return {
+    createChart: chartMocks.createChart,
     createSeriesMarkers,
     CandlestickSeries: 'CandlestickSeries',
   };
