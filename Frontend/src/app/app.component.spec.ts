@@ -36,6 +36,10 @@ describe('AppComponent', () => {
         RouterModule.forRoot([
           { path: 'data-lab', component: ShellSmokeRouteComponent },
           { path: 'research-lab/strategy-runs/:id', component: ShellSmokeRouteComponent },
+          { path: 'research-lab/walk-forward/:id', component: ShellSmokeRouteComponent },
+          { path: 'research-lab/monte-carlo/:id', component: ShellSmokeRouteComponent },
+          { path: 'research-lab/baselines/:id', component: ShellSmokeRouteComponent },
+          { path: 'research-lab/signal-report/:id', component: ShellSmokeRouteComponent },
         ]),
       ],
       providers: [
@@ -69,10 +73,17 @@ describe('AppComponent', () => {
     expect(results.violations).toEqual([]);
   });
 
-  it('keeps the shell visible while representative routes change', async () => {
+  it('keeps the shell visible for standard and research-detail routes', async () => {
     const router = TestBed.inject(Router);
 
-    for (const url of ['/data-lab', '/research-lab/strategy-runs/run-42']) {
+    for (const url of [
+      '/data-lab',
+      '/research-lab/strategy-runs/run-42',
+      '/research-lab/walk-forward/wf-42',
+      '/research-lab/monte-carlo/mc-42',
+      '/research-lab/baselines/baseline-42',
+      '/research-lab/signal-report/42',
+    ]) {
       await router.navigateByUrl(url);
       fixture.detectChanges();
 

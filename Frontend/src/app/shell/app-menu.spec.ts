@@ -21,8 +21,14 @@ describe('app menu projections', () => {
     ]);
   });
 
-  it('stops a deep route at its deepest menu node', () => {
-    expect(breadcrumbTrailFor('/research-lab/strategy-runs/run-42')).toEqual([
+  it.each([
+    '/research-lab/strategy-runs/run-42',
+    '/research-lab/walk-forward/wf-42',
+    '/research-lab/monte-carlo/mc-42',
+    '/research-lab/baselines/baseline-42',
+    '/research-lab/signal-report/42',
+  ])('stops the research-detail route %s at its deepest menu node', (url) => {
+    expect(breadcrumbTrailFor(url)).toEqual([
       { label: 'Research', route: '/research-lab' },
       { label: 'Research Lab', route: '/research-lab' },
     ]);

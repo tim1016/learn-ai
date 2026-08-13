@@ -22,8 +22,9 @@ const SUBTITLES = {
 } as const;
 
 export const researchLabRoutes: Routes = [
-  // Detail routes — full-screen, no shell chrome. Listed before the shell so
-  // their more-specific patterns match first.
+  // Detail routes retain focused content while inheriting the root application
+  // shell. Listed before the research-lab child shell so their more-specific
+  // patterns match first.
   {
     path: 'strategy-runs/:run_id',
     loadComponent: () =>
