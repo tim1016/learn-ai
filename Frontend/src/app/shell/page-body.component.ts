@@ -1,12 +1,17 @@
-import { ChangeDetectionStrategy, Component } from '@angular/core';
+import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 
 /** Shared inner-spacing boundary for standard page bodies. */
 @Component({
   selector: 'app-page-body',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: '<ng-content />',
-  // The existing utility remains the one spacing authority until the
-  // full page-body migration replaces every page-local use in S9.
-  host: { class: 'page-inset' },
+  styleUrl: './page-body.component.scss',
+  host: {
+    class: 'page-body',
+    '[class.page-body--full-bleed]': 'fullBleed()',
+  },
 })
-export class PageBodyComponent {}
+export class PageBodyComponent {
+  /** Deliberate edge-to-edge workspace surface, declared by route data. */
+  readonly fullBleed = input(false);
+}

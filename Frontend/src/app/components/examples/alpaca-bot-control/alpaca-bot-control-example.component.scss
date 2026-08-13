@@ -1,6 +1,6 @@
 :host { display: block; min-height: 100%; }
 
-.gallery { max-width: 84rem; margin: 0 auto; padding: var(--page-pad-y) var(--page-pad-x); color: var(--text-primary); }
+.gallery { max-width: 84rem; margin: 0 auto; color: var(--text-primary); }
 .gallery__header, .scenario-picker, .lens-tabs { display: flex; gap: 1rem; align-items: center; }
 .gallery__header { justify-content: space-between; border-bottom: 1px solid var(--border-light); padding-bottom: 1.25rem; }
 h1, p { margin: 0; }
@@ -16,4 +16,4 @@ h1 { font-size: 1.65rem; letter-spacing: var(--ls-tight); }
 .lens-tabs button { background: transparent; border: 0; border-bottom: 2px solid transparent; color: var(--tab-fg-inactive); cursor: pointer; font: inherit; padding: .55rem .8rem; }
 .lens-tabs button.active { border-bottom-color: var(--tab-accent); color: var(--tab-fg-active); font-weight: var(--fw-semi); }
 button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-@media (max-width: 42rem) { .gallery { padding: 1rem; } .gallery__header { align-items: flex-start; flex-direction: column; } .scenario-picker { display: grid; } .scenario-picker select { width: 100%; } }
+@media (max-width: 42rem) { .gallery__header { align-items: flex-start; flex-direction: column; } .scenario-picker { display: grid; } .scenario-picker select { width: 100%; } }

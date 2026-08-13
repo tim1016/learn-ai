@@ -35,6 +35,7 @@ describe('AppComponent', () => {
         AppComponent,
         RouterModule.forRoot([
           { path: 'data-lab', component: ShellSmokeRouteComponent },
+          { path: 'options-lab', component: ShellSmokeRouteComponent, data: { fullBleed: true } },
           { path: 'research-lab/strategy-runs/:id', component: ShellSmokeRouteComponent },
           { path: 'research-lab/walk-forward/:id', component: ShellSmokeRouteComponent },
           { path: 'research-lab/monte-carlo/:id', component: ShellSmokeRouteComponent },
@@ -62,6 +63,7 @@ describe('AppComponent', () => {
 
   it('renders the universal top bar and applies the Market Scope browser title', () => {
     expect(fixture.nativeElement.querySelector('.shell > app-top-bar')).toBeTruthy();
+    expect(fixture.nativeElement.querySelector('app-page-body')).toBeTruthy();
     expect(TestBed.inject(Title).getTitle()).toBe('Market Scope');
   });
 
@@ -71,6 +73,19 @@ describe('AppComponent', () => {
     });
 
     expect(results.violations).toEqual([]);
+  });
+
+  it('keeps standard pages inset and declared workspaces full-bleed', async () => {
+    const router = TestBed.inject(Router);
+    const pageBody = () => fixture.nativeElement.querySelector('app-page-body') as HTMLElement;
+
+    await router.navigateByUrl('/data-lab');
+    fixture.detectChanges();
+    expect(pageBody().classList.contains('page-body--full-bleed')).toBe(false);
+
+    await router.navigateByUrl('/options-lab');
+    fixture.detectChanges();
+    expect(pageBody().classList.contains('page-body--full-bleed')).toBe(true);
   });
 
   it('keeps the shell visible for standard and research-detail routes', async () => {
