@@ -61,6 +61,27 @@ describe('AppSidebarComponent', () => {
     expect(screen.getByRole('link', { name: 'Market Scope' }).getAttribute('href')).toBe('/data-lab');
   });
 
+  it('links group disclosures only to the container rendered for their current presentation', async () => {
+    const { fixture } = await render(AppSidebarComponent, { providers: sidebarProviders() });
+    const alpaca = screen.getByRole('button', { name: 'Alpaca' });
+
+    expect(alpaca.getAttribute('aria-controls')).toBeNull();
+
+    fireEvent.mouseEnter(alpaca);
+    fixture.detectChanges();
+    expect(alpaca.getAttribute('aria-controls')).toBe('sidebar-flyout-alpaca');
+    expect(document.getElementById('sidebar-flyout-alpaca')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pin expanded navigation sidebar' }));
+    fixture.detectChanges();
+    expect(alpaca.getAttribute('aria-controls')).toBeNull();
+
+    fireEvent.click(alpaca);
+    fixture.detectChanges();
+    expect(alpaca.getAttribute('aria-controls')).toBe('sidebar-group-items-alpaca');
+    expect(document.getElementById('sidebar-group-items-alpaca')).toBeTruthy();
+  });
+
   it('clears the compact search overlay when the home glyph is selected', async () => {
     const { fixture } = await render(AppSidebarComponent, {
       providers: sidebarProviders([{ path: 'data-lab', component: AppSidebarComponent }]),
@@ -96,6 +117,23 @@ describe('AppSidebarComponent', () => {
     expect(fixture.nativeElement.querySelector('a.nav-link.active')?.textContent).toContain('Data Lab');
   });
 
+  it('closes compact search with Escape', async () => {
+    const { fixture } = await render(AppSidebarComponent, { providers: sidebarProviders() });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search navigation' }));
+    fireEvent.input(screen.getByRole('textbox', { name: 'Search navigation' }), {
+      target: { value: 'data' },
+    });
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.flat-matches')).toBeTruthy();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.flat-matches')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.search-input')).toBeNull();
+  });
+
   it('reveals one hovered group as a keyboard-reachable flyout and closes it with Escape', async () => {
     const { fixture } = await render(AppSidebarComponent, {
       providers: sidebarProviders(),
@@ -112,6 +150,27 @@ describe('AppSidebarComponent', () => {
     fixture.detectChanges();
 
     expect(screen.queryByRole('region', { name: 'Alpaca' })).toBeNull();
+  });
+
+  it('keeps compact flyouts within the viewport bottom edge', async () => {
+    const { fixture } = await render(AppSidebarComponent, { providers: sidebarProviders() });
+    const documentation = screen.getByRole('button', { name: 'Documentation' });
+    const originalHeight = window.innerHeight;
+    const bounds = vi.spyOn(documentation, 'getBoundingClientRect').mockReturnValue({
+      top: 180,
+      right: 56,
+    } as DOMRect);
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 200 });
+
+    try {
+      fireEvent.mouseEnter(documentation);
+      fixture.detectChanges();
+
+      expect(screen.getByRole('region', { name: 'Documentation' }).style.top).toBe('8px');
+    } finally {
+      bounds.mockRestore();
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: originalHeight });
+    }
   });
 
   it('marks the compact group containing the active route', async () => {

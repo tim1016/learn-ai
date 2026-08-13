@@ -88,7 +88,6 @@ interface ExpirationOption {
   ],
   styleUrl: './broker-options-chain.component.scss',
   templateUrl: './broker-options-chain.component.html',
-  host: { class: 'page-inset' },
 })
 export class BrokerOptionsChainComponent {
   private readonly broker = inject(BrokerService);

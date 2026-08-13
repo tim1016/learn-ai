@@ -117,7 +117,7 @@ const FLYOUT_CLOSE_DELAY_MS = 180;
                 (focus)="openFlyout(g, $event)"
                 (keydown)="onGroupKeydown(g, $event)"
                 [attr.aria-label]="pinned() ? null : g.title"
-                [attr.aria-controls]="flyoutId(g.id)"
+                [attr.aria-controls]="controlledGroupId(g)"
                 [attr.aria-expanded]="pinned() ? openGroups()[g.id] === true : openFlyoutId() === g.id"
               >
                 <i [class]="g.icon + ' group-icon'" aria-hidden="true"></i>
@@ -130,7 +130,7 @@ const FLYOUT_CLOSE_DELAY_MS = 180;
               </button>
 
               @if (pinned() && openGroups()[g.id]) {
-                <div class="nav-group-items">
+                <div class="nav-group-items" [id]="groupItemsId(g.id)">
                   @for (item of g.items; track item.label) {
                     <a
                       class="nav-link"
@@ -284,6 +284,12 @@ export class AppSidebarComponent {
     if (event.key === 'Escape' && this.openFlyoutId() !== null) {
       event.preventDefault();
       this.closeFlyout(true);
+      return;
+    }
+    if (event.key === 'Escape' && this.searchOpen()) {
+      event.preventDefault();
+      this.query.set('');
+      this.searchOpen.set(false);
     }
   }
 
@@ -336,7 +342,9 @@ export class AppSidebarComponent {
     this.cancelFlyoutClose();
     this.flyoutTrigger = trigger;
     const bounds = trigger.getBoundingClientRect();
-    this.flyoutPosition.set({ top: Math.max(8, bounds.top), left: bounds.right + 8 });
+    const estimatedHeight = 56 + group.items.length * 38;
+    const maxTop = Math.max(8, window.innerHeight - estimatedHeight - 8);
+    this.flyoutPosition.set({ top: Math.min(Math.max(8, bounds.top), maxTop), left: bounds.right + 8 });
     this.openFlyoutId.set(group.id);
   }
 
@@ -376,6 +384,17 @@ export class AppSidebarComponent {
 
   protected flyoutId(groupId: string): string {
     return `sidebar-flyout-${groupId}`;
+  }
+
+  protected groupItemsId(groupId: string): string {
+    return `sidebar-group-items-${groupId}`;
+  }
+
+  protected controlledGroupId(group: AppMenuGroup): string | null {
+    if (this.pinned()) {
+      return this.openGroups()[group.id] ? this.groupItemsId(group.id) : null;
+    }
+    return this.openFlyoutId() === group.id ? this.flyoutId(group.id) : null;
   }
 
   protected groupTriggerId(groupId: string): string {

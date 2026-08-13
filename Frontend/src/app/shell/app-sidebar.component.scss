@@ -255,7 +255,9 @@
   position: fixed;
   z-index: 50;
   width: min(15rem, calc(100vw - 4rem));
-  overflow: hidden;
+  max-height: calc(100dvh - 16px);
+  overflow-x: hidden;
+  overflow-y: auto;
   border: 1px solid $border-light;
   border-radius: $radius-md;
   background: $bg-surface;
