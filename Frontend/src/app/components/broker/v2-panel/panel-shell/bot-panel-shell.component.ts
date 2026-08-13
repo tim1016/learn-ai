@@ -33,7 +33,6 @@ import {
 } from '../lib/panel-action-outcome';
 import { TraderLensComponent } from '../trader-lens/trader-lens.component';
 import { OperatorLensComponent } from '../operator-lens/operator-lens.component';
-import { PanelHeaderComponent } from './panel-header.component';
 import {
   type ActionReceiptView,
   PanelActionReceiptComponent,
@@ -62,7 +61,6 @@ type PanelLens = 'trader' | 'operator';
   selector: 'app-bot-panel-shell',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    PanelHeaderComponent,
     PanelActionReceiptComponent,
     SafeFlattenPlanComponent,
     TraderLensComponent,

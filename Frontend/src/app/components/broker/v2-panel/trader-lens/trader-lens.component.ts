@@ -10,10 +10,12 @@ import type {
   ChartHistoryPreset,
   ChartLiveResolution,
   ChartLiveResponse,
+  PanelActionTrigger,
   ChartHistoryResponse,
   PanelProfile,
 } from '../lib/broker-v2-panel.types';
 import { DualPaneChartComponent } from '../dual-pane-chart/dual-pane-chart.component';
+import { PanelHeaderComponent } from '../panel-shell/panel-header.component';
 import { TradesTodayListComponent } from './trades-today-list.component';
 import { TraderMetricsComponent } from './trader-metrics.component';
 
@@ -33,6 +35,7 @@ import { TraderMetricsComponent } from './trader-metrics.component';
   selector: 'app-trader-lens',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
+    PanelHeaderComponent,
     DualPaneChartComponent,
     TradesTodayListComponent,
     TraderMetricsComponent,
@@ -51,12 +54,14 @@ export class TraderLensComponent {
   readonly histChartLoading = input(false);
   readonly liveResolution = input<ChartLiveResolution>('5s');
   readonly selectedPreset = input<ChartHistoryPreset>('1D');
+  readonly actionPending = input(false);
 
   // ── Outputs ───────────────────────────────────────────────────────────────
 
   /** User selected a history preset. */
   readonly presetChange = output<ChartHistoryPreset>();
   readonly liveResolutionChange = output<ChartLiveResolution>();
+  readonly actionRequested = output<PanelActionTrigger>();
 
   // ── Derived ───────────────────────────────────────────────────────────────
 

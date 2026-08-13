@@ -23,6 +23,7 @@ import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 import { OperatorRunHistoryComponent } from '../bot-run-history/operator-run-history.component';
 import { OperatorDisclosureCardComponent } from './operator-disclosure-card.component';
+import { PanelHeaderComponent } from '../panel-shell/panel-header.component';
 
 /**
  * Operator lens (spec §7).
@@ -50,6 +51,7 @@ import { OperatorDisclosureCardComponent } from './operator-disclosure-card.comp
     OperatorRunHistoryComponent,
     OperatorDisclosureCardComponent,
     AssetIdentityComponent,
+    PanelHeaderComponent,
   ],
   templateUrl: './operator-lens.component.html',
   styleUrl: './operator-lens.component.scss',

@@ -1,3 +1,9 @@
+<app-panel-header
+  [panel]="panel()"
+  [actionPending]="actionPending()"
+  (actionRequested)="actionRequested.emit($event)"
+/>
+
 <div class="trader-workspace">
   <section class="chart-section" aria-label="Market and fill chart">
     <app-dual-pane-chart

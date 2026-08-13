@@ -488,7 +488,7 @@ describe('BotPanelShellComponent', () => {
     })).toBeNull();
   });
 
-  it('keeps lens navigation above the hero and run evidence out of Trader', async () => {
+  it('keeps lens navigation above the active lens header and run evidence out of Trader', async () => {
     const { fixture, container } = await render(BotPanelShellComponent, {
       inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [
@@ -502,11 +502,11 @@ describe('BotPanelShellComponent', () => {
     fixture.detectChanges();
 
     const navigation = container.querySelector('.lens-navigation');
-    const hero = container.querySelector('app-panel-header');
+    const hero = container.querySelector('app-trader-lens app-panel-header');
     expect(navigation).not.toBeNull();
     expect(hero).not.toBeNull();
     if (navigation === null || hero === null) {
-      throw new Error('Expected lens navigation and panel hero to render.');
+      throw new Error('Expected lens navigation and active-lens header to render.');
     }
     expect(
       navigation.compareDocumentPosition(hero) & Node.DOCUMENT_POSITION_FOLLOWING,

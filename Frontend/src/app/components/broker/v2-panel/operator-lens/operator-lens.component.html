@@ -1,4 +1,10 @@
 <div class="operator-lens">
+  <app-panel-header
+    [panel]="panel()"
+    [actionPending]="actionPending()"
+    (actionRequested)="onActionRequested($event)"
+  />
+
   <div class="operator-lens__grid">
     <div class="operator-lens__column">
       <app-operator-readiness

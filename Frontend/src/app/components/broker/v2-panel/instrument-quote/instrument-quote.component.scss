@@ -1,0 +1,101 @@
+:host {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-primary);
+}
+
+.instrument-quote__identity {
+  min-width: 0;
+
+  app-asset-identity {
+    --asset-identity-logo-size: 2.5rem;
+    --asset-identity-symbol-max-width: 10ch;
+  }
+}
+
+.instrument-quote__price {
+  font-family: var(--font-mono);
+  font-size: clamp(1.05rem, 1.5vw, 1.35rem);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--ls-tight);
+  white-space: nowrap;
+}
+
+.instrument-quote__change {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  white-space: nowrap;
+
+  &--positive { color: var(--bull); }
+  &--negative { color: var(--bear); }
+  &--flat,
+  &--unavailable { color: var(--text-secondary); }
+}
+
+.instrument-quote__session {
+  padding: 0.18rem 0.45rem;
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: var(--fs-xxs);
+  font-weight: var(--fw-semibold);
+  white-space: nowrap;
+
+  &[data-session='OPEN'] { border-color: color-mix(in srgb, var(--bull) 52%, var(--border-light)); color: var(--bull); }
+  &[data-session='PRE_MARKET'],
+  &[data-session='AFTER_HOURS'] { border-color: color-mix(in srgb, var(--accent) 52%, var(--border-light)); color: var(--accent-text); }
+}
+
+.instrument-quote__freshness {
+  display: inline-grid;
+  width: 1rem;
+  height: 1rem;
+  place-items: center;
+}
+
+.instrument-quote__freshness-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--text-muted);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--text-muted) 18%, transparent);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+:host([data-feed-state='live']) .instrument-quote__freshness-dot {
+  background: var(--bull);
+  box-shadow: 0 0 0 3px var(--bull-soft);
+}
+
+:host([data-feed-state='idle']) .instrument-quote__freshness-dot {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px var(--warn-soft);
+}
+
+:host([data-feed-state='stale']),
+:host([data-feed-state='missing']) {
+  .instrument-quote__freshness-dot {
+    background: var(--bear);
+    box-shadow: 0 0 0 3px var(--bear-soft);
+  }
+}
+
+@media (max-width: 620px) {
+  :host { flex-wrap: wrap; }
+  .instrument-quote__identity { flex-basis: 100%; }
+}
