@@ -136,7 +136,8 @@ class CommandResource:
     idempotency_key: str
     payload_hash: str
     kind: str
-    strategy_instance_id: str
+    # Manual-custody commands deliberately do not impersonate a strategy.
+    strategy_instance_id: str | None
     run_id: str | None
     action: str
     intended_end_state: str | None
@@ -165,7 +166,8 @@ class EffectOperationResource:
     authority_generation: int
     idempotency_key: str
     command_id: str
-    strategy_instance_id: str
+    # ``None`` is the durable/manual-custody representation, never a pseudo-bot.
+    strategy_instance_id: str | None
     run_id: str | None
     kind: str
     state: str
@@ -187,6 +189,36 @@ class OrderResource:
     broker_state: str | None
     submitted_at_ms: int | None
     updated_at_ms: int
+
+
+@dataclass(frozen=True)
+class ManualOrderLegResource:
+    """One immutable manual-ticket leg plus its current Clerk resources."""
+
+    ticket_id: str
+    leg_id: str
+    subject_id: str
+    instruction_hash: str
+    command_id: str | None
+    effect_operation_id: str | None
+    order_ref: str | None
+    state: str
+    created_at_ms: int
+    updated_at_ms: int
+
+
+@dataclass(frozen=True)
+class ManualOrderTicketResource:
+    """A replayable manual ticket and all of its independently owned legs."""
+
+    ticket_id: str
+    subject_id: str
+    operator_id: str
+    instruction_hash: str
+    state: str
+    created_at_ms: int
+    updated_at_ms: int
+    legs: tuple[ManualOrderLegResource, ...]
 
 
 @dataclass(frozen=True)

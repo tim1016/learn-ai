@@ -24,11 +24,15 @@ import { AlpacaTraderLensComponent } from './alpaca-trader-lens.component';
 import { AlpacaHoldBannerComponent } from './alpaca-hold-banner.component';
 import { AlpacaOrderEntryComponent } from './alpaca-order-entry.component';
 import { parseManualOrderTicketQuery } from '../../broker/lib/manual-order-navigation';
+import type { ManualOrderCapability } from '../../../api/alpaca.types';
 import { BrokersService } from '../../../services/brokers.service';
 
 const LENS_STORAGE_KEY = 'learn-ai.alpaca-desk.lens';
 
 type AlpacaDeskLens = 'trader' | 'operator';
+type ManualOrderAuthority =
+  | { readonly kind: 'legacy' }
+  | { readonly kind: 'sqlite'; readonly capability: ManualOrderCapability };
 
 function lensFrom(value: string | null): AlpacaDeskLens | null {
   return value === 'trader' || value === 'operator' ? value : null;
@@ -112,18 +116,27 @@ export class AlpacaDeskComponent {
     params: () => this.orderPrefill()?.accountId,
     loader: async ({ params }) => {
       try {
-        await this.brokers.getSqliteClerkProjection(params);
-        return 'sqlite' as const;
+        return {
+          kind: 'sqlite',
+          capability: await this.brokers.getSqliteManualOrderCapability(params),
+        } satisfies ManualOrderAuthority;
       } catch (error) {
         if (
           (error instanceof HttpErrorResponse && error.status === 409) ||
           (typeof error === 'object' && error !== null && 'status' in error && error.status === 409)
         ) {
-          return 'legacy' as const;
+          return { kind: 'legacy' } satisfies ManualOrderAuthority;
         }
         throw error;
       }
     },
+  });
+  protected readonly sqliteManualAuthority = computed(
+    () => this.manualOrderAuthority.value()?.kind === 'sqlite',
+  );
+  protected readonly manualTicketCapability = computed(() => {
+    const authority = this.manualOrderAuthority.value();
+    return authority?.kind === 'sqlite' ? authority.capability : null;
   });
   protected readonly manualOrderNotice = computed(() => {
     if (this.orderPrefill() === null) return null;
@@ -133,9 +146,7 @@ export class AlpacaDeskComponent {
     if (this.manualOrderAuthority.error() !== undefined) {
       return 'The active order authority could not be verified. No ticket was opened.';
     }
-    return this.manualOrderAuthority.value() === 'sqlite'
-      ? 'Manual orders are unavailable while SQLite Clerk authority is active. No ticket was opened.'
-      : null;
+    return null;
   });
   protected readonly orderEntryOpen = signal(false);
   protected readonly historyRefreshVersion = signal(0);
@@ -146,7 +157,7 @@ export class AlpacaDeskComponent {
     });
     effect(() => {
       this.orderEntryOpen.set(
-        this.orderPrefill() !== null && this.manualOrderAuthority.value() === 'legacy',
+        this.orderPrefill() !== null && this.manualOrderAuthority.value() !== undefined,
       );
     });
   }

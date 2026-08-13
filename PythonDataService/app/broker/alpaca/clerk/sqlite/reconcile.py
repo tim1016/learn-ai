@@ -13,7 +13,6 @@ from app.broker.alpaca.clerk.exposure import (
     ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
     signed_broker_position_quantity,
 )
-from app.broker.alpaca.clerk.sqlite.enter import resolve_enter_submission
 from app.broker.alpaca.clerk.sqlite.exit import resolve_exit
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.facts import (
@@ -29,7 +28,10 @@ from app.broker.alpaca.clerk.sqlite.models import (
     EffectOperationResource,
     TransitionInput,
 )
-from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
+from app.broker.alpaca.clerk.sqlite.order_evidence import (
+    fold_order_evidence,
+    resolve_order_submission,
+)
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteError,
     ClerkSqliteRepository,
@@ -89,11 +91,17 @@ def plan_account_reconciliation(
     known_order_refs: frozenset[str] | None = None,
 ) -> ReconcilePlan:
     """Derive residual account safety only after local evidence was folded."""
+    # Once the active SQLite authority supplies its full captured order-ref
+    # set, that durable identity is stronger than the historical bot-only
+    # namespace heuristic and correctly recognizes manual custody too.
     foreign = tuple(
         order
         for order in broker_orders
-        if not order_ref_namespace_matches(order.client_order_id, namespaces)
-        or (known_order_refs is not None and order.client_order_id not in known_order_refs)
+        if (
+            order.client_order_id not in known_order_refs
+            if known_order_refs is not None
+            else not order_ref_namespace_matches(order.client_order_id, namespaces)
+        )
     )
     in_flight_symbols = {
         order.symbol.upper()
@@ -195,7 +203,7 @@ async def _reconcile_effect(
             raise ReconciliationInvariantError(
                 f"ENTER effect {effect.effect_operation_id!r} has no captured order"
             )
-        await resolve_enter_submission(repo, order_ref=order.order_ref, trade=trade)
+        await resolve_order_submission(repo, order_ref=order.order_ref, trade=trade)
 
     effect_after = await asyncio.to_thread(repo.effect_operation, effect.effect_operation_id)
     if effect_after is None:
@@ -207,7 +215,10 @@ async def _reconcile_effect(
         raise ReconciliationInvariantError(
             f"order {order.order_ref!r} disappeared during reconciliation"
         )
-    if effect_after.state == "succeeded" or (effect_after.kind == "ENTER" and order_after.broker_order_id is not None):
+    if effect_after.state == "succeeded" or (
+        effect_after.kind in {"ENTER", "MANUAL_ORDER"}
+        and order_after.broker_order_id is not None
+    ):
         outcome: ReconciliationOutcome = "RESOLVED_SUCCESS"
     elif effect_after.state in ("failed", "rejected"):
         outcome = "RESOLVED_FAILURE"

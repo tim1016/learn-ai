@@ -108,6 +108,126 @@ describe('AlpacaOrderEntryComponent', () => {
     expect(await screen.findByText('manual/desk/v1:abc123')).toBeTruthy();
   });
 
+  it('uses the SQLite ticket path for one BUY market DAY leg without a browser operator', async () => {
+    const submitOrder = vi.fn();
+    const previewSqliteManualOrder = vi.fn().mockResolvedValue({
+      capability: { available: true, unavailable: null, supported_order_shape: 'BUY market DAY equity, one leg' },
+      preview_token: 'a'.repeat(64),
+      authority_generation: 1,
+      db_identity_token: 'db-token',
+      control_revision: 1,
+      subject_id: 'manual-operator:operator',
+    });
+    const submitSqliteManualOrder = vi.fn().mockResolvedValue({
+      ticket_id: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
+      subject_id: 'manual-operator:operator',
+      state: 'ACTIVE',
+      created_at_ms: 1,
+      updated_at_ms: 2,
+      legs: [
+        {
+          leg_id: '09d6d63e-6375-4e6d-8d20-3b1bf70c2465',
+          instruction_hash: 'hash',
+          state: 'IN_PROGRESS',
+          command: { command_id: 'cmd', state: 'in_progress', action: 'SUBMIT_MANUAL_ORDER', receipt_id: null },
+          effect: { effect_operation_id: 'effect', state: 'in_progress', kind: 'MANUAL_ORDER', terminal_receipt_id: null },
+          order: { order_ref: 'manual/operator/v1:abc', client_order_id: 'manual/operator/v1:abc', broker_order_id: 'broker', broker_state: 'accepted' },
+        },
+      ],
+    });
+    await render(AlpacaOrderEntryComponent, {
+      inputs: {
+        expectedAccountId: 'PA1',
+        sqliteManualAuthority: true,
+        manualTicketId: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
+        manualLegId: '09d6d63e-6375-4e6d-8d20-3b1bf70c2465',
+        manualCapability: {
+          available: true,
+          unavailable: null,
+          supported_order_shape: 'BUY market DAY equity, one leg',
+        },
+      },
+      providers: [{
+        provide: BrokersService,
+        useValue: {
+          submitOrder,
+          previewSqliteManualOrder,
+          submitSqliteManualOrder,
+          getSqliteManualOrderTicket: vi.fn().mockRejectedValue(new HttpErrorResponse({ status: 404 })),
+        },
+      }],
+    });
+
+    await fillFirstLeg('spy', '2');
+    expect(screen.queryByRole('button', { name: /Add another/i })).toBeNull();
+    expect(screen.queryByLabelText('Leg 1 side')).toBeNull();
+    expect(screen.getByText('Buy')).toBeTruthy();
+    expect(screen.getAllByText('Market').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Day').length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole('button', { name: /Preview order/i }));
+    await vi.waitFor(() => expect(previewSqliteManualOrder).toHaveBeenCalledTimes(1));
+    fireEvent.click(await screen.findByRole('button', { name: /Confirm & submit/i }));
+
+    await vi.waitFor(() => expect(submitSqliteManualOrder).toHaveBeenCalledTimes(1));
+    expect(previewSqliteManualOrder).toHaveBeenCalledWith('PA1', {
+      ticket_id: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
+      leg: {
+        leg_id: '09d6d63e-6375-4e6d-8d20-3b1bf70c2465',
+        instruction: {
+          symbol: 'SPY', side: 'buy', quantity: 2, order_type: 'market', time_in_force: 'day',
+        },
+      },
+    });
+    expect(submitSqliteManualOrder).toHaveBeenCalledWith(
+      'PA1',
+      '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
+      expect.objectContaining({ preview_token: 'a'.repeat(64) }),
+    );
+    expect(submitOrder).not.toHaveBeenCalled();
+    expect(await screen.findByText(/Ticket.*is Active/)).toBeTruthy();
+    expect(screen.getByText('manual/operator/v1:abc')).toBeTruthy();
+    expect(screen.getByText('In Progress')).toBeTruthy();
+  });
+
+  it('refreshes a nonterminal SQLite ticket from its durable status resource', async () => {
+    const activeTicket = {
+      ticket_id: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
+      subject_id: 'manual-operator:operator',
+      state: 'ACTIVE',
+      created_at_ms: 1,
+      updated_at_ms: 2,
+      legs: [],
+    };
+    const getSqliteManualOrderTicket = vi.fn().mockResolvedValue(activeTicket);
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
+
+    await render(AlpacaOrderEntryComponent, {
+      inputs: {
+        expectedAccountId: 'PA1',
+        sqliteManualAuthority: true,
+        manualTicketId: activeTicket.ticket_id,
+      },
+      providers: [{
+        provide: BrokersService,
+        useValue: { getSqliteManualOrderTicket },
+      }],
+    });
+
+    await vi.waitFor(() => expect(getSqliteManualOrderTicket).toHaveBeenCalledTimes(1));
+    const refreshCall = await vi.waitFor(() => {
+      const call = setIntervalSpy.mock.calls.find(([, delay]) => delay === 5_000);
+      expect(call).toBeDefined();
+      return call;
+    });
+    if (refreshCall === undefined) throw new Error('expected a five-second refresh callback');
+    const [refresh] = refreshCall;
+    if (typeof refresh !== 'function') throw new Error('expected a refresh callback');
+    refresh();
+    await vi.waitFor(() => expect(getSqliteManualOrderTicket).toHaveBeenCalledTimes(2));
+    setIntervalSpy.mockRestore();
+  });
+
   it('reveals the limit-price field only when the order type is Limit', async () => {
     await renderPanel(vi.fn());
     await fillFirstLeg('spy', '2');

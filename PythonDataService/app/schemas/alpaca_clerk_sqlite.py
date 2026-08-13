@@ -39,7 +39,7 @@ class CommandResponse(BaseModel):
     command_id: str
     idempotency_key: str
     kind: str
-    strategy_instance_id: str
+    strategy_instance_id: str | None
     run_id: str | None
     action: str
     intended_end_state: str | None
@@ -54,7 +54,11 @@ class CommandResponse(BaseModel):
     def from_resource(cls, resource: CommandResource) -> CommandResponse:
         non_terminal = resource.state in ("reserved", "accepted", "in_progress", "unknown")
         tooltip = (
-            f"A {resource.action.lower()} has already been requested for this bot."
+            (
+                f"A {resource.action.lower()} has already been requested for this bot."
+                if resource.strategy_instance_id is not None
+                else f"A {resource.action.lower()} has already been requested for this manual order."
+            )
             if non_terminal
             else None
         )

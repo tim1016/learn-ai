@@ -19,6 +19,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
     DecisionReceiptResource,
     EffectOperationResource,
     ExternalOrderResource,
+    ManualOrderTicketResource,
     OrderResource,
     RunResource,
 )
@@ -201,6 +202,17 @@ class ClerkSqliteRepositoryReadApi:
         with self._write_lock:
             return reads.order_for_effect_operation(self._conn, effect_operation_id)
 
+    def manual_order_ticket(
+        self: ClerkSqliteRepository,
+        ticket_id: str,
+    ) -> ManualOrderTicketResource | None:
+        with self._write_lock:
+            return reads.manual_order_ticket(self._conn, ticket_id)
+
+    def custody_subject(self: ClerkSqliteRepository, subject_id: str) -> dict | None:
+        with self._write_lock:
+            return reads.custody_subject(self._conn, subject_id)
+
     def orders_for_effect_operation(
         self: ClerkSqliteRepository,
         effect_operation_id: str,
@@ -266,6 +278,14 @@ class ClerkSqliteRepositoryReadApi:
         with self._write_lock:
             return reads.effective_fill_totals_for_order(self._conn, order_ref)
 
+    def effective_exact_fill_totals_for_order(
+        self: ClerkSqliteRepository,
+        order_ref: str,
+    ) -> tuple[float, float]:
+        """Return only effective broker-issued execution slices for one order."""
+        with self._write_lock:
+            return reads.effective_exact_fill_totals_for_order(self._conn, order_ref)
+
     def uncertain_orders(self: ClerkSqliteRepository) -> list[OrderResource]:
         with self._write_lock:
             return reads.uncertain_orders(self._conn)
@@ -283,6 +303,13 @@ class ClerkSqliteRepositoryReadApi:
                 self._conn,
                 strategy_instance_id,
             )
+
+    def attributed_positions_for_subject(
+        self: ClerkSqliteRepository,
+        subject_id: str,
+    ) -> dict[str, float]:
+        with self._write_lock:
+            return reads.attributed_positions_for_subject(self._conn, subject_id)
 
     def active_hold(
         self: ClerkSqliteRepository,
@@ -311,21 +338,25 @@ class ClerkSqliteRepositoryReadApi:
     def active_uncertainties_for_admission(
         self: ClerkSqliteRepository,
         *,
-        strategy_instance_id: str,
+        strategy_instance_id: str | None = None,
+        subject_id: str | None = None,
     ) -> list[dict]:
         with self._write_lock:
             return reads.active_uncertainties_for_admission(
                 self._conn,
                 strategy_instance_id=strategy_instance_id,
+                subject_id=subject_id,
             )
 
     def active_holds_for_admission(
         self: ClerkSqliteRepository,
         *,
-        strategy_instance_id: str,
+        strategy_instance_id: str | None = None,
+        subject_id: str | None = None,
     ) -> list[dict]:
         with self._write_lock:
             return reads.active_holds_for_admission(
                 self._conn,
                 strategy_instance_id=strategy_instance_id,
+                subject_id=subject_id,
             )

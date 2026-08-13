@@ -12,9 +12,11 @@ from typing import Any
 
 from app.broker.alpaca.clerk.sqlite.facts import (
     CustodySubjectRegisteredFacts,
+    ManualOrderAcceptedFacts,
     ManualTicketReservedFacts,
     ManualTicketStateFacts,
     validate_custody_subject_registered_facts,
+    validate_manual_order_accepted_facts,
     validate_manual_ticket_reserved_facts,
     validate_manual_ticket_state_facts,
 )
@@ -130,3 +132,96 @@ def fold_manual_ticket_state(conn: sqlite3.Connection, payload: dict[str, Any]) 
     )
     if updated.rowcount != 1:
         raise ValueError("manual ticket state requires its durable ticket and custody subject")
+
+
+def fold_manual_order_accepted(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Attach one reserved manual leg to its pre-contact command/effect/order.
+
+    The ticket and leg must already exist.  Creating all three resources before
+    the single leg-resource update makes the schema's custody-chain trigger
+    prove that this manual ticket cannot accidentally point at bot custody.
+    """
+    facts = ManualOrderAcceptedFacts.from_facts_json(payload["facts_json"])
+    validate_manual_order_accepted_facts(facts)
+    _require_manual_outer_identity_is_null(payload)
+    leg = conn.execute(
+        "SELECT subject_id, instruction_hash, command_id, effect_operation_id, order_ref "
+        "FROM manual_order_legs WHERE ticket_id = ? AND leg_id = ?",
+        (facts.ticket_id, facts.leg_id),
+    ).fetchone()
+    expected = (facts.subject_id, facts.instruction_hash)
+    if leg is None or tuple(leg[:2]) != expected:
+        raise ValueError("manual order acceptance requires its immutable ticket leg")
+    existing_resources = tuple(leg[2:])
+    requested_resources = (
+        payload["command_id"],
+        payload["effect_operation_id"],
+        payload["order_ref"],
+    )
+    if any(existing_resources):
+        if existing_resources != requested_resources:
+            raise ValueError("manual ticket leg resources conflict with prior acceptance")
+        return
+    conn.execute(
+        "INSERT INTO commands (command_id, authority_generation, idempotency_key, payload_hash, kind, "
+        "subject_id, strategy_instance_id, run_id, action, intended_end_state, state, "
+        "effect_operation_id, receipt_id, created_at_ms, updated_at_ms) "
+        "VALUES (?, ?, ?, ?, 'manual_order', ?, NULL, NULL, 'SUBMIT_MANUAL_ORDER', NULL, "
+        "'accepted', NULL, NULL, ?, ?)",
+        (
+            payload["command_id"],
+            payload["authority_generation"],
+            facts.idempotency_key,
+            facts.payload_hash,
+            facts.subject_id,
+            payload["recorded_at_ms"],
+            payload["recorded_at_ms"],
+        ),
+    )
+    conn.execute(
+        "INSERT INTO effect_operations (effect_operation_id, authority_generation, idempotency_key, "
+        "command_id, subject_id, strategy_instance_id, run_id, kind, state, custody_owner, "
+        "created_at_ms, updated_at_ms, terminal_receipt_id) "
+        "VALUES (?, ?, ?, ?, ?, NULL, NULL, 'MANUAL_ORDER', 'accepted', 'ACCOUNT_CLERK', ?, ?, NULL)",
+        (
+            payload["effect_operation_id"],
+            payload["authority_generation"],
+            facts.effect_idempotency_key,
+            payload["command_id"],
+            facts.subject_id,
+            payload["recorded_at_ms"],
+            payload["recorded_at_ms"],
+        ),
+    )
+    conn.execute(
+        "INSERT INTO orders (order_ref, effect_operation_id, client_order_id, broker_order_id, role, "
+        "broker_state, submitted_at_ms, updated_at_ms) VALUES (?, ?, ?, NULL, 'MANUAL', NULL, NULL, ?)",
+        (
+            payload["order_ref"],
+            payload["effect_operation_id"],
+            payload["order_ref"],
+            payload["recorded_at_ms"],
+        ),
+    )
+    conn.execute(
+        "UPDATE commands SET effect_operation_id = ? WHERE command_id = ?",
+        (payload["effect_operation_id"], payload["command_id"]),
+    )
+    updated = conn.execute(
+        "UPDATE manual_order_legs SET command_id = ?, effect_operation_id = ?, order_ref = ?, "
+        "state = 'ACCEPTED', updated_at_ms = ? WHERE ticket_id = ? AND leg_id = ?",
+        (
+            payload["command_id"],
+            payload["effect_operation_id"],
+            payload["order_ref"],
+            payload["recorded_at_ms"],
+            facts.ticket_id,
+            facts.leg_id,
+        ),
+    )
+    if updated.rowcount != 1:
+        raise ValueError("manual ticket leg disappeared during acceptance")
+    conn.execute(
+        "UPDATE manual_order_tickets SET state = 'ACTIVE', updated_at_ms = ? WHERE ticket_id = ?",
+        (payload["recorded_at_ms"], facts.ticket_id),
+    )

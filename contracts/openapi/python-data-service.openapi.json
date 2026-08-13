@@ -12750,8 +12750,15 @@
             "type": "string"
           },
           "strategy_instance_id": {
-            "title": "Strategy Instance Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Instance Id"
           },
           "updated_at_ms": {
             "title": "Updated At Ms",
@@ -18043,9 +18050,22 @@
             "type": "number"
           },
           "entry_strategy_instance_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entry Strategy Instance Id"
+          },
+          "entry_subject_id": {
             "maxLength": 128,
             "minLength": 1,
-            "title": "Entry Strategy Instance Id",
+            "title": "Entry Subject Id",
             "type": "string"
           },
           "exit_price": {
@@ -18053,9 +18073,22 @@
             "type": "number"
           },
           "exit_strategy_instance_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Strategy Instance Id"
+          },
+          "exit_subject_id": {
             "maxLength": 128,
             "minLength": 1,
-            "title": "Exit Strategy Instance Id",
+            "title": "Exit Subject Id",
             "type": "string"
           },
           "fee": {
@@ -18097,8 +18130,8 @@
           "opened_at_ms",
           "closed_at_ms",
           "realized_pnl",
-          "entry_strategy_instance_id",
-          "exit_strategy_instance_id"
+          "entry_subject_id",
+          "exit_subject_id"
         ],
         "title": "FifoAttributionRowResponse",
         "type": "object"
@@ -25910,6 +25943,396 @@
           "conditions"
         ],
         "title": "LogicNodeOrConditions",
+        "type": "object"
+      },
+      "ManualOrderBrokerOrderResponse": {
+        "properties": {
+          "broker_order_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broker Order Id"
+          },
+          "broker_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broker State"
+          },
+          "client_order_id": {
+            "title": "Client Order Id",
+            "type": "string"
+          },
+          "order_ref": {
+            "title": "Order Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "order_ref",
+          "client_order_id",
+          "broker_order_id",
+          "broker_state"
+        ],
+        "title": "ManualOrderBrokerOrderResponse",
+        "type": "object"
+      },
+      "ManualOrderCapabilityResponse": {
+        "description": "The policy answer shown before an operator may create exposure.",
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "supported_order_shape": {
+            "default": "BUY market DAY equity, one leg",
+            "title": "Supported Order Shape",
+            "type": "string"
+          },
+          "unavailable": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ManualOrderUnavailableResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "available",
+          "unavailable"
+        ],
+        "title": "ManualOrderCapabilityResponse",
+        "type": "object"
+      },
+      "ManualOrderCommandResponse": {
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "command_id": {
+            "title": "Command Id",
+            "type": "string"
+          },
+          "receipt_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Receipt Id"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command_id",
+          "state",
+          "action",
+          "receipt_id"
+        ],
+        "title": "ManualOrderCommandResponse",
+        "type": "object"
+      },
+      "ManualOrderEffectResponse": {
+        "properties": {
+          "effect_operation_id": {
+            "title": "Effect Operation Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "terminal_receipt_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terminal Receipt Id"
+          }
+        },
+        "required": [
+          "effect_operation_id",
+          "state",
+          "kind",
+          "terminal_receipt_id"
+        ],
+        "title": "ManualOrderEffectResponse",
+        "type": "object"
+      },
+      "ManualOrderLegRequest": {
+        "additionalProperties": false,
+        "description": "One browser-minted stable leg identity and the intended instruction.",
+        "properties": {
+          "instruction": {
+            "$ref": "#/components/schemas/BrokerOrderLeg"
+          },
+          "leg_id": {
+            "format": "uuid",
+            "title": "Leg Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "leg_id",
+          "instruction"
+        ],
+        "title": "ManualOrderLegRequest",
+        "type": "object"
+      },
+      "ManualOrderLegResponse": {
+        "properties": {
+          "command": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ManualOrderCommandResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "effect": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ManualOrderEffectResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "instruction_hash": {
+            "title": "Instruction Hash",
+            "type": "string"
+          },
+          "leg_id": {
+            "title": "Leg Id",
+            "type": "string"
+          },
+          "order": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ManualOrderBrokerOrderResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "leg_id",
+          "instruction_hash",
+          "state",
+          "command",
+          "effect",
+          "order"
+        ],
+        "title": "ManualOrderLegResponse",
+        "type": "object"
+      },
+      "ManualOrderPreviewRequest": {
+        "additionalProperties": false,
+        "description": "Preview never accepts operator identity; the server attributes that fact.",
+        "properties": {
+          "leg": {
+            "$ref": "#/components/schemas/ManualOrderLegRequest"
+          },
+          "ticket_id": {
+            "format": "uuid",
+            "title": "Ticket Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticket_id",
+          "leg"
+        ],
+        "title": "ManualOrderPreviewRequest",
+        "type": "object"
+      },
+      "ManualOrderPreviewResponse": {
+        "properties": {
+          "authority_generation": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authority Generation"
+          },
+          "capability": {
+            "$ref": "#/components/schemas/ManualOrderCapabilityResponse"
+          },
+          "control_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Control Revision"
+          },
+          "db_identity_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Db Identity Token"
+          },
+          "preview_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preview Token"
+          },
+          "subject_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Id"
+          }
+        },
+        "required": [
+          "capability",
+          "preview_token",
+          "authority_generation",
+          "db_identity_token",
+          "control_revision",
+          "subject_id"
+        ],
+        "title": "ManualOrderPreviewResponse",
+        "type": "object"
+      },
+      "ManualOrderSubmitRequest": {
+        "additionalProperties": false,
+        "description": "Confirmation for the exact previewed ticket and leg.",
+        "properties": {
+          "leg": {
+            "$ref": "#/components/schemas/ManualOrderLegRequest"
+          },
+          "preview_token": {
+            "maxLength": 128,
+            "minLength": 64,
+            "title": "Preview Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "leg",
+          "preview_token"
+        ],
+        "title": "ManualOrderSubmitRequest",
+        "type": "object"
+      },
+      "ManualOrderTicketResponse": {
+        "properties": {
+          "created_at_ms": {
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "legs": {
+            "items": {
+              "$ref": "#/components/schemas/ManualOrderLegResponse"
+            },
+            "title": "Legs",
+            "type": "array"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "subject_id": {
+            "title": "Subject Id",
+            "type": "string"
+          },
+          "ticket_id": {
+            "title": "Ticket Id",
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "title": "Updated At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ticket_id",
+          "subject_id",
+          "state",
+          "created_at_ms",
+          "updated_at_ms",
+          "legs"
+        ],
+        "title": "ManualOrderTicketResponse",
+        "type": "object"
+      },
+      "ManualOrderUnavailableResponse": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "ManualOrderUnavailableResponse",
         "type": "object"
       },
       "MarketDashboardResponse": {
@@ -49080,6 +49503,280 @@
         "summary": "Symbols Search Endpoint",
         "tags": [
           "broker"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/accounts/{account_id}/manual-order-tickets/{ticket_id}": {
+      "get": {
+        "description": "Restore a durable manual ticket after refresh or a lost submit response.",
+        "operationId": "get_sqlite_manual_order_ticket_api_brokers_alpaca_accounts__account_id__manual_order_tickets__ticket_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "ticket_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Ticket Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManualOrderTicketResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Sqlite Manual Order Ticket",
+        "tags": [
+          "brokers-v2"
+        ]
+      },
+      "put": {
+        "description": "Durably accept then submit exactly one previewed manual market-order leg.",
+        "operationId": "submit_sqlite_manual_order_api_brokers_alpaca_accounts__account_id__manual_order_tickets__ticket_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "ticket_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Ticket Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualOrderSubmitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManualOrderTicketResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Submit Sqlite Manual Order",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/accounts/{account_id}/manual-orders/capability": {
+      "get": {
+        "description": "Return the current policy answer before a browser opens a ticket.",
+        "operationId": "sqlite_manual_order_capability_api_brokers_alpaca_accounts__account_id__manual_orders_capability_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManualOrderCapabilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sqlite Manual Order Capability",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/accounts/{account_id}/manual-orders/preview": {
+      "post": {
+        "description": "Bind one browser-stable ticket leg to fresh server authority facts.",
+        "operationId": "preview_sqlite_manual_order_api_brokers_alpaca_accounts__account_id__manual_orders_preview_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualOrderPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManualOrderPreviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview Sqlite Manual Order",
+        "tags": [
+          "brokers-v2"
         ]
       }
     },

@@ -54,6 +54,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.manual_ticket_folds import (
     fold_custody_subject_registered,
+    fold_manual_order_accepted,
     fold_manual_ticket_reserved,
     fold_manual_ticket_state,
 )
@@ -577,6 +578,13 @@ def _fold_order_submit_acked(conn: sqlite3.Connection, payload: dict[str, Any]) 
             "AND state NOT IN ('succeeded','failed','rejected')",
             (payload["recorded_at_ms"], payload["command_id"]),
         )
+        _sync_manual_ticket_effect_state(
+            conn,
+            payload,
+            effect_state="in_progress",
+            leg_state="IN_PROGRESS",
+            ticket_state="ACTIVE",
+        )
 
 
 def _fold_effect_terminal(conn: sqlite3.Connection, payload: dict[str, Any], *, terminal_state: str) -> None:
@@ -618,11 +626,72 @@ def _fold_effect_terminal(conn: sqlite3.Connection, payload: dict[str, Any], *, 
     _resolve_unknown_outcome_if_proven(conn, payload)
 
 
+def _sync_manual_ticket_effect_state(
+    conn: sqlite3.Connection,
+    payload: dict[str, Any],
+    *,
+    effect_state: str,
+    leg_state: str,
+    ticket_state: str,
+) -> None:
+    """Advance the manual ticket only when its owned effect reached this state.
+
+    The ticket is a durable projection of the same effect state—not an HTTP
+    presentation inference. Non-manual effects leave no matching leg and are
+    intentionally unchanged.
+    """
+    effect = conn.execute(
+        "SELECT kind, state FROM effect_operations WHERE effect_operation_id = ?",
+        (payload["effect_operation_id"],),
+    ).fetchone()
+    if effect is None or effect["kind"] != "MANUAL_ORDER" or effect["state"] != effect_state:
+        return
+    updated = conn.execute(
+        "UPDATE manual_order_legs SET state = ?, updated_at_ms = ? "
+        "WHERE effect_operation_id = ?",
+        (leg_state, payload["recorded_at_ms"], payload["effect_operation_id"]),
+    )
+    if updated.rowcount != 1:
+        raise ValueError("manual order effect requires exactly one ticket leg")
+    ticket_updated = conn.execute(
+        "UPDATE manual_order_tickets SET state = ?, updated_at_ms = ? "
+        "WHERE ticket_id = (SELECT ticket_id FROM manual_order_legs "
+        "WHERE effect_operation_id = ?)",
+        (ticket_state, payload["recorded_at_ms"], payload["effect_operation_id"]),
+    )
+    if ticket_updated.rowcount != 1:
+        raise ValueError("manual order effect requires exactly one ticket")
+
+
+def _fold_manual_order_filled(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Terminal success needs both a filled broker state and exact fill coverage.
+
+    ``order_evidence`` appends this only after it proves that the effective
+    execution total covers the immutable manual leg. The fold then makes the
+    receipt and bounded ticket projection agree with that final custody fact.
+    """
+    _fold_effect_terminal(conn, payload, terminal_state="succeeded")
+    _sync_manual_ticket_effect_state(
+        conn,
+        payload,
+        effect_state="succeeded",
+        leg_state="SUCCEEDED",
+        ticket_state="COMPLETED",
+    )
+
+
 def _fold_order_submit_failed(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Definitive submit failure (vendor 4xx/409/auth/rate-limit) or absence
     proven past the R4 uncertainty grace window — both fold to the same
     terminal ``failed`` outcome with a receipt."""
     _fold_effect_terminal(conn, payload, terminal_state="failed")
+    _sync_manual_ticket_effect_state(
+        conn,
+        payload,
+        effect_state="failed",
+        leg_state="FAILED",
+        ticket_state="COMPLETED",
+    )
 
 
 def _fold_exit_attributed_flat(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
@@ -655,6 +724,13 @@ def _fold_order_submit_uncertain(conn: sqlite3.Connection, payload: dict[str, An
         (payload["effect_operation_id"],),
     ).fetchone()
     if effect is not None and effect["state"] == "unknown":
+        _sync_manual_ticket_effect_state(
+            conn,
+            payload,
+            effect_state="unknown",
+            leg_state="UNKNOWN",
+            ticket_state="PAUSED_UNKNOWN",
+        )
         _open_or_refresh_unknown_outcome(conn, payload)
 
 
@@ -688,6 +764,12 @@ def _apply_attributed_position_delta(
     side: str,
     quantity: float,
 ) -> None:
+    owner = conn.execute(
+        "SELECT subject_id, strategy_instance_id FROM effect_operations WHERE effect_operation_id = ?",
+        (payload["effect_operation_id"],),
+    ).fetchone()
+    if owner is None:
+        raise ValueError("execution fill requires its durable owning effect")
     signed_delta = quantity if side == "BUY" else -quantity
     conn.execute(
         "INSERT INTO positions (subject_id, strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
@@ -696,8 +778,8 @@ def _apply_attributed_position_delta(
         "attributed_qty = attributed_qty + excluded.attributed_qty, "
         "updated_at_ms = excluded.updated_at_ms",
         (
-            bot_subject_id(payload["strategy_instance_id"]),
-            payload["strategy_instance_id"],
+            owner["subject_id"],
+            owner["strategy_instance_id"],
             symbol.upper(),
             signed_delta,
             payload["recorded_at_ms"],
@@ -878,12 +960,23 @@ def _fold_execution_corrected(conn: sqlite3.Connection, payload: dict[str, Any])
     ).fetchone()
     if already_recorded is not None:
         return
+    owner = conn.execute(
+        "SELECT subject_id, strategy_instance_id FROM effect_operations "
+        "WHERE effect_operation_id = ?",
+        (payload["effect_operation_id"],),
+    ).fetchone()
+    if owner is None:
+        raise ValueError("correction requires its durable owning effect")
     superseded = conn.execute(
         "SELECT f.fill_id, f.order_ref, f.qty, f.price, f.side, f.evidence_source, f.fee, "
-        "f.fee_fidelity, e.strategy_instance_id, s.symbol "
+        "f.fee_fidelity, e.subject_id, e.strategy_instance_id, "
+        "COALESCE(s.symbol, json_extract(manual_acceptance.facts_json, '$.leg.symbol')) AS symbol "
         "FROM fills f JOIN orders o ON o.order_ref = f.order_ref "
         "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
-        "JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id "
+        "LEFT JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id "
+        "LEFT JOIN custody_transitions manual_acceptance "
+        "ON manual_acceptance.effect_operation_id = e.effect_operation_id "
+        "AND manual_acceptance.transition_kind = 'MANUAL_ORDER_ACCEPTED' "
         "WHERE f.execution_id = ? "
         "AND NOT EXISTS (SELECT 1 FROM fills successor "
         "WHERE successor.superseded_execution_ref = f.execution_id)",
@@ -895,7 +988,9 @@ def _fold_execution_corrected(conn: sqlite3.Connection, payload: dict[str, Any])
         )
     if superseded["order_ref"] != payload["order_ref"]:
         raise ValueError("correction target belongs to a different order")
-    if superseded["strategy_instance_id"] != payload["strategy_instance_id"]:
+    if superseded["subject_id"] != owner["subject_id"]:
+        raise ValueError("correction target belongs to a different custody subject")
+    if superseded["strategy_instance_id"] != owner["strategy_instance_id"]:
         raise ValueError("correction target belongs to a different strategy instance")
     if superseded["symbol"].upper() != facts.symbol.upper():
         raise ValueError("correction symbol does not match the superseded execution")
@@ -1014,20 +1109,12 @@ def _fold_order_fill_observed(conn: sqlite3.Connection, payload: dict[str, Any])
             _this_transition_sequence(conn),
         ),
     )
-    signed_delta = delta_qty if facts.side == "BUY" else -delta_qty
-    conn.execute(
-        "INSERT INTO positions (subject_id, strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
-        "VALUES (?, ?, ?, ?, ?) "
-        "ON CONFLICT(subject_id, symbol) DO UPDATE SET "
-        "attributed_qty = attributed_qty + excluded.attributed_qty, "
-        "updated_at_ms = excluded.updated_at_ms",
-        (
-            bot_subject_id(payload["strategy_instance_id"]),
-            payload["strategy_instance_id"],
-            facts.symbol.upper(),
-            signed_delta,
-            payload["recorded_at_ms"],
-        ),
+    _apply_attributed_position_delta(
+        conn,
+        payload=payload,
+        symbol=facts.symbol,
+        side=facts.side,
+        quantity=delta_qty,
     )
 
 
@@ -1113,6 +1200,7 @@ DEFAULT_FOLD_REGISTRY.register("EXIT_REDUCING_ORDER_CREATED", _fold_exit_reducin
 DEFAULT_FOLD_REGISTRY.register("EXIT_ATTRIBUTED_FLAT", _fold_exit_attributed_flat)
 DEFAULT_FOLD_REGISTRY.register("EXIT_NOT_FLAT", _fold_order_submit_failed)
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_ACKED", _fold_order_submit_acked)
+DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_FILLED", _fold_manual_order_filled)
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_FAILED", _fold_order_submit_failed)
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_UNCERTAIN", _fold_order_submit_uncertain)
 # EXIT's cancel-analog (#1379): same generic "effect/command -> unknown, no
@@ -1125,6 +1213,7 @@ DEFAULT_FOLD_REGISTRY.register("EXECUTION_COVERAGE_QUARANTINED", _fold_execution
 DEFAULT_FOLD_REGISTRY.register("EXECUTION_COVERAGE_RESOLVED", _fold_execution_coverage_resolved)
 DEFAULT_FOLD_REGISTRY.register("CUSTODY_SUBJECT_REGISTERED", fold_custody_subject_registered)
 DEFAULT_FOLD_REGISTRY.register("MANUAL_TICKET_RESERVED", fold_manual_ticket_reserved)
+DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_ACCEPTED", fold_manual_order_accepted)
 DEFAULT_FOLD_REGISTRY.register("MANUAL_TICKET_PAUSED_UNKNOWN", fold_manual_ticket_state)
 DEFAULT_FOLD_REGISTRY.register("MANUAL_TICKET_COMPLETED", fold_manual_ticket_state)
 DEFAULT_FOLD_REGISTRY.register("MANUAL_TICKET_CANCELED", fold_manual_ticket_state)

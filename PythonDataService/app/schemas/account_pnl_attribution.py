@@ -27,8 +27,10 @@ class FifoAttributionRowResponse(BaseModel):
     closed_at_ms: int = Field(ge=0)
     realized_pnl: float
     fee: float | None = None
-    entry_strategy_instance_id: str = Field(min_length=1, max_length=128)
-    exit_strategy_instance_id: str = Field(min_length=1, max_length=128)
+    entry_strategy_instance_id: str | None = Field(default=None, min_length=1, max_length=128)
+    exit_strategy_instance_id: str | None = Field(default=None, min_length=1, max_length=128)
+    entry_subject_id: str = Field(min_length=1, max_length=128)
+    exit_subject_id: str = Field(min_length=1, max_length=128)
 
 
 class AccountPnlAttributionResponse(BaseModel):
@@ -73,6 +75,8 @@ class AccountPnlAttributionResponse(BaseModel):
                     fee=row.fee,
                     entry_strategy_instance_id=row.entry_strategy_instance_id,
                     exit_strategy_instance_id=row.exit_strategy_instance_id,
+                    entry_subject_id=row.entry_subject_id,
+                    exit_subject_id=row.exit_subject_id,
                 )
                 for row in projection.attribution_rows
             ],

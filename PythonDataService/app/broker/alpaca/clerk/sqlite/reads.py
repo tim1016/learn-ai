@@ -20,6 +20,8 @@ from app.broker.alpaca.clerk.sqlite.models import (
     DecisionReceiptResource,
     EffectOperationResource,
     ExternalOrderResource,
+    ManualOrderLegResource,
+    ManualOrderTicketResource,
     OrderResource,
 )
 
@@ -303,6 +305,36 @@ def order_for_effect_operation(
     return OrderResource(**dict(row)) if row is not None else None
 
 
+def manual_order_ticket(conn: sqlite3.Connection, ticket_id: str) -> ManualOrderTicketResource | None:
+    """Return one manual ticket and its bounded, durable leg resources."""
+    ticket = conn.execute(
+        "SELECT ticket_id, subject_id, operator_id, instruction_hash, state, created_at_ms, updated_at_ms "
+        "FROM manual_order_tickets WHERE ticket_id = ?",
+        (ticket_id,),
+    ).fetchone()
+    if ticket is None:
+        return None
+    legs = conn.execute(
+        "SELECT ticket_id, leg_id, subject_id, instruction_hash, command_id, effect_operation_id, "
+        "order_ref, state, created_at_ms, updated_at_ms FROM manual_order_legs "
+        "WHERE ticket_id = ? ORDER BY leg_id ASC",
+        (ticket_id,),
+    ).fetchall()
+    return ManualOrderTicketResource(
+        **dict(ticket),
+        legs=tuple(ManualOrderLegResource(**dict(leg)) for leg in legs),
+    )
+
+
+def custody_subject(conn: sqlite3.Connection, subject_id: str) -> dict | None:
+    row = conn.execute(
+        "SELECT subject_id, kind, strategy_instance_id, operator_id, created_at_ms "
+        "FROM custody_subjects WHERE subject_id = ?",
+        (subject_id,),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
 def orders_for_effect_operation(
     conn: sqlite3.Connection, effect_operation_id: str
 ) -> list[OrderResource]:
@@ -397,7 +429,7 @@ def reconcilable_effect_operations(conn: sqlite3.Connection) -> list[EffectOpera
         "e.created_at_ms, e.updated_at_ms, e.terminal_receipt_id "
         "FROM effect_operations e LEFT JOIN operation_order_links l "
         "ON l.effect_operation_id = e.effect_operation_id LEFT JOIN orders o "
-        "ON o.order_ref = l.order_ref WHERE e.kind IN ('ENTER','EXIT') "
+        "ON o.order_ref = l.order_ref WHERE e.kind IN ('ENTER','EXIT','MANUAL_ORDER') "
         "AND e.state NOT IN ('succeeded','failed','rejected') "
         "AND (e.state IN ('accepted','unknown') OR e.kind = 'EXIT' "
         "OR o.broker_state IS NULL OR lower(o.broker_state) NOT IN "
@@ -476,17 +508,21 @@ def correction_uncertainty_exists(conn: sqlite3.Connection, execution_id: str) -
 
 
 def effective_execution_slice(conn: sqlite3.Connection, execution_id: str) -> dict | None:
-    """Return one currently effective execution plus its owning bot identity.
+    """Return one currently effective execution plus its immutable custody owner.
 
     Corrections are append-only replacement rows. A row is effective only
     while no later row names its execution identity as ``superseded``.
     """
     row = conn.execute(
         "SELECT f.execution_id, f.order_ref, f.qty, f.price, f.side, f.evidence_source, f.fee, "
-        "f.fee_fidelity, e.strategy_instance_id, s.symbol "
+        "f.fee_fidelity, e.subject_id, e.strategy_instance_id, "
+        "COALESCE(s.symbol, json_extract(manual_acceptance.facts_json, '$.leg.symbol')) AS symbol "
         "FROM fills f JOIN orders o ON o.order_ref = f.order_ref "
         "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
-        "JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id "
+        "LEFT JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id "
+        "LEFT JOIN custody_transitions manual_acceptance "
+        "ON manual_acceptance.effect_operation_id = e.effect_operation_id "
+        "AND manual_acceptance.transition_kind = 'MANUAL_ORDER_ACCEPTED' "
         "WHERE f.execution_id = ? "
         "AND NOT EXISTS (SELECT 1 FROM fills successor "
         "WHERE successor.superseded_execution_ref = f.execution_id)",
@@ -507,6 +543,24 @@ def effective_fill_totals_for_order(conn: sqlite3.Connection, order_ref: str) ->
     row = conn.execute(
         "SELECT COALESCE(SUM(f.qty), 0) AS qty, COALESCE(SUM(f.qty * f.price), 0) AS cost "
         "FROM fills f WHERE f.order_ref = ? "
+        "AND NOT EXISTS (SELECT 1 FROM fills successor "
+        "WHERE successor.superseded_execution_ref = f.execution_id)",
+        (order_ref,),
+    ).fetchone()
+    return float(row["qty"]), float(row["cost"])
+
+
+def effective_exact_fill_totals_for_order(conn: sqlite3.Connection, order_ref: str) -> tuple[float, float]:
+    """Return current exact-execution quantity and cost for one order.
+
+    Aggregate REST recovery is deliberately excluded: it can establish
+    exposure and an acknowledgement, but only a broker-issued execution ID
+    may complete a manual ticket.
+    """
+    row = conn.execute(
+        "SELECT COALESCE(SUM(f.qty), 0) AS qty, COALESCE(SUM(f.qty * f.price), 0) AS cost "
+        "FROM fills f WHERE f.order_ref = ? "
+        "AND f.evidence_source IN ('websocket', 'activity_recovery') "
         "AND NOT EXISTS (SELECT 1 FROM fills successor "
         "WHERE successor.superseded_execution_ref = f.execution_id)",
         (order_ref,),
@@ -551,6 +605,16 @@ def attributed_positions_for_strategy(
     return {row["symbol"]: row["qty"] for row in rows}
 
 
+def attributed_positions_for_subject(conn: sqlite3.Connection, subject_id: str) -> dict[str, float]:
+    """Return one custody subject's position projection without bot aliases."""
+    rows = conn.execute(
+        "SELECT UPPER(symbol) AS symbol, SUM(attributed_qty) AS qty FROM positions "
+        "WHERE subject_id = ? GROUP BY UPPER(symbol)",
+        (subject_id,),
+    ).fetchall()
+    return {row["symbol"]: row["qty"] for row in rows}
+
+
 def active_hold(conn: sqlite3.Connection, *, scope: str, reason_code: str) -> dict | None:
     """The current ``ACTIVE`` hold for this ``(scope, reason_code)``, if any —
     reconciliation's idempotency check before raising a new one (#1378)."""
@@ -591,29 +655,39 @@ def active_uncertainty(
 
 
 def active_uncertainties_for_admission(
-    conn: sqlite3.Connection, *, strategy_instance_id: str
+    conn: sqlite3.Connection,
+    *,
+    strategy_instance_id: str | None = None,
+    subject_id: str | None = None,
 ) -> list[dict]:
-    """Every currently-``ACTIVE`` uncertainty relevant to admission for one
-    bot (#1380): every ``ACCOUNT_CLERK``-scoped uncertainty (blocks every
-    bot) plus this specific bot's own ``CUSTODY_SUBJECT``-scoped ones — never
-    another bot's uncertainty."""
+    """Return account-wide plus exactly one custody subject's uncertainty."""
+    if (strategy_instance_id is None) == (subject_id is None):
+        raise ValueError("admission reads require exactly one subject identity")
     rows = conn.execute(
         f"SELECT {_UNCERTAINTY_COLUMNS} FROM uncertainties "
-        "WHERE resolved_at_ms IS NULL AND (scope = 'ACCOUNT_CLERK' OR strategy_instance_id = ?)",
-        (strategy_instance_id,),
+        "WHERE resolved_at_ms IS NULL AND (scope = 'ACCOUNT_CLERK' "
+        "OR (strategy_instance_id IS NOT NULL AND strategy_instance_id = ?) "
+        "OR (subject_id IS NOT NULL AND subject_id = ?))",
+        (strategy_instance_id, subject_id),
     ).fetchall()
     return [dict(row) for row in rows]
 
 
-def active_holds_for_admission(conn: sqlite3.Connection, *, strategy_instance_id: str) -> list[dict]:
-    """Every currently-``ACTIVE`` hold relevant to admission for one bot
-    (#1380) — the same account-wide-or-this-bot shape as
-    :func:`active_uncertainties_for_admission`, so :func:`admit_new_exposure`
-    can fold both mechanisms behind one admission surface."""
+def active_holds_for_admission(
+    conn: sqlite3.Connection,
+    *,
+    strategy_instance_id: str | None = None,
+    subject_id: str | None = None,
+) -> list[dict]:
+    """Return account-wide plus exactly one custody subject's active holds."""
+    if (strategy_instance_id is None) == (subject_id is None):
+        raise ValueError("admission reads require exactly one subject identity")
     rows = conn.execute(
-        "SELECT hold_id, scope, strategy_instance_id, reason_code, state, opened_at_ms, "
+        "SELECT hold_id, scope, subject_id, strategy_instance_id, reason_code, state, opened_at_ms, "
         "resolved_at_ms, evidence_refs_json FROM holds "
-        "WHERE state = 'ACTIVE' AND (scope = 'ACCOUNT_CLERK' OR strategy_instance_id = ?)",
-        (strategy_instance_id,),
+        "WHERE state = 'ACTIVE' AND (scope = 'ACCOUNT_CLERK' "
+        "OR (strategy_instance_id IS NOT NULL AND strategy_instance_id = ?) "
+        "OR (subject_id IS NOT NULL AND subject_id = ?))",
+        (strategy_instance_id, subject_id),
     ).fetchall()
     return [dict(row) for row in rows]

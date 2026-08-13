@@ -2,8 +2,15 @@
   <div class="order-entry__toolbar">
     <div>
       <strong>Order ticket</strong>
-      <p>Each leg is journaled separately before submission.</p>
+      <p>
+        @if (manualMarketOnly()) {
+          This SQLite ticket supports one BUY market DAY equity leg. The server journals it before submission.
+        } @else {
+          Each leg is journaled separately before submission.
+        }
+      </p>
     </div>
+    @if (!manualMarketOnly()) {
     <p-button
       label="Add another"
       icon="pi pi-plus"
@@ -13,6 +20,7 @@
       ariaLabel="Add equity leg"
       (onClick)="addEquityLeg()"
     />
+    }
   </div>
 
   @if (legs().length === 0) {
@@ -27,6 +35,7 @@
         <app-alpaca-order-leg-row
           [legForm]="legsForm[$index]"
           [position]="$index"
+          [manualMarketOnly]="manualMarketOnly()"
           (removed)="removeLeg(leg.id)"
         />
       }
@@ -35,15 +44,19 @@
     <div class="order-entry__footer">
       <div class="order-capabilities">
         <span><i class="pi pi-check" aria-hidden="true"></i> Market</span>
+        @if (!manualMarketOnly()) {
         <span><i class="pi pi-check" aria-hidden="true"></i> Limit</span>
         <span><i class="pi pi-clock" aria-hidden="true"></i> Day or GTC</span>
+        } @else {
+          <span><i class="pi pi-clock" aria-hidden="true"></i> Day</span>
+        }
       </div>
       <p-button
         label="Preview order"
         icon="pi pi-arrow-right"
         iconPos="right"
         size="small"
-        [disabled]="!canSubmit()"
+        [disabled]="!canConfirm() || submitting()"
         (onClick)="openPreview()"
       />
     </div>
@@ -53,7 +66,38 @@
     <p-message severity="error">{{ error }}</p-message>
   }
 
-  <app-alpaca-order-results [results]="results()" />
+  @if (manualMarketOnly()) {
+    @if (manualCapability()?.available === false) {
+      <p-message severity="warn">{{ manualCapability()?.unavailable?.message }}</p-message>
+    }
+    @if (manualTicket(); as ticket) {
+      <section aria-live="polite" aria-label="Manual ticket status">
+        <p-message severity="info">
+          Ticket <code>{{ ticket.ticket_id }}</code> is {{ ticket.state | receiptLabel }}.
+          Updated <app-timestamp-display [value]="ticket.updated_at_ms" mode="local" />.
+        </p-message>
+        @if (ticket.legs[0]; as leg) {
+          <dl>
+            <div><dt>Leg</dt><dd><code>{{ leg.leg_id }}</code> · {{ leg.state | receiptLabel }}</dd></div>
+            @if (leg.order; as order) {
+              <div><dt>Order reference</dt><dd><code>{{ order.order_ref }}</code></dd></div>
+              @if (order.broker_state) {
+                <div><dt>Broker state</dt><dd>{{ order.broker_state | receiptLabel }}</dd></div>
+              }
+            }
+            @if (leg.effect; as effect) {
+              <div><dt>Effect</dt><dd>{{ effect.state | receiptLabel }}</dd></div>
+              @if (effect.terminal_receipt_id) {
+                <div><dt>Terminal receipt</dt><dd><code>{{ effect.terminal_receipt_id }}</code></dd></div>
+              }
+            }
+          </dl>
+        }
+      </section>
+    }
+  } @else {
+    <app-alpaca-order-results [results]="results()" />
+  }
 </div>
 
 <app-alpaca-order-preview

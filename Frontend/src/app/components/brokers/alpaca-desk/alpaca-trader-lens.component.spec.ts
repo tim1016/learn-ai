@@ -146,6 +146,8 @@ function portfolioHistoryProof(): PortfolioHistoryProof {
         fee: null,
         entry_strategy_instance_id: 'bot-spy',
         exit_strategy_instance_id: 'bot-spy',
+        entry_subject_id: 'bot:bot-spy',
+        exit_subject_id: 'bot:bot-spy',
       }],
       realized_pnl_total: 100,
       start_open_pnl_total: 0,

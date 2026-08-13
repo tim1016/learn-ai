@@ -31,6 +31,7 @@ from app.broker.alpaca.clerk.sqlite.folds import (
     POSITION_QTY_EPSILON,
     position_quantity_is_nonzero,
 )
+from app.broker.alpaca.clerk.sqlite.manual_orders import submit_manual_order
 from app.broker.alpaca.clerk.sqlite.models import CommittedTransition, TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.reconcile import (
@@ -1118,6 +1119,67 @@ async def test_reconcile_account_resolved_count_excludes_orders_still_unknown(
 
     result = await reconcile_account(repo, read=read, trade=_FakeTrade(lookup_absent=True))
     assert result.resolved_count == 0
+
+
+async def test_reconcile_account_recovers_an_unknown_manual_open_order(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """Manual UNKNOWN effects use the same exact client-order recovery path."""
+    submitted = await submit_manual_order(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id="desk",
+        ticket_id="7de3a77c-b698-4e0d-a5d1-2f624574ed35",
+        leg_id="09d6d63e-6375-4e6d-8d20-3b1bf70c2465",
+        leg=_leg(),
+        trade=_FakeTrade(submit_error=BrokerUnavailable("timeout"), lookup_absent=True),
+    )
+    assert submitted.leg.order_ref is not None
+    assert submitted.leg.effect_operation_id is not None
+    assert repo.effect_operation(submitted.leg.effect_operation_id).state == "unknown"  # type: ignore[union-attr]
+
+    trade = _FakeTrade()
+    result = await reconcile_account(repo, read=_FakeRead(), trade=trade)
+
+    assert result.resolved_count == 1
+    assert trade.lookup_calls == [submitted.leg.order_ref]
+    assert repo.order(submitted.leg.order_ref).broker_order_id is not None  # type: ignore[union-attr]
+    assert repo.effect_operation(submitted.leg.effect_operation_id).state == "in_progress"  # type: ignore[union-attr]
+
+
+async def test_reconcile_account_recovers_an_unknown_manual_closed_order(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """A closed manual order folds cumulative evidence without inventing an exact fill."""
+    submitted = await submit_manual_order(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id="desk",
+        ticket_id="7de3a77c-b698-4e0d-a5d1-2f624574ed35",
+        leg_id="09d6d63e-6375-4e6d-8d20-3b1bf70c2465",
+        leg=_leg(),
+        trade=_FakeTrade(submit_error=BrokerUnavailable("timeout"), lookup_absent=True),
+    )
+    assert submitted.leg.order_ref is not None
+    closed = _broker_order(
+        submitted.leg.order_ref,
+        status="filled",
+        filled_quantity=1.0,
+        filled_avg_price=100.0,
+    )
+
+    result = await reconcile_account(
+        repo,
+        read=_FakeRead(positions=[_position("SPY", quantity=1.0)]),
+        trade=_FakeTrade(lookup_result=closed),
+    )
+
+    assert result.resolved_count == 1
+    assert repo.effective_fill_totals_for_order(submitted.leg.order_ref) == (1.0, 100.0)
+    ticket = repo.manual_order_ticket(submitted.ticket.ticket_id)
+    assert ticket is not None
+    assert ticket.state == "ACTIVE"
+    assert ticket.legs[0].state == "IN_PROGRESS"
 
 
 async def test_reconcile_account_skips_a_claim_contended_order_but_still_resolves_the_rest(
