@@ -45,6 +45,7 @@ from app.broker.alpaca.clerk.fifo_pnl import (
     realized_pnl_for_window,
 )
 from app.broker.alpaca.clerk.fills import FillRecord
+from app.broker.alpaca.clerk.sqlite.custody_subjects import BOT_SUBJECT_PREFIX
 from app.broker.alpaca.clerk.sqlite.economic_projection_models import (
     AccountPnlAttribution,
     EconomicSnapshot,
@@ -350,10 +351,11 @@ class SqliteEconomicProjectionReader:
     ) -> ExecutionPage:
         """Return a bounded account-history execution page from SQLite folds.
 
-        S2 has only registered bot fills.  The ``origin`` filter nevertheless
-        accepts the complete future desk vocabulary; ``manual``, ``external``,
-        and ``unknown`` therefore return an empty page until S4 writes those
-        independent observation rows instead of fabricating bot executions.
+        Bot and S2 manual fills share this account-wide history. The
+        ``origin`` filter also accepts the remaining future desk vocabulary;
+        ``external`` and ``unknown`` return an empty page until a later slice
+        writes those independent observation rows instead of fabricating
+        strategy executions.
         """
         if origin not in (None, "strategy", "manual", "external", "unknown"):
             raise ValueError("unsupported execution origin")
@@ -421,24 +423,14 @@ class SqliteEconomicProjectionReader:
         _validate_inclusive_window(from_ms=from_ms, to_ms=to_ms)
         with self._read_transaction():
             meta = self._verified_meta()
-            strategy_instance_ids = tuple(
-                str(row["strategy_instance_id"])
-                for row in self._conn.execute(
-                    "SELECT strategy_instance_id FROM strategy_instances ORDER BY strategy_instance_id"
-                ).fetchall()
-            )
             all_rows = self._effective_fill_rows(
-                strategy_instance_ids=strategy_instance_ids,
+                strategy_instance_ids=None,
                 from_ms=None,
                 to_ms=None,
                 cursor_key=None,
                 limit=None,
             )
-            coverage_complete = all(
-                self._execution_coverage(strategy_instance_id, all_rows)
-                == "complete"
-                for strategy_instance_id in strategy_instance_ids
-            )
+            coverage_complete = self._account_execution_coverage(all_rows) == "complete"
             external_fill_exists = self._conn.execute(
                 "SELECT 1 FROM external_orders "
                 "WHERE filled_avg_price IS NOT NULL AND ABS(qty) >= 1e-9 LIMIT 1"
@@ -446,7 +438,14 @@ class SqliteEconomicProjectionReader:
 
         records = tuple(
             sorted(
-                (_to_fill_record(row, account_id=self._account_id) for row in all_rows),
+                (
+                    _to_fill_record(
+                        row,
+                        account_id=self._account_id,
+                        custody_subject_identity=True,
+                    )
+                    for row in all_rows
+                ),
                 key=lambda record: (record.filled_at_ms, record.ledger_sequence),
             )
         )
@@ -859,7 +858,7 @@ class SqliteEconomicProjectionReader:
     def _effective_fill_rows(
         self,
         *,
-        strategy_instance_ids: Sequence[str],
+        strategy_instance_ids: Sequence[str] | None,
         from_ms: int | None,
         to_ms: int | None,
         cursor_key: tuple[int, str] | None,
@@ -872,12 +871,15 @@ class SqliteEconomicProjectionReader:
         session membership; the outer row's ``recorded_at_ms`` remains the
         audit/keyset timestamp.
         """
-        if not strategy_instance_ids:
-            return []
-        where = [
-            f"effective.strategy_instance_id IN ({_placeholders(strategy_instance_ids)})"
-        ]
-        params: list[object] = [*strategy_instance_ids]
+        where = ["1 = 1"]
+        params: list[object] = []
+        if strategy_instance_ids is not None:
+            if not strategy_instance_ids:
+                return []
+            where.append(
+                f"effective.strategy_instance_id IN ({_placeholders(strategy_instance_ids)})"
+            )
+            params.extend(strategy_instance_ids)
         if from_ms is not None:
             where.append("effective.economic_filled_at_ms >= ?")
             params.append(from_ms)
@@ -898,7 +900,9 @@ class SqliteEconomicProjectionReader:
                 SELECT f.fill_id, f.order_ref, f.qty, f.price, f.side, f.execution_id,
                        f.evidence_source, f.event_kind, f.fee, f.fee_fidelity,
                        f.recorded_at_ms, f.recorded_transition_sequence,
-                       e.strategy_instance_id, s.symbol,
+                       e.subject_id, e.strategy_instance_id,
+                       CASE WHEN e.strategy_instance_id IS NULL THEN 'manual' ELSE 'strategy' END AS origin,
+                       COALESCE(s.symbol, json_extract(manual_acceptance.facts_json, '$.leg.symbol')) AS symbol,
                        COALESCE(roots.root_source_event_at_ms, roots.root_recorded_at_ms,
                                 f.source_event_at_ms, f.recorded_at_ms) AS economic_filled_at_ms,
                        COALESCE(roots.root_transition_sequence,
@@ -907,7 +911,10 @@ class SqliteEconomicProjectionReader:
                 FROM fills f
                 JOIN orders o ON o.order_ref = f.order_ref
                 JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id
-                JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id
+                LEFT JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id
+                LEFT JOIN custody_transitions manual_acceptance
+                    ON manual_acceptance.effect_operation_id = e.effect_operation_id
+                    AND manual_acceptance.transition_kind = 'MANUAL_ORDER_ACCEPTED'
                 JOIN roots ON roots.effective_fill_id = f.fill_id
                 WHERE NOT EXISTS (
                     SELECT 1 FROM fills successor
@@ -930,16 +937,17 @@ class SqliteEconomicProjectionReader:
         cursor_key: tuple[int, str] | None,
         limit: int,
     ) -> list[sqlite3.Row]:
-        if origin is not None and origin != "strategy":
-            return []
         where = ["1 = 1"]
         params: list[object] = []
         if bot is not None:
             where.append("e.strategy_instance_id = ?")
             params.append(bot)
         if symbol is not None:
-            where.append("s.symbol = ?")
+            where.append("COALESCE(s.symbol, json_extract(manual_acceptance.facts_json, '$.leg.symbol')) = ?")
             params.append(symbol.upper())
+        if origin is not None:
+            where.append("CASE WHEN e.strategy_instance_id IS NULL THEN 'manual' ELSE 'strategy' END = ?")
+            params.append(origin)
         if state == "effective":
             where.append(
                 "NOT EXISTS (SELECT 1 FROM fills successor "
@@ -962,7 +970,9 @@ class SqliteEconomicProjectionReader:
             SELECT f.fill_id, f.execution_id, f.order_ref, f.qty, f.price, f.side,
                    f.event_kind, f.fee, f.fee_fidelity, f.recorded_at_ms,
                    f.recorded_transition_sequence,
-                   e.strategy_instance_id, s.symbol,
+                   e.subject_id, e.strategy_instance_id,
+                   CASE WHEN e.strategy_instance_id IS NULL THEN 'manual' ELSE 'strategy' END AS origin,
+                   COALESCE(s.symbol, json_extract(manual_acceptance.facts_json, '$.leg.symbol')) AS symbol,
                    CASE WHEN EXISTS (
                        SELECT 1 FROM fills successor
                        WHERE successor.superseded_execution_ref = f.execution_id
@@ -972,7 +982,10 @@ class SqliteEconomicProjectionReader:
             FROM fills f
             JOIN orders o ON o.order_ref = f.order_ref
             JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id
-            JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id
+            LEFT JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id
+            LEFT JOIN custody_transitions manual_acceptance
+                ON manual_acceptance.effect_operation_id = e.effect_operation_id
+                AND manual_acceptance.transition_kind = 'MANUAL_ORDER_ACCEPTED'
             LEFT JOIN roots ON roots.effective_fill_id = f.fill_id
             WHERE {' AND '.join(where)}
             ORDER BY f.recorded_at_ms DESC, COALESCE(f.execution_id, f.fill_id) DESC
@@ -1003,7 +1016,9 @@ class SqliteEconomicProjectionReader:
                 SELECT f.fill_id, f.execution_id, f.order_ref, f.qty, f.price, f.side,
                        f.event_kind, f.fee, f.fee_fidelity, f.recorded_at_ms,
                        f.recorded_transition_sequence,
-                       e.strategy_instance_id, s.symbol,
+                       e.subject_id, e.strategy_instance_id,
+                       CASE WHEN e.strategy_instance_id IS NULL THEN 'manual' ELSE 'strategy' END AS origin,
+                       COALESCE(s.symbol, json_extract(manual_acceptance.facts_json, '$.leg.symbol')) AS symbol,
                        'effective' AS state,
                        COALESCE(roots.root_source_event_at_ms, roots.root_recorded_at_ms,
                                 f.source_event_at_ms, f.recorded_at_ms) AS filled_at_ms,
@@ -1011,7 +1026,10 @@ class SqliteEconomicProjectionReader:
                 FROM fills f
                 JOIN orders o ON o.order_ref = f.order_ref
                 JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id
-                JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id
+                LEFT JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id
+                LEFT JOIN custody_transitions manual_acceptance
+                    ON manual_acceptance.effect_operation_id = e.effect_operation_id
+                    AND manual_acceptance.transition_kind = 'MANUAL_ORDER_ACCEPTED'
                 JOIN roots ON roots.effective_fill_id = f.fill_id
                 WHERE f.order_ref IN ({placeholders})
                   AND NOT EXISTS (
@@ -1055,8 +1073,27 @@ class SqliteEconomicProjectionReader:
         ).fetchone()
         return "incomplete" if row is not None else "complete"
 
+    def _account_execution_coverage(
+        self,
+        effective_rows: Sequence[sqlite3.Row],
+    ) -> ExecutionCoverage:
+        """Require complete evidence for every owned account custody subject."""
+        if any(row["evidence_source"] == "cumulative_recovery" for row in effective_rows):
+            return "incomplete"
+        row = self._conn.execute(
+            "SELECT 1 FROM uncertainties WHERE reason_code = ? "
+            "AND resolved_at_ms IS NULL LIMIT 1",
+            (EXECUTION_COVERAGE_CONFLICT_REASON_CODE,),
+        ).fetchone()
+        return "incomplete" if row is not None else "complete"
 
-def _to_fill_record(row: sqlite3.Row, *, account_id: str) -> FillRecord:
+
+def _to_fill_record(
+    row: sqlite3.Row,
+    *,
+    account_id: str,
+    custody_subject_identity: bool = False,
+) -> FillRecord:
     try:
         _namespace, intent_id = parse_order_ref(row["order_ref"])
     except ValueError as exc:
@@ -1067,9 +1104,12 @@ def _to_fill_record(row: sqlite3.Row, *, account_id: str) -> FillRecord:
         side = OrderSide(row["side"].lower())
     except ValueError as exc:
         raise EconomicProjectionError(f"SQLite fill has invalid side {row['side']!r}") from exc
+    sid = row["subject_id"] if custody_subject_identity else row["strategy_instance_id"]
+    if sid is None:
+        raise EconomicProjectionError("SQLite fill is missing its custody-owner identity")
     return FillRecord(
         account_id=account_id,
-        sid=row["strategy_instance_id"],
+        sid=sid,
         intent_id=intent_id,
         order_ref=row["order_ref"],
         event_key=row["execution_id"] or row["fill_id"],
@@ -1094,8 +1134,10 @@ def _to_fifo_attribution_row(lot: ClosedLot) -> FifoAttributionRow:
         closed_at_ms=lot.closed_at_ms,
         realized_pnl=lot.realized_pnl,
         fee=lot.fee,
-        entry_strategy_instance_id=lot.entry_strategy_instance_id,
-        exit_strategy_instance_id=lot.exit_strategy_instance_id,
+        entry_strategy_instance_id=_strategy_instance_id_for_subject(lot.entry_strategy_instance_id),
+        exit_strategy_instance_id=_strategy_instance_id_for_subject(lot.exit_strategy_instance_id),
+        entry_subject_id=lot.entry_strategy_instance_id,
+        exit_subject_id=lot.exit_strategy_instance_id,
     )
 
 
@@ -1109,7 +1151,7 @@ def _to_execution_row(row: sqlite3.Row) -> ExecutionRow:
         execution_id=row["execution_id"],
         order_ref=row["order_ref"],
         strategy_instance_id=row["strategy_instance_id"],
-        origin="strategy",
+        origin=row["origin"],
         state=row["state"],
         event_kind=row["event_kind"],
         symbol=row["symbol"].upper(),
@@ -1120,8 +1162,16 @@ def _to_execution_row(row: sqlite3.Row) -> ExecutionRow:
         fee_fidelity=row["fee_fidelity"],
         filled_at_ms=int(row["filled_at_ms"]),
         recorded_at_ms=int(row["recorded_at_ms"]),
+        subject_id=row["subject_id"],
         journal_seq=_required_ledger_sequence(row),
     )
+
+
+def _strategy_instance_id_for_subject(subject_id: str) -> str | None:
+    """Adapt FIFO's actor key back to the legacy bot compatibility field."""
+    if subject_id.startswith(BOT_SUBJECT_PREFIX):
+        return subject_id.removeprefix(BOT_SUBJECT_PREFIX)
+    return None
 
 
 def _required_ledger_sequence(

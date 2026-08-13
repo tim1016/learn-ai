@@ -634,8 +634,8 @@ class ClerkSqliteRepository(
             and float(existing["price"]) == facts.slice_price
         )
 
-    @staticmethod
     def _validate_execution_coverage_conflict(
+        self,
         *,
         uncertainty: TransitionInput,
         execution_id: str,
@@ -643,8 +643,26 @@ class ClerkSqliteRepository(
     ) -> None:
         if uncertainty.transition_kind != "UNCERTAINTY_RAISED":
             raise ValueError("coverage conflict must raise UNCERTAINTY_RAISED")
-        if uncertainty.order_ref != order_ref or uncertainty.strategy_instance_id is None:
-            raise ValueError("coverage conflict must identify the order and strategy")
+        if uncertainty.order_ref != order_ref or uncertainty.effect_operation_id is None:
+            raise ValueError("coverage conflict must identify the order and owning effect")
+        owner = self._conn.execute(
+            "SELECT command_id, subject_id, strategy_instance_id FROM effect_operations "
+            "WHERE effect_operation_id = ?",
+            (uncertainty.effect_operation_id,),
+        ).fetchone()
+        if owner is None:
+            raise ValueError("coverage conflict requires its durable owning effect")
+        if (
+            uncertainty.command_id != owner["command_id"]
+            or uncertainty.strategy_instance_id != owner["strategy_instance_id"]
+        ):
+            raise ValueError("coverage conflict ownership does not match its durable effect")
+        order_owner = self._conn.execute(
+            "SELECT effect_operation_id FROM orders WHERE order_ref = ?",
+            (order_ref,),
+        ).fetchone()
+        if order_owner is None or order_owner["effect_operation_id"] != uncertainty.effect_operation_id:
+            raise ValueError("coverage conflict effect does not own the exact order")
         facts = UncertaintyRaisedFacts.from_facts_json(uncertainty.facts_json)
         if facts.reason_code != EXECUTION_COVERAGE_CONFLICT_REASON_CODE:
             raise ValueError("coverage conflict must use the execution coverage reason code")

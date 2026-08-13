@@ -18050,9 +18050,22 @@
             "type": "number"
           },
           "entry_strategy_instance_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entry Strategy Instance Id"
+          },
+          "entry_subject_id": {
             "maxLength": 128,
             "minLength": 1,
-            "title": "Entry Strategy Instance Id",
+            "title": "Entry Subject Id",
             "type": "string"
           },
           "exit_price": {
@@ -18060,9 +18073,22 @@
             "type": "number"
           },
           "exit_strategy_instance_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Strategy Instance Id"
+          },
+          "exit_subject_id": {
             "maxLength": 128,
             "minLength": 1,
-            "title": "Exit Strategy Instance Id",
+            "title": "Exit Subject Id",
             "type": "string"
           },
           "fee": {
@@ -18104,8 +18130,8 @@
           "opened_at_ms",
           "closed_at_ms",
           "realized_pnl",
-          "entry_strategy_instance_id",
-          "exit_strategy_instance_id"
+          "entry_subject_id",
+          "exit_subject_id"
         ],
         "title": "FifoAttributionRowResponse",
         "type": "object"

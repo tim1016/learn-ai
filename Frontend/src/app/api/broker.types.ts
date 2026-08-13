@@ -13566,11 +13566,15 @@ export interface components {
             /** Entry Price */
             entry_price: number;
             /** Entry Strategy Instance Id */
-            entry_strategy_instance_id: string;
+            entry_strategy_instance_id?: string | null;
+            /** Entry Subject Id */
+            entry_subject_id: string;
             /** Exit Price */
             exit_price: number;
             /** Exit Strategy Instance Id */
-            exit_strategy_instance_id: string;
+            exit_strategy_instance_id?: string | null;
+            /** Exit Subject Id */
+            exit_subject_id: string;
             /** Fee */
             fee?: number | null;
             /** Opened At Ms */

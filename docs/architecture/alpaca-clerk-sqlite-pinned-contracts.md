@@ -1010,7 +1010,12 @@ issue #1377's rebuild has a fixed target rather than inventing one ad hoc.
 `MANUAL_ORDER_ACCEPTED` is the S2 manual-market tracer's implemented
 strategy-free counterpart: it is legal only after an immutable ticket/leg
 reservation, and its fold creates one manual command/effect/order resource
-chain before the caller may contact the broker.
+chain before the caller may contact the broker. Every later execution,
+aggregate recovery, coverage conflict, and account FIFO/history projection
+resolves custody from that effect's immutable `subject_id`: manual fills are
+reported as `manual` origin and never as a synthetic strategy. Ticket/leg
+state is updated by those same canonical folds (acknowledged, unknown, failed,
+and exact-filled), never inferred only at the HTTP boundary.
 
 ### 3e. Reconciliation and hold transition facts (#1378)
 

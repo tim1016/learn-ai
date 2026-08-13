@@ -185,7 +185,47 @@ describe('AlpacaOrderEntryComponent', () => {
       expect.objectContaining({ preview_token: 'a'.repeat(64) }),
     );
     expect(submitOrder).not.toHaveBeenCalled();
-    expect(await screen.findByText(/Ticket 7de3a77c-b698-4e0d-a5d1-2f624574ed35 is ACTIVE/)).toBeTruthy();
+    expect(await screen.findByText(/Ticket.*is Active/)).toBeTruthy();
+    expect(screen.getByText('manual/operator/v1:abc')).toBeTruthy();
+    expect(screen.getByText('In Progress')).toBeTruthy();
+  });
+
+  it('refreshes a nonterminal SQLite ticket from its durable status resource', async () => {
+    const activeTicket = {
+      ticket_id: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
+      subject_id: 'manual-operator:operator',
+      state: 'ACTIVE',
+      created_at_ms: 1,
+      updated_at_ms: 2,
+      legs: [],
+    };
+    const getSqliteManualOrderTicket = vi.fn().mockResolvedValue(activeTicket);
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
+
+    await render(AlpacaOrderEntryComponent, {
+      inputs: {
+        expectedAccountId: 'PA1',
+        sqliteManualAuthority: true,
+        manualTicketId: activeTicket.ticket_id,
+      },
+      providers: [{
+        provide: BrokersService,
+        useValue: { getSqliteManualOrderTicket },
+      }],
+    });
+
+    await vi.waitFor(() => expect(getSqliteManualOrderTicket).toHaveBeenCalledTimes(1));
+    const refreshCall = await vi.waitFor(() => {
+      const call = setIntervalSpy.mock.calls.find(([, delay]) => delay === 5_000);
+      expect(call).toBeDefined();
+      return call;
+    });
+    if (refreshCall === undefined) throw new Error('expected a five-second refresh callback');
+    const [refresh] = refreshCall;
+    if (typeof refresh !== 'function') throw new Error('expected a refresh callback');
+    refresh();
+    await vi.waitFor(() => expect(getSqliteManualOrderTicket).toHaveBeenCalledTimes(2));
+    setIntervalSpy.mockRestore();
   });
 
   it('reveals the limit-price field only when the order type is Limit', async () => {

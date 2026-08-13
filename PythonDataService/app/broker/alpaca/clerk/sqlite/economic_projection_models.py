@@ -81,7 +81,7 @@ class ExecutionRow:
     fill_id: str
     execution_id: str | None
     order_ref: str
-    strategy_instance_id: str
+    strategy_instance_id: str | None
     origin: ExecutionOrigin
     state: ExecutionState
     event_kind: Literal["fill", "correction"]
@@ -93,6 +93,7 @@ class ExecutionRow:
     fee_fidelity: FeeFidelity
     filled_at_ms: int
     recorded_at_ms: int
+    subject_id: str = ""
     journal_seq: int = 0
 
 
@@ -139,7 +140,7 @@ class SessionEconomicProjection:
 
 @dataclass(frozen=True)
 class FifoAttributionRow:
-    """One account-level FIFO lot closure, with both bot identities retained."""
+    """One account-level FIFO lot closure, with its custody actors retained."""
 
     symbol: str
     quantity: float
@@ -149,8 +150,10 @@ class FifoAttributionRow:
     closed_at_ms: int
     realized_pnl: float
     fee: float | None
-    entry_strategy_instance_id: str
-    exit_strategy_instance_id: str
+    entry_strategy_instance_id: str | None
+    exit_strategy_instance_id: str | None
+    entry_subject_id: str
+    exit_subject_id: str
 
 
 @dataclass(frozen=True)

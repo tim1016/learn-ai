@@ -58,6 +58,27 @@ def _log_unreadable_active_uncertainty(*, active: sqlite3.Row, subject_id: str, 
     )
 
 
+def _uncertainty_custody(
+    conn: sqlite3.Connection,
+    payload: dict[str, Any],
+) -> tuple[str, str | None, str | None]:
+    """Resolve every effect-bound uncertainty through its durable owner."""
+    effect_operation_id = payload.get("effect_operation_id")
+    if effect_operation_id is not None:
+        owner = conn.execute(
+            "SELECT subject_id, strategy_instance_id FROM effect_operations "
+            "WHERE effect_operation_id = ?",
+            (effect_operation_id,),
+        ).fetchone()
+        if owner is None:
+            raise ValueError("effect-bound uncertainty requires its durable owning effect")
+        return "CUSTODY_SUBJECT", owner["subject_id"], owner["strategy_instance_id"]
+    strategy_instance_id = payload["strategy_instance_id"]
+    if strategy_instance_id is not None:
+        return "CUSTODY_SUBJECT", bot_subject_id(strategy_instance_id), strategy_instance_id
+    return "ACCOUNT_CLERK", None, None
+
+
 def open_or_refresh_unknown_outcome(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Atomically pair an UNKNOWN effect state with its fail-closed episode."""
     effect_operation_id = payload["effect_operation_id"]
@@ -226,7 +247,7 @@ def resolve_unknown_outcome_if_proven(conn: sqlite3.Connection, payload: dict[st
 def fold_uncertainty_raised(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Open one database-unique, versioned R5 uncertainty episode."""
     facts = UncertaintyRaisedFacts.from_facts_json(payload["facts_json"])
-    scope = "CUSTODY_SUBJECT" if payload["strategy_instance_id"] is not None else "ACCOUNT_CLERK"
+    scope, subject_id, strategy_instance_id = _uncertainty_custody(conn, payload)
     conn.execute(
         "INSERT INTO uncertainties (uncertainty_id, scope, severity, blocks_new_exposure, "
         "allows_reduction, custody_owner, subject_id, strategy_instance_id, reason_code, headline, "
@@ -239,12 +260,8 @@ def fold_uncertainty_raised(conn: sqlite3.Connection, payload: dict[str, Any]) -
             facts.severity,
             1 if facts.blocks_new_exposure else 0,
             1 if facts.allows_reduction else 0,
-            (
-                None
-                if payload["strategy_instance_id"] is None
-                else bot_subject_id(payload["strategy_instance_id"])
-            ),
-            payload["strategy_instance_id"],
+            subject_id,
+            strategy_instance_id,
             facts.reason_code,
             facts.headline,
             facts.explanation,
@@ -260,12 +277,12 @@ def fold_uncertainty_raised(conn: sqlite3.Connection, payload: dict[str, Any]) -
 
 def fold_uncertainty_refreshed(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     facts = UncertaintyRaisedFacts.from_facts_json(payload["facts_json"])
-    scope = "CUSTODY_SUBJECT" if payload["strategy_instance_id"] is not None else "ACCOUNT_CLERK"
+    scope, subject_id, _strategy_instance_id = _uncertainty_custody(conn, payload)
     conn.execute(
         "UPDATE uncertainties SET severity = ?, blocks_new_exposure = ?, allows_reduction = ?, "
         "headline = ?, explanation = ?, operator_impact = ?, next_step = ?, observed_at_ms = ?, "
         "evidence_refs_json = ?, facts_schema_version = ?, facts_json = ? "
-        "WHERE scope = ? AND reason_code = ? AND strategy_instance_id IS ? "
+        "WHERE scope = ? AND reason_code = ? AND subject_id IS ? "
         "AND resolved_at_ms IS NULL",
         (
             facts.severity,
@@ -281,7 +298,7 @@ def fold_uncertainty_refreshed(conn: sqlite3.Connection, payload: dict[str, Any]
             payload["facts_json"],
             scope,
             facts.reason_code,
-            payload["strategy_instance_id"],
+            subject_id,
         ),
     )
 

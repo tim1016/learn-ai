@@ -22,6 +22,8 @@ import type {
   OrderLegResult,
 } from '../../../api/alpaca.types';
 import { BrokersService } from '../../../services/brokers.service';
+import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
+import { TimestampDisplayComponent } from '../../../shared/timestamp';
 import type { AlpacaOrderDraftLeg } from './alpaca-order-entry.types';
 import { AlpacaOrderLegRowComponent } from './alpaca-order-leg-row.component';
 import { AlpacaOrderPreviewComponent } from './alpaca-order-preview.component';
@@ -44,6 +46,8 @@ import { AlpacaOrderResultsComponent } from './alpaca-order-results.component';
     AlpacaOrderLegRowComponent,
     AlpacaOrderPreviewComponent,
     AlpacaOrderResultsComponent,
+    ReceiptLabelPipe,
+    TimestampDisplayComponent,
   ],
   templateUrl: './alpaca-order-entry.component.html',
   styleUrl: './alpaca-order-entry.component.scss',
@@ -103,6 +107,12 @@ export class AlpacaOrderEntryComponent {
       const ticketId = this.manualTicketId();
       if (ticketId === null) return;
       void this.restoreManualTicket(ticketId);
+    });
+    effect((onCleanup) => {
+      const ticket = this.manualTicket();
+      if (!this.sqliteManualAuthority() || ticket === null || !this.ticketNeedsRefresh(ticket)) return;
+      const refresh = globalThis.setInterval(() => void this.restoreManualTicket(ticket.ticket_id), 5_000);
+      onCleanup(() => globalThis.clearInterval(refresh));
     });
   }
 
@@ -228,6 +238,10 @@ export class AlpacaOrderEntryComponent {
       if (err instanceof HttpErrorResponse && err.status === 404) return;
       this.submitError.set(this.submissionErrorMessage(err));
     }
+  }
+
+  private ticketNeedsRefresh(ticket: ManualOrderTicket): boolean {
+    return !['COMPLETED', 'CANCELED'].includes(ticket.state);
   }
 
   private toRequestLeg(leg: AlpacaOrderDraftLeg): BrokerOrderLeg {

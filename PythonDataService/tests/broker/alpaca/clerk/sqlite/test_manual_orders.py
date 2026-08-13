@@ -7,6 +7,10 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.clerk.sqlite.custody_subjects import manual_operator_subject_id
+from app.broker.alpaca.clerk.sqlite.economic_projection import (
+    MarketMark,
+    SqliteEconomicProjectionReader,
+)
 from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts
 from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError
 from app.broker.alpaca.clerk.sqlite.manual_orders import (
@@ -117,7 +121,7 @@ async def test_manual_order_is_durable_before_broker_contact_and_never_a_bot(
     assert submitted.command.strategy_instance_id is None
     assert submitted.leg.order_ref == trade.submit_calls[0]
     assert submitted.leg.order_ref.startswith("manual/operator/v1:")
-    assert submitted.leg.state == "ACCEPTED"
+    assert submitted.leg.state == "IN_PROGRESS"
     assert submitted.ticket.subject_id == manual_operator_subject_id(OPERATOR_ID)
     assert repo.strategy_instance(manual_operator_subject_id(OPERATOR_ID)) is None
     effect = repo.effect_operation(submitted.leg.effect_operation_id or "")
@@ -183,6 +187,8 @@ async def test_lost_manual_submit_response_remains_queryable_unknown(
     resumed = repo.manual_order_ticket(TICKET_ID)
     assert resumed is not None
     assert resumed.legs[0].order_ref == submitted.leg.order_ref
+    assert resumed.state == "PAUSED_UNKNOWN"
+    assert resumed.legs[0].state == "UNKNOWN"
     assert repo.uncertain_orders()[0].order_ref == submitted.leg.order_ref
     uncertainty = repo.active_uncertainties_for_admission(
         subject_id=manual_operator_subject_id(OPERATOR_ID),
@@ -235,3 +241,20 @@ async def test_exact_execution_changes_only_the_manual_subject_position(
 
     assert repo.attributed_positions_for_subject(manual_operator_subject_id(OPERATOR_ID)) == {"SPY": 1}
     assert repo.attributed_positions_for_strategy("bot-1") == {}
+    reader = SqliteEconomicProjectionReader.from_repository(repo)
+    try:
+        history = reader.account_executions(origin="manual", state="effective")
+        attribution = reader.account_pnl_attribution(
+            from_ms=0,
+            to_ms=facts.source_event_at_ms,
+            marks={"SPY": MarketMark(price=510, observed_at_ms=facts.source_event_at_ms)},
+        )
+    finally:
+        reader.close()
+    assert len(history.executions) == 1
+    execution = history.executions[0]
+    assert execution.origin == "manual"
+    assert execution.strategy_instance_id is None
+    assert execution.subject_id == manual_operator_subject_id(OPERATOR_ID)
+    assert attribution.open_pnl_total == pytest.approx(10, abs=1e-6, rel=0)
+    assert attribution.execution_coverage == "complete"

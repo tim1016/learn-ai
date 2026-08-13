@@ -12,7 +12,6 @@ from app.broker.alpaca.clerk.sqlite.manual_order_runtime import (
     ManualOrderUnavailable,
 )
 from app.broker.alpaca.clerk.sqlite.models import (
-    EffectOperationResource,
     ManualOrderLegResource,
     ManualOrderTicketResource,
 )
@@ -151,7 +150,7 @@ class ManualOrderLegResponse(BaseModel):
         return cls(
             leg_id=leg.leg_id,
             instruction_hash=leg.instruction_hash,
-            state=_effective_leg_state(leg, effect),
+            state=leg.state,
             command=(
                 ManualOrderCommandResponse(
                     command_id=command.command_id,
@@ -206,37 +205,8 @@ class ManualOrderTicketResponse(BaseModel):
         return cls(
             ticket_id=ticket.ticket_id,
             subject_id=ticket.subject_id,
-            state=_effective_ticket_state(ticket, legs),
+            state=ticket.state,
             created_at_ms=ticket.created_at_ms,
             updated_at_ms=ticket.updated_at_ms,
             legs=legs,
         )
-
-
-def _effective_leg_state(
-    leg: ManualOrderLegResource,
-    effect: EffectOperationResource | None,
-) -> str:
-    if effect is None:
-        return leg.state
-    return {
-        "accepted": "ACCEPTED",
-        "in_progress": "IN_PROGRESS",
-        "unknown": "UNKNOWN",
-        "succeeded": "SUCCEEDED",
-        "failed": "FAILED",
-        "rejected": "FAILED",
-    }.get(effect.state, leg.state)
-
-
-def _effective_ticket_state(
-    ticket: ManualOrderTicketResource,
-    legs: tuple[ManualOrderLegResponse, ...],
-) -> str:
-    if ticket.state in {"CANCELED", "COMPLETED"}:
-        return ticket.state
-    if any(leg.state == "UNKNOWN" for leg in legs):
-        return "PAUSED_UNKNOWN"
-    if legs and all(leg.state in {"SUCCEEDED", "FAILED", "CANCELED"} for leg in legs):
-        return "COMPLETED"
-    return ticket.state

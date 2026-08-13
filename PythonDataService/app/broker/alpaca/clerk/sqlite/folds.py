@@ -578,6 +578,13 @@ def _fold_order_submit_acked(conn: sqlite3.Connection, payload: dict[str, Any]) 
             "AND state NOT IN ('succeeded','failed','rejected')",
             (payload["recorded_at_ms"], payload["command_id"]),
         )
+        _sync_manual_ticket_effect_state(
+            conn,
+            payload,
+            effect_state="in_progress",
+            leg_state="IN_PROGRESS",
+            ticket_state="ACTIVE",
+        )
 
 
 def _fold_effect_terminal(conn: sqlite3.Connection, payload: dict[str, Any], *, terminal_state: str) -> None:
@@ -619,6 +626,43 @@ def _fold_effect_terminal(conn: sqlite3.Connection, payload: dict[str, Any], *, 
     _resolve_unknown_outcome_if_proven(conn, payload)
 
 
+def _sync_manual_ticket_effect_state(
+    conn: sqlite3.Connection,
+    payload: dict[str, Any],
+    *,
+    effect_state: str,
+    leg_state: str,
+    ticket_state: str,
+) -> None:
+    """Advance the manual ticket only when its owned effect reached this state.
+
+    The ticket is a durable projection of the same effect state—not an HTTP
+    presentation inference. Non-manual effects leave no matching leg and are
+    intentionally unchanged.
+    """
+    effect = conn.execute(
+        "SELECT kind, state FROM effect_operations WHERE effect_operation_id = ?",
+        (payload["effect_operation_id"],),
+    ).fetchone()
+    if effect is None or effect["kind"] != "MANUAL_ORDER" or effect["state"] != effect_state:
+        return
+    updated = conn.execute(
+        "UPDATE manual_order_legs SET state = ?, updated_at_ms = ? "
+        "WHERE effect_operation_id = ?",
+        (leg_state, payload["recorded_at_ms"], payload["effect_operation_id"]),
+    )
+    if updated.rowcount != 1:
+        raise ValueError("manual order effect requires exactly one ticket leg")
+    ticket_updated = conn.execute(
+        "UPDATE manual_order_tickets SET state = ?, updated_at_ms = ? "
+        "WHERE ticket_id = (SELECT ticket_id FROM manual_order_legs "
+        "WHERE effect_operation_id = ?)",
+        (ticket_state, payload["recorded_at_ms"], payload["effect_operation_id"]),
+    )
+    if ticket_updated.rowcount != 1:
+        raise ValueError("manual order effect requires exactly one ticket")
+
+
 def _fold_manual_order_filled(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Terminal success needs both a filled broker state and exact fill coverage.
 
@@ -626,25 +670,13 @@ def _fold_manual_order_filled(conn: sqlite3.Connection, payload: dict[str, Any])
     execution total covers the immutable manual leg. The fold then makes the
     receipt and bounded ticket projection agree with that final custody fact.
     """
-    effect = conn.execute(
-        "SELECT kind FROM effect_operations WHERE effect_operation_id = ?",
-        (payload["effect_operation_id"],),
-    ).fetchone()
-    if effect is None or effect["kind"] != "MANUAL_ORDER":
-        raise ValueError("manual fill completion requires a manual order effect")
     _fold_effect_terminal(conn, payload, terminal_state="succeeded")
-    updated = conn.execute(
-        "UPDATE manual_order_legs SET state = 'SUCCEEDED', updated_at_ms = ? "
-        "WHERE effect_operation_id = ?",
-        (payload["recorded_at_ms"], payload["effect_operation_id"]),
-    )
-    if updated.rowcount != 1:
-        raise ValueError("manual fill completion requires its ticket leg")
-    conn.execute(
-        "UPDATE manual_order_tickets SET state = 'COMPLETED', updated_at_ms = ? "
-        "WHERE ticket_id = (SELECT ticket_id FROM manual_order_legs "
-        "WHERE effect_operation_id = ?)",
-        (payload["recorded_at_ms"], payload["effect_operation_id"]),
+    _sync_manual_ticket_effect_state(
+        conn,
+        payload,
+        effect_state="succeeded",
+        leg_state="SUCCEEDED",
+        ticket_state="COMPLETED",
     )
 
 
@@ -653,6 +685,13 @@ def _fold_order_submit_failed(conn: sqlite3.Connection, payload: dict[str, Any])
     proven past the R4 uncertainty grace window — both fold to the same
     terminal ``failed`` outcome with a receipt."""
     _fold_effect_terminal(conn, payload, terminal_state="failed")
+    _sync_manual_ticket_effect_state(
+        conn,
+        payload,
+        effect_state="failed",
+        leg_state="FAILED",
+        ticket_state="COMPLETED",
+    )
 
 
 def _fold_exit_attributed_flat(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
@@ -685,6 +724,13 @@ def _fold_order_submit_uncertain(conn: sqlite3.Connection, payload: dict[str, An
         (payload["effect_operation_id"],),
     ).fetchone()
     if effect is not None and effect["state"] == "unknown":
+        _sync_manual_ticket_effect_state(
+            conn,
+            payload,
+            effect_state="unknown",
+            leg_state="UNKNOWN",
+            ticket_state="PAUSED_UNKNOWN",
+        )
         _open_or_refresh_unknown_outcome(conn, payload)
 
 
@@ -1050,20 +1096,12 @@ def _fold_order_fill_observed(conn: sqlite3.Connection, payload: dict[str, Any])
             _this_transition_sequence(conn),
         ),
     )
-    signed_delta = delta_qty if facts.side == "BUY" else -delta_qty
-    conn.execute(
-        "INSERT INTO positions (subject_id, strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
-        "VALUES (?, ?, ?, ?, ?) "
-        "ON CONFLICT(subject_id, symbol) DO UPDATE SET "
-        "attributed_qty = attributed_qty + excluded.attributed_qty, "
-        "updated_at_ms = excluded.updated_at_ms",
-        (
-            bot_subject_id(payload["strategy_instance_id"]),
-            payload["strategy_instance_id"],
-            facts.symbol.upper(),
-            signed_delta,
-            payload["recorded_at_ms"],
-        ),
+    _apply_attributed_position_delta(
+        conn,
+        payload=payload,
+        symbol=facts.symbol,
+        side=facts.side,
+        quantity=delta_qty,
     )
 
 

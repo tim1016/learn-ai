@@ -71,9 +71,29 @@
       <p-message severity="warn">{{ manualCapability()?.unavailable?.message }}</p-message>
     }
     @if (manualTicket(); as ticket) {
-      <p-message severity="info">
-        Ticket {{ ticket.ticket_id }} is {{ ticket.state }}. Its leg is {{ ticket.legs[0].state }}.
-      </p-message>
+      <section aria-live="polite" aria-label="Manual ticket status">
+        <p-message severity="info">
+          Ticket <code>{{ ticket.ticket_id }}</code> is {{ ticket.state | receiptLabel }}.
+          Updated <app-timestamp-display [value]="ticket.updated_at_ms" mode="local" />.
+        </p-message>
+        @if (ticket.legs[0]; as leg) {
+          <dl>
+            <div><dt>Leg</dt><dd><code>{{ leg.leg_id }}</code> · {{ leg.state | receiptLabel }}</dd></div>
+            @if (leg.order; as order) {
+              <div><dt>Order reference</dt><dd><code>{{ order.order_ref }}</code></dd></div>
+              @if (order.broker_state) {
+                <div><dt>Broker state</dt><dd>{{ order.broker_state | receiptLabel }}</dd></div>
+              }
+            }
+            @if (leg.effect; as effect) {
+              <div><dt>Effect</dt><dd>{{ effect.state | receiptLabel }}</dd></div>
+              @if (effect.terminal_receipt_id) {
+                <div><dt>Terminal receipt</dt><dd><code>{{ effect.terminal_receipt_id }}</code></dd></div>
+              }
+            }
+          </dl>
+        }
+      </section>
     }
   } @else {
     <app-alpaca-order-results [results]="results()" />

@@ -29,5 +29,5 @@ export class AlpacaPortfolioReconciliationProofComponent {
   readonly unavailable = input(false);
 
   trackAttribution = (_: number, row: AttributionRow): string =>
-    `${row.entry_strategy_instance_id}:${row.opened_at_ms}:${row.exit_strategy_instance_id}:${row.closed_at_ms}:${row.quantity}`;
+    `${row.entry_subject_id}:${row.opened_at_ms}:${row.exit_subject_id}:${row.closed_at_ms}:${row.quantity}`;
 }

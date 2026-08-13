@@ -405,6 +405,62 @@ async def test_sqlite_rest_recovery_folds_cumulative_fill_without_fabricating_an
         repo.close()
 
 
+async def test_manual_rest_recovery_and_later_exact_evidence_stay_subject_scoped(
+    tmp_path: Path,
+) -> None:
+    """Manual recovery cannot fall through a bot-only coverage-conflict path."""
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    accepted = accept_manual_order(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id="operator",
+        ticket_id="7de3a77c-b698-4e0d-a5d1-2f624574ed35",
+        leg_id="09d6d63e-6375-4e6d-8d20-3b1bf70c2465",
+        leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1.0),
+    )
+    assert accepted.leg.effect_operation_id is not None
+    assert accepted.leg.order_ref is not None
+    recovered = _owned_order(accepted.leg.order_ref).model_copy(
+        update={"quantity": 1.0, "filled_quantity": 1.0, "filled_avg_price": 101.0}
+    )
+    try:
+        fold_order_evidence(
+            repo,
+            effect_operation_id=accepted.leg.effect_operation_id,
+            order=recovered,
+        )
+        assert repo.attributed_positions_for_subject(accepted.ticket.subject_id) == {"SPY": 1.0}
+
+        await _sqlite_sink(repo).record_lifecycle_event(
+            client_order_id=accepted.leg.order_ref,
+            event=BrokerOrderEvent(
+                event_type="fill",
+                occurred_at_ms=1_700_000_000_150,
+                price=101.0,
+                quantity=1.0,
+                execution_id="manual-exact-after-recovery",
+            ),
+            event_key="exec:manual-exact-after-recovery",
+            order=recovered,
+            recovery_source=None,
+            recovery_window_limit=None,
+        )
+
+        assert len(repo.fills_for_order(accepted.leg.order_ref)) == 1
+        uncertainty = repo.active_uncertainties_for_admission(subject_id=accepted.ticket.subject_id)
+        assert len(uncertainty) == 1
+        assert uncertainty[0]["scope"] == "CUSTODY_SUBJECT"
+        admission = decide_capability(
+            repo,
+            capability=Capability.NEW_EXPOSURE,
+            subject_id=accepted.ticket.subject_id,
+        )
+        assert admission.allowed is False
+        assert admission.reason_code == EXECUTION_COVERAGE_CONFLICT_REASON_CODE
+    finally:
+        repo.close()
+
+
 async def test_sqlite_changed_execution_redelivery_raises_one_coverage_conflict(
     tmp_path: Path,
 ) -> None:

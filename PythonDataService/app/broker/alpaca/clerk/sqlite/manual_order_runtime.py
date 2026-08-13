@@ -17,10 +17,12 @@ from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot, ManualOrd
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError, require_manual_admission
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
+from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerAccountSnapshot, BrokerOrderLeg, OrderSide, OrderType, TimeInForce
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 
 _LOCAL_PREVIEW_KEY = b"learn-ai/local-manual-preview/v1"
+_MANUAL_ASSET_LOOKUP_LIMIT = 10_000
 
 
 @dataclass(frozen=True)
@@ -100,6 +102,33 @@ def _account_unavailable(account: BrokerAccountSnapshot, account_id: str) -> Man
     return None
 
 
+async def _manual_asset_unavailable(
+    read: BrokerReadPort,
+    *,
+    symbol: str,
+) -> ManualOrderUnavailable | None:
+    """Require fresh broker-listed, tradable US-equity evidence before intent."""
+    try:
+        assets = await read.list_assets(status="active", limit=_MANUAL_ASSET_LOOKUP_LIMIT)
+    except BrokerError:
+        return ManualOrderUnavailable(
+            "ASSET_EVIDENCE_UNAVAILABLE",
+            "Manual order preview requires fresh broker asset eligibility evidence.",
+        )
+    asset = next((item for item in assets if item.symbol.upper() == symbol.upper()), None)
+    if (
+        asset is None
+        or asset.asset_class.lower() != "us_equity"
+        or asset.status.lower() != "active"
+        or not asset.tradable
+    ):
+        return ManualOrderUnavailable(
+            "UNSUPPORTED_MANUAL_ASSET",
+            "The selected symbol is not an active, tradable US equity in Alpaca.",
+        )
+    return None
+
+
 async def preview_manual_order(
     *,
     repo: ClerkSqliteRepository,
@@ -146,6 +175,16 @@ async def preview_manual_order(
     if not capability.available:
         return ManualOrderPreview(
             capability=capability,
+            preview_token=None,
+            authority_generation=None,
+            db_identity_token=None,
+            control_revision=None,
+            subject_id=None,
+        )
+    asset_failure = await _manual_asset_unavailable(read, symbol=leg.symbol)
+    if asset_failure is not None:
+        return ManualOrderPreview(
+            capability=ManualOrderCapability(False, asset_failure),
             preview_token=None,
             authority_generation=None,
             db_identity_token=None,

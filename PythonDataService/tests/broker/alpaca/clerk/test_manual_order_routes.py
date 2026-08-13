@@ -15,7 +15,7 @@ from app.broker.alpaca.clerk.sqlite.custody_subjects import manual_operator_subj
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
-from app.broker.contract.models import BrokerAccountSnapshot, BrokerOrder, BrokerOrderLeg
+from app.broker.contract.models import BrokerAccountSnapshot, BrokerAsset, BrokerOrder, BrokerOrderLeg
 from app.config import settings
 from app.routers.brokers import router
 from app.security.data_plane_control import CONTROL_SECRET_HEADER
@@ -53,12 +53,41 @@ class FakeAlpacaPort:
         self.repo = repo
         self.account_mode = account_mode
         self.account_calls = 0
+        self.asset_available = True
+        self.asset_calls = 0
         self.submit_calls: list[str] = []
         self.durable_before_submit = False
 
     async def get_account(self) -> BrokerAccountSnapshot:
         self.account_calls += 1
         return _account(account_mode=self.account_mode)
+
+    async def list_assets(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[BrokerAsset]:
+        self.asset_calls += 1
+        if not self.asset_available:
+            return []
+        assert status == "active"
+        assert limit >= 1
+        return [
+            BrokerAsset(
+                broker="alpaca",
+                asset_id="asset-spy",
+                symbol="SPY",
+                name="SPDR S&P 500 ETF Trust",
+                asset_class="us_equity",
+                exchange="NYSE",
+                status="active",
+                tradable=True,
+                fractionable=True,
+                shortable=True,
+                marginable=True,
+            )
+        ]
 
     async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
         self.submit_calls.append(client_order_id)
@@ -173,6 +202,7 @@ async def test_disabled_manual_capability_refuses_without_contacting_alpaca(
         "supported_order_shape": "BUY market DAY equity, one leg",
     }
     assert port.account_calls == 0
+    assert port.asset_calls == 0
 
 
 @pytest.mark.asyncio
@@ -275,3 +305,20 @@ async def test_manual_preview_is_fresh_and_live_accounts_are_refused(
         )
     assert unhealthy.status_code == 200
     assert unhealthy.json()["unavailable"]["code"] == "BROKER_CHANNEL_UNHEALTHY"
+
+
+@pytest.mark.asyncio
+async def test_manual_preview_refuses_an_unlisted_asset_before_durable_acceptance(
+    api: tuple[FastAPI, ClerkSqliteRepository, FakeAlpacaPort, dict[str, bool]],
+) -> None:
+    app, repo, port, _health = api
+    port.asset_available = False
+    preview_path = f"/api/brokers/alpaca/accounts/{ACCOUNT_ID}/manual-orders/preview"
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        preview = await client.post(preview_path, headers=_headers(), json=_preview_payload())
+
+    assert preview.status_code == 200
+    assert preview.json()["capability"]["unavailable"]["code"] == "UNSUPPORTED_MANUAL_ASSET"
+    assert repo.manual_order_ticket(TICKET_ID) is None
+    assert port.submit_calls == []
