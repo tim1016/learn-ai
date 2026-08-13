@@ -314,6 +314,8 @@ async def test_presented_stop_rechecks_policy_and_replays_durable_lost_response(
         snapshot = await client.get(
             f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/snapshot"
         )
+        assert snapshot.status_code == 200
+        assert snapshot.json()["guidance"]["scope"] == "CUSTODY_SUBJECT"
         action = next(
             item
             for item in snapshot.json()["recovery_actions"]

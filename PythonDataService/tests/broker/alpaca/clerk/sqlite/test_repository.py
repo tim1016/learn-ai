@@ -200,18 +200,18 @@ def test_reconcilable_effect_projection_matches_authority_for_every_state_and_or
                 command_id = f"cmd-{state}-{kind.lower()}-{suffix}"
                 repo._conn.execute(
                     "INSERT INTO commands "
-                    "(command_id, authority_generation, idempotency_key, payload_hash, "
+                    "(command_id, authority_generation, subject_id, idempotency_key, payload_hash, "
                     "kind, strategy_instance_id, run_id, action, intended_end_state, state, "
                     "effect_operation_id, receipt_id, created_at_ms, updated_at_ms) "
-                    "VALUES (?, 1, ?, 'hash', 'strategy_decision', 'spy', NULL, ?, NULL, "
+                    "VALUES (?, 1, 'bot:spy', ?, 'hash', 'strategy_decision', 'spy', NULL, ?, NULL, "
                     "?, NULL, NULL, ?, ?)",
                     (command_id, command_id, kind, state, now_ms, now_ms),
                 )
                 repo._conn.execute(
                     "INSERT INTO effect_operations "
-                    "(effect_operation_id, authority_generation, idempotency_key, command_id, "
+                    "(effect_operation_id, authority_generation, subject_id, idempotency_key, command_id, "
                     "strategy_instance_id, run_id, kind, state, custody_owner, created_at_ms, "
-                    "updated_at_ms) VALUES (?, 1, ?, ?, 'spy', NULL, ?, ?, "
+                    "updated_at_ms) VALUES (?, 1, 'bot:spy', ?, ?, 'spy', NULL, ?, ?, "
                     "'ACCOUNT_CLERK', ?, ?)",
                     (operation_id, operation_id, command_id, kind, state, now_ms, now_ms),
                 )
@@ -581,7 +581,11 @@ def test_mirror_prepare_without_finalize_is_excluded_not_imported(tmp_path: Path
     guarantees it had no broker effect."""
     mirror_path = tmp_path / "orphan.mirror"
     mirror = MirrorFile(mirror_path)
-    from app.broker.alpaca.clerk.sqlite.hashchain import GENESIS, canonical_payload, compute_row_hash
+    from app.broker.alpaca.clerk.sqlite.hashchain import (
+        GENESIS,
+        canonical_payload,
+        compute_row_hash,
+    )
     from app.broker.alpaca.clerk.sqlite.mirror import PendingTransition
 
     row = {
@@ -653,7 +657,11 @@ def test_mirror_rebuild_tolerates_an_abandoned_prepare_reusing_a_sequence(tmp_pa
     failed attempt never joined. That abandoned attempt must not be
     mistaken for tampering: only the PREPARE matching the sequence's
     FINALIZE is authoritative."""
-    from app.broker.alpaca.clerk.sqlite.hashchain import GENESIS, canonical_payload, compute_row_hash
+    from app.broker.alpaca.clerk.sqlite.hashchain import (
+        GENESIS,
+        canonical_payload,
+        compute_row_hash,
+    )
     from app.broker.alpaca.clerk.sqlite.mirror import PendingTransition
 
     mirror = MirrorFile(tmp_path / "reused.mirror")
@@ -697,7 +705,11 @@ def test_mirror_rebuild_still_fails_closed_on_conflicting_finalize(tmp_path: Pat
     genuine corruption (SQLite's own PRIMARY KEY on ``sequence`` would
     prevent this from ever arising on a real commit path) and must still
     fail closed — unlike the benign abandoned-PREPARE case above."""
-    from app.broker.alpaca.clerk.sqlite.hashchain import GENESIS, canonical_payload, compute_row_hash
+    from app.broker.alpaca.clerk.sqlite.hashchain import (
+        GENESIS,
+        canonical_payload,
+        compute_row_hash,
+    )
     from app.broker.alpaca.clerk.sqlite.mirror import PendingTransition
 
     mirror = MirrorFile(tmp_path / "conflict.mirror")
@@ -778,13 +790,19 @@ def test_attributed_positions_by_symbol_sums_across_bots(tmp_path: Path) -> None
             "INSERT INTO strategy_instances (strategy_instance_id, symbol, config_hash, "
             "created_at_ms, retired_at_ms) VALUES ('bot-b', 'SPY', 'h', 1, NULL)"
         )
-        repo._conn.execute(
-            "INSERT INTO positions (strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
-            "VALUES ('bot-a', 'SPY', 0.1, 1)"
+        repo._conn.executemany(
+            "INSERT INTO custody_subjects "
+            "(subject_id, kind, strategy_instance_id, operator_id, created_at_ms) "
+            "VALUES (?, 'BOT', ?, NULL, 1)",
+            (("bot:bot-a", "bot-a"), ("bot:bot-b", "bot-b")),
         )
         repo._conn.execute(
-            "INSERT INTO positions (strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
-            "VALUES ('bot-b', 'SPY', 0.2, 1)"
+            "INSERT INTO positions (subject_id, strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
+            "VALUES ('bot:bot-a', 'bot-a', 'SPY', 0.1, 1)"
+        )
+        repo._conn.execute(
+            "INSERT INTO positions (subject_id, strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
+            "VALUES ('bot:bot-b', 'bot-b', 'SPY', 0.2, 1)"
         )
         repo._conn.commit()
 
@@ -861,17 +879,30 @@ def test_uncertainty_raised_fold_creates_an_active_bot_scoped_uncertainty(
             "INSERT INTO strategy_instances (strategy_instance_id, symbol, config_hash, "
             "created_at_ms, retired_at_ms) VALUES ('spy-bot', 'SPY', 'h', 1, NULL)"
         )
+        repo._conn.execute(
+            "INSERT INTO custody_subjects "
+            "(subject_id, kind, strategy_instance_id, operator_id, created_at_ms) "
+            "VALUES ('bot:spy-bot', 'BOT', 'spy-bot', NULL, 1)"
+        )
         repo._conn.commit()
 
     repo.append_transition(_uncertainty_transition(strategy_instance_id="spy-bot"))
 
-    uncertainty = repo.active_uncertainty(scope="BOT", reason_code="TEST_REASON", strategy_instance_id="spy-bot")
+    uncertainty = repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code="TEST_REASON",
+        strategy_instance_id="spy-bot",
+    )
     assert uncertainty is not None
-    assert uncertainty["scope"] == "BOT"
+    assert uncertainty["scope"] == "CUSTODY_SUBJECT"
     assert uncertainty["strategy_instance_id"] == "spy-bot"
 
     # A different bot's identical reason_code must not collide.
-    assert repo.active_uncertainty(scope="BOT", reason_code="TEST_REASON", strategy_instance_id="qqq-bot") is None
+    assert repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code="TEST_REASON",
+        strategy_instance_id="qqq-bot",
+    ) is None
     repo.close()
 
 
@@ -941,6 +972,12 @@ def test_active_uncertainties_for_admission_includes_account_and_bot_scope(
         repo._conn.execute(
             "INSERT INTO strategy_instances (strategy_instance_id, symbol, config_hash, "
             "created_at_ms, retired_at_ms) VALUES ('qqq-bot', 'QQQ', 'h', 1, NULL)"
+        )
+        repo._conn.executemany(
+            "INSERT INTO custody_subjects "
+            "(subject_id, kind, strategy_instance_id, operator_id, created_at_ms) "
+            "VALUES (?, 'BOT', ?, NULL, 1)",
+            (("bot:spy-bot", "spy-bot"), ("bot:qqq-bot", "qqq-bot")),
         )
         repo._conn.commit()
 

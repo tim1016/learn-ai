@@ -141,7 +141,7 @@ def test_bot_uncertainty_does_not_leak_to_another_bot_projection(tmp_path: Path)
         repo.close()
 
     assert affected is not None
-    assert affected.guidance.scope == "BOT"
+    assert affected.guidance.scope == "CUSTODY_SUBJECT"
     assert affected.guidance.may_create_exposure is False
     assert [item.reason_code for item in affected.uncertainties] == [
         "ORDER_OUTCOME_UNKNOWN"
@@ -445,10 +445,10 @@ def test_recovery_policy_reads_working_orders_outside_the_operation_page(
         ("alpaca-order-older", observed_at_ms, observed_at_ms, older.order_ref),
     )
     repo._conn.execute(
-        "INSERT INTO positions "
-        "(strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
-        "VALUES (?, 'SPY', 1.0, ?)",
-        (SID, observed_at_ms),
+            "INSERT INTO positions "
+            "(subject_id, strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
+            "VALUES (?, ?, 'SPY', 1.0, ?)",
+            (f"bot:{SID}", SID, observed_at_ms),
     )
     repo._conn.commit()
 
@@ -497,10 +497,10 @@ def test_safe_flatten_uses_account_reconciliation_not_newer_effect_attempt(
     account_reconciliation_at_ms = clock()
     effect_reconciliation_at_ms = clock()
     repo._conn.execute(
-        "INSERT INTO positions "
-        "(strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
-        "VALUES (?, 'SPY', 1.0, ?)",
-        (SID, position_at_ms),
+            "INSERT INTO positions "
+            "(subject_id, strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
+            "VALUES (?, ?, 'SPY', 1.0, ?)",
+            (f"bot:{SID}", SID, position_at_ms),
     )
     repo._conn.execute(
         "INSERT INTO reconciliations "

@@ -561,9 +561,9 @@ async def test_instance_custody_proof_omits_zero_quantity_position_rows(
     await facade.register_strategy_run(binding)
     repo._conn.execute(
         "INSERT INTO positions "
-        "(strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
-        "VALUES (?, 'SPY', 0.0, 10)",
-        (binding.strategy_instance_id,),
+        "(subject_id, strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
+        "VALUES (?, ?, 'SPY', 0.0, 10)",
+        (f"bot:{binding.strategy_instance_id}", binding.strategy_instance_id),
     )
     repo._conn.commit()
 

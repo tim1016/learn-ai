@@ -95,19 +95,19 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         cause_is_valid=broker_snapshot_stale_cause_is_valid,
     ),
     ORDER_OUTCOME_UNKNOWN_REASON_CODE: ReasonPolicy(
-        scope="BOT",
+        scope="CUSTODY_SUBJECT",
         blocks_new_exposure=True,
         allows_reduction=False,
         cause_is_valid=_order_outcome_unknown_cause_is_valid,
     ),
     EXIT_NOT_FLAT_REASON_CODE: ReasonPolicy(
-        scope="BOT",
+        scope="CUSTODY_SUBJECT",
         blocks_new_exposure=True,
         allows_reduction=True,
         cause_is_valid=_exit_not_flat_cause_is_valid,
     ),
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE: ReasonPolicy(
-        scope="BOT",
+        scope="CUSTODY_SUBJECT",
         blocks_new_exposure=True,
         allows_reduction=False,
         cause_is_valid=_execution_coverage_conflict_cause_is_valid,
@@ -121,8 +121,8 @@ def _effective_identity(
     policy = _REASON_POLICIES.get(reason_code)
     if policy is None:
         return None, "ACCOUNT_CLERK", None
-    if policy.scope == "BOT" and strategy_instance_id is not None:
-        return policy, "BOT", strategy_instance_id
+    if policy.scope == "CUSTODY_SUBJECT" and strategy_instance_id is not None:
+        return policy, "CUSTODY_SUBJECT", strategy_instance_id
     return policy, "ACCOUNT_CLERK", None
 
 
@@ -248,7 +248,7 @@ def resolve_exit_not_flat_uncertainty(
         )
 
     return repo.resolve_uncertainty_if_active(
-        scope="BOT",
+        scope="CUSTODY_SUBJECT",
         reason_code=EXIT_NOT_FLAT_REASON_CODE,
         strategy_instance_id=strategy_instance_id,
         build_transition=build_transition,

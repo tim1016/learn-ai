@@ -36,9 +36,19 @@ from app.broker.alpaca.clerk.sqlite.idempotency import (
 )
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_uncertain
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, OperationClaimError
-from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError, raise_uncertainty
-from app.broker.contract.errors import BrokerError, BrokerRequestInvalid, BrokerUnavailable
+from app.broker.alpaca.clerk.sqlite.repository import (
+    ClerkSqliteRepository,
+    OperationClaimError,
+)
+from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    AdmissionBlockedError,
+    raise_uncertainty,
+)
+from app.broker.contract.errors import (
+    BrokerError,
+    BrokerRequestInvalid,
+    BrokerUnavailable,
+)
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
 from conftest import _clock_at
 
@@ -342,7 +352,7 @@ async def test_cancelled_submit_retains_unknown_custody_before_claim_release(
     effect = repo.effect_operation("effect:spy-bot:cancelled-submit")
     assert effect is not None and effect.state == "unknown"
     uncertainty = repo.active_uncertainty(
-        scope="BOT",
+        scope="CUSTODY_SUBJECT",
         reason_code="ORDER_OUTCOME_UNKNOWN",
         strategy_instance_id=SID,
     )
@@ -1149,7 +1159,7 @@ async def test_lost_submit_atomically_blocks_more_exposure_until_exact_recovery(
         trade=lost,
     )
     uncertainty = repo.active_uncertainty(
-        scope="BOT",
+        scope="CUSTODY_SUBJECT",
         reason_code="ORDER_OUTCOME_UNKNOWN",
         strategy_instance_id=SID,
     )
@@ -1173,7 +1183,7 @@ async def test_lost_submit_atomically_blocks_more_exposure_until_exact_recovery(
     )
     assert (
         repo.active_uncertainty(
-            scope="BOT",
+            scope="CUSTODY_SUBJECT",
             reason_code="ORDER_OUTCOME_UNKNOWN",
             strategy_instance_id=SID,
         )
@@ -1234,7 +1244,7 @@ def test_exact_recovery_advances_each_effect_while_a_sibling_unknown_remains(
     assert first_after is not None and first_after.state == "in_progress"
     assert second_after is not None and second_after.state == "unknown"
     assert repo.active_uncertainty(
-        scope="BOT",
+        scope="CUSTODY_SUBJECT",
         reason_code="ORDER_OUTCOME_UNKNOWN",
         strategy_instance_id=SID,
     )
@@ -1248,7 +1258,7 @@ def test_exact_recovery_advances_each_effect_while_a_sibling_unknown_remains(
     assert repo.effect_operation(second.effect_operation_id).state == "in_progress"  # type: ignore[union-attr]
     assert (
         repo.active_uncertainty(
-            scope="BOT",
+            scope="CUSTODY_SUBJECT",
             reason_code="ORDER_OUTCOME_UNKNOWN",
             strategy_instance_id=SID,
         )

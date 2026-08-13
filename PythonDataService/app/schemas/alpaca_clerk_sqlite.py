@@ -25,6 +25,7 @@ ReconciliationVerdict = Literal[
     "position_drift",
     "stale",
 ]
+CustodyScope = Literal["CUSTODY_SUBJECT", "ACCOUNT_CLERK"]
 
 
 class CommandResponse(BaseModel):
@@ -190,7 +191,7 @@ class ProjectedHoldResponse(BaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     hold_id: str
-    scope: Literal["BOT", "ACCOUNT_CLERK"]
+    scope: CustodyScope
     strategy_instance_id: str | None
     reason_code: str
     opened_at_ms: int
@@ -201,7 +202,7 @@ class ProjectedUncertaintyResponse(BaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     uncertainty_id: str
-    scope: Literal["BOT", "ACCOUNT_CLERK"]
+    scope: CustodyScope
     severity: str
     blocks_new_exposure: bool
     allows_reduction: bool
@@ -278,7 +279,7 @@ class SafeFlattenPlanResponse(BaseModel):
     authority_generation: int
     db_identity_token: str
     control_revision: int
-    scope: Literal["BOT", "ACCOUNT_CLERK"]
+    scope: CustodyScope
     strategy_instance_id: str | None
     reconciliation_id: str
     prepared_at_ms: int
@@ -295,7 +296,7 @@ class RecoveryCapabilityResponse(BaseModel):
     available: bool
     unavailable_reason_code: str | None
     unavailable_reason: str | None
-    scope: Literal["BOT", "ACCOUNT_CLERK"]
+    scope: CustodyScope
     freshness: Literal["fresh", "stale", "not_required", "unavailable"]
     evidence: tuple[RecoveryEvidenceResponse, ...]
     reduction_plan: SafeFlattenPlanResponse | None
@@ -312,7 +313,7 @@ class ProjectionGuidanceResponse(BaseModel):
 
     headline: str
     explanation: str
-    scope: Literal["BOT", "ACCOUNT_CLERK"]
+    scope: CustodyScope
     impact: str
     custody_owner: str
     may_create_exposure: bool

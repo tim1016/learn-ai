@@ -309,8 +309,8 @@ class UncertaintyRaisedFacts:
     """``UNCERTAINTY_RAISED`` (#1380): the R5 envelope, minus what's already
     an outer ``custody_transitions``/``uncertainties`` column —
     ``strategy_instance_id`` is already an outer transition column, and
-    ``uncertainties.scope`` is derived from it being non-null (``BOT``) or
-    null (``ACCOUNT_CLERK``), the same truthful scope/identity coupling
+    ``uncertainties.scope`` is derived from it being non-null
+    (``CUSTODY_SUBJECT``) or null (``ACCOUNT_CLERK``), the same truthful scope/identity coupling
     ``holds`` already uses. Every other envelope field (severity, the two
     independent admission axes, and the four backend-authored operator-
     facing strings) has nowhere else to live, so it's typed here."""
@@ -517,6 +517,72 @@ class ExecutionCorrectedFacts:
         return cls(**json.loads(facts_json))
 
 
+@dataclass(frozen=True)
+class CustodySubjectRegisteredFacts:
+    """Versioned identity for a non-bot Clerk custody subject."""
+
+    subject_id: str
+    kind: str
+    strategy_instance_id: str | None
+    operator_id: str | None
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> CustodySubjectRegisteredFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
+class ManualTicketLegReservedFacts:
+    """One immutable manual-ticket leg, before any broker eligibility exists."""
+
+    leg_id: str
+    instruction_hash: str
+
+
+@dataclass(frozen=True)
+class ManualTicketReservedFacts:
+    """The complete durable reservation of one non-atomic manual ticket."""
+
+    ticket_id: str
+    subject_id: str
+    operator_id: str
+    instruction_hash: str
+    legs: tuple[ManualTicketLegReservedFacts, ...]
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> ManualTicketReservedFacts:
+        value = json.loads(facts_json)
+        try:
+            value["legs"] = tuple(
+                ManualTicketLegReservedFacts(**leg) for leg in value["legs"]
+            )
+        except (KeyError, TypeError) as exc:
+            raise ValueError("manual ticket legs must be typed facts") from exc
+        return cls(**value)
+
+
+@dataclass(frozen=True)
+class ManualTicketStateFacts:
+    """A backend-authored terminal or paused state for one manual ticket."""
+
+    ticket_id: str
+    subject_id: str
+    state: str
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> ManualTicketStateFacts:
+        return cls(**json.loads(facts_json))
+
+
 def _require_finite_positive(value: float, *, field: str) -> None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{field} must be a number")
@@ -633,6 +699,45 @@ def validate_execution_coverage_resolved_facts(
         raise ValueError("coverage resolution requires unique sorted evidence references")
     validate_execution_slice_facts(facts.exact_execution)
     return facts.exact_execution
+
+
+def validate_custody_subject_registered_facts(facts: CustodySubjectRegisteredFacts) -> None:
+    """Validate a closed custody-subject identity before it reaches a fold."""
+    from app.broker.alpaca.clerk.sqlite.custody_subjects import CustodySubject
+
+    CustodySubject(
+        subject_id=facts.subject_id,
+        kind=facts.kind,
+        strategy_instance_id=facts.strategy_instance_id,
+        operator_id=facts.operator_id,
+    ).validate()
+
+
+def validate_manual_ticket_reserved_facts(facts: ManualTicketReservedFacts) -> None:
+    """Validate the immutable ticket envelope before any manual leg exists."""
+    if not all(
+        isinstance(value, str) and value
+        for value in (facts.ticket_id, facts.subject_id, facts.operator_id, facts.instruction_hash)
+    ):
+        raise ValueError("manual ticket requires non-empty identity and instruction fields")
+    if not facts.legs:
+        raise ValueError("manual ticket requires at least one reserved leg")
+    leg_ids = [leg.leg_id for leg in facts.legs]
+    if (
+        len(leg_ids) != len(set(leg_ids))
+        or any(not isinstance(leg_id, str) or not leg_id for leg_id in leg_ids)
+        or any(not isinstance(leg.instruction_hash, str) or not leg.instruction_hash for leg in facts.legs)
+    ):
+        raise ValueError("manual ticket requires unique legs with instruction hashes")
+
+
+def validate_manual_ticket_state_facts(facts: ManualTicketStateFacts) -> None:
+    if not isinstance(facts.ticket_id, str) or not facts.ticket_id:
+        raise ValueError("manual ticket state requires ticket_id")
+    if not isinstance(facts.subject_id, str) or not facts.subject_id:
+        raise ValueError("manual ticket state requires subject_id")
+    if facts.state not in {"PAUSED_UNKNOWN", "COMPLETED", "CANCELED"}:
+        raise ValueError("manual ticket state is not supported")
 
 
 def validate_execution_corrected_facts(facts: ExecutionCorrectedFacts) -> None:

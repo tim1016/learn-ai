@@ -59,7 +59,7 @@ def test_schema_ddl_matches_pinned_contracts_doc() -> None:
     assert pinned == schema.SCHEMA_DDL
 
 
-def test_schema_creates_all_eighteen_pinned_tables() -> None:
+def test_schema_creates_all_twenty_one_pinned_tables() -> None:
     conn = sqlite3.connect(":memory:")
     schema.configure_connection(conn)
     schema.apply_schema(conn)
@@ -73,6 +73,7 @@ def test_schema_creates_all_eighteen_pinned_tables() -> None:
         "control_meta",
         "strategy_instances",
         "runs",
+        "custody_subjects",
         "commands",
         "effect_operations",
         "orders",
@@ -84,6 +85,8 @@ def test_schema_creates_all_eighteen_pinned_tables() -> None:
         "positions",
         "holds",
         "uncertainties",
+        "manual_order_tickets",
+        "manual_order_legs",
         "reconciliations",
         "receipts",
         "custody_transitions",
@@ -91,7 +94,7 @@ def test_schema_creates_all_eighteen_pinned_tables() -> None:
     }
 
 
-def test_v8_execution_provenance_and_bounded_receipts_schema() -> None:
+def test_v9_execution_provenance_and_custody_subject_schema() -> None:
     conn = sqlite3.connect(":memory:")
     schema.configure_connection(conn)
     schema.apply_schema(conn)
@@ -122,44 +125,175 @@ def test_v8_execution_provenance_and_bounded_receipts_schema() -> None:
         "ux_fills_execution_id",
         "ux_external_orders_broker_order_id",
         "ix_decision_receipts_strategy_observed_at",
+        "ux_manual_order_legs_command",
+        "ux_manual_order_legs_effect",
+        "ux_manual_order_legs_order",
     } <= index_names
 
+    command_columns = {row[1]: row for row in conn.execute("PRAGMA table_info(commands)")}
+    effect_columns = {row[1]: row for row in conn.execute("PRAGMA table_info(effect_operations)")}
+    assert command_columns["subject_id"][3] == 1
+    assert effect_columns["subject_id"][3] == 1
+    assert command_columns["strategy_instance_id"][3] == 0
+    assert effect_columns["strategy_instance_id"][3] == 0
 
-def test_empty_v6_authority_migrates_atomically_to_complete_v8_schema() -> None:
+
+def test_v9_subject_ownership_invariants_reject_counterfeit_and_cross_wired_rows() -> None:
+    import pytest
+
+    conn = sqlite3.connect(":memory:")
+    schema.configure_connection(conn)
+    schema.apply_schema(conn)
+    for strategy_instance_id in ("spy", "qqq"):
+        conn.execute(
+            "INSERT INTO strategy_instances "
+            "(strategy_instance_id, symbol, config_hash, created_at_ms, retired_at_ms) "
+            "VALUES (?, ?, 'hash', 1, NULL)",
+            (strategy_instance_id, strategy_instance_id.upper()),
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO custody_subjects "
+            "(subject_id, kind, strategy_instance_id, operator_id, created_at_ms) "
+            "VALUES ('counterfeit', 'BOT', 'spy', NULL, 1)"
+        )
+    conn.execute(
+        "INSERT INTO custody_subjects "
+        "(subject_id, kind, strategy_instance_id, operator_id, created_at_ms) "
+        "VALUES ('bot:spy', 'BOT', 'spy', NULL, 1)"
+    )
+    conn.execute(
+        "INSERT INTO custody_subjects "
+        "(subject_id, kind, strategy_instance_id, operator_id, created_at_ms) "
+        "VALUES ('bot:qqq', 'BOT', 'qqq', NULL, 1)"
+    )
+    conn.execute(
+        "INSERT INTO custody_subjects "
+        "(subject_id, kind, strategy_instance_id, operator_id, created_at_ms) "
+        "VALUES ('manual-operator:operator-a', 'MANUAL_OPERATOR', NULL, 'operator-a', 1)"
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="custody_subjects identity is immutable"):
+        conn.execute(
+            "UPDATE custody_subjects SET operator_id = 'operator-b' "
+            "WHERE subject_id = 'manual-operator:operator-a'"
+        )
+
+    with pytest.raises(sqlite3.IntegrityError, match="commands subject"):
+        conn.execute(
+            "INSERT INTO commands "
+            "(command_id, authority_generation, subject_id, idempotency_key, payload_hash, kind, "
+            "strategy_instance_id, run_id, action, state, created_at_ms, updated_at_ms) "
+            "VALUES ('cross-command', 1, 'bot:spy', 'cross-command', 'h', 'strategy_decision', "
+            "'qqq', NULL, 'ENTER', 'accepted', 1, 1)"
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="position subject"):
+        conn.execute(
+            "INSERT INTO positions (subject_id, strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
+            "VALUES ('manual-operator:operator-a', 'spy', 'SPY', 1, 1)"
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="hold subject"):
+        conn.execute(
+            "INSERT INTO holds (hold_id, scope, subject_id, strategy_instance_id, reason_code, state, opened_at_ms) "
+            "VALUES ('cross-hold', 'CUSTODY_SUBJECT', 'manual-operator:operator-a', 'spy', 'X', 'ACTIVE', 1)"
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="uncertainty subject"):
+        conn.execute(
+            "INSERT INTO uncertainties "
+            "(uncertainty_id, scope, severity, blocks_new_exposure, allows_reduction, subject_id, "
+            "strategy_instance_id, reason_code, headline, explanation, operator_impact, next_step, "
+            "observed_at_ms, facts_schema_version, facts_json) "
+            "VALUES ('cross-uncertainty', 'CUSTODY_SUBJECT', 'warning', 1, 0, "
+            "'manual-operator:operator-a', 'spy', 'X', 'h', 'e', 'impact', 'next', 1, 1, '{}')"
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="manual ticket"):
+        conn.execute(
+            "INSERT INTO manual_order_tickets "
+            "(ticket_id, subject_id, operator_id, instruction_hash, state, created_at_ms, updated_at_ms) "
+            "VALUES ('bad-ticket', 'bot:spy', 'operator-a', 'h', 'RESERVED', 1, 1)"
+        )
+
+    conn.execute(
+        "INSERT INTO commands "
+        "(command_id, authority_generation, subject_id, idempotency_key, payload_hash, kind, "
+        "strategy_instance_id, run_id, action, state, created_at_ms, updated_at_ms) "
+        "VALUES ('bot-command', 1, 'bot:spy', 'bot-command', 'h', 'strategy_decision', "
+        "'spy', NULL, 'ENTER', 'accepted', 1, 1)"
+    )
+    conn.execute(
+        "INSERT INTO effect_operations "
+        "(effect_operation_id, authority_generation, subject_id, idempotency_key, command_id, "
+        "strategy_instance_id, run_id, kind, state, custody_owner, created_at_ms, updated_at_ms) "
+        "VALUES ('bot-effect', 1, 'bot:spy', 'bot-effect', 'bot-command', 'spy', NULL, "
+        "'ENTER', 'accepted', 'ACCOUNT_CLERK', 1, 1)"
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="effect operation"):
+        conn.execute(
+            "INSERT INTO effect_operations "
+            "(effect_operation_id, authority_generation, subject_id, idempotency_key, command_id, "
+            "strategy_instance_id, run_id, kind, state, custody_owner, created_at_ms, updated_at_ms) "
+            "VALUES ('cross-effect', 1, 'bot:qqq', 'cross-effect', 'bot-command', 'qqq', NULL, "
+            "'ENTER', 'accepted', 'ACCOUNT_CLERK', 1, 1)"
+        )
+    conn.execute(
+        "INSERT INTO orders "
+        "(order_ref, effect_operation_id, client_order_id, role, updated_at_ms) "
+        "VALUES ('bot-order', 'bot-effect', 'bot-order', 'ENTRY', 1)"
+    )
+    conn.execute(
+        "INSERT INTO manual_order_tickets "
+        "(ticket_id, subject_id, operator_id, instruction_hash, state, created_at_ms, updated_at_ms) "
+        "VALUES ('manual-ticket', 'manual-operator:operator-a', 'operator-a', 'h', 'RESERVED', 1, 1)"
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="manual leg must belong"):
+        conn.execute(
+            "INSERT INTO manual_order_legs "
+            "(ticket_id, leg_id, subject_id, instruction_hash, state, created_at_ms, updated_at_ms) "
+            "VALUES ('manual-ticket', 'cross-leg', 'bot:spy', 'leg-h', 'RESERVED', 1, 1)"
+        )
+    conn.execute(
+        "INSERT INTO manual_order_legs "
+        "(ticket_id, leg_id, subject_id, instruction_hash, state, created_at_ms, updated_at_ms) "
+        "VALUES ('manual-ticket', 'leg-a', 'manual-operator:operator-a', 'leg-h', 'RESERVED', 1, 1)"
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="manual_order_tickets identity is immutable"):
+        conn.execute(
+            "UPDATE manual_order_tickets SET operator_id = 'operator-b' "
+            "WHERE ticket_id = 'manual-ticket'"
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="manual_order_tickets are append-only"):
+        conn.execute("DELETE FROM manual_order_tickets WHERE ticket_id = 'manual-ticket'")
+    with pytest.raises(sqlite3.IntegrityError, match="manual_order_legs identity is immutable"):
+        conn.execute(
+            "UPDATE manual_order_legs SET leg_id = 'renamed-leg' "
+            "WHERE ticket_id = 'manual-ticket' AND leg_id = 'leg-a'"
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="manual_order_legs are append-only"):
+        conn.execute(
+            "DELETE FROM manual_order_legs WHERE ticket_id = 'manual-ticket' AND leg_id = 'leg-a'"
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="manual leg resources"):
+        conn.execute(
+            "UPDATE manual_order_legs SET command_id = 'bot-command', effect_operation_id = 'bot-effect', "
+            "order_ref = 'bot-order' WHERE ticket_id = 'manual-ticket' AND leg_id = 'leg-a'"
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="custody_subjects are append-only"):
+        conn.execute("DELETE FROM custody_subjects WHERE subject_id = 'bot:qqq'")
+
+
+def test_empty_v6_authority_stops_at_the_required_offline_v8_to_v9_ceremony() -> None:
     conn = sqlite3.connect(":memory:")
     schema.configure_connection(conn)
     _empty_v6_authority(conn)
 
-    schema.migrate_schema(conn, from_version=6)
+    import pytest
 
-    assert conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0] == 8
-    assert {
-        row[1]
-        for row in conn.execute("PRAGMA table_info(fills)")
-    } >= {
-        "execution_id",
-        "evidence_source",
-        "event_kind",
-        "superseded_execution_ref",
-        "fee",
-        "fee_fidelity",
-    }
-    tables = {
-        row[0]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table'"
-        )
-    }
-    assert {"external_orders", "bot_config", "decision_receipts"} <= tables
-    indexes = {
-        row[0]
-        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")
-    }
-    assert {
-        "ux_fills_execution_id",
-        "ux_external_orders_broker_order_id",
-        "ix_decision_receipts_strategy_observed_at",
-    } <= indexes
+    with pytest.raises(schema.OfflineSchemaUpgradeRequired, match="offline v8-to-v9"):
+        schema.migrate_schema(conn, from_version=6)
+
+    assert conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0] == 6
+    assert conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'decision_receipts'"
+    ).fetchone() is None
 
 
 def test_data_bearing_v6_authority_fails_closed_without_schema_mutation() -> None:
@@ -257,6 +391,11 @@ def test_idempotency_indexes_reject_duplicate_rows_at_the_sql_boundary() -> None
         "VALUES ('spy', 'SPY', 'hash', 1, NULL)"
     )
     conn.execute(
+        "INSERT INTO custody_subjects "
+        "(subject_id, kind, strategy_instance_id, operator_id, created_at_ms) "
+        "VALUES ('bot:spy', 'BOT', 'spy', NULL, 1)"
+    )
+    conn.execute(
         "INSERT INTO runs (run_id, strategy_instance_id, lifecycle_run_id, state, "
         "started_at_ms, stopped_at_ms) VALUES ('run-1', 'spy', 'lifecycle-1', 'ACTIVE', 1, NULL)"
     )
@@ -267,36 +406,36 @@ def test_idempotency_indexes_reject_duplicate_rows_at_the_sql_boundary() -> None
         )
 
     command_values = (
-        "1, 'command-key', 'payload', 'strategy_decision', 'spy', NULL, 'ENTER', "
+        "1, 'bot:spy', 'command-key', 'payload', 'strategy_decision', 'spy', NULL, 'ENTER', "
         "NULL, 'accepted', NULL, NULL, 1, 1"
     )
     conn.execute(
-        "INSERT INTO commands (command_id, authority_generation, idempotency_key, payload_hash, "
+        "INSERT INTO commands (command_id, authority_generation, subject_id, idempotency_key, payload_hash, "
         "kind, strategy_instance_id, run_id, action, intended_end_state, state, "
         "effect_operation_id, receipt_id, created_at_ms, updated_at_ms) "
         f"VALUES ('command-1', {command_values})"
     )
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute(
-            "INSERT INTO commands (command_id, authority_generation, idempotency_key, payload_hash, "
+            "INSERT INTO commands (command_id, authority_generation, subject_id, idempotency_key, payload_hash, "
             "kind, strategy_instance_id, run_id, action, intended_end_state, state, "
             "effect_operation_id, receipt_id, created_at_ms, updated_at_ms) "
             f"VALUES ('command-2', {command_values})"
         )
 
     effect_values = (
-        "1, 'effect-key', 'command-1', 'spy', NULL, 'ENTER', 'accepted', "
+        "1, 'bot:spy', 'effect-key', 'command-1', 'spy', NULL, 'ENTER', 'accepted', "
         "'ACCOUNT_CLERK', 1, 1, NULL, NULL, NULL, NULL, NULL"
     )
     conn.execute(
-        "INSERT INTO effect_operations (effect_operation_id, authority_generation, idempotency_key, "
+        "INSERT INTO effect_operations (effect_operation_id, authority_generation, subject_id, idempotency_key, "
         "command_id, strategy_instance_id, run_id, kind, state, custody_owner, created_at_ms, "
         "updated_at_ms, terminal_receipt_id, claim_owner, claim_token, claimed_at_ms, claim_expires_at_ms) "
         f"VALUES ('effect-1', {effect_values})"
     )
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute(
-            "INSERT INTO effect_operations (effect_operation_id, authority_generation, idempotency_key, "
+            "INSERT INTO effect_operations (effect_operation_id, authority_generation, subject_id, idempotency_key, "
             "command_id, strategy_instance_id, run_id, kind, state, custody_owner, created_at_ms, "
             "updated_at_ms, terminal_receipt_id, claim_owner, claim_token, claimed_at_ms, claim_expires_at_ms) "
             f"VALUES ('effect-2', {effect_values})"

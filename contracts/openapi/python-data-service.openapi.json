@@ -31210,7 +31210,7 @@
           },
           "scope": {
             "enum": [
-              "BOT",
+              "CUSTODY_SUBJECT",
               "ACCOUNT_CLERK"
             ],
             "title": "Scope",
@@ -31645,7 +31645,7 @@
           },
           "scope": {
             "enum": [
-              "BOT",
+              "CUSTODY_SUBJECT",
               "ACCOUNT_CLERK"
             ],
             "title": "Scope",
@@ -31730,7 +31730,7 @@
           },
           "scope": {
             "enum": [
-              "BOT",
+              "CUSTODY_SUBJECT",
               "ACCOUNT_CLERK"
             ],
             "title": "Scope",
@@ -33118,7 +33118,7 @@
           },
           "scope": {
             "enum": [
-              "BOT",
+              "CUSTODY_SUBJECT",
               "ACCOUNT_CLERK"
             ],
             "title": "Scope",
@@ -35671,7 +35671,7 @@
           },
           "scope": {
             "enum": [
-              "BOT",
+              "CUSTODY_SUBJECT",
               "ACCOUNT_CLERK"
             ],
             "title": "Scope",

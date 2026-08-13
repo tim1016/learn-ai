@@ -579,7 +579,7 @@ def active_uncertainty(
     idempotency check before raising a new one (#1380). ``strategy_instance_id``
     is part of the key (unlike ``active_hold``, which never needs it since
     every hold raised so far is ``ACCOUNT_CLERK``-scoped): two different bots'
-    ``BOT``-scoped uncertainties sharing the same ``reason_code`` must never
+    ``CUSTODY_SUBJECT``-scoped uncertainties sharing the same ``reason_code`` must never
     be confused for one another."""
     row = conn.execute(
         f"SELECT {_UNCERTAINTY_COLUMNS} FROM uncertainties "
@@ -595,8 +595,8 @@ def active_uncertainties_for_admission(
 ) -> list[dict]:
     """Every currently-``ACTIVE`` uncertainty relevant to admission for one
     bot (#1380): every ``ACCOUNT_CLERK``-scoped uncertainty (blocks every
-    bot) plus this specific bot's own ``BOT``-scoped ones — never another
-    bot's ``BOT``-scoped uncertainty."""
+    bot) plus this specific bot's own ``CUSTODY_SUBJECT``-scoped ones — never
+    another bot's uncertainty."""
     rows = conn.execute(
         f"SELECT {_UNCERTAINTY_COLUMNS} FROM uncertainties "
         "WHERE resolved_at_ms IS NULL AND (scope = 'ACCOUNT_CLERK' OR strategy_instance_id = ?)",

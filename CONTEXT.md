@@ -89,6 +89,11 @@ ephemeral session id:
   the Account Clerk's durable intent/acknowledgement lane. It has no fabricated
   bot binding; the Clerk journal is its canonical submit receipt and its broker
   callbacks retain the same `order_ref`.
+- **Custody subject** — an immutable Account Clerk identity for the economic
+  actor whose commands, effects, positions, holds, and uncertainty are being
+  projected. A `BOT` subject is bound one-to-one to a strategy instance; a
+  `MANUAL_OPERATOR` subject is bound one-to-one to an approved operator. A
+  manual subject never creates a pseudo-bot, run, or strategy binding.
 - **Order history** — a read-side transaction-history projection over canonical
   Clerk receipts and broker callbacks. It is not a fresh broker sweep and does
   not become an authority for order state. The operator view may show its full

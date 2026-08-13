@@ -20,6 +20,7 @@ from collections.abc import Callable
 from typing import Any
 
 from app.broker.alpaca.clerk.sqlite import reads
+from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     FILL_QTY_EPSILON,
     active_execution_coverage_conflicts,
@@ -51,6 +52,11 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     validate_execution_slice_facts,
 )
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
+from app.broker.alpaca.clerk.sqlite.manual_ticket_folds import (
+    fold_custody_subject_registered,
+    fold_manual_ticket_reserved,
+    fold_manual_ticket_state,
+)
 from app.broker.alpaca.clerk.sqlite.uncertainty_folds import (
     fold_uncertainty_raised as _fold_uncertainty_raised,
 )
@@ -133,6 +139,16 @@ def _fold_strategy_instance_registered(conn: sqlite3.Connection, payload: dict[s
             payload["recorded_at_ms"],
         ),
     )
+    conn.execute(
+        "INSERT INTO custody_subjects "
+        "(subject_id, kind, strategy_instance_id, operator_id, created_at_ms) "
+        "VALUES (?, 'BOT', ?, NULL, ?)",
+        (
+            bot_subject_id(payload["strategy_instance_id"]),
+            payload["strategy_instance_id"],
+            payload["recorded_at_ms"],
+        ),
+    )
 
 
 def _insert_command_row(
@@ -143,7 +159,8 @@ def _insert_command_row(
     idempotency_key: str,
     payload_hash: str,
     kind: str,
-    strategy_instance_id: str,
+    subject_id: str,
+    strategy_instance_id: str | None,
     run_id: str | None,
     action: str,
     intended_end_state: str | None,
@@ -164,15 +181,16 @@ def _insert_command_row(
     """
     conn.execute(
         "INSERT INTO commands (command_id, authority_generation, idempotency_key, "
-        "payload_hash, kind, strategy_instance_id, run_id, action, intended_end_state, "
+        "payload_hash, kind, subject_id, strategy_instance_id, run_id, action, intended_end_state, "
         "state, effect_operation_id, receipt_id, created_at_ms, updated_at_ms) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)",
         (
             command_id,
             authority_generation,
             idempotency_key,
             payload_hash,
             kind,
+            subject_id,
             strategy_instance_id,
             run_id,
             action,
@@ -254,6 +272,7 @@ def _fold_run_started(conn: sqlite3.Connection, payload: dict[str, Any]) -> None
         idempotency_key=facts.idempotency_key,
         payload_hash=facts.payload_hash,
         kind=facts.kind,
+        subject_id=bot_subject_id(payload["strategy_instance_id"]),
         strategy_instance_id=payload["strategy_instance_id"],
         run_id=payload["run_id"],
         action=facts.action,
@@ -277,6 +296,7 @@ def _fold_run_stopped(conn: sqlite3.Connection, payload: dict[str, Any]) -> None
         idempotency_key=facts.idempotency_key,
         payload_hash=facts.payload_hash,
         kind=facts.kind,
+        subject_id=bot_subject_id(payload["strategy_instance_id"]),
         strategy_instance_id=payload["strategy_instance_id"],
         run_id=payload["run_id"],
         action=facts.action,
@@ -296,6 +316,7 @@ def _fold_command_rejected(conn: sqlite3.Connection, payload: dict[str, Any]) ->
         idempotency_key=facts.idempotency_key,
         payload_hash=facts.payload_hash,
         kind=facts.kind,
+        subject_id=bot_subject_id(payload["strategy_instance_id"]),
         strategy_instance_id=payload["strategy_instance_id"],
         run_id=payload["run_id"],
         action=facts.action,
@@ -332,6 +353,7 @@ def _fold_enter_accepted(conn: sqlite3.Connection, payload: dict[str, Any]) -> N
         idempotency_key=facts.idempotency_key,
         payload_hash=facts.payload_hash,
         kind=facts.kind,
+        subject_id=bot_subject_id(payload["strategy_instance_id"]),
         strategy_instance_id=payload["strategy_instance_id"],
         run_id=payload["run_id"],
         action=facts.action,
@@ -341,14 +363,15 @@ def _fold_enter_accepted(conn: sqlite3.Connection, payload: dict[str, Any]) -> N
     )
     conn.execute(
         "INSERT INTO effect_operations (effect_operation_id, authority_generation, "
-        "idempotency_key, command_id, strategy_instance_id, run_id, kind, state, "
+        "idempotency_key, command_id, subject_id, strategy_instance_id, run_id, kind, state, "
         "custody_owner, created_at_ms, updated_at_ms, terminal_receipt_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, 'accepted', 'ACCOUNT_CLERK', ?, ?, NULL)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'accepted', 'ACCOUNT_CLERK', ?, ?, NULL)",
         (
             payload["effect_operation_id"],
             payload["authority_generation"],
             facts.effect_idempotency_key,
             payload["command_id"],
+            bot_subject_id(payload["strategy_instance_id"]),
             payload["strategy_instance_id"],
             payload["run_id"],
             facts.effect_kind,
@@ -397,6 +420,7 @@ def _fold_exit_accepted(conn: sqlite3.Connection, payload: dict[str, Any]) -> No
         idempotency_key=facts.idempotency_key,
         payload_hash=facts.payload_hash,
         kind=facts.kind,
+        subject_id=bot_subject_id(payload["strategy_instance_id"]),
         strategy_instance_id=payload["strategy_instance_id"],
         run_id=payload["run_id"],
         action=facts.action,
@@ -406,14 +430,15 @@ def _fold_exit_accepted(conn: sqlite3.Connection, payload: dict[str, Any]) -> No
     )
     conn.execute(
         "INSERT INTO effect_operations (effect_operation_id, authority_generation, "
-        "idempotency_key, command_id, strategy_instance_id, run_id, kind, state, "
+        "idempotency_key, command_id, subject_id, strategy_instance_id, run_id, kind, state, "
         "custody_owner, created_at_ms, updated_at_ms, terminal_receipt_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, 'accepted', 'ACCOUNT_CLERK', ?, ?, NULL)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'accepted', 'ACCOUNT_CLERK', ?, ?, NULL)",
         (
             payload["effect_operation_id"],
             payload["authority_generation"],
             facts.effect_idempotency_key,
             payload["command_id"],
+            bot_subject_id(payload["strategy_instance_id"]),
             payload["strategy_instance_id"],
             payload["run_id"],
             facts.effect_kind,
@@ -665,12 +690,13 @@ def _apply_attributed_position_delta(
 ) -> None:
     signed_delta = quantity if side == "BUY" else -quantity
     conn.execute(
-        "INSERT INTO positions (strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
-        "VALUES (?, ?, ?, ?) "
-        "ON CONFLICT(strategy_instance_id, symbol) DO UPDATE SET "
+        "INSERT INTO positions (subject_id, strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
+        "VALUES (?, ?, ?, ?, ?) "
+        "ON CONFLICT(subject_id, symbol) DO UPDATE SET "
         "attributed_qty = attributed_qty + excluded.attributed_qty, "
         "updated_at_ms = excluded.updated_at_ms",
         (
+            bot_subject_id(payload["strategy_instance_id"]),
             payload["strategy_instance_id"],
             symbol.upper(),
             signed_delta,
@@ -990,12 +1016,13 @@ def _fold_order_fill_observed(conn: sqlite3.Connection, payload: dict[str, Any])
     )
     signed_delta = delta_qty if facts.side == "BUY" else -delta_qty
     conn.execute(
-        "INSERT INTO positions (strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
-        "VALUES (?, ?, ?, ?) "
-        "ON CONFLICT(strategy_instance_id, symbol) DO UPDATE SET "
+        "INSERT INTO positions (subject_id, strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
+        "VALUES (?, ?, ?, ?, ?) "
+        "ON CONFLICT(subject_id, symbol) DO UPDATE SET "
         "attributed_qty = attributed_qty + excluded.attributed_qty, "
         "updated_at_ms = excluded.updated_at_ms",
         (
+            bot_subject_id(payload["strategy_instance_id"]),
             payload["strategy_instance_id"],
             facts.symbol.upper(),
             signed_delta,
@@ -1096,6 +1123,11 @@ DEFAULT_FOLD_REGISTRY.register("ORDER_FILL_OBSERVED", _fold_order_fill_observed)
 DEFAULT_FOLD_REGISTRY.register("EXECUTION_SLICE_FILLED", _fold_execution_slice_filled)
 DEFAULT_FOLD_REGISTRY.register("EXECUTION_COVERAGE_QUARANTINED", _fold_execution_coverage_quarantined)
 DEFAULT_FOLD_REGISTRY.register("EXECUTION_COVERAGE_RESOLVED", _fold_execution_coverage_resolved)
+DEFAULT_FOLD_REGISTRY.register("CUSTODY_SUBJECT_REGISTERED", fold_custody_subject_registered)
+DEFAULT_FOLD_REGISTRY.register("MANUAL_TICKET_RESERVED", fold_manual_ticket_reserved)
+DEFAULT_FOLD_REGISTRY.register("MANUAL_TICKET_PAUSED_UNKNOWN", fold_manual_ticket_state)
+DEFAULT_FOLD_REGISTRY.register("MANUAL_TICKET_COMPLETED", fold_manual_ticket_state)
+DEFAULT_FOLD_REGISTRY.register("MANUAL_TICKET_CANCELED", fold_manual_ticket_state)
 DEFAULT_FOLD_REGISTRY.register("EXECUTION_CORRECTED", _fold_execution_corrected)
 DEFAULT_FOLD_REGISTRY.register("RECONCILIATION_ATTEMPTED", _fold_reconciliation_attempted)
 DEFAULT_FOLD_REGISTRY.register("ACCOUNT_HOLD_RAISED", _fold_account_hold_raised)

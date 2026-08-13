@@ -111,7 +111,11 @@ def test_raise_uncertainty_account_clerk_scope(repo: ClerkSqliteRepository) -> N
 def test_raise_uncertainty_bot_scope(repo: ClerkSqliteRepository) -> None:
     created = _raise(repo, strategy_instance_id=SID)
     assert created is True
-    uncertainty = repo.active_uncertainty(scope="BOT", reason_code="ORDER_OUTCOME_UNKNOWN", strategy_instance_id=SID)
+    uncertainty = repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code="ORDER_OUTCOME_UNKNOWN",
+        strategy_instance_id=SID,
+    )
     assert uncertainty is not None
 
 

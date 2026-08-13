@@ -167,6 +167,59 @@ snapshot and manifest, then publishes the bundle atomically beneath
 `accounts/alpaca/PA-EXAMPLE/verified-backups/`. An interrupted `.incomplete-*` bundle
 is retained as evidence and never replaces `latest.json`.
 
+## Offline v8-to-v9 custody-subject upgrade
+
+Schema v9 introduces durable custody subjects: every existing strategy becomes
+one `BOT` subject, while future manual tickets use a distinct
+`MANUAL_OPERATOR` subject and never a pseudo-bot or pseudo-run. This is an
+offline ceremony, not a startup migration. Startup refuses a v8 authority
+until the ceremony completes.
+
+1. Stop every data-plane process that could hold the account's execution
+   lease. Capture a fresh account-bound process-stop evidence file; the v9
+   ceremony accepts evidence no older than 60 seconds.
+2. Run `verify`. Preserve its output with the change record.
+3. Run `upgrade-v9` from the same local filesystem/volume as the authority.
+   It re-verifies the v8 source, creates a verified backup, rebuilds a staged
+   v9 database from finalized mirror records, proves journal and projection
+   parity, checkpoints the stopped source WAL into one verified source file,
+   rechecks that the source did not change, and then atomically swaps only the
+   verified stage into place.
+4. Run `verify` again and preserve the completed receipt under
+   `offline-v9-upgrades/`. Do not resume the writer until this succeeds.
+
+```bash
+.venv/bin/python -m scripts.manage_alpaca_sqlite_clerk \
+  --artifacts-root /absolute/artifacts/alpaca_clerk \
+  --account-id PA-EXAMPLE \
+  upgrade-v9 \
+  --process-stop-evidence /absolute/incidents/process-stop-proof.json
+```
+
+If a proof fails before publication, the original v8 authority remains
+selected, the staged database is retained only for forensics, and a
+`.failed.json` receipt records the reason and the verified backup reference.
+Immediately before publication the ceremony fsyncs a matching
+`.prepared.json` receipt. If the process is interrupted after the swap but
+before its completed receipt, leave the authority stopped and rerun
+`upgrade-v9` with fresh stop evidence: it verifies the selected v9 file against
+that prepared receipt and writes the completion receipt without a second swap
+or a new transition. A completed ceremony is idempotent and returns its prior
+receipt. Never alter `control_meta` or copy the database by hand.
+
+If an immediate rollback is required before any new transition is accepted,
+use the receipt-bound command below. It may restore only the exact verified v8
+bundle the upgrade recorded; the general restore protections still reject a
+backup behind the mirror head.
+
+```bash
+.venv/bin/python -m scripts.manage_alpaca_sqlite_clerk \
+  --artifacts-root /absolute/artifacts/alpaca_clerk \
+  --account-id PA-EXAMPLE \
+  rollback-v9 \
+  --process-stop-evidence /absolute/incidents/process-stop-proof.json
+```
+
 ## Restore a verified snapshot
 
 Restore accepts only a direct, non-symlink child of this account's

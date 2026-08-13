@@ -232,17 +232,17 @@ def _insert_order_reference(repository: ClerkSqliteRepository, *, order_ref: str
     """Seed the required Clerk-owned order identity for an order-ref receipt."""
     repository._conn.execute(
         "INSERT INTO commands "
-        "(command_id, authority_generation, idempotency_key, payload_hash, kind, "
+        "(command_id, authority_generation, subject_id, idempotency_key, payload_hash, kind, "
         "strategy_instance_id, run_id, action, intended_end_state, state, "
         "effect_operation_id, receipt_id, created_at_ms, updated_at_ms) "
-        "VALUES ('command-1', 1, 'command-key', 'hash', 'strategy_decision', "
+        "VALUES ('command-1', 1, 'bot:spy-bot', 'command-key', 'hash', 'strategy_decision', "
         "'spy-bot', NULL, 'ENTER', NULL, 'accepted', NULL, NULL, 1, 1)"
     )
     repository._conn.execute(
         "INSERT INTO effect_operations "
-        "(effect_operation_id, authority_generation, idempotency_key, command_id, "
+        "(effect_operation_id, authority_generation, subject_id, idempotency_key, command_id, "
         "strategy_instance_id, run_id, kind, state, custody_owner, created_at_ms, updated_at_ms) "
-        "VALUES ('effect-1', 1, 'effect-key', 'command-1', 'spy-bot', NULL, "
+        "VALUES ('effect-1', 1, 'bot:spy-bot', 'effect-key', 'command-1', 'spy-bot', NULL, "
         "'ENTER', 'accepted', 'ACCOUNT_CLERK', 1, 1)"
     )
     repository._conn.execute(
