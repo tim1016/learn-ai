@@ -18,38 +18,40 @@
   </header>
 
   @if (hasFills()) {
-    <table class="fills-table" aria-label="Fills today">
-      <thead>
-        <tr>
-          <th scope="col">Time</th>
-          <th scope="col">Side</th>
-          <th scope="col">Qty</th>
-          <th scope="col">Price</th>
-        </tr>
-      </thead>
-      <tbody>
-        @for (fill of fills(); track fill.order_ref) {
-          <tr
-            class="fill-row"
-            [class.fill-row--buy]="fill.side === 'buy'"
-            [class.fill-row--sell]="fill.side === 'sell'"
-          >
-            <td>
-              <app-timestamp-display
-                [value]="fill.filled_at_ms"
-                mode="local"
-                granularity="time"
-              />
-            </td>
-            <td class="fill-side">{{ fill.side | receiptLabel }}</td>
-            <td>{{ fill.quantity }}</td>
-            <td>{{ fmtCurrency(fill.price) }}</td>
-          </tr>
-        }
-      </tbody>
-    </table>
+    <app-fill-table [fills]="inlineFills()" label="Fills today" />
+
+    @if (hasMoreFills()) {
+      <button type="button" class="view-all-fills" (click)="openAllFills()">
+        View all {{ fills().length }} fills
+      </button>
+    }
 
   } @else {
     <p class="no-trades" role="status">{{ emptyStateLabel() }}</p>
   }
 </section>
+
+<p-drawer
+  [visible]="allFillsOpen()"
+  (visibleChange)="allFillsOpen.set($event)"
+  position="right"
+  [modal]="true"
+  [dismissible]="true"
+  [showCloseIcon]="false"
+  styleClass="fills-drawer"
+  [style]="{ width: 'min(38rem, 96vw)' }"
+>
+  <ng-template #header>
+    <div class="fills-drawer__header">
+      <div>
+        <span>Execution</span>
+        <h2>All fills today</h2>
+      </div>
+      <button type="button" aria-label="Close all fills" (click)="closeAllFills()">×</button>
+    </div>
+  </ng-template>
+
+  @if (allFillsOpen()) {
+    <app-fill-table [fills]="fills()" label="All fills today" />
+  }
+</p-drawer>

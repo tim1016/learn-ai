@@ -1,12 +1,15 @@
-import { render, screen, waitFor } from '@testing-library/angular';
+import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { TestBed } from '@angular/core/testing';
+import { of } from 'rxjs';
 import { beforeEach, describe, it, expect, vi } from 'vitest';
 import {
   DUAL_PANE_CHART_FACTORY,
   DualPaneChartComponent,
+  formatChartAxisTime,
   toSeriesMarkers,
 } from './dual-pane-chart.component';
 import type { ChartBar } from '../lib/broker-v2-panel.types';
+import { MarketDataService } from '../../../../services/market-data.service';
 
 const chartMocks = vi.hoisted(() => ({
   createChart: vi.fn(),
@@ -47,6 +50,7 @@ function createMockChart(): object {
 interface ChartHarness {
   chart: {
     timeScale: () => { fitContent: ReturnType<typeof vi.fn> };
+    applyOptions: ReturnType<typeof vi.fn>;
   } | null;
   series: {
     setData: ReturnType<typeof vi.fn>;
@@ -84,6 +88,7 @@ describe('DualPaneChartComponent', () => {
     chartMocks.setData.mockClear();
     chartMocks.update.mockClear();
     chartMocks.fitContent.mockClear();
+    localStorage.removeItem('broker-v2.chart-timezone.v1');
   });
 
   it('renders source tabs for IBKR live and Polygon', async () => {
@@ -97,9 +102,30 @@ describe('DualPaneChartComponent', () => {
 
   it('uses the shared asset identity for the chart symbol', async () => {
     const { container } = await render(DualPaneChartComponent, {
-      inputs: { symbol: 'NVDA', liveBars: [], histBars: [] },
+      inputs: {
+        symbol: 'NVDA',
+        liveBars: [],
+        histBars: [],
+        marketPulse: {
+          session: 'OPEN', feed_state: 'LIVE', latest_bar_at_ms: 1_753_800_000_000,
+          age_ms: 1_000, source: 'polygon', expected_cadence_ms: 60_000,
+          headline: 'Market data live', explanation: 'Current.', next_step: null,
+          attention_required: false, observed_at_ms: 1_753_800_001_000,
+        },
+      },
+      providers: [{
+        provide: MarketDataService,
+        useValue: {
+          getStockSnapshot: () => of({
+            success: true,
+            snapshot: { ticker: 'NVDA', day: { close: 181.42 }, min: null, todaysChangePercent: 1.35 },
+            error: null,
+          }),
+        },
+      }],
     });
 
+    await screen.findByText('$181.42');
     const identity = container.querySelector('app-asset-identity');
     expect(identity).not.toBeNull();
     expect(screen.getByText('NVDA')).toBeTruthy();
@@ -173,6 +199,27 @@ describe('DualPaneChartComponent', () => {
     expect(
       screen.getByRole('button', { name: /expand market chart/i }),
     ).toBeTruthy();
+  });
+
+  it('defaults chart labels to local time and persists an explicit ET choice', async () => {
+    await render(DualPaneChartComponent, {
+      inputs: { symbol: 'SPY', liveBars: [], histBars: [] },
+    });
+
+    expect(screen.getByRole('button', { name: 'Local' }).getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: 'ET' }));
+    expect(screen.getByRole('button', { name: 'ET' }).getAttribute('aria-pressed')).toBe('true');
+    expect(localStorage.getItem('broker-v2.chart-timezone.v1')).toBe('et');
+  });
+
+  it('formats exchange-time labels with America/New_York rather than a fixed offset', () => {
+    const seconds = 1_741_524_000;
+    const expected = new Intl.DateTimeFormat(undefined, {
+      month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit',
+      hour12: false, timeZone: 'America/New_York',
+    }).format(new Date(seconds * 1_000));
+
+    expect(formatChartAxisTime(seconds, 'et')).toBe(expected);
   });
 
   it('keeps existing candles visible while a background refresh is loading', async () => {

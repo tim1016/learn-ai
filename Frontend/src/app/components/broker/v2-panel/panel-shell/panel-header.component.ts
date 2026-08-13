@@ -7,7 +7,6 @@ import {
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import type {
-  ActionId,
   BotPanelView,
   PanelAction,
   PanelActionTrigger,
@@ -21,11 +20,10 @@ import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestam
 import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
 import { buildManualOrderTicketNavigation } from '../../lib/manual-order-navigation';
-
-const RUNNING_STOP_ACTION_IDS: readonly ActionId[] = [
-  'stop',
-  'stop_bot_decisions',
-];
+import {
+  lifecycleActionTone,
+  primaryLifecycleAction,
+} from '../bot-detail-banner/lifecycle-action';
 
 @Component({
   selector: 'app-panel-header',
@@ -60,21 +58,11 @@ export class PanelHeaderComponent {
     return health.duty_outcome?.explanation ?? health.desired_state_label;
   });
 
-  protected readonly primaryAction = computed<PanelAction | null>(() => {
-    const health = this.panel().health;
-    const actionIds: readonly ActionId[] = !health.running
-      ? ['resume']
-      : health.desired_state === 'PAUSED'
-        ? ['continue']
-        : RUNNING_STOP_ACTION_IDS;
-    return this.panel().actions.find((action) => actionIds.includes(action.action_id)) ?? null;
-  });
+  protected readonly primaryAction = computed<PanelAction | null>(() => primaryLifecycleAction(this.panel()));
 
   protected readonly primaryActionTone = computed(() => {
     const action = this.primaryAction();
-    return action !== null && RUNNING_STOP_ACTION_IDS.includes(action.action_id)
-      ? 'danger'
-      : 'primary';
+    return action === null ? 'primary' : lifecycleActionTone(action);
   });
 
   protected formatAge(ageMs: number | null): string {

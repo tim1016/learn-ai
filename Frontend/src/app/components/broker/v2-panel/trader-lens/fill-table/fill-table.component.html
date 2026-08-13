@@ -1,0 +1,24 @@
+<table class="fill-table" [attr.aria-label]="label()">
+  <thead>
+    <tr>
+      <th scope="col">Time</th>
+      <th scope="col">Side</th>
+      <th scope="col">Qty</th>
+      <th scope="col">Price</th>
+    </tr>
+  </thead>
+  <tbody>
+    @for (fill of fills(); track fill.order_ref) {
+      <tr
+        class="fill-table__row"
+        [class.fill-table__row--buy]="fill.side === 'buy'"
+        [class.fill-table__row--sell]="fill.side === 'sell'"
+      >
+        <td><app-timestamp-display [value]="fill.filled_at_ms" mode="local" granularity="time" /></td>
+        <td class="fill-table__side">{{ fill.side | receiptLabel }}</td>
+        <td>{{ fill.quantity }}</td>
+        <td>{{ fmtCurrency(fill.price) }}</td>
+      </tr>
+    }
+  </tbody>
+</table>

@@ -404,8 +404,8 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    // Symbol from the loaded panel should appear
-    expect(screen.getByRole('heading', { name: /QQQ/, level: 1 })).toBeTruthy();
+    // The loaded panel drives the chart's instrument context.
+    expect(screen.getByRole('article', { name: 'Market tape for QQQ' })).toBeTruthy();
     expect(mockService.getLiveSnapshot).toHaveBeenCalledWith(
       'alpaca',
       'DUM284968',
@@ -523,7 +523,7 @@ describe('BotPanelShellComponent', () => {
     fixture.detectChanges();
 
     const navigation = container.querySelector('.lens-navigation');
-    const hero = container.querySelector('app-trader-lens app-panel-header');
+    const hero = container.querySelector('app-trader-lens app-trader-bot-banner');
     expect(navigation).not.toBeNull();
     expect(hero).not.toBeNull();
     if (navigation === null || hero === null) {

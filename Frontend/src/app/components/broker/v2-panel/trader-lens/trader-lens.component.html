@@ -1,4 +1,4 @@
-<app-panel-header
+<app-trader-bot-banner
   [panel]="panel()"
   [tickerQuote]="tickerQuote()"
   [actionPending]="actionPending()"
@@ -12,6 +12,7 @@
       [liveBars]="liveBars()"
       [liveFillMarkers]="liveFillMarkers()"
       [liveNotices]="liveNotices()"
+      [marketPulse]="panel().market_pulse"
       [liveLoading]="liveChartLoading()"
       [historyLoading]="histChartLoading()"
       [liveResolution]="liveResolution()"

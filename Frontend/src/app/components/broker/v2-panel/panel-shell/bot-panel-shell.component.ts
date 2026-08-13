@@ -72,6 +72,9 @@ type PanelLens = 'trader' | 'operator';
   templateUrl: './bot-panel-shell.component.html',
   styleUrl: './bot-panel-shell.component.scss',
   providers: [BotPanelLiveStore],
+  host: {
+    '[class.bot-panel-shell--trader]': "activeLens() === 'trader'",
+  },
 })
 export class BotPanelShellComponent {
   // ── Route inputs (Angular route input binding) ────────────────────────────

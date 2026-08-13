@@ -3,11 +3,14 @@ import {
   Component,
   computed,
   input,
+  signal,
 } from '@angular/core';
+import { Drawer } from 'primeng/drawer';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
-import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
-import { fmtCurrency } from '../../format';
 import type { ChartFillMarker } from '../lib/broker-v2-panel.types';
+import { FillTableComponent } from './fill-table/fill-table.component';
+
+const INLINE_FILL_LIMIT = 4;
 
 /**
  * Fills list for today's session (spec §6, §10).
@@ -18,7 +21,7 @@ import type { ChartFillMarker } from '../lib/broker-v2-panel.types';
 @Component({
   selector: 'app-trades-today-list',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ReceiptLabelPipe, TimestampDisplayComponent],
+  imports: [Drawer, FillTableComponent, TimestampDisplayComponent],
   templateUrl: './trades-today-list.component.html',
   styleUrl: './trades-today-list.component.scss',
 })
@@ -32,6 +35,9 @@ export class TradesTodayListComponent {
   readonly tradingDateMs = input<number | null>(null);
 
   protected readonly hasFills = computed(() => this.fills().length > 0);
+  protected readonly inlineFills = computed(() => this.fills().slice(0, INLINE_FILL_LIMIT));
+  protected readonly hasMoreFills = computed(() => this.fills().length > INLINE_FILL_LIMIT);
+  protected readonly allFillsOpen = signal(false);
 
   protected readonly emptyStateLabel = computed(() => {
     const fillCount = this.fillCount();
@@ -48,5 +54,11 @@ export class TradesTodayListComponent {
     this.feeFidelity() === 'none' ? 'Fees not reported' : null,
   );
 
-  protected readonly fmtCurrency = fmtCurrency;
+  protected openAllFills(): void {
+    this.allFillsOpen.set(true);
+  }
+
+  protected closeAllFills(): void {
+    this.allFillsOpen.set(false);
+  }
 }

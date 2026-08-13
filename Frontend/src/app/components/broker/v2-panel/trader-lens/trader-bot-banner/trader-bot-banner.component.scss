@@ -1,0 +1,93 @@
+:host { display: block; }
+
+.trader-bot-banner__identity {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.trader-bot-banner__strategy {
+  color: var(--text-primary);
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--ls-tight);
+}
+
+.trader-bot-banner__identity code {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trader-bot-banner__status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0.28rem 0.55rem;
+  border: 1px solid color-mix(in srgb, var(--bull) 45%, var(--border-light));
+  border-radius: var(--radius-pill);
+  background: var(--bull-soft);
+  color: var(--bull);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  white-space: nowrap;
+
+  &::before {
+    width: 0.38rem;
+    height: 0.38rem;
+    border-radius: 999px;
+    background: currentcolor;
+    content: '';
+  }
+
+  &[data-state='off_duty'] { border-color: color-mix(in srgb, var(--warn) 50%, var(--border-light)); background: var(--warn-soft); color: var(--warn); }
+  &[data-state='blocked'],
+  &[data-state='retired'] { border-color: color-mix(in srgb, var(--bear) 50%, var(--border-light)); background: var(--bear-soft); color: var(--bear); }
+}
+
+.trader-bot-banner__overflow { position: relative; }
+
+.trader-bot-banner__overflow > button {
+  display: grid;
+  width: 2.25rem;
+  height: 2.25rem;
+  place-items: center;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 1.25rem;
+  line-height: 1;
+  &:hover { border-color: var(--accent); color: var(--text-primary); }
+  &:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+}
+
+.trader-bot-banner__menu {
+  position: absolute;
+  z-index: 4;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  min-width: 10rem;
+  padding: var(--space-1);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-pop);
+
+  a {
+    display: block;
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: var(--fs-sm);
+    text-decoration: none;
+
+    &:hover,
+    &:focus-visible { background: var(--bg-hover); color: var(--accent-text); }
+  }
+}

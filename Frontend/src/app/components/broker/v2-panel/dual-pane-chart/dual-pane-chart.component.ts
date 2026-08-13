@@ -29,13 +29,35 @@ import type {
   ChartHistoryPreset,
   ChartLiveResolution,
   ChartSource,
+  MarketPulseView,
 } from '../lib/broker-v2-panel.types';
 import { toCandle } from '../lib/chart-bar-mapping';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
-import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 import { createAppChart } from '../../../../shared/charts/chart-utils';
+import { PanelInstrumentQuoteComponent } from '../instrument-quote/panel-instrument-quote.component';
 
 type ChartPane = 'live' | 'polygon';
+export type ChartTimeZone = 'local' | 'et';
+
+const TIME_ZONE_STORAGE_KEY = 'broker-v2.chart-timezone.v1';
+
+function persistedChartTimeZone(): ChartTimeZone {
+  if (typeof localStorage === 'undefined') return 'local';
+  return localStorage.getItem(TIME_ZONE_STORAGE_KEY) === 'et' ? 'et' : 'local';
+}
+
+/** Formats the chart-library's seconds-UTC boundary in the selected display zone. */
+export function formatChartAxisTime(time: Time | number, timeZone: ChartTimeZone): string {
+  if (typeof time !== 'number') return String(time);
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone: timeZone === 'et' ? 'America/New_York' : undefined,
+  }).format(new Date(time * 1_000));
+}
 
 function sameBar(left: ChartBar, right: ChartBar): boolean {
   return left.start_ms === right.start_ms
@@ -131,7 +153,7 @@ export const DUAL_PANE_CHART_FACTORY = new InjectionToken<typeof createAppChart>
 @Component({
   selector: 'app-dual-pane-chart',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AssetIdentityComponent, ReceiptLabelPipe],
+  imports: [PanelInstrumentQuoteComponent, ReceiptLabelPipe],
   templateUrl: './dual-pane-chart.component.html',
   styleUrl: './dual-pane-chart.component.scss',
 })
@@ -140,6 +162,7 @@ export class DualPaneChartComponent implements AfterViewInit {
   readonly liveBars = input<readonly ChartBar[]>([]);
   readonly liveFillMarkers = input<readonly ChartFillMarker[]>([]);
   readonly liveNotices = input<readonly { code: string; message: string }[]>([]);
+  readonly marketPulse = input<MarketPulseView | null>(null);
   readonly liveLoading = input(false);
   readonly historyLoading = input(false);
   readonly liveResolution = input<ChartLiveResolution>('5s');
@@ -157,6 +180,7 @@ export class DualPaneChartComponent implements AfterViewInit {
 
   protected readonly activePane = signal<ChartPane>('live');
   protected readonly fullscreen = signal(false);
+  protected readonly timeZone = signal<ChartTimeZone>(persistedChartTimeZone());
   protected readonly presets = HISTORY_PRESETS;
   protected readonly liveResolutions = LIVE_RESOLUTIONS;
 
@@ -179,11 +203,6 @@ export class DualPaneChartComponent implements AfterViewInit {
   protected readonly visibleFillCount = computed(() =>
     toSeriesMarkers(this.activeMarkers(), this.activeBars()).length,
   );
-  protected readonly lastPrice = computed(() => {
-    const bars = this.activeBars();
-    return bars.length ? Number(bars[bars.length - 1].close) : null;
-  });
-
   private chart: IChartApi | null = null;
   private series: ISeriesApi<'Candlestick'> | null = null;
   private markers: ISeriesMarkersPluginApi<Time> | null = null;
@@ -192,6 +211,10 @@ export class DualPaneChartComponent implements AfterViewInit {
 
   constructor() {
     effect(() => this.renderActivePane());
+    effect(() => {
+      this.timeZone();
+      this.applyTimeZoneFormatting();
+    });
   }
 
   ngAfterViewInit(): void {
@@ -211,6 +234,7 @@ export class DualPaneChartComponent implements AfterViewInit {
     });
     this.series = this.chart.addSeries(CandlestickSeries, {});
     this.markers = createSeriesMarkers(this.series, []);
+    this.applyTimeZoneFormatting();
     this.renderActivePane();
     this.destroyRef.onDestroy(() => this.cleanup());
   }
@@ -238,16 +262,16 @@ export class DualPaneChartComponent implements AfterViewInit {
     this.presetChange.emit(preset);
   }
 
+  protected selectTimeZone(timeZone: ChartTimeZone): void {
+    this.timeZone.set(timeZone);
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(TIME_ZONE_STORAGE_KEY, timeZone);
+    }
+  }
+
   protected toggleFullscreen(): void {
     this.fullscreen.update((value) => !value);
     requestAnimationFrame(() => this.chart?.timeScale().fitContent());
-  }
-
-  protected formatPrice(price: number): string {
-    return price.toLocaleString(undefined, {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 4,
-    });
   }
 
   private renderActivePane(): void {
@@ -314,5 +338,17 @@ export class DualPaneChartComponent implements AfterViewInit {
     this.markers = null;
     this.renderedViewKey = null;
     this.renderedBars = [];
+  }
+
+  private applyTimeZoneFormatting(): void {
+    const timeZone = this.timeZone();
+    this.chart?.applyOptions({
+      localization: {
+        timeFormatter: (time: Time) => formatChartAxisTime(time, timeZone),
+      },
+      timeScale: {
+        tickMarkFormatter: (time: Time) => formatChartAxisTime(time, timeZone),
+      },
+    });
   }
 }

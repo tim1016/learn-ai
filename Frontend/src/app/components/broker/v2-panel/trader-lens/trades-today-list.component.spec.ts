@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/angular';
+import { fireEvent, render, screen } from '@testing-library/angular';
 import { describe, it, expect } from 'vitest';
 import { TradesTodayListComponent } from './trades-today-list.component';
 import type { ChartFillMarker } from '../lib/broker-v2-panel.types';
@@ -89,6 +89,22 @@ describe('TradesTodayListComponent', () => {
     });
 
     expect(screen.getByText('Fees not reported')).toBeTruthy();
+  });
+
+  it('bounds the inline rail and opens every fill in the slide-over', async () => {
+    const fills = Array.from({ length: 6 }, (_, index) => ({
+      ...BUY_FILL,
+      filled_at_ms: BUY_FILL.filled_at_ms + index * 5_000,
+      order_ref: `ord-${index}`,
+    }));
+    await render(TradesTodayListComponent, {
+      inputs: { fills, feeFidelity: 'per_fill', tradingDateMs: null },
+    });
+
+    expect(screen.getByRole('table', { name: 'Fills today' }).querySelectorAll('tbody tr')).toHaveLength(4);
+    fireEvent.click(screen.getByRole('button', { name: 'View all 6 fills' }));
+    expect(await screen.findByRole('table', { name: 'All fills today' })).toBeTruthy();
+    expect(screen.getByRole('table', { name: 'All fills today' }).querySelectorAll('tbody tr')).toHaveLength(6);
   });
 
 });
