@@ -4,10 +4,6 @@
   display: block;
   max-width: 960px;
   margin: 0 auto;
-  padding:
-    calc(var(--page-pad-y) + var(--space-1))
-    calc(var(--page-pad-x) + var(--space-1))
-    calc(var(--page-pad-y) + var(--space-10));
 }
 
 .notice-card {

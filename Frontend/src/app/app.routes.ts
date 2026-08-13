@@ -54,6 +54,7 @@ export const routes: Routes = [
   },
   {
     path: "options-lab",
+    data: { fullBleed: true },
     loadComponent: () =>
       import("./components/options-lab/options-lab.component").then(
         (m) => m.OptionsLabComponent
@@ -172,6 +173,7 @@ export const routes: Routes = [
   },
   {
     path: "strategy-lab",
+    data: { fullBleed: true },
     loadComponent: () =>
       import("./components/strategy-lab/strategy-lab.component").then(
         (m) => m.StrategyLabComponent
@@ -276,6 +278,7 @@ export const routes: Routes = [
     // Broker-v2 bot control panel — trader lens (S3); operator lens adds in S4.
     // Route binds broker, accountId, sid as component inputs.
     path: "brokers/:broker/accounts/:accountId/bots/:sid",
+    data: { fullBleed: true },
     loadComponent: () =>
       import(
         "./components/broker/v2-panel/panel-shell/bot-panel-shell.component"

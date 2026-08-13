@@ -35,7 +35,6 @@ interface NavState {
   templateUrl: './research-lab.component.html',
   styleUrls: ['./research-lab.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
-  host: { class: 'page-inset' },
 })
 export class ResearchLabComponent {
   readonly groups = RESEARCH_LAB_NAV;

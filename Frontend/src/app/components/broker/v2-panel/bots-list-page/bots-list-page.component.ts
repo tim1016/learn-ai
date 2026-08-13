@@ -47,7 +47,7 @@ interface ScopedSnapshot<T> {
   ],
   templateUrl: './bots-list-page.component.html',
   styleUrl: './bots-list-page.component.scss',
-  host: { class: 'block h-full page-inset' },
+  host: { class: 'block h-full' },
 })
 export class BotsListPageComponent {
   readonly broker = input('alpaca');

@@ -75,7 +75,7 @@ describe('BrokerBannerComponent', () => {
     expect(fixture.nativeElement.querySelector('.broker-banner')).toBeNull();
   });
 
-  it('connects from the sidebar toggle when disconnected', async () => {
+  it('connects from the global toggle when disconnected', async () => {
     const { fixture, brokerHealth } = setup();
     brokerHealth.bannerState.set('disconnected');
     brokerHealth.health.set(health({ connected: false, is_paper: null }));
@@ -92,7 +92,7 @@ describe('BrokerBannerComponent', () => {
     expect(brokerHealth.disconnect).not.toHaveBeenCalled();
   });
 
-  it('disconnects from the sidebar toggle when connected', async () => {
+  it('disconnects from the global toggle when connected', async () => {
     const { fixture, brokerHealth } = setup();
     brokerHealth.bannerState.set('paper');
     brokerHealth.health.set(health());
@@ -156,7 +156,7 @@ describe('BrokerBannerComponent', () => {
     fixture.detectChanges();
 
     const notice = fixture.nativeElement.querySelector(
-      '[data-testid="sidebar-host-runner-notice"]',
+      '[data-testid="host-runner-notice"]',
     ) as HTMLElement | null;
     const banner = fixture.nativeElement.querySelector('.broker-banner') as HTMLElement | null;
     expect(notice?.querySelector('summary')?.textContent).toContain('Warning, host runner unreachable.');
@@ -164,7 +164,7 @@ describe('BrokerBannerComponent', () => {
     expect(notice?.compareDocumentPosition(banner as Node)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
 
-  it('starts the host process from an invalid live-binding sidebar action', async () => {
+  it('starts the host process from an invalid live-binding global action', async () => {
     const { fixture, activeBotNotice, liveRuns } = setup();
     const request = bindAgainRequest();
     activeBotNotice.setNotice({
@@ -183,7 +183,7 @@ describe('BrokerBannerComponent', () => {
     fixture.detectChanges();
 
     const button = fixture.nativeElement.querySelector(
-      '[data-testid="sidebar-host-runner-action"]',
+      '[data-testid="host-runner-notice-action"]',
     ) as HTMLButtonElement | null;
     expect(fixture.nativeElement.textContent).toContain('Live binding invalid.');
     expect(button?.textContent?.trim()).toBe('Bind again');
@@ -193,7 +193,7 @@ describe('BrokerBannerComponent', () => {
     expect(liveRuns.startHostRunner).toHaveBeenCalledWith('run-1', request);
   });
 
-  it('keeps sidebar action in-flight state scoped to each notice instance', async () => {
+  it('keeps global action in-flight state scoped to each notice instance', async () => {
     const { fixture, activeBotNotice, liveRuns } = setup();
     const request = bindAgainRequest();
     let finishFirst: () => void = () => undefined;
@@ -219,7 +219,7 @@ describe('BrokerBannerComponent', () => {
     fixture.detectChanges();
 
     const firstButton = fixture.nativeElement.querySelector(
-      '[data-testid="sidebar-host-runner-action"]',
+      '[data-testid="host-runner-notice-action"]',
     ) as HTMLButtonElement;
     firstButton.click();
     await Promise.resolve();
@@ -242,7 +242,7 @@ describe('BrokerBannerComponent', () => {
     fixture.detectChanges();
 
     const secondButton = fixture.nativeElement.querySelector(
-      '[data-testid="sidebar-host-runner-action"]',
+      '[data-testid="host-runner-notice-action"]',
     ) as HTMLButtonElement;
     expect(secondButton.disabled).toBe(false);
     secondButton.click();
@@ -254,7 +254,7 @@ describe('BrokerBannerComponent', () => {
     await fixture.whenStable();
   });
 
-  it('times out a hung invalid live-binding sidebar action and allows retry', async () => {
+  it('times out a hung invalid live-binding global action and allows retry', async () => {
     vi.useFakeTimers();
     try {
       const { fixture, activeBotNotice, liveRuns } = setup();
@@ -278,7 +278,7 @@ describe('BrokerBannerComponent', () => {
       fixture.detectChanges();
 
       const button = fixture.nativeElement.querySelector(
-        '[data-testid="sidebar-host-runner-action"]',
+        '[data-testid="host-runner-notice-action"]',
       ) as HTMLButtonElement;
       button.click();
       await Promise.resolve();
@@ -291,7 +291,7 @@ describe('BrokerBannerComponent', () => {
 
       const alert = fixture.nativeElement.querySelector('[role="alert"]') as HTMLElement | null;
       const retryButton = fixture.nativeElement.querySelector(
-        '[data-testid="sidebar-host-runner-action"]',
+        '[data-testid="host-runner-notice-action"]',
       ) as HTMLButtonElement;
       expect(alert?.textContent).toContain('Timed out starting bot process. Try again.');
       expect(retryButton.disabled).toBe(false);

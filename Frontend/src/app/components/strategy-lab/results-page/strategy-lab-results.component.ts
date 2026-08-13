@@ -10,7 +10,6 @@ import { RunReportComponent } from "../../engine-lab/run-report/run-report.compo
   templateUrl: "./strategy-lab-results.component.html",
   styleUrl: "./strategy-lab-results.component.scss",
   changeDetection: ChangeDetectionStrategy.OnPush,
-  host: { class: 'page-inset' },
 })
 export class StrategyLabResultsComponent {
   readonly id = input<string | null>(null);

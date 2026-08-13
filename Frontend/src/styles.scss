@@ -7,7 +7,7 @@
 @import url("katex/dist/katex.min.css");
 
 /* ═══════════════════════════════════════════════════════════
-   Quant Trading Lab — Global Styles
+   Market Scope — Global Styles
 
    The @use above emits the `:root { --bg-canvas: …; … }` block
    from _tokens.scss into THIS global stylesheet. Angular does
@@ -57,15 +57,6 @@ p {
 .positive { color: var(--bull); font-weight: 600; }
 .negative { color: var(--bear); font-weight: 600; }
 .muted    { color: var(--text-muted); }
-
-/* Routed pages own their framing. The application shell deliberately does
-   not add padding, so full-bleed workspaces and standard pages can coexist
-   without compensating margins. */
-.page-inset {
-  display: block;
-  min-width: 0;
-  padding: var(--page-pad-y) var(--page-pad-x);
-}
 
 /* Tabular-num utilities. Apply to any element rendering a price,
    percentage, count, ratio, or ID-like string so digits align in a
