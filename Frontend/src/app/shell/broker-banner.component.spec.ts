@@ -92,6 +92,19 @@ describe('BrokerBannerComponent', () => {
     expect(brokerHealth.disconnect).not.toHaveBeenCalled();
   });
 
+  it('exposes a disabled busy state while a connection action is in flight', () => {
+    const { fixture, brokerHealth } = setup();
+    brokerHealth.bannerState.set('disconnected');
+    brokerHealth.health.set(health({ connected: false, is_paper: null }));
+    brokerHealth.lifecycleAction.set('connect');
+    fixture.detectChanges();
+
+    const button = toggle(fixture);
+    expect(button?.getAttribute('aria-busy')).toBe('true');
+    expect(button?.disabled).toBe(true);
+    expect(button?.querySelector('.pi-spinner')).not.toBeNull();
+  });
+
   it('disconnects from the global toggle when connected', async () => {
     const { fixture, brokerHealth } = setup();
     brokerHealth.bannerState.set('paper');

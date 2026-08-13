@@ -44,6 +44,15 @@ describe('AppSidebarComponent', () => {
     expect(localStorage.getItem('quant-lab.sidebar.pinned')).toBe('true');
   });
 
+  it('restores a persisted pinned preference', async () => {
+    localStorage.setItem('quant-lab.sidebar.pinned', 'true');
+
+    const { fixture } = await render(AppSidebarComponent, { providers: sidebarProviders() });
+
+    expect(fixture.nativeElement.classList.contains('sidebar--pinned')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Use compact navigation rail' }).getAttribute('aria-pressed')).toBe('true');
+  });
+
   it('keeps the pin control as the final sidebar footer action', async () => {
     const { fixture } = await render(AppSidebarComponent, {
       providers: sidebarProviders(),
