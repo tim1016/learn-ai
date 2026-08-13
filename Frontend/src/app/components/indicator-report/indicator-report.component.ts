@@ -97,7 +97,6 @@ const CHART_PANELS: ChartPanel[] = [
   templateUrl: './indicator-report.component.html',
   styleUrls: ['./indicator-report.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
-  host: { class: 'page-inset' },
 })
 export class IndicatorReportComponent {
   private destroyRef = inject(DestroyRef);

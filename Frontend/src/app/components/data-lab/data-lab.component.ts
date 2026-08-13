@@ -336,7 +336,6 @@ const DEFAULT_ENTRIES: IndicatorEntry[] = [
   templateUrl: './data-lab.component.html',
   styleUrls: ['./data-lab.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
-  host: { class: 'page-inset' },
   providers: [
     // Wire data-lab's RunSessionService into the shared dock's source slot.
     // Unique storage key so data-lab and engine-lab don't share dock state.

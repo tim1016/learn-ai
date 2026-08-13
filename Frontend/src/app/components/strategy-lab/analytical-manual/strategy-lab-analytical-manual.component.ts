@@ -48,7 +48,6 @@ export function filterMetricVariants(
   templateUrl: "./strategy-lab-analytical-manual.component.html",
   styleUrl: "./strategy-lab-analytical-manual.component.scss",
   changeDetection: ChangeDetectionStrategy.OnPush,
-  host: { class: 'page-inset' },
 })
 export class StrategyLabAnalyticalManualComponent {
   private readonly route = inject(ActivatedRoute);

@@ -75,7 +75,6 @@ function persistLens(lens: AlpacaDeskLens): void {
   ],
   templateUrl: './alpaca-desk.component.html',
   styleUrl: './alpaca-desk.component.scss',
-  host: { class: 'block h-full page-inset' },
   providers: [AlpacaDeskAccountDataService, AlpacaOperatorLensDataService],
 })
 export class AlpacaDeskComponent {

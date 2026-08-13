@@ -32,7 +32,6 @@ import { catchError, finalize, of } from 'rxjs';
   templateUrl: './portfolio.component.html',
   styleUrls: ['./portfolio.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
-  host: { class: 'page-inset' },
 })
 export class PortfolioComponent implements OnInit {
   private portfolioService = inject(PortfolioService);

@@ -44,7 +44,6 @@ interface CapabilityRow {
   ],
   templateUrl: "./edge.component.html",
   styleUrls: ["./edge.component.scss"],
-  host: { class: 'page-inset' },
 })
 export class EdgeComponent {
   private readonly router = inject(Router);

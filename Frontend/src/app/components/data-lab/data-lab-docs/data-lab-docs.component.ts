@@ -15,7 +15,6 @@ type PanelFilter = 'all' | 'overlay' | 'sub';
   templateUrl: './data-lab-docs.component.html',
   styleUrls: ['./data-lab-docs.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
-  host: { class: 'page-inset' },
 })
 export class DataLabDocsComponent {
   private route = inject(ActivatedRoute);
