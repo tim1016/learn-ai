@@ -36,26 +36,18 @@
 
 // ── Brand + layout preference ────────────────────────────────
 .brand {
-  display: flex;
+  display: grid;
   min-height: 52px;
   box-sizing: border-box;
-  align-items: center;
-  gap: 10px;
-  padding: 14px 16px;
+  place-items: center;
+  padding: 14px;
   border-bottom: 1px solid $border;
-}
+  text-decoration: none;
 
-.wordmark {
-  font-family: $font-mono;
-  font-size: 14px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  color: $text-primary;
-}
-
-.slash {
-  color: $text-subtle;
-  font-weight: 500;
+  &:focus-visible {
+    outline: 2px solid $accent;
+    outline-offset: -2px;
+  }
 }
 
 .sidebar-pin,
@@ -320,11 +312,8 @@
 :host:not(.sidebar--pinned) {
   .brand {
     min-height: 56px;
-    justify-content: center;
     padding: 17px 0;
   }
-
-  .wordmark { display: none; }
 
   .search-wrap {
     min-height: 44px;
