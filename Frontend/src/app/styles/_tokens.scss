@@ -194,6 +194,9 @@ $container-lg: 1400px;
   --topbar-h:     52px;
   --subnav-h:     40px;
 
+  // Shell chrome stays above page content but below fixed modal and drawer overlays.
+  --z-shell-chrome: 20;
+
   // Persistent navigation stays available above the bottom run drawer.
   --z-bottom-drawer: 1000;
   --z-sidebar: 1100;

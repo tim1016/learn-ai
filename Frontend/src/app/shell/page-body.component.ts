@@ -5,7 +5,8 @@ import { ChangeDetectionStrategy, Component } from '@angular/core';
   selector: 'app-page-body',
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: '<ng-content />',
-  styleUrl: './page-body.component.scss',
-  host: { class: 'page-body' },
+  // The existing utility remains the one spacing authority until the
+  // full page-body migration replaces every page-local use in S9.
+  host: { class: 'page-inset' },
 })
 export class PageBodyComponent {}

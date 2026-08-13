@@ -1,6 +1,6 @@
 :host {
   display: block;
-  min-height: 100dvh;
+  min-height: 100%;
   overflow-y: auto;
   overflow-x: clip;
   background: var(--bg-canvas);
@@ -9,7 +9,7 @@
 
 :host(.bot-panel-shell--trader) {
   display: flex;
-  height: 100dvh;
+  height: 100%;
   min-height: 0;
   box-sizing: border-box;
   flex-direction: column;
@@ -92,7 +92,7 @@
   :host(.bot-panel-shell--trader) {
     display: block;
     height: auto;
-    min-height: 100dvh;
+    min-height: 100%;
     overflow-y: auto;
   }
 }

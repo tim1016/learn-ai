@@ -4,6 +4,7 @@ import { Router, RouterModule } from '@angular/router';
 import { Title } from '@angular/platform-browser';
 import { MessageService } from 'primeng/api';
 import { vi } from 'vitest';
+import axe from 'axe-core';
 import { AppComponent } from './app.component';
 import { BrokerHealthService } from './services/broker-health.service';
 
@@ -50,8 +51,16 @@ describe('AppComponent', () => {
   });
 
   it('renders the universal top bar and applies the Market Scope browser title', () => {
-    expect(fixture.nativeElement.querySelector('main > app-top-bar')).toBeTruthy();
+    expect(fixture.nativeElement.querySelector('.shell > app-top-bar')).toBeTruthy();
     expect(TestBed.inject(Title).getTitle()).toBe('Market Scope');
+  });
+
+  it('keeps the application banner outside the main landmark', async () => {
+    const results = await axe.run(fixture.nativeElement, {
+      runOnly: { type: 'rule', values: ['landmark-banner-is-top-level'] },
+    });
+
+    expect(results.violations).toEqual([]);
   });
 
   it('keeps the shell visible while representative routes change', async () => {
