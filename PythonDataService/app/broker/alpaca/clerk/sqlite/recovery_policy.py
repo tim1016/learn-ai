@@ -269,7 +269,7 @@ def _evidence(
 
 
 def _scope(ctx: RecoveryPolicyContext) -> ClerkScope:
-    return "BOT" if ctx.strategy_instance_id is not None else "ACCOUNT_CLERK"
+    return "CUSTODY_SUBJECT" if ctx.strategy_instance_id is not None else "ACCOUNT_CLERK"
 
 
 def _relevant_runs(ctx: RecoveryPolicyContext) -> tuple[ProjectedRun, ...]:

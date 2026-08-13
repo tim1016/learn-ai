@@ -7,6 +7,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
+from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.broker.alpaca.clerk.sqlite.facts import (
     FACTS_SCHEMA_VERSION,
     UncertaintyRaisedFacts,
@@ -66,7 +67,7 @@ def open_or_refresh_unknown_outcome(conn: sqlite3.Connection, payload: dict[str,
     order_ref = payload["order_ref"]
     active = conn.execute(
         "SELECT uncertainty_id, facts_schema_version, facts_json FROM uncertainties "
-        "WHERE scope = 'BOT' AND strategy_instance_id = ? AND reason_code = ? "
+        "WHERE scope = 'CUSTODY_SUBJECT' AND strategy_instance_id = ? AND reason_code = ? "
         "AND resolved_at_ms IS NULL",
         (strategy_instance_id, ORDER_OUTCOME_UNKNOWN_REASON_CODE),
     ).fetchone()
@@ -76,15 +77,16 @@ def open_or_refresh_unknown_outcome(conn: sqlite3.Connection, payload: dict[str,
         facts = _unknown_outcome_envelope(cause=cause, why="The broker response was lost or timed out.")
         conn.execute(
             "INSERT INTO uncertainties (uncertainty_id, scope, severity, "
-            "blocks_new_exposure, allows_reduction, custody_owner, strategy_instance_id, "
+            "blocks_new_exposure, allows_reduction, custody_owner, subject_id, strategy_instance_id, "
             "reason_code, headline, explanation, operator_impact, next_step, observed_at_ms, "
             "resolved_at_ms, evidence_refs_json, facts_schema_version, facts_json) "
-            "VALUES (?, 'BOT', ?, ?, ?, 'ACCOUNT_CLERK', ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)",
+            "VALUES (?, 'CUSTODY_SUBJECT', ?, ?, ?, 'ACCOUNT_CLERK', ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)",
             (
                 f"uncertainty:{_transition_sequence(conn)}",
                 facts.severity,
                 1 if facts.blocks_new_exposure else 0,
                 1 if facts.allows_reduction else 0,
+                bot_subject_id(strategy_instance_id),
                 strategy_instance_id,
                 facts.reason_code,
                 facts.headline,
@@ -129,7 +131,7 @@ def open_or_refresh_unknown_outcome(conn: sqlite3.Connection, payload: dict[str,
     facts = _unknown_outcome_envelope(cause=cause, why="One or more broker responses were lost or timed out.")
     conn.execute(
         "UPDATE uncertainties SET observed_at_ms = ?, evidence_refs_json = ?, facts_json = ? "
-        "WHERE scope = 'BOT' AND strategy_instance_id = ? AND reason_code = ? "
+        "WHERE scope = 'CUSTODY_SUBJECT' AND strategy_instance_id = ? AND reason_code = ? "
         "AND resolved_at_ms IS NULL",
         (
             payload["recorded_at_ms"],
@@ -152,7 +154,7 @@ def resolve_unknown_outcome_if_proven(conn: sqlite3.Connection, payload: dict[st
     """Fold exact proof and report both effect-local and episode-wide state."""
     active = conn.execute(
         "SELECT uncertainty_id, facts_schema_version, facts_json FROM uncertainties "
-        "WHERE scope = 'BOT' AND strategy_instance_id = ? AND reason_code = ? "
+        "WHERE scope = 'CUSTODY_SUBJECT' AND strategy_instance_id = ? AND reason_code = ? "
         "AND resolved_at_ms IS NULL",
         (payload["strategy_instance_id"], ORDER_OUTCOME_UNKNOWN_REASON_CODE),
     ).fetchone()
@@ -212,19 +214,24 @@ def resolve_unknown_outcome_if_proven(conn: sqlite3.Connection, payload: dict[st
 def fold_uncertainty_raised(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Open one database-unique, versioned R5 uncertainty episode."""
     facts = UncertaintyRaisedFacts.from_facts_json(payload["facts_json"])
-    scope = "BOT" if payload["strategy_instance_id"] is not None else "ACCOUNT_CLERK"
+    scope = "CUSTODY_SUBJECT" if payload["strategy_instance_id"] is not None else "ACCOUNT_CLERK"
     conn.execute(
         "INSERT INTO uncertainties (uncertainty_id, scope, severity, blocks_new_exposure, "
-        "allows_reduction, custody_owner, strategy_instance_id, reason_code, headline, "
+        "allows_reduction, custody_owner, subject_id, strategy_instance_id, reason_code, headline, "
         "explanation, operator_impact, next_step, observed_at_ms, resolved_at_ms, "
         "evidence_refs_json, facts_schema_version, facts_json) "
-        "VALUES (?, ?, ?, ?, ?, 'ACCOUNT_CLERK', ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, 'ACCOUNT_CLERK', ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)",
         (
             f"uncertainty:{_transition_sequence(conn)}",
             scope,
             facts.severity,
             1 if facts.blocks_new_exposure else 0,
             1 if facts.allows_reduction else 0,
+            (
+                None
+                if payload["strategy_instance_id"] is None
+                else bot_subject_id(payload["strategy_instance_id"])
+            ),
             payload["strategy_instance_id"],
             facts.reason_code,
             facts.headline,
@@ -241,7 +248,7 @@ def fold_uncertainty_raised(conn: sqlite3.Connection, payload: dict[str, Any]) -
 
 def fold_uncertainty_refreshed(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     facts = UncertaintyRaisedFacts.from_facts_json(payload["facts_json"])
-    scope = "BOT" if payload["strategy_instance_id"] is not None else "ACCOUNT_CLERK"
+    scope = "CUSTODY_SUBJECT" if payload["strategy_instance_id"] is not None else "ACCOUNT_CLERK"
     conn.execute(
         "UPDATE uncertainties SET severity = ?, blocks_new_exposure = ?, allows_reduction = ?, "
         "headline = ?, explanation = ?, operator_impact = ?, next_step = ?, observed_at_ms = ?, "

@@ -176,8 +176,8 @@ following load-bearing decisions.
     legacy JSONL, initialize a new Clerk authority generation, and redeploy
     desired instances. There is no dual-authority mode.
 
-11. **Two uncertainty scopes, extensible causes.** Blast radius is `BOT` or
-    `ACCOUNT_CLERK`; symbol/venue/order and future attributes ride as
+11. **Two uncertainty scopes, extensible causes.** Blast radius is a
+    `CUSTODY_SUBJECT` or `ACCOUNT_CLERK`; symbol/venue/order and future attributes ride as
     extensible `reason_code` + `facts_json`, not new top-level scopes.
     Unrecognized reasons default to `ACCOUNT_CLERK` and block new exposure
     (fail-closed).
@@ -200,6 +200,22 @@ following load-bearing decisions.
     product fallback while this authority generation is active. This scope is
     delivered by the fresh-generation program; it does not retroactively claim
     that the accepted generation-1 projections already supply every field.
+
+14. **Schema v9 names custody subjects and upgrades only by an offline proof
+    ceremony.** A `BOT` subject is bound one-to-one to an existing strategy;
+    a `MANUAL_OPERATOR` subject is bound one-to-one to an approved human
+    operator. Commands, effects, positions, holds, and uncertainties name the
+    subject, while a manual order leaves outer strategy/run identity null. A
+    data-bearing v8 file is never altered by startup: the stopped authority is
+    verified and backed up, a v9 stage is rebuilt from finalized mirror facts,
+    journal and projection parity are proved, and only then is the staged
+    database atomically swapped. A failed pre-publication proof leaves v8
+    selected with a durable failure receipt. Immediately before the swap, a
+    fsynced prepared receipt binds the verified backup and staged journal
+    identity; an interruption after the swap is deterministically finalized
+    from that receipt on a stopped retry rather than mislabeled as a failed v8
+    ceremony. The completed receipt's verified backup supports the bounded
+    rollback procedure.
 
 **Crown-jewel invariants preserved unchanged** (they are application logic,
 orthogonal to storage, and must be re-proven under SQLite with tests):

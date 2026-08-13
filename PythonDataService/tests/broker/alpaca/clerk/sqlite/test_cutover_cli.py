@@ -9,6 +9,10 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from tests.broker.alpaca.clerk.sqlite.cutover_test_support import (
+    PLAN_MS,
+    write_stopped_runner_bot,
+)
 
 import scripts.manage_alpaca_sqlite_clerk as recovery_cli_module
 from app.broker.alpaca.clerk.sqlite.activation import ActivationStore
@@ -22,10 +26,6 @@ from scripts.manage_alpaca_sqlite_clerk import (
     _read_reset_evidence,
 )
 from scripts.manage_alpaca_sqlite_clerk import main as recovery_cli
-from tests.broker.alpaca.clerk.sqlite.cutover_test_support import (
-    PLAN_MS,
-    write_stopped_runner_bot,
-)
 
 ACCOUNT_ID = "PACUTOVER"
 
@@ -234,6 +234,46 @@ def test_read_reset_and_cutover_evidence_use_distinct_models(
     assert not hasattr(reset, "account_mode")
     with pytest.raises(ValueError, match="cutover broker evidence"):
         _read_cutover_evidence(evidence_path, ACCOUNT_ID)
+
+
+def test_v9_upgrade_and_rollback_cli_require_account_bound_process_stop_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence_path = tmp_path / "process-stop.json"
+    evidence_path.write_text(
+        json.dumps(
+            {
+                "account_id": ACCOUNT_ID,
+                "observed_at_ms": PLAN_MS,
+                "proof_reference": "tests/process-stop-proof.json",
+            }
+        ),
+        encoding="utf-8",
+    )
+    captured: list[tuple[str, Any]] = []
+
+    def capture_upgrade(**kwargs: Any) -> Any:
+        captured.append(("upgrade", kwargs["process_stop_proof"]))
+        return kwargs["process_stop_proof"]
+
+    def capture_rollback(**kwargs: Any) -> Any:
+        captured.append(("rollback", kwargs["process_stop_proof"]))
+        return kwargs["process_stop_proof"]
+
+    monkeypatch.setattr(recovery_cli_module, "upgrade_v8_authority_offline", capture_upgrade)
+    monkeypatch.setattr(recovery_cli_module, "rollback_v9_upgrade_offline", capture_rollback)
+    common = ["--artifacts-root", str(tmp_path / "clerk"), "--account-id", ACCOUNT_ID]
+
+    assert recovery_cli([*common, "upgrade-v9", "--process-stop-evidence", str(evidence_path)]) == 0
+    assert recovery_cli([*common, "rollback-v9", "--process-stop-evidence", str(evidence_path)]) == 0
+    assert [(operation, proof.account_id) for operation, proof in captured] == [
+        ("upgrade", ACCOUNT_ID),
+        ("rollback", ACCOUNT_ID),
+    ]
+
+    with pytest.raises(ValueError, match="requires --process-stop-evidence"):
+        recovery_cli([*common, "upgrade-v9"])
 
 
 def test_dev_reset_cli_moves_paper_legacy_authority_without_broker_evidence(

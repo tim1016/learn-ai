@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from conftest import _clock_at
 
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter, submit_enter
@@ -45,7 +46,6 @@ from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.errors import BrokerRequestInvalid, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
-from conftest import _clock_at
 
 ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
@@ -930,7 +930,7 @@ async def test_reducing_order_lost_submit_response_stays_uncertain(
     assert effect_after_unrelated_ack is not None
     assert effect_after_unrelated_ack.state == "unknown"
     uncertainty = repo.active_uncertainty(
-        scope="BOT",
+            scope="CUSTODY_SUBJECT",
         reason_code="ORDER_OUTCOME_UNKNOWN",
         strategy_instance_id=SID,
     )
@@ -1123,7 +1123,7 @@ async def test_reducing_order_resolves_without_flattening_folds_a_precise_failur
     transitions = repo.transitions_for_order(result.reducing_order_ref)  # type: ignore[arg-type]
     assert any(t["summary_code"] == "EXIT_NOT_FLAT" for t in transitions)
     uncertainty = repo.active_uncertainty(
-        scope="BOT",
+            scope="CUSTODY_SUBJECT",
         reason_code="EXIT_NOT_FLAT",
         strategy_instance_id=SID,
     )

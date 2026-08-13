@@ -56,8 +56,8 @@ not a second copy. Re-exported here (``__all__``) for existing callers.
 R6 admission gating against open holds/uncertainties (#1380) is implemented
 in :func:`accept_enter` via :func:`~.uncertainty.require_admission` — see
 that function's own docstring for the policy (an ``ACCOUNT_CLERK``-scoped
-block applies to every bot; a ``BOT``-scoped block applies only to the
-matching bot).
+block applies to every bot; a ``CUSTODY_SUBJECT``-scoped block applies only
+to the matching subject).
 """
 
 from __future__ import annotations

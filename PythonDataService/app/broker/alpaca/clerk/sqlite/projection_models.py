@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-ClerkScope = Literal["BOT", "ACCOUNT_CLERK"]
+ClerkScope = Literal["CUSTODY_SUBJECT", "ACCOUNT_CLERK"]
 AuthorityHealth = Literal["healthy", "degraded_to_mirror", "failed"]
 EvidenceFreshness = Literal["fresh", "stale", "not_required", "unavailable"]
 

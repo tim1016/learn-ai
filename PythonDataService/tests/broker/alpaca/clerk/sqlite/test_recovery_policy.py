@@ -457,7 +457,7 @@ def test_account_safe_flatten_blocks_on_any_bot_uncertainty() -> None:
                 uncertainties=(
                     ProjectedUncertainty(
                         uncertainty_id="spy-uncertainty",
-                        scope="BOT",
+                        scope="CUSTODY_SUBJECT",
                         severity="warning",
                         blocks_new_exposure=True,
                         allows_reduction=False,
@@ -600,7 +600,7 @@ def test_safe_flatten_checks_complete_current_orders_not_operation_page() -> Non
 def test_bot_uncertainty_authors_scope_impact_and_next_step() -> None:
     uncertainty = ProjectedUncertainty(
         uncertainty_id="uncertain-1",
-        scope="BOT",
+        scope="CUSTODY_SUBJECT",
         severity="warning",
         blocks_new_exposure=True,
         allows_reduction=False,
@@ -618,7 +618,7 @@ def test_bot_uncertainty_authors_scope_impact_and_next_step() -> None:
 
     guidance = build_projection_guidance(_context(uncertainties=(uncertainty,)))
 
-    assert guidance.scope == "BOT"
+    assert guidance.scope == "CUSTODY_SUBJECT"
     assert guidance.may_create_exposure is False
     assert guidance.impact == "Only this bot cannot create exposure."
     assert guidance.next_step == "The Clerk is reconciling automatically."
