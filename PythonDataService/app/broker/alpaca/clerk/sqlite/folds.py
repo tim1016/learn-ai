@@ -960,12 +960,23 @@ def _fold_execution_corrected(conn: sqlite3.Connection, payload: dict[str, Any])
     ).fetchone()
     if already_recorded is not None:
         return
+    owner = conn.execute(
+        "SELECT subject_id, strategy_instance_id FROM effect_operations "
+        "WHERE effect_operation_id = ?",
+        (payload["effect_operation_id"],),
+    ).fetchone()
+    if owner is None:
+        raise ValueError("correction requires its durable owning effect")
     superseded = conn.execute(
         "SELECT f.fill_id, f.order_ref, f.qty, f.price, f.side, f.evidence_source, f.fee, "
-        "f.fee_fidelity, e.strategy_instance_id, s.symbol "
+        "f.fee_fidelity, e.subject_id, e.strategy_instance_id, "
+        "COALESCE(s.symbol, json_extract(manual_acceptance.facts_json, '$.leg.symbol')) AS symbol "
         "FROM fills f JOIN orders o ON o.order_ref = f.order_ref "
         "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
-        "JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id "
+        "LEFT JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id "
+        "LEFT JOIN custody_transitions manual_acceptance "
+        "ON manual_acceptance.effect_operation_id = e.effect_operation_id "
+        "AND manual_acceptance.transition_kind = 'MANUAL_ORDER_ACCEPTED' "
         "WHERE f.execution_id = ? "
         "AND NOT EXISTS (SELECT 1 FROM fills successor "
         "WHERE successor.superseded_execution_ref = f.execution_id)",
@@ -977,7 +988,9 @@ def _fold_execution_corrected(conn: sqlite3.Connection, payload: dict[str, Any])
         )
     if superseded["order_ref"] != payload["order_ref"]:
         raise ValueError("correction target belongs to a different order")
-    if superseded["strategy_instance_id"] != payload["strategy_instance_id"]:
+    if superseded["subject_id"] != owner["subject_id"]:
+        raise ValueError("correction target belongs to a different custody subject")
+    if superseded["strategy_instance_id"] != owner["strategy_instance_id"]:
         raise ValueError("correction target belongs to a different strategy instance")
     if superseded["symbol"].upper() != facts.symbol.upper():
         raise ValueError("correction symbol does not match the superseded execution")

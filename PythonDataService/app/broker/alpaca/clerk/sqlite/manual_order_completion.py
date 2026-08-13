@@ -33,7 +33,7 @@ def manual_order_has_exact_terminal_coverage(
         raise RuntimeError(f"manual effect {effect_operation_id!r} has no acceptance transition")
     facts = ManualOrderAcceptedFacts.from_facts_json(acceptance["facts_json"])
     expected_quantity = BrokerOrderLeg.model_validate(facts.leg).quantity
-    effective_quantity, _ = repo.effective_fill_totals_for_order(order_ref)
+    effective_quantity, _ = repo.effective_exact_fill_totals_for_order(order_ref)
     return abs(effective_quantity - expected_quantity) <= FILL_QTY_EPSILON
 
 

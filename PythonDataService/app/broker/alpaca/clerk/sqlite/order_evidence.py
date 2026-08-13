@@ -12,6 +12,9 @@ an observed (or absent, or lost) ``BrokerOrder`` snapshot means.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+from app.broker.alpaca.clerk.recovery import UNCERTAIN_SUBMIT_GRACE_MS
 from app.broker.alpaca.clerk.sqlite.execution_coverage import FILL_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.facts import (
     EnterAcceptedFacts,
@@ -26,7 +29,11 @@ from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.manual_order_completion import manual_order_has_exact_terminal_coverage
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerOrder
+
+if TYPE_CHECKING:
+    from app.broker.contract.ports import BrokerTradePort
 
 __all__ = [
     "entry_order_symbol",
@@ -35,6 +42,7 @@ __all__ = [
     "fold_order_evidence",
     "fold_order_submission_acknowledgement",
     "fold_uncertain",
+    "resolve_order_submission",
 ]
 
 
@@ -330,3 +338,77 @@ def fold_failed(
             facts_json=facts.to_facts_json(),
         )
     )
+
+
+async def resolve_order_submission(
+    repo: ClerkSqliteRepository,
+    *,
+    order_ref: str,
+    trade: BrokerTradePort,
+) -> None:
+    """Recover any captured order by its exact client identity.
+
+    This belongs with shared order evidence rather than an ENTER-only module:
+    manual custody, ENTER, and a future reducing order all use the same R4/R7
+    claim, exact lookup, grace-window, and monotonic fold discipline.
+    """
+    order_row = repo.order(order_ref)
+    assert order_row is not None
+    effect = repo.effect_operation(order_row.effect_operation_id)
+    assert effect is not None
+
+    if effect.state in ("succeeded", "failed", "rejected"):
+        return
+
+    # ClaimedBrokerIO itself uses ``fold_uncertain`` above. Importing it only
+    # after this module is fully initialized preserves that shared dependency
+    # direction without an import-time cycle.
+    from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
+
+    claim = repo.claim_before_broker_contact(effect.effect_operation_id)
+    broker = ClaimedBrokerIO(
+        repo=repo,
+        effect_operation_id=effect.effect_operation_id,
+        claim_token=claim.token,
+        trade=trade,
+    )
+    uncertain_since_ms = _uncertain_since_ms(repo, order_ref)
+    try:
+        try:
+            order = await broker.lookup(order_ref)
+        except BrokerError:
+            return
+
+        if order is not None and order.client_order_id != order_ref:
+            return
+
+        if order is None:
+            if order_row.broker_order_id is not None:
+                return
+            grace_active = (repo.clock() - uncertain_since_ms) < UNCERTAIN_SUBMIT_GRACE_MS
+            if grace_active:
+                return
+            fold_failed(
+                repo,
+                effect_operation_id=effect.effect_operation_id,
+                order_ref=order_ref,
+                summary_code="ORDER_SUBMIT_FAILED_ABSENT",
+                reason="The order did not reach the broker.",
+                why="Alpaca has no order for this client_order_id (definitively absent).",
+            )
+        else:
+            fold_order_evidence(repo, effect_operation_id=effect.effect_operation_id, order=order)
+    finally:
+        repo.release_operation_claim(
+            effect_operation_id=effect.effect_operation_id,
+            token=claim.token,
+        )
+
+
+def _uncertain_since_ms(repo: ClerkSqliteRepository, order_ref: str) -> int:
+    """Find the first unproven-outcome boundary for the exact order."""
+    transitions = repo.transitions_for_order(order_ref)
+    for transition in reversed(transitions):
+        if transition["transition_kind"] == "ORDER_SUBMIT_UNCERTAIN":
+            return transition["recorded_at_ms"]
+    return transitions[0]["recorded_at_ms"]

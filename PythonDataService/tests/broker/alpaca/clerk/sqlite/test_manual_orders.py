@@ -11,7 +11,10 @@ from app.broker.alpaca.clerk.sqlite.economic_projection import (
     MarketMark,
     SqliteEconomicProjectionReader,
 )
-from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts
+from app.broker.alpaca.clerk.sqlite.facts import (
+    ExecutionCorrectedFacts,
+    ExecutionSliceFilledFacts,
+)
 from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError
 from app.broker.alpaca.clerk.sqlite.manual_orders import (
     accept_manual_order,
@@ -258,3 +261,76 @@ async def test_exact_execution_changes_only_the_manual_subject_position(
     assert execution.subject_id == manual_operator_subject_id(OPERATOR_ID)
     assert attribution.open_pnl_total == pytest.approx(10, abs=1e-6, rel=0)
     assert attribution.execution_coverage == "complete"
+
+
+@pytest.mark.asyncio
+async def test_manual_execution_correction_replaces_only_manual_custody(
+    repo: ClerkSqliteRepository,
+) -> None:
+    submitted = await submit_manual_order(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id=OPERATOR_ID,
+        ticket_id=TICKET_ID,
+        leg_id=LEG_ID,
+        leg=market_buy(),
+        trade=FakeTrade(repo=repo),
+    )
+    assert submitted.leg.effect_operation_id is not None
+    assert submitted.leg.order_ref is not None
+    exact = ExecutionSliceFilledFacts(
+        execution_id="manual-execution-to-correct",
+        symbol="SPY",
+        side="BUY",
+        slice_qty=1,
+        slice_price=500,
+        fee=None,
+        fee_fidelity="not_reported",
+        evidence_source="websocket",
+        source_event_at_ms=1_700_000_000_200,
+    )
+    repo.append_transition(
+        TransitionInput(
+            command_id=submitted.command.command_id,
+            effect_operation_id=submitted.leg.effect_operation_id,
+            order_ref=submitted.leg.order_ref,
+            transition_kind="EXECUTION_SLICE_FILLED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="in_progress",
+            source_event_at_ms=exact.source_event_at_ms,
+            clerk_observed_at_ms=repo.clock(),
+            summary_code="EXECUTION_SLICE_FILLED",
+            facts_json=exact.to_facts_json(),
+        )
+    )
+    corrected = ExecutionCorrectedFacts(
+        execution_id="manual-corrected-execution",
+        superseded_execution_ref=exact.execution_id,
+        symbol="SPY",
+        side="BUY",
+        corrected_qty=2,
+        corrected_price=501,
+        why="broker corrected the exact manual fill",
+    )
+
+    outcome = repo.append_execution_correction_or_raise(
+        correction=TransitionInput(
+            command_id=submitted.command.command_id,
+            effect_operation_id=submitted.leg.effect_operation_id,
+            order_ref=submitted.leg.order_ref,
+            transition_kind="EXECUTION_CORRECTED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="in_progress",
+            source_event_at_ms=1_700_000_000_201,
+            clerk_observed_at_ms=repo.clock(),
+            summary_code="EXECUTION_CORRECTED",
+            facts_json=corrected.to_facts_json(),
+        ),
+        build_uncertainty=lambda reason: pytest.fail(f"unexpected correction rejection: {reason}"),
+    )
+
+    assert outcome == "appended"
+    assert repo.attributed_positions_for_subject(manual_operator_subject_id(OPERATOR_ID)) == {"SPY": 2.0}
+    assert repo.attributed_positions_for_strategy("bot-1") == {}

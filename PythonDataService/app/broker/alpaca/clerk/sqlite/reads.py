@@ -429,7 +429,7 @@ def reconcilable_effect_operations(conn: sqlite3.Connection) -> list[EffectOpera
         "e.created_at_ms, e.updated_at_ms, e.terminal_receipt_id "
         "FROM effect_operations e LEFT JOIN operation_order_links l "
         "ON l.effect_operation_id = e.effect_operation_id LEFT JOIN orders o "
-        "ON o.order_ref = l.order_ref WHERE e.kind IN ('ENTER','EXIT') "
+        "ON o.order_ref = l.order_ref WHERE e.kind IN ('ENTER','EXIT','MANUAL_ORDER') "
         "AND e.state NOT IN ('succeeded','failed','rejected') "
         "AND (e.state IN ('accepted','unknown') OR e.kind = 'EXIT' "
         "OR o.broker_state IS NULL OR lower(o.broker_state) NOT IN "
@@ -508,17 +508,21 @@ def correction_uncertainty_exists(conn: sqlite3.Connection, execution_id: str) -
 
 
 def effective_execution_slice(conn: sqlite3.Connection, execution_id: str) -> dict | None:
-    """Return one currently effective execution plus its owning bot identity.
+    """Return one currently effective execution plus its immutable custody owner.
 
     Corrections are append-only replacement rows. A row is effective only
     while no later row names its execution identity as ``superseded``.
     """
     row = conn.execute(
         "SELECT f.execution_id, f.order_ref, f.qty, f.price, f.side, f.evidence_source, f.fee, "
-        "f.fee_fidelity, e.strategy_instance_id, s.symbol "
+        "f.fee_fidelity, e.subject_id, e.strategy_instance_id, "
+        "COALESCE(s.symbol, json_extract(manual_acceptance.facts_json, '$.leg.symbol')) AS symbol "
         "FROM fills f JOIN orders o ON o.order_ref = f.order_ref "
         "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
-        "JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id "
+        "LEFT JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id "
+        "LEFT JOIN custody_transitions manual_acceptance "
+        "ON manual_acceptance.effect_operation_id = e.effect_operation_id "
+        "AND manual_acceptance.transition_kind = 'MANUAL_ORDER_ACCEPTED' "
         "WHERE f.execution_id = ? "
         "AND NOT EXISTS (SELECT 1 FROM fills successor "
         "WHERE successor.superseded_execution_ref = f.execution_id)",
@@ -539,6 +543,24 @@ def effective_fill_totals_for_order(conn: sqlite3.Connection, order_ref: str) ->
     row = conn.execute(
         "SELECT COALESCE(SUM(f.qty), 0) AS qty, COALESCE(SUM(f.qty * f.price), 0) AS cost "
         "FROM fills f WHERE f.order_ref = ? "
+        "AND NOT EXISTS (SELECT 1 FROM fills successor "
+        "WHERE successor.superseded_execution_ref = f.execution_id)",
+        (order_ref,),
+    ).fetchone()
+    return float(row["qty"]), float(row["cost"])
+
+
+def effective_exact_fill_totals_for_order(conn: sqlite3.Connection, order_ref: str) -> tuple[float, float]:
+    """Return current exact-execution quantity and cost for one order.
+
+    Aggregate REST recovery is deliberately excluded: it can establish
+    exposure and an acknowledgement, but only a broker-issued execution ID
+    may complete a manual ticket.
+    """
+    row = conn.execute(
+        "SELECT COALESCE(SUM(f.qty), 0) AS qty, COALESCE(SUM(f.qty * f.price), 0) AS cost "
+        "FROM fills f WHERE f.order_ref = ? "
+        "AND f.evidence_source IN ('websocket', 'activity_recovery') "
         "AND NOT EXISTS (SELECT 1 FROM fills successor "
         "WHERE successor.superseded_execution_ref = f.execution_id)",
         (order_ref,),

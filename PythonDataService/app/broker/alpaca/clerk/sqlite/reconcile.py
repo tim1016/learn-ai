@@ -13,7 +13,6 @@ from app.broker.alpaca.clerk.exposure import (
     ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
     signed_broker_position_quantity,
 )
-from app.broker.alpaca.clerk.sqlite.enter import resolve_enter_submission
 from app.broker.alpaca.clerk.sqlite.exit import resolve_exit
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.facts import (
@@ -29,7 +28,10 @@ from app.broker.alpaca.clerk.sqlite.models import (
     EffectOperationResource,
     TransitionInput,
 )
-from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
+from app.broker.alpaca.clerk.sqlite.order_evidence import (
+    fold_order_evidence,
+    resolve_order_submission,
+)
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteError,
     ClerkSqliteRepository,
@@ -201,7 +203,7 @@ async def _reconcile_effect(
             raise ReconciliationInvariantError(
                 f"ENTER effect {effect.effect_operation_id!r} has no captured order"
             )
-        await resolve_enter_submission(repo, order_ref=order.order_ref, trade=trade)
+        await resolve_order_submission(repo, order_ref=order.order_ref, trade=trade)
 
     effect_after = await asyncio.to_thread(repo.effect_operation, effect.effect_operation_id)
     if effect_after is None:

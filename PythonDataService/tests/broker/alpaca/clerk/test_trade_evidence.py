@@ -461,6 +461,60 @@ async def test_manual_rest_recovery_and_later_exact_evidence_stay_subject_scoped
         repo.close()
 
 
+async def test_manual_changed_execution_redelivery_raises_one_subject_conflict(
+    tmp_path: Path,
+) -> None:
+    """A changed manual execution ID is never silently discarded as a replay."""
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    accepted = accept_manual_order(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id="operator",
+        ticket_id="7de3a77c-b698-4e0d-a5d1-2f624574ed35",
+        leg_id="09d6d63e-6375-4e6d-8d20-3b1bf70c2465",
+        leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1.0),
+    )
+    assert accepted.leg.order_ref is not None
+    original = BrokerOrderEvent(
+        event_type="fill",
+        occurred_at_ms=1_700_000_000_050,
+        price=100.0,
+        quantity=1.0,
+        execution_id="manual-changed-redelivery",
+    )
+    changed = original.model_copy(update={"occurred_at_ms": 1_700_000_000_051, "price": 101.0})
+    try:
+        sink = _sqlite_sink(repo)
+        await sink.record_lifecycle_event(
+            client_order_id=accepted.leg.order_ref,
+            event=original,
+            event_key="exec:manual-changed-redelivery:original",
+            order=_owned_order(accepted.leg.order_ref, status="filled").model_copy(
+                update={"quantity": 1.0, "filled_quantity": 1.0, "filled_avg_price": 100.0}
+            ),
+            recovery_source=None,
+            recovery_window_limit=None,
+        )
+        await sink.record_lifecycle_event(
+            client_order_id=accepted.leg.order_ref,
+            event=changed,
+            event_key="exec:manual-changed-redelivery:changed",
+            order=_owned_order(accepted.leg.order_ref, status="filled").model_copy(
+                update={"quantity": 1.0, "filled_quantity": 1.0, "filled_avg_price": 101.0}
+            ),
+            recovery_source=None,
+            recovery_window_limit=None,
+        )
+
+        assert len(repo.fills_for_order(accepted.leg.order_ref)) == 1
+        assert repo.attributed_positions_for_subject(accepted.ticket.subject_id) == {"SPY": 1.0}
+        uncertainty = repo.active_uncertainties_for_admission(subject_id=accepted.ticket.subject_id)
+        assert len(uncertainty) == 1
+        assert uncertainty[0]["reason_code"] == EXECUTION_COVERAGE_CONFLICT_REASON_CODE
+    finally:
+        repo.close()
+
+
 async def test_sqlite_changed_execution_redelivery_raises_one_coverage_conflict(
     tmp_path: Path,
 ) -> None:

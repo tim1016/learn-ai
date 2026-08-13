@@ -278,6 +278,14 @@ class ClerkSqliteRepositoryReadApi:
         with self._write_lock:
             return reads.effective_fill_totals_for_order(self._conn, order_ref)
 
+    def effective_exact_fill_totals_for_order(
+        self: ClerkSqliteRepository,
+        order_ref: str,
+    ) -> tuple[float, float]:
+        """Return only effective broker-issued execution slices for one order."""
+        with self._write_lock:
+            return reads.effective_exact_fill_totals_for_order(self._conn, order_ref)
+
     def uncertain_orders(self: ClerkSqliteRepository) -> list[OrderResource]:
         with self._write_lock:
             return reads.uncertain_orders(self._conn)

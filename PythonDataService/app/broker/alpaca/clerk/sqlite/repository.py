@@ -556,8 +556,8 @@ class ClerkSqliteRepository(
             self.append_transition(transition)
             return "appended"
 
-    @staticmethod
     def _validated_execution_slice_transition(
+        self,
         transition: TransitionInput,
         *,
         execution_id: str,
@@ -572,7 +572,44 @@ class ClerkSqliteRepository(
             raise ValueError("execution_id must match the transition facts")
         if transition.order_ref != order_ref:
             raise ValueError("order_ref must match the exact execution transition")
+        self._validate_order_effect_ownership(transition, order_ref=order_ref)
         return facts
+
+    def _validate_order_effect_ownership(
+        self,
+        transition: TransitionInput,
+        *,
+        order_ref: str,
+    ) -> dict:
+        """Bind execution evidence to its order's immutable effect owner.
+
+        Manual custody has no strategy instance, so an effect's subject is the
+        canonical identity.  The optional strategy field remains a
+        compatibility assertion for bot-owned effects only.
+        """
+        if transition.effect_operation_id is None or transition.command_id is None:
+            raise ValueError("execution evidence requires its durable owning effect and command")
+        owner = self._conn.execute(
+            "SELECT command_id, subject_id, strategy_instance_id FROM effect_operations "
+            "WHERE effect_operation_id = ?",
+            (transition.effect_operation_id,),
+        ).fetchone()
+        if owner is None:
+            raise ValueError("execution evidence requires an existing durable owning effect")
+        if (
+            transition.command_id != owner["command_id"]
+            or transition.strategy_instance_id != owner["strategy_instance_id"]
+        ):
+            raise ValueError("execution evidence ownership does not match its durable effect")
+        linked = self._conn.execute(
+            "SELECT 1 FROM orders o LEFT JOIN operation_order_links l "
+            "ON l.order_ref = o.order_ref AND l.effect_operation_id = ? "
+            "WHERE o.order_ref = ? AND (o.effect_operation_id = ? OR l.effect_operation_id IS NOT NULL)",
+            (transition.effect_operation_id, order_ref, transition.effect_operation_id),
+        ).fetchone()
+        if linked is None:
+            raise ValueError("execution evidence effect does not own the exact order")
+        return dict(owner)
 
     def _execution_coverage_quarantine_transition(
         self,
@@ -657,12 +694,7 @@ class ClerkSqliteRepository(
             or uncertainty.strategy_instance_id != owner["strategy_instance_id"]
         ):
             raise ValueError("coverage conflict ownership does not match its durable effect")
-        order_owner = self._conn.execute(
-            "SELECT effect_operation_id FROM orders WHERE order_ref = ?",
-            (order_ref,),
-        ).fetchone()
-        if order_owner is None or order_owner["effect_operation_id"] != uncertainty.effect_operation_id:
-            raise ValueError("coverage conflict effect does not own the exact order")
+        self._validate_order_effect_ownership(uncertainty, order_ref=order_ref)
         facts = UncertaintyRaisedFacts.from_facts_json(uncertainty.facts_json)
         if facts.reason_code != EXECUTION_COVERAGE_CONFLICT_REASON_CODE:
             raise ValueError("coverage conflict must use the execution coverage reason code")
@@ -720,8 +752,15 @@ class ClerkSqliteRepository(
         correction: TransitionInput,
         facts: ExecutionCorrectedFacts,
     ) -> str | None:
-        if correction.order_ref is None or correction.strategy_instance_id is None:
-            return "correction transition is missing order or strategy identity"
+        if correction.order_ref is None:
+            return "correction transition is missing order identity"
+        try:
+            owner = self._validate_order_effect_ownership(
+                correction,
+                order_ref=correction.order_ref,
+            )
+        except ValueError as exc:
+            return str(exc)
         target = reads.effective_execution_slice(self._conn, facts.superseded_execution_ref)
         if target is None:
             return (
@@ -730,7 +769,9 @@ class ClerkSqliteRepository(
             )
         if target["order_ref"] != correction.order_ref:
             return "superseded execution belongs to a different order"
-        if target["strategy_instance_id"] != correction.strategy_instance_id:
+        if target["subject_id"] != owner["subject_id"]:
+            return "superseded execution belongs to a different custody subject"
+        if target["strategy_instance_id"] != owner["strategy_instance_id"]:
             return "superseded execution belongs to a different strategy instance"
         if target["symbol"].upper() != facts.symbol.upper():
             return "superseded execution has a different symbol"

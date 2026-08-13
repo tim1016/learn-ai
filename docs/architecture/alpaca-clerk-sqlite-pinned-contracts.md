@@ -1003,6 +1003,11 @@ must round-trip through facts.
 | `MANUAL_ORDER_ACCEPTED` | immutable `ticket_id`/`leg_id`/manual-subject/operator identities; ticket-leg instruction hash; command idempotency key/hash/kind/action; effect idempotency key/kind; complete BUY/market/DAY broker leg. The outer strategy and run identities are null. |
 | `MANUAL_ORDER_FILLED` | none (`{}`). It may be appended only after the broker's terminal `filled` state and effective exact execution quantity both cover the immutable manual leg; its fold creates the shared terminal success receipt and completes the one-leg ticket. |
 
+For this completion rule, exact execution means an effective broker-issued
+`websocket` or `activity_recovery` slice with an execution identity. Aggregate
+`cumulative_recovery` evidence may recover exposure and broker lifecycle state,
+but never completes a manual ticket.
+
 Implemented in `app/broker/alpaca/clerk/sqlite/facts.py`. `ENTER_ACCEPTED`'s
 dataclass and fold are not implemented in the corrective slice — no command
 flow appends that transition kind yet — but its facts shape is pinned here so
