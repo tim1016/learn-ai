@@ -44,6 +44,7 @@ vi.mock('lightweight-charts', () => {
     createChart: chartMocks.createChart,
     createSeriesMarkers: vi.fn().mockReturnValue({ setMarkers: vi.fn() }),
     CandlestickSeries: 'CandlestickSeries',
+    TickMarkType: { Year: 0, Month: 1, DayOfMonth: 2, Time: 3, TimeWithSeconds: 4 },
   };
 });
 class StubEventSource {

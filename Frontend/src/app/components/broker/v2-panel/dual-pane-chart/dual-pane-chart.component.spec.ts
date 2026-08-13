@@ -4,7 +4,7 @@ import { beforeEach, describe, it, expect, vi } from 'vitest';
 import {
   DUAL_PANE_CHART_FACTORY,
   DualPaneChartComponent,
-  formatChartAxisTime,
+  formatChartCrosshairTime,
   toSeriesMarkers,
 } from './dual-pane-chart.component';
 import type { ChartBar } from '../lib/broker-v2-panel.types';
@@ -26,6 +26,7 @@ vi.mock('lightweight-charts', () => {
     createChart: chartMocks.createChart,
     createSeriesMarkers,
     CandlestickSeries: 'CandlestickSeries',
+    TickMarkType: { Year: 0, Month: 1, DayOfMonth: 2, Time: 3, TimeWithSeconds: 4 },
   };
 });
 
@@ -202,14 +203,14 @@ describe('DualPaneChartComponent', () => {
       hour12: false, timeZone: 'America/New_York',
     }).format(new Date(seconds * 1_000));
 
-    expect(formatChartAxisTime(seconds, 'et')).toBe(expected);
+    expect(formatChartCrosshairTime(seconds, 'et')).toBe(expected);
   });
 
   it('keeps consecutive five-second candles distinguishable in the time readout', () => {
     const fiveSecondsLater = 1_741_524_005;
 
-    expect(formatChartAxisTime(1_741_524_000, 'et')).not.toBe(
-      formatChartAxisTime(fiveSecondsLater, 'et'),
+    expect(formatChartCrosshairTime(1_741_524_000, 'et')).not.toBe(
+      formatChartCrosshairTime(fiveSecondsLater, 'et'),
     );
   });
 

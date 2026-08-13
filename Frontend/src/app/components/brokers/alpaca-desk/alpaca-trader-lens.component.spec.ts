@@ -23,6 +23,7 @@ vi.mock('lightweight-charts', () => {
   return {
     createChart: vi.fn().mockReturnValue(chart),
     LineSeries: 'LineSeries',
+    TickMarkType: { Year: 0, Month: 1, DayOfMonth: 2, Time: 3, TimeWithSeconds: 4 },
   };
 });
 
