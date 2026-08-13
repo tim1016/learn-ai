@@ -19409,7 +19409,7 @@ export interface components {
              * Scope
              * @enum {string}
              */
-            scope: "BOT" | "ACCOUNT_CLERK";
+            scope: "CUSTODY_SUBJECT" | "ACCOUNT_CLERK";
             /** Strategy Instance Id */
             strategy_instance_id: string | null;
         };
@@ -19548,7 +19548,7 @@ export interface components {
              * Scope
              * @enum {string}
              */
-            scope: "BOT" | "ACCOUNT_CLERK";
+            scope: "CUSTODY_SUBJECT" | "ACCOUNT_CLERK";
             /** Severity */
             severity: string;
             /** Strategy Instance Id */
@@ -19578,7 +19578,7 @@ export interface components {
              * Scope
              * @enum {string}
              */
-            scope: "BOT" | "ACCOUNT_CLERK";
+            scope: "CUSTODY_SUBJECT" | "ACCOUNT_CLERK";
         };
         /**
          * QcAuditCopyListing
@@ -20088,7 +20088,7 @@ export interface components {
              * Scope
              * @enum {string}
              */
-            scope: "BOT" | "ACCOUNT_CLERK";
+            scope: "CUSTODY_SUBJECT" | "ACCOUNT_CLERK";
             /** Unavailable Reason */
             unavailable_reason: string | null;
             /** Unavailable Reason Code */
@@ -21268,7 +21268,7 @@ export interface components {
              * Scope
              * @enum {string}
              */
-            scope: "BOT" | "ACCOUNT_CLERK";
+            scope: "CUSTODY_SUBJECT" | "ACCOUNT_CLERK";
             /** Strategy Instance Id */
             strategy_instance_id: string | null;
             /** Version Token */

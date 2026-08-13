@@ -252,7 +252,7 @@ def test_sqlite_adapter_replaces_legacy_custody_with_fold_projection() -> None:
         available=True,
         unavailable_reason_code=None,
         unavailable_reason=None,
-        scope="BOT",
+        scope="CUSTODY_SUBJECT",
         freshness="not_required",
         evidence=(),
         reduction_plan=None,
@@ -299,7 +299,7 @@ def test_sqlite_adapter_replaces_legacy_custody_with_fold_projection() -> None:
         guidance=ProjectionGuidance(
             headline="Account Clerk custody is healthy",
             explanation="SQLite has current custody truth.",
-            scope="BOT",
+            scope="CUSTODY_SUBJECT",
             impact="Normal Clerk-governed controls remain available.",
             custody_owner="ACCOUNT_CLERK",
             may_create_exposure=True,
@@ -318,6 +318,7 @@ def test_sqlite_adapter_replaces_legacy_custody_with_fold_projection() -> None:
     assert adapted.journal_tail_ref.endswith(f"/{SID}/timeline")
     assert [item.action_id for item in adapted.actions] == ["reconcile_now"]
     assert adapted.actions[0].concurrency_token == "sqlite-token"
+    assert adapted.readiness_checks[0].scope == "bot"
     assert adapted.rail.transaction_ref == "effect:enter"
     assert adapted.working_orders[0].order_ref == "order:enter"
     assert adapted.working_orders[0].filled_quantity is None
@@ -487,7 +488,7 @@ def _rail_projection(
         guidance=ProjectionGuidance(
             headline="Account Clerk custody is healthy",
             explanation="SQLite has current custody truth.",
-            scope="BOT",
+            scope="CUSTODY_SUBJECT",
             impact="Normal Clerk-governed controls remain available.",
             custody_owner="ACCOUNT_CLERK",
             may_create_exposure=True,
@@ -596,7 +597,7 @@ def test_sqlite_adapter_preserves_stopped_bot_resume_with_sqlite_recovery_action
         available=True,
         unavailable_reason_code=None,
         unavailable_reason=None,
-        scope="BOT",
+        scope="CUSTODY_SUBJECT",
         freshness="not_required",
         evidence=(),
         reduction_plan=None,

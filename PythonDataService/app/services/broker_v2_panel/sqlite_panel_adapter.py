@@ -297,7 +297,7 @@ def _panel_action(capability: RecoveryCapability, revision: int) -> PanelAction:
 def _capability_blocker(capability: RecoveryCapability) -> OperatorBlocker:
     return OperatorBlocker.for_host(
         condition_id=capability.unavailable_reason_code or "RECOVERY_ACTION_UNAVAILABLE",
-        scope="bot" if capability.scope == "BOT" else "account",
+        scope="bot" if capability.scope == "CUSTODY_SUBJECT" else "account",
         host="bot_cockpit",
         anchor=SURFACE_ANCHOR,
         audience="both",
@@ -320,7 +320,7 @@ def _readiness_check(
         operation=capability.action_id,
         label=capability.label,
         ready=capability.available,
-        scope="bot" if capability.scope == "BOT" else "account",
+        scope="bot" if capability.scope == "CUSTODY_SUBJECT" else "account",
         authority="SQLite Account Clerk recovery policy",
         explanation=(
             capability.explanation
