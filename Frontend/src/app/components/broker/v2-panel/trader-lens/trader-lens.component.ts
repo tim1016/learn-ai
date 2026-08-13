@@ -16,9 +16,9 @@ import type {
 } from '../lib/broker-v2-panel.types';
 import type { TickerQuoteView } from '../../../../shared/ticker-quote/ticker-quote.component';
 import { DualPaneChartComponent } from '../dual-pane-chart/dual-pane-chart.component';
-import { PanelHeaderComponent } from '../panel-shell/panel-header.component';
 import { TradesTodayListComponent } from './trades-today-list.component';
 import { TraderMetricsComponent } from './trader-metrics.component';
+import { TraderBotBannerComponent } from './trader-bot-banner/trader-bot-banner.component';
 
 /**
  * Trader lens (spec §6).
@@ -36,9 +36,9 @@ import { TraderMetricsComponent } from './trader-metrics.component';
   selector: 'app-trader-lens',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    PanelHeaderComponent,
     DualPaneChartComponent,
     TradesTodayListComponent,
+    TraderBotBannerComponent,
     TraderMetricsComponent,
   ],
   templateUrl: './trader-lens.component.html',

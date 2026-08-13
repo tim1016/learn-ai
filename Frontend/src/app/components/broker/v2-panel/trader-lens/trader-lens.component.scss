@@ -1,15 +1,23 @@
-:host { display: grid; min-width: 0; gap: var(--space-3); }
+:host {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  gap: var(--space-3);
+  grid-template-rows: auto minmax(0, 1fr);
+}
 
 .trader-workspace {
   display: grid;
   min-width: 0;
   grid-template-columns: minmax(0, 1fr) minmax(20rem, 22rem);
   align-items: stretch;
+  min-height: 0;
   gap: var(--space-3);
 }
 
 .chart-section {
   min-width: 0;
+  min-height: 0;
 
   app-dual-pane-chart { height: 100%; }
 }
@@ -17,6 +25,9 @@
 .trader-rail {
   display: grid;
   min-width: 0;
+  min-height: 0;
+  align-content: start;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: var(--space-3);
 }
 
@@ -35,8 +46,9 @@
 }
 
 @media (max-width: 1100px) {
+  :host { grid-template-rows: auto auto; }
   .trader-workspace { grid-template-columns: 1fr; }
-  .trader-rail { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .trader-rail { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: auto; }
   .trader-rail app-trades-today-list,
   .trader-rail .observation-note { grid-column: 1 / -1; }
 }

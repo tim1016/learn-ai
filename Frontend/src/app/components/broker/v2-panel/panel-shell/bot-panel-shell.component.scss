@@ -8,6 +8,28 @@
   color: var(--text-primary);
 }
 
+:host(.bot-panel-shell--trader) {
+  display: flex;
+  height: calc(100dvh - (2 * var(--page-pad-y)));
+  min-height: 0;
+  box-sizing: border-box;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+:host(.bot-panel-shell--trader) .lens-navigation { flex: 0 0 auto; }
+
+:host(.bot-panel-shell--trader) #trader-panel {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+}
+
+:host(.bot-panel-shell--trader) app-trader-lens {
+  min-height: 0;
+  flex: 1;
+}
+
 .load-error {
   margin-bottom: var(--space-3);
   padding: var(--space-3);
@@ -62,4 +84,12 @@
   .lens-navigation { margin: calc(var(--space-3) * -1) calc(var(--space-3) * -1) var(--space-3); padding: 0 var(--space-3); }
   .lens-toggle { width: 100%; }
   .lens-toggle__tab { flex: 1; }
+}
+
+@media (max-width: 1100px) {
+  :host(.bot-panel-shell--trader) {
+    display: block;
+    height: auto;
+    overflow-y: auto;
+  }
 }

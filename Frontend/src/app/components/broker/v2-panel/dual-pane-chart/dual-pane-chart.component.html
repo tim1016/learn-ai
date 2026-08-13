@@ -5,32 +5,24 @@
   [attr.aria-label]="'Market tape for ' + symbol()"
 >
   <header class="tape-header">
-    <div class="instrument-lockup">
-      <span class="instrument-kicker">Bot market tape</span>
-      <div class="instrument-line">
-        <h2><app-asset-identity [symbol]="symbol()" size="sm" /></h2>
-        @if (lastPrice(); as price) {
-          <span class="last-price">{{ formatPrice(price) }}</span>
-        } @else {
-          <span class="last-price last-price--empty">—</span>
-        }
-      </div>
+    <div class="quote-line">
+      <span class="quote-line__kicker">Bot market tape</span>
+      <app-panel-instrument-quote [symbol]="symbol()" [tickerQuote]="tickerQuote()" />
     </div>
 
-    <div class="tape-readout" aria-live="polite">
-      <span>{{ activeBars().length }} candle{{ activeBars().length === 1 ? '' : 's' }}</span>
-      @if (visibleFillCount() === activeMarkers().length) {
-        <span>{{ activeMarkers().length }} fill{{ activeMarkers().length === 1 ? '' : 's' }}</span>
-      } @else {
-        <span>{{ visibleFillCount() }} plotted / {{ activeMarkers().length }} fills</span>
-      }
-      @if (activePane() === 'live' && liveSource()) {
-        <span>{{ liveSource() ?? '' | receiptLabel }}</span>
-      } @else if (activePane() === 'live') {
-        <span>IBKR</span>
-      } @else {
-        <span>Polygon</span>
-      }
+    <div class="chart-timezone" role="group" aria-label="Chart timezone">
+      <button
+        type="button"
+        [class.chart-timezone__button--active]="timeZone() === 'local'"
+        [attr.aria-pressed]="timeZone() === 'local'"
+        (click)="selectTimeZone('local')"
+      >Local</button>
+      <button
+        type="button"
+        [class.chart-timezone__button--active]="timeZone() === 'et'"
+        [attr.aria-pressed]="timeZone() === 'et'"
+        (click)="selectTimeZone('et')"
+      >ET</button>
     </div>
 
     <button
@@ -44,8 +36,8 @@
     </button>
   </header>
 
-  <div class="tape-workspace">
-    <nav class="source-rail" role="tablist" aria-label="Market data source">
+  <div class="tape-tools">
+    <nav class="source-switcher" role="tablist" aria-label="Market data source">
       <button
         id="live-tape-tab"
         type="button"
@@ -87,6 +79,24 @@
       </button>
     </nav>
 
+    <div class="tape-readout" aria-live="polite">
+      <span>{{ activeBars().length }} candle{{ activeBars().length === 1 ? '' : 's' }}</span>
+      @if (visibleFillCount() === activeMarkers().length) {
+        <span>{{ activeMarkers().length }} fill{{ activeMarkers().length === 1 ? '' : 's' }}</span>
+      } @else {
+        <span>{{ visibleFillCount() }} plotted / {{ activeMarkers().length }} fills</span>
+      }
+      @if (activePane() === 'live' && liveSource()) {
+        <span>{{ liveSource() ?? '' | receiptLabel }}</span>
+      } @else if (activePane() === 'live') {
+        <span>IBKR</span>
+      } @else {
+        <span>Polygon</span>
+      }
+    </div>
+  </div>
+
+  <div class="tape-workspace">
     <section
       id="market-tape-panel"
       class="chart-deck"
