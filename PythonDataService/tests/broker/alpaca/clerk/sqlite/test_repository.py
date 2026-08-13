@@ -581,7 +581,11 @@ def test_mirror_prepare_without_finalize_is_excluded_not_imported(tmp_path: Path
     guarantees it had no broker effect."""
     mirror_path = tmp_path / "orphan.mirror"
     mirror = MirrorFile(mirror_path)
-    from app.broker.alpaca.clerk.sqlite.hashchain import GENESIS, canonical_payload, compute_row_hash
+    from app.broker.alpaca.clerk.sqlite.hashchain import (
+        GENESIS,
+        canonical_payload,
+        compute_row_hash,
+    )
     from app.broker.alpaca.clerk.sqlite.mirror import PendingTransition
 
     row = {
@@ -653,7 +657,11 @@ def test_mirror_rebuild_tolerates_an_abandoned_prepare_reusing_a_sequence(tmp_pa
     failed attempt never joined. That abandoned attempt must not be
     mistaken for tampering: only the PREPARE matching the sequence's
     FINALIZE is authoritative."""
-    from app.broker.alpaca.clerk.sqlite.hashchain import GENESIS, canonical_payload, compute_row_hash
+    from app.broker.alpaca.clerk.sqlite.hashchain import (
+        GENESIS,
+        canonical_payload,
+        compute_row_hash,
+    )
     from app.broker.alpaca.clerk.sqlite.mirror import PendingTransition
 
     mirror = MirrorFile(tmp_path / "reused.mirror")
@@ -697,7 +705,11 @@ def test_mirror_rebuild_still_fails_closed_on_conflicting_finalize(tmp_path: Pat
     genuine corruption (SQLite's own PRIMARY KEY on ``sequence`` would
     prevent this from ever arising on a real commit path) and must still
     fail closed — unlike the benign abandoned-PREPARE case above."""
-    from app.broker.alpaca.clerk.sqlite.hashchain import GENESIS, canonical_payload, compute_row_hash
+    from app.broker.alpaca.clerk.sqlite.hashchain import (
+        GENESIS,
+        canonical_payload,
+        compute_row_hash,
+    )
     from app.broker.alpaca.clerk.sqlite.mirror import PendingTransition
 
     mirror = MirrorFile(tmp_path / "conflict.mirror")

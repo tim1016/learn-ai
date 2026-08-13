@@ -9,10 +9,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from tests.broker.alpaca.clerk.sqlite.cutover_test_support import (
-    PLAN_MS,
-    write_stopped_runner_bot,
-)
 
 import scripts.manage_alpaca_sqlite_clerk as recovery_cli_module
 from app.broker.alpaca.clerk.sqlite.activation import ActivationStore
@@ -26,6 +22,10 @@ from scripts.manage_alpaca_sqlite_clerk import (
     _read_reset_evidence,
 )
 from scripts.manage_alpaca_sqlite_clerk import main as recovery_cli
+from tests.broker.alpaca.clerk.sqlite.cutover_test_support import (
+    PLAN_MS,
+    write_stopped_runner_bot,
+)
 
 ACCOUNT_ID = "PACUTOVER"
 

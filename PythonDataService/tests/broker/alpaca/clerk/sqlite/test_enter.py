@@ -37,9 +37,19 @@ from app.broker.alpaca.clerk.sqlite.idempotency import (
 )
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_uncertain
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, OperationClaimError
-from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError, raise_uncertainty
-from app.broker.contract.errors import BrokerError, BrokerRequestInvalid, BrokerUnavailable
+from app.broker.alpaca.clerk.sqlite.repository import (
+    ClerkSqliteRepository,
+    OperationClaimError,
+)
+from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    AdmissionBlockedError,
+    raise_uncertainty,
+)
+from app.broker.contract.errors import (
+    BrokerError,
+    BrokerRequestInvalid,
+    BrokerUnavailable,
+)
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
 
 ACCOUNT_ID = "PA-TEST"
