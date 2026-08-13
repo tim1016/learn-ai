@@ -5,6 +5,7 @@ import { Toast } from 'primeng/toast';
 import { AppSidebarComponent } from './shell/app-sidebar.component';
 import { MarkdownDrawerHostComponent } from './shared/markdown-drawer/markdown-drawer-host.component';
 import { BrokerHealthService } from './services/broker-health.service';
+import { BreadcrumbComponent } from './shell/breadcrumb.component';
 import { TopBarComponent } from './shell/top-bar.component';
 
 // The global JobsDrawer / floating "Jobs" launcher was removed in favor
@@ -17,6 +18,7 @@ import { TopBarComponent } from './shell/top-bar.component';
   imports: [
     RouterOutlet,
     AppSidebarComponent,
+    BreadcrumbComponent,
     TopBarComponent,
     MarkdownDrawerHostComponent,
     Toast,
@@ -62,7 +64,9 @@ import { TopBarComponent } from './shell/top-bar.component';
   template: `
     <app-sidebar />
     <div class="shell">
-      <app-top-bar />
+      <app-top-bar>
+        <app-breadcrumb shell-breadcrumbs />
+      </app-top-bar>
       <main class="main">
         <div class="main-content">
           <router-outlet />
