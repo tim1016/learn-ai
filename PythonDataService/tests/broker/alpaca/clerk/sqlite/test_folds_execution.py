@@ -35,6 +35,9 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     build_recovery_catalog,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.repository_execution_coverage_api import (
+    ExecutionCoverageResolutionUnavailable,
+)
 from app.broker.alpaca.clerk.sqlite.uncertainty import Capability, decide_capability
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
@@ -598,10 +601,9 @@ def test_late_exact_execution_after_cumulative_recovery_raises_one_coverage_conf
         quarantined = ExecutionCoverageQuarantinedFacts.from_facts_json(
             quarantine_transitions[0]["facts_json"]
         )
-        assert quarantined.exact_execution["execution_id"] == late_exact.execution_id
-        uncertainty_facts = UncertaintyRaisedFacts.from_facts_json(
-            json.dumps(quarantined.uncertainty)
-        )
+        assert quarantined.exact_execution.execution_id == late_exact.execution_id
+        assert quarantined.uncertainty is not None
+        uncertainty_facts = quarantined.uncertainty
         assert uncertainty_facts.reason_code == EXECUTION_COVERAGE_CONFLICT_REASON_CODE
         assert uncertainty_facts.cause_facts == {
             "execution_id": late_exact.execution_id,
@@ -621,6 +623,104 @@ def test_late_exact_execution_after_cumulative_recovery_raises_one_coverage_conf
             == "coverage_conflict_already_raised"
         )
         assert repo.transitions_for_order(accepted.order_ref or "") == transitions_after_conflict
+    finally:
+        repo.close()
+
+
+def test_coverage_conflict_retains_each_distinct_exact_execution(tmp_path: Path) -> None:
+    """A second exact slice stays auditable and cannot unlock a one-slice proof."""
+    repo, accepted = _repository_for_strategy(
+        tmp_path,
+        strategy_instance_id="coverage-multiple-exacts",
+        symbol="SPY",
+    )
+    try:
+        _append_cumulative_recovery(
+            repo,
+            accepted=accepted,
+            cumulative_filled_quantity=5.0,
+            average_price=100.0,
+            source_event_at_ms=1_786_368_000_351,
+        )
+        first_exact = ExecutionSliceFilledFacts(
+            execution_id="coverage-multiple-a",
+            symbol="SPY",
+            side="BUY",
+            slice_qty=2.0,
+            slice_price=100.0,
+            fee=None,
+            fee_fidelity="not_reported",
+            evidence_source="websocket",
+            source_event_at_ms=1_786_368_000_352,
+        )
+        second_exact = ExecutionSliceFilledFacts(
+            execution_id="coverage-multiple-b",
+            symbol="SPY",
+            side="BUY",
+            slice_qty=3.0,
+            slice_price=100.0,
+            fee=None,
+            fee_fidelity="not_reported",
+            evidence_source="websocket",
+            source_event_at_ms=1_786_368_000_353,
+        )
+
+        assert _append_slice(repo, accepted=accepted, facts=first_exact) == "coverage_conflict_raised"
+        assert _append_slice(repo, accepted=accepted, facts=second_exact) == "coverage_conflict_quarantined"
+        quarantines = [
+            ExecutionCoverageQuarantinedFacts.from_facts_json(transition["facts_json"])
+            for transition in repo.transitions_for_order(accepted.order_ref or "")
+            if transition["transition_kind"] == "EXECUTION_COVERAGE_QUARANTINED"
+        ]
+        assert [item.exact_execution.execution_id for item in quarantines] == [
+            first_exact.execution_id,
+            second_exact.execution_id,
+        ]
+        assert quarantines[0].uncertainty is not None
+        assert quarantines[1].uncertainty is None
+        assert quarantines[1].conflict_execution_id == first_exact.execution_id
+        active = repo.active_uncertainties_for_admission(
+            strategy_instance_id="coverage-multiple-exacts"
+        )
+        assert len(active) == 1
+        meta = repo.control_meta_snapshot()
+        with pytest.raises(ExecutionCoverageResolutionUnavailable, match="Multiple exact executions"):
+            repo.resolve_execution_coverage_conflict(
+                uncertainty_id=active[0]["uncertainty_id"],
+                expected_authority_generation=meta.authority_generation,
+                expected_db_identity_token=meta.db_identity_token,
+                expected_control_revision=meta.control_revision,
+            )
+        reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
+        try:
+            context = reader.recovery_context(strategy_instance_id="coverage-multiple-exacts")
+        finally:
+            reader.close()
+        assert context is not None
+        action = next(
+            item
+            for item in build_recovery_catalog(context)
+            if item.action_id == "resolve_execution_coverage"
+        )
+        assert action.available is False
+        assert [evidence.reference for evidence in action.evidence] == [
+            f"order:{accepted.order_ref}",
+            f"execution:{first_exact.execution_id}",
+            f"execution:{second_exact.execution_id}",
+            f"fill:{accepted.order_ref}:5.000000000",
+        ]
+        assert repo.active_uncertainties_for_admission(
+            strategy_instance_id="coverage-multiple-exacts"
+        ) == active
+        assert [fill["execution_id"] for fill in repo.fills_for_order(accepted.order_ref or "")] == [None]
+        assert _append_slice(repo, accepted=accepted, facts=second_exact) == "coverage_conflict_already_raised"
+        assert len(
+            [
+                item
+                for item in repo.transitions_for_order(accepted.order_ref or "")
+                if item["transition_kind"] == "EXECUTION_COVERAGE_QUARANTINED"
+            ]
+        ) == 2
     finally:
         repo.close()
 

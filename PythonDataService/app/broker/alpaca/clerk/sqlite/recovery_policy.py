@@ -593,6 +593,7 @@ def _execution_coverage_resolution_decision(ctx: RecoveryPolicyContext) -> _Deci
             token_facts=[conflict.uncertainty_id for conflict in conflicts],
         )
     conflict = conflicts[0]
+    execution_ids = conflict.execution_ids or (conflict.execution_id,)
     evidence = tuple(
         RecoveryEvidence(
             reference=reference,
@@ -602,12 +603,17 @@ def _execution_coverage_resolution_decision(ctx: RecoveryPolicyContext) -> _Deci
             freshness="fresh" if conflict.proof_available else "unavailable",
         )
         for reference, label in (
-            (f"order:{conflict.order_ref}", "Clerk order reference"),
-            (f"execution:{conflict.execution_id}", "Quarantined exact execution"),
-            (
-                f"fill:{conflict.cumulative_fill_id or 'missing'}",
-                "Cumulative recovery fill",
-            ),
+            [(f"order:{conflict.order_ref}", "Clerk order reference")]
+            + [
+                (f"execution:{execution_id}", "Quarantined exact execution")
+                for execution_id in execution_ids
+            ]
+            + [
+                (
+                    f"fill:{conflict.cumulative_fill_id or 'missing'}",
+                    "Cumulative recovery fill",
+                )
+            ]
         )
     )
     return _Decision(
@@ -631,6 +637,7 @@ def _execution_coverage_resolution_decision(ctx: RecoveryPolicyContext) -> _Deci
             conflict.uncertainty_id,
             conflict.order_ref,
             conflict.execution_id,
+            conflict.execution_ids,
             conflict.cumulative_fill_id,
             conflict.exact_qty,
             conflict.exact_price,

@@ -20,6 +20,11 @@ from collections.abc import Callable
 from typing import Any
 
 from app.broker.alpaca.clerk.sqlite import reads
+from app.broker.alpaca.clerk.sqlite.execution_coverage import (
+    FILL_QTY_EPSILON,
+    active_execution_coverage_conflicts,
+    execution_coverage_proof,
+)
 from app.broker.alpaca.clerk.sqlite.external_order_folds import (
     fold_external_order_acknowledged as _fold_external_order_acknowledged,
 )
@@ -628,11 +633,6 @@ def _fold_order_submit_uncertain(conn: sqlite3.Connection, payload: dict[str, An
         _open_or_refresh_unknown_outcome(conn, payload)
 
 
-#: Numerical-rigor tolerance for the fill-quantity delta gate below — see
-#: ``docs/references/clerk-fill-quantity-tolerance.md`` for the citation and
-#: reasoning (`.claude/rules/numerical-rigor.md`).
-FILL_QTY_EPSILON = 1e-9
-
 #: Numerical-rigor tolerance for "is this position flat/drifted" — same
 #: absolute-tolerance rationale as ``FILL_QTY_EPSILON`` above (see
 #: ``docs/references/clerk-position-drift-tolerance.md``). Lives here, not in
@@ -746,10 +746,23 @@ def _fold_execution_coverage_quarantined(
         raise ValueError("quarantined coverage order_ref must match its transition")
     if payload["source_event_at_ms"] != exact.source_event_at_ms:
         raise ValueError("quarantined coverage timestamp must match exact evidence")
-    uncertainty_payload = dict(payload)
-    uncertainty_payload["transition_kind"] = "UNCERTAINTY_RAISED"
-    uncertainty_payload["facts_json"] = canonicalize(facts.uncertainty)
-    _fold_uncertainty_raised(conn, uncertainty_payload)
+    if facts.uncertainty is not None:
+        if active_execution_coverage_conflicts(conn, order_ref=facts.order_ref):
+            raise ValueError("initial coverage quarantine cannot reopen an active conflict")
+        uncertainty_payload = dict(payload)
+        uncertainty_payload["transition_kind"] = "UNCERTAINTY_RAISED"
+        uncertainty_payload["facts_json"] = facts.uncertainty.to_facts_json()
+        _fold_uncertainty_raised(conn, uncertainty_payload)
+        return
+    active = active_execution_coverage_conflicts(
+        conn,
+        order_ref=facts.order_ref,
+    )
+    if not any(
+        conflict.conflict_execution_id == facts.conflict_execution_id
+        for conflict in active
+    ):
+        raise ValueError("additional coverage evidence requires its active conflict episode")
 
 
 def _fold_execution_coverage_resolved(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
@@ -766,25 +779,29 @@ def _fold_execution_coverage_resolved(conn: sqlite3.Connection, payload: dict[st
     """
     facts = ExecutionCoverageResolvedFacts.from_facts_json(payload["facts_json"])
     exact = validate_execution_coverage_resolved_facts(facts)
-    cumulative = conn.execute(
-        "SELECT fill_id, order_ref, qty, price, side, evidence_source FROM fills WHERE fill_id = ?",
-        (facts.replaced_cumulative_fill_id,),
-    ).fetchone()
-    if cumulative is None:
-        existing_exact = conn.execute(
-            "SELECT 1 FROM fills WHERE execution_id = ?", (exact.execution_id,)
-        ).fetchone()
-        if existing_exact is not None:
-            return
-        raise ValueError("coverage resolution cumulative fill is missing")
+    meta = reads.control_meta_snapshot(conn)
     if (
-        cumulative["order_ref"] != facts.order_ref
-        or cumulative["evidence_source"] != "cumulative_recovery"
-        or cumulative["side"] != exact.side
-        or abs(float(cumulative["qty"]) - exact.slice_qty) >= FILL_QTY_EPSILON
-        or abs(float(cumulative["price"]) - exact.slice_price) >= FILL_QTY_EPSILON
+        facts.account_id != meta.account_id
+        or facts.authority_generation != meta.authority_generation
+        or facts.db_identity_token != meta.db_identity_token
+        or facts.expected_control_revision != meta.control_revision
     ):
-        raise ValueError("coverage resolution proof does not match cumulative economics")
+        raise ValueError("coverage resolution binding does not match the current Clerk authority")
+    active = active_execution_coverage_conflicts(
+        conn,
+        uncertainty_id=facts.uncertainty_id,
+    )
+    if len(active) != 1 or active[0].order_ref != facts.order_ref:
+        raise ValueError("coverage resolution requires its selected active conflict")
+    proof = execution_coverage_proof(conn, conflict=active[0])
+    cumulative = proof.cumulative
+    if (
+        not proof.proof_available
+        or proof.exact_execution != exact
+        or cumulative is None
+        or cumulative.fill_id != facts.replaced_cumulative_fill_id
+    ):
+        raise ValueError("coverage resolution proof does not match immutable evidence")
     if conn.execute("SELECT 1 FROM fills WHERE execution_id = ?", (exact.execution_id,)).fetchone() is not None:
         raise ValueError("coverage resolution exact execution already exists")
     conn.execute("DELETE FROM fills WHERE fill_id = ?", (facts.replaced_cumulative_fill_id,))

@@ -22,9 +22,6 @@ from app.broker.alpaca.clerk.sqlite.models import (
     ExternalOrderResource,
     OrderResource,
 )
-from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
-    EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
-)
 
 _COMMAND_COLUMNS: tuple[str, ...] = (
     "command_id",
@@ -458,31 +455,6 @@ def cumulative_recovery_fill_ids_for_order(conn: sqlite3.Connection, order_ref: 
         (order_ref,),
     ).fetchall()
     return [str(row["fill_id"]) for row in rows]
-
-
-def execution_coverage_conflict_uncertainty_exists(
-    conn: sqlite3.Connection,
-    *,
-    order_ref: str,
-) -> bool:
-    """Whether one exact-execution conflict was already raised for an order.
-
-    The rejected exact slice has no ``fills`` row by design. Its durable
-    idempotency marker is therefore the typed uncertainty cause, keyed by the
-    order whose prior immutable evidence made the slice ambiguous.
-    """
-    rows = conn.execute(
-        "SELECT facts_json FROM uncertainties "
-        "WHERE reason_code = ? AND resolved_at_ms IS NULL",
-        (EXECUTION_COVERAGE_CONFLICT_REASON_CODE,),
-    ).fetchall()
-    for row in rows:
-        facts = json.loads(row["facts_json"])
-        if (
-            facts.get("cause_facts", {}).get("order_ref") == order_ref
-        ):
-            return True
-    return False
 
 
 def correction_uncertainty_exists(conn: sqlite3.Connection, execution_id: str) -> bool:

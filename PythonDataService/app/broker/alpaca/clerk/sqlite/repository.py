@@ -26,7 +26,6 @@ issue #1377 onward, the effect/order) — never a separate write.
 
 from __future__ import annotations
 
-import json
 import secrets
 import sqlite3
 import threading
@@ -37,6 +36,10 @@ from app.broker.alpaca.clerk.sqlite import reads, writes
 from app.broker.alpaca.clerk.sqlite.decision_receipts import (
     append_decision_receipt_row,
     update_decision_receipt_for_bar,
+)
+from app.broker.alpaca.clerk.sqlite.execution_coverage import (
+    active_execution_coverage_conflicts,
+    execution_is_quarantined,
 )
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExecutionCorrectedFacts,
@@ -469,8 +472,8 @@ class ClerkSqliteRepository(
         typed uncertainty fences new exposure instead.
 
         Outcomes are ``"appended"``, ``"duplicate"``,
-        ``"coverage_conflict_raised"``, or
-        ``"coverage_conflict_already_raised"``. A changed delivery that
+        ``"coverage_conflict_raised"``, ``"coverage_conflict_quarantined"``,
+        or ``"coverage_conflict_already_raised"``. A changed delivery that
         reuses an immutable broker execution ID cannot be a truthful new
         execution or correction (a correction needs its own broker identity),
         so it raises the same fail-closed coverage uncertainty instead of
@@ -502,17 +505,33 @@ class ClerkSqliteRepository(
             if reads.execution_exists(self._conn, execution_id):
                 return "duplicate"
             if reads.cumulative_recovery_fill_exists_for_order(self._conn, order_ref):
-                if reads.execution_coverage_conflict_uncertainty_exists(
-                    self._conn,
-                    order_ref=order_ref,
-                ):
-                    return "coverage_conflict_already_raised"
                 candidate = build_transition()
                 facts = self._validated_execution_slice_transition(
                     candidate,
                     execution_id=execution_id,
                     order_ref=order_ref,
                 )
+                active_conflicts = active_execution_coverage_conflicts(
+                    self._conn,
+                    order_ref=order_ref,
+                )
+                if active_conflicts:
+                    conflict = active_conflicts[0]
+                    if execution_is_quarantined(
+                        self._conn,
+                        conflict=conflict,
+                        execution_id=execution_id,
+                    ):
+                        return "coverage_conflict_already_raised"
+                    self.append_transition(
+                        self._execution_coverage_quarantine_transition(
+                            exact_transition=candidate,
+                            facts=facts,
+                            conflict_execution_id=conflict.conflict_execution_id,
+                            uncertainty=None,
+                        )
+                    )
+                    return "coverage_conflict_quarantined"
                 uncertainty = build_coverage_conflict()
                 self._validate_execution_coverage_conflict(
                     uncertainty=uncertainty,
@@ -523,6 +542,7 @@ class ClerkSqliteRepository(
                     self._execution_coverage_quarantine_transition(
                         exact_transition=candidate,
                         facts=facts,
+                        conflict_execution_id=facts.execution_id,
                         uncertainty=uncertainty,
                     )
                 )
@@ -559,19 +579,25 @@ class ClerkSqliteRepository(
         *,
         exact_transition: TransitionInput,
         facts: ExecutionSliceFilledFacts,
-        uncertainty: TransitionInput,
+        conflict_execution_id: str,
+        uncertainty: TransitionInput | None,
     ) -> TransitionInput:
         """Build a no-economic fold carrying the exact rejected evidence."""
         if exact_transition.order_ref is None:
             raise ValueError("quarantined coverage requires an order reference")
         quarantined = ExecutionCoverageQuarantinedFacts(
             order_ref=exact_transition.order_ref,
-            exact_execution=json.loads(facts.to_facts_json()),
+            conflict_execution_id=conflict_execution_id,
+            exact_execution=facts,
             conflicting_cumulative_fill_ids=reads.cumulative_recovery_fill_ids_for_order(
                 self._conn,
                 exact_transition.order_ref,
             ),
-            uncertainty=json.loads(uncertainty.facts_json),
+            uncertainty=(
+                None
+                if uncertainty is None
+                else UncertaintyRaisedFacts.from_facts_json(uncertainty.facts_json)
+            ),
         )
         validate_execution_coverage_quarantined_facts(quarantined)
         return TransitionInput(

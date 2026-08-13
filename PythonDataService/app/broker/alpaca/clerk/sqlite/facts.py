@@ -413,16 +413,44 @@ class ExecutionCoverageQuarantinedFacts:
     """
 
     order_ref: str
-    exact_execution: dict[str, Any]
+    conflict_execution_id: str
+    exact_execution: ExecutionSliceFilledFacts
     conflicting_cumulative_fill_ids: list[str]
-    uncertainty: dict[str, Any]
+    uncertainty: UncertaintyRaisedFacts | None
 
     def to_facts_json(self) -> str:
-        return canonicalize(asdict(self))
+        return canonicalize(
+            {
+                "order_ref": self.order_ref,
+                "conflict_execution_id": self.conflict_execution_id,
+                "exact_execution": json.loads(self.exact_execution.to_facts_json()),
+                "conflicting_cumulative_fill_ids": self.conflicting_cumulative_fill_ids,
+                "uncertainty": (
+                    None
+                    if self.uncertainty is None
+                    else json.loads(self.uncertainty.to_facts_json())
+                ),
+            }
+        )
 
     @classmethod
     def from_facts_json(cls, facts_json: str) -> ExecutionCoverageQuarantinedFacts:
-        return cls(**json.loads(facts_json))
+        value = json.loads(facts_json)
+        if not isinstance(value, dict):
+            raise ValueError("quarantined coverage facts must be an object")
+        try:
+            exact_execution = ExecutionSliceFilledFacts.from_facts_json(
+                canonicalize(value.pop("exact_execution"))
+            )
+            raw_uncertainty = value.pop("uncertainty")
+            uncertainty = (
+                None
+                if raw_uncertainty is None
+                else UncertaintyRaisedFacts.from_facts_json(canonicalize(raw_uncertainty))
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("quarantined coverage nested facts are invalid") from exc
+        return cls(exact_execution=exact_execution, uncertainty=uncertainty, **value)
 
 
 @dataclass(frozen=True)
@@ -442,15 +470,26 @@ class ExecutionCoverageResolvedFacts:
     order_ref: str
     resolution_kind: str
     replaced_cumulative_fill_id: str
-    exact_execution: dict[str, Any]
+    exact_execution: ExecutionSliceFilledFacts
     evidence_refs: list[str]
 
     def to_facts_json(self) -> str:
-        return canonicalize(asdict(self))
+        value = asdict(self)
+        value["exact_execution"] = json.loads(self.exact_execution.to_facts_json())
+        return canonicalize(value)
 
     @classmethod
     def from_facts_json(cls, facts_json: str) -> ExecutionCoverageResolvedFacts:
-        return cls(**json.loads(facts_json))
+        value = json.loads(facts_json)
+        if not isinstance(value, dict):
+            raise ValueError("coverage resolution facts must be an object")
+        try:
+            value["exact_execution"] = ExecutionSliceFilledFacts.from_facts_json(
+                canonicalize(value["exact_execution"])
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("coverage resolution exact execution is invalid") from exc
+        return cls(**value)
 
 
 @dataclass(frozen=True)
@@ -524,22 +563,15 @@ def validate_execution_slice_facts(facts: ExecutionSliceFilledFacts) -> None:
         raise ValueError("source_event_at_ms must be an int64 millisecond timestamp")
 
 
-def execution_slice_from_mapping(value: dict[str, Any]) -> ExecutionSliceFilledFacts:
-    """Decode a nested immutable execution fact at the transition boundary."""
-    try:
-        facts = ExecutionSliceFilledFacts(**value)
-    except TypeError as exc:
-        raise ValueError("exact_execution must be a complete execution-slice fact") from exc
-    validate_execution_slice_facts(facts)
-    return facts
-
-
 def validate_execution_coverage_quarantined_facts(
     facts: ExecutionCoverageQuarantinedFacts,
 ) -> ExecutionSliceFilledFacts:
     if not isinstance(facts.order_ref, str) or not facts.order_ref:
         raise ValueError("quarantined coverage requires order_ref")
-    exact_execution = execution_slice_from_mapping(facts.exact_execution)
+    exact_execution = facts.exact_execution
+    validate_execution_slice_facts(exact_execution)
+    if not isinstance(facts.conflict_execution_id, str) or not facts.conflict_execution_id:
+        raise ValueError("quarantined coverage requires conflict_execution_id")
     fill_ids = facts.conflicting_cumulative_fill_ids
     if (
         not isinstance(fill_ids, list)
@@ -548,19 +580,20 @@ def validate_execution_coverage_quarantined_facts(
         or fill_ids != sorted(set(fill_ids))
     ):
         raise ValueError("quarantined coverage requires unique sorted cumulative fill ids")
-    try:
-        uncertainty = UncertaintyRaisedFacts.from_facts_json(canonicalize(facts.uncertainty))
-        cause = ExecutionCoverageConflictCause.from_mapping(uncertainty.cause_facts)
-    except (KeyError, TypeError, ValueError) as exc:
-        raise ValueError("quarantined coverage requires a valid blocking uncertainty") from exc
-    if (
-        uncertainty.reason_code != "EXECUTION_COVERAGE_CONFLICT"
-        or not uncertainty.blocks_new_exposure
-        or uncertainty.allows_reduction
-        or cause.order_ref != facts.order_ref
-        or cause.execution_id != exact_execution.execution_id
-    ):
-        raise ValueError("quarantined coverage uncertainty must block this exact execution")
+    if facts.uncertainty is not None:
+        try:
+            cause = ExecutionCoverageConflictCause.from_mapping(facts.uncertainty.cause_facts)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("quarantined coverage uncertainty cause is invalid") from exc
+        if (
+            facts.uncertainty.reason_code != "EXECUTION_COVERAGE_CONFLICT"
+            or not facts.uncertainty.blocks_new_exposure
+            or facts.uncertainty.allows_reduction
+            or cause.order_ref != facts.order_ref
+            or cause.execution_id != facts.conflict_execution_id
+            or exact_execution.execution_id != facts.conflict_execution_id
+        ):
+            raise ValueError("initial coverage quarantine must embed its blocking uncertainty")
     return exact_execution
 
 
@@ -598,7 +631,8 @@ def validate_execution_coverage_resolved_facts(
         or facts.evidence_refs != sorted(set(facts.evidence_refs))
     ):
         raise ValueError("coverage resolution requires unique sorted evidence references")
-    return execution_slice_from_mapping(facts.exact_execution)
+    validate_execution_slice_facts(facts.exact_execution)
+    return facts.exact_execution
 
 
 def validate_execution_corrected_facts(facts: ExecutionCorrectedFacts) -> None:

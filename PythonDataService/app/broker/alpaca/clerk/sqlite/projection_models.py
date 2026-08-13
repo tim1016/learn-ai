@@ -126,6 +126,7 @@ class ProjectedExecutionCoverageConflict:
     cumulative_side: str | None
     proof_available: bool
     unavailable_reason: str | None
+    execution_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
