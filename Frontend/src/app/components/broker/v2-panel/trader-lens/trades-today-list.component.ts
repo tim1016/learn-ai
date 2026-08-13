@@ -35,7 +35,7 @@ export class TradesTodayListComponent {
   readonly tradingDateMs = input<number | null>(null);
 
   protected readonly hasFills = computed(() => this.fills().length > 0);
-  protected readonly inlineFills = computed(() => this.fills().slice(0, INLINE_FILL_LIMIT));
+  protected readonly inlineFills = computed(() => this.fills().slice(-INLINE_FILL_LIMIT));
   protected readonly hasMoreFills = computed(() => this.fills().length > INLINE_FILL_LIMIT);
   protected readonly allFillsOpen = signal(false);
 

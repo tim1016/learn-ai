@@ -95,13 +95,19 @@ describe('TradesTodayListComponent', () => {
     const fills = Array.from({ length: 6 }, (_, index) => ({
       ...BUY_FILL,
       filled_at_ms: BUY_FILL.filled_at_ms + index * 5_000,
+      price: 500 + index,
       order_ref: `ord-${index}`,
     }));
     await render(TradesTodayListComponent, {
       inputs: { fills, feeFidelity: 'per_fill', tradingDateMs: null },
     });
 
-    expect(screen.getByRole('table', { name: 'Fills today' }).querySelectorAll('tbody tr')).toHaveLength(4);
+    const inlineTable = screen.getByRole('table', { name: 'Fills today' });
+    expect(inlineTable.querySelectorAll('tbody tr')).toHaveLength(4);
+    expect(inlineTable.textContent).not.toContain('$500.00');
+    expect(inlineTable.textContent).not.toContain('$501.00');
+    expect(inlineTable.textContent).toContain('$502.00');
+    expect(inlineTable.textContent).toContain('$505.00');
     fireEvent.click(screen.getByRole('button', { name: 'View all 6 fills' }));
     expect(await screen.findByRole('table', { name: 'All fills today' })).toBeTruthy();
     expect(screen.getByRole('table', { name: 'All fills today' }).querySelectorAll('tbody tr')).toHaveLength(6);

@@ -10,7 +10,7 @@
 
 :host(.bot-panel-shell--trader) {
   display: flex;
-  height: 100dvh;
+  height: calc(100dvh - (2 * var(--page-pad-y)));
   min-height: 0;
   box-sizing: border-box;
   flex-direction: column;

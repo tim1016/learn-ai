@@ -29,10 +29,10 @@ import type {
   ChartHistoryPreset,
   ChartLiveResolution,
   ChartSource,
-  MarketPulseView,
 } from '../lib/broker-v2-panel.types';
 import { toCandle } from '../lib/chart-bar-mapping';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
+import type { TickerQuoteView } from '../../../../shared/ticker-quote/ticker-quote.component';
 import { createAppChart } from '../../../../shared/charts/chart-utils';
 import { PanelInstrumentQuoteComponent } from '../instrument-quote/panel-instrument-quote.component';
 
@@ -54,6 +54,7 @@ export function formatChartAxisTime(time: Time | number, timeZone: ChartTimeZone
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
+    second: '2-digit',
     hour12: false,
     timeZone: timeZone === 'et' ? 'America/New_York' : undefined,
   }).format(new Date(time * 1_000));
@@ -159,10 +160,10 @@ export const DUAL_PANE_CHART_FACTORY = new InjectionToken<typeof createAppChart>
 })
 export class DualPaneChartComponent implements AfterViewInit {
   readonly symbol = input.required<string>();
+  readonly tickerQuote = input<TickerQuoteView | null>(null);
   readonly liveBars = input<readonly ChartBar[]>([]);
   readonly liveFillMarkers = input<readonly ChartFillMarker[]>([]);
   readonly liveNotices = input<readonly { code: string; message: string }[]>([]);
-  readonly marketPulse = input<MarketPulseView | null>(null);
   readonly liveLoading = input(false);
   readonly historyLoading = input(false);
   readonly liveResolution = input<ChartLiveResolution>('5s');

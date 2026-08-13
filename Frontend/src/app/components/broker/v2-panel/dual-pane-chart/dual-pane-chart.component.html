@@ -5,17 +5,10 @@
   [attr.aria-label]="'Market tape for ' + symbol()"
 >
   <header class="tape-header">
-    @if (marketPulse(); as pulse) {
-      <div class="quote-line">
-        <span class="quote-line__kicker">Bot market tape</span>
-        <app-panel-instrument-quote [symbol]="symbol()" [marketPulse]="pulse" />
-      </div>
-    } @else {
-      <div class="quote-line">
-        <span class="quote-line__kicker">Bot market tape</span>
-        <strong>{{ symbol() }}</strong>
-      </div>
-    }
+    <div class="quote-line">
+      <span class="quote-line__kicker">Bot market tape</span>
+      <app-panel-instrument-quote [symbol]="symbol()" [tickerQuote]="tickerQuote()" />
+    </div>
 
     <div class="chart-timezone" role="group" aria-label="Chart timezone">
       <button

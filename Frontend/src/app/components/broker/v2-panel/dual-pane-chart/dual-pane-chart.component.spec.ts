@@ -1,6 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { TestBed } from '@angular/core/testing';
-import { of } from 'rxjs';
 import { beforeEach, describe, it, expect, vi } from 'vitest';
 import {
   DUAL_PANE_CHART_FACTORY,
@@ -9,7 +8,6 @@ import {
   toSeriesMarkers,
 } from './dual-pane-chart.component';
 import type { ChartBar } from '../lib/broker-v2-panel.types';
-import { MarketDataService } from '../../../../services/market-data.service';
 
 const chartMocks = vi.hoisted(() => ({
   createChart: vi.fn(),
@@ -104,25 +102,10 @@ describe('DualPaneChartComponent', () => {
     const { container } = await render(DualPaneChartComponent, {
       inputs: {
         symbol: 'NVDA',
+        tickerQuote: { ticker: 'NVDA', price: 181.42, changePercent: 1.35 },
         liveBars: [],
         histBars: [],
-        marketPulse: {
-          session: 'OPEN', feed_state: 'LIVE', latest_bar_at_ms: 1_753_800_000_000,
-          age_ms: 1_000, source: 'polygon', expected_cadence_ms: 60_000,
-          headline: 'Market data live', explanation: 'Current.', next_step: null,
-          attention_required: false, observed_at_ms: 1_753_800_001_000,
-        },
       },
-      providers: [{
-        provide: MarketDataService,
-        useValue: {
-          getStockSnapshot: () => of({
-            success: true,
-            snapshot: { ticker: 'NVDA', day: { close: 181.42 }, min: null, todaysChangePercent: 1.35 },
-            error: null,
-          }),
-        },
-      }],
     });
 
     await screen.findByText('$181.42');
@@ -215,11 +198,19 @@ describe('DualPaneChartComponent', () => {
   it('formats exchange-time labels with America/New_York rather than a fixed offset', () => {
     const seconds = 1_741_524_000;
     const expected = new Intl.DateTimeFormat(undefined, {
-      month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit',
+      month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
       hour12: false, timeZone: 'America/New_York',
     }).format(new Date(seconds * 1_000));
 
     expect(formatChartAxisTime(seconds, 'et')).toBe(expected);
+  });
+
+  it('keeps consecutive five-second candles distinguishable in the time readout', () => {
+    const fiveSecondsLater = 1_741_524_005;
+
+    expect(formatChartAxisTime(1_741_524_000, 'et')).not.toBe(
+      formatChartAxisTime(fiveSecondsLater, 'et'),
+    );
   });
 
   it('keeps existing candles visible while a background refresh is loading', async () => {

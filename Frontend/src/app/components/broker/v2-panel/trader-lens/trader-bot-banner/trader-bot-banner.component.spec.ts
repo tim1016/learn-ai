@@ -58,7 +58,7 @@ describe('TraderBotBannerComponent', () => {
     });
 
     expect(screen.getByRole('link', { name: /alpaca bots/i })).toBeTruthy();
-    expect(screen.getByText('EMA crossover')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'EMA crossover', level: 1 })).toBeTruthy();
     expect(screen.getByText('ema-spy-001')).toBeTruthy();
     expect(screen.getByRole('status', { name: 'Mission blocked' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Resume' })).toBeTruthy();

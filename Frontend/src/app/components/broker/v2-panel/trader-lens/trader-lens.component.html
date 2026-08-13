@@ -1,6 +1,5 @@
 <app-trader-bot-banner
   [panel]="panel()"
-  [tickerQuote]="tickerQuote()"
   [actionPending]="actionPending()"
   (actionRequested)="actionRequested.emit($event)"
 />
@@ -9,10 +8,10 @@
   <section class="chart-section" aria-label="Market and fill chart">
     <app-dual-pane-chart
       [symbol]="symbol()"
+      [tickerQuote]="tickerQuote()"
       [liveBars]="liveBars()"
       [liveFillMarkers]="liveFillMarkers()"
       [liveNotices]="liveNotices()"
-      [marketPulse]="panel().market_pulse"
       [liveLoading]="liveChartLoading()"
       [historyLoading]="histChartLoading()"
       [liveResolution]="liveResolution()"
