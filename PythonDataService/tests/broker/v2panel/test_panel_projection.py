@@ -625,6 +625,37 @@ def test_sqlite_adapter_preserves_stopped_bot_resume_with_sqlite_recovery_action
     assert len(adapted.actions) == len(actions)
 
 
+def test_sqlite_adapter_keeps_unavailable_custody_subject_blockers_on_bot_scope() -> None:
+    capability = RecoveryCapability(
+        action_id="reconcile_now",
+        label="Reconcile now",
+        explanation="Compare durable custody with Alpaca.",
+        available=False,
+        unavailable_reason_code="EVIDENCE_STALE",
+        unavailable_reason="Fresh custody evidence is required.",
+        scope="CUSTODY_SUBJECT",
+        freshness="stale",
+        evidence=(),
+        reduction_plan=None,
+        confirmation=None,
+        next_step="Refresh the custody evidence.",
+        concurrency_token="sqlite-token",
+        execution_ref=None,
+        mutation=True,
+        primary=True,
+    )
+    projection = replace(
+        _rail_projection(orders=()),
+        recovery_actions=(capability,),
+    )
+
+    adapted = adapt_sqlite_panel(_panel(_status(), _clerk_status(), []), projection)
+
+    action = _action(adapted, "reconcile_now")
+    assert action.blockers[0].condition.scope == "bot"
+    assert adapted.readiness_checks[0].scope == "bot"
+
+
 def test_reconciled_station_requires_resolved_success_outcome() -> None:
     """#1396 P1: a matching reconciliation row must not close the custody
     chain unless its outcome is RESOLVED_SUCCESS — STILL_UNKNOWN and
