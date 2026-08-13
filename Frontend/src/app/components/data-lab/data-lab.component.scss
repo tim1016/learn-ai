@@ -10,16 +10,6 @@
   min-height: 100%;
 }
 
-.data-lab {
-  max-width: none;
-  padding: 1.5rem 1rem 3rem;
-  // The IDE shell rails now own their own max-height + overflow, so they
-  // scroll independently and the run-dock floats over their tail. No
-  // page-level padding-bottom is needed for the dock anymore. The old
-  // --inspector-w gutter for the pinned config inspector is also gone --
-  // the right rail occupies that gutter natively.
-}
-
 // ─── Page Header ────────────────────────────────────────
 .page-header {
   margin-bottom: 1.5rem;

@@ -1,13 +1,16 @@
-import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
+import { toSignal } from '@angular/core/rxjs-interop';
 import { Title } from '@angular/platform-browser';
-import { RouterOutlet } from '@angular/router';
+import { ActivatedRouteSnapshot, NavigationEnd, Router, RouterOutlet } from '@angular/router';
 import { Toast } from 'primeng/toast';
+import { filter } from 'rxjs';
 import { AppSidebarComponent } from './shell/app-sidebar.component';
 import { BrokerBannerComponent } from './shell/broker-banner.component';
 import { BreadcrumbComponent } from './shell/breadcrumb.component';
 import { MarkdownDrawerHostComponent } from './shared/markdown-drawer/markdown-drawer-host.component';
 import { BrokerHealthService } from './services/broker-health.service';
 import { TopBarComponent } from './shell/top-bar.component';
+import { PageBodyComponent } from './shell/page-body.component';
 
 // The global JobsDrawer / floating "Jobs" launcher was removed in favor
 // of per-feature SSE-driven progress UIs (e.g. the Engine Lab run
@@ -22,6 +25,7 @@ import { TopBarComponent } from './shell/top-bar.component';
     BrokerBannerComponent,
     BreadcrumbComponent,
     TopBarComponent,
+    PageBodyComponent,
     MarkdownDrawerHostComponent,
     Toast,
   ],
@@ -72,7 +76,9 @@ import { TopBarComponent } from './shell/top-bar.component';
       </app-top-bar>
       <main class="main">
         <div class="main-content">
-          <router-outlet />
+          <app-page-body [fullBleed]="isFullBleedRoute()">
+            <router-outlet />
+          </app-page-body>
         </div>
       </main>
     </div>
@@ -83,6 +89,15 @@ import { TopBarComponent } from './shell/top-bar.component';
 export class AppComponent {
   private readonly brokerHealth = inject(BrokerHealthService);
   private readonly title = inject(Title);
+  private readonly router = inject(Router);
+  private readonly navigationEnd = toSignal(
+    this.router.events.pipe(filter((event): event is NavigationEnd => event instanceof NavigationEnd)),
+    { initialValue: null },
+  );
+  protected readonly isFullBleedRoute = computed(() => {
+    this.navigationEnd();
+    return activeRouteHasData(this.router.routerState.snapshot.root, 'fullBleed');
+  });
 
   constructor() {
     this.title.setTitle('Market Scope');
@@ -91,4 +106,8 @@ export class AppComponent {
     // /api/broker/health from per-page mounts.
     this.brokerHealth.start();
   }
+}
+
+function activeRouteHasData(route: ActivatedRouteSnapshot, key: string): boolean {
+  return Boolean(route.data[key]) || route.children.some((child) => activeRouteHasData(child, key));
 }

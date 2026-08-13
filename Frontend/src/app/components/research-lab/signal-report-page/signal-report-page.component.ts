@@ -22,7 +22,6 @@ import { MessageModule } from 'primeng/message';
   templateUrl: './signal-report-page.component.html',
   styleUrls: ['./signal-report-page.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
-  host: { class: 'page-inset' },
 })
 export class SignalReportPageComponent implements OnInit {
   private route = inject(ActivatedRoute);

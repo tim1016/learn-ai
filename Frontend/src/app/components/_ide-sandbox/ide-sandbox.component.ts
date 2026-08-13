@@ -14,7 +14,6 @@ import { IndicatorCategory } from '../../shared/indicator-catalog/indicator-cata
 @Component({
   selector: 'app-ide-sandbox',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  host: { class: 'page-inset' },
   imports: [IndicatorPickerComponent],
   template: `
     <header class="sandbox-header">
