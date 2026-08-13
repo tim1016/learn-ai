@@ -34,7 +34,7 @@ describe('TopBarComponent', () => {
   });
 
   it('projects each shell extension through its named region', async () => {
-    const { container } = await render(TopBarProjectionHostComponent);
+    const { container } = await render(TopBarProjectionHostComponent, { providers: [provideRouter([])] });
 
     expect(container.querySelector('[data-shell-slot="breadcrumbs"]')?.textContent).toContain('Breadcrumbs');
     expect(container.querySelector('[data-shell-slot="account-cluster"]')?.textContent).toContain('Account context');

@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject, viewChild } from '@angular/core';
+import { ChangeDetectionStrategy, Component, ElementRef, computed, inject, viewChild } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { NavigationEnd, Router, RouterLink } from '@angular/router';
 import { filter, map, startWith } from 'rxjs/operators';
@@ -60,7 +60,7 @@ export class BreadcrumbComponent {
 
   readonly crumbs = computed(() => breadcrumbTrailFor(this.currentUrl()));
   readonly ancestorCrumbs = computed(() => this.crumbs().slice(0, -1));
-  private readonly overflow = viewChild<HTMLDetailsElement>('overflow');
+  private readonly overflow = viewChild<ElementRef<HTMLDetailsElement>>('overflow');
 
   protected isCurrentPath(crumb: Crumb): boolean {
     return pathOf(this.currentUrl()) === crumb.route;
@@ -72,10 +72,10 @@ export class BreadcrumbComponent {
 
   protected closeOverflow(): void {
     const overflow = this.overflow();
-    if (overflow !== undefined) overflow.open = false;
+    if (overflow !== undefined) overflow.nativeElement.open = false;
   }
 }
 
 function pathOf(url: string): string {
-  return url.split(/[?#]/, 1)[0];
+  return url.split(/[?#]/, 1)[0] ?? '';
 }

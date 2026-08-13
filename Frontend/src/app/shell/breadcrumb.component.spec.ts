@@ -49,10 +49,10 @@ describe('BreadcrumbComponent', () => {
 
     await router.navigateByUrl('/pricing-lab');
     fixture.detectChanges();
-    const overflow = fixture.nativeElement.querySelector<HTMLDetailsElement>('.breadcrumb__overflow');
+    const overflow = fixture.nativeElement.querySelector('.breadcrumb__overflow') as HTMLDetailsElement;
     overflow.open = true;
 
-    fireEvent.click(fixture.nativeElement.querySelector('.breadcrumb__overflow a'));
+    fireEvent.click(fixture.nativeElement.querySelector('.breadcrumb__overflow a') as HTMLAnchorElement);
 
     expect(overflow.open).toBe(false);
   });
