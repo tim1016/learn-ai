@@ -17,7 +17,6 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-from conftest import _hold_transition
 
 from app.broker.alpaca.clerk.sqlite import process_repositories, repository_lifecycle
 from app.broker.alpaca.clerk.sqlite.facts import (
@@ -43,6 +42,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     UnsupportedWalFilesystem,
 )
 from app.services.sqlite_clerk_compat import _operation_requires_reconciliation
+from conftest import _hold_transition
 
 ACCOUNT_ID = "PA-TEST"
 

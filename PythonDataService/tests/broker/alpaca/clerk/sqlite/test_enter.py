@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import _clock_at
 
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import (
@@ -51,6 +50,7 @@ from app.broker.contract.errors import (
     BrokerUnavailable,
 )
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
+from conftest import _clock_at
 
 ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
