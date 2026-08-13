@@ -56,22 +56,13 @@
 }
 
 .page-title {
-  margin: 0 0 var(--space-1);
+  margin: 0;
   color: $text-primary;
   font-size: var(--fs-h1);
   font-weight: var(--fw-semi);
   letter-spacing: var(--ls-tight);
   line-height: 1.15;
   text-wrap: balance;
-}
-
-.page-subtitle {
-  margin: 0;
-  max-width: 72ch;
-  color: $text-subtle; // 4.6:1 on #0f1117 — WCAG AA
-  font-size: var(--fs-sm);
-  line-height: 1.5;
-  text-wrap: pretty;
 }
 
 // ─── Guide slot ────────────────────────────────────────────────────────────

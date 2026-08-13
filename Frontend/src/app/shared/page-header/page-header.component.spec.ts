@@ -6,7 +6,7 @@ import { PageHeaderComponent } from './page-header.component';
 @Component({
   imports: [PageHeaderComponent],
   template: `
-    <app-page-header title="Strategy Builder" subtitle="…">
+    <app-page-header title="Strategy Builder">
       <button slot="actions">Save</button>
       <p slot="guide" data-testid="projected-guide">How this page works</p>
     </app-page-header>
@@ -17,7 +17,7 @@ class GuideHost {}
 @Component({
   imports: [PageHeaderComponent],
   template: `
-    <app-page-header title="Plain Page" subtitle="…">
+    <app-page-header title="Plain Page">
       <button slot="actions">Save</button>
     </app-page-header>
   `,
@@ -48,12 +48,12 @@ describe('PageHeaderComponent slots', () => {
     expect(guide.children.length).toBe(0);
   });
 
-  it('renders title, subtitle, and actions slot intact', () => {
+  it('renders title and actions slot without a subtitle', () => {
     const fixture = TestBed.createComponent(NoGuideHost);
     fixture.detectChanges();
     const el = fixture.nativeElement as HTMLElement;
     expect(find(el, '.page-title').textContent?.trim()).toBe('Plain Page');
-    expect(find(el, '.page-subtitle').textContent).toBe('…');
+    expect(el.querySelector('.page-subtitle')).toBeNull();
     expect(find(el, '[slot=actions]').textContent).toBe('Save');
   });
 });
