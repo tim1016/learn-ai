@@ -12,7 +12,6 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import _clock_at
 
 from app.broker.alpaca.adapter import from_alpaca_trade_update
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
@@ -42,6 +41,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     ExecutionCoverageConflictCause,
 )
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
+from conftest import _clock_at
 
 _FIXTURE_ROOT = Path(__file__).parents[4] / "fixtures" / "golden" / "alpaca-sqlite-execution"
 _ACCOUNT_ID = "PA-S1-EXECUTION"
