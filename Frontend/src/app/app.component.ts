@@ -1,9 +1,11 @@
 import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
+import { Title } from '@angular/platform-browser';
 import { RouterOutlet } from '@angular/router';
 import { Toast } from 'primeng/toast';
 import { AppSidebarComponent } from './shell/app-sidebar.component';
 import { MarkdownDrawerHostComponent } from './shared/markdown-drawer/markdown-drawer-host.component';
 import { BrokerHealthService } from './services/broker-health.service';
+import { TopBarComponent } from './shell/top-bar.component';
 
 // The global JobsDrawer / floating "Jobs" launcher was removed in favor
 // of per-feature SSE-driven progress UIs (e.g. the Engine Lab run
@@ -15,15 +17,24 @@ import { BrokerHealthService } from './services/broker-health.service';
   imports: [
     RouterOutlet,
     AppSidebarComponent,
+    TopBarComponent,
     MarkdownDrawerHostComponent,
     Toast,
   ],
   styles: [`
     :host {
       display: flex;
-      min-height: 100vh;
+      min-height: 100dvh;
       background: var(--bg-canvas);
       color: var(--text-primary);
+    }
+
+    .shell {
+      display: flex;
+      flex: 1;
+      min-width: 0;
+      min-height: 100dvh;
+      flex-direction: column;
     }
 
     /* Named container "ide" drives the .ide-grid breakpoints declared in
@@ -33,6 +44,7 @@ import { BrokerHealthService } from './services/broker-health.service';
     .main {
       flex: 1;
       min-width: 0;
+      min-height: 0;
       display: flex;
       flex-direction: column;
       overflow-x: auto;
@@ -42,23 +54,31 @@ import { BrokerHealthService } from './services/broker-health.service';
     .main-content {
       flex: 1;
       min-width: 0;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
     }
   `],
   template: `
     <app-sidebar />
-    <main class="main">
-      <div class="main-content">
-        <router-outlet />
-      </div>
-    </main>
+    <div class="shell">
+      <app-top-bar />
+      <main class="main">
+        <div class="main-content">
+          <router-outlet />
+        </div>
+      </main>
+    </div>
     <app-markdown-drawer-host />
     <p-toast position="top-right" />
   `,
 })
 export class AppComponent {
   private readonly brokerHealth = inject(BrokerHealthService);
+  private readonly title = inject(Title);
 
   constructor() {
+    this.title.setTitle('Market Scope');
     // Single-source-of-truth poll for the global banner. Components
     // read ``BrokerHealthService.health()`` instead of polling
     // /api/broker/health from per-page mounts.
