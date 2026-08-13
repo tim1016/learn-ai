@@ -4,10 +4,16 @@
   [updatedAtMs]="panel().updated_at_ms"
   [snapshotStatus]="'Revision ' + panel().revision + (panel().health.running ? ' running' : ' stopped')"
 >
-  <div botBannerIdentity class="trader-bot-banner__identity">
-    <h1 class="trader-bot-banner__strategy">{{ panel().strategy_label }}</h1>
+  <div botBannerIdentity class="operator-bot-banner__identity">
+    <h1 class="operator-bot-banner__strategy">{{ panel().strategy_label }}</h1>
     <code>{{ panel().strategy_instance_id }}</code>
   </div>
+
+  <app-panel-instrument-quote
+    botBannerQuote
+    [symbol]="panel().symbol"
+    [tickerQuote]="tickerQuote()"
+  />
 
   <app-mission-verdict-status
     botBannerStatus
@@ -24,11 +30,16 @@
     />
   }
 
-  <app-bot-banner-overflow botBannerOverflow label="More trader actions">
-    <a
-      class="trader-bot-banner__manual-order"
-      [routerLink]="manualOrderNavigation().commands"
-      [queryParams]="manualOrderNavigation().queryParams"
-    >Manual order</a>
-  </app-bot-banner-overflow>
+  @if (overflowActions().length > 0) {
+    <app-bot-banner-overflow botBannerOverflow label="More operator actions">
+      @for (action of overflowActions(); track action.action_id) {
+        <app-panel-action-button
+          [action]="action"
+          [pending]="actionPending()"
+          tone="neutral"
+          (triggered)="actionRequested.emit($event)"
+        />
+      }
+    </app-bot-banner-overflow>
+  }
 </app-bot-detail-banner>

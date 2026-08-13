@@ -63,6 +63,8 @@ const OPERATOR_ACTION_TONES: Partial<Record<ActionId, PanelActionTone>> = {
 })
 export class OperatorReadinessComponent {
   readonly panel = input.required<BotPanelView>();
+  /** The one lifecycle control promoted to the banner; its gate remains visible below. */
+  readonly bannerActionId = input<ActionId | null>(null);
   readonly actionPending = input(false);
   readonly actionRequested = output<PanelActionTrigger>();
 
@@ -75,7 +77,7 @@ export class OperatorReadinessComponent {
 
       return panel.readiness_checks.map((check) => {
         const tone = OPERATOR_ACTION_TONES[check.operation];
-        const action = tone
+        const action = tone && check.operation !== this.bannerActionId()
           ? actions.get(check.operation) ?? null
           : null;
 

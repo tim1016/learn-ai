@@ -10,6 +10,7 @@ import {
 } from '@angular/core';
 import type {
   BotPanelView,
+  PanelAction,
   PanelActionTrigger,
   PanelProfile,
 } from '../lib/broker-v2-panel.types';
@@ -24,7 +25,8 @@ import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 import { OperatorRunHistoryComponent } from '../bot-run-history/operator-run-history.component';
 import { OperatorDisclosureCardComponent } from './operator-disclosure-card.component';
-import { PanelHeaderComponent } from '../panel-shell/panel-header.component';
+import { OperatorBotBannerComponent } from './operator-bot-banner/operator-bot-banner.component';
+import { primaryLifecycleAction } from '../bot-detail-banner/lifecycle-action';
 
 /**
  * Operator lens (spec §7).
@@ -52,7 +54,7 @@ import { PanelHeaderComponent } from '../panel-shell/panel-header.component';
     OperatorRunHistoryComponent,
     OperatorDisclosureCardComponent,
     AssetIdentityComponent,
-    PanelHeaderComponent,
+    OperatorBotBannerComponent,
   ],
   templateUrl: './operator-lens.component.html',
   styleUrl: './operator-lens.component.scss',
@@ -104,6 +106,7 @@ export class OperatorLensComponent {
   protected readonly health = computed(() => this.panel().health);
   protected readonly clerk = computed(() => this.panel().clerk);
   protected readonly rail = computed(() => this.panel().rail);
+  protected readonly primaryAction = computed<PanelAction | null>(() => primaryLifecycleAction(this.panel()));
 
   // ── Template handlers ─────────────────────────────────────────────────────
 

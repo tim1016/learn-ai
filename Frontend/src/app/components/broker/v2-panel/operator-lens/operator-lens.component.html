@@ -1,5 +1,5 @@
 <div class="operator-lens">
-  <app-panel-header
+  <app-operator-bot-banner
     [panel]="panel()"
     [tickerQuote]="tickerQuote()"
     [actionPending]="actionPending()"
@@ -10,6 +10,7 @@
     <div class="operator-lens__column">
       <app-operator-readiness
         [panel]="panel()"
+        [bannerActionId]="primaryAction()?.action_id ?? null"
         [actionPending]="actionPending()"
         (actionRequested)="onActionRequested($event)"
       />
