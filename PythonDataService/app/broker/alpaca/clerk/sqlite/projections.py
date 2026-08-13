@@ -16,6 +16,12 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from app.broker.alpaca.clerk.sqlite.facts import (
+    ExecutionCoverageQuarantinedFacts,
+    UncertaintyRaisedFacts,
+    validate_execution_coverage_quarantined_facts,
+)
+from app.broker.alpaca.clerk.sqlite.folds import FILL_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.order_projection import (
     OrderProjectionReadError,
     read_current_orders,
@@ -25,6 +31,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     ClerkProjection,
     OperationPage,
     ProjectedCommand,
+    ProjectedExecutionCoverageConflict,
     ProjectedHold,
     ProjectedOperation,
     ProjectedOrder,
@@ -42,6 +49,10 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     build_recovery_catalog,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+    ExecutionCoverageConflictCause,
+)
 from app.utils.timestamps import Clock, now_ms_utc
 
 DEFAULT_OPERATION_LIMIT = 50
@@ -249,6 +260,7 @@ class SqliteClerkProjectionReader:
             current_orders=self._current_orders(strategy_instance_id),
             positions=self._positions(strategy_instance_id),
             uncertainties=self._uncertainties(strategy_instance_id, now_ms),
+            execution_coverage_conflicts=self._execution_coverage_conflicts(strategy_instance_id),
             latest_account_reconciliation=self._latest_reconciliation(
                 None,
                 now_ms,
@@ -734,6 +746,108 @@ class SqliteClerkProjectionReader:
             for row in rows
         )
 
+    def _execution_coverage_conflicts(
+        self,
+        strategy_instance_id: str | None,
+    ) -> tuple[ProjectedExecutionCoverageConflict, ...]:
+        where = "u.reason_code = ? AND u.resolved_at_ms IS NULL"
+        params: list[object] = [EXECUTION_COVERAGE_CONFLICT_REASON_CODE]
+        if strategy_instance_id is not None:
+            where += " AND u.strategy_instance_id = ?"
+            params.append(strategy_instance_id)
+        rows = self._conn.execute(
+            "SELECT u.uncertainty_id, u.facts_json FROM uncertainties u "
+            f"WHERE {where} ORDER BY u.observed_at_ms ASC",
+            params,
+        ).fetchall()
+        return tuple(self._execution_coverage_conflict(row) for row in rows)
+
+    def _execution_coverage_conflict(
+        self,
+        uncertainty: sqlite3.Row,
+    ) -> ProjectedExecutionCoverageConflict:
+        try:
+            raised = UncertaintyRaisedFacts.from_facts_json(uncertainty["facts_json"])
+            cause = ExecutionCoverageConflictCause.from_mapping(raised.cause_facts)
+        except (TypeError, ValueError, KeyError):
+            return ProjectedExecutionCoverageConflict(
+                uncertainty_id=uncertainty["uncertainty_id"],
+                order_ref="",
+                execution_id="",
+                cumulative_fill_id=None,
+                exact_qty=None,
+                exact_price=None,
+                exact_side=None,
+                cumulative_qty=None,
+                cumulative_price=None,
+                cumulative_side=None,
+                proof_available=False,
+                unavailable_reason="The coverage-conflict cause is unreadable; no safe resolution is available.",
+            )
+        row = self._conn.execute(
+            "SELECT facts_json FROM custody_transitions WHERE order_ref = ? "
+            "AND transition_kind = 'EXECUTION_COVERAGE_QUARANTINED' ORDER BY sequence DESC",
+            (cause.order_ref,),
+        ).fetchone()
+        if row is None:
+            return _unavailable_coverage_conflict(
+                uncertainty_id=uncertainty["uncertainty_id"],
+                order_ref=cause.order_ref,
+                execution_id=cause.execution_id,
+                reason="The exact execution quarantine is absent; fresh exact evidence is required.",
+            )
+        try:
+            quarantined = ExecutionCoverageQuarantinedFacts.from_facts_json(row["facts_json"])
+            exact = validate_execution_coverage_quarantined_facts(quarantined)
+        except (TypeError, ValueError, KeyError):
+            return _unavailable_coverage_conflict(
+                uncertainty_id=uncertainty["uncertainty_id"],
+                order_ref=cause.order_ref,
+                execution_id=cause.execution_id,
+                reason="The exact execution quarantine is unreadable; no safe resolution is available.",
+            )
+        if exact.execution_id != cause.execution_id or len(quarantined.conflicting_cumulative_fill_ids) != 1:
+            return _unavailable_coverage_conflict(
+                uncertainty_id=uncertainty["uncertainty_id"],
+                order_ref=cause.order_ref,
+                execution_id=cause.execution_id,
+                reason="The exact execution does not map to one cumulative recovery total.",
+            )
+        cumulative = self._conn.execute(
+            "SELECT fill_id, qty, price, side, evidence_source FROM fills WHERE fill_id = ?",
+            (quarantined.conflicting_cumulative_fill_ids[0],),
+        ).fetchone()
+        if cumulative is None or cumulative["evidence_source"] != "cumulative_recovery":
+            return _unavailable_coverage_conflict(
+                uncertainty_id=uncertainty["uncertainty_id"],
+                order_ref=cause.order_ref,
+                execution_id=cause.execution_id,
+                reason="The cumulative recovery row is unavailable; fresh exact evidence is required.",
+            )
+        proof_available = (
+            cumulative["side"] == exact.side
+            and abs(float(cumulative["qty"]) - exact.slice_qty) < FILL_QTY_EPSILON
+            and abs(float(cumulative["price"]) - exact.slice_price) < FILL_QTY_EPSILON
+        )
+        return ProjectedExecutionCoverageConflict(
+            uncertainty_id=uncertainty["uncertainty_id"],
+            order_ref=cause.order_ref,
+            execution_id=cause.execution_id,
+            cumulative_fill_id=cumulative["fill_id"],
+            exact_qty=exact.slice_qty,
+            exact_price=exact.slice_price,
+            exact_side=exact.side,
+            cumulative_qty=float(cumulative["qty"]),
+            cumulative_price=float(cumulative["price"]),
+            cumulative_side=cumulative["side"],
+            proof_available=proof_available,
+            unavailable_reason=(
+                None
+                if proof_available
+                else "The exact execution and cumulative recovery economics differ; no automatic replacement is safe."
+            ),
+        )
+
     def _latest_reconciliation(
         self,
         strategy_instance_id: str | None,
@@ -954,6 +1068,29 @@ def _json_string_tuple(raw: str | None) -> tuple[str, ...]:
     if not isinstance(decoded, list) or not all(isinstance(item, str) for item in decoded):
         raise ProjectionReadError("Fold evidence_refs_json must contain a string list")
     return tuple(decoded)
+
+
+def _unavailable_coverage_conflict(
+    *,
+    uncertainty_id: str,
+    order_ref: str,
+    execution_id: str,
+    reason: str,
+) -> ProjectedExecutionCoverageConflict:
+    return ProjectedExecutionCoverageConflict(
+        uncertainty_id=uncertainty_id,
+        order_ref=order_ref,
+        execution_id=execution_id,
+        cumulative_fill_id=None,
+        exact_qty=None,
+        exact_price=None,
+        exact_side=None,
+        cumulative_qty=None,
+        cumulative_price=None,
+        cumulative_side=None,
+        proof_available=False,
+        unavailable_reason=reason,
+    )
 
 
 def _operation_ref(row: sqlite3.Row) -> str:

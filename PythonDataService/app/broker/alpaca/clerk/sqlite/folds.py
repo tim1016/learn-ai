@@ -32,6 +32,8 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     CommandRejectedFacts,
     EnterAcceptedFacts,
     ExecutionCorrectedFacts,
+    ExecutionCoverageQuarantinedFacts,
+    ExecutionCoverageResolvedFacts,
     ExecutionSliceFilledFacts,
     ExitAcceptedFacts,
     OrderFillObservedFacts,
@@ -39,6 +41,8 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     RunStartedFacts,
     RunStoppedFacts,
     validate_execution_corrected_facts,
+    validate_execution_coverage_quarantined_facts,
+    validate_execution_coverage_resolved_facts,
     validate_execution_slice_facts,
 )
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
@@ -725,6 +729,93 @@ def _fold_execution_slice_filled(conn: sqlite3.Connection, payload: dict[str, An
     )
 
 
+def _fold_execution_coverage_quarantined(
+    conn: sqlite3.Connection,
+    payload: dict[str, Any],
+) -> None:
+    """Keep ambiguous exact evidence in the hash chain, outside economics.
+
+    The immutable transition facts are the quarantine fold. No economic
+    current-state row is written here, but the embedded typed uncertainty is
+    folded in the same SQLite transaction so a crash cannot leave the account
+    with recorded ambiguity and no admission block.
+    """
+    facts = ExecutionCoverageQuarantinedFacts.from_facts_json(payload["facts_json"])
+    exact = validate_execution_coverage_quarantined_facts(facts)
+    if facts.order_ref != payload["order_ref"]:
+        raise ValueError("quarantined coverage order_ref must match its transition")
+    if payload["source_event_at_ms"] != exact.source_event_at_ms:
+        raise ValueError("quarantined coverage timestamp must match exact evidence")
+    uncertainty_payload = dict(payload)
+    uncertainty_payload["transition_kind"] = "UNCERTAINTY_RAISED"
+    uncertainty_payload["facts_json"] = canonicalize(facts.uncertainty)
+    _fold_uncertainty_raised(conn, uncertainty_payload)
+
+
+def _fold_execution_coverage_resolved(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Replace exactly one cumulative fold with verified exact economics.
+
+    Formula: Δposition = 0 because the replacement is admitted only when
+    exact and cumulative quantity/price/side agree within the Clerk's pinned
+    execution tolerance.  The raw cumulative and exact observations remain
+    custody transitions; ``fills`` is rebuilt from the selected coverage.
+    Reference: docs/prds/2026-08-13-sqlite-clerk-manual-orders.md §11.
+    Canonical implementation: this file.
+    Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
+      test_folds_execution.py::test_coverage_resolution_replaces_one_cumulative_fill_once.
+    """
+    facts = ExecutionCoverageResolvedFacts.from_facts_json(payload["facts_json"])
+    exact = validate_execution_coverage_resolved_facts(facts)
+    cumulative = conn.execute(
+        "SELECT fill_id, order_ref, qty, price, side, evidence_source FROM fills WHERE fill_id = ?",
+        (facts.replaced_cumulative_fill_id,),
+    ).fetchone()
+    if cumulative is None:
+        existing_exact = conn.execute(
+            "SELECT 1 FROM fills WHERE execution_id = ?", (exact.execution_id,)
+        ).fetchone()
+        if existing_exact is not None:
+            return
+        raise ValueError("coverage resolution cumulative fill is missing")
+    if (
+        cumulative["order_ref"] != facts.order_ref
+        or cumulative["evidence_source"] != "cumulative_recovery"
+        or cumulative["side"] != exact.side
+        or abs(float(cumulative["qty"]) - exact.slice_qty) >= FILL_QTY_EPSILON
+        or abs(float(cumulative["price"]) - exact.slice_price) >= FILL_QTY_EPSILON
+    ):
+        raise ValueError("coverage resolution proof does not match cumulative economics")
+    if conn.execute("SELECT 1 FROM fills WHERE execution_id = ?", (exact.execution_id,)).fetchone() is not None:
+        raise ValueError("coverage resolution exact execution already exists")
+    conn.execute("DELETE FROM fills WHERE fill_id = ?", (facts.replaced_cumulative_fill_id,))
+    conn.execute(
+        "INSERT INTO fills (fill_id, order_ref, qty, price, side, is_correction, execution_id, "
+        "evidence_source, event_kind, superseded_execution_ref, fee, fee_fidelity, "
+        "source_event_at_ms, clerk_observed_at_ms, recorded_at_ms, recorded_transition_sequence) "
+        "VALUES (?, ?, ?, ?, ?, 0, ?, ?, 'fill', NULL, ?, ?, ?, ?, ?, ?)",
+        (
+            exact.execution_id,
+            facts.order_ref,
+            exact.slice_qty,
+            exact.slice_price,
+            exact.side,
+            exact.execution_id,
+            exact.evidence_source,
+            exact.fee,
+            exact.fee_fidelity,
+            exact.source_event_at_ms,
+            payload["clerk_observed_at_ms"],
+            payload["recorded_at_ms"],
+            _this_transition_sequence(conn),
+        ),
+    )
+    conn.execute(
+        "UPDATE uncertainties SET resolved_at_ms = ? WHERE uncertainty_id = ? "
+        "AND reason_code = 'EXECUTION_COVERAGE_CONFLICT' AND resolved_at_ms IS NULL",
+        (payload["recorded_at_ms"], facts.uncertainty_id),
+    )
+
+
 def _fold_execution_corrected(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Replace one effective execution while retaining its audit history.
 
@@ -986,6 +1077,8 @@ DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_UNCERTAIN", _fold_order_submit_unce
 DEFAULT_FOLD_REGISTRY.register("ORDER_CANCEL_UNCERTAIN", _fold_order_submit_uncertain)
 DEFAULT_FOLD_REGISTRY.register("ORDER_FILL_OBSERVED", _fold_order_fill_observed)
 DEFAULT_FOLD_REGISTRY.register("EXECUTION_SLICE_FILLED", _fold_execution_slice_filled)
+DEFAULT_FOLD_REGISTRY.register("EXECUTION_COVERAGE_QUARANTINED", _fold_execution_coverage_quarantined)
+DEFAULT_FOLD_REGISTRY.register("EXECUTION_COVERAGE_RESOLVED", _fold_execution_coverage_resolved)
 DEFAULT_FOLD_REGISTRY.register("EXECUTION_CORRECTED", _fold_execution_corrected)
 DEFAULT_FOLD_REGISTRY.register("RECONCILIATION_ATTEMPTED", _fold_reconciliation_attempted)
 DEFAULT_FOLD_REGISTRY.register("ACCOUNT_HOLD_RAISED", _fold_account_hold_raised)

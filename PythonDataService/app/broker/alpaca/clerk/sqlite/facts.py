@@ -33,6 +33,9 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    ExecutionCoverageConflictCause,
+)
 
 FACTS_SCHEMA_VERSION = 1
 
@@ -401,6 +404,56 @@ class ExecutionSliceFilledFacts:
 
 
 @dataclass(frozen=True)
+class ExecutionCoverageQuarantinedFacts:
+    """Immutable exact evidence withheld from economics pending coverage proof.
+
+    The record is deliberately a transition fact rather than a second fill
+    table: it must survive mirror replay, but it must not participate in
+    positions or FIFO until a closed resolution proof chooses it.
+    """
+
+    order_ref: str
+    exact_execution: dict[str, Any]
+    conflicting_cumulative_fill_ids: list[str]
+    uncertainty: dict[str, Any]
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> ExecutionCoverageQuarantinedFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
+class ExecutionCoverageResolvedFacts:
+    """Closed proof that replaces one aggregate fold with one exact execution.
+
+    Both source records remain immutable custody transitions. ``fills`` is a
+    rebuildable current-state fold, so replacing its selected row preserves
+    audit history while preventing a double economic delta.
+    """
+
+    uncertainty_id: str
+    account_id: str
+    authority_generation: int
+    db_identity_token: str
+    expected_control_revision: int
+    order_ref: str
+    resolution_kind: str
+    replaced_cumulative_fill_id: str
+    exact_execution: dict[str, Any]
+    evidence_refs: list[str]
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> ExecutionCoverageResolvedFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
 class ExecutionCorrectedFacts:
     """An auditable effective replacement for one prior execution slice.
 
@@ -469,6 +522,83 @@ def validate_execution_slice_facts(facts: ExecutionSliceFilledFacts) -> None:
         raise ValueError("not_reported fee_fidelity requires fee=None")
     if isinstance(facts.source_event_at_ms, bool) or not isinstance(facts.source_event_at_ms, int):
         raise ValueError("source_event_at_ms must be an int64 millisecond timestamp")
+
+
+def execution_slice_from_mapping(value: dict[str, Any]) -> ExecutionSliceFilledFacts:
+    """Decode a nested immutable execution fact at the transition boundary."""
+    try:
+        facts = ExecutionSliceFilledFacts(**value)
+    except TypeError as exc:
+        raise ValueError("exact_execution must be a complete execution-slice fact") from exc
+    validate_execution_slice_facts(facts)
+    return facts
+
+
+def validate_execution_coverage_quarantined_facts(
+    facts: ExecutionCoverageQuarantinedFacts,
+) -> ExecutionSliceFilledFacts:
+    if not isinstance(facts.order_ref, str) or not facts.order_ref:
+        raise ValueError("quarantined coverage requires order_ref")
+    exact_execution = execution_slice_from_mapping(facts.exact_execution)
+    fill_ids = facts.conflicting_cumulative_fill_ids
+    if (
+        not isinstance(fill_ids, list)
+        or not fill_ids
+        or any(not isinstance(fill_id, str) or not fill_id for fill_id in fill_ids)
+        or fill_ids != sorted(set(fill_ids))
+    ):
+        raise ValueError("quarantined coverage requires unique sorted cumulative fill ids")
+    try:
+        uncertainty = UncertaintyRaisedFacts.from_facts_json(canonicalize(facts.uncertainty))
+        cause = ExecutionCoverageConflictCause.from_mapping(uncertainty.cause_facts)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("quarantined coverage requires a valid blocking uncertainty") from exc
+    if (
+        uncertainty.reason_code != "EXECUTION_COVERAGE_CONFLICT"
+        or not uncertainty.blocks_new_exposure
+        or uncertainty.allows_reduction
+        or cause.order_ref != facts.order_ref
+        or cause.execution_id != exact_execution.execution_id
+    ):
+        raise ValueError("quarantined coverage uncertainty must block this exact execution")
+    return exact_execution
+
+
+def validate_execution_coverage_resolved_facts(
+    facts: ExecutionCoverageResolvedFacts,
+) -> ExecutionSliceFilledFacts:
+    if not isinstance(facts.uncertainty_id, str) or not facts.uncertainty_id:
+        raise ValueError("coverage resolution requires uncertainty_id")
+    if not isinstance(facts.account_id, str) or not facts.account_id:
+        raise ValueError("coverage resolution requires account_id")
+    if (
+        isinstance(facts.authority_generation, bool)
+        or not isinstance(facts.authority_generation, int)
+        or facts.authority_generation < 1
+    ):
+        raise ValueError("coverage resolution requires authority_generation")
+    if not isinstance(facts.db_identity_token, str) or not facts.db_identity_token:
+        raise ValueError("coverage resolution requires db_identity_token")
+    if (
+        isinstance(facts.expected_control_revision, bool)
+        or not isinstance(facts.expected_control_revision, int)
+        or facts.expected_control_revision < 0
+    ):
+        raise ValueError("coverage resolution requires expected_control_revision")
+    if not isinstance(facts.order_ref, str) or not facts.order_ref:
+        raise ValueError("coverage resolution requires order_ref")
+    if facts.resolution_kind != "EXACT_REPLACES_CUMULATIVE":
+        raise ValueError("coverage resolution kind is not supported")
+    if not isinstance(facts.replaced_cumulative_fill_id, str) or not facts.replaced_cumulative_fill_id:
+        raise ValueError("coverage resolution requires a cumulative fill id")
+    if (
+        not isinstance(facts.evidence_refs, list)
+        or not facts.evidence_refs
+        or any(not isinstance(reference, str) or not reference for reference in facts.evidence_refs)
+        or facts.evidence_refs != sorted(set(facts.evidence_refs))
+    ):
+        raise ValueError("coverage resolution requires unique sorted evidence references")
+    return execution_slice_from_mapping(facts.exact_execution)
 
 
 def validate_execution_corrected_facts(facts: ExecutionCorrectedFacts) -> None:

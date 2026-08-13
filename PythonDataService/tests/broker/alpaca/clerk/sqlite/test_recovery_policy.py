@@ -7,6 +7,7 @@ from dataclasses import replace
 import pytest
 
 from app.broker.alpaca.clerk.sqlite.projection_models import (
+    ProjectedExecutionCoverageConflict,
     ProjectedOrder,
     ProjectedPosition,
     ProjectedReconciliation,
@@ -59,6 +60,7 @@ def test_healthy_catalog_omits_failure_and_generic_recovery_actions() -> None:
 
     assert actions == {
         "reconcile_now",
+        "resolve_execution_coverage",
         "cancel_verified_working_orders",
         "prepare_safe_flatten",
         "stop_bot_decisions",
@@ -69,6 +71,74 @@ def test_healthy_catalog_omits_failure_and_generic_recovery_actions() -> None:
     assert "flatten" not in actions
     assert "rebuild_from_mirror" not in actions
     assert "reset_authority" not in actions
+
+
+def test_coverage_resolution_requires_one_exact_economic_replacement() -> None:
+    conflict = ProjectedExecutionCoverageConflict(
+        uncertainty_id="uncertainty:coverage-1",
+        order_ref="alpaca/intent-1",
+        execution_id="execution-1",
+        cumulative_fill_id="alpaca/intent-1:5.000000000",
+        exact_qty=5.0,
+        exact_price=100.0,
+        exact_side="BUY",
+        cumulative_qty=5.0,
+        cumulative_price=100.0,
+        cumulative_side="BUY",
+        proof_available=True,
+        unavailable_reason=None,
+    )
+    action = next(
+        item
+        for item in build_recovery_catalog(
+            _context(execution_coverage_conflicts=(conflict,))
+        )
+        if item.action_id == "resolve_execution_coverage"
+    )
+
+    assert action.available is True
+    assert action.execution_ref == conflict.uncertainty_id
+    assert action.confirmation is not None
+    assert action.evidence[1].reference == "execution:execution-1"
+    with pytest.raises(StaleRecoveryTokenError):
+        recheck_recovery_action(
+            _context(
+                control_revision=8,
+                execution_coverage_conflicts=(conflict,),
+            ),
+            action_id=action.action_id,
+            concurrency_token=action.concurrency_token,
+        )
+
+
+def test_coverage_resolution_explains_when_exact_proof_is_insufficient() -> None:
+    conflict = ProjectedExecutionCoverageConflict(
+        uncertainty_id="uncertainty:coverage-1",
+        order_ref="alpaca/intent-1",
+        execution_id="execution-1",
+        cumulative_fill_id="alpaca/intent-1:5.000000000",
+        exact_qty=5.0,
+        exact_price=101.0,
+        exact_side="BUY",
+        cumulative_qty=5.0,
+        cumulative_price=100.0,
+        cumulative_side="BUY",
+        proof_available=False,
+        unavailable_reason="The exact execution and cumulative recovery economics differ.",
+    )
+    action = next(
+        item
+        for item in build_recovery_catalog(
+            _context(execution_coverage_conflicts=(conflict,))
+        )
+        if item.action_id == "resolve_execution_coverage"
+    )
+
+    assert action.available is False
+    assert action.unavailable_reason_code == "COVERAGE_PROOF_INSUFFICIENT"
+    assert action.next_step == (
+        "Keep the exposure blocked and obtain exact broker execution coverage; no generic override is available."
+    )
 
 
 def test_failure_catalog_requires_exact_rebuild_and_reset_prerequisites() -> None:

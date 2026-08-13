@@ -111,6 +111,24 @@ class ProjectedUncertainty:
 
 
 @dataclass(frozen=True)
+class ProjectedExecutionCoverageConflict:
+    """Read-only proof material for one quarantined exact execution."""
+
+    uncertainty_id: str
+    order_ref: str
+    execution_id: str
+    cumulative_fill_id: str | None
+    exact_qty: float | None
+    exact_price: float | None
+    exact_side: str | None
+    cumulative_qty: float | None
+    cumulative_price: float | None
+    cumulative_side: str | None
+    proof_available: bool
+    unavailable_reason: str | None
+
+
+@dataclass(frozen=True)
 class ProjectedReconciliation:
     reconciliation_id: str
     effect_operation_id: str | None

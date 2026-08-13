@@ -289,15 +289,7 @@ class SafeFlattenPlanResponse(BaseModel):
 class RecoveryCapabilityResponse(BaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
-    action_id: Literal[
-        "reconcile_now",
-        "cancel_verified_working_orders",
-        "prepare_safe_flatten",
-        "stop_bot_decisions",
-        "open_custody_timeline",
-        "rebuild_from_mirror",
-        "reset_authority",
-    ]
+    action_id: RecoveryActionId
     label: str
     explanation: str
     available: bool

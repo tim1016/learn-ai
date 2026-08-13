@@ -26,6 +26,7 @@ issue #1377 onward, the effect/order) — never a separate write.
 
 from __future__ import annotations
 
+import json
 import secrets
 import sqlite3
 import threading
@@ -39,12 +40,17 @@ from app.broker.alpaca.clerk.sqlite.decision_receipts import (
 )
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExecutionCorrectedFacts,
+    ExecutionCoverageQuarantinedFacts,
     ExecutionSliceFilledFacts,
     UncertaintyRaisedFacts,
     validate_execution_corrected_facts,
+    validate_execution_coverage_quarantined_facts,
     validate_execution_slice_facts,
 )
-from app.broker.alpaca.clerk.sqlite.folds import DEFAULT_FOLD_REGISTRY, FoldRegistry
+from app.broker.alpaca.clerk.sqlite.folds import (
+    DEFAULT_FOLD_REGISTRY,
+    FoldRegistry,
+)
 from app.broker.alpaca.clerk.sqlite.hashchain import (
     GENESIS,
     canonical_payload,
@@ -60,6 +66,9 @@ from app.broker.alpaca.clerk.sqlite.models import (
     DecisionReceiptResource,
     OperationClaim,
     TransitionInput,
+)
+from app.broker.alpaca.clerk.sqlite.repository_execution_coverage_api import (
+    ClerkSqliteRepositoryExecutionCoverageApi,
 )
 from app.broker.alpaca.clerk.sqlite.repository_external_order_api import (
     ClerkSqliteRepositoryExternalOrderApi,
@@ -134,7 +143,11 @@ class OperationClaimError(ClerkSqliteError):
     """Scope D: an ``effect_operations`` claim attempt found a live owner."""
 
 
-class ClerkSqliteRepository(ClerkSqliteRepositoryReadApi, ClerkSqliteRepositoryExternalOrderApi):
+class ClerkSqliteRepository(
+    ClerkSqliteRepositoryReadApi,
+    ClerkSqliteRepositoryExternalOrderApi,
+    ClerkSqliteRepositoryExecutionCoverageApi,
+):
     """One Alpaca account's event-sourced SQLite authority.
 
     Construct via :meth:`initialize` (a brand-new generation) or
@@ -494,13 +507,25 @@ class ClerkSqliteRepository(ClerkSqliteRepositoryReadApi, ClerkSqliteRepositoryE
                     order_ref=order_ref,
                 ):
                     return "coverage_conflict_already_raised"
+                candidate = build_transition()
+                facts = self._validated_execution_slice_transition(
+                    candidate,
+                    execution_id=execution_id,
+                    order_ref=order_ref,
+                )
                 uncertainty = build_coverage_conflict()
                 self._validate_execution_coverage_conflict(
                     uncertainty=uncertainty,
                     execution_id=execution_id,
                     order_ref=order_ref,
                 )
-                self.append_transition(uncertainty)
+                self.append_transition(
+                    self._execution_coverage_quarantine_transition(
+                        exact_transition=candidate,
+                        facts=facts,
+                        uncertainty=uncertainty,
+                    )
+                )
                 return "coverage_conflict_raised"
             transition = build_transition()
             self._validated_execution_slice_transition(
@@ -528,6 +553,44 @@ class ClerkSqliteRepository(ClerkSqliteRepositoryReadApi, ClerkSqliteRepositoryE
         if transition.order_ref != order_ref:
             raise ValueError("order_ref must match the exact execution transition")
         return facts
+
+    def _execution_coverage_quarantine_transition(
+        self,
+        *,
+        exact_transition: TransitionInput,
+        facts: ExecutionSliceFilledFacts,
+        uncertainty: TransitionInput,
+    ) -> TransitionInput:
+        """Build a no-economic fold carrying the exact rejected evidence."""
+        if exact_transition.order_ref is None:
+            raise ValueError("quarantined coverage requires an order reference")
+        quarantined = ExecutionCoverageQuarantinedFacts(
+            order_ref=exact_transition.order_ref,
+            exact_execution=json.loads(facts.to_facts_json()),
+            conflicting_cumulative_fill_ids=reads.cumulative_recovery_fill_ids_for_order(
+                self._conn,
+                exact_transition.order_ref,
+            ),
+            uncertainty=json.loads(uncertainty.facts_json),
+        )
+        validate_execution_coverage_quarantined_facts(quarantined)
+        return TransitionInput(
+            strategy_instance_id=exact_transition.strategy_instance_id,
+            run_id=exact_transition.run_id,
+            command_id=exact_transition.command_id,
+            effect_operation_id=exact_transition.effect_operation_id,
+            order_ref=exact_transition.order_ref,
+            broker_order_id=exact_transition.broker_order_id,
+            transition_kind="EXECUTION_COVERAGE_QUARANTINED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="in_progress",
+            proof_reference=exact_transition.proof_reference,
+            source_event_at_ms=facts.source_event_at_ms,
+            clerk_observed_at_ms=self._clock(),
+            summary_code="EXECUTION_COVERAGE_QUARANTINED",
+            facts_json=quarantined.to_facts_json(),
+        )
 
     @staticmethod
     def _same_execution_slice(

@@ -11,9 +11,10 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
+from conftest import _clock_at
 
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter, submit_enter
@@ -33,14 +34,18 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     OperationClaimError,
 )
+from app.broker.alpaca.clerk.sqlite.runtime import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     BROKER_SNAPSHOT_STALE_REASON_CODE,
     AdmissionBlockedError,
+    Capability,
+    decide_capability,
     raise_uncertainty,
 )
+from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.errors import BrokerRequestInvalid, BrokerUnavailable
-from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
-from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at
+from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
+from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 
 ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
@@ -208,6 +213,90 @@ async def _make_entry(
             ),
         )
     return submission.order_ref
+
+
+async def test_coverage_resolution_resumes_accepted_exit_without_second_intent(
+    repo: ClerkSqliteRepository,
+) -> None:
+    entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
+    accepted = accept_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-coverage-recovery",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
+    )
+    assert accepted.effect_operation_id is not None
+    recovered_order = _broker_order(
+        entry_ref,
+        status="filled",
+        filled_quantity=10,
+        filled_avg_price=100,
+    )
+    sink = SqliteTradeUpdateEvidenceSink(
+        repo=repo,
+        read=cast(BrokerReadPort, _FakeTrade()),
+        trade=cast(BrokerTradePort, _FakeTrade()),
+        intake=ReentrantAsyncLock(),
+    )
+    await sink.record_lifecycle_event(
+        client_order_id=entry_ref,
+        event=BrokerOrderEvent(
+            event_type="fill",
+            occurred_at_ms=1_700_000_000_600,
+            price=100,
+            quantity=10,
+            execution_id="exit-coverage-execution",
+        ),
+        event_key="execution:exit-coverage-execution",
+        order=recovered_order,
+        recovery_source=None,
+        recovery_window_limit=None,
+    )
+
+    assert not decide_capability(
+        repo,
+        capability=Capability.REDUCE,
+        strategy_instance_id=SID,
+    ).allowed
+    blocked_trade = _FakeTrade(lookup_results=[recovered_order, recovered_order])
+    with pytest.raises(AdmissionBlockedError):
+        await resolve_exit(
+            repo,
+            effect_operation_id=accepted.effect_operation_id,
+            trade=blocked_trade,
+        )
+    assert blocked_trade.submit_calls == []
+
+    uncertainty = repo.active_uncertainties_for_admission(strategy_instance_id=SID)
+    assert len(uncertainty) == 1
+    meta = repo.control_meta_snapshot()
+    repo.resolve_execution_coverage_conflict(
+        uncertainty_id=uncertainty[0]["uncertainty_id"],
+        expected_authority_generation=meta.authority_generation,
+        expected_db_identity_token=meta.db_identity_token,
+        expected_control_revision=meta.control_revision,
+    )
+
+    resumed_trade = _FakeTrade(
+        lookup_results=[recovered_order, recovered_order],
+        submit_result=_broker_order(
+            "placeholder",
+            side="sell",
+            status="accepted",
+        ),
+    )
+    resumed = await resolve_exit(
+        repo,
+        effect_operation_id=accepted.effect_operation_id,
+        trade=resumed_trade,
+    )
+
+    assert resumed.effect_operation_id == accepted.effect_operation_id
+    assert resumed.reducing_order_ref is not None
+    assert len(resumed_trade.submit_calls) == 1
+    assert resumed_trade.submit_calls[0][1] == resumed.reducing_order_ref
 
 
 # ── accept_exit ──────────────────────────────────────────────────────────────

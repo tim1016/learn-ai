@@ -230,6 +230,24 @@ from the canonical NYSE calendar, including half-days.
   the effective position and FIFO projection. A quantity regression without a
   matching superseded slice is an exposure-blocking uncertainty, not a silently
   accepted fill.
+- An **execution-coverage quarantine** is an immutable exact execution fact
+  that arrives after a cumulative recovery fold for the same order. It is
+  appended to the custody transition stream but deliberately does not enter
+  `fills`, positions, FIFO, or P&L until a closed proof selects its economic
+  coverage. Its typed `EXECUTION_COVERAGE_CONFLICT` uncertainty opens in the
+  same SQLite transaction, so a partial write cannot leave new exposure or
+  reduction unblocked while that proof is absent.
+- The only initial coverage resolution vocabulary is
+  `EXACT_REPLACES_CUMULATIVE`: one quarantined exact execution must have the
+  same order, side, quantity, and price (within the pinned execution
+  tolerance) as exactly one current `cumulative_recovery` fold. The resolution
+  replaces that rebuildable fold with the exact execution in the same SQLite
+  transaction and closes only the named conflict. The resolution facts record
+  the account, authority generation, database identity, and expected control
+  revision that admitted it. Both original observations and the resolution
+  remain immutable custody transitions. Multiple aggregate
+  rows, changed economics, unreadable facts, or an identity mismatch remain
+  blocked with an explicit evidence-insufficiency reason; there is no override.
 - **`realized_pnl_today`** is computed by running FIFO over the complete
   effective fill history and summing only closed lots whose
   `closed_at_ms ∈ [session_open_ms, session_close_ms)`. The result is therefore

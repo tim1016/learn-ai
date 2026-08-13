@@ -12,17 +12,29 @@ import json
 from pathlib import Path
 
 import pytest
+from conftest import _clock_at
 
 from app.broker.alpaca.adapter import from_alpaca_trade_update
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExecutionCorrectedFacts,
+    ExecutionCoverageQuarantinedFacts,
+    ExecutionCoverageResolvedFacts,
     ExecutionSliceFilledFacts,
     UncertaintyRaisedFacts,
 )
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
+from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
+from app.broker.alpaca.clerk.sqlite.recovery_execution import (
+    RecoveryExecutionRequest,
+    execute_recovery_action,
+)
+from app.broker.alpaca.clerk.sqlite.recovery_policy import (
+    RecoveryPolicyContext,
+    build_recovery_catalog,
+)
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import Capability, decide_capability
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
@@ -30,7 +42,6 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     ExecutionCoverageConflictCause,
 )
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
-from conftest import _clock_at
 
 _FIXTURE_ROOT = Path(__file__).parents[4] / "fixtures" / "golden" / "alpaca-sqlite-execution"
 _ACCOUNT_ID = "PA-S1-EXECUTION"
@@ -578,14 +589,18 @@ def test_late_exact_execution_after_cumulative_recovery_raises_one_coverage_conf
             abs=_ATOL,
             rel=0,
         )
-        uncertainty_transitions = [
+        quarantine_transitions = [
             transition
             for transition in repo.transitions_for_order(accepted.order_ref or "")
-            if transition["transition_kind"] == "UNCERTAINTY_RAISED"
+            if transition["transition_kind"] == "EXECUTION_COVERAGE_QUARANTINED"
         ]
-        assert len(uncertainty_transitions) == 1
+        assert len(quarantine_transitions) == 1
+        quarantined = ExecutionCoverageQuarantinedFacts.from_facts_json(
+            quarantine_transitions[0]["facts_json"]
+        )
+        assert quarantined.exact_execution["execution_id"] == late_exact.execution_id
         uncertainty_facts = UncertaintyRaisedFacts.from_facts_json(
-            uncertainty_transitions[0]["facts_json"]
+            json.dumps(quarantined.uncertainty)
         )
         assert uncertainty_facts.reason_code == EXECUTION_COVERAGE_CONFLICT_REASON_CODE
         assert uncertainty_facts.cause_facts == {
@@ -606,6 +621,221 @@ def test_late_exact_execution_after_cumulative_recovery_raises_one_coverage_conf
             == "coverage_conflict_already_raised"
         )
         assert repo.transitions_for_order(accepted.order_ref or "") == transitions_after_conflict
+    finally:
+        repo.close()
+
+
+def test_coverage_resolution_replaces_one_cumulative_fill_once(tmp_path: Path) -> None:
+    repo, accepted = _repository_for_strategy(
+        tmp_path,
+        strategy_instance_id="coverage-resolution-bot",
+        symbol="SPY",
+    )
+    try:
+        _append_cumulative_recovery(
+            repo,
+            accepted=accepted,
+            cumulative_filled_quantity=5.0,
+            average_price=100.0,
+            source_event_at_ms=1_786_368_000_351,
+        )
+        exact = ExecutionSliceFilledFacts(
+            execution_id="coverage-resolution-execution-5",
+            symbol="SPY",
+            side="BUY",
+            slice_qty=5.0,
+            slice_price=100.0,
+            fee=None,
+            fee_fidelity="not_reported",
+            evidence_source="websocket",
+            source_event_at_ms=1_786_368_000_352,
+        )
+        assert _append_slice(repo, accepted=accepted, facts=exact) == "coverage_conflict_raised"
+        meta = repo.control_meta_snapshot()
+        active = repo.active_uncertainties_for_admission(
+            strategy_instance_id="coverage-resolution-bot"
+        )
+        assert len(active) == 1
+        receipt = repo.resolve_execution_coverage_conflict(
+            uncertainty_id=active[0]["uncertainty_id"],
+            expected_authority_generation=meta.authority_generation,
+            expected_db_identity_token=meta.db_identity_token,
+            expected_control_revision=meta.control_revision,
+        )
+
+        assert receipt.applied is True
+        assert receipt.execution_id == exact.execution_id
+        assert receipt.receipt_id.startswith("coverage-resolution:")
+        resolution = next(
+            transition
+            for transition in repo.transitions_for_order(accepted.order_ref or "")
+            if transition["transition_kind"] == "EXECUTION_COVERAGE_RESOLVED"
+        )
+        resolution_facts = ExecutionCoverageResolvedFacts.from_facts_json(
+            resolution["facts_json"]
+        )
+        assert resolution_facts.account_id == _ACCOUNT_ID
+        assert resolution_facts.authority_generation == meta.authority_generation
+        assert resolution_facts.db_identity_token == meta.db_identity_token
+        assert resolution_facts.expected_control_revision == meta.control_revision
+        fills = repo.fills_for_order(accepted.order_ref or "")
+        assert len(fills) == 1
+        assert fills[0]["execution_id"] == exact.execution_id
+        assert fills[0]["evidence_source"] == "websocket"
+        assert repo.position("coverage-resolution-bot", "SPY") == pytest.approx(
+            5.0,
+            abs=_ATOL,
+            rel=0,
+        )
+        assert repo.active_uncertainties_for_admission(
+            strategy_instance_id="coverage-resolution-bot"
+        ) == []
+        assert decide_capability(
+            repo,
+            capability=Capability.REDUCE,
+            strategy_instance_id="coverage-resolution-bot",
+        ).allowed
+
+        retry = repo.resolve_execution_coverage_conflict(
+            uncertainty_id=active[0]["uncertainty_id"],
+            expected_authority_generation=meta.authority_generation,
+            expected_db_identity_token=meta.db_identity_token,
+            expected_control_revision=meta.control_revision,
+        )
+        assert retry == receipt.__class__(**{**receipt.__dict__, "applied": False})
+        assert repo.fills_for_order(accepted.order_ref or "") == fills
+    finally:
+        repo.close()
+
+
+def test_coverage_resolution_survives_restart_without_a_second_delta(tmp_path: Path) -> None:
+    repo, accepted = _repository_for_strategy(
+        tmp_path,
+        strategy_instance_id="coverage-restart",
+        symbol="SPY",
+    )
+    try:
+        _append_cumulative_recovery(
+            repo,
+            accepted=accepted,
+            cumulative_filled_quantity=5.0,
+            average_price=100.0,
+            source_event_at_ms=1_786_368_000_351,
+        )
+        exact = ExecutionSliceFilledFacts(
+            execution_id="coverage-restart-execution-5",
+            symbol="SPY",
+            side="BUY",
+            slice_qty=5.0,
+            slice_price=100.0,
+            fee=None,
+            fee_fidelity="not_reported",
+            evidence_source="websocket",
+            source_event_at_ms=1_786_368_000_352,
+        )
+        assert _append_slice(repo, accepted=accepted, facts=exact) == "coverage_conflict_raised"
+        uncertainty_id = repo.active_uncertainties_for_admission(
+            strategy_instance_id="coverage-restart"
+        )[0]["uncertainty_id"]
+        repo.close()
+        repo = ClerkSqliteRepository.open(
+            account_id=_ACCOUNT_ID,
+            artifacts_root=tmp_path,
+            clock=_clock_at(1_786_368_000_400),
+        )
+        meta = repo.control_meta_snapshot()
+        receipt = repo.resolve_execution_coverage_conflict(
+            uncertainty_id=uncertainty_id,
+            expected_authority_generation=meta.authority_generation,
+            expected_db_identity_token=meta.db_identity_token,
+            expected_control_revision=meta.control_revision,
+        )
+
+        assert receipt.applied is True
+        assert repo.position("coverage-restart", "SPY") == pytest.approx(
+            5.0,
+            abs=_ATOL,
+            rel=0,
+        )
+        assert repo.fills_for_order(accepted.order_ref or "")[0]["execution_id"] == exact.execution_id
+    finally:
+        repo.close()
+
+
+@pytest.mark.asyncio
+async def test_presented_coverage_resolution_replays_its_original_receipt(
+    tmp_path: Path,
+) -> None:
+    repo, accepted = _repository_for_strategy(
+        tmp_path,
+        strategy_instance_id="presented-cover",
+        symbol="SPY",
+    )
+    try:
+        _append_cumulative_recovery(
+            repo,
+            accepted=accepted,
+            cumulative_filled_quantity=5.0,
+            average_price=100.0,
+            source_event_at_ms=1_786_368_000_351,
+        )
+        exact = ExecutionSliceFilledFacts(
+            execution_id="presented-coverage-resolution-execution-5",
+            symbol="SPY",
+            side="BUY",
+            slice_qty=5.0,
+            slice_price=100.0,
+            fee=None,
+            fee_fidelity="not_reported",
+            evidence_source="websocket",
+            source_event_at_ms=1_786_368_000_352,
+        )
+        assert _append_slice(repo, accepted=accepted, facts=exact) == "coverage_conflict_raised"
+
+        async def current_context() -> RecoveryPolicyContext:
+            reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
+            try:
+                context = reader.recovery_context(
+                    strategy_instance_id="presented-cover"
+                )
+                assert context is not None
+                return context
+            finally:
+                reader.close()
+
+        context = await current_context()
+        action = next(
+            item
+            for item in build_recovery_catalog(context)
+            if item.action_id == "resolve_execution_coverage"
+        )
+        assert action.available is True
+        assert action.execution_ref is not None
+
+        class _Facade:
+            account_id = _ACCOUNT_ID
+            repository = repo
+
+        request = RecoveryExecutionRequest(
+            action_id="resolve_execution_coverage",
+            concurrency_token=action.concurrency_token,
+            execution_ref=action.execution_ref,
+            reason=None,
+        )
+        result = await execute_recovery_action(
+            _Facade(),
+            request=request,
+            current_context=current_context,
+        )
+        replay = await execute_recovery_action(
+            _Facade(),
+            request=request,
+            current_context=current_context,
+        )
+
+        assert result.applied is True
+        assert replay.applied is False
+        assert replay.receipt_id == result.receipt_id
     finally:
         repo.close()
 
