@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject, input, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { BrokerHealthService } from '../services/broker-health.service';
 import { LiveRunsService } from '../services/live-runs.service';
@@ -8,7 +8,7 @@ import type { ActiveBotSidebarNotice } from './active-bot-sidebar-notice.service
 const NOTICE_ACTION_TIMEOUT_MS = 15_000;
 
 /**
- * Sidebar broker connection control.
+ * Global IBKR broker connection control.
  *
  * Driven by ``BrokerHealthService.bannerState`` — see the service
  * docstring for why the truth source is ``health.is_paper`` and never
@@ -19,14 +19,14 @@ const NOTICE_ACTION_TIMEOUT_MS = 15_000;
   changeDetection: ChangeDetectionStrategy.OnPush,
   styleUrl: './broker-banner.component.scss',
   template: `
-    @if (!compact() && activeBotNotice(); as notice) {
+    @if (activeBotNotice(); as notice) {
       <details
-        class="host-runner-sidebar-notice"
+        class="host-runner-notice"
         [class.is-binding-invalid]="notice.kind === 'live-binding-invalid'"
-        data-testid="sidebar-host-runner-notice"
+        data-testid="host-runner-notice"
       >
         <summary>{{ notice.summary }}</summary>
-        <div class="host-runner-sidebar-detail">
+        <div class="host-runner-notice__detail">
           <p>{{ notice.message }}</p>
           @if (notice.command) {
             <pre><code>{{ notice.command }}</code></pre>
@@ -34,8 +34,8 @@ const NOTICE_ACTION_TIMEOUT_MS = 15_000;
           @if (notice.action; as action) {
             <button
               type="button"
-              class="host-runner-sidebar-action"
-              data-testid="sidebar-host-runner-action"
+              class="host-runner-notice__action"
+              data-testid="host-runner-notice-action"
               [disabled]="isNoticeActionInFlight(notice.instanceId)"
               (click)="invokeNoticeAction(notice)"
             >
@@ -43,7 +43,7 @@ const NOTICE_ACTION_TIMEOUT_MS = 15_000;
             </button>
           }
           @if (noticeActionError(); as err) {
-            <p class="host-runner-sidebar-error" role="alert">{{ err }}</p>
+            <p class="host-runner-notice__error" role="alert">{{ err }}</p>
           }
         </div>
       </details>
@@ -54,7 +54,6 @@ const NOTICE_ACTION_TIMEOUT_MS = 15_000;
     @if (state) {
       <section
         class="broker-banner"
-        [class.broker-banner--compact]="compact()"
         [class.is-paper]="state.kind === 'paper'"
         [class.is-live]="state.kind === 'live'"
         [class.is-degraded]="state.kind === 'degraded'"
@@ -94,16 +93,12 @@ const NOTICE_ACTION_TIMEOUT_MS = 15_000;
               aria-hidden="true"
             ></i>
           </button>
-        } @else if (compact()) {
-          <i class="pi pi-lock broker-status-icon" aria-hidden="true"></i>
         }
       </section>
     }
   `,
 })
 export class BrokerBannerComponent {
-  readonly compact = input(false);
-
   private readonly healthService = inject(BrokerHealthService);
   private readonly liveRuns = inject(LiveRunsService);
   private readonly activeBotNoticeService = inject(ActiveBotSidebarNoticeService);

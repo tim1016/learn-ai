@@ -47,4 +47,5 @@ describe('TopBarComponent', () => {
     const results = await axe.run(document.body, { rules: { 'color-contrast': { enabled: false } } });
     expect(results.violations).toEqual([]);
   });
+
 });

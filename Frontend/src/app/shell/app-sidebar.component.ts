@@ -19,7 +19,6 @@ import {
   type AppMenuGroup,
   type AppMenuItem,
 } from './app-menu';
-import { BrokerBannerComponent } from './broker-banner.component';
 
 const SIDEBAR_PINNED_STORAGE_KEY = 'quant-lab.sidebar.pinned';
 const FLYOUT_CLOSE_DELAY_MS = 180;
@@ -27,7 +26,7 @@ const FLYOUT_CLOSE_DELAY_MS = 180;
 @Component({
   selector: 'app-sidebar',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule, FormsModule, RouterLink, BrokerBannerComponent],
+  imports: [CommonModule, FormsModule, RouterLink],
   styleUrl: './app-sidebar.component.scss',
   host: {
     '[class.sidebar--pinned]': 'pinned()',
@@ -182,7 +181,6 @@ const FLYOUT_CLOSE_DELAY_MS = 180;
       </nav>
 
       <div class="status-footer">
-        <app-broker-banner [compact]="!pinned()" />
         <button
           type="button"
           class="sidebar-pin"

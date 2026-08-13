@@ -7,6 +7,7 @@ import { vi } from 'vitest';
 import axe from 'axe-core';
 import { AppComponent } from './app.component';
 import { BrokerHealthService } from './services/broker-health.service';
+import { LiveRunsService } from './services/live-runs.service';
 
 class FakeBrokerHealthService {
   readonly health = signal(null);
@@ -15,6 +16,10 @@ class FakeBrokerHealthService {
   start = vi.fn();
   connect = vi.fn().mockResolvedValue(undefined);
   disconnect = vi.fn().mockResolvedValue(undefined);
+}
+
+class FakeLiveRunsService {
+  startHostRunner = vi.fn().mockResolvedValue(undefined);
 }
 
 @Component({ template: '<p>Route body</p>', changeDetection: ChangeDetectionStrategy.OnPush })
@@ -36,6 +41,7 @@ describe('AppComponent', () => {
       providers: [
         MessageService,
         { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        { provide: LiveRunsService, useClass: FakeLiveRunsService },
       ],
     }).compileComponents();
     fixture = TestBed.createComponent(AppComponent);
@@ -75,10 +81,11 @@ describe('AppComponent', () => {
     }
   });
 
-  it('should render the broker banner inside the sidebar', () => {
+  it('renders the global broker banner in the top-bar connection region', () => {
     const sidebar = fixture.nativeElement.querySelector('app-sidebar');
-    expect(sidebar?.querySelector('app-broker-banner')).toBeTruthy();
-    expect(fixture.nativeElement.querySelector('main > app-broker-banner')).toBeNull();
+    const connection = fixture.nativeElement.querySelector('[data-shell-slot="connection"]');
+    expect(sidebar?.querySelector('app-broker-banner')).toBeNull();
+    expect(connection?.querySelector('app-broker-banner')).toBeTruthy();
   });
 
   it('should contain a router-outlet', () => {
