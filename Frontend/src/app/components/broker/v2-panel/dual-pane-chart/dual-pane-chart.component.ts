@@ -20,6 +20,7 @@ import {
   type ISeriesMarkersPluginApi,
   type SeriesMarker,
   type Time,
+  type TickMarkType,
   type UTCTimestamp,
   createSeriesMarkers,
 } from 'lightweight-charts';
@@ -33,7 +34,7 @@ import type {
 import { toCandle } from '../lib/chart-bar-mapping';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import type { TickerQuoteView } from '../../../../shared/ticker-quote/ticker-quote.component';
-import { createAppChart } from '../../../../shared/charts/chart-utils';
+import { createAppChart, formatChartAxisTick } from '../../../../shared/charts/chart-utils';
 import { PanelInstrumentQuoteComponent } from '../instrument-quote/panel-instrument-quote.component';
 
 type ChartPane = 'live' | 'polygon';
@@ -46,8 +47,8 @@ function persistedChartTimeZone(): ChartTimeZone {
   return localStorage.getItem(TIME_ZONE_STORAGE_KEY) === 'et' ? 'et' : 'local';
 }
 
-/** Formats the chart-library's seconds-UTC boundary in the selected display zone. */
-export function formatChartAxisTime(time: Time | number, timeZone: ChartTimeZone): string {
+/** Formats the chart-library's seconds-UTC boundary for the crosshair readout. */
+export function formatChartCrosshairTime(time: Time | number, timeZone: ChartTimeZone): string {
   if (typeof time !== 'number') return String(time);
   return new Intl.DateTimeFormat(undefined, {
     month: 'short',
@@ -345,10 +346,14 @@ export class DualPaneChartComponent implements AfterViewInit {
     const timeZone = this.timeZone();
     this.chart?.applyOptions({
       localization: {
-        timeFormatter: (time: Time) => formatChartAxisTime(time, timeZone),
+        timeFormatter: (time: Time) => formatChartCrosshairTime(time, timeZone),
       },
       timeScale: {
-        tickMarkFormatter: (time: Time) => formatChartAxisTime(time, timeZone),
+        tickMarkFormatter: (time: Time, tickMarkType: TickMarkType) => formatChartAxisTick(
+          time,
+          timeZone === 'et' ? 'America/New_York' : undefined,
+          tickMarkType,
+        ),
       },
     });
   }

@@ -3,6 +3,8 @@ import {
   type ChartOptions,
   type DeepPartial,
   type IChartApi,
+  type Time,
+  TickMarkType,
   type UTCTimestamp,
 } from 'lightweight-charts';
 
@@ -27,39 +29,57 @@ export function createAppChart(
   });
 }
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-                'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function formatAxisLabel(
+  date: Date,
+  timeZone: string | undefined,
+  options: Intl.DateTimeFormatOptions,
+): string {
+  return new Intl.DateTimeFormat('en-US', { ...options, timeZone }).format(date);
+}
 
 /**
- * Custom tick mark formatter for lightweight-charts.
- * Shows "Mon DD" for day ticks instead of just "DD".
+ * Format a Lightweight Charts axis tick at the UI boundary.
  *
- * tickMarkType values (TickMarkType enum):
- *   0 = Year, 1 = Month, 2 = DayOfMonth, 3 = Time, 4 = TimeWithSeconds
+ * The library supplies seconds UTC, derived from the source's int64-ms UTC
+ * timestamp. Converting it to a display string here keeps timezone handling
+ * out of chart data and leaves the source timestamp unchanged.
  */
-export function formatTickMark(
-  time: UTCTimestamp,
-  tickMarkType: number,
-  _locale: string
+export function formatChartAxisTick(
+  time: Time | number,
+  timeZone: string | undefined,
+  tickMarkType: TickMarkType,
 ): string {
-  const d = new Date((time as number) * 1000);
+  if (typeof time !== 'number') return String(time);
 
+  const date = new Date(time * 1_000);
   switch (tickMarkType) {
-    case 0: // Year
-      return d.getUTCFullYear().toString();
-    case 1: // Month
-      return `${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
-    case 2: // DayOfMonth
-      return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`;
-    case 3: // Time
-      return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
-    case 4: // TimeWithSeconds
-      return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+    case TickMarkType.Year:
+      return formatAxisLabel(date, timeZone, { year: 'numeric' });
+    case TickMarkType.Month:
+      return formatAxisLabel(date, timeZone, { month: 'short', year: 'numeric' });
+    case TickMarkType.DayOfMonth:
+      return formatAxisLabel(date, timeZone, { month: 'short', day: 'numeric' });
+    case TickMarkType.Time:
+      return formatAxisLabel(date, timeZone, {
+        hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+      });
+    case TickMarkType.TimeWithSeconds:
+      return formatAxisLabel(date, timeZone, {
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+      });
     default:
       return '';
   }
 }
 
-function pad(n: number): string {
-  return n.toString().padStart(2, '0');
+/**
+ * Compatibility adapter that preserves the existing UTC axis behavior for
+ * charts that have not opted into an explicit display zone yet.
+ */
+export function formatTickMark(
+  time: UTCTimestamp,
+  tickMarkType: TickMarkType,
+  _locale: string
+): string {
+  return formatChartAxisTick(time, 'UTC', tickMarkType);
 }

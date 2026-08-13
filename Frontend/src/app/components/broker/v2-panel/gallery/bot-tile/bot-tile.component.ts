@@ -21,13 +21,14 @@ import {
   type ISeriesMarkersPluginApi,
   type SeriesMarker,
   type Time,
+  TickMarkType,
   type UTCTimestamp,
   createSeriesMarkers,
 } from 'lightweight-charts';
 import type { ChartBar, ChartFillMarker, GalleryBotView } from '../lib/gallery.types';
 import { toCandle } from '../../lib/chart-bar-mapping';
 import { fmtCurrency, fmtInteger, fmtSignedCurrency, fmtSignedNumber } from '../../../format';
-import { createAppChart } from '../../../../../shared/charts/chart-utils';
+import { createAppChart, formatChartAxisTick } from '../../../../../shared/charts/chart-utils';
 import { AssetIdentityComponent } from '../../../../../shared/asset-identity';
 
 /**
@@ -231,7 +232,16 @@ export class BotTileComponent {
         horzLines: { color: 'rgba(42, 46, 57, 0.35)' },
       },
       rightPriceScale: { borderColor: '#2a2e39' },
-      timeScale: { borderColor: '#2a2e39', timeVisible: true },
+      timeScale: {
+        borderColor: '#2a2e39',
+        timeVisible: true,
+        secondsVisible: false,
+        tickMarkFormatter: (time: Time) => formatChartAxisTick(
+          time,
+          undefined,
+          TickMarkType.Time,
+        ),
+      },
       autoSize: true,
     });
     this.candleSeries = this.chart.addSeries(CandlestickSeries, {});

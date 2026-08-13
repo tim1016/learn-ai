@@ -27,6 +27,7 @@ vi.mock('lightweight-charts', () => {
     HistogramSeries: 'HistogramSeries',
     LineStyle: { Solid: 0, Dotted: 1, Dashed: 2, LargeDashed: 3, SparseDotted: 4 },
     CrosshairMode: { Normal: 0, Magnet: 1 },
+    TickMarkType: { Year: 0, Month: 1, DayOfMonth: 2, Time: 3, TimeWithSeconds: 4 },
   };
 });
 
