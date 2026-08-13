@@ -340,6 +340,31 @@ describe('OperatorLensComponent', () => {
     expect(screen.getByText('Restore observation and reconcile.')).toBeTruthy();
   });
 
+  it('keeps the promoted lifecycle action out of readiness while retaining its gate', async () => {
+    const fakeSvc = makeFakePanelService();
+    const resumeAction: PanelAction = {
+      action_id: 'resume', label: 'Resume', explanation: 'Resume bot.', enabled: true,
+      blockers: [], confirmation: null, revision: 1, concurrency_token: 'resume-token',
+    };
+    const panel: BotPanelView = {
+      ...makePanel(),
+      health: { ...makeHealth(), running: false, phase: 'OFF_DUTY', desired_state: 'STOPPED' },
+      actions: [resumeAction],
+      readiness_checks: [makeReadinessCheck(resumeAction)],
+    };
+
+    await render(OperatorLensComponent, {
+      inputs: {
+        panel, profile: makeProfile(), actionPending: false,
+        broker: 'alpaca', accountId: 'acc-1', sid: 'sid-1',
+      },
+      providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
+    });
+
+    expect(screen.getAllByRole('button', { name: 'Resume' })).toHaveLength(1);
+    expect(screen.getByRole('button', { name: /Ready Resume/i })).toBeTruthy();
+  });
+
   it('renders the transaction rail with the station from the panel', async () => {
     const fakeSvc = makeFakePanelService();
 

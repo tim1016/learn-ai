@@ -2,21 +2,17 @@
   [backLink]="backLink()"
   [backLabel]="(panel().broker | receiptLabel) + ' bots'"
   [updatedAtMs]="panel().updated_at_ms"
+  [snapshotStatus]="'Revision ' + panel().revision + (panel().health.running ? ' running' : ' stopped')"
 >
   <div botBannerIdentity class="trader-bot-banner__identity">
     <h1 class="trader-bot-banner__strategy">{{ panel().strategy_label }}</h1>
     <code>{{ panel().strategy_instance_id }}</code>
   </div>
 
-  <span
+  <app-mission-verdict-status
     botBannerStatus
-    class="trader-bot-banner__status"
-    [attr.data-state]="panel().mission_verdict.state"
-    [attr.aria-label]="panel().mission_verdict.label"
-    role="status"
-    aria-live="polite"
-    aria-atomic="true"
-  >{{ panel().mission_verdict.label }}</span>
+    [verdict]="panel().mission_verdict"
+  />
 
   @if (primaryAction(); as action) {
     <app-panel-action-button
@@ -28,21 +24,11 @@
     />
   }
 
-  <div botBannerOverflow class="trader-bot-banner__overflow">
-    <button
-      type="button"
-      aria-label="More trader actions"
-      [attr.aria-expanded]="overflowOpen()"
-      aria-controls="trader-banner-actions"
-      (click)="toggleOverflow()"
-    >⋯</button>
-    @if (overflowOpen()) {
-      <div id="trader-banner-actions" class="trader-bot-banner__menu">
-      <a
-        [routerLink]="manualOrderNavigation().commands"
-        [queryParams]="manualOrderNavigation().queryParams"
-      >Manual order</a>
-      </div>
-    }
-  </div>
+  <app-bot-banner-overflow botBannerOverflow label="More trader actions">
+    <a
+      class="trader-bot-banner__manual-order"
+      [routerLink]="manualOrderNavigation().commands"
+      [queryParams]="manualOrderNavigation().queryParams"
+    >Manual order</a>
+  </app-bot-banner-overflow>
 </app-bot-detail-banner>

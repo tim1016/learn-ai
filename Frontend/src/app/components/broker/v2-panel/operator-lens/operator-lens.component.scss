@@ -1,6 +1,6 @@
 :host { display: block; min-width: 0; }
 
-.operator-lens { min-width: 0; }
+.operator-lens { display: grid; min-width: 0; gap: var(--space-4); }
 
 .operator-lens__grid {
   display: grid;

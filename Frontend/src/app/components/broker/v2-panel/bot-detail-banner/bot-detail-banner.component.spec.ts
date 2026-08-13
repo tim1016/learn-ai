@@ -13,6 +13,7 @@ import { BotDetailBannerComponent } from './bot-detail-banner.component';
       [backLink]="backLink"
       backLabel="alpaca bots"
       [updatedAtMs]="updatedAtMs"
+      snapshotStatus="Revision 42 stopped"
     >
       <span botBannerIdentity>EMA crossover · sid-001</span>
       <span botBannerQuote>SPY $625.10</span>
@@ -40,6 +41,6 @@ describe('BotDetailBannerComponent', () => {
     expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'More actions' })).toBeTruthy();
     expect(screen.getByText(/Updated/)).toBeTruthy();
-    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.getByRole('status', { name: 'Revision 42 stopped' })).toBeTruthy();
   });
 });

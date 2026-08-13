@@ -26,4 +26,6 @@ export class BotDetailBannerComponent {
   readonly backLink = input.required<string | string[]>();
   readonly backLabel = input.required<string>();
   readonly updatedAtMs = input.required<number>();
+  /** Screen-reader summary of the latest panel revision, without visual header noise. */
+  readonly snapshotStatus = input<string | null>(null);
 }

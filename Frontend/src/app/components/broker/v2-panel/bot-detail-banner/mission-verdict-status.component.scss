@@ -1,0 +1,36 @@
+:host { display: inline-flex; }
+
+.mission-verdict-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0.28rem 0.55rem;
+  border: 1px solid color-mix(in srgb, var(--bull) 45%, var(--border-light));
+  border-radius: var(--radius-pill);
+  background: var(--bull-soft);
+  color: var(--bull);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  white-space: nowrap;
+
+  &::before {
+    width: 0.38rem;
+    height: 0.38rem;
+    border-radius: 999px;
+    background: currentcolor;
+    content: '';
+  }
+
+  &[data-state='off_duty'] {
+    border-color: color-mix(in srgb, var(--warn) 50%, var(--border-light));
+    background: var(--warn-soft);
+    color: var(--warn);
+  }
+
+  &[data-state='blocked'],
+  &[data-state='retired'] {
+    border-color: color-mix(in srgb, var(--bear) 50%, var(--border-light));
+    background: var(--bear-soft);
+    color: var(--bear);
+  }
+}
