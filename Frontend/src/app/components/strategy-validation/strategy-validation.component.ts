@@ -25,6 +25,7 @@ import { QuantConnectReferenceCodeComponent } from './quantconnect-reference-cod
   templateUrl: './strategy-validation.component.html',
   styleUrl: './strategy-validation.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  host: { class: 'page-inset' },
 })
 export class StrategyValidationComponent {
   private readonly service = inject(StrategyValidationService);

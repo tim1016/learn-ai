@@ -58,6 +58,15 @@ p {
 .negative { color: var(--bear); font-weight: 600; }
 .muted    { color: var(--text-muted); }
 
+/* Routed pages own their framing. The application shell deliberately does
+   not add padding, so full-bleed workspaces and standard pages can coexist
+   without compensating margins. */
+.page-inset {
+  display: block;
+  min-width: 0;
+  padding: var(--page-pad-y) var(--page-pad-x);
+}
+
 /* Tabular-num utilities. Apply to any element rendering a price,
    percentage, count, ratio, or ID-like string so digits align in a
    monospaced grid. Non-negotiable per design system. */

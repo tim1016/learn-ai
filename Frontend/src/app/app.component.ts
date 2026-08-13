@@ -42,7 +42,6 @@ import { BrokerHealthService } from './services/broker-health.service';
     .main-content {
       flex: 1;
       min-width: 0;
-      padding: var(--page-pad-y) var(--page-pad-x);
     }
   `],
   template: `

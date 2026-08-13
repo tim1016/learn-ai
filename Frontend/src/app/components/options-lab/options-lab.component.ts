@@ -8,5 +8,6 @@ import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
   templateUrl: './options-lab.component.html',
   styleUrls: ['./options-lab.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
+  host: { class: 'page-inset' },
 })
 export class OptionsLabComponent {}

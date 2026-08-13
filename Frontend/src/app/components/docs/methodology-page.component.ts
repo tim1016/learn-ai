@@ -41,12 +41,15 @@ import { PageHeaderComponent } from '../../shared/page-header/page-header.compon
     </div>
   `,
   styles: [`
-    :host {
-      display: block;
-      max-width: 960px;
-      margin: 0 auto;
-      padding: 4px 4px 40px;
-    }
+      :host {
+        display: block;
+        max-width: 960px;
+        margin: 0 auto;
+        padding:
+          calc(var(--page-pad-y) + 4px)
+          calc(var(--page-pad-x) + 4px)
+          calc(var(--page-pad-y) + 40px);
+      }
 
     .page-header {
       margin-bottom: 24px;

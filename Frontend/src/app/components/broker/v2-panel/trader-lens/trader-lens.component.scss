@@ -2,6 +2,7 @@
   display: grid;
   min-width: 0;
   min-height: 0;
+  padding: 0 var(--space-4) var(--space-4);
   gap: var(--space-3);
   grid-template-rows: auto minmax(0, 1fr);
 }
@@ -54,6 +55,7 @@
 }
 
 @media (max-width: 760px) {
+  :host { padding-inline: var(--space-3); }
   .trader-rail { grid-template-columns: 1fr; }
   .trader-rail app-trades-today-list,
   .trader-rail .observation-note { grid-column: auto; }

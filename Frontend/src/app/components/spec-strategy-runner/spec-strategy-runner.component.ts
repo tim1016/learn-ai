@@ -117,6 +117,7 @@ interface QuickManageRule {
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './spec-strategy-runner.component.html',
   styleUrl: './spec-strategy-runner.component.scss',
+  host: { class: 'page-inset' },
 })
 export class SpecStrategyRunnerComponent {
   private readonly specService = inject(SpecStrategyService);

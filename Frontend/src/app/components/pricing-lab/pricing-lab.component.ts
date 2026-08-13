@@ -126,6 +126,7 @@ export const MODEL_REGISTRY: ModelDef[] = [
   templateUrl: './pricing-lab.component.html',
   styleUrls: ['./pricing-lab.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
+  host: { class: 'page-inset' },
 })
 export class PricingLabComponent implements OnDestroy {
   private readonly marketData = inject(MarketDataService);

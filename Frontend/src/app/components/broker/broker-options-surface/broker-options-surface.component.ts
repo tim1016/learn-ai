@@ -90,6 +90,7 @@ const Z_METRICS: readonly ZMetricOption[] = [
   ],
   styleUrl: './broker-options-surface.component.scss',
   templateUrl: './broker-options-surface.component.html',
+  host: { class: 'page-inset' },
 })
 export class BrokerOptionsSurfaceComponent {
   private readonly broker = inject(BrokerService);

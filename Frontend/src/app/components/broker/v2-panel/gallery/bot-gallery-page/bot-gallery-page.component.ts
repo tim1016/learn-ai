@@ -56,7 +56,7 @@ type GalleryViewState = 'loading' | 'error' | 'empty' | 'ready';
   providers: [GalleryLiveStore],
   templateUrl: './bot-gallery-page.component.html',
   styleUrl: './bot-gallery-page.component.scss',
-  host: { class: 'block h-full' },
+  host: { class: 'block h-full page-inset' },
 })
 export class BotGalleryPageComponent {
   readonly broker = input.required<string>();

@@ -41,7 +41,10 @@ import { PageHeaderComponent } from '../../../../shared/page-header/page-header.
         display: block;
         max-width: 960px;
         margin: 0 auto;
-        padding: 4px 4px 40px;
+        padding:
+          calc(var(--page-pad-y) + 4px)
+          calc(var(--page-pad-x) + 4px)
+          calc(var(--page-pad-y) + 40px);
       }
 
       .page-link {

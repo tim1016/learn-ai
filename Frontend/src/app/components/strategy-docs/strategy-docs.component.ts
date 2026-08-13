@@ -32,6 +32,7 @@ interface PitfallDoc {
   templateUrl: './strategy-docs.component.html',
   styleUrls: ['./strategy-docs.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
+  host: { class: 'page-inset' },
 })
 export class StrategyDocsComponent {
 

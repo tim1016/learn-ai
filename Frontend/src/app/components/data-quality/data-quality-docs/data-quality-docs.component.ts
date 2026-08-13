@@ -53,6 +53,7 @@ interface LibraryInfo {
   templateUrl: "./data-quality-docs.component.html",
   styleUrl: "./data-quality-docs.component.scss",
   changeDetection: ChangeDetectionStrategy.OnPush,
+  host: { class: 'page-inset' },
 })
 export class DataQualityDocsComponent {
   private http = inject(HttpClient);

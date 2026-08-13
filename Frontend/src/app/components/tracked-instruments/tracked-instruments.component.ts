@@ -20,6 +20,7 @@ const TRACKED_TICKERS = [
   templateUrl: './tracked-instruments.component.html',
   styleUrls: ['./tracked-instruments.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
+  host: { class: 'page-inset' },
 })
 export class TrackedInstrumentsComponent implements OnInit {
   private marketDataService = inject(MarketDataService);

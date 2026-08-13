@@ -30,6 +30,7 @@ interface BacktestResult {
 @Component({
   selector: 'app-backtest-job-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  host: { class: 'page-inset' },
   imports: [FormsModule, ButtonModule, InputTextModule, JobProgressComponent],
   styles: [`
     :host { display: block; max-width: 720px; }
