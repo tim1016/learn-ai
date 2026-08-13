@@ -1,0 +1,15 @@
+@if (tickerQuote(); as quote) {
+  <app-ticker-quote [quote]="quote" size="lg" />
+} @else {
+  <div class="instrument-quote__identity">
+    <app-asset-identity
+      [symbol]="quote().symbol"
+      [name]="quote().name ?? null"
+      [exchange]="quote().exchange ?? null"
+      [logoSlug]="quote().logoSlug ?? null"
+      size="lg"
+    />
+  </div>
+}
+
+<span class="instrument-quote__source">{{ sourceLabel() }}</span>

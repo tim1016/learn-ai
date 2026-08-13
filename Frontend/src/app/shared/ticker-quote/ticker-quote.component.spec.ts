@@ -172,6 +172,14 @@ describe('TickerQuoteComponent', () => {
   });
 
   describe('inline mode (default)', () => {
+    it('honors an explicitly requested identity size', async () => {
+      const { container } = await render(TickerQuoteComponent, {
+        inputs: { quote: BASE_QUOTE, size: 'lg' },
+      });
+
+      expect(container.querySelector('app-asset-identity.asset-identity--lg')).not.toBeNull();
+    });
+
     it('does not render name in inline mode', async () => {
       await render(TickerQuoteComponent, {
         inputs: { quote: BASE_QUOTE },

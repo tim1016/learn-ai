@@ -1,9 +1,11 @@
 import { render, screen } from '@testing-library/angular';
 import { TestBed } from '@angular/core/testing';
+import { of } from 'rxjs';
 import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { TraderLensComponent } from './trader-lens.component';
 import type { BotPanelView, PanelProfile, ChartLiveResponse } from '../lib/broker-v2-panel.types';
 import { DUAL_PANE_CHART_FACTORY } from '../dual-pane-chart/dual-pane-chart.component';
+import { MarketDataService } from '../../../../services/market-data.service';
 
 const chartMocks = vi.hoisted(() => {
   const timeScale = { fitContent: vi.fn() };
@@ -29,7 +31,15 @@ vi.mock('lightweight-charts', () => {
 
 beforeEach(() => {
   TestBed.configureTestingModule({
-    providers: [{ provide: DUAL_PANE_CHART_FACTORY, useValue: chartMocks.createChart }],
+    providers: [
+      { provide: DUAL_PANE_CHART_FACTORY, useValue: chartMocks.createChart },
+      {
+        provide: MarketDataService,
+        useValue: {
+          getStockSnapshot: () => of({ success: true, snapshot: null, error: null }),
+        },
+      },
+    ],
   });
   chartMocks.createChart.mockClear();
 });

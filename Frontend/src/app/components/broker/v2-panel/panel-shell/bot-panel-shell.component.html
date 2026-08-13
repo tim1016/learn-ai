@@ -52,17 +52,12 @@
     <app-safe-flatten-plan [plan]="plan" />
   }
 
-  <app-panel-header
-    [panel]="panelData"
-    [actionPending]="actionPending()"
-    (actionRequested)="onActionRequested($event)"
-  />
-
   @switch (activeLens()) {
     @case ('trader') {
       <div id="trader-panel" role="tabpanel" aria-labelledby="trader-tab">
         <app-trader-lens
           [panel]="panelData"
+          [tickerQuote]="tickerQuote()"
           [profile]="profileData"
           [liveChart]="liveChart()"
           [histChart]="histChart.value() ?? null"
@@ -70,8 +65,10 @@
           [histChartLoading]="histChart.isLoading()"
           [liveResolution]="liveResolution()"
           [selectedPreset]="selectedPreset()"
+          [actionPending]="actionPending()"
           (presetChange)="onPresetChange($event)"
           (liveResolutionChange)="onLiveResolutionChange($event)"
+          (actionRequested)="onActionRequested($event)"
         />
       </div>
     }
@@ -79,6 +76,7 @@
       <div id="operator-panel" role="tabpanel" aria-labelledby="operator-tab">
         <app-operator-lens
           [panel]="panelData"
+          [tickerQuote]="tickerQuote()"
           [profile]="profileData"
           [actionPending]="actionPending()"
           [broker]="broker()"

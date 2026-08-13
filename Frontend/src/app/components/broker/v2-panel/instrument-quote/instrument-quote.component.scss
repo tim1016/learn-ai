@@ -1,0 +1,32 @@
+:host {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-primary);
+}
+
+.instrument-quote__identity {
+  min-width: 0;
+
+  app-asset-identity {
+    --asset-identity-logo-size: 2.5rem;
+    --asset-identity-symbol-max-width: 10ch;
+  }
+}
+
+.instrument-quote__source {
+  padding: 0.18rem 0.45rem;
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: var(--fs-xxs);
+  font-weight: var(--fw-semibold);
+  white-space: nowrap;
+}
+
+@media (max-width: 620px) {
+  :host { flex-wrap: wrap; }
+  .instrument-quote__identity { flex-basis: 100%; }
+}

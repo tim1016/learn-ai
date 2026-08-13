@@ -1,9 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/angular';
 import { provideRouter } from '@angular/router';
-import { of } from 'rxjs';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
-import { MarketDataService } from '../../../../services/market-data.service';
 import type { BotPanelView, PanelAction } from '../lib/broker-v2-panel.types';
 import { PanelHeaderComponent } from './panel-header.component';
 
@@ -105,31 +103,19 @@ function panel(overrides: Partial<BotPanelView> = {}): BotPanelView {
   };
 }
 
-function marketData() {
-  return {
-    getStockSnapshot: vi.fn().mockReturnValue(of({
-      success: true,
-      snapshot: {
-        ticker: 'NVDA',
-        day: { open: 178, high: 183, low: 177, close: 181.42, volume: 1, vwap: 180 },
-        prevDay: null,
-        min: null,
-        todaysChange: 2.42,
-        todaysChangePercent: 1.35,
-        updated: 1_753_800_001_000,
-      },
-      error: null,
-    })),
-  };
-}
-
 async function renderHeader(value: BotPanelView, actionPending = false) {
   return render(PanelHeaderComponent, {
-    inputs: { panel: value, actionPending },
-    providers: [
-      provideRouter([]),
-      { provide: MarketDataService, useValue: marketData() },
-    ],
+    inputs: {
+      panel: value,
+      actionPending,
+      tickerQuote: {
+        ticker: 'NVDA',
+        price: 181.42,
+        change: 2.42,
+        changePercent: 1.35,
+      },
+    },
+    providers: [provideRouter([])],
   });
 }
 

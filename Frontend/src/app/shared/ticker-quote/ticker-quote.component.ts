@@ -38,13 +38,13 @@ export class TickerQuoteComponent {
 
   readonly quote = input.required<TickerQuoteView>();
   readonly mode = input<'inline' | 'card'>('inline');
-  readonly size = input<'sm' | 'md' | 'lg'>('md');
+  readonly size = input<'sm' | 'md' | 'lg'>('sm');
   readonly tone = input<'default' | 'inverse'>('default');
   readonly logo = input<boolean>(true);
 
   readonly isCard = computed(() => this.mode() === 'card');
 
-  readonly effectiveSize = computed(() => (this.isCard() ? this.size() : 'sm'));
+  readonly effectiveSize = computed(() => this.size());
 
   readonly currencySymbol = computed(() => this.quote().currencySymbol ?? '$');
 

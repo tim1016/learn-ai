@@ -1,5 +1,7 @@
-import { render, screen, fireEvent } from '@testing-library/angular';
-import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent, within } from '@testing-library/angular';
+import { TestBed } from '@angular/core/testing';
+import { of } from 'rxjs';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import type {
   BotHealthCard,
   BotPanelView,
@@ -10,6 +12,7 @@ import type {
   TransactionRail,
 } from '../lib/broker-v2-panel.types';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
+import { MarketDataService } from '../../../../services/market-data.service';
 import { OperatorLensComponent } from './operator-lens.component';
 
 // ── Minimal test data factories ───────────────────────────────────────────────
@@ -211,6 +214,19 @@ function makeFakePanelService(evidencePage?: EvidencePage) {
   };
 }
 
+beforeEach(() => {
+  TestBed.configureTestingModule({
+    providers: [
+      {
+        provide: MarketDataService,
+        useValue: {
+          getStockSnapshot: () => of({ success: true, snapshot: null, error: null }),
+        },
+      },
+    ],
+  });
+});
+
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 describe('OperatorLensComponent', () => {
@@ -252,7 +268,7 @@ describe('OperatorLensComponent', () => {
       providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
     });
 
-    expect(screen.getByText('Live')).toBeTruthy();
+    expect(within(screen.getByLabelText('Bot health')).getByText('Live')).toBeTruthy();
   });
 
   it('renders run evidence as the final operator section', async () => {
