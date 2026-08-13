@@ -458,7 +458,7 @@ async def test_sqlite_late_exact_execution_after_recovery_is_fenced_across_resta
             transition["transition_kind"] for transition in repo.transitions_for_order(order_ref)
         ]
         assert "EXECUTION_SLICE_FILLED" not in transition_kinds
-        assert transition_kinds.count("UNCERTAINTY_RAISED") == 1
+        assert transition_kinds.count("EXECUTION_COVERAGE_QUARANTINED") == 1
         admission = decide_capability(
             repo,
             capability=Capability.NEW_EXPOSURE,

@@ -20003,7 +20003,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "reconcile_now" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
+            action_id: "reconcile_now" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
             /** Concurrency Token */
             concurrency_token: string;
         };
@@ -20020,7 +20020,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "reconcile_now" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
+            action_id: "reconcile_now" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
             /** Concurrency Token */
             concurrency_token: string;
             /** Execution Ref */
@@ -20034,7 +20034,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "reconcile_now" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
+            action_id: "reconcile_now" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
             /** Applied */
             applied: boolean;
             command: components["schemas"]["CommandResponse"] | null;
@@ -20058,7 +20058,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "reconcile_now" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
+            action_id: "reconcile_now" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
             /** Available */
             available: boolean;
             /** Concurrency Token */

@@ -32858,6 +32858,7 @@
           "action_id": {
             "enum": [
               "reconcile_now",
+              "resolve_execution_coverage",
               "cancel_verified_working_orders",
               "prepare_safe_flatten",
               "stop_bot_decisions",
@@ -32901,6 +32902,7 @@
           "action_id": {
             "enum": [
               "reconcile_now",
+              "resolve_execution_coverage",
               "cancel_verified_working_orders",
               "prepare_safe_flatten",
               "stop_bot_decisions",
@@ -32954,6 +32956,7 @@
           "action_id": {
             "enum": [
               "reconcile_now",
+              "resolve_execution_coverage",
               "cancel_verified_working_orders",
               "prepare_safe_flatten",
               "stop_bot_decisions",
@@ -33026,6 +33029,7 @@
           "action_id": {
             "enum": [
               "reconcile_now",
+              "resolve_execution_coverage",
               "cancel_verified_working_orders",
               "prepare_safe_flatten",
               "stop_bot_decisions",

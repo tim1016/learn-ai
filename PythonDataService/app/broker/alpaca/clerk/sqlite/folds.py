@@ -20,6 +20,11 @@ from collections.abc import Callable
 from typing import Any
 
 from app.broker.alpaca.clerk.sqlite import reads
+from app.broker.alpaca.clerk.sqlite.execution_coverage import (
+    FILL_QTY_EPSILON,
+    active_execution_coverage_conflicts,
+    execution_coverage_proof,
+)
 from app.broker.alpaca.clerk.sqlite.external_order_folds import (
     fold_external_order_acknowledged as _fold_external_order_acknowledged,
 )
@@ -32,6 +37,8 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     CommandRejectedFacts,
     EnterAcceptedFacts,
     ExecutionCorrectedFacts,
+    ExecutionCoverageQuarantinedFacts,
+    ExecutionCoverageResolvedFacts,
     ExecutionSliceFilledFacts,
     ExitAcceptedFacts,
     OrderFillObservedFacts,
@@ -39,6 +46,8 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     RunStartedFacts,
     RunStoppedFacts,
     validate_execution_corrected_facts,
+    validate_execution_coverage_quarantined_facts,
+    validate_execution_coverage_resolved_facts,
     validate_execution_slice_facts,
 )
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
@@ -624,11 +633,6 @@ def _fold_order_submit_uncertain(conn: sqlite3.Connection, payload: dict[str, An
         _open_or_refresh_unknown_outcome(conn, payload)
 
 
-#: Numerical-rigor tolerance for the fill-quantity delta gate below — see
-#: ``docs/references/clerk-fill-quantity-tolerance.md`` for the citation and
-#: reasoning (`.claude/rules/numerical-rigor.md`).
-FILL_QTY_EPSILON = 1e-9
-
 #: Numerical-rigor tolerance for "is this position flat/drifted" — same
 #: absolute-tolerance rationale as ``FILL_QTY_EPSILON`` above (see
 #: ``docs/references/clerk-position-drift-tolerance.md``). Lives here, not in
@@ -722,6 +726,110 @@ def _fold_execution_slice_filled(conn: sqlite3.Connection, payload: dict[str, An
         symbol=facts.symbol,
         side=facts.side,
         quantity=facts.slice_qty,
+    )
+
+
+def _fold_execution_coverage_quarantined(
+    conn: sqlite3.Connection,
+    payload: dict[str, Any],
+) -> None:
+    """Keep ambiguous exact evidence in the hash chain, outside economics.
+
+    The immutable transition facts are the quarantine fold. No economic
+    current-state row is written here, but the embedded typed uncertainty is
+    folded in the same SQLite transaction so a crash cannot leave the account
+    with recorded ambiguity and no admission block.
+    """
+    facts = ExecutionCoverageQuarantinedFacts.from_facts_json(payload["facts_json"])
+    exact = validate_execution_coverage_quarantined_facts(facts)
+    if facts.order_ref != payload["order_ref"]:
+        raise ValueError("quarantined coverage order_ref must match its transition")
+    if payload["source_event_at_ms"] != exact.source_event_at_ms:
+        raise ValueError("quarantined coverage timestamp must match exact evidence")
+    if facts.uncertainty is not None:
+        if active_execution_coverage_conflicts(conn, order_ref=facts.order_ref):
+            raise ValueError("initial coverage quarantine cannot reopen an active conflict")
+        uncertainty_payload = dict(payload)
+        uncertainty_payload["transition_kind"] = "UNCERTAINTY_RAISED"
+        uncertainty_payload["facts_json"] = facts.uncertainty.to_facts_json()
+        _fold_uncertainty_raised(conn, uncertainty_payload)
+        return
+    active = active_execution_coverage_conflicts(
+        conn,
+        order_ref=facts.order_ref,
+    )
+    if not any(
+        conflict.conflict_execution_id == facts.conflict_execution_id
+        for conflict in active
+    ):
+        raise ValueError("additional coverage evidence requires its active conflict episode")
+
+
+def _fold_execution_coverage_resolved(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Replace exactly one cumulative fold with verified exact economics.
+
+    Formula: Δposition = 0 because the replacement is admitted only when
+    exact and cumulative quantity/price/side agree within the Clerk's pinned
+    execution tolerance.  The raw cumulative and exact observations remain
+    custody transitions; ``fills`` is rebuilt from the selected coverage.
+    Reference: docs/prds/2026-08-13-sqlite-clerk-manual-orders.md §11.
+    Canonical implementation: this file.
+    Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
+      test_folds_execution.py::test_coverage_resolution_replaces_one_cumulative_fill_once.
+    """
+    facts = ExecutionCoverageResolvedFacts.from_facts_json(payload["facts_json"])
+    exact = validate_execution_coverage_resolved_facts(facts)
+    meta = reads.control_meta_snapshot(conn)
+    if (
+        facts.account_id != meta.account_id
+        or facts.authority_generation != meta.authority_generation
+        or facts.db_identity_token != meta.db_identity_token
+        or facts.expected_control_revision != meta.control_revision
+    ):
+        raise ValueError("coverage resolution binding does not match the current Clerk authority")
+    active = active_execution_coverage_conflicts(
+        conn,
+        uncertainty_id=facts.uncertainty_id,
+    )
+    if len(active) != 1 or active[0].order_ref != facts.order_ref:
+        raise ValueError("coverage resolution requires its selected active conflict")
+    proof = execution_coverage_proof(conn, conflict=active[0])
+    cumulative = proof.cumulative
+    if (
+        not proof.proof_available
+        or proof.exact_execution != exact
+        or cumulative is None
+        or cumulative.fill_id != facts.replaced_cumulative_fill_id
+    ):
+        raise ValueError("coverage resolution proof does not match immutable evidence")
+    if conn.execute("SELECT 1 FROM fills WHERE execution_id = ?", (exact.execution_id,)).fetchone() is not None:
+        raise ValueError("coverage resolution exact execution already exists")
+    conn.execute("DELETE FROM fills WHERE fill_id = ?", (facts.replaced_cumulative_fill_id,))
+    conn.execute(
+        "INSERT INTO fills (fill_id, order_ref, qty, price, side, is_correction, execution_id, "
+        "evidence_source, event_kind, superseded_execution_ref, fee, fee_fidelity, "
+        "source_event_at_ms, clerk_observed_at_ms, recorded_at_ms, recorded_transition_sequence) "
+        "VALUES (?, ?, ?, ?, ?, 0, ?, ?, 'fill', NULL, ?, ?, ?, ?, ?, ?)",
+        (
+            exact.execution_id,
+            facts.order_ref,
+            exact.slice_qty,
+            exact.slice_price,
+            exact.side,
+            exact.execution_id,
+            exact.evidence_source,
+            exact.fee,
+            exact.fee_fidelity,
+            exact.source_event_at_ms,
+            payload["clerk_observed_at_ms"],
+            payload["recorded_at_ms"],
+            _this_transition_sequence(conn),
+        ),
+    )
+    conn.execute(
+        "UPDATE uncertainties SET resolved_at_ms = ? WHERE uncertainty_id = ? "
+        "AND reason_code = 'EXECUTION_COVERAGE_CONFLICT' AND resolved_at_ms IS NULL",
+        (payload["recorded_at_ms"], facts.uncertainty_id),
     )
 
 
@@ -986,6 +1094,8 @@ DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_UNCERTAIN", _fold_order_submit_unce
 DEFAULT_FOLD_REGISTRY.register("ORDER_CANCEL_UNCERTAIN", _fold_order_submit_uncertain)
 DEFAULT_FOLD_REGISTRY.register("ORDER_FILL_OBSERVED", _fold_order_fill_observed)
 DEFAULT_FOLD_REGISTRY.register("EXECUTION_SLICE_FILLED", _fold_execution_slice_filled)
+DEFAULT_FOLD_REGISTRY.register("EXECUTION_COVERAGE_QUARANTINED", _fold_execution_coverage_quarantined)
+DEFAULT_FOLD_REGISTRY.register("EXECUTION_COVERAGE_RESOLVED", _fold_execution_coverage_resolved)
 DEFAULT_FOLD_REGISTRY.register("EXECUTION_CORRECTED", _fold_execution_corrected)
 DEFAULT_FOLD_REGISTRY.register("RECONCILIATION_ATTEMPTED", _fold_reconciliation_attempted)
 DEFAULT_FOLD_REGISTRY.register("ACCOUNT_HOLD_RAISED", _fold_account_hold_raised)

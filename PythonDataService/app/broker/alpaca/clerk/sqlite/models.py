@@ -48,6 +48,18 @@ class CommittedTransition:
 
 
 @dataclass(frozen=True)
+class ExecutionCoverageResolutionReceipt:
+    """Idempotent receipt for one evidence-bound coverage resolution."""
+
+    uncertainty_id: str
+    order_ref: str
+    execution_id: str
+    receipt_id: str
+    recorded_at_ms: int
+    applied: bool
+
+
+@dataclass(frozen=True)
 class ControlMetaSnapshot:
     schema_version: int
     account_id: str

@@ -51,6 +51,9 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     ExecutionLeaseLost,
     RepositoryPoisoned,
 )
+from app.broker.alpaca.clerk.sqlite.repository_execution_coverage_api import (
+    ExecutionCoverageResolutionUnavailable,
+)
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.errors import BrokerError, UnknownBrokerError
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
@@ -519,6 +522,11 @@ async def _execute_presented_recovery_action(
         raise HTTPException(
             status_code=409,
             detail={"reason": "recovery_execution_rejected", "message": str(exc)},
+        ) from exc
+    except ExecutionCoverageResolutionUnavailable as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "coverage_proof_insufficient", "message": str(exc)},
         ) from exc
     except (ExecutionLeaseLost, RepositoryPoisoned) as exc:
         raise _unavailable_response(exc) from exc

@@ -12,6 +12,7 @@ an observed (or absent, or lost) ``BrokerOrder`` snapshot means.
 
 from __future__ import annotations
 
+from app.broker.alpaca.clerk.sqlite.execution_coverage import FILL_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.facts import (
     EnterAcceptedFacts,
     OrderFillObservedFacts,
@@ -19,7 +20,6 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     OrderSubmitUncertainFacts,
 )
 from app.broker.alpaca.clerk.sqlite.folds import (
-    FILL_QTY_EPSILON,
     order_observation_advances,
 )
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize

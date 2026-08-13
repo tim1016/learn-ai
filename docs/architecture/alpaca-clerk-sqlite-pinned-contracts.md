@@ -741,6 +741,8 @@ creates or mutates a `commands` row, only the `uncertainties` table (§3):
 | `UNCERTAINTY_RAISED` | `severity`, `blocks_new_exposure`, `allows_reduction`, `reason_code`, `headline`, `explanation`, `operator_impact`, `next_step`, `evidence_refs`, and versioned `cause_facts` | Inserts one uncertainty episode and persists both `facts_schema_version` and the complete `facts_json`. Scope comes from the registered reason policy; an unknown reason is forced account-wide and reduction-blocking. A partial unique index enforces one active cause. |
 | `UNCERTAINTY_REFRESHED` | Same stable envelope and typed cause facts as the raise | Updates the active episode only when its evidence/facts changed; unchanged observations append nothing. |
 | `UNCERTAINTY_RESOLVED` | `uncertainty_id`, closed `resolution_kind`, and `evidence_refs` | `UPDATE`s `resolved_at_ms` on the named active episode. Only a reason-specific recovery function with its required fresh evidence may build this transition; there is no generic clear. |
+| `EXECUTION_COVERAGE_QUARANTINED` | `order_ref`, stable conflict-origin execution id, full typed exact execution facts, sorted conflicting cumulative `fill_id`s, and the typed blocking uncertainty only for the originating exact execution | Persists every distinct rejected exact execution in the hash-chained transition stream. The origin opens its blocking uncertainty in the same SQLite transaction; later evidence is linked to that same active episode. No quarantine writes `fills`, positions, FIFO, or P&L, so ambiguous executions cannot be double-applied or become unblocked after a partial write. |
+| `EXECUTION_COVERAGE_RESOLVED` | `uncertainty_id`, account identity, authority generation, database identity, expected control revision, `order_ref`, closed `resolution_kind`, selected cumulative `fill_id`, full typed exact execution facts, and sorted evidence references | Supported only for `EXACT_REPLACES_CUMULATIVE`: validates that the episode contains exactly one quarantined exact execution and one current cumulative-recovery fold with matching side, quantity, and price within `FILL_QTY_EPSILON`; it replaces the rebuildable `fills` row without a position delta and resolves only the named `EXECUTION_COVERAGE_CONFLICT` episode. |
 
 All are raised/refreshed/resolved through
 `app/broker/alpaca/clerk/sqlite/uncertainty.py`; the repository performs each
@@ -754,6 +756,21 @@ order_ref)` pair and closes the episode only after no recorded pair remains.
 Evidence for another order linked to the same EXIT cannot clear a lost reducing
 submit. Thus there is no committed UNKNOWN effect that can briefly admit
 another ENTER.
+
+### 3g.i. Execution-coverage recovery (#1521)
+
+`EXECUTION_COVERAGE_CONFLICT` is not a generic reconciliation instruction. A
+late exact execution that overlaps cumulative recovery is first quarantined
+with the complete immutable economics. The presented
+`resolve_execution_coverage` action binds the account, authority generation,
+database identity, relevant control revision, uncertainty id, order reference,
+execution id, and selected cumulative fold through its recovery token; the
+committed resolution facts preserve that authority binding for audit. Retry
+after a committed resolution returns the original `coverage-resolution:<seq>`
+receipt and performs no second economic fold. A mismatch, more than one
+cumulative fold, more than one quarantined exact execution, a missing
+quarantine, or unreadable facts remains unavailable with backend-authored
+evidence requirements; the UI must never invent a retry or override.
 
 **R6 capability policy** (`uncertainty.decide_capability`/
 `require_capability`) folds both uncertainties and holds for `NEW_EXPOSURE`,
