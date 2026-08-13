@@ -1,5 +1,6 @@
 export interface AppMenuItem {
-  readonly label: string;
+  /** The single display name for every navigation projection. */
+  readonly title: string;
   /** Router path for navigation. */
   readonly route: string;
   /** Query parameters required to navigate to this menu item. */
@@ -25,7 +26,7 @@ export interface ActiveMenuNode {
 }
 
 export interface Crumb {
-  readonly label: string;
+  readonly title: string;
   readonly route: string;
   readonly queryParams?: Readonly<Record<string, string>>;
 }
@@ -43,8 +44,8 @@ export const APP_MENU: readonly AppMenuGroup[] = [
     title: 'Data Lab',
     icon: 'pi pi-database',
     items: [
-      { label: 'Data Lab', route: '/data-lab' },
-      { label: 'Indicator Report', route: '/indicator-report' },
+      { title: 'Data Lab', route: '/data-lab' },
+      { title: 'Indicator Report', route: '/indicator-report' },
     ],
   },
   {
@@ -52,10 +53,10 @@ export const APP_MENU: readonly AppMenuGroup[] = [
     title: 'Options',
     icon: 'pi pi-sliders-h',
     items: [
-      { label: 'Options Lab', route: '/options-lab' },
-      { label: 'Options Chain (Live)', route: '/broker/options-chain' },
-      { label: 'Options Surface (3D)', route: '/broker/options-surface' },
-      { label: 'Pricing Lab', route: '/pricing-lab' },
+      { title: 'Options Lab', route: '/options-lab' },
+      { title: 'Options Chain (Live)', route: '/broker/options-chain' },
+      { title: 'Options Surface (3D)', route: '/broker/options-surface' },
+      { title: 'Pricing Lab', route: '/pricing-lab' },
     ],
   },
   {
@@ -63,8 +64,8 @@ export const APP_MENU: readonly AppMenuGroup[] = [
     title: 'Research',
     icon: 'pi pi-compass',
     items: [
-      { label: 'Research Lab', route: '/research-lab' },
-      { label: 'Golden Fixtures', route: '/golden-fixtures' },
+      { title: 'Research Lab', route: '/research-lab' },
+      { title: 'Golden Fixtures', route: '/golden-fixtures' },
     ],
   },
   {
@@ -72,10 +73,10 @@ export const APP_MENU: readonly AppMenuGroup[] = [
     title: 'Edge Analysis',
     icon: 'pi pi-bolt',
     items: [
-      { label: 'Overview', route: '/edge' },
-      { label: 'Realized vs IV', route: '/edge/realized-vs-iv' },
-      { label: 'Cross-Asset', route: '/edge/cross-asset' },
-      { label: 'Regimes', route: '/edge/regimes' },
+      { title: 'Overview', route: '/edge' },
+      { title: 'Realized vs IV', route: '/edge/realized-vs-iv' },
+      { title: 'Cross-Asset', route: '/edge/cross-asset' },
+      { title: 'Regimes', route: '/edge/regimes' },
     ],
   },
   {
@@ -83,15 +84,15 @@ export const APP_MENU: readonly AppMenuGroup[] = [
     title: 'Alpaca',
     icon: 'pi pi-link',
     items: [
-      { label: 'Accounts', route: '/brokers/alpaca' },
+      { title: 'Accounts', route: '/brokers/alpaca' },
       {
-        label: 'Deploy',
+        title: 'Deploy',
         route: '/brokers/alpaca',
         queryParams: { deploy: '' },
         activePath: '/brokers/alpaca/deploy',
       },
-      { label: 'Bots', route: '/brokers/alpaca/bots' },
-      { label: 'Gallery', route: '/brokers/alpaca/gallery' },
+      { title: 'Bots', route: '/brokers/alpaca/bots' },
+      { title: 'Gallery', route: '/brokers/alpaca/gallery' },
     ],
   },
   {
@@ -99,8 +100,8 @@ export const APP_MENU: readonly AppMenuGroup[] = [
     title: 'Design Lab',
     icon: 'pi pi-palette',
     items: [
-      { label: 'Desert Oasis', route: '/broker/desert-oasis' },
-      { label: 'Bot Sprites', route: '/broker/bot-sprites' },
+      { title: 'Desert Oasis', route: '/broker/desert-oasis' },
+      { title: 'Bot Sprites', route: '/broker/bot-sprites' },
     ],
   },
   {
@@ -108,9 +109,9 @@ export const APP_MENU: readonly AppMenuGroup[] = [
     title: 'Strategy Tools',
     icon: 'pi pi-briefcase',
     items: [
-      { label: 'Strategy Validation', route: '/strategy-validation' },
-      { label: 'Strategy Spec', route: '/spec-strategy' },
-      { label: 'Strategy Lab', route: '/strategy-lab' },
+      { title: 'Strategy Validation', route: '/strategy-validation' },
+      { title: 'Strategy Spec', route: '/spec-strategy' },
+      { title: 'Strategy Lab', route: '/strategy-lab' },
     ],
   },
   {
@@ -118,12 +119,12 @@ export const APP_MENU: readonly AppMenuGroup[] = [
     title: 'Documentation',
     icon: 'pi pi-book',
     items: [
-      { label: 'Strategy Docs', route: '/strategy-docs' },
-      { label: 'Indicator Reference', route: '/data-lab-docs' },
-      { label: 'Pipeline Docs', route: '/data-quality-docs' },
-      { label: 'Indicator Reliability', route: '/docs/indicator-reliability-methodology' },
-      { label: 'Signal Engine', route: '/docs/signal-engine-methodology' },
-      { label: 'Legal Notices', route: '/legal/notices' },
+      { title: 'Strategy Docs', route: '/strategy-docs' },
+      { title: 'Indicator Reference', route: '/data-lab-docs' },
+      { title: 'Pipeline Docs', route: '/data-quality-docs' },
+      { title: 'Indicator Reliability', route: '/docs/indicator-reliability-methodology' },
+      { title: 'Signal Engine', route: '/docs/signal-engine-methodology' },
+      { title: 'Legal Notices', route: '/legal/notices' },
     ],
   },
 ];
@@ -165,26 +166,28 @@ export function activeMenuNodeFor(url: string): ActiveMenuNode | null {
   return ACTIVE_MENU_ITEMS.find(({ activePath }) => path === activePath || path.startsWith(`${activePath}/`)) ?? null;
 }
 
+/** Resolves the page title from the same active node used by the navigation rail. */
+export function pageTitleFor(url: string): string | null {
+  return activeMenuNodeFor(url)?.item.title ?? null;
+}
+
 /** Pure breadcrumb projection of the active menu node. */
 export function breadcrumbTrailFor(url: string): readonly Crumb[] {
   const node = activeMenuNodeFor(url);
   if (node === null) return [];
 
   const groupDefault = defaultMenuItemFor(node.group);
-  return [
-    crumbFor(node.group.title, groupDefault),
-    crumbFor(node.item.label, node.item),
-  ];
+  return [crumbFor(node.group.title, groupDefault)];
 }
 
 function nodeForActivePath(activePath: string): ActiveMenuNode | null {
   return ACTIVE_MENU_ITEMS.find((node) => node.activePath === activePath) ?? null;
 }
 
-function crumbFor(label: string, item: AppMenuItem): Crumb {
+function crumbFor(title: string, item: AppMenuItem): Crumb {
   return item.queryParams === undefined
-    ? { label, route: item.route }
-    : { label, route: item.route, queryParams: item.queryParams };
+    ? { title, route: item.route }
+    : { title, route: item.route, queryParams: item.queryParams };
 }
 
 function splitUrl(url: string): { path: string; query: string } {

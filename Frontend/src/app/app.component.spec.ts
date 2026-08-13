@@ -61,10 +61,19 @@ describe('AppComponent', () => {
     expect(fixture.nativeElement.querySelector('app-sidebar')).toBeTruthy();
   });
 
-  it('renders the universal top bar and applies the Market Scope browser title', () => {
+  it('renders the universal top bar and applies the fallback browser title', () => {
     expect(fixture.nativeElement.querySelector('.shell > app-top-bar')).toBeTruthy();
     expect(fixture.nativeElement.querySelector('app-page-body')).toBeTruthy();
     expect(TestBed.inject(Title).getTitle()).toBe('Market Scope');
+  });
+
+  it('sets the browser title from the current menu page title', async () => {
+    const router = TestBed.inject(Router);
+
+    await router.navigateByUrl('/options-lab');
+    fixture.detectChanges();
+
+    expect(TestBed.inject(Title).getTitle()).toBe('Options Lab');
   });
 
   it('keeps the application banner outside the main landmark', async () => {

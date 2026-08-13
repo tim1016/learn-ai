@@ -1,9 +1,9 @@
-import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { Title } from '@angular/platform-browser';
 import { ActivatedRouteSnapshot, NavigationEnd, Router, RouterOutlet } from '@angular/router';
 import { Toast } from 'primeng/toast';
-import { filter } from 'rxjs';
+import { filter, map, startWith } from 'rxjs';
 import { AppSidebarComponent } from './shell/app-sidebar.component';
 import { BrokerBannerComponent } from './shell/broker-banner.component';
 import { BreadcrumbComponent } from './shell/breadcrumb.component';
@@ -11,6 +11,7 @@ import { MarkdownDrawerHostComponent } from './shared/markdown-drawer/markdown-d
 import { BrokerHealthService } from './services/broker-health.service';
 import { TopBarComponent } from './shell/top-bar.component';
 import { PageBodyComponent } from './shell/page-body.component';
+import { pageTitleFor } from './shell/app-menu';
 
 // The global JobsDrawer / floating "Jobs" launcher was removed in favor
 // of per-feature SSE-driven progress UIs (e.g. the Engine Lab run
@@ -70,7 +71,7 @@ import { PageBodyComponent } from './shell/page-body.component';
   template: `
     <app-sidebar />
     <div class="shell">
-      <app-top-bar>
+      <app-top-bar [pageTitle]="pageTitle()">
         <app-breadcrumb shell-breadcrumbs />
         <app-broker-banner shell-connection />
       </app-top-bar>
@@ -90,17 +91,22 @@ export class AppComponent {
   private readonly brokerHealth = inject(BrokerHealthService);
   private readonly title = inject(Title);
   private readonly router = inject(Router);
-  private readonly navigationEnd = toSignal(
-    this.router.events.pipe(filter((event): event is NavigationEnd => event instanceof NavigationEnd)),
-    { initialValue: null },
+  private readonly currentUrl = toSignal(
+    this.router.events.pipe(
+      filter((event): event is NavigationEnd => event instanceof NavigationEnd),
+      map((event) => event.urlAfterRedirects),
+      startWith(this.router.url),
+    ),
+    { initialValue: this.router.url },
   );
+  protected readonly pageTitle = computed(() => pageTitleFor(this.currentUrl()));
   protected readonly isFullBleedRoute = computed(() => {
-    this.navigationEnd();
+    this.currentUrl();
     return activeRouteHasData(this.router.routerState.snapshot.root, 'fullBleed');
   });
 
   constructor() {
-    this.title.setTitle('Market Scope');
+    effect(() => this.title.setTitle(this.pageTitle() ?? 'Market Scope'));
     // Single-source-of-truth poll for the global banner. Components
     // read ``BrokerHealthService.health()`` instead of polling
     // /api/broker/health from per-page mounts.

@@ -81,7 +81,7 @@ const FLYOUT_CLOSE_DELAY_MS = 180;
       <nav class="nav-scroll" role="navigation">
         @if (filtered(); as matches) {
           <div class="flat-matches">
-            @for (m of matches; track m.label) {
+            @for (m of matches; track m.title) {
               <a
                 class="nav-link"
                 [class.active]="isActive(m)"
@@ -89,7 +89,7 @@ const FLYOUT_CLOSE_DELAY_MS = 180;
                 [queryParams]="m.queryParams"
                 (click)="onNavigationSelected()"
               >
-                <span class="nav-link-label">{{ m.label }}</span>
+                <span class="nav-link-label">{{ m.title }}</span>
                 <span class="nav-link-group mono">{{ m.groupTitle }}</span>
               </a>
             }
@@ -131,7 +131,7 @@ const FLYOUT_CLOSE_DELAY_MS = 180;
 
               @if (pinned() && openGroups()[g.id]) {
                 <div class="nav-group-items" [id]="groupItemsId(g.id)">
-                  @for (item of g.items; track item.label) {
+                  @for (item of g.items; track item.title) {
                     <a
                       class="nav-link"
                       [class.active]="isActive(item)"
@@ -139,7 +139,7 @@ const FLYOUT_CLOSE_DELAY_MS = 180;
                       [queryParams]="item.queryParams"
                       (click)="onNavigationSelected()"
                     >
-                      <span class="nav-link-label">{{ item.label }}</span>
+                      <span class="nav-link-label">{{ item.title }}</span>
                     </a>
                   }
                 </div>
@@ -161,7 +161,7 @@ const FLYOUT_CLOSE_DELAY_MS = 180;
                 >
                   <h2 class="nav-flyout-title">{{ g.title }}</h2>
                   <div class="nav-flyout-items">
-                    @for (item of g.items; track item.label) {
+                    @for (item of g.items; track item.title) {
                       <a
                         class="nav-link"
                         [class.active]="isActive(item)"
@@ -169,7 +169,7 @@ const FLYOUT_CLOSE_DELAY_MS = 180;
                         [queryParams]="item.queryParams"
                         (click)="onNavigationSelected()"
                       >
-                        <span class="nav-link-label">{{ item.label }}</span>
+                        <span class="nav-link-label">{{ item.title }}</span>
                       </a>
                     }
                   </div>
@@ -234,7 +234,7 @@ export class AppSidebarComponent {
     const matches: (AppMenuItem & { groupTitle: string })[] = [];
     for (const g of APP_MENU) {
       for (const it of g.items) {
-        if ((it.label + ' ' + g.title).toLowerCase().includes(q)) {
+        if ((it.title + ' ' + g.title).toLowerCase().includes(q)) {
           matches.push({ ...it, groupTitle: g.title });
         }
       }

@@ -8,11 +8,11 @@
 }
 
 .top-bar {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   min-height: 48px;
   box-sizing: border-box;
   align-items: center;
-  justify-content: space-between;
   gap: var(--space-4);
   padding: 0 var(--space-4);
   background: $bg-surface;
@@ -28,11 +28,29 @@
 }
 
 .top-bar__left {
-  flex: 1 1 auto;
+  grid-column: 1;
+  justify-self: start;
 }
 
 .top-bar__right {
-  flex: 0 0 auto;
+  grid-column: 3;
+  justify-self: end;
+}
+
+.top-bar__page-title {
+  grid-column: 2;
+  max-inline-size: 40vw;
+  overflow: hidden;
+  color: $text-subtle;
+  font-family: $font-mono;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semi);
+  letter-spacing: 0.12em;
+  line-height: 1;
+  text-align: center;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .top-bar__wordmark {
