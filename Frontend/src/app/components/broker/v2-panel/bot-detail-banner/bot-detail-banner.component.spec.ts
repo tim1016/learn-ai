@@ -41,6 +41,7 @@ describe('BotDetailBannerComponent', () => {
     expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'More actions' })).toBeTruthy();
     expect(screen.getByText(/Updated/)).toBeTruthy();
-    expect(screen.getByRole('status', { name: 'Revision 42 stopped' })).toBeTruthy();
+    const revisionStatus = screen.getByRole('status', { name: 'Revision 42 stopped' });
+    expect(revisionStatus.textContent).toBe('Revision 42 stopped');
   });
 });

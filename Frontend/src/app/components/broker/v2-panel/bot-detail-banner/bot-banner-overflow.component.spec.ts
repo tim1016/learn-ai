@@ -13,9 +13,9 @@ describe('BotBannerOverflowComponent', () => {
     const trigger = screen.getByRole('button', { name: 'More bot actions' });
     expect(trigger.getAttribute('aria-haspopup')).toBeNull();
     expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    expect(document.getElementById(trigger.getAttribute('aria-controls') ?? '')).not.toBeNull();
     fireEvent.click(trigger);
     expect(trigger.getAttribute('aria-expanded')).toBe('true');
-    expect(document.getElementById(trigger.getAttribute('aria-controls') ?? '')).not.toBeNull();
     expect(screen.getByRole('link', { name: 'Manual order' })).toBeTruthy();
   });
 });

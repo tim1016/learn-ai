@@ -9,7 +9,7 @@
       Updated <app-timestamp-display [value]="updatedAtMs()" mode="local" />
     </span>
     @if (snapshotStatus(); as status) {
-      <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">{{ status }}</span>
+      <span class="sr-only" role="status" aria-live="polite" aria-atomic="true" [attr.aria-label]="status">{{ status }}</span>
     }
   </div>
 

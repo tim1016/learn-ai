@@ -19,11 +19,9 @@ let nextOverflowId = 0;
       [attr.aria-controls]="menuId"
       (click)="toggle()"
     >⋯</button>
-    @if (open()) {
-      <div [id]="menuId" class="bot-banner-overflow__menu">
-        <ng-content />
-      </div>
-    }
+    <div [id]="menuId" class="bot-banner-overflow__menu" [hidden]="!open()">
+      <ng-content />
+    </div>
   `,
   styleUrl: './bot-banner-overflow.component.scss',
 })

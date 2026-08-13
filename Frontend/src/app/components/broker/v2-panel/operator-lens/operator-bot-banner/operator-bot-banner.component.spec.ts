@@ -55,10 +55,11 @@ describe('OperatorBotBannerComponent', () => {
     });
 
     expect(screen.getByRole('link', { name: /alpaca bots/i })).toBeTruthy();
-    expect(screen.getByText('EMA crossover')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'EMA crossover', level: 1 })).toBeTruthy();
     expect(screen.getByText('ema-spy-001')).toBeTruthy();
     expect(screen.getByText('SPY')).toBeTruthy();
     expect(screen.getByRole('status', { name: 'Mission working' })).toBeTruthy();
+    expect(screen.getByRole('status', { name: 'Revision 1 running' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'More operator actions' })).toBeTruthy();
     expect(screen.queryByText('Paper')).toBeNull();
