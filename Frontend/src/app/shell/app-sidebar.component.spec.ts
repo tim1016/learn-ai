@@ -44,6 +44,17 @@ describe('AppSidebarComponent', () => {
     expect(localStorage.getItem('quant-lab.sidebar.pinned')).toBe('true');
   });
 
+  it('keeps the pin control as the final sidebar footer action', async () => {
+    const { fixture } = await render(AppSidebarComponent, {
+      providers: sidebarProviders(),
+    });
+
+    const footer = fixture.nativeElement.querySelector('.status-footer') as HTMLElement;
+    const pin = screen.getByRole('button', { name: 'Pin expanded navigation sidebar' });
+
+    expect(footer.lastElementChild).toBe(pin);
+  });
+
   it('reveals one hovered group as a keyboard-reachable flyout and closes it with Escape', async () => {
     const { fixture } = await render(AppSidebarComponent, {
       providers: sidebarProviders(),

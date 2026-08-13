@@ -153,15 +153,6 @@ const FLYOUT_CLOSE_DELAY_MS = 180;
           <rect x="4" y="5" width="14" height="14" fill="#00c896" rx="1" />
         </svg>
         <span class="wordmark">quant<span class="slash">/</span>lab</span>
-        <button
-          type="button"
-          class="sidebar-pin"
-          [attr.aria-label]="pinned() ? 'Use compact navigation rail' : 'Pin expanded navigation sidebar'"
-          [attr.aria-pressed]="pinned()"
-          (click)="togglePinned()"
-        >
-          <i class="pi pi-thumbtack" aria-hidden="true"></i>
-        </button>
       </div>
 
       <div class="search-wrap">
@@ -298,6 +289,15 @@ const FLYOUT_CLOSE_DELAY_MS = 180;
 
       <div class="status-footer">
         <app-broker-banner [compact]="!pinned()" />
+        <button
+          type="button"
+          class="sidebar-pin"
+          [attr.aria-label]="pinned() ? 'Use compact navigation rail' : 'Pin expanded navigation sidebar'"
+          [attr.aria-pressed]="pinned()"
+          (click)="togglePinned()"
+        >
+          <i class="pi pi-thumbtack" aria-hidden="true"></i>
+        </button>
       </div>
     </aside>
   `,

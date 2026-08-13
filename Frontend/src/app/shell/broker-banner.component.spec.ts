@@ -82,7 +82,10 @@ describe('BrokerBannerComponent', () => {
     fixture.detectChanges();
 
     const button = toggle(fixture);
-    expect(button?.textContent?.trim()).toBe('Connect');
+    expect(button?.getAttribute('aria-label')).toBe('Connect to IB Gateway');
+    expect(button?.querySelector('.pi-plug')).not.toBeNull();
+    expect(button?.querySelector('.broker-toggle-track')).toBeNull();
+    expect(button?.textContent?.trim()).toBe('');
     button?.click();
 
     expect(brokerHealth.connect).toHaveBeenCalledTimes(1);
@@ -97,7 +100,8 @@ describe('BrokerBannerComponent', () => {
 
     const button = toggle(fixture);
     expect(button?.getAttribute('aria-pressed')).toBe('true');
-    expect(button?.textContent?.trim()).toBe('Disconnect');
+    expect(button?.getAttribute('aria-label')).toBe('Disconnect from IB Gateway');
+    expect(button?.querySelector('.pi-power-off')).not.toBeNull();
     button?.click();
 
     expect(brokerHealth.disconnect).toHaveBeenCalledTimes(1);

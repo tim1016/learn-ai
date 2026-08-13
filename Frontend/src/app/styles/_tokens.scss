@@ -194,6 +194,10 @@ $container-lg: 1400px;
   --topbar-h:     52px;
   --subnav-h:     40px;
 
+  // Persistent navigation stays available above the bottom run drawer.
+  --z-bottom-drawer: 1000;
+  --z-sidebar: 1100;
+
   // Badge variants (outline style, low visual weight for informational tags)
   --badge-neutral-bg:    transparent;
   --badge-neutral-border: var(--border-light);

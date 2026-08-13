@@ -87,6 +87,8 @@
 
 .broker-banner {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
   gap: 10px;
   padding: 10px;
   background: $bg-canvas;
@@ -96,56 +98,22 @@
 }
 
 .broker-banner--compact {
-  position: relative;
-  display: block;
+  display: grid;
   width: 32px;
   min-height: 32px;
   box-sizing: border-box;
   padding: 0;
-  border-radius: 50%;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 
   .broker-banner-copy {
-    display: grid;
-    height: 30px;
-    place-items: center;
-  }
-
-  .broker-banner-kicker,
-  .broker-banner-detail {
     display: none;
-  }
-
-  .broker-banner-title {
-    font-size: 0;
-    line-height: 0;
-  }
-
-  .broker-banner-dot {
-    width: 10px;
-    height: 10px;
   }
 
   .broker-toggle {
-    position: absolute;
-    inset: 0;
     width: 100%;
-    min-height: 0;
-    padding: 0;
-    border: 0;
-    background: transparent;
-  }
-
-  .broker-toggle-track {
-    display: none;
-  }
-
-  .broker-toggle-label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    white-space: nowrap;
+    height: 32px;
   }
 }
 
@@ -226,21 +194,20 @@
 }
 
 .broker-toggle {
-  display: flex;
+  display: inline-grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  flex-shrink: 0;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  min-height: 30px;
-  padding: 5px 7px;
+  padding: 0;
   background: $bg-surface;
   border: 1px solid $border;
   border-radius: $radius-sm;
   color: $text-secondary;
   cursor: pointer;
   font: inherit;
-  font-size: 11px;
-  font-weight: 700;
+  font-size: 13px;
   transition: background $t-fast, border-color $t-fast, color $t-fast;
 
   &:hover:not(:disabled) {
@@ -260,45 +227,30 @@
 
   &.is-on {
     border-color: color-mix(in srgb, $bull 36%, $border);
+    color: $bull;
   }
 }
 
-.broker-toggle-track {
-  flex-shrink: 0;
-  position: relative;
+.is-degraded .broker-toggle {
+  border-color: color-mix(in srgb, $bear 42%, $border);
+  color: $bear;
+}
+
+.broker-toggle.is-busy {
+  cursor: progress;
+}
+
+.broker-status-icon {
+  display: none;
+}
+
+.broker-banner--compact .broker-status-icon {
+  display: grid;
   width: 32px;
-  height: 18px;
-  background: $bg-hover;
-  border: 1px solid $border;
-  border-radius: 999px;
-}
-
-.broker-toggle-thumb {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 12px;
-  height: 12px;
-  background: $text-muted;
-  border-radius: 50%;
-  transition: transform $t-ui, background $t-ui;
-}
-
-.broker-toggle.is-on {
-  .broker-toggle-track {
-    background: color-mix(in srgb, $bull 16%, $bg-hover);
-    border-color: color-mix(in srgb, $bull 45%, $border);
-  }
-
-  .broker-toggle-thumb {
-    background: $bull;
-    transform: translateX(14px);
-  }
-}
-
-.broker-toggle-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  height: 32px;
+  place-items: center;
+  border: 1px solid var(--badge-info-border);
+  border-radius: $radius-sm;
+  color: $info;
+  font-size: 13px;
 }

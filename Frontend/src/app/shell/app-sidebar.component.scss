@@ -7,7 +7,7 @@
   position: sticky;
   top: 0;
   height: 100vh;
-  z-index: 40;
+  z-index: var(--z-sidebar);
   transition: flex-basis $t-ui ease, width $t-ui ease;
 }
 
@@ -307,6 +307,9 @@
 
 // ── Status footer ────────────────────────────────────────────
 .status-footer {
+  display: grid;
+  gap: 8px;
+  justify-items: end;
   flex-shrink: 0;
   padding: 10px 10px 12px;
   margin-top: auto;
@@ -318,18 +321,10 @@
   .brand {
     min-height: 56px;
     justify-content: center;
-    padding: 27px 0 7px;
-    position: relative;
+    padding: 17px 0;
   }
 
   .wordmark { display: none; }
-
-  .sidebar-pin {
-    position: absolute;
-    top: 2px;
-    right: 2px;
-    margin: 0;
-  }
 
   .search-wrap {
     min-height: 44px;
