@@ -1,7 +1,8 @@
 import { signal } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { Router, RouterModule } from '@angular/router';
-import { describe, expect, it, vi } from 'vitest';
+import { provideRouter, Router, RouterModule } from '@angular/router';
+import { fireEvent, render, screen } from '@testing-library/angular';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BrokerHealthService } from '../services/broker-health.service';
 import { LiveRunsService } from '../services/live-runs.service';
@@ -20,6 +21,182 @@ class FakeLiveRunsService {
 }
 
 describe('AppSidebarComponent', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it('uses the compact rail by default and persists an explicit pin choice', async () => {
+    const { fixture } = await render(AppSidebarComponent, {
+      providers: sidebarProviders(),
+    });
+
+    const sidebar = fixture.nativeElement as HTMLElement;
+    const pin = screen.getByRole('button', { name: 'Pin expanded navigation sidebar' });
+
+    expect(sidebar.classList.contains('sidebar--pinned')).toBe(false);
+    expect(pin.getAttribute('aria-pressed')).toBe('false');
+
+    fireEvent.click(pin);
+    fixture.detectChanges();
+
+    expect(sidebar.classList.contains('sidebar--pinned')).toBe(true);
+    expect(pin.getAttribute('aria-pressed')).toBe('true');
+    expect(localStorage.getItem('quant-lab.sidebar.pinned')).toBe('true');
+  });
+
+  it('restores a persisted pinned preference', async () => {
+    localStorage.setItem('quant-lab.sidebar.pinned', 'true');
+
+    const { fixture } = await render(AppSidebarComponent, { providers: sidebarProviders() });
+
+    expect(fixture.nativeElement.classList.contains('sidebar--pinned')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Use compact navigation rail' }).getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('keeps the pin control as the final sidebar footer action', async () => {
+    const { fixture } = await render(AppSidebarComponent, {
+      providers: sidebarProviders(),
+    });
+
+    const footer = fixture.nativeElement.querySelector('.status-footer') as HTMLElement;
+    const pin = screen.getByRole('button', { name: 'Pin expanded navigation sidebar' });
+
+    expect(footer.lastElementChild).toBe(pin);
+  });
+
+  it('uses the Market Scope glyph as its labelled home link', async () => {
+    await render(AppSidebarComponent, { providers: sidebarProviders() });
+
+    expect(screen.getByRole('link', { name: 'Market Scope' }).getAttribute('href')).toBe('/data-lab');
+  });
+
+  it('links group disclosures only to the container rendered for their current presentation', async () => {
+    const { fixture } = await render(AppSidebarComponent, { providers: sidebarProviders() });
+    const alpaca = screen.getByRole('button', { name: 'Alpaca' });
+
+    expect(alpaca.getAttribute('aria-controls')).toBeNull();
+
+    fireEvent.mouseEnter(alpaca);
+    fixture.detectChanges();
+    expect(alpaca.getAttribute('aria-controls')).toBe('sidebar-flyout-alpaca');
+    expect(document.getElementById('sidebar-flyout-alpaca')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pin expanded navigation sidebar' }));
+    fixture.detectChanges();
+    expect(alpaca.getAttribute('aria-controls')).toBeNull();
+
+    fireEvent.click(alpaca);
+    fixture.detectChanges();
+    expect(alpaca.getAttribute('aria-controls')).toBe('sidebar-group-items-alpaca');
+    expect(document.getElementById('sidebar-group-items-alpaca')).toBeTruthy();
+  });
+
+  it('clears the compact search overlay when the home glyph is selected', async () => {
+    const { fixture } = await render(AppSidebarComponent, {
+      providers: sidebarProviders([{ path: 'data-lab', component: AppSidebarComponent }]),
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search navigation' }));
+    fireEvent.input(screen.getByRole('textbox', { name: 'Search navigation' }), {
+      target: { value: 'data' },
+    });
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.flat-matches')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('link', { name: 'Market Scope' }));
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.flat-matches')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.search-input')).toBeNull();
+  });
+
+  it('marks the current page as active inside compact search results', async () => {
+    const { fixture } = await render(AppSidebarComponent, {
+      providers: sidebarProviders([{ path: 'data-lab', component: AppSidebarComponent }]),
+    });
+    const router = TestBed.inject(Router);
+
+    await router.navigateByUrl('/data-lab');
+    fireEvent.click(screen.getByRole('button', { name: 'Search navigation' }));
+    fireEvent.input(screen.getByRole('textbox', { name: 'Search navigation' }), {
+      target: { value: 'data' },
+    });
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('a.nav-link.active')?.textContent).toContain('Data Lab');
+  });
+
+  it('closes compact search with Escape', async () => {
+    const { fixture } = await render(AppSidebarComponent, { providers: sidebarProviders() });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search navigation' }));
+    fireEvent.input(screen.getByRole('textbox', { name: 'Search navigation' }), {
+      target: { value: 'data' },
+    });
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.flat-matches')).toBeTruthy();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.flat-matches')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.search-input')).toBeNull();
+  });
+
+  it('reveals one hovered group as a keyboard-reachable flyout and closes it with Escape', async () => {
+    const { fixture } = await render(AppSidebarComponent, {
+      providers: sidebarProviders(),
+    });
+    const alpaca = screen.getByRole('button', { name: 'Alpaca' });
+
+    fireEvent.mouseEnter(alpaca);
+    fixture.detectChanges();
+
+    expect(screen.getByRole('region', { name: 'Alpaca' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Accounts' }).getAttribute('href')).toBe('/brokers/alpaca');
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    fixture.detectChanges();
+
+    expect(screen.queryByRole('region', { name: 'Alpaca' })).toBeNull();
+  });
+
+  it('keeps compact flyouts within the viewport bottom edge', async () => {
+    const { fixture } = await render(AppSidebarComponent, { providers: sidebarProviders() });
+    const documentation = screen.getByRole('button', { name: 'Documentation' });
+    const originalHeight = window.innerHeight;
+    const bounds = vi.spyOn(documentation, 'getBoundingClientRect').mockReturnValue({
+      top: 180,
+      right: 56,
+    } as DOMRect);
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 200 });
+
+    try {
+      fireEvent.mouseEnter(documentation);
+      fixture.detectChanges();
+
+      expect(screen.getByRole('region', { name: 'Documentation' }).style.top).toBe('8px');
+    } finally {
+      bounds.mockRestore();
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: originalHeight });
+    }
+  });
+
+  it('marks the compact group containing the active route', async () => {
+    const { fixture } = await render(AppSidebarComponent, {
+      providers: sidebarProviders([{
+        path: 'brokers/:broker/accounts/:accountId/:surface',
+        component: AppSidebarComponent,
+      }]),
+    });
+    const router = TestBed.inject(Router);
+
+    await router.navigateByUrl('/brokers/alpaca/accounts/PA9/bots');
+    fixture.detectChanges();
+
+    expect(screen.getByRole('button', { name: 'Alpaca' }).classList.contains('has-active')).toBe(true);
+  });
+
   it('does not expose the retired Interactive Broker menu', () => {
     const fixture = setup();
 
@@ -58,6 +235,14 @@ describe('AppSidebarComponent', () => {
       ['gallery', 'Gallery'],
     ]) {
       await router.navigateByUrl(`/brokers/alpaca/accounts/PA9/${surface}`);
+      fixture.detectChanges();
+      const alpaca = Array.from(
+        (fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>(
+          'button.nav-group-header',
+        ),
+      ).find((candidate) => candidate.textContent?.includes('Alpaca'));
+      if (alpaca === undefined) throw new Error('Alpaca group not found');
+      fireEvent.mouseEnter(alpaca);
       fixture.detectChanges();
       const activeLabels = Array.from(
         (fixture.nativeElement as HTMLElement).querySelectorAll<HTMLAnchorElement>('a.nav-link.active'),
@@ -108,6 +293,14 @@ describe('AppSidebarComponent', () => {
     expect(navLinks(fixture).get('Legal Notices')).toBe('/legal/notices');
   });
 });
+
+function sidebarProviders(routes: Parameters<typeof provideRouter>[0] = []) {
+  return [
+    provideRouter(routes),
+    { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+    { provide: LiveRunsService, useClass: FakeLiveRunsService },
+  ];
+}
 
 function setup(): ComponentFixture<AppSidebarComponent> {
   TestBed.resetTestingModule();

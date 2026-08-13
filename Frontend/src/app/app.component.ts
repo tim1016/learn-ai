@@ -1,9 +1,16 @@
-import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
-import { RouterOutlet } from '@angular/router';
+import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
+import { toSignal } from '@angular/core/rxjs-interop';
+import { Title } from '@angular/platform-browser';
+import { ActivatedRouteSnapshot, NavigationEnd, Router, RouterOutlet } from '@angular/router';
 import { Toast } from 'primeng/toast';
+import { filter } from 'rxjs';
 import { AppSidebarComponent } from './shell/app-sidebar.component';
+import { BrokerBannerComponent } from './shell/broker-banner.component';
+import { BreadcrumbComponent } from './shell/breadcrumb.component';
 import { MarkdownDrawerHostComponent } from './shared/markdown-drawer/markdown-drawer-host.component';
 import { BrokerHealthService } from './services/broker-health.service';
+import { TopBarComponent } from './shell/top-bar.component';
+import { PageBodyComponent } from './shell/page-body.component';
 
 // The global JobsDrawer / floating "Jobs" launcher was removed in favor
 // of per-feature SSE-driven progress UIs (e.g. the Engine Lab run
@@ -15,15 +22,27 @@ import { BrokerHealthService } from './services/broker-health.service';
   imports: [
     RouterOutlet,
     AppSidebarComponent,
+    BrokerBannerComponent,
+    BreadcrumbComponent,
+    TopBarComponent,
+    PageBodyComponent,
     MarkdownDrawerHostComponent,
     Toast,
   ],
   styles: [`
     :host {
       display: flex;
-      min-height: 100vh;
+      min-height: 100dvh;
       background: var(--bg-canvas);
       color: var(--text-primary);
+    }
+
+    .shell {
+      display: flex;
+      flex: 1;
+      min-width: 0;
+      min-height: 100dvh;
+      flex-direction: column;
     }
 
     /* Named container "ide" drives the .ide-grid breakpoints declared in
@@ -33,6 +52,7 @@ import { BrokerHealthService } from './services/broker-health.service';
     .main {
       flex: 1;
       min-width: 0;
+      min-height: 0;
       display: flex;
       flex-direction: column;
       overflow-x: auto;
@@ -42,27 +62,52 @@ import { BrokerHealthService } from './services/broker-health.service';
     .main-content {
       flex: 1;
       min-width: 0;
-      padding: var(--page-pad-y) var(--page-pad-x);
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
     }
   `],
   template: `
     <app-sidebar />
-    <main class="main">
-      <div class="main-content">
-        <router-outlet />
-      </div>
-    </main>
+    <div class="shell">
+      <app-top-bar>
+        <app-breadcrumb shell-breadcrumbs />
+        <app-broker-banner shell-connection />
+      </app-top-bar>
+      <main class="main">
+        <div class="main-content">
+          <app-page-body [fullBleed]="isFullBleedRoute()">
+            <router-outlet />
+          </app-page-body>
+        </div>
+      </main>
+    </div>
     <app-markdown-drawer-host />
     <p-toast position="top-right" />
   `,
 })
 export class AppComponent {
   private readonly brokerHealth = inject(BrokerHealthService);
+  private readonly title = inject(Title);
+  private readonly router = inject(Router);
+  private readonly navigationEnd = toSignal(
+    this.router.events.pipe(filter((event): event is NavigationEnd => event instanceof NavigationEnd)),
+    { initialValue: null },
+  );
+  protected readonly isFullBleedRoute = computed(() => {
+    this.navigationEnd();
+    return activeRouteHasData(this.router.routerState.snapshot.root, 'fullBleed');
+  });
 
   constructor() {
+    this.title.setTitle('Market Scope');
     // Single-source-of-truth poll for the global banner. Components
     // read ``BrokerHealthService.health()`` instead of polling
     // /api/broker/health from per-page mounts.
     this.brokerHealth.start();
   }
+}
+
+function activeRouteHasData(route: ActivatedRouteSnapshot, key: string): boolean {
+  return Boolean(route.data[key]) || route.children.some((child) => activeRouteHasData(child, key));
 }

@@ -42,14 +42,18 @@
   </nav>
 
   @if (actionReceipt(); as receipt) {
-    <app-panel-action-receipt
-      [receipt]="receipt"
-      (dismissed)="dismissActionReceipt()"
-    />
+    <div class="panel-feedback">
+      <app-panel-action-receipt
+        [receipt]="receipt"
+        (dismissed)="dismissActionReceipt()"
+      />
+    </div>
   }
 
   @if (reductionPlan(); as plan) {
-    <app-safe-flatten-plan [plan]="plan" />
+    <div class="panel-feedback">
+      <app-safe-flatten-plan [plan]="plan" />
+    </div>
   }
 
   @switch (activeLens()) {

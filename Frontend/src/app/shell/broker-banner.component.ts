@@ -8,7 +8,7 @@ import type { ActiveBotSidebarNotice } from './active-bot-sidebar-notice.service
 const NOTICE_ACTION_TIMEOUT_MS = 15_000;
 
 /**
- * Sidebar broker connection control.
+ * Global IBKR broker connection control.
  *
  * Driven by ``BrokerHealthService.bannerState`` — see the service
  * docstring for why the truth source is ``health.is_paper`` and never
@@ -21,12 +21,12 @@ const NOTICE_ACTION_TIMEOUT_MS = 15_000;
   template: `
     @if (activeBotNotice(); as notice) {
       <details
-        class="host-runner-sidebar-notice"
+        class="host-runner-notice"
         [class.is-binding-invalid]="notice.kind === 'live-binding-invalid'"
-        data-testid="sidebar-host-runner-notice"
+        data-testid="host-runner-notice"
       >
         <summary>{{ notice.summary }}</summary>
-        <div class="host-runner-sidebar-detail">
+        <div class="host-runner-notice__detail">
           <p>{{ notice.message }}</p>
           @if (notice.command) {
             <pre><code>{{ notice.command }}</code></pre>
@@ -34,8 +34,8 @@ const NOTICE_ACTION_TIMEOUT_MS = 15_000;
           @if (notice.action; as action) {
             <button
               type="button"
-              class="host-runner-sidebar-action"
-              data-testid="sidebar-host-runner-action"
+              class="host-runner-notice__action"
+              data-testid="host-runner-notice-action"
               [disabled]="isNoticeActionInFlight(notice.instanceId)"
               (click)="invokeNoticeAction(notice)"
             >
@@ -43,7 +43,7 @@ const NOTICE_ACTION_TIMEOUT_MS = 15_000;
             </button>
           }
           @if (noticeActionError(); as err) {
-            <p class="host-runner-sidebar-error" role="alert">{{ err }}</p>
+            <p class="host-runner-notice__error" role="alert">{{ err }}</p>
           }
         </div>
       </details>
@@ -71,20 +71,27 @@ const NOTICE_ACTION_TIMEOUT_MS = 15_000;
             {{ state.detail }}
           </span>
         </div>
-        @if (state.toggleLabel; as label) {
+        @if (state.toggleLabel) {
           <button
             type="button"
             class="broker-toggle"
             [class.is-on]="state.connected"
+            [class.is-busy]="action !== null"
             (click)="toggleConnection()"
             [disabled]="action !== null"
             [attr.aria-pressed]="state.connected"
             [attr.aria-label]="state.toggleAria"
+            [attr.aria-busy]="action !== null"
+            [attr.title]="state.toggleAria"
           >
-            <span class="broker-toggle-track" aria-hidden="true">
-              <span class="broker-toggle-thumb"></span>
-            </span>
-            <span class="broker-toggle-label">{{ toggleText(label, action) }}</span>
+            <i
+              class="pi"
+              [class.pi-power-off]="action === null && state.connected"
+              [class.pi-plug]="action === null && !state.connected"
+              [class.pi-spinner]="action !== null"
+              [class.pi-spin]="action !== null"
+              aria-hidden="true"
+            ></i>
           </button>
         }
       </section>
@@ -110,12 +117,6 @@ export class BrokerBannerComponent {
     if (state === null || state.toggleLabel === null) return Promise.resolve();
     if (state.connected) return this.healthService.disconnect();
     return this.healthService.connect();
-  }
-
-  toggleText(label: 'Connect' | 'Disconnect', action: string | null): string {
-    if (action === 'connect') return 'Connecting';
-    if (action === 'disconnect') return 'Disconnecting';
-    return label;
   }
 
   async invokeNoticeAction(notice: ActiveBotSidebarNotice): Promise<void> {

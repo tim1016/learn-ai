@@ -1,0 +1,99 @@
+@use '../styles/tokens' as *;
+
+:host {
+  display: block;
+  min-width: 0;
+}
+
+.breadcrumb {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-2);
+  color: $text-secondary;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.breadcrumb__crumb {
+  overflow: hidden;
+  color: inherit;
+  text-decoration: none;
+  text-overflow: ellipsis;
+
+  &:hover {
+    color: $text-primary;
+    text-decoration: underline;
+  }
+
+  &:focus-visible {
+    outline: 2px solid $accent;
+    outline-offset: 2px;
+  }
+}
+
+.breadcrumb__separator {
+  flex: 0 0 auto;
+  color: $text-muted;
+}
+
+.breadcrumb__overflow {
+  display: none;
+  position: relative;
+
+  summary {
+    display: grid;
+    width: 1.5rem;
+    height: 1.5rem;
+    place-items: center;
+    border-radius: $radius-sm;
+    color: $text-secondary;
+    cursor: pointer;
+    list-style: none;
+
+    &::-webkit-details-marker {
+      display: none;
+    }
+
+    &:focus-visible {
+      outline: 2px solid $accent;
+      outline-offset: 2px;
+    }
+  }
+}
+
+.breadcrumb__overflow-menu {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  left: 0;
+  display: grid;
+  min-width: max-content;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  background: $bg-surface;
+  border: 1px solid $border-light;
+  border-radius: $radius;
+  box-shadow: $shadow-pop;
+
+  a {
+    color: $text-secondary;
+    text-decoration: none;
+
+    &:hover,
+    &:focus-visible {
+      color: $text-primary;
+      text-decoration: underline;
+    }
+  }
+}
+
+@media (max-width: 760px) {
+  .breadcrumb__overflow {
+    display: block;
+  }
+
+  .breadcrumb__crumb--ancestor,
+  .breadcrumb__separator--before-last {
+    display: none;
+  }
+}

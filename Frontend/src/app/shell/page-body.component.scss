@@ -1,0 +1,11 @@
+:host {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  padding: var(--page-pad-y) var(--page-pad-x);
+}
+
+:host(.page-body--full-bleed) {
+  padding: 0;
+}

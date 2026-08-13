@@ -39,9 +39,11 @@ import { PageHeaderComponent } from '../../../../shared/page-header/page-header.
     `
       :host {
         display: block;
+      }
+
+      .manual-page {
         max-width: 960px;
         margin: 0 auto;
-        padding: 4px 4px 40px;
       }
 
       .page-link {

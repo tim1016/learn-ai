@@ -31,6 +31,14 @@ describe('routes', () => {
     expect(await route.loadComponent()).toBe(StrategyLabResultsComponent);
   });
 
+  it.each([
+    'options-lab',
+    'strategy-lab',
+    'brokers/:broker/accounts/:accountId/bots/:sid',
+  ])('marks %s as an intentionally full-bleed workspace', (path) => {
+    expect(routes.find((route) => route.path === path)?.data).toMatchObject({ fullBleed: true });
+  });
+
   it('redirects historical Alpaca Deploy URLs into the desk drawer', () => {
     for (const path of ['brokers/alpaca/deploy', 'brokers/alpaca/accounts/:accountId/deploy']) {
       expect(routes.find((candidate) => candidate.path === path)).toMatchObject({
