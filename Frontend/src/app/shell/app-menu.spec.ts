@@ -2,22 +2,21 @@ import {
   activeMenuNodeFor,
   breadcrumbTrailFor,
   defaultMenuItemFor,
+  pageTitleFor,
   APP_MENU,
 } from './app-menu';
 
 describe('app menu projections', () => {
   it('uses the configured group default as the parent crumb target', () => {
-    expect(defaultMenuItemFor(APP_MENU[1])).toMatchObject({ label: 'Options Lab', route: '/options-lab' });
+    expect(defaultMenuItemFor(APP_MENU[1])).toMatchObject({ title: 'Options Lab', route: '/options-lab' });
     expect(breadcrumbTrailFor('/options-lab')).toEqual([
-      { label: 'Options', route: '/options-lab' },
-      { label: 'Options Lab', route: '/options-lab' },
+      { title: 'Options', route: '/options-lab' },
     ]);
   });
 
-  it('links a leaf crumb to its own route', () => {
+  it('returns ancestors only, without the current page crumb', () => {
     expect(breadcrumbTrailFor('/pricing-lab')).toEqual([
-      { label: 'Options', route: '/options-lab' },
-      { label: 'Pricing Lab', route: '/pricing-lab' },
+      { title: 'Options', route: '/options-lab' },
     ]);
   });
 
@@ -29,24 +28,28 @@ describe('app menu projections', () => {
     '/research-lab/signal-report/42',
   ])('stops the research-detail route %s at its deepest menu node', (url) => {
     expect(breadcrumbTrailFor(url)).toEqual([
-      { label: 'Research', route: '/research-lab' },
-      { label: 'Research Lab', route: '/research-lab' },
+      { title: 'Research', route: '/research-lab' },
     ]);
   });
 
   it('maps account-scoped Alpaca pages onto their stable menu entry', () => {
     expect(breadcrumbTrailFor('/brokers/alpaca/accounts/PA9/gallery/sid-3')).toEqual([
-      { label: 'Alpaca', route: '/brokers/alpaca' },
-      { label: 'Gallery', route: '/brokers/alpaca/gallery' },
+      { title: 'Alpaca', route: '/brokers/alpaca' },
     ]);
   });
 
-  it('resolves the deploy query alias without losing its navigation query', () => {
-    expect(activeMenuNodeFor('/brokers/alpaca?deploy=')?.item.label).toBe('Deploy');
+  it('resolves the deploy query alias to its page title and parent crumb', () => {
+    expect(activeMenuNodeFor('/brokers/alpaca?deploy=')?.item.title).toBe('Deploy');
     expect(breadcrumbTrailFor('/brokers/alpaca?deploy=')).toEqual([
-      { label: 'Alpaca', route: '/brokers/alpaca' },
-      { label: 'Deploy', route: '/brokers/alpaca', queryParams: { deploy: '' } },
+      { title: 'Alpaca', route: '/brokers/alpaca' },
     ]);
+  });
+
+  it('resolves page titles through the active menu node', () => {
+    expect(pageTitleFor('/pricing-lab')).toBe('Pricing Lab');
+    expect(pageTitleFor('/brokers/alpaca/accounts/PA9/gallery/sid-3')).toBe('Gallery');
+    expect(pageTitleFor('/brokers/alpaca?deploy=')).toBe('Deploy');
+    expect(pageTitleFor('/jobs-demo')).toBeNull();
   });
 
   it('returns no crumbs for a route outside the menu', () => {

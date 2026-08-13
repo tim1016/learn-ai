@@ -25,6 +25,19 @@ describe('TopBarComponent', () => {
     expect(screen.getByRole('link', { name: 'Market Scope home' }).getAttribute('href')).toBe('/data-lab');
   });
 
+  it('renders the current page title as a non-heading centered element', async () => {
+    const { container } = await render(TopBarComponent, {
+      inputs: { pageTitle: 'Pricing Lab' },
+      providers: [provideRouter([])],
+    });
+
+    const title = screen.getByText('Pricing Lab');
+    expect(title.classList.contains('top-bar__page-title')).toBe(true);
+    expect(title.tagName).toBe('SPAN');
+    expect(screen.queryByRole('heading', { name: 'Pricing Lab' })).toBeNull();
+    expect(container.querySelector('.top-bar')?.children[1]).toBe(title);
+  });
+
   it('provides named regions for shell extensions', async () => {
     const { container } = await render(TopBarComponent, { providers: [provideRouter([])] });
 

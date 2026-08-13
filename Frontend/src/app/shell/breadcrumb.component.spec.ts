@@ -11,14 +11,14 @@ class BreadcrumbTestRouteComponent {}
 const BREADCRUMB_ROUTES = [{ path: '**', component: BreadcrumbTestRouteComponent }];
 
 describe('BreadcrumbComponent', () => {
-  it('renders menu ancestors and their canonical link targets', async () => {
+  it('renders the menu ancestor and omits the current page crumb', async () => {
     const { fixture, router } = await renderBreadcrumb();
 
     await router.navigateByUrl('/pricing-lab');
     fixture.detectChanges();
 
     expect(screen.getByRole('link', { name: 'Options' }).getAttribute('href')).toBe('/options-lab');
-    expect(screen.getByRole('link', { name: 'Pricing Lab' }).getAttribute('href')).toBe('/pricing-lab');
+    expect(screen.queryByRole('link', { name: 'Pricing Lab' })).toBeNull();
   });
 
   it('stops at the deepest menu node for account-scoped routes', async () => {
@@ -28,33 +28,29 @@ describe('BreadcrumbComponent', () => {
     fixture.detectChanges();
 
     expect(screen.getByRole('link', { name: 'Alpaca' })).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Bots' }).getAttribute('aria-current')).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Bots' })).toBeNull();
     expect(screen.queryByText('bot-7')).toBeNull();
   });
 
-  it('preserves current query state when the current crumb is followed', async () => {
+  it('navigates an ancestor to its canonical route without retaining the page query', async () => {
     const { fixture, router } = await renderBreadcrumb();
 
-    await router.navigateByUrl('/strategy-validation?strategy=ema_crossover_signal');
+    await router.navigateByUrl('/brokers/alpaca?deploy=');
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('link', { name: 'Strategy Validation' }));
+    fireEvent.click(screen.getByRole('link', { name: 'Alpaca' }));
     await fixture.whenStable();
 
-    expect(router.url).toBe('/strategy-validation?strategy=ema_crossover_signal');
+    expect(router.url).toBe('/brokers/alpaca');
   });
 
-  it('closes the overflow menu after an ancestor crumb is selected', async () => {
+  it('does not mark an ancestor link as the current page', async () => {
     const { fixture, router } = await renderBreadcrumb();
 
     await router.navigateByUrl('/pricing-lab');
     fixture.detectChanges();
-    const overflow = fixture.nativeElement.querySelector('.breadcrumb__overflow') as HTMLDetailsElement;
-    overflow.open = true;
 
-    fireEvent.click(fixture.nativeElement.querySelector('.breadcrumb__overflow a') as HTMLAnchorElement);
-
-    expect(overflow.open).toBe(false);
+    expect(screen.getByRole('link', { name: 'Options' }).getAttribute('aria-current')).toBeNull();
   });
 
   it('renders nothing for a route outside the menu', async () => {
@@ -64,16 +60,6 @@ describe('BreadcrumbComponent', () => {
     fixture.detectChanges();
 
     expect(screen.queryByRole('navigation', { name: 'Breadcrumb' })).toBeNull();
-  });
-
-  it('provides the accessible overflow control used on narrow layouts', async () => {
-    const { fixture, router } = await renderBreadcrumb();
-
-    await router.navigateByUrl('/pricing-lab');
-    fixture.detectChanges();
-
-    expect(screen.getByRole('navigation', { name: 'Breadcrumb' })).toBeTruthy();
-    expect(fixture.nativeElement.querySelector('summary[aria-label="Show earlier breadcrumbs"]')).toBeTruthy();
   });
 
   it('has no detectable accessibility violations', async () => {
