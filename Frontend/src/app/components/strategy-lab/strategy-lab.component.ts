@@ -43,7 +43,6 @@ import { toStrategyLabConfiguration } from "./strategy-lab.models";
   templateUrl: "./strategy-lab.component.html",
   styleUrl: "./strategy-lab.component.scss",
   changeDetection: ChangeDetectionStrategy.OnPush,
-  host: { class: 'page-inset' },
   providers: [
     StrategyLabConfigStore,
     StrategyLabRunner,

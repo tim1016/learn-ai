@@ -67,9 +67,18 @@
   box-shadow: 0 0 0 4px var(--accent-soft);
 }
 
-:host ::ng-deep .p-tabpanels,
-:host ::ng-deep .p-tabpanel {
+:host ::ng-deep .p-tablist {
+  padding-inline: var(--page-pad-x);
+}
+
+:host ::ng-deep .p-tabpanels {
   padding: 0;
+  background: transparent;
+}
+
+:host ::ng-deep .p-tabpanel {
+  display: block;
+  padding: var(--page-pad-y) var(--page-pad-x);
   background: transparent;
 }
 
