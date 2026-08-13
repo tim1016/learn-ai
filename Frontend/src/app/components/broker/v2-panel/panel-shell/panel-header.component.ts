@@ -2,13 +2,10 @@ import {
   ChangeDetectionStrategy,
   Component,
   computed,
-  inject,
   input,
   output,
-  resource,
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
-import { firstValueFrom } from 'rxjs';
 import type {
   ActionId,
   BotPanelView,
@@ -23,7 +20,6 @@ import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
-import { MarketDataService } from '../../../../services/market-data.service';
 import { buildManualOrderTicketNavigation } from '../../lib/manual-order-navigation';
 
 const RUNNING_STOP_ACTION_IDS: readonly ActionId[] = [
@@ -46,39 +42,10 @@ const RUNNING_STOP_ACTION_IDS: readonly ActionId[] = [
   styleUrl: './panel-header.component.scss',
 })
 export class PanelHeaderComponent {
-  private readonly marketData = inject(MarketDataService);
-
   readonly panel = input.required<BotPanelView>();
+  readonly tickerQuote = input<TickerQuoteView | null>(null);
   readonly actionPending = input(false);
   readonly actionRequested = output<PanelActionTrigger>();
-
-  private readonly marketSnapshot = resource({
-    params: () => this.panel().symbol,
-    loader: ({ params: symbol }) =>
-      firstValueFrom(this.marketData.getStockSnapshot(symbol)),
-  });
-
-  protected readonly tickerQuote = computed<TickerQuoteView | null>(() => {
-    const snapshot = this.marketSnapshot.hasValue()
-      ? this.marketSnapshot.value().snapshot
-      : null;
-    const price = snapshot?.day?.close ?? snapshot?.min?.close;
-    const changePercent = snapshot?.todaysChangePercent;
-    if (
-      price === null
-      || price === undefined
-      || changePercent === null
-      || changePercent === undefined
-    ) {
-      return null;
-    }
-    return {
-      ticker: snapshot?.ticker ?? this.panel().symbol,
-      price,
-      change: snapshot?.todaysChange,
-      changePercent,
-    };
-  });
 
   protected readonly manualOrderNavigation = computed(() =>
     buildManualOrderTicketNavigation(

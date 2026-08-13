@@ -3,6 +3,7 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MessageService } from 'primeng/api';
+import { of } from 'rxjs';
 import type {
   SqliteRecoveryAction,
   SqliteSafeFlattenPlan,
@@ -10,6 +11,7 @@ import type {
 import { BotPanelShellComponent } from './bot-panel-shell.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { BrokersService } from '../../../../services/brokers.service';
+import { MarketDataService } from '../../../../services/market-data.service';
 import { DUAL_PANE_CHART_FACTORY } from '../dual-pane-chart/dual-pane-chart.component';
 import type {
   BotPanelView,
@@ -45,7 +47,10 @@ vi.mock('lightweight-charts', () => {
 
 beforeEach(() => {
   TestBed.configureTestingModule({
-    providers: [{ provide: DUAL_PANE_CHART_FACTORY, useValue: chartMocks.createChart }],
+    providers: [
+      { provide: DUAL_PANE_CHART_FACTORY, useValue: chartMocks.createChart },
+      { provide: MarketDataService, useValue: marketDataMock },
+    ],
   });
   chartMocks.createChart.mockClear();
 });
@@ -356,6 +361,22 @@ const brokersMock = {
   checkSqliteRecoveryAction: vi.fn().mockResolvedValue(SAFE_FLATTEN_CAPABILITY),
 };
 
+const marketDataMock = {
+  getStockSnapshot: vi.fn().mockReturnValue(of({
+    success: true,
+    snapshot: {
+      ticker: 'QQQ',
+      day: { open: 480, high: 482, low: 478, close: 481.42, volume: 1, vwap: 480 },
+      prevDay: null,
+      min: null,
+      todaysChange: 2.42,
+      todaysChangePercent: 0.51,
+      updated: 1_753_800_001_000,
+    },
+    error: null,
+  })),
+};
+
 function openDisclosure(label: string): void {
   const details = screen.getByText(label).closest('details');
   if (details === null) throw new Error(`Expected ${label} disclosure.`);
@@ -384,7 +405,7 @@ describe('BotPanelShellComponent', () => {
     fixture.detectChanges();
 
     // Symbol from the loaded panel should appear
-    expect(screen.getByRole('heading', { name: 'QQQ', level: 1 })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: /QQQ/, level: 1 })).toBeTruthy();
     expect(mockService.getLiveSnapshot).toHaveBeenCalledWith(
       'alpaca',
       'DUM284968',
@@ -514,6 +535,31 @@ describe('BotPanelShellComponent', () => {
     expect(screen.queryByText('Run evidence')).toBeNull();
     expect(screen.queryByText('Strategy evidence')).toBeNull();
     expect(screen.queryByText('Clerk evidence')).toBeNull();
+  });
+
+  it('keeps the market snapshot mounted while switching lenses', async () => {
+    const { fixture } = await render(BotPanelShellComponent, {
+      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      providers: [
+        provideRouter([]),
+        { provide: BrokerV2PanelService, useValue: mockService },
+        { provide: BrokersService, useValue: brokersMock },
+        { provide: MessageService, useValue: messageService },
+      ],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(marketDataMock.getStockSnapshot).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+    fireEvent.click(screen.getByRole('tab', { name: 'Trader' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(marketDataMock.getStockSnapshot).toHaveBeenCalledTimes(1);
   });
 
   it('loads previous runs only while the operator lens is mounted', async () => {

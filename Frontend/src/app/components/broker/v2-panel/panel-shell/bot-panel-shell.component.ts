@@ -13,6 +13,7 @@ import {
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router } from '@angular/router';
 import { MessageService } from 'primeng/api';
+import { firstValueFrom } from 'rxjs';
 
 import type { SqliteSafeFlattenPlan } from '../../../../api/alpaca.types';
 import { SafeFlattenPlanComponent } from '../../shared/safe-flatten-plan/safe-flatten-plan.component';
@@ -26,6 +27,8 @@ import type {
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { BotPanelLiveStore } from '../lib/bot-panel-live-store.service';
 import { BrokersService } from '../../../../services/brokers.service';
+import { MarketDataService } from '../../../../services/market-data.service';
+import type { TickerQuoteView } from '../../../../shared/ticker-quote/ticker-quote.component';
 import {
   actionOutcomeToast,
   deriveActionRejection,
@@ -81,6 +84,7 @@ export class BotPanelShellComponent {
 
   private readonly panelSvc = inject(BrokerV2PanelService);
   private readonly brokers = inject(BrokersService);
+  private readonly marketData = inject(MarketDataService);
   private readonly liveStore = inject(BotPanelLiveStore);
   private readonly destroyRef = inject(DestroyRef);
   private readonly route = inject(ActivatedRoute);
@@ -121,6 +125,26 @@ export class BotPanelShellComponent {
   protected readonly profile = resource({
     params: () => this.broker(),
     loader: ({ params }) => this.panelSvc.getPanelProfile(params),
+  });
+
+  private readonly marketSnapshot = resource({
+    params: () => this.panel()?.symbol,
+    loader: ({ params: symbol }) =>
+      firstValueFrom(this.marketData.getStockSnapshot(symbol)),
+  });
+
+  protected readonly tickerQuote = computed<TickerQuoteView | null>(() => {
+    const snapshot = this.marketSnapshot.hasValue()
+      ? this.marketSnapshot.value().snapshot
+      : null;
+    const price = snapshot?.day?.close ?? snapshot?.min?.close;
+    if (price === null || price === undefined) return null;
+    return {
+      ticker: snapshot?.ticker ?? this.panel()?.symbol ?? '',
+      price,
+      change: snapshot?.todaysChange,
+      changePercent: snapshot?.todaysChangePercent ?? null,
+    };
   });
 
   protected readonly histChart = resource({

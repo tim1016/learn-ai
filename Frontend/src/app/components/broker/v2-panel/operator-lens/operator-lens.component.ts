@@ -13,6 +13,7 @@ import type {
   PanelActionTrigger,
   PanelProfile,
 } from '../lib/broker-v2-panel.types';
+import type { TickerQuoteView } from '../../../../shared/ticker-quote/ticker-quote.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { TransactionRailComponent } from './transaction-rail.component';
 import { HealthCardComponent } from './health-card.component';
@@ -60,6 +61,7 @@ export class OperatorLensComponent {
   // ── Shell-provided data ───────────────────────────────────────────────────
 
   readonly panel = input.required<BotPanelView>();
+  readonly tickerQuote = input<TickerQuoteView | null>(null);
   readonly profile = input.required<PanelProfile>();
   readonly actionPending = input(false);
 

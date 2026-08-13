@@ -1,6 +1,7 @@
 <div class="operator-lens">
   <app-panel-header
     [panel]="panel()"
+    [tickerQuote]="tickerQuote()"
     [actionPending]="actionPending()"
     (actionRequested)="onActionRequested($event)"
   />

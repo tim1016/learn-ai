@@ -1,5 +1,6 @@
 <app-panel-header
   [panel]="panel()"
+  [tickerQuote]="tickerQuote()"
   [actionPending]="actionPending()"
   (actionRequested)="actionRequested.emit($event)"
 />

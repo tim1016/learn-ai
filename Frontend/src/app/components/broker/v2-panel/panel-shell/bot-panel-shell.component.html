@@ -57,6 +57,7 @@
       <div id="trader-panel" role="tabpanel" aria-labelledby="trader-tab">
         <app-trader-lens
           [panel]="panelData"
+          [tickerQuote]="tickerQuote()"
           [profile]="profileData"
           [liveChart]="liveChart()"
           [histChart]="histChart.value() ?? null"
@@ -75,6 +76,7 @@
       <div id="operator-panel" role="tabpanel" aria-labelledby="operator-tab">
         <app-operator-lens
           [panel]="panelData"
+          [tickerQuote]="tickerQuote()"
           [profile]="profileData"
           [actionPending]="actionPending()"
           [broker]="broker()"

@@ -40,5 +40,6 @@ describe('BotDetailBannerComponent', () => {
     expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'More actions' })).toBeTruthy();
     expect(screen.getByText(/Updated/)).toBeTruthy();
+    expect(screen.queryByRole('status')).toBeNull();
   });
 });

@@ -1,40 +1,15 @@
-<div class="instrument-quote__identity">
-  <app-asset-identity
-    [symbol]="quote().symbol"
-    [name]="quote().name ?? null"
-    [exchange]="quote().exchange ?? null"
-    [logoSlug]="quote().logoSlug ?? null"
-    size="lg"
-  />
-</div>
+@if (tickerQuote(); as quote) {
+  <app-ticker-quote [quote]="quote" size="lg" />
+} @else {
+  <div class="instrument-quote__identity">
+    <app-asset-identity
+      [symbol]="quote().symbol"
+      [name]="quote().name ?? null"
+      [exchange]="quote().exchange ?? null"
+      [logoSlug]="quote().logoSlug ?? null"
+      size="lg"
+    />
+  </div>
+}
 
-<div class="instrument-quote__price" aria-label="Latest price">
-  @if (quote().price !== null) {
-    <span>{{ currencySymbol() }}{{ quote().price | number:'1.2-2' }}</span>
-  } @else {
-    <span>—</span>
-  }
-</div>
-
-<span
-  class="instrument-quote__change"
-  [class.instrument-quote__change--positive]="changeTone() === 'positive'"
-  [class.instrument-quote__change--negative]="changeTone() === 'negative'"
-  [class.instrument-quote__change--flat]="changeTone() === 'flat'"
-  [class.instrument-quote__change--unavailable]="changeTone() === 'unavailable'"
->
-  @if (quote().changePercent !== null) {
-    {{ changePrefix() }}{{ quote().changePercent | number:'1.2-2' }}%
-  } @else {
-    —
-  }
-</span>
-
-<span class="instrument-quote__session" [attr.data-session]="session()">
-  {{ sessionLabel() }}
-</span>
-
-<span class="instrument-quote__freshness" [attr.aria-label]="freshnessLabel()">
-  <span class="instrument-quote__freshness-dot" aria-hidden="true"></span>
-  <span class="sr-only">{{ freshnessLabel() }}</span>
-</span>
+<span class="instrument-quote__source">{{ sourceLabel() }}</span>

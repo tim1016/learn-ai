@@ -14,6 +14,7 @@ import type {
   ChartHistoryResponse,
   PanelProfile,
 } from '../lib/broker-v2-panel.types';
+import type { TickerQuoteView } from '../../../../shared/ticker-quote/ticker-quote.component';
 import { DualPaneChartComponent } from '../dual-pane-chart/dual-pane-chart.component';
 import { PanelHeaderComponent } from '../panel-shell/panel-header.component';
 import { TradesTodayListComponent } from './trades-today-list.component';
@@ -47,6 +48,7 @@ export class TraderLensComponent {
   // ── Inputs ────────────────────────────────────────────────────────────────
 
   readonly panel = input.required<BotPanelView>();
+  readonly tickerQuote = input<TickerQuoteView | null>(null);
   readonly profile = input.required<PanelProfile>();
   readonly liveChart = input<ChartLiveResponse | null>(null);
   readonly histChart = input<ChartHistoryResponse | null>(null);
