@@ -1,9 +1,8 @@
 import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 
 /**
- * App-wide page header. Standardizes the h1 + subtitle + optional eyebrow /
- * actions slot so every route renders the same hierarchy, spacing, and
- * WCAG-AA subtitle contrast.
+ * App-wide page header. Standardizes the h1 + optional eyebrow / actions slot
+ * so every route renders the same hierarchy and spacing.
  *
  * Slots:
  *   - ``[slot=actions]`` — chips, links, or buttons aligned to the right.
@@ -12,7 +11,7 @@ import { ChangeDetectionStrategy, Component, input } from '@angular/core';
  *     content so per-page bespoke guides keep working.
  *
  * Usage:
- *   <app-page-header title="Engine Lab" subtitle="…">
+ *   <app-page-header title="Engine Lab">
  *     <button slot="actions">…</button>
  *     <app-page-guide slot="guide" pulls="…" why="…" />
  *   </app-page-header>
@@ -33,9 +32,6 @@ import { ChangeDetectionStrategy, Component, input } from '@angular/core';
           }
           <span>{{ title() }}</span>
         </h1>
-        @if (subtitle()) {
-          <p class="page-subtitle">{{ subtitle() }}</p>
-        }
       </div>
       <div class="page-header-actions">
         <ng-content select="[slot=actions]" />
@@ -48,7 +44,6 @@ import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 })
 export class PageHeaderComponent {
   readonly title = input.required<string>();
-  readonly subtitle = input<string | undefined>(undefined);
   readonly eyebrow = input<string | undefined>(undefined);
   /** Optional leading PrimeIcons class (without the ``pi-`` prefix —
    *  e.g. ``"pi-bolt"``). Renders in ``--accent`` next to the title. */

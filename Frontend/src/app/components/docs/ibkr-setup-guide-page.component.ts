@@ -18,7 +18,6 @@ import { PageHeaderComponent } from '../../shared/page-header/page-header.compon
       <app-page-header
         eyebrow="Runbook"
         title="IBKR Setup Guide"
-        subtitle="Paper Gateway / TWS setup, API socket settings, client-ID separation, diagnostics, and account monitor cutover checks."
       >
         <a
           slot="actions"

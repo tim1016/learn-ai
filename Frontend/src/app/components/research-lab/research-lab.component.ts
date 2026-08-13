@@ -42,7 +42,7 @@ export class ResearchLabComponent {
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
 
-  /** Refreshes on every successful navigation; powers title, subtitle,
+  /** Refreshes on every successful navigation; powers title
    *  and which parent group's children should be shown in row 2. */
   private readonly navState = toSignal(
     this.router.events.pipe(
@@ -55,10 +55,6 @@ export class ResearchLabComponent {
   readonly title = computed<string>(
     () => (this.navState().data['title'] as string | undefined) ?? 'Research Lab',
   );
-  readonly subtitle = computed<string>(
-    () => (this.navState().data['subtitle'] as string | undefined) ?? '',
-  );
-
   /** Group whose child is currently active. Falls back to the first group
    *  for the brief moment between landing on `/research-lab` and the
    *  redirect to `features/validate` resolving. */

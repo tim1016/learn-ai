@@ -21,7 +21,6 @@ import { PageHeaderComponent } from '../../shared/page-header/page-header.compon
       <app-page-header
         eyebrow="Reference"
         title="Indicator Reliability — Methodology"
-        subtitle="Consolidated reference: IC statistics, multiple-testing correction, random baselines, regime conditioning, IR proxy, and the mission-control UI."
       >
         <a
           slot="actions"
@@ -71,13 +70,6 @@ import { PageHeaderComponent } from '../../shared/page-header/page-header.compon
       font-weight: 700;
       letter-spacing: -0.02em;
       color: var(--text-primary);
-    }
-    .page-subtitle {
-      margin: 0;
-      color: var(--text-secondary);
-      font-size: 0.92rem;
-      line-height: 1.6;
-      max-width: 720px;
     }
     .page-actions {
       margin-top: 14px;

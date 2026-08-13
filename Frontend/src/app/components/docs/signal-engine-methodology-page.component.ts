@@ -25,7 +25,6 @@ import { PageHeaderComponent } from '../../shared/page-header/page-header.compon
       <app-page-header
         eyebrow="Reference"
         title="Signal Engine — Methodology"
-        subtitle="Walk-forward backtesting with strict no-lookahead PnL, Stage 0 kill switch, Lo (2002) Sharpe CIs, Bailey & López de Prado deflated Sharpe, and the 0/1/2/3 graduation ladder."
       >
         <a
           slot="actions"

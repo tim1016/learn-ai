@@ -1,26 +1,5 @@
 import { Routes } from '@angular/router';
 
-const SUBTITLES = {
-  validate:
-    "Test a candidate feature's predictive power via Information Coefficient against forward log returns.",
-  crossSectional:
-    'Run one feature across the full universe and rank by IC.',
-  experiments:
-    'Audit log of feature validation runs.',
-  signalEngine:
-    'Compose features into signals and validate them against the same IC bar.',
-  signalHistory:
-    'Audit log of signal engine runs.',
-  reliability:
-    "Score an indicator's stability, parameter sensitivity, and regime robustness.",
-  strategyRuns:
-    'All completed strategy backtests with walk-forward and Monte Carlo drilldowns.',
-  dataDivergence:
-    'Audit divergence between vendor data feeds before trusting downstream math.',
-  preFlight:
-    'Validate strategy config and data coverage before queuing a backtest run.',
-} as const;
-
 export const researchLabRoutes: Routes = [
   // Detail routes retain focused content while inheriting the root application
   // shell. Listed before the research-lab child shell so their more-specific
@@ -76,7 +55,7 @@ export const researchLabRoutes: Routes = [
           import('./feature-runner/feature-runner.component').then(
             (m) => m.FeatureRunnerComponent,
           ),
-        data: { title: 'Feature Validation', subtitle: SUBTITLES.validate },
+        data: { title: 'Feature Validation' },
       },
       {
         path: 'features/cross-sectional',
@@ -84,7 +63,7 @@ export const researchLabRoutes: Routes = [
           import('./batch-runner/batch-runner.component').then(
             (m) => m.BatchRunnerComponent,
           ),
-        data: { title: 'Cross-Sectional Sweep', subtitle: SUBTITLES.crossSectional },
+        data: { title: 'Cross-Sectional Sweep' },
       },
       {
         path: 'features/experiments',
@@ -92,7 +71,7 @@ export const researchLabRoutes: Routes = [
           import('./experiment-history/experiment-history.component').then(
             (m) => m.ExperimentHistoryComponent,
           ),
-        data: { title: 'Experiment History', subtitle: SUBTITLES.experiments },
+        data: { title: 'Experiment History' },
       },
 
       // Signals
@@ -102,7 +81,7 @@ export const researchLabRoutes: Routes = [
           import('./signal-runner/signal-runner.component').then(
             (m) => m.SignalRunnerComponent,
           ),
-        data: { title: 'Signal Engine', subtitle: SUBTITLES.signalEngine },
+        data: { title: 'Signal Engine' },
       },
       {
         path: 'signals/history',
@@ -110,7 +89,7 @@ export const researchLabRoutes: Routes = [
           import('./signal-history/signal-history.component').then(
             (m) => m.SignalHistoryComponent,
           ),
-        data: { title: 'Signal History', subtitle: SUBTITLES.signalHistory },
+        data: { title: 'Signal History' },
       },
 
       // Backtests
@@ -120,7 +99,7 @@ export const researchLabRoutes: Routes = [
           import(
             './indicator-reliability/indicator-reliability.component'
           ).then((m) => m.IndicatorReliabilityComponent),
-        data: { title: 'Indicator Reliability', subtitle: SUBTITLES.reliability },
+        data: { title: 'Indicator Reliability' },
       },
       {
         path: 'backtests/strategy-runs',
@@ -128,7 +107,7 @@ export const researchLabRoutes: Routes = [
           import('./strategy-runs/strategy-runs.component').then(
             (m) => m.StrategyRunsComponent,
           ),
-        data: { title: 'Backtest Runs', subtitle: SUBTITLES.strategyRuns },
+        data: { title: 'Backtest Runs' },
       },
 
       // Nav-invisible routes (no longer surfaced in sub-nav but still reachable)
@@ -138,7 +117,7 @@ export const researchLabRoutes: Routes = [
           import('./data-divergence/data-divergence.component').then(
             (m) => m.DataDivergenceComponent,
           ),
-        data: { title: 'Data Divergence', subtitle: SUBTITLES.dataDivergence },
+        data: { title: 'Data Divergence' },
       },
       {
         path: 'inspect/pre-flight',
@@ -146,7 +125,7 @@ export const researchLabRoutes: Routes = [
           import('./strategy-preflight/strategy-preflight.component').then(
             (m) => m.StrategyPreflightComponent,
           ),
-        data: { title: 'Strategy Pre-flight', subtitle: SUBTITLES.preFlight },
+        data: { title: 'Strategy Pre-flight' },
       },
 
       // Legacy redirects — old build/* and inspect/* paths → new canonical paths

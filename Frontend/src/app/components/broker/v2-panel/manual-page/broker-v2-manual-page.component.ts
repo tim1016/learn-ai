@@ -19,7 +19,6 @@ import { PageHeaderComponent } from '../../../../shared/page-header/page-header.
       <app-page-header
         eyebrow="Operator Manual"
         [title]="pageTitle()"
-        subtitle="Six-station order pipeline, button reference, and closed vocabulary for the broker-v2 control panel."
       >
         <a
           slot="actions"
