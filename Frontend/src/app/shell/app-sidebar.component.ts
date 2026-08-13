@@ -36,7 +36,13 @@ const FLYOUT_CLOSE_DELAY_MS = 180;
   },
   template: `
     <aside class="sidebar" [class.sidebar--pinned]="pinned()">
-      <a class="brand" routerLink="/data-lab" aria-label="Market Scope" title="Market Scope">
+      <a
+        class="brand"
+        routerLink="/data-lab"
+        aria-label="Market Scope"
+        title="Market Scope"
+        (click)="onNavigationSelected()"
+      >
         <svg width="18" height="22" viewBox="0 0 22 26" aria-hidden="true">
           <rect x="9" y="0" width="4" height="26" fill="#5a6178" />
           <rect x="4" y="5" width="14" height="14" fill="#00c896" rx="1" />
@@ -82,7 +88,7 @@ const FLYOUT_CLOSE_DELAY_MS = 180;
                 [class.active]="isActive(m)"
                 [routerLink]="m.route"
                 [queryParams]="m.queryParams"
-                (click)="query.set('')"
+                (click)="onNavigationSelected()"
               >
                 <span class="nav-link-label">{{ m.label }}</span>
                 <span class="nav-link-group mono">{{ m.groupTitle }}</span>
@@ -396,7 +402,7 @@ export class AppSidebarComponent {
   }
 
   isActive(item: AppMenuItem): boolean {
-    return this.activeNode()?.item === item;
+    return (item.activePath ?? item.route) === this.activeNode()?.activePath;
   }
 
   groupHasActive(group: AppMenuGroup): boolean {

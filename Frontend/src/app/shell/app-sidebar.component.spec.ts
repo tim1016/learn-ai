@@ -61,6 +61,41 @@ describe('AppSidebarComponent', () => {
     expect(screen.getByRole('link', { name: 'Market Scope' }).getAttribute('href')).toBe('/data-lab');
   });
 
+  it('clears the compact search overlay when the home glyph is selected', async () => {
+    const { fixture } = await render(AppSidebarComponent, {
+      providers: sidebarProviders([{ path: 'data-lab', component: AppSidebarComponent }]),
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search navigation' }));
+    fireEvent.input(screen.getByRole('textbox', { name: 'Search navigation' }), {
+      target: { value: 'data' },
+    });
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.flat-matches')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('link', { name: 'Market Scope' }));
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.flat-matches')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.search-input')).toBeNull();
+  });
+
+  it('marks the current page as active inside compact search results', async () => {
+    const { fixture } = await render(AppSidebarComponent, {
+      providers: sidebarProviders([{ path: 'data-lab', component: AppSidebarComponent }]),
+    });
+    const router = TestBed.inject(Router);
+
+    await router.navigateByUrl('/data-lab');
+    fireEvent.click(screen.getByRole('button', { name: 'Search navigation' }));
+    fireEvent.input(screen.getByRole('textbox', { name: 'Search navigation' }), {
+      target: { value: 'data' },
+    });
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('a.nav-link.active')?.textContent).toContain('Data Lab');
+  });
+
   it('reveals one hovered group as a keyboard-reachable flyout and closes it with Escape', async () => {
     const { fixture } = await render(AppSidebarComponent, {
       providers: sidebarProviders(),
