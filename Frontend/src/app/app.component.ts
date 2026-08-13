@@ -1,9 +1,11 @@
 import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
+import { Title } from '@angular/platform-browser';
 import { RouterOutlet } from '@angular/router';
 import { Toast } from 'primeng/toast';
 import { AppSidebarComponent } from './shell/app-sidebar.component';
 import { MarkdownDrawerHostComponent } from './shared/markdown-drawer/markdown-drawer-host.component';
 import { BrokerHealthService } from './services/broker-health.service';
+import { TopBarComponent } from './shell/top-bar.component';
 
 // The global JobsDrawer / floating "Jobs" launcher was removed in favor
 // of per-feature SSE-driven progress UIs (e.g. the Engine Lab run
@@ -15,6 +17,7 @@ import { BrokerHealthService } from './services/broker-health.service';
   imports: [
     RouterOutlet,
     AppSidebarComponent,
+    TopBarComponent,
     MarkdownDrawerHostComponent,
     Toast,
   ],
@@ -47,6 +50,7 @@ import { BrokerHealthService } from './services/broker-health.service';
   template: `
     <app-sidebar />
     <main class="main">
+      <app-top-bar />
       <div class="main-content">
         <router-outlet />
       </div>
@@ -57,8 +61,10 @@ import { BrokerHealthService } from './services/broker-health.service';
 })
 export class AppComponent {
   private readonly brokerHealth = inject(BrokerHealthService);
+  private readonly title = inject(Title);
 
   constructor() {
+    this.title.setTitle('Market Scope');
     // Single-source-of-truth poll for the global banner. Components
     // read ``BrokerHealthService.health()`` instead of polling
     // /api/broker/health from per-page mounts.
