@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, input, signal } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { BrokerHealthService } from '../services/broker-health.service';
 import { LiveRunsService } from '../services/live-runs.service';
@@ -19,7 +19,7 @@ const NOTICE_ACTION_TIMEOUT_MS = 15_000;
   changeDetection: ChangeDetectionStrategy.OnPush,
   styleUrl: './broker-banner.component.scss',
   template: `
-    @if (activeBotNotice(); as notice) {
+    @if (!compact() && activeBotNotice(); as notice) {
       <details
         class="host-runner-sidebar-notice"
         [class.is-binding-invalid]="notice.kind === 'live-binding-invalid'"
@@ -54,6 +54,7 @@ const NOTICE_ACTION_TIMEOUT_MS = 15_000;
     @if (state) {
       <section
         class="broker-banner"
+        [class.broker-banner--compact]="compact()"
         [class.is-paper]="state.kind === 'paper'"
         [class.is-live]="state.kind === 'live'"
         [class.is-degraded]="state.kind === 'degraded'"
@@ -92,6 +93,8 @@ const NOTICE_ACTION_TIMEOUT_MS = 15_000;
   `,
 })
 export class BrokerBannerComponent {
+  readonly compact = input(false);
+
   private readonly healthService = inject(BrokerHealthService);
   private readonly liveRuns = inject(LiveRunsService);
   private readonly activeBotNoticeService = inject(ActiveBotSidebarNoticeService);

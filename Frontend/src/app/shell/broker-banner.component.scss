@@ -95,6 +95,60 @@
   color: $text-secondary;
 }
 
+.broker-banner--compact {
+  position: relative;
+  display: block;
+  width: 32px;
+  min-height: 32px;
+  box-sizing: border-box;
+  padding: 0;
+  border-radius: 50%;
+
+  .broker-banner-copy {
+    display: grid;
+    height: 30px;
+    place-items: center;
+  }
+
+  .broker-banner-kicker,
+  .broker-banner-detail {
+    display: none;
+  }
+
+  .broker-banner-title {
+    font-size: 0;
+    line-height: 0;
+  }
+
+  .broker-banner-dot {
+    width: 10px;
+    height: 10px;
+  }
+
+  .broker-toggle {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+
+  .broker-toggle-track {
+    display: none;
+  }
+
+  .broker-toggle-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+}
+
 .broker-banner-copy {
   display: grid;
   gap: 3px;

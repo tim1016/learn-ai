@@ -3,7 +3,6 @@ import {
   Component,
   DestroyRef,
   ElementRef,
-  HostListener,
   computed,
   inject,
   signal,
@@ -133,33 +132,66 @@ const NAV_ROUTES = NAV.flatMap((group) => group.items.map((item) => item.activeP
   (left, right) => right.length - left.length,
 );
 
+const SIDEBAR_PINNED_STORAGE_KEY = 'quant-lab.sidebar.pinned';
+const FLYOUT_CLOSE_DELAY_MS = 180;
+
 @Component({
   selector: 'app-sidebar',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [CommonModule, FormsModule, RouterLink, BrokerBannerComponent],
   styleUrl: './app-sidebar.component.scss',
+  host: {
+    '[class.sidebar--pinned]': 'pinned()',
+    '[class.sidebar--search-open]': 'searchOpen()',
+    '(window:keydown)': 'handleKeydown($event)',
+  },
   template: `
-    <aside class="sidebar">
+    <aside class="sidebar" [class.sidebar--pinned]="pinned()">
       <div class="brand">
         <svg width="18" height="22" viewBox="0 0 22 26" aria-hidden="true">
           <rect x="9" y="0" width="4" height="26" fill="#5a6178" />
           <rect x="4" y="5" width="14" height="14" fill="#00c896" rx="1" />
         </svg>
         <span class="wordmark">quant<span class="slash">/</span>lab</span>
+        <button
+          type="button"
+          class="sidebar-pin"
+          [attr.aria-label]="pinned() ? 'Use compact navigation rail' : 'Pin expanded navigation sidebar'"
+          [attr.aria-pressed]="pinned()"
+          (click)="togglePinned()"
+        >
+          <i class="pi pi-thumbtack" aria-hidden="true"></i>
+        </button>
       </div>
 
       <div class="search-wrap">
-        <i class="pi pi-search search-icon" aria-hidden="true"></i>
-        <input
-          #searchInput
-          type="text"
-          class="search-input"
-          placeholder="Jump to…"
-          aria-label="Search navigation"
-          [ngModel]="query()"
-          (ngModelChange)="query.set($event)"
-        />
-        <span class="search-kbd mono">⌘K</span>
+        @if (pinned()) {
+          <i class="pi pi-search search-icon" aria-hidden="true"></i>
+        } @else {
+          <button
+            type="button"
+            class="rail-search-trigger"
+            aria-label="Search navigation"
+            (click)="openSearch()"
+          >
+            <i class="pi pi-search" aria-hidden="true"></i>
+          </button>
+        }
+        @if (pinned() || searchOpen()) {
+          <input
+            #searchInput
+            type="text"
+            class="search-input"
+            placeholder="Jump to…"
+            aria-label="Search navigation"
+            [ngModel]="query()"
+            (ngModelChange)="onQueryChanged($event)"
+            (focus)="openSearch()"
+          />
+        }
+        @if (pinned()) {
+          <span class="search-kbd mono">⌘K</span>
+        }
       </div>
 
       <nav class="nav-scroll" role="navigation">
@@ -183,24 +215,37 @@ const NAV_ROUTES = NAV.flatMap((group) => group.items.map((item) => item.activeP
           </div>
         } @else {
           @for (g of groups; track g.id) {
-            <div class="nav-group">
+            <div
+              class="nav-group"
+              [class.nav-group--flyout-open]="openFlyoutId() === g.id"
+              (mouseleave)="scheduleFlyoutClose()"
+              (focusin)="cancelFlyoutClose()"
+              (focusout)="scheduleFlyoutClose()"
+            >
               <button
                 type="button"
+                [id]="groupTriggerId(g.id)"
                 class="nav-group-header"
                 [class.has-active]="groupHasActive(g)"
-                (click)="toggleGroup(g.id)"
-                [attr.aria-expanded]="openGroups()[g.id] === true"
+                [class.rail-group-button]="!pinned()"
+                (click)="onGroupActivated(g, $event)"
+                (mouseenter)="openFlyout(g, $event)"
+                (focus)="openFlyout(g, $event)"
+                (keydown)="onGroupKeydown(g, $event)"
+                [attr.aria-label]="pinned() ? null : g.title"
+                [attr.aria-controls]="flyoutId(g.id)"
+                [attr.aria-expanded]="pinned() ? openGroups()[g.id] === true : openFlyoutId() === g.id"
               >
                 <i [class]="g.icon + ' group-icon'" aria-hidden="true"></i>
                 <span class="group-title">{{ g.title }}</span>
                 <i
                   class="pi pi-chevron-right chevron"
-                  [class.open]="openGroups()[g.id] === true"
+                  [class.open]="pinned() ? openGroups()[g.id] === true : openFlyoutId() === g.id"
                   aria-hidden="true"
                 ></i>
               </button>
 
-              @if (openGroups()[g.id]) {
+              @if (pinned() && openGroups()[g.id]) {
                 <div class="nav-group-items">
                   @for (item of g.items; track item.label) {
                     <a
@@ -208,11 +253,43 @@ const NAV_ROUTES = NAV.flatMap((group) => group.items.map((item) => item.activeP
                       [class.active]="isActive(item)"
                       [routerLink]="item.route"
                       [queryParams]="item.queryParams"
+                      (click)="onNavigationSelected()"
                     >
                       <span class="nav-link-label">{{ item.label }}</span>
                     </a>
                   }
                 </div>
+              }
+
+              @if (!pinned() && openFlyoutId() === g.id) {
+                <section
+                  [id]="flyoutId(g.id)"
+                  class="nav-flyout"
+                  role="region"
+                  [attr.aria-labelledby]="groupTriggerId(g.id)"
+                  [style.top.px]="flyoutPosition().top"
+                  [style.left.px]="flyoutPosition().left"
+                  (mouseenter)="cancelFlyoutClose()"
+                  (mouseleave)="scheduleFlyoutClose()"
+                  (focusin)="cancelFlyoutClose()"
+                  (focusout)="scheduleFlyoutClose()"
+                  (keydown)="onFlyoutKeydown($event)"
+                >
+                  <h2 class="nav-flyout-title">{{ g.title }}</h2>
+                  <div class="nav-flyout-items">
+                    @for (item of g.items; track item.label) {
+                      <a
+                        class="nav-link"
+                        [class.active]="isActive(item)"
+                        [routerLink]="item.route"
+                        [queryParams]="item.queryParams"
+                        (click)="onNavigationSelected()"
+                      >
+                        <span class="nav-link-label">{{ item.label }}</span>
+                      </a>
+                    }
+                  </div>
+                </section>
               }
             </div>
           }
@@ -220,14 +297,14 @@ const NAV_ROUTES = NAV.flatMap((group) => group.items.map((item) => item.activeP
       </nav>
 
       <div class="status-footer">
-        <app-broker-banner />
+        <app-broker-banner [compact]="!pinned()" />
       </div>
     </aside>
   `,
 })
 export class AppSidebarComponent {
-  private router = inject(Router);
-  private destroyRef = inject(DestroyRef);
+  private readonly router = inject(Router);
+  private readonly destroyRef = inject(DestroyRef);
 
   readonly groups = NAV;
 
@@ -253,10 +330,22 @@ export class AppSidebarComponent {
   });
 
   /** Open/closed state per group. Groups containing the active route auto-open. */
-  openGroups = signal<Record<string, boolean>>(this.computeInitialOpenState());
+  readonly openGroups = signal<Record<string, boolean>>(this.computeInitialOpenState());
+
+  /** Persisted presentation preference. Compact rail is the default. */
+  readonly pinned = signal(this.readPinnedPreference());
+
+  /** The only group currently expanded over the compact rail. */
+  readonly openFlyoutId = signal<string | null>(null);
+
+  /** Viewport coordinates keep the flyout outside the scroll container. */
+  readonly flyoutPosition = signal({ top: 0, left: 0 });
 
   /** Search query string. Non-empty switches nav into flat-match mode. */
-  query = signal<string>('');
+  readonly query = signal<string>('');
+
+  /** Compact rail search is a temporary popover; pinned search stays inline. */
+  readonly searchOpen = signal(false);
 
   /**
    * When query is non-empty, return the matching items flattened across groups.
@@ -276,7 +365,12 @@ export class AppSidebarComponent {
     return matches;
   });
 
-  searchInput = viewChild<ElementRef<HTMLInputElement>>('searchInput');
+  readonly searchInput = viewChild<ElementRef<HTMLInputElement>>('searchInput');
+
+  private flyoutCloseTimer: ReturnType<typeof setTimeout> | null = null;
+  private searchFocusTimer: ReturnType<typeof setTimeout> | null = null;
+  private flyoutTrigger: HTMLElement | null = null;
+  private suppressNextFlyoutOpen = false;
 
   constructor() {
     this.router.events
@@ -297,22 +391,134 @@ export class AppSidebarComponent {
           return next;
         });
       });
+    this.destroyRef.onDestroy(() => {
+      this.cancelFlyoutClose();
+      if (this.searchFocusTimer !== null) clearTimeout(this.searchFocusTimer);
+    });
   }
 
   /** ⌘K / Ctrl+K focuses the search input globally. */
-  @HostListener('window:keydown', ['$event'])
-  handleKeydown(event: KeyboardEvent): void {
+  protected handleKeydown(event: KeyboardEvent): void {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
       event.preventDefault();
-      const el = this.searchInput()?.nativeElement;
-      if (el) {
-        el.focus();
-        el.select();
-      }
+      this.openSearch(true);
+      return;
+    }
+    if (event.key === 'Escape' && this.openFlyoutId() !== null) {
+      event.preventDefault();
+      this.closeFlyout(true);
     }
   }
 
-  toggleGroup(id: string): void {
+  protected togglePinned(): void {
+    const next = !this.pinned();
+    this.pinned.set(next);
+    this.writePinnedPreference(next);
+    this.closeFlyout();
+    if (next) this.searchOpen.set(false);
+  }
+
+  protected onQueryChanged(query: string): void {
+    this.query.set(query);
+    if (!this.pinned()) this.searchOpen.set(true);
+  }
+
+  protected openSearch(selectContents = false): void {
+    if (this.pinned()) {
+      const input = this.searchInput()?.nativeElement;
+      input?.focus();
+      if (selectContents) input?.select();
+      return;
+    }
+    this.searchOpen.set(true);
+    if (this.searchFocusTimer !== null) clearTimeout(this.searchFocusTimer);
+    this.searchFocusTimer = setTimeout(() => {
+      const input = this.searchInput()?.nativeElement;
+      input?.focus();
+      if (selectContents) input?.select();
+      this.searchFocusTimer = null;
+    });
+  }
+
+  protected onGroupActivated(group: NavGroup, event: Event): void {
+    if (this.pinned()) {
+      this.toggleGroup(group.id);
+      return;
+    }
+    this.openFlyout(group, event);
+  }
+
+  protected openFlyout(group: NavGroup, event: Event): void {
+    if (this.pinned() || this.query().trim()) return;
+    if (this.suppressNextFlyoutOpen && event.type === 'focus') {
+      this.suppressNextFlyoutOpen = false;
+      return;
+    }
+    const trigger = event.currentTarget;
+    if (!(trigger instanceof HTMLElement)) return;
+    this.cancelFlyoutClose();
+    this.flyoutTrigger = trigger;
+    const bounds = trigger.getBoundingClientRect();
+    this.flyoutPosition.set({ top: Math.max(8, bounds.top), left: bounds.right + 8 });
+    this.openFlyoutId.set(group.id);
+  }
+
+  protected scheduleFlyoutClose(): void {
+    if (this.pinned() || this.openFlyoutId() === null) return;
+    this.cancelFlyoutClose();
+    this.flyoutCloseTimer = setTimeout(() => this.closeFlyout(), FLYOUT_CLOSE_DELAY_MS);
+  }
+
+  protected cancelFlyoutClose(): void {
+    if (this.flyoutCloseTimer === null) return;
+    clearTimeout(this.flyoutCloseTimer);
+    this.flyoutCloseTimer = null;
+  }
+
+  protected onGroupKeydown(group: NavGroup, event: KeyboardEvent): void {
+    if (this.pinned() || !['ArrowDown', 'ArrowRight'].includes(event.key)) return;
+    event.preventDefault();
+    this.openFlyout(group, event);
+    setTimeout(() => {
+      const flyout = document.getElementById(this.flyoutId(group.id));
+      flyout?.querySelector<HTMLAnchorElement>('a.nav-link')?.focus();
+    });
+  }
+
+  protected onFlyoutKeydown(event: KeyboardEvent): void {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    this.closeFlyout(true);
+  }
+
+  protected onNavigationSelected(): void {
+    this.query.set('');
+    this.searchOpen.set(false);
+    this.closeFlyout();
+  }
+
+  protected flyoutId(groupId: string): string {
+    return `sidebar-flyout-${groupId}`;
+  }
+
+  protected groupTriggerId(groupId: string): string {
+    return `sidebar-group-${groupId}`;
+  }
+
+  private closeFlyout(returnFocus = false): void {
+    this.cancelFlyoutClose();
+    this.openFlyoutId.set(null);
+    if (!returnFocus || this.flyoutTrigger === null) {
+      this.flyoutTrigger = null;
+      return;
+    }
+    const trigger = this.flyoutTrigger;
+    if (document.activeElement === trigger) return;
+    this.suppressNextFlyoutOpen = true;
+    trigger.focus({ preventScroll: true });
+  }
+
+  private toggleGroup(id: string): void {
     this.openGroups.update(state => ({ ...state, [id]: !state[id] }));
   }
 
@@ -340,5 +546,23 @@ export class AppSidebarComponent {
       state[g.id] = this.groupContainsUrl(g, url);
     }
     return state;
+  }
+
+  private readPinnedPreference(): boolean {
+    try {
+      return typeof localStorage !== 'undefined' && localStorage.getItem(SIDEBAR_PINNED_STORAGE_KEY) === 'true';
+    } catch (error) {
+      if (error instanceof DOMException) return false;
+      throw error;
+    }
+  }
+
+  private writePinnedPreference(pinned: boolean): void {
+    try {
+      localStorage.setItem(SIDEBAR_PINNED_STORAGE_KEY, String(pinned));
+    } catch (error) {
+      if (error instanceof DOMException) return;
+      throw error;
+    }
   }
 }

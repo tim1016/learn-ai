@@ -1,7 +1,8 @@
 import { signal } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { Router, RouterModule } from '@angular/router';
-import { describe, expect, it, vi } from 'vitest';
+import { provideRouter, Router, RouterModule } from '@angular/router';
+import { fireEvent, render, screen } from '@testing-library/angular';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BrokerHealthService } from '../services/broker-health.service';
 import { LiveRunsService } from '../services/live-runs.service';
@@ -20,6 +21,62 @@ class FakeLiveRunsService {
 }
 
 describe('AppSidebarComponent', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it('uses the compact rail by default and persists an explicit pin choice', async () => {
+    const { fixture } = await render(AppSidebarComponent, {
+      providers: sidebarProviders(),
+    });
+
+    const sidebar = fixture.nativeElement as HTMLElement;
+    const pin = screen.getByRole('button', { name: 'Pin expanded navigation sidebar' });
+
+    expect(sidebar.classList.contains('sidebar--pinned')).toBe(false);
+    expect(pin.getAttribute('aria-pressed')).toBe('false');
+
+    fireEvent.click(pin);
+    fixture.detectChanges();
+
+    expect(sidebar.classList.contains('sidebar--pinned')).toBe(true);
+    expect(pin.getAttribute('aria-pressed')).toBe('true');
+    expect(localStorage.getItem('quant-lab.sidebar.pinned')).toBe('true');
+  });
+
+  it('reveals one hovered group as a keyboard-reachable flyout and closes it with Escape', async () => {
+    const { fixture } = await render(AppSidebarComponent, {
+      providers: sidebarProviders(),
+    });
+    const alpaca = screen.getByRole('button', { name: 'Alpaca' });
+
+    fireEvent.mouseEnter(alpaca);
+    fixture.detectChanges();
+
+    expect(screen.getByRole('region', { name: 'Alpaca' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Accounts' }).getAttribute('href')).toBe('/brokers/alpaca');
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    fixture.detectChanges();
+
+    expect(screen.queryByRole('region', { name: 'Alpaca' })).toBeNull();
+  });
+
+  it('marks the compact group containing the active route', async () => {
+    const { fixture } = await render(AppSidebarComponent, {
+      providers: sidebarProviders([{
+        path: 'brokers/:broker/accounts/:accountId/:surface',
+        component: AppSidebarComponent,
+      }]),
+    });
+    const router = TestBed.inject(Router);
+
+    await router.navigateByUrl('/brokers/alpaca/accounts/PA9/bots');
+    fixture.detectChanges();
+
+    expect(screen.getByRole('button', { name: 'Alpaca' }).classList.contains('has-active')).toBe(true);
+  });
+
   it('does not expose the retired Interactive Broker menu', () => {
     const fixture = setup();
 
@@ -58,6 +115,14 @@ describe('AppSidebarComponent', () => {
       ['gallery', 'Gallery'],
     ]) {
       await router.navigateByUrl(`/brokers/alpaca/accounts/PA9/${surface}`);
+      fixture.detectChanges();
+      const alpaca = Array.from(
+        (fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>(
+          'button.nav-group-header',
+        ),
+      ).find((candidate) => candidate.textContent?.includes('Alpaca'));
+      if (alpaca === undefined) throw new Error('Alpaca group not found');
+      fireEvent.mouseEnter(alpaca);
       fixture.detectChanges();
       const activeLabels = Array.from(
         (fixture.nativeElement as HTMLElement).querySelectorAll<HTMLAnchorElement>('a.nav-link.active'),
@@ -108,6 +173,14 @@ describe('AppSidebarComponent', () => {
     expect(navLinks(fixture).get('Legal Notices')).toBe('/legal/notices');
   });
 });
+
+function sidebarProviders(routes: Parameters<typeof provideRouter>[0] = []) {
+  return [
+    provideRouter(routes),
+    { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+    { provide: LiveRunsService, useClass: FakeLiveRunsService },
+  ];
+}
 
 function setup(): ComponentFixture<AppSidebarComponent> {
   TestBed.resetTestingModule();

@@ -2,15 +2,22 @@
 
 :host {
   display: block;
-  flex-shrink: 0;
+  flex: 0 0 var(--sidebar-w-collapsed);
+  width: var(--sidebar-w-collapsed);
   position: sticky;
   top: 0;
   height: 100vh;
   z-index: 40;
+  transition: flex-basis $t-ui ease, width $t-ui ease;
+}
+
+:host(.sidebar--pinned) {
+  flex-basis: var(--sidebar-w);
+  width: var(--sidebar-w);
 }
 
 .sidebar {
-  width: var(--sidebar-w);
+  width: 100%;
   height: 100vh;
   background: $bg-surface;
   border-right: 1px solid $border;
@@ -27,14 +34,17 @@
   font-variant-numeric: tabular-nums;
 }
 
-// ── Brand ────────────────────────────────────────────────────
+// ── Brand + layout preference ────────────────────────────────
 .brand {
   display: flex;
+  min-height: 52px;
+  box-sizing: border-box;
   align-items: center;
   gap: 10px;
   padding: 14px 16px;
   border-bottom: 1px solid $border;
 }
+
 .wordmark {
   font-family: $font-mono;
   font-size: 14px;
@@ -42,9 +52,35 @@
   letter-spacing: -0.01em;
   color: $text-primary;
 }
+
 .slash {
   color: $text-subtle;
   font-weight: 500;
+}
+
+.sidebar-pin,
+.rail-search-trigger {
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: $text-muted;
+  cursor: pointer;
+
+  &:hover { background: $bg-elevated; color: $text-primary; }
+  &:focus-visible { outline: 2px solid $accent; outline-offset: 2px; }
+}
+
+.sidebar-pin {
+  width: 26px;
+  height: 26px;
+  margin-left: auto;
+  border-radius: $radius-sm;
+  font-size: 12px;
+}
+
+:host(.sidebar--pinned) .sidebar-pin {
+  color: $accent-text;
 }
 
 // ── Search ───────────────────────────────────────────────────
@@ -52,6 +88,7 @@
   position: relative;
   padding: 12px 12px 6px;
 }
+
 .search-icon {
   position: absolute;
   top: 50%;
@@ -61,6 +98,7 @@
   font-size: 12px;
   pointer-events: none;
 }
+
 .search-input {
   box-sizing: border-box;
   width: 100%;
@@ -79,6 +117,7 @@
     box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
   }
 }
+
 .search-kbd {
   position: absolute;
   top: 50%;
@@ -91,6 +130,8 @@
   font-size: 10px;
   pointer-events: none;
 }
+
+.rail-search-trigger { display: none; }
 
 // ── Nav scroll region ────────────────────────────────────────
 .nav-scroll {
@@ -109,13 +150,15 @@
 
 // ── Section groups ───────────────────────────────────────────
 .nav-group {
+  position: relative;
   margin-bottom: 2px;
 }
+
 .nav-group-header {
   display: flex;
+  width: 100%;
   align-items: center;
   gap: 8px;
-  width: 100%;
   padding: 8px 10px;
   background: transparent;
   border: 0;
@@ -125,12 +168,13 @@
   font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.08em;
-  text-transform: uppercase;
   text-align: left;
+  text-transform: uppercase;
   cursor: pointer;
   transition: background $t-fast, color $t-fast;
 
   &:hover { background: $bg-elevated; color: $text-secondary; }
+  &:focus-visible { outline: 2px solid $accent; outline-offset: -2px; }
 
   &.has-active {
     color: $text-secondary;
@@ -163,10 +207,9 @@
   &.open { transform: rotate(90deg); }
 }
 
-// ── Child links ──────────────────────────────────────────────
-// Defensive: block-level + full width so links stack even if
-// display:flex is ever overridden by a global rule.
-.nav-group-items {
+// ── Child links and single-group flyout ───────────────────────
+.nav-group-items,
+.nav-flyout-items {
   display: block;
   padding: 2px 0 6px;
 }
@@ -179,25 +222,18 @@
   gap: 8px;
   padding: 7px 10px 7px 30px;
   margin: 1px 0 1px -2px;
-  color: $text-secondary;
   background: transparent;
   border-left: 3px solid transparent;
   border-radius: 0 $radius-sm $radius-sm 0;
+  color: $text-secondary;
   font-size: 13px;
   font-weight: 400;
   text-decoration: none;
   cursor: pointer;
   transition: background $t-fast, color $t-fast, border-color $t-fast;
 
-  &:hover {
-    background: $bg-elevated;
-    color: $text-primary;
-  }
-
-  &:focus-visible {
-    outline: 2px solid $accent;
-    outline-offset: -2px;
-  }
+  &:hover { background: $bg-elevated; color: $text-primary; }
+  &:focus-visible { outline: 2px solid $accent; outline-offset: -2px; }
 
   &.active {
     background: $bg-hover;
@@ -223,18 +259,37 @@
   text-transform: uppercase;
 }
 
-// Informational outline badge — low visual weight.
-.nav-link-badge {
-  flex-shrink: 0;
-  padding: 1px 5px;
-  background: var(--badge-warn-bg);
-  border: 1px solid var(--badge-warn-border);
-  border-radius: $radius-sm;
-  color: var(--badge-warn-text);
-  font-size: 9px;
-  letter-spacing: 0.06em;
+.nav-flyout {
+  position: fixed;
+  z-index: 50;
+  width: min(15rem, calc(100vw - 4rem));
+  overflow: hidden;
+  border: 1px solid $border-light;
+  border-radius: $radius-md;
+  background: $bg-surface;
+  box-shadow: $shadow-pop;
+}
+
+.nav-flyout-title {
+  margin: 0;
+  padding: 11px 14px 8px;
+  border-bottom: 1px solid $border;
+  color: $text-subtle;
+  font-family: $font-mono;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  line-height: 1.4;
+}
+
+.nav-flyout-items {
+  padding: 5px 0;
+
+  .nav-link {
+    padding: 9px 14px;
+    margin: 1px 0;
+    border-left-width: 2px;
+  }
 }
 
 // ── Search empty-state ───────────────────────────────────────
@@ -242,6 +297,7 @@
   display: block;
   padding: 2px 0;
 }
+
 .empty {
   padding: 12px;
   color: $text-muted;
@@ -255,4 +311,117 @@
   padding: 10px 10px 12px;
   margin-top: auto;
   border-top: 1px solid $border;
+}
+
+// ── Compact rail ─────────────────────────────────────────────
+:host:not(.sidebar--pinned) {
+  .brand {
+    min-height: 56px;
+    justify-content: center;
+    padding: 27px 0 7px;
+    position: relative;
+  }
+
+  .wordmark { display: none; }
+
+  .sidebar-pin {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    margin: 0;
+  }
+
+  .search-wrap {
+    min-height: 44px;
+    padding: 6px 8px;
+  }
+
+  .rail-search-trigger {
+    display: inline-grid;
+    width: 100%;
+    min-height: 32px;
+    border-radius: $radius-sm;
+    font-size: 13px;
+  }
+
+  .search-input {
+    position: fixed;
+    top: -100vh;
+    left: 0;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .search-kbd { display: none; }
+
+  .nav-scroll { padding: 8px; }
+
+  .nav-group { margin-bottom: 4px; }
+
+  .rail-group-button {
+    width: 40px;
+    height: 40px;
+    justify-content: center;
+    padding: 0;
+    margin: 0 auto;
+    position: relative;
+
+    .group-icon { width: auto; font-size: 15px; }
+    .group-title,
+    .chevron { display: none; }
+
+    &.has-active::after {
+      width: 3px;
+      height: 16px;
+      position: absolute;
+      top: 12px;
+      right: -4px;
+      border-radius: 2px;
+      background: $accent;
+      content: '';
+    }
+  }
+
+  .status-footer {
+    display: grid;
+    justify-content: center;
+    padding: 8px 0 10px;
+  }
+}
+
+:host.sidebar--search-open:not(.sidebar--pinned) {
+  .search-input {
+    top: 8px;
+    left: 64px;
+    z-index: 60;
+    width: min(15rem, calc(100vw - 4.5rem));
+    height: auto;
+    padding: 8px 10px 8px 32px;
+    opacity: 1;
+    pointer-events: auto;
+    box-shadow: $shadow-pop;
+  }
+
+  .flat-matches {
+    position: fixed;
+    top: 48px;
+    left: 64px;
+    z-index: 55;
+    width: min(15rem, calc(100vw - 4.5rem));
+    max-height: min(28rem, calc(100vh - 3.5rem));
+    overflow-y: auto;
+    border: 1px solid $border-light;
+    border-radius: $radius-md;
+    background: $bg-surface;
+    box-shadow: $shadow-pop;
+
+    .nav-link {
+      padding: 9px 14px;
+      margin: 1px 0;
+      border-left-width: 2px;
+    }
+  }
 }
