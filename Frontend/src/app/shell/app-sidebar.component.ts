@@ -13,124 +13,13 @@ import { FormsModule } from '@angular/forms';
 import { Router, RouterLink, NavigationEnd } from '@angular/router';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { filter } from 'rxjs/operators';
+import {
+  APP_MENU,
+  activeMenuNodeFor,
+  type AppMenuGroup,
+  type AppMenuItem,
+} from './app-menu';
 import { BrokerBannerComponent } from './broker-banner.component';
-
-interface NavItem {
-  label: string;
-  route: string;
-  queryParams?: Record<string, string>;
-  activePath?: string;
-}
-
-interface NavGroup {
-  id: string;
-  title: string;
-  /** PrimeIcons class, e.g. 'pi pi-chart-line' */
-  icon: string;
-  items: NavItem[];
-}
-
-/**
- * Static information architecture.
- *
- * Contains current product surfaces only. Retired broker navigation remains
- * redirect-only in the route table and is intentionally absent from the UI.
- */
-const NAV: NavGroup[] = [
-  {
-    id: 'data-lab',
-    title: 'Data Lab',
-    icon: 'pi pi-database',
-    items: [
-      { label: 'Data Lab', route: '/data-lab' },
-      { label: 'Indicator Report', route: '/indicator-report' },
-    ],
-  },
-  {
-    id: 'options',
-    title: 'Options',
-    icon: 'pi pi-sliders-h',
-    items: [
-      { label: 'Options Lab', route: '/options-lab' },
-      { label: 'Options Chain (Live)', route: '/broker/options-chain' },
-      { label: 'Options Surface (3D)', route: '/broker/options-surface' },
-      { label: 'Pricing Lab', route: '/pricing-lab' },
-    ],
-  },
-  {
-    id: 'research',
-    title: 'Research',
-    icon: 'pi pi-compass',
-    items: [
-      { label: 'Research Lab', route: '/research-lab' },
-      { label: 'Golden Fixtures', route: '/golden-fixtures' },
-    ],
-  },
-  {
-    id: 'edge',
-    title: 'Edge Analysis',
-    icon: 'pi pi-bolt',
-    items: [
-      { label: 'Overview', route: '/edge' },
-      { label: 'Realized vs IV', route: '/edge/realized-vs-iv' },
-      { label: 'Cross-Asset', route: '/edge/cross-asset' },
-      { label: 'Regimes', route: '/edge/regimes' },
-    ],
-  },
-  {
-    id: 'alpaca',
-    title: 'Alpaca',
-    icon: 'pi pi-link',
-    items: [
-      { label: 'Accounts', route: '/brokers/alpaca' },
-      {
-        label: 'Deploy',
-        route: '/brokers/alpaca',
-        queryParams: { deploy: '' },
-        activePath: '/brokers/alpaca/deploy',
-      },
-      { label: 'Bots', route: '/brokers/alpaca/bots' },
-      { label: 'Gallery', route: '/brokers/alpaca/gallery' },
-    ],
-  },
-  {
-    id: 'design-lab',
-    title: 'Design Lab',
-    icon: 'pi pi-palette',
-    items: [
-      { label: 'Desert Oasis', route: '/broker/desert-oasis' },
-      { label: 'Bot Sprites', route: '/broker/bot-sprites' },
-    ],
-  },
-  {
-    id: 'strategy-tools',
-    title: 'Strategy Tools',
-    icon: 'pi pi-briefcase',
-    items: [
-      { label: 'Strategy Validation', route: '/strategy-validation' },
-      // Strategy Lab owns the one-strategy diagnostic and LEAN parity launch.
-      { label: 'Strategy Spec', route: '/spec-strategy' },
-      { label: 'Strategy Lab', route: '/strategy-lab' },
-    ],
-  },
-  {
-    id: 'documentation',
-    title: 'Documentation',
-    icon: 'pi pi-book',
-    items: [
-      { label: 'Strategy Docs', route: '/strategy-docs' },
-      { label: 'Indicator Reference', route: '/data-lab-docs' },
-      { label: 'Pipeline Docs', route: '/data-quality-docs' },
-      { label: 'Indicator Reliability', route: '/docs/indicator-reliability-methodology' },
-      { label: 'Signal Engine', route: '/docs/signal-engine-methodology' },
-      { label: 'Legal Notices', route: '/legal/notices' },
-    ],
-  },
-];
-
-const NAV_ROUTES = NAV.flatMap((group) => group.items.map((item) => item.activePath ?? item.route)).sort(
-  (left, right) => right.length - left.length,
-);
 
 const SIDEBAR_PINNED_STORAGE_KEY = 'quant-lab.sidebar.pinned';
 const FLYOUT_CLOSE_DELAY_MS = 180;
@@ -147,13 +36,12 @@ const FLYOUT_CLOSE_DELAY_MS = 180;
   },
   template: `
     <aside class="sidebar" [class.sidebar--pinned]="pinned()">
-      <div class="brand">
+      <a class="brand" routerLink="/data-lab" aria-label="Market Scope" title="Market Scope">
         <svg width="18" height="22" viewBox="0 0 22 26" aria-hidden="true">
           <rect x="9" y="0" width="4" height="26" fill="#5a6178" />
           <rect x="4" y="5" width="14" height="14" fill="#00c896" rx="1" />
         </svg>
-        <span class="wordmark">quant<span class="slash">/</span>lab</span>
-      </div>
+      </a>
 
       <div class="search-wrap">
         @if (pinned()) {
@@ -306,28 +194,13 @@ export class AppSidebarComponent {
   private readonly router = inject(Router);
   private readonly destroyRef = inject(DestroyRef);
 
-  readonly groups = NAV;
+  readonly groups = APP_MENU;
 
   /** Current route URL — updated on NavigationEnd. Signal so child bindings refresh. */
   private currentUrl = signal<string>(this.router.url);
 
-  /** Only the longest route match is active, so `/broker` does not shadow its children. */
-  private activeRoute = computed<string | null>(() => {
-    const currentUrl = this.currentUrl();
-    const url = this.navigationPath(currentUrl);
-    if (url === '/brokers/alpaca' && this.router.parseUrl(currentUrl).queryParams['deploy'] !== undefined) {
-      return '/brokers/alpaca/deploy';
-    }
-    const accountScopedBrokerSurface = url.match(
-      /^\/brokers\/([^/]+)\/accounts\/[^/]+\/(deploy|bots|gallery)(?:\/|$)/,
-    );
-    if (accountScopedBrokerSurface) {
-      const [, broker, surface] = accountScopedBrokerSurface;
-      const navigationSlot = `/brokers/${broker}/${surface}`;
-      if (NAV_ROUTES.includes(navigationSlot)) return navigationSlot;
-    }
-    return NAV_ROUTES.find((route) => url === route || url.startsWith(route + '/')) ?? null;
-  });
+  /** Shared resolver keeps the rail's active highlight aligned with other shell navigation. */
+  private readonly activeNode = computed(() => activeMenuNodeFor(this.currentUrl()));
 
   /** Open/closed state per group. Groups containing the active route auto-open. */
   readonly openGroups = signal<Record<string, boolean>>(this.computeInitialOpenState());
@@ -351,11 +224,11 @@ export class AppSidebarComponent {
    * When query is non-empty, return the matching items flattened across groups.
    * Null means "show the normal grouped tree."
    */
-  filtered = computed<(NavItem & { groupTitle: string })[] | null>(() => {
+  filtered = computed<(AppMenuItem & { groupTitle: string })[] | null>(() => {
     const q = this.query().trim().toLowerCase();
     if (!q) return null;
-    const matches: (NavItem & { groupTitle: string })[] = [];
-    for (const g of NAV) {
+    const matches: (AppMenuItem & { groupTitle: string })[] = [];
+    for (const g of APP_MENU) {
       for (const it of g.items) {
         if ((it.label + ' ' + g.title).toLowerCase().includes(q)) {
           matches.push({ ...it, groupTitle: g.title });
@@ -383,7 +256,7 @@ export class AppSidebarComponent {
         // Auto-open the group containing the newly active route.
         this.openGroups.update(state => {
           const next = { ...state };
-          for (const g of NAV) {
+          for (const g of APP_MENU) {
             if (this.groupContainsUrl(g, e.urlAfterRedirects)) {
               next[g.id] = true;
             }
@@ -440,7 +313,7 @@ export class AppSidebarComponent {
     });
   }
 
-  protected onGroupActivated(group: NavGroup, event: Event): void {
+  protected onGroupActivated(group: AppMenuGroup, event: Event): void {
     if (this.pinned()) {
       this.toggleGroup(group.id);
       return;
@@ -448,7 +321,7 @@ export class AppSidebarComponent {
     this.openFlyout(group, event);
   }
 
-  protected openFlyout(group: NavGroup, event: Event): void {
+  protected openFlyout(group: AppMenuGroup, event: Event): void {
     if (this.pinned() || this.query().trim()) return;
     if (this.suppressNextFlyoutOpen && event.type === 'focus') {
       this.suppressNextFlyoutOpen = false;
@@ -475,7 +348,7 @@ export class AppSidebarComponent {
     this.flyoutCloseTimer = null;
   }
 
-  protected onGroupKeydown(group: NavGroup, event: KeyboardEvent): void {
+  protected onGroupKeydown(group: AppMenuGroup, event: KeyboardEvent): void {
     if (this.pinned() || !['ArrowDown', 'ArrowRight'].includes(event.key)) return;
     event.preventDefault();
     this.openFlyout(group, event);
@@ -522,27 +395,22 @@ export class AppSidebarComponent {
     this.openGroups.update(state => ({ ...state, [id]: !state[id] }));
   }
 
-  isActive(item: NavItem): boolean {
-    return this.activeRoute() === (item.activePath ?? item.route);
+  isActive(item: AppMenuItem): boolean {
+    return this.activeNode()?.item === item;
   }
 
-  groupHasActive(g: NavGroup): boolean {
-    return g.items.some(it => this.isActive(it));
+  groupHasActive(group: AppMenuGroup): boolean {
+    return this.activeNode()?.group === group;
   }
 
-  private groupContainsUrl(g: NavGroup, url: string): boolean {
-    const path = this.navigationPath(url);
-    return g.items.some(it => path === it.route || path.startsWith(it.route + '/'));
-  }
-
-  private navigationPath(url: string): string {
-    return url.split(/[?#]/, 1)[0] ?? '';
+  private groupContainsUrl(group: AppMenuGroup, url: string): boolean {
+    return activeMenuNodeFor(url)?.group === group;
   }
 
   private computeInitialOpenState(): Record<string, boolean> {
     const url = this.router.url;
     const state: Record<string, boolean> = {};
-    for (const g of NAV) {
+    for (const g of APP_MENU) {
       state[g.id] = this.groupContainsUrl(g, url);
     }
     return state;
