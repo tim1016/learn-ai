@@ -1000,11 +1000,17 @@ must round-trip through facts.
 | `COMMAND_REJECTED` | `idempotency_key`, `payload_hash`, `kind`, `action`, `intended_end_state`, `reason_code`, `operator_reason` |
 | `RUN_STOPPED` | `idempotency_key`, `payload_hash`, `kind`, `action`, `intended_end_state`, `lifecycle_run_id`, `operator_reason` |
 | `ENTER_ACCEPTED` | command idempotency key/hash/kind/action; decision id; effect idempotency key/kind; complete immutable broker leg/captured order fields |
+| `MANUAL_ORDER_ACCEPTED` | immutable `ticket_id`/`leg_id`/manual-subject/operator identities; ticket-leg instruction hash; command idempotency key/hash/kind/action; effect idempotency key/kind; complete BUY/market/DAY broker leg. The outer strategy and run identities are null. |
+| `MANUAL_ORDER_FILLED` | none (`{}`). It may be appended only after the broker's terminal `filled` state and effective exact execution quantity both cover the immutable manual leg; its fold creates the shared terminal success receipt and completes the one-leg ticket. |
 
 Implemented in `app/broker/alpaca/clerk/sqlite/facts.py`. `ENTER_ACCEPTED`'s
 dataclass and fold are not implemented in the corrective slice — no command
 flow appends that transition kind yet — but its facts shape is pinned here so
 issue #1377's rebuild has a fixed target rather than inventing one ad hoc.
+`MANUAL_ORDER_ACCEPTED` is the S2 manual-market tracer's implemented
+strategy-free counterpart: it is legal only after an immutable ticket/leg
+reservation, and its fold creates one manual command/effect/order resource
+chain before the caller may contact the broker.
 
 ### 3e. Reconciliation and hold transition facts (#1378)
 

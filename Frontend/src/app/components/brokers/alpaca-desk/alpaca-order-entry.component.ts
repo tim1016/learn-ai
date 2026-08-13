@@ -3,6 +3,7 @@ import {
   ChangeDetectionStrategy,
   Component,
   computed,
+  effect,
   inject,
   input,
   linkedSignal,
@@ -13,7 +14,13 @@ import { form } from '@angular/forms/signals';
 import { ButtonModule } from 'primeng/button';
 import { MessageModule } from 'primeng/message';
 
-import type { BrokerOrderLeg, OrderLegResult } from '../../../api/alpaca.types';
+import type {
+  BrokerOrderLeg,
+  ManualOrderCapability,
+  ManualOrderPreview,
+  ManualOrderTicket,
+  OrderLegResult,
+} from '../../../api/alpaca.types';
 import { BrokersService } from '../../../services/brokers.service';
 import type { AlpacaOrderDraftLeg } from './alpaca-order-entry.types';
 import { AlpacaOrderLegRowComponent } from './alpaca-order-leg-row.component';
@@ -46,6 +53,11 @@ export class AlpacaOrderEntryComponent {
   private readonly brokers = inject(BrokersService);
   readonly initialSymbol = input('');
   readonly expectedAccountId = input.required<string>();
+  /** True only when the active Account Clerk is SQLite-backed. */
+  readonly sqliteManualAuthority = input(false);
+  readonly manualTicketId = input<string | null>(null);
+  readonly manualLegId = input<string | null>(null);
+  readonly manualCapability = input<ManualOrderCapability | null>(null);
 
   // S1 has no operator-identity plumbing yet; the manual namespace uses a fixed
   // desk operator. Later slices thread the signed-in operator through here.
@@ -58,6 +70,8 @@ export class AlpacaOrderEntryComponent {
   protected readonly previewOpen = signal(false);
   protected readonly submitting = signal(false);
   protected readonly results = signal<OrderLegResult[] | null>(null);
+  protected readonly manualTicket = signal<ManualOrderTicket | null>(null);
+  private readonly manualPreview = signal<ManualOrderPreview | null>(null);
   protected readonly submitError = signal<string | null>(null);
   /** Fires after any broker submission attempt, including uncertain outcomes. */
   readonly submissionFinished = output();
@@ -70,6 +84,27 @@ export class AlpacaOrderEntryComponent {
       && this.legs().length > 0
       && this.legs().every((leg) => this.legValid(leg)),
   );
+
+  protected readonly manualMarketOnly = computed(() => this.sqliteManualAuthority());
+  protected readonly manualSubmissionAvailable = computed(
+    () => !this.sqliteManualAuthority() || this.manualCapability()?.available === true,
+  );
+  protected readonly canConfirm = computed(
+    () =>
+      this.canSubmit()
+      && this.manualSubmissionAvailable()
+      && (!this.sqliteManualAuthority()
+        || (this.manualTicketId() !== null && this.manualLegId() !== null)),
+  );
+
+  constructor() {
+    effect(() => {
+      if (!this.sqliteManualAuthority()) return;
+      const ticketId = this.manualTicketId();
+      if (ticketId === null) return;
+      void this.restoreManualTicket(ticketId);
+    });
+  }
 
   protected legValid(leg: AlpacaOrderDraftLeg): boolean {
     const quantity = Number(leg.quantity);
@@ -90,6 +125,7 @@ export class AlpacaOrderEntryComponent {
   }
 
   protected addEquityLeg(): void {
+    if (this.sqliteManualAuthority()) return;
     this.legs.update((legs) => [...legs, this.newLeg(this.nextId++, '')]);
     // A new draft invalidates the last submit's results view.
     this.results.set(null);
@@ -97,6 +133,7 @@ export class AlpacaOrderEntryComponent {
   }
 
   protected removeLeg(id: number): void {
+    if (this.sqliteManualAuthority()) return;
     this.legs.update((legs) => legs.filter((leg) => leg.id !== id));
     // Editing the draft (removing a leg) invalidates the last submit's results
     // view, so a stale results table isn't left rendered against an empty draft.
@@ -104,9 +141,34 @@ export class AlpacaOrderEntryComponent {
     this.submitError.set(null);
   }
 
-  protected openPreview(): void {
-    if (!this.canSubmit()) return;
-    this.previewOpen.set(true);
+  protected async openPreview(): Promise<void> {
+    if (!this.canConfirm() || this.submitting()) return;
+    this.submitError.set(null);
+    if (!this.sqliteManualAuthority()) {
+      this.previewOpen.set(true);
+      return;
+    }
+    const ticketId = this.manualTicketId();
+    const legId = this.manualLegId();
+    const leg = this.legs()[0];
+    if (ticketId === null || legId === null || leg === undefined) return;
+    this.submitting.set(true);
+    try {
+      const preview = await this.brokers.previewSqliteManualOrder(this.expectedAccountId(), {
+        ticket_id: ticketId,
+        leg: { leg_id: legId, instruction: this.toRequestLeg(leg) },
+      });
+      this.manualPreview.set(preview);
+      if (!preview.capability.available || preview.preview_token === null) {
+        this.submitError.set(preview.capability.unavailable?.message ?? 'Manual order is unavailable.');
+        return;
+      }
+      this.previewOpen.set(true);
+    } catch (err) {
+      this.submitError.set(this.submissionErrorMessage(err));
+    } finally {
+      this.submitting.set(false);
+    }
   }
 
   protected closePreview(): void {
@@ -114,25 +176,57 @@ export class AlpacaOrderEntryComponent {
   }
 
   protected async confirmSubmit(): Promise<void> {
-    if (!this.canSubmit() || this.submitting()) return;
+    if (!this.canConfirm() || this.submitting()) return;
     this.submitting.set(true);
     this.submitError.set(null);
-    const request = {
-      operator: this.operator,
-      expected_account_id: this.expectedAccountId(),
-      legs: this.legs().map((leg) => this.toRequestLeg(leg)),
-    };
     try {
-      const result = await this.brokers.submitOrder('alpaca', request);
-      this.results.set(result.results);
+      if (this.sqliteManualAuthority()) {
+        await this.confirmSqliteManualOrder();
+      } else {
+        const request = {
+          operator: this.operator,
+          expected_account_id: this.expectedAccountId(),
+          legs: this.legs().map((leg) => this.toRequestLeg(leg)),
+        };
+        const result = await this.brokers.submitOrder('alpaca', request);
+        this.results.set(result.results);
+        this.legs.set([]);
+      }
       this.previewOpen.set(false);
-      this.legs.set([]);
     } catch (err) {
       this.submitError.set(this.submissionErrorMessage(err));
       this.previewOpen.set(false);
     } finally {
       this.submitting.set(false);
       this.submissionFinished.emit();
+    }
+  }
+
+  private async confirmSqliteManualOrder(): Promise<void> {
+    const ticketId = this.manualTicketId();
+    const legId = this.manualLegId();
+    const leg = this.legs()[0];
+    const previewToken = this.manualPreview()?.preview_token;
+    if (ticketId === null || legId === null || leg === undefined || previewToken === null || previewToken === undefined) {
+      throw new Error('Refresh the manual order preview before confirming.');
+    }
+    const ticket = await this.brokers.submitSqliteManualOrder(this.expectedAccountId(), ticketId, {
+      leg: { leg_id: legId, instruction: this.toRequestLeg(leg) },
+      preview_token: previewToken,
+    });
+    this.manualTicket.set(ticket);
+  }
+
+  private async restoreManualTicket(ticketId: string): Promise<void> {
+    try {
+      const ticket = await this.brokers.getSqliteManualOrderTicket(
+        this.expectedAccountId(),
+        ticketId,
+      );
+      this.manualTicket.set(ticket);
+    } catch (err) {
+      if (err instanceof HttpErrorResponse && err.status === 404) return;
+      this.submitError.set(this.submissionErrorMessage(err));
     }
   }
 

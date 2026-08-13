@@ -348,10 +348,14 @@ def decide_capability(
     repo: ClerkSqliteRepository,
     *,
     capability: Capability,
-    strategy_instance_id: str,
+    strategy_instance_id: str | None = None,
+    subject_id: str | None = None,
     reduction_intent: ReductionIntent | None = None,
 ) -> CapabilityDecision:
     """Author both preview and execution policy from the same typed snapshot."""
+    if (strategy_instance_id is None) == (subject_id is None):
+        raise ValueError("capability evaluation requires exactly one custody subject")
+
     if capability in (Capability.CANCEL, Capability.RECONCILE):
         return CapabilityDecision(allowed=True, capability=capability)
 
@@ -363,7 +367,11 @@ def decide_capability(
                 reason_code="RECONCILIATION_IN_PROGRESS",
                 why="Account reconciliation is proving fresh broker truth.",
             )
-        active_exit = repo.active_exit_for_strategy(strategy_instance_id)
+        active_exit = (
+            repo.active_exit_for_strategy(strategy_instance_id)
+            if strategy_instance_id is not None
+            else None
+        )
         if active_exit is not None:
             return CapabilityDecision(
                 allowed=False,
@@ -375,7 +383,10 @@ def decide_capability(
                 ),
             )
 
-    holds = repo.active_holds_for_admission(strategy_instance_id=strategy_instance_id)
+    holds = repo.active_holds_for_admission(
+        strategy_instance_id=strategy_instance_id,
+        subject_id=subject_id,
+    )
     if holds:
         hold = holds[0]
         return CapabilityDecision(
@@ -385,7 +396,10 @@ def decide_capability(
             why=f"An active {hold['scope'].lower()}-scoped hold blocks {capability.value.lower()}.",
         )
 
-    for uncertainty in repo.active_uncertainties_for_admission(strategy_instance_id=strategy_instance_id):
+    for uncertainty in repo.active_uncertainties_for_admission(
+        strategy_instance_id=strategy_instance_id,
+        subject_id=subject_id,
+    ):
         reason_code = uncertainty["reason_code"]
         policy = _REASON_POLICIES.get(reason_code)
         facts = None if policy is None else _strict_uncertainty_facts(uncertainty, policy)
@@ -414,6 +428,7 @@ def decide_capability(
                             facts=facts,
                             intent=reduction_intent,
                         )
+                        and strategy_instance_id is not None
                         and reduction_intent is not None
                         and _moves_toward_zero_without_crossing(
                             repo.position(
@@ -446,13 +461,15 @@ def require_capability(
     repo: ClerkSqliteRepository,
     *,
     capability: Capability,
-    strategy_instance_id: str,
+    strategy_instance_id: str | None = None,
+    subject_id: str | None = None,
     reduction_intent: ReductionIntent | None = None,
 ) -> None:
     decision = decide_capability(
         repo,
         capability=capability,
         strategy_instance_id=strategy_instance_id,
+        subject_id=subject_id,
         reduction_intent=reduction_intent,
     )
     if not decision.allowed:
@@ -475,6 +492,15 @@ def require_admission(repo: ClerkSqliteRepository, *, strategy_instance_id: str)
     )
 
 
+def require_manual_admission(repo: ClerkSqliteRepository, *, subject_id: str) -> None:
+    """Apply the same account/subject admission policy to manual custody."""
+    require_capability(
+        repo,
+        capability=Capability.NEW_EXPOSURE,
+        subject_id=subject_id,
+    )
+
+
 __all__ = [
     "BROKER_SNAPSHOT_STALE_REASON_CODE",
     "DRIFT_REDUCTION_EVIDENCE_MAX_AGE_MS",
@@ -491,6 +517,7 @@ __all__ = [
     "raise_uncertainty",
     "require_admission",
     "require_capability",
+    "require_manual_admission",
     "resolve_exit_not_flat_uncertainty",
     "resolve_reconciliation_uncertainty",
 ]

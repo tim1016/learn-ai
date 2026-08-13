@@ -1749,6 +1749,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/alpaca/accounts/{account_id}/manual-order-tickets/{ticket_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Sqlite Manual Order Ticket
+         * @description Restore a durable manual ticket after refresh or a lost submit response.
+         */
+        get: operations["get_sqlite_manual_order_ticket_api_brokers_alpaca_accounts__account_id__manual_order_tickets__ticket_id__get"];
+        /**
+         * Submit Sqlite Manual Order
+         * @description Durably accept then submit exactly one previewed manual market-order leg.
+         */
+        put: operations["submit_sqlite_manual_order_api_brokers_alpaca_accounts__account_id__manual_order_tickets__ticket_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/alpaca/accounts/{account_id}/manual-orders/capability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Sqlite Manual Order Capability
+         * @description Return the current policy answer before a browser opens a ticket.
+         */
+        get: operations["sqlite_manual_order_capability_api_brokers_alpaca_accounts__account_id__manual_orders_capability_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/alpaca/accounts/{account_id}/manual-orders/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview Sqlite Manual Order
+         * @description Bind one browser-stable ticket leg to fresh server authority facts.
+         */
+        post: operations["preview_sqlite_manual_order_api_brokers_alpaca_accounts__account_id__manual_orders_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/account": {
         parameters: {
             query?: never;
@@ -10978,7 +11042,7 @@ export interface components {
             /** State */
             state: string;
             /** Strategy Instance Id */
-            strategy_instance_id: string;
+            strategy_instance_id: string | null;
             /** Updated At Ms */
             updated_at_ms: number;
         };
@@ -17094,6 +17158,134 @@ export interface components {
              * @enum {string}
              */
             logic: "AND" | "OR";
+        };
+        /** ManualOrderBrokerOrderResponse */
+        ManualOrderBrokerOrderResponse: {
+            /** Broker Order Id */
+            broker_order_id: string | null;
+            /** Broker State */
+            broker_state: string | null;
+            /** Client Order Id */
+            client_order_id: string;
+            /** Order Ref */
+            order_ref: string;
+        };
+        /**
+         * ManualOrderCapabilityResponse
+         * @description The policy answer shown before an operator may create exposure.
+         */
+        ManualOrderCapabilityResponse: {
+            /** Available */
+            available: boolean;
+            /**
+             * Supported Order Shape
+             * @default BUY market DAY equity, one leg
+             */
+            supported_order_shape?: string;
+            unavailable: components["schemas"]["ManualOrderUnavailableResponse"] | null;
+        };
+        /** ManualOrderCommandResponse */
+        ManualOrderCommandResponse: {
+            /** Action */
+            action: string;
+            /** Command Id */
+            command_id: string;
+            /** Receipt Id */
+            receipt_id: string | null;
+            /** State */
+            state: string;
+        };
+        /** ManualOrderEffectResponse */
+        ManualOrderEffectResponse: {
+            /** Effect Operation Id */
+            effect_operation_id: string;
+            /** Kind */
+            kind: string;
+            /** State */
+            state: string;
+            /** Terminal Receipt Id */
+            terminal_receipt_id: string | null;
+        };
+        /**
+         * ManualOrderLegRequest
+         * @description One browser-minted stable leg identity and the intended instruction.
+         */
+        ManualOrderLegRequest: {
+            instruction: components["schemas"]["BrokerOrderLeg"];
+            /**
+             * Leg Id
+             * Format: uuid
+             */
+            leg_id: string;
+        };
+        /** ManualOrderLegResponse */
+        ManualOrderLegResponse: {
+            command: components["schemas"]["ManualOrderCommandResponse"] | null;
+            effect: components["schemas"]["ManualOrderEffectResponse"] | null;
+            /** Instruction Hash */
+            instruction_hash: string;
+            /** Leg Id */
+            leg_id: string;
+            order: components["schemas"]["ManualOrderBrokerOrderResponse"] | null;
+            /** State */
+            state: string;
+        };
+        /**
+         * ManualOrderPreviewRequest
+         * @description Preview never accepts operator identity; the server attributes that fact.
+         */
+        ManualOrderPreviewRequest: {
+            leg: components["schemas"]["ManualOrderLegRequest"];
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+        };
+        /** ManualOrderPreviewResponse */
+        ManualOrderPreviewResponse: {
+            /** Authority Generation */
+            authority_generation: number | null;
+            capability: components["schemas"]["ManualOrderCapabilityResponse"];
+            /** Control Revision */
+            control_revision: number | null;
+            /** Db Identity Token */
+            db_identity_token: string | null;
+            /** Preview Token */
+            preview_token: string | null;
+            /** Subject Id */
+            subject_id: string | null;
+        };
+        /**
+         * ManualOrderSubmitRequest
+         * @description Confirmation for the exact previewed ticket and leg.
+         */
+        ManualOrderSubmitRequest: {
+            leg: components["schemas"]["ManualOrderLegRequest"];
+            /** Preview Token */
+            preview_token: string;
+        };
+        /** ManualOrderTicketResponse */
+        ManualOrderTicketResponse: {
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Legs */
+            legs: components["schemas"]["ManualOrderLegResponse"][];
+            /** State */
+            state: string;
+            /** Subject Id */
+            subject_id: string;
+            /** Ticket Id */
+            ticket_id: string;
+            /** Updated At Ms */
+            updated_at_ms: number;
+        };
+        /** ManualOrderUnavailableResponse */
+        ManualOrderUnavailableResponse: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
         };
         /**
          * MarketDashboardResponse
@@ -27685,6 +27877,148 @@ export interface operations {
                 };
                 content: {
                     "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_sqlite_manual_order_ticket_api_brokers_alpaca_accounts__account_id__manual_order_tickets__ticket_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+                ticket_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManualOrderTicketResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_sqlite_manual_order_api_brokers_alpaca_accounts__account_id__manual_order_tickets__ticket_id__put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+                ticket_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManualOrderSubmitRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManualOrderTicketResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sqlite_manual_order_capability_api_brokers_alpaca_accounts__account_id__manual_orders_capability_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManualOrderCapabilityResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_sqlite_manual_order_api_brokers_alpaca_accounts__account_id__manual_orders_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManualOrderPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManualOrderPreviewResponse"];
                 };
             };
             /** @description Validation Error */

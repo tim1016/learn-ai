@@ -53,6 +53,28 @@ function brokerService() {
       resolution_plan: [],
     }),
     getSqliteClerkProjection: vi.fn().mockResolvedValue({}),
+    getSqliteManualOrderCapability: vi.fn().mockResolvedValue({
+      available: false,
+      unavailable: {
+        code: 'MANUAL_TRADING_NOT_QUALIFIED',
+        message: 'Manual SQLite trading remains disabled until paper qualification is complete.',
+      },
+      supported_order_shape: 'BUY market DAY equity, one leg',
+    }),
+    getSqliteManualOrderTicket: vi.fn().mockRejectedValue(new HttpErrorResponse({ status: 404 })),
+    previewSqliteManualOrder: vi.fn(),
+    submitSqliteManualOrder: vi.fn(),
+  };
+}
+
+function manualTicketQuery(overrides: Record<string, string> = {}): Record<string, string> {
+  return {
+    order: 'new',
+    accountId: 'PA1',
+    symbol: 'SPY',
+    ticketId: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
+    legId: '09d6d63e-6375-4e6d-8d20-3b1bf70c2465',
+    ...overrides,
   };
 }
 
@@ -144,39 +166,36 @@ describe('AlpacaDeskComponent', () => {
     expect(await screen.findByRole('heading', { name: 'Deploy a bot' })).toBeTruthy();
   });
 
-  it('opens a matching manual-order deep link only under legacy authority', async () => {
+  it('opens a matching manual-order deep link under legacy authority', async () => {
     const brokers = brokerService();
-    brokers.getSqliteClerkProjection.mockRejectedValue(
+    brokers.getSqliteManualOrderCapability.mockRejectedValue(
       new HttpErrorResponse({ status: 409 }),
     );
 
-    await renderDesk({ order: 'new', accountId: 'PA1', symbol: 'spy' }, brokers);
+    await renderDesk(manualTicketQuery({ symbol: 'spy' }), brokers);
 
     expect(await screen.findByText('Create Alpaca order')).toBeTruthy();
     expect(await screen.findByDisplayValue('SPY')).toBeTruthy();
   });
 
   it('refuses a manual-order link for a different account', async () => {
-    const { brokers } = await renderDesk({
-      order: 'new',
-      accountId: 'PA-OTHER',
-      symbol: 'SPY',
-    });
+    const { brokers } = await renderDesk(manualTicketQuery({ accountId: 'PA-OTHER' }));
 
     expect((await screen.findByRole('alert')).textContent).toContain(
       'The order link targets account PA-OTHER, but Alpaca is connected to PA1. No ticket was opened.',
     );
     expect(screen.queryByRole('heading', { name: 'Create Alpaca order' })).toBeNull();
-    expect(brokers.getSqliteClerkProjection).not.toHaveBeenCalled();
+    expect(brokers.getSqliteManualOrderCapability).not.toHaveBeenCalled();
   });
 
-  it('fails closed with an explicit message under SQLite authority', async () => {
-    await renderDesk({ order: 'new', accountId: 'PA1', symbol: 'SPY' });
+  it('opens a SQLite ticket with the server-owned disabled reason', async () => {
+    const { brokers } = await renderDesk(manualTicketQuery());
 
     expect(
-      await screen.findByText(/Manual orders are unavailable while SQLite Clerk authority is active/),
+      await screen.findByText(/Manual SQLite trading remains disabled until paper qualification is complete/),
     ).toBeTruthy();
-    expect(screen.queryByRole('heading', { name: 'Create Alpaca order' })).toBeNull();
+    expect(await screen.findByText('Create Alpaca order')).toBeTruthy();
+    expect(brokers.getSqliteManualOrderCapability).toHaveBeenCalledWith('PA1');
   });
 
   it('restores the last selected lens when no query parameter is present', async () => {

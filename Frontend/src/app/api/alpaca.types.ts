@@ -37,6 +37,14 @@ export type OrderLegError = components['schemas']['OrderLegError'];
 // Phase-2 S3 order cancellation (write path).
 export type OrderCancelResult = components['schemas']['OrderCancelResult'];
 
+// SQLite-owned manual market-order tracer. The browser submits a stable ticket
+// and leg UUID; the server supplies custody attribution and broker identity.
+export type ManualOrderCapability = components['schemas']['ManualOrderCapabilityResponse'];
+export type ManualOrderPreviewRequest = components['schemas']['ManualOrderPreviewRequest'];
+export type ManualOrderPreview = components['schemas']['ManualOrderPreviewResponse'];
+export type ManualOrderSubmitRequest = components['schemas']['ManualOrderSubmitRequest'];
+export type ManualOrderTicket = components['schemas']['ManualOrderTicketResponse'];
+
 // Phase-2 S6 reconciliation + flag-and-hold (clerk status + clear-hold).
 export type ClerkStatus = components['schemas']['ClerkStatus'];
 export type HoldState = components['schemas']['HoldState'];

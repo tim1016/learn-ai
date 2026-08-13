@@ -89,11 +89,17 @@ def plan_account_reconciliation(
     known_order_refs: frozenset[str] | None = None,
 ) -> ReconcilePlan:
     """Derive residual account safety only after local evidence was folded."""
+    # Once the active SQLite authority supplies its full captured order-ref
+    # set, that durable identity is stronger than the historical bot-only
+    # namespace heuristic and correctly recognizes manual custody too.
     foreign = tuple(
         order
         for order in broker_orders
-        if not order_ref_namespace_matches(order.client_order_id, namespaces)
-        or (known_order_refs is not None and order.client_order_id not in known_order_refs)
+        if (
+            order.client_order_id not in known_order_refs
+            if known_order_refs is not None
+            else not order_ref_namespace_matches(order.client_order_id, namespaces)
+        )
     )
     in_flight_symbols = {
         order.symbol.upper()
@@ -207,7 +213,10 @@ async def _reconcile_effect(
         raise ReconciliationInvariantError(
             f"order {order.order_ref!r} disappeared during reconciliation"
         )
-    if effect_after.state == "succeeded" or (effect_after.kind == "ENTER" and order_after.broker_order_id is not None):
+    if effect_after.state == "succeeded" or (
+        effect_after.kind in {"ENTER", "MANUAL_ORDER"}
+        and order_after.broker_order_id is not None
+    ):
         outcome: ReconciliationOutcome = "RESOLVED_SUCCESS"
     elif effect_after.state in ("failed", "rejected"):
         outcome = "RESOLVED_FAILURE"

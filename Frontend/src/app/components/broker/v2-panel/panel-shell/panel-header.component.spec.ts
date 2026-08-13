@@ -127,9 +127,14 @@ describe('PanelHeaderComponent', () => {
     expect(container.querySelector('app-asset-identity')?.textContent).toContain('NVDA');
     expect(screen.getByText('$181.42')).toBeTruthy();
     expect(screen.getByText('+1.35%')).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Manual order' }).getAttribute('href')).toBe(
-      '/brokers/alpaca?order=new&accountId=PA3KWXU1C4C3&symbol=NVDA',
-    );
+    const href = screen.getByRole('link', { name: 'Manual order' }).getAttribute('href');
+    const ticket = new URL(href ?? '', 'http://test');
+    expect(ticket.pathname).toBe('/brokers/alpaca');
+    expect(ticket.searchParams.get('order')).toBe('new');
+    expect(ticket.searchParams.get('accountId')).toBe('PA3KWXU1C4C3');
+    expect(ticket.searchParams.get('symbol')).toBe('NVDA');
+    expect(ticket.searchParams.get('ticketId')).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(ticket.searchParams.get('legId')).toMatch(/^[0-9a-f-]{36}$/i);
   });
 
   it('uses the durable duty outcome as the bot headline', async () => {

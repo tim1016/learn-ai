@@ -23,6 +23,7 @@ from app.broker.alpaca.clerk.sqlite.folds import (
     order_observation_advances,
 )
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
+from app.broker.alpaca.clerk.sqlite.manual_order_completion import manual_order_has_exact_terminal_coverage
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.models import BrokerOrder
@@ -190,6 +191,37 @@ def fold_order_acknowledgement(
                 source_event_at_ms=order.updated_at_ms,
                 clerk_observed_at_ms=repo.clock(),
                 summary_code="ORDER_SUBMIT_ACKED",
+                facts_json=canonicalize({}),
+            )
+        )
+    if (
+        manual_order_has_exact_terminal_coverage(
+            repo,
+            effect_operation_id=effect_operation_id,
+            order_ref=order_ref,
+            broker_state=order.status,
+        )
+        and not repo.has_order_transition(
+            order_ref=order_ref,
+            transition_kind="MANUAL_ORDER_FILLED",
+        )
+    ):
+        repo.append_transition(
+            TransitionInput(
+                strategy_instance_id=effect.strategy_instance_id,
+                run_id=effect.run_id,
+                command_id=effect.command_id,
+                effect_operation_id=effect_operation_id,
+                order_ref=order_ref,
+                broker_order_id=order.order_id,
+                broker_state=order.status,
+                transition_kind="MANUAL_ORDER_FILLED",
+                custody_owner="ACCOUNT_CLERK",
+                execution_authority="ACCOUNT_CLERK",
+                operation_state="succeeded",
+                source_event_at_ms=order.updated_at_ms,
+                clerk_observed_at_ms=repo.clock(),
+                summary_code="MANUAL_ORDER_FILLED",
                 facts_json=canonicalize({}),
             )
         )

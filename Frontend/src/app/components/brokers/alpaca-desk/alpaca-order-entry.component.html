@@ -2,8 +2,15 @@
   <div class="order-entry__toolbar">
     <div>
       <strong>Order ticket</strong>
-      <p>Each leg is journaled separately before submission.</p>
+      <p>
+        @if (manualMarketOnly()) {
+          This SQLite ticket supports one BUY market DAY equity leg. The server journals it before submission.
+        } @else {
+          Each leg is journaled separately before submission.
+        }
+      </p>
     </div>
+    @if (!manualMarketOnly()) {
     <p-button
       label="Add another"
       icon="pi pi-plus"
@@ -13,6 +20,7 @@
       ariaLabel="Add equity leg"
       (onClick)="addEquityLeg()"
     />
+    }
   </div>
 
   @if (legs().length === 0) {
@@ -27,6 +35,7 @@
         <app-alpaca-order-leg-row
           [legForm]="legsForm[$index]"
           [position]="$index"
+          [manualMarketOnly]="manualMarketOnly()"
           (removed)="removeLeg(leg.id)"
         />
       }
@@ -35,15 +44,19 @@
     <div class="order-entry__footer">
       <div class="order-capabilities">
         <span><i class="pi pi-check" aria-hidden="true"></i> Market</span>
+        @if (!manualMarketOnly()) {
         <span><i class="pi pi-check" aria-hidden="true"></i> Limit</span>
         <span><i class="pi pi-clock" aria-hidden="true"></i> Day or GTC</span>
+        } @else {
+          <span><i class="pi pi-clock" aria-hidden="true"></i> Day</span>
+        }
       </div>
       <p-button
         label="Preview order"
         icon="pi pi-arrow-right"
         iconPos="right"
         size="small"
-        [disabled]="!canSubmit()"
+        [disabled]="!canConfirm() || submitting()"
         (onClick)="openPreview()"
       />
     </div>
@@ -53,7 +66,18 @@
     <p-message severity="error">{{ error }}</p-message>
   }
 
-  <app-alpaca-order-results [results]="results()" />
+  @if (manualMarketOnly()) {
+    @if (manualCapability()?.available === false) {
+      <p-message severity="warn">{{ manualCapability()?.unavailable?.message }}</p-message>
+    }
+    @if (manualTicket(); as ticket) {
+      <p-message severity="info">
+        Ticket {{ ticket.ticket_id }} is {{ ticket.state }}. Its leg is {{ ticket.legs[0].state }}.
+      </p-message>
+    }
+  } @else {
+    <app-alpaca-order-results [results]="results()" />
+  }
 </div>
 
 <app-alpaca-order-preview

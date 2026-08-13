@@ -54,6 +54,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.manual_ticket_folds import (
     fold_custody_subject_registered,
+    fold_manual_order_accepted,
     fold_manual_ticket_reserved,
     fold_manual_ticket_state,
 )
@@ -618,6 +619,35 @@ def _fold_effect_terminal(conn: sqlite3.Connection, payload: dict[str, Any], *, 
     _resolve_unknown_outcome_if_proven(conn, payload)
 
 
+def _fold_manual_order_filled(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Terminal success needs both a filled broker state and exact fill coverage.
+
+    ``order_evidence`` appends this only after it proves that the effective
+    execution total covers the immutable manual leg. The fold then makes the
+    receipt and bounded ticket projection agree with that final custody fact.
+    """
+    effect = conn.execute(
+        "SELECT kind FROM effect_operations WHERE effect_operation_id = ?",
+        (payload["effect_operation_id"],),
+    ).fetchone()
+    if effect is None or effect["kind"] != "MANUAL_ORDER":
+        raise ValueError("manual fill completion requires a manual order effect")
+    _fold_effect_terminal(conn, payload, terminal_state="succeeded")
+    updated = conn.execute(
+        "UPDATE manual_order_legs SET state = 'SUCCEEDED', updated_at_ms = ? "
+        "WHERE effect_operation_id = ?",
+        (payload["recorded_at_ms"], payload["effect_operation_id"]),
+    )
+    if updated.rowcount != 1:
+        raise ValueError("manual fill completion requires its ticket leg")
+    conn.execute(
+        "UPDATE manual_order_tickets SET state = 'COMPLETED', updated_at_ms = ? "
+        "WHERE ticket_id = (SELECT ticket_id FROM manual_order_legs "
+        "WHERE effect_operation_id = ?)",
+        (payload["recorded_at_ms"], payload["effect_operation_id"]),
+    )
+
+
 def _fold_order_submit_failed(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Definitive submit failure (vendor 4xx/409/auth/rate-limit) or absence
     proven past the R4 uncertainty grace window — both fold to the same
@@ -688,6 +718,12 @@ def _apply_attributed_position_delta(
     side: str,
     quantity: float,
 ) -> None:
+    owner = conn.execute(
+        "SELECT subject_id, strategy_instance_id FROM effect_operations WHERE effect_operation_id = ?",
+        (payload["effect_operation_id"],),
+    ).fetchone()
+    if owner is None:
+        raise ValueError("execution fill requires its durable owning effect")
     signed_delta = quantity if side == "BUY" else -quantity
     conn.execute(
         "INSERT INTO positions (subject_id, strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
@@ -696,8 +732,8 @@ def _apply_attributed_position_delta(
         "attributed_qty = attributed_qty + excluded.attributed_qty, "
         "updated_at_ms = excluded.updated_at_ms",
         (
-            bot_subject_id(payload["strategy_instance_id"]),
-            payload["strategy_instance_id"],
+            owner["subject_id"],
+            owner["strategy_instance_id"],
             symbol.upper(),
             signed_delta,
             payload["recorded_at_ms"],
@@ -1113,6 +1149,7 @@ DEFAULT_FOLD_REGISTRY.register("EXIT_REDUCING_ORDER_CREATED", _fold_exit_reducin
 DEFAULT_FOLD_REGISTRY.register("EXIT_ATTRIBUTED_FLAT", _fold_exit_attributed_flat)
 DEFAULT_FOLD_REGISTRY.register("EXIT_NOT_FLAT", _fold_order_submit_failed)
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_ACKED", _fold_order_submit_acked)
+DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_FILLED", _fold_manual_order_filled)
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_FAILED", _fold_order_submit_failed)
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_UNCERTAIN", _fold_order_submit_uncertain)
 # EXIT's cancel-analog (#1379): same generic "effect/command -> unknown, no
@@ -1125,6 +1162,7 @@ DEFAULT_FOLD_REGISTRY.register("EXECUTION_COVERAGE_QUARANTINED", _fold_execution
 DEFAULT_FOLD_REGISTRY.register("EXECUTION_COVERAGE_RESOLVED", _fold_execution_coverage_resolved)
 DEFAULT_FOLD_REGISTRY.register("CUSTODY_SUBJECT_REGISTERED", fold_custody_subject_registered)
 DEFAULT_FOLD_REGISTRY.register("MANUAL_TICKET_RESERVED", fold_manual_ticket_reserved)
+DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_ACCEPTED", fold_manual_order_accepted)
 DEFAULT_FOLD_REGISTRY.register("MANUAL_TICKET_PAUSED_UNKNOWN", fold_manual_ticket_state)
 DEFAULT_FOLD_REGISTRY.register("MANUAL_TICKET_COMPLETED", fold_manual_ticket_state)
 DEFAULT_FOLD_REGISTRY.register("MANUAL_TICKET_CANCELED", fold_manual_ticket_state)

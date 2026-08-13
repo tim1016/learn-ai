@@ -36,7 +36,7 @@ def _unknown_outcome_envelope(*, cause: OrderOutcomeUnknownCause, why: str) -> U
         headline="A broker order outcome is unknown",
         explanation=why,
         operator_impact=(
-            "New exposure and new reducing orders are paused for this strategy until "
+            "New exposure and new reducing orders are paused for this custody subject until "
             "the exact broker identities are recovered."
         ),
         next_step="Reconcile now; cancellation and exact-identity lookup remain available.",
@@ -45,15 +45,13 @@ def _unknown_outcome_envelope(*, cause: OrderOutcomeUnknownCause, why: str) -> U
     )
 
 
-def _log_unreadable_active_uncertainty(
-    *, active: sqlite3.Row, strategy_instance_id: str, reason: str
-) -> None:
+def _log_unreadable_active_uncertainty(*, active: sqlite3.Row, subject_id: str, reason: str) -> None:
     logger.warning(
         "active broker-outcome uncertainty has an unreadable facts envelope",
         extra={
             "action": "unknown_outcome_envelope_unreadable",
             "uncertainty_id": active["uncertainty_id"],
-            "strategy_instance_id": strategy_instance_id,
+            "subject_id": subject_id,
             "facts_schema_version": active["facts_schema_version"],
             "reason": reason,
         },
@@ -62,14 +60,21 @@ def _log_unreadable_active_uncertainty(
 
 def open_or_refresh_unknown_outcome(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Atomically pair an UNKNOWN effect state with its fail-closed episode."""
-    strategy_instance_id = payload["strategy_instance_id"]
     effect_operation_id = payload["effect_operation_id"]
     order_ref = payload["order_ref"]
+    owner = conn.execute(
+        "SELECT subject_id, strategy_instance_id FROM effect_operations WHERE effect_operation_id = ?",
+        (effect_operation_id,),
+    ).fetchone()
+    if owner is None:
+        raise ValueError("unknown outcome requires its durable owning effect")
+    subject_id = owner["subject_id"]
+    strategy_instance_id = owner["strategy_instance_id"]
     active = conn.execute(
         "SELECT uncertainty_id, facts_schema_version, facts_json FROM uncertainties "
-        "WHERE scope = 'CUSTODY_SUBJECT' AND strategy_instance_id = ? AND reason_code = ? "
+        "WHERE scope = 'CUSTODY_SUBJECT' AND subject_id = ? AND reason_code = ? "
         "AND resolved_at_ms IS NULL",
-        (strategy_instance_id, ORDER_OUTCOME_UNKNOWN_REASON_CODE),
+        (subject_id, ORDER_OUTCOME_UNKNOWN_REASON_CODE),
     ).fetchone()
     identity = UnknownOrderIdentity(effect_operation_id=effect_operation_id, order_ref=order_ref)
     if active is None:
@@ -86,7 +91,7 @@ def open_or_refresh_unknown_outcome(conn: sqlite3.Connection, payload: dict[str,
                 facts.severity,
                 1 if facts.blocks_new_exposure else 0,
                 1 if facts.allows_reduction else 0,
-                bot_subject_id(strategy_instance_id),
+                subject_id,
                 strategy_instance_id,
                 facts.reason_code,
                 facts.headline,
@@ -106,7 +111,7 @@ def open_or_refresh_unknown_outcome(conn: sqlite3.Connection, payload: dict[str,
     if active["facts_schema_version"] != FACTS_SCHEMA_VERSION:
         _log_unreadable_active_uncertainty(
             active=active,
-            strategy_instance_id=strategy_instance_id,
+            subject_id=subject_id,
             reason="facts_schema_version_mismatch",
         )
         return
@@ -116,7 +121,7 @@ def open_or_refresh_unknown_outcome(conn: sqlite3.Connection, payload: dict[str,
     except (TypeError, ValueError, KeyError):
         _log_unreadable_active_uncertainty(
             active=active,
-            strategy_instance_id=strategy_instance_id,
+            subject_id=subject_id,
             reason="facts_parse_failed",
         )
         return
@@ -131,13 +136,13 @@ def open_or_refresh_unknown_outcome(conn: sqlite3.Connection, payload: dict[str,
     facts = _unknown_outcome_envelope(cause=cause, why="One or more broker responses were lost or timed out.")
     conn.execute(
         "UPDATE uncertainties SET observed_at_ms = ?, evidence_refs_json = ?, facts_json = ? "
-        "WHERE scope = 'CUSTODY_SUBJECT' AND strategy_instance_id = ? AND reason_code = ? "
+        "WHERE scope = 'CUSTODY_SUBJECT' AND subject_id = ? AND reason_code = ? "
         "AND resolved_at_ms IS NULL",
         (
             payload["recorded_at_ms"],
             canonicalize(facts.evidence_refs),
             facts.to_facts_json(),
-            strategy_instance_id,
+            subject_id,
             ORDER_OUTCOME_UNKNOWN_REASON_CODE,
         ),
     )
@@ -152,18 +157,25 @@ class UnknownEvidenceDisposition:
 
 def resolve_unknown_outcome_if_proven(conn: sqlite3.Connection, payload: dict[str, Any]) -> UnknownEvidenceDisposition:
     """Fold exact proof and report both effect-local and episode-wide state."""
+    owner = conn.execute(
+        "SELECT subject_id FROM effect_operations WHERE effect_operation_id = ?",
+        (payload["effect_operation_id"],),
+    ).fetchone()
+    if owner is None:
+        raise ValueError("unknown outcome resolution requires its durable owning effect")
+    subject_id = owner["subject_id"]
     active = conn.execute(
         "SELECT uncertainty_id, facts_schema_version, facts_json FROM uncertainties "
-        "WHERE scope = 'CUSTODY_SUBJECT' AND strategy_instance_id = ? AND reason_code = ? "
+        "WHERE scope = 'CUSTODY_SUBJECT' AND subject_id = ? AND reason_code = ? "
         "AND resolved_at_ms IS NULL",
-        (payload["strategy_instance_id"], ORDER_OUTCOME_UNKNOWN_REASON_CODE),
+        (subject_id, ORDER_OUTCOME_UNKNOWN_REASON_CODE),
     ).fetchone()
     if active is None:
         return UnknownEvidenceDisposition(False, False, False)
     if active["facts_schema_version"] != FACTS_SCHEMA_VERSION:
         _log_unreadable_active_uncertainty(
             active=active,
-            strategy_instance_id=payload["strategy_instance_id"],
+            subject_id=subject_id,
             reason="facts_schema_version_mismatch",
         )
         return UnknownEvidenceDisposition(False, True, True)
@@ -173,7 +185,7 @@ def resolve_unknown_outcome_if_proven(conn: sqlite3.Connection, payload: dict[st
     except (TypeError, ValueError, KeyError):
         _log_unreadable_active_uncertainty(
             active=active,
-            strategy_instance_id=payload["strategy_instance_id"],
+            subject_id=subject_id,
             reason="facts_parse_failed",
         )
         return UnknownEvidenceDisposition(False, True, True)

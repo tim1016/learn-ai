@@ -27,6 +27,7 @@ outer ``custody_transitions`` column, so its ``facts_json`` is legitimately
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from dataclasses import asdict, dataclass, field
@@ -583,6 +584,37 @@ class ManualTicketStateFacts:
         return cls(**json.loads(facts_json))
 
 
+@dataclass(frozen=True)
+class ManualOrderAcceptedFacts:
+    """One manual BUY market/DAY leg made broker-eligible by SQLite.
+
+    The ticket reservation establishes immutable user input; this fact captures
+    the command/effect identities that bind that reservation to exactly one
+    broker client-order identity before any network call is attempted.
+    """
+
+    ticket_id: str
+    leg_id: str
+    subject_id: str
+    operator_id: str
+    instruction_hash: str
+    idempotency_key: str
+    payload_hash: str
+    kind: str
+    action: str
+    intended_end_state: str | None
+    effect_idempotency_key: str
+    effect_kind: str
+    leg: dict[str, Any]
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> ManualOrderAcceptedFacts:
+        return cls(**json.loads(facts_json))
+
+
 def _require_finite_positive(value: float, *, field: str) -> None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{field} must be a number")
@@ -738,6 +770,45 @@ def validate_manual_ticket_state_facts(facts: ManualTicketStateFacts) -> None:
         raise ValueError("manual ticket state requires subject_id")
     if facts.state not in {"PAUSED_UNKNOWN", "COMPLETED", "CANCELED"}:
         raise ValueError("manual ticket state is not supported")
+
+
+def validate_manual_order_accepted_facts(facts: ManualOrderAcceptedFacts) -> None:
+    """Keep the tracer's narrow broker shape durable and replayable."""
+    from app.broker.alpaca.clerk.sqlite.custody_subjects import manual_operator_subject_id
+    from app.broker.contract.models import BrokerOrderLeg, OrderSide, OrderType, TimeInForce
+
+    if not all(
+        isinstance(value, str) and value
+        for value in (
+            facts.ticket_id,
+            facts.leg_id,
+            facts.subject_id,
+            facts.operator_id,
+            facts.instruction_hash,
+            facts.idempotency_key,
+            facts.payload_hash,
+            facts.effect_idempotency_key,
+        )
+    ):
+        raise ValueError("manual order acceptance requires complete immutable identities")
+    if facts.subject_id != manual_operator_subject_id(facts.operator_id):
+        raise ValueError("manual order acceptance has a noncanonical operator subject")
+    if facts.kind != "manual_order" or facts.action != "SUBMIT_MANUAL_ORDER":
+        raise ValueError("manual order acceptance has an unsupported command shape")
+    if facts.effect_kind != "MANUAL_ORDER":
+        raise ValueError("manual order acceptance has an unsupported effect kind")
+    leg = BrokerOrderLeg.model_validate(facts.leg)
+    if (
+        leg.side is not OrderSide.BUY
+        or leg.order_type is not OrderType.MARKET
+        or leg.time_in_force is not TimeInForce.DAY
+    ):
+        raise ValueError("the manual market tracer accepts only BUY market DAY legs")
+    expected_instruction_hash = hashlib.sha256(
+        canonicalize(leg.model_dump(mode="json")).encode("utf-8")
+    ).hexdigest()
+    if facts.instruction_hash != expected_instruction_hash:
+        raise ValueError("manual order acceptance instruction hash does not match its leg")
 
 
 def validate_execution_corrected_facts(facts: ExecutionCorrectedFacts) -> None:

@@ -9,6 +9,7 @@ from typing import Any, cast
 from app.broker.alpaca.clerk.models import ClerkEntryKind
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+from app.broker.alpaca.clerk.sqlite.manual_orders import accept_manual_order
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import ReentrantAsyncLock
@@ -230,6 +231,55 @@ async def test_sqlite_websocket_fill_records_exact_execution_and_separate_ack(
         assert "EXECUTION_SLICE_FILLED" in transition_kinds
         assert "ORDER_SUBMIT_ACKED" in transition_kinds
         assert "ORDER_FILL_OBSERVED" not in transition_kinds
+    finally:
+        repo.close()
+
+
+async def test_sqlite_websocket_fill_completes_manual_ticket_with_exact_coverage(
+    tmp_path: Path,
+) -> None:
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    accepted = accept_manual_order(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id="operator",
+        ticket_id="7de3a77c-b698-4e0d-a5d1-2f624574ed35",
+        leg_id="09d6d63e-6375-4e6d-8d20-3b1bf70c2465",
+        leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1.0),
+    )
+    assert accepted.leg.effect_operation_id is not None
+    assert accepted.leg.order_ref is not None
+    order = _owned_order(accepted.leg.order_ref, status="filled").model_copy(
+        update={"quantity": 1.0, "filled_quantity": 1.0, "filled_avg_price": 100.25}
+    )
+    try:
+        await _sqlite_sink(repo).record_lifecycle_event(
+            client_order_id=accepted.leg.order_ref,
+            event=BrokerOrderEvent(
+                event_type="fill",
+                occurred_at_ms=1_700_000_000_050,
+                price=100.25,
+                quantity=1.0,
+                execution_id="manual-exec-001",
+            ),
+            event_key="exec:manual-exec-001",
+            order=order,
+            recovery_source=None,
+            recovery_window_limit=None,
+        )
+
+        ticket = repo.manual_order_ticket(accepted.ticket.ticket_id)
+        assert ticket is not None
+        assert ticket.state == "COMPLETED"
+        assert ticket.legs[0].state == "SUCCEEDED"
+        command = repo.get_command(accepted.command.command_id)
+        assert command is not None and command.state == "succeeded"
+        assert command.receipt_id == f"receipt:{accepted.leg.effect_operation_id}"
+        assert repo.attributed_positions_for_subject(ticket.subject_id) == {"SPY": 1.0}
+        assert repo.has_order_transition(
+            order_ref=accepted.leg.order_ref,
+            transition_kind="MANUAL_ORDER_FILLED",
+        )
     finally:
         repo.close()
 
