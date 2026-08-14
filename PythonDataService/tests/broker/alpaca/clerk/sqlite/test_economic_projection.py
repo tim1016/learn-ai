@@ -28,7 +28,7 @@ from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.models import BrokerOrderLeg
 from app.lean_sidecar.trading_calendar import SessionWindow, session_window_for_date
-from conftest import _clock_at
+from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at
 
 _ACCOUNT_ID = "PA-S2-ECONOMICS"
 _SID = "s2-economic"

@@ -45,7 +45,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     ExecutionCoverageConflictCause,
 )
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
-from conftest import _clock_at
+from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at
 
 _FIXTURE_ROOT = Path(__file__).parents[4] / "fixtures" / "golden" / "alpaca-sqlite-execution"
 _ACCOUNT_ID = "PA-S1-EXECUTION"

@@ -50,7 +50,7 @@ from app.broker.contract.errors import (
     BrokerUnavailable,
 )
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
-from conftest import _clock_at
+from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at
 
 ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
