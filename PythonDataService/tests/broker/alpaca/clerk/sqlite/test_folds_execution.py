@@ -499,19 +499,17 @@ def test_execution_correction_missing_target_symbol_raises_uncertainty(
 ) -> None:
     repo, accepted = _repository_for_strategy(
         tmp_path,
-        strategy_instance_id="correction-missing-symbol-bot",
+        strategy_instance_id="correction-symbol-bot",
         symbol="SPY",
     )
     try:
-        effect = repo.effect_operation(accepted.effect_operation_id or "")
-        assert effect is not None
         monkeypatch.setattr(
             repository_module.reads,
             "effective_execution_slice",
             lambda _conn, _execution_id: {
                 "order_ref": accepted.order_ref,
-                "subject_id": effect.subject_id,
-                "strategy_instance_id": effect.strategy_instance_id,
+                "subject_id": f"bot:{accepted.command.strategy_instance_id}",
+                "strategy_instance_id": accepted.command.strategy_instance_id,
                 "symbol": None,
                 "side": "BUY",
             },
