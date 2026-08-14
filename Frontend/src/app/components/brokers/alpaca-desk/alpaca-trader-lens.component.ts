@@ -7,8 +7,7 @@ import { AlpacaDeskAccountDataService } from './alpaca-desk-account-data.service
 import { AlpacaPortfolioHistoryChartComponent } from './alpaca-portfolio-history-chart.component';
 import { AlpacaPortfolioReconciliationProofComponent } from './alpaca-portfolio-reconciliation-proof.component';
 import { AlpacaPositionsTableComponent } from './alpaca-positions-table.component';
-import { AlpacaTraderActivityTimelineComponent } from './alpaca-trader-activity-timeline.component';
-import { AlpacaTraderHeroComponent } from './alpaca-trader-hero.component';
+import { AlpacaTraderActivityTableComponent } from './alpaca-trader-activity-table.component';
 import { AlpacaTraderLensDataService } from './alpaca-trader-lens-data.service';
 
 type TraderScope = 'today' | '30d' | '60d';
@@ -38,8 +37,7 @@ const SCOPE_CONFIG = {
     AccountDeskTransactionHistoryComponent,
     AlpacaPortfolioHistoryChartComponent,
     AlpacaPortfolioReconciliationProofComponent,
-    AlpacaTraderActivityTimelineComponent,
-    AlpacaTraderHeroComponent,
+    AlpacaTraderActivityTableComponent,
   ],
   templateUrl: './alpaca-trader-lens.component.html',
   styleUrl: './alpaca-trader-lens.component.scss',
@@ -55,14 +53,8 @@ export class AlpacaTraderLensComponent {
   protected readonly account = computed(() =>
     this.accountData.account.hasValue() ? this.accountData.account.value() : undefined,
   );
-  protected readonly positions = computed(() =>
-    this.traderData.positions.hasValue() ? this.traderData.positions.value() : undefined,
-  );
   protected readonly activities = computed(() =>
     this.traderData.activities.hasValue() ? this.traderData.activities.value() : undefined,
-  );
-  protected readonly positionsUnavailable = computed(
-    () => this.traderData.positions.error() !== undefined,
   );
   protected readonly activitiesUnavailable = computed(
     () => this.traderData.activities.error() !== undefined,

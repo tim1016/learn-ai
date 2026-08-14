@@ -39,9 +39,10 @@ Rebuild the broker account desk **on the live Alpaca surface** as a **single rou
 in-page Trader ⇄ Operator lens toggle**, delete the orphaned lens page entirely, and give each
 persona a purpose-built view:
 
-- **Trader lens (outcomes):** a glance-layer of hero metric tiles over a narrative
-  *"Today at the desk"* timeline, with a **Today · 30D · 60D** scope control that swaps in a
-  **robust, investor-grade equity history**.
+- **Trader lens (outcomes):** a glance-layer of verified account facts over compact activity
+  and position tables, with a **Today · 30D · 60D** scope control that swaps in a **robust,
+  investor-grade equity history**. Today's P&L remains unavailable unless the future
+  uncertainty-aware contract below can support it without a browser-derived estimate.
 - **Operator lens (mechanism + repair):** one **dominant posture headline with the fix
   attached**, over a **forensic evidence grid**, over collapsed deep-system panels.
 
@@ -73,19 +74,19 @@ a slide-over drawer, and add the Bot Gallery to the nav.
 
 ### Trader lens — outcomes
 
-7. As a trader, I want a **hero row of metric tiles** — today's P&L ($ and %), open positions
-   (count + net exposure $), **fills today** ("how many trades went through"), and realized P&L
-   today — so that I get my account's state at a glance.
+7. As a trader, I want a **compact account summary** of currently reliable broker facts —
+   equity, cash, buying power, and freshness — so that I get my account's state at a glance
+   without an unverified P&L estimate occupying a headline position.
 8. As a trader, I want account **equity and cash** in the desk header, so that I always see the
    headline number.
-9. As a trader, I want a **"Today at the desk" timeline** as the centerpiece — a chronological
-   narrative feed of what happened (entered SPY → filled @ X → exited → +$Y) — so that I can
-   read my day like a story, not a table.
-10. As a trader, I want each timeline entry and position to render the instrument through the
+9. As a trader, I want **Today activity in a compact PrimeNG table** with client-side search,
+   sorting, and pagination, so that I can scan what happened without a long timeline pushing
+   current positions several screens below the fold.
+10. As a trader, I want each activity row and position to render the instrument through the
     **`asset-identity` component** (logo + symbol), so that instruments are recognizable at a
     glance rather than raw text.
-11. As a trader, I want a **positions table** below the timeline, so that I can drop to detail
-    when I need it.
+11. As a trader, I want a **positions table visible alongside Today activity on large desktop
+    screens**, so that current exposure remains available without page scrolling.
 
 ### Trader lens — robust equity history
 
@@ -107,23 +108,64 @@ a slide-over drawer, and add the Bot Gallery to the nav.
 18. As an operator, I want the system to **record our own daily equity snapshot from day one**,
     so that over time a fully-sovereign cross-check curve accrues independent of the broker.
 
+### Future requirement — uncertainty-aware Today P&L
+
+The current redesign must **not** show a tentative Today P&L or manufacture uncertainty limits
+from the reconciliation residual. A residual is a disagreement between two books, not a
+confidence interval. A future implementation may show an estimate only after all of the
+following requirements are met:
+
+1. **Python owns the estimate and its uncertainty.** Angular receives and renders a typed
+   result; it never sums positions, selects an implicit baseline, estimates missing executions,
+   or calculates bounds.
+2. **The estimand is explicit.** The contract defines exactly what “Today P&L” means, including
+   the canonical session boundary, viewer-independent timezone, treatment of deposits,
+   withdrawals, dividends, fees, external/manual executions, and overnight positions.
+3. **Uncertainty is mathematically defensible.** The backend must return either a justified
+   bound/interval with its method and assumptions or an explicit `unavailable` result. The
+   reconciliation residual alone must never be relabeled as uncertainty, confidence, or an
+   error bar.
+4. **Coverage is machine-readable.** The response identifies execution, fee, cash-flow, and
+   mark coverage; missing contributors; the observation timestamp; provenance; and the model
+   or contract version used to produce the result.
+5. **The display state is server-supported.** The result distinguishes at least `verified`,
+   `estimated`, `bounded`, and `unavailable`. An estimated or bounded value includes a concise
+   operator explanation and preserves detailed evidence for progressive disclosure.
+6. **No number is safer than an unjustified number.** If the available evidence cannot support
+   meaningful limits, the API returns `unavailable` and the UI shows no P&L estimate.
+7. **Validation ships with the feature.** Golden fixtures cover session boundaries, cash flows,
+   incomplete execution history, missing fees, stale or missing marks, external trades, and
+   known broker-statement examples. Tests pin numerical tolerances and prove that incomplete
+   evidence cannot silently produce a confident result.
+8. **Presentation is explicit.** When supported, the UI labels the value “Estimated Today P&L,”
+   shows the interval or bound beside it, states the confidence/bound semantics in plain
+   language, and labels the observation time as local time. It must never visually resemble a
+   verified exact value.
+
+Building the producer, repairing historical coverage, and making any SQLite/data-model changes
+needed to satisfy these gates are a separate future task.
+
 ### Operator lens — mechanism & repair
 
-19. As an operator, I want **one dominant posture headline** — "System healthy" or the single
-    most important thing wrong — so that I'm not parsing a wall of statuses to learn the state.
+19. As an operator, I want **one dominant posture headline** — a proven healthy state or the
+    single most important thing wrong — so that I'm not parsing a wall of statuses to learn the
+    state. The UI must never infer health while unresolved uncertainty remains.
 20. As an operator, I want the **fix action attached to the headline**, driven by the
     OperatorBlocker disposition (`fix_here` → repair button here; `fix_elsewhere` → deep link;
     `wait` → countdown; `terminal` → escalation), so that diagnosis and repair are one motion.
-21. As an operator, I want a **forensic transaction evidence grid** — Recorded · Origin & context
-    · Instruction & execution · Lifecycle · Evidence — so that I can audit every Clerk receipt.
-22. As an operator, I want **filters** on the grid (origin, lifecycle, bot, run), so that I can
-    narrow to the transactions I care about.
-23. As an operator, I want the forensic grid to be **operator-only** (the trader gets the
-    narrative timeline instead), so that each persona sees the right altitude of the same
-    underlying transactions.
-24. As an operator, I want **deep system panels** (custody clocks, broker session/capability,
-    fleet, truth spine) available but **collapsed by default**, so that the mechanism is one
-    layer down, not in my face.
+21. As an operator, I want a **forensic transaction evidence grid** — Recorded (local time) ·
+    Instrument · Request · Execution · Status · Submitted by · Fees · Evidence — so that I can
+    audit every account transaction in understandable language.
+22. As an operator, I want PrimeNG **client-side global and column filters** over the complete
+    selected Today/30D/60D server-bounded window, so that I can narrow to any useful field without
+    mixing filtering models. The loader follows all keyset pages before publishing the table and
+    shows an explicit warning if its client safety limit is reached.
+23. As a user, I want the same compact transaction table available beneath historical Trader
+    scopes and as the Operator's primary evidence surface, with technical receipts opened only
+    on demand.
+24. As an operator, I want friendly **deep system panels** (Order custody & recovery, Broker
+    connection, Trading fleet, Account source of truth) available but **collapsed by default**,
+    so that mechanism and raw evidence are one layer down rather than in my face.
 
 ### Evidence modal
 
@@ -225,13 +267,13 @@ Alpaca execution / fills / P&L / history"). The existing .NET `SnapshotService` 
 - **Desk shell** owns the lens toggle scaffold and renders one of two lens child components by
   signal. Trader and Operator lenses are **separate components with disjoint files**, meeting
   the shell at their selectors (a contract), so they parallelize.
-- **Trader lens:** hero tile row, `TradingChart`/equity-curve for the historical scope, the
-  "Today at the desk" timeline (reuse the existing `p-timeline` treatment), positions table.
+- **Trader lens:** compact reliable-account summary, Today activity table, positions table,
+  and `TradingChart`/equity-curve for the historical scope.
   Consumes C1/C2/C3 through a typed frontend API service; builds against **mocked** contracts.
 - **Operator lens:** dominant posture headline consuming the existing dominant-condition +
-  `OperatorBlocker` disposition atoms; the forensic transaction grid (the existing 5-column
-  `account-desk-transaction-history` grid, moved under the operator lens); collapsed deep
-  panels.
+  `OperatorBlocker` disposition atoms; the shared eight-column PrimeNG transaction table with
+  complete-window client filtering; collapsed deep panels with operator-friendly names and
+  technical evidence preserved through progressive disclosure.
 - **Evidence reader (Contract C-Evidence):** the shared `clerk-transaction-evidence-drawer`
   keeps its input surface stable (`accountId`, `transaction`, `openerElement`, `closed`) so the
   operator grid and the evidence redesign parallelize. Internals redesigned: `asset-identity`
@@ -285,7 +327,8 @@ exists, and at the highest point.
   rendered output. Prior art: `alpaca-desk.component.spec.ts`, `account-desk-*.component.spec.ts`.
   - Lens toggle renders trader vs operator content; default is trader; `?lens=` deep-links;
     operator data lazy-loads on switch.
-  - Trader: hero tiles show the metrics; timeline renders trade entries; scope control switches
+  - Trader: compact summary shows reliable broker facts and no unsupported Today P&L estimate;
+    activity and positions render in searchable/sortable/paginated tables; scope control switches
     Today/30D/60D and renders the equity curve + trade list; symbols render via `asset-identity`.
   - Operator: dominant headline renders with the correct fix affordance per blocker disposition;
     forensic grid renders and a row opens the evidence modal; deep panels start collapsed.
@@ -323,6 +366,10 @@ exists, and at the highest point.
 - **A fully-sovereign locally-computed equity curve as the displayed spine** — we display the
   broker curve now and only *accrue* sovereign snapshots; promoting them to the displayed line
   (with our own drawdown/Sharpe as first-class metrics) is a future option.
+- **Tentative or uncertainty-bounded Today P&L** — the current desk shows no estimate until the
+  future requirement above has a canonical Python producer, defensible uncertainty semantics,
+  complete typed provenance, and the required numerical validation. SQL/data repair for that
+  producer is not part of this UI task.
 - **Any new user-role/auth model** — the lens is a manual choice, not driven by an identity.
 
 ## Further Notes

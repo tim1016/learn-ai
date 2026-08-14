@@ -225,8 +225,10 @@
 :host-context(.top-bar__connection) {
   .broker-banner {
     display: flex;
-    min-height: 32px;
-    padding: 0 4px 0 8px;
+    min-height: 28px;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 8px 2px 3px;
     background: $bg-canvas;
     border-radius: $radius-pill;
   }
@@ -238,6 +240,7 @@
   }
 
   .broker-banner-kicker,
+  .broker-banner-state,
   .broker-banner-detail {
     display: none;
   }
@@ -248,7 +251,9 @@
   }
 
   .broker-toggle {
-    width: 28px;
-    height: 28px;
+    width: 30px;
+    height: 22px;
+    border-radius: $radius-pill;
+    font-size: 10px;
   }
 }

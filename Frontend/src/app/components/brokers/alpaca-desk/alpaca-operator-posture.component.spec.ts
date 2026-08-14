@@ -71,8 +71,81 @@ describe('AlpacaOperatorPostureComponent', () => {
       },
     });
 
-    expect(screen.getByRole('heading', { name: 'System healthy' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Clerk reconciliation required' })).toBeTruthy();
     expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  it('does not claim health when unresolved uncertainty remains without a required action', async () => {
+    await render(AlpacaOperatorPostureComponent, {
+      inputs: {
+        projection: projection({
+          guidance: {
+            ...projection().guidance,
+            headline: 'Execution evidence needs review',
+            explanation: 'One broker outcome is not yet proven.',
+            action_required: false,
+          },
+          recovery_actions: [],
+          uncertainties: [{
+            uncertainty_id: 'uncertainty-1',
+            scope: 'ACCOUNT_CLERK',
+            strategy_instance_id: null,
+            reason_code: 'BROKER_OUTCOME_UNPROVEN',
+            severity: 'warning',
+            headline: 'Execution evidence needs review',
+            explanation: 'One broker outcome is not yet proven.',
+            operator_impact: 'Review before relying on the account record.',
+            blocks_new_exposure: false,
+            allows_reduction: true,
+            next_step: 'Review the order evidence.',
+            custody_owner: 'ACCOUNT_CLERK',
+            observed_at_ms: 1_700_000_000_000,
+            evidence_age_ms: 10,
+            evidence_refs: ['order-1'],
+          }],
+        }),
+      },
+    });
+
+    expect(screen.getByRole('heading', { name: 'Execution evidence needs review' })).toBeTruthy();
+    expect(screen.getByText('Review the current evidence.')).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'System healthy' })).toBeNull();
+  });
+
+  it('keeps an available recovery action in review when server guidance does not require it', async () => {
+    const repairRequested = vi.fn();
+    await render(AlpacaOperatorPostureComponent, {
+      inputs: {
+        projection: projection({
+          guidance: {
+            ...projection().guidance,
+            action_required: false,
+          },
+          uncertainties: [{
+            uncertainty_id: 'uncertainty-1',
+            scope: 'ACCOUNT_CLERK',
+            strategy_instance_id: null,
+            reason_code: 'BROKER_OUTCOME_UNPROVEN',
+            severity: 'warning',
+            headline: 'Execution evidence needs review',
+            explanation: 'One broker outcome is not yet proven.',
+            operator_impact: 'Review before relying on the account record.',
+            blocks_new_exposure: false,
+            allows_reduction: true,
+            next_step: 'Review the order evidence.',
+            custody_owner: 'ACCOUNT_CLERK',
+            observed_at_ms: 1_700_000_000_000,
+            evidence_age_ms: 10,
+            evidence_refs: ['order-1'],
+          }],
+        }),
+      },
+      on: { repairRequested },
+    });
+
+    expect(screen.getByText('Review the current evidence.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Reconcile now' })).toBeNull();
+    expect(repairRequested).not.toHaveBeenCalled();
   });
 
   it('attaches the available repair action to the dominant Clerk posture', async () => {
@@ -106,8 +179,8 @@ describe('AlpacaOperatorPostureComponent', () => {
   });
 
   it.each([
-    ['wait', 'Waiting for fresh Clerk evidence.'],
-    ['terminal', 'Escalation required.'],
+    ['wait', 'Waiting for fresh account evidence.'],
+    ['terminal', 'Manual escalation required.'],
   ] as const)('uses the %s OperatorBlocker disposition without inventing a repair', async (disposition, copy) => {
     await render(AlpacaOperatorPostureComponent, {
       inputs: { blocker: operatorBlockerFixture({ disposition, primaryMove: null }) },

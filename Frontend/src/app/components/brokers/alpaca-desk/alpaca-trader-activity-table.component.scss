@@ -3,7 +3,7 @@
   min-width: 0;
 }
 
-.positions-panel {
+.activity-panel {
   height: 100%;
   border: 1px solid var(--border-light);
   border-radius: var(--radius-lg);
@@ -12,7 +12,7 @@
   overflow: hidden;
 }
 
-.positions-panel__header {
+.activity-panel__header {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -23,73 +23,74 @@
   border-bottom: 1px solid var(--border);
 }
 
-.positions-panel__header h2,
-.positions-panel__header p {
+.activity-panel__header h2,
+.activity-panel__header p {
   margin: 0;
 }
 
-.positions-panel__header h2 {
+.activity-panel__header h2 {
   color: var(--text-primary);
   font-size: var(--fs-lg);
 }
 
-.positions-panel__header div > p:last-child {
+.activity-panel__header div > p:last-child,
+.state {
   color: var(--text-secondary);
   font-size: var(--fs-xs);
 }
 
 .eyebrow {
-  color: var(--text-muted) !important;
-  font-size: var(--fs-xxs) !important;
+  color: var(--text-muted);
+  font-size: var(--fs-xxs);
   font-weight: var(--fw-semi);
   letter-spacing: var(--ls-caps);
   text-transform: uppercase;
 }
 
-.table-search,
-.instrument-cell {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
+.state {
+  margin: 0;
+  padding: var(--space-4);
 }
 
 .table-search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
   color: var(--text-muted);
 }
 
 .table-search input {
-  width: 8.5rem;
+  width: min(15rem, 24vw);
   height: 2rem;
   font-size: var(--fs-xs);
 }
 
-.table-search button,
-.details-column button {
-  width: 1.8rem;
-  height: 1.8rem;
+.table-search button {
+  width: 2rem;
+  height: 2rem;
   padding: 0;
 }
 
-:host ::ng-deep .positions-table .p-datatable-table {
-  min-width: 42rem;
+:host ::ng-deep .desk-table .p-datatable-table {
+  min-width: 54rem;
 }
 
-:host ::ng-deep .positions-table th,
-:host ::ng-deep .positions-table td {
-  padding: 0.58rem 0.6rem;
+:host ::ng-deep .desk-table th,
+:host ::ng-deep .desk-table td {
+  padding: 0.58rem 0.65rem;
   white-space: nowrap;
 }
 
-:host ::ng-deep .positions-table th {
+:host ::ng-deep .desk-table th {
   color: var(--text-subtle);
   font-size: var(--fs-xxs);
   letter-spacing: var(--ls-caps);
   text-transform: uppercase;
 }
 
+.time-cell,
 .numeric,
-.stacked-cell,
-.position-details dd,
+.activity-details dd,
 code {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
@@ -99,23 +100,18 @@ code {
   text-align: right;
 }
 
-.stacked-cell strong,
-.stacked-cell small {
-  display: block;
-}
-
-.stacked-cell small {
-  margin-top: 0.12rem;
-  color: var(--text-secondary);
-  font-size: var(--fs-xxs);
-}
-
-.position-side {
-  padding: 0.12rem 0.35rem;
+.activity-kind {
+  display: inline-flex;
+  padding: 0.15rem 0.4rem;
   border-radius: var(--radius-pill);
   background: var(--accent-faint);
   color: var(--accent-text);
   font-size: var(--fs-xxs);
+  font-weight: var(--fw-semi);
+}
+
+.account-event {
+  color: var(--text-secondary);
   font-weight: var(--fw-semi);
 }
 
@@ -124,55 +120,36 @@ code {
   text-align: center;
 }
 
+.details-column button {
+  width: 1.8rem;
+  height: 1.8rem;
+  padding: 0;
+}
+
 .expanded-cell {
   background: var(--bg-sunken);
 }
 
-.position-details {
+.activity-details {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--space-3);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-4);
   margin: 0;
 }
 
-.position-details dt {
+.activity-details dt {
   color: var(--text-muted);
   font-size: var(--fs-xxs);
   letter-spacing: var(--ls-caps);
   text-transform: uppercase;
 }
 
-.position-details dd {
+.activity-details dd {
   margin: var(--space-1) 0 0;
   color: var(--text-secondary);
   font-size: var(--fs-xs);
   overflow-wrap: anywhere;
   white-space: normal;
-}
-
-.state {
-  margin: 0;
-  padding: var(--space-4);
-  color: var(--text-secondary);
-  font-size: var(--fs-sm);
-}
-
-.state--error {
-  color: var(--bear);
-}
-
-.empty-state {
-  display: grid;
-  min-height: 11rem;
-  place-content: center;
-  justify-items: center;
-  gap: var(--space-2);
-  color: var(--text-muted);
-  font-size: var(--fs-sm);
-}
-
-.empty-state i {
-  font-size: 1.3rem;
 }
 
 .table-empty {
@@ -190,7 +167,7 @@ code {
 }
 
 @media (max-width: 560px) {
-  .positions-panel__header {
+  .activity-panel__header {
     align-items: start;
     flex-direction: column;
   }
@@ -200,7 +177,7 @@ code {
     width: 100%;
   }
 
-  .position-details {
+  .activity-details {
     grid-template-columns: 1fr;
   }
 }

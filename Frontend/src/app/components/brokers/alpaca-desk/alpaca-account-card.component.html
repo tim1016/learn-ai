@@ -25,6 +25,14 @@
           <dt>Cash</dt>
           <dd>{{ acct.cash | currency: acct.currency }}</dd>
         </div>
+        <div>
+          <dt>Buying power</dt>
+          <dd>{{ acct.buying_power | currency: acct.currency }}</dd>
+        </div>
+        <div class="headline-metrics__freshness">
+          <dt>Updated (local)</dt>
+          <dd><app-timestamp-display [value]="acct.observed_at_ms" mode="local" /></dd>
+        </div>
       </dl>
 
       <button
@@ -42,10 +50,6 @@
     <div id="alpaca-account-details" class="account-strip__details" [attr.aria-hidden]="!expanded()">
       <div class="account-strip__details-inner">
         <dl class="detail-metrics">
-          <div>
-            <dt>Buying power</dt>
-            <dd>{{ acct.buying_power | currency: acct.currency }}</dd>
-          </div>
           <div>
             <dt>Portfolio value</dt>
             <dd>{{ acct.portfolio_value | currency: acct.currency }}</dd>
@@ -71,12 +75,11 @@
         </div>
 
         <footer class="account-timestamp">
-          <span>Observed </span>
-          <app-timestamp-display [value]="acct.observed_at_ms" mode="local" />
           @if (acct.created_at_ms !== null) {
-            <span class="account-timestamp__divider" aria-hidden="true">·</span>
-            <span>Opened </span>
+            <span>Account opened (local) </span>
             <app-timestamp-display [value]="acct.created_at_ms" mode="local" />
+          } @else {
+            <span>Account opening time was not reported.</span>
           }
         </footer>
       </div>

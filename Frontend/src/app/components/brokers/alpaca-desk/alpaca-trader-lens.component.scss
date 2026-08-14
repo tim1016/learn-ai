@@ -7,8 +7,7 @@
   gap: var(--space-4);
 }
 
-.trader-lens__header,
-.positions-section__header {
+.trader-lens__header {
   display: flex;
   flex-wrap: wrap;
   align-items: end;
@@ -18,15 +17,12 @@
 
 .trader-lens__header h2,
 .trader-lens__header p,
-.positions-section__header h2,
-.positions-section__header p,
 .history-placeholder h2,
 .history-placeholder p {
   margin: 0;
 }
 
 .trader-lens__header h2,
-.positions-section__header h2,
 .history-placeholder h2 {
   color: var(--text-primary);
   font-size: var(--fs-xl);
@@ -41,7 +37,6 @@
 }
 
 .trader-lens__intro,
-.positions-section__header > p,
 .history-placeholder > p:last-child {
   margin-top: var(--space-2);
   color: var(--text-secondary);
@@ -81,7 +76,6 @@
   outline-offset: 1px;
 }
 
-.positions-section,
 .history-placeholder {
   border: 1px solid var(--border-light);
   border-radius: var(--radius-lg);
@@ -89,17 +83,16 @@
   box-shadow: var(--shadow-card);
 }
 
-.positions-section {
-  overflow: hidden;
-}
-
-.positions-section__header,
 .history-placeholder {
   padding: clamp(1rem, 2vw, 1.4rem);
 }
 
-.positions-section__header {
-  border-bottom: 1px solid var(--border);
+.today-workspace {
+  display: grid;
+  grid-template-columns: minmax(28rem, 2fr) minmax(42rem, 3fr);
+  gap: var(--space-3);
+  height: clamp(30rem, calc(100dvh - 24rem), 40rem);
+  min-height: 0;
 }
 
 .history-workspace {
@@ -108,9 +101,19 @@
 }
 
 @media (max-width: 560px) {
-  .trader-lens__header,
-  .positions-section__header {
+  .trader-lens__header {
     align-items: start;
     flex-direction: column;
+  }
+}
+
+@media (max-width: 1180px) {
+  .today-workspace {
+    grid-template-columns: minmax(0, 1fr);
+    height: auto;
+  }
+
+  .today-workspace > * {
+    min-height: 28rem;
   }
 }

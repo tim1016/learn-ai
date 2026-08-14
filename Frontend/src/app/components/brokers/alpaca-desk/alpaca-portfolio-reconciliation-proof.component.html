@@ -1,62 +1,76 @@
 <section class="reconciliation-proof" aria-labelledby="portfolio-reconciliation-heading">
   <header>
-    <div>
-      <p class="eyebrow">Independent local books</p>
-      <h2 id="portfolio-reconciliation-heading">FIFO reconciliation proof</h2>
-    </div>
+    <p class="eyebrow">Account verification</p>
+    <h2 id="portfolio-reconciliation-heading">Portfolio equity check</h2>
+    <p>Compares Alpaca's account change with the trades, fees, and open positions recorded here.</p>
   </header>
 
   @if (unavailable()) {
-    <p class="state" role="alert">Portfolio reconciliation proof is unavailable right now.</p>
+    <p class="state state--review" role="alert">This period cannot be verified right now.</p>
   } @else if (proof() === undefined) {
-    <p class="state" role="status">Loading independent FIFO attribution…</p>
+    <p class="state" role="status">Checking the account record…</p>
   } @else if (proof(); as result) {
     @if (result.reconciliation && result.attribution) {
       @if (result.reconciliation.within_tolerance) {
         <p class="proof proof--verified" role="status">
-          Broker curve agrees with local FIFO P&amp;L within ${{ result.reconciliation.atol | number: '1.2-6' }}.
+          <i class="pi pi-check-circle" aria-hidden="true"></i>
+          Alpaca's account change matches the recorded activity within ${{ result.reconciliation.atol | number: '1.2-6' }}.
         </p>
       } @else {
         <p class="proof proof--review" role="alert">
-          Broker curve does not yet agree with local FIFO P&amp;L. Review the reported divergence before relying on this proof.
+          <i class="pi pi-exclamation-circle" aria-hidden="true"></i>
+          This period is not fully verified. Review the reported differences before relying on it.
         </p>
-        <ul class="divergence-list" aria-label="Reported reconciliation divergences">
-          @for (divergence of result.reconciliation.divergences; track $index) {
-            <li>
-              <strong>{{ divergence.category | receiptLabel }}</strong>
-              <span>{{ divergence.detail }}</span>
-            </li>
-          }
-        </ul>
       }
-      <dl class="totals">
-        <div><dt>Broker delta</dt><dd>{{ result.reconciliation.broker_delta | currency }}</dd></div>
-        <div><dt>Local FIFO delta</dt><dd>{{ result.reconciliation.local_delta | currency }}</dd></div>
-        <div><dt>Residual</dt><dd>{{ result.reconciliation.residual | currency }}</dd></div>
-      </dl>
 
-      <h3>FIFO attribution rows</h3>
-      @if (result.attribution.attribution_rows.length === 0) {
-        <p class="state">No FIFO lot closures were recorded in this window.</p>
-      } @else {
-        <div class="attribution-table" role="table" aria-label="FIFO attribution rows">
-          <div class="attribution-table__header" role="row" aria-hidden="true">
-            <span>Instrument</span><span>Closed</span><span>FIFO P&amp;L</span><span>Attribution</span>
-          </div>
-          @for (row of result.attribution.attribution_rows; track trackAttribution($index, row)) {
-            <div role="row">
-              <span role="cell"><app-asset-identity [symbol]="row.symbol" size="sm" /></span>
-              <span role="cell"><app-timestamp-display [value]="row.closed_at_ms" mode="local" /></span>
-              <span role="cell">{{ row.realized_pnl | currency }}</span>
-              <span role="cell"><code>{{ row.entry_subject_id | receiptLabel }}</code> → <code>{{ row.exit_subject_id | receiptLabel }}</code></span>
+      <details class="calculation-details">
+        <summary>Calculation details and supporting trades</summary>
+        <div class="calculation-details__body">
+          <dl class="totals">
+            <div><dt>Alpaca account change</dt><dd>{{ result.reconciliation.broker_delta | currency }}</dd></div>
+            <div><dt>Recorded trade change</dt><dd>{{ result.reconciliation.local_delta | currency }}</dd></div>
+            <div><dt>Unexplained difference</dt><dd>{{ result.reconciliation.residual | currency }}</dd></div>
+          </dl>
+
+          @if (result.reconciliation.divergences.length > 0) {
+            <div class="difference-list">
+              <h3>Why this check needs review</h3>
+              <ul aria-label="Portfolio verification differences">
+                @for (divergence of result.reconciliation.divergences; track $index) {
+                  <li><strong>{{ divergence.category | receiptLabel }}</strong><span>{{ divergence.detail }}</span></li>
+                }
+              </ul>
             </div>
           }
+
+          <h3>Trades supporting this period</h3>
+          @if (result.attribution.attribution_rows.length === 0) {
+            <p class="state">No closed trade lots were recorded in this period.</p>
+          } @else {
+            <div class="attribution-table" role="table" aria-label="Trades supporting this period">
+              <div class="attribution-table__header" role="row" aria-hidden="true">
+                <span>Instrument</span><span>Closed (local)</span><span>Recorded P&amp;L</span><span>Record identities</span>
+              </div>
+              @for (row of result.attribution.attribution_rows; track trackAttribution($index, row)) {
+                <div role="row">
+                  <span role="cell"><app-asset-identity [symbol]="row.symbol" size="sm" /></span>
+                  <span role="cell"><app-timestamp-display [value]="row.closed_at_ms" mode="local" /></span>
+                  <span role="cell">{{ row.realized_pnl | currency }}</span>
+                  <span role="cell"><code>{{ row.entry_subject_id }}</code> → <code>{{ row.exit_subject_id }}</code></span>
+                </div>
+              }
+            </div>
+          }
+
+          <p class="method-note">Technical method: first-in, first-out trade attribution with absolute tolerance {{ result.reconciliation.atol | number: '1.2-6' }} and relative tolerance {{ result.reconciliation.rtol | number: '1.2-6' }}.</p>
         </div>
-      }
+      </details>
     } @else {
       <p class="proof proof--review" role="alert">
-        {{ result.proof_unavailable_reason ?? 'Independent FIFO proof is unavailable for this broker snapshot.' }}
+        <i class="pi pi-exclamation-circle" aria-hidden="true"></i>
+        This period cannot be fully verified from the available account record.
       </p>
+      <details class="calculation-details"><summary>Technical reason</summary><p>{{ result.proof_unavailable_reason ?? 'Independent verification is unavailable for this broker snapshot.' }}</p></details>
     }
   }
 </section>

@@ -1,54 +1,120 @@
-@if (positions.isLoading()) {
-  <p class="m-0 py-3 text-sm text-color-secondary" role="status">Loading positions…</p>
-} @else if (positions.error()) {
-  <p class="m-0 py-3 text-sm text-red-500" role="alert">
-    Couldn't reach Alpaca. Positions are unavailable right now.
-  </p>
-} @else if (positions.value(); as rows) {
-  @if (rows.length === 0) {
-    <div class="empty-state" role="status">
-      <i class="pi pi-wallet" aria-hidden="true"></i>
-      <span>No open positions.</span>
+<section class="positions-panel" aria-labelledby="open-positions-heading">
+  <header class="positions-panel__header">
+    <div>
+      <p class="eyebrow">Portfolio</p>
+      <h2 id="open-positions-heading">Current positions</h2>
+      <p>Open exposure reported by Alpaca.</p>
     </div>
-  } @else {
-    <div class="position-list" role="list" aria-label="Open positions">
-      @for (row of rows; track row.symbol) {
-        <article class="position-card" role="listitem">
-          <header class="position-card__header">
-            <app-asset-identity [symbol]="row.symbol" size="md" />
-            <span class="position-side">{{ row.side | receiptLabel }}</span>
-          </header>
+  </header>
 
-          <div class="position-price">
-            <span class="position-price__label">Market value</span>
-            <strong>{{ row.market_value | currency: 'USD' }}</strong>
+  @if (positions.isLoading()) {
+    <p class="state" role="status">Loading positions…</p>
+  } @else if (positions.error()) {
+    <p class="state state--error" role="alert">
+      Couldn't reach Alpaca. Positions are unavailable right now.
+    </p>
+  } @else if (positions.value(); as rows) {
+    @if (rows.length === 0) {
+      <div class="empty-state" role="status">
+        <i class="pi pi-wallet" aria-hidden="true"></i>
+        <span>No open positions.</span>
+      </div>
+    } @else {
+      <p-table
+        #positionTable
+        class="positions-table"
+        [value]="rows"
+        dataKey="symbol"
+        [globalFilterFields]="globalFilterFields"
+        [pt]="tablePassThrough"
+        [paginator]="rows.length > 6"
+        [rows]="6"
+        [rowsPerPageOptions]="[6, 12, 24]"
+        [rowHover]="true"
+        [stripedRows]="true"
+        [showCurrentPageReport]="true"
+        currentPageReportTemplate="{first}–{last} of {totalRecords}"
+        sortField="market_value"
+        [sortOrder]="-1"
+        size="small"
+      >
+        <ng-template #caption>
+          <div class="table-search">
+            <i class="pi pi-search" aria-hidden="true"></i>
+            <input
+              #positionSearch
+              pInputText
+              type="search"
+              placeholder="Find symbol"
+              aria-label="Search current positions"
+              (input)="positionTable.filterGlobal(inputValue($event), 'contains')"
+            />
+            <button
+              pButton
+              type="button"
+              severity="secondary"
+              text
+              aria-label="Clear position search"
+              (click)="clearSearch(positionTable, positionSearch)"
+            ><i class="pi pi-times" aria-hidden="true"></i></button>
           </div>
-
-          <dl class="position-metrics">
-            <div>
-              <dt>Shares</dt>
-              <dd>{{ row.quantity | number: '1.0-4' }}</dd>
-            </div>
-            <div>
-              <dt>Avg entry</dt>
-              <dd>{{ row.average_entry_price | currency: 'USD' }}</dd>
-            </div>
-            <div>
-              <dt>Last</dt>
-              <dd>{{ row.current_price === null ? '—' : (row.current_price | currency: 'USD') }}</dd>
-            </div>
-            <div>
-              <dt>Unrealized</dt>
-              <dd [class.positive]="row.unrealized_pl >= 0" [class.negative]="row.unrealized_pl < 0">
-                {{ row.unrealized_pl | currency: 'USD' }}
-                @if (row.unrealized_plpc !== null) {
-                  <span>({{ row.unrealized_plpc | percent: '1.2-2' }})</span>
-                }
-              </dd>
-            </div>
-          </dl>
-        </article>
-      }
-    </div>
+        </ng-template>
+        <ng-template #header>
+          <tr>
+            <th pSortableColumn="symbol">Instrument<p-sort-icon field="symbol" /></th>
+            <th pSortableColumn="quantity" class="numeric">Quantity<p-sort-icon field="quantity" /></th>
+            <th pSortableColumn="current_price" class="numeric">Price<p-sort-icon field="current_price" /></th>
+            <th pSortableColumn="market_value" class="numeric">Market value<p-sort-icon field="market_value" /></th>
+            <th pSortableColumn="unrealized_pl" class="numeric">Open P&amp;L<p-sort-icon field="unrealized_pl" /></th>
+            <th class="details-column"><span class="sr-only">Details</span></th>
+          </tr>
+        </ng-template>
+        <ng-template #body let-row let-expanded="expanded">
+          <tr>
+            <td>
+              <div class="instrument-cell">
+                <app-asset-identity [symbol]="row.symbol" size="sm" />
+                <span class="position-side">{{ row.side | receiptLabel }}</span>
+              </div>
+            </td>
+            <td class="numeric">{{ row.quantity | number: '1.0-4' }}</td>
+            <td class="numeric stacked-cell">
+              <strong>{{ row.current_price === null ? '—' : (row.current_price | currency: 'USD') }}</strong>
+              <small>Avg {{ row.average_entry_price | currency: 'USD' }}</small>
+            </td>
+            <td class="numeric">{{ row.market_value | currency: 'USD' }}</td>
+            <td class="numeric stacked-cell" [class.positive]="row.unrealized_pl >= 0" [class.negative]="row.unrealized_pl < 0">
+              <strong>{{ row.unrealized_pl | currency: 'USD' }}</strong>
+              <small>{{ row.unrealized_plpc === null ? 'Rate unavailable' : (row.unrealized_plpc | percent: '1.2-2') }}</small>
+            </td>
+            <td class="details-column">
+              <button
+                pButton
+                type="button"
+                severity="secondary"
+                text
+                [pRowToggler]="row"
+                [attr.aria-label]="(expanded ? 'Hide' : 'Show') + ' ' + row.symbol + ' position details'"
+              ><i [class]="expanded ? 'pi pi-chevron-up' : 'pi pi-chevron-down'" aria-hidden="true"></i></button>
+            </td>
+          </tr>
+        </ng-template>
+        <ng-template #expandedrow let-row>
+          <tr>
+            <td colspan="6" class="expanded-cell">
+              <dl class="position-details">
+                <div><dt>Cost basis</dt><dd>{{ row.cost_basis | currency: 'USD' }}</dd></div>
+                <div><dt>Asset class</dt><dd>{{ row.asset_class ? (row.asset_class | receiptLabel) : 'Not recorded' }}</dd></div>
+                <div><dt>Asset identifier</dt><dd><code>{{ row.asset_id ?? 'Not recorded' }}</code></dd></div>
+                <div><dt>Observed (local)</dt><dd><app-timestamp-display [value]="row.observed_at_ms" mode="local" /></dd></div>
+              </dl>
+            </td>
+          </tr>
+        </ng-template>
+        <ng-template #emptymessage>
+          <tr><td colspan="6" class="table-empty">No positions match your search.</td></tr>
+        </ng-template>
+      </p-table>
+    }
   }
-}
+</section>

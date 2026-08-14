@@ -20,27 +20,13 @@
 
   @switch (scope()) {
     @case ('today') {
-      <app-alpaca-trader-hero
-        [account]="account()"
-        [positions]="positions()"
-        [positionsUnavailable]="positionsUnavailable()"
-        [activities]="activities()"
-        [activitiesUnavailable]="activitiesUnavailable()"
-      />
-      <app-alpaca-trader-activity-timeline
-        [activities]="activities()"
-        [unavailable]="activitiesUnavailable()"
-      />
-      <section class="positions-section" aria-labelledby="open-positions-heading">
-        <header class="positions-section__header">
-          <div>
-            <p class="eyebrow">Portfolio</p>
-            <h2 id="open-positions-heading">Open positions</h2>
-          </div>
-          <p>Live market values from Alpaca.</p>
-        </header>
+      <div class="today-workspace">
         <app-alpaca-positions-table />
-      </section>
+        <app-alpaca-trader-activity-table
+          [activities]="activities()"
+          [unavailable]="activitiesUnavailable()"
+        />
+      </div>
     }
     @default {
       <section class="history-workspace" aria-live="polite">
@@ -58,6 +44,7 @@
           [fromMs]="historyWindow()?.fromMs ?? null"
           [toMs]="historyWindow()?.toMs ?? null"
           [refreshVersion]="refreshVersion()"
+          [showScopeControl]="false"
         />
       </section>
     }

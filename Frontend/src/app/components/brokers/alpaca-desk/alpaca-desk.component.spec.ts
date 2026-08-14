@@ -4,6 +4,7 @@ import { ActivatedRoute, convertToParamMap, provideRouter, Router } from '@angul
 import { of } from 'rxjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { BrokerService } from '../../../services/broker.service';
 import { BrokersService } from '../../../services/brokers.service';
 import { BrokerV2PanelService } from '../../broker/v2-panel/lib/broker-v2-panel.service';
 import { AlpacaDeskComponent } from './alpaca-desk.component';
@@ -32,6 +33,10 @@ function brokerService() {
     }),
     listPositions: vi.fn().mockResolvedValue([]),
     listActivities: vi.fn().mockResolvedValue([]),
+    getPortfolioHistory: vi.fn().mockResolvedValue({
+      timestamps: [1, 2], equity: [1_000, 1_000], profit_loss: [0, 0],
+      base_value: 1_000, timeframe: '1D',
+    }),
     getClerkStatus: vi.fn().mockResolvedValue({
       broker: 'alpaca',
       account_id: 'PA1',
@@ -52,7 +57,20 @@ function brokerService() {
       divergences: [],
       resolution_plan: [],
     }),
-    getSqliteClerkProjection: vi.fn().mockResolvedValue({}),
+    getSqliteClerkProjection: vi.fn().mockResolvedValue({
+      account_id: 'PA1', strategy_instance_id: null, authority_generation: 1,
+      db_identity_token: 'db-1', authority_health: 'healthy', authority_health_reason: null,
+      control_revision: 1, custody_owner: 'ACCOUNT_CLERK', runs: [], commands: [],
+      operations: [], positions: [], holds: [], uncertainties: [], latest_reconciliation: null,
+      terminal_receipts: [], recovery_actions: [], generated_at_ms: 1,
+      guidance: {
+        headline: 'Account record is healthy', explanation: 'No unresolved account uncertainty.',
+        scope: 'ACCOUNT_CLERK', impact: 'Normal controls remain available.',
+        custody_owner: 'ACCOUNT_CLERK', may_create_exposure: true,
+        available_safety_actions: [], action_required: false,
+        next_step: 'No recovery action is required.',
+      },
+    }),
     getSqliteManualOrderCapability: vi.fn().mockResolvedValue({
       available: false,
       unavailable: {
@@ -94,6 +112,23 @@ async function renderDesk(
         },
       },
       { provide: BrokersService, useValue: brokers },
+      {
+        provide: BrokerService,
+        useValue: {
+          accountTransactions: vi.fn().mockResolvedValue({
+            projection_available: true, canonical_fallback_required: false, feed_state: 'live',
+            feed_headline: 'Current', feed_detail: 'Current', high_water_journal_seq: 0,
+            lag_records: 0, lag_is_lower_bound: false,
+            custody_summary: {
+              record_count: 0, a0_custody_accepted_count: 0,
+              a1_broker_write_started_count: 0, a2_broker_known_count: 0,
+              a3_economic_terminal_count: 0, uncertain_count: 0,
+            },
+            rows: [], next_cursor: null,
+          }),
+          accountTransaction: vi.fn(),
+        },
+      },
       {
         provide: BrokerV2PanelService,
         useValue: { getDeployView: () => new Promise<never>(() => undefined) },

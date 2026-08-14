@@ -61,16 +61,6 @@ const NOTICE_ACTION_TIMEOUT_MS = 15_000;
         [class.is-disabled]="state.kind === 'disabled'"
         [attr.aria-label]="state.aria"
       >
-        <div class="broker-banner-copy" role="status" [attr.aria-label]="state.aria">
-          <span class="broker-banner-kicker">IBKR</span>
-          <span class="broker-banner-title">
-            <span class="broker-banner-dot" aria-hidden="true"></span>
-            {{ state.title }}
-          </span>
-          <span class="broker-banner-detail" [attr.title]="state.detailTitle">
-            {{ state.detail }}
-          </span>
-        </div>
         @if (state.toggleLabel) {
           <button
             type="button"
@@ -94,6 +84,17 @@ const NOTICE_ACTION_TIMEOUT_MS = 15_000;
             ></i>
           </button>
         }
+        <div class="broker-banner-copy" role="status" [attr.aria-label]="state.aria">
+          <span class="broker-banner-kicker">IBKR</span>
+          <span class="broker-banner-title">
+            <span class="broker-banner-dot" aria-hidden="true"></span>
+            <span>Broker</span>
+            <span class="broker-banner-state">{{ state.title }}</span>
+          </span>
+          <span class="broker-banner-detail" [attr.title]="state.detailTitle">
+            {{ state.detail }}
+          </span>
+        </div>
       </section>
     }
   `,

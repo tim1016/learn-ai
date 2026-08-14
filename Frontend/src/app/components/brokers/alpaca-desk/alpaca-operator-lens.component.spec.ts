@@ -48,6 +48,16 @@ function resourceValue<T>(value: T) {
   };
 }
 
+function getPortfolioHistory() {
+  return vi.fn().mockResolvedValue({
+    timestamps: [1_700_000_000_000, 1_700_086_400_000],
+    equity: [100, 101],
+    profit_loss: [0, 1],
+    base_value: 100,
+    timeframe: '1D',
+  });
+}
+
 describe('AlpacaOperatorLensComponent', () => {
   it('forwards the inline repair to the existing evidence-bound custody action flow', async () => {
     const repair = {
@@ -95,6 +105,7 @@ describe('AlpacaOperatorLensComponent', () => {
           useValue: {
             getSqliteClerkProjection: vi.fn().mockResolvedValue(activeProjection),
             executeSqliteRecoveryAction,
+            getPortfolioHistory: getPortfolioHistory(),
           },
         },
       ],
@@ -144,25 +155,27 @@ describe('AlpacaOperatorLensComponent', () => {
             accountTransaction,
           },
         },
-        { provide: BrokersService, useValue: {} },
+        { provide: BrokersService, useValue: { getPortfolioHistory: getPortfolioHistory() } },
       ],
     });
 
-    expect(screen.getByRole('heading', { name: 'System healthy' })).toBeTruthy();
-    await waitFor(() => expect(accountTransactions).toHaveBeenCalledWith('PA1', null, 25, {}));
-    expect(screen.getByText('Recorded')).toBeTruthy();
-    expect(screen.getByText('Origin and context')).toBeTruthy();
-    expect(screen.getByText('Instruction and execution')).toBeTruthy();
-    expect(screen.getAllByText('Lifecycle')).toHaveLength(2);
+    expect(screen.getByRole('heading', { name: 'Account Clerk custody is healthy' })).toBeTruthy();
+    await waitFor(() => expect(accountTransactions).toHaveBeenCalledWith('PA1', null, 100, {
+      fromMs: 1_700_000_000_000,
+      toMs: 1_700_086_400_000,
+    }));
+    expect(screen.getByText('Recorded (local time)')).toBeTruthy();
+    expect(screen.getByText('Instrument')).toBeTruthy();
+    expect(screen.getByText('Request')).toBeTruthy();
+    expect(screen.getByText('Execution')).toBeTruthy();
+    expect(screen.getByText('Status')).toBeTruthy();
+    expect(screen.getByText('Submitted by')).toBeTruthy();
+    expect(screen.getByText('Fees')).toBeTruthy();
     expect(screen.getByText('Evidence')).toBeTruthy();
-    expect(screen.getByRole('group', { name: 'Transaction history filters' })).toBeTruthy();
-    expect(screen.getByRole('combobox', { name: 'Origin' })).toBeTruthy();
-    expect(screen.getByRole('textbox', { name: 'Lifecycle' })).toBeTruthy();
-    expect(screen.getByRole('textbox', { name: 'Bot' })).toBeTruthy();
-    expect(screen.getByRole('textbox', { name: 'Run' })).toBeTruthy();
+    expect(screen.getByPlaceholderText(/Search symbols, status, strategy/)).toBeTruthy();
     expect(document.querySelector('app-clerk-transaction-evidence-drawer')).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open receipt order-1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'View evidence for order-1' }));
     await waitFor(() => expect(accountTransaction).toHaveBeenCalledWith('PA1', 'txn-1'));
   });
 
@@ -173,7 +186,7 @@ describe('AlpacaOperatorLensComponent', () => {
       providers: [
         { provide: AlpacaOperatorLensDataService, useValue: { status, projection: sqliteProjection } },
         { provide: BrokerService, useValue: { accountTransactions: vi.fn(), accountTransaction: vi.fn() } },
-        { provide: BrokersService, useValue: {} },
+        { provide: BrokersService, useValue: { getPortfolioHistory: getPortfolioHistory() } },
       ],
     });
 
@@ -181,14 +194,14 @@ describe('AlpacaOperatorLensComponent', () => {
     expect(panels).toHaveLength(4);
     expect(panels.every((panel) => !panel.open)).toBe(true);
 
-    fireEvent.click(screen.getByText('Truth spine'));
+    fireEvent.click(screen.getByText('Account source of truth'));
     expect(panels[3].open).toBe(true);
     expect(screen.getAllByText('Account service')).not.toHaveLength(0);
     expect(screen.getByText('Healthy')).toBeTruthy();
     expect(screen.queryByText('ACCOUNT_CLERK')).toBeNull();
     expect(screen.queryByText('healthy')).toBeNull();
 
-    fireEvent.click(screen.getByText('Broker session and capability'));
+    fireEvent.click(screen.getByText('Broker connection'));
     expect(screen.queryByText('1700000000000')).toBeNull();
   });
 });

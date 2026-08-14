@@ -149,7 +149,7 @@ describe('AlpacaSqliteCustodyComponent', () => {
     await renderCustody({ getSqliteClerkProjection });
 
     await waitFor(() => expect(getSqliteClerkProjection).toHaveBeenCalledOnce());
-    expect(screen.queryByRole('heading', { name: 'Account Clerk' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Custody and recovery' })).toBeNull();
     expect(screen.queryByRole('alert')).toBeNull();
   });
 

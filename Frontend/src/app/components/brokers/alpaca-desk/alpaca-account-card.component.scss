@@ -3,7 +3,9 @@
 }
 
 .account-strip {
+  container-type: inline-size;
   border: 1px solid var(--border-light);
+  border-left: 0.22rem solid var(--accent);
   border-radius: var(--radius-lg);
   background:
     linear-gradient(105deg, rgba(41, 98, 255, 0.11), transparent 42%),
@@ -14,11 +16,11 @@
 
 .account-strip__primary {
   display: grid;
-  grid-template-columns: minmax(12rem, 1fr) minmax(19rem, 1.2fr) auto;
-  gap: clamp(1rem, 3vw, 3rem);
+  grid-template-columns: minmax(11rem, 0.7fr) minmax(40rem, 2.3fr) auto;
+  gap: clamp(0.75rem, 2vw, 2rem);
   align-items: center;
-  min-height: 5.25rem;
-  padding: 0.85rem 1rem;
+  min-height: 4.25rem;
+  padding: 0.62rem 0.85rem;
 }
 
 .account-identity {
@@ -58,8 +60,8 @@
 }
 
 .headline-metrics {
-  grid-template-columns: repeat(2, minmax(8rem, 1fr));
-  gap: clamp(1rem, 4vw, 4rem);
+  grid-template-columns: repeat(3, minmax(7rem, 1fr)) minmax(11rem, 1.2fr);
+  gap: clamp(0.75rem, 2vw, 2rem);
 }
 
 .headline-metrics dd,
@@ -71,9 +73,15 @@
 }
 
 .headline-metrics dd {
-  font-size: clamp(1.1rem, 2vw, 1.45rem);
+  font-size: clamp(0.95rem, 1.5vw, 1.2rem);
   font-weight: var(--fw-bold);
   letter-spacing: var(--ls-tight);
+}
+
+.headline-metrics__freshness dd {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
 }
 
 .account-toggle {
@@ -124,7 +132,7 @@
 }
 
 .detail-metrics {
-  grid-template-columns: repeat(4, minmax(8rem, 1fr));
+  grid-template-columns: repeat(3, minmax(8rem, 1fr));
   gap: var(--space-4);
   padding: 0.9rem 1rem 0.65rem;
 }
@@ -166,7 +174,7 @@
   color: var(--border-strong);
 }
 
-@media (max-width: 900px) {
+@container (max-width: 62rem) {
   .account-strip__primary {
     grid-template-columns: 1fr auto;
     gap: var(--space-3);
@@ -187,7 +195,7 @@
   }
 }
 
-@media (max-width: 420px) {
+@container (max-width: 26.25rem) {
   .account-toggle span {
     position: absolute;
     width: 1px;
@@ -197,7 +205,7 @@
   }
 }
 
-@container ide (max-width: 32rem) {
+@container (max-width: 32.5rem) {
   .account-strip__primary {
     grid-template-columns: minmax(0, 1fr);
   }

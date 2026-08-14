@@ -82,7 +82,10 @@ describe('BrokerBannerComponent', () => {
     fixture.detectChanges();
 
     const button = toggle(fixture);
+    const banner = fixture.nativeElement.querySelector('.broker-banner') as HTMLElement;
     expect(button?.getAttribute('aria-label')).toBe('Connect to IB Gateway');
+    expect(banner.textContent).toContain('Broker');
+    expect(banner.firstElementChild).toBe(button);
     expect(button?.querySelector('.pi-plug')).not.toBeNull();
     expect(button?.querySelector('.broker-toggle-track')).toBeNull();
     expect(button?.textContent?.trim()).toBe('');

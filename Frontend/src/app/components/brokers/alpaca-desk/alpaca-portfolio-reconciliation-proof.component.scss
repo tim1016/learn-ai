@@ -2,21 +2,101 @@
   display: grid;
   gap: var(--space-3);
   padding: var(--space-4);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-light);
   border-radius: var(--radius-lg);
-  background: var(--surface);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-card);
+}
+
+.reconciliation-proof header {
+  display: grid;
+  gap: var(--space-1);
 }
 
 .reconciliation-proof header h2,
 .reconciliation-proof header p,
 .state,
-.proof {
+.proof,
+.method-note,
+.calculation-details p {
   margin: 0;
 }
 
-.state { color: var(--text-secondary); }
-.proof--verified { color: var(--success); }
-.proof--review { color: var(--warning); }
+.reconciliation-proof header h2 {
+  color: var(--text-primary);
+  font-size: var(--fs-lg);
+}
+
+.reconciliation-proof header > p:last-child,
+.state,
+.method-note,
+.calculation-details p {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.eyebrow {
+  color: var(--text-muted) !important;
+  font-size: var(--fs-xxs) !important;
+  font-weight: var(--fw-semi);
+  letter-spacing: var(--ls-caps);
+  text-transform: uppercase;
+}
+
+.proof {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0.65rem 0.75rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  font-size: var(--fs-sm);
+}
+
+.proof--verified {
+  border-color: color-mix(in srgb, var(--bull) 42%, var(--border));
+  background: var(--bull-soft);
+  color: var(--bull);
+}
+
+.proof--review,
+.state--review {
+  border-color: color-mix(in srgb, var(--warn) 42%, var(--border));
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.calculation-details {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.calculation-details summary {
+  padding: 0.65rem 0.8rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semi);
+}
+
+.calculation-details summary:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.calculation-details summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.calculation-details__body {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-3);
+  border-top: 1px solid var(--border);
+  background: var(--bg-sunken);
+}
 
 .totals,
 .attribution-table > div {
@@ -25,14 +105,83 @@
   gap: var(--space-2);
 }
 
-.totals div { display: grid; gap: var(--space-1); }
-.totals dt { color: var(--text-secondary); }
-.totals dd { margin: 0; font-weight: 600; }
+.totals {
+  margin: 0;
+}
 
-.attribution-table { overflow-x: auto; }
-.attribution-table > div { min-width: 620px; grid-template-columns: 1fr 1.4fr 1fr 2fr; padding: var(--space-2) 0; }
-.attribution-table__header { color: var(--text-secondary); font-size: var(--font-size-sm); }
+.totals div {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.totals dt {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.totals dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-weight: var(--fw-semi);
+}
+
+.difference-list h3,
+.calculation-details__body > h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+}
+
+.difference-list ul {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-5);
+}
+
+.difference-list li {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.difference-list li strong,
+.difference-list li span {
+  display: block;
+}
+
+.attribution-table {
+  overflow-x: auto;
+}
+
+.attribution-table > div {
+  min-width: 42rem;
+  grid-template-columns: 1fr 1.4fr 1fr 2fr;
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.attribution-table__header {
+  color: var(--text-muted);
+  font-size: var(--fs-xxs);
+  font-weight: var(--fw-semi);
+  letter-spacing: var(--ls-caps);
+  text-transform: uppercase;
+}
+
+.attribution-table code {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.method-note {
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+  font-size: var(--fs-xs) !important;
+}
 
 @media (max-width: 560px) {
-  .totals { grid-template-columns: 1fr; }
+  .totals {
+    grid-template-columns: 1fr;
+  }
 }

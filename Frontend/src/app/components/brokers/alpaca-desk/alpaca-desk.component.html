@@ -1,21 +1,19 @@
 <main class="alpaca-desk">
-  <header class="desk-header">
-    <div class="desk-titlebar">
-      <div class="desk-title">
-        <span class="desk-eyebrow">Broker desk</span>
-        <div class="desk-title__line">
-          <h1>Alpaca</h1>
-          <p-tag severity="warn" value="Paper" />
-        </div>
+  <header class="desk-titlebar">
+    <div class="desk-title">
+      <span class="desk-eyebrow">Broker desk</span>
+      <div class="desk-title__line">
+        <h1>Alpaca</h1>
+        <p-tag severity="warn" value="Paper" />
       </div>
-      <button type="button" class="deploy-button" (click)="openDeploy()">
-        <span aria-hidden="true">＋</span>
-        Deploy strategy
-      </button>
     </div>
-
-    <app-alpaca-account-card />
+    <button type="button" class="deploy-button" (click)="openDeploy()">
+      <span aria-hidden="true">＋</span>
+      Deploy strategy
+    </button>
   </header>
+
+  <app-alpaca-account-card class="desk-account-summary" />
 
   <app-alpaca-hold-banner />
 
