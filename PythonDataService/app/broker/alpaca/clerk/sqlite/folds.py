@@ -735,6 +735,21 @@ def _fold_manual_order_canceled(conn: sqlite3.Connection, payload: dict[str, Any
     )
 
 
+def _fold_manual_order_terminal(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Close an owned manual leg on exact expired/rejected broker evidence."""
+    validate_manual_order_cancel_result_facts(
+        ManualOrderCancelResultFacts.from_facts_json(payload["facts_json"])
+    )
+    _fold_effect_terminal(conn, payload, terminal_state="failed")
+    _sync_manual_ticket_effect_state(
+        conn,
+        payload,
+        effect_state="failed",
+        leg_state="FAILED",
+        ticket_state="COMPLETED",
+    )
+
+
 def _fold_manual_order_cancel_confirmed(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Record a proved cancellation as success of the cancel effect itself."""
     validate_manual_order_cancel_result_facts(
@@ -1331,6 +1346,7 @@ DEFAULT_FOLD_REGISTRY.register("MANUAL_TICKET_PAUSED_UNKNOWN", fold_manual_ticke
 DEFAULT_FOLD_REGISTRY.register("MANUAL_TICKET_COMPLETED", fold_manual_ticket_state)
 DEFAULT_FOLD_REGISTRY.register("MANUAL_TICKET_CANCELED", fold_manual_ticket_state)
 DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_CANCELED", _fold_manual_order_canceled)
+DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_TERMINAL", _fold_manual_order_terminal)
 DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_CANCEL_CONFIRMED", _fold_manual_order_cancel_confirmed)
 DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_CANCEL_TERMINAL", _fold_manual_order_cancel_terminal)
 DEFAULT_FOLD_REGISTRY.register("EXECUTION_CORRECTED", _fold_execution_corrected)

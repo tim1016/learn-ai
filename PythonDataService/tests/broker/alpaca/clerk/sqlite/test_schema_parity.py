@@ -140,6 +140,30 @@ def test_v9_execution_provenance_and_custody_subject_schema() -> None:
     assert effect_columns["strategy_instance_id"][3] == 0
 
 
+def test_v9_authority_migrates_the_manual_cancellation_resource_to_v10() -> None:
+    conn = sqlite3.connect(":memory:")
+    schema.configure_connection(conn)
+    schema.apply_v9_schema(conn)
+    assert conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'manual_order_cancellations'"
+    ).fetchone() is None
+    conn.execute(
+        "INSERT INTO control_meta "
+        "(id, schema_version, broker, account_id, db_identity_token, authority_generation, "
+        "control_revision, created_at_ms, last_open_at_ms, reset_provenance_json, "
+        "execution_lease_owner, execution_lease_expires_at_ms) "
+        "VALUES (1, 9, 'alpaca', 'PA1', 'identity', 1, 0, 1, 1, NULL, NULL, NULL)"
+    )
+    conn.commit()
+
+    schema.migrate_schema(conn, from_version=9)
+
+    assert conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0] == 10
+    assert conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'manual_order_cancellations'"
+    ).fetchone() is not None
+
+
 def test_v9_subject_ownership_invariants_reject_counterfeit_and_cross_wired_rows() -> None:
     import pytest
 

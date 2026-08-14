@@ -682,7 +682,9 @@ def manual_reduction_available_quantity(
 ) -> float:
     """Return manual-owned long quantity not already reserved for a sell.
 
-    Formula: ``max(0, folded_manual_long - nonterminal_manual_sell_qty)``.
+    Formula: ``max(0, folded_manual_long - pending_manual_sell_qty)`` where
+    each pending sell quantity is its requested quantity less its current
+    effective filled quantity.
     Reference: docs/prds/2026-08-13-sqlite-clerk-manual-orders.md §8.
     Canonical implementation: this file.
     Validated against: tests/broker/alpaca/clerk/sqlite/test_manual_orders.py::
@@ -699,9 +701,10 @@ def manual_reduction_available_quantity(
         (subject_id, normalized_symbol),
     ).fetchone()
     long_quantity = max(0.0, float(position["attributed_qty"]) if position is not None else 0.0)
-    reservation = conn.execute(
-        "SELECT COALESCE(SUM(CAST(json_extract(acceptance.facts_json, '$.leg.quantity') AS REAL)), 0) "
-        "AS qty FROM effect_operations effect "
+    reservations = conn.execute(
+        "SELECT leg.order_ref, CAST(json_extract(acceptance.facts_json, '$.leg.quantity') AS REAL) "
+        "AS requested_qty FROM effect_operations effect "
+        "JOIN manual_order_legs leg ON leg.effect_operation_id = effect.effect_operation_id "
         "JOIN custody_transitions acceptance "
         "ON acceptance.effect_operation_id = effect.effect_operation_id "
         "AND acceptance.transition_kind = 'MANUAL_ORDER_ACCEPTED' "
@@ -710,8 +713,15 @@ def manual_reduction_available_quantity(
         "AND UPPER(json_extract(acceptance.facts_json, '$.leg.symbol')) = ? "
         "AND UPPER(json_extract(acceptance.facts_json, '$.leg.side')) = 'SELL'",
         (subject_id, normalized_symbol),
-    ).fetchone()
-    reserved_quantity = float(reservation["qty"])
+    ).fetchall()
+    reserved_quantity = sum(
+        max(
+            0.0,
+            float(row["requested_qty"])
+            - effective_fill_totals_for_order(conn, str(row["order_ref"]))[0],
+        )
+        for row in reservations
+    )
     return max(0.0, long_quantity - reserved_quantity)
 
 

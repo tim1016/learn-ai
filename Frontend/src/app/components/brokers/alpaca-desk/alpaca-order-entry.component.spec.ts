@@ -287,6 +287,75 @@ describe('AlpacaOrderEntryComponent', () => {
     expect(screen.queryByRole('button', { name: /Cancel order/i })).toBeNull();
   });
 
+  it('creates a new cancellation identity after the ticket target changes', async () => {
+    const firstTicket = {
+      ticket_id: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
+      subject_id: 'manual-operator:operator',
+      state: 'ACTIVE',
+      created_at_ms: 1,
+      updated_at_ms: 2,
+      legs: [{
+        leg_id: '09d6d63e-6375-4e6d-8d20-3b1bf70c2465',
+        instruction_hash: 'hash-a',
+        state: 'IN_PROGRESS',
+        command: { command_id: 'command-a', state: 'in_progress', action: 'SUBMIT_MANUAL_ORDER', receipt_id: null },
+        effect: { effect_operation_id: 'effect-a', state: 'in_progress', kind: 'MANUAL_ORDER', terminal_receipt_id: null },
+        order: { order_ref: 'manual/operator/v1:first', client_order_id: 'manual/operator/v1:first', broker_order_id: 'broker-a', broker_state: 'accepted' },
+        cancellation: null,
+      }],
+    };
+    const secondTicket = {
+      ...firstTicket,
+      ticket_id: '2ece6033-0c8a-45a5-82cc-c9a47bc81d94',
+      legs: [{
+        ...firstTicket.legs[0],
+        leg_id: '3d76e323-c1d3-4f8b-8a0e-6137556f77bd',
+        order: { order_ref: 'manual/operator/v1:second', client_order_id: 'manual/operator/v1:second', broker_order_id: 'broker-b', broker_state: 'accepted' },
+      }],
+    };
+    const getSqliteManualOrderTicket = vi.fn(
+      (_accountId: string, ticketId: string) => Promise.resolve(
+        ticketId === firstTicket.ticket_id ? firstTicket : secondTicket,
+      ),
+    );
+    const cancelSqliteManualOrder = vi.fn(
+      (_accountId: string, orderRef: string, request: { cancel_request_id: string }) => Promise.resolve({
+        order_ref: orderRef,
+        cancel_request_id: request.cancel_request_id,
+        state: 'UNKNOWN' as const,
+        message: 'The cancellation outcome is not yet known.',
+        impact: 'The Clerk will not create another cancellation while exact broker evidence is unresolved.',
+        next_action: 'Refresh this ticket while the Clerk reconciles the cancellation by its exact order reference.',
+        command: { command_id: `cancel-${orderRef}`, state: 'unknown' as const, action: 'CANCEL_MANUAL_ORDER', receipt_id: null },
+        effect: { effect_operation_id: `cancel-effect-${orderRef}`, state: 'unknown' as const, kind: 'CANCEL' as const, terminal_receipt_id: null },
+      }),
+    );
+    const view = await render(AlpacaOrderEntryComponent, {
+      inputs: {
+        expectedAccountId: 'PA1',
+        sqliteManualAuthority: true,
+        manualTicketId: firstTicket.ticket_id,
+        manualLegId: firstTicket.legs[0].leg_id,
+      },
+      providers: [{
+        provide: BrokersService,
+        useValue: { cancelSqliteManualOrder, getSqliteManualOrderTicket },
+      }],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /Cancel order manual\/operator\/v1:first/i }));
+    await vi.waitFor(() => expect(cancelSqliteManualOrder).toHaveBeenCalledTimes(1));
+    view.fixture.componentRef.setInput('manualTicketId', secondTicket.ticket_id);
+    view.fixture.componentRef.setInput('manualLegId', secondTicket.legs[0].leg_id);
+    view.fixture.detectChanges();
+
+    fireEvent.click(await screen.findByRole('button', { name: /Cancel order manual\/operator\/v1:second/i }));
+    await vi.waitFor(() => expect(cancelSqliteManualOrder).toHaveBeenCalledTimes(2));
+    expect(cancelSqliteManualOrder.mock.calls[0][2].cancel_request_id).not.toBe(
+      cancelSqliteManualOrder.mock.calls[1][2].cancel_request_id,
+    );
+  });
+
   it('refreshes a nonterminal SQLite ticket from its durable status resource', async () => {
     const activeTicket = {
       ticket_id: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',

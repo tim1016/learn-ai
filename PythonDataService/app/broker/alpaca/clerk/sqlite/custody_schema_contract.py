@@ -49,7 +49,7 @@ END;
 """
 
 
-EFFECT_SUBJECT_COMPATIBILITY_DDL = """\
+_EFFECT_SUBJECT_COMPATIBILITY_INSERT_V9_DDL = """\
 CREATE TRIGGER trg_effect_operations_subject_compatible_insert
 BEFORE INSERT ON effect_operations
 BEGIN
@@ -64,11 +64,15 @@ BEGIN
             AND (
                 (subject.kind = 'BOT' AND subject.strategy_instance_id = NEW.strategy_instance_id
                     AND NEW.kind != 'MANUAL_ORDER')
-                OR (subject.kind = 'MANUAL_OPERATOR' AND NEW.kind IN ('MANUAL_ORDER', 'CANCEL')
+                OR (subject.kind = 'MANUAL_OPERATOR' AND NEW.kind = 'MANUAL_ORDER'
                     AND NEW.strategy_instance_id IS NULL AND NEW.run_id IS NULL)
             )
     ) THEN RAISE(ABORT, 'effect operation must stay within its command custody subject') END;
 END;
+"""
+
+
+_EFFECT_SUBJECT_COMPATIBILITY_UPDATE_V9_DDL = """\
 CREATE TRIGGER trg_effect_operations_subject_compatible_update
 BEFORE UPDATE OF subject_id, command_id, strategy_instance_id, run_id, kind ON effect_operations
 BEGIN
@@ -83,12 +87,37 @@ BEGIN
             AND (
                 (subject.kind = 'BOT' AND subject.strategy_instance_id = NEW.strategy_instance_id
                     AND NEW.kind != 'MANUAL_ORDER')
-                OR (subject.kind = 'MANUAL_OPERATOR' AND NEW.kind IN ('MANUAL_ORDER', 'CANCEL')
+                OR (subject.kind = 'MANUAL_OPERATOR' AND NEW.kind = 'MANUAL_ORDER'
                     AND NEW.strategy_instance_id IS NULL AND NEW.run_id IS NULL)
             )
     ) THEN RAISE(ABORT, 'effect operation must stay within its command custody subject') END;
 END;
 """
+
+# Schema v9 only admitted manual-order effects.  v10 replaces these two
+# triggers atomically before it introduces the durable cancellation resource.
+EFFECT_SUBJECT_COMPATIBILITY_DDL = (
+    _EFFECT_SUBJECT_COMPATIBILITY_INSERT_V9_DDL
+    + _EFFECT_SUBJECT_COMPATIBILITY_UPDATE_V9_DDL
+)
+_EFFECT_SUBJECT_COMPATIBILITY_INSERT_V10_DDL = (
+    _EFFECT_SUBJECT_COMPATIBILITY_INSERT_V9_DDL.replace(
+        "NEW.kind = 'MANUAL_ORDER'",
+        "NEW.kind IN ('MANUAL_ORDER', 'CANCEL')",
+    )
+)
+_EFFECT_SUBJECT_COMPATIBILITY_UPDATE_V10_DDL = (
+    _EFFECT_SUBJECT_COMPATIBILITY_UPDATE_V9_DDL.replace(
+        "NEW.kind = 'MANUAL_ORDER'",
+        "NEW.kind IN ('MANUAL_ORDER', 'CANCEL')",
+    )
+)
+EFFECT_SUBJECT_COMPATIBILITY_V10_MIGRATION_STATEMENTS: tuple[str, ...] = (
+    "DROP TRIGGER trg_effect_operations_subject_compatible_insert",
+    "DROP TRIGGER trg_effect_operations_subject_compatible_update",
+    _EFFECT_SUBJECT_COMPATIBILITY_INSERT_V10_DDL,
+    _EFFECT_SUBJECT_COMPATIBILITY_UPDATE_V10_DDL,
+)
 
 
 POSITION_SUBJECT_COMPATIBILITY_DDL = """\
@@ -287,18 +316,26 @@ END;
 """
 
 
-MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_DDL = """\
+_MANUAL_CANCELLATION_IDENTITY_DDL = """\
 CREATE TRIGGER trg_manual_order_cancellation_identity_immutable
 BEFORE UPDATE OF order_ref, subject_id, cancel_request_id, command_id, effect_operation_id
 ON manual_order_cancellations
 BEGIN
     SELECT RAISE(ABORT, 'manual_order_cancellations identity is immutable');
 END;
+"""
+
+
+_MANUAL_CANCELLATION_DELETE_DDL = """\
 CREATE TRIGGER trg_manual_order_cancellation_delete_forbidden
 BEFORE DELETE ON manual_order_cancellations
 BEGIN
     SELECT RAISE(ABORT, 'manual_order_cancellations are append-only');
 END;
+"""
+
+
+_MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_DDL = """\
 CREATE TRIGGER trg_manual_order_cancellation_subject_compatible_insert
 BEFORE INSERT ON manual_order_cancellations
 BEGIN
@@ -324,3 +361,14 @@ BEGIN
     ) THEN RAISE(ABORT, 'manual cancellation must own one manual ticket order') END;
 END;
 """
+
+MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_DDL = (
+    _MANUAL_CANCELLATION_IDENTITY_DDL
+    + _MANUAL_CANCELLATION_DELETE_DDL
+    + _MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_DDL
+)
+MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_STATEMENTS: tuple[str, ...] = (
+    _MANUAL_CANCELLATION_IDENTITY_DDL,
+    _MANUAL_CANCELLATION_DELETE_DDL,
+    _MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_DDL,
+)

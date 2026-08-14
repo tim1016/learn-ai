@@ -79,6 +79,7 @@ export class AlpacaOrderEntryComponent {
   protected readonly manualCancellation = signal<ManualOrderCancellation | null>(null);
   private readonly manualPreview = signal<ManualOrderPreview | null>(null);
   private readonly manualCancelRequestId = signal<string | null>(null);
+  private readonly manualCancelTargetOrderRef = signal<string | null>(null);
   protected readonly submitError = signal<string | null>(null);
   protected readonly cancelling = signal(false);
   /** Fires after any broker submission attempt, including uncertain outcomes. */
@@ -122,6 +123,15 @@ export class AlpacaOrderEntryComponent {
   );
 
   constructor() {
+    effect(() => {
+      // A cancellation id is immutable for one target order only. Route/input
+      // reuse must never carry it to the next manual ticket or leg.
+      this.manualTicketId();
+      this.manualLegId();
+      this.manualCancelRequestId.set(null);
+      this.manualCancelTargetOrderRef.set(null);
+      this.manualCancellation.set(null);
+    });
     effect(() => {
       const accountId = this.expectedAccountId();
       if (!this.sqliteManualAuthority()) return;
@@ -263,6 +273,13 @@ export class AlpacaOrderEntryComponent {
       const cancellation = ticket.legs[0]?.cancellation ?? null;
       const currentCancellation = this.manualCancellation();
       const orderRef = ticket.legs[0]?.order?.order_ref;
+      if (
+        this.manualCancelTargetOrderRef() !== null
+        && this.manualCancelTargetOrderRef() !== orderRef
+      ) {
+        this.manualCancelRequestId.set(null);
+        this.manualCancelTargetOrderRef.set(null);
+      }
       if (cancellation !== null || currentCancellation?.order_ref !== orderRef) {
         this.manualCancellation.set(cancellation);
       }
@@ -286,8 +303,12 @@ export class AlpacaOrderEntryComponent {
     this.cancelling.set(true);
     this.submitError.set(null);
     try {
-      const cancelRequestId = this.manualCancelRequestId() ?? this.newCancelRequestId();
+      const cancelRequestId =
+        this.manualCancelTargetOrderRef() === orderRef
+          ? (this.manualCancelRequestId() ?? this.newCancelRequestId())
+          : this.newCancelRequestId();
       this.manualCancelRequestId.set(cancelRequestId);
+      this.manualCancelTargetOrderRef.set(orderRef);
       const cancellation = await this.brokers.cancelSqliteManualOrder(this.expectedAccountId(), orderRef, {
         cancel_request_id: cancelRequestId,
       });

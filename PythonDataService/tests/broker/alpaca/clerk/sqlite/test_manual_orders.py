@@ -687,6 +687,86 @@ async def test_manual_sell_reserves_only_its_subject_long_position(repo: ClerkSq
 
 
 @pytest.mark.asyncio
+async def test_manual_sell_reserves_only_its_unfilled_remainder(
+    repo: ClerkSqliteRepository,
+) -> None:
+    trade = FakeTrade(repo=repo)
+    bought = await submit_manual_order(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id=OPERATOR_ID,
+        ticket_id=TICKET_ID,
+        leg_id=LEG_ID,
+        leg=market_buy(quantity=2),
+        trade=trade,
+    )
+    assert bought.leg.effect_operation_id is not None and bought.leg.order_ref is not None
+    repo.append_transition(
+        TransitionInput(
+            command_id=bought.command.command_id,
+            effect_operation_id=bought.leg.effect_operation_id,
+            order_ref=bought.leg.order_ref,
+            transition_kind="EXECUTION_SLICE_FILLED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="in_progress",
+            source_event_at_ms=1_700_000_000_200,
+            clerk_observed_at_ms=repo.clock(),
+            summary_code="EXECUTION_SLICE_FILLED",
+            facts_json=ExecutionSliceFilledFacts(
+                execution_id="manual-owned-long-for-partial-sell",
+                symbol="SPY",
+                side="BUY",
+                slice_qty=2,
+                slice_price=500,
+                fee=None,
+                fee_fidelity="not_reported",
+                evidence_source="websocket",
+                source_event_at_ms=1_700_000_000_200,
+            ).to_facts_json(),
+        )
+    )
+    reduced = accept_manual_order(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id=OPERATOR_ID,
+        ticket_id="7621bfd6-7211-4399-8cc1-01a5a34565eb",
+        leg_id="f7f1993d-0562-4d8c-9fcf-091fedc515fa",
+        leg=market_sell(quantity=1.5),
+    )
+    assert reduced.leg.effect_operation_id is not None and reduced.leg.order_ref is not None
+    repo.append_transition(
+        TransitionInput(
+            command_id=reduced.command.command_id,
+            effect_operation_id=reduced.leg.effect_operation_id,
+            order_ref=reduced.leg.order_ref,
+            transition_kind="EXECUTION_SLICE_FILLED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="in_progress",
+            source_event_at_ms=1_700_000_000_300,
+            clerk_observed_at_ms=repo.clock(),
+            summary_code="EXECUTION_SLICE_FILLED",
+            facts_json=ExecutionSliceFilledFacts(
+                execution_id="manual-partial-sell",
+                symbol="SPY",
+                side="SELL",
+                slice_qty=0.5,
+                slice_price=501,
+                fee=None,
+                fee_fidelity="not_reported",
+                evidence_source="websocket",
+                source_event_at_ms=1_700_000_000_300,
+            ).to_facts_json(),
+        )
+    )
+
+    assert repo.manual_reduction_available_quantity(
+        subject_id=manual_operator_subject_id(OPERATOR_ID), symbol="SPY"
+    ) == pytest.approx(0.5, abs=1e-9, rel=0)
+
+
+@pytest.mark.asyncio
 async def test_manual_cancel_is_durable_idempotent_and_proves_exact_target(
     repo: ClerkSqliteRepository,
 ) -> None:
@@ -809,6 +889,114 @@ async def test_manual_cancel_refuses_a_terminal_target_before_creating_a_cancel_
         )
 
     assert repo.manual_order_cancellation(order_ref=submitted.leg.order_ref) is None
+    assert trade.cancel_calls == []
+
+
+@pytest.mark.asyncio
+async def test_manual_cancel_recovers_an_already_canceled_target_as_success(
+    repo: ClerkSqliteRepository,
+) -> None:
+    trade = FakeTrade(repo=repo)
+    submitted = await submit_manual_order(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id=OPERATOR_ID,
+        ticket_id=TICKET_ID,
+        leg_id=LEG_ID,
+        leg=market_buy(),
+        trade=trade,
+    )
+    assert submitted.leg.order_ref is not None
+    order = trade.orders[submitted.leg.order_ref]
+    trade.orders[submitted.leg.order_ref] = order.model_copy(
+        update={"status": "canceled", "canceled_at_ms": 1_700_000_000_300}
+    )
+
+    cancellation = await submit_manual_order_cancellation(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id=OPERATOR_ID,
+        order_ref=submitted.leg.order_ref,
+        cancel_request_id="a43145a2-afd2-4d2b-a2fc-09a6b8b24a79",
+        trade=trade,
+    )
+
+    assert cancellation.cancellation.state == "SUCCEEDED"
+    assert trade.cancel_calls == []
+    ticket = repo.manual_order_ticket(TICKET_ID)
+    assert ticket is not None and ticket.state == "CANCELED"
+
+
+@pytest.mark.asyncio
+async def test_manual_cancel_closes_expired_target_and_does_not_issue_delete(
+    repo: ClerkSqliteRepository,
+) -> None:
+    trade = FakeTrade(repo=repo)
+    submitted = await submit_manual_order(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id=OPERATOR_ID,
+        ticket_id=TICKET_ID,
+        leg_id=LEG_ID,
+        leg=market_buy(),
+        trade=trade,
+    )
+    assert submitted.leg.order_ref is not None and submitted.leg.effect_operation_id is not None
+    trade.orders[submitted.leg.order_ref] = trade.orders[submitted.leg.order_ref].model_copy(
+        update={"status": "expired", "expired_at_ms": 1_700_000_000_300}
+    )
+
+    cancellation = await submit_manual_order_cancellation(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id=OPERATOR_ID,
+        order_ref=submitted.leg.order_ref,
+        cancel_request_id="2f7575e4-4ffb-4fca-a7a0-576d72d1391b",
+        trade=trade,
+    )
+
+    assert cancellation.cancellation.state == "FAILED"
+    assert repo.effect_operation(submitted.leg.effect_operation_id).state == "failed"
+    assert trade.cancel_calls == []
+    ticket = repo.manual_order_ticket(TICKET_ID)
+    assert ticket is not None and ticket.state == "COMPLETED"
+    assert ticket.legs[0].state == "FAILED"
+
+
+@pytest.mark.asyncio
+async def test_manual_cancel_polls_a_pending_cancel_without_another_delete(
+    repo: ClerkSqliteRepository,
+) -> None:
+    trade = FakeTrade(repo=repo)
+    submitted = await submit_manual_order(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id=OPERATOR_ID,
+        ticket_id=TICKET_ID,
+        leg_id=LEG_ID,
+        leg=market_buy(),
+        trade=trade,
+    )
+    assert submitted.leg.order_ref is not None
+    trade.orders[submitted.leg.order_ref] = trade.orders[submitted.leg.order_ref].model_copy(
+        update={"status": "pending_cancel"}
+    )
+
+    accepted = await submit_manual_order_cancellation(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id=OPERATOR_ID,
+        order_ref=submitted.leg.order_ref,
+        cancel_request_id="50e68b27-4d3d-4bb0-a802-7c5c239dbdbf",
+        trade=trade,
+    )
+    await resolve_manual_order_cancellation(
+        repo,
+        effect_operation_id=accepted.effect.effect_operation_id,
+        trade=trade,
+    )
+
+    assert accepted.cancellation.state == "ACCEPTED"
     assert trade.cancel_calls == []
 
 

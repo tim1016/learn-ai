@@ -255,6 +255,33 @@ def _append_source_canceled(
     )
 
 
+def _append_source_terminal(
+    repo: ClerkSqliteRepository,
+    *,
+    order_ref: str,
+    source_effect: EffectOperationResource,
+    why: str,
+) -> None:
+    """Close a source leg when exact broker evidence proves a non-cancel terminal state."""
+    if source_effect.state in {"succeeded", "failed", "rejected"}:
+        return
+    facts = ManualOrderCancelResultFacts(outcome="TARGET_TERMINAL", why=why)
+    repo.append_transition(
+        TransitionInput(
+            command_id=source_effect.command_id,
+            effect_operation_id=source_effect.effect_operation_id,
+            order_ref=order_ref,
+            transition_kind="MANUAL_ORDER_TERMINAL",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="failed",
+            clerk_observed_at_ms=repo.clock(),
+            summary_code="MANUAL_ORDER_TARGET_TERMINAL",
+            facts_json=facts.to_facts_json(),
+        )
+    )
+
+
 def _append_cancellation_result(
     repo: ClerkSqliteRepository,
     *,
@@ -313,8 +340,12 @@ async def _resolve_claimed_manual_order_cancellation(
         _append_cancellation_result(
             repo,
             cancellation=cancellation,
-            succeeded=False,
-            why="The owned manual order was already terminal before this cancellation could act.",
+            succeeded=(target.broker_state or "").lower() == "canceled",
+            why=(
+                "Exact broker evidence had already recorded this manual order as canceled."
+                if (target.broker_state or "").lower() == "canceled"
+                else "The owned manual order was already terminal before this cancellation could act."
+            ),
         )
         return
     if source_effect.state == "accepted" and target.broker_order_id is None:
@@ -354,12 +385,30 @@ async def _resolve_claimed_manual_order_cancellation(
                 source_effect=source_effect,
                 why="Exact broker evidence proved the manual order canceled.",
             )
-        _append_cancellation_result(
-            repo,
-            cancellation=cancellation,
-            succeeded=False,
-            why="The owned manual order was already terminal at the broker.",
-        )
+            _append_cancellation_result(
+                repo,
+                cancellation=cancellation,
+                succeeded=True,
+                why="Exact broker evidence proved the manual order was already canceled.",
+            )
+        else:
+            _append_source_terminal(
+                repo,
+                order_ref=target.order_ref,
+                source_effect=source_effect,
+                why="Exact broker evidence proved the manual order terminal before cancellation.",
+            )
+            _append_cancellation_result(
+                repo,
+                cancellation=cancellation,
+                succeeded=False,
+                why="The owned manual order was already terminal at the broker.",
+            )
+        return
+    if (target.broker_state or "").lower() == "pending_cancel":
+        # The exact broker snapshot is durable evidence that a cancellation is
+        # already in flight. Recovery polls this target on its next sweep but
+        # must not issue another DELETE for the same durable cancel resource.
         return
     if target.broker_order_id is None:
         fold_uncertain(
@@ -422,6 +471,12 @@ async def _resolve_claimed_manual_order_cancellation(
             why="Exact broker evidence proved the manual order canceled.",
         )
     elif _terminal(target_after.broker_state):
+        _append_source_terminal(
+            repo,
+            order_ref=target_after.order_ref,
+            source_effect=source_after,
+            why="Exact broker evidence proved the manual order terminal before cancellation.",
+        )
         _append_cancellation_result(
             repo,
             cancellation=cancellation,
