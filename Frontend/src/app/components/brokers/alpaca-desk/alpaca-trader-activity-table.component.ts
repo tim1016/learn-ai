@@ -6,7 +6,7 @@ import { Table, TableModule } from 'primeng/table';
 
 import type { BrokerActivity } from '../../../api/alpaca.types';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
-import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
+import { formatReceiptLabel, ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
 
 function eventTime(activity: BrokerActivity): number {
@@ -87,5 +87,10 @@ export class AlpacaTraderActivityTableComponent {
   protected clearSearch(table: Table, input: HTMLInputElement): void {
     input.value = '';
     table.clear();
+  }
+
+  protected activityDetailsLabel(row: ActivityTableRow, expanded: boolean): string {
+    const subject = row.symbol ?? 'account';
+    return `${expanded ? 'Hide' : 'Show'} activity details for ${subject} ${formatReceiptLabel(row.activityType)}`;
   }
 }

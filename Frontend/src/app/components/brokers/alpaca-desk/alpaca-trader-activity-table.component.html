@@ -89,7 +89,7 @@
               severity="secondary"
               text
               [pRowToggler]="row"
-              [attr.aria-label]="(expanded ? 'Hide' : 'Show') + ' activity details'"
+              [attr.aria-label]="activityDetailsLabel(row, expanded)"
             ><i [class]="expanded ? 'pi pi-chevron-up' : 'pi pi-chevron-down'" aria-hidden="true"></i></button>
           </td>
         </tr>

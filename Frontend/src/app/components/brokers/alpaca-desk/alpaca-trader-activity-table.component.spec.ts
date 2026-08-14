@@ -32,7 +32,7 @@ describe('AlpacaTraderActivityTableComponent', () => {
     expect(screen.getByTitle('SPY')).toBeTruthy();
     expect(screen.queryByText('order-older')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Show activity details' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Show activity details for SPY Fill' }));
     expect(screen.getByText('order-older')).toBeTruthy();
     expect(screen.getByText('Observed (local)')).toBeTruthy();
   });

@@ -105,7 +105,13 @@
           <tr>
             <th pSortableColumn="recordedAtMs">
               <span>Recorded (local time)</span><p-sort-icon field="recordedAtMs" />
-              <p-column-filter type="date" field="recordedAt" display="menu" />
+              <p-column-filter
+                type="date"
+                field="recordedAtMs"
+                matchMode="sameLocalDateMs"
+                [showMatchModes]="false"
+                display="menu"
+              />
             </th>
             <th pSortableColumn="symbol">
               <span>Instrument</span><p-sort-icon field="symbol" />
@@ -117,9 +123,9 @@
               <span>Status</span><p-sort-icon field="status" />
               <p-column-filter type="text" field="status" display="menu" />
             </th>
-            <th pSortableColumn="submittedBy">
-              <span>Submitted by</span><p-sort-icon field="submittedBy" />
-              <p-column-filter type="text" field="submittedBy" display="menu" />
+            <th pSortableColumn="origin">
+              <span>Submitted by</span><p-sort-icon field="origin" />
+              <p-column-filter type="text" field="origin" display="menu" />
             </th>
             <th pSortableColumn="fee" class="numeric">
               <span>Fees</span><p-sort-icon field="fee" />
@@ -141,7 +147,7 @@
             <td class="request-cell">{{ row.request }}</td>
             <td>{{ row.execution }}</td>
             <td><span class="status-pill">{{ row.status }}</span></td>
-            <td>{{ row.submittedBy }}</td>
+            <td>{{ row.origin | receiptLabel }}</td>
             <td class="numeric">
               @if (!row.feesReported) {
                 <span class="muted">Not reported</span>

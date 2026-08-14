@@ -9,7 +9,10 @@ import type {
 import { BrokerService } from '../../../services/broker.service';
 import { BrokersService } from '../../../services/brokers.service';
 import { AccountDeskTransactionHistoryStore } from './account-desk-transaction-history-store.service';
-import { AccountDeskTransactionHistoryComponent } from './account-desk-transaction-history.component';
+import {
+  AccountDeskTransactionHistoryComponent,
+  matchesLocalDateMs,
+} from './account-desk-transaction-history.component';
 
 if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
   HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) {
@@ -146,6 +149,23 @@ describe('AccountDeskTransactionHistoryComponent', () => {
     expect(screen.getByRole('alert').textContent).toContain(
       'search and filters cover only the displayed records',
     );
+  });
+
+  it('renders transaction origins through the shared receipt label and keeps timestamps as milliseconds', async () => {
+    await renderHistory({
+      rows: signal([transaction({ transaction_origin: 'force_flat' })]),
+    });
+
+    expect(screen.getByText('Force Flat')).toBeTruthy();
+  });
+
+  it('derives a local calendar day only while matching canonical timestamp values', () => {
+    const selectedDay = new Date(2026, 7, 13);
+    const startOfDayMs = selectedDay.getTime();
+
+    expect(matchesLocalDateMs(startOfDayMs + 12 * 60 * 60 * 1_000, selectedDay)).toBe(true);
+    expect(matchesLocalDateMs(startOfDayMs - 1, selectedDay)).toBe(false);
+    expect(matchesLocalDateMs(startOfDayMs + 24 * 60 * 60 * 1_000, selectedDay)).toBe(false);
   });
 });
 

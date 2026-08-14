@@ -13,6 +13,7 @@ import {
 import { ButtonModule } from 'primeng/button';
 import { InputText } from 'primeng/inputtext';
 import { Table, TableModule } from 'primeng/table';
+import { FilterService } from 'primeng/api';
 
 import type {
   BrokerPortfolioHistory,
@@ -26,7 +27,7 @@ import type {
 import { BrokerService } from '../../../services/broker.service';
 import { BrokersService } from '../../../services/brokers.service';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
-import { formatReceiptLabel } from '../../../shared/pipes/receipt-label.pipe';
+import { formatReceiptLabel, ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
 import { ClerkTransactionEvidenceDrawerComponent } from '../clerk-transaction-evidence-drawer/clerk-transaction-evidence-drawer.component';
 import { AccountDeskTransactionHistoryStore } from './account-desk-transaction-history-store.service';
@@ -40,13 +41,12 @@ interface HistoryWindow {
 
 interface TransactionTableRow {
   readonly transaction: ClerkTransactionSummary;
-  readonly recordedAt: Date;
   readonly recordedAtMs: number;
   readonly symbol: string | null;
   readonly request: string;
   readonly execution: string;
   readonly status: string;
-  readonly submittedBy: string;
+  readonly origin: ClerkTransactionOrigin | undefined;
   readonly fee: number | null;
   readonly feesReported: boolean;
   readonly evidence: string;
@@ -76,6 +76,26 @@ const MONEY = new Intl.NumberFormat('en-US', {
   maximumFractionDigits: 4,
 });
 
+const LOCAL_DATE_MATCH_MODE = 'sameLocalDateMs';
+
+/** Compares canonical timestamps to the local calendar day selected in the table filter. */
+export function matchesLocalDateMs(value: unknown, filter: unknown): boolean {
+  if (filter === null || filter === undefined) return true;
+  if (typeof value !== 'number' || !Number.isFinite(value) || !(filter instanceof Date)) return false;
+
+  const startOfDayMs = new Date(
+    filter.getFullYear(),
+    filter.getMonth(),
+    filter.getDate(),
+  ).getTime();
+  const endOfDayMs = new Date(
+    filter.getFullYear(),
+    filter.getMonth(),
+    filter.getDate() + 1,
+  ).getTime();
+  return value >= startOfDayMs && value < endOfDayMs;
+}
+
 /** Complete-window, client-filtered transaction table with receipt detail on demand. */
 @Component({
   selector: 'app-account-desk-transaction-history',
@@ -86,6 +106,7 @@ const MONEY = new Intl.NumberFormat('en-US', {
     ClerkTransactionEvidenceDrawerComponent,
     CurrencyPipe,
     InputText,
+    ReceiptLabelPipe,
     TableModule,
     TimestampDisplayComponent,
   ],
@@ -96,6 +117,7 @@ export class AccountDeskTransactionHistoryComponent {
   readonly store = inject(AccountDeskTransactionHistoryStore);
   private readonly broker = inject(BrokerService);
   private readonly brokers = inject(BrokersService);
+  private readonly filterService = inject(FilterService);
 
   readonly accountId = input<string | null>(null);
   readonly refreshVersion = input(0);
@@ -166,6 +188,7 @@ export class AccountDeskTransactionHistoryComponent {
   };
 
   constructor() {
+    this.filterService.register(LOCAL_DATE_MATCH_MODE, matchesLocalDateMs);
     effect(() => {
       const accountId = this.accountId();
       const window = this.activeWindow();
@@ -245,7 +268,6 @@ function toTableRow(transaction: ClerkTransactionSummary): TransactionTableRow {
   const request = requestLabel(transaction);
   const execution = executionLabel(transaction);
   const status = formatReceiptLabel(transaction.lifecycle_state);
-  const submittedBy = originLabel(transaction.transaction_origin);
   const feesReported = transaction.fee_fidelity === 'reported'
     || transaction.commission_status === 'reported';
   const evidence = `${transaction.event_count} event${transaction.event_count === 1 ? '' : 's'}`;
@@ -254,7 +276,7 @@ function toTableRow(transaction: ClerkTransactionSummary): TransactionTableRow {
     request,
     execution,
     status,
-    submittedBy,
+    formatReceiptLabel(transaction.transaction_origin),
     transaction.transaction_kind,
     transaction.transaction_origin,
     transaction.transaction_id,
@@ -275,13 +297,12 @@ function toTableRow(transaction: ClerkTransactionSummary): TransactionTableRow {
 
   return {
     transaction,
-    recordedAt: new Date(transaction.recorded_at_ms),
     recordedAtMs: transaction.recorded_at_ms,
     symbol,
     request,
     execution,
     status,
-    submittedBy,
+    origin: transaction.transaction_origin,
     fee: transaction.fee,
     feesReported,
     evidence,
@@ -310,21 +331,6 @@ function executionLabel(transaction: ClerkTransactionSummary): string {
     return `${transaction.execution_quantity} filled`;
   }
   return `${transaction.execution_quantity} filled at ${MONEY.format(transaction.execution_price)}`;
-}
-
-function originLabel(origin: ClerkTransactionOrigin | undefined): string {
-  switch (origin) {
-    case 'strategy': return 'Strategy';
-    case 'manual': return 'Manual';
-    case 'external': return 'External';
-    case 'unknown': return 'Unknown — review needed';
-    case 'recovery': return 'Recovery';
-    case 'emergency': return 'Emergency';
-    case 'shutdown': return 'Shutdown';
-    case 'force_flat': return 'Safety flatten';
-    case 'other': return 'Other';
-    default: return 'Not recorded';
-  }
 }
 
 function presentFeed(feed: ClerkTransactionHistoryResponse): FeedPresentation {

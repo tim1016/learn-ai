@@ -100,7 +100,7 @@ function projectionPosture(projection: SqliteClerkProjection): OperatorPostureVi
       nextStep: guidance.next_step,
     };
   }
-  if (primaryAction?.available) {
+  if (guidance.action_required && primaryAction?.available) {
     return {
       headline: guidance.headline,
       detail: guidance.explanation,
