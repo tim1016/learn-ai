@@ -359,6 +359,18 @@ class ClerkSqliteRepositoryReadApi:
         with self._write_lock:
             return reads.has_nonterminal_manual_order(self._conn)
 
+    def has_nonterminal_manual_order_outside_ticket(
+        self: ClerkSqliteRepository,
+        *,
+        ticket_id: str,
+    ) -> bool:
+        """Keep a ticket continuation fenced by other manual custody work."""
+        with self._write_lock:
+            return reads.has_nonterminal_manual_order_outside_ticket(
+                self._conn,
+                ticket_id=ticket_id,
+            )
+
     def active_hold(
         self: ClerkSqliteRepository,
         *,

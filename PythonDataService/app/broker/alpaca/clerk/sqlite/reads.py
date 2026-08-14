@@ -316,14 +316,33 @@ def manual_order_ticket(conn: sqlite3.Connection, ticket_id: str) -> ManualOrder
     if ticket is None:
         return None
     legs = conn.execute(
-        "SELECT ticket_id, leg_id, subject_id, instruction_hash, command_id, effect_operation_id, "
-        "order_ref, state, created_at_ms, updated_at_ms FROM manual_order_legs "
-        "WHERE ticket_id = ? ORDER BY leg_id ASC",
+        "SELECT leg.ticket_id, leg.leg_id, leg.sequence_index, leg.subject_id, leg.instruction_hash, "
+        "leg.command_id, leg.effect_operation_id, leg.order_ref, leg.state, leg.created_at_ms, "
+        "leg.updated_at_ms, COALESCE(json_extract(reserved_leg.value, '$.instruction'), "
+        "json_extract(acceptance.facts_json, '$.leg')) AS instruction_json "
+        "FROM manual_order_legs leg "
+        "LEFT JOIN custody_transitions reservation ON reservation.sequence = ("
+        "SELECT MIN(candidate.sequence) FROM custody_transitions candidate "
+        "WHERE candidate.transition_kind = 'MANUAL_TICKET_RESERVED' "
+        "AND json_extract(candidate.facts_json, '$.ticket_id') = leg.ticket_id) "
+        "LEFT JOIN json_each(reservation.facts_json, '$.legs') reserved_leg "
+        "ON json_extract(reserved_leg.value, '$.leg_id') = leg.leg_id "
+        "LEFT JOIN custody_transitions acceptance ON acceptance.sequence = ("
+        "SELECT MIN(candidate.sequence) FROM custody_transitions candidate "
+        "WHERE candidate.transition_kind = 'MANUAL_ORDER_ACCEPTED' "
+        "AND candidate.effect_operation_id = leg.effect_operation_id) "
+        "WHERE leg.ticket_id = ? ORDER BY leg.sequence_index ASC",
         (ticket_id,),
     ).fetchall()
+    resources = []
+    for leg in legs:
+        values = dict(leg)
+        instruction_json = values.pop("instruction_json")
+        values["instruction"] = json.loads(instruction_json) if instruction_json is not None else None
+        resources.append(ManualOrderLegResource(**values))
     return ManualOrderTicketResource(
         **dict(ticket),
-        legs=tuple(ManualOrderLegResource(**dict(leg)) for leg in legs),
+        legs=tuple(resources),
     )
 
 
@@ -348,11 +367,15 @@ def manual_order_leg_for_order_ref(
 ) -> ManualOrderLegResource | None:
     """Return the immutable ticket leg that owns one manual order reference."""
     row = conn.execute(
-        "SELECT ticket_id, leg_id, subject_id, instruction_hash, command_id, effect_operation_id, "
+        "SELECT ticket_id, leg_id, sequence_index, subject_id, instruction_hash, command_id, effect_operation_id, "
         "order_ref, state, created_at_ms, updated_at_ms FROM manual_order_legs WHERE order_ref = ?",
         (order_ref,),
     ).fetchone()
-    return ManualOrderLegResource(**dict(row)) if row is not None else None
+    if row is None:
+        return None
+    values = dict(row)
+    values["instruction"] = None
+    return ManualOrderLegResource(**values)
 
 
 def manual_order_cancellation_for_effect(
@@ -730,6 +753,28 @@ def has_nonterminal_manual_order(conn: sqlite3.Connection) -> bool:
     row = conn.execute(
         "SELECT 1 FROM effect_operations WHERE kind = 'MANUAL_ORDER' "
         "AND state NOT IN ('succeeded', 'failed', 'rejected') LIMIT 1"
+    ).fetchone()
+    return row is not None
+
+
+def has_nonterminal_manual_order_outside_ticket(
+    conn: sqlite3.Connection,
+    *,
+    ticket_id: str,
+) -> bool:
+    """Whether another ticket leaves new manual exposure unsafe.
+
+    Ordered continuation may follow a broker-acknowledged leg in its *own*
+    ticket, but it must never bypass an unresolved manual order from another
+    ticket. This remains a repository read, not a UI inference.
+    """
+    row = conn.execute(
+        "SELECT 1 FROM effect_operations effect "
+        "JOIN manual_order_legs leg ON leg.effect_operation_id = effect.effect_operation_id "
+        "WHERE effect.kind = 'MANUAL_ORDER' "
+        "AND effect.state NOT IN ('succeeded', 'failed', 'rejected') "
+        "AND leg.ticket_id != ? LIMIT 1",
+        (ticket_id,),
     ).fetchone()
     return row is not None
 

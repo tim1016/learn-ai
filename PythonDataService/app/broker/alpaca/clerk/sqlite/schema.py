@@ -25,14 +25,15 @@ from app.broker.alpaca.clerk.sqlite.custody_schema_contract import (
     HOLD_SUBJECT_COMPATIBILITY_DDL,
     MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_DDL,
     MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_STATEMENTS,
-    MANUAL_LEG_SUBJECT_COMPATIBILITY_DDL,
+    MANUAL_LEG_IDENTITY_V11_DDL,
+    MANUAL_LEG_SUBJECT_COMPATIBILITY_V10_DDL,
     MANUAL_TICKET_SUBJECT_COMPATIBILITY_DDL,
     POSITION_SUBJECT_COMPATIBILITY_DDL,
     UNCERTAINTY_SUBJECT_COMPATIBILITY_DDL,
 )
 
 OFFLINE_V9_SCHEMA_VERSION = 9
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 PRAGMA_STATEMENTS: tuple[str, ...] = (
     "PRAGMA journal_mode = WAL",
@@ -432,7 +433,7 @@ CREATE UNIQUE INDEX ux_manual_order_legs_effect
     ON manual_order_legs(effect_operation_id) WHERE effect_operation_id IS NOT NULL;
 CREATE UNIQUE INDEX ux_manual_order_legs_order
     ON manual_order_legs(order_ref) WHERE order_ref IS NOT NULL;
-""" + MANUAL_LEG_SUBJECT_COMPATIBILITY_DDL + """\
+""" + MANUAL_LEG_SUBJECT_COMPATIBILITY_V10_DDL + """\
 
 -- ============================================================
 -- reconciliations — reconciliation attempts and terminal receipts
@@ -604,7 +605,22 @@ SCHEMA_V10_DDL = (
     + _EFFECT_SUBJECT_COMPATIBILITY_V10_DDL
     + MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_DDL
 )
-SCHEMA_DDL = (SCHEMA_V9_DDL + "\n\n" + SCHEMA_V10_DDL).rstrip("\n")
+# v11 adds a durable ordinal to the existing replayable leg projection.
+_MANUAL_LEG_SEQUENCE_V11_DDL = """\
+ALTER TABLE manual_order_legs ADD COLUMN sequence_index INTEGER NOT NULL DEFAULT 0;
+CREATE UNIQUE INDEX ux_manual_order_legs_sequence
+    ON manual_order_legs(ticket_id, sequence_index);
+DROP TRIGGER trg_manual_order_leg_identity_immutable;
+""" + MANUAL_LEG_IDENTITY_V11_DDL
+_MANUAL_LEG_SEQUENCE_V11_MIGRATION_STATEMENTS: tuple[str, ...] = (
+    "ALTER TABLE manual_order_legs ADD COLUMN sequence_index INTEGER NOT NULL DEFAULT 0",
+    "CREATE UNIQUE INDEX ux_manual_order_legs_sequence "
+    "ON manual_order_legs(ticket_id, sequence_index)",
+    "DROP TRIGGER trg_manual_order_leg_identity_immutable",
+    MANUAL_LEG_IDENTITY_V11_DDL,
+)
+SCHEMA_V11_DDL = _MANUAL_LEG_SEQUENCE_V11_DDL
+SCHEMA_DDL = (SCHEMA_V9_DDL + "\n\n" + SCHEMA_V10_DDL + "\n\n" + SCHEMA_V11_DDL).rstrip("\n")
 
 
 def configure_connection(conn: sqlite3.Connection) -> None:
@@ -802,6 +818,11 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
         *EFFECT_SUBJECT_COMPATIBILITY_V10_MIGRATION_STATEMENTS,
         *MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_STATEMENTS,
     ),
+    # v10 -> v11: an ordered ticket must retain the sequence explicitly. v10
+    # only permitted one immediate leg, so ordinal zero is the faithful
+    # backfill. Replacing this narrow identity trigger makes the new ordering
+    # as immutable as the ticket/leg identities it governs.
+    10: _MANUAL_LEG_SEQUENCE_V11_MIGRATION_STATEMENTS,
 }
 
 

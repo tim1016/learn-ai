@@ -129,6 +129,7 @@ def test_v9_execution_provenance_and_custody_subject_schema() -> None:
         "ux_manual_order_legs_command",
         "ux_manual_order_legs_effect",
         "ux_manual_order_legs_order",
+        "ux_manual_order_legs_sequence",
         "ix_manual_order_cancellations_effect",
     } <= index_names
 
@@ -140,7 +141,7 @@ def test_v9_execution_provenance_and_custody_subject_schema() -> None:
     assert effect_columns["strategy_instance_id"][3] == 0
 
 
-def test_v9_authority_migrates_the_manual_cancellation_resource_to_v10() -> None:
+def test_v9_authority_migrates_the_manual_cancellation_resource_and_leg_order_to_v11() -> None:
     conn = sqlite3.connect(":memory:")
     schema.configure_connection(conn)
     schema.apply_v9_schema(conn)
@@ -158,10 +159,12 @@ def test_v9_authority_migrates_the_manual_cancellation_resource_to_v10() -> None
 
     schema.migrate_schema(conn, from_version=9)
 
-    assert conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0] == 10
+    assert conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0] == 11
     assert conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'manual_order_cancellations'"
     ).fetchone() is not None
+    leg_columns = {row[1] for row in conn.execute("PRAGMA table_info(manual_order_legs)")}
+    assert "sequence_index" in leg_columns
 
 
 def test_v9_subject_ownership_invariants_reject_counterfeit_and_cross_wired_rows() -> None:
@@ -291,6 +294,11 @@ def test_v9_subject_ownership_invariants_reject_counterfeit_and_cross_wired_rows
     with pytest.raises(sqlite3.IntegrityError, match="manual_order_legs identity is immutable"):
         conn.execute(
             "UPDATE manual_order_legs SET leg_id = 'renamed-leg' "
+            "WHERE ticket_id = 'manual-ticket' AND leg_id = 'leg-a'"
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="manual_order_legs identity is immutable"):
+        conn.execute(
+            "UPDATE manual_order_legs SET sequence_index = 1 "
             "WHERE ticket_id = 'manual-ticket' AND leg_id = 'leg-a'"
         )
     with pytest.raises(sqlite3.IntegrityError, match="manual_order_legs are append-only"):

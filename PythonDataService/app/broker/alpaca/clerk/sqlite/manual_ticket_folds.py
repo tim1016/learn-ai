@@ -80,13 +80,13 @@ def fold_manual_ticket_reserved(conn: sqlite3.Connection, payload: dict[str, Any
             tuple(row)
             for row in conn.execute(
                 "SELECT leg_id, subject_id, instruction_hash FROM manual_order_legs "
-                "WHERE ticket_id = ? ORDER BY leg_id",
+                "WHERE ticket_id = ? ORDER BY sequence_index",
                 (facts.ticket_id,),
             )
         )
         expected_legs = tuple(
             (leg.leg_id, facts.subject_id, leg.instruction_hash)
-            for leg in sorted(facts.legs, key=lambda leg: leg.leg_id)
+            for leg in facts.legs
         )
         if persisted_legs != expected_legs:
             raise ValueError("manual ticket legs conflict with prior immutable reservation")
@@ -106,19 +106,20 @@ def fold_manual_ticket_reserved(conn: sqlite3.Connection, payload: dict[str, Any
     )
     conn.executemany(
         "INSERT INTO manual_order_legs "
-        "(ticket_id, leg_id, subject_id, instruction_hash, command_id, effect_operation_id, "
-        "order_ref, state, created_at_ms, updated_at_ms) "
-        "VALUES (?, ?, ?, ?, NULL, NULL, NULL, 'RESERVED', ?, ?)",
+        "(ticket_id, leg_id, sequence_index, subject_id, instruction_hash, command_id, "
+        "effect_operation_id, order_ref, state, created_at_ms, updated_at_ms) "
+        "VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, 'RESERVED', ?, ?)",
         (
             (
                 facts.ticket_id,
                 leg.leg_id,
+                index,
                 facts.subject_id,
                 leg.instruction_hash,
                 payload["recorded_at_ms"],
                 payload["recorded_at_ms"],
             )
-            for leg in facts.legs
+            for index, leg in enumerate(facts.legs)
         ),
     )
 
@@ -135,6 +136,87 @@ def fold_manual_ticket_state(conn: sqlite3.Connection, payload: dict[str, Any]) 
     )
     if updated.rowcount != 1:
         raise ValueError("manual ticket state requires its durable ticket and custody subject")
+
+
+def sync_manual_ticket_effect_state(
+    conn: sqlite3.Connection,
+    payload: dict[str, Any],
+    *,
+    effect_state: str,
+    leg_state: str,
+    ticket_state: str,
+) -> None:
+    """Fold one manual effect into its leg and derive the ticket state."""
+    effect = conn.execute(
+        "SELECT kind, state FROM effect_operations WHERE effect_operation_id = ?",
+        (payload["effect_operation_id"],),
+    ).fetchone()
+    if effect is None or effect["kind"] != "MANUAL_ORDER" or effect["state"] != effect_state:
+        return
+    updated = conn.execute(
+        "UPDATE manual_order_legs SET state = ?, updated_at_ms = ? "
+        "WHERE effect_operation_id = ?",
+        (leg_state, payload["recorded_at_ms"], payload["effect_operation_id"]),
+    )
+    if updated.rowcount != 1:
+        raise ValueError("manual order effect requires exactly one ticket leg")
+    ticket = conn.execute(
+        "SELECT ticket_id FROM manual_order_legs WHERE effect_operation_id = ?",
+        (payload["effect_operation_id"],),
+    ).fetchone()
+    if ticket is None:
+        raise ValueError("manual order effect requires exactly one ticket")
+    ticket_id = ticket["ticket_id"]
+    if ticket_state == "CANCELED":
+        conn.execute(
+            "UPDATE manual_order_legs SET state = 'CANCELED', updated_at_ms = ? "
+            "WHERE ticket_id = ? AND state = 'RESERVED'",
+            (payload["recorded_at_ms"], ticket_id),
+        )
+    states = tuple(
+        row["state"]
+        for row in conn.execute(
+            "SELECT state FROM manual_order_legs WHERE ticket_id = ? ORDER BY sequence_index",
+            (ticket_id,),
+        )
+    )
+    next_state = (
+        "PAUSED_UNKNOWN"
+        if "UNKNOWN" in states
+        else "CANCELED"
+        if ticket_state == "CANCELED" and states and all(state == "CANCELED" for state in states)
+        else "COMPLETED"
+        if states and all(state in {"SUCCEEDED", "FAILED", "CANCELED"} for state in states)
+        else "ACTIVE"
+    )
+    ticket_updated = conn.execute(
+        "UPDATE manual_order_tickets SET state = ?, updated_at_ms = ? WHERE ticket_id = ?",
+        (next_state, payload["recorded_at_ms"], ticket_id),
+    )
+    if ticket_updated.rowcount != 1:
+        raise ValueError("manual order effect requires exactly one ticket")
+
+
+def pause_manual_ticket_for_unknown_cancellation(
+    conn: sqlite3.Connection,
+    payload: dict[str, Any],
+) -> None:
+    """Pause the owning ticket before a lost cancel outcome can permit continuation."""
+    ticket = conn.execute(
+        "SELECT leg.ticket_id FROM manual_order_cancellations cancellation "
+        "JOIN manual_order_legs leg ON leg.order_ref = cancellation.order_ref "
+        "WHERE cancellation.effect_operation_id = ?",
+        (payload["effect_operation_id"],),
+    ).fetchone()
+    if ticket is None:
+        return
+    updated = conn.execute(
+        "UPDATE manual_order_tickets SET state = 'PAUSED_UNKNOWN', updated_at_ms = ? "
+        "WHERE ticket_id = ?",
+        (payload["recorded_at_ms"], ticket["ticket_id"]),
+    )
+    if updated.rowcount != 1:
+        raise ValueError("manual cancellation requires exactly one ticket")
 
 
 def fold_manual_order_accepted(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:

@@ -351,6 +351,7 @@ def decide_capability(
     strategy_instance_id: str | None = None,
     subject_id: str | None = None,
     reduction_intent: ReductionIntent | None = None,
+    continuation_ticket_id: str | None = None,
 ) -> CapabilityDecision:
     """Author both preview and execution policy from the same typed snapshot."""
     if (strategy_instance_id is None) == (subject_id is None):
@@ -367,7 +368,12 @@ def decide_capability(
                 reason_code="RECONCILIATION_IN_PROGRESS",
                 why="Account reconciliation is proving fresh broker truth.",
             )
-        if repo.has_nonterminal_manual_order():
+        manual_order_outstanding = (
+            repo.has_nonterminal_manual_order_outside_ticket(ticket_id=continuation_ticket_id)
+            if continuation_ticket_id is not None
+            else repo.has_nonterminal_manual_order()
+        )
+        if manual_order_outstanding:
             return CapabilityDecision(
                 allowed=False,
                 capability=capability,
@@ -474,6 +480,7 @@ def require_capability(
     strategy_instance_id: str | None = None,
     subject_id: str | None = None,
     reduction_intent: ReductionIntent | None = None,
+    continuation_ticket_id: str | None = None,
 ) -> None:
     decision = decide_capability(
         repo,
@@ -481,6 +488,7 @@ def require_capability(
         strategy_instance_id=strategy_instance_id,
         subject_id=subject_id,
         reduction_intent=reduction_intent,
+        continuation_ticket_id=continuation_ticket_id,
     )
     if not decision.allowed:
         raise AdmissionBlockedError(decision)
@@ -502,12 +510,18 @@ def require_admission(repo: ClerkSqliteRepository, *, strategy_instance_id: str)
     )
 
 
-def require_manual_admission(repo: ClerkSqliteRepository, *, subject_id: str) -> None:
+def require_manual_admission(
+    repo: ClerkSqliteRepository,
+    *,
+    subject_id: str,
+    continuation_ticket_id: str | None = None,
+) -> None:
     """Apply the same account/subject admission policy to manual custody."""
     require_capability(
         repo,
         capability=Capability.NEW_EXPOSURE,
         subject_id=subject_id,
+        continuation_ticket_id=continuation_ticket_id,
     )
 
 

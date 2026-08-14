@@ -108,10 +108,10 @@ describe('AlpacaOrderEntryComponent', () => {
     expect(await screen.findByText('manual/desk/v1:abc123')).toBeTruthy();
   });
 
-  it('uses the SQLite ticket path for one market DAY leg without a browser operator', async () => {
+  it('uses the SQLite ticket path for ordered limit/GTC legs without a browser operator', async () => {
     const submitOrder = vi.fn();
     const previewSqliteManualOrder = vi.fn().mockResolvedValue({
-      capability: { available: true, unavailable: null, supported_order_shape: 'BUY or SELL market DAY equity, one leg' },
+      capability: { available: true, unavailable: null, supported_order_shape: 'BUY or SELL market/limit DAY/GTC equity, one to eight ordered legs' },
       preview_token: 'a'.repeat(64),
       authority_generation: 1,
       db_identity_token: 'db-token',
@@ -127,7 +127,9 @@ describe('AlpacaOrderEntryComponent', () => {
       legs: [
         {
           leg_id: '09d6d63e-6375-4e6d-8d20-3b1bf70c2465',
+          sequence_index: 0,
           instruction_hash: 'hash',
+          instruction: { symbol: 'SPY', side: 'buy', quantity: 2, order_type: 'market', time_in_force: 'day' },
           state: 'IN_PROGRESS',
           command: { command_id: 'cmd', state: 'in_progress', action: 'SUBMIT_MANUAL_ORDER', receipt_id: null },
           effect: { effect_operation_id: 'effect', state: 'in_progress', kind: 'MANUAL_ORDER', terminal_receipt_id: null },
@@ -145,7 +147,7 @@ describe('AlpacaOrderEntryComponent', () => {
         manualCapability: {
           available: true,
           unavailable: null,
-          supported_order_shape: 'BUY or SELL market DAY equity, one leg',
+          supported_order_shape: 'BUY or SELL market/limit DAY/GTC equity, one to eight ordered legs',
         },
       },
       providers: [{
@@ -160,11 +162,14 @@ describe('AlpacaOrderEntryComponent', () => {
     });
 
     await fillFirstLeg('spy', '2');
-    expect(screen.queryByRole('button', { name: /Add another/i })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Add equity leg' })).toBeTruthy();
     expect(screen.getByLabelText('Leg 1 side')).toBeTruthy();
     expect(screen.getAllByText('Market').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Day').length).toBeGreaterThan(0);
 
+    selectOption('Leg 1 order type', 'limit');
+    await setLimitPrice('500');
+    selectOption('Leg 1 time in force', 'gtc');
     fireEvent.click(screen.getByRole('button', { name: /Preview order/i }));
     await vi.waitFor(() => expect(previewSqliteManualOrder).toHaveBeenCalledTimes(1));
     fireEvent.click(await screen.findByRole('button', { name: /Confirm & submit/i }));
@@ -172,12 +177,14 @@ describe('AlpacaOrderEntryComponent', () => {
     await vi.waitFor(() => expect(submitSqliteManualOrder).toHaveBeenCalledTimes(1));
     expect(previewSqliteManualOrder).toHaveBeenCalledWith('PA1', {
       ticket_id: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
-      leg: {
-        leg_id: '09d6d63e-6375-4e6d-8d20-3b1bf70c2465',
-        instruction: {
-          symbol: 'SPY', side: 'buy', quantity: 2, order_type: 'market', time_in_force: 'day',
+      legs: [
+        {
+          leg_id: '09d6d63e-6375-4e6d-8d20-3b1bf70c2465',
+          instruction: {
+            symbol: 'SPY', side: 'buy', quantity: 2, order_type: 'limit', limit_price: 500, time_in_force: 'gtc',
+          },
         },
-      },
+      ],
     });
     expect(submitSqliteManualOrder).toHaveBeenCalledWith(
       'PA1',
@@ -187,12 +194,11 @@ describe('AlpacaOrderEntryComponent', () => {
     expect(submitOrder).not.toHaveBeenCalled();
     expect(await screen.findByText(/Ticket.*is Active/)).toBeTruthy();
     expect(screen.getByText('manual/operator/v1:abc')).toBeTruthy();
-    expect(screen.getByText('In Progress')).toBeTruthy();
   });
 
   it('lets a SQLite ticket preview a SELL reduction even when new exposure is unavailable', async () => {
     const previewSqliteManualOrder = vi.fn().mockResolvedValue({
-      capability: { available: true, unavailable: null, supported_order_shape: 'BUY or SELL market DAY equity, one leg' },
+      capability: { available: true, unavailable: null, supported_order_shape: 'BUY or SELL market/limit DAY/GTC equity, one to eight ordered legs' },
       preview_token: 'b'.repeat(64),
       authority_generation: 1,
       db_identity_token: 'db-token',
@@ -208,7 +214,7 @@ describe('AlpacaOrderEntryComponent', () => {
         manualCapability: {
           available: false,
           unavailable: { code: 'MANUAL_ORDER_OUTSTANDING', message: 'A manual order is unresolved.' },
-          supported_order_shape: 'BUY or SELL market DAY equity, one leg',
+          supported_order_shape: 'BUY or SELL market/limit DAY/GTC equity, one to eight ordered legs',
         },
       },
       providers: [{
@@ -226,16 +232,94 @@ describe('AlpacaOrderEntryComponent', () => {
 
     await vi.waitFor(() => expect(previewSqliteManualOrder).toHaveBeenCalledWith('PA1', {
       ticket_id: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
-      leg: {
-        leg_id: '09d6d63e-6375-4e6d-8d20-3b1bf70c2465',
-        instruction: {
-          symbol: 'SPY', side: 'sell', quantity: 2, order_type: 'market', time_in_force: 'day',
+      legs: [
+        {
+          leg_id: '09d6d63e-6375-4e6d-8d20-3b1bf70c2465',
+          instruction: {
+            symbol: 'SPY', side: 'sell', quantity: 2, order_type: 'market', time_in_force: 'day',
+          },
         },
-      },
+      ],
     }));
   });
 
-  it('cancels the exact manual order once and renders durable unknown guidance', async () => {
+  it('continues exactly one reserved ticket leg only after a refreshed preview', async () => {
+    const ticket = {
+      ticket_id: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
+      subject_id: 'manual-operator:operator',
+      state: 'ACTIVE',
+      created_at_ms: 1,
+      updated_at_ms: 2,
+      legs: [
+        {
+          leg_id: '09d6d63e-6375-4e6d-8d20-3b1bf70c2465',
+          sequence_index: 0,
+          instruction_hash: 'first-hash',
+          instruction: { symbol: 'SPY', side: 'buy', quantity: 1, order_type: 'market', time_in_force: 'day' },
+          state: 'IN_PROGRESS',
+          command: { command_id: 'first-command', state: 'in_progress', action: 'SUBMIT_MANUAL_ORDER', receipt_id: null },
+          effect: { effect_operation_id: 'first-effect', state: 'in_progress', kind: 'MANUAL_ORDER', terminal_receipt_id: null },
+          order: { order_ref: 'manual/operator/v1:first', client_order_id: 'manual/operator/v1:first', broker_order_id: 'broker-first', broker_state: 'accepted' },
+          cancellation: null,
+        },
+        {
+          leg_id: '5791929d-4a3f-4ffc-a15f-62c34cb6c873',
+          sequence_index: 1,
+          instruction_hash: 'second-hash',
+          instruction: { symbol: 'SPY', side: 'buy', quantity: 2, order_type: 'limit', limit_price: 499.5, time_in_force: 'gtc' },
+          state: 'RESERVED',
+          command: null,
+          effect: null,
+          order: null,
+          cancellation: null,
+        },
+      ],
+    };
+    const previewSqliteManualOrder = vi.fn().mockResolvedValue({
+      capability: { available: true, unavailable: null, supported_order_shape: 'BUY or SELL market/limit DAY/GTC equity, one to eight ordered legs' },
+      preview_token: 'c'.repeat(64),
+      authority_generation: 1,
+      db_identity_token: 'db-token',
+      control_revision: 2,
+      subject_id: 'manual-operator:operator',
+    });
+    const continueSqliteManualOrderTicket = vi.fn().mockResolvedValue({
+      ...ticket,
+      legs: [ticket.legs[0], { ...ticket.legs[1], state: 'IN_PROGRESS' }],
+    });
+    await render(AlpacaOrderEntryComponent, {
+      inputs: {
+        expectedAccountId: 'PA1',
+        sqliteManualAuthority: true,
+        manualTicketId: ticket.ticket_id,
+      },
+      providers: [{
+        provide: BrokersService,
+        useValue: {
+          getSqliteManualOrderTicket: vi.fn().mockResolvedValue(ticket),
+          previewSqliteManualOrder,
+          continueSqliteManualOrderTicket,
+        },
+      }],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /Continue remaining legs/i }));
+
+    await vi.waitFor(() => expect(previewSqliteManualOrder).toHaveBeenCalledWith('PA1', {
+      ticket_id: ticket.ticket_id,
+      legs: [
+        { leg_id: ticket.legs[0].leg_id, instruction: ticket.legs[0].instruction },
+        { leg_id: ticket.legs[1].leg_id, instruction: ticket.legs[1].instruction },
+      ],
+    }));
+    expect(continueSqliteManualOrderTicket).toHaveBeenCalledWith(
+      'PA1',
+      ticket.ticket_id,
+      expect.objectContaining({ preview_token: 'c'.repeat(64) }),
+    );
+  });
+
+  it('cancels the manual ticket once and renders durable unknown guidance', async () => {
     const cancellation = {
       order_ref: 'manual/operator/v1:abc',
       cancel_request_id: '50ce3186-4d73-4d3a-bce9-d0f1768f0be5',
@@ -254,7 +338,9 @@ describe('AlpacaOrderEntryComponent', () => {
       updated_at_ms: 2,
       legs: [{
         leg_id: '09d6d63e-6375-4e6d-8d20-3b1bf70c2465',
+        sequence_index: 0,
         instruction_hash: 'hash',
+        instruction: { symbol: 'SPY', side: 'buy', quantity: 1, order_type: 'market', time_in_force: 'day' },
         state: 'IN_PROGRESS',
         command: { command_id: 'cmd', state: 'in_progress', action: 'SUBMIT_MANUAL_ORDER', receipt_id: null },
         effect: { effect_operation_id: 'effect', state: 'in_progress', kind: 'MANUAL_ORDER', terminal_receipt_id: null },
@@ -263,7 +349,11 @@ describe('AlpacaOrderEntryComponent', () => {
       }],
     };
     const getSqliteManualOrderTicket = vi.fn().mockResolvedValue(ticket);
-    const cancelSqliteManualOrder = vi.fn().mockResolvedValue(cancellation);
+    const cancelSqliteManualOrderTicket = vi.fn().mockResolvedValue({
+      ...ticket,
+      state: 'PAUSED_UNKNOWN',
+      legs: [{ ...ticket.legs[0], cancellation }],
+    });
     await render(AlpacaOrderEntryComponent, {
       inputs: {
         expectedAccountId: 'PA1',
@@ -272,19 +362,19 @@ describe('AlpacaOrderEntryComponent', () => {
       },
       providers: [{
         provide: BrokersService,
-        useValue: { cancelSqliteManualOrder, getSqliteManualOrderTicket },
+        useValue: { cancelSqliteManualOrderTicket, getSqliteManualOrderTicket },
       }],
     });
 
-    fireEvent.click(await screen.findByRole('button', { name: /Cancel order manual\/operator\/v1:abc/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Cancel manual ticket 7de3a77c/i }));
 
-    await vi.waitFor(() => expect(cancelSqliteManualOrder).toHaveBeenCalledWith(
+    await vi.waitFor(() => expect(cancelSqliteManualOrderTicket).toHaveBeenCalledWith(
       'PA1',
-      'manual/operator/v1:abc',
+      ticket.ticket_id,
       { cancel_request_id: expect.any(String) },
     ));
     expect(await screen.findByText(/Refresh this ticket while the Clerk reconciles/i)).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /Cancel order/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Cancel manual ticket/i })).toBeNull();
   });
 
   it('creates a new cancellation identity after the ticket target changes', async () => {
@@ -296,7 +386,9 @@ describe('AlpacaOrderEntryComponent', () => {
       updated_at_ms: 2,
       legs: [{
         leg_id: '09d6d63e-6375-4e6d-8d20-3b1bf70c2465',
+        sequence_index: 0,
         instruction_hash: 'hash-a',
+        instruction: { symbol: 'SPY', side: 'buy', quantity: 1, order_type: 'market', time_in_force: 'day' },
         state: 'IN_PROGRESS',
         command: { command_id: 'command-a', state: 'in_progress', action: 'SUBMIT_MANUAL_ORDER', receipt_id: null },
         effect: { effect_operation_id: 'effect-a', state: 'in_progress', kind: 'MANUAL_ORDER', terminal_receipt_id: null },
@@ -318,17 +410,10 @@ describe('AlpacaOrderEntryComponent', () => {
         ticketId === firstTicket.ticket_id ? firstTicket : secondTicket,
       ),
     );
-    const cancelSqliteManualOrder = vi.fn(
-      (_accountId: string, orderRef: string, request: { cancel_request_id: string }) => Promise.resolve({
-        order_ref: orderRef,
-        cancel_request_id: request.cancel_request_id,
-        state: 'UNKNOWN' as const,
-        message: 'The cancellation outcome is not yet known.',
-        impact: 'The Clerk will not create another cancellation while exact broker evidence is unresolved.',
-        next_action: 'Refresh this ticket while the Clerk reconciles the cancellation by its exact order reference.',
-        command: { command_id: `cancel-${orderRef}`, state: 'unknown' as const, action: 'CANCEL_MANUAL_ORDER', receipt_id: null },
-        effect: { effect_operation_id: `cancel-effect-${orderRef}`, state: 'unknown' as const, kind: 'CANCEL' as const, terminal_receipt_id: null },
-      }),
+    const cancelSqliteManualOrderTicket = vi.fn(
+      (_accountId: string, ticketId: string, _request: { cancel_request_id: string }) => Promise.resolve(
+        ticketId === firstTicket.ticket_id ? firstTicket : secondTicket,
+      ),
     );
     const view = await render(AlpacaOrderEntryComponent, {
       inputs: {
@@ -339,20 +424,20 @@ describe('AlpacaOrderEntryComponent', () => {
       },
       providers: [{
         provide: BrokersService,
-        useValue: { cancelSqliteManualOrder, getSqliteManualOrderTicket },
+        useValue: { cancelSqliteManualOrderTicket, getSqliteManualOrderTicket },
       }],
     });
 
-    fireEvent.click(await screen.findByRole('button', { name: /Cancel order manual\/operator\/v1:first/i }));
-    await vi.waitFor(() => expect(cancelSqliteManualOrder).toHaveBeenCalledTimes(1));
+    fireEvent.click(await screen.findByRole('button', { name: /Cancel manual ticket 7de3a77c/i }));
+    await vi.waitFor(() => expect(cancelSqliteManualOrderTicket).toHaveBeenCalledTimes(1));
     view.fixture.componentRef.setInput('manualTicketId', secondTicket.ticket_id);
     view.fixture.componentRef.setInput('manualLegId', secondTicket.legs[0].leg_id);
     view.fixture.detectChanges();
 
-    fireEvent.click(await screen.findByRole('button', { name: /Cancel order manual\/operator\/v1:second/i }));
-    await vi.waitFor(() => expect(cancelSqliteManualOrder).toHaveBeenCalledTimes(2));
-    expect(cancelSqliteManualOrder.mock.calls[0][2].cancel_request_id).not.toBe(
-      cancelSqliteManualOrder.mock.calls[1][2].cancel_request_id,
+    fireEvent.click(await screen.findByRole('button', { name: /Cancel manual ticket 2ece6033/i }));
+    await vi.waitFor(() => expect(cancelSqliteManualOrderTicket).toHaveBeenCalledTimes(2));
+    expect(cancelSqliteManualOrderTicket.mock.calls[0][2].cancel_request_id).not.toBe(
+      cancelSqliteManualOrderTicket.mock.calls[1][2].cancel_request_id,
     );
   });
 

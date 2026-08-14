@@ -1773,6 +1773,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/alpaca/accounts/{account_id}/manual-order-tickets/{ticket_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel Sqlite Manual Ticket
+         * @description Cancel every verified working order owned by one manual ticket.
+         */
+        post: operations["cancel_sqlite_manual_ticket_api_brokers_alpaca_accounts__account_id__manual_order_tickets__ticket_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/alpaca/accounts/{account_id}/manual-order-tickets/{ticket_id}/continue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Continue Sqlite Manual Order Ticket
+         * @description Activate only the next acknowledged ticket leg after a fresh review.
+         */
+        post: operations["continue_sqlite_manual_order_ticket_api_brokers_alpaca_accounts__account_id__manual_order_tickets__ticket_id__continue_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/alpaca/accounts/{account_id}/manual-orders/capability": {
         parameters: {
             query?: never;
@@ -17234,7 +17274,7 @@ export interface components {
             available: boolean;
             /**
              * Supported Order Shape
-             * @default BUY or SELL market DAY equity, one leg
+             * @default BUY or SELL market/limit DAY/GTC equity, one to eight ordered legs
              */
             supported_order_shape?: string;
             unavailable: components["schemas"]["ManualOrderUnavailableResponse"] | null;
@@ -17278,11 +17318,14 @@ export interface components {
             cancellation: components["schemas"]["ManualOrderCancellationResponse"] | null;
             command: components["schemas"]["ManualOrderCommandResponse"] | null;
             effect: components["schemas"]["ManualOrderEffectResponse"] | null;
+            instruction: components["schemas"]["BrokerOrderLeg"] | null;
             /** Instruction Hash */
             instruction_hash: string;
             /** Leg Id */
             leg_id: string;
             order: components["schemas"]["ManualOrderBrokerOrderResponse"] | null;
+            /** Sequence Index */
+            sequence_index: number;
             /** State */
             state: string;
         };
@@ -17291,7 +17334,8 @@ export interface components {
          * @description Preview never accepts operator identity; the server attributes that fact.
          */
         ManualOrderPreviewRequest: {
-            leg: components["schemas"]["ManualOrderLegRequest"];
+            /** Legs */
+            legs: components["schemas"]["ManualOrderLegRequest"][];
             /**
              * Ticket Id
              * Format: uuid
@@ -17317,7 +17361,8 @@ export interface components {
          * @description Confirmation for the exact previewed ticket and leg.
          */
         ManualOrderSubmitRequest: {
-            leg: components["schemas"]["ManualOrderLegRequest"];
+            /** Legs */
+            legs: components["schemas"]["ManualOrderLegRequest"][];
             /** Preview Token */
             preview_token: string;
         };
@@ -27981,6 +28026,82 @@ export interface operations {
         };
     };
     submit_sqlite_manual_order_api_brokers_alpaca_accounts__account_id__manual_order_tickets__ticket_id__put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+                ticket_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManualOrderSubmitRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManualOrderTicketResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_sqlite_manual_ticket_api_brokers_alpaca_accounts__account_id__manual_order_tickets__ticket_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+                ticket_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManualOrderCancelRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManualOrderTicketResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    continue_sqlite_manual_order_ticket_api_brokers_alpaca_accounts__account_id__manual_order_tickets__ticket_id__continue_post: {
         parameters: {
             query?: never;
             header?: {

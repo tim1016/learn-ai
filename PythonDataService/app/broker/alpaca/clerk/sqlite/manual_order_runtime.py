@@ -10,7 +10,9 @@ from app.broker.alpaca.clerk.sqlite.custody_subjects import manual_operator_subj
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.manual_orders import (
     ManualOrderSubmission,
+    ManualTicketLeg,
     manual_order_command_id,
+    next_manual_ticket_leg,
     submit_manual_order,
 )
 from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot, ManualOrderTicketResource
@@ -23,7 +25,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
 )
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
 from app.broker.contract.errors import BrokerError
-from app.broker.contract.models import BrokerAccountSnapshot, BrokerOrderLeg, OrderSide, OrderType, TimeInForce
+from app.broker.contract.models import BrokerAccountSnapshot, OrderSide, OrderType, TimeInForce
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.engine.live.identity import validate_strategy_instance_id
 
@@ -69,8 +71,7 @@ def _preview_token(
     account_id: str,
     operator_id: str,
     ticket_id: str,
-    leg_id: str,
-    leg: BrokerOrderLeg,
+    legs: tuple[ManualTicketLeg, ...],
     meta: ControlMetaSnapshot,
 ) -> str:
     payload = canonicalize(
@@ -78,8 +79,10 @@ def _preview_token(
             "account_id": account_id,
             "operator_id": operator_id,
             "ticket_id": ticket_id,
-            "leg_id": leg_id,
-            "leg": leg.model_dump(mode="json"),
+            "legs": [
+                {"leg_id": leg.leg_id, "instruction": leg.instruction.model_dump(mode="json")}
+                for leg in legs
+            ],
             "authority_generation": meta.authority_generation,
             "db_identity_token": meta.db_identity_token,
             "control_revision": meta.control_revision,
@@ -145,8 +148,7 @@ async def preview_manual_order(
     account_id: str,
     operator_id: str,
     ticket_id: str,
-    leg_id: str,
-    leg: BrokerOrderLeg,
+    legs: tuple[ManualTicketLeg, ...],
 ) -> ManualOrderPreview:
     """Build the backend-owned capability and opaque freshness token."""
     try:
@@ -167,16 +169,17 @@ async def preview_manual_order(
             subject_id=None,
         )
     if (
-        leg.side not in {OrderSide.BUY, OrderSide.SELL}
-        or leg.order_type is not OrderType.MARKET
-        or leg.time_in_force is not TimeInForce.DAY
+        not legs
+        or len(legs) > 8
+        or any(not leg.leg_id for leg in legs)
+        or len({leg.leg_id for leg in legs}) != len(legs)
     ):
         return ManualOrderPreview(
             capability=ManualOrderCapability(
                 False,
                 ManualOrderUnavailable(
-                    "UNSUPPORTED_MANUAL_ORDER_SHAPE",
-                    "The manual SQLite tracer supports one BUY or SELL market DAY equity leg.",
+                    "INVALID_MANUAL_TICKET",
+                    "A manual ticket requires between one and eight uniquely identified ordered legs.",
                 ),
             ),
             preview_token=None,
@@ -185,56 +188,89 @@ async def preview_manual_order(
             control_revision=None,
             subject_id=None,
         )
-    capability = await manual_order_capability(
-        read=read,
-        stream_health=stream_health,
-        manual_trading_enabled=manual_trading_enabled,
-        control_secret=control_secret,
-        allow_unauthenticated_control=allow_unauthenticated_control,
-        account_id=account_id,
-        symbol=leg.symbol,
-    )
-    if not capability.available:
-        return ManualOrderPreview(
-            capability=capability,
-            preview_token=None,
-            authority_generation=None,
-            db_identity_token=None,
-            control_revision=None,
-            subject_id=None,
-        )
-    asset_failure = await _manual_asset_unavailable(read, symbol=leg.symbol)
-    if asset_failure is not None:
-        return ManualOrderPreview(
-            capability=ManualOrderCapability(False, asset_failure),
-            preview_token=None,
-            authority_generation=None,
-            db_identity_token=None,
-            control_revision=None,
-            subject_id=None,
-        )
     subject_id = manual_operator_subject_id(operator_id)
-    try:
-        if leg.side is OrderSide.BUY:
-            require_manual_admission(repo, subject_id=subject_id)
-        else:
-            require_manual_reduction(
-                repo,
+    existing_ticket = repo.manual_order_ticket(ticket_id)
+    continuation_ticket_id = (
+        ticket_id
+        if existing_ticket is not None and existing_ticket.subject_id == subject_id
+        else None
+    )
+    for ticket_leg in legs:
+        leg = ticket_leg.instruction
+        if (
+            leg.side not in {OrderSide.BUY, OrderSide.SELL}
+            or leg.order_type not in {OrderType.MARKET, OrderType.LIMIT}
+            or leg.time_in_force not in {TimeInForce.DAY, TimeInForce.GTC}
+        ):
+            return ManualOrderPreview(
+                capability=ManualOrderCapability(
+                    False,
+                    ManualOrderUnavailable(
+                        "UNSUPPORTED_MANUAL_ORDER_SHAPE",
+                        "Manual tickets support only BUY or SELL market/limit DAY/GTC equity legs.",
+                    ),
+                ),
+                preview_token=None,
+                authority_generation=None,
+                db_identity_token=None,
+                control_revision=None,
                 subject_id=subject_id,
-                intent=ReductionIntent(symbol=leg.symbol, side=leg.side.value, quantity=leg.quantity),
             )
-    except AdmissionBlockedError as exc:
-        return ManualOrderPreview(
-            capability=ManualOrderCapability(
-                False,
-                ManualOrderUnavailable(exc.decision.reason_code or "ADMISSION_BLOCKED", exc.decision.why or str(exc)),
-            ),
-            preview_token=None,
-            authority_generation=None,
-            db_identity_token=None,
-            control_revision=None,
-            subject_id=subject_id,
+        capability = await manual_order_capability(
+            read=read,
+            stream_health=stream_health,
+            manual_trading_enabled=manual_trading_enabled,
+            control_secret=control_secret,
+            allow_unauthenticated_control=allow_unauthenticated_control,
+            account_id=account_id,
+            symbol=leg.symbol,
         )
+        if not capability.available:
+            return ManualOrderPreview(
+                capability=capability,
+                preview_token=None,
+                authority_generation=None,
+                db_identity_token=None,
+                control_revision=None,
+                subject_id=subject_id,
+            )
+        asset_failure = await _manual_asset_unavailable(read, symbol=leg.symbol)
+        if asset_failure is not None:
+            return ManualOrderPreview(
+                capability=ManualOrderCapability(False, asset_failure),
+                preview_token=None,
+                authority_generation=None,
+                db_identity_token=None,
+                control_revision=None,
+                subject_id=subject_id,
+            )
+        try:
+            if leg.side is OrderSide.BUY:
+                require_manual_admission(
+                    repo,
+                    subject_id=subject_id,
+                    continuation_ticket_id=continuation_ticket_id,
+                )
+            else:
+                require_manual_reduction(
+                    repo,
+                    subject_id=subject_id,
+                    intent=ReductionIntent(symbol=leg.symbol, side=leg.side.value, quantity=leg.quantity),
+                )
+        except AdmissionBlockedError as exc:
+            return ManualOrderPreview(
+                capability=ManualOrderCapability(
+                    False,
+                    ManualOrderUnavailable(
+                        exc.decision.reason_code or "ADMISSION_BLOCKED", exc.decision.why or str(exc)
+                    ),
+                ),
+                preview_token=None,
+                authority_generation=None,
+                db_identity_token=None,
+                control_revision=None,
+                subject_id=subject_id,
+            )
     meta = repo.control_meta_snapshot()
     key = _preview_key(
         control_secret=control_secret,
@@ -248,8 +284,7 @@ async def preview_manual_order(
             account_id=account_id,
             operator_id=operator_id,
             ticket_id=ticket_id,
-            leg_id=leg_id,
-            leg=leg,
+            legs=legs,
             meta=meta,
         ),
         authority_generation=meta.authority_generation,
@@ -326,12 +361,17 @@ async def submit_previewed_manual_order(
     account_id: str,
     operator_id: str,
     ticket_id: str,
-    leg_id: str,
-    leg: BrokerOrderLeg,
+    legs: tuple[ManualTicketLeg, ...],
     preview_token: str,
+    continuation: bool = False,
 ) -> ManualOrderSubmission:
-    """Recheck a fresh preview, except for a safe replay of existing custody."""
-    if repo.get_command(manual_order_command_id(ticket_id, leg_id)) is None:
+    """Recheck one ticket preview, then activate only its selected serial leg."""
+    if not legs:
+        raise ManualPreviewStaleError("The manual ticket has no leg to submit.")
+    active_leg = next_manual_ticket_leg(repo, ticket_id=ticket_id) if continuation else legs[0]
+    if continuation and active_leg.leg_id not in {leg.leg_id for leg in legs}:
+        raise ManualPreviewStaleError("The refreshed manual ticket no longer contains its next leg.")
+    if repo.get_command(manual_order_command_id(ticket_id, active_leg.leg_id)) is None:
         preview = await preview_manual_order(
             repo=repo,
             read=read,
@@ -342,8 +382,7 @@ async def submit_previewed_manual_order(
             account_id=account_id,
             operator_id=operator_id,
             ticket_id=ticket_id,
-            leg_id=leg_id,
-            leg=leg,
+            legs=legs,
         )
         if not preview.capability.available:
             assert preview.capability.unavailable is not None
@@ -357,9 +396,11 @@ async def submit_previewed_manual_order(
         account_id=account_id,
         operator_id=operator_id,
         ticket_id=ticket_id,
-        leg_id=leg_id,
-        leg=leg,
+        leg_id=active_leg.leg_id,
+        leg=active_leg.instruction,
         trade=trade,
+        ticket_legs=legs,
+        continuation=continuation,
     )
 
 

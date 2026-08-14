@@ -541,6 +541,7 @@ class ManualTicketLegReservedFacts:
 
     leg_id: str
     instruction_hash: str
+    instruction: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -786,6 +787,8 @@ def validate_custody_subject_registered_facts(facts: CustodySubjectRegisteredFac
 
 def validate_manual_ticket_reserved_facts(facts: ManualTicketReservedFacts) -> None:
     """Validate the immutable ticket envelope before any manual leg exists."""
+    from app.broker.contract.models import BrokerOrderLeg
+
     if not all(
         isinstance(value, str) and value
         for value in (facts.ticket_id, facts.subject_id, facts.operator_id, facts.instruction_hash)
@@ -800,6 +803,18 @@ def validate_manual_ticket_reserved_facts(facts: ManualTicketReservedFacts) -> N
         or any(not isinstance(leg.instruction_hash, str) or not leg.instruction_hash for leg in facts.legs)
     ):
         raise ValueError("manual ticket requires unique legs with instruction hashes")
+    for leg in facts.legs:
+        # v9/v10 reserved only one immediately accepted leg, whose full
+        # instruction remains recoverable from MANUAL_ORDER_ACCEPTED. New
+        # ordered tickets retain it here before any leg becomes eligible.
+        if leg.instruction is None:
+            continue
+        normalized = BrokerOrderLeg.model_validate(leg.instruction)
+        expected_hash = hashlib.sha256(
+            canonicalize(normalized.model_dump(mode="json")).encode("utf-8")
+        ).hexdigest()
+        if leg.instruction_hash != expected_hash:
+            raise ValueError("manual ticket leg instruction hash does not match its normalized instruction")
 
 
 def validate_manual_ticket_state_facts(facts: ManualTicketStateFacts) -> None:
@@ -812,7 +827,7 @@ def validate_manual_ticket_state_facts(facts: ManualTicketStateFacts) -> None:
 
 
 def validate_manual_order_accepted_facts(facts: ManualOrderAcceptedFacts) -> None:
-    """Keep the tracer's narrow broker shape durable and replayable."""
+    """Keep each supported manual leg durable and replayable."""
     from app.broker.alpaca.clerk.sqlite.custody_subjects import manual_operator_subject_id
     from app.broker.contract.models import BrokerOrderLeg, OrderSide, OrderType, TimeInForce
 
@@ -837,12 +852,11 @@ def validate_manual_order_accepted_facts(facts: ManualOrderAcceptedFacts) -> Non
     if facts.effect_kind != "MANUAL_ORDER":
         raise ValueError("manual order acceptance has an unsupported effect kind")
     leg = BrokerOrderLeg.model_validate(facts.leg)
-    if (
-        leg.side not in {OrderSide.BUY, OrderSide.SELL}
-        or leg.order_type is not OrderType.MARKET
-        or leg.time_in_force is not TimeInForce.DAY
-    ):
-        raise ValueError("the manual market tracer accepts only BUY or SELL market DAY legs")
+    if leg.side not in {OrderSide.BUY, OrderSide.SELL} or leg.order_type not in {
+        OrderType.MARKET,
+        OrderType.LIMIT,
+    } or leg.time_in_force not in {TimeInForce.DAY, TimeInForce.GTC}:
+        raise ValueError("manual tickets accept only BUY or SELL market/limit DAY/GTC equity legs")
     expected_instruction_hash = hashlib.sha256(
         canonicalize(leg.model_dump(mode="json")).encode("utf-8")
     ).hexdigest()

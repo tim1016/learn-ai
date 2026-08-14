@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from uuid import UUID, uuid5
 
 from app.broker.alpaca.clerk.exposure import ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
 from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
@@ -49,6 +50,10 @@ class ManualOrderCancelOwnershipError(ValueError):
 
 class ManualOrderCancelTerminalError(ValueError):
     """The owned manual order is already terminal and cannot be canceled."""
+
+
+class ManualTicketCancelError(ValueError):
+    """A ticket-wide cancellation cannot safely advance its owned effects."""
 
 
 @dataclass(frozen=True)
@@ -540,7 +545,7 @@ async def submit_manual_order_cancellation(
         order_ref=order_ref,
         cancel_request_id=cancel_request_id,
     )
-    if not accepted.created:
+    if not accepted.created and accepted.cancellation.state in {"SUCCEEDED", "FAILED"}:
         return accepted
     return await resolve_manual_order_cancellation(
         repo,
@@ -549,13 +554,86 @@ async def submit_manual_order_cancellation(
     )
 
 
+def _ticket_cancel_request_id(*, ticket_id: str, cancel_request_id: str, order_ref: str) -> str:
+    """Derive one stable per-order cancellation identity from a ticket click."""
+    try:
+        namespace = UUID(cancel_request_id)
+    except ValueError as exc:
+        raise ManualTicketCancelError("ticket cancellation requires a UUID request identity") from exc
+    return str(uuid5(namespace, f"{ticket_id}:{order_ref}"))
+
+
+async def submit_manual_ticket_cancellation(
+    repo: ClerkSqliteRepository,
+    *,
+    account_id: str,
+    operator_id: str,
+    ticket_id: str,
+    cancel_request_id: str,
+    trade: BrokerTradePort,
+) -> tuple[ManualOrderCancellationSubmission, ...]:
+    """Cancel every verified working leg, stopping at the first unknown outcome.
+
+    Each target still owns its own durable cancellation command/effect. The
+    ticket request identity deterministically derives the per-order identities,
+    so replay after an interrupted HTTP response cannot create a second broker
+    delete. A lost outcome deliberately stops this loop before any later broker
+    write and the ticket fold records ``PAUSED_UNKNOWN``.
+    """
+    ticket = repo.manual_order_ticket(ticket_id)
+    subject_id = manual_operator_subject_id(operator_id)
+    if ticket is None or ticket.subject_id != subject_id:
+        raise ManualOrderCancelOwnershipError("Ticket cancellation requires an owned manual ticket.")
+    if any(leg.state == "UNKNOWN" for leg in ticket.legs):
+        raise ManualTicketCancelError(
+            "The ticket has an unknown manual outcome; reconcile it before canceling another working leg."
+        )
+    order_refs: list[str] = []
+    for leg in ticket.legs:
+        if leg.order_ref is None:
+            continue
+        child_request_id = _ticket_cancel_request_id(
+            ticket_id=ticket_id,
+            cancel_request_id=cancel_request_id,
+            order_ref=leg.order_ref,
+        )
+        existing = repo.manual_order_cancellation(order_ref=leg.order_ref)
+        if leg.state in {"ACCEPTED", "IN_PROGRESS"} or (
+            existing is not None and existing.cancel_request_id == child_request_id
+        ):
+            order_refs.append(leg.order_ref)
+    if not order_refs:
+        raise ManualTicketCancelError("The ticket has no verified working manual order to cancel.")
+
+    submissions: list[ManualOrderCancellationSubmission] = []
+    for order_ref in order_refs:
+        submission = await submit_manual_order_cancellation(
+            repo,
+            account_id=account_id,
+            operator_id=operator_id,
+            order_ref=order_ref,
+            cancel_request_id=_ticket_cancel_request_id(
+                ticket_id=ticket_id,
+                cancel_request_id=cancel_request_id,
+                order_ref=order_ref,
+            ),
+            trade=trade,
+        )
+        submissions.append(submission)
+        if submission.cancellation.state == "UNKNOWN":
+            break
+    return tuple(submissions)
+
+
 __all__ = [
     "ACTION_CANCEL_MANUAL_ORDER",
     "ManualOrderCancelConflictError",
     "ManualOrderCancelOwnershipError",
     "ManualOrderCancelTerminalError",
     "ManualOrderCancellationSubmission",
+    "ManualTicketCancelError",
     "accept_manual_order_cancellation",
     "resolve_manual_order_cancellation",
     "submit_manual_order_cancellation",
+    "submit_manual_ticket_cancellation",
 ]

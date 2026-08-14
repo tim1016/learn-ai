@@ -236,12 +236,25 @@ END;
 """
 
 
-MANUAL_LEG_SUBJECT_COMPATIBILITY_DDL = """\
+MANUAL_LEG_IDENTITY_V11_DDL = """\
+CREATE TRIGGER trg_manual_order_leg_identity_immutable
+BEFORE UPDATE OF ticket_id, leg_id, sequence_index, subject_id, instruction_hash ON manual_order_legs
+BEGIN
+    SELECT RAISE(ABORT, 'manual_order_legs identity is immutable');
+END;
+"""
+
+
+MANUAL_LEG_IDENTITY_V10_DDL = """\
 CREATE TRIGGER trg_manual_order_leg_identity_immutable
 BEFORE UPDATE OF ticket_id, leg_id, subject_id, instruction_hash ON manual_order_legs
 BEGIN
     SELECT RAISE(ABORT, 'manual_order_legs identity is immutable');
 END;
+"""
+
+
+_MANUAL_LEG_SUBJECT_COMPATIBILITY_REMAINDER = """\
 CREATE TRIGGER trg_manual_order_leg_delete_forbidden
 BEFORE DELETE ON manual_order_legs
 BEGIN
@@ -314,6 +327,14 @@ BEGIN
     ) THEN RAISE(ABORT, 'manual leg resources must be one chain in the ticket subject') END;
 END;
 """
+
+
+MANUAL_LEG_SUBJECT_COMPATIBILITY_V10_DDL = (
+    MANUAL_LEG_IDENTITY_V10_DDL + _MANUAL_LEG_SUBJECT_COMPATIBILITY_REMAINDER
+)
+MANUAL_LEG_SUBJECT_COMPATIBILITY_DDL = (
+    MANUAL_LEG_IDENTITY_V11_DDL + _MANUAL_LEG_SUBJECT_COMPATIBILITY_REMAINDER
+)
 
 
 _MANUAL_CANCELLATION_IDENTITY_DDL = """\
