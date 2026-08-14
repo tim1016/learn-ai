@@ -413,7 +413,13 @@ export class AlpacaOrderEntryComponent {
   }
 
   private submissionErrorMessage(err: unknown): string {
-    if (err instanceof Error && err.message === 'Refresh the manual order preview before confirming.') {
+    if (
+      err instanceof Error
+      && [
+        'Refresh the manual order preview before confirming.',
+        'The Clerk cannot recover this ticket leg for a safe continuation.',
+      ].includes(err.message)
+    ) {
       return err.message;
     }
     if (err instanceof HttpErrorResponse && err.status !== 0) {
