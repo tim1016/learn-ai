@@ -1122,13 +1122,14 @@ def _to_fill_record(
     sid = row["subject_id"] if custody_subject_identity else row["strategy_instance_id"]
     if sid is None:
         raise EconomicProjectionError("SQLite fill is missing its custody-owner identity")
+    symbol = _required_fill_symbol(row)
     return FillRecord(
         account_id=account_id,
         sid=sid,
         intent_id=intent_id,
         order_ref=row["order_ref"],
         event_key=row["execution_id"] or row["fill_id"],
-        symbol=row["symbol"].upper(),
+        symbol=symbol,
         side=side,
         quantity=float(row["qty"]),
         fill_price=float(row["price"]),
@@ -1161,6 +1162,7 @@ def _to_execution_row(row: sqlite3.Row) -> ExecutionRow:
         side = OrderSide(row["side"].lower())
     except ValueError as exc:
         raise EconomicProjectionError(f"SQLite fill has invalid side {row['side']!r}") from exc
+    symbol = _required_fill_symbol(row)
     return ExecutionRow(
         fill_id=row["fill_id"],
         execution_id=row["execution_id"],
@@ -1169,7 +1171,7 @@ def _to_execution_row(row: sqlite3.Row) -> ExecutionRow:
         origin=row["origin"],
         state=row["state"],
         event_kind=row["event_kind"],
-        symbol=row["symbol"].upper(),
+        symbol=symbol,
         side=side,
         quantity=float(row["qty"]),
         price=float(row["price"]),
@@ -1180,6 +1182,16 @@ def _to_execution_row(row: sqlite3.Row) -> ExecutionRow:
         subject_id=row["subject_id"],
         journal_seq=_required_ledger_sequence(row),
     )
+
+
+def _required_fill_symbol(row: sqlite3.Row) -> str:
+    """Return a normalized owned symbol or fail the projection closed."""
+    symbol = row["symbol"]
+    if not isinstance(symbol, str) or not symbol:
+        raise EconomicProjectionError(
+            f"SQLite fill {row['fill_id']!r} has no owned or manual symbol evidence"
+        )
+    return symbol.upper()
 
 
 def _strategy_instance_id_for_subject(subject_id: str) -> str | None:

@@ -773,6 +773,8 @@ class ClerkSqliteRepository(
             return "superseded execution belongs to a different custody subject"
         if target["strategy_instance_id"] != owner["strategy_instance_id"]:
             return "superseded execution belongs to a different strategy instance"
+        if not isinstance(target["symbol"], str) or not target["symbol"]:
+            return "superseded execution is missing owned symbol evidence"
         if target["symbol"].upper() != facts.symbol.upper():
             return "superseded execution has a different symbol"
         if target["side"] != facts.side:

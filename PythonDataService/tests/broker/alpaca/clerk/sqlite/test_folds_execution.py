@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.adapter import from_alpaca_trade_update
+from app.broker.alpaca.clerk.sqlite import repository as repository_module
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
 from app.broker.alpaca.clerk.sqlite.facts import (
@@ -488,6 +489,61 @@ def test_execution_correction_invalid_target_raises_uncertainty(tmp_path: Path) 
             == "duplicate"
         )
         assert len(repo.custody_transitions()) == transition_count
+    finally:
+        repo.close()
+
+
+def test_execution_correction_missing_target_symbol_raises_uncertainty(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo, accepted = _repository_for_strategy(
+        tmp_path,
+        strategy_instance_id="correction-missing-symbol-bot",
+        symbol="SPY",
+    )
+    try:
+        effect = repo.effect_operation(accepted.effect_operation_id or "")
+        assert effect is not None
+        monkeypatch.setattr(
+            repository_module.reads,
+            "effective_execution_slice",
+            lambda _conn, _execution_id: {
+                "order_ref": accepted.order_ref,
+                "subject_id": effect.subject_id,
+                "strategy_instance_id": effect.strategy_instance_id,
+                "symbol": None,
+                "side": "BUY",
+            },
+        )
+        correction = ExecutionCorrectedFacts(
+            execution_id="corrected-missing-symbol",
+            superseded_execution_ref="target-missing-symbol",
+            symbol="SPY",
+            side="BUY",
+            corrected_qty=3.0,
+            corrected_price=100.0,
+            why="broker correction target lacks readable symbol evidence",
+        )
+
+        outcome = repo.append_execution_correction_or_raise(
+            correction=_correction_transition(
+                repo,
+                accepted=accepted,
+                facts=correction,
+                source_event_at_ms=1_786_368_000_202,
+            ),
+            build_uncertainty=lambda reason: _correction_uncertainty_transition(
+                repo,
+                reason=reason,
+                execution_id=correction.execution_id,
+            ),
+        )
+
+        assert outcome == "invalid"
+        uncertainty = UncertaintyRaisedFacts.from_facts_json(repo.custody_transitions()[-1]["facts_json"])
+        assert uncertainty.reason_code == "EXECUTION_CORRECTION_UNEXPLAINED"
+        assert uncertainty.explanation == "superseded execution is missing owned symbol evidence"
     finally:
         repo.close()
 

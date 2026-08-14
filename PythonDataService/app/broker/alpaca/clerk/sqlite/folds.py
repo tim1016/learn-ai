@@ -1027,6 +1027,8 @@ def _fold_execution_corrected(conn: sqlite3.Connection, payload: dict[str, Any])
         raise ValueError("correction target belongs to a different custody subject")
     if superseded["strategy_instance_id"] != owner["strategy_instance_id"]:
         raise ValueError("correction target belongs to a different strategy instance")
+    if not isinstance(superseded["symbol"], str) or not superseded["symbol"]:
+        raise ValueError("correction target is missing owned symbol evidence")
     if superseded["symbol"].upper() != facts.symbol.upper():
         raise ValueError("correction symbol does not match the superseded execution")
     if superseded["side"] != facts.side:
