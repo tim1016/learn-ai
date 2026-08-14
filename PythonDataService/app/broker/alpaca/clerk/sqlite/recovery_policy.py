@@ -364,6 +364,42 @@ def _relevant_uncertainties(
     )
 
 
+def _timeline_evidence(ctx: RecoveryPolicyContext) -> tuple[RecoveryEvidence, ...]:
+    """Carry the exact evidence scope when the timeline action is presented."""
+    candidates: list[tuple[str, str, int | None]] = [
+        (
+            f"uncertainty:{uncertainty.uncertainty_id}",
+            "Custody uncertainty",
+            uncertainty.observed_at_ms,
+        )
+        for uncertainty in _relevant_uncertainties(ctx)
+    ]
+    for conflict in ctx.execution_coverage_conflicts:
+        if conflict.order_ref and conflict.execution_id:
+            candidates.extend(
+                (
+                    (f"order:{conflict.order_ref}", "Conflicted Clerk order", None),
+                    (f"execution:{conflict.execution_id}", "Conflicted Alpaca execution", None),
+                )
+            )
+    seen: set[str] = set()
+    evidence: list[RecoveryEvidence] = []
+    for reference, label, observed_at_ms in candidates:
+        if reference in seen:
+            continue
+        seen.add(reference)
+        evidence.append(
+            _evidence(
+                ctx,
+                reference=reference,
+                label=label,
+                observed_at_ms=observed_at_ms,
+                required_fresh=False,
+            )
+        )
+    return tuple(evidence)
+
+
 def _is_successful_account_reconciliation(
     reconciliation: ProjectedReconciliation | None,
 ) -> TypeGuard[ProjectedReconciliation]:
@@ -378,6 +414,7 @@ def _is_successful_account_reconciliation(
 def _decision(ctx: RecoveryPolicyContext, action_id: RecoveryActionId) -> _Decision:
     if action_id == "open_custody_timeline":
         available = ctx.authority_health == "healthy"
+        evidence = _timeline_evidence(ctx)
         return _Decision(
             available=available,
             reason_code=None if available else "READABLE_TIMELINE_REQUIRED",
@@ -387,13 +424,16 @@ def _decision(ctx: RecoveryPolicyContext, action_id: RecoveryActionId) -> _Decis
                 else "The failed authority has no verified online timeline reader."
             ),
             freshness="not_required",
-            evidence=(),
+            evidence=evidence,
             next_step=(
                 "Open the timeline and select an operation to inspect all three clocks."
                 if available
                 else "Stop the process and verify the preserved database or finalized mirror offline."
             ),
-            token_facts={"authority_health": ctx.authority_health},
+            token_facts={
+                "authority_health": ctx.authority_health,
+                "evidence_refs": [item.reference for item in evidence],
+            },
         )
     if ctx.authority_health != "healthy":
         return _failure_decision(ctx, action_id)

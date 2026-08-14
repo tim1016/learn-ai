@@ -99,6 +99,10 @@ class PanelAction(BaseModel):
     # narrower than the display revision: a new chart point or journal receipt
     # must not make a presented STOP falsely stale.
     concurrency_token: str
+    # Opaque immutable evidence identities for view actions. The client may
+    # route these into Clerk timeline filters but never derives a recovery
+    # capability from them.
+    evidence_refs: list[str] = Field(default_factory=list)
 
 
 class BotCatalogView(BaseModel):

@@ -25,7 +25,10 @@ import { AlpacaHoldBannerComponent } from './alpaca-hold-banner.component';
 import { AlpacaOrderEntryComponent } from './alpaca-order-entry.component';
 import { parseManualOrderTicketQuery } from '../../broker/lib/manual-order-navigation';
 import type { ManualOrderCapability } from '../../../api/alpaca.types';
-import { BrokersService } from '../../../services/brokers.service';
+import {
+  BrokersService,
+  type SqliteTimelineQuery,
+} from '../../../services/brokers.service';
 
 const LENS_STORAGE_KEY = 'learn-ai.alpaca-desk.lens';
 
@@ -57,6 +60,24 @@ function persistLens(lens: AlpacaDeskLens): void {
     // Persistence is an enhancement; keep the current session's choice.
     void error;
   }
+}
+
+function timelineQueryFromRoute(params: { get(name: string): string | null }): SqliteTimelineQuery | null {
+  const rawSequence = params.get('timelineSequence');
+  const sequence = rawSequence === null ? undefined : Number(rawSequence);
+  const query: SqliteTimelineQuery = {
+    strategyInstanceId: params.get('timelineBot') ?? undefined,
+    orderRef: params.get('timelineOrderRef') ?? undefined,
+    effectOperationId: params.get('timelineOperationRef') ?? undefined,
+    uncertaintyId: params.get('timelineUncertaintyId') ?? undefined,
+    executionId: params.get('timelineExecutionId') ?? undefined,
+    transitionKind: params.get('timelineTransitionKind') ?? undefined,
+    sequence:
+      typeof sequence === 'number' && Number.isInteger(sequence) && sequence > 0
+        ? sequence
+        : undefined,
+  };
+  return Object.values(query).some((value) => value !== undefined) ? query : null;
 }
 
 /**
@@ -95,6 +116,7 @@ export class AlpacaDeskComponent {
     lensFrom(this.queryParams().get('lens')) ?? storedLens() ?? 'trader',
   );
   protected readonly deployOpen = linkedSignal(() => this.queryParams().has('deploy'));
+  protected readonly timelineQuery = computed(() => timelineQueryFromRoute(this.queryParams()));
   private readonly routedOrderPrefill = computed(() =>
     parseManualOrderTicketQuery(this.queryParams()),
   );

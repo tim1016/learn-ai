@@ -139,6 +139,51 @@ def _client(app: FastAPI) -> httpx.AsyncClient:
 
 
 @pytest.mark.asyncio
+async def test_timeline_route_forwards_all_exact_evidence_filters(
+    api: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    original = alpaca_clerk_sqlite.SqliteClerkProjectionReader.timeline_page
+
+    def timeline_page(self, **kwargs):
+        captured.update(kwargs)
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(
+        alpaca_clerk_sqlite.SqliteClerkProjectionReader,
+        "timeline_page",
+        timeline_page,
+    )
+    async with _client(api) as client:
+        response = await client.get(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/timeline",
+            params={
+                "strategy_instance_id": SID,
+                "order_ref": "order:1",
+                "effect_operation_id": "effect:1",
+                "uncertainty_id": "uncertainty:7",
+                "execution_id": "execution:1",
+                "transition_kind": "UNCERTAINTY_RAISED",
+                "sequence": 7,
+            },
+        )
+
+    assert response.status_code == 200
+    assert captured == {
+        "strategy_instance_id": SID,
+        "order_ref": "order:1",
+        "effect_operation_id": "effect:1",
+        "uncertainty_id": "uncertainty:7",
+        "execution_id": "execution:1",
+        "transition_kind": "UNCERTAINTY_RAISED",
+        "sequence": 7,
+        "cursor": None,
+        "page_size": 25,
+    }
+
+
+@pytest.mark.asyncio
 async def test_failed_activated_authority_exposes_typed_account_recovery_state() -> None:
     set_active_clerk_runtime(
         ActiveClerkRuntime(

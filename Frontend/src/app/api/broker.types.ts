@@ -19183,6 +19183,8 @@ export interface components {
             confirmation: components["schemas"]["OperatorConfirmationCopy"] | null;
             /** Enabled */
             enabled: boolean;
+            /** Evidence Refs */
+            evidence_refs?: string[];
             /** Explanation */
             explanation: string;
             /** Label */
@@ -26744,6 +26746,12 @@ export interface operations {
             query?: {
                 cursor?: string | null;
                 page_size?: number;
+                order_ref?: string | null;
+                effect_operation_id?: string | null;
+                uncertainty_id?: string | null;
+                execution_id?: string | null;
+                transition_kind?: string | null;
+                sequence?: number | null;
             };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;
@@ -26955,6 +26963,13 @@ export interface operations {
             query?: {
                 cursor?: string | null;
                 page_size?: number;
+                strategy_instance_id?: string | null;
+                order_ref?: string | null;
+                effect_operation_id?: string | null;
+                uncertainty_id?: string | null;
+                execution_id?: string | null;
+                transition_kind?: string | null;
+                sequence?: number | null;
             };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;

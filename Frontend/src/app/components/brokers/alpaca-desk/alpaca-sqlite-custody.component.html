@@ -75,6 +75,18 @@
       <p class="sqlite-custody__notice" role="status">{{ notice }}</p>
     }
 
+    @if (actionProblem(); as problem) {
+      <section class="sqlite-custody__problem" role="alert" aria-label="Clerk action refusal">
+        @if (problem.reason !== null) {
+          <strong>{{ problem.reason | receiptLabel }}</strong>
+        }
+        <p>{{ problem.message }}</p>
+        @if (problem.remediation !== null) {
+          <p>{{ problem.remediation }}</p>
+        }
+      </section>
+    }
+
     @if (reductionPlan(); as plan) {
       <app-safe-flatten-plan [plan]="plan" />
     }
@@ -89,13 +101,86 @@
     @if (timelineOpen()) {
       <section class="sqlite-custody__timeline" aria-labelledby="sqlite-timeline-title">
         <h3 id="sqlite-timeline-title">Custody timeline</h3>
+        <form class="sqlite-custody__timeline-filters" (submit)="$event.preventDefault(); applyTimelineFilters()">
+          <label>
+            Bot
+            <input
+              type="text"
+              [value]="timelineFilters().strategyInstanceId ?? ''"
+              (input)="updateTimelineFilter('strategyInstanceId', $event)"
+            />
+          </label>
+          <label>
+            Order reference
+            <input
+              type="text"
+              [value]="timelineFilters().orderRef ?? ''"
+              (input)="updateTimelineFilter('orderRef', $event)"
+            />
+          </label>
+          <label>
+            Uncertainty ID
+            <input
+              type="text"
+              [value]="timelineFilters().uncertaintyId ?? ''"
+              (input)="updateTimelineFilter('uncertaintyId', $event)"
+            />
+          </label>
+          <label>
+            Execution ID
+            <input
+              type="text"
+              [value]="timelineFilters().executionId ?? ''"
+              (input)="updateTimelineFilter('executionId', $event)"
+            />
+          </label>
+          <label>
+            Transition kind
+            <input
+              type="text"
+              [value]="timelineFilters().transitionKind ?? ''"
+              (input)="updateTimelineFilter('transitionKind', $event)"
+            />
+          </label>
+          <label>
+            Sequence
+            <input
+              type="number"
+              min="1"
+              [value]="timelineFilters().sequence ?? ''"
+              (input)="updateTimelineFilter('sequence', $event)"
+            />
+          </label>
+          <label>
+            Operation reference
+            <input
+              type="text"
+              [value]="timelineFilters().effectOperationId ?? ''"
+              (input)="updateTimelineFilter('effectOperationId', $event)"
+            />
+          </label>
+          <div class="sqlite-custody__timeline-filter-actions">
+            <button type="submit">Apply filters</button>
+            <button type="button" (click)="clearTimelineFilters()">Clear filters</button>
+          </div>
+        </form>
         @if (timelineLoading()) {
           <p role="status">Loading timeline…</p>
         } @else {
           <p aria-live="polite">{{ timeline().length }} of {{ timelineTotalEntries() }}</p>
-          <ol>
-            @for (entry of timeline(); track trackTimeline($index, entry)) {
-              <li>
+          @if (timeline().length === 0) {
+            <p>No immutable transitions match these exact filters.</p>
+          } @else {
+            <ol>
+              @for (entry of timeline(); track trackTimeline($index, entry)) {
+                <li>
+                  <button
+                    type="button"
+                    class="sqlite-custody__timeline-entry"
+                    [class.sqlite-custody__timeline-entry--selected]="selectedTimelineEntry()?.sequence === entry.sequence"
+                    [attr.aria-pressed]="selectedTimelineEntry()?.sequence === entry.sequence"
+                    (click)="selectTimelineEntry(entry)"
+                  >
                 <strong>{{ entry.transition_kind | receiptLabel }}</strong>
                 <code>{{ entry.operation_ref }}</code>
                 <span>{{ entry.operation_state | receiptLabel }}</span>
@@ -106,9 +191,23 @@
                   <div><dt>Clerk observed</dt><dd><app-timestamp-display [value]="entry.clerk_observed_at_ms" mode="local" /></dd></div>
                   <div><dt>Durably recorded</dt><dd><app-timestamp-display [value]="entry.recorded_at_ms" mode="local" /></dd></div>
                 </dl>
-              </li>
-            }
-          </ol>
+                  </button>
+                </li>
+              }
+            </ol>
+          }
+          @if (selectedTimelineEntry(); as selected) {
+            <section class="sqlite-custody__timeline-detail" aria-label="Selected immutable evidence">
+              <h4>Selected immutable evidence</h4>
+              <dl>
+                <div><dt>Operation reference</dt><dd><code>{{ selected.operation_ref }}</code></dd></div>
+                <div><dt>Transition sequence</dt><dd>{{ selected.sequence }}</dd></div>
+                <div><dt>Order reference</dt><dd><code>{{ selected.order_ref ?? 'None' }}</code></dd></div>
+                <div><dt>Execution authority</dt><dd>{{ selected.execution_authority | receiptLabel }}</dd></div>
+                <div><dt>Proof reference</dt><dd><code>{{ selected.proof_reference ?? 'None' }}</code></dd></div>
+              </dl>
+            </section>
+          }
           @if (timelineNextCursor() !== null) {
             <button
               type="button"

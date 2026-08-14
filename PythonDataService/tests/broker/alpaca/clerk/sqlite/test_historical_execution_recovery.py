@@ -20,6 +20,7 @@ from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import (
 )
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
+from app.broker.alpaca.clerk.sqlite.projection_errors import InvalidTimelineCursor
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.recovery_policy import build_recovery_catalog
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -217,6 +218,46 @@ def _recovery_action(repo: ClerkSqliteRepository):
     )
     assert action.available is True
     return context, action
+
+
+def test_timeline_filters_bind_one_historical_conflict_and_cursor_scope(tmp_path: Path) -> None:
+    """Every evidence identity finds its immutable transition, never another page."""
+    repo, uncertainty_id = _seed_historical_conflict(tmp_path)
+    try:
+        row = repo._conn.execute(
+            "SELECT sequence, order_ref, effect_operation_id FROM custody_transitions "
+            "WHERE transition_kind = 'UNCERTAINTY_RAISED'"
+        ).fetchone()
+        assert row is not None
+        reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
+        try:
+            by_bot = reader.timeline_page(strategy_instance_id=SID)
+            by_order = reader.timeline_page(order_ref=row["order_ref"], page_size=1)
+            by_effect = reader.timeline_page(effect_operation_id=row["effect_operation_id"])
+            by_uncertainty = reader.timeline_page(uncertainty_id=uncertainty_id)
+            by_execution = reader.timeline_page(execution_id=EXECUTION_ID)
+            by_kind = reader.timeline_page(transition_kind="UNCERTAINTY_RAISED")
+            by_sequence = reader.timeline_page(sequence=row["sequence"])
+            assert by_order.next_cursor is not None
+            with pytest.raises(InvalidTimelineCursor):
+                reader.timeline_page(
+                    order_ref=row["order_ref"],
+                    execution_id=EXECUTION_ID,
+                    cursor=by_order.next_cursor,
+                )
+        finally:
+            reader.close()
+    finally:
+        repo.close()
+
+    assert row["sequence"] in {entry.sequence for entry in by_bot.entries}
+    assert row["sequence"] in {entry.sequence for entry in by_effect.entries}
+    assert {entry.effect_operation_id for entry in by_effect.entries} == {
+        row["effect_operation_id"]
+    }
+    for page in (by_uncertainty, by_execution, by_kind, by_sequence):
+        assert [entry.sequence for entry in page.entries] == [row["sequence"]]
+    assert by_order.anchor_sequence >= row["sequence"]
 
 
 @pytest.mark.asyncio

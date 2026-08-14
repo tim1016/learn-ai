@@ -10,7 +10,10 @@ import type {
   SqliteSafeFlattenPlan,
   SqliteTimelinePage,
 } from '../../../api/alpaca.types';
-import { BrokersService } from '../../../services/brokers.service';
+import {
+  BrokersService,
+  type SqliteTimelineQuery,
+} from '../../../services/brokers.service';
 import { TypedHaltConfirmComponent } from '../../broker/shared/typed-halt-confirm/typed-halt-confirm.component';
 import { AlpacaSqliteCustodyComponent } from './alpaca-sqlite-custody.component';
 
@@ -133,9 +136,12 @@ function timeline(
   };
 }
 
-async function renderCustody(service: Partial<BrokersService>) {
+async function renderCustody(
+  service: Partial<BrokersService>,
+  inputs: { readonly timelineQuery?: SqliteTimelineQuery | null } = {},
+) {
   return render(AlpacaSqliteCustodyComponent, {
-    inputs: { accountId: 'PA1' },
+    inputs: { accountId: 'PA1', ...inputs },
     providers: [{ provide: BrokersService, useValue: service }],
   });
 }
@@ -169,7 +175,7 @@ describe('AlpacaSqliteCustodyComponent', () => {
     expect(await screen.findByText('Durable Clerk state has no unresolved uncertainty.')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Open custody timeline' }));
 
-    expect(await screen.findByText('effect:enter:12')).toBeTruthy();
+    expect((await screen.findAllByText('effect:enter:12')).length).toBeGreaterThan(0);
     expect(screen.getByText('Source event')).toBeTruthy();
     expect(screen.getByText('Clerk observed')).toBeTruthy();
     expect(screen.getByText('Durably recorded')).toBeTruthy();
@@ -200,17 +206,66 @@ describe('AlpacaSqliteCustodyComponent', () => {
     });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Open custody timeline' }));
-    expect(await screen.findByText('effect:enter:12')).toBeTruthy();
+    expect((await screen.findAllByText('effect:enter:12')).length).toBeGreaterThan(0);
     expect(screen.getByText('1 of 2')).toBeTruthy();
 
     const loadMore = screen.getByRole('button', { name: 'Load more events' });
     fireEvent.click(loadMore);
 
-    expect(await screen.findByText('effect:enter:11')).toBeTruthy();
-    expect(screen.getByText('effect:enter:12')).toBeTruthy();
+    expect((await screen.findAllByText('effect:enter:11')).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('effect:enter:12').length).toBeGreaterThan(0);
     expect(screen.getByText('2 of 2')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Load more events' })).toBeNull();
-    expect(getSqliteClerkTimeline).toHaveBeenNthCalledWith(2, 'PA1', 'cursor-11');
+    expect(getSqliteClerkTimeline).toHaveBeenNthCalledWith(2, 'PA1', { cursor: 'cursor-11' });
+  });
+
+  it('opens exact deep-link filters and updates immutable evidence on row selection', async () => {
+    const getSqliteClerkTimeline = vi.fn().mockResolvedValue(timeline({
+      entries: [timelineEntry(12), timelineEntry(11)],
+      total_entries: 2,
+    }));
+    const query: SqliteTimelineQuery = {
+      strategyInstanceId: 'spy-bot',
+      orderRef: 'order:enter:12',
+      uncertaintyId: 'uncertainty:12',
+      executionId: 'execution:12',
+      transitionKind: 'ORDER_EVIDENCE_OBSERVED',
+      sequence: 12,
+    };
+    await renderCustody(
+      {
+        getSqliteClerkProjection: vi.fn().mockResolvedValue(projection()),
+        getSqliteClerkTimeline,
+      },
+      { timelineQuery: query },
+    );
+
+    await waitFor(() => expect(getSqliteClerkTimeline).toHaveBeenCalledWith('PA1', query));
+    fireEvent.click(await screen.findByRole('button', { name: /effect:enter:11/i }));
+
+    expect(getSqliteClerkTimeline).toHaveBeenCalledOnce();
+    expect(screen.getByLabelText('Selected immutable evidence').textContent).toContain(
+      'effect:enter:11',
+    );
+  });
+
+  it('explains when an exact evidence filter has no matching immutable transition', async () => {
+    const query: SqliteTimelineQuery = { executionId: 'missing-execution' };
+    await renderCustody(
+      {
+        getSqliteClerkProjection: vi.fn().mockResolvedValue(projection()),
+        getSqliteClerkTimeline: vi.fn().mockResolvedValue(timeline({
+          entries: [],
+          total_entries: 0,
+        })),
+      },
+      { timelineQuery: query },
+    );
+
+    expect(
+      await screen.findByText('No immutable transitions match these exact filters.'),
+    ).toBeTruthy();
+    expect(screen.queryByLabelText('Selected immutable evidence')).toBeNull();
   });
 
   it('labels an unverified activation identity without presenting generation zero', async () => {
@@ -320,6 +375,31 @@ describe('AlpacaSqliteCustodyComponent', () => {
     expect(await screen.findByText(/Clerk evidence changed/)).toBeTruthy();
     expect(executeSqliteRecoveryAction).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(getSqliteClerkProjection).toHaveBeenCalledTimes(2));
+  });
+
+  it('renders the backend reason, message, and remediation on a typed refusal', async () => {
+    const executeSqliteRecoveryAction = vi.fn().mockRejectedValue(
+      new HttpErrorResponse({
+        status: 409,
+        error: {
+          detail: {
+            reason: 'stale_action_token',
+            message: 'The evidence changed after this action was presented.',
+            next_step: 'Refresh and review the current Clerk action.',
+          },
+        },
+      }),
+    );
+    await renderCustody({
+      getSqliteClerkProjection: vi.fn().mockResolvedValue(projection()),
+      executeSqliteRecoveryAction,
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Reconcile now' }));
+
+    expect(await screen.findByText('Stale Action Token')).toBeTruthy();
+    expect(screen.getByText('The evidence changed after this action was presented.')).toBeTruthy();
+    expect(screen.getByText('Refresh and review the current Clerk action.')).toBeTruthy();
   });
 
   it('renders policy-authored unavailability and no generic recovery action', async () => {

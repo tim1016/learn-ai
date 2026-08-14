@@ -55,7 +55,10 @@
   @if (lens() === 'trader') {
     <app-alpaca-trader-lens [refreshVersion]="historyRefreshVersion()" />
   } @else {
-    <app-alpaca-operator-lens [refreshVersion]="historyRefreshVersion()" />
+    <app-alpaca-operator-lens
+      [refreshVersion]="historyRefreshVersion()"
+      [timelineQuery]="timelineQuery()"
+    />
   }
 </main>
 

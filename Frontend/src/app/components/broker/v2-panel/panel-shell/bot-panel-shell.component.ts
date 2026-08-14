@@ -271,7 +271,9 @@ export class BotPanelShellComponent {
   protected async onActionRequested({ action, reason }: PanelActionTrigger): Promise<void> {
     if (this.actionPending()) return;
     if (action.action_id === 'open_custody_timeline') {
-      this.selectLens('operator');
+      void this.router.navigate(['/brokers/alpaca'], {
+        queryParams: this.custodyTimelineQuery(action),
+      });
       return;
     }
     if (action.action_id === 'prepare_safe_flatten') {
@@ -414,6 +416,33 @@ export class BotPanelShellComponent {
     } finally {
       this.actionPending.set(false);
     }
+  }
+
+  private custodyTimelineQuery(action: PanelAction): Record<string, string> {
+    const query: Record<string, string> = {
+      lens: 'operator',
+      timelineBot: this.sid(),
+    };
+    for (const reference of action.evidence_refs ?? []) {
+      const separator = reference.indexOf(':');
+      if (separator < 1 || separator === reference.length - 1) continue;
+      const value = reference.slice(separator + 1);
+      switch (reference.slice(0, separator)) {
+        case 'order':
+          query['timelineOrderRef'] ??= value;
+          break;
+        case 'execution':
+          query['timelineExecutionId'] ??= value;
+          break;
+        case 'uncertainty':
+          query['timelineUncertaintyId'] ??= value;
+          break;
+        case 'operation':
+          query['timelineOperationRef'] ??= value;
+          break;
+      }
+    }
+    return query;
   }
 
   private successReceipt(result: PanelActionResult): ActionReceiptView {

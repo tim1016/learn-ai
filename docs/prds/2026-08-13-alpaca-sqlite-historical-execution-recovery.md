@@ -1,7 +1,7 @@
 # PRD — Alpaca SQLite Historical Execution Recovery and Operator Action Reliability
 
 - **Date:** 2026-08-13
-- **Status:** In implementation — Slices A and B complete; Slice C pending
+- **Status:** Implemented — all three slices complete; awaiting CodeRabbit review
 - **Product surfaces:** Alpaca Broker V2 Account Desk and bot Operator panel
 - **Delivery posture:** Three Terra-sized tracer bullets; each slice is independently verifiable and must be labeled `ready-for-agent` when published
 - **Authority:** The activated SQLite Account Clerk remains the sole custody and execution authority. Alpaca supplies external broker evidence. Angular renders backend-authored capabilities and never infers whether a recovery is safe.
@@ -197,23 +197,23 @@ coverage resolution, refreshed bot projection, and operator receipt.
 
 Acceptance criteria:
 
-- [ ] A bot-scoped historical conflict with an execution ID and cumulative fill
+- [x] A bot-scoped historical conflict with an execution ID and cumulative fill
       offers **Recover exact execution evidence**; account scope with multiple
       conflicts directs the operator to choose a bot.
-- [ ] Prepare reads only the selected Alpaca paper account and returns the
+- [x] Prepare reads only the selected Alpaca paper account and returns the
       signed, expiring plan defined in §5.1 without changing Clerk revision.
-- [ ] Confirm rechecks every bound identity and appends quarantine plus
+- [x] Confirm rechecks every bound identity and appends quarantine plus
       resolution atomically through the Clerk repository.
-- [ ] Successful recovery changes no account or bot economic quantity, price,
+- [x] Successful recovery changes no account or bot economic quantity, price,
       realized P&L, or FIFO total except for replacing the evidence source used
       by the existing projection.
-- [ ] Duplicate confirmation is idempotent and returns the original receipt.
-- [ ] Missing, ambiguous, mismatched, stale, live-mode, and unavailable-broker
+- [x] Duplicate confirmation is idempotent and returns the original receipt.
+- [x] Missing, ambiguous, mismatched, stale, live-mode, and unavailable-broker
       cases remain blocked with typed remediation.
-- [ ] Regression fixtures reproduce a pre-quarantine conflict and prove the
+- [x] Regression fixtures reproduce a pre-quarantine conflict and prove the
       full prepare/confirm route, repository transitions, projection, and bot UI
       behavior.
-- [ ] The existing fresh-websocket quarantine and resolution path remains
+- [x] The existing fresh-websocket quarantine and resolution path remains
       unchanged and green.
 
 ### Slice B — Make every recovery capability discoverable at the correct scope
@@ -226,24 +226,24 @@ the backend recovery catalog.
 
 Acceptance criteria:
 
-- [ ] The Account Desk dominant posture shows its backend-selected primary
+- [x] The Account Desk dominant posture shows its backend-selected primary
       action when available and an explicit disabled affordance with reason when
       unavailable.
-- [ ] `Reconcile now`, `resolve_execution_coverage`, historical exact-evidence
+- [x] `Reconcile now`, `resolve_execution_coverage`, historical exact-evidence
       recovery, `cancel_verified_working_orders`, `prepare_safe_flatten`,
       `stop_bot_decisions`, and `open_custody_timeline` render consistently at
       their supported account or bot scope.
-- [ ] The bot Operator panel exposes real controls for coverage recovery and
+- [x] The bot Operator panel exposes real controls for coverage recovery and
       timeline opening instead of readiness-only rows.
-- [ ] The Account custody card can expose Reconcile without duplicating a
+- [x] The Account custody card can expose Reconcile without duplicating a
       conflicting second action implementation.
-- [ ] A control that requires expansion states that clearly; the primary action
+- [x] A control that requires expansion states that clearly; the primary action
       never depends on discovering a hidden inner button.
-- [ ] Unavailable actions preserve the backend reason code through the shared
+- [x] Unavailable actions preserve the backend reason code through the shared
       receipt-label vocabulary and render backend-authored prose unchanged.
-- [ ] The operator manual and pinned recovery vocabulary list the same actions
+- [x] The operator manual and pinned recovery vocabulary list the same actions
       as the generated contract snapshot.
-- [ ] Angular interaction tests cover visible, disabled, confirmed, stale-token,
+- [x] Angular interaction tests cover visible, disabled, confirmed, stale-token,
       success-receipt, and timeline-navigation behavior for account and bot
       scope.
 
@@ -256,23 +256,23 @@ timeline and lossless typed error presentation.
 
 Acceptance criteria:
 
-- [ ] Account posture and detailed recovery controls consume one shared
+- [x] Account posture and detailed recovery controls consume one shared
       projection resource or one explicit shared invalidation mechanism.
-- [ ] After any recovery success, idempotent replay, or typed refusal, every
+- [x] After any recovery success, idempotent replay, or typed refusal, every
       visible custody projection refreshes from the new server revision without
       a browser reload.
-- [ ] The timeline endpoint and UI support exact filters for bot, order
+- [x] The timeline endpoint and UI support exact filters for bot, order
       reference, uncertainty ID, execution ID, transition kind, and sequence.
-- [ ] **Open custody timeline** deep-links with the action's evidence filters and
+- [x] **Open custody timeline** deep-links with the action's evidence filters and
       brings the relevant transition into view.
-- [ ] Operation selection is real: selecting a timeline row updates the
+- [x] Operation selection is real: selecting a timeline row updates the
       transaction/evidence detail using the selected immutable reference.
-- [ ] Paging remains keyset-based, stable under concurrent appends, and exposes
+- [x] Paging remains keyset-based, stable under concurrent appends, and exposes
       total/high-water metadata without scanning the full journal in Angular.
-- [ ] Typed backend errors retain reason, message, remediation, and refreshed
+- [x] Typed backend errors retain reason, message, remediation, and refreshed
       capability; the UI no longer collapses all non-409 failures into one
       generic sentence.
-- [ ] Tests prove cross-component refresh, deep-link/filter round trips,
+- [x] Tests prove cross-component refresh, deep-link/filter round trips,
       keyset stability, empty results, and typed error rendering.
 
 ## 7. Verification and evidence

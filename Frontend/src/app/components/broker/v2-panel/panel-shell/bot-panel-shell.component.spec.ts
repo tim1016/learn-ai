@@ -190,6 +190,23 @@ const HISTORICAL_RECOVERY_ACTION = {
   confirmation: null,
 } satisfies PanelAction;
 
+const OPEN_CUSTODY_TIMELINE_ACTION = {
+  action_id: 'open_custody_timeline',
+  revision: 17,
+  concurrency_token: 'timeline-token-17',
+  enabled: true,
+  label: 'Open custody timeline',
+  explanation: 'Inspect the exact immutable custody evidence.',
+  blockers: [],
+  confirmation: null,
+  evidence_refs: [
+    'uncertainty:uncertainty:17',
+    'order:learn-ai/qqq/1',
+    'execution:alpaca-execution-1',
+    'operation:effect:sid-001:recovery',
+  ],
+} satisfies PanelAction;
+
 const HISTORICAL_RECOVERY_PLAN: HistoricalExecutionRecoveryPlan = {
   account_id: 'DUM284968',
   strategy_instance_id: 'sid-001',
@@ -266,7 +283,7 @@ function safeFlattenSnapshot(): BotPanelLiveSnapshot {
       scope: 'bot',
       authority: 'Alpaca SQLite Clerk',
       explanation: PREPARE_SAFE_FLATTEN_ACTION.explanation,
-      evidence: {},
+      evidence: { primary: true },
       evaluated_at_ms: 1_753_800_000_000,
       cure: null,
     }],
@@ -289,6 +306,26 @@ function historicalRecoverySnapshot(): BotPanelLiveSnapshot {
       evidence: { primary: true },
       evaluated_at_ms: 1_753_800_000_000,
       cure: 'Prepare exact Alpaca paper evidence for this conflict.',
+    }],
+    readiness_ready_count: 1,
+  });
+}
+
+function custodyTimelineSnapshot(): BotPanelLiveSnapshot {
+  return liveSnapshot({
+    ...PANEL,
+    revision: 17,
+    actions: [OPEN_CUSTODY_TIMELINE_ACTION],
+    readiness_checks: [{
+      operation: OPEN_CUSTODY_TIMELINE_ACTION.action_id,
+      label: OPEN_CUSTODY_TIMELINE_ACTION.label,
+      ready: true,
+      scope: 'bot',
+      authority: 'Alpaca SQLite Clerk',
+      explanation: OPEN_CUSTODY_TIMELINE_ACTION.explanation,
+      evidence: { primary: true },
+      evaluated_at_ms: 1_753_800_000_000,
+      cure: null,
     }],
     readiness_ready_count: 1,
   });
@@ -585,6 +622,38 @@ describe('BotPanelShellComponent', () => {
       HISTORICAL_RECOVERY_ACTION,
       null,
     );
+  });
+
+  it('deep-links the Account Desk timeline with the action evidence filters', async () => {
+    mockService.getLiveSnapshot.mockResolvedValueOnce(custodyTimelineSnapshot());
+    const { fixture } = await render(BotPanelShellComponent, {
+      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      providers: [
+        provideRouter([]),
+        { provide: BrokerV2PanelService, useValue: mockService },
+        { provide: BrokersService, useValue: brokersMock },
+        { provide: MessageService, useValue: messageService },
+      ],
+    });
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+    fireEvent.click(screen.getByRole('button', { name: 'Open custody timeline' }));
+
+    expect(navigate).toHaveBeenCalledWith(['/brokers/alpaca'], {
+      queryParams: {
+        lens: 'operator',
+        timelineBot: 'sid-001',
+        timelineUncertaintyId: 'uncertainty:17',
+        timelineOrderRef: 'learn-ai/qqq/1',
+        timelineExecutionId: 'alpaca-execution-1',
+        timelineOperationRef: 'effect:sid-001:recovery',
+      },
+    });
   });
 
   it('renders the server-authored stale-plan refusal and refreshes without confirmation', async () => {

@@ -32,6 +32,19 @@ import type {
   SqliteTimelinePage,
 } from '../api/alpaca.types';
 
+/** Exact, server-owned Clerk timeline filters; all values bind the keyset cursor. */
+export interface SqliteTimelineQuery {
+  readonly strategyInstanceId?: string;
+  readonly orderRef?: string;
+  readonly effectOperationId?: string;
+  readonly uncertaintyId?: string;
+  readonly executionId?: string;
+  readonly transitionKind?: string;
+  readonly sequence?: number;
+  readonly cursor?: string;
+  readonly pageSize?: number;
+}
+
 /**
  * Broker System v2 read client — targets `/api/brokers/{broker}/...`, the v2
  * data-plane surface (separate from the v1 `/api/broker/...` family). Phase 1
@@ -330,11 +343,29 @@ export class BrokersService {
     );
   }
 
-  getSqliteClerkTimeline(accountId: string, cursor?: string | null): Promise<SqliteTimelinePage> {
-    const params = cursor != null ? `?cursor=${encodeURIComponent(cursor)}` : '';
+  getSqliteClerkTimeline(
+    accountId: string,
+    query: SqliteTimelineQuery = {},
+  ): Promise<SqliteTimelinePage> {
+    let params = new HttpParams();
+    const queryEntries: readonly [string, string | number | undefined][] = [
+      ['strategy_instance_id', query.strategyInstanceId],
+      ['order_ref', query.orderRef],
+      ['effect_operation_id', query.effectOperationId],
+      ['uncertainty_id', query.uncertaintyId],
+      ['execution_id', query.executionId],
+      ['transition_kind', query.transitionKind],
+      ['sequence', query.sequence],
+      ['cursor', query.cursor],
+      ['page_size', query.pageSize],
+    ];
+    for (const [key, value] of queryEntries) {
+      if (value !== undefined) params = params.set(key, String(value));
+    }
     return firstValueFrom(
       this.http.get<SqliteTimelinePage>(
-        `/api/alpaca-clerk-sqlite/accounts/${encodeURIComponent(accountId)}/timeline${params}`,
+        `/api/alpaca-clerk-sqlite/accounts/${encodeURIComponent(accountId)}/timeline`,
+        { params },
       ),
     );
   }
