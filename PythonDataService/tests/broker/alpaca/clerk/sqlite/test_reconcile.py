@@ -44,7 +44,7 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError, raise_uncertainty
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, BrokerPosition
-from conftest import _clock_at, _hold_transition
+from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at, _hold_transition
 
 ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
@@ -1145,6 +1145,50 @@ async def test_reconcile_account_recovers_an_unknown_manual_open_order(
     assert trade.lookup_calls == [submitted.leg.order_ref]
     assert repo.order(submitted.leg.order_ref).broker_order_id is not None  # type: ignore[union-attr]
     assert repo.effect_operation(submitted.leg.effect_operation_id).state == "in_progress"  # type: ignore[union-attr]
+
+
+async def test_reconcile_account_recovers_an_unknown_manual_order_after_repository_restart(
+    tmp_path: Path,
+) -> None:
+    """Recovery after a process restart uses the persisted manual order identity only."""
+    clock = _clock_at(1_700_000_000_000)
+    before_restart = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+        clock=clock,
+    )
+    try:
+        submitted = await submit_manual_order(
+            before_restart,
+            account_id=ACCOUNT_ID,
+            operator_id="desk",
+            ticket_id="7de3a77c-b698-4e0d-a5d1-2f624574ed35",
+            leg_id="09d6d63e-6375-4e6d-8d20-3b1bf70c2465",
+            leg=_leg(),
+            trade=_FakeTrade(submit_error=BrokerUnavailable("timeout"), lookup_absent=True),
+        )
+        assert submitted.leg.order_ref is not None
+        assert submitted.leg.effect_operation_id is not None
+        assert before_restart.effect_operation(submitted.leg.effect_operation_id).state == "unknown"  # type: ignore[union-attr]
+    finally:
+        before_restart.close()
+
+    after_restart = ClerkSqliteRepository.open(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+        clock=clock,
+    )
+    try:
+        trade = _FakeTrade()
+        result = await reconcile_account(after_restart, read=_FakeRead(), trade=trade)
+
+        assert result.resolved_count == 1
+        assert trade.submit_calls == []
+        assert trade.lookup_calls == [submitted.leg.order_ref]
+        assert after_restart.order(submitted.leg.order_ref).broker_order_id is not None  # type: ignore[union-attr]
+        assert after_restart.effect_operation(submitted.leg.effect_operation_id).state == "in_progress"  # type: ignore[union-attr]
+    finally:
+        after_restart.close()
 
 
 async def test_reconcile_account_recovers_an_unknown_manual_closed_order(

@@ -368,21 +368,6 @@ def decide_capability(
                 reason_code="RECONCILIATION_IN_PROGRESS",
                 why="Account reconciliation is proving fresh broker truth.",
             )
-        manual_order_outstanding = (
-            repo.has_nonterminal_manual_order_outside_ticket(ticket_id=continuation_ticket_id)
-            if continuation_ticket_id is not None
-            else repo.has_nonterminal_manual_order()
-        )
-        if manual_order_outstanding:
-            return CapabilityDecision(
-                allowed=False,
-                capability=capability,
-                reason_code="MANUAL_ORDER_OUTSTANDING",
-                why=(
-                    "A manual order still has a working or unknown broker outcome; "
-                    "new account exposure waits for exact resolution."
-                ),
-            )
         active_exit = (
             repo.active_exit_for_strategy(strategy_instance_id)
             if strategy_instance_id is not None
@@ -463,6 +448,22 @@ def decide_capability(
                 capability=capability,
                 reason_code=reason_code,
                 why=uncertainty["explanation"],
+            )
+    if capability is Capability.NEW_EXPOSURE:
+        manual_order_outstanding = (
+            repo.has_nonterminal_manual_order_outside_ticket(ticket_id=continuation_ticket_id)
+            if continuation_ticket_id is not None
+            else repo.has_nonterminal_manual_order()
+        )
+        if manual_order_outstanding:
+            return CapabilityDecision(
+                allowed=False,
+                capability=capability,
+                reason_code="MANUAL_ORDER_OUTSTANDING",
+                why=(
+                    "A manual order still has a working or unknown broker outcome; "
+                    "new account exposure waits for exact resolution."
+                ),
             )
     return CapabilityDecision(allowed=True, capability=capability)
 

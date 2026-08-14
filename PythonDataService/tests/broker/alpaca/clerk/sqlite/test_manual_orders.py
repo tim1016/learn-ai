@@ -40,14 +40,18 @@ from app.broker.alpaca.clerk.sqlite.manual_orders import (
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
+from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    AdmissionBlockedError,
+    Capability,
+    decide_capability,
+)
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
     ExecutionCoverageConflictCause,
 )
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
-from conftest import _clock_at
+from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at
 
 ACCOUNT_ID = "PA-TEST"
 OPERATOR_ID = "operator"
@@ -693,6 +697,13 @@ async def test_coverage_resolution_completes_a_filled_manual_ticket(
         subject_id=manual_operator_subject_id(OPERATOR_ID),
     )
     assert len(uncertainty) == 1
+    blocked = decide_capability(
+        repo,
+        capability=Capability.NEW_EXPOSURE,
+        subject_id=manual_operator_subject_id(OPERATOR_ID),
+    )
+    assert blocked.allowed is False
+    assert blocked.reason_code == EXECUTION_COVERAGE_CONFLICT_REASON_CODE
     meta = repo.control_meta_snapshot()
 
     receipt = repo.resolve_execution_coverage_conflict(
@@ -708,6 +719,12 @@ async def test_coverage_resolution_completes_a_filled_manual_ticket(
     assert ticket.state == "COMPLETED"
     assert ticket.legs[0].state == "SUCCEEDED"
     assert repo.effect_operation(submitted.leg.effect_operation_id).state == "succeeded"  # type: ignore[union-attr]
+    restored = decide_capability(
+        repo,
+        capability=Capability.NEW_EXPOSURE,
+        subject_id=manual_operator_subject_id(OPERATOR_ID),
+    )
+    assert restored.allowed is True
 
 
 @pytest.mark.asyncio
