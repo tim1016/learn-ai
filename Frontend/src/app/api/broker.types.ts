@@ -755,6 +755,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/historical-execution-recovery/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm Bot Historical Execution Recovery
+         * @description Append only the signed plan's exact evidence and its existing proof result.
+         */
+        post: operations["confirm_bot_historical_execution_recovery_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__historical_execution_recovery_confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/historical-execution-recovery/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Prepare Bot Historical Execution Recovery
+         * @description Read one exact Alpaca paper activity and bind it into a no-write plan.
+         */
+        post: operations["prepare_bot_historical_execution_recovery_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__historical_execution_recovery_prepare_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/recovery-actions/check": {
         parameters: {
             query?: never;
@@ -14186,6 +14226,86 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** HistoricalExecutionRecoveryConfirmRequest */
+        HistoricalExecutionRecoveryConfirmRequest: {
+            /** Confirmation Token */
+            confirmation_token: string;
+            plan: components["schemas"]["HistoricalExecutionRecoveryPlanResponse"];
+        };
+        /**
+         * HistoricalExecutionRecoveryPlanResponse
+         * @description One signed, read-only historical exact-execution recovery plan.
+         */
+        HistoricalExecutionRecoveryPlanResponse: {
+            /** Account Id */
+            account_id: string;
+            /** Authority Generation */
+            authority_generation: number;
+            /** Broker Order Id */
+            broker_order_id: string;
+            /** Confirmation Token */
+            confirmation_token: string;
+            /** Control Revision */
+            control_revision: number;
+            /** Cumulative Fill Id */
+            cumulative_fill_id: string;
+            /** Cumulative Price */
+            cumulative_price: number;
+            /** Cumulative Quantity */
+            cumulative_quantity: number;
+            /**
+             * Cumulative Side
+             * @enum {string}
+             */
+            cumulative_side: "BUY" | "SELL";
+            /** Db Identity Token */
+            db_identity_token: string;
+            /** Exact Price */
+            exact_price: number;
+            /** Exact Quantity */
+            exact_quantity: number;
+            /**
+             * Exact Side
+             * @enum {string}
+             */
+            exact_side: "BUY" | "SELL";
+            /** Exact Symbol */
+            exact_symbol: string;
+            /** Execution Id */
+            execution_id: string;
+            /** Expires At Ms */
+            expires_at_ms: number;
+            /** Order Ref */
+            order_ref: string;
+            /** Prepared At Ms */
+            prepared_at_ms: number;
+            /** Source Event At Ms */
+            source_event_at_ms: number;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            /** Uncertainty Id */
+            uncertainty_id: string;
+        };
+        /** HistoricalExecutionRecoveryPrepareRequest */
+        HistoricalExecutionRecoveryPrepareRequest: {
+            /** Concurrency Token */
+            concurrency_token: string;
+        };
+        /** HistoricalExecutionRecoveryReceiptResponse */
+        HistoricalExecutionRecoveryReceiptResponse: {
+            /** Applied */
+            applied: boolean;
+            /** Execution Id */
+            execution_id: string;
+            /** Order Ref */
+            order_ref: string;
+            /** Receipt Id */
+            receipt_id: string;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+            /** Uncertainty Id */
+            uncertainty_id: string;
+        };
         /**
          * HoldState
          * @description The account-level exposure-hold state, journal-derived (S6).
@@ -19055,7 +19175,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
+            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
             /** Blockers */
             blockers: components["schemas"]["OperatorBlocker"][];
             /** Concurrency Token */
@@ -19082,7 +19202,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
+            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
             /** Concurrency Token */
             concurrency_token: string;
             /** Idempotency Key */
@@ -19105,7 +19225,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
+            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
             /** Applied */
             applied: boolean;
             /** Concurrency Token */
@@ -19148,7 +19268,7 @@ export interface components {
             /** Stations */
             stations: components["schemas"]["StationApplicability"][];
             /** Supported Action Ids */
-            supported_action_ids: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority")[];
+            supported_action_ids: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority")[];
         };
         /**
          * ParameterStabilityResponse
@@ -20071,7 +20191,7 @@ export interface components {
              * Operation
              * @enum {string}
              */
-            operation: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
+            operation: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
             /** Ready */
             ready: boolean;
             /**
@@ -20300,7 +20420,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "reconcile_now" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
+            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
             /** Concurrency Token */
             concurrency_token: string;
         };
@@ -20317,7 +20437,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "reconcile_now" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
+            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
             /** Concurrency Token */
             concurrency_token: string;
             /** Execution Ref */
@@ -20331,7 +20451,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "reconcile_now" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
+            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
             /** Applied */
             applied: boolean;
             command: components["schemas"]["CommandResponse"] | null;
@@ -20355,7 +20475,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "reconcile_now" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
+            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
             /** Available */
             available: boolean;
             /** Concurrency Token */
@@ -26344,6 +26464,82 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SanitizedDataResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    confirm_bot_historical_execution_recovery_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__historical_execution_recovery_confirm_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+                strategy_instance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HistoricalExecutionRecoveryConfirmRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HistoricalExecutionRecoveryReceiptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    prepare_bot_historical_execution_recovery_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__historical_execution_recovery_prepare_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+                strategy_instance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HistoricalExecutionRecoveryPrepareRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HistoricalExecutionRecoveryPlanResponse"];
                 };
             };
             /** @description Validation Error */

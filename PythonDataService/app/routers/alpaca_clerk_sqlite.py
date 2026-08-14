@@ -30,6 +30,10 @@ from app.broker.alpaca.clerk.sqlite.commands import (
     submit_start_run,
     submit_stop_run,
 )
+from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import (
+    HistoricalExecutionRecoveryPlan,
+    HistoricalExecutionRecoveryRefused,
+)
 from app.broker.alpaca.clerk.sqlite.projections import (
     InvalidTimelineCursor,
     ProjectionReadError,
@@ -61,6 +65,10 @@ from app.broker.contract.registry import get_broker_registry
 from app.schemas.alpaca_clerk_sqlite import (
     ClerkProjectionResponse,
     CommandResponse,
+    HistoricalExecutionRecoveryConfirmRequest,
+    HistoricalExecutionRecoveryPlanResponse,
+    HistoricalExecutionRecoveryPrepareRequest,
+    HistoricalExecutionRecoveryReceiptResponse,
     ReconciliationResponse,
     RecoveryActionCheckRequest,
     RecoveryActionCheckResponse,
@@ -466,6 +474,100 @@ async def check_bot_recovery_action(
         strategy_instance_id=strategy_instance_id,
         body=body,
     )
+
+
+@router.post(
+    "/accounts/{account_id}/bots/{strategy_instance_id}/historical-execution-recovery/prepare",
+    response_model=HistoricalExecutionRecoveryPlanResponse,
+)
+async def prepare_bot_historical_execution_recovery(
+    account_id: str,
+    strategy_instance_id: str,
+    body: HistoricalExecutionRecoveryPrepareRequest,
+) -> HistoricalExecutionRecoveryPlanResponse:
+    """Read one exact Alpaca paper activity and bind it into a no-write plan."""
+    facade = _active_sqlite_facade(account_id)
+    try:
+        context = await asyncio.to_thread(
+            _read_projection,
+            facade.repository,
+            lambda reader: reader.recovery_context(
+                strategy_instance_id=strategy_instance_id,
+            ),
+        )
+        if context is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"reason": "unknown_strategy_instance"},
+            )
+        plan = await facade.prepare_historical_execution_recovery(
+            context=context,
+            concurrency_token=body.concurrency_token,
+        )
+    except StaleRecoveryTokenError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "stale_action_token", "message": str(exc)},
+        ) from exc
+    except RecoveryActionUnavailableError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason": "recovery_action_unavailable",
+                "message": str(exc),
+                "capability": RecoveryCapabilityResponse.model_validate(
+                    exc.capability
+                ).model_dump(mode="json"),
+            },
+        ) from exc
+    except HistoricalExecutionRecoveryRefused as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": exc.reason.lower(), "message": exc.message},
+        ) from exc
+    except ExecutionCoverageResolutionUnavailable as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "coverage_proof_insufficient", "message": str(exc)},
+        ) from exc
+    return HistoricalExecutionRecoveryPlanResponse.model_validate(plan)
+
+
+@router.post(
+    "/accounts/{account_id}/bots/{strategy_instance_id}/historical-execution-recovery/confirm",
+    response_model=HistoricalExecutionRecoveryReceiptResponse,
+)
+async def confirm_bot_historical_execution_recovery(
+    account_id: str,
+    strategy_instance_id: str,
+    body: HistoricalExecutionRecoveryConfirmRequest,
+) -> HistoricalExecutionRecoveryReceiptResponse:
+    """Append only the signed plan's exact evidence and its existing proof result."""
+    if (
+        body.plan.account_id != account_id
+        or body.plan.strategy_instance_id != strategy_instance_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason": "historical_recovery_scope_mismatch",
+                "message": "The recovery plan belongs to another account or bot.",
+            },
+        )
+    facade = _active_sqlite_facade(account_id)
+    try:
+        receipt = await facade.confirm_historical_execution_recovery(
+            plan=HistoricalExecutionRecoveryPlan(**body.plan.model_dump()),
+            confirmation_token=body.confirmation_token,
+        )
+    except HistoricalExecutionRecoveryRefused as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": exc.reason.lower(), "message": exc.message},
+        ) from exc
+    except (ExecutionLeaseLost, RepositoryPoisoned) as exc:
+        raise _unavailable_response(exc) from exc
+    return HistoricalExecutionRecoveryReceiptResponse.model_validate(receipt)
 
 
 async def _execute_presented_recovery_action(

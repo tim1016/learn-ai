@@ -20,6 +20,7 @@ from typing import Any
 from app.broker.alpaca.clerk.sqlite import projection_helpers
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     ActiveExecutionCoverageConflict,
+    cumulative_recovery_fills_for_order,
     execution_coverage_proof,
 )
 from app.broker.alpaca.clerk.sqlite.facts import UncertaintyRaisedFacts
@@ -802,6 +803,12 @@ class SqliteClerkProjectionReader:
         )
         exact = proof.exact_execution
         cumulative = proof.cumulative
+        if cumulative is None and not proof.execution_ids:
+            historical_fills = cumulative_recovery_fills_for_order(
+                self._conn,
+                order_ref=cause.order_ref,
+            )
+            cumulative = historical_fills[0] if len(historical_fills) == 1 else None
         return ProjectedExecutionCoverageConflict(
             uncertainty_id=uncertainty["uncertainty_id"],
             order_ref=cause.order_ref,

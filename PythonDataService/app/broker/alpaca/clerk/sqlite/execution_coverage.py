@@ -235,9 +235,21 @@ def _current_cumulative_recovery_fill(
     """Read the single aggregate identity carried by one quarantined slice."""
     if len(quarantine.conflicting_cumulative_fill_ids) != 1:
         return None
+    return cumulative_recovery_fill_by_id(
+        conn,
+        fill_id=quarantine.conflicting_cumulative_fill_ids[0],
+    )
+
+
+def cumulative_recovery_fill_by_id(
+    conn: sqlite3.Connection,
+    *,
+    fill_id: str,
+) -> CumulativeRecoveryFill | None:
+    """Return one typed aggregate-recovery row without inferring any exact slice."""
     row = conn.execute(
         "SELECT fill_id, order_ref, qty, price, side, evidence_source FROM fills WHERE fill_id = ?",
-        (quarantine.conflicting_cumulative_fill_ids[0],),
+        (fill_id,),
     ).fetchone()
     if row is None or row["evidence_source"] != "cumulative_recovery":
         return None
@@ -247,6 +259,24 @@ def _current_cumulative_recovery_fill(
         quantity=float(row["qty"]),
         price=float(row["price"]),
         side=row["side"],
+    )
+
+
+def cumulative_recovery_fills_for_order(
+    conn: sqlite3.Connection,
+    *,
+    order_ref: str,
+) -> tuple[CumulativeRecoveryFill, ...]:
+    """Return every active aggregate recovery row for a historical proof check."""
+    rows = conn.execute(
+        "SELECT fill_id FROM fills WHERE order_ref = ? AND evidence_source = 'cumulative_recovery' "
+        "ORDER BY fill_id ASC",
+        (order_ref,),
+    ).fetchall()
+    return tuple(
+        fill
+        for row in rows
+        if (fill := cumulative_recovery_fill_by_id(conn, fill_id=row["fill_id"])) is not None
     )
 
 

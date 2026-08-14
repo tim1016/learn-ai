@@ -6,6 +6,7 @@ import asyncio
 import threading
 import time
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -15,9 +16,14 @@ from httpx import ASGITransport
 from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
     ClerkStartupFailure,
+    get_active_clerk_runtime,
     set_active_clerk_runtime,
 )
 from app.broker.alpaca.clerk.journal import reset_clerk_settings_for_testing
+from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import (
+    HistoricalExecutionRecoveryPlan,
+)
+from app.broker.alpaca.clerk.sqlite.models import ExecutionCoverageResolutionReceipt
 from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
@@ -194,6 +200,69 @@ async def test_start_then_get_returns_the_command_resource(api: FastAPI) -> None
         )
         assert get.status_code == 200
         assert get.json() == body
+
+
+@pytest.mark.asyncio
+async def test_historical_execution_recovery_routes_preserve_the_signed_plan_boundary(
+    api: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The transport never turns the two-step recovery into a generic execute."""
+    runtime = get_active_clerk_runtime()
+    assert runtime is not None
+    assert isinstance(runtime.clerk, SqliteAlpacaClerkFacade)
+    plan = HistoricalExecutionRecoveryPlan(
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        uncertainty_id="uncertainty:historical-1",
+        order_ref="learn-ai/spy/v1:historical",
+        broker_order_id="alpaca-order-1",
+        execution_id="execution-1",
+        exact_symbol="SPY",
+        exact_quantity=1.0,
+        exact_price=100.0,
+        exact_side="BUY",
+        source_event_at_ms=1_700_000_000_000,
+        cumulative_fill_id="learn-ai/spy/v1:historical:1.000000000",
+        cumulative_quantity=1.0,
+        cumulative_price=100.0,
+        cumulative_side="BUY",
+        authority_generation=1,
+        db_identity_token="db-token",
+        control_revision=10,
+        prepared_at_ms=1_700_000_000_001,
+        expires_at_ms=1_700_000_120_001,
+        confirmation_token="a" * 64,
+    )
+    prepare = AsyncMock(return_value=plan)
+    confirm = AsyncMock(
+        return_value=ExecutionCoverageResolutionReceipt(
+            uncertainty_id=plan.uncertainty_id,
+            order_ref=plan.order_ref,
+            execution_id=plan.execution_id,
+            receipt_id="coverage-resolution:11",
+            recorded_at_ms=1_700_000_000_002,
+            applied=True,
+        )
+    )
+    monkeypatch.setattr(runtime.clerk, "prepare_historical_execution_recovery", prepare)
+    monkeypatch.setattr(runtime.clerk, "confirm_historical_execution_recovery", confirm)
+
+    async with _client(api) as client:
+        prepared = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/historical-execution-recovery/prepare",
+            json={"concurrency_token": "b" * 64},
+        )
+        confirmed = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/historical-execution-recovery/confirm",
+            json={"plan": prepared.json(), "confirmation_token": plan.confirmation_token},
+        )
+
+    assert prepared.status_code == 200
+    assert confirmed.status_code == 200
+    prepare.assert_awaited_once()
+    confirm.assert_awaited_once()
+    assert confirmed.json()["receipt_id"] == "coverage-resolution:11"
 
 
 @pytest.mark.asyncio

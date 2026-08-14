@@ -19242,6 +19242,202 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "HistoricalExecutionRecoveryConfirmRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmation_token": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Confirmation Token",
+            "type": "string"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/HistoricalExecutionRecoveryPlanResponse"
+          }
+        },
+        "required": [
+          "plan",
+          "confirmation_token"
+        ],
+        "title": "HistoricalExecutionRecoveryConfirmRequest",
+        "type": "object"
+      },
+      "HistoricalExecutionRecoveryPlanResponse": {
+        "description": "One signed, read-only historical exact-execution recovery plan.",
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "authority_generation": {
+            "title": "Authority Generation",
+            "type": "integer"
+          },
+          "broker_order_id": {
+            "title": "Broker Order Id",
+            "type": "string"
+          },
+          "confirmation_token": {
+            "title": "Confirmation Token",
+            "type": "string"
+          },
+          "control_revision": {
+            "title": "Control Revision",
+            "type": "integer"
+          },
+          "cumulative_fill_id": {
+            "title": "Cumulative Fill Id",
+            "type": "string"
+          },
+          "cumulative_price": {
+            "title": "Cumulative Price",
+            "type": "number"
+          },
+          "cumulative_quantity": {
+            "title": "Cumulative Quantity",
+            "type": "number"
+          },
+          "cumulative_side": {
+            "enum": [
+              "BUY",
+              "SELL"
+            ],
+            "title": "Cumulative Side",
+            "type": "string"
+          },
+          "db_identity_token": {
+            "title": "Db Identity Token",
+            "type": "string"
+          },
+          "exact_price": {
+            "title": "Exact Price",
+            "type": "number"
+          },
+          "exact_quantity": {
+            "title": "Exact Quantity",
+            "type": "number"
+          },
+          "exact_side": {
+            "enum": [
+              "BUY",
+              "SELL"
+            ],
+            "title": "Exact Side",
+            "type": "string"
+          },
+          "exact_symbol": {
+            "title": "Exact Symbol",
+            "type": "string"
+          },
+          "execution_id": {
+            "title": "Execution Id",
+            "type": "string"
+          },
+          "expires_at_ms": {
+            "title": "Expires At Ms",
+            "type": "integer"
+          },
+          "order_ref": {
+            "title": "Order Ref",
+            "type": "string"
+          },
+          "prepared_at_ms": {
+            "title": "Prepared At Ms",
+            "type": "integer"
+          },
+          "source_event_at_ms": {
+            "title": "Source Event At Ms",
+            "type": "integer"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "uncertainty_id": {
+            "title": "Uncertainty Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id",
+          "strategy_instance_id",
+          "uncertainty_id",
+          "order_ref",
+          "broker_order_id",
+          "execution_id",
+          "exact_symbol",
+          "exact_quantity",
+          "exact_price",
+          "exact_side",
+          "source_event_at_ms",
+          "cumulative_fill_id",
+          "cumulative_quantity",
+          "cumulative_price",
+          "cumulative_side",
+          "authority_generation",
+          "db_identity_token",
+          "control_revision",
+          "prepared_at_ms",
+          "expires_at_ms",
+          "confirmation_token"
+        ],
+        "title": "HistoricalExecutionRecoveryPlanResponse",
+        "type": "object"
+      },
+      "HistoricalExecutionRecoveryPrepareRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "concurrency_token": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Concurrency Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "concurrency_token"
+        ],
+        "title": "HistoricalExecutionRecoveryPrepareRequest",
+        "type": "object"
+      },
+      "HistoricalExecutionRecoveryReceiptResponse": {
+        "properties": {
+          "applied": {
+            "title": "Applied",
+            "type": "boolean"
+          },
+          "execution_id": {
+            "title": "Execution Id",
+            "type": "string"
+          },
+          "order_ref": {
+            "title": "Order Ref",
+            "type": "string"
+          },
+          "receipt_id": {
+            "title": "Receipt Id",
+            "type": "string"
+          },
+          "recorded_at_ms": {
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
+          "uncertainty_id": {
+            "title": "Uncertainty Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "uncertainty_id",
+          "order_ref",
+          "execution_id",
+          "receipt_id",
+          "recorded_at_ms",
+          "applied"
+        ],
+        "title": "HistoricalExecutionRecoveryReceiptResponse",
+        "type": "object"
+      },
       "HoldState": {
         "additionalProperties": false,
         "description": "The account-level exposure-hold state, journal-derived (S6).\n\nA hold is active when a ``HOLD_SET`` or ``UNEXPLAINED_ORDER`` line has no\nlater ``HOLD_CLEARED``. The latter keeps a crash between the observation and\nits companion HOLD_SET receipt fail-closed. ``reason_code`` is code-like\n(rendered through ``receiptLabel`` on the UI); ``reason`` is backend-authored\nwhat/why prose (rendered unpiped). When not held, every field but ``active``\nis ``None``.",
@@ -30167,6 +30363,7 @@
               "clear_hold",
               "record_inventory_baseline",
               "reconcile_now",
+              "recover_exact_execution_evidence",
               "resolve_execution_coverage",
               "cancel_verified_working_orders",
               "prepare_safe_flatten",
@@ -30246,6 +30443,7 @@
               "clear_hold",
               "record_inventory_baseline",
               "reconcile_now",
+              "recover_exact_execution_evidence",
               "resolve_execution_coverage",
               "cancel_verified_working_orders",
               "prepare_safe_flatten",
@@ -30312,6 +30510,7 @@
               "clear_hold",
               "record_inventory_baseline",
               "reconcile_now",
+              "recover_exact_execution_evidence",
               "resolve_execution_coverage",
               "cancel_verified_working_orders",
               "prepare_safe_flatten",
@@ -30410,6 +30609,7 @@
                 "clear_hold",
                 "record_inventory_baseline",
                 "reconcile_now",
+                "recover_exact_execution_evidence",
                 "resolve_execution_coverage",
                 "cancel_verified_working_orders",
                 "prepare_safe_flatten",
@@ -32736,6 +32936,7 @@
               "clear_hold",
               "record_inventory_baseline",
               "reconcile_now",
+              "recover_exact_execution_evidence",
               "resolve_execution_coverage",
               "cancel_verified_working_orders",
               "prepare_safe_flatten",
@@ -33418,6 +33619,7 @@
           "action_id": {
             "enum": [
               "reconcile_now",
+              "recover_exact_execution_evidence",
               "resolve_execution_coverage",
               "cancel_verified_working_orders",
               "prepare_safe_flatten",
@@ -33462,6 +33664,7 @@
           "action_id": {
             "enum": [
               "reconcile_now",
+              "recover_exact_execution_evidence",
               "resolve_execution_coverage",
               "cancel_verified_working_orders",
               "prepare_safe_flatten",
@@ -33516,6 +33719,7 @@
           "action_id": {
             "enum": [
               "reconcile_now",
+              "recover_exact_execution_evidence",
               "resolve_execution_coverage",
               "cancel_verified_working_orders",
               "prepare_safe_flatten",
@@ -33589,6 +33793,7 @@
           "action_id": {
             "enum": [
               "reconcile_now",
+              "recover_exact_execution_evidence",
               "resolve_execution_coverage",
               "cancel_verified_working_orders",
               "prepare_safe_flatten",
@@ -46400,6 +46605,162 @@
         "summary": "Fetch Aggregates",
         "tags": [
           "aggregates"
+        ]
+      }
+    },
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/historical-execution-recovery/confirm": {
+      "post": {
+        "description": "Append only the signed plan's exact evidence and its existing proof result.",
+        "operationId": "confirm_bot_historical_execution_recovery_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__historical_execution_recovery_confirm_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "strategy_instance_id",
+            "required": true,
+            "schema": {
+              "title": "Strategy Instance Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HistoricalExecutionRecoveryConfirmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoricalExecutionRecoveryReceiptResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Confirm Bot Historical Execution Recovery",
+        "tags": [
+          "alpaca-clerk-sqlite"
+        ]
+      }
+    },
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/historical-execution-recovery/prepare": {
+      "post": {
+        "description": "Read one exact Alpaca paper activity and bind it into a no-write plan.",
+        "operationId": "prepare_bot_historical_execution_recovery_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__historical_execution_recovery_prepare_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "strategy_instance_id",
+            "required": true,
+            "schema": {
+              "title": "Strategy Instance Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HistoricalExecutionRecoveryPrepareRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoricalExecutionRecoveryPlanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Prepare Bot Historical Execution Recovery",
+        "tags": [
+          "alpaca-clerk-sqlite"
         ]
       }
     },
