@@ -136,6 +136,12 @@ def fold_manual_ticket_state(conn: sqlite3.Connection, payload: dict[str, Any]) 
     )
     if updated.rowcount != 1:
         raise ValueError("manual ticket state requires its durable ticket and custody subject")
+    if facts.state == "CANCELED":
+        conn.execute(
+            "UPDATE manual_order_legs SET state = 'CANCELED', updated_at_ms = ? "
+            "WHERE ticket_id = ? AND state = 'RESERVED'",
+            (payload["recorded_at_ms"], facts.ticket_id),
+        )
 
 
 def sync_manual_ticket_effect_state(

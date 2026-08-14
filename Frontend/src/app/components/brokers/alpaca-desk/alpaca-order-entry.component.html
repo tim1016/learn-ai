@@ -77,7 +77,11 @@
               <dd><code>{{ leg.leg_id }}</code> · {{ leg.state | receiptLabel }}</dd>
               @if (leg.instruction; as instruction) {
                 <app-asset-identity [symbol]="instruction.symbol" size="sm" />
-                {{ instruction.side | receiptLabel }} {{ instruction.order_type | receiptLabel }} {{ instruction.time_in_force | receiptLabel }}
+                {{ instruction.side | receiptLabel }} {{ instruction.quantity }}
+                {{ instruction.order_type | receiptLabel }} {{ instruction.time_in_force | receiptLabel }}
+                @if (instruction.limit_price !== null) {
+                  at {{ instruction.limit_price }}
+                }
               }
               @if (leg.order; as order) {
                 <div>Order reference <code>{{ order.order_ref }}</code></div>

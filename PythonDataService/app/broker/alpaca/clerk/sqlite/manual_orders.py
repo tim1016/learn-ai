@@ -210,6 +210,14 @@ def next_manual_ticket_leg(
                 )
             return ManualTicketLeg(resource.leg_id, BrokerOrderLeg.model_validate(resource.instruction))
         prior_states = {leg.state for leg in ticket.legs[:index]}
+        for prior_leg in ticket.legs[:index]:
+            if prior_leg.order_ref is None:
+                continue
+            cancellation = repo.manual_order_cancellation(order_ref=prior_leg.order_ref)
+            if cancellation is not None and cancellation.state in {"ACCEPTED", "UNKNOWN"}:
+                raise ManualTicketContinuationError(
+                    "the ticket remains paused until the prior manual cancellation is terminal"
+                )
         if "UNKNOWN" in prior_states:
             raise ManualTicketContinuationError(
                 "the ticket remains paused until the prior manual order outcome is reconciled"
@@ -374,14 +382,10 @@ def accept_manual_order(
                 raise ManualTicketContinuationError(
                     "later manual ticket legs require an explicit Continue remaining legs confirmation"
                 )
-            prior_states = {item.state for item in ticket.legs[:current_index]}
-            if "UNKNOWN" in prior_states:
+            next_leg = next_manual_ticket_leg(repo, ticket_id=ticket_id)
+            if next_leg.leg_id != leg_id:
                 raise ManualTicketContinuationError(
-                    "the ticket remains paused until the prior manual order outcome is reconciled"
-                )
-            if prior_states & {"RESERVED", "ACCEPTED"}:
-                raise ManualTicketContinuationError(
-                    "the prior manual ticket leg has not reached broker acknowledgement"
+                    "this manual ticket leg is not the next eligible continuation"
                 )
         _require_manual_leg_admission(
             repo,

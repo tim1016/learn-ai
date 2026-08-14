@@ -129,7 +129,7 @@ describe('AlpacaOrderEntryComponent', () => {
           leg_id: '09d6d63e-6375-4e6d-8d20-3b1bf70c2465',
           sequence_index: 0,
           instruction_hash: 'hash',
-          instruction: { symbol: 'SPY', side: 'buy', quantity: 2, order_type: 'market', time_in_force: 'day' },
+          instruction: { symbol: 'SPY', side: 'buy', quantity: 2, order_type: 'limit', limit_price: 500, time_in_force: 'gtc' },
           state: 'IN_PROGRESS',
           command: { command_id: 'cmd', state: 'in_progress', action: 'SUBMIT_MANUAL_ORDER', receipt_id: null },
           effect: { effect_operation_id: 'effect', state: 'in_progress', kind: 'MANUAL_ORDER', terminal_receipt_id: null },
@@ -193,6 +193,7 @@ describe('AlpacaOrderEntryComponent', () => {
     );
     expect(submitOrder).not.toHaveBeenCalled();
     expect(await screen.findByText(/Ticket.*is Active/)).toBeTruthy();
+    expect(screen.getByText(/Buy 2 Limit GTC at 500/)).toBeTruthy();
     expect(screen.getByText('manual/operator/v1:abc')).toBeTruthy();
   });
 

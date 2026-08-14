@@ -13,15 +13,19 @@ from app.broker.alpaca.clerk.sqlite.economic_projection import (
 )
 from app.broker.alpaca.clerk.sqlite.execution_coverage import FILL_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.facts import (
+    CustodySubjectRegisteredFacts,
     ExecutionCorrectedFacts,
     ExecutionSliceFilledFacts,
     ManualOrderCancelResultFacts,
+    ManualTicketLegReservedFacts,
+    ManualTicketReservedFacts,
     UncertaintyRaisedFacts,
 )
 from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError
 from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import (
     ManualOrderCancelOwnershipError,
     ManualOrderCancelTerminalError,
+    accept_manual_order_cancellation,
     resolve_manual_order_cancellation,
     submit_manual_order_cancellation,
     submit_manual_ticket_cancellation,
@@ -30,6 +34,7 @@ from app.broker.alpaca.clerk.sqlite.manual_orders import (
     ManualTicketContinuationError,
     ManualTicketLeg,
     accept_manual_order,
+    next_manual_ticket_leg,
     submit_manual_order,
 )
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
@@ -335,6 +340,115 @@ async def test_unknown_first_ticket_leg_refuses_later_broker_contact(
     assert len(trade.submit_calls) == 1
     ticket = repo.manual_order_ticket(TICKET_ID)
     assert ticket is not None and ticket.legs[1].state == "RESERVED"
+
+
+@pytest.mark.asyncio
+async def test_pending_prior_cancellation_refuses_ticket_continuation_before_broker_contact(
+    repo: ClerkSqliteRepository,
+) -> None:
+    trade = FakeTrade(repo=repo)
+    second_leg_id = "5791929d-4a3f-4ffc-a15f-62c34cb6c873"
+    legs = (
+        ManualTicketLeg(leg_id=LEG_ID, instruction=market_buy()),
+        ManualTicketLeg(leg_id=second_leg_id, instruction=market_buy(quantity=2)),
+    )
+    first = await submit_manual_order(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id=OPERATOR_ID,
+        ticket_id=TICKET_ID,
+        leg_id=LEG_ID,
+        leg=market_buy(),
+        ticket_legs=legs,
+        trade=trade,
+    )
+    assert first.leg.order_ref is not None
+    accepted_cancel = accept_manual_order_cancellation(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id=OPERATOR_ID,
+        order_ref=first.leg.order_ref,
+        cancel_request_id="fbe501a8-ba5e-42f9-b3d8-41c6edaf8c32",
+    )
+    assert accepted_cancel.cancellation.state == "ACCEPTED"
+
+    with pytest.raises(ManualTicketContinuationError, match="prior manual cancellation"):
+        next_manual_ticket_leg(repo, ticket_id=TICKET_ID)
+    with pytest.raises(ManualTicketContinuationError, match="prior manual cancellation"):
+        await submit_manual_order(
+            repo,
+            account_id=ACCOUNT_ID,
+            operator_id=OPERATOR_ID,
+            ticket_id=TICKET_ID,
+            leg_id=second_leg_id,
+            leg=market_buy(quantity=2),
+            ticket_legs=legs,
+            continuation=True,
+            trade=trade,
+        )
+
+    assert len(trade.submit_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_ticket_cancel_closes_reserved_ticket_without_broker_contact(
+    repo: ClerkSqliteRepository,
+) -> None:
+    subject_id = manual_operator_subject_id(OPERATOR_ID)
+    repo.append_transition(
+        TransitionInput(
+            transition_kind="CUSTODY_SUBJECT_REGISTERED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="succeeded",
+            clerk_observed_at_ms=repo.clock(),
+            summary_code="CUSTODY_SUBJECT_REGISTERED",
+            facts_json=CustodySubjectRegisteredFacts(
+                subject_id=subject_id,
+                kind="MANUAL_OPERATOR",
+                strategy_instance_id=None,
+                operator_id=OPERATOR_ID,
+            ).to_facts_json(),
+        )
+    )
+    repo.append_transition(
+        TransitionInput(
+            transition_kind="MANUAL_TICKET_RESERVED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="accepted",
+            clerk_observed_at_ms=repo.clock(),
+            summary_code="MANUAL_TICKET_RESERVED",
+            facts_json=ManualTicketReservedFacts(
+                ticket_id=TICKET_ID,
+                subject_id=subject_id,
+                operator_id=OPERATOR_ID,
+                instruction_hash="ticket-hash",
+                legs=(
+                    ManualTicketLegReservedFacts(LEG_ID, "first-hash"),
+                    ManualTicketLegReservedFacts(
+                        "5791929d-4a3f-4ffc-a15f-62c34cb6c873", "second-hash"
+                    ),
+                ),
+            ).to_facts_json(),
+        )
+    )
+    trade = FakeTrade(repo=repo)
+
+    cancelled = await submit_manual_ticket_cancellation(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id=OPERATOR_ID,
+        ticket_id=TICKET_ID,
+        cancel_request_id="8f859881-16a7-4df6-a3d4-7889f3a4ef26",
+        trade=trade,
+    )
+
+    ticket = repo.manual_order_ticket(TICKET_ID)
+    assert cancelled == ()
+    assert ticket is not None and ticket.state == "CANCELED"
+    assert [leg.state for leg in ticket.legs] == ["CANCELED", "CANCELED"]
+    assert trade.cancel_calls == []
 
 
 @pytest.mark.asyncio

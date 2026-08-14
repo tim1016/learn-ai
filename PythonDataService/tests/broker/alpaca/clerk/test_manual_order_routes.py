@@ -12,6 +12,9 @@ from httpx import ASGITransport
 from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime, set_active_clerk_runtime
 from app.broker.alpaca.clerk.models import ChannelHealth
 from app.broker.alpaca.clerk.sqlite.custody_subjects import manual_operator_subject_id
+from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts
+from app.broker.alpaca.clerk.sqlite.manual_orders import ManualTicketLeg, submit_manual_order
+from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
@@ -394,6 +397,88 @@ async def test_manual_ticket_continue_requires_a_fresh_preview_and_activates_one
     assert cancelled.status_code == 202
     assert [leg["state"] for leg in cancelled.json()["legs"]] == ["CANCELED", "CANCELED"]
     assert len(port.cancel_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_manual_ticket_continuation_preview_checks_only_the_next_reserved_leg(
+    api: tuple[FastAPI, ClerkSqliteRepository, FakeAlpacaPort, dict[str, bool]],
+) -> None:
+    app, repo, port, _health = api
+    seeded = await submit_manual_order(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id="operator",
+        ticket_id="b5d667d3-6820-4c60-927a-2130f3c02aaf",
+        leg_id="91cd2b42-12b1-4c04-9caa-ffdfc346fbc2",
+        leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=2),
+        trade=port,
+    )
+    assert seeded.leg.effect_operation_id is not None and seeded.leg.order_ref is not None
+    fill = ExecutionSliceFilledFacts(
+        execution_id="manual-owned-long-for-preview",
+        symbol="SPY",
+        side="BUY",
+        slice_qty=2,
+        slice_price=500,
+        fee=None,
+        fee_fidelity="not_reported",
+        evidence_source="websocket",
+        source_event_at_ms=1_700_000_000_200,
+    )
+    repo.append_transition(
+        TransitionInput(
+            command_id=seeded.command.command_id,
+            effect_operation_id=seeded.leg.effect_operation_id,
+            order_ref=seeded.leg.order_ref,
+            transition_kind="EXECUTION_SLICE_FILLED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="in_progress",
+            source_event_at_ms=fill.source_event_at_ms,
+            clerk_observed_at_ms=repo.clock(),
+            summary_code="EXECUTION_SLICE_FILLED",
+            facts_json=fill.to_facts_json(),
+        )
+    )
+    ticket_id = "c721e10b-9c80-4caf-bacf-c3cd988aa539"
+    first_leg = ManualTicketLeg(
+        leg_id="3bfe6f0b-7ee2-4a12-ba54-2e3eb2e5522f",
+        instruction=BrokerOrderLeg(symbol="SPY", side="sell", quantity=1.5),
+    )
+    second_leg = ManualTicketLeg(
+        leg_id="65a12102-c7c7-4350-8648-7f9dc9377d4a",
+        instruction=BrokerOrderLeg(symbol="SPY", side="sell", quantity=0.5),
+    )
+    legs = (first_leg, second_leg)
+    await submit_manual_order(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id="operator",
+        ticket_id=ticket_id,
+        leg_id=first_leg.leg_id,
+        leg=first_leg.instruction,
+        ticket_legs=legs,
+        trade=port,
+    )
+    assert repo.manual_reduction_available_quantity(
+        subject_id=manual_operator_subject_id("operator"), symbol="SPY"
+    ) == pytest.approx(0.5, abs=1e-9, rel=0)
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        preview = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCOUNT_ID}/manual-orders/preview",
+            headers=_headers(),
+            json={
+                "ticket_id": ticket_id,
+                "legs": [
+                    {"leg_id": leg.leg_id, "instruction": leg.instruction.model_dump(mode="json")}
+                    for leg in legs
+                ],
+            },
+        )
+
+    assert preview.status_code == 200
+    assert preview.json()["capability"]["available"] is True
 
 
 @pytest.mark.asyncio

@@ -18,6 +18,7 @@ from app.broker.alpaca.clerk.sqlite.custody_subjects import manual_operator_subj
 from app.broker.alpaca.clerk.sqlite.facts import (
     ManualOrderCancelAcceptedFacts,
     ManualOrderCancelResultFacts,
+    ManualTicketStateFacts,
 )
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError
@@ -603,6 +604,23 @@ async def submit_manual_ticket_cancellation(
         ):
             order_refs.append(leg.order_ref)
     if not order_refs:
+        if all(leg.state in {"RESERVED", "SUCCEEDED", "FAILED", "CANCELED"} for leg in ticket.legs):
+            repo.append_transition(
+                TransitionInput(
+                    transition_kind="MANUAL_TICKET_CANCELED",
+                    custody_owner="ACCOUNT_CLERK",
+                    execution_authority="ACCOUNT_CLERK",
+                    operation_state="succeeded",
+                    clerk_observed_at_ms=repo.clock(),
+                    summary_code="MANUAL_TICKET_CANCELED",
+                    facts_json=ManualTicketStateFacts(
+                        ticket_id=ticket_id,
+                        subject_id=subject_id,
+                        state="CANCELED",
+                    ).to_facts_json(),
+                )
+            )
+            return ()
         raise ManualTicketCancelError("The ticket has no verified working manual order to cancel.")
 
     submissions: list[ManualOrderCancellationSubmission] = []

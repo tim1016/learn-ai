@@ -10,6 +10,7 @@ from app.broker.alpaca.clerk.sqlite.custody_subjects import manual_operator_subj
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.manual_orders import (
     ManualOrderSubmission,
+    ManualTicketContinuationError,
     ManualTicketLeg,
     manual_order_command_id,
     next_manual_ticket_leg,
@@ -149,6 +150,7 @@ async def preview_manual_order(
     operator_id: str,
     ticket_id: str,
     legs: tuple[ManualTicketLeg, ...],
+    continuation: bool = False,
 ) -> ManualOrderPreview:
     """Build the backend-owned capability and opaque freshness token."""
     try:
@@ -195,6 +197,39 @@ async def preview_manual_order(
         if existing_ticket is not None and existing_ticket.subject_id == subject_id
         else None
     )
+    try:
+        active_leg_id = (
+            next_manual_ticket_leg(repo, ticket_id=ticket_id).leg_id
+            if continuation_ticket_id is not None
+            else legs[0].leg_id
+        )
+    except ManualTicketContinuationError as exc:
+        return ManualOrderPreview(
+            capability=ManualOrderCapability(
+                False,
+                ManualOrderUnavailable("STALE_MANUAL_TICKET", str(exc)),
+            ),
+            preview_token=None,
+            authority_generation=None,
+            db_identity_token=None,
+            control_revision=None,
+            subject_id=subject_id,
+        )
+    if active_leg_id not in {leg.leg_id for leg in legs}:
+        return ManualOrderPreview(
+            capability=ManualOrderCapability(
+                False,
+                ManualOrderUnavailable(
+                    "STALE_MANUAL_TICKET",
+                    "The refreshed manual ticket no longer contains its next eligible leg.",
+                ),
+            ),
+            preview_token=None,
+            authority_generation=None,
+            db_identity_token=None,
+            control_revision=None,
+            subject_id=subject_id,
+        )
     for ticket_leg in legs:
         leg = ticket_leg.instruction
         if (
@@ -216,6 +251,8 @@ async def preview_manual_order(
                 control_revision=None,
                 subject_id=subject_id,
             )
+        if ticket_leg.leg_id != active_leg_id:
+            continue
         capability = await manual_order_capability(
             read=read,
             stream_health=stream_health,
@@ -383,6 +420,7 @@ async def submit_previewed_manual_order(
             operator_id=operator_id,
             ticket_id=ticket_id,
             legs=legs,
+            continuation=continuation,
         )
         if not preview.capability.available:
             assert preview.capability.unavailable is not None
