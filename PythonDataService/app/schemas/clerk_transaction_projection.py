@@ -148,6 +148,7 @@ class ClerkTransactionRow(BaseModel):
     transaction_kind: str = Field(min_length=1, max_length=64)
     transaction_origin: TransactionOrigin = "manual"
     order_instruction: ClerkOrderInstruction = Field(default_factory=ClerkOrderInstruction)
+    subject_id: str | None = Field(default=None, min_length=1, max_length=128)
     strategy_instance_id: str | None = Field(default=None, min_length=1, max_length=128)
     run_id: str | None = Field(default=None, min_length=1, max_length=128)
     intent_id: str | None = Field(default=None, min_length=1, max_length=256)
@@ -182,6 +183,7 @@ class ClerkTransactionSummaryRow(BaseModel):
     transaction_kind: str = Field(min_length=1, max_length=64)
     transaction_origin: TransactionOrigin = "manual"
     order_instruction: ClerkOrderInstruction = Field(default_factory=ClerkOrderInstruction)
+    subject_id: str | None = Field(default=None, min_length=1, max_length=128)
     strategy_instance_id: str | None = Field(default=None, min_length=1, max_length=128)
     run_id: str | None = Field(default=None, min_length=1, max_length=128)
     intent_id: str | None = Field(default=None, min_length=1, max_length=256)

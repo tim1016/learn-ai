@@ -17,6 +17,7 @@ from app.broker.alpaca.clerk.sqlite.economic_projection import ExecutionRow
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts
+from app.broker.alpaca.clerk.sqlite.manual_orders import accept_manual_order
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     OperationPage,
@@ -190,6 +191,63 @@ def test_account_desk_reads_operation_first_sqlite_projection(tmp_path: Path) ->
     assert detail.events[0].receipt["clerk_observed_at_ms"]
     assert detail.events[0].receipt["recorded_at_ms"]
     assert "source_event_at_ms" in detail.events[0].receipt
+
+
+def test_account_transaction_projection_includes_manual_ticket_without_bot_run(tmp_path: Path) -> None:
+    repo = ClerkSqliteRepository.initialize(
+        account_id="PA-ACCOUNT-DESK",
+        artifacts_root=tmp_path,
+    )
+    accepted = accept_manual_order(
+        repo,
+        account_id="PA-ACCOUNT-DESK",
+        operator_id="operator-42",
+        ticket_id="7de3a77c-b698-4e0d-a5d1-2f624574ed35",
+        leg_id="09d6d63e-6375-4e6d-8d20-3b1bf70c2465",
+        leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+    )
+    broker = _UnusedBroker()
+    set_active_clerk_runtime(
+        ActiveClerkRuntime(
+            authority_kind="sqlite",
+            clerk=SqliteAlpacaClerkFacade(
+                repo=repo,
+                read=broker,  # type: ignore[arg-type]
+                trade=broker,  # type: ignore[arg-type]
+            ),
+        )
+    )
+    try:
+        page = sqlite_transaction_history(
+            account_id="PA-ACCOUNT-DESK",
+            limit=25,
+            cursor=None,
+            origin="manual",
+            lifecycle_state=None,
+            strategy_instance_id=None,
+            run_id=None,
+        )
+        active, detail = sqlite_transaction_detail(
+            account_id="PA-ACCOUNT-DESK",
+            transaction_id=accepted.leg.effect_operation_id or "",
+        )
+    finally:
+        set_active_clerk_runtime(None)
+        repo.close()
+
+    assert page is not None
+    assert len(page.rows) == 1
+    summary = page.rows[0]
+    assert summary.transaction_origin == "manual"
+    assert summary.subject_id == "manual-operator:operator-42"
+    assert summary.strategy_instance_id is None
+    assert summary.run_id is None
+    assert summary.order_ref == accepted.leg.order_ref
+    assert active is True
+    assert detail is not None
+    assert detail.subject_id == "manual-operator:operator-42"
+    assert detail.receipt["subject_id"] == "manual-operator:operator-42"
+    assert [event.event_kind for event in detail.events] == ["MANUAL_ORDER_ACCEPTED"]
 
 
 def test_transaction_projection_preserves_each_effective_execution_economics(
@@ -451,7 +509,12 @@ def test_transaction_origin_uses_exact_ownership_ladder_without_namespace_prefix
     assert classify_transaction_origin(
         order_ref=manual_ref,
         strategy_instance_id=None,
+        custody_subject_kind="MANUAL_OPERATOR",
     ) == "manual"
+    assert classify_transaction_origin(
+        order_ref=manual_ref,
+        strategy_instance_id=None,
+    ) == "unknown"
     assert classify_transaction_origin(
         order_ref="learn-ai/spy-bot/v10:intent-3",
         strategy_instance_id="spy-bot",
@@ -733,17 +796,20 @@ def test_all_history_refuses_typed_hydration_that_crosses_a_control_revision(
 def _projected_operation(
     *,
     effect_operation_id: str,
-    strategy_instance_id: str,
+    strategy_instance_id: str | None,
     order_ref: str,
     created_at_ms: int,
+    subject_id: str | None = None,
+    custody_subject_kind: str | None = None,
 ) -> ProjectedOperation:
+    run_id = "run-1" if strategy_instance_id is not None else None
     return ProjectedOperation(
         effect_operation_id=effect_operation_id,
         kind="enter",
         state="succeeded",
         custody_owner="ACCOUNT_CLERK",
         strategy_instance_id=strategy_instance_id,
-        run_id="run-1",
+        run_id=run_id,
         created_at_ms=created_at_ms,
         updated_at_ms=created_at_ms,
         latest_transition_sequence=1,
@@ -754,7 +820,7 @@ def _projected_operation(
             kind="enter",
             action="submit",
             state="succeeded",
-            run_id="run-1",
+            run_id=run_id,
             receipt_id=None,
             created_at_ms=created_at_ms,
             updated_at_ms=created_at_ms,
@@ -771,6 +837,8 @@ def _projected_operation(
                 symbol="SPY",
             ),
         ),
+        subject_id=subject_id,
+        custody_subject_kind=custody_subject_kind,
     )
 
 
@@ -812,12 +880,16 @@ def test_origin_filtered_operation_page_scans_past_a_sparse_first_page() -> None
     )
     manual_op = _projected_operation(
         effect_operation_id="op-manual-1",
-        strategy_instance_id="manual-desk",
+        strategy_instance_id=None,
         order_ref=manual_ref,
         created_at_ms=1_000,
+        subject_id="manual-operator:operator",
+        custody_subject_kind="MANUAL_OPERATOR",
     )
     assert classify_transaction_origin(
-        order_ref=manual_ref, strategy_instance_id="manual-desk",
+        order_ref=manual_ref,
+        strategy_instance_id=None,
+        custody_subject_kind="MANUAL_OPERATOR",
     ) == "manual"
     pages = [
         OperationPage(
