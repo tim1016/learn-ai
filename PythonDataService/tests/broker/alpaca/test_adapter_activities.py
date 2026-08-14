@@ -86,7 +86,7 @@ async def test_activity_cursor_filters_the_contract_occurred_at_timestamp(
     assert [activity.activity_id for activity in activities] == [trade["id"]]
 
 
-async def test_activity_cursor_uses_one_bounded_newest_first_page(
+async def test_activity_cursor_paginates_a_bounded_newest_first_window(
     load_alpaca_fixture: AlpacaFixtureLoader,
 ) -> None:
     trade, non_trade = load_alpaca_fixture("activities", "activities.json")
@@ -107,5 +107,31 @@ async def test_activity_cursor_uses_one_bounded_newest_first_page(
 
     activities = await broker.list_activities(after_ms=cursor, limit=page_size)
 
-    assert client.page_tokens == [None]
+    assert client.page_tokens == [None, "old-24"]
+    assert [activity.activity_id for activity in activities] == ["qualifying"]
+
+
+async def test_activity_cursor_stops_after_its_strict_page_bound(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
+    trade, non_trade = load_alpaca_fixture("activities", "activities.json")
+    page_size = 25
+
+    def older_page(prefix: str) -> list[dict]:
+        return [{**non_trade, "id": f"{prefix}-{index}"} for index in range(page_size)]
+
+    client = _ActivitiesClient(
+        {
+            None: older_page("page-1"),
+            "page-1-24": older_page("page-2"),
+            "page-2-24": older_page("page-3"),
+            "page-3-24": [{**trade, "id": "must-not-fetch"}],
+        }
+    )
+    broker = AlpacaBroker(client=client)  # type: ignore[arg-type]
+    cursor = rfc3339_to_ms("2026-07-24T00:00:00Z")
+
+    activities = await broker.list_activities(after_ms=cursor, limit=page_size)
+
+    assert client.page_tokens == [None, "page-1-24", "page-2-24"]
     assert activities == []

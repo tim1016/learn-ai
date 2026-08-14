@@ -269,14 +269,20 @@ def cumulative_recovery_fills_for_order(
 ) -> tuple[CumulativeRecoveryFill, ...]:
     """Return every active aggregate recovery row for a historical proof check."""
     rows = conn.execute(
-        "SELECT fill_id FROM fills WHERE order_ref = ? AND evidence_source = 'cumulative_recovery' "
+        "SELECT fill_id, order_ref, qty, price, side FROM fills "
+        "WHERE order_ref = ? AND evidence_source = 'cumulative_recovery' "
         "ORDER BY fill_id ASC",
         (order_ref,),
     ).fetchall()
     return tuple(
-        fill
+        CumulativeRecoveryFill(
+            fill_id=row["fill_id"],
+            order_ref=row["order_ref"],
+            quantity=float(row["qty"]),
+            price=float(row["price"]),
+            side=row["side"],
+        )
         for row in rows
-        if (fill := cumulative_recovery_fill_by_id(conn, fill_id=row["fill_id"])) is not None
     )
 
 

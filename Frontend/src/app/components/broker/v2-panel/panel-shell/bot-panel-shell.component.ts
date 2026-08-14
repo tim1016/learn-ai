@@ -351,7 +351,7 @@ export class BotPanelShellComponent {
   }
 
   protected historicalRecoveryMessage(plan: HistoricalExecutionRecoveryPlan): string {
-    return `Alpaca paper activity ${plan.execution_id} records ${plan.exact_side} ${plan.exact_quantity} ${plan.exact_symbol} at ${plan.exact_price}. It exactly matches cumulative recovery fill ${plan.cumulative_fill_id}.`;
+    return `Alpaca paper activity ${plan.execution_id} records ${plan.exact_side} ${plan.exact_quantity} at ${plan.exact_price}. It exactly matches cumulative recovery fill ${plan.cumulative_fill_id}.`;
   }
 
   protected async confirmHistoricalExecutionRecovery(): Promise<void> {
@@ -429,17 +429,13 @@ export class BotPanelShellComponent {
       const value = reference.slice(separator + 1);
       switch (reference.slice(0, separator)) {
         case 'order':
-          query['timelineOrderRef'] ??= value;
-          break;
+          return { ...query, timelineOrderRef: value };
         case 'execution':
-          query['timelineExecutionId'] ??= value;
-          break;
+          return { ...query, timelineExecutionId: value };
         case 'uncertainty':
-          query['timelineUncertaintyId'] ??= value;
-          break;
+          return { ...query, timelineUncertaintyId: value };
         case 'operation':
-          query['timelineOperationRef'] ??= value;
-          break;
+          return { ...query, timelineOperationRef: value };
       }
     }
     return query;

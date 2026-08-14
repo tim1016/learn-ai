@@ -43,6 +43,7 @@ from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import (
     HistoricalExecutionRecoveryRefused,
     confirm_historical_execution_recovery,
     prepare_historical_execution_recovery,
+    replay_historical_execution_recovery,
 )
 from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import (
     ManualOrderCancellationSubmission,
@@ -58,7 +59,12 @@ from app.broker.alpaca.clerk.sqlite.manual_order_runtime import (
     submit_previewed_manual_order,
 )
 from app.broker.alpaca.clerk.sqlite.manual_orders import ManualOrderSubmission, ManualTicketLeg
-from app.broker.alpaca.clerk.sqlite.models import ManualOrderTicketResource, OrderResource, TransitionInput
+from app.broker.alpaca.clerk.sqlite.models import (
+    ExecutionCoverageResolutionReceipt,
+    ManualOrderTicketResource,
+    OrderResource,
+    TransitionInput,
+)
 from app.broker.alpaca.clerk.sqlite.reconcile import (
     AccountReconciliationResult,
 )
@@ -214,9 +220,19 @@ class SqliteAlpacaClerkFacade:
         *,
         plan: HistoricalExecutionRecoveryPlan,
         confirmation_token: str,
-    ):
+    ) -> ExecutionCoverageResolutionReceipt:
         """Append only the signed plan's exact evidence and closed resolution."""
         async with self._intake:
+            replay = await asyncio.to_thread(
+                replay_historical_execution_recovery,
+                repo=self._repo,
+                plan=plan,
+                confirmation_token=confirmation_token,
+                control_secret=settings.DATA_PLANE_CONTROL_SECRET,
+                allow_unauthenticated_control=settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL,
+            )
+            if replay is not None:
+                return replay
             try:
                 account = await self._read.get_account()
             except BrokerError as exc:

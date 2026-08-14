@@ -83,6 +83,12 @@ from app.services.sqlite_clerk_compat import failed_sqlite_projection
 
 router = APIRouter(prefix="/api/alpaca-clerk-sqlite", tags=["alpaca-clerk-sqlite"])
 ReadResult = TypeVar("ReadResult")
+_MAX_TIMELINE_CURSOR_LENGTH = 4_096
+_HISTORICAL_EXECUTION_RECOVERY_RESPONSES = {
+    404: {"description": "The selected SQLite authority or bot is unavailable."},
+    409: {"description": "The signed plan or exact-evidence proof is no longer safe to apply."},
+    503: {"description": "SQLite projection or Alpaca evidence is temporarily unavailable."},
+}
 
 
 async def _repo(account_id: str) -> ClerkSqliteRepository:
@@ -183,6 +189,17 @@ def _projection_read_error(exc: ProjectionReadError) -> HTTPException:
         detail={
             "reason": "sqlite_projection_unavailable",
             "message": str(exc),
+        },
+    )
+
+
+def _historical_recovery_refusal(exc: HistoricalExecutionRecoveryRefused) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={
+            "reason": exc.reason.lower(),
+            "message": exc.message,
+            "next_step": exc.next_step,
         },
     )
 
@@ -373,7 +390,7 @@ async def _timeline(
 )
 async def get_account_timeline(
     account_id: str,
-    cursor: str | None = Query(default=None, max_length=1024),
+    cursor: str | None = Query(default=None, max_length=_MAX_TIMELINE_CURSOR_LENGTH),
     page_size: int = Query(default=25, ge=1, le=100),
     strategy_instance_id: str | None = Query(default=None, min_length=1, max_length=256),
     order_ref: str | None = Query(default=None, min_length=1, max_length=512),
@@ -404,7 +421,7 @@ async def get_account_timeline(
 async def get_bot_timeline(
     account_id: str,
     strategy_instance_id: str,
-    cursor: str | None = Query(default=None, max_length=1024),
+    cursor: str | None = Query(default=None, max_length=_MAX_TIMELINE_CURSOR_LENGTH),
     page_size: int = Query(default=25, ge=1, le=100),
     order_ref: str | None = Query(default=None, min_length=1, max_length=512),
     effect_operation_id: str | None = Query(default=None, min_length=1, max_length=512),
@@ -516,6 +533,7 @@ async def check_bot_recovery_action(
 @router.post(
     "/accounts/{account_id}/bots/{strategy_instance_id}/historical-execution-recovery/prepare",
     response_model=HistoricalExecutionRecoveryPlanResponse,
+    responses=_HISTORICAL_EXECUTION_RECOVERY_RESPONSES,
 )
 async def prepare_bot_historical_execution_recovery(
     account_id: str,
@@ -558,21 +576,25 @@ async def prepare_bot_historical_execution_recovery(
             },
         ) from exc
     except HistoricalExecutionRecoveryRefused as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={"reason": exc.reason.lower(), "message": exc.message},
-        ) from exc
+        raise _historical_recovery_refusal(exc) from exc
     except ExecutionCoverageResolutionUnavailable as exc:
         raise HTTPException(
             status_code=409,
-            detail={"reason": "coverage_proof_insufficient", "message": str(exc)},
+            detail={
+                "reason": "coverage_proof_insufficient",
+                "message": str(exc),
+                "next_step": "Keep new exposure blocked and refresh the recovery evidence.",
+            },
         ) from exc
+    except ProjectionReadError as exc:
+        raise _projection_read_error(exc) from exc
     return HistoricalExecutionRecoveryPlanResponse.model_validate(plan)
 
 
 @router.post(
     "/accounts/{account_id}/bots/{strategy_instance_id}/historical-execution-recovery/confirm",
     response_model=HistoricalExecutionRecoveryReceiptResponse,
+    responses=_HISTORICAL_EXECUTION_RECOVERY_RESPONSES,
 )
 async def confirm_bot_historical_execution_recovery(
     account_id: str,
@@ -589,6 +611,7 @@ async def confirm_bot_historical_execution_recovery(
             detail={
                 "reason": "historical_recovery_scope_mismatch",
                 "message": "The recovery plan belongs to another account or bot.",
+                "next_step": "Return to the affected bot and prepare a fresh recovery plan.",
             },
         )
     facade = _active_sqlite_facade(account_id)
@@ -598,10 +621,7 @@ async def confirm_bot_historical_execution_recovery(
             confirmation_token=body.confirmation_token,
         )
     except HistoricalExecutionRecoveryRefused as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={"reason": exc.reason.lower(), "message": exc.message},
-        ) from exc
+        raise _historical_recovery_refusal(exc) from exc
     except (ExecutionLeaseLost, RepositoryPoisoned) as exc:
         raise _unavailable_response(exc) from exc
     return HistoricalExecutionRecoveryReceiptResponse.model_validate(receipt)

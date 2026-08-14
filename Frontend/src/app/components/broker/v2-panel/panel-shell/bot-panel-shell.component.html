@@ -99,6 +99,7 @@
     [open]="true"
     heading="Confirm exact execution recovery"
     [message]="historicalRecoveryMessage(draft.plan)"
+    [assetSymbol]="draft.plan.exact_symbol"
     consequence="The Clerk will retain this exact paper execution and run its existing no-delta coverage proof. It will not submit, cancel, or modify any broker order."
     requiredToken="RECOVER"
     confirmLabel="Recover exact evidence"

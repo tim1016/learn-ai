@@ -28,6 +28,8 @@ from app.broker.contract.models import (
 )
 from app.broker.contract.registry import BrokerRegistry, get_broker_registry
 
+_ACTIVITY_MAX_PAGES = 3
+
 # Alpaca free / paper-account capabilities, verified 2026-07 (spec §3). Honest
 # differences declared as data so callers gate on capability, not identity:
 # IEX gaps on illiquid symbols (bars_may_gap), 30-symbol / 1-connection stream
@@ -98,16 +100,36 @@ class AlpacaBroker:
             payloads = await self._client.list_activities(limit=limit)
             return [adapter.from_alpaca_activity(payload) for payload in payloads]
 
-        # Recovery is explicitly a bounded window. Alpaca's page cursor has a
-        # different ordering than the canonical occurred-at cursor, so following
-        # it would turn a reconnect into an unbounded history scan. One newest-
-        # first page plus durable idempotency is the honest recovery contract.
-        payloads = await self._client.list_activities(limit=limit)
-        return [
-            activity
-            for activity in (adapter.from_alpaca_activity(payload) for payload in payloads)
-            if activity.occurred_at_ms is not None and activity.occurred_at_ms >= after_ms
-        ]
+        # Recovery is explicitly bounded. Alpaca's page cursor is not the
+        # canonical occurred-at cursor, so follow at most this small fixed
+        # number of newest-first pages and filter mapped contract records here.
+        activities: list[BrokerActivity] = []
+        seen_activity_ids: set[str] = set()
+        page_token: str | None = None
+        for _ in range(_ACTIVITY_MAX_PAGES):
+            payloads = await self._client.list_activities(
+                limit=limit,
+                page_token=page_token,
+            )
+            for activity in (adapter.from_alpaca_activity(payload) for payload in payloads):
+                if (
+                    activity.activity_id not in seen_activity_ids
+                    and activity.occurred_at_ms is not None
+                    and activity.occurred_at_ms >= after_ms
+                ):
+                    seen_activity_ids.add(activity.activity_id)
+                    activities.append(activity)
+            if len(payloads) < limit:
+                break
+            next_page_token = payloads[-1].get("id")
+            if (
+                not isinstance(next_page_token, str)
+                or not next_page_token
+                or next_page_token == page_token
+            ):
+                break
+            page_token = next_page_token
+        return activities
 
     async def list_assets(
         self,

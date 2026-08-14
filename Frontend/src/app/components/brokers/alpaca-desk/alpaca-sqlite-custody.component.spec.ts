@@ -219,6 +219,39 @@ describe('AlpacaSqliteCustodyComponent', () => {
     expect(getSqliteClerkTimeline).toHaveBeenNthCalledWith(2, 'PA1', { cursor: 'cursor-11' });
   });
 
+  it('continues a timeline page with the filters that minted its cursor', async () => {
+    const getSqliteClerkTimeline = vi.fn()
+      .mockResolvedValueOnce(timeline({
+        entries: [timelineEntry(12)],
+        next_cursor: 'cursor-11',
+        total_entries: 2,
+      }))
+      .mockResolvedValueOnce(timeline({
+        entries: [timelineEntry(11)],
+        next_cursor: null,
+        total_entries: 2,
+      }));
+    await renderCustody(
+      {
+        getSqliteClerkProjection: vi.fn().mockResolvedValue(projection()),
+        getSqliteClerkTimeline,
+      },
+      { timelineQuery: { orderRef: 'order:enter:12' } },
+    );
+
+    await screen.findAllByText('effect:enter:12');
+    fireEvent.input(screen.getByLabelText('Order reference'), {
+      target: { value: 'order:edited-before-load-more' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Load more events' }));
+
+    await screen.findAllByText('effect:enter:11');
+    expect(getSqliteClerkTimeline).toHaveBeenNthCalledWith(2, 'PA1', {
+      orderRef: 'order:enter:12',
+      cursor: 'cursor-11',
+    });
+  });
+
   it('opens exact deep-link filters and updates immutable evidence on row selection', async () => {
     const getSqliteClerkTimeline = vi.fn().mockResolvedValue(timeline({
       entries: [timelineEntry(12), timelineEntry(11)],
@@ -400,6 +433,33 @@ describe('AlpacaSqliteCustodyComponent', () => {
     expect(await screen.findByText('Stale Action Token')).toBeTruthy();
     expect(screen.getByText('The evidence changed after this action was presented.')).toBeTruthy();
     expect(screen.getByText('Refresh and review the current Clerk action.')).toBeTruthy();
+  });
+
+  it('renders a recovery capability nested next step on an unavailable action', async () => {
+    const executeSqliteRecoveryAction = vi.fn().mockRejectedValue(
+      new HttpErrorResponse({
+        status: 409,
+        error: {
+          detail: {
+            reason: 'recovery_action_unavailable',
+            message: 'The presented recovery action is no longer available.',
+            capability: {
+              next_step: 'Review the refreshed recovery capability before trying again.',
+            },
+          },
+        },
+      }),
+    );
+    await renderCustody({
+      getSqliteClerkProjection: vi.fn().mockResolvedValue(projection()),
+      executeSqliteRecoveryAction,
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Reconcile now' }));
+
+    expect(
+      await screen.findByText('Review the refreshed recovery capability before trying again.'),
+    ).toBeTruthy();
   });
 
   it('renders policy-authored unavailability and no generic recovery action', async () => {

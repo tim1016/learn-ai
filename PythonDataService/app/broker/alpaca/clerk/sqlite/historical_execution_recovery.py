@@ -9,12 +9,16 @@ then delegates the append-only replacement to the existing coverage proof.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import math
 from dataclasses import asdict, dataclass
 
-from app.broker.alpaca.clerk.sqlite.execution_coverage import CumulativeRecoveryFill
+from app.broker.alpaca.clerk.sqlite.execution_coverage import (
+    CumulativeRecoveryFill,
+    exact_replaces_cumulative,
+)
 from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.models import ExecutionCoverageResolutionReceipt
@@ -39,9 +43,18 @@ _ACTIVITY_LOOKBACK_MS = 86_400_000
 class HistoricalExecutionRecoveryRefused(Exception):
     """A typed, fail-closed refusal for historical exact-evidence recovery."""
 
-    def __init__(self, reason: str, message: str) -> None:
+    def __init__(
+        self,
+        reason: str,
+        message: str,
+        next_step: str = (
+            "Keep new exposure blocked, refresh the Clerk recovery action, and retry only "
+            "with fresh evidence."
+        ),
+    ) -> None:
         self.reason = reason
         self.message = message
+        self.next_step = next_step
         super().__init__(message)
 
 
@@ -201,11 +214,7 @@ def _require_matching_economics(
         evidence_source="activity_recovery",
         source_event_at_ms=activity.occurred_at_ms or 0,
     )
-    if (
-        exact.side != cumulative.side
-        or not math.isclose(exact.slice_qty, cumulative.quantity, abs_tol=1e-9, rel_tol=0)
-        or not math.isclose(exact.slice_price, cumulative.price, abs_tol=1e-9, rel_tol=0)
-    ):
+    if not exact_replaces_cumulative(exact=exact, cumulative=cumulative):
         raise HistoricalExecutionRecoveryRefused(
             "EXECUTION_ECONOMICS_MISMATCH",
             "The exact Alpaca execution does not match the cumulative Clerk recovery total.",
@@ -236,7 +245,10 @@ async def prepare_historical_execution_recovery(
         control_secret=control_secret,
         allow_unauthenticated_control=allow_unauthenticated_control,
     )
-    target = repo.historical_execution_recovery_target(capability.execution_ref)
+    target = await asyncio.to_thread(
+        repo.historical_execution_recovery_target,
+        capability.execution_ref,
+    )
     if target.strategy_instance_id != context.strategy_instance_id:
         raise HistoricalExecutionRecoveryRefused(
             "RECOVERY_SCOPE_CHANGED",
@@ -295,16 +307,21 @@ async def prepare_historical_execution_recovery(
     )
 
 
-def confirm_historical_execution_recovery(
+def replay_historical_execution_recovery(
     *,
     repo: ClerkSqliteRepository,
     plan: HistoricalExecutionRecoveryPlan,
     confirmation_token: str,
     control_secret: str,
     allow_unauthenticated_control: bool,
-    observed_account: BrokerAccountSnapshot,
-) -> ExecutionCoverageResolutionReceipt:
-    """Verify a plan, then append quarantine and closed resolution under one writer."""
+) -> ExecutionCoverageResolutionReceipt | None:
+    """Return an authenticated durable resolution before TTL or broker checks.
+
+    A completed resolution is append-only evidence, not a new broker-facing
+    mutation. Replaying it remains possible after a client retry delay or a
+    later broker-account outage, while both supplied tokens still authenticate
+    the complete signed plan.
+    """
     key = _require_plan_key(
         control_secret=control_secret,
         allow_unauthenticated_control=allow_unauthenticated_control,
@@ -318,6 +335,36 @@ def confirm_historical_execution_recovery(
             "RECOVERY_PLAN_INVALID",
             "The historical execution recovery plan does not verify. Prepare a new plan.",
         )
+    receipt = repo.execution_coverage_resolution_receipt(plan.uncertainty_id)
+    if receipt is None:
+        return None
+    if receipt.order_ref != plan.order_ref or receipt.execution_id != plan.execution_id:
+        raise HistoricalExecutionRecoveryRefused(
+            "RECOVERY_REPLAY_MISMATCH",
+            "The durable recovery receipt does not match this signed execution plan.",
+        )
+    return receipt
+
+
+def confirm_historical_execution_recovery(
+    *,
+    repo: ClerkSqliteRepository,
+    plan: HistoricalExecutionRecoveryPlan,
+    confirmation_token: str,
+    control_secret: str,
+    allow_unauthenticated_control: bool,
+    observed_account: BrokerAccountSnapshot,
+) -> ExecutionCoverageResolutionReceipt:
+    """Verify a plan, then append quarantine and closed resolution under one writer."""
+    replay = replay_historical_execution_recovery(
+        repo=repo,
+        plan=plan,
+        confirmation_token=confirmation_token,
+        control_secret=control_secret,
+        allow_unauthenticated_control=allow_unauthenticated_control,
+    )
+    if replay is not None:
+        return replay
     if repo.clock() > plan.expires_at_ms:
         raise HistoricalExecutionRecoveryRefused(
             "RECOVERY_PLAN_EXPIRED",
@@ -359,4 +406,5 @@ __all__ = [
     "HistoricalExecutionRecoveryRefused",
     "confirm_historical_execution_recovery",
     "prepare_historical_execution_recovery",
+    "replay_historical_execution_recovery",
 ]

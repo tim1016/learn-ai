@@ -89,7 +89,9 @@ function blockerPosture(blocker: OperatorBlocker): OperatorPostureView {
 
 function projectionPosture(projection: SqliteClerkProjection): OperatorPostureView {
   const guidance = projection.guidance;
-  const primaryAction = projection.recovery_actions.find((action) => action.primary) ?? null;
+  const primaryAction = projection.recovery_actions.find((action) => action.primary)
+    ?? projection.recovery_actions.find((action) => !action.available)
+    ?? null;
   const isHealthy = !guidance.action_required
     && projection.uncertainties.length === 0
     && projection.authority_health === 'healthy';

@@ -39,6 +39,7 @@ export class PanelActionButtonComponent {
   readonly pending = input(false);
   readonly tone = input<PanelActionTone>('neutral');
   readonly suppressedBlockerId = input<string | null>(null);
+  readonly suppressedBlockerReasonCode = input<string | null>(null);
 
   readonly triggered = output<PanelActionTrigger>();
   protected readonly confirmationOpen = signal(false);

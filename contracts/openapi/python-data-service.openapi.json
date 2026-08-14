@@ -19263,6 +19263,7 @@
         "type": "object"
       },
       "HistoricalExecutionRecoveryPlanResponse": {
+        "additionalProperties": false,
         "description": "One signed, read-only historical exact-execution recovery plan.",
         "properties": {
           "account_id": {
@@ -46676,6 +46677,12 @@
             },
             "description": "Successful Response"
           },
+          "404": {
+            "description": "The selected SQLite authority or bot is unavailable."
+          },
+          "409": {
+            "description": "The signed plan or exact-evidence proof is no longer safe to apply."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -46685,6 +46692,9 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "description": "SQLite projection or Alpaca evidence is temporarily unavailable."
           }
         },
         "summary": "Confirm Bot Historical Execution Recovery",
@@ -46754,6 +46764,12 @@
             },
             "description": "Successful Response"
           },
+          "404": {
+            "description": "The selected SQLite authority or bot is unavailable."
+          },
+          "409": {
+            "description": "The signed plan or exact-evidence proof is no longer safe to apply."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -46763,6 +46779,9 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "description": "SQLite projection or Alpaca evidence is temporarily unavailable."
           }
         },
         "summary": "Prepare Bot Historical Execution Recovery",
@@ -47178,7 +47197,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "maxLength": 1024,
+                  "maxLength": 4096,
                   "type": "string"
                 },
                 {
@@ -47693,7 +47712,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "maxLength": 1024,
+                  "maxLength": 4096,
                   "type": "string"
                 },
                 {

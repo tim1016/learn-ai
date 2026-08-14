@@ -26506,6 +26506,20 @@ export interface operations {
                     "application/json": components["schemas"]["HistoricalExecutionRecoveryReceiptResponse"];
                 };
             };
+            /** @description The selected SQLite authority or bot is unavailable. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The signed plan or exact-evidence proof is no longer safe to apply. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -26514,6 +26528,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+            /** @description SQLite projection or Alpaca evidence is temporarily unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -26544,6 +26565,20 @@ export interface operations {
                     "application/json": components["schemas"]["HistoricalExecutionRecoveryPlanResponse"];
                 };
             };
+            /** @description The selected SQLite authority or bot is unavailable. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The signed plan or exact-evidence proof is no longer safe to apply. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -26552,6 +26587,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+            /** @description SQLite projection or Alpaca evidence is temporarily unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

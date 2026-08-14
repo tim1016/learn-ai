@@ -142,13 +142,17 @@ describe('PanelActionButtonComponent', () => {
           ],
         }),
         suppressedBlockerId: 'BOT_ALREADY_STOPPED',
+        suppressedBlockerReasonCode: 'BOT_ALREADY_STOPPED',
       },
     });
 
     expect(screen.queryByText('The bot is already stopped.')).toBeNull();
-    expect(screen.getByRole('alert').textContent).toContain(
-      'The Clerk cannot prove current account custody.',
-    );
+    expect(screen.getByText('Bot Already Stopped')).toBeTruthy();
+    expect(
+      screen.getAllByRole('alert').some((alert) =>
+        alert.textContent?.includes('The Clerk cannot prove current account custody.'),
+      ),
+    ).toBe(true);
     expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy();
   });
 

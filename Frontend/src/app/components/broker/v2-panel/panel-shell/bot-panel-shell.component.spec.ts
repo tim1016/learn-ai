@@ -600,7 +600,10 @@ describe('BotPanelShellComponent', () => {
       'historical-token-17',
     );
     expect(screen.getByRole('heading', { name: 'Confirm exact execution recovery' })).toBeTruthy();
-    expect(screen.getByText(/alpaca-execution-1 records BUY 2.5 QQQ/i)).toBeTruthy();
+    expect(screen.getByText(/alpaca-execution-1 records BUY 2.5 at/i)).toBeTruthy();
+    expect(
+      fixture.nativeElement.querySelector('app-typed-halt-confirm app-asset-identity')?.textContent,
+    ).toContain('QQQ');
 
     fireEvent.input(screen.getByTestId('typed-halt-confirm-input'), {
       target: { value: 'RECOVER' },
@@ -624,7 +627,7 @@ describe('BotPanelShellComponent', () => {
     );
   });
 
-  it('deep-links the Account Desk timeline with the action evidence filters', async () => {
+  it('deep-links the Account Desk with one exact, non-cross-correlated evidence identity', async () => {
     mockService.getLiveSnapshot.mockResolvedValueOnce(custodyTimelineSnapshot());
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
@@ -649,9 +652,6 @@ describe('BotPanelShellComponent', () => {
         lens: 'operator',
         timelineBot: 'sid-001',
         timelineUncertaintyId: 'uncertainty:17',
-        timelineOrderRef: 'learn-ai/qqq/1',
-        timelineExecutionId: 'alpaca-execution-1',
-        timelineOperationRef: 'effect:sid-001:recovery',
       },
     });
   });

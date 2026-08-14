@@ -399,7 +399,7 @@ class TimelinePageResponse(BaseModel):
 class HistoricalExecutionRecoveryPlanResponse(BaseModel):
     """One signed, read-only historical exact-execution recovery plan."""
 
-    model_config = ConfigDict(frozen=True, from_attributes=True)
+    model_config = ConfigDict(frozen=True, from_attributes=True, extra="forbid")
 
     account_id: str
     strategy_instance_id: str

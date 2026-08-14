@@ -9,6 +9,7 @@ import {
   signal,
   viewChild,
 } from '@angular/core';
+import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 
 /**
  * Shared confirmation dialog for backend-authored broker actions.
@@ -19,6 +20,7 @@ import {
 @Component({
   selector: 'app-typed-halt-confirm',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [AssetIdentityComponent],
   host: {
     '(document:keydown.escape)': 'onEscape()',
   },
@@ -32,6 +34,8 @@ export class TypedHaltConfirmComponent {
   readonly heading = input.required<string>();
   /** Body copy explaining what the action does.  Operator-language. */
   readonly message = input.required<string>();
+  /** Optional tradeable instrument rendered through the shared identity control. */
+  readonly assetSymbol = input<string | null>(null);
   /** Explicit consequence copy authored by the backend. */
   readonly consequence = input.required<string>();
   /** Token the operator must type to enable the confirm button. An empty

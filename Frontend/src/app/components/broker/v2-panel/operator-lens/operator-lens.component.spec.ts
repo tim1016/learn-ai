@@ -733,7 +733,7 @@ describe('OperatorLensComponent', () => {
     expect(actionRequested).toHaveBeenCalledWith({ action: recoveryAction, reason: null });
   });
 
-  it('combines an operator action with its current gate without duplicate blocker copy', async () => {
+  it('keeps a disabled operator action reason code visible with its current gate', async () => {
     const fakeSvc = makeFakePanelService();
     const blockedExplanation = 'The bot is already stopped with no attributed exposure.';
     const flattenAction: PanelAction = {
@@ -820,6 +820,11 @@ describe('OperatorLensComponent', () => {
     expect(disclosure.getAttribute('aria-expanded')).toBe('true');
 
     expect(await screen.findByRole('button', { name: 'Flatten & stop' })).toBeTruthy();
+    expect(
+      screen.getAllByRole('alert').some((alert) =>
+        alert.textContent?.includes('Bot Already Stopped Flat'),
+      ),
+    ).toBe(true);
     expect(screen.queryByLabelText('Operator commands')).toBeNull();
   });
 });

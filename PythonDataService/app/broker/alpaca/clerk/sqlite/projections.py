@@ -760,6 +760,9 @@ class SqliteClerkProjectionReader:
         exact = proof.exact_execution
         cumulative = proof.cumulative
         if cumulative is None and not proof.execution_ids:
+            # A historical conflict can predate durable execution IDs. Surface its
+            # sole order-scoped aggregate row for operator evidence only; the
+            # proof remains unavailable until exact execution evidence is retained.
             historical_fills = cumulative_recovery_fills_for_order(
                 self._conn,
                 order_ref=cause.order_ref,

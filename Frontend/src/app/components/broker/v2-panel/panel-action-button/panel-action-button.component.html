@@ -12,6 +12,12 @@
     {{ action().label }}
   </button>
 
+  @if (suppressedBlockerReasonCode(); as code) {
+    <div class="panel-action__blocker" role="alert">
+      <strong>{{ code | receiptLabel }}</strong>
+    </div>
+  }
+
   @for (blocker of visibleBlockers(); track blocker.condition.id) {
     <div class="panel-action__blocker" role="alert">
       <strong>{{ blocker.condition.id | receiptLabel }}</strong>

@@ -11,6 +11,7 @@ import pytest
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.facts import (
+    ExecutionCorrectedFacts,
     UncertaintyRaisedFacts,
 )
 from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import (
@@ -24,6 +25,7 @@ from app.broker.alpaca.clerk.sqlite.projection_errors import InvalidTimelineCurs
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.recovery_policy import build_recovery_catalog
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.uncertainty import raise_uncertainty
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
     ExecutionCoverageConflictCause,
@@ -260,6 +262,133 @@ def test_timeline_filters_bind_one_historical_conflict_and_cursor_scope(tmp_path
     assert by_order.anchor_sequence >= row["sequence"]
 
 
+def test_timeline_uncertainty_filter_includes_refreshed_episode(tmp_path: Path) -> None:
+    repo, _ = _seed_historical_conflict(tmp_path)
+    try:
+        cause = ExecutionCoverageConflictCause(
+            order_ref="historical-order-ref",
+            execution_id="historical-refresh-execution",
+        ).to_mapping()
+        assert raise_uncertainty(
+            repo,
+            strategy_instance_id=SID,
+            reason_code=EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+            headline="Exact evidence needs review",
+            explanation="The first retained evidence needs a review.",
+            operator_impact="New exposure remains blocked.",
+            next_step="Review the exact retained evidence.",
+            cause_facts=cause,
+        )
+        active = repo.active_uncertainty(
+            scope="CUSTODY_SUBJECT",
+            reason_code=EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+            strategy_instance_id=SID,
+        )
+        assert active is not None
+        uncertainty_id = active["uncertainty_id"]
+
+        assert raise_uncertainty(
+            repo,
+            strategy_instance_id=SID,
+            reason_code=EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+            headline="Exact evidence needs review",
+            explanation="The refreshed retained evidence needs a review.",
+            operator_impact="New exposure remains blocked.",
+            next_step="Review the exact retained evidence.",
+            cause_facts=cause,
+        )
+        reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
+        try:
+            page = reader.timeline_page(uncertainty_id=uncertainty_id)
+        finally:
+            reader.close()
+        refresh = repo._conn.execute(
+            "SELECT proof_reference FROM custody_transitions "
+            "WHERE transition_kind = 'UNCERTAINTY_REFRESHED' ORDER BY sequence DESC LIMIT 1"
+        ).fetchone()
+    finally:
+        repo.close()
+
+    assert refresh is not None
+    assert refresh["proof_reference"] == uncertainty_id
+    assert {entry.transition_kind for entry in page.entries} >= {
+        "UNCERTAINTY_RAISED",
+        "UNCERTAINTY_REFRESHED",
+    }
+
+
+@pytest.mark.asyncio
+async def test_timeline_execution_filter_includes_a_correction_of_that_execution(
+    tmp_path: Path,
+) -> None:
+    repo, _ = _seed_historical_conflict(tmp_path)
+    try:
+        context, action = _recovery_action(repo)
+        read = _Read(activities=[_activity()])
+        plan = await prepare_historical_execution_recovery(
+            repo=repo,
+            read=read,
+            context=context,
+            concurrency_token=action.concurrency_token,
+            control_secret="test-control-secret",
+            allow_unauthenticated_control=False,
+        )
+        confirm_historical_execution_recovery(
+            repo=repo,
+            plan=plan,
+            confirmation_token=plan.confirmation_token,
+            control_secret="test-control-secret",
+            allow_unauthenticated_control=False,
+            observed_account=await read.get_account(),
+        )
+        recovered = repo._conn.execute(
+            "SELECT strategy_instance_id, run_id, command_id, effect_operation_id, order_ref "
+            "FROM custody_transitions WHERE transition_kind = 'EXECUTION_COVERAGE_QUARANTINED'"
+        ).fetchone()
+        assert recovered is not None
+        correction = ExecutionCorrectedFacts(
+            execution_id="historical-execution-5-corrected",
+            superseded_execution_ref=EXECUTION_ID,
+            symbol="SPY",
+            side="BUY",
+            corrected_qty=5.0,
+            corrected_price=100.0,
+            why="Alpaca corrected the retained historical execution.",
+        )
+        assert repo.append_execution_correction_or_raise(
+            correction=TransitionInput(
+                strategy_instance_id=recovered["strategy_instance_id"],
+                run_id=recovered["run_id"],
+                command_id=recovered["command_id"],
+                effect_operation_id=recovered["effect_operation_id"],
+                order_ref=recovered["order_ref"],
+                transition_kind="EXECUTION_CORRECTED",
+                custody_owner="ACCOUNT_CLERK",
+                execution_authority="ACCOUNT_CLERK",
+                operation_state="succeeded",
+                clerk_observed_at_ms=repo.clock(),
+                summary_code="EXECUTION_CORRECTED",
+                facts_json=correction.to_facts_json(),
+            ),
+            build_uncertainty=lambda reason: pytest.fail(
+                f"valid correction unexpectedly raised uncertainty: {reason}"
+            ),
+        ) == "appended"
+        correction_row = repo._conn.execute(
+            "SELECT sequence FROM custody_transitions WHERE transition_kind = 'EXECUTION_CORRECTED'"
+        ).fetchone()
+        assert correction_row is not None
+        reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
+        try:
+            page = reader.timeline_page(execution_id=EXECUTION_ID)
+        finally:
+            reader.close()
+    finally:
+        repo.close()
+
+    assert correction_row["sequence"] in {entry.sequence for entry in page.entries}
+
+
 @pytest.mark.asyncio
 async def test_historical_exact_execution_recovery_prepares_confirms_and_replays(
     tmp_path: Path,
@@ -320,6 +449,52 @@ async def test_historical_exact_execution_recovery_prepares_confirms_and_replays
 
 
 @pytest.mark.asyncio
+async def test_historical_execution_recovery_replays_after_plan_expiry_without_account_recheck(
+    tmp_path: Path,
+) -> None:
+    repo, _ = _seed_historical_conflict(tmp_path)
+    try:
+        context, action = _recovery_action(repo)
+        paper = _Read(activities=[_activity()])
+        plan = await prepare_historical_execution_recovery(
+            repo=repo,
+            read=paper,
+            context=context,
+            concurrency_token=action.concurrency_token,
+            control_secret="test-control-secret",
+            allow_unauthenticated_control=False,
+        )
+        receipt = confirm_historical_execution_recovery(
+            repo=repo,
+            plan=plan,
+            confirmation_token=plan.confirmation_token,
+            control_secret="test-control-secret",
+            allow_unauthenticated_control=False,
+            observed_account=await paper.get_account(),
+        )
+        assert receipt.applied is True
+
+        clock = repo.clock
+        assert isinstance(clock, _Clock)
+        clock.value = plan.expires_at_ms + 1
+        replay = confirm_historical_execution_recovery(
+            repo=repo,
+            plan=plan,
+            confirmation_token=plan.confirmation_token,
+            control_secret="test-control-secret",
+            allow_unauthenticated_control=False,
+            observed_account=await _Read(
+                activities=[_activity()],
+                account_mode="live",
+            ).get_account(),
+        )
+
+        assert replay == replace(receipt, applied=False)
+    finally:
+        repo.close()
+
+
+@pytest.mark.asyncio
 async def test_historical_exact_execution_recovery_resumes_after_quarantine_commit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -352,6 +527,14 @@ async def test_historical_exact_execution_recovery_resumes_after_quarantine_comm
                 allow_unauthenticated_control=False,
                 observed_account=await read.get_account(),
             )
+        assert len(
+            [
+                transition
+                for transition in repo.transitions_for_order(plan.order_ref)
+                if transition["transition_kind"] == "EXECUTION_COVERAGE_QUARANTINED"
+            ]
+        ) == 1
+        assert repo.active_uncertainties_for_admission(strategy_instance_id=SID)
         monkeypatch.setattr(repo, "resolve_execution_coverage_conflict", original_resolve)
 
         receipt = confirm_historical_execution_recovery(
@@ -484,6 +667,7 @@ async def test_historical_exact_execution_recovery_fails_closed_for_unproven_evi
                 allow_unauthenticated_control=False,
             )
         assert captured.value.reason == reason
+        assert captured.value.next_step
         assert repo.active_uncertainties_for_admission(strategy_instance_id=SID)
     finally:
         repo.close()

@@ -93,10 +93,10 @@ class ClerkSqliteRepositoryExecutionCoverageApi:
                 raise ExecutionCoverageResolutionUnavailable(
                     "The conflict no longer has its Clerk-owned order identity."
                 )
-            strategy = self._conn.execute(
-                "SELECT symbol FROM strategy_instances WHERE strategy_instance_id = ?",
-                (conflict.strategy_instance_id,),
-            ).fetchone()
+            strategy = reads.strategy_instance(
+                self._conn,
+                conflict.strategy_instance_id,
+            )
             uncertainty = self._conn.execute(
                 "SELECT observed_at_ms FROM uncertainties WHERE uncertainty_id = ?",
                 (uncertainty_id,),

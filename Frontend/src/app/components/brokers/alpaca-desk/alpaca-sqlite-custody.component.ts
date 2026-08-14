@@ -55,6 +55,11 @@ function actionProblem(error: unknown, fallback: string): ActionProblem {
       remediation: null,
     };
   }
+  const capability = detail['capability'];
+  const capabilityNextStep =
+    isRecord(capability) && typeof capability['next_step'] === 'string'
+      ? capability['next_step']
+      : null;
   return {
     reason: typeof detail['reason'] === 'string' ? detail['reason'] : null,
     message: typeof detail['message'] === 'string' ? detail['message'] : fallback,
@@ -63,7 +68,7 @@ function actionProblem(error: unknown, fallback: string): ActionProblem {
         ? detail['remediation']
         : typeof detail['next_step'] === 'string'
           ? detail['next_step']
-          : null,
+          : capabilityNextStep,
   };
 }
 
@@ -98,6 +103,7 @@ export class AlpacaSqliteCustodyComponent {
   });
   protected readonly timeline = signal<readonly SqliteTimelineEntry[]>([]);
   protected readonly timelineFilters = signal<SqliteTimelineQuery>({});
+  private readonly timelineAppliedFilters = signal<SqliteTimelineQuery>({});
   protected readonly timelineOpen = signal(false);
   protected readonly timelineLoading = signal(false);
   protected readonly timelineLoadingMore = signal(false);
@@ -264,7 +270,7 @@ export class AlpacaSqliteCustodyComponent {
     this.timelineLoadingMore.set(true);
     try {
       const page = await this.brokers.getSqliteClerkTimeline(this.accountId(), {
-        ...this.timelineFilters(),
+        ...this.timelineAppliedFilters(),
         cursor,
       });
       this.timeline.update((current) => [...current, ...page.entries]);
@@ -284,11 +290,12 @@ export class AlpacaSqliteCustodyComponent {
     this.timelineLoading.set(true);
     const { cursor: _cursor, pageSize: _pageSize, ...filters } = query;
     this.timelineFilters.set(filters);
+    this.timelineAppliedFilters.set(filters);
     this.selectedTimelineEntry.set(null);
     try {
       const page = await this.brokers.getSqliteClerkTimeline(
         this.accountId(),
-        this.timelineFilters(),
+        filters,
       );
       this.timeline.set(page.entries);
       this.timelineNextCursor.set(page.next_cursor);

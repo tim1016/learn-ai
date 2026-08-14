@@ -26,6 +26,7 @@
         [pending]="actionPending()"
         [tone]="control.tone"
         [suppressedBlockerId]="control.suppressedBlockerId"
+        [suppressedBlockerReasonCode]="control.suppressedBlockerReasonCode"
         (triggered)="actionRequested.emit($event)"
       />
     </div>
@@ -56,6 +57,7 @@
                 [pending]="actionPending()"
                 [tone]="control.tone"
                 [suppressedBlockerId]="control.suppressedBlockerId"
+                [suppressedBlockerReasonCode]="control.suppressedBlockerReasonCode"
                 (triggered)="actionRequested.emit($event)"
               />
             </div>

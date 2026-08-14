@@ -24,12 +24,14 @@ from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import (
     HistoricalExecutionRecoveryPlan,
 )
 from app.broker.alpaca.clerk.sqlite.models import ExecutionCoverageResolutionReceipt
+from app.broker.alpaca.clerk.sqlite.projection_errors import ProjectionReadError
 from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     RepositoryPoisoned,
 )
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.alpaca.clerk.sqlite.timeline_query import TimelineFilters, _encode_cursor
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerAccountSnapshot
 from app.routers import alpaca_clerk_sqlite
@@ -184,6 +186,45 @@ async def test_timeline_route_forwards_all_exact_evidence_filters(
 
 
 @pytest.mark.asyncio
+async def test_timeline_route_accepts_a_maximum_scope_cursor(api: FastAPI) -> None:
+    filters = TimelineFilters(
+        strategy_instance_id="s" * 256,
+        order_ref="o" * 512,
+        effect_operation_id="e" * 512,
+        uncertainty_id="u" * 256,
+        execution_id="x" * 256,
+        transition_kind="t" * 128,
+        sequence=1,
+    )
+    cursor = _encode_cursor(
+        account_id=ACCOUNT_ID,
+        authority_generation=1,
+        filters=filters,
+        anchor_sequence=0,
+        before_sequence=1,
+    )
+    assert len(cursor) > 1_024
+    assert len(cursor) <= 4_096
+
+    async with _client(api) as client:
+        response = await client.get(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/timeline",
+            params={
+                "cursor": cursor,
+                "strategy_instance_id": filters.strategy_instance_id,
+                "order_ref": filters.order_ref,
+                "effect_operation_id": filters.effect_operation_id,
+                "uncertainty_id": filters.uncertainty_id,
+                "execution_id": filters.execution_id,
+                "transition_kind": filters.transition_kind,
+                "sequence": filters.sequence,
+            },
+        )
+
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_failed_activated_authority_exposes_typed_account_recovery_state() -> None:
     set_active_clerk_runtime(
         ActiveClerkRuntime(
@@ -307,7 +348,33 @@ async def test_historical_execution_recovery_routes_preserve_the_signed_plan_bou
     assert confirmed.status_code == 200
     prepare.assert_awaited_once()
     confirm.assert_awaited_once()
+    assert prepare.await_args.kwargs["concurrency_token"] == "b" * 64
+    assert confirm.await_args.kwargs["plan"] == plan
+    assert confirm.await_args.kwargs["confirmation_token"] == plan.confirmation_token
     assert confirmed.json()["receipt_id"] == "coverage-resolution:11"
+
+
+@pytest.mark.asyncio
+async def test_historical_execution_recovery_prepare_maps_projection_read_failure(
+    api: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unavailable_context(*_args, **_kwargs):
+        raise ProjectionReadError("simulated stale projection")
+
+    monkeypatch.setattr(
+        alpaca_clerk_sqlite.SqliteClerkProjectionReader,
+        "recovery_context",
+        unavailable_context,
+    )
+    async with _client(api) as client:
+        response = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/historical-execution-recovery/prepare",
+            json={"concurrency_token": "b" * 64},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["reason"] == "sqlite_projection_unavailable"
 
 
 @pytest.mark.asyncio

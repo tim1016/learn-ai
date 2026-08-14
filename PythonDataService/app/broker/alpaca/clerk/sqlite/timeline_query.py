@@ -162,9 +162,12 @@ def _append_uncertainty_filter(
     """Match an episode's raise, resolution, and retained exact evidence."""
     clauses.append(
         "(ct.sequence = ? OR json_extract(ct.facts_json, '$.uncertainty_id') = ? "
-        "OR json_extract(ct.facts_json, '$.uncertainty.uncertainty_id') = ?)"
+        "OR json_extract(ct.facts_json, '$.uncertainty.uncertainty_id') = ? "
+        "OR ct.proof_reference = ?)"
     )
-    parameters.extend((_uncertainty_sequence(uncertainty_id), uncertainty_id, uncertainty_id))
+    parameters.extend(
+        (_uncertainty_sequence(uncertainty_id), uncertainty_id, uncertainty_id, uncertainty_id)
+    )
 
 
 def _append_execution_filter(
@@ -178,9 +181,10 @@ def _append_execution_filter(
         "OR json_extract(ct.facts_json, '$.conflict_execution_id') = ? "
         "OR json_extract(ct.facts_json, '$.exact_execution.execution_id') = ? "
         "OR json_extract(ct.facts_json, '$.cause_facts.execution_id') = ? "
-        "OR json_extract(ct.facts_json, '$.uncertainty.cause_facts.execution_id') = ?)"
+        "OR json_extract(ct.facts_json, '$.uncertainty.cause_facts.execution_id') = ? "
+        "OR json_extract(ct.facts_json, '$.superseded_execution_ref') = ?)"
     )
-    parameters.extend((execution_id,) * 5)
+    parameters.extend((execution_id,) * 6)
 
 
 def _uncertainty_sequence(uncertainty_id: str) -> int:

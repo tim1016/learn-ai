@@ -182,6 +182,28 @@ describe('AlpacaOperatorPostureComponent', () => {
     expect(screen.getByText(/Bot scope required/i)).toBeTruthy();
   });
 
+  it('keeps an unavailable recovery visible when no capability is designated primary', async () => {
+    await render(AlpacaOperatorPostureComponent, {
+      inputs: {
+        projection: projection({
+          recovery_actions: [action({
+            action_id: 'recover_exact_execution_evidence',
+            label: 'Recover exact execution evidence',
+            available: false,
+            primary: false,
+            unavailable_reason_code: 'PAPER_QUALIFICATION_REQUIRED',
+            unavailable_reason: 'Complete paper qualification before recovery.',
+          })],
+        }),
+      },
+    });
+
+    expect(
+      screen.getByRole('button', { name: 'Recover exact execution evidence' }).hasAttribute('disabled'),
+    ).toBe(true);
+    expect(screen.getByText('Complete paper qualification before recovery.')).toBeTruthy();
+  });
+
   it('renders the exact OperatorBlocker move for a fix-elsewhere disposition', async () => {
     const view = await render(AlpacaOperatorPostureComponent, {
       inputs: {

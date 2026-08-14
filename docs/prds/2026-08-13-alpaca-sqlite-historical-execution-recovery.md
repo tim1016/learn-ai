@@ -166,8 +166,9 @@ one Clerk transaction:
 4. returns a durable receipt covering both appended transitions and the
    unchanged economic total.
 
-A repeated confirmation returns the original durable result. It must not append
-duplicate quarantine, resolution, fill, or position changes.
+A repeated confirmation returns the original durable receipt identity with
+`applied=false`. It must not append duplicate quarantine, resolution, fill, or
+position changes.
 
 ### 5.3 Failure remains actionable and fail-closed
 

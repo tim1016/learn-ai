@@ -30,6 +30,7 @@ interface ReadinessControl {
   readonly action: PanelAction | null;
   readonly check: ReadinessCheck;
   readonly suppressedBlockerId: string | null;
+  readonly suppressedBlockerReasonCode: string | null;
   readonly tone: PanelActionTone;
 }
 
@@ -93,6 +94,7 @@ export class OperatorReadinessComponent {
       action,
       check,
       suppressedBlockerId: null,
+      suppressedBlockerReasonCode: null,
       tone,
     };
   });
@@ -112,10 +114,14 @@ export class OperatorReadinessComponent {
           ? actions.get(check.operation) ?? null
           : null;
 
+        const firstBlockerId = action?.blockers[0]?.condition.id ?? null;
         return {
           action,
           check,
-          suppressedBlockerId: action?.blockers[0]?.condition.id ?? null,
+          // The gate owns the operator prose. A disabled action still exposes
+          // its stable reason code beside the compact action control.
+          suppressedBlockerId: firstBlockerId,
+          suppressedBlockerReasonCode: action?.enabled ? null : firstBlockerId,
           tone: tone ?? 'neutral',
         };
       });
