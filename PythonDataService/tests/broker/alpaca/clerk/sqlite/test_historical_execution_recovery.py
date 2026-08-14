@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
-from typing import Literal
+from typing import Literal, NoReturn, cast
 
 import pytest
 
+from app.broker.alpaca.clerk.sqlite import runtime as sqlite_runtime
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.facts import (
@@ -15,6 +16,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     UncertaintyRaisedFacts,
 )
 from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import (
+    HistoricalExecutionRecoveryPlan,
     HistoricalExecutionRecoveryRefused,
     confirm_historical_execution_recovery,
     prepare_historical_execution_recovery,
@@ -22,9 +24,14 @@ from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import (
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.projection_errors import InvalidTimelineCursor
+from app.broker.alpaca.clerk.sqlite.projection_models import RecoveryCapability
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
-from app.broker.alpaca.clerk.sqlite.recovery_policy import build_recovery_catalog
+from app.broker.alpaca.clerk.sqlite.recovery_policy import (
+    RecoveryPolicyContext,
+    build_recovery_catalog,
+)
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.sqlite.uncertainty import raise_uncertainty
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
@@ -89,7 +96,9 @@ class _Read:
             observed_at_ms=NOW_MS,
         )
 
-    async def list_activities(self, *, after_ms: int | None = None, limit: int = 100):
+    async def list_activities(
+        self, *, after_ms: int | None = None, limit: int = 100
+    ) -> list[BrokerActivity]:
         if self._error is not None:
             raise self._error
         return self._activities[:limit]
@@ -206,7 +215,9 @@ def _seed_historical_conflict(tmp_path: Path) -> tuple[ClerkSqliteRepository, st
     return repo, uncertainty[0]["uncertainty_id"]
 
 
-def _recovery_action(repo: ClerkSqliteRepository):
+def _recovery_action(
+    repo: ClerkSqliteRepository,
+) -> tuple[RecoveryPolicyContext, RecoveryCapability]:
     reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
     try:
         context = reader.recovery_context(strategy_instance_id=SID)
@@ -514,7 +525,7 @@ async def test_historical_exact_execution_recovery_resumes_after_quarantine_comm
         )
         original_resolve = repo.resolve_execution_coverage_conflict
 
-        def _interrupted_resolution(**_kwargs):
+        def _interrupted_resolution(**_kwargs: object) -> NoReturn:
             raise RuntimeError("simulated process interruption after quarantine")
 
         monkeypatch.setattr(repo, "resolve_execution_coverage_conflict", _interrupted_resolution)
@@ -668,6 +679,35 @@ async def test_historical_exact_execution_recovery_fails_closed_for_unproven_evi
             )
         assert captured.value.reason == reason
         assert captured.value.next_step
+        assert repo.active_uncertainties_for_admission(strategy_instance_id=SID)
+    finally:
+        repo.close()
+
+
+@pytest.mark.asyncio
+async def test_facade_refuses_unexpected_account_evidence_failure_without_unblocking_intake(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo, _ = _seed_historical_conflict(tmp_path)
+    try:
+        facade = SqliteAlpacaClerkFacade(
+            repo=repo,
+            read=_Read(activities=[], error=RuntimeError("unexpected broker failure")),
+            trade=_Read(activities=[]),
+        )
+
+        def no_replay(**_kwargs: object) -> None:
+            return None
+
+        monkeypatch.setattr(sqlite_runtime, "replay_historical_execution_recovery", no_replay)
+        with pytest.raises(HistoricalExecutionRecoveryRefused) as captured:
+            await facade.confirm_historical_execution_recovery(
+                plan=cast(HistoricalExecutionRecoveryPlan, object()),
+                confirmation_token="unused",
+            )
+
+        assert captured.value.reason == "HISTORICAL_EVIDENCE_UNAVAILABLE"
         assert repo.active_uncertainties_for_admission(strategy_instance_id=SID)
     finally:
         repo.close()

@@ -107,12 +107,12 @@ function timelineEntry(sequence: number): SqliteTimelinePage['entries'][number] 
     command_id: `command:enter:${sequence}`,
     order_ref: `order:enter:${sequence}`,
     broker_order_id: `alpaca-order-${sequence}`,
-    transition_kind: 'ORDER_EVIDENCE_OBSERVED',
+    transition_kind: 'ORDER_FILL_OBSERVED',
     operation_state: 'in_progress',
     broker_state: 'accepted',
     custody_owner: 'ACCOUNT_CLERK',
     execution_authority: 'ACCOUNT_CLERK',
-    summary_code: 'ORDER_EVIDENCE_OBSERVED',
+    summary_code: 'ORDER_FILL_OBSERVED',
     proof_reference: `proof:${sequence}`,
     source_event_at_ms: NOW - 300,
     clerk_observed_at_ms: NOW - 200,
@@ -134,6 +134,14 @@ function timeline(
     entries: [timelineEntry(12)],
     ...overrides,
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 async function renderCustody(
@@ -262,7 +270,7 @@ describe('AlpacaSqliteCustodyComponent', () => {
       orderRef: 'order:enter:12',
       uncertaintyId: 'uncertainty:12',
       executionId: 'execution:12',
-      transitionKind: 'ORDER_EVIDENCE_OBSERVED',
+      transitionKind: 'ORDER_FILL_OBSERVED',
       sequence: 12,
     };
     await renderCustody(
@@ -280,6 +288,31 @@ describe('AlpacaSqliteCustodyComponent', () => {
     expect(screen.getByLabelText('Selected immutable evidence').textContent).toContain(
       'effect:enter:11',
     );
+  });
+
+  it('loads the newest deep-link query after an earlier timeline request is in flight', async () => {
+    const firstTimeline = deferred<SqliteTimelinePage>();
+    const getSqliteClerkTimeline = vi.fn()
+      .mockReturnValueOnce(firstTimeline.promise)
+      .mockResolvedValueOnce(timeline({ entries: [timelineEntry(11)] }));
+    const view = await renderCustody(
+      {
+        getSqliteClerkProjection: vi.fn().mockResolvedValue(projection()),
+        getSqliteClerkTimeline,
+      },
+      { timelineQuery: { orderRef: 'order:enter:12' } },
+    );
+
+    await waitFor(() => expect(getSqliteClerkTimeline).toHaveBeenCalledOnce());
+    view.fixture.componentRef.setInput('timelineQuery', { orderRef: 'order:enter:11' });
+    firstTimeline.resolve(timeline());
+
+    await waitFor(() => {
+      expect(getSqliteClerkTimeline).toHaveBeenLastCalledWith('PA1', {
+        orderRef: 'order:enter:11',
+      });
+    });
+    expect((await screen.findAllByText('effect:enter:11')).length).toBeGreaterThan(0);
   });
 
   it('explains when an exact evidence filter has no matching immutable transition', async () => {

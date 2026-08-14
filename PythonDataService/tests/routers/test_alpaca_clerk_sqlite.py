@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from dataclasses import fields
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -25,6 +26,8 @@ from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import (
 )
 from app.broker.alpaca.clerk.sqlite.models import ExecutionCoverageResolutionReceipt
 from app.broker.alpaca.clerk.sqlite.projection_errors import ProjectionReadError
+from app.broker.alpaca.clerk.sqlite.projection_models import TimelinePage
+from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
@@ -36,6 +39,7 @@ from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerAccountSnapshot
 from app.routers import alpaca_clerk_sqlite
 from app.routers.alpaca_clerk_sqlite import router
+from app.schemas.alpaca_clerk_sqlite import HistoricalExecutionRecoveryPlanResponse
 
 ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
@@ -148,7 +152,9 @@ async def test_timeline_route_forwards_all_exact_evidence_filters(
     captured: dict[str, object] = {}
     original = alpaca_clerk_sqlite.SqliteClerkProjectionReader.timeline_page
 
-    def timeline_page(self, **kwargs):
+    def timeline_page(
+        self: SqliteClerkProjectionReader, **kwargs: object
+    ) -> TimelinePage:
         captured.update(kwargs)
         return original(self, **kwargs)
 
@@ -193,7 +199,7 @@ async def test_timeline_route_accepts_a_maximum_scope_cursor(api: FastAPI) -> No
         effect_operation_id="e" * 512,
         uncertainty_id="u" * 256,
         execution_id="x" * 256,
-        transition_kind="t" * 128,
+        transition_kind="UNCERTAINTY_RAISED",
         sequence=1,
     )
     cursor = _encode_cursor(
@@ -222,6 +228,52 @@ async def test_timeline_route_accepts_a_maximum_scope_cursor(api: FastAPI) -> No
         )
 
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path",
+    [
+        f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/timeline",
+        f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/timeline",
+    ],
+)
+async def test_timeline_routes_reject_unregistered_transition_kinds(
+    api: FastAPI,
+    path: str,
+) -> None:
+    async with _client(api) as client:
+        response = await client.get(path, params={"transition_kind": "NOT_A_TRANSITION"})
+
+    assert response.status_code == 422
+
+
+def test_timeline_openapi_contract_enumerates_registered_transition_kinds(
+    api: FastAPI,
+) -> None:
+    document = api.openapi()
+    for path in (
+        "/api/alpaca-clerk-sqlite/accounts/{account_id}/timeline",
+        "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/timeline",
+    ):
+        parameter = next(
+            item
+            for item in document["paths"][path]["get"]["parameters"]
+            if item["name"] == "transition_kind"
+        )
+        assert parameter["schema"]["anyOf"][0] == {
+            "$ref": "#/components/schemas/TimelineTransitionKind"
+        }
+
+    assert document["components"]["schemas"]["TimelineTransitionKind"]["enum"] == [
+        member.value for member in alpaca_clerk_sqlite.TimelineTransitionKind
+    ]
+
+
+def test_historical_execution_recovery_transport_plan_matches_signed_plan() -> None:
+    assert {field.name for field in fields(HistoricalExecutionRecoveryPlan)} == set(
+        HistoricalExecutionRecoveryPlanResponse.model_fields
+    )
 
 
 @pytest.mark.asyncio

@@ -141,13 +141,13 @@ with the Clerk order.
 
 A successful prepare returns a short-lived, signed recovery plan containing:
 
-- account ID and confirmed `paper` mode;
+- account ID (prepare separately verifies the selected account remains `paper`
+  before it issues any plan);
 - authority generation, database identity, and control revision;
 - strategy instance, uncertainty ID, Clerk order reference, and broker order
   identity;
 - exact Alpaca execution ID, quantity, price, side, and source timestamp;
 - cumulative fill ID, quantity, price, and side;
-- the exact comparison verdict and evidence-source reference;
 - expiry and an opaque confirmation token.
 
 Prepare performs no SQLite write and no broker mutation.

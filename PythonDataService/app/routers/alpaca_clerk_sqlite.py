@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from enum import StrEnum
 from typing import TypeVar
 
 from fastapi import APIRouter, HTTPException, Query
@@ -30,6 +31,7 @@ from app.broker.alpaca.clerk.sqlite.commands import (
     submit_start_run,
     submit_stop_run,
 )
+from app.broker.alpaca.clerk.sqlite.folds import DEFAULT_FOLD_REGISTRY
 from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import (
     HistoricalExecutionRecoveryPlan,
     HistoricalExecutionRecoveryRefused,
@@ -84,6 +86,13 @@ from app.services.sqlite_clerk_compat import failed_sqlite_projection
 router = APIRouter(prefix="/api/alpaca-clerk-sqlite", tags=["alpaca-clerk-sqlite"])
 ReadResult = TypeVar("ReadResult")
 _MAX_TIMELINE_CURSOR_LENGTH = 4_096
+# The fold registry is the authority for transition kinds.  Exposing the same
+# closed vocabulary here makes invalid timeline filters fail at the HTTP
+# boundary and keeps the generated OpenAPI contract honest.
+TimelineTransitionKind = StrEnum(
+    "TimelineTransitionKind",
+    {kind: kind for kind in sorted(DEFAULT_FOLD_REGISTRY.registered_kinds)},
+)
 _HISTORICAL_EXECUTION_RECOVERY_RESPONSES = {
     404: {"description": "The selected SQLite authority or bot is unavailable."},
     409: {"description": "The signed plan or exact-evidence proof is no longer safe to apply."},
@@ -352,7 +361,7 @@ async def _timeline(
     effect_operation_id: str | None,
     uncertainty_id: str | None,
     execution_id: str | None,
-    transition_kind: str | None,
+    transition_kind: TimelineTransitionKind | None,
     sequence: int | None,
     cursor: str | None,
     page_size: int,
@@ -397,7 +406,7 @@ async def get_account_timeline(
     effect_operation_id: str | None = Query(default=None, min_length=1, max_length=512),
     uncertainty_id: str | None = Query(default=None, min_length=1, max_length=256),
     execution_id: str | None = Query(default=None, min_length=1, max_length=256),
-    transition_kind: str | None = Query(default=None, min_length=1, max_length=128),
+    transition_kind: TimelineTransitionKind | None = None,
     sequence: int | None = Query(default=None, ge=1),
 ) -> TimelinePageResponse:
     return await _timeline(
@@ -427,7 +436,7 @@ async def get_bot_timeline(
     effect_operation_id: str | None = Query(default=None, min_length=1, max_length=512),
     uncertainty_id: str | None = Query(default=None, min_length=1, max_length=256),
     execution_id: str | None = Query(default=None, min_length=1, max_length=256),
-    transition_kind: str | None = Query(default=None, min_length=1, max_length=128),
+    transition_kind: TimelineTransitionKind | None = None,
     sequence: int | None = Query(default=None, ge=1),
 ) -> TimelinePageResponse:
     return await _timeline(

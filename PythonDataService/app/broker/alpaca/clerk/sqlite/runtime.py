@@ -240,6 +240,11 @@ class SqliteAlpacaClerkFacade:
                     "HISTORICAL_EVIDENCE_UNAVAILABLE",
                     "Alpaca account evidence is temporarily unavailable. Keep the exposure blocked and retry later.",
                 ) from exc
+            except Exception as exc:
+                raise HistoricalExecutionRecoveryRefused(
+                    "HISTORICAL_EVIDENCE_UNAVAILABLE",
+                    "Alpaca account evidence is temporarily unavailable. Keep the exposure blocked and retry later.",
+                ) from exc
             return await asyncio.to_thread(
                 confirm_historical_execution_recovery,
                 repo=self._repo,

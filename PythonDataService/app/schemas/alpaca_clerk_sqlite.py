@@ -438,7 +438,7 @@ class HistoricalExecutionRecoveryConfirmRequest(BaseModel):
 
 
 class HistoricalExecutionRecoveryReceiptResponse(BaseModel):
-    model_config = ConfigDict(frozen=True, from_attributes=True)
+    model_config = ConfigDict(frozen=True, from_attributes=True, extra="forbid")
 
     uncertainty_id: str
     order_ref: str

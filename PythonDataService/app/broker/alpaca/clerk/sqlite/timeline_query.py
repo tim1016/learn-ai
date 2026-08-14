@@ -1,8 +1,9 @@
 """Immutable, cursor-bound custody timeline queries.
 
 The timeline is the one sanctioned append-log read.  Every filter participates
-in both the SQL predicate and the signed cursor scope, so an older page cannot
-silently change meaning if an operator changes the evidence they are viewing.
+in both the SQL predicate and the encoded cursor scope, which is revalidated
+on decode so an older page cannot silently change meaning if an operator
+changes the evidence they are viewing.
 """
 
 from __future__ import annotations

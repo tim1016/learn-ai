@@ -161,7 +161,16 @@ def historical_exact_recovery_decision(
             reason_code="COVERAGE_RECOVERY_SELECTION_REQUIRED",
             reason="More than one coverage conflict is active for this bot.",
             freshness="unavailable",
-            evidence=(),
+            evidence=tuple(
+                RecoveryEvidence(
+                    reference=f"order:{conflict.order_ref}",
+                    label="Conflicting bot order",
+                    observed_at_ms=None,
+                    age_ms=None,
+                    freshness="unavailable",
+                )
+                for conflict in conflicts
+            ),
             next_step="Inspect the bot custody timeline and select one conflict at a time.",
             token_facts=[conflict.uncertainty_id for conflict in conflicts],
         )

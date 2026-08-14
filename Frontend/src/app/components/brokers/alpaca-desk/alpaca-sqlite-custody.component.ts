@@ -107,6 +107,7 @@ export class AlpacaSqliteCustodyComponent {
   protected readonly timelineOpen = signal(false);
   protected readonly timelineLoading = signal(false);
   protected readonly timelineLoadingMore = signal(false);
+  private readonly queuedTimelineQuery = signal<SqliteTimelineQuery | null>(null);
   protected readonly timelineNextCursor = signal<string | null>(null);
   protected readonly timelineTotalEntries = signal(0);
   protected readonly busyActionId = signal<string | null>(null);
@@ -140,7 +141,7 @@ export class AlpacaSqliteCustodyComponent {
     });
     effect(() => {
       const query = this.timelineQuery();
-      if (query !== null) void untracked(() => this.openTimeline(query));
+      if (query !== null) untracked(() => this.openTimeline(query));
     });
   }
 
@@ -170,12 +171,12 @@ export class AlpacaSqliteCustodyComponent {
   }
 
   protected applyTimelineFilters(): void {
-    void this.openTimeline(this.timelineFilters());
+    this.openTimeline(this.timelineFilters());
   }
 
   protected clearTimelineFilters(): void {
     this.timelineFilters.set({});
-    void this.openTimeline({});
+    this.openTimeline({});
   }
 
   protected selectTimelineEntry(entry: SqliteTimelineEntry): void {
@@ -185,7 +186,7 @@ export class AlpacaSqliteCustodyComponent {
   protected async runAction(action: SqliteRecoveryAction): Promise<void> {
     if (!action.available || this.busyActionId() !== null) return;
     if (action.action_id === 'open_custody_timeline') {
-      await this.openTimeline();
+      this.openTimeline();
       return;
     }
     if (action.action_id === 'prepare_safe_flatten') {
@@ -284,9 +285,17 @@ export class AlpacaSqliteCustodyComponent {
     }
   }
 
-  private async openTimeline(query: SqliteTimelineQuery = this.timelineFilters()): Promise<void> {
+  private openTimeline(query: SqliteTimelineQuery = this.timelineFilters()): void {
     this.timelineOpen.set(true);
+    this.queuedTimelineQuery.set(query);
+    void this.loadQueuedTimeline();
+  }
+
+  private async loadQueuedTimeline(): Promise<void> {
     if (this.timelineLoading()) return;
+    const query = this.queuedTimelineQuery();
+    if (query === null) return;
+    this.queuedTimelineQuery.set(null);
     this.timelineLoading.set(true);
     const { cursor: _cursor, pageSize: _pageSize, ...filters } = query;
     this.timelineFilters.set(filters);
@@ -306,6 +315,7 @@ export class AlpacaSqliteCustodyComponent {
       this.actionNotice.set('The custody timeline is temporarily unavailable.');
     } finally {
       this.timelineLoading.set(false);
+      if (this.queuedTimelineQuery() !== null) void this.loadQueuedTimeline();
     }
   }
 

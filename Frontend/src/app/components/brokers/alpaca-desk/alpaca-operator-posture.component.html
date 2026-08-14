@@ -19,11 +19,11 @@
         <button
           type="button"
           [disabled]="!current.action.available"
-          [attr.aria-disabled]="!current.action.available"
+          [attr.aria-describedby]="!current.action.available && current.action.unavailable_reason ? 'operator-posture-unavailable-reason' : null"
           (click)="requestRepair(current.action)"
         >{{ current.action.label }}</button>
         @if (!current.action.available && current.action.unavailable_reason; as reason) {
-          <p class="operator-posture__status" role="status">
+          <p id="operator-posture-unavailable-reason" class="operator-posture__status" role="status">
             @if (current.action.unavailable_reason_code; as code) {
               <strong>{{ code | receiptLabel }}:</strong>
             }

@@ -175,9 +175,9 @@ describe('AlpacaOperatorPostureComponent', () => {
       },
     });
 
-    expect(
-      screen.getByRole('button', { name: 'Recover exact execution evidence' }).hasAttribute('disabled'),
-    ).toBe(true);
+    const recovery = screen.getByRole('button', { name: 'Recover exact execution evidence' });
+    expect(recovery.hasAttribute('disabled')).toBe(true);
+    expect(recovery.getAttribute('aria-describedby')).toBe('operator-posture-unavailable-reason');
     expect(screen.getByText('Open the affected bot before recovering exact evidence.')).toBeTruthy();
     expect(screen.getByText(/Bot scope required/i)).toBeTruthy();
   });

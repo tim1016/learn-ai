@@ -58,6 +58,21 @@ function getPortfolioHistory() {
   });
 }
 
+function lensDataProvider(
+  currentProjection: SqliteClerkProjection = projection(),
+  refreshProjection = vi.fn(),
+) {
+  return {
+    provide: AlpacaOperatorLensDataService,
+    useValue: {
+      status: resourceValue(clerkStatus()),
+      projection: resourceValue(currentProjection),
+      projectionRefreshVersion: signal(0),
+      refreshProjection,
+    },
+  };
+}
+
 describe('AlpacaOperatorLensComponent', () => {
   it('forwards the inline repair to the existing evidence-bound custody action flow', async () => {
     const repair = {
@@ -96,15 +111,7 @@ describe('AlpacaOperatorLensComponent', () => {
 
     await render(AlpacaOperatorLensComponent, {
       providers: [
-        {
-          provide: AlpacaOperatorLensDataService,
-          useValue: {
-            status: resourceValue(clerkStatus()),
-            projection: resourceValue(activeProjection),
-            projectionRefreshVersion: signal(0),
-            refreshProjection,
-          },
-        },
+        lensDataProvider(activeProjection, refreshProjection),
         { provide: BrokerService, useValue: { accountTransactions: vi.fn(), accountTransaction: vi.fn() } },
         {
           provide: BrokersService,
@@ -126,8 +133,6 @@ describe('AlpacaOperatorLensComponent', () => {
   });
 
   it('composes the canonical forensic grid, filters, and shared receipt reader', async () => {
-    const status = resourceValue(clerkStatus());
-    const sqliteProjection = resourceValue(projection());
     const accountTransaction = vi.fn().mockResolvedValue({
       transaction_id: 'txn-1', broker: 'alpaca', account_id: 'PA1', journal_seq: 1,
       recorded_at_ms: 1_700_000_000_000, transaction_kind: 'strategy_execution',
@@ -154,15 +159,7 @@ describe('AlpacaOperatorLensComponent', () => {
     });
     await render(AlpacaOperatorLensComponent, {
       providers: [
-        {
-          provide: AlpacaOperatorLensDataService,
-          useValue: {
-            status,
-            projection: sqliteProjection,
-            projectionRefreshVersion: signal(0),
-            refreshProjection: vi.fn(),
-          },
-        },
+        lensDataProvider(),
         {
           provide: BrokerService,
           useValue: {
@@ -195,19 +192,9 @@ describe('AlpacaOperatorLensComponent', () => {
   });
 
   it('keeps all deep system panels collapsed until the operator opens one', async () => {
-    const status = resourceValue(clerkStatus());
-    const sqliteProjection = resourceValue(projection());
     const { container } = await render(AlpacaOperatorLensComponent, {
       providers: [
-        {
-          provide: AlpacaOperatorLensDataService,
-          useValue: {
-            status,
-            projection: sqliteProjection,
-            projectionRefreshVersion: signal(0),
-            refreshProjection: vi.fn(),
-          },
-        },
+        lensDataProvider(),
         { provide: BrokerService, useValue: { accountTransactions: vi.fn(), accountTransaction: vi.fn() } },
         { provide: BrokersService, useValue: { getPortfolioHistory: getPortfolioHistory() } },
       ],

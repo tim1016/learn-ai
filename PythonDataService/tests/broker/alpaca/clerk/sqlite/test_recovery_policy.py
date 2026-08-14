@@ -182,6 +182,51 @@ def test_historical_exact_evidence_recovery_requires_one_bot_scoped_missing_exac
     assert account_action.unavailable_reason_code == "BOT_SCOPE_REQUIRED"
 
 
+def test_historical_exact_evidence_recovery_identifies_every_bot_conflict() -> None:
+    conflicts = (
+        ProjectedExecutionCoverageConflict(
+            uncertainty_id="uncertainty:historical-1",
+            order_ref="alpaca/intent-1",
+            execution_id="execution-1",
+            cumulative_fill_id="alpaca/intent-1:5.000000000",
+            exact_qty=None,
+            exact_price=None,
+            exact_side=None,
+            cumulative_qty=5.0,
+            cumulative_price=100.0,
+            cumulative_side="BUY",
+            proof_available=False,
+            unavailable_reason="Exact evidence is missing.",
+        ),
+        ProjectedExecutionCoverageConflict(
+            uncertainty_id="uncertainty:historical-2",
+            order_ref="alpaca/intent-2",
+            execution_id="execution-2",
+            cumulative_fill_id="alpaca/intent-2:2.000000000",
+            exact_qty=None,
+            exact_price=None,
+            exact_side=None,
+            cumulative_qty=2.0,
+            cumulative_price=200.0,
+            cumulative_side="BUY",
+            proof_available=False,
+            unavailable_reason="Exact evidence is missing.",
+        ),
+    )
+    action = next(
+        item
+        for item in build_recovery_catalog(_context(execution_coverage_conflicts=conflicts))
+        if item.action_id == "recover_exact_execution_evidence"
+    )
+
+    assert action.available is False
+    assert action.unavailable_reason_code == "COVERAGE_RECOVERY_SELECTION_REQUIRED"
+    assert [evidence.reference for evidence in action.evidence] == [
+        "order:alpaca/intent-1",
+        "order:alpaca/intent-2",
+    ]
+
+
 def test_failure_catalog_requires_exact_rebuild_and_reset_prerequisites() -> None:
     failed = _context(
         authority_health="failed",
