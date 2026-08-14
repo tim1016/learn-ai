@@ -286,7 +286,7 @@ async def test_manual_ticket_preview_submit_replay_and_read_are_durable(
             headers=_headers(),
             json={"cancel_request_id": "7d524bb7-3a8c-4b45-8c8e-e009654d3035"},
         )
-        restored_after_cancel = await client.get(ticket_path)
+        restored_after_cancel = await client.get(ticket_path, headers=_headers())
         generic = await client.post(
             "/api/brokers/alpaca/orders",
             headers=_headers(),
@@ -342,7 +342,7 @@ async def test_manual_cancel_unknown_response_uses_server_authored_recovery_copy
             headers=_headers(),
             json={"cancel_request_id": "d40f1aeb-263c-4a57-8583-0e48f1d9298b"},
         )
-        restored = await client.get(ticket_path)
+        restored = await client.get(ticket_path, headers=_headers())
 
     assert unknown.status_code == 202
     assert unknown.json()["state"] == "UNKNOWN"

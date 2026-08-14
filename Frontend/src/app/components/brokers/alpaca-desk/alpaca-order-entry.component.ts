@@ -314,7 +314,7 @@ export class AlpacaOrderEntryComponent {
       });
       this.manualCancellation.set(cancellation);
       const ticketId = this.manualTicketId();
-      if (ticketId !== null) await this.restoreManualTicket(ticketId);
+      if (ticketId !== null) await this.restoreManualTicket(ticketId, this.expectedAccountId());
     } catch (err) {
       this.submitError.set(this.submissionErrorMessage(err));
     } finally {
