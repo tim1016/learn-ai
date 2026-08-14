@@ -41,14 +41,54 @@ def test_pre_live_report_does_not_claim_live_paper_qualification() -> None:
         for scenario in MANUAL_QUALIFICATION_SCENARIOS
     ]
 
-    report = runner._report(scenarios=scenarios, generated_at_ms=3)
+    source_identity = {
+        "status": "VERIFIED",
+        "git_commit": "a" * 40,
+        "working_tree_clean": True,
+        "source_sha256": {"PythonDataService/scripts/run_manual_order_qualification.py": "c" * 64},
+        "missing_sources": [],
+    }
+    report = runner._report(
+        scenarios=scenarios,
+        generated_at_ms=3,
+        source_identity=source_identity,
+    )
 
     assert report["overall_status"] == "PRE_LIVE_REHEARSAL_PASSED"
     assert report["live_environment_status"] == "NOT_RUN"
     assert report["release_gate_status"] == "PENDING_DATED_PAPER_CEREMONY"
+    assert report["tested_revision"] == source_identity
     assert report["report_sha256"] == runner._sha256(
         runner._canonical_json({key: value for key, value in report.items() if key != "report_sha256"})
     )
+
+
+def test_unverifiable_source_identity_refuses_a_passing_pre_live_receipt() -> None:
+    report = runner._report(
+        scenarios=[
+            {
+                "scenario_id": "scenario",
+                "title": "Scenario",
+                "test_refs": ["tests/example.py::test_example"],
+                "status": "PASSED",
+                "started_at_ms": 1,
+                "completed_at_ms": 2,
+                "stdout_sha256": "a" * 64,
+                "stderr_sha256": "b" * 64,
+                "failure_detail": None,
+            }
+        ],
+        generated_at_ms=3,
+        source_identity={
+            "status": "UNVERIFIABLE",
+            "git_commit": None,
+            "working_tree_clean": False,
+            "source_sha256": {},
+            "missing_sources": ["tests/example.py"],
+        },
+    )
+
+    assert report["overall_status"] == "PRE_LIVE_REHEARSAL_FAILED"
 
 
 def test_scenario_failure_captures_bounded_diagnostic_without_claiming_success(

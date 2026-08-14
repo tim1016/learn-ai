@@ -71,14 +71,19 @@ automated report is deliberately not a production activation receipt.
    `NOT_RUN`, and `release_gate_status` `PENDING_DATED_PAPER_CEREMONY`.
 
 2. On the selected paper authority, obtain a fresh process-stop proof and run the
-   offline v8-to-v9 ceremony. Then, with the flag still disabled, archive the
-   upgrade receipt and perform the supervised Account Desk sequence: one-share
-   buy/fill, manual-owned sell/flatten, resting limit/cancel, duplicate
+   offline v8-to-v9 ceremony. Archive the upgrade receipt. For the supervised
+   Account Desk sequence only, temporarily set
+   `ALPACA_SQLITE_MANUAL_TRADING_ENABLED=true` on that selected paper deployment
+   after verifying its Alpaca account mode is `paper`, its control-plane
+   credential is present, and the operator has recorded the ceremony start time.
+   Never perform this temporary enablement against a live account. Perform the
+   one-share buy/fill, manual-owned sell/flatten, resting limit/cancel, duplicate
    confirmation/reload, accepted-before-ack restart, partial-fill restart,
    reconnect/reconciliation, coverage recovery, and bot-start admission after
-   terminal reconciliation. Each row must bind the Alpaca order ID, Clerk order
-   reference and transition, mirror/hash head, position/FIFO/account-history
-   observation, and start-admission result.
+   terminal reconciliation; then disable the flag again and archive the dated
+   receipt. Each row must bind the Alpaca order ID, Clerk order reference and
+   transition, mirror/hash head, position/FIFO/account-history observation, and
+   start-admission result.
 
 Only after that dated audit has every required receipt may a paper deployment
 set `ALPACA_SQLITE_MANUAL_TRADING_ENABLED=true`. Do not enable it for a live

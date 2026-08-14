@@ -78,7 +78,7 @@ MANUAL_QUALIFICATION_SCENARIOS: tuple[ManualQualificationScenario, ...] = (
             "tests/broker/alpaca/clerk/sqlite/test_manual_orders.py::"
             "test_lost_manual_submit_response_remains_queryable_unknown",
             "tests/broker/alpaca/clerk/sqlite/test_reconcile.py::"
-            "test_reconcile_account_recovers_an_unknown_manual_open_order",
+            "test_reconcile_account_recovers_an_unknown_manual_order_after_repository_restart",
             "tests/broker/alpaca/clerk/sqlite/test_reconcile.py::"
             "test_reconcile_account_recovers_an_unknown_manual_closed_order",
         ),
@@ -88,7 +88,7 @@ MANUAL_QUALIFICATION_SCENARIOS: tuple[ManualQualificationScenario, ...] = (
         "Changed exact evidence blocks the manual subject until the documented coverage recovery completes.",
         (
             "tests/broker/alpaca/clerk/test_trade_evidence.py::"
-            "test_manual_changed_execution_redelivery_raises_one_subject_conflict",
+            "test_manual_rest_recovery_and_later_exact_evidence_stay_subject_scoped",
             "tests/broker/alpaca/clerk/sqlite/test_manual_orders.py::"
             "test_coverage_resolution_completes_a_filled_manual_ticket",
         ),

@@ -111,15 +111,69 @@ def _scenario_result(
     }
 
 
-def _report(*, scenarios: list[dict[str, Any]], generated_at_ms: int) -> dict[str, Any]:
+def _source_identity(*, working_directory: Path) -> dict[str, Any]:
+    """Bind the receipt to the exact checkout and selected regression sources."""
+    repository_root = working_directory.parent
+    source_paths = {
+        Path(__file__).resolve(),
+        repository_root / "PythonDataService/app/services/manual_order_qualification.py",
+    }
+    source_paths.update(
+        working_directory / test_ref.split("::", maxsplit=1)[0]
+        for scenario in MANUAL_QUALIFICATION_SCENARIOS
+        for test_ref in scenario.test_refs
+    )
+    source_sha256: dict[str, str] = {}
+    missing_sources: list[str] = []
+    for path in sorted(source_paths):
+        try:
+            relative_path = path.relative_to(repository_root).as_posix()
+            source_sha256[relative_path] = hashlib.sha256(path.read_bytes()).hexdigest()
+        except (OSError, ValueError):
+            missing_sources.append(str(path))
+    commit = _git_stdout(repository_root, "rev-parse", "HEAD")
+    status = _git_stdout(repository_root, "status", "--porcelain=v1")
+    return {
+        "status": "VERIFIED" if commit is not None and not missing_sources else "UNVERIFIABLE",
+        "git_commit": commit,
+        "working_tree_clean": status == "",
+        "source_sha256": source_sha256,
+        "missing_sources": missing_sources,
+    }
+
+
+def _git_stdout(repository_root: Path, *args: str) -> str | None:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(repository_root), *args],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return completed.stdout.strip() if completed.returncode == 0 else None
+
+
+def _report(
+    *,
+    scenarios: list[dict[str, Any]],
+    generated_at_ms: int,
+    source_identity: dict[str, Any],
+) -> dict[str, Any]:
     passed = all(scenario["status"] == "PASSED" for scenario in scenarios)
+    identity_verified = source_identity["status"] == "VERIFIED"
     payload: dict[str, Any] = {
         "schema_version": _SCHEMA_VERSION,
         "label": "SQLITE_MANUAL_ORDER_PRE_LIVE_QUALIFICATION",
         "generated_at_ms": generated_at_ms,
-        "overall_status": "PRE_LIVE_REHEARSAL_PASSED" if passed else "PRE_LIVE_REHEARSAL_FAILED",
+        "overall_status": (
+            "PRE_LIVE_REHEARSAL_PASSED" if passed and identity_verified else "PRE_LIVE_REHEARSAL_FAILED"
+        ),
         "live_environment_status": "NOT_RUN",
         "release_gate_status": "PENDING_DATED_PAPER_CEREMONY",
+        "tested_revision": source_identity,
         "scenarios": scenarios,
     }
     payload["report_sha256"] = _sha256(_canonical_json(payload))
@@ -133,6 +187,9 @@ def _markdown(report: dict[str, Any]) -> str:
         f"- Overall: `{report['overall_status']}`",
         f"- Live paper ceremony: `{report['live_environment_status']}`",
         f"- Release gate: `{report['release_gate_status']}`",
+        f"- Tested commit: `{report['tested_revision']['git_commit']}`",
+        f"- Working tree clean: `{report['tested_revision']['working_tree_clean']}`",
+        f"- Source identity: `{report['tested_revision']['status']}`",
         f"- Report SHA-256: `{report['report_sha256']}`",
         "",
         "| Scenario | Status | Focused regressions |",
@@ -176,11 +233,16 @@ def _failure_detail(completed: subprocess.CompletedProcess[str]) -> str:
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     working_directory = Path(__file__).resolve().parents[1]
+    source_identity = _source_identity(working_directory=working_directory)
     scenarios = [
         _run_scenario(scenario, working_directory=working_directory)
         for scenario in MANUAL_QUALIFICATION_SCENARIOS
     ]
-    report = _report(scenarios=scenarios, generated_at_ms=time.time_ns() // 1_000_000)
+    report = _report(
+        scenarios=scenarios,
+        generated_at_ms=time.time_ns() // 1_000_000,
+        source_identity=source_identity,
+    )
     atomic_write_json(args.json_output, report)
     atomic_write_text(args.markdown_output, _markdown(report))
     sys.stdout.write(
@@ -190,6 +252,7 @@ def main(argv: list[str] | None = None) -> int:
                 "release_gate_status": report["release_gate_status"],
                 "report_sha256": report["report_sha256"],
                 "scenario_count": len(scenarios),
+                "tested_commit": report["tested_revision"]["git_commit"],
             },
             sort_keys=True,
         )
