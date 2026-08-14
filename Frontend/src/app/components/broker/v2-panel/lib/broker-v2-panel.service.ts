@@ -3,6 +3,10 @@ import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 import type { components } from '../../../../api/broker.types';
 import type {
+  HistoricalExecutionRecoveryPlan,
+  HistoricalExecutionRecoveryReceipt,
+} from '../../../../api/alpaca.types';
+import type {
   BotCatalogView,
   BotPanelView,
   BotPanelLiveSnapshot,
@@ -234,6 +238,38 @@ export class BrokerV2PanelService {
       reason,
     };
     return this.runAction(broker, accountId, sid, request);
+  }
+
+  /**
+   * Read the exact Alpaca paper activity for a presented SQLite recovery
+   * capability. This has its own endpoint because it is a signed evidence
+   * ceremony, not a generic panel action.
+   */
+  prepareHistoricalExecutionRecovery(
+    accountId: string,
+    sid: string,
+    concurrencyToken: string,
+  ): Promise<HistoricalExecutionRecoveryPlan> {
+    return firstValueFrom(
+      this.http.post<HistoricalExecutionRecoveryPlan>(
+        `/api/alpaca-clerk-sqlite/accounts/${encodeURIComponent(accountId)}/bots/${encodeURIComponent(sid)}/historical-execution-recovery/prepare`,
+        { concurrency_token: concurrencyToken },
+      ),
+    );
+  }
+
+  /** Confirm exactly the short-lived evidence plan returned by prepare. */
+  confirmHistoricalExecutionRecovery(
+    accountId: string,
+    sid: string,
+    plan: HistoricalExecutionRecoveryPlan,
+  ): Promise<HistoricalExecutionRecoveryReceipt> {
+    return firstValueFrom(
+      this.http.post<HistoricalExecutionRecoveryReceipt>(
+        `/api/alpaca-clerk-sqlite/accounts/${encodeURIComponent(accountId)}/bots/${encodeURIComponent(sid)}/historical-execution-recovery/confirm`,
+        { plan, confirmation_token: plan.confirmation_token },
+      ),
+    );
   }
 
   getLiveChart(

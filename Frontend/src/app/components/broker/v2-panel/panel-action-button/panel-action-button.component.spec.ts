@@ -98,6 +98,7 @@ describe('PanelActionButtonComponent', () => {
     expect(screen.getByRole('alert').textContent).toContain(
       'An order is still open.',
     );
+    expect(screen.getByRole('alert').textContent).toContain('Open Order');
   });
 
   it('can suppress only the blocker its parent already presents', async () => {

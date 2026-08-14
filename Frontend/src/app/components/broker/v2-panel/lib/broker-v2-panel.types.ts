@@ -32,6 +32,7 @@ export type ActionId =
   | 'clear_hold'
   | 'record_inventory_baseline'
   | 'reconcile_now'
+  | 'recover_exact_execution_evidence'
   | 'resolve_execution_coverage'
   | 'cancel_verified_working_orders'
   | 'prepare_safe_flatten'

@@ -1,7 +1,7 @@
 # PRD — Alpaca SQLite Historical Execution Recovery and Operator Action Reliability
 
 - **Date:** 2026-08-13
-- **Status:** In implementation — Slice A complete; Slices B and C pending
+- **Status:** In implementation — Slices A and B complete; Slice C pending
 - **Product surfaces:** Alpaca Broker V2 Account Desk and bot Operator panel
 - **Delivery posture:** Three Terra-sized tracer bullets; each slice is independently verifiable and must be labeled `ready-for-agent` when published
 - **Authority:** The activated SQLite Account Clerk remains the sole custody and execution authority. Alpaca supplies external broker evidence. Angular renders backend-authored capabilities and never infers whether a recovery is safe.

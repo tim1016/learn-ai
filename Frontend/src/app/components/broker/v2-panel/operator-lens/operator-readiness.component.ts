@@ -33,6 +33,10 @@ interface ReadinessControl {
   readonly tone: PanelActionTone;
 }
 
+interface PrimaryReadinessControl extends ReadinessControl {
+  readonly action: PanelAction;
+}
+
 const OPERATOR_ACTION_TONES: Partial<Record<ActionId, PanelActionTone>> = {
   resume: 'primary',
   pause: 'warning',
@@ -41,9 +45,15 @@ const OPERATOR_ACTION_TONES: Partial<Record<ActionId, PanelActionTone>> = {
   stop_bot_decisions: 'danger',
   flatten_stop: 'danger',
   reconcile_now: 'neutral',
+  recover_exact_execution_evidence: 'warning',
+  resolve_execution_coverage: 'warning',
+  cancel_verified_working_orders: 'danger',
   prepare_safe_flatten: 'neutral',
+  open_custody_timeline: 'neutral',
   clear_hold: 'warning',
   record_inventory_baseline: 'warning',
+  rebuild_from_mirror: 'warning',
+  reset_authority: 'danger',
 };
 
 @Component({
@@ -68,6 +78,25 @@ export class OperatorReadinessComponent {
   readonly actionPending = input(false);
   readonly actionRequested = output<PanelActionTrigger>();
 
+  /** A policy-primary recovery must never be hidden behind an accordion row. */
+  protected readonly primaryControl = computed<PrimaryReadinessControl | null>(() => {
+    const panel = this.panel();
+    const check = panel.readiness_checks.find(
+      (candidate) => candidate.evidence['primary'] === true,
+    );
+    if (check === undefined || check.operation === this.bannerActionId()) return null;
+    const tone = OPERATOR_ACTION_TONES[check.operation];
+    if (tone === undefined) return null;
+    const action = panel.actions.find((candidate) => candidate.action_id === check.operation);
+    if (action === undefined) return null;
+    return {
+      action,
+      check,
+      suppressedBlockerId: null,
+      tone,
+    };
+  });
+
   protected readonly readinessControls = computed<readonly ReadinessControl[]>(
     () => {
       const panel = this.panel();
@@ -77,7 +106,9 @@ export class OperatorReadinessComponent {
 
       return panel.readiness_checks.map((check) => {
         const tone = OPERATOR_ACTION_TONES[check.operation];
+        const isPrimary = check.evidence['primary'] === true;
         const action = tone && check.operation !== this.bannerActionId()
+          && !isPrimary
           ? actions.get(check.operation) ?? null
           : null;
 

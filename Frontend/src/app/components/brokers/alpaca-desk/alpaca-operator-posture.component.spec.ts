@@ -112,7 +112,7 @@ describe('AlpacaOperatorPostureComponent', () => {
     expect(screen.queryByRole('heading', { name: 'System healthy' })).toBeNull();
   });
 
-  it('keeps an available recovery action in review when server guidance does not require it', async () => {
+  it('keeps an available recovery action visible when server guidance marks it review-only', async () => {
     const repairRequested = vi.fn();
     await render(AlpacaOperatorPostureComponent, {
       inputs: {
@@ -143,9 +143,9 @@ describe('AlpacaOperatorPostureComponent', () => {
       on: { repairRequested },
     });
 
-    expect(screen.getByText('Review the current evidence.')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Reconcile now' })).toBeNull();
-    expect(repairRequested).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
+
+    expect(repairRequested).toHaveBeenCalledWith(expect.objectContaining({ action_id: 'reconcile_now' }));
   });
 
   it('attaches the available repair action to the dominant Clerk posture', async () => {
@@ -158,6 +158,28 @@ describe('AlpacaOperatorPostureComponent', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
 
     expect(repairRequested).toHaveBeenCalledWith(expect.objectContaining({ action_id: 'reconcile_now' }));
+  });
+
+  it('renders an unavailable primary recovery as a disabled control with its exact reason', async () => {
+    await render(AlpacaOperatorPostureComponent, {
+      inputs: {
+        projection: projection({
+          recovery_actions: [action({
+            available: false,
+            unavailable_reason_code: 'BOT_SCOPE_REQUIRED',
+            unavailable_reason: 'Open the affected bot before recovering exact evidence.',
+            label: 'Recover exact execution evidence',
+            action_id: 'recover_exact_execution_evidence',
+          })],
+        }),
+      },
+    });
+
+    expect(
+      screen.getByRole('button', { name: 'Recover exact execution evidence' }).hasAttribute('disabled'),
+    ).toBe(true);
+    expect(screen.getByText('Open the affected bot before recovering exact evidence.')).toBeTruthy();
+    expect(screen.getByText(/Bot scope required/i)).toBeTruthy();
   });
 
   it('renders the exact OperatorBlocker move for a fix-elsewhere disposition', async () => {

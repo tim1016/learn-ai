@@ -5,6 +5,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MessageService } from 'primeng/api';
 import { of } from 'rxjs';
 import type {
+  HistoricalExecutionRecoveryPlan,
   SqliteRecoveryAction,
   SqliteSafeFlattenPlan,
 } from '../../../../api/alpaca.types';
@@ -178,6 +179,41 @@ const PREPARE_SAFE_FLATTEN_ACTION = {
   confirmation: null,
 } satisfies PanelAction;
 
+const HISTORICAL_RECOVERY_ACTION = {
+  action_id: 'recover_exact_execution_evidence',
+  revision: 17,
+  concurrency_token: 'historical-token-17',
+  enabled: true,
+  label: 'Recover exact execution evidence',
+  explanation: 'Read the retained Alpaca paper execution before resolving coverage.',
+  blockers: [],
+  confirmation: null,
+} satisfies PanelAction;
+
+const HISTORICAL_RECOVERY_PLAN: HistoricalExecutionRecoveryPlan = {
+  account_id: 'DUM284968',
+  strategy_instance_id: 'sid-001',
+  uncertainty_id: 'uncertainty:historical-1',
+  order_ref: 'learn-ai/qqq/1',
+  broker_order_id: 'alpaca-order-1',
+  execution_id: 'alpaca-execution-1',
+  exact_symbol: 'QQQ',
+  exact_quantity: 2.5,
+  exact_price: 481.42,
+  exact_side: 'BUY',
+  source_event_at_ms: 1_753_800_000_000,
+  cumulative_fill_id: 'learn-ai/qqq/1:2.500000000',
+  cumulative_quantity: 2.5,
+  cumulative_price: 481.42,
+  cumulative_side: 'BUY',
+  authority_generation: 4,
+  db_identity_token: 'db-generation-4',
+  control_revision: 17,
+  prepared_at_ms: 1_753_800_000_000,
+  expires_at_ms: 1_753_800_120_000,
+  confirmation_token: 'confirmation-token',
+};
+
 const SAFE_FLATTEN_CAPABILITY: SqliteRecoveryAction = {
   action_id: 'prepare_safe_flatten',
   label: 'Prepare safe flatten',
@@ -233,6 +269,26 @@ function safeFlattenSnapshot(): BotPanelLiveSnapshot {
       evidence: {},
       evaluated_at_ms: 1_753_800_000_000,
       cure: null,
+    }],
+    readiness_ready_count: 1,
+  });
+}
+
+function historicalRecoverySnapshot(): BotPanelLiveSnapshot {
+  return liveSnapshot({
+    ...PANEL,
+    revision: 17,
+    actions: [HISTORICAL_RECOVERY_ACTION],
+    readiness_checks: [{
+      operation: HISTORICAL_RECOVERY_ACTION.action_id,
+      label: HISTORICAL_RECOVERY_ACTION.label,
+      ready: true,
+      scope: 'bot',
+      authority: 'Alpaca SQLite Clerk',
+      explanation: HISTORICAL_RECOVERY_ACTION.explanation,
+      evidence: { primary: true },
+      evaluated_at_ms: 1_753_800_000_000,
+      cure: 'Prepare exact Alpaca paper evidence for this conflict.',
     }],
     readiness_ready_count: 1,
   });
@@ -356,6 +412,15 @@ const mockService = {
     concurrency_token: 'start-token',
     message: 'Bot start requested.',
   }),
+  prepareHistoricalExecutionRecovery: vi.fn().mockResolvedValue(HISTORICAL_RECOVERY_PLAN),
+  confirmHistoricalExecutionRecovery: vi.fn().mockResolvedValue({
+    uncertainty_id: HISTORICAL_RECOVERY_PLAN.uncertainty_id,
+    order_ref: HISTORICAL_RECOVERY_PLAN.order_ref,
+    execution_id: HISTORICAL_RECOVERY_PLAN.execution_id,
+    receipt_id: 'coverage-resolution:18',
+    recorded_at_ms: 1_753_800_000_100,
+    applied: true,
+  }),
 };
 
 const brokersMock = {
@@ -469,6 +534,93 @@ describe('BotPanelShellComponent', () => {
     expect(screen.queryByRole('region', {
       name: 'Prepared safe-flatten reduction plan',
     })).toBeNull();
+  });
+
+  it('prepares and explicitly confirms historical exact-execution recovery', async () => {
+    mockService.getLiveSnapshot.mockResolvedValueOnce(historicalRecoverySnapshot());
+    const { fixture } = await render(BotPanelShellComponent, {
+      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      providers: [
+        provideRouter([]),
+        { provide: BrokerV2PanelService, useValue: mockService },
+        { provide: BrokersService, useValue: brokersMock },
+        { provide: MessageService, useValue: messageService },
+      ],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+    fireEvent.click(screen.getByRole('button', { name: 'Recover exact execution evidence' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(mockService.prepareHistoricalExecutionRecovery).toHaveBeenCalledWith(
+      'DUM284968',
+      'sid-001',
+      'historical-token-17',
+    );
+    expect(screen.getByRole('heading', { name: 'Confirm exact execution recovery' })).toBeTruthy();
+    expect(screen.getByText(/alpaca-execution-1 records BUY 2.5 QQQ/i)).toBeTruthy();
+
+    fireEvent.input(screen.getByTestId('typed-halt-confirm-input'), {
+      target: { value: 'RECOVER' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Recover exact evidence' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(mockService.confirmHistoricalExecutionRecovery).toHaveBeenCalledWith(
+      'DUM284968',
+      'sid-001',
+      HISTORICAL_RECOVERY_PLAN,
+    );
+    expect(screen.getByText(/recorded exact evidence without changing economic totals/i)).toBeTruthy();
+    expect(mockService.runBotAction).not.toHaveBeenCalledWith(
+      'alpaca',
+      'DUM284968',
+      'sid-001',
+      HISTORICAL_RECOVERY_ACTION,
+      null,
+    );
+  });
+
+  it('renders the server-authored stale-plan refusal and refreshes without confirmation', async () => {
+    mockService.getLiveSnapshot.mockResolvedValueOnce(historicalRecoverySnapshot());
+    mockService.prepareHistoricalExecutionRecovery.mockRejectedValueOnce(
+      new HttpErrorResponse({
+        status: 409,
+        error: {
+          detail: {
+            reason: 'stale_action_token',
+            message: 'The recovery evidence changed. Refresh before confirming the action.',
+          },
+        },
+      }),
+    );
+    const { fixture } = await render(BotPanelShellComponent, {
+      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      providers: [
+        provideRouter([]),
+        { provide: BrokerV2PanelService, useValue: mockService },
+        { provide: BrokersService, useValue: brokersMock },
+        { provide: MessageService, useValue: messageService },
+      ],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
+    await fixture.whenStable();
+    fireEvent.click(screen.getByRole('button', { name: 'Recover exact execution evidence' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(screen.getByText('The recovery evidence changed. Refresh before confirming the action.')).toBeTruthy();
+    expect(screen.getByText('Stale Action Token')).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Confirm exact execution recovery' })).toBeNull();
   });
 
   it('discards a safe-flatten response after route identity changes', async () => {

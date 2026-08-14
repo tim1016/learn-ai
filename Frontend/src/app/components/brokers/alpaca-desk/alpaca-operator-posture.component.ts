@@ -13,6 +13,7 @@ import type {
   SqliteRecoveryAction,
 } from '../../../api/alpaca.types';
 import type { OperatorBlocker, OperatorMove } from '../../../api/operator-blocker.types';
+import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 
 type PostureDisposition = OperatorBlocker['disposition'] | 'healthy' | 'review';
 
@@ -33,6 +34,7 @@ interface OperatorPostureView {
 @Component({
   selector: 'app-alpaca-operator-posture',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [ReceiptLabelPipe],
   templateUrl: './alpaca-operator-posture.component.html',
   styleUrl: './alpaca-operator-posture.component.scss',
 })
@@ -100,7 +102,7 @@ function projectionPosture(projection: SqliteClerkProjection): OperatorPostureVi
       nextStep: guidance.next_step,
     };
   }
-  if (guidance.action_required && primaryAction?.available) {
+  if (primaryAction?.available) {
     return {
       headline: guidance.headline,
       detail: guidance.explanation,
@@ -112,9 +114,9 @@ function projectionPosture(projection: SqliteClerkProjection): OperatorPostureVi
   if (primaryAction !== null) {
     return {
       headline: guidance.headline,
-      detail: primaryAction.unavailable_reason ?? guidance.explanation,
+      detail: guidance.explanation,
       disposition: guidance.action_required ? 'wait' : 'review',
-      action: null,
+      action: primaryAction,
       nextStep: primaryAction.next_step,
     };
   }

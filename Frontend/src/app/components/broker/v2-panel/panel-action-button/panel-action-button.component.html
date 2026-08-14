@@ -14,7 +14,8 @@
 
   @for (blocker of visibleBlockers(); track blocker.condition.id) {
     <div class="panel-action__blocker" role="alert">
-      <strong>{{ blocker.headline }}</strong>
+      <strong>{{ blocker.condition.id | receiptLabel }}</strong>
+      <span>{{ blocker.headline }}</span>
       @if (blocker.detail) { <span>{{ blocker.detail }}</span> }
     </div>
   }

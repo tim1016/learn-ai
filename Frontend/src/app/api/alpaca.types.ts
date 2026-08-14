@@ -69,3 +69,7 @@ export type SqliteRecoveryResult = components['schemas']['RecoveryActionExecuteR
 export type SqliteSafeFlattenPlan = components['schemas']['SafeFlattenPlanResponse'];
 export type SqliteTimelineEntry = components['schemas']['TimelineEntryResponse'];
 export type SqliteTimelinePage = components['schemas']['TimelinePageResponse'];
+export type HistoricalExecutionRecoveryPlan =
+  components['schemas']['HistoricalExecutionRecoveryPlanResponse'];
+export type HistoricalExecutionRecoveryReceipt =
+  components['schemas']['HistoricalExecutionRecoveryReceiptResponse'];

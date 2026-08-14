@@ -10,6 +10,7 @@ import {
 import type { ActionId, PanelAction, PanelActionTrigger } from '../lib/broker-v2-panel.types';
 import { TypedHaltConfirmComponent } from '../../shared/typed-halt-confirm/typed-halt-confirm.component';
 import { PanelActionCommentConfirmComponent } from './panel-action-comment-confirm.component';
+import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 
 export type PanelActionTone = 'primary' | 'neutral' | 'warning' | 'danger';
 
@@ -25,7 +26,11 @@ const COMMENT_REQUIRED_ACTION_IDS: ReadonlySet<ActionId> = new Set([
 @Component({
   selector: 'app-panel-action-button',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [TypedHaltConfirmComponent, PanelActionCommentConfirmComponent],
+  imports: [
+    PanelActionCommentConfirmComponent,
+    ReceiptLabelPipe,
+    TypedHaltConfirmComponent,
+  ],
   templateUrl: './panel-action-button.component.html',
   styleUrl: './panel-action-button.component.scss',
 })
