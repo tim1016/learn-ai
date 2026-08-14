@@ -125,45 +125,6 @@ describe('BotTileComponent', () => {
     expect(screen.getAllByText('—').length).toBeGreaterThan(0);
   });
 
-  it('renders footer realized/open P&L colored by sign, and the fills count', async () => {
-    await render(BotTileComponent, {
-      inputs: {
-        bot: bot({ realized_pnl_today: 125.5, open_pnl: -40.25, fills_today: 3 }),
-        bars: [bar()],
-        broker: 'alpaca',
-        accountId: 'PA3',
-      },
-      providers: [routerProvider()],
-    });
-
-    const realized = screen.getByText('+$125.50');
-    expect(realized.classList.contains('pnl--positive')).toBe(true);
-    const open = screen.getByText('-$40.25');
-    expect(open.classList.contains('pnl--negative')).toBe(true);
-    expect(screen.getByText('3')).toBeTruthy();
-  });
-
-  it('renders a dash and neutral tone for unavailable P&L/fills, instead of a fabricated zero', async () => {
-    const { container } = await render(BotTileComponent, {
-      inputs: {
-        bot: bot({ realized_pnl_today: null, open_pnl: null, fills_today: null }),
-        bars: [bar()],
-        broker: 'alpaca',
-        accountId: 'PA3',
-      },
-      providers: [routerProvider()],
-    });
-
-    const [realized, open, fills] = Array.from(
-      container.querySelectorAll('.bot-tile__metric strong'),
-    );
-    expect(realized.textContent?.trim()).toBe('—');
-    expect(realized.classList.contains('pnl--neutral')).toBe(true);
-    expect(open.textContent?.trim()).toBe('—');
-    expect(open.classList.contains('pnl--neutral')).toBe(true);
-    expect(fills.textContent?.trim()).toBe('—');
-  });
-
   it('marks the state dot running when the bot is running', async () => {
     const { container } = await render(BotTileComponent, {
       inputs: { bot: bot({ running: true }), bars: [bar()], broker: 'alpaca', accountId: 'PA3' },
@@ -216,11 +177,12 @@ describe('BotTileComponent', () => {
     const button = screen.getByRole('button', { name: /Stop/i }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
     expect(button.getAttribute('aria-busy')).toBe('true');
-    expect(button.textContent?.trim()).toBe('Stop…');
+    expect(button.querySelector('.pi-spinner')).not.toBeNull();
+    expect(button.textContent?.trim()).toBe('Stop');
   });
 
   it('keeps the quick action actionable when not pending', async () => {
-    await render(BotTileComponent, {
+    const { container } = await render(BotTileComponent, {
       inputs: { bot: bot(), bars: [bar()], broker: 'alpaca', accountId: 'PA3', pending: false },
       providers: [routerProvider()],
     });
@@ -228,6 +190,27 @@ describe('BotTileComponent', () => {
     const button = screen.getByRole('button', { name: /^Stop$/i }) as HTMLButtonElement;
     expect(button.disabled).toBe(false);
     expect(button.getAttribute('aria-busy')).toBe('false');
+    expect(button.querySelector('.pi-stop')).not.toBeNull();
+    expect(button.textContent?.trim()).toBe('Stop');
+    expect(container.querySelector('.bot-tile__header .bot-tile__action-button')).toBe(button);
+    expect(container.querySelector('.bot-tile__footer')).toBeNull();
+    expect(screen.queryByText('Realized')).toBeNull();
+    expect(screen.queryByText('Open')).toBeNull();
+    expect(screen.queryByText('Fills')).toBeNull();
+  });
+
+  it('uses a play icon for the Resume action', async () => {
+    await render(BotTileComponent, {
+      inputs: {
+        bot: bot({ primary_action: { action_id: 'resume', label: 'Resume', enabled: true, disabled_reason: null } }),
+        bars: [bar()],
+        broker: 'alpaca',
+        accountId: 'PA3',
+      },
+      providers: [routerProvider()],
+    });
+
+    expect(screen.getByRole('button', { name: 'Resume' }).querySelector('.pi-play')).not.toBeNull();
   });
 
   it('opens an inline confirm on quick-action click and only emits action after confirming', async () => {

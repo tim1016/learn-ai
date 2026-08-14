@@ -454,8 +454,8 @@ git commit -m "feat(gallery): live store with one aggregated EventSource"
 - Consumes inputs: `bot = input.required<GalleryBotView>()`, `bars = input.required<ChartBar[]>()`, `markers = input<ChartFillMarker[]>([])`.
 - Emits: `action = output<{ sid: string; actionId: string }>()` (the guarded quick action); tile-body click navigates via `Router`.
 
-- [ ] **Step 1: Write the failing test** — render with a `GalleryBotView` + bars; assert the header shows the symbol + formatted price, the footer shows realized/open P&L, and clicking the guarded action opens the confirm then emits `action`. (Testing Library; mock `Router`.)
-- [ ] **Step 2: Run to verify fail** → **Step 3: implement** — `OnPush`, create the chart in `afterNextRender`, `effect(() => this.chart.update(lastBar))` reading `bars()` (imperative, outside CD); candlestick + volume + `setMarkers`; header/footer per anatomy B; single posture action from `bot().primary_action` with an inline confirm; disabled-with-reason when `!enabled`.
+- [ ] **Step 1: Write the failing test** — render with a `GalleryBotView` + bars; assert the header shows the symbol + formatted price, a backend-authored action (play icon for Resume, stop icon plus text for Stop), and no P&L/fills footer; clicking the guarded action opens the confirm then emits `action`. (Testing Library; mock `Router`.)
+- [ ] **Step 2: Run to verify fail** → **Step 3: implement** — `OnPush`, create the chart in `afterNextRender`, `effect(() => this.chart.update(lastBar))` reading `bars()` (imperative, outside CD); candlestick + volume + `setMarkers`; compact header + chart with no footer; a single posture action from `bot().primary_action` with an inline confirm; Resume is icon-only and Stop carries its icon plus label; disabled-with-reason when `!enabled`.
 - [ ] **Step 4: Run to verify pass.**
 - [ ] **Step 5: Lint + commit** `feat(gallery): live bot tile on lightweight-charts`.
 
@@ -514,7 +514,7 @@ podman exec my-frontend npx ng test --watch=false --include='**/gallery/**/*.spe
 
 ## Self-Review
 
-**Spec coverage:** aggregated stream (T1–T4) ✓ · lightweight-charts tile anatomy B (T6) ✓ · CDK resizable dock (T7) ✓ · paginate >20 (T7/T8) ✓ · localStorage layout (T7) ✓ · guarded quick action via existing pipeline (T6/T8) ✓ · running-bots-this-account scope (T2) ✓ · route + list toggle (T8) ✓ · int64 ms UTC / OHLC strings (T1) ✓ · OpenAPI contract (T4) ✓ · states empty/stale (T8) ✓. SP2/SP3 intentionally out of scope.
+**Spec coverage:** aggregated stream (T1–T4) ✓ · compact chart-first tile with header action (T6) ✓ · CDK resizable dock (T7) ✓ · paginate >20 (T7/T8) ✓ · localStorage layout (T7) ✓ · guarded quick action via existing pipeline (T6/T8) ✓ · running-bots-this-account scope (T2) ✓ · route + list toggle (T8) ✓ · int64 ms UTC / OHLC strings (T1) ✓ · OpenAPI contract (T4) ✓ · states empty/stale (T8) ✓. SP2/SP3 intentionally out of scope.
 
 **Placeholder scan:** the two upstream helpers referenced by name — `aggregator_bars_to_chart_bars` (T2, extract-if-missing with its own test) and the `get_gallery_hub` dependency (T4, defined in that task) — are the only forward references and both have a defining task. No TBD/TODO left.
 

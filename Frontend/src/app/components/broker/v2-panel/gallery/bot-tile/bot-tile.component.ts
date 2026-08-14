@@ -27,7 +27,7 @@ import {
 } from 'lightweight-charts';
 import type { ChartBar, ChartFillMarker, GalleryBotView } from '../lib/gallery.types';
 import { toCandle } from '../../lib/chart-bar-mapping';
-import { fmtCurrency, fmtInteger, fmtSignedCurrency, fmtSignedNumber } from '../../../format';
+import { fmtCurrency, fmtSignedNumber } from '../../../format';
 import { createAppChart, formatChartAxisTick } from '../../../../../shared/charts/chart-utils';
 import { AssetIdentityComponent } from '../../../../../shared/asset-identity';
 
@@ -62,17 +62,10 @@ export function toTileMarkers(markers: readonly ChartFillMarker[]): SeriesMarker
     .sort((a, b) => a.time - b.time);
 }
 
-type PnlTone = 'positive' | 'negative' | 'neutral';
-
-function toneOf(value: number | null): PnlTone {
-  if (value === null || value === 0) return 'neutral';
-  return value > 0 ? 'positive' : 'negative';
-}
-
 /**
  * One live bot's gallery tile: header identity/price, a thin candlestick +
- * volume chart with fill markers, footer P&L, and a single guarded quick
- * action. The chart is mounted and updated imperatively so a 20-tile wall
+ * volume chart with fill markers, and a single guarded icon action in the
+ * header. The chart is mounted and updated imperatively so a 20-tile wall
  * never routes tick-by-tick data through Angular's change detection — see
  * `dual-pane-chart.component.ts` for the same lightweight-charts v5 idioms.
  */
@@ -107,9 +100,6 @@ export class BotTileComponent {
 
   protected readonly confirmOpen = signal(false);
 
-  protected readonly fmtSignedCurrency = fmtSignedCurrency;
-  protected readonly fmtInteger = fmtInteger;
-
   private readonly lastBar = computed<ChartBar | null>(() => {
     const bars = this.bars();
     return bars.length ? bars[bars.length - 1] : null;
@@ -136,27 +126,27 @@ export class BotTileComponent {
     const delta = this.deltaPct();
     return delta === null ? null : `${fmtSignedNumber(delta * 100, 2)}%`;
   });
-  protected readonly deltaTone = computed<PnlTone>(() => {
+  protected readonly deltaTone = computed<'positive' | 'negative' | 'neutral'>(() => {
     const delta = this.deltaPct();
     if (delta === null || delta === 0) return 'neutral';
     return delta > 0 ? 'positive' : 'negative';
   });
 
-  protected readonly realizedTone = computed(() => toneOf(this.bot().realized_pnl_today));
-  protected readonly openTone = computed(() => toneOf(this.bot().open_pnl));
-
-  protected readonly actionTitle = computed<string | null>(() => {
+  protected readonly actionTitle = computed(() => {
     const primaryAction = this.bot().primary_action;
     return !primaryAction.enabled && primaryAction.disabled_reason
       ? primaryAction.disabled_reason
-      : null;
+      : primaryAction.label;
   });
-  protected readonly actionAriaLabel = computed<string | null>(() => {
+  protected readonly actionAriaLabel = computed(() => {
     const primaryAction = this.bot().primary_action;
     return !primaryAction.enabled && primaryAction.disabled_reason
       ? `${primaryAction.label} — ${primaryAction.disabled_reason}`
-      : null;
+      : primaryAction.label;
   });
+  protected readonly actionIsStop = computed(() =>
+    this.bot().primary_action.action_id !== 'resume',
+  );
   protected readonly confirmText = computed(() => {
     const view = this.bot();
     return `${view.primary_action.label} ${view.symbol} · ${view.sid}?`;

@@ -43,7 +43,7 @@ The real 20-bot bottleneck is the **data layer**, addressed below.
 | Gallery scope | Bots with `running == true` for the account in the route |
 | Tile click | Navigates to that bot's single-bot detail page |
 | Entry point | New route `…/gallery` + a "Gallery" toggle on the bots list page |
-| Tile anatomy | **B**: header (identity + live price/Δ) · chart (candles+volume; fill markers deferred, see below) · footer (realized/open P&L + fills) |
+| Tile anatomy | Compact header (identity + live price/Δ + a posture-appropriate action) · chart (candles+volume; fill markers deferred, see below); no tile footer |
 | Dock model | **Resizable dock**: auto near-square grid → drag-reorder + resize-to-span |
 | Dock engine | **Angular CDK drag-drop** (already a dep) + custom corner resize; **no** gridster |
 | Overflow (>20) | **Paginate** in pages of 20 (nothing hidden) |
@@ -51,6 +51,12 @@ The real 20-bot bottleneck is the **data layer**, addressed below.
 | Tile actions | One posture-appropriate **quick action** (Resume/Stop), guarded (see §7) |
 | Live data | **New aggregated backend SSE** (`GalleryHub`) — one connection, per-symbol dedup |
 | Timeframe | Shared **Today · 1m** for the whole wall (multi-day history is SP2) |
+
+**Amendment 2026-08-14:** The gallery is a price-action wall. Each tile retains its compact
+identity header but drops the realized/open P&L and fills footer. Its one backend-authored,
+posture-appropriate action stays in the header: Stop uses a stop-square icon with its text label,
+while Resume uses a play icon. The action remains guarded, shows a disabled reason
+when blocked, and remains pending until the stream reconciles it.
 
 ## Goals / non-goals
 
@@ -157,14 +163,14 @@ reset), and an endpoint test via `httpx.AsyncClient` + `ASGITransport`.
 - **`BotTileComponent`** — thin lightweight-charts wrapper: candlestick + volume histogram +
   native crosshair, wired for fill markers (`createSeriesMarkers`) against the always-empty
   `markers` the hub emits in v1 — see the deferred note above; the plumbing is in place, the
-  data isn't yet. Anatomy **B**: header
-  (identity + live price/Δ from the last bar), chart, footer (realized/open P&L + fills).
+  data isn't yet. Anatomy: compact header
+  (identity + live price/Δ from the last bar + posture-appropriate quick action) and chart; the P&L/fills
+  footer is deliberately absent so the price action owns the tile.
   Reuses the shared `TickerQuoteComponent`? — **no** at tile scale (too tall); a compact
   inline header instead, but the `receiptLabel`/formatting conventions still apply. Holds its
   own `IChartApi`; subscribes to its symbol's bar signal + its sid's markers/stats; updates
   the chart **imperatively** in an `effect` (never re-render the component per tick). Click on
-  the chart body → router navigate to the detail page; the footer quick-action is a separate
-  hit target.
+  the chart body → router navigate to the detail page; the header action is a separate hit target.
   - *Not* the heavy `TradingChartComponent` (indicator picker, sub-panes) — minimal per-tile
     cost is the point (SP0).
 - **`BotGalleryDockComponent`** — CDK `cdkDropList` (free-drag reorder) + **custom** corner
@@ -208,6 +214,9 @@ into a single rAF paint, so tick-by-tick fidelity is safe without an explicit th
 - Exactly **one** action per tile, posture-appropriate: **Resume** if paused/stopped,
   **Stop** if running (the backend supplies `primary_action` = id + enabled + disabled_reason,
   so the tile never re-derives posture — consistent with the execution-posture model).
+- The action is in the tile header (play icon for Resume; stop-square plus text label for Stop).
+  Its accessible name and tooltip use the backend-authored label; a blocked action exposes its
+  backend-authored disabled reason.
 - **Guarded:** clicking opens a tiny inline confirm ("Stop SPY · Aug11-02?") to prevent
   dense-wall mis-clicks; only the confirm dispatches.
 - **Routed through the existing pipeline:** `BrokerV2PanelService.runBotAction(...)` →
@@ -230,8 +239,9 @@ into a single rAF paint, so tick-by-tick fidelity is safe without an explicit th
   delta, version monotonicity, epoch reset); endpoint test (`httpx.AsyncClient`); OpenAPI
   contract regenerated & committed.
 - **Frontend (Vitest + Testing Library):** `GalleryLiveStore` (parse snapshot/delta/reset,
-  fallback poll); `BotTileComponent` (renders identity/P&L, chart mounts, click navigates,
-  quick-action confirm → dispatch, disabled-with-reason); `BotGalleryDockComponent`
+  fallback poll); `BotTileComponent` (renders identity and the compact header action without a
+  P&L/fills footer, chart mounts, click navigates, quick-action confirm → dispatch,
+  disabled-with-reason); `BotGalleryDockComponent`
   (auto-division for N, drag reorder persists, resize span persists, reset, pagination).
 
 ## 10. Risks & mitigations
