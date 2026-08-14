@@ -118,6 +118,11 @@ class AlpacaBroker:
         payloads = await self._client.list_assets(status=status, limit=limit)
         return [adapter.from_alpaca_asset(payload) for payload in payloads]
 
+    async def get_asset(self, symbol: str) -> BrokerAsset | None:
+        """Return one Alpaca asset, or ``None`` when the symbol is unlisted."""
+        payload = await self._client.get_asset(symbol)
+        return None if payload is None else adapter.from_alpaca_asset(payload)
+
     async def get_clock_evidence(self) -> BrokerClockEvidence:
         payload = await self._client.get_clock()
         return adapter.from_alpaca_clock(payload)

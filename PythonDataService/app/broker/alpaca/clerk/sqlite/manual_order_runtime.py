@@ -118,13 +118,12 @@ async def _manual_asset_unavailable(
 ) -> ManualOrderUnavailable | None:
     """Require fresh broker-listed, tradable US-equity evidence before intent."""
     try:
-        assets = await read.list_assets(status="active", limit=None)
+        asset = await read.get_asset(symbol)
     except BrokerError:
         return ManualOrderUnavailable(
             "ASSET_EVIDENCE_UNAVAILABLE",
             "Manual order preview requires fresh broker asset eligibility evidence.",
         )
-    asset = next((item for item in assets if item.symbol.upper() == symbol.upper()), None)
     if (
         asset is None
         or asset.asset_class.lower() != "us_equity"

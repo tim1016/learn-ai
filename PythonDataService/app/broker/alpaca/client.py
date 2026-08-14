@@ -273,6 +273,25 @@ class AlpacaTradingClient:
         # ``None`` to inspect the complete authoritative asset set.
         return payloads if limit is None else payloads[:limit]
 
+    async def get_asset(self, symbol: str) -> dict[str, Any] | None:
+        """GET one Alpaca asset by symbol without enumerating the asset catalog.
+
+        Alpaca returns HTTP 404 when the supplied symbol is not a listed asset.
+        That is definitive eligibility evidence rather than an unavailable
+        broker, so it maps to ``None``. Other failures retain the shared broker
+        error taxonomy through :meth:`_call`.
+        """
+
+        def _get(client: Any) -> dict[str, Any] | None:
+            try:
+                return client.get_asset(symbol)
+            except APIError as exc:
+                if status_of(exc) == 404:
+                    return None
+                raise
+
+        return await self._call(_get, describe="asset lookup")
+
     async def get_clock(self) -> dict[str, Any]:
         return await self._call(lambda c: c.get_clock(), describe="clock")
 

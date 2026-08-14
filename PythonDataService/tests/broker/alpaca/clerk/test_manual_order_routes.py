@@ -51,6 +51,22 @@ def _account(*, account_mode: str = "paper") -> BrokerAccountSnapshot:
     )
 
 
+def _asset() -> BrokerAsset:
+    return BrokerAsset(
+        broker="alpaca",
+        asset_id="asset-spy",
+        symbol="SPY",
+        name="SPDR S&P 500 ETF Trust",
+        asset_class="us_equity",
+        exchange="NYSE",
+        status="active",
+        tradable=True,
+        fractionable=True,
+        shortable=True,
+        marginable=True,
+    )
+
+
 class FakeAlpacaPort:
     broker_id = "alpaca"
 
@@ -59,8 +75,8 @@ class FakeAlpacaPort:
         self.account_mode = account_mode
         self.account_calls = 0
         self.asset_available = True
-        self.asset_calls = 0
-        self.asset_limits: list[int | None] = []
+        self.asset_lookup_calls: list[str] = []
+        self.asset_list_calls = 0
         self.submit_calls: list[str] = []
         self.cancel_calls: list[str] = []
         self.orders: dict[str, BrokerOrder] = {}
@@ -77,26 +93,17 @@ class FakeAlpacaPort:
         status: str | None = None,
         limit: int | None = 100,
     ) -> list[BrokerAsset]:
-        self.asset_calls += 1
-        self.asset_limits.append(limit)
+        self.asset_list_calls += 1
         if not self.asset_available:
             return []
         assert status == "active"
-        return [
-            BrokerAsset(
-                broker="alpaca",
-                asset_id="asset-spy",
-                symbol="SPY",
-                name="SPDR S&P 500 ETF Trust",
-                asset_class="us_equity",
-                exchange="NYSE",
-                status="active",
-                tradable=True,
-                fractionable=True,
-                shortable=True,
-                marginable=True,
-            )
-        ]
+        return [_asset()]
+
+    async def get_asset(self, symbol: str) -> BrokerAsset | None:
+        self.asset_lookup_calls.append(symbol)
+        if not self.asset_available:
+            return None
+        return _asset()
 
     async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
         self.submit_calls.append(client_order_id)
@@ -253,7 +260,8 @@ async def test_disabled_manual_capability_refuses_without_contacting_alpaca(
         "supported_order_shape": "BUY or SELL market/limit DAY/GTC equity, one to eight ordered legs",
     }
     assert port.account_calls == 0
-    assert port.asset_calls == 0
+    assert port.asset_lookup_calls == []
+    assert port.asset_list_calls == 0
 
 
 @pytest.mark.asyncio
@@ -563,7 +571,8 @@ async def test_manual_preview_refuses_an_unlisted_asset_before_durable_acceptanc
     assert preview.json()["capability"]["unavailable"]["code"] == "UNSUPPORTED_MANUAL_ASSET"
     assert repo.manual_order_ticket(TICKET_ID) is None
     assert port.submit_calls == []
-    assert port.asset_limits == [None]
+    assert port.asset_lookup_calls == ["SPY"]
+    assert port.asset_list_calls == 0
 
 
 @pytest.mark.asyncio
@@ -596,4 +605,5 @@ async def test_invalid_configured_manual_operator_refuses_before_ticket_reservat
     assert preview.status_code == 200
     assert preview.json()["capability"]["unavailable"]["code"] == "INVALID_MANUAL_OPERATOR"
     assert repo.manual_order_ticket(TICKET_ID) is None
-    assert port.asset_calls == 0
+    assert port.asset_lookup_calls == []
+    assert port.asset_list_calls == 0

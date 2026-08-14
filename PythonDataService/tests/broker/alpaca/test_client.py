@@ -45,6 +45,7 @@ class _FakeAlpaca:
         self.post_call: Any = None
         self.delete_call: Any = None
         self.lookup_call: Any = None
+        self.asset_lookup_call: Any = None
 
     def get_account(self) -> dict:
         return {"account_number": "PA1", "status": "ACTIVE"}
@@ -59,6 +60,10 @@ class _FakeAlpaca:
     def get_all_assets(self, filter: Any = None) -> list[dict]:
         self.assets_filter = filter
         return [{"id": "a1"}, {"id": "a2"}]
+
+    def get_asset(self, symbol_or_asset_id: str) -> dict[str, Any]:
+        self.asset_lookup_call = symbol_or_asset_id
+        return {"id": "a1", "symbol": symbol_or_asset_id}
 
     def get(self, path: str, data: Any = None) -> list[dict]:
         self.activities_call = (path, data)
@@ -118,6 +123,27 @@ async def test_list_assets_builds_status_filter_and_caps_response() -> None:
 
     assert fake.assets_filter.status == AssetStatus.ACTIVE
     assert payloads == [{"id": "a1"}]
+
+
+async def test_get_asset_uses_the_symbol_specific_sdk_lookup() -> None:
+    fake = _FakeAlpaca()
+
+    payload = await _client(fake).get_asset("SPY")
+
+    assert fake.asset_lookup_call == "SPY"
+    assert fake.assets_filter is None
+    assert payload == {"id": "a1", "symbol": "SPY"}
+
+
+async def test_get_asset_404_returns_none(make_api_error: ApiErrorFactory) -> None:
+    fake = _FakeAlpaca()
+
+    def raise_not_found(symbol_or_asset_id: str) -> dict[str, Any]:
+        raise make_api_error(404, message=f"{symbol_or_asset_id} not found")
+
+    fake.get_asset = raise_not_found  # type: ignore[method-assign]
+
+    assert await _client(fake).get_asset("MISSING") is None
 
 
 async def test_list_activities_calls_low_level_endpoint() -> None:
