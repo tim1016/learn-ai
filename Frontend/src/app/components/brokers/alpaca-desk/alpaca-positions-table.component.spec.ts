@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/angular';
+import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { describe, expect, it } from 'vitest';
 
 import type { BrokerPosition } from '../../../api/alpaca.types';
@@ -38,6 +38,26 @@ describe('AlpacaPositionsTableComponent', () => {
 
     expect(await screen.findByText('AAPL')).toBeTruthy();
     expect(screen.getByText('TSLA')).toBeTruthy();
+    expect(screen.getByText('Quantity')).toBeTruthy();
+    expect(screen.getByText('Price')).toBeTruthy();
+    expect(screen.getByText('Market value')).toBeTruthy();
+    expect(screen.getByText('Open P&L')).toBeTruthy();
+  });
+
+  it('searches positions client-side and reveals technical details on demand', async () => {
+    await renderTable(() =>
+      Promise.resolve([fakePosition({ symbol: 'AAPL' }), fakePosition({ symbol: 'TSLA' })]),
+    );
+
+    fireEvent.input(await screen.findByRole('searchbox', { name: 'Search current positions' }), {
+      target: { value: 'TSLA' },
+    });
+    await waitFor(() => expect(screen.queryByTitle('AAPL')).toBeNull());
+    expect(screen.getByTitle('TSLA')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show TSLA position details' }));
+    expect(screen.getByText('Cost basis')).toBeTruthy();
+    expect(screen.getByText('Asset identifier')).toBeTruthy();
   });
 
   it('renders honest-empty ("no positions"), distinct from error', async () => {

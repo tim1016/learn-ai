@@ -13,7 +13,8 @@
   box-shadow: var(--shadow-card);
 }
 
-.operator-posture--attention { border-left-color: var(--bear); }
+.operator-posture--caution { border-left-color: var(--warn); }
+.operator-posture--blocked { border-left-color: var(--bear); }
 
 .operator-posture__eyebrow,
 .operator-posture__detail,

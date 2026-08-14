@@ -14,7 +14,7 @@ import type {
 } from '../../../api/alpaca.types';
 import type { OperatorBlocker, OperatorMove } from '../../../api/operator-blocker.types';
 
-type PostureDisposition = OperatorBlocker['disposition'] | 'healthy';
+type PostureDisposition = OperatorBlocker['disposition'] | 'healthy' | 'review';
 
 interface OperatorPostureView {
   readonly headline: string;
@@ -88,9 +88,12 @@ function blockerPosture(blocker: OperatorBlocker): OperatorPostureView {
 function projectionPosture(projection: SqliteClerkProjection): OperatorPostureView {
   const guidance = projection.guidance;
   const primaryAction = projection.recovery_actions.find((action) => action.primary) ?? null;
-  if (!guidance.action_required) {
+  const isHealthy = !guidance.action_required
+    && projection.uncertainties.length === 0
+    && projection.authority_health === 'healthy';
+  if (isHealthy) {
     return {
-      headline: 'System healthy',
+      headline: guidance.headline,
       detail: guidance.explanation,
       disposition: 'healthy',
       action: null,
@@ -110,9 +113,18 @@ function projectionPosture(projection: SqliteClerkProjection): OperatorPostureVi
     return {
       headline: guidance.headline,
       detail: primaryAction.unavailable_reason ?? guidance.explanation,
-      disposition: 'wait',
+      disposition: guidance.action_required ? 'wait' : 'review',
       action: null,
       nextStep: primaryAction.next_step,
+    };
+  }
+  if (!guidance.action_required) {
+    return {
+      headline: guidance.headline,
+      detail: guidance.explanation,
+      disposition: 'review',
+      action: null,
+      nextStep: guidance.next_step,
     };
   }
   return {

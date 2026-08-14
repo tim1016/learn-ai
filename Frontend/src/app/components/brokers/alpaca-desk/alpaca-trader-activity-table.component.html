@@ -1,0 +1,113 @@
+<section class="activity-panel" aria-labelledby="today-activity-heading">
+  <header class="activity-panel__header">
+    <div>
+      <p class="eyebrow">Today</p>
+      <h2 id="today-activity-heading">Activity</h2>
+      <p>Broker-reported events, newest first.</p>
+    </div>
+  </header>
+
+  @if (unavailable()) {
+    <p class="state" role="alert">Today's account activity is unavailable right now.</p>
+  } @else if (activities() === undefined) {
+    <p class="state" role="status">Loading today's account activity…</p>
+  } @else if (rows().length === 0) {
+    <p class="state">No account activity has been recorded today.</p>
+  } @else {
+    <p-table
+      #activityTable
+      class="desk-table"
+      [value]="rows()"
+      dataKey="id"
+      [globalFilterFields]="globalFilterFields"
+      [pt]="tablePassThrough"
+      [paginator]="true"
+      [rows]="8"
+      [rowsPerPageOptions]="[8, 16, 32]"
+      [rowHover]="true"
+      [stripedRows]="true"
+      [showCurrentPageReport]="true"
+      currentPageReportTemplate="{first}–{last} of {totalRecords}"
+      sortField="timeMs"
+      [sortOrder]="-1"
+      size="small"
+    >
+      <ng-template #caption>
+        <div class="table-search">
+          <i class="pi pi-search" aria-hidden="true"></i>
+          <input
+            #activitySearch
+            pInputText
+            type="search"
+            placeholder="Search activity"
+            aria-label="Search today's activity"
+            (input)="activityTable.filterGlobal(inputValue($event), 'contains')"
+          />
+          <button
+            pButton
+            type="button"
+            severity="secondary"
+            text
+            aria-label="Clear activity search"
+            (click)="clearSearch(activityTable, activitySearch)"
+          ><i class="pi pi-times" aria-hidden="true"></i></button>
+        </div>
+      </ng-template>
+      <ng-template #header>
+        <tr>
+          <th pSortableColumn="timeMs">Time (local)<p-sort-icon field="timeMs" /></th>
+          <th pSortableColumn="symbol">Instrument<p-sort-icon field="symbol" /></th>
+          <th pSortableColumn="activityType">Activity<p-sort-icon field="activityType" /></th>
+          <th pSortableColumn="side">Side<p-sort-icon field="side" /></th>
+          <th pSortableColumn="quantity" class="numeric">Quantity<p-sort-icon field="quantity" /></th>
+          <th pSortableColumn="price" class="numeric">Price<p-sort-icon field="price" /></th>
+          <th pSortableColumn="netAmount" class="numeric">Net amount<p-sort-icon field="netAmount" /></th>
+          <th class="details-column"><span class="sr-only">Details</span></th>
+        </tr>
+      </ng-template>
+      <ng-template #body let-row let-expanded="expanded">
+        <tr>
+          <td class="time-cell"><app-timestamp-display [value]="row.timeMs" mode="local" /></td>
+          <td>
+            @if (row.symbol; as symbol) {
+              <app-asset-identity [symbol]="symbol" size="sm" />
+            } @else {
+              <span class="account-event">Account</span>
+            }
+          </td>
+          <td><span class="activity-kind">{{ row.activityType | receiptLabel }}</span></td>
+          <td>{{ row.side ? (row.side | receiptLabel) : '—' }}</td>
+          <td class="numeric">{{ row.quantity === null ? '—' : (row.quantity | number: '1.0-4') }}</td>
+          <td class="numeric">{{ row.price === null ? '—' : (row.price | currency: 'USD') }}</td>
+          <td class="numeric" [class.positive]="row.netAmount !== null && row.netAmount >= 0" [class.negative]="row.netAmount !== null && row.netAmount < 0">
+            {{ row.netAmount === null ? '—' : (row.netAmount | currency: 'USD') }}
+          </td>
+          <td class="details-column">
+            <button
+              pButton
+              type="button"
+              severity="secondary"
+              text
+              [pRowToggler]="row"
+              [attr.aria-label]="(expanded ? 'Hide' : 'Show') + ' activity details'"
+            ><i [class]="expanded ? 'pi pi-chevron-up' : 'pi pi-chevron-down'" aria-hidden="true"></i></button>
+          </td>
+        </tr>
+      </ng-template>
+      <ng-template #expandedrow let-row>
+        <tr>
+          <td colspan="8" class="expanded-cell">
+            <dl class="activity-details">
+              <div><dt>Category</dt><dd>{{ row.category | receiptLabel }}</dd></div>
+              <div><dt>Broker order reference</dt><dd><code>{{ row.nativeOrderId ?? 'Not recorded' }}</code></dd></div>
+              <div><dt>Observed (local)</dt><dd><app-timestamp-display [value]="row.observedAtMs" mode="local" /></dd></div>
+            </dl>
+          </td>
+        </tr>
+      </ng-template>
+      <ng-template #emptymessage>
+        <tr><td colspan="8" class="table-empty">No activity matches your search.</td></tr>
+      </ng-template>
+    </p-table>
+  }
+</section>

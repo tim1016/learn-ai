@@ -1,26 +1,19 @@
 @if (projection.isLoading()) {
-  <p class="sqlite-custody__state" role="status">Loading Account Clerk custody…</p>
+  <p class="sqlite-custody__state" role="status">Loading order custody details…</p>
 } @else if (isLegacyAuthority()) {
   <!-- The legacy cards below remain authoritative until SQLite activation. -->
 } @else if (projection.error()) {
   <p class="sqlite-custody__state sqlite-custody__state--error" role="alert">
-    SQLite Clerk custody is unavailable. Broker mutations remain blocked until authority recovers.
+    Order custody details are unavailable. New broker actions remain blocked until the account record recovers.
   </p>
 } @else if (projection.value(); as custody) {
   <section class="sqlite-custody" aria-labelledby="sqlite-custody-title">
     <header>
       <div>
-        <span class="sqlite-custody__eyebrow">Active custody authority</span>
-        <h2 id="sqlite-custody-title">Account Clerk</h2>
+        <span class="sqlite-custody__eyebrow">Order record</span>
+        <h2 id="sqlite-custody-title">Custody and recovery</h2>
       </div>
-      <span>
-        {{ custody.authority_health | receiptLabel }} ·
-        @if (custody.db_identity_token === 'unverified-activation') {
-          activation identity unverified
-        } @else {
-          generation {{ custody.authority_generation }}
-        }
-      </span>
+      <span class="sqlite-custody__health">{{ custody.authority_health | receiptLabel }}</span>
     </header>
 
     <div class="sqlite-custody__guidance">
@@ -28,8 +21,7 @@
       <p>{{ custody.guidance.explanation }}</p>
       <p>{{ custody.guidance.impact }} {{ custody.guidance.next_step }}</p>
       <small>
-        Observed <app-timestamp-display [value]="custody.generated_at_ms" mode="local" />
-        · control revision {{ custody.control_revision }}
+        Updated (local) <app-timestamp-display [value]="custody.generated_at_ms" mode="local" />
       </small>
     </div>
 
@@ -62,6 +54,22 @@
         </div>
       }
     </div>
+
+    <details class="sqlite-custody__technical">
+      <summary>Technical authority details</summary>
+      <dl>
+        <div><dt>Record owner</dt><dd>{{ custody.custody_owner | receiptLabel }}</dd></div>
+        <div><dt>Snapshot revision</dt><dd>{{ custody.control_revision }}</dd></div>
+        <div><dt>Authority generation</dt><dd>
+          @if (custody.db_identity_token === 'unverified-activation') {
+            Activation identity unverified
+          } @else {
+            {{ custody.authority_generation }}
+          }
+        </dd></div>
+        <div><dt>Database identity</dt><dd><code>{{ custody.db_identity_token }}</code></dd></div>
+      </dl>
+    </details>
 
     @if (actionNotice(); as notice) {
       <p class="sqlite-custody__notice" role="status">{{ notice }}</p>

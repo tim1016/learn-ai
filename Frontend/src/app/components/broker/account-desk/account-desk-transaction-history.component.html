@@ -1,87 +1,186 @@
-<p-panel id="account-desk-transaction-history" class="transaction-history" aria-live="polite">
-  <ng-template #header><h2>Transaction history</h2></ng-template>
-  <p>Projected account order receipts. Select a row to read its complete evidence.</p>
-  <fieldset class="transaction-filters" aria-label="Transaction history filters">
-    <legend>Filter projected transactions</legend>
-    <label>Origin
-      <select [value]="filterOrigin()" (change)="setOriginFilter($event)">
-        <option value="">All origins</option>
-        <option value="strategy">{{ 'strategy' | receiptLabel }}</option>
-        <option value="manual">{{ 'manual' | receiptLabel }}</option>
-        <option value="external">{{ 'external' | receiptLabel }}</option>
-        <option value="unknown">{{ 'unknown' | receiptLabel }}</option>
-        <option value="recovery">{{ 'recovery' | receiptLabel }}</option>
-        <option value="emergency">{{ 'emergency' | receiptLabel }}</option>
-        <option value="shutdown">{{ 'shutdown' | receiptLabel }}</option>
-        <option value="force_flat">{{ 'force_flat' | receiptLabel }}</option>
-        <option value="other">{{ 'other' | receiptLabel }}</option>
-      </select>
-    </label>
-    <label>Lifecycle <input [value]="filterLifecycle()" (input)="filterLifecycle.set(inputValue($event))" /></label>
-    <label>Bot <input [value]="filterStrategy()" (input)="filterStrategy.set(inputValue($event))" /></label>
-    <label>Run <input [value]="filterRun()" (input)="filterRun.set(inputValue($event))" /></label>
-    <button pButton type="button" severity="secondary" (click)="applyFilters()">Apply filters</button>
-    <button pButton type="button" severity="secondary" (click)="clearFilters()">Clear filters</button>
-  </fieldset>
-  @if (store.loading() && !store.hasLastGood()) {
-    <p class="state">Loading transaction history…</p>
-  } @else if (store.errorMessage() && !store.hasLastGood()) {
-    <div class="state state-error" role="alert"><p>{{ store.errorMessage() }}</p><button pButton type="button" severity="secondary" (click)="store.retry()">Retry</button></div>
-  } @else if (store.feed(); as feed) {
-    <p class="state" [class.state-error]="!feed.projection_available || feed.feed_state === 'corrupt'" role="status"><strong>{{ feed.feed_headline }}</strong> {{ feed.feed_detail }}</p>
-    @if (feed.high_water_journal_seq !== null || feed.lag_records !== null) {
-      <p class="state">Projection high-water: {{ feed.high_water_journal_seq ?? 'not yet projected' }}. Lag: {{ feed.lag_records ?? 'unknown' }}{{ feed.lag_is_lower_bound ? '+' : '' }} records.</p>
-    }
-    @if (feed.projection_available && store.rows().length === 0) {
-      <p class="state">No projected transactions match this account and filter set.</p>
-    } @else if (feed.projection_available) {
-      <div class="transaction-grid" role="group" aria-label="Operator transaction history">
-        <div class="transaction-grid__head" aria-hidden="true"><span>Recorded</span><span>Origin and context</span><span>Instruction and execution</span><span>Lifecycle</span><span>Evidence</span></div>
-        @for (row of store.rows(); track trackRow($index, row)) {
-          <button type="button" class="transaction-grid__row" [attr.aria-label]="'Open receipt ' + (row.order_ref ?? row.external_order_id ?? row.transaction_id)" (click)="openReceipt(row, $event)">
-            <span data-label="Recorded"><app-timestamp-display [value]="row.recorded_at_ms" mode="local" /></span>
-            <span data-label="Origin and context">
-              <strong>{{ originLabel(row) }}</strong>
-              @if (row.transaction_origin; as origin) {
-                @if (originCodeDistinctFromLabel(origin)) { <small>{{ origin | receiptLabel }}</small> }
-              }
-              @if (row.run_id; as runId) { <code>{{ runId }}</code> }
-            </span>
-            <span data-label="Instruction and execution">
-              <span>{{ instruction(row) }} {{ row.order_instruction?.action | receiptLabel }} {{ row.order_instruction?.order_type | receiptLabel }}</span>
-              @if (row.order_ref; as orderRef) {
-                <code>{{ orderRef }}</code>
-              } @else if (row.external_order_id; as externalOrderId) {
-                <code>{{ externalOrderId }}</code>
-              }
-              @if (row.execution_quantity !== null && row.execution_quantity !== undefined) {
-                <small>
-                  Execution: {{ row.execution_quantity | number: '1.0-4' }}
-                  @if (row.execution_price !== null && row.execution_price !== undefined) {
-                    &#64; {{ row.execution_price | number: '1.2-4' }}
-                  }
-                </small>
-              }
-              @if (row.fee_fidelity; as fidelity) {
-                <small>
-                  @if (fidelity === 'not_reported') {
-                    Fees not reported
-                  } @else {
-                    {{ fidelity | receiptLabel }}
-                    @if (row.fee !== null) { · {{ row.fee | number: '1.2-4' }} }
-                  }
-                </small>
-              }
-            </span>
-            <span data-label="Lifecycle">{{ row.lifecycle_state | receiptLabel }}</span>
-            <span data-label="Evidence">{{ row.event_count }} event{{ row.event_count === 1 ? '' : 's' }}</span>
-          </button>
+<section id="account-desk-transaction-history" class="transaction-history" aria-labelledby="transaction-history-heading" aria-live="polite">
+  <header class="transaction-history__header">
+    <div>
+      <p class="eyebrow">Account record</p>
+      <h2 id="transaction-history-heading">Transaction history</h2>
+      <p>Orders and executions recorded for this Alpaca account.</p>
+    </div>
+
+    @if (showScopeControl()) {
+      <div class="scope-control" aria-label="Transaction history period">
+        @for (scopeOption of scopeOptions; track scopeOption) {
+          <button
+            type="button"
+            [class.scope-control__button--active]="scope() === scopeOption"
+            [attr.aria-pressed]="scope() === scopeOption"
+            (click)="selectScope(scopeOption)"
+          >{{ scopeConfig[scopeOption].label }}</button>
         }
       </div>
     }
-    @if (store.nextCursor() !== null) { <button pButton type="button" severity="secondary" [disabled]="store.loading()" (click)="store.loadOlder()">Load older</button> }
+  </header>
+
+  @if (selectedBrokerHistory.isLoading() && showScopeControl()) {
+    <p class="state" role="status">Loading the selected account period…</p>
+  } @else if (rangeUnavailable()) {
+    <p class="state state--error" role="alert">
+      This account period is unavailable, so no partial transaction results are shown.
+    </p>
+  } @else if (store.loading() && !store.hasLastGood()) {
+    <p class="state" role="status">
+      Loading the complete period… {{ store.loadedCount() }} transactions across {{ store.loadedPages() }} page{{ store.loadedPages() === 1 ? '' : 's' }}.
+    </p>
+  } @else if (store.errorMessage() && !store.hasLastGood()) {
+    <div class="state state--error" role="alert">
+      <p>{{ store.errorMessage() }}</p>
+      <button pButton type="button" severity="secondary" (click)="store.retry()">Retry</button>
+    </div>
+  } @else if (store.feed(); as feed) {
+    @if (feedPresentation(); as presentation) {
+      <div class="feed-status" [class.feed-status--attention]="presentation.attention" role="status">
+        <i [class]="presentation.attention ? 'pi pi-exclamation-circle' : 'pi pi-check-circle'" aria-hidden="true"></i>
+        <span><strong>{{ presentation.headline }}</strong>{{ presentation.detail }}</span>
+      </div>
+    }
+
+    @if (store.loading()) {
+      <p class="load-progress" role="status">
+        Refreshing the complete period… {{ store.loadedCount() }} transactions loaded.
+      </p>
+    }
+
+    @if (store.rowLimitReached()) {
+      <p class="state state--warning" role="alert">
+        Showing {{ store.rows().length }} transactions. The safety limit was reached, so search and filters cover only the displayed records.
+      </p>
+    }
+
+    @if (!feed.projection_available) {
+      <p class="state state--error" role="alert">The account transaction view is unavailable.</p>
+    } @else if (store.rows().length === 0) {
+      <p class="state">No transactions were recorded in this period.</p>
+    } @else {
+      <p-table
+        #transactionTable
+        class="transaction-table"
+        [value]="tableRows()"
+        dataKey="transaction.transaction_id"
+        [globalFilterFields]="globalFilterFields"
+        [pt]="tablePassThrough"
+        [paginator]="true"
+        [rows]="pageSize()"
+        [rowsPerPageOptions]="pageSizeOptions()"
+        [rowHover]="true"
+        [stripedRows]="true"
+        [showCurrentPageReport]="true"
+        currentPageReportTemplate="{first}–{last} of {totalRecords}"
+        sortField="recordedAtMs"
+        [sortOrder]="-1"
+        size="small"
+      >
+        <ng-template #caption>
+          <div class="table-toolbar">
+            <label class="table-search">
+              <span class="sr-only">Search all transaction fields</span>
+              <i class="pi pi-search" aria-hidden="true"></i>
+              <input
+                #transactionSearch
+                pInputText
+                type="search"
+                placeholder="Search symbols, status, strategy, run, or order reference"
+                [disabled]="store.loading()"
+                (input)="transactionTable.filterGlobal(inputValue($event), 'contains')"
+              />
+            </label>
+            <button
+              pButton
+              type="button"
+              severity="secondary"
+              [disabled]="store.loading()"
+              (click)="clearFilters(transactionTable, transactionSearch)"
+            ><i class="pi pi-filter-slash" aria-hidden="true"></i>Clear filters</button>
+          </div>
+        </ng-template>
+        <ng-template #header>
+          <tr>
+            <th pSortableColumn="recordedAtMs">
+              <span>Recorded (local time)</span><p-sort-icon field="recordedAtMs" />
+              <p-column-filter type="date" field="recordedAt" display="menu" />
+            </th>
+            <th pSortableColumn="symbol">
+              <span>Instrument</span><p-sort-icon field="symbol" />
+              <p-column-filter type="text" field="symbol" display="menu" />
+            </th>
+            <th pSortableColumn="request"><span>Request</span><p-sort-icon field="request" /></th>
+            <th pSortableColumn="execution"><span>Execution</span><p-sort-icon field="execution" /></th>
+            <th pSortableColumn="status">
+              <span>Status</span><p-sort-icon field="status" />
+              <p-column-filter type="text" field="status" display="menu" />
+            </th>
+            <th pSortableColumn="submittedBy">
+              <span>Submitted by</span><p-sort-icon field="submittedBy" />
+              <p-column-filter type="text" field="submittedBy" display="menu" />
+            </th>
+            <th pSortableColumn="fee" class="numeric">
+              <span>Fees</span><p-sort-icon field="fee" />
+              <p-column-filter type="numeric" field="fee" display="menu" />
+            </th>
+            <th><span>Evidence</span></th>
+          </tr>
+        </ng-template>
+        <ng-template #body let-row>
+          <tr>
+            <td class="time-cell"><app-timestamp-display [value]="row.recordedAtMs" mode="local" /></td>
+            <td>
+              @if (row.symbol; as symbol) {
+                <app-asset-identity [symbol]="symbol" size="sm" />
+              } @else {
+                <span class="account-event">Account</span>
+              }
+            </td>
+            <td class="request-cell">{{ row.request }}</td>
+            <td>{{ row.execution }}</td>
+            <td><span class="status-pill">{{ row.status }}</span></td>
+            <td>{{ row.submittedBy }}</td>
+            <td class="numeric">
+              @if (!row.feesReported) {
+                <span class="muted">Not reported</span>
+              } @else {
+                {{ row.fee === null ? '—' : (row.fee | currency: 'USD') }}
+              }
+            </td>
+            <td class="evidence-cell">
+              <button
+                pButton
+                type="button"
+                severity="secondary"
+                outlined
+                (click)="openReceipt(row, $event)"
+                [attr.aria-label]="'View evidence for ' + (row.symbol ?? row.transaction.order_ref ?? row.transaction.external_order_id ?? row.transaction.transaction_id)"
+              >View details</button>
+              <small>{{ row.evidence }}</small>
+            </td>
+          </tr>
+        </ng-template>
+        <ng-template #emptymessage>
+          <tr><td colspan="8" class="table-empty">No transactions match the current filters.</td></tr>
+        </ng-template>
+      </p-table>
+    }
+
+    <details class="technical-feed-details">
+      <summary>Technical feed details</summary>
+      <div>
+        <p><strong>{{ feed.feed_headline }}</strong> {{ feed.feed_detail }}</p>
+        <dl>
+          <div><dt>Projection high-water</dt><dd>{{ feed.high_water_journal_seq ?? 'Not yet projected' }}</dd></div>
+          <div><dt>Recorded lag</dt><dd>{{ feed.lag_records ?? 'Unknown' }}{{ feed.lag_is_lower_bound ? '+' : '' }}</dd></div>
+          <div><dt>Loaded records</dt><dd>{{ store.rows().length }}</dd></div>
+        </dl>
+      </div>
+    </details>
   }
-</p-panel>
+</section>
 
 @if (canAcknowledgeSelectedExternalOrder()) {
   <section class="external-order-acknowledgement" aria-label="External order acknowledgement">
@@ -101,9 +200,7 @@
       severity="warn"
       [disabled]="!acknowledgementOperator().trim() || acknowledgingExternalOrderId() !== null"
       (click)="acknowledgeSelectedExternalOrder()"
-    >
-      Acknowledge external order
-    </button>
+    >Acknowledge external order</button>
   </section>
 }
 

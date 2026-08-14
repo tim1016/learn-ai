@@ -41,9 +41,11 @@ describe('AlpacaAccountCardComponent', () => {
     expect(screen.getByText('Paper')).toBeTruthy();
     expect(screen.getByText('Equity')).toBeTruthy();
     expect(screen.getByText('Cash')).toBeTruthy();
+    expect(screen.getByText('Buying power')).toBeTruthy();
+    expect(screen.getByText('Updated (local)')).toBeTruthy();
 
     screen.getByRole('button', { name: 'Account details' }).click();
-    expect(screen.getByText('Buying power')).toBeTruthy();
+    expect(screen.getByText('Portfolio value')).toBeTruthy();
   });
 
   it('renders an error state, distinct from empty, when Alpaca is unreachable', async () => {

@@ -2,11 +2,12 @@
   <section
     class="operator-posture"
     [class.operator-posture--healthy]="current.disposition === 'healthy'"
-    [class.operator-posture--attention]="current.disposition !== 'healthy'"
+    [class.operator-posture--caution]="current.disposition !== 'healthy' && current.disposition !== 'terminal'"
+    [class.operator-posture--blocked]="current.disposition === 'terminal'"
     aria-labelledby="operator-posture-title"
   >
     <div>
-      <p class="operator-posture__eyebrow">System posture</p>
+      <p class="operator-posture__eyebrow">Account status</p>
       <h2 id="operator-posture-title">{{ current.headline }}</h2>
       @if (current.detail) {
         <p class="operator-posture__detail">{{ current.detail }}</p>
@@ -31,15 +32,18 @@
         }
       }
       @case ('wait') {
-        <p class="operator-posture__status" role="status">Waiting for fresh Clerk evidence.</p>
+        <p class="operator-posture__status" role="status">Waiting for fresh account evidence.</p>
+      }
+      @case ('review') {
+        <p class="operator-posture__status" role="status">Review the current evidence.</p>
       }
       @case ('terminal') {
-        <p class="operator-posture__status" role="alert">Escalation required.</p>
+        <p class="operator-posture__status" role="alert">Manual escalation required.</p>
       }
     }
 
     @if (current.nextStep; as nextStep) {
-      <p class="operator-posture__next"><strong>Next:</strong> {{ nextStep }}</p>
+      <p class="operator-posture__next"><strong>Recommended next step:</strong> {{ nextStep }}</p>
     }
   </section>
 }

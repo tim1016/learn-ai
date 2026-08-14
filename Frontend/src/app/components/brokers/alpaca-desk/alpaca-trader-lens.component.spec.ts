@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/angular';
+import { fireEvent, render, screen } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
 import type {
@@ -218,17 +218,16 @@ async function renderLens(
 }
 
 describe('AlpacaTraderLensComponent', () => {
-  it("renders today's live positions, fill count, and instrument identities", async () => {
+  it("renders today's positions and activity as compact searchable tables", async () => {
     const { broker } = await renderLens();
 
     expect(await screen.findAllByTitle('SPY')).not.toHaveLength(0);
-    const hero = screen.getByLabelText('Today at a glance');
-    expect(within(hero).getAllByText('2')).toHaveLength(2);
-    expect(screen.getByText('Fills today')).toBeTruthy();
-    expect(within(hero).getByText('Open positions')).toBeTruthy();
-    expect(within(hero).getByText('Realized P&L today')).toBeTruthy();
-    expect(within(hero).getByText('Reconciled account attribution is not available yet.')).toBeTruthy();
-    expect(screen.getByRole('list', { name: 'Today at the desk activity' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Current positions' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Activity' })).toBeTruthy();
+    expect(screen.getByRole('table', { name: 'Current positions' })).toBeTruthy();
+    expect(screen.getByRole('table', { name: "Today's account activity" })).toBeTruthy();
+    expect(screen.getByRole('searchbox', { name: 'Search current positions' })).toBeTruthy();
+    expect(screen.getByRole('searchbox', { name: "Search today's activity" })).toBeTruthy();
     expect(screen.getAllByTitle('NVDA')).not.toHaveLength(0);
     expect(broker.listActivities).toHaveBeenCalledWith(
       'alpaca',
@@ -246,8 +245,9 @@ describe('AlpacaTraderLensComponent', () => {
     expect(await screen.findByRole('img', { name: '30D broker equity curve' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Transaction history' })).toBeTruthy();
     expect(broker.getPortfolioHistoryProof).toHaveBeenCalledWith('alpaca', '30D');
-    expect(await screen.findByText(/Broker curve agrees with local FIFO P&L within \$0\.000001\./)).toBeTruthy();
-    expect(screen.getByRole('table', { name: 'FIFO attribution rows' })).toBeTruthy();
+    expect(await screen.findByText(/Alpaca's account change matches the recorded activity within \$0\.000001\./)).toBeTruthy();
+    fireEvent.click(screen.getByText('Calculation details and supporting trades'));
+    expect(screen.getByRole('table', { name: 'Trades supporting this period' })).toBeTruthy();
     expect(screen.getByText('bot:bot-spy')).toBeTruthy();
     expect(screen.getByText('bot:bot-qqq')).toBeTruthy();
     expect(screen.getAllByTitle('SPY')).not.toHaveLength(0);
@@ -273,15 +273,12 @@ describe('AlpacaTraderLensComponent', () => {
     });
   });
 
-  it('renders zero fills as a loaded value', async () => {
+  it('renders an honest empty state when today has no activity', async () => {
     const broker = brokers();
     broker.listActivities.mockResolvedValue([]);
     await renderLens(broker);
 
-    const hero = await screen.findByLabelText('Today at a glance');
-    const fills = within(hero).getByText('Fills today').closest('article');
-    expect(fills?.textContent).toContain('0');
-    expect(fills?.textContent).not.toContain('Loading');
+    expect(await screen.findByText('No account activity has been recorded today.')).toBeTruthy();
   });
 
   it('renders backend-authored reconciliation divergences', async () => {
@@ -325,13 +322,13 @@ describe('AlpacaTraderLensComponent', () => {
       history: portfolioHistory(),
       attribution: null,
       reconciliation: null,
-      proof_unavailable_reason: 'SQLite FIFO attribution is unavailable for this broker.',
+      proof_unavailable_reason: 'The supporting account record is unavailable for this broker.',
     });
     await renderLens(broker);
 
     fireEvent.click(screen.getByRole('button', { name: '30D' }));
 
     expect(await screen.findByRole('img', { name: '30D broker equity curve' })).toBeTruthy();
-    expect(await screen.findByText('SQLite FIFO attribution is unavailable for this broker.')).toBeTruthy();
+    expect(await screen.findByText('The supporting account record is unavailable for this broker.')).toBeTruthy();
   });
 });
