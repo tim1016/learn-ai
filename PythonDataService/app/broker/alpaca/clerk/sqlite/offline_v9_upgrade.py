@@ -124,7 +124,7 @@ def _upgrade_v8_authority_offline_fenced(
     fsync_directory(upgrade_root)
 
     control = _read_control(db_path)
-    if control["schema_version"] == schema.SCHEMA_VERSION:
+    if control["schema_version"] in {schema.OFFLINE_V9_SCHEMA_VERSION, schema.SCHEMA_VERSION}:
         return _completed_receipt_or_refuse(
             account_id=account_id,
             upgrade_root=upgrade_root,
@@ -226,7 +226,7 @@ def _upgrade_v8_authority_offline_fenced(
                 "authority_generation": control["authority_generation"],
                 "db_identity_token": control["db_identity_token"],
                 "source_schema_version": control["schema_version"],
-                "target_schema_version": schema.SCHEMA_VERSION,
+                "target_schema_version": schema.OFFLINE_V9_SCHEMA_VERSION,
                 "backup_reference": backup_reference,
                 "failed_at_ms": clock(),
                 "reason": str(exc),
@@ -283,7 +283,7 @@ def rollback_v9_upgrade_offline(
     )
     _, account_dir = writes.account_paths(artifacts_root, account_id)
     control = _read_control(writes.confined_account_file(artifacts_root, account_id, DB_FILENAME))
-    if control["schema_version"] != schema.SCHEMA_VERSION:
+    if control["schema_version"] not in {schema.OFFLINE_V9_SCHEMA_VERSION, schema.SCHEMA_VERSION}:
         raise OfflineV9UpgradeRefused("only a published v9 authority can be rolled back")
     receipt = _completed_receipt_or_refuse(
         account_id=account_id,
@@ -348,7 +348,7 @@ def _rebuild_stage_from_finalized_mirror(
     conn.row_factory = sqlite3.Row
     try:
         schema.configure_connection(conn)
-        schema.apply_schema(conn)
+        schema.apply_v9_schema(conn)
         conn.execute("BEGIN IMMEDIATE")
         try:
             conn.execute(
@@ -358,7 +358,7 @@ def _rebuild_stage_from_finalized_mirror(
                 "execution_lease_owner, execution_lease_expires_at_ms) "
                 "VALUES (1, ?, 'alpaca', ?, ?, ?, 0, ?, ?, ?, NULL, NULL)",
                 (
-                    schema.SCHEMA_VERSION,
+                    schema.OFFLINE_V9_SCHEMA_VERSION,
                     account_id,
                     source_control["db_identity_token"],
                     source_control["authority_generation"],
@@ -404,7 +404,7 @@ def _rebuild_stage_from_finalized_mirror(
 
 def _assert_journal_identity(source: DatabaseVerification, stage: DatabaseVerification) -> None:
     if (
-        stage.schema_version != schema.SCHEMA_VERSION
+        stage.schema_version != schema.OFFLINE_V9_SCHEMA_VERSION
         or stage.account_id != source.account_id
         or stage.authority_generation != source.authority_generation
         or stage.db_identity_token != source.db_identity_token
@@ -501,7 +501,7 @@ def _prepared_receipt_payload(
         "authority_generation": source.authority_generation,
         "db_identity_token": source.db_identity_token,
         "source_schema_version": 8,
-        "target_schema_version": schema.SCHEMA_VERSION,
+        "target_schema_version": schema.OFFLINE_V9_SCHEMA_VERSION,
         "backup_reference": backup_reference,
         "receipt_reference": relative_reference(artifacts_root, receipt_path),
         "transition_count": source.transition_count,
@@ -613,7 +613,7 @@ def _receipt_from_completed_payload(
         or receipt.authority_generation != control["authority_generation"]
         or receipt.db_identity_token != control["db_identity_token"]
         or receipt.source_schema_version != 8
-        or receipt.target_schema_version != schema.SCHEMA_VERSION
+        or receipt.target_schema_version != schema.OFFLINE_V9_SCHEMA_VERSION
         or receipt.receipt_reference != expected_reference
     ):
         raise OfflineV9UpgradeRefused("completed v9 upgrade receipt does not bind this authority")
@@ -640,7 +640,7 @@ def _assert_prepared_receipt_matches_published_authority(
         payload.get("status") != "prepared"
         or payload.get("account_id") != account_id
         or payload.get("source_schema_version") != 8
-        or payload.get("target_schema_version") != schema.SCHEMA_VERSION
+        or payload.get("target_schema_version") != schema.OFFLINE_V9_SCHEMA_VERSION
         or payload.get("receipt_reference") != expected_reference
         or expected_generation != control["authority_generation"]
         or expected_identity != control["db_identity_token"]
@@ -654,7 +654,7 @@ def _assert_prepared_receipt_matches_published_authority(
         expected_db_identity=expected_identity,
     )
     if (
-        verification.schema_version != schema.SCHEMA_VERSION
+        verification.schema_version not in {schema.OFFLINE_V9_SCHEMA_VERSION, schema.SCHEMA_VERSION}
         or verification.transition_count != expected_transition_count
         or verification.last_row_hash != expected_last_hash
     ):

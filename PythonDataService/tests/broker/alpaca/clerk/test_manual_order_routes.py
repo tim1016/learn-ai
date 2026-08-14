@@ -15,6 +15,7 @@ from app.broker.alpaca.clerk.sqlite.custody_subjects import manual_operator_subj
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
+from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerAccountSnapshot, BrokerAsset, BrokerOrder, BrokerOrderLeg
 from app.config import settings
 from app.routers.brokers import router
@@ -57,7 +58,10 @@ class FakeAlpacaPort:
         self.asset_calls = 0
         self.asset_limits: list[int | None] = []
         self.submit_calls: list[str] = []
+        self.cancel_calls: list[str] = []
+        self.orders: dict[str, BrokerOrder] = {}
         self.durable_before_submit = False
+        self.cancel_unavailable = False
 
     async def get_account(self) -> BrokerAccountSnapshot:
         self.account_calls += 1
@@ -98,7 +102,7 @@ class FakeAlpacaPort:
             and ticket.legs[0].order_ref == client_order_id
             and ticket.legs[0].effect_operation_id is not None
         )
-        return BrokerOrder(
+        order = BrokerOrder(
             broker="alpaca",
             order_id="broker-manual-1",
             client_order_id=client_order_id,
@@ -122,12 +126,28 @@ class FakeAlpacaPort:
             events=[],
             observed_at_ms=1_700_000_000_100,
         )
+        self.orders[client_order_id] = order
+        return order
 
-    async def cancel(self, _order_id: str) -> None:  # pragma: no cover - S3
-        raise AssertionError("S2 does not expose manual cancellation")
+    async def cancel(self, order_id: str) -> None:
+        self.cancel_calls.append(order_id)
+        if self.cancel_unavailable:
+            raise BrokerUnavailable("cancel transport unavailable")
+        for client_order_id, order in self.orders.items():
+            if order.order_id == order_id:
+                self.orders[client_order_id] = order.model_copy(
+                    update={
+                        "status": "canceled",
+                        "canceled_at_ms": 1_700_000_000_200,
+                        "updated_at_ms": 1_700_000_000_200,
+                        "observed_at_ms": 1_700_000_000_200,
+                    }
+                )
+                return
+        raise AssertionError(f"unknown broker order {order_id!r}")
 
-    async def get_order_by_client_order_id(self, _client_order_id: str):  # pragma: no cover - S3
-        return None
+    async def get_order_by_client_order_id(self, client_order_id: str) -> BrokerOrder | None:
+        return self.orders.get(client_order_id)
 
 
 @pytest.fixture()
@@ -201,7 +221,7 @@ async def test_disabled_manual_capability_refuses_without_contacting_alpaca(
             "code": "MANUAL_TRADING_NOT_QUALIFIED",
             "message": "Manual SQLite trading remains disabled until paper qualification is complete.",
         },
-        "supported_order_shape": "BUY market DAY equity, one leg",
+        "supported_order_shape": "BUY or SELL market DAY equity, one leg",
     }
     assert port.account_calls == 0
     assert port.asset_calls == 0
@@ -229,9 +249,15 @@ async def test_manual_ticket_preview_submit_replay_and_read_are_durable(
             headers=_headers(),
             json={
                 **_preview_payload(),
-                "leg": {
-                    "leg_id": LEG_ID,
-                    "instruction": {"symbol": "SPY", "side": "sell", "quantity": 1},
+                    "leg": {
+                        "leg_id": LEG_ID,
+                        "instruction": {
+                            "symbol": "SPY",
+                            "side": "buy",
+                            "quantity": 1,
+                            "order_type": "limit",
+                            "limit_price": 500,
+                        },
                 },
             },
         )
@@ -246,6 +272,21 @@ async def test_manual_ticket_preview_submit_replay_and_read_are_durable(
             headers=_headers(),
             json={"leg": _preview_payload(quantity=2)["leg"], "preview_token": token},
         )
+        cancel_path = (
+            f"/api/brokers/alpaca/accounts/{ACCOUNT_ID}/manual-orders/"
+            f"{submitted.json()['legs'][0]['order']['order_ref']}/cancel"
+        )
+        cancelled = await client.post(
+            cancel_path,
+            headers=_headers(),
+            json={"cancel_request_id": "7d524bb7-3a8c-4b45-8c8e-e009654d3035"},
+        )
+        cancel_replay = await client.post(
+            cancel_path,
+            headers=_headers(),
+            json={"cancel_request_id": "7d524bb7-3a8c-4b45-8c8e-e009654d3035"},
+        )
+        restored_after_cancel = await client.get(ticket_path, headers=_headers())
         generic = await client.post(
             "/api/brokers/alpaca/orders",
             headers=_headers(),
@@ -273,6 +314,41 @@ async def test_manual_ticket_preview_submit_replay_and_read_are_durable(
     assert conflict.status_code == 409
     assert conflict.json()["detail"]["reason"] == "manual_ticket_conflict"
     assert generic.status_code == 409
+    assert cancelled.status_code == cancel_replay.status_code == 202
+    assert cancelled.json()["state"] == "SUCCEEDED"
+    assert cancelled.json()["effect"]["kind"] == "CANCEL"
+    assert restored_after_cancel.json()["legs"][0]["cancellation"]["state"] == "SUCCEEDED"
+    assert len(port.cancel_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_manual_cancel_unknown_response_uses_server_authored_recovery_copy(
+    api: tuple[FastAPI, ClerkSqliteRepository, FakeAlpacaPort, dict[str, bool]],
+) -> None:
+    app, _repo, port, _health = api
+    preview_path = f"/api/brokers/alpaca/accounts/{ACCOUNT_ID}/manual-orders/preview"
+    ticket_path = f"/api/brokers/alpaca/accounts/{ACCOUNT_ID}/manual-order-tickets/{TICKET_ID}"
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        preview = await client.post(preview_path, headers=_headers(), json=_preview_payload())
+        submitted = await client.put(
+            ticket_path,
+            headers=_headers(),
+            json={"leg": _preview_payload()["leg"], "preview_token": preview.json()["preview_token"]},
+        )
+        order_ref = submitted.json()["legs"][0]["order"]["order_ref"]
+        port.cancel_unavailable = True
+        unknown = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCOUNT_ID}/manual-orders/{order_ref}/cancel",
+            headers=_headers(),
+            json={"cancel_request_id": "d40f1aeb-263c-4a57-8583-0e48f1d9298b"},
+        )
+        restored = await client.get(ticket_path, headers=_headers())
+
+    assert unknown.status_code == 202
+    assert unknown.json()["state"] == "UNKNOWN"
+    assert unknown.json()["message"] == "The cancellation outcome is not yet known."
+    assert "Refresh this ticket" in unknown.json()["next_action"]
+    assert restored.json()["legs"][0]["cancellation"]["message"] == unknown.json()["message"]
 
 
 @pytest.mark.asyncio

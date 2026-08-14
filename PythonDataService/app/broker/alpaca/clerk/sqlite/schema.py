@@ -21,14 +21,18 @@ from app.broker.alpaca.clerk.sqlite.custody_schema_contract import (
     COMMAND_SUBJECT_COMPATIBILITY_DDL,
     CUSTODY_SUBJECT_IDENTITY_DDL,
     EFFECT_SUBJECT_COMPATIBILITY_DDL,
+    EFFECT_SUBJECT_COMPATIBILITY_V10_MIGRATION_STATEMENTS,
     HOLD_SUBJECT_COMPATIBILITY_DDL,
+    MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_DDL,
+    MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_STATEMENTS,
     MANUAL_LEG_SUBJECT_COMPATIBILITY_DDL,
     MANUAL_TICKET_SUBJECT_COMPATIBILITY_DDL,
     POSITION_SUBJECT_COMPATIBILITY_DDL,
     UNCERTAINTY_SUBJECT_COMPATIBILITY_DDL,
 )
 
-SCHEMA_VERSION = 9
+OFFLINE_V9_SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 PRAGMA_STATEMENTS: tuple[str, ...] = (
     "PRAGMA journal_mode = WAL",
@@ -39,7 +43,7 @@ PRAGMA_STATEMENTS: tuple[str, ...] = (
 
 # Byte-for-byte the fenced ```sql block from
 # docs/architecture/alpaca-clerk-sqlite-pinned-contracts.md §3.
-SCHEMA_DDL = """\
+SCHEMA_V9_DDL = """\
 -- ============================================================
 -- control_meta — guarded singleton (PRD §9.1)
 -- ============================================================
@@ -569,6 +573,39 @@ BEGIN
 END;\
 """
 
+# v10 is additive over the published v9 custody contract. Existing v9
+# authorities gain this table and the expanded effect-subject trigger through
+# one transactional migration; fresh authorities execute the same final DDL.
+_MANUAL_ORDER_CANCELLATION_TABLE_DDL = """\
+CREATE TABLE manual_order_cancellations (
+    order_ref                 TEXT PRIMARY KEY REFERENCES orders(order_ref),
+    subject_id                TEXT NOT NULL REFERENCES custody_subjects(subject_id),
+    cancel_request_id         TEXT NOT NULL UNIQUE,
+    command_id                TEXT NOT NULL UNIQUE REFERENCES commands(command_id),
+    effect_operation_id       TEXT NOT NULL UNIQUE REFERENCES effect_operations(effect_operation_id),
+    state                     TEXT NOT NULL CHECK (state IN ('ACCEPTED','UNKNOWN','SUCCEEDED','FAILED')),
+    created_at_ms             INTEGER NOT NULL,
+    updated_at_ms             INTEGER NOT NULL
+);
+"""
+_MANUAL_ORDER_CANCELLATION_INDEX_DDL = """\
+CREATE INDEX ix_manual_order_cancellations_effect
+    ON manual_order_cancellations(effect_operation_id);
+"""
+_EFFECT_SUBJECT_COMPATIBILITY_V10_DDL = (
+    "DROP TRIGGER trg_effect_operations_subject_compatible_insert;\n"
+    "DROP TRIGGER trg_effect_operations_subject_compatible_update;\n"
+    + EFFECT_SUBJECT_COMPATIBILITY_V10_MIGRATION_STATEMENTS[2]
+    + EFFECT_SUBJECT_COMPATIBILITY_V10_MIGRATION_STATEMENTS[3]
+)
+SCHEMA_V10_DDL = (
+    _MANUAL_ORDER_CANCELLATION_TABLE_DDL
+    + _MANUAL_ORDER_CANCELLATION_INDEX_DDL
+    + _EFFECT_SUBJECT_COMPATIBILITY_V10_DDL
+    + MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_DDL
+)
+SCHEMA_DDL = (SCHEMA_V9_DDL + "\n\n" + SCHEMA_V10_DDL).rstrip("\n")
+
 
 def configure_connection(conn: sqlite3.Connection) -> None:
     """Apply the pinned PRAGMA set (§2) to a freshly-opened connection."""
@@ -579,6 +616,11 @@ def configure_connection(conn: sqlite3.Connection) -> None:
 def apply_schema(conn: sqlite3.Connection) -> None:
     """Create all tables/indexes/triggers from ``SCHEMA_DDL`` (fresh init only)."""
     conn.executescript(SCHEMA_DDL)
+
+
+def apply_v9_schema(conn: sqlite3.Connection) -> None:
+    """Create the historical v9 custody schema for the verified offline ceremony."""
+    conn.executescript(SCHEMA_V9_DDL)
 
 
 # Registered upgrades keyed by the ``schema_version`` they start from, each an
@@ -751,6 +793,15 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
         "ALTER TABLE external_orders ADD COLUMN stop_price REAL",
         "ALTER TABLE external_orders ADD COLUMN filled_avg_price REAL",
     ),
+    # v9 -> v10: manual cancellation is a new durable resource. The old v9
+    # effect-subject triggers are replaced before the new CANCEL effect can
+    # exist, and every DDL statement is committed with the version advance.
+    9: (
+        _MANUAL_ORDER_CANCELLATION_TABLE_DDL,
+        _MANUAL_ORDER_CANCELLATION_INDEX_DDL,
+        *EFFECT_SUBJECT_COMPATIBILITY_V10_MIGRATION_STATEMENTS,
+        *MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_STATEMENTS,
+    ),
 }
 
 
@@ -768,7 +819,7 @@ def is_upgradable_to_current(version: int) -> bool:
     """
     seen = version
     while seen < SCHEMA_VERSION:
-        if seen == 8 and SCHEMA_VERSION == 9:
+        if seen == 8:
             # Verification and backup may inspect v8, but only the offline
             # mirror-rebuild ceremony may publish v9.
             return True
@@ -788,14 +839,14 @@ def migrate_schema(conn: sqlite3.Connection, *, from_version: int) -> None:
     fail-closed default for anything not proven safe here.
     """
     version = from_version
-    if version == 8 and SCHEMA_VERSION == 9:
+    if version == 8:
         raise OfflineSchemaUpgradeRequired(
             "schema v8 requires the verified offline v8-to-v9 upgrade ceremony"
         )
     conn.execute("BEGIN IMMEDIATE")
     try:
         while version < SCHEMA_VERSION:
-            if version == 8 and SCHEMA_VERSION == 9:
+            if version == 8:
                 raise OfflineSchemaUpgradeRequired(
                     "schema v8 requires the verified offline v8-to-v9 upgrade ceremony"
                 )

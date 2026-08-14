@@ -38,6 +38,11 @@ from app.broker.alpaca.clerk.sqlite.economic_projection import (
     MarketMark,
 )
 from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError
+from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import (
+    ManualOrderCancelConflictError,
+    ManualOrderCancelOwnershipError,
+    ManualOrderCancelTerminalError,
+)
 from app.broker.alpaca.clerk.sqlite.manual_order_runtime import ManualPreviewStaleError
 from app.broker.alpaca.clerk.sqlite.manual_orders import ManualTicketConflictError
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
@@ -68,6 +73,8 @@ from app.schemas.account_pnl_attribution import (
     PortfolioHistoryProofResponse,
 )
 from app.schemas.manual_orders import (
+    ManualOrderCancellationResponse,
+    ManualOrderCancelRequest,
     ManualOrderCapabilityResponse,
     ManualOrderPreviewRequest,
     ManualOrderPreviewResponse,
@@ -522,6 +529,37 @@ async def get_sqlite_manual_order_ticket(
     """Restore a durable manual ticket after refresh or a lost submit response."""
     facade = _require_sqlite_manual_facade(account_id)
     return _manual_ticket_response(facade, str(ticket_id))
+
+
+@router.post(
+    "/alpaca/accounts/{account_id}/manual-orders/{order_ref:path}/cancel",
+    response_model=ManualOrderCancellationResponse,
+    status_code=202,
+    dependencies=[Depends(require_data_plane_control_secret)],
+)
+async def cancel_sqlite_manual_order(
+    account_id: str,
+    order_ref: str,
+    request: ManualOrderCancelRequest,
+) -> ManualOrderCancellationResponse:
+    """Durably cancel one SQLite-owned manual order by Clerk reference only."""
+    facade = _require_sqlite_manual_facade(account_id)
+    try:
+        submission = await facade.cancel_manual_order(
+            operator_id=settings.PANEL_OPERATOR_IDENTITY,
+            order_ref=order_ref,
+            cancel_request_id=str(request.cancel_request_id),
+        )
+    except (
+        ManualOrderCancelConflictError,
+        ManualOrderCancelOwnershipError,
+        ManualOrderCancelTerminalError,
+    ) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "manual_order_cancel_refused", "message": str(exc)},
+        ) from exc
+    return ManualOrderCancellationResponse.from_domain(submission)
 
 
 @router.delete(

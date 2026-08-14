@@ -47,6 +47,11 @@
   finalizes a post-swap prepared receipt only after it re-verifies the selected
   v9 journal identity. See the recovery runbook's “Offline v8-to-v9
   custody-subject upgrade” procedure.
+- Schema-v10 adds the immutable `manual_order_cancellations` resource and
+  expands the subject-bound effect trigger to admit its `CANCEL` effect. The
+  registered v9 → v10 migration creates that resource and replaces the two
+  effect-subject triggers in the same transaction; the verified v8 → v9
+  ceremony remains exactly v9 and startup then applies this additive upgrade.
 - **Source of truth ranking:** ADR 0035 (decision rationale) →
   `docs/prds/alpaca-account-clerk-sqlite-control-plane.md` §9–§11 (functional
   contract) → this document (concrete, implementable pin). Where this document
@@ -909,6 +914,94 @@ BEFORE UPDATE OF state ON effect_operations
 WHEN OLD.state IN ('succeeded','failed','rejected') AND NEW.state != OLD.state
 BEGIN
     SELECT RAISE(ABORT, 'effect_operations.state cannot change once terminal');
+END;
+
+CREATE TABLE manual_order_cancellations (
+    order_ref                 TEXT PRIMARY KEY REFERENCES orders(order_ref),
+    subject_id                TEXT NOT NULL REFERENCES custody_subjects(subject_id),
+    cancel_request_id         TEXT NOT NULL UNIQUE,
+    command_id                TEXT NOT NULL UNIQUE REFERENCES commands(command_id),
+    effect_operation_id       TEXT NOT NULL UNIQUE REFERENCES effect_operations(effect_operation_id),
+    state                     TEXT NOT NULL CHECK (state IN ('ACCEPTED','UNKNOWN','SUCCEEDED','FAILED')),
+    created_at_ms             INTEGER NOT NULL,
+    updated_at_ms             INTEGER NOT NULL
+);
+CREATE INDEX ix_manual_order_cancellations_effect
+    ON manual_order_cancellations(effect_operation_id);
+DROP TRIGGER trg_effect_operations_subject_compatible_insert;
+DROP TRIGGER trg_effect_operations_subject_compatible_update;
+CREATE TRIGGER trg_effect_operations_subject_compatible_insert
+BEFORE INSERT ON effect_operations
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1
+        FROM commands command
+        JOIN custody_subjects subject ON subject.subject_id = NEW.subject_id
+        WHERE command.command_id = NEW.command_id
+            AND command.subject_id = NEW.subject_id
+            AND command.strategy_instance_id IS NEW.strategy_instance_id
+            AND command.run_id IS NEW.run_id
+            AND (
+                (subject.kind = 'BOT' AND subject.strategy_instance_id = NEW.strategy_instance_id
+                    AND NEW.kind != 'MANUAL_ORDER')
+                OR (subject.kind = 'MANUAL_OPERATOR' AND NEW.kind IN ('MANUAL_ORDER', 'CANCEL')
+                    AND NEW.strategy_instance_id IS NULL AND NEW.run_id IS NULL)
+            )
+    ) THEN RAISE(ABORT, 'effect operation must stay within its command custody subject') END;
+END;
+CREATE TRIGGER trg_effect_operations_subject_compatible_update
+BEFORE UPDATE OF subject_id, command_id, strategy_instance_id, run_id, kind ON effect_operations
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1
+        FROM commands command
+        JOIN custody_subjects subject ON subject.subject_id = NEW.subject_id
+        WHERE command.command_id = NEW.command_id
+            AND command.subject_id = NEW.subject_id
+            AND command.strategy_instance_id IS NEW.strategy_instance_id
+            AND command.run_id IS NEW.run_id
+            AND (
+                (subject.kind = 'BOT' AND subject.strategy_instance_id = NEW.strategy_instance_id
+                    AND NEW.kind != 'MANUAL_ORDER')
+                OR (subject.kind = 'MANUAL_OPERATOR' AND NEW.kind IN ('MANUAL_ORDER', 'CANCEL')
+                    AND NEW.strategy_instance_id IS NULL AND NEW.run_id IS NULL)
+            )
+    ) THEN RAISE(ABORT, 'effect operation must stay within its command custody subject') END;
+END;
+CREATE TRIGGER trg_manual_order_cancellation_identity_immutable
+BEFORE UPDATE OF order_ref, subject_id, cancel_request_id, command_id, effect_operation_id
+ON manual_order_cancellations
+BEGIN
+    SELECT RAISE(ABORT, 'manual_order_cancellations identity is immutable');
+END;
+CREATE TRIGGER trg_manual_order_cancellation_delete_forbidden
+BEFORE DELETE ON manual_order_cancellations
+BEGIN
+    SELECT RAISE(ABORT, 'manual_order_cancellations are append-only');
+END;
+CREATE TRIGGER trg_manual_order_cancellation_subject_compatible_insert
+BEFORE INSERT ON manual_order_cancellations
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1
+        FROM manual_order_legs leg
+        JOIN custody_subjects subject ON subject.subject_id = leg.subject_id
+        JOIN commands command ON command.command_id = NEW.command_id
+        JOIN effect_operations effect ON effect.effect_operation_id = NEW.effect_operation_id
+        WHERE leg.order_ref = NEW.order_ref
+            AND leg.subject_id = NEW.subject_id
+            AND subject.kind = 'MANUAL_OPERATOR'
+            AND command.subject_id = NEW.subject_id
+            AND command.kind = 'manual_order'
+            AND command.action = 'CANCEL_MANUAL_ORDER'
+            AND command.strategy_instance_id IS NULL
+            AND command.run_id IS NULL
+            AND effect.command_id = command.command_id
+            AND effect.subject_id = NEW.subject_id
+            AND effect.kind = 'CANCEL'
+            AND effect.strategy_instance_id IS NULL
+            AND effect.run_id IS NULL
+    ) THEN RAISE(ABORT, 'manual cancellation must own one manual ticket order') END;
 END;
 ```
 

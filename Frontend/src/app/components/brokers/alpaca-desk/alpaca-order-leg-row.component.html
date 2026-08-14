@@ -11,10 +11,17 @@
   />
 </label>
 @if (manualMarketOnly()) {
-  <div class="order-field">
+  <label class="order-field">
     <span>Side</span>
-    <output class="order-input">Buy</output>
-  </div>
+    <select
+      [formField]="legForm().side"
+      [attr.aria-label]="'Leg ' + (position() + 1) + ' side'"
+      class="order-input"
+    >
+      <option value="buy">Buy</option>
+      <option value="sell">Sell</option>
+    </select>
+  </label>
 } @else {
   <label class="order-field">
     <span>Side</span>

@@ -59,7 +59,7 @@ def test_schema_ddl_matches_pinned_contracts_doc() -> None:
     assert pinned == schema.SCHEMA_DDL
 
 
-def test_schema_creates_all_twenty_one_pinned_tables() -> None:
+def test_schema_creates_all_twenty_two_pinned_tables() -> None:
     conn = sqlite3.connect(":memory:")
     schema.configure_connection(conn)
     schema.apply_schema(conn)
@@ -87,6 +87,7 @@ def test_schema_creates_all_twenty_one_pinned_tables() -> None:
         "uncertainties",
         "manual_order_tickets",
         "manual_order_legs",
+        "manual_order_cancellations",
         "reconciliations",
         "receipts",
         "custody_transitions",
@@ -128,6 +129,7 @@ def test_v9_execution_provenance_and_custody_subject_schema() -> None:
         "ux_manual_order_legs_command",
         "ux_manual_order_legs_effect",
         "ux_manual_order_legs_order",
+        "ix_manual_order_cancellations_effect",
     } <= index_names
 
     command_columns = {row[1]: row for row in conn.execute("PRAGMA table_info(commands)")}
@@ -136,6 +138,30 @@ def test_v9_execution_provenance_and_custody_subject_schema() -> None:
     assert effect_columns["subject_id"][3] == 1
     assert command_columns["strategy_instance_id"][3] == 0
     assert effect_columns["strategy_instance_id"][3] == 0
+
+
+def test_v9_authority_migrates_the_manual_cancellation_resource_to_v10() -> None:
+    conn = sqlite3.connect(":memory:")
+    schema.configure_connection(conn)
+    schema.apply_v9_schema(conn)
+    assert conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'manual_order_cancellations'"
+    ).fetchone() is None
+    conn.execute(
+        "INSERT INTO control_meta "
+        "(id, schema_version, broker, account_id, db_identity_token, authority_generation, "
+        "control_revision, created_at_ms, last_open_at_ms, reset_provenance_json, "
+        "execution_lease_owner, execution_lease_expires_at_ms) "
+        "VALUES (1, 9, 'alpaca', 'PA1', 'identity', 1, 0, 1, 1, NULL, NULL, NULL)"
+    )
+    conn.commit()
+
+    schema.migrate_schema(conn, from_version=9)
+
+    assert conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0] == 10
+    assert conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'manual_order_cancellations'"
+    ).fetchone() is not None
 
 
 def test_v9_subject_ownership_invariants_reject_counterfeit_and_cross_wired_rows() -> None:
@@ -275,6 +301,63 @@ def test_v9_subject_ownership_invariants_reject_counterfeit_and_cross_wired_rows
         conn.execute(
             "UPDATE manual_order_legs SET command_id = 'bot-command', effect_operation_id = 'bot-effect', "
             "order_ref = 'bot-order' WHERE ticket_id = 'manual-ticket' AND leg_id = 'leg-a'"
+        )
+    conn.execute(
+        "INSERT INTO commands "
+        "(command_id, authority_generation, subject_id, idempotency_key, payload_hash, kind, "
+        "strategy_instance_id, run_id, action, state, created_at_ms, updated_at_ms) "
+        "VALUES ('manual-command', 1, 'manual-operator:operator-a', 'manual-command', 'h', "
+        "'manual_order', NULL, NULL, 'SUBMIT_MANUAL_ORDER', 'accepted', 1, 1)"
+    )
+    conn.execute(
+        "INSERT INTO effect_operations "
+        "(effect_operation_id, authority_generation, subject_id, idempotency_key, command_id, "
+        "strategy_instance_id, run_id, kind, state, custody_owner, created_at_ms, updated_at_ms) "
+        "VALUES ('manual-effect', 1, 'manual-operator:operator-a', 'manual-effect', "
+        "'manual-command', NULL, NULL, 'MANUAL_ORDER', 'accepted', 'ACCOUNT_CLERK', 1, 1)"
+    )
+    conn.execute(
+        "INSERT INTO orders "
+        "(order_ref, effect_operation_id, client_order_id, role, updated_at_ms) "
+        "VALUES ('manual-order', 'manual-effect', 'manual-order', 'MANUAL', 1)"
+    )
+    conn.execute(
+        "UPDATE manual_order_legs SET command_id = 'manual-command', effect_operation_id = "
+        "'manual-effect', order_ref = 'manual-order' WHERE ticket_id = 'manual-ticket' AND leg_id = 'leg-a'"
+    )
+    conn.execute(
+        "INSERT INTO commands "
+        "(command_id, authority_generation, subject_id, idempotency_key, payload_hash, kind, "
+        "strategy_instance_id, run_id, action, state, created_at_ms, updated_at_ms) "
+        "VALUES ('manual-cancel-command', 1, 'manual-operator:operator-a', 'manual-cancel', 'h', "
+        "'manual_order', NULL, NULL, 'CANCEL_MANUAL_ORDER', 'accepted', 1, 1)"
+    )
+    conn.execute(
+        "INSERT INTO effect_operations "
+        "(effect_operation_id, authority_generation, subject_id, idempotency_key, command_id, "
+        "strategy_instance_id, run_id, kind, state, custody_owner, created_at_ms, updated_at_ms) "
+        "VALUES ('manual-cancel-effect', 1, 'manual-operator:operator-a', 'manual-cancel-effect', "
+        "'manual-cancel-command', NULL, NULL, 'CANCEL', 'accepted', 'ACCOUNT_CLERK', 1, 1)"
+    )
+    conn.execute(
+        "INSERT INTO manual_order_cancellations "
+        "(order_ref, subject_id, cancel_request_id, command_id, effect_operation_id, state, "
+        "created_at_ms, updated_at_ms) VALUES ('manual-order', 'manual-operator:operator-a', "
+        "'cancel-request', 'manual-cancel-command', 'manual-cancel-effect', 'ACCEPTED', 1, 1)"
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="manual_order_cancellations identity is immutable"):
+        conn.execute(
+            "UPDATE manual_order_cancellations SET cancel_request_id = 'other-request' "
+            "WHERE order_ref = 'manual-order'"
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="manual_order_cancellations are append-only"):
+        conn.execute("DELETE FROM manual_order_cancellations WHERE order_ref = 'manual-order'")
+    with pytest.raises(sqlite3.IntegrityError, match="manual cancellation must own"):
+        conn.execute(
+            "INSERT INTO manual_order_cancellations "
+            "(order_ref, subject_id, cancel_request_id, command_id, effect_operation_id, state, "
+            "created_at_ms, updated_at_ms) VALUES ('bot-order', 'bot:spy', 'bot-cancel', "
+            "'bot-command', 'bot-effect', 'ACCEPTED', 1, 1)"
         )
     with pytest.raises(sqlite3.IntegrityError, match="custody_subjects are append-only"):
         conn.execute("DELETE FROM custody_subjects WHERE subject_id = 'bot:qqq'")

@@ -16,6 +16,7 @@ import { MessageModule } from 'primeng/message';
 
 import type {
   BrokerOrderLeg,
+  ManualOrderCancellation,
   ManualOrderCapability,
   ManualOrderPreview,
   ManualOrderTicket,
@@ -75,8 +76,12 @@ export class AlpacaOrderEntryComponent {
   protected readonly submitting = signal(false);
   protected readonly results = signal<OrderLegResult[] | null>(null);
   protected readonly manualTicket = signal<ManualOrderTicket | null>(null);
+  protected readonly manualCancellation = signal<ManualOrderCancellation | null>(null);
   private readonly manualPreview = signal<ManualOrderPreview | null>(null);
+  private readonly manualCancelRequestId = signal<string | null>(null);
+  private readonly manualCancelTargetOrderRef = signal<string | null>(null);
   protected readonly submitError = signal<string | null>(null);
+  protected readonly cancelling = signal(false);
   /** Fires after any broker submission attempt, including uncertain outcomes. */
   readonly submissionFinished = output();
 
@@ -91,8 +96,24 @@ export class AlpacaOrderEntryComponent {
 
   protected readonly manualMarketOnly = computed(() => this.sqliteManualAuthority());
   protected readonly manualSubmissionAvailable = computed(
-    () => !this.sqliteManualAuthority() || this.manualCapability()?.available === true,
+    () =>
+      !this.sqliteManualAuthority()
+      || this.legs()[0]?.side === 'sell'
+      || this.manualCapability()?.available === true,
   );
+  protected readonly displayedManualCancellation = computed(
+    () => this.manualTicket()?.legs[0]?.cancellation ?? this.manualCancellation(),
+  );
+  protected readonly cancelableManualOrderRef = computed(() => {
+    const ticket = this.manualTicket();
+    const orderRef = ticket?.legs[0]?.order?.order_ref;
+    return ticket !== null
+      && orderRef !== undefined
+      && this.ticketNeedsRefresh(ticket)
+      && this.displayedManualCancellation() === null
+      ? orderRef
+      : null;
+  });
   protected readonly canConfirm = computed(
     () =>
       this.canSubmit()
@@ -102,6 +123,15 @@ export class AlpacaOrderEntryComponent {
   );
 
   constructor() {
+    effect(() => {
+      // A cancellation id is immutable for one target order only. Route/input
+      // reuse must never carry it to the next manual ticket or leg.
+      this.manualTicketId();
+      this.manualLegId();
+      this.manualCancelRequestId.set(null);
+      this.manualCancelTargetOrderRef.set(null);
+      this.manualCancellation.set(null);
+    });
     effect(() => {
       const accountId = this.expectedAccountId();
       if (!this.sqliteManualAuthority()) return;
@@ -240,6 +270,19 @@ export class AlpacaOrderEntryComponent {
       );
       if (this.manualTicketId() !== ticketId || this.expectedAccountId() !== accountId) return;
       this.manualTicket.set(ticket);
+      const cancellation = ticket.legs[0]?.cancellation ?? null;
+      const currentCancellation = this.manualCancellation();
+      const orderRef = ticket.legs[0]?.order?.order_ref;
+      if (
+        this.manualCancelTargetOrderRef() !== null
+        && this.manualCancelTargetOrderRef() !== orderRef
+      ) {
+        this.manualCancelRequestId.set(null);
+        this.manualCancelTargetOrderRef.set(null);
+      }
+      if (cancellation !== null || currentCancellation?.order_ref !== orderRef) {
+        this.manualCancellation.set(cancellation);
+      }
     } catch (err) {
       if (
         (err instanceof HttpErrorResponse && err.status === 404)
@@ -252,6 +295,39 @@ export class AlpacaOrderEntryComponent {
 
   private ticketNeedsRefresh(ticket: ManualOrderTicket): boolean {
     return !['COMPLETED', 'CANCELED', 'PAUSED_UNKNOWN'].includes(ticket.state);
+  }
+
+  protected async cancelManualOrder(): Promise<void> {
+    const orderRef = this.cancelableManualOrderRef();
+    if (orderRef === null || this.cancelling()) return;
+    this.cancelling.set(true);
+    this.submitError.set(null);
+    try {
+      const cancelRequestId =
+        this.manualCancelTargetOrderRef() === orderRef
+          ? (this.manualCancelRequestId() ?? this.newCancelRequestId())
+          : this.newCancelRequestId();
+      this.manualCancelRequestId.set(cancelRequestId);
+      this.manualCancelTargetOrderRef.set(orderRef);
+      const cancellation = await this.brokers.cancelSqliteManualOrder(this.expectedAccountId(), orderRef, {
+        cancel_request_id: cancelRequestId,
+      });
+      this.manualCancellation.set(cancellation);
+      const ticketId = this.manualTicketId();
+      if (ticketId !== null) await this.restoreManualTicket(ticketId, this.expectedAccountId());
+    } catch (err) {
+      this.submitError.set(this.submissionErrorMessage(err));
+    } finally {
+      this.cancelling.set(false);
+      this.submissionFinished.emit();
+    }
+  }
+
+  private newCancelRequestId(): string {
+    if (typeof globalThis.crypto?.randomUUID !== 'function') {
+      throw new Error('This browser cannot create a durable cancellation identity.');
+    }
+    return globalThis.crypto.randomUUID();
   }
 
   private toRequestLeg(leg: AlpacaOrderDraftLeg): BrokerOrderLeg {

@@ -49,7 +49,7 @@ END;
 """
 
 
-EFFECT_SUBJECT_COMPATIBILITY_DDL = """\
+_EFFECT_SUBJECT_COMPATIBILITY_INSERT_V9_DDL = """\
 CREATE TRIGGER trg_effect_operations_subject_compatible_insert
 BEFORE INSERT ON effect_operations
 BEGIN
@@ -69,6 +69,10 @@ BEGIN
             )
     ) THEN RAISE(ABORT, 'effect operation must stay within its command custody subject') END;
 END;
+"""
+
+
+_EFFECT_SUBJECT_COMPATIBILITY_UPDATE_V9_DDL = """\
 CREATE TRIGGER trg_effect_operations_subject_compatible_update
 BEFORE UPDATE OF subject_id, command_id, strategy_instance_id, run_id, kind ON effect_operations
 BEGIN
@@ -89,6 +93,31 @@ BEGIN
     ) THEN RAISE(ABORT, 'effect operation must stay within its command custody subject') END;
 END;
 """
+
+# Schema v9 only admitted manual-order effects.  v10 replaces these two
+# triggers atomically before it introduces the durable cancellation resource.
+EFFECT_SUBJECT_COMPATIBILITY_DDL = (
+    _EFFECT_SUBJECT_COMPATIBILITY_INSERT_V9_DDL
+    + _EFFECT_SUBJECT_COMPATIBILITY_UPDATE_V9_DDL
+)
+_EFFECT_SUBJECT_COMPATIBILITY_INSERT_V10_DDL = (
+    _EFFECT_SUBJECT_COMPATIBILITY_INSERT_V9_DDL.replace(
+        "NEW.kind = 'MANUAL_ORDER'",
+        "NEW.kind IN ('MANUAL_ORDER', 'CANCEL')",
+    )
+)
+_EFFECT_SUBJECT_COMPATIBILITY_UPDATE_V10_DDL = (
+    _EFFECT_SUBJECT_COMPATIBILITY_UPDATE_V9_DDL.replace(
+        "NEW.kind = 'MANUAL_ORDER'",
+        "NEW.kind IN ('MANUAL_ORDER', 'CANCEL')",
+    )
+)
+EFFECT_SUBJECT_COMPATIBILITY_V10_MIGRATION_STATEMENTS: tuple[str, ...] = (
+    "DROP TRIGGER trg_effect_operations_subject_compatible_insert",
+    "DROP TRIGGER trg_effect_operations_subject_compatible_update",
+    _EFFECT_SUBJECT_COMPATIBILITY_INSERT_V10_DDL,
+    _EFFECT_SUBJECT_COMPATIBILITY_UPDATE_V10_DDL,
+)
 
 
 POSITION_SUBJECT_COMPATIBILITY_DDL = """\
@@ -285,3 +314,61 @@ BEGIN
     ) THEN RAISE(ABORT, 'manual leg resources must be one chain in the ticket subject') END;
 END;
 """
+
+
+_MANUAL_CANCELLATION_IDENTITY_DDL = """\
+CREATE TRIGGER trg_manual_order_cancellation_identity_immutable
+BEFORE UPDATE OF order_ref, subject_id, cancel_request_id, command_id, effect_operation_id
+ON manual_order_cancellations
+BEGIN
+    SELECT RAISE(ABORT, 'manual_order_cancellations identity is immutable');
+END;
+"""
+
+
+_MANUAL_CANCELLATION_DELETE_DDL = """\
+CREATE TRIGGER trg_manual_order_cancellation_delete_forbidden
+BEFORE DELETE ON manual_order_cancellations
+BEGIN
+    SELECT RAISE(ABORT, 'manual_order_cancellations are append-only');
+END;
+"""
+
+
+_MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_DDL = """\
+CREATE TRIGGER trg_manual_order_cancellation_subject_compatible_insert
+BEFORE INSERT ON manual_order_cancellations
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1
+        FROM manual_order_legs leg
+        JOIN custody_subjects subject ON subject.subject_id = leg.subject_id
+        JOIN commands command ON command.command_id = NEW.command_id
+        JOIN effect_operations effect ON effect.effect_operation_id = NEW.effect_operation_id
+        WHERE leg.order_ref = NEW.order_ref
+            AND leg.subject_id = NEW.subject_id
+            AND subject.kind = 'MANUAL_OPERATOR'
+            AND command.subject_id = NEW.subject_id
+            AND command.kind = 'manual_order'
+            AND command.action = 'CANCEL_MANUAL_ORDER'
+            AND command.strategy_instance_id IS NULL
+            AND command.run_id IS NULL
+            AND effect.command_id = command.command_id
+            AND effect.subject_id = NEW.subject_id
+            AND effect.kind = 'CANCEL'
+            AND effect.strategy_instance_id IS NULL
+            AND effect.run_id IS NULL
+    ) THEN RAISE(ABORT, 'manual cancellation must own one manual ticket order') END;
+END;
+"""
+
+MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_DDL = (
+    _MANUAL_CANCELLATION_IDENTITY_DDL
+    + _MANUAL_CANCELLATION_DELETE_DDL
+    + _MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_DDL
+)
+MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_STATEMENTS: tuple[str, ...] = (
+    _MANUAL_CANCELLATION_IDENTITY_DDL,
+    _MANUAL_CANCELLATION_DELETE_DDL,
+    _MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_DDL,
+)

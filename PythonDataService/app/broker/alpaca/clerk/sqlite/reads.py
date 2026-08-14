@@ -20,6 +20,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
     DecisionReceiptResource,
     EffectOperationResource,
     ExternalOrderResource,
+    ManualOrderCancellationResource,
     ManualOrderLegResource,
     ManualOrderTicketResource,
     OrderResource,
@@ -326,6 +327,49 @@ def manual_order_ticket(conn: sqlite3.Connection, ticket_id: str) -> ManualOrder
     )
 
 
+def manual_order_cancellation(
+    conn: sqlite3.Connection,
+    *,
+    order_ref: str,
+) -> ManualOrderCancellationResource | None:
+    """Return the one durable cancellation owned by a manual order reference."""
+    row = conn.execute(
+        "SELECT order_ref, subject_id, cancel_request_id, command_id, effect_operation_id, "
+        "state, created_at_ms, updated_at_ms FROM manual_order_cancellations WHERE order_ref = ?",
+        (order_ref,),
+    ).fetchone()
+    return ManualOrderCancellationResource(**dict(row)) if row is not None else None
+
+
+def manual_order_leg_for_order_ref(
+    conn: sqlite3.Connection,
+    *,
+    order_ref: str,
+) -> ManualOrderLegResource | None:
+    """Return the immutable ticket leg that owns one manual order reference."""
+    row = conn.execute(
+        "SELECT ticket_id, leg_id, subject_id, instruction_hash, command_id, effect_operation_id, "
+        "order_ref, state, created_at_ms, updated_at_ms FROM manual_order_legs WHERE order_ref = ?",
+        (order_ref,),
+    ).fetchone()
+    return ManualOrderLegResource(**dict(row)) if row is not None else None
+
+
+def manual_order_cancellation_for_effect(
+    conn: sqlite3.Connection,
+    *,
+    effect_operation_id: str,
+) -> ManualOrderCancellationResource | None:
+    """Resolve a recovery effect back to its immutable manual target order."""
+    row = conn.execute(
+        "SELECT order_ref, subject_id, cancel_request_id, command_id, effect_operation_id, "
+        "state, created_at_ms, updated_at_ms FROM manual_order_cancellations "
+        "WHERE effect_operation_id = ?",
+        (effect_operation_id,),
+    ).fetchone()
+    return ManualOrderCancellationResource(**dict(row)) if row is not None else None
+
+
 def custody_subject(conn: sqlite3.Connection, subject_id: str) -> dict | None:
     row = conn.execute(
         "SELECT subject_id, kind, strategy_instance_id, operator_id, created_at_ms "
@@ -429,9 +473,9 @@ def reconcilable_effect_operations(conn: sqlite3.Connection) -> list[EffectOpera
         "e.created_at_ms, e.updated_at_ms, e.terminal_receipt_id "
         "FROM effect_operations e LEFT JOIN operation_order_links l "
         "ON l.effect_operation_id = e.effect_operation_id LEFT JOIN orders o "
-        "ON o.order_ref = l.order_ref WHERE e.kind IN ('ENTER','EXIT','MANUAL_ORDER') "
+        "ON o.order_ref = l.order_ref WHERE e.kind IN ('ENTER','EXIT','MANUAL_ORDER','CANCEL') "
         "AND e.state NOT IN ('succeeded','failed','rejected') "
-        "AND (e.state IN ('accepted','unknown') OR e.kind = 'EXIT' "
+        "AND (e.state IN ('accepted','unknown') OR e.kind IN ('EXIT','CANCEL') "
         "OR o.broker_state IS NULL OR lower(o.broker_state) NOT IN "
         "('filled','canceled','expired','rejected','replaced')) "
         "ORDER BY e.created_at_ms ASC"
@@ -628,6 +672,66 @@ def attributed_positions_for_subject(conn: sqlite3.Connection, subject_id: str) 
         (subject_id,),
     ).fetchall()
     return {row["symbol"]: row["qty"] for row in rows}
+
+
+def manual_reduction_available_quantity(
+    conn: sqlite3.Connection,
+    *,
+    subject_id: str,
+    symbol: str,
+) -> float:
+    """Return manual-owned long quantity not already reserved for a sell.
+
+    Formula: ``max(0, folded_manual_long - pending_manual_sell_qty)`` where
+    each pending sell quantity is its requested quantity less its current
+    effective filled quantity.
+    Reference: docs/prds/2026-08-13-sqlite-clerk-manual-orders.md §8.
+    Canonical implementation: this file.
+    Validated against: tests/broker/alpaca/clerk/sqlite/test_manual_orders.py::
+      test_manual_sell_reserves_only_its_subject_long_position.
+
+    The position projection includes exact fills and corrections.  Each
+    accepted, working, or unknown manual sell remains reserved until its own
+    effect becomes terminal, so concurrent confirmations cannot oversell the
+    custody subject while a broker response is pending.
+    """
+    normalized_symbol = symbol.upper()
+    position = conn.execute(
+        "SELECT attributed_qty FROM positions WHERE subject_id = ? AND symbol = ?",
+        (subject_id, normalized_symbol),
+    ).fetchone()
+    long_quantity = max(0.0, float(position["attributed_qty"]) if position is not None else 0.0)
+    reservations = conn.execute(
+        "SELECT leg.order_ref, CAST(json_extract(acceptance.facts_json, '$.leg.quantity') AS REAL) "
+        "AS requested_qty FROM effect_operations effect "
+        "JOIN manual_order_legs leg ON leg.effect_operation_id = effect.effect_operation_id "
+        "JOIN custody_transitions acceptance "
+        "ON acceptance.effect_operation_id = effect.effect_operation_id "
+        "AND acceptance.transition_kind = 'MANUAL_ORDER_ACCEPTED' "
+        "WHERE effect.kind = 'MANUAL_ORDER' AND effect.subject_id = ? "
+        "AND effect.state NOT IN ('succeeded', 'failed', 'rejected') "
+        "AND UPPER(json_extract(acceptance.facts_json, '$.leg.symbol')) = ? "
+        "AND UPPER(json_extract(acceptance.facts_json, '$.leg.side')) = 'SELL'",
+        (subject_id, normalized_symbol),
+    ).fetchall()
+    reserved_quantity = sum(
+        max(
+            0.0,
+            float(row["requested_qty"])
+            - effective_fill_totals_for_order(conn, str(row["order_ref"]))[0],
+        )
+        for row in reservations
+    )
+    return max(0.0, long_quantity - reserved_quantity)
+
+
+def has_nonterminal_manual_order(conn: sqlite3.Connection) -> bool:
+    """Whether any manual order leaves account-wide new exposure unsafe."""
+    row = conn.execute(
+        "SELECT 1 FROM effect_operations WHERE kind = 'MANUAL_ORDER' "
+        "AND state NOT IN ('succeeded', 'failed', 'rejected') LIMIT 1"
+    ).fetchone()
+    return row is not None
 
 
 def active_hold(conn: sqlite3.Connection, *, scope: str, reason_code: str) -> dict | None:

@@ -31,7 +31,11 @@ from app.broker.alpaca.clerk.sqlite.models import (
     TransitionInput,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.uncertainty import require_manual_admission
+from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    ReductionIntent,
+    require_manual_admission,
+    require_manual_reduction,
+)
 from app.broker.contract.errors import BrokerError, BrokerUnavailable
 from app.broker.contract.models import BrokerOrderLeg, OrderSide, OrderType, TimeInForce
 from app.broker.contract.ports import BrokerTradePort
@@ -108,11 +112,27 @@ def manual_order_command_id(ticket_id: str, leg_id: str) -> str:
 
 def _require_tracer_leg(leg: BrokerOrderLeg) -> None:
     if (
-        leg.side is not OrderSide.BUY
+        leg.side not in {OrderSide.BUY, OrderSide.SELL}
         or leg.order_type is not OrderType.MARKET
         or leg.time_in_force is not TimeInForce.DAY
     ):
-        raise ValueError("manual trading currently supports one BUY market DAY equity leg")
+        raise ValueError("manual trading currently supports one BUY or SELL market DAY equity leg")
+
+
+def _require_manual_leg_admission(
+    repo: ClerkSqliteRepository,
+    *,
+    subject_id: str,
+    leg: BrokerOrderLeg,
+) -> None:
+    if leg.side is OrderSide.BUY:
+        require_manual_admission(repo, subject_id=subject_id)
+        return
+    require_manual_reduction(
+        repo,
+        subject_id=subject_id,
+        intent=ReductionIntent(symbol=leg.symbol, side=leg.side.value, quantity=leg.quantity),
+    )
 
 
 def _submission(
@@ -242,7 +262,7 @@ def accept_manual_order(
             leg_id=leg_id,
             instruction_hash=instruction_hash,
         )
-        require_manual_admission(repo, subject_id=subject_id)
+        _require_manual_leg_admission(repo, subject_id=subject_id, leg=leg)
         order_ref = build_order_ref(build_manual_order_namespace(operator_id), mint_intent_id())
         facts = ManualOrderAcceptedFacts(
             ticket_id=ticket_id,

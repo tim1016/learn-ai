@@ -19,6 +19,8 @@ from app.broker.alpaca.clerk.sqlite.models import (
     DecisionReceiptResource,
     EffectOperationResource,
     ExternalOrderResource,
+    ManualOrderCancellationResource,
+    ManualOrderLegResource,
     ManualOrderTicketResource,
     OrderResource,
     RunResource,
@@ -209,6 +211,33 @@ class ClerkSqliteRepositoryReadApi:
         with self._write_lock:
             return reads.manual_order_ticket(self._conn, ticket_id)
 
+    def manual_order_cancellation(
+        self: ClerkSqliteRepository,
+        *,
+        order_ref: str,
+    ) -> ManualOrderCancellationResource | None:
+        with self._write_lock:
+            return reads.manual_order_cancellation(self._conn, order_ref=order_ref)
+
+    def manual_order_leg_for_order_ref(
+        self: ClerkSqliteRepository,
+        *,
+        order_ref: str,
+    ) -> ManualOrderLegResource | None:
+        with self._write_lock:
+            return reads.manual_order_leg_for_order_ref(self._conn, order_ref=order_ref)
+
+    def manual_order_cancellation_for_effect(
+        self: ClerkSqliteRepository,
+        *,
+        effect_operation_id: str,
+    ) -> ManualOrderCancellationResource | None:
+        with self._write_lock:
+            return reads.manual_order_cancellation_for_effect(
+                self._conn,
+                effect_operation_id=effect_operation_id,
+            )
+
     def custody_subject(self: ClerkSqliteRepository, subject_id: str) -> dict | None:
         with self._write_lock:
             return reads.custody_subject(self._conn, subject_id)
@@ -310,6 +339,25 @@ class ClerkSqliteRepositoryReadApi:
     ) -> dict[str, float]:
         with self._write_lock:
             return reads.attributed_positions_for_subject(self._conn, subject_id)
+
+    def manual_reduction_available_quantity(
+        self: ClerkSqliteRepository,
+        *,
+        subject_id: str,
+        symbol: str,
+    ) -> float:
+        """Return the atomic manual-custody sell capacity for one symbol."""
+        with self._write_lock:
+            return reads.manual_reduction_available_quantity(
+                self._conn,
+                subject_id=subject_id,
+                symbol=symbol,
+            )
+
+    def has_nonterminal_manual_order(self: ClerkSqliteRepository) -> bool:
+        """Whether manual broker intent currently fences new account exposure."""
+        with self._write_lock:
+            return reads.has_nonterminal_manual_order(self._conn)
 
     def active_hold(
         self: ClerkSqliteRepository,

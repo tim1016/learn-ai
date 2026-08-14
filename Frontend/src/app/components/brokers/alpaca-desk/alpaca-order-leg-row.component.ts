@@ -20,7 +20,7 @@ import type { AlpacaOrderDraftLeg } from './alpaca-order-entry.types';
 export class AlpacaOrderLegRowComponent {
   readonly legForm = input.required<FieldTree<AlpacaOrderDraftLeg, number>>();
   readonly position = input.required<number>();
-  /** The SQLite tracer deliberately exposes only its qualified BUY/market/DAY shape. */
+  /** The SQLite tracer deliberately exposes only its qualified market/DAY shape. */
   readonly manualMarketOnly = input(false);
   readonly removed = output();
 }

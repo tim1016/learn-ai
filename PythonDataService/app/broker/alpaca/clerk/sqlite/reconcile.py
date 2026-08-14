@@ -24,6 +24,9 @@ from app.broker.alpaca.clerk.sqlite.folds import (
     position_quantity_is_nonzero,
 )
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
+from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import (
+    resolve_manual_order_cancellation,
+)
 from app.broker.alpaca.clerk.sqlite.models import (
     EffectOperationResource,
     TransitionInput,
@@ -193,6 +196,24 @@ async def _reconcile_effect(
             )
         order = entry_orders[0]
         await resolve_exit(
+            repo,
+            effect_operation_id=effect.effect_operation_id,
+            trade=trade,
+        )
+    elif effect.kind == "CANCEL":
+        cancellation = repo.manual_order_cancellation_for_effect(
+            effect_operation_id=effect.effect_operation_id
+        )
+        if cancellation is None:
+            raise ReconciliationInvariantError(
+                f"CANCEL effect {effect.effect_operation_id!r} has no manual cancellation target"
+            )
+        order = repo.order(cancellation.order_ref)
+        if order is None:
+            raise ReconciliationInvariantError(
+                f"CANCEL effect {effect.effect_operation_id!r} has no captured target order"
+            )
+        await resolve_manual_order_cancellation(
             repo,
             effect_operation_id=effect.effect_operation_id,
             trade=trade,

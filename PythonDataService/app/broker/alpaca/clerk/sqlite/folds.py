@@ -42,6 +42,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     ExecutionCoverageResolvedFacts,
     ExecutionSliceFilledFacts,
     ExitAcceptedFacts,
+    ManualOrderCancelResultFacts,
     OrderFillObservedFacts,
     ReconciliationAttemptedFacts,
     RunStartedFacts,
@@ -50,11 +51,13 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     validate_execution_coverage_quarantined_facts,
     validate_execution_coverage_resolved_facts,
     validate_execution_slice_facts,
+    validate_manual_order_cancel_result_facts,
 )
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.manual_ticket_folds import (
     fold_custody_subject_registered,
     fold_manual_order_accepted,
+    fold_manual_order_cancel_accepted,
     fold_manual_ticket_reserved,
     fold_manual_ticket_state,
 )
@@ -663,6 +666,29 @@ def _sync_manual_ticket_effect_state(
         raise ValueError("manual order effect requires exactly one ticket")
 
 
+def _sync_manual_cancellation_effect_state(
+    conn: sqlite3.Connection,
+    payload: dict[str, Any],
+    *,
+    effect_state: str,
+    cancellation_state: str,
+) -> None:
+    """Keep the cancellation projection aligned with its own effect only."""
+    effect = conn.execute(
+        "SELECT kind, state FROM effect_operations WHERE effect_operation_id = ?",
+        (payload["effect_operation_id"],),
+    ).fetchone()
+    if effect is None or effect["kind"] != "CANCEL" or effect["state"] != effect_state:
+        return
+    updated = conn.execute(
+        "UPDATE manual_order_cancellations SET state = ?, updated_at_ms = ? "
+        "WHERE effect_operation_id = ?",
+        (cancellation_state, payload["recorded_at_ms"], payload["effect_operation_id"]),
+    )
+    if updated.rowcount != 1:
+        raise ValueError("manual cancellation effect requires exactly one durable cancellation")
+
+
 def _fold_manual_order_filled(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Terminal success needs both a filled broker state and exact fill coverage.
 
@@ -691,6 +717,64 @@ def _fold_order_submit_failed(conn: sqlite3.Connection, payload: dict[str, Any])
         effect_state="failed",
         leg_state="FAILED",
         ticket_state="COMPLETED",
+    )
+
+
+def _fold_manual_order_canceled(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Terminally cancel a source leg only after local or exact broker proof."""
+    validate_manual_order_cancel_result_facts(
+        ManualOrderCancelResultFacts.from_facts_json(payload["facts_json"])
+    )
+    _fold_effect_terminal(conn, payload, terminal_state="failed")
+    _sync_manual_ticket_effect_state(
+        conn,
+        payload,
+        effect_state="failed",
+        leg_state="CANCELED",
+        ticket_state="CANCELED",
+    )
+
+
+def _fold_manual_order_terminal(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Close an owned manual leg on exact expired/rejected broker evidence."""
+    validate_manual_order_cancel_result_facts(
+        ManualOrderCancelResultFacts.from_facts_json(payload["facts_json"])
+    )
+    _fold_effect_terminal(conn, payload, terminal_state="failed")
+    _sync_manual_ticket_effect_state(
+        conn,
+        payload,
+        effect_state="failed",
+        leg_state="FAILED",
+        ticket_state="COMPLETED",
+    )
+
+
+def _fold_manual_order_cancel_confirmed(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Record a proved cancellation as success of the cancel effect itself."""
+    validate_manual_order_cancel_result_facts(
+        ManualOrderCancelResultFacts.from_facts_json(payload["facts_json"])
+    )
+    _fold_effect_terminal(conn, payload, terminal_state="succeeded")
+    _sync_manual_cancellation_effect_state(
+        conn,
+        payload,
+        effect_state="succeeded",
+        cancellation_state="SUCCEEDED",
+    )
+
+
+def _fold_manual_order_cancel_terminal(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Record that cancellation had a proved terminal target and did not act."""
+    validate_manual_order_cancel_result_facts(
+        ManualOrderCancelResultFacts.from_facts_json(payload["facts_json"])
+    )
+    _fold_effect_terminal(conn, payload, terminal_state="failed")
+    _sync_manual_cancellation_effect_state(
+        conn,
+        payload,
+        effect_state="failed",
+        cancellation_state="FAILED",
     )
 
 
@@ -730,6 +814,12 @@ def _fold_order_submit_uncertain(conn: sqlite3.Connection, payload: dict[str, An
             effect_state="unknown",
             leg_state="UNKNOWN",
             ticket_state="PAUSED_UNKNOWN",
+        )
+        _sync_manual_cancellation_effect_state(
+            conn,
+            payload,
+            effect_state="unknown",
+            cancellation_state="UNKNOWN",
         )
         _open_or_refresh_unknown_outcome(conn, payload)
 
@@ -1251,9 +1341,14 @@ DEFAULT_FOLD_REGISTRY.register("EXECUTION_COVERAGE_RESOLVED", _fold_execution_co
 DEFAULT_FOLD_REGISTRY.register("CUSTODY_SUBJECT_REGISTERED", fold_custody_subject_registered)
 DEFAULT_FOLD_REGISTRY.register("MANUAL_TICKET_RESERVED", fold_manual_ticket_reserved)
 DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_ACCEPTED", fold_manual_order_accepted)
+DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_CANCEL_ACCEPTED", fold_manual_order_cancel_accepted)
 DEFAULT_FOLD_REGISTRY.register("MANUAL_TICKET_PAUSED_UNKNOWN", fold_manual_ticket_state)
 DEFAULT_FOLD_REGISTRY.register("MANUAL_TICKET_COMPLETED", fold_manual_ticket_state)
 DEFAULT_FOLD_REGISTRY.register("MANUAL_TICKET_CANCELED", fold_manual_ticket_state)
+DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_CANCELED", _fold_manual_order_canceled)
+DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_TERMINAL", _fold_manual_order_terminal)
+DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_CANCEL_CONFIRMED", _fold_manual_order_cancel_confirmed)
+DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_CANCEL_TERMINAL", _fold_manual_order_cancel_terminal)
 DEFAULT_FOLD_REGISTRY.register("EXECUTION_CORRECTED", _fold_execution_corrected)
 DEFAULT_FOLD_REGISTRY.register("RECONCILIATION_ATTEMPTED", _fold_reconciliation_attempted)
 DEFAULT_FOLD_REGISTRY.register("ACCOUNT_HOLD_RAISED", _fold_account_hold_raised)

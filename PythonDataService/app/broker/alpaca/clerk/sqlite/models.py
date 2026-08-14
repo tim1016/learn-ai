@@ -222,6 +222,20 @@ class ManualOrderTicketResource:
 
 
 @dataclass(frozen=True)
+class ManualOrderCancellationResource:
+    """One immutable cancel identity and its mutable effect state."""
+
+    order_ref: str
+    subject_id: str
+    cancel_request_id: str
+    command_id: str
+    effect_operation_id: str
+    state: str
+    created_at_ms: int
+    updated_at_ms: int
+
+
+@dataclass(frozen=True)
 class ExitSubmission:
     """Current resource snapshot for one EXIT effect operation."""
 

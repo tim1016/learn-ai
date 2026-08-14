@@ -44,6 +44,8 @@ export type ManualOrderPreviewRequest = components['schemas']['ManualOrderPrevie
 export type ManualOrderPreview = components['schemas']['ManualOrderPreviewResponse'];
 export type ManualOrderSubmitRequest = components['schemas']['ManualOrderSubmitRequest'];
 export type ManualOrderTicket = components['schemas']['ManualOrderTicketResponse'];
+export type ManualOrderCancelRequest = components['schemas']['ManualOrderCancelRequest'];
+export type ManualOrderCancellation = components['schemas']['ManualOrderCancellationResponse'];
 
 // Phase-2 S6 reconciliation + flag-and-hold (clerk status + clear-hold).
 export type ClerkStatus = components['schemas']['ClerkStatus'];

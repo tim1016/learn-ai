@@ -6,12 +6,16 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import (
+    ManualOrderCancellationSubmission,
+)
 from app.broker.alpaca.clerk.sqlite.manual_order_runtime import (
     ManualOrderCapability,
     ManualOrderPreview,
     ManualOrderUnavailable,
 )
 from app.broker.alpaca.clerk.sqlite.models import (
+    ManualOrderCancellationResource,
     ManualOrderLegResource,
     ManualOrderTicketResource,
 )
@@ -46,6 +50,14 @@ class ManualOrderSubmitRequest(BaseModel):
     preview_token: str = Field(min_length=64, max_length=128)
 
 
+class ManualOrderCancelRequest(BaseModel):
+    """One stable browser-generated cancellation identity for a Clerk order ref."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    cancel_request_id: UUID
+
+
 class ManualOrderUnavailableResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -64,7 +76,7 @@ class ManualOrderCapabilityResponse(BaseModel):
 
     available: bool
     unavailable: ManualOrderUnavailableResponse | None
-    supported_order_shape: str = "BUY market DAY equity, one leg"
+    supported_order_shape: str = "BUY or SELL market DAY equity, one leg"
 
     @classmethod
     def from_domain(cls, capability: ManualOrderCapability) -> ManualOrderCapabilityResponse:
@@ -118,6 +130,114 @@ class ManualOrderEffectResponse(BaseModel):
     terminal_receipt_id: str | None
 
 
+class ManualOrderCancellationResponse(BaseModel):
+    """Durable cancellation receipt; `UNKNOWN` never claims broker success."""
+
+    model_config = ConfigDict(frozen=True)
+
+    order_ref: str
+    cancel_request_id: str
+    state: str
+    message: str
+    impact: str
+    next_action: str
+    command: ManualOrderCommandResponse
+    effect: ManualOrderEffectResponse
+
+    @staticmethod
+    def _copy_for_state(state: str) -> tuple[str, str, str]:
+        copies = {
+            "ACCEPTED": (
+                "The Clerk accepted this cancellation request.",
+                "The manual order remains active until exact broker evidence is recorded.",
+                "Refresh this ticket for the Clerk's current cancellation receipt.",
+            ),
+            "UNKNOWN": (
+                "The cancellation outcome is not yet known.",
+                "The Clerk will not create another cancellation while exact broker evidence is unresolved.",
+                "Refresh this ticket while the Clerk reconciles the cancellation by its exact order reference.",
+            ),
+            "SUCCEEDED": (
+                "Exact broker evidence confirmed the manual order was canceled.",
+                "The manual order is terminal and no longer leaves cancellation work outstanding.",
+                "No further cancellation action is required.",
+            ),
+            "FAILED": (
+                "The cancellation could not be completed because the manual order was already terminal.",
+                "The original manual order has a terminal outcome and cannot be canceled again.",
+                "Review the refreshed ticket receipt for the terminal order outcome.",
+            ),
+        }
+        return copies.get(
+            state,
+            (
+                "The Clerk recorded the cancellation request.",
+                "The cancellation receipt is retained as durable account evidence.",
+                "Refresh this ticket for the current receipt.",
+            ),
+        )
+
+    @classmethod
+    def from_resource(
+        cls,
+        cancellation: ManualOrderCancellationResource,
+        *,
+        repo: ClerkSqliteRepository,
+    ) -> ManualOrderCancellationResponse:
+        command = repo.get_command(cancellation.command_id)
+        effect = repo.effect_operation(cancellation.effect_operation_id)
+        if command is None or effect is None:
+            raise RuntimeError("manual cancellation lost its durable command or effect")
+        message, impact, next_action = cls._copy_for_state(cancellation.state)
+        return cls(
+            order_ref=cancellation.order_ref,
+            cancel_request_id=cancellation.cancel_request_id,
+            state=cancellation.state,
+            message=message,
+            impact=impact,
+            next_action=next_action,
+            command=ManualOrderCommandResponse(
+                command_id=command.command_id,
+                state=command.state,
+                action=command.action,
+                receipt_id=command.receipt_id,
+            ),
+            effect=ManualOrderEffectResponse(
+                effect_operation_id=effect.effect_operation_id,
+                state=effect.state,
+                kind=effect.kind,
+                terminal_receipt_id=effect.terminal_receipt_id,
+            ),
+        )
+
+    @classmethod
+    def from_domain(
+        cls,
+        submission: ManualOrderCancellationSubmission,
+    ) -> ManualOrderCancellationResponse:
+        message, impact, next_action = cls._copy_for_state(submission.cancellation.state)
+        return cls(
+            order_ref=submission.cancellation.order_ref,
+            cancel_request_id=submission.cancellation.cancel_request_id,
+            state=submission.cancellation.state,
+            message=message,
+            impact=impact,
+            next_action=next_action,
+            command=ManualOrderCommandResponse(
+                command_id=submission.command.command_id,
+                state=submission.command.state,
+                action=submission.command.action,
+                receipt_id=submission.command.receipt_id,
+            ),
+            effect=ManualOrderEffectResponse(
+                effect_operation_id=submission.effect.effect_operation_id,
+                state=submission.effect.state,
+                kind=submission.effect.kind,
+                terminal_receipt_id=submission.effect.terminal_receipt_id,
+            ),
+        )
+
+
 class ManualOrderBrokerOrderResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -136,6 +256,7 @@ class ManualOrderLegResponse(BaseModel):
     command: ManualOrderCommandResponse | None
     effect: ManualOrderEffectResponse | None
     order: ManualOrderBrokerOrderResponse | None
+    cancellation: ManualOrderCancellationResponse | None
 
     @classmethod
     def from_resource(
@@ -147,6 +268,11 @@ class ManualOrderLegResponse(BaseModel):
         command = repo.get_command(leg.command_id) if leg.command_id is not None else None
         effect = repo.effect_operation(leg.effect_operation_id) if leg.effect_operation_id is not None else None
         order = repo.order(leg.order_ref) if leg.order_ref is not None else None
+        cancellation = (
+            repo.manual_order_cancellation(order_ref=leg.order_ref)
+            if leg.order_ref is not None
+            else None
+        )
         return cls(
             leg_id=leg.leg_id,
             instruction_hash=leg.instruction_hash,
@@ -179,6 +305,11 @@ class ManualOrderLegResponse(BaseModel):
                     broker_state=order.broker_state,
                 )
                 if order is not None
+                else None
+            ),
+            cancellation=(
+                ManualOrderCancellationResponse.from_resource(cancellation, repo=repo)
+                if cancellation is not None
                 else None
             ),
         )
