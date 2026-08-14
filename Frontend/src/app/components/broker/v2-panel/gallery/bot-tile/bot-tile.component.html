@@ -13,6 +13,44 @@
       [class.bot-tile__delta--positive]="deltaTone() === 'positive'"
       [class.bot-tile__delta--negative]="deltaTone() === 'negative'"
     >{{ formattedDeltaPct() ?? '—' }}</span>
+    <div class="bot-tile__action">
+      <button
+        #actionButton
+        type="button"
+        class="bot-tile__action-button"
+        [class.bot-tile__action-button--stop]="actionIsStop()"
+        [disabled]="pending() || !bot().primary_action.enabled"
+        [attr.aria-busy]="pending()"
+        [attr.title]="actionTitle()"
+        [attr.aria-label]="actionAriaLabel()"
+        (click)="onActionClick()"
+      >
+        <i
+          class="pi"
+          [class.pi-stop]="actionIsStop() && !pending()"
+          [class.pi-play]="!actionIsStop() && !pending()"
+          [class.pi-spin]="pending()"
+          [class.pi-spinner]="pending()"
+          aria-hidden="true"
+        ></i>
+        @if (actionIsStop()) {
+          <span>{{ bot().primary_action.label }}</span>
+        }
+      </button>
+
+      @if (confirmOpen()) {
+        <div
+          class="bot-tile__confirm"
+          role="alertdialog"
+          aria-label="Confirm quick action"
+          aria-describedby="bot-tile-confirm-{{ bot().sid }}"
+        >
+          <p id="bot-tile-confirm-{{ bot().sid }}">{{ confirmText() }}</p>
+          <button type="button" (click)="confirmAction()">Confirm</button>
+          <button #confirmCancelButton type="button" (click)="cancelAction()">Cancel</button>
+        </div>
+      }
+    </div>
   </header>
 
   <div
@@ -25,56 +63,5 @@
     (keydown.space)="onBodySpaceKey($event)"
   >
     <div #chartContainer class="bot-tile__chart-canvas"></div>
-  </div>
-
-  <footer class="bot-tile__footer">
-    <span class="bot-tile__metric">
-      <small>Realized</small>
-      <strong
-        [class.pnl--positive]="realizedTone() === 'positive'"
-        [class.pnl--negative]="realizedTone() === 'negative'"
-        [class.pnl--neutral]="realizedTone() === 'neutral'"
-      >{{ fmtSignedCurrency(bot().realized_pnl_today) }}</strong>
-    </span>
-    <span class="bot-tile__metric">
-      <small>Open</small>
-      <strong
-        [class.pnl--positive]="openTone() === 'positive'"
-        [class.pnl--negative]="openTone() === 'negative'"
-        [class.pnl--neutral]="openTone() === 'neutral'"
-      >{{ fmtSignedCurrency(bot().open_pnl) }}</strong>
-    </span>
-    <span class="bot-tile__metric">
-      <small>Fills</small>
-      <strong>{{ fmtInteger(bot().fills_today) }}</strong>
-    </span>
-  </footer>
-
-  <div class="bot-tile__action">
-    <button
-      #actionButton
-      type="button"
-      class="bot-tile__action-button"
-      [disabled]="pending() || !bot().primary_action.enabled"
-      [attr.aria-busy]="pending()"
-      [attr.title]="actionTitle()"
-      [attr.aria-label]="actionAriaLabel()"
-      (click)="onActionClick()"
-    >
-      {{ pending() ? bot().primary_action.label + '…' : bot().primary_action.label }}
-    </button>
-
-    @if (confirmOpen()) {
-      <div
-        class="bot-tile__confirm"
-        role="alertdialog"
-        aria-label="Confirm quick action"
-        aria-describedby="bot-tile-confirm-{{ bot().sid }}"
-      >
-        <p id="bot-tile-confirm-{{ bot().sid }}">{{ confirmText() }}</p>
-        <button type="button" (click)="confirmAction()">Confirm</button>
-        <button #confirmCancelButton type="button" (click)="cancelAction()">Cancel</button>
-      </div>
-    }
   </div>
 </article>
