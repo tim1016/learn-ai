@@ -53,6 +53,37 @@ old plan version. The backend only prepares one after a complete working-order
 check and an account-wide reconciliation that is at least as new as every
 included position.
 
+### Manual paper qualification release gate
+
+The feature flag remains disabled until both gates below are complete. A passing
+automated report is deliberately not a production activation receipt.
+
+1. Run the broker-free deterministic matrix from `PythonDataService/` and archive
+   its JSON and Markdown outputs in the dated release audit:
+
+   ```bash
+   .venv/bin/python -m scripts.run_manual_order_qualification \
+     --json-output /secured-audit/2026-08-13/manual-pre-live.json \
+     --markdown-output /secured-audit/2026-08-13/manual-pre-live.md
+   ```
+
+   The report must say `PRE_LIVE_REHEARSAL_PASSED`, `live_environment_status`
+   `NOT_RUN`, and `release_gate_status` `PENDING_DATED_PAPER_CEREMONY`.
+
+2. On the selected paper authority, obtain a fresh process-stop proof and run the
+   offline v8-to-v9 ceremony. Then, with the flag still disabled, archive the
+   upgrade receipt and perform the supervised Account Desk sequence: one-share
+   buy/fill, manual-owned sell/flatten, resting limit/cancel, duplicate
+   confirmation/reload, accepted-before-ack restart, partial-fill restart,
+   reconnect/reconciliation, coverage recovery, and bot-start admission after
+   terminal reconciliation. Each row must bind the Alpaca order ID, Clerk order
+   reference and transition, mirror/hash head, position/FIFO/account-history
+   observation, and start-admission result.
+
+Only after that dated audit has every required receipt may a paper deployment
+set `ALPACA_SQLITE_MANUAL_TRADING_ENABLED=true`. Do not enable it for a live
+account, and do not replace a missing paper receipt with a test result.
+
 ---
 
 ## Six-Station Pipeline
