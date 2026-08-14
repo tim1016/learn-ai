@@ -6,6 +6,8 @@ from pathlib import Path
 
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+from app.broker.alpaca.clerk.sqlite.facts import ExitReducingOrderCreatedFacts
+from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.projections import (
     SqliteClerkProjectionReader,
     timeline_sequences,
@@ -117,6 +119,70 @@ def test_bot_snapshot_exposes_immutable_order_leg_and_verified_zero_fill_total(
     assert order.side == "buy"
     assert order.quantity == 3.0
     assert order.filled_quantity == 0.0
+
+
+def test_account_snapshot_projects_sparse_exit_reducing_order_facts(
+    tmp_path: Path,
+) -> None:
+    """A valid reducing-order fact must not make every Operator read fail."""
+    clock = _Clock()
+    repo = _repository(tmp_path, clock)
+    submit_start_run(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        lifecycle_run_id="run-1",
+        clock=clock,
+    )
+    accepted = accept_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="reducing-projection",
+        lifecycle_run_id="run-1",
+        leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=3),
+    )
+    assert accepted.effect_operation_id is not None
+    assert accepted.command.run_id is not None
+    repo.append_transition(
+        TransitionInput(
+            strategy_instance_id=SID,
+            run_id=accepted.command.run_id,
+            command_id=accepted.command.command_id,
+            effect_operation_id=accepted.effect_operation_id,
+            order_ref="learn-ai/spy/v1:reducing-projection",
+            transition_kind="EXIT_REDUCING_ORDER_CREATED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="in_progress",
+            clerk_observed_at_ms=clock(),
+            summary_code="EXIT_REDUCING_ORDER_CREATED",
+            facts_json=ExitReducingOrderCreatedFacts(
+                symbol="SPY",
+                side="SELL",
+                quantity=3,
+            ).to_facts_json(),
+        )
+    )
+    reader = SqliteClerkProjectionReader.from_repository(repo, clock=clock)
+    try:
+        snapshot = reader.account_snapshot()
+    finally:
+        reader.close()
+        repo.close()
+
+    reducing = next(
+        order
+        for operation in snapshot.operations
+        for order in operation.orders
+        if order.order_ref == "learn-ai/spy/v1:reducing-projection"
+    )
+    assert reducing.symbol == "SPY"
+    assert reducing.side == "sell"
+    assert reducing.quantity == 3.0
+    assert reducing.order_type is None
+    assert reducing.limit_price is None
+    assert reducing.time_in_force is None
 
 
 def test_bot_uncertainty_does_not_leak_to_another_bot_projection(tmp_path: Path) -> None:

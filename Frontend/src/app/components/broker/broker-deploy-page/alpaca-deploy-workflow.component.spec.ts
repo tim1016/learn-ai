@@ -257,6 +257,10 @@ describe('AlpacaDeployWorkflowComponent', () => {
     const blockedHeader = screen.getByRole('button', { name: /Broker channel/ });
     expect(readyHeader.getAttribute('aria-expanded')).toBe('false');
     expect(blockedHeader.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByRole('link', { name: 'Open account recovery' }).getAttribute('href'))
+      .toBe('/brokers/alpaca?lens=operator');
+    expect(screen.getByRole('link', { name: 'Review bot fleet' }).getAttribute('href'))
+      .toBe('/brokers/alpaca/bots');
   });
 
   it('moves lens focus with the tablist keyboard controls', async () => {

@@ -88,6 +88,7 @@ type DeployLens = 'trader' | 'operator';
 })
 export class AlpacaDeployWorkflowComponent {
   readonly accountId = input.required<string>();
+  protected readonly operatorLensQuery = { lens: 'operator' } as const;
 
   private readonly panelService = inject(BrokerV2PanelService);
   private readonly route = inject(ActivatedRoute);
