@@ -396,6 +396,58 @@ class TimelinePageResponse(BaseModel):
         return cls.model_validate(page)
 
 
+class HistoricalExecutionRecoveryPlanResponse(BaseModel):
+    """One signed, read-only historical exact-execution recovery plan."""
+
+    model_config = ConfigDict(frozen=True, from_attributes=True, extra="forbid")
+
+    account_id: str
+    strategy_instance_id: str
+    uncertainty_id: str
+    order_ref: str
+    broker_order_id: str
+    execution_id: str
+    exact_symbol: str
+    exact_quantity: float
+    exact_price: float
+    exact_side: Literal["BUY", "SELL"]
+    source_event_at_ms: int
+    cumulative_fill_id: str
+    cumulative_quantity: float
+    cumulative_price: float
+    cumulative_side: Literal["BUY", "SELL"]
+    authority_generation: int
+    db_identity_token: str
+    control_revision: int
+    prepared_at_ms: int
+    expires_at_ms: int
+    confirmation_token: str
+
+
+class HistoricalExecutionRecoveryPrepareRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    concurrency_token: str = Field(min_length=1, max_length=128)
+
+
+class HistoricalExecutionRecoveryConfirmRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    plan: HistoricalExecutionRecoveryPlanResponse
+    confirmation_token: str = Field(min_length=1, max_length=128)
+
+
+class HistoricalExecutionRecoveryReceiptResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True, extra="forbid")
+
+    uncertainty_id: str
+    order_ref: str
+    execution_id: str
+    receipt_id: str
+    recorded_at_ms: int
+    applied: bool
+
+
 class RecoveryActionCheckRequest(BaseModel):
     """Action-specific token checked against a fresh policy evaluation."""
 

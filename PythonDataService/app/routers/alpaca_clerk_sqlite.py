@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from enum import StrEnum
 from typing import TypeVar
 
 from fastapi import APIRouter, HTTPException, Query
@@ -29,6 +30,11 @@ from app.broker.alpaca.clerk.sqlite.commands import (
     UnknownStrategyInstanceError,
     submit_start_run,
     submit_stop_run,
+)
+from app.broker.alpaca.clerk.sqlite.folds import DEFAULT_FOLD_REGISTRY
+from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import (
+    HistoricalExecutionRecoveryPlan,
+    HistoricalExecutionRecoveryRefused,
 )
 from app.broker.alpaca.clerk.sqlite.projections import (
     InvalidTimelineCursor,
@@ -61,6 +67,10 @@ from app.broker.contract.registry import get_broker_registry
 from app.schemas.alpaca_clerk_sqlite import (
     ClerkProjectionResponse,
     CommandResponse,
+    HistoricalExecutionRecoveryConfirmRequest,
+    HistoricalExecutionRecoveryPlanResponse,
+    HistoricalExecutionRecoveryPrepareRequest,
+    HistoricalExecutionRecoveryReceiptResponse,
     ReconciliationResponse,
     RecoveryActionCheckRequest,
     RecoveryActionCheckResponse,
@@ -75,6 +85,19 @@ from app.services.sqlite_clerk_compat import failed_sqlite_projection
 
 router = APIRouter(prefix="/api/alpaca-clerk-sqlite", tags=["alpaca-clerk-sqlite"])
 ReadResult = TypeVar("ReadResult")
+_MAX_TIMELINE_CURSOR_LENGTH = 4_096
+# The fold registry is the authority for transition kinds.  Exposing the same
+# closed vocabulary here makes invalid timeline filters fail at the HTTP
+# boundary and keeps the generated OpenAPI contract honest.
+TimelineTransitionKind = StrEnum(
+    "TimelineTransitionKind",
+    {kind: kind for kind in sorted(DEFAULT_FOLD_REGISTRY.registered_kinds)},
+)
+_HISTORICAL_EXECUTION_RECOVERY_RESPONSES = {
+    404: {"description": "The selected SQLite authority or bot is unavailable."},
+    409: {"description": "The signed plan or exact-evidence proof is no longer safe to apply."},
+    503: {"description": "SQLite projection or Alpaca evidence is temporarily unavailable."},
+}
 
 
 async def _repo(account_id: str) -> ClerkSqliteRepository:
@@ -175,6 +198,17 @@ def _projection_read_error(exc: ProjectionReadError) -> HTTPException:
         detail={
             "reason": "sqlite_projection_unavailable",
             "message": str(exc),
+        },
+    )
+
+
+def _historical_recovery_refusal(exc: HistoricalExecutionRecoveryRefused) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={
+            "reason": exc.reason.lower(),
+            "message": exc.message,
+            "next_step": exc.next_step,
         },
     )
 
@@ -323,6 +357,12 @@ async def _timeline(
     account_id: str,
     *,
     strategy_instance_id: str | None,
+    order_ref: str | None,
+    effect_operation_id: str | None,
+    uncertainty_id: str | None,
+    execution_id: str | None,
+    transition_kind: TimelineTransitionKind | None,
+    sequence: int | None,
     cursor: str | None,
     page_size: int,
 ) -> TimelinePageResponse:
@@ -333,6 +373,12 @@ async def _timeline(
             repo,
             lambda reader: reader.timeline_page(
                 strategy_instance_id=strategy_instance_id,
+                order_ref=order_ref,
+                effect_operation_id=effect_operation_id,
+                uncertainty_id=uncertainty_id,
+                execution_id=execution_id,
+                transition_kind=transition_kind,
+                sequence=sequence,
                 cursor=cursor,
                 page_size=page_size,
             ),
@@ -353,12 +399,25 @@ async def _timeline(
 )
 async def get_account_timeline(
     account_id: str,
-    cursor: str | None = Query(default=None, max_length=1024),
+    cursor: str | None = Query(default=None, max_length=_MAX_TIMELINE_CURSOR_LENGTH),
     page_size: int = Query(default=25, ge=1, le=100),
+    strategy_instance_id: str | None = Query(default=None, min_length=1, max_length=256),
+    order_ref: str | None = Query(default=None, min_length=1, max_length=512),
+    effect_operation_id: str | None = Query(default=None, min_length=1, max_length=512),
+    uncertainty_id: str | None = Query(default=None, min_length=1, max_length=256),
+    execution_id: str | None = Query(default=None, min_length=1, max_length=256),
+    transition_kind: TimelineTransitionKind | None = None,
+    sequence: int | None = Query(default=None, ge=1),
 ) -> TimelinePageResponse:
     return await _timeline(
         account_id,
-        strategy_instance_id=None,
+        strategy_instance_id=strategy_instance_id,
+        order_ref=order_ref,
+        effect_operation_id=effect_operation_id,
+        uncertainty_id=uncertainty_id,
+        execution_id=execution_id,
+        transition_kind=transition_kind,
+        sequence=sequence,
         cursor=cursor,
         page_size=page_size,
     )
@@ -371,12 +430,24 @@ async def get_account_timeline(
 async def get_bot_timeline(
     account_id: str,
     strategy_instance_id: str,
-    cursor: str | None = Query(default=None, max_length=1024),
+    cursor: str | None = Query(default=None, max_length=_MAX_TIMELINE_CURSOR_LENGTH),
     page_size: int = Query(default=25, ge=1, le=100),
+    order_ref: str | None = Query(default=None, min_length=1, max_length=512),
+    effect_operation_id: str | None = Query(default=None, min_length=1, max_length=512),
+    uncertainty_id: str | None = Query(default=None, min_length=1, max_length=256),
+    execution_id: str | None = Query(default=None, min_length=1, max_length=256),
+    transition_kind: TimelineTransitionKind | None = None,
+    sequence: int | None = Query(default=None, ge=1),
 ) -> TimelinePageResponse:
     return await _timeline(
         account_id,
         strategy_instance_id=strategy_instance_id,
+        order_ref=order_ref,
+        effect_operation_id=effect_operation_id,
+        uncertainty_id=uncertainty_id,
+        execution_id=execution_id,
+        transition_kind=transition_kind,
+        sequence=sequence,
         cursor=cursor,
         page_size=page_size,
     )
@@ -466,6 +537,103 @@ async def check_bot_recovery_action(
         strategy_instance_id=strategy_instance_id,
         body=body,
     )
+
+
+@router.post(
+    "/accounts/{account_id}/bots/{strategy_instance_id}/historical-execution-recovery/prepare",
+    response_model=HistoricalExecutionRecoveryPlanResponse,
+    responses=_HISTORICAL_EXECUTION_RECOVERY_RESPONSES,
+)
+async def prepare_bot_historical_execution_recovery(
+    account_id: str,
+    strategy_instance_id: str,
+    body: HistoricalExecutionRecoveryPrepareRequest,
+) -> HistoricalExecutionRecoveryPlanResponse:
+    """Read one exact Alpaca paper activity and bind it into a no-write plan."""
+    facade = _active_sqlite_facade(account_id)
+    try:
+        context = await asyncio.to_thread(
+            _read_projection,
+            facade.repository,
+            lambda reader: reader.recovery_context(
+                strategy_instance_id=strategy_instance_id,
+            ),
+        )
+        if context is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"reason": "unknown_strategy_instance"},
+            )
+        plan = await facade.prepare_historical_execution_recovery(
+            context=context,
+            concurrency_token=body.concurrency_token,
+        )
+    except StaleRecoveryTokenError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "stale_action_token", "message": str(exc)},
+        ) from exc
+    except RecoveryActionUnavailableError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason": "recovery_action_unavailable",
+                "message": str(exc),
+                "capability": RecoveryCapabilityResponse.model_validate(
+                    exc.capability
+                ).model_dump(mode="json"),
+            },
+        ) from exc
+    except HistoricalExecutionRecoveryRefused as exc:
+        raise _historical_recovery_refusal(exc) from exc
+    except ExecutionCoverageResolutionUnavailable as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason": "coverage_proof_insufficient",
+                "message": str(exc),
+                "next_step": "Keep new exposure blocked and refresh the recovery evidence.",
+            },
+        ) from exc
+    except ProjectionReadError as exc:
+        raise _projection_read_error(exc) from exc
+    return HistoricalExecutionRecoveryPlanResponse.model_validate(plan)
+
+
+@router.post(
+    "/accounts/{account_id}/bots/{strategy_instance_id}/historical-execution-recovery/confirm",
+    response_model=HistoricalExecutionRecoveryReceiptResponse,
+    responses=_HISTORICAL_EXECUTION_RECOVERY_RESPONSES,
+)
+async def confirm_bot_historical_execution_recovery(
+    account_id: str,
+    strategy_instance_id: str,
+    body: HistoricalExecutionRecoveryConfirmRequest,
+) -> HistoricalExecutionRecoveryReceiptResponse:
+    """Append only the signed plan's exact evidence and its existing proof result."""
+    if (
+        body.plan.account_id != account_id
+        or body.plan.strategy_instance_id != strategy_instance_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason": "historical_recovery_scope_mismatch",
+                "message": "The recovery plan belongs to another account or bot.",
+                "next_step": "Return to the affected bot and prepare a fresh recovery plan.",
+            },
+        )
+    facade = _active_sqlite_facade(account_id)
+    try:
+        receipt = await facade.confirm_historical_execution_recovery(
+            plan=HistoricalExecutionRecoveryPlan(**body.plan.model_dump()),
+            confirmation_token=body.confirmation_token,
+        )
+    except HistoricalExecutionRecoveryRefused as exc:
+        raise _historical_recovery_refusal(exc) from exc
+    except (ExecutionLeaseLost, RepositoryPoisoned) as exc:
+        raise _unavailable_response(exc) from exc
+    return HistoricalExecutionRecoveryReceiptResponse.model_validate(receipt)
 
 
 async def _execute_presented_recovery_action(

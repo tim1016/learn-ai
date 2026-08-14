@@ -57,6 +57,36 @@ describe('BrokerV2PanelService run evidence', () => {
     await expect(response).resolves.toEqual({ runs: [], next_cursor: null });
   });
 
+  it('keeps historical exact-execution recovery outside the generic panel-action endpoint', async () => {
+    const prepared = service.prepareHistoricalExecutionRecovery('account/1', 'bot/1', 'token-1');
+    const prepareRequest = http.expectOne(
+      '/api/alpaca-clerk-sqlite/accounts/account%2F1/bots/bot%2F1/historical-execution-recovery/prepare',
+    );
+    expect(prepareRequest.request.body).toEqual({ concurrency_token: 'token-1' });
+    prepareRequest.flush({
+      account_id: 'account/1', strategy_instance_id: 'bot/1', uncertainty_id: 'u-1',
+      order_ref: 'order-1', broker_order_id: 'broker-order-1', execution_id: 'execution-1',
+      exact_symbol: 'SPY', exact_quantity: 1, exact_price: 100, exact_side: 'BUY',
+      source_event_at_ms: 1, cumulative_fill_id: 'fill-1', cumulative_quantity: 1,
+      cumulative_price: 100, cumulative_side: 'BUY', authority_generation: 1,
+      db_identity_token: 'db-1', control_revision: 1, prepared_at_ms: 1,
+      expires_at_ms: 2, confirmation_token: 'confirm-1',
+    });
+    const plan = await prepared;
+
+    const confirmed = service.confirmHistoricalExecutionRecovery('account/1', 'bot/1', plan);
+    const confirmRequest = http.expectOne(
+      '/api/alpaca-clerk-sqlite/accounts/account%2F1/bots/bot%2F1/historical-execution-recovery/confirm',
+    );
+    expect(confirmRequest.request.body).toEqual({ plan, confirmation_token: 'confirm-1' });
+    confirmRequest.flush({
+      uncertainty_id: 'u-1', order_ref: 'order-1', execution_id: 'execution-1',
+      receipt_id: 'coverage-resolution:2', recorded_at_ms: 2, applied: true,
+    });
+
+    await expect(confirmed).resolves.toMatchObject({ receipt_id: 'coverage-resolution:2' });
+  });
+
 });
 
 describe('BrokerV2PanelService resilient action retry (defect #10)', () => {

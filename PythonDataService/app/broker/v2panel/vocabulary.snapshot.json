@@ -40,6 +40,7 @@
     "rebuild_from_mirror",
     "reconcile_now",
     "record_inventory_baseline",
+    "recover_exact_execution_evidence",
     "reset_authority",
     "resolve_execution_coverage",
     "resume",
@@ -194,6 +195,10 @@
     "record_inventory_baseline": {
       "label": "Recover inventory baseline",
       "explanation": "Record the freshly observed broker positions as the account accounting cutover, retiring prior bot attribution without deleting history or assigning current positions to a bot."
+    },
+    "recover_exact_execution_evidence": {
+      "label": "Recover exact execution evidence",
+      "explanation": "Read one retained Alpaca paper execution and prepare the Clerk's no-delta coverage proof."
     },
     "reset_authority": {
       "label": "Reset authority",

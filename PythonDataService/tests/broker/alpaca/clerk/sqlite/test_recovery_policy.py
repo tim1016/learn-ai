@@ -60,6 +60,7 @@ def test_healthy_catalog_omits_failure_and_generic_recovery_actions() -> None:
 
     assert actions == {
         "reconcile_now",
+        "recover_exact_execution_evidence",
         "resolve_execution_coverage",
         "cancel_verified_working_orders",
         "prepare_safe_flatten",
@@ -139,6 +140,91 @@ def test_coverage_resolution_explains_when_exact_proof_is_insufficient() -> None
     assert action.next_step == (
         "Keep the exposure blocked and obtain exact broker execution coverage; no generic override is available."
     )
+
+
+def test_historical_exact_evidence_recovery_requires_one_bot_scoped_missing_exact() -> None:
+    conflict = ProjectedExecutionCoverageConflict(
+        uncertainty_id="uncertainty:historical-1",
+        order_ref="alpaca/intent-1",
+        execution_id="execution-1",
+        cumulative_fill_id="alpaca/intent-1:5.000000000",
+        exact_qty=None,
+        exact_price=None,
+        exact_side=None,
+        cumulative_qty=5.0,
+        cumulative_price=100.0,
+        cumulative_side="BUY",
+        proof_available=False,
+        unavailable_reason="The exact execution quarantine is absent; fresh exact evidence is required.",
+    )
+    bot_action = next(
+        action
+        for action in build_recovery_catalog(
+            _context(execution_coverage_conflicts=(conflict,))
+        )
+        if action.action_id == "recover_exact_execution_evidence"
+    )
+    account_action = next(
+        action
+        for action in build_recovery_catalog(
+            _context(
+                strategy_instance_id=None,
+                execution_coverage_conflicts=(conflict,),
+            )
+        )
+        if action.action_id == "recover_exact_execution_evidence"
+    )
+
+    assert bot_action.available is True
+    assert bot_action.primary is True
+    assert bot_action.execution_ref == conflict.uncertainty_id
+    assert account_action.available is False
+    assert account_action.unavailable_reason_code == "BOT_SCOPE_REQUIRED"
+
+
+def test_historical_exact_evidence_recovery_identifies_every_bot_conflict() -> None:
+    conflicts = (
+        ProjectedExecutionCoverageConflict(
+            uncertainty_id="uncertainty:historical-1",
+            order_ref="alpaca/intent-1",
+            execution_id="execution-1",
+            cumulative_fill_id="alpaca/intent-1:5.000000000",
+            exact_qty=None,
+            exact_price=None,
+            exact_side=None,
+            cumulative_qty=5.0,
+            cumulative_price=100.0,
+            cumulative_side="BUY",
+            proof_available=False,
+            unavailable_reason="Exact evidence is missing.",
+        ),
+        ProjectedExecutionCoverageConflict(
+            uncertainty_id="uncertainty:historical-2",
+            order_ref="alpaca/intent-2",
+            execution_id="execution-2",
+            cumulative_fill_id="alpaca/intent-2:2.000000000",
+            exact_qty=None,
+            exact_price=None,
+            exact_side=None,
+            cumulative_qty=2.0,
+            cumulative_price=200.0,
+            cumulative_side="BUY",
+            proof_available=False,
+            unavailable_reason="Exact evidence is missing.",
+        ),
+    )
+    action = next(
+        item
+        for item in build_recovery_catalog(_context(execution_coverage_conflicts=conflicts))
+        if item.action_id == "recover_exact_execution_evidence"
+    )
+
+    assert action.available is False
+    assert action.unavailable_reason_code == "COVERAGE_RECOVERY_SELECTION_REQUIRED"
+    assert [evidence.reference for evidence in action.evidence] == [
+        "order:alpaca/intent-1",
+        "order:alpaca/intent-2",
+    ]
 
 
 def test_failure_catalog_requires_exact_rebuild_and_reset_prerequisites() -> None:

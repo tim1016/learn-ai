@@ -12,10 +12,12 @@ not activate SQLite. A malformed fence or failed activated startup installs no
 broker-mutation capability and never falls back to JSONL.
 
 For activated SQLite accounts, the available actions are exactly `reconcile_now`,
+`recover_exact_execution_evidence`, `resolve_execution_coverage`,
 `cancel_verified_working_orders`, `prepare_safe_flatten`, `stop_bot_decisions`,
 `open_custody_timeline`, and—only during typed authority failure—
 `rebuild_from_mirror` or `reset_authority`. There is no generic Clear, blind Retry, or
-unproven Flatten. See
+unproven Flatten. Historical exact-execution recovery is paper-only and never enables
+manual SQLite trading. See
 `docs/references/alpaca-sqlite-clerk-recovery-language.md` for the wording matrix and
 `docs/runbooks/alpaca-sqlite-clerk-recovery-and-cutover.md` for the offline subprocedure.
 
@@ -175,6 +177,28 @@ Desired state (`RUNNING` or `STOPPED`) is separate from duty outcome (`ON_DUTY`,
 **When available:** Always, when the reconciliation station is visible.
 **What it does:** Runs an immediate reconciliation sweep against the broker. Useful after a hold is cleared or after a manual order intervention.
 
+### `recover_exact_execution_evidence` {#action-recover-exact-execution-evidence}
+**When available:** On the affected bot only, when an old execution-coverage conflict retains one Alpaca execution identity and one cumulative Clerk fill but lacks exact economics.
+**What it does:** Reads one retained Alpaca paper activity into a short-lived signed plan. After an explicit `RECOVER` confirmation, the Clerk appends that exact evidence and runs the existing no-delta coverage proof. It never places, cancels, or changes a broker order.
+
+### `resolve_execution_coverage` {#action-resolve-execution-coverage}
+**When available:** When the Clerk already quarantined exact execution evidence that exactly replaces one cumulative recovery fill.
+**What it does:** Resolves only the closed one-exact-for-one-cumulative proof. It changes evidence provenance, not account or bot economics.
+
+### SQLite recovery capabilities {#sqlite-recovery-capabilities}
+
+| Code | Label | Meaning |
+|---|---|---|
+| `reconcile_now` | Reconcile now | Run one fresh broker reconciliation. It cannot reconstruct a missing exact fill. |
+| `recover_exact_execution_evidence` | Recover exact execution evidence | Read and explicitly confirm one retained Alpaca paper execution for a bot-scoped historical coverage conflict. |
+| `resolve_execution_coverage` | Resolve execution coverage | Close the existing exact replacement proof when its exact evidence is already quarantined. |
+| `cancel_verified_working_orders` | Cancel verified working orders | Cancel only broker working orders with proven Clerk identity. |
+| `prepare_safe_flatten` | Prepare safe flatten | Produce a reviewed reduction plan; it never submits an order. |
+| `stop_bot_decisions` | Stop bot decisions | Stop fresh bot decisions while existing exposure stays under Clerk custody. |
+| `open_custody_timeline` | Open custody timeline | Inspect immutable custody evidence. |
+| `rebuild_from_mirror` | Rebuild from mirror | Restore a failed authority only from a verified contiguous mirror. |
+| `reset_authority` | Reset authority | Establish a new authority generation only after fresh flat, order-free proof. |
+
 ---
 
 ## Hold Actions {#hold-actions}
@@ -279,3 +303,11 @@ The panel uses a closed vocabulary. Every code the system emits is defined below
 | `cancel_order` | Cancel order | Cancel one working order at the broker. |
 | `clear_hold` | Clear hold | Lift the account exposure hold once its root condition is healthy and freshly observed. |
 | `reconcile_now` | Reconcile now | Run a reconciliation sweep against the broker immediately. |
+| `recover_exact_execution_evidence` | Recover exact execution evidence | Recover one retained Alpaca paper execution through the Clerk's no-delta coverage proof. |
+| `resolve_execution_coverage` | Resolve execution coverage | Resolve an already-proven exact-for-cumulative coverage replacement. |
+| `cancel_verified_working_orders` | Cancel verified working orders | Cancel only working orders whose identities are proven. |
+| `prepare_safe_flatten` | Prepare safe flatten | Prepare an evidence-bound reduction plan without submitting orders. |
+| `stop_bot_decisions` | Stop bot decisions | Stop new bot decisions while preserving Clerk custody of existing exposure. |
+| `open_custody_timeline` | Open custody timeline | Inspect immutable Clerk custody evidence. |
+| `rebuild_from_mirror` | Rebuild from mirror | Restore a failed authority only from a verified mirror. |
+| `reset_authority` | Reset authority | Reset authority only after flat and order-free proof. |

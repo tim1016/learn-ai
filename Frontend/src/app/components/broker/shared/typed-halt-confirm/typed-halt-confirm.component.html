@@ -18,7 +18,12 @@
     <header>
       <h2 id="typed-halt-confirm-heading">{{ heading() }}</h2>
     </header>
-    <p class="message">{{ message() }}</p>
+    <div class="message">
+      @if (assetSymbol(); as symbol) {
+        <app-asset-identity [symbol]="symbol" size="sm" />
+      }
+      <span>{{ message() }}</span>
+    </div>
     <p class="consequence">{{ consequence() }}</p>
     @if (requiredToken()) {
       <label class="field">

@@ -14,6 +14,7 @@ import { BrokersService } from '../../../services/brokers.service';
 export class AlpacaOperatorLensDataService {
   private readonly brokers = inject(BrokersService);
   private readonly requested = signal(false);
+  readonly projectionRefreshVersion = signal(0);
 
   readonly status = resource({
     params: () => (this.requested() ? 'alpaca' : undefined),
@@ -29,11 +30,21 @@ export class AlpacaOperatorLensDataService {
 
   /** Backend-authored dominant guidance and exact recovery capabilities. */
   readonly projection = resource({
-    params: () => this.sqliteAccountId(),
-    loader: ({ params }) => this.brokers.getSqliteClerkProjection(params),
+    params: () => {
+      const accountId = this.sqliteAccountId();
+      return accountId === undefined
+        ? undefined
+        : { accountId, refreshVersion: this.projectionRefreshVersion() };
+    },
+    loader: ({ params }) => this.brokers.getSqliteClerkProjection(params.accountId),
   });
 
   loadOnce(): void {
     this.requested.set(true);
+  }
+
+  /** Refresh every Desk surface bound to the current Clerk projection. */
+  refreshProjection(): void {
+    this.projectionRefreshVersion.update((version) => version + 1);
   }
 }

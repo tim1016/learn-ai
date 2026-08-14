@@ -146,6 +146,11 @@ export const BROKER_V2_EMERGENCY_COPY: Readonly<Record<string, VocabularyCopy>> 
     label: 'Reconcile now',
     explanation: 'Run a reconciliation sweep against the broker immediately.',
   },
+  recover_exact_execution_evidence: {
+    label: 'Recover exact execution evidence',
+    explanation:
+      'Read one retained Alpaca paper execution and prepare the Clerk\'s no-delta coverage proof.',
+  },
   resolve_execution_coverage: {
     label: 'Resolve execution coverage',
     explanation:

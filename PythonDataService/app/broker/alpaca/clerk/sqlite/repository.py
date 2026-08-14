@@ -30,6 +30,7 @@ import secrets
 import sqlite3
 import threading
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 from app.broker.alpaca.clerk.sqlite import reads, writes
@@ -1213,7 +1214,9 @@ class ClerkSqliteRepository(
                 return "raised"
             if active["facts_json"] == facts_json and not refresh_unchanged:
                 return "unchanged"
-            self.append_transition(build_refresh())
+            self.append_transition(
+                replace(build_refresh(), proof_reference=active["uncertainty_id"])
+            )
             return "refreshed"
 
     def resolve_uncertainty_if_active(

@@ -14,6 +14,7 @@ import { AccountDeskTransactionHistoryStore } from '../../broker/account-desk/ac
 import type { SqliteRecoveryAction } from '../../../api/alpaca.types';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
+import type { SqliteTimelineQuery } from '../../../services/brokers.service';
 import { AlpacaSqliteCustodyComponent } from './alpaca-sqlite-custody.component';
 import { AlpacaOperatorLensDataService } from './alpaca-operator-lens-data.service';
 import { AlpacaOperatorPostureComponent } from './alpaca-operator-posture.component';
@@ -35,12 +36,14 @@ import { AlpacaOperatorPostureComponent } from './alpaca-operator-posture.compon
 })
 export class AlpacaOperatorLensComponent {
   readonly refreshVersion = input(0);
+  readonly timelineQuery = input<SqliteTimelineQuery | null>(null);
   private readonly data = inject(AlpacaOperatorLensDataService);
   private readonly custodyPanel = viewChild<ElementRef<HTMLDetailsElement>>('custodyPanel');
   private readonly custody = viewChild(AlpacaSqliteCustodyComponent);
 
   protected readonly status = this.data.status;
   protected readonly projection = this.data.projection;
+  protected readonly projectionRefreshVersion = this.data.projectionRefreshVersion;
   protected readonly custodyOpened = signal(false);
   private readonly pendingRepair = signal<SqliteRecoveryAction | null>(null);
 
@@ -51,6 +54,11 @@ export class AlpacaOperatorLensComponent {
       if (action === null || custody === undefined) return;
       this.pendingRepair.set(null);
       custody.requestPresentedAction(action);
+    });
+    effect(() => {
+      if (this.timelineQuery() === null) return;
+      this.custodyOpened.set(true);
+      this.custodyPanel()?.nativeElement.setAttribute('open', '');
     });
   }
 
@@ -64,5 +72,9 @@ export class AlpacaOperatorLensComponent {
     this.custodyOpened.set(true);
     this.pendingRepair.set(action);
     this.custodyPanel()?.nativeElement.setAttribute('open', '');
+  }
+
+  protected refreshCustodyProjection(): void {
+    this.data.refreshProjection();
   }
 }

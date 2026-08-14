@@ -14,31 +14,46 @@
       }
     </div>
 
-    @switch (current.disposition) {
-      @case ('fix_here') {
-        @if (isRecoveryAction(current.action)) {
-          <button type="button" (click)="requestRepair(current.action)">
-            {{ current.action.label }}
-          </button>
-        } @else if (current.action; as move) {
-          <button type="button" (click)="requestMove(move)">{{ move.label }}</button>
+    @if (isRecoveryAction(current.action)) {
+      <div class="operator-posture__recovery-action">
+        <button
+          type="button"
+          [disabled]="!current.action.available"
+          [attr.aria-describedby]="!current.action.available && current.action.unavailable_reason ? 'operator-posture-unavailable-reason' : null"
+          (click)="requestRepair(current.action)"
+        >{{ current.action.label }}</button>
+        @if (!current.action.available && current.action.unavailable_reason; as reason) {
+          <p id="operator-posture-unavailable-reason" class="operator-posture__status" role="status">
+            @if (current.action.unavailable_reason_code; as code) {
+              <strong>{{ code | receiptLabel }}:</strong>
+            }
+            {{ reason }}
+          </p>
         }
-      }
-      @case ('fix_elsewhere') {
-        @if (current.action; as move) {
-          <button type="button" class="operator-posture__link" (click)="requestMove(move)">
-            {{ move.label }}
-          </button>
+      </div>
+    } @else {
+      @switch (current.disposition) {
+        @case ('fix_here') {
+          @if (current.action; as move) {
+            <button type="button" (click)="requestMove(move)">{{ move.label }}</button>
+          }
         }
-      }
-      @case ('wait') {
-        <p class="operator-posture__status" role="status">Waiting for fresh account evidence.</p>
-      }
-      @case ('review') {
-        <p class="operator-posture__status" role="status">Review the current evidence.</p>
-      }
-      @case ('terminal') {
-        <p class="operator-posture__status" role="alert">Manual escalation required.</p>
+        @case ('fix_elsewhere') {
+          @if (current.action; as move) {
+            <button type="button" class="operator-posture__link" (click)="requestMove(move)">
+              {{ move.label }}
+            </button>
+          }
+        }
+        @case ('wait') {
+          <p class="operator-posture__status" role="status">Waiting for fresh account evidence.</p>
+        }
+        @case ('review') {
+          <p class="operator-posture__status" role="status">Review the current evidence.</p>
+        }
+        @case ('terminal') {
+          <p class="operator-posture__status" role="alert">Manual escalation required.</p>
+        }
       }
     }
 

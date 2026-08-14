@@ -33,6 +33,7 @@ export interface ActionRejection {
 export function deriveActionRejection(error: unknown, fallbackMessage: string): ActionRejection {
   const detail = extractActionErrorDetail(error);
   const outcome = detail?.['outcome'];
+  const reason = detail?.['reason'];
   return {
     outcome:
       outcome === 'conflict' || outcome === 'failure' || outcome === 'unknown' ? outcome : 'unknown',
@@ -42,7 +43,12 @@ export function deriveActionRejection(error: unknown, fallbackMessage: string): 
         : error instanceof Error
           ? error.message
           : fallbackMessage,
-    why: typeof detail?.['why'] === 'string' ? detail['why'] : null,
+    why:
+      typeof detail?.['why'] === 'string'
+        ? detail['why']
+        : typeof reason === 'string'
+          ? formatReceiptLabel(reason)
+          : null,
   };
 }
 

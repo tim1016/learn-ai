@@ -38,6 +38,13 @@ from app.broker.alpaca.clerk.sqlite.exit_resolution import cancel_and_prove_owne
 from app.broker.alpaca.clerk.sqlite.facts import AccountHoldRaisedFacts, AccountHoldResolvedFacts
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
+from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import (
+    HistoricalExecutionRecoveryPlan,
+    HistoricalExecutionRecoveryRefused,
+    confirm_historical_execution_recovery,
+    prepare_historical_execution_recovery,
+    replay_historical_execution_recovery,
+)
 from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import (
     ManualOrderCancellationSubmission,
     submit_manual_order_cancellation,
@@ -52,15 +59,22 @@ from app.broker.alpaca.clerk.sqlite.manual_order_runtime import (
     submit_previewed_manual_order,
 )
 from app.broker.alpaca.clerk.sqlite.manual_orders import ManualOrderSubmission, ManualTicketLeg
-from app.broker.alpaca.clerk.sqlite.models import ManualOrderTicketResource, OrderResource, TransitionInput
+from app.broker.alpaca.clerk.sqlite.models import (
+    ExecutionCoverageResolutionReceipt,
+    ManualOrderTicketResource,
+    OrderResource,
+    TransitionInput,
+)
 from app.broker.alpaca.clerk.sqlite.reconcile import (
     AccountReconciliationResult,
 )
 from app.broker.alpaca.clerk.sqlite.reconcile import (
     reconcile_account as reconcile_sqlite_account,
 )
+from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryPolicyContext
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate, stream_health_refusal
+from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerOrderLeg, OrderSide
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.config import settings
@@ -182,6 +196,63 @@ class SqliteAlpacaClerkFacade:
                 control_secret=settings.DATA_PLANE_CONTROL_SECRET,
                 allow_unauthenticated_control=settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL,
                 account_id=self.account_id,
+            )
+
+    async def prepare_historical_execution_recovery(
+        self,
+        *,
+        context: RecoveryPolicyContext,
+        concurrency_token: str,
+    ) -> HistoricalExecutionRecoveryPlan:
+        """Read paper broker evidence while the Clerk intake boundary is stable."""
+        async with self._intake:
+            return await prepare_historical_execution_recovery(
+                repo=self._repo,
+                read=self._read,
+                context=context,
+                concurrency_token=concurrency_token,
+                control_secret=settings.DATA_PLANE_CONTROL_SECRET,
+                allow_unauthenticated_control=settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL,
+            )
+
+    async def confirm_historical_execution_recovery(
+        self,
+        *,
+        plan: HistoricalExecutionRecoveryPlan,
+        confirmation_token: str,
+    ) -> ExecutionCoverageResolutionReceipt:
+        """Append only the signed plan's exact evidence and closed resolution."""
+        async with self._intake:
+            replay = await asyncio.to_thread(
+                replay_historical_execution_recovery,
+                repo=self._repo,
+                plan=plan,
+                confirmation_token=confirmation_token,
+                control_secret=settings.DATA_PLANE_CONTROL_SECRET,
+                allow_unauthenticated_control=settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL,
+            )
+            if replay is not None:
+                return replay
+            try:
+                account = await self._read.get_account()
+            except BrokerError as exc:
+                raise HistoricalExecutionRecoveryRefused(
+                    "HISTORICAL_EVIDENCE_UNAVAILABLE",
+                    "Alpaca account evidence is temporarily unavailable. Keep the exposure blocked and retry later.",
+                ) from exc
+            except Exception as exc:
+                raise HistoricalExecutionRecoveryRefused(
+                    "HISTORICAL_EVIDENCE_UNAVAILABLE",
+                    "Alpaca account evidence is temporarily unavailable. Keep the exposure blocked and retry later.",
+                ) from exc
+            return await asyncio.to_thread(
+                confirm_historical_execution_recovery,
+                repo=self._repo,
+                plan=plan,
+                confirmation_token=confirmation_token,
+                control_secret=settings.DATA_PLANE_CONTROL_SECRET,
+                allow_unauthenticated_control=settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL,
+                observed_account=account,
             )
 
     async def preview_manual_order(

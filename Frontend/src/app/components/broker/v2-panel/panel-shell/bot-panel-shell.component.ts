@@ -15,8 +15,12 @@ import { ActivatedRoute, Router } from '@angular/router';
 import { MessageService } from 'primeng/api';
 import { firstValueFrom } from 'rxjs';
 
-import type { SqliteSafeFlattenPlan } from '../../../../api/alpaca.types';
+import type {
+  HistoricalExecutionRecoveryPlan,
+  SqliteSafeFlattenPlan,
+} from '../../../../api/alpaca.types';
 import { SafeFlattenPlanComponent } from '../../shared/safe-flatten-plan/safe-flatten-plan.component';
+import { TypedHaltConfirmComponent } from '../../shared/typed-halt-confirm/typed-halt-confirm.component';
 import type {
   ChartHistoryPreset,
   ChartLiveResolution,
@@ -43,6 +47,11 @@ import {
 
 type PanelLens = 'trader' | 'operator';
 
+interface HistoricalExecutionRecoveryDraft {
+  readonly action: PanelAction;
+  readonly plan: HistoricalExecutionRecoveryPlan;
+}
+
 /**
  * Panel shell — host for all bot control panel lenses (spec §3, §6, §7).
  *
@@ -66,6 +75,7 @@ type PanelLens = 'trader' | 'operator';
   imports: [
     PanelActionReceiptComponent,
     SafeFlattenPlanComponent,
+    TypedHaltConfirmComponent,
     TraderLensComponent,
     OperatorLensComponent,
   ],
@@ -116,6 +126,10 @@ export class BotPanelShellComponent {
   protected readonly reductionPlan = linkedSignal({
     source: this.routeIdentity,
     computation: (): SqliteSafeFlattenPlan | null => null,
+  });
+  protected readonly historicalRecoveryDraft = linkedSignal({
+    source: this.routeIdentity,
+    computation: (): HistoricalExecutionRecoveryDraft | null => null,
   });
 
   protected readonly panel = computed(() => this.liveStore.snapshot()?.panel ?? null);
@@ -257,11 +271,17 @@ export class BotPanelShellComponent {
   protected async onActionRequested({ action, reason }: PanelActionTrigger): Promise<void> {
     if (this.actionPending()) return;
     if (action.action_id === 'open_custody_timeline') {
-      this.selectLens('operator');
+      void this.router.navigate(['/brokers/alpaca'], {
+        queryParams: this.custodyTimelineQuery(action),
+      });
       return;
     }
     if (action.action_id === 'prepare_safe_flatten') {
       await this.prepareSafeFlatten(action);
+      return;
+    }
+    if (action.action_id === 'recover_exact_execution_evidence') {
+      await this.prepareHistoricalExecutionRecovery(action);
       return;
     }
     this.actionPending.set(true);
@@ -324,6 +344,101 @@ export class BotPanelShellComponent {
     } finally {
       this.actionPending.set(false);
     }
+  }
+
+  protected cancelHistoricalExecutionRecovery(): void {
+    this.historicalRecoveryDraft.set(null);
+  }
+
+  protected historicalRecoveryMessage(plan: HistoricalExecutionRecoveryPlan): string {
+    return `Alpaca paper activity ${plan.execution_id} records ${plan.exact_side} ${plan.exact_quantity} at ${plan.exact_price}. It exactly matches cumulative recovery fill ${plan.cumulative_fill_id}.`;
+  }
+
+  protected async confirmHistoricalExecutionRecovery(): Promise<void> {
+    const draft = this.historicalRecoveryDraft();
+    if (draft === null || this.actionPending()) return;
+    const requestIdentity = this.routeIdentity();
+    this.actionPending.set(true);
+    this.actionReceipt.set(null);
+    try {
+      const receipt = await this.panelSvc.confirmHistoricalExecutionRecovery(
+        this.accountId(),
+        this.sid(),
+        draft.plan,
+      );
+      if (requestIdentity !== this.routeIdentity()) return;
+      this.historicalRecoveryDraft.set(null);
+      const message = receipt.applied
+        ? `${draft.action.label} completed. The Clerk recorded exact evidence without changing economic totals.`
+        : `${draft.action.label} had already completed; the durable result was replayed.`;
+      const actionReceipt: ActionReceiptView = {
+        actionId: draft.action.action_id,
+        outcome: 'success',
+        receiptId: receipt.receipt_id,
+        recordedAtMs: receipt.recorded_at_ms,
+        message,
+        remediation: null,
+      };
+      this.actionReceipt.set(actionReceipt);
+      this.messageService.add(actionOutcomeToast('success', actionReceipt.message));
+      await this.liveStore.refresh();
+    } catch (error) {
+      if (requestIdentity !== this.routeIdentity()) return;
+      this.historicalRecoveryDraft.set(null);
+      const receipt = this.errorReceipt(error, draft.action);
+      this.actionReceipt.set(receipt);
+      this.messageService.add(actionOutcomeToast(receipt.outcome, receipt.message, receipt.remediation));
+      await this.liveStore.refresh();
+    } finally {
+      this.actionPending.set(false);
+    }
+  }
+
+  private async prepareHistoricalExecutionRecovery(action: PanelAction): Promise<void> {
+    const requestIdentity = this.routeIdentity();
+    this.actionPending.set(true);
+    this.actionReceipt.set(null);
+    this.historicalRecoveryDraft.set(null);
+    try {
+      const plan = await this.panelSvc.prepareHistoricalExecutionRecovery(
+        this.accountId(),
+        this.sid(),
+        action.concurrency_token,
+      );
+      if (requestIdentity !== this.routeIdentity()) return;
+      this.historicalRecoveryDraft.set({ action, plan });
+    } catch (error) {
+      if (requestIdentity !== this.routeIdentity()) return;
+      const receipt = this.errorReceipt(error, action);
+      this.actionReceipt.set(receipt);
+      this.messageService.add(actionOutcomeToast(receipt.outcome, receipt.message, receipt.remediation));
+      await this.liveStore.refresh();
+    } finally {
+      this.actionPending.set(false);
+    }
+  }
+
+  private custodyTimelineQuery(action: PanelAction): Record<string, string> {
+    const query: Record<string, string> = {
+      lens: 'operator',
+      timelineBot: this.sid(),
+    };
+    for (const reference of action.evidence_refs ?? []) {
+      const separator = reference.indexOf(':');
+      if (separator < 1 || separator === reference.length - 1) continue;
+      const value = reference.slice(separator + 1);
+      switch (reference.slice(0, separator)) {
+        case 'order':
+          return { ...query, timelineOrderRef: value };
+        case 'execution':
+          return { ...query, timelineExecutionId: value };
+        case 'uncertainty':
+          return { ...query, timelineUncertaintyId: value };
+        case 'operation':
+          return { ...query, timelineOperationRef: value };
+      }
+    }
+    return query;
   }
 
   private successReceipt(result: PanelActionResult): ActionReceiptView {

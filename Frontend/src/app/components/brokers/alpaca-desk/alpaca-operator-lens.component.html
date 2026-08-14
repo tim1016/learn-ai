@@ -43,7 +43,12 @@
             </span>
           </summary>
           @if (custodyOpened()) {
-            <app-alpaca-sqlite-custody [accountId]="clerkStatus.account_id" />
+            <app-alpaca-sqlite-custody
+              [accountId]="clerkStatus.account_id"
+              [projectionRefreshVersion]="projectionRefreshVersion()"
+              [timelineQuery]="timelineQuery()"
+              (projectionInvalidated)="refreshCustodyProjection()"
+            />
           }
         </details>
 

@@ -20,6 +20,7 @@ from typing import Any
 from app.broker.alpaca.clerk.sqlite import projection_helpers
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     ActiveExecutionCoverageConflict,
+    cumulative_recovery_fills_for_order,
     execution_coverage_proof,
 )
 from app.broker.alpaca.clerk.sqlite.facts import UncertaintyRaisedFacts
@@ -55,6 +56,10 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     build_recovery_catalog,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.timeline_query import (
+    TimelineFilters,
+    read_timeline_page,
+)
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
     ExecutionCoverageConflictCause,
@@ -275,6 +280,10 @@ class SqliteClerkProjectionReader:
         strategy_instance_id: str | None = None,
         order_ref: str | None = None,
         effect_operation_id: str | None = None,
+        uncertainty_id: str | None = None,
+        execution_id: str | None = None,
+        transition_kind: str | None = None,
+        sequence: int | None = None,
         cursor: str | None = None,
         page_size: int = DEFAULT_TIMELINE_PAGE_SIZE,
     ) -> TimelinePage:
@@ -282,75 +291,23 @@ class SqliteClerkProjectionReader:
         with self._read_transaction():
             self._verify_identity()
             meta = self._meta()
-            if cursor is None:
-                row = self._conn.execute(
-                    "SELECT COALESCE(MAX(sequence), 0) AS sequence FROM custody_transitions"
-                ).fetchone()
-                anchor_sequence = int(row["sequence"])
-                before_sequence = anchor_sequence + 1
-            else:
-                anchor_sequence, before_sequence = self._decode_cursor(
-                    cursor,
+            return read_timeline_page(
+                self._conn,
+                account_id=self._account_id,
+                authority_generation=self._authority_generation,
+                control_revision=meta["control_revision"],
+                filters=TimelineFilters(
                     strategy_instance_id=strategy_instance_id,
                     order_ref=order_ref,
                     effect_operation_id=effect_operation_id,
-                )
-            where = "sequence <= ? AND sequence < ?"
-            parameters: list[object] = [anchor_sequence, before_sequence]
-            if strategy_instance_id is not None:
-                where += " AND strategy_instance_id = ?"
-                parameters.append(strategy_instance_id)
-            if order_ref is not None:
-                where += " AND order_ref = ?"
-                parameters.append(order_ref)
-            if effect_operation_id is not None:
-                where += " AND effect_operation_id = ?"
-                parameters.append(effect_operation_id)
-            rows = self._conn.execute(
-                "SELECT sequence, effect_operation_id, command_id, order_ref, broker_order_id, "
-                "transition_kind, operation_state, broker_state, custody_owner, "
-                "execution_authority, summary_code, proof_reference, source_event_at_ms, "
-                "clerk_observed_at_ms, recorded_at_ms FROM custody_transitions "
-                f"WHERE {where} ORDER BY sequence DESC LIMIT ?",
-                (*parameters, page_size + 1),
-            ).fetchall()
-            total_where = "sequence <= ?"
-            total_parameters: list[object] = [anchor_sequence]
-            if strategy_instance_id is not None:
-                total_where += " AND strategy_instance_id = ?"
-                total_parameters.append(strategy_instance_id)
-            if order_ref is not None:
-                total_where += " AND order_ref = ?"
-                total_parameters.append(order_ref)
-            if effect_operation_id is not None:
-                total_where += " AND effect_operation_id = ?"
-                total_parameters.append(effect_operation_id)
-            total = self._conn.execute(
-                f"SELECT COUNT(*) AS count FROM custody_transitions WHERE {total_where}",
-                total_parameters,
-            ).fetchone()
-        has_more = len(rows) > page_size
-        visible_rows = rows[:page_size]
-        entries = tuple(projection_helpers.timeline_entry(row) for row in visible_rows)
-        next_cursor = None
-        if has_more and entries:
-            next_cursor = self._encode_cursor(
-                anchor_sequence=anchor_sequence,
-                before_sequence=entries[-1].sequence,
-                strategy_instance_id=strategy_instance_id,
-                order_ref=order_ref,
-                effect_operation_id=effect_operation_id,
+                    uncertainty_id=uncertainty_id,
+                    execution_id=execution_id,
+                    transition_kind=transition_kind,
+                    sequence=sequence,
+                ),
+                cursor=cursor,
+                page_size=page_size,
             )
-        return TimelinePage(
-            account_id=self._account_id,
-            strategy_instance_id=strategy_instance_id,
-            authority_generation=self._authority_generation,
-            control_revision=meta["control_revision"],
-            anchor_sequence=anchor_sequence,
-            total_entries=int(total["count"]),
-            entries=entries,
-            next_cursor=next_cursor,
-        )
 
     def operation_page(
         self,
@@ -802,6 +759,15 @@ class SqliteClerkProjectionReader:
         )
         exact = proof.exact_execution
         cumulative = proof.cumulative
+        if cumulative is None and not proof.execution_ids:
+            # A historical conflict can predate durable execution IDs. Surface its
+            # sole order-scoped aggregate row for operator evidence only; the
+            # proof remains unavailable until exact execution evidence is retained.
+            historical_fills = cumulative_recovery_fills_for_order(
+                self._conn,
+                order_ref=cause.order_ref,
+            )
+            cumulative = historical_fills[0] if len(historical_fills) == 1 else None
         return ProjectedExecutionCoverageConflict(
             uncertainty_id=uncertainty["uncertainty_id"],
             order_ref=cause.order_ref,
@@ -871,74 +837,6 @@ class SqliteClerkProjectionReader:
             (*params, DEFAULT_RECEIPT_LIMIT),
         ).fetchall()
         return tuple(ProjectedReceipt(**dict(row)) for row in rows)
-
-    def _encode_cursor(
-        self,
-        *,
-        anchor_sequence: int,
-        before_sequence: int,
-        strategy_instance_id: str | None,
-        order_ref: str | None,
-        effect_operation_id: str | None,
-    ) -> str:
-        encoded = json.dumps(
-            {
-                "account_id": self._account_id,
-                "authority_generation": self._authority_generation,
-                "strategy_instance_id": strategy_instance_id,
-                "order_ref": order_ref,
-                "effect_operation_id": effect_operation_id,
-                "anchor_sequence": anchor_sequence,
-                "before_sequence": before_sequence,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        return base64.urlsafe_b64encode(encoded).decode("ascii").rstrip("=")
-
-    def _decode_cursor(
-        self,
-        cursor: str,
-        *,
-        strategy_instance_id: str | None,
-        order_ref: str | None,
-        effect_operation_id: str | None,
-    ) -> tuple[int, int]:
-        try:
-            padding = "=" * (-len(cursor) % 4)
-            payload: Any = json.loads(
-                base64.urlsafe_b64decode(cursor + padding).decode("utf-8")
-            )
-            expected_scope = (
-                payload["account_id"],
-                payload["authority_generation"],
-                payload["strategy_instance_id"],
-                payload["order_ref"],
-                payload["effect_operation_id"],
-            )
-            actual_scope = (
-                self._account_id,
-                self._authority_generation,
-                strategy_instance_id,
-                order_ref,
-                effect_operation_id,
-            )
-            anchor = payload["anchor_sequence"]
-            before = payload["before_sequence"]
-            if (
-                expected_scope != actual_scope
-                or not isinstance(anchor, int)
-                or not isinstance(before, int)
-                or anchor < 0
-                or before < 1
-                or before > anchor + 1
-            ):
-                raise ValueError("cursor scope or bounds do not match")
-            return anchor, before
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-            raise InvalidTimelineCursor(
-                "Timeline cursor is malformed, stale, or belongs to another scope"
-            ) from exc
 
     def _encode_operation_cursor(
         self,

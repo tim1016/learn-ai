@@ -291,6 +291,7 @@ def _panel_action(capability: RecoveryCapability, revision: int) -> PanelAction:
         ),
         revision=revision,
         concurrency_token=capability.concurrency_token,
+        evidence_refs=[evidence.reference for evidence in capability.evidence],
     )
 
 

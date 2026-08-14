@@ -14,6 +14,11 @@ import math
 from dataclasses import dataclass, replace
 from typing import Literal, TypeGuard
 
+from app.broker.alpaca.clerk.sqlite.execution_coverage_policy import (
+    ExecutionCoverageRecoveryDecision,
+    coverage_resolution_decision,
+    historical_exact_recovery_decision,
+)
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     AuthorityHealth,
@@ -34,6 +39,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
 
 RecoveryActionId = Literal[
     "reconcile_now",
+    "recover_exact_execution_evidence",
     "resolve_execution_coverage",
     "cancel_verified_working_orders",
     "prepare_safe_flatten",
@@ -127,6 +133,16 @@ def _confirmation(title: str, explanation: str, confirm_label: str) -> RecoveryC
 
 
 _DESCRIPTORS: tuple[_Descriptor, ...] = (
+    _Descriptor(
+        action_id="recover_exact_execution_evidence",
+        label="Recover exact execution evidence",
+        explanation=(
+            "Read one retained Alpaca paper execution, bind it to the Clerk conflict, "
+            "and prepare the existing no-delta coverage proof."
+        ),
+        mutation=False,
+        confirmation=None,
+    ),
     _Descriptor(
         action_id="resolve_execution_coverage",
         label="Resolve execution coverage",
@@ -348,6 +364,42 @@ def _relevant_uncertainties(
     )
 
 
+def _timeline_evidence(ctx: RecoveryPolicyContext) -> tuple[RecoveryEvidence, ...]:
+    """Carry the exact evidence scope when the timeline action is presented."""
+    candidates: list[tuple[str, str, int | None]] = [
+        (
+            f"uncertainty:{uncertainty.uncertainty_id}",
+            "Custody uncertainty",
+            uncertainty.observed_at_ms,
+        )
+        for uncertainty in _relevant_uncertainties(ctx)
+    ]
+    for conflict in ctx.execution_coverage_conflicts:
+        if conflict.order_ref and conflict.execution_id:
+            candidates.extend(
+                (
+                    (f"order:{conflict.order_ref}", "Conflicted Clerk order", None),
+                    (f"execution:{conflict.execution_id}", "Conflicted Alpaca execution", None),
+                )
+            )
+    seen: set[str] = set()
+    evidence: list[RecoveryEvidence] = []
+    for reference, label, observed_at_ms in candidates:
+        if reference in seen:
+            continue
+        seen.add(reference)
+        evidence.append(
+            _evidence(
+                ctx,
+                reference=reference,
+                label=label,
+                observed_at_ms=observed_at_ms,
+                required_fresh=False,
+            )
+        )
+    return tuple(evidence)
+
+
 def _is_successful_account_reconciliation(
     reconciliation: ProjectedReconciliation | None,
 ) -> TypeGuard[ProjectedReconciliation]:
@@ -362,6 +414,7 @@ def _is_successful_account_reconciliation(
 def _decision(ctx: RecoveryPolicyContext, action_id: RecoveryActionId) -> _Decision:
     if action_id == "open_custody_timeline":
         available = ctx.authority_health == "healthy"
+        evidence = _timeline_evidence(ctx)
         return _Decision(
             available=available,
             reason_code=None if available else "READABLE_TIMELINE_REQUIRED",
@@ -371,16 +424,21 @@ def _decision(ctx: RecoveryPolicyContext, action_id: RecoveryActionId) -> _Decis
                 else "The failed authority has no verified online timeline reader."
             ),
             freshness="not_required",
-            evidence=(),
+            evidence=evidence,
             next_step=(
                 "Open the timeline and select an operation to inspect all three clocks."
                 if available
                 else "Stop the process and verify the preserved database or finalized mirror offline."
             ),
-            token_facts={"authority_health": ctx.authority_health},
+            token_facts={
+                "authority_health": ctx.authority_health,
+                "evidence_refs": [item.reference for item in evidence],
+            },
         )
     if ctx.authority_health != "healthy":
         return _failure_decision(ctx, action_id)
+    if action_id == "recover_exact_execution_evidence":
+        return _historical_execution_recovery_decision(ctx)
     if action_id == "resolve_execution_coverage":
         return _execution_coverage_resolution_decision(ctx)
     if action_id == "reconcile_now":
@@ -561,93 +619,34 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
 
 
 def _execution_coverage_resolution_decision(ctx: RecoveryPolicyContext) -> _Decision:
-    """Expose only the closed S0 proof vocabulary to the operator."""
-    conflicts = ctx.execution_coverage_conflicts
-    if not conflicts:
-        return _Decision(
-            available=False,
-            reason_code="NO_EXECUTION_COVERAGE_CONFLICT",
-            reason="No active execution-coverage conflict has a Clerk-owned resolution path.",
-            freshness="unavailable",
-            evidence=(),
-            next_step="No coverage resolution is required.",
-            token_facts=(),
-        )
-    if len(conflicts) != 1:
-        return _Decision(
-            available=False,
-            reason_code="COVERAGE_RESOLUTION_SELECTION_REQUIRED",
-            reason="More than one coverage conflict is active; inspect each custody timeline before resolving one.",
-            freshness="unavailable",
-            evidence=tuple(
-                RecoveryEvidence(
-                    reference=f"order:{conflict.order_ref}",
-                    label="Conflicting order",
-                    observed_at_ms=None,
-                    age_ms=None,
-                    freshness="unavailable",
-                )
-                for conflict in conflicts
-            ),
-            next_step="Open the relevant bot custody timeline and present one conflict at a time.",
-            token_facts=[conflict.uncertainty_id for conflict in conflicts],
-        )
-    conflict = conflicts[0]
-    execution_ids = conflict.execution_ids or (conflict.execution_id,)
-    evidence = tuple(
-        RecoveryEvidence(
-            reference=reference,
-            label=label,
-            observed_at_ms=None,
-            age_ms=None,
-            freshness="fresh" if conflict.proof_available else "unavailable",
-        )
-        for reference, label in (
-            [(f"order:{conflict.order_ref}", "Clerk order reference")]
-            + [
-                (f"execution:{execution_id}", "Quarantined exact execution")
-                for execution_id in execution_ids
-            ]
-            + [
-                (
-                    f"fill:{conflict.cumulative_fill_id or 'missing'}",
-                    "Cumulative recovery fill",
-                )
-            ]
+    return _coverage_decision(
+        coverage_resolution_decision(
+            control_revision=ctx.control_revision,
+            conflicts=ctx.execution_coverage_conflicts,
         )
     )
+
+
+def _historical_execution_recovery_decision(ctx: RecoveryPolicyContext) -> _Decision:
+    return _coverage_decision(
+        historical_exact_recovery_decision(
+            strategy_instance_id=ctx.strategy_instance_id,
+            control_revision=ctx.control_revision,
+            conflicts=ctx.execution_coverage_conflicts,
+        )
+    )
+
+
+def _coverage_decision(decision: ExecutionCoverageRecoveryDecision) -> _Decision:
     return _Decision(
-        available=conflict.proof_available,
-        reason_code=None if conflict.proof_available else "COVERAGE_PROOF_INSUFFICIENT",
-        reason=(
-            None
-            if conflict.proof_available
-            else conflict.unavailable_reason
-            or "The Clerk cannot prove that the exact execution replaces the cumulative total."
-        ),
-        freshness="not_required" if conflict.proof_available else "unavailable",
-        evidence=evidence,
-        next_step=(
-            "Confirm the exact replacement; no broker order will be submitted."
-            if conflict.proof_available
-            else "Keep the exposure blocked and obtain exact broker execution coverage; no generic override is available."
-        ),
-        token_facts=(
-            ctx.control_revision,
-            conflict.uncertainty_id,
-            conflict.order_ref,
-            conflict.execution_id,
-            conflict.execution_ids,
-            conflict.cumulative_fill_id,
-            conflict.exact_qty,
-            conflict.exact_price,
-            conflict.exact_side,
-            conflict.cumulative_qty,
-            conflict.cumulative_price,
-            conflict.cumulative_side,
-            conflict.proof_available,
-        ),
-        execution_ref=conflict.uncertainty_id,
+        available=decision.available,
+        reason_code=decision.reason_code,
+        reason=decision.reason,
+        freshness=decision.freshness,
+        evidence=decision.evidence,
+        next_step=decision.next_step,
+        token_facts=decision.token_facts,
+        execution_ref=decision.execution_ref,
     )
 
 
@@ -819,6 +818,7 @@ def _primary_action_id(capabilities: list[RecoveryCapability]) -> str | None:
     priority = (
         "rebuild_from_mirror",
         "reset_authority",
+        "recover_exact_execution_evidence",
         "resolve_execution_coverage",
         "cancel_verified_working_orders",
         "reconcile_now",

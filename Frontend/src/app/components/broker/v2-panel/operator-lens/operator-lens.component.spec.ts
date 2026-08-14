@@ -691,7 +691,49 @@ describe('OperatorLensComponent', () => {
     expect(screen.getByText('BASELINE')).toBeTruthy();
   });
 
-  it('combines an operator action with its current gate without duplicate blocker copy', async () => {
+  it('keeps the backend-selected exact-evidence recovery control outside the accordion', async () => {
+    const fakeSvc = makeFakePanelService();
+    const actionRequested = vi.fn();
+    const recoveryAction: PanelAction = {
+      action_id: 'recover_exact_execution_evidence',
+      label: 'Recover exact execution evidence',
+      explanation: 'Read one retained Alpaca paper execution.',
+      enabled: true,
+      blockers: [],
+      confirmation: null,
+      revision: 1,
+      concurrency_token: 'historical-token',
+    };
+    const panel: BotPanelView = {
+      ...makePanel(),
+      actions: [recoveryAction],
+      readiness_checks: [makeReadinessCheck(recoveryAction, {
+        evidence: { primary: true },
+        cure: 'Prepare the exact paper execution evidence.',
+      })],
+      readiness_ready_count: 1,
+    };
+
+    await render(OperatorLensComponent, {
+      inputs: {
+        panel,
+        profile: makeProfile(),
+        actionPending: false,
+        broker: 'alpaca',
+        accountId: 'acc-1',
+        sid: 'sid-1',
+      },
+      on: { actionRequested },
+      providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
+    });
+
+    expect(screen.getByText('Recommended action')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: recoveryAction.label }));
+
+    expect(actionRequested).toHaveBeenCalledWith({ action: recoveryAction, reason: null });
+  });
+
+  it('keeps a disabled operator action reason code visible with its current gate', async () => {
     const fakeSvc = makeFakePanelService();
     const blockedExplanation = 'The bot is already stopped with no attributed exposure.';
     const flattenAction: PanelAction = {
@@ -778,6 +820,11 @@ describe('OperatorLensComponent', () => {
     expect(disclosure.getAttribute('aria-expanded')).toBe('true');
 
     expect(await screen.findByRole('button', { name: 'Flatten & stop' })).toBeTruthy();
+    expect(
+      screen.getAllByRole('alert').some((alert) =>
+        alert.textContent?.includes('Bot Already Stopped Flat'),
+      ),
+    ).toBe(true);
     expect(screen.queryByLabelText('Operator commands')).toBeNull();
   });
 });
