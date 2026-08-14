@@ -111,6 +111,62 @@ _SQLITE_TRANSITION_COPY: Final[dict[str, tuple[str, str]]] = {
         "Execution correction recorded",
         "The Account Clerk replaced a prior execution slice with corrected broker evidence.",
     ),
+    "EXECUTION_COVERAGE_QUARANTINED": (
+        "Execution coverage quarantined",
+        "The Account Clerk isolated execution evidence that could not be attributed safely.",
+    ),
+    "EXECUTION_COVERAGE_RESOLVED": (
+        "Execution coverage resolved",
+        "Verified evidence resolved the execution-coverage quarantine.",
+    ),
+    "CUSTODY_SUBJECT_REGISTERED": (
+        "Custody subject registered",
+        "The Account Clerk registered an account-scoped subject for durable custody.",
+    ),
+    "MANUAL_TICKET_RESERVED": (
+        "Manual ticket reserved",
+        "The Account Clerk reserved a manual order ticket without contacting the broker.",
+    ),
+    "MANUAL_ORDER_ACCEPTED": (
+        "Manual order accepted",
+        "The Account Clerk accepted a qualified manual order for broker submission.",
+    ),
+    "MANUAL_ORDER_FILLED": (
+        "Manual order fill recorded",
+        "The Account Clerk recorded broker-authored fill evidence for the manual order.",
+    ),
+    "MANUAL_TICKET_PAUSED_UNKNOWN": (
+        "Manual ticket paused",
+        "The manual ticket is paused because the broker outcome is not yet proven.",
+    ),
+    "MANUAL_TICKET_COMPLETED": (
+        "Manual ticket completed",
+        "The Account Clerk proved the manual ticket reached its completed state.",
+    ),
+    "MANUAL_TICKET_CANCELED": (
+        "Manual ticket canceled",
+        "The Account Clerk proved the manual ticket reached its canceled state.",
+    ),
+    "MANUAL_ORDER_CANCEL_ACCEPTED": (
+        "Manual cancellation accepted",
+        "The Account Clerk accepted a request to cancel the verified manual order.",
+    ),
+    "MANUAL_ORDER_CANCELED": (
+        "Manual order canceled",
+        "Broker evidence proved the manual order was canceled.",
+    ),
+    "MANUAL_ORDER_TERMINAL": (
+        "Manual order terminal",
+        "Broker evidence proved the manual order was already in a terminal state.",
+    ),
+    "MANUAL_ORDER_CANCEL_CONFIRMED": (
+        "Manual cancellation confirmed",
+        "The broker confirmed the manual order cancellation.",
+    ),
+    "MANUAL_ORDER_CANCEL_TERMINAL": (
+        "Manual cancellation target terminal",
+        "The cancellation target had already reached a terminal broker state.",
+    ),
     "EXTERNAL_ORDER_OBSERVED": (
         "External order observed",
         "The Account Clerk recorded an order outside the configured bot namespaces.",

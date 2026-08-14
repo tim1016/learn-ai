@@ -106,6 +106,7 @@ class _Read:
 
 def _activity(
     *,
+    activity_id: str = EXECUTION_ID,
     quantity: float = 5.0,
     price: float = 100.0,
     native_order_id: str = "alpaca-order-5",
@@ -113,7 +114,7 @@ def _activity(
 ) -> BrokerActivity:
     return BrokerActivity(
         broker="alpaca",
-        activity_id=EXECUTION_ID,
+        activity_id=activity_id,
         native_order_id=native_order_id,
         activity_type="FILL",
         category="trade_activity",
@@ -408,7 +409,7 @@ async def test_historical_exact_execution_recovery_prepares_confirms_and_replays
     try:
         context, action = _recovery_action(repo)
         before = repo.control_meta_snapshot().control_revision
-        read = _Read(activities=[_activity()])
+        read = _Read(activities=[_activity(activity_id=f"20260813151906351::{EXECUTION_ID}")])
         plan = await prepare_historical_execution_recovery(
             repo=repo,
             read=read,
@@ -649,6 +650,10 @@ async def test_historical_exact_execution_recovery_rejects_a_stale_clerk_plan(
     ("read", "reason"),
     [
         (_Read(activities=[],), "EXECUTION_ACTIVITY_NOT_FOUND"),
+        (
+            _Read(activities=[_activity(activity_id=f"invalid::{EXECUTION_ID}")]),
+            "EXECUTION_ACTIVITY_NOT_FOUND",
+        ),
         (_Read(activities=[_activity(), _activity()]), "EXECUTION_ACTIVITY_AMBIGUOUS"),
         (_Read(activities=[_activity(native_order_id="other-order")]), "EXECUTION_ORDER_MISMATCH"),
         (_Read(activities=[_activity(symbol="QQQ")]), "EXECUTION_SYMBOL_MISMATCH"),

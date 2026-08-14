@@ -57,7 +57,10 @@ def read_order_details(
         "ORDER BY sequence ASC",
         unique_refs,
     ).fetchall()
-    legs: dict[str, tuple[str, str, float, str, float | None, str]] = {}
+    legs: dict[
+        str,
+        tuple[str, str, float, str | None, float | None, str | None],
+    ] = {}
     for row in fact_rows:
         candidate = _order_leg_from_facts(
             order_ref=row["order_ref"],
@@ -176,20 +179,17 @@ def _order_leg_from_facts(
     order_ref: str,
     transition_kind: str,
     facts_json: str,
-) -> tuple[str, str, float, str, float | None, str]:
+) -> tuple[str, str, float, str | None, float | None, str | None]:
     try:
         facts = json.loads(facts_json)
-        raw_leg = (
-            facts["leg"]
-            if transition_kind in {"ENTER_ACCEPTED", "MANUAL_ORDER_ACCEPTED"}
-            else facts
-        )
+        is_reducing_exit = transition_kind == "EXIT_REDUCING_ORDER_CREATED"
+        raw_leg = facts if is_reducing_exit else facts["leg"]
         symbol = raw_leg["symbol"]
         side = raw_leg["side"]
         quantity = raw_leg["quantity"]
-        order_type = raw_leg["order_type"]
-        limit_price = raw_leg.get("limit_price")
-        time_in_force = raw_leg["time_in_force"]
+        order_type = None if is_reducing_exit else raw_leg["order_type"]
+        limit_price = None if is_reducing_exit else raw_leg.get("limit_price")
+        time_in_force = None if is_reducing_exit else raw_leg["time_in_force"]
     except (KeyError, TypeError, json.JSONDecodeError) as exc:
         raise OrderProjectionReadError(
             f"SQLite order {order_ref!r} has malformed {transition_kind} facts"
@@ -203,8 +203,13 @@ def _order_leg_from_facts(
         or not isinstance(quantity, (int, float))
         or not math.isfinite(quantity)
         or quantity <= 0
-        or not isinstance(order_type, str)
-        or order_type.lower() not in {"market", "limit"}
+        or (
+            not is_reducing_exit
+            and (
+                not isinstance(order_type, str)
+                or order_type.lower() not in {"market", "limit"}
+            )
+        )
         or (
             limit_price is not None
             and (
@@ -214,8 +219,13 @@ def _order_leg_from_facts(
                 or limit_price <= 0
             )
         )
-        or not isinstance(time_in_force, str)
-        or time_in_force.lower() not in {"day", "gtc"}
+        or (
+            not is_reducing_exit
+            and (
+                not isinstance(time_in_force, str)
+                or time_in_force.lower() not in {"day", "gtc"}
+            )
+        )
     ):
         raise OrderProjectionReadError(
             f"SQLite order {order_ref!r} has invalid immutable leg values"
@@ -224,9 +234,9 @@ def _order_leg_from_facts(
         symbol.upper(),
         side.lower(),
         float(quantity),
-        order_type.lower(),
+        None if order_type is None else order_type.lower(),
         None if limit_price is None else float(limit_price),
-        time_in_force.lower(),
+        None if time_in_force is None else time_in_force.lower(),
     )
 
 

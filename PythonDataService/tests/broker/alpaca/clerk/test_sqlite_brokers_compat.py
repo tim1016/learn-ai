@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import httpx
 import pytest
@@ -15,11 +15,13 @@ from app.broker.alpaca.clerk.active_authority import (
     set_active_clerk_runtime,
 )
 from app.broker.alpaca.clerk.models import ChannelHealth
+from app.broker.alpaca.clerk.sqlite.projection_errors import ProjectionReadError
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.sqlite.uncertainty import raise_uncertainty
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
 from app.config import settings
+from app.routers import brokers as brokers_router
 from app.routers.brokers import router
 from app.security.data_plane_control import CONTROL_SECRET_HEADER
 
@@ -122,6 +124,36 @@ async def test_existing_reads_project_active_sqlite_authority(sqlite_desk: FastA
     assert diagnosis.json()["in_sync"] is False
     assert diagnosis.json()["resolvable"] is False
     assert diagnosis.json()["divergences"][0]["kind"] == "needs_review"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/brokers/alpaca/clerk/status",
+        "/api/brokers/alpaca/clerk/custody-diagnosis",
+    ],
+)
+async def test_existing_reads_map_sqlite_projection_failures_to_typed_unavailable(
+    sqlite_desk: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+) -> None:
+    def unreadable_projection(**_kwargs: Any) -> NoReturn:
+        raise ProjectionReadError("simulated malformed durable projection")
+
+    monkeypatch.setattr(brokers_router, "sqlite_projection", unreadable_projection)
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=sqlite_desk), base_url="http://test"
+    ) as client:
+        response = await client.get(path)
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == {
+        "reason": "sqlite_projection_unavailable",
+        "message": "The Account Clerk order record could not be read safely.",
+        "next_step": "Keep broker actions blocked and retry after the Clerk projection is repaired.",
+    }
 
 
 @pytest.mark.asyncio
