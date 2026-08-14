@@ -136,6 +136,7 @@ def _raise_http(error: BrokerError) -> NoReturn:
 
 
 def _sqlite_projection_unavailable() -> HTTPException:
+    """Build the stable fail-closed response shared by retained broker reads."""
     return HTTPException(
         status_code=503,
         detail={
