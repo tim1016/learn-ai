@@ -19,6 +19,31 @@ unproven Flatten. See
 `docs/references/alpaca-sqlite-clerk-recovery-language.md` for the wording matrix and
 `docs/runbooks/alpaca-sqlite-clerk-recovery-and-cutover.md` for the offline subprocedure.
 
+## SQLite manual paper tickets
+
+The Alpaca Account Desk is the only manual-order entry point when its selected
+authority is SQLite. Manual trading is paper-only and remains unavailable until
+the server enables `ALPACA_SQLITE_MANUAL_TRADING_ENABLED` after qualification.
+The browser supplies stable ticket and leg UUIDs, but Python supplies the trusted
+operator identity, validates the preview again at confirmation, and records the
+SQLite intent before it contacts Alpaca. Do not use the generic `/orders` route,
+the broker console, or a bot action to work around a disabled manual capability.
+
+- A ticket may contain one to eight immutable market or limit legs with `DAY` or
+  `GTC` time in force. Legs are serial, not atomic: the next leg requires its
+  own durable confirmation.
+- A broker-acknowledged leg may permit the next leg. An unknown result pauses the
+  ticket; reconcile the exact order, refresh the backend preview, and explicitly
+  choose **Continue remaining legs**. Never submit a replacement ticket for an
+  unknown result.
+- **Cancel ticket** only requests cancellation for verified working manual orders.
+  It never targets bot or foreign orders, and it retires never-activated legs
+  locally without broker contact.
+- Account transaction history and FIFO reconciliation identify these rows as
+  `manual` with the immutable manual custody subject. Bot catalog, panel, and
+  strategy P&L remain strategy-scoped and therefore do not include manual
+  attribution.
+
 `Prepare safe flatten` refreshes the backend policy and displays a read-only,
 versioned plan: each nonzero attributed position, the closing side and exact
 quantity, its evidence time, and the authority/reconciliation identities that

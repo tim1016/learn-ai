@@ -29,7 +29,6 @@ from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.engine.live.order_identity import (
     OwnershipRung,
     build_bot_order_namespace,
-    build_manual_order_namespace,
     classify_ownership,
 )
 from app.schemas.clerk_transaction_projection import (
@@ -779,8 +778,6 @@ def _summary_row(
 ) -> ClerkTransactionSummaryRow:
     economic_orders = _economic_orders(operation)
     order = (economic_orders or operation.orders)[0] if operation.orders else None
-    if operation.run_id is None:
-        raise RuntimeError("SQLite broker operation is missing its lifecycle run identity")
     executions = tuple(
         execution
         for projected_order in economic_orders
@@ -797,7 +794,17 @@ def _summary_row(
         transaction_origin=classify_transaction_origin(
             order_ref=(order.order_ref if order is not None else None),
             strategy_instance_id=operation.strategy_instance_id,
+            custody_subject_kind=operation.custody_subject_kind,
         ),
+        order_instruction=ClerkOrderInstruction(
+            symbol=(order.symbol if order is not None else None),
+            action=(order.side if order is not None else None),
+            quantity=(order.quantity if order is not None else None),
+            order_type=(order.order_type if order is not None else None),
+            limit_price=(order.limit_price if order is not None else None),
+            time_in_force=(order.time_in_force if order is not None else None),
+        ),
+        subject_id=operation.subject_id,
         strategy_instance_id=operation.strategy_instance_id,
         run_id=operation.run_id,
         intent_id=operation.command.command_id,
@@ -866,6 +873,7 @@ def _detail_row(
         receipt={
             "effect_operation_id": operation.effect_operation_id,
             "command_id": operation.command.command_id,
+            "subject_id": operation.subject_id,
             "custody_owner": operation.custody_owner,
             "terminal_receipt_id": operation.terminal_receipt_id,
             "order_refs": [item.order_ref for item in operation.orders],
@@ -924,15 +932,18 @@ def classify_transaction_origin(
     *,
     order_ref: str | None,
     strategy_instance_id: str | None,
+    custody_subject_kind: str | None = None,
     external_observation: bool = False,
 ) -> TransactionOrigin:
-    """Classify the order only through the canonical ownership ladder.
+    """Classify a materialized operation through durable ownership evidence.
 
-    The service intentionally never uses prefix checks or string fragments to
-    label an operator-facing row.  A foreign broker observation is explicitly
-    supplied by the external-order fold; a failed ownership ladder without
-    that observation remains ``unknown`` and must retain its safety hold.
+    A v9 ``MANUAL_OPERATOR`` subject is the canonical manual identity; bot
+    origin still requires the exact order-namespace ownership ladder. A
+    foreign broker observation is explicitly supplied by the external-order
+    fold; absent either proof the row remains ``unknown``.
     """
+    if custody_subject_kind == "MANUAL_OPERATOR":
+        return "manual"
     strategy_namespaces = (
         frozenset({build_bot_order_namespace(strategy_instance_id)})
         if strategy_instance_id is not None
@@ -940,8 +951,6 @@ def classify_transaction_origin(
     )
     if _ownership_matches(order_ref, strategy_namespaces):
         return "strategy"
-    if _ownership_matches(order_ref, frozenset({build_manual_order_namespace("operator")})):
-        return "manual"
     return "external" if external_observation else "unknown"
 
 

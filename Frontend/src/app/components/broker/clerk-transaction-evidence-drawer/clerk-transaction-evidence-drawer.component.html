@@ -35,7 +35,11 @@
         <div><dt>Broker</dt><dd>{{ receipt.broker | receiptLabel }}</dd></div>
         <div><dt>Origin</dt><dd>{{ (receipt.transaction_origin ?? 'manual') | receiptLabel }}</dd></div>
         <div><dt>Custody account</dt><dd><code>{{ receipt.account_id }}</code></dd></div>
-        <div><dt>Custody manager</dt><dd><code>{{ receipt.strategy_instance_id ?? 'Not recorded' }}</code></dd></div>
+        @if (receipt.subject_id; as subjectId) {
+          <div><dt>Custody subject</dt><dd><code>{{ subjectId }}</code></dd></div>
+        } @else {
+          <div><dt>Custody manager</dt><dd><code>{{ receipt.strategy_instance_id ?? 'Not recorded' }}</code></dd></div>
+        }
         <div><dt>Manager run</dt><dd><code>{{ receipt.run_id ?? 'Not recorded' }}</code></dd></div>
         <div><dt>Intent</dt><dd><code>{{ receipt.intent_id ?? 'Not recorded' }}</code></dd></div>
         <div><dt>Commission</dt><dd>{{ receipt.commission_status | receiptLabel }}</dd></div>

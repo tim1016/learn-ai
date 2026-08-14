@@ -463,7 +463,8 @@ class SqliteClerkProjectionReader:
             self._verify_identity()
             rows = self._conn.execute(
                 "SELECT e.effect_operation_id, e.kind, e.state, e.custody_owner, "
-                "e.strategy_instance_id, e.run_id, e.created_at_ms, e.updated_at_ms, "
+                "e.subject_id, subject.kind AS custody_subject_kind, e.strategy_instance_id, e.run_id, "
+                "e.created_at_ms, e.updated_at_ms, "
                 "e.terminal_receipt_id, c.command_id, c.kind AS command_kind, "
                 "c.action, c.state AS command_state, c.run_id AS command_run_id, "
                 "c.receipt_id, c.created_at_ms AS command_created_at_ms, "
@@ -474,6 +475,7 @@ class SqliteClerkProjectionReader:
                 "(SELECT COUNT(*) FROM custody_transitions t "
                 "WHERE t.effect_operation_id = e.effect_operation_id) AS transition_count "
                 "FROM effect_operations e "
+                "LEFT JOIN custody_subjects subject ON subject.subject_id = e.subject_id "
                 "JOIN commands c ON c.command_id = e.command_id "
                 f"WHERE e.effect_operation_id IN ({placeholders})",
                 operation_ids,
@@ -564,6 +566,8 @@ class SqliteClerkProjectionReader:
                     updated_at_ms=row["command_updated_at_ms"],
                 ),
                 orders=orders_by_operation.get(row["effect_operation_id"], ()),
+                subject_id=row["subject_id"],
+                custody_subject_kind=row["custody_subject_kind"],
             )
             for row in rows
         )
@@ -628,7 +632,8 @@ class SqliteClerkProjectionReader:
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         return self._conn.execute(
             "SELECT e.effect_operation_id, e.kind, e.state, e.custody_owner, "
-            "e.strategy_instance_id, e.run_id, e.created_at_ms, e.updated_at_ms, "
+            "e.subject_id, subject.kind AS custody_subject_kind, e.strategy_instance_id, e.run_id, "
+            "e.created_at_ms, e.updated_at_ms, "
             "e.terminal_receipt_id, c.command_id, c.kind AS command_kind, "
             "c.action, c.state AS command_state, c.run_id AS command_run_id, "
             "c.receipt_id, c.created_at_ms AS command_created_at_ms, "
@@ -639,6 +644,7 @@ class SqliteClerkProjectionReader:
             "(SELECT COUNT(*) FROM custody_transitions t "
             "WHERE t.effect_operation_id = e.effect_operation_id) AS transition_count "
             "FROM effect_operations e "
+            "LEFT JOIN custody_subjects subject ON subject.subject_id = e.subject_id "
             f"JOIN commands c ON c.command_id = e.command_id {where} "
             "ORDER BY e.created_at_ms DESC, e.effect_operation_id DESC LIMIT ?",
             (*parameters, limit),

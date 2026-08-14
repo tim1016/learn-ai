@@ -10972,6 +10972,8 @@ export interface components {
             run_id?: string | null;
             /** Strategy Instance Id */
             strategy_instance_id?: string | null;
+            /** Subject Id */
+            subject_id?: string | null;
             /** Transaction Id */
             transaction_id: string;
             /** Transaction Kind */
@@ -11039,6 +11041,8 @@ export interface components {
             run_id?: string | null;
             /** Strategy Instance Id */
             strategy_instance_id?: string | null;
+            /** Subject Id */
+            subject_id?: string | null;
             /** Transaction Id */
             transaction_id: string;
             /** Transaction Kind */

@@ -29,6 +29,9 @@ class ProjectedOrderDetails:
     symbol: str | None
     side: str | None
     quantity: float | None
+    order_type: str | None
+    limit_price: float | None
+    time_in_force: str | None
     filled_quantity: float
 
 
@@ -49,11 +52,12 @@ def read_order_details(
     fact_rows = conn.execute(
         "SELECT order_ref, transition_kind, facts_json FROM custody_transitions "
         f"WHERE order_ref IN ({placeholders}) "
-        "AND transition_kind IN ('ENTER_ACCEPTED', 'EXIT_REDUCING_ORDER_CREATED') "
+        "AND transition_kind IN "
+        "('ENTER_ACCEPTED', 'EXIT_REDUCING_ORDER_CREATED', 'MANUAL_ORDER_ACCEPTED') "
         "ORDER BY sequence ASC",
         unique_refs,
     ).fetchall()
-    legs: dict[str, tuple[str, str, float]] = {}
+    legs: dict[str, tuple[str, str, float, str, float | None, str]] = {}
     for row in fact_rows:
         candidate = _order_leg_from_facts(
             order_ref=row["order_ref"],
@@ -79,7 +83,7 @@ def read_order_details(
     }
     return {
         order_ref: ProjectedOrderDetails(
-            *legs.get(order_ref, (None, None, None)),
+            *legs.get(order_ref, (None, None, None, None, None, None)),
             filled_quantities.get(order_ref, 0.0),
         )
         for order_ref in unique_refs
@@ -101,10 +105,12 @@ def read_orders_by_operation(
         "SELECT effect_operation_id, order_ref FROM operation_order_links "
         f"WHERE effect_operation_id IN ({placeholders}) UNION "
         "SELECT effect_operation_id, order_ref FROM orders "
+        f"WHERE effect_operation_id IN ({placeholders}) UNION "
+        "SELECT effect_operation_id, order_ref FROM manual_order_cancellations "
         f"WHERE effect_operation_id IN ({placeholders})"
         ") owner ON owner.order_ref = o.order_ref "
         "ORDER BY o.updated_at_ms ASC, o.order_ref ASC",
-        (*operation_ids, *operation_ids),
+        (*operation_ids, *operation_ids, *operation_ids),
     ).fetchall()
     details = read_order_details(conn, tuple(row["order_ref"] for row in rows))
     grouped: dict[str, list[ProjectedOrder]] = {
@@ -124,6 +130,9 @@ def read_orders_by_operation(
                 symbol=detail.symbol,
                 side=detail.side,
                 quantity=detail.quantity,
+                order_type=detail.order_type,
+                limit_price=detail.limit_price,
+                time_in_force=detail.time_in_force,
                 filled_quantity=detail.filled_quantity,
             )
         )
@@ -153,6 +162,9 @@ def read_current_orders(
             symbol=details[row["order_ref"]].symbol,
             side=details[row["order_ref"]].side,
             quantity=details[row["order_ref"]].quantity,
+            order_type=details[row["order_ref"]].order_type,
+            limit_price=details[row["order_ref"]].limit_price,
+            time_in_force=details[row["order_ref"]].time_in_force,
             filled_quantity=details[row["order_ref"]].filled_quantity,
         )
         for row in rows
@@ -164,13 +176,20 @@ def _order_leg_from_facts(
     order_ref: str,
     transition_kind: str,
     facts_json: str,
-) -> tuple[str, str, float]:
+) -> tuple[str, str, float, str, float | None, str]:
     try:
         facts = json.loads(facts_json)
-        raw_leg = facts["leg"] if transition_kind == "ENTER_ACCEPTED" else facts
+        raw_leg = (
+            facts["leg"]
+            if transition_kind in {"ENTER_ACCEPTED", "MANUAL_ORDER_ACCEPTED"}
+            else facts
+        )
         symbol = raw_leg["symbol"]
         side = raw_leg["side"]
         quantity = raw_leg["quantity"]
+        order_type = raw_leg["order_type"]
+        limit_price = raw_leg.get("limit_price")
+        time_in_force = raw_leg["time_in_force"]
     except (KeyError, TypeError, json.JSONDecodeError) as exc:
         raise OrderProjectionReadError(
             f"SQLite order {order_ref!r} has malformed {transition_kind} facts"
@@ -184,11 +203,31 @@ def _order_leg_from_facts(
         or not isinstance(quantity, (int, float))
         or not math.isfinite(quantity)
         or quantity <= 0
+        or not isinstance(order_type, str)
+        or order_type.lower() not in {"market", "limit"}
+        or (
+            limit_price is not None
+            and (
+                isinstance(limit_price, bool)
+                or not isinstance(limit_price, (int, float))
+                or not math.isfinite(limit_price)
+                or limit_price <= 0
+            )
+        )
+        or not isinstance(time_in_force, str)
+        or time_in_force.lower() not in {"day", "gtc"}
     ):
         raise OrderProjectionReadError(
             f"SQLite order {order_ref!r} has invalid immutable leg values"
         )
-    return symbol.upper(), side.lower(), float(quantity)
+    return (
+        symbol.upper(),
+        side.lower(),
+        float(quantity),
+        order_type.lower(),
+        None if limit_price is None else float(limit_price),
+        time_in_force.lower(),
+    )
 
 
 __all__ = [

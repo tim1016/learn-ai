@@ -53,6 +53,9 @@ class ProjectedOrder:
     symbol: str | None = None
     side: str | None = None
     quantity: float | None = None
+    order_type: str | None = None
+    limit_price: float | None = None
+    time_in_force: str | None = None
     filled_quantity: float | None = None
 
 
@@ -62,7 +65,7 @@ class ProjectedOperation:
     kind: str
     state: str
     custody_owner: str
-    strategy_instance_id: str
+    strategy_instance_id: str | None
     run_id: str | None
     created_at_ms: int
     updated_at_ms: int
@@ -71,6 +74,8 @@ class ProjectedOperation:
     terminal_receipt_id: str | None
     command: ProjectedCommand
     orders: tuple[ProjectedOrder, ...]
+    subject_id: str | None = None
+    custody_subject_kind: str | None = None
 
 
 @dataclass(frozen=True)
