@@ -63,6 +63,10 @@ class Settings(BaseSettings):
     # THIS configured identity to journaled actions. Operator identity is never
     # a request field — no free-text identity input anywhere in the UI.
     PANEL_OPERATOR_IDENTITY: str = "operator"
+    # Manual SQLite custody remains disabled until the paper qualification
+    # ceremony supplies a release receipt. Routes expose the authored reason;
+    # this flag alone never authorizes a live account.
+    ALPACA_SQLITE_MANUAL_TRADING_ENABLED: bool = False
     # Account-level half of the two-key carryover permission. A deployment
     # must also opt in explicitly; the default remains flat-only Resume.
     ALPACA_PAPER_CARRYOVER_ENABLED: bool = False

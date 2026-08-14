@@ -9,6 +9,7 @@ from typing import Any, cast
 from app.broker.alpaca.clerk.models import ClerkEntryKind
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+from app.broker.alpaca.clerk.sqlite.manual_orders import accept_manual_order
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import ReentrantAsyncLock
@@ -234,6 +235,55 @@ async def test_sqlite_websocket_fill_records_exact_execution_and_separate_ack(
         repo.close()
 
 
+async def test_sqlite_websocket_fill_completes_manual_ticket_with_exact_coverage(
+    tmp_path: Path,
+) -> None:
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    accepted = accept_manual_order(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id="operator",
+        ticket_id="7de3a77c-b698-4e0d-a5d1-2f624574ed35",
+        leg_id="09d6d63e-6375-4e6d-8d20-3b1bf70c2465",
+        leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1.0),
+    )
+    assert accepted.leg.effect_operation_id is not None
+    assert accepted.leg.order_ref is not None
+    order = _owned_order(accepted.leg.order_ref, status="filled").model_copy(
+        update={"quantity": 1.0, "filled_quantity": 1.0, "filled_avg_price": 100.25}
+    )
+    try:
+        await _sqlite_sink(repo).record_lifecycle_event(
+            client_order_id=accepted.leg.order_ref,
+            event=BrokerOrderEvent(
+                event_type="fill",
+                occurred_at_ms=1_700_000_000_050,
+                price=100.25,
+                quantity=1.0,
+                execution_id="manual-exec-001",
+            ),
+            event_key="exec:manual-exec-001",
+            order=order,
+            recovery_source=None,
+            recovery_window_limit=None,
+        )
+
+        ticket = repo.manual_order_ticket(accepted.ticket.ticket_id)
+        assert ticket is not None
+        assert ticket.state == "COMPLETED"
+        assert ticket.legs[0].state == "SUCCEEDED"
+        command = repo.get_command(accepted.command.command_id)
+        assert command is not None and command.state == "succeeded"
+        assert command.receipt_id == f"receipt:{accepted.leg.effect_operation_id}"
+        assert repo.attributed_positions_for_subject(ticket.subject_id) == {"SPY": 1.0}
+        assert repo.has_order_transition(
+            order_ref=accepted.leg.order_ref,
+            transition_kind="MANUAL_ORDER_FILLED",
+        )
+    finally:
+        repo.close()
+
+
 async def test_sqlite_unexplained_trade_update_records_external_order_without_a_bot_fill(
     tmp_path: Path,
 ) -> None:
@@ -355,6 +405,116 @@ async def test_sqlite_rest_recovery_folds_cumulative_fill_without_fabricating_an
         repo.close()
 
 
+async def test_manual_rest_recovery_and_later_exact_evidence_stay_subject_scoped(
+    tmp_path: Path,
+) -> None:
+    """Manual recovery cannot fall through a bot-only coverage-conflict path."""
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    accepted = accept_manual_order(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id="operator",
+        ticket_id="7de3a77c-b698-4e0d-a5d1-2f624574ed35",
+        leg_id="09d6d63e-6375-4e6d-8d20-3b1bf70c2465",
+        leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1.0),
+    )
+    assert accepted.leg.effect_operation_id is not None
+    assert accepted.leg.order_ref is not None
+    recovered = _owned_order(accepted.leg.order_ref).model_copy(
+        update={"quantity": 1.0, "filled_quantity": 1.0, "filled_avg_price": 101.0}
+    )
+    try:
+        fold_order_evidence(
+            repo,
+            effect_operation_id=accepted.leg.effect_operation_id,
+            order=recovered,
+        )
+        assert repo.attributed_positions_for_subject(accepted.ticket.subject_id) == {"SPY": 1.0}
+
+        await _sqlite_sink(repo).record_lifecycle_event(
+            client_order_id=accepted.leg.order_ref,
+            event=BrokerOrderEvent(
+                event_type="fill",
+                occurred_at_ms=1_700_000_000_150,
+                price=101.0,
+                quantity=1.0,
+                execution_id="manual-exact-after-recovery",
+            ),
+            event_key="exec:manual-exact-after-recovery",
+            order=recovered,
+            recovery_source=None,
+            recovery_window_limit=None,
+        )
+
+        assert len(repo.fills_for_order(accepted.leg.order_ref)) == 1
+        uncertainty = repo.active_uncertainties_for_admission(subject_id=accepted.ticket.subject_id)
+        assert len(uncertainty) == 1
+        assert uncertainty[0]["scope"] == "CUSTODY_SUBJECT"
+        admission = decide_capability(
+            repo,
+            capability=Capability.NEW_EXPOSURE,
+            subject_id=accepted.ticket.subject_id,
+        )
+        assert admission.allowed is False
+        assert admission.reason_code == EXECUTION_COVERAGE_CONFLICT_REASON_CODE
+    finally:
+        repo.close()
+
+
+async def test_manual_changed_execution_redelivery_raises_one_subject_conflict(
+    tmp_path: Path,
+) -> None:
+    """A changed manual execution ID is never silently discarded as a replay."""
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    accepted = accept_manual_order(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id="operator",
+        ticket_id="7de3a77c-b698-4e0d-a5d1-2f624574ed35",
+        leg_id="09d6d63e-6375-4e6d-8d20-3b1bf70c2465",
+        leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1.0),
+    )
+    assert accepted.leg.order_ref is not None
+    original = BrokerOrderEvent(
+        event_type="fill",
+        occurred_at_ms=1_700_000_000_050,
+        price=100.0,
+        quantity=1.0,
+        execution_id="manual-changed-redelivery",
+    )
+    changed = original.model_copy(update={"occurred_at_ms": 1_700_000_000_051, "price": 101.0})
+    try:
+        sink = _sqlite_sink(repo)
+        await sink.record_lifecycle_event(
+            client_order_id=accepted.leg.order_ref,
+            event=original,
+            event_key="exec:manual-changed-redelivery:original",
+            order=_owned_order(accepted.leg.order_ref, status="filled").model_copy(
+                update={"quantity": 1.0, "filled_quantity": 1.0, "filled_avg_price": 100.0}
+            ),
+            recovery_source=None,
+            recovery_window_limit=None,
+        )
+        await sink.record_lifecycle_event(
+            client_order_id=accepted.leg.order_ref,
+            event=changed,
+            event_key="exec:manual-changed-redelivery:changed",
+            order=_owned_order(accepted.leg.order_ref, status="filled").model_copy(
+                update={"quantity": 1.0, "filled_quantity": 1.0, "filled_avg_price": 101.0}
+            ),
+            recovery_source=None,
+            recovery_window_limit=None,
+        )
+
+        assert len(repo.fills_for_order(accepted.leg.order_ref)) == 1
+        assert repo.attributed_positions_for_subject(accepted.ticket.subject_id) == {"SPY": 1.0}
+        uncertainty = repo.active_uncertainties_for_admission(subject_id=accepted.ticket.subject_id)
+        assert len(uncertainty) == 1
+        assert uncertainty[0]["reason_code"] == EXECUTION_COVERAGE_CONFLICT_REASON_CODE
+    finally:
+        repo.close()
+
+
 async def test_sqlite_changed_execution_redelivery_raises_one_coverage_conflict(
     tmp_path: Path,
 ) -> None:
@@ -458,7 +618,7 @@ async def test_sqlite_late_exact_execution_after_recovery_is_fenced_across_resta
             transition["transition_kind"] for transition in repo.transitions_for_order(order_ref)
         ]
         assert "EXECUTION_SLICE_FILLED" not in transition_kinds
-        assert transition_kinds.count("UNCERTAINTY_RAISED") == 1
+        assert transition_kinds.count("EXECUTION_COVERAGE_QUARANTINED") == 1
         admission = decide_capability(
             repo,
             capability=Capability.NEW_EXPOSURE,

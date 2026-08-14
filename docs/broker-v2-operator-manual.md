@@ -19,6 +19,31 @@ unproven Flatten. See
 `docs/references/alpaca-sqlite-clerk-recovery-language.md` for the wording matrix and
 `docs/runbooks/alpaca-sqlite-clerk-recovery-and-cutover.md` for the offline subprocedure.
 
+## SQLite manual paper tickets
+
+The Alpaca Account Desk is the only manual-order entry point when its selected
+authority is SQLite. Manual trading is paper-only and remains unavailable until
+the server enables `ALPACA_SQLITE_MANUAL_TRADING_ENABLED` after qualification.
+The browser supplies stable ticket and leg UUIDs, but Python supplies the trusted
+operator identity, validates the preview again at confirmation, and records the
+SQLite intent before it contacts Alpaca. Do not use the generic `/orders` route,
+the broker console, or a bot action to work around a disabled manual capability.
+
+- A ticket may contain one to eight immutable market or limit legs with `DAY` or
+  `GTC` time in force. Legs are serial, not atomic: the next leg requires its
+  own durable confirmation.
+- A broker-acknowledged leg may permit the next leg. An unknown result pauses the
+  ticket; reconcile the exact order, refresh the backend preview, and explicitly
+  choose **Continue remaining legs**. Never submit a replacement ticket for an
+  unknown result.
+- **Cancel ticket** only requests cancellation for verified working manual orders.
+  It never targets bot or foreign orders, and it retires never-activated legs
+  locally without broker contact.
+- Account transaction history and FIFO reconciliation identify these rows as
+  `manual` with the immutable manual custody subject. Bot catalog, panel, and
+  strategy P&L remain strategy-scoped and therefore do not include manual
+  attribution.
+
 `Prepare safe flatten` refreshes the backend policy and displays a read-only,
 versioned plan: each nonzero attributed position, the closing side and exact
 quantity, its evidence time, and the authority/reconciliation identities that
@@ -27,6 +52,42 @@ evidence changes, prepare again; a future reduction operation may not reuse the
 old plan version. The backend only prepares one after a complete working-order
 check and an account-wide reconciliation that is at least as new as every
 included position.
+
+### Manual paper qualification release gate
+
+The feature flag remains disabled until both gates below are complete. A passing
+automated report is deliberately not a production activation receipt.
+
+1. Run the broker-free deterministic matrix from `PythonDataService/` and archive
+   its JSON and Markdown outputs in the dated release audit:
+
+   ```bash
+   .venv/bin/python -m scripts.run_manual_order_qualification \
+     --json-output /secured-audit/2026-08-13/manual-pre-live.json \
+     --markdown-output /secured-audit/2026-08-13/manual-pre-live.md
+   ```
+
+   The report must say `PRE_LIVE_REHEARSAL_PASSED`, `live_environment_status`
+   `NOT_RUN`, and `release_gate_status` `PENDING_DATED_PAPER_CEREMONY`.
+
+2. On the selected paper authority, obtain a fresh process-stop proof and run the
+   offline v8-to-v9 ceremony. Archive the upgrade receipt. For the supervised
+   Account Desk sequence only, temporarily set
+   `ALPACA_SQLITE_MANUAL_TRADING_ENABLED=true` on that selected paper deployment
+   after verifying its Alpaca account mode is `paper`, its control-plane
+   credential is present, and the operator has recorded the ceremony start time.
+   Never perform this temporary enablement against a live account. Perform the
+   one-share buy/fill, manual-owned sell/flatten, resting limit/cancel, duplicate
+   confirmation/reload, accepted-before-ack restart, partial-fill restart,
+   reconnect/reconciliation, coverage recovery, and bot-start admission after
+   terminal reconciliation; then disable the flag again and archive the dated
+   receipt. Each row must bind the Alpaca order ID, Clerk order reference and
+   transition, mirror/hash head, position/FIFO/account-history observation, and
+   start-admission result.
+
+Only after that dated audit has every required receipt may a paper deployment
+set `ALPACA_SQLITE_MANUAL_TRADING_ENABLED=true`. Do not enable it for a live
+account, and do not replace a missing paper receipt with a test result.
 
 ---
 

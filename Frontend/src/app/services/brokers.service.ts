@@ -17,6 +17,13 @@ import type {
   CustodyResolutionRequest,
   OrderCancelResult,
   OrderSubmitResult,
+  ManualOrderCapability,
+  ManualOrderCancelRequest,
+  ManualOrderCancellation,
+  ManualOrderPreview,
+  ManualOrderPreviewRequest,
+  ManualOrderSubmitRequest,
+  ManualOrderTicket,
   PortfolioHistoryRange,
   SqliteClerkProjection,
   SqliteRecoveryAction,
@@ -158,6 +165,90 @@ export class BrokersService {
   ): Promise<OrderSubmitResult> {
     return firstValueFrom(
       this.http.post<OrderSubmitResult>(`${this.base}/${broker}/orders`, request),
+    );
+  }
+
+  /** SQLite authority's policy answer for an ordered manual equity ticket. */
+  getSqliteManualOrderCapability(accountId: string): Promise<ManualOrderCapability> {
+    return firstValueFrom(
+      this.http.get<ManualOrderCapability>(
+        `${this.base}/alpaca/accounts/${encodeURIComponent(accountId)}/manual-orders/capability`,
+      ),
+    );
+  }
+
+  previewSqliteManualOrder(
+    accountId: string,
+    request: ManualOrderPreviewRequest,
+  ): Promise<ManualOrderPreview> {
+    return firstValueFrom(
+      this.http.post<ManualOrderPreview>(
+        `${this.base}/alpaca/accounts/${encodeURIComponent(accountId)}/manual-orders/preview`,
+        request,
+      ),
+    );
+  }
+
+  submitSqliteManualOrder(
+    accountId: string,
+    ticketId: string,
+    request: ManualOrderSubmitRequest,
+  ): Promise<ManualOrderTicket> {
+    return firstValueFrom(
+      this.http.put<ManualOrderTicket>(
+        `${this.base}/alpaca/accounts/${encodeURIComponent(accountId)}/manual-order-tickets/${encodeURIComponent(ticketId)}`,
+        request,
+      ),
+    );
+  }
+
+  /** Explicitly activate the next reviewed SQLite manual-ticket leg. */
+  continueSqliteManualOrderTicket(
+    accountId: string,
+    ticketId: string,
+    request: ManualOrderSubmitRequest,
+  ): Promise<ManualOrderTicket> {
+    return firstValueFrom(
+      this.http.post<ManualOrderTicket>(
+        `${this.base}/alpaca/accounts/${encodeURIComponent(accountId)}/manual-order-tickets/${encodeURIComponent(ticketId)}/continue`,
+        request,
+      ),
+    );
+  }
+
+  /** Cancel all verified working orders owned by one manual ticket. */
+  cancelSqliteManualOrderTicket(
+    accountId: string,
+    ticketId: string,
+    request: ManualOrderCancelRequest,
+  ): Promise<ManualOrderTicket> {
+    return firstValueFrom(
+      this.http.post<ManualOrderTicket>(
+        `${this.base}/alpaca/accounts/${encodeURIComponent(accountId)}/manual-order-tickets/${encodeURIComponent(ticketId)}/cancel`,
+        request,
+      ),
+    );
+  }
+
+  getSqliteManualOrderTicket(accountId: string, ticketId: string): Promise<ManualOrderTicket> {
+    return firstValueFrom(
+      this.http.get<ManualOrderTicket>(
+        `${this.base}/alpaca/accounts/${encodeURIComponent(accountId)}/manual-order-tickets/${encodeURIComponent(ticketId)}`,
+      ),
+    );
+  }
+
+  /** Cancel the exact SQLite-owned manual order reference once, durably. */
+  cancelSqliteManualOrder(
+    accountId: string,
+    orderRef: string,
+    request: ManualOrderCancelRequest,
+  ): Promise<ManualOrderCancellation> {
+    return firstValueFrom(
+      this.http.post<ManualOrderCancellation>(
+        `${this.base}/alpaca/accounts/${encodeURIComponent(accountId)}/manual-orders/${encodeURIComponent(orderRef)}/cancel`,
+        request,
+      ),
     );
   }
 

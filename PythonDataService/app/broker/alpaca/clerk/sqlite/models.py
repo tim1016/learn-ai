@@ -10,6 +10,7 @@ connection.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,18 @@ class CommittedTransition:
     row_hash: str
     prev_hash: str
     control_revision: int
+
+
+@dataclass(frozen=True)
+class ExecutionCoverageResolutionReceipt:
+    """Idempotent receipt for one evidence-bound coverage resolution."""
+
+    uncertainty_id: str
+    order_ref: str
+    execution_id: str
+    receipt_id: str
+    recorded_at_ms: int
+    applied: bool
 
 
 @dataclass(frozen=True)
@@ -124,7 +137,8 @@ class CommandResource:
     idempotency_key: str
     payload_hash: str
     kind: str
-    strategy_instance_id: str
+    # Manual-custody commands deliberately do not impersonate a strategy.
+    strategy_instance_id: str | None
     run_id: str | None
     action: str
     intended_end_state: str | None
@@ -153,7 +167,8 @@ class EffectOperationResource:
     authority_generation: int
     idempotency_key: str
     command_id: str
-    strategy_instance_id: str
+    # ``None`` is the durable/manual-custody representation, never a pseudo-bot.
+    strategy_instance_id: str | None
     run_id: str | None
     kind: str
     state: str
@@ -174,6 +189,52 @@ class OrderResource:
     role: str
     broker_state: str | None
     submitted_at_ms: int | None
+    updated_at_ms: int
+
+
+@dataclass(frozen=True)
+class ManualOrderLegResource:
+    """One immutable manual-ticket leg plus its current Clerk resources."""
+
+    ticket_id: str
+    leg_id: str
+    sequence_index: int
+    subject_id: str
+    instruction_hash: str
+    instruction: dict[str, Any] | None
+    command_id: str | None
+    effect_operation_id: str | None
+    order_ref: str | None
+    state: str
+    created_at_ms: int
+    updated_at_ms: int
+
+
+@dataclass(frozen=True)
+class ManualOrderTicketResource:
+    """A replayable manual ticket and all of its independently owned legs."""
+
+    ticket_id: str
+    subject_id: str
+    operator_id: str
+    instruction_hash: str
+    state: str
+    created_at_ms: int
+    updated_at_ms: int
+    legs: tuple[ManualOrderLegResource, ...]
+
+
+@dataclass(frozen=True)
+class ManualOrderCancellationResource:
+    """One immutable cancel identity and its mutable effect state."""
+
+    order_ref: str
+    subject_id: str
+    cancel_request_id: str
+    command_id: str
+    effect_operation_id: str
+    state: str
+    created_at_ms: int
     updated_at_ms: int
 
 

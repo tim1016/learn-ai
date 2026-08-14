@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import date
 from pathlib import Path
 
@@ -10,10 +11,13 @@ import pytest
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
     DEFAULT_RECENT_FILL_LIMIT,
+    EconomicProjectionError,
     EconomicProjectionUnavailable,
     InvalidEconomicCursor,
     MarketMark,
     SqliteEconomicProjectionReader,
+    _to_execution_row,
+    _to_fill_record,
 )
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
 from app.broker.alpaca.clerk.sqlite.facts import (
@@ -24,7 +28,7 @@ from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.models import BrokerOrderLeg
 from app.lean_sidecar.trading_calendar import SessionWindow, session_window_for_date
-from conftest import _clock_at
+from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at
 
 _ACCOUNT_ID = "PA-S2-ECONOMICS"
 _SID = "s2-economic"
@@ -800,6 +804,29 @@ def test_mismatched_effective_fills_and_positions_is_explicitly_unavailable(tmp_
             _snapshot(repo, session=session)
     finally:
         repo.close()
+
+
+def test_fill_projection_conversion_rejects_missing_symbol_evidence() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        fill_row = conn.execute(
+            "SELECT ? AS order_ref, 'BUY' AS side, ? AS strategy_instance_id, "
+            "'fill-without-symbol' AS fill_id, NULL AS symbol",
+            ("manual/operator/v1:intent", _SID),
+        ).fetchone()
+        execution_row = conn.execute(
+            "SELECT 'fill-without-symbol' AS fill_id, 'BUY' AS side, NULL AS symbol"
+        ).fetchone()
+        assert fill_row is not None
+        assert execution_row is not None
+
+        with pytest.raises(EconomicProjectionError, match="no owned or manual symbol evidence"):
+            _to_fill_record(fill_row, account_id=_ACCOUNT_ID)
+        with pytest.raises(EconomicProjectionError, match="no owned or manual symbol evidence"):
+            _to_execution_row(execution_row)
+    finally:
+        conn.close()
 
 
 def test_catalog_rollup_returns_one_revision_for_all_requested_bots(

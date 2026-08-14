@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-ClerkScope = Literal["BOT", "ACCOUNT_CLERK"]
+ClerkScope = Literal["CUSTODY_SUBJECT", "ACCOUNT_CLERK"]
 AuthorityHealth = Literal["healthy", "degraded_to_mirror", "failed"]
 EvidenceFreshness = Literal["fresh", "stale", "not_required", "unavailable"]
 
@@ -53,6 +53,9 @@ class ProjectedOrder:
     symbol: str | None = None
     side: str | None = None
     quantity: float | None = None
+    order_type: str | None = None
+    limit_price: float | None = None
+    time_in_force: str | None = None
     filled_quantity: float | None = None
 
 
@@ -62,7 +65,7 @@ class ProjectedOperation:
     kind: str
     state: str
     custody_owner: str
-    strategy_instance_id: str
+    strategy_instance_id: str | None
     run_id: str | None
     created_at_ms: int
     updated_at_ms: int
@@ -71,6 +74,8 @@ class ProjectedOperation:
     terminal_receipt_id: str | None
     command: ProjectedCommand
     orders: tuple[ProjectedOrder, ...]
+    subject_id: str | None = None
+    custody_subject_kind: str | None = None
 
 
 @dataclass(frozen=True)
@@ -108,6 +113,25 @@ class ProjectedUncertainty:
     observed_at_ms: int
     evidence_age_ms: int
     evidence_refs: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ProjectedExecutionCoverageConflict:
+    """Read-only proof material for one quarantined exact execution."""
+
+    uncertainty_id: str
+    order_ref: str
+    execution_id: str
+    cumulative_fill_id: str | None
+    exact_qty: float | None
+    exact_price: float | None
+    exact_side: str | None
+    cumulative_qty: float | None
+    cumulative_price: float | None
+    cumulative_side: str | None
+    proof_available: bool
+    unavailable_reason: str | None
+    execution_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

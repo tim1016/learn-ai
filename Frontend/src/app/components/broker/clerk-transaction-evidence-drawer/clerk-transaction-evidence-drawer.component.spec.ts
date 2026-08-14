@@ -214,6 +214,34 @@ describe('ClerkTransactionEvidenceDrawerComponent', () => {
     expect(instructionHeader.getAttribute('aria-expanded')).toBe('true');
     expect(host.querySelector('.receipt-table')?.textContent).toContain('Requested instruction');
   });
+
+  it('renders the durable manual custody subject instead of inventing a bot manager', async () => {
+    const broker = {
+      accountTransaction: vi.fn().mockResolvedValue(detail(
+        'PA1',
+        'manual-effect',
+        {},
+        [],
+        { subject_id: 'manual-operator:operator-42', strategy_instance_id: null },
+      )),
+    };
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        { provide: BrokerService, useValue: broker },
+      ],
+    });
+    const fixture = TestBed.createComponent(ClerkTransactionEvidenceDrawerComponent);
+    fixture.componentRef.setInput('accountId', 'PA1');
+    fixture.componentRef.setInput('transaction', summary('PA1', 'manual-effect'));
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const text = fixture.nativeElement.textContent ?? '';
+    expect(text).toContain('Custody subject');
+    expect(text).toContain('manual-operator:operator-42');
+  });
 });
 
 function accordionHeader(host: HTMLElement, label: string): HTMLElement {

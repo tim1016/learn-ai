@@ -63,8 +63,8 @@ def repo(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_schema_version_includes_execution_authority_tables() -> None:
-    assert schema.SCHEMA_VERSION == 8
+def test_schema_version_includes_custody_subject_and_cancellation_tables() -> None:
+    assert schema.SCHEMA_VERSION == 11
 
 
 def test_stale_schema_version_fails_closed_on_open(tmp_path: Path) -> None:
@@ -92,50 +92,21 @@ def test_future_schema_version_fails_closed_on_open(tmp_path: Path) -> None:
         ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
 
 
-def test_empty_v6_authority_opens_through_the_complete_v8_upgrade(tmp_path: Path) -> None:
-    """An operationally empty physical v6 file upgrades atomically on open."""
+def test_v8_authority_fails_closed_on_open_until_offline_upgrade(tmp_path: Path) -> None:
+    """No startup path may mutate a v8 authority into v9."""
     clock = _clock_seq()
     r = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
-    r._conn.execute("DROP INDEX ux_fills_execution_id")
-    r._conn.execute("DROP INDEX ux_external_orders_broker_order_id")
-    r._conn.execute("DROP INDEX ix_decision_receipts_strategy_observed_at")
-    r._conn.execute("DROP TABLE decision_receipts")
-    r._conn.execute("DROP TABLE bot_config")
-    r._conn.execute("DROP TABLE external_orders")
-    for column in (
-        "execution_id",
-        "evidence_source",
-        "event_kind",
-        "superseded_execution_ref",
-        "fee",
-        "fee_fidelity",
-        "recorded_transition_sequence",
-    ):
-        r._conn.execute(f"ALTER TABLE fills DROP COLUMN {column}")
-    r._conn.execute("UPDATE control_meta SET schema_version = 6 WHERE id = 1")
+    r._conn.execute("UPDATE control_meta SET schema_version = 8 WHERE id = 1")
     r._conn.commit()
     r.close()
 
-    reopened = ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
-    reopened.close()
+    with pytest.raises(SchemaVersionMismatch, match="offline v8-to-v9 Clerk upgrade"):
+        ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
 
     db_path = tmp_path / "accounts" / "alpaca" / ACCOUNT_ID / "clerk.db"
     conn = sqlite3.connect(db_path)
     try:
-        version = conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0]
-        assert version == 8
-        fills_columns = {row[1] for row in conn.execute("PRAGMA table_info(fills)")}
-        assert {
-            "execution_id",
-            "evidence_source",
-            "event_kind",
-            "superseded_execution_ref",
-            "fee",
-            "fee_fidelity",
-            "recorded_transition_sequence",
-        } <= fills_columns
-        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-        assert {"external_orders", "bot_config", "decision_receipts"} <= tables
+        assert conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0] == 8
     finally:
         conn.close()
 
@@ -226,8 +197,8 @@ def test_genesis_prev_hash_column_is_not_null(repo: ClerkSqliteRepository) -> No
 @pytest.mark.parametrize(
     ("scope", "strategy_instance_id", "should_fail"),
     [
-        ("BOT", None, True),
-        ("BOT", "spy-bot", False),
+        ("CUSTODY_SUBJECT", None, True),
+        ("CUSTODY_SUBJECT", "spy-bot", False),
         ("ACCOUNT_CLERK", "spy-bot", True),
         ("ACCOUNT_CLERK", None, False),
     ],
@@ -236,23 +207,23 @@ def test_holds_scope_strategy_instance_coupling(
     repo: ClerkSqliteRepository, scope: str, strategy_instance_id: str | None, should_fail: bool
 ) -> None:
     stmt = (
-        "INSERT INTO holds (hold_id, scope, strategy_instance_id, reason_code, state, "
+        "INSERT INTO holds (hold_id, scope, subject_id, strategy_instance_id, reason_code, state, "
         "opened_at_ms, resolved_at_ms, evidence_refs_json) "
-        "VALUES ('h1', ?, ?, 'r', 'ACTIVE', 1, NULL, NULL)"
+        "VALUES ('h1', ?, ?, ?, 'r', 'ACTIVE', 1, NULL, NULL)"
     )
     if should_fail:
         with pytest.raises(sqlite3.IntegrityError):
-            repo._conn.execute(stmt, (scope, strategy_instance_id))
+            repo._conn.execute(stmt, (scope, f"bot:{strategy_instance_id}" if strategy_instance_id else None, strategy_instance_id))
     else:
-        repo._conn.execute(stmt, (scope, strategy_instance_id))
+        repo._conn.execute(stmt, (scope, f"bot:{strategy_instance_id}" if strategy_instance_id else None, strategy_instance_id))
         repo._conn.commit()
 
 
 @pytest.mark.parametrize(
     ("scope", "strategy_instance_id", "should_fail"),
     [
-        ("BOT", None, True),
-        ("BOT", "spy-bot", False),
+        ("CUSTODY_SUBJECT", None, True),
+        ("CUSTODY_SUBJECT", "spy-bot", False),
         ("ACCOUNT_CLERK", "spy-bot", True),
         ("ACCOUNT_CLERK", None, False),
     ],
@@ -262,16 +233,16 @@ def test_uncertainties_scope_strategy_instance_coupling(
 ) -> None:
     stmt = (
         "INSERT INTO uncertainties (uncertainty_id, scope, severity, blocks_new_exposure, "
-        "allows_reduction, strategy_instance_id, reason_code, headline, explanation, "
+        "allows_reduction, subject_id, strategy_instance_id, reason_code, headline, explanation, "
         "operator_impact, next_step, observed_at_ms, resolved_at_ms, evidence_refs_json, "
         "facts_schema_version, facts_json) "
-        "VALUES ('u1', ?, 'HIGH', 0, 1, ?, 'r', 'h', 'e', 'oi', 'ns', 1, NULL, NULL, 1, '{}')"
+        "VALUES ('u1', ?, 'HIGH', 0, 1, ?, ?, 'r', 'h', 'e', 'oi', 'ns', 1, NULL, NULL, 1, '{}')"
     )
     if should_fail:
         with pytest.raises(sqlite3.IntegrityError):
-            repo._conn.execute(stmt, (scope, strategy_instance_id))
+            repo._conn.execute(stmt, (scope, f"bot:{strategy_instance_id}" if strategy_instance_id else None, strategy_instance_id))
     else:
-        repo._conn.execute(stmt, (scope, strategy_instance_id))
+        repo._conn.execute(stmt, (scope, f"bot:{strategy_instance_id}" if strategy_instance_id else None, strategy_instance_id))
         repo._conn.commit()
 
 
@@ -287,10 +258,10 @@ def test_cross_bot_command_run_link_rejected(repo: ClerkSqliteRepository) -> Non
 
     with pytest.raises(sqlite3.IntegrityError):
         repo._conn.execute(
-            "INSERT INTO commands (command_id, authority_generation, idempotency_key, "
+            "INSERT INTO commands (command_id, authority_generation, subject_id, idempotency_key, "
             "payload_hash, kind, strategy_instance_id, run_id, action, intended_end_state, "
             "state, effect_operation_id, receipt_id, created_at_ms, updated_at_ms) "
-            "VALUES ('cmd:cross-bot', 1, 'cross-bot-key', 'h', 'operator_lifecycle', ?, ?, "
+            "VALUES ('cmd:cross-bot', 1, 'bot:qqq-bot', 'cross-bot-key', 'h', 'operator_lifecycle', ?, ?, "
             "'START', 'ACTIVE', 'succeeded', NULL, NULL, 1, 1)",
             (SID_B, other_run_id),
         )
@@ -313,10 +284,10 @@ def test_effect_operations_terminal_state_cannot_regress(repo: ClerkSqliteReposi
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1"
     )
     repo._conn.execute(
-        "INSERT INTO effect_operations (effect_operation_id, authority_generation, "
+        "INSERT INTO effect_operations (effect_operation_id, authority_generation, subject_id, "
         "idempotency_key, command_id, strategy_instance_id, run_id, kind, state, "
         "custody_owner, created_at_ms, updated_at_ms, terminal_receipt_id) "
-        "VALUES ('eff:1', 1, 'eff-key', ?, ?, ?, 'ENTER', 'succeeded', 'ACCOUNT_CLERK', 1, 1, NULL)",
+        "VALUES ('eff:1', 1, 'bot:spy-bot', 'eff-key', ?, ?, ?, 'ENTER', 'succeeded', 'ACCOUNT_CLERK', 1, 1, NULL)",
         (submission.command.command_id, SID_A, submission.command.run_id),
     )
     repo._conn.commit()
@@ -334,10 +305,10 @@ def test_rejected_effect_operation_cannot_regress_either(repo: ClerkSqliteReposi
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1"
     )
     repo._conn.execute(
-        "INSERT INTO effect_operations (effect_operation_id, authority_generation, "
+        "INSERT INTO effect_operations (effect_operation_id, authority_generation, subject_id, "
         "idempotency_key, command_id, strategy_instance_id, run_id, kind, state, "
         "custody_owner, created_at_ms, updated_at_ms, terminal_receipt_id) "
-        "VALUES ('eff:2', 1, 'eff-key-2', ?, ?, ?, 'ENTER', 'rejected', 'ACCOUNT_CLERK', 1, 1, NULL)",
+        "VALUES ('eff:2', 1, 'bot:spy-bot', 'eff-key-2', ?, ?, ?, 'ENTER', 'rejected', 'ACCOUNT_CLERK', 1, 1, NULL)",
         (submission.command.command_id, SID_A, submission.command.run_id),
     )
     repo._conn.commit()
@@ -668,10 +639,10 @@ def test_operation_claim_cas_fences_a_second_owner_until_expiry(repo: ClerkSqlit
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1"
     )
     repo._conn.execute(
-        "INSERT INTO effect_operations (effect_operation_id, authority_generation, "
+        "INSERT INTO effect_operations (effect_operation_id, authority_generation, subject_id, "
         "idempotency_key, command_id, strategy_instance_id, run_id, kind, state, "
         "custody_owner, created_at_ms, updated_at_ms, terminal_receipt_id) "
-        "VALUES ('eff:1', 1, 'eff-key', ?, ?, ?, 'ENTER', 'accepted', 'ACCOUNT_CLERK', 1, 1, NULL)",
+        "VALUES ('eff:1', 1, 'bot:spy-bot', 'eff-key', ?, ?, ?, 'ENTER', 'accepted', 'ACCOUNT_CLERK', 1, 1, NULL)",
         (submission.command.command_id, SID_A, submission.command.run_id),
     )
     repo._conn.commit()
@@ -718,10 +689,10 @@ def test_operation_claim_blocks_same_owner_overlap_until_attempt_releases(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1"
     )
     repo._conn.execute(
-        "INSERT INTO effect_operations (effect_operation_id, authority_generation, "
+        "INSERT INTO effect_operations (effect_operation_id, authority_generation, subject_id, "
         "idempotency_key, command_id, strategy_instance_id, run_id, kind, state, "
         "custody_owner, created_at_ms, updated_at_ms, terminal_receipt_id) "
-        "VALUES ('eff:3', 1, 'eff-key-3', ?, ?, ?, 'ENTER', 'accepted', 'ACCOUNT_CLERK', 1, 1, NULL)",
+        "VALUES ('eff:3', 1, 'bot:spy-bot', 'eff-key-3', ?, ?, ?, 'ENTER', 'accepted', 'ACCOUNT_CLERK', 1, 1, NULL)",
         (submission.command.command_id, SID_A, submission.command.run_id),
     )
     repo._conn.commit()
@@ -760,11 +731,11 @@ def test_operation_claim_fields_must_be_all_null_or_all_complete(
             **claim_fields,
         }
         repo._conn.execute(
-            "INSERT INTO effect_operations (effect_operation_id, authority_generation, "
+            "INSERT INTO effect_operations (effect_operation_id, authority_generation, subject_id, "
             "idempotency_key, command_id, strategy_instance_id, run_id, kind, state, "
             "custody_owner, created_at_ms, updated_at_ms, terminal_receipt_id, "
             "claim_owner, claim_token, claimed_at_ms, claim_expires_at_ms) "
-            "VALUES (?, 1, ?, ?, ?, ?, 'ENTER', 'accepted', 'ACCOUNT_CLERK', 1, 1, NULL, "
+            "VALUES (?, 1, 'bot:spy-bot', ?, ?, ?, ?, 'ENTER', 'accepted', 'ACCOUNT_CLERK', 1, 1, NULL, "
             "?, ?, ?, ?)",
             (
                 effect_operation_id,

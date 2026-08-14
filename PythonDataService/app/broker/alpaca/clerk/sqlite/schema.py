@@ -17,7 +17,23 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 8
+from app.broker.alpaca.clerk.sqlite.custody_schema_contract import (
+    COMMAND_SUBJECT_COMPATIBILITY_DDL,
+    CUSTODY_SUBJECT_IDENTITY_DDL,
+    EFFECT_SUBJECT_COMPATIBILITY_DDL,
+    EFFECT_SUBJECT_COMPATIBILITY_V10_MIGRATION_STATEMENTS,
+    HOLD_SUBJECT_COMPATIBILITY_DDL,
+    MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_DDL,
+    MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_STATEMENTS,
+    MANUAL_LEG_IDENTITY_V11_DDL,
+    MANUAL_LEG_SUBJECT_COMPATIBILITY_V10_DDL,
+    MANUAL_TICKET_SUBJECT_COMPATIBILITY_DDL,
+    POSITION_SUBJECT_COMPATIBILITY_DDL,
+    UNCERTAINTY_SUBJECT_COMPATIBILITY_DDL,
+)
+
+OFFLINE_V9_SCHEMA_VERSION = 9
+SCHEMA_VERSION = 11
 
 PRAGMA_STATEMENTS: tuple[str, ...] = (
     "PRAGMA journal_mode = WAL",
@@ -28,7 +44,7 @@ PRAGMA_STATEMENTS: tuple[str, ...] = (
 
 # Byte-for-byte the fenced ```sql block from
 # docs/architecture/alpaca-clerk-sqlite-pinned-contracts.md §3.
-SCHEMA_DDL = """\
+SCHEMA_V9_DDL = """\
 -- ============================================================
 -- control_meta — guarded singleton (PRD §9.1)
 -- ============================================================
@@ -82,15 +98,34 @@ CREATE INDEX ix_runs_strategy_started_at
     ON runs(strategy_instance_id, started_at_ms DESC);
 
 -- ============================================================
+-- custody_subjects — durable economic owners, never pseudo-bots
+-- ============================================================
+CREATE TABLE custody_subjects (
+    subject_id              TEXT PRIMARY KEY,
+    kind                    TEXT NOT NULL CHECK (kind IN ('BOT','MANUAL_OPERATOR')),
+    strategy_instance_id    TEXT UNIQUE REFERENCES strategy_instances(strategy_instance_id),
+    operator_id             TEXT UNIQUE,
+    created_at_ms           INTEGER NOT NULL,
+    CHECK (
+        (kind = 'BOT' AND strategy_instance_id IS NOT NULL AND operator_id IS NULL
+            AND subject_id = 'bot:' || strategy_instance_id)
+        OR (kind = 'MANUAL_OPERATOR' AND strategy_instance_id IS NULL AND operator_id IS NOT NULL
+            AND subject_id = 'manual-operator:' || operator_id)
+    )
+);
+""" + CUSTODY_SUBJECT_IDENTITY_DDL + """\
+
+-- ============================================================
 -- commands — content-addressed request identity (R2)
 -- ============================================================
 CREATE TABLE commands (
     command_id              TEXT PRIMARY KEY,       -- opaque durable resource id (GET /commands/{command_id})
     authority_generation    INTEGER NOT NULL,
+    subject_id              TEXT NOT NULL REFERENCES custody_subjects(subject_id),
     idempotency_key         TEXT NOT NULL,           -- canonical natural key, see §3a below
     payload_hash            TEXT NOT NULL,           -- immutable once first committed
-    kind                    TEXT NOT NULL CHECK (kind IN ('strategy_decision','operator_lifecycle')),
-    strategy_instance_id    TEXT NOT NULL REFERENCES strategy_instances(strategy_instance_id),
+    kind                    TEXT NOT NULL CHECK (kind IN ('strategy_decision','operator_lifecycle','manual_order')),
+    strategy_instance_id    TEXT REFERENCES strategy_instances(strategy_instance_id),
     run_id                  TEXT,                    -- null only for pre-run commands; see composite FK below
     action                  TEXT NOT NULL,           -- e.g. START, RESUME, STOP, STOP_AND_FLATTEN, decision replay
     intended_end_state      TEXT,                    -- operator-lifecycle only
@@ -111,6 +146,9 @@ CREATE UNIQUE INDEX ux_commands_idempotency
 CREATE INDEX ix_commands_updated_at ON commands(updated_at_ms DESC, command_id DESC);
 CREATE INDEX ix_commands_strategy_updated_at
     ON commands(strategy_instance_id, updated_at_ms DESC, command_id DESC);
+CREATE INDEX ix_commands_subject_updated_at
+    ON commands(subject_id, updated_at_ms DESC, command_id DESC);
+""" + COMMAND_SUBJECT_COMPATIBILITY_DDL + """\
 
 -- ============================================================
 -- effect_operations — Clerk-owned ENTER/EXIT/cancel/recovery work (§7)
@@ -118,12 +156,13 @@ CREATE INDEX ix_commands_strategy_updated_at
 CREATE TABLE effect_operations (
     effect_operation_id     TEXT PRIMARY KEY,
     authority_generation    INTEGER NOT NULL,
+    subject_id              TEXT NOT NULL REFERENCES custody_subjects(subject_id),
     idempotency_key         TEXT NOT NULL,           -- Clerk effect idempotency identity, distinct from command's
     command_id              TEXT NOT NULL REFERENCES commands(command_id),
-    strategy_instance_id    TEXT NOT NULL REFERENCES strategy_instances(strategy_instance_id),
+    strategy_instance_id    TEXT REFERENCES strategy_instances(strategy_instance_id),
     run_id                  TEXT,                    -- see composite FK below
     kind                    TEXT NOT NULL CHECK (kind IN
-                             ('ENTER','EXIT','CANCEL','RECONCILE','STOP','STOP_AND_FLATTEN')),
+                             ('ENTER','EXIT','CANCEL','RECONCILE','STOP','STOP_AND_FLATTEN','MANUAL_ORDER')),
     state                   TEXT NOT NULL CHECK (state IN
                              ('reserved','rejected','accepted','in_progress','unknown','succeeded','failed')),
     custody_owner           TEXT NOT NULL DEFAULT 'ACCOUNT_CLERK',
@@ -165,6 +204,9 @@ CREATE INDEX ix_effect_operations_created_at
     ON effect_operations(created_at_ms DESC, effect_operation_id DESC);
 CREATE INDEX ix_effect_operations_strategy_created_at
     ON effect_operations(strategy_instance_id, created_at_ms DESC, effect_operation_id DESC);
+CREATE INDEX ix_effect_operations_subject_created_at
+    ON effect_operations(subject_id, created_at_ms DESC, effect_operation_id DESC);
+""" + EFFECT_SUBJECT_COMPATIBILITY_DDL + """\
 
 -- ============================================================
 -- orders — one row per broker/client order identity (R7)
@@ -174,7 +216,7 @@ CREATE TABLE orders (
     effect_operation_id      TEXT NOT NULL REFERENCES effect_operations(effect_operation_id),
     client_order_id          TEXT NOT NULL,           -- Alpaca reconciliation identity (R7)
     broker_order_id          TEXT,                    -- filled in once Alpaca acknowledges
-    role                     TEXT NOT NULL CHECK (role IN ('ENTRY','REDUCING','OTHER')),
+    role                     TEXT NOT NULL CHECK (role IN ('ENTRY','REDUCING','OTHER','MANUAL')),
     broker_state             TEXT,                    -- last proven Alpaca order status
     submitted_at_ms          INTEGER,
     updated_at_ms            INTEGER NOT NULL
@@ -285,35 +327,39 @@ CREATE INDEX ix_decision_receipts_strategy_observed_at
 -- (never nets from raw broker position — preserves existing exposure.py semantics)
 -- ============================================================
 CREATE TABLE positions (
-    strategy_instance_id     TEXT NOT NULL REFERENCES strategy_instances(strategy_instance_id),
+    subject_id               TEXT NOT NULL REFERENCES custody_subjects(subject_id),
+    strategy_instance_id     TEXT REFERENCES strategy_instances(strategy_instance_id),
     symbol                   TEXT NOT NULL,
     attributed_qty           REAL NOT NULL DEFAULT 0,
     updated_at_ms             INTEGER NOT NULL,
-    PRIMARY KEY (strategy_instance_id, symbol)
+    PRIMARY KEY (subject_id, symbol)
 );
+CREATE UNIQUE INDEX ux_positions_strategy_symbol
+    ON positions(strategy_instance_id, symbol) WHERE strategy_instance_id IS NOT NULL;
+""" + POSITION_SUBJECT_COMPATIBILITY_DDL + """\
 
 -- ============================================================
 -- holds — active and resolved bot/Account-Clerk holds; fold of the log
 -- ============================================================
 CREATE TABLE holds (
     hold_id                  TEXT PRIMARY KEY,
-    scope                    TEXT NOT NULL CHECK (scope IN ('BOT','ACCOUNT_CLERK')),
-    strategy_instance_id     TEXT REFERENCES strategy_instances(strategy_instance_id),  -- null for ACCOUNT_CLERK scope
+    scope                    TEXT NOT NULL CHECK (scope IN ('CUSTODY_SUBJECT','ACCOUNT_CLERK')),
+    subject_id               TEXT REFERENCES custody_subjects(subject_id),
+    strategy_instance_id     TEXT REFERENCES strategy_instances(strategy_instance_id),  -- bot compatibility projection
     reason_code               TEXT NOT NULL,
     state                     TEXT NOT NULL CHECK (state IN ('ACTIVE','RESOLVED')),
     opened_at_ms               INTEGER NOT NULL,
     resolved_at_ms             INTEGER,
     evidence_refs_json         TEXT,
-    -- scope is truthfully coupled to bot identity, not just documented by a
-    -- comment: BOT requires a strategy instance, ACCOUNT_CLERK forbids one.
-    CHECK ((scope = 'BOT' AND strategy_instance_id IS NOT NULL)
-        OR (scope = 'ACCOUNT_CLERK' AND strategy_instance_id IS NULL))
+    CHECK ((scope = 'CUSTODY_SUBJECT' AND subject_id IS NOT NULL)
+        OR (scope = 'ACCOUNT_CLERK' AND subject_id IS NULL AND strategy_instance_id IS NULL))
 );
 CREATE UNIQUE INDEX ux_holds_one_active_cause
-    ON holds(scope, reason_code, COALESCE(strategy_instance_id, ''))
+    ON holds(scope, reason_code, COALESCE(subject_id, ''))
     WHERE state = 'ACTIVE';
 CREATE INDEX ix_holds_active_strategy_opened_at
     ON holds(strategy_instance_id, opened_at_ms DESC) WHERE state = 'ACTIVE';
+""" + HOLD_SUBJECT_COMPATIBILITY_DDL + """\
 
 -- ============================================================
 -- uncertainties — active nonterminal unknowns; fold of the log. Columns are
@@ -321,12 +367,13 @@ CREATE INDEX ix_holds_active_strategy_opened_at
 -- ============================================================
 CREATE TABLE uncertainties (
     uncertainty_id            TEXT PRIMARY KEY,
-    scope                     TEXT NOT NULL CHECK (scope IN ('BOT','ACCOUNT_CLERK')),
+    scope                     TEXT NOT NULL CHECK (scope IN ('CUSTODY_SUBJECT','ACCOUNT_CLERK')),
     severity                  TEXT NOT NULL,
     blocks_new_exposure       INTEGER NOT NULL CHECK (blocks_new_exposure IN (0,1)),
     allows_reduction          INTEGER NOT NULL CHECK (allows_reduction IN (0,1)),
     custody_owner             TEXT NOT NULL DEFAULT 'ACCOUNT_CLERK',
-    strategy_instance_id      TEXT REFERENCES strategy_instances(strategy_instance_id),  -- null for ACCOUNT_CLERK
+    subject_id                TEXT REFERENCES custody_subjects(subject_id),
+    strategy_instance_id      TEXT REFERENCES strategy_instances(strategy_instance_id),  -- bot compatibility projection
     reason_code               TEXT NOT NULL,
     headline                  TEXT NOT NULL,
     explanation               TEXT NOT NULL,
@@ -337,16 +384,56 @@ CREATE TABLE uncertainties (
     evidence_refs_json        TEXT,
     facts_schema_version      INTEGER NOT NULL,
     facts_json                TEXT NOT NULL,
-    -- same truthful scope/identity coupling as holds, above:
-    CHECK ((scope = 'BOT' AND strategy_instance_id IS NOT NULL)
-        OR (scope = 'ACCOUNT_CLERK' AND strategy_instance_id IS NULL))
+    CHECK ((scope = 'CUSTODY_SUBJECT' AND subject_id IS NOT NULL)
+        OR (scope = 'ACCOUNT_CLERK' AND subject_id IS NULL AND strategy_instance_id IS NULL))
 );
 CREATE UNIQUE INDEX ux_uncertainties_one_active_cause
-    ON uncertainties(scope, reason_code, COALESCE(strategy_instance_id, ''))
+    ON uncertainties(scope, reason_code, COALESCE(subject_id, ''))
     WHERE resolved_at_ms IS NULL;
 CREATE INDEX ix_uncertainties_active_strategy_observed_at
     ON uncertainties(strategy_instance_id, observed_at_ms DESC)
     WHERE resolved_at_ms IS NULL;
+CREATE INDEX ix_uncertainties_active_subject_observed_at
+    ON uncertainties(subject_id, observed_at_ms DESC)
+    WHERE resolved_at_ms IS NULL;
+""" + UNCERTAINTY_SUBJECT_COMPATIBILITY_DDL + """\
+
+-- ============================================================
+-- manual_order_tickets / manual_order_legs — replayable manual custody state
+-- ============================================================
+CREATE TABLE manual_order_tickets (
+    ticket_id                TEXT PRIMARY KEY,
+    subject_id               TEXT NOT NULL REFERENCES custody_subjects(subject_id),
+    operator_id              TEXT NOT NULL,
+    instruction_hash         TEXT NOT NULL,
+    state                    TEXT NOT NULL CHECK (state IN ('RESERVED','ACTIVE','PAUSED_UNKNOWN','COMPLETED','CANCELED')),
+    created_at_ms            INTEGER NOT NULL,
+    updated_at_ms            INTEGER NOT NULL
+);
+CREATE INDEX ix_manual_order_tickets_subject_updated_at
+    ON manual_order_tickets(subject_id, updated_at_ms DESC, ticket_id DESC);
+""" + MANUAL_TICKET_SUBJECT_COMPATIBILITY_DDL + """\
+
+CREATE TABLE manual_order_legs (
+    ticket_id                TEXT NOT NULL REFERENCES manual_order_tickets(ticket_id),
+    leg_id                   TEXT NOT NULL,
+    subject_id               TEXT NOT NULL REFERENCES custody_subjects(subject_id),
+    instruction_hash         TEXT NOT NULL,
+    command_id               TEXT REFERENCES commands(command_id),
+    effect_operation_id      TEXT REFERENCES effect_operations(effect_operation_id),
+    order_ref                TEXT REFERENCES orders(order_ref),
+    state                    TEXT NOT NULL CHECK (state IN ('RESERVED','ACCEPTED','IN_PROGRESS','UNKNOWN','SUCCEEDED','FAILED','CANCELED')),
+    created_at_ms            INTEGER NOT NULL,
+    updated_at_ms            INTEGER NOT NULL,
+    PRIMARY KEY (ticket_id, leg_id)
+);
+CREATE UNIQUE INDEX ux_manual_order_legs_command
+    ON manual_order_legs(command_id) WHERE command_id IS NOT NULL;
+CREATE UNIQUE INDEX ux_manual_order_legs_effect
+    ON manual_order_legs(effect_operation_id) WHERE effect_operation_id IS NOT NULL;
+CREATE UNIQUE INDEX ux_manual_order_legs_order
+    ON manual_order_legs(order_ref) WHERE order_ref IS NOT NULL;
+""" + MANUAL_LEG_SUBJECT_COMPATIBILITY_V10_DDL + """\
 
 -- ============================================================
 -- reconciliations — reconciliation attempts and terminal receipts
@@ -487,6 +574,69 @@ BEGIN
 END;\
 """
 
+# v10 is additive over the published v9 custody contract. Existing v9
+# authorities gain this table and the expanded effect-subject trigger through
+# one transactional migration; fresh authorities execute the same final DDL.
+_MANUAL_ORDER_CANCELLATION_TABLE_DDL = """\
+CREATE TABLE manual_order_cancellations (
+    order_ref                 TEXT PRIMARY KEY REFERENCES orders(order_ref),
+    subject_id                TEXT NOT NULL REFERENCES custody_subjects(subject_id),
+    cancel_request_id         TEXT NOT NULL UNIQUE,
+    command_id                TEXT NOT NULL UNIQUE REFERENCES commands(command_id),
+    effect_operation_id       TEXT NOT NULL UNIQUE REFERENCES effect_operations(effect_operation_id),
+    state                     TEXT NOT NULL CHECK (state IN ('ACCEPTED','UNKNOWN','SUCCEEDED','FAILED')),
+    created_at_ms             INTEGER NOT NULL,
+    updated_at_ms             INTEGER NOT NULL
+);
+"""
+_MANUAL_ORDER_CANCELLATION_INDEX_DDL = """\
+CREATE INDEX ix_manual_order_cancellations_effect
+    ON manual_order_cancellations(effect_operation_id);
+"""
+_EFFECT_SUBJECT_COMPATIBILITY_V10_DDL = (
+    "DROP TRIGGER trg_effect_operations_subject_compatible_insert;\n"
+    "DROP TRIGGER trg_effect_operations_subject_compatible_update;\n"
+    + EFFECT_SUBJECT_COMPATIBILITY_V10_MIGRATION_STATEMENTS[2]
+    + EFFECT_SUBJECT_COMPATIBILITY_V10_MIGRATION_STATEMENTS[3]
+)
+SCHEMA_V10_DDL = (
+    _MANUAL_ORDER_CANCELLATION_TABLE_DDL
+    + _MANUAL_ORDER_CANCELLATION_INDEX_DDL
+    + _EFFECT_SUBJECT_COMPATIBILITY_V10_DDL
+    + MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_DDL
+)
+# v11 adds a durable ordinal to the existing replayable leg projection.
+_MANUAL_LEG_SEQUENCE_V11_DDL = """\
+ALTER TABLE manual_order_legs ADD COLUMN sequence_index INTEGER NOT NULL DEFAULT 0;
+UPDATE manual_order_legs AS leg
+SET sequence_index = (
+    SELECT COUNT(*)
+    FROM manual_order_legs AS earlier
+    WHERE earlier.ticket_id = leg.ticket_id
+        AND (
+            earlier.created_at_ms < leg.created_at_ms
+            OR (earlier.created_at_ms = leg.created_at_ms AND earlier.leg_id < leg.leg_id)
+        )
+);
+CREATE UNIQUE INDEX ux_manual_order_legs_sequence
+    ON manual_order_legs(ticket_id, sequence_index);
+DROP TRIGGER trg_manual_order_leg_identity_immutable;
+""" + MANUAL_LEG_IDENTITY_V11_DDL
+_MANUAL_LEG_SEQUENCE_V11_MIGRATION_STATEMENTS: tuple[str, ...] = (
+    "ALTER TABLE manual_order_legs ADD COLUMN sequence_index INTEGER NOT NULL DEFAULT 0",
+    "UPDATE manual_order_legs AS leg SET sequence_index = ("
+    "SELECT COUNT(*) FROM manual_order_legs AS earlier "
+    "WHERE earlier.ticket_id = leg.ticket_id AND ("
+    "earlier.created_at_ms < leg.created_at_ms OR ("
+    "earlier.created_at_ms = leg.created_at_ms AND earlier.leg_id < leg.leg_id)))",
+    "CREATE UNIQUE INDEX ux_manual_order_legs_sequence "
+    "ON manual_order_legs(ticket_id, sequence_index)",
+    "DROP TRIGGER trg_manual_order_leg_identity_immutable",
+    MANUAL_LEG_IDENTITY_V11_DDL,
+)
+SCHEMA_V11_DDL = _MANUAL_LEG_SEQUENCE_V11_DDL
+SCHEMA_DDL = (SCHEMA_V9_DDL + "\n\n" + SCHEMA_V10_DDL + "\n\n" + SCHEMA_V11_DDL).rstrip("\n")
+
 
 def configure_connection(conn: sqlite3.Connection) -> None:
     """Apply the pinned PRAGMA set (§2) to a freshly-opened connection."""
@@ -497,6 +647,11 @@ def configure_connection(conn: sqlite3.Connection) -> None:
 def apply_schema(conn: sqlite3.Connection) -> None:
     """Create all tables/indexes/triggers from ``SCHEMA_DDL`` (fresh init only)."""
     conn.executescript(SCHEMA_DDL)
+
+
+def apply_v9_schema(conn: sqlite3.Connection) -> None:
+    """Create the historical v9 custody schema for the verified offline ceremony."""
+    conn.executescript(SCHEMA_V9_DDL)
 
 
 # Registered upgrades keyed by the ``schema_version`` they start from, each an
@@ -669,7 +824,25 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
         "ALTER TABLE external_orders ADD COLUMN stop_price REAL",
         "ALTER TABLE external_orders ADD COLUMN filled_avg_price REAL",
     ),
+    # v9 -> v10: manual cancellation is a new durable resource. The old v9
+    # effect-subject triggers are replaced before the new CANCEL effect can
+    # exist, and every DDL statement is committed with the version advance.
+    9: (
+        _MANUAL_ORDER_CANCELLATION_TABLE_DDL,
+        _MANUAL_ORDER_CANCELLATION_INDEX_DDL,
+        *EFFECT_SUBJECT_COMPATIBILITY_V10_MIGRATION_STATEMENTS,
+        *MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_STATEMENTS,
+    ),
+    # v10 -> v11: an ordered ticket must retain the sequence explicitly. A
+    # deterministic created-at/leg-id backfill makes every pre-v11 ticket
+    # unique before the per-ticket fence exists. Replacing this narrow identity
+    # trigger then makes the ordering as immutable as the ticket/leg identities.
+    10: _MANUAL_LEG_SEQUENCE_V11_MIGRATION_STATEMENTS,
 }
+
+
+class OfflineSchemaUpgradeRequired(ValueError):
+    """A data-bearing authority needs the verified v8-to-v9 ceremony."""
 
 
 def is_upgradable_to_current(version: int) -> bool:
@@ -682,6 +855,10 @@ def is_upgradable_to_current(version: int) -> bool:
     """
     seen = version
     while seen < SCHEMA_VERSION:
+        if seen == 8:
+            # Verification and backup may inspect v8, but only the offline
+            # mirror-rebuild ceremony may publish v9.
+            return True
         if seen not in SCHEMA_MIGRATIONS:
             return False
         seen += 1
@@ -698,9 +875,17 @@ def migrate_schema(conn: sqlite3.Connection, *, from_version: int) -> None:
     fail-closed default for anything not proven safe here.
     """
     version = from_version
+    if version == 8:
+        raise OfflineSchemaUpgradeRequired(
+            "schema v8 requires the verified offline v8-to-v9 upgrade ceremony"
+        )
     conn.execute("BEGIN IMMEDIATE")
     try:
         while version < SCHEMA_VERSION:
+            if version == 8:
+                raise OfflineSchemaUpgradeRequired(
+                    "schema v8 requires the verified offline v8-to-v9 upgrade ceremony"
+                )
             statements = SCHEMA_MIGRATIONS.get(version)
             if statements is None:
                 raise ValueError(

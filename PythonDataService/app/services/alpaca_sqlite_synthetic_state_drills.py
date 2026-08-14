@@ -263,7 +263,7 @@ async def restart_in_flight(artifacts_root: Path) -> SyntheticScenarioObservatio
         accepted_effect = recovered.effect_operation(accepted.effect_operation_id)
         unknown_effect = recovered.effect_operation(unknown.effect_operation_id)
         unknown_hold = recovered.active_uncertainty(
-            scope="BOT",
+            scope="CUSTODY_SUBJECT",
             reason_code=ORDER_OUTCOME_UNKNOWN_REASON_CODE,
             strategy_instance_id="unknown-bot",
         )

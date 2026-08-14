@@ -34,3 +34,7 @@ def test_export_excludes_dev_fault_routes_when_caller_environment_enables_them(
 
     contract = json.loads(output.read_text(encoding="utf-8"))
     assert "/api/brokers/alpaca/fault-injection/arm" not in contract["paths"]
+    for schema_name in ("ManualOrderPreviewRequest", "ManualOrderSubmitRequest"):
+        legs = contract["components"]["schemas"][schema_name]["properties"]["legs"]
+        assert legs["minItems"] == 1
+        assert legs["maxItems"] == 8

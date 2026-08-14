@@ -25,6 +25,7 @@ ReconciliationVerdict = Literal[
     "position_drift",
     "stale",
 ]
+CustodyScope = Literal["CUSTODY_SUBJECT", "ACCOUNT_CLERK"]
 
 
 class CommandResponse(BaseModel):
@@ -38,7 +39,7 @@ class CommandResponse(BaseModel):
     command_id: str
     idempotency_key: str
     kind: str
-    strategy_instance_id: str
+    strategy_instance_id: str | None
     run_id: str | None
     action: str
     intended_end_state: str | None
@@ -53,7 +54,11 @@ class CommandResponse(BaseModel):
     def from_resource(cls, resource: CommandResource) -> CommandResponse:
         non_terminal = resource.state in ("reserved", "accepted", "in_progress", "unknown")
         tooltip = (
-            f"A {resource.action.lower()} has already been requested for this bot."
+            (
+                f"A {resource.action.lower()} has already been requested for this bot."
+                if resource.strategy_instance_id is not None
+                else f"A {resource.action.lower()} has already been requested for this manual order."
+            )
             if non_terminal
             else None
         )
@@ -190,7 +195,7 @@ class ProjectedHoldResponse(BaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     hold_id: str
-    scope: Literal["BOT", "ACCOUNT_CLERK"]
+    scope: CustodyScope
     strategy_instance_id: str | None
     reason_code: str
     opened_at_ms: int
@@ -201,7 +206,7 @@ class ProjectedUncertaintyResponse(BaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     uncertainty_id: str
-    scope: Literal["BOT", "ACCOUNT_CLERK"]
+    scope: CustodyScope
     severity: str
     blocks_new_exposure: bool
     allows_reduction: bool
@@ -278,7 +283,7 @@ class SafeFlattenPlanResponse(BaseModel):
     authority_generation: int
     db_identity_token: str
     control_revision: int
-    scope: Literal["BOT", "ACCOUNT_CLERK"]
+    scope: CustodyScope
     strategy_instance_id: str | None
     reconciliation_id: str
     prepared_at_ms: int
@@ -289,21 +294,13 @@ class SafeFlattenPlanResponse(BaseModel):
 class RecoveryCapabilityResponse(BaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
-    action_id: Literal[
-        "reconcile_now",
-        "cancel_verified_working_orders",
-        "prepare_safe_flatten",
-        "stop_bot_decisions",
-        "open_custody_timeline",
-        "rebuild_from_mirror",
-        "reset_authority",
-    ]
+    action_id: RecoveryActionId
     label: str
     explanation: str
     available: bool
     unavailable_reason_code: str | None
     unavailable_reason: str | None
-    scope: Literal["BOT", "ACCOUNT_CLERK"]
+    scope: CustodyScope
     freshness: Literal["fresh", "stale", "not_required", "unavailable"]
     evidence: tuple[RecoveryEvidenceResponse, ...]
     reduction_plan: SafeFlattenPlanResponse | None
@@ -320,7 +317,7 @@ class ProjectionGuidanceResponse(BaseModel):
 
     headline: str
     explanation: str
-    scope: Literal["BOT", "ACCOUNT_CLERK"]
+    scope: CustodyScope
     impact: str
     custody_owner: str
     may_create_exposure: bool

@@ -146,6 +146,8 @@ function portfolioHistoryProof(): PortfolioHistoryProof {
         fee: null,
         entry_strategy_instance_id: 'bot-spy',
         exit_strategy_instance_id: 'bot-spy',
+        entry_subject_id: 'bot:bot-spy',
+        exit_subject_id: 'bot:bot-qqq',
       }],
       realized_pnl_total: 100,
       start_open_pnl_total: 0,
@@ -246,6 +248,8 @@ describe('AlpacaTraderLensComponent', () => {
     expect(broker.getPortfolioHistoryProof).toHaveBeenCalledWith('alpaca', '30D');
     expect(await screen.findByText(/Broker curve agrees with local FIFO P&L within \$0\.000001\./)).toBeTruthy();
     expect(screen.getByRole('table', { name: 'FIFO attribution rows' })).toBeTruthy();
+    expect(screen.getByText('bot:bot-spy')).toBeTruthy();
+    expect(screen.getByText('bot:bot-qqq')).toBeTruthy();
     expect(screen.getAllByTitle('SPY')).not.toHaveLength(0);
     await vi.waitFor(() => expect(clerk.accountTransactions).toHaveBeenCalled());
     const thirtyDayFilters = clerk.accountTransactions.mock.calls.at(-1)?.[3];

@@ -68,8 +68,12 @@ class BrokerReadPort(Protocol):
         self,
         *,
         status: str | None = None,
-        limit: int = 100,
+        limit: int | None = 100,
     ) -> list[BrokerAsset]: ...
+
+    async def get_asset(self, symbol: str) -> BrokerAsset | None:
+        """Return one broker asset, or ``None`` when the symbol is absent."""
+        ...
 
     async def get_clock_evidence(self) -> BrokerClockEvidence: ...
 

@@ -36,7 +36,7 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
 from app.engine.live.order_identity import OwnershipRung, classify_ownership
 from app.lean_sidecar.trading_calendar import SessionWindow
-from conftest import _clock_at
+from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at
 
 _FIXTURE_ROOT = Path(__file__).parents[4] / "fixtures" / "golden" / "alpaca-sqlite-execution"
 _FIXTURE_FAMILIES = (

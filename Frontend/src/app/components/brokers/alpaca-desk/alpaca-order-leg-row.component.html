@@ -10,8 +10,21 @@
     class="order-input order-input--symbol"
   />
 </label>
-<label class="order-field">
-  <span>Side</span>
+@if (manualMarketOnly()) {
+  <label class="order-field">
+    <span>Side</span>
+    <select
+      [formField]="legForm().side"
+      [attr.aria-label]="'Leg ' + (position() + 1) + ' side'"
+      class="order-input"
+    >
+      <option value="buy">Buy</option>
+      <option value="sell">Sell</option>
+    </select>
+  </label>
+} @else {
+  <label class="order-field">
+    <span>Side</span>
   <select
     [formField]="legForm().side"
     [attr.aria-label]="'Leg ' + (position() + 1) + ' side'"
@@ -20,7 +33,8 @@
     <option value="buy">Buy</option>
     <option value="sell">Sell</option>
   </select>
-</label>
+  </label>
+}
 <label class="order-field">
   <span>Quantity</span>
   <input
@@ -32,8 +46,14 @@
     class="order-input"
   />
 </label>
-<label class="order-field order-field--type">
-  <span>Type</span>
+@if (manualMarketOnly()) {
+  <div class="order-field order-field--type">
+    <span>Type</span>
+    <output class="order-input">Market</output>
+  </div>
+} @else {
+  <label class="order-field order-field--type">
+    <span>Type</span>
   <select
     [formField]="legForm().orderType"
     [attr.aria-label]="'Leg ' + (position() + 1) + ' order type'"
@@ -42,8 +62,9 @@
     <option value="market">Market</option>
     <option value="limit">Limit</option>
   </select>
-</label>
-@if (legForm().orderType().value() === 'limit') {
+  </label>
+}
+@if (!manualMarketOnly() && legForm().orderType().value() === 'limit') {
   <label class="order-field">
     <span>Limit price</span>
     <input
@@ -56,8 +77,14 @@
     />
   </label>
 }
-<label class="order-field">
-  <span>Time in force</span>
+@if (manualMarketOnly()) {
+  <div class="order-field">
+    <span>Time in force</span>
+    <output class="order-input">Day</output>
+  </div>
+} @else {
+  <label class="order-field">
+    <span>Time in force</span>
   <select
     [formField]="legForm().timeInForce"
     [attr.aria-label]="'Leg ' + (position() + 1) + ' time in force'"
@@ -66,7 +93,9 @@
     <option value="day">Day</option>
     <option value="gtc">GTC</option>
   </select>
-</label>
+  </label>
+}
+@if (!manualMarketOnly()) {
 <p-button
   icon="pi pi-trash"
   size="small"
@@ -76,9 +105,10 @@
   (onClick)="removed.emit()"
   [attr.aria-label]="'Remove leg ' + (position() + 1)"
 />
+}
 
 <div class="leg-help">
-  @if (legForm().orderType().value() === 'limit') {
+  @if (!manualMarketOnly() && legForm().orderType().value() === 'limit') {
     Limit orders rest until the price is met or the order is canceled.
   } @else {
     Market orders prioritize execution over price.

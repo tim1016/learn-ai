@@ -95,19 +95,19 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         cause_is_valid=broker_snapshot_stale_cause_is_valid,
     ),
     ORDER_OUTCOME_UNKNOWN_REASON_CODE: ReasonPolicy(
-        scope="BOT",
+        scope="CUSTODY_SUBJECT",
         blocks_new_exposure=True,
         allows_reduction=False,
         cause_is_valid=_order_outcome_unknown_cause_is_valid,
     ),
     EXIT_NOT_FLAT_REASON_CODE: ReasonPolicy(
-        scope="BOT",
+        scope="CUSTODY_SUBJECT",
         blocks_new_exposure=True,
         allows_reduction=True,
         cause_is_valid=_exit_not_flat_cause_is_valid,
     ),
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE: ReasonPolicy(
-        scope="BOT",
+        scope="CUSTODY_SUBJECT",
         blocks_new_exposure=True,
         allows_reduction=False,
         cause_is_valid=_execution_coverage_conflict_cause_is_valid,
@@ -121,8 +121,8 @@ def _effective_identity(
     policy = _REASON_POLICIES.get(reason_code)
     if policy is None:
         return None, "ACCOUNT_CLERK", None
-    if policy.scope == "BOT" and strategy_instance_id is not None:
-        return policy, "BOT", strategy_instance_id
+    if policy.scope == "CUSTODY_SUBJECT" and strategy_instance_id is not None:
+        return policy, "CUSTODY_SUBJECT", strategy_instance_id
     return policy, "ACCOUNT_CLERK", None
 
 
@@ -248,7 +248,7 @@ def resolve_exit_not_flat_uncertainty(
         )
 
     return repo.resolve_uncertainty_if_active(
-        scope="BOT",
+        scope="CUSTODY_SUBJECT",
         reason_code=EXIT_NOT_FLAT_REASON_CODE,
         strategy_instance_id=strategy_instance_id,
         build_transition=build_transition,
@@ -348,10 +348,15 @@ def decide_capability(
     repo: ClerkSqliteRepository,
     *,
     capability: Capability,
-    strategy_instance_id: str,
+    strategy_instance_id: str | None = None,
+    subject_id: str | None = None,
     reduction_intent: ReductionIntent | None = None,
+    continuation_ticket_id: str | None = None,
 ) -> CapabilityDecision:
     """Author both preview and execution policy from the same typed snapshot."""
+    if (strategy_instance_id is None) == (subject_id is None):
+        raise ValueError("capability evaluation requires exactly one custody subject")
+
     if capability in (Capability.CANCEL, Capability.RECONCILE):
         return CapabilityDecision(allowed=True, capability=capability)
 
@@ -363,7 +368,11 @@ def decide_capability(
                 reason_code="RECONCILIATION_IN_PROGRESS",
                 why="Account reconciliation is proving fresh broker truth.",
             )
-        active_exit = repo.active_exit_for_strategy(strategy_instance_id)
+        active_exit = (
+            repo.active_exit_for_strategy(strategy_instance_id)
+            if strategy_instance_id is not None
+            else None
+        )
         if active_exit is not None:
             return CapabilityDecision(
                 allowed=False,
@@ -375,7 +384,10 @@ def decide_capability(
                 ),
             )
 
-    holds = repo.active_holds_for_admission(strategy_instance_id=strategy_instance_id)
+    holds = repo.active_holds_for_admission(
+        strategy_instance_id=strategy_instance_id,
+        subject_id=subject_id,
+    )
     if holds:
         hold = holds[0]
         return CapabilityDecision(
@@ -385,7 +397,10 @@ def decide_capability(
             why=f"An active {hold['scope'].lower()}-scoped hold blocks {capability.value.lower()}.",
         )
 
-    for uncertainty in repo.active_uncertainties_for_admission(strategy_instance_id=strategy_instance_id):
+    for uncertainty in repo.active_uncertainties_for_admission(
+        strategy_instance_id=strategy_instance_id,
+        subject_id=subject_id,
+    ):
         reason_code = uncertainty["reason_code"]
         policy = _REASON_POLICIES.get(reason_code)
         facts = None if policy is None else _strict_uncertainty_facts(uncertainty, policy)
@@ -414,6 +429,7 @@ def decide_capability(
                             facts=facts,
                             intent=reduction_intent,
                         )
+                        and strategy_instance_id is not None
                         and reduction_intent is not None
                         and _moves_toward_zero_without_crossing(
                             repo.position(
@@ -433,6 +449,22 @@ def decide_capability(
                 reason_code=reason_code,
                 why=uncertainty["explanation"],
             )
+    if capability is Capability.NEW_EXPOSURE:
+        manual_order_outstanding = (
+            repo.has_nonterminal_manual_order_outside_ticket(ticket_id=continuation_ticket_id)
+            if continuation_ticket_id is not None
+            else repo.has_nonterminal_manual_order()
+        )
+        if manual_order_outstanding:
+            return CapabilityDecision(
+                allowed=False,
+                capability=capability,
+                reason_code="MANUAL_ORDER_OUTSTANDING",
+                why=(
+                    "A manual order still has a working or unknown broker outcome; "
+                    "new account exposure waits for exact resolution."
+                ),
+            )
     return CapabilityDecision(allowed=True, capability=capability)
 
 
@@ -446,14 +478,18 @@ def require_capability(
     repo: ClerkSqliteRepository,
     *,
     capability: Capability,
-    strategy_instance_id: str,
+    strategy_instance_id: str | None = None,
+    subject_id: str | None = None,
     reduction_intent: ReductionIntent | None = None,
+    continuation_ticket_id: str | None = None,
 ) -> None:
     decision = decide_capability(
         repo,
         capability=capability,
         strategy_instance_id=strategy_instance_id,
+        subject_id=subject_id,
         reduction_intent=reduction_intent,
+        continuation_ticket_id=continuation_ticket_id,
     )
     if not decision.allowed:
         raise AdmissionBlockedError(decision)
@@ -475,6 +511,51 @@ def require_admission(repo: ClerkSqliteRepository, *, strategy_instance_id: str)
     )
 
 
+def require_manual_admission(
+    repo: ClerkSqliteRepository,
+    *,
+    subject_id: str,
+    continuation_ticket_id: str | None = None,
+) -> None:
+    """Apply the same account/subject admission policy to manual custody."""
+    require_capability(
+        repo,
+        capability=Capability.NEW_EXPOSURE,
+        subject_id=subject_id,
+        continuation_ticket_id=continuation_ticket_id,
+    )
+
+
+def require_manual_reduction(
+    repo: ClerkSqliteRepository,
+    *,
+    subject_id: str,
+    intent: ReductionIntent,
+) -> None:
+    """Authorize a manual sell only within its independently owned long custody."""
+    require_capability(
+        repo,
+        capability=Capability.REDUCE,
+        subject_id=subject_id,
+        reduction_intent=intent,
+    )
+    available_quantity = repo.manual_reduction_available_quantity(
+        subject_id=subject_id,
+        symbol=intent.symbol,
+    )
+    if intent.side.upper() != "SELL" or intent.quantity > available_quantity + REDUCTION_QTY_EPSILON:
+        decision = CapabilityDecision(
+            allowed=False,
+            capability=Capability.REDUCE,
+            reason_code="MANUAL_LONG_QUANTITY_UNAVAILABLE",
+            why=(
+                f"Only {available_quantity:g} {intent.symbol.upper()} is available from this manual "
+                "custody subject after pending manual reductions."
+            ),
+        )
+        raise AdmissionBlockedError(decision)
+
+
 __all__ = [
     "BROKER_SNAPSHOT_STALE_REASON_CODE",
     "DRIFT_REDUCTION_EVIDENCE_MAX_AGE_MS",
@@ -491,6 +572,8 @@ __all__ = [
     "raise_uncertainty",
     "require_admission",
     "require_capability",
+    "require_manual_admission",
+    "require_manual_reduction",
     "resolve_exit_not_flat_uncertainty",
     "resolve_reconciliation_uncertainty",
 ]

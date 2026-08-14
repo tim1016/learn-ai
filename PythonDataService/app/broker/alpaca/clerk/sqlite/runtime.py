@@ -38,7 +38,21 @@ from app.broker.alpaca.clerk.sqlite.exit_resolution import cancel_and_prove_owne
 from app.broker.alpaca.clerk.sqlite.facts import AccountHoldRaisedFacts, AccountHoldResolvedFacts
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
-from app.broker.alpaca.clerk.sqlite.models import OrderResource, TransitionInput
+from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import (
+    ManualOrderCancellationSubmission,
+    submit_manual_order_cancellation,
+    submit_manual_ticket_cancellation,
+)
+from app.broker.alpaca.clerk.sqlite.manual_order_runtime import (
+    ManualOrderCapability,
+    ManualOrderPreview,
+    get_manual_ticket,
+    manual_order_capability,
+    preview_manual_order,
+    submit_previewed_manual_order,
+)
+from app.broker.alpaca.clerk.sqlite.manual_orders import ManualOrderSubmission, ManualTicketLeg
+from app.broker.alpaca.clerk.sqlite.models import ManualOrderTicketResource, OrderResource, TransitionInput
 from app.broker.alpaca.clerk.sqlite.reconcile import (
     AccountReconciliationResult,
 )
@@ -49,6 +63,7 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate, stream_health_refusal
 from app.broker.contract.models import BrokerOrderLeg, OrderSide
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
+from app.config import settings
 from app.schemas.action_plan import ActionPlan, StockEntryLeg
 
 if TYPE_CHECKING:
@@ -156,6 +171,111 @@ class SqliteAlpacaClerkFacade:
         if self._stream_health is None:
             return None
         return self._stream_health.snapshot(symbol)
+
+    async def manual_order_capability(self) -> ManualOrderCapability:
+        """Return the server-owned policy gate for the manual market tracer."""
+        async with self._intake:
+            return await manual_order_capability(
+                read=self._read,
+                stream_health=self._stream_health,
+                manual_trading_enabled=settings.ALPACA_SQLITE_MANUAL_TRADING_ENABLED,
+                control_secret=settings.DATA_PLANE_CONTROL_SECRET,
+                allow_unauthenticated_control=settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL,
+                account_id=self.account_id,
+            )
+
+    async def preview_manual_order(
+        self,
+        *,
+        operator_id: str,
+        ticket_id: str,
+        legs: tuple[ManualTicketLeg, ...],
+    ) -> ManualOrderPreview:
+        """Bind one browser-stable ticket leg to current SQLite authority facts."""
+        async with self._intake:
+            return await preview_manual_order(
+                repo=self._repo,
+                read=self._read,
+                stream_health=self._stream_health,
+                manual_trading_enabled=settings.ALPACA_SQLITE_MANUAL_TRADING_ENABLED,
+                control_secret=settings.DATA_PLANE_CONTROL_SECRET,
+                allow_unauthenticated_control=settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL,
+                account_id=self.account_id,
+                operator_id=operator_id,
+                ticket_id=ticket_id,
+                legs=legs,
+            )
+
+    async def submit_manual_order(
+        self,
+        *,
+        operator_id: str,
+        ticket_id: str,
+        legs: tuple[ManualTicketLeg, ...],
+        preview_token: str,
+        continuation: bool = False,
+    ) -> ManualOrderSubmission:
+        """Accept and submit one previewed manual leg under the intake fence."""
+        async with self._intake:
+            return await submit_previewed_manual_order(
+                repo=self._repo,
+                read=self._read,
+                trade=self._trade,
+                stream_health=self._stream_health,
+                manual_trading_enabled=settings.ALPACA_SQLITE_MANUAL_TRADING_ENABLED,
+                control_secret=settings.DATA_PLANE_CONTROL_SECRET,
+                allow_unauthenticated_control=settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL,
+                account_id=self.account_id,
+                operator_id=operator_id,
+                ticket_id=ticket_id,
+                legs=legs,
+                preview_token=preview_token,
+                continuation=continuation,
+            )
+
+    def manual_order_ticket(self, ticket_id: str) -> ManualOrderTicketResource | None:
+        """Read one durable ticket without presenting repository mutation access."""
+        return get_manual_ticket(self._repo, ticket_id)
+
+    async def cancel_manual_order(
+        self,
+        *,
+        operator_id: str,
+        order_ref: str,
+        cancel_request_id: str,
+    ) -> ManualOrderCancellationSubmission:
+        """Accept and reconcile one durable manual-order cancellation."""
+        async with self._intake:
+            return await submit_manual_order_cancellation(
+                self._repo,
+                account_id=self.account_id,
+                operator_id=operator_id,
+                order_ref=order_ref,
+                cancel_request_id=cancel_request_id,
+                trade=self._trade,
+            )
+
+    async def cancel_manual_ticket(
+        self,
+        *,
+        operator_id: str,
+        ticket_id: str,
+        cancel_request_id: str,
+    ) -> ManualOrderTicketResource:
+        """Cancel the ticket's owned working orders with one replayable request."""
+        async with self._intake:
+            await submit_manual_ticket_cancellation(
+                self._repo,
+                account_id=self.account_id,
+                operator_id=operator_id,
+                ticket_id=ticket_id,
+                cancel_request_id=cancel_request_id,
+                trade=self._trade,
+            )
+            ticket = get_manual_ticket(self._repo, ticket_id)
+            if ticket is None:
+                raise RuntimeError("manual ticket disappeared after cancellation")
+            return ticket
 
     async def register_strategy_run(self, binding: BrokerBotBinding) -> None:
         """Durably register immutable strategy + run before order capability."""

@@ -27,12 +27,16 @@ outer ``custody_transitions`` column, so its ``facts_json`` is legitimately
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    ExecutionCoverageConflictCause,
+)
 
 FACTS_SCHEMA_VERSION = 1
 
@@ -306,8 +310,8 @@ class UncertaintyRaisedFacts:
     """``UNCERTAINTY_RAISED`` (#1380): the R5 envelope, minus what's already
     an outer ``custody_transitions``/``uncertainties`` column —
     ``strategy_instance_id`` is already an outer transition column, and
-    ``uncertainties.scope`` is derived from it being non-null (``BOT``) or
-    null (``ACCOUNT_CLERK``), the same truthful scope/identity coupling
+    ``uncertainties.scope`` is derived from it being non-null
+    (``CUSTODY_SUBJECT``) or null (``ACCOUNT_CLERK``), the same truthful scope/identity coupling
     ``holds`` already uses. Every other envelope field (severity, the two
     independent admission axes, and the four backend-authored operator-
     facing strings) has nowhere else to live, so it's typed here."""
@@ -401,6 +405,95 @@ class ExecutionSliceFilledFacts:
 
 
 @dataclass(frozen=True)
+class ExecutionCoverageQuarantinedFacts:
+    """Immutable exact evidence withheld from economics pending coverage proof.
+
+    The record is deliberately a transition fact rather than a second fill
+    table: it must survive mirror replay, but it must not participate in
+    positions or FIFO until a closed resolution proof chooses it.
+    """
+
+    order_ref: str
+    conflict_execution_id: str
+    exact_execution: ExecutionSliceFilledFacts
+    conflicting_cumulative_fill_ids: list[str]
+    uncertainty: UncertaintyRaisedFacts | None
+
+    def to_facts_json(self) -> str:
+        return canonicalize(
+            {
+                "order_ref": self.order_ref,
+                "conflict_execution_id": self.conflict_execution_id,
+                "exact_execution": json.loads(self.exact_execution.to_facts_json()),
+                "conflicting_cumulative_fill_ids": self.conflicting_cumulative_fill_ids,
+                "uncertainty": (
+                    None
+                    if self.uncertainty is None
+                    else json.loads(self.uncertainty.to_facts_json())
+                ),
+            }
+        )
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> ExecutionCoverageQuarantinedFacts:
+        value = json.loads(facts_json)
+        if not isinstance(value, dict):
+            raise ValueError("quarantined coverage facts must be an object")
+        try:
+            exact_execution = ExecutionSliceFilledFacts.from_facts_json(
+                canonicalize(value.pop("exact_execution"))
+            )
+            raw_uncertainty = value.pop("uncertainty")
+            uncertainty = (
+                None
+                if raw_uncertainty is None
+                else UncertaintyRaisedFacts.from_facts_json(canonicalize(raw_uncertainty))
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("quarantined coverage nested facts are invalid") from exc
+        return cls(exact_execution=exact_execution, uncertainty=uncertainty, **value)
+
+
+@dataclass(frozen=True)
+class ExecutionCoverageResolvedFacts:
+    """Closed proof that replaces one aggregate fold with one exact execution.
+
+    Both source records remain immutable custody transitions. ``fills`` is a
+    rebuildable current-state fold, so replacing its selected row preserves
+    audit history while preventing a double economic delta.
+    """
+
+    uncertainty_id: str
+    account_id: str
+    authority_generation: int
+    db_identity_token: str
+    expected_control_revision: int
+    order_ref: str
+    resolution_kind: str
+    replaced_cumulative_fill_id: str
+    exact_execution: ExecutionSliceFilledFacts
+    evidence_refs: list[str]
+
+    def to_facts_json(self) -> str:
+        value = asdict(self)
+        value["exact_execution"] = json.loads(self.exact_execution.to_facts_json())
+        return canonicalize(value)
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> ExecutionCoverageResolvedFacts:
+        value = json.loads(facts_json)
+        if not isinstance(value, dict):
+            raise ValueError("coverage resolution facts must be an object")
+        try:
+            value["exact_execution"] = ExecutionSliceFilledFacts.from_facts_json(
+                canonicalize(value["exact_execution"])
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("coverage resolution exact execution is invalid") from exc
+        return cls(**value)
+
+
+@dataclass(frozen=True)
 class ExecutionCorrectedFacts:
     """An auditable effective replacement for one prior execution slice.
 
@@ -422,6 +515,143 @@ class ExecutionCorrectedFacts:
 
     @classmethod
     def from_facts_json(cls, facts_json: str) -> ExecutionCorrectedFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
+class CustodySubjectRegisteredFacts:
+    """Versioned identity for a non-bot Clerk custody subject."""
+
+    subject_id: str
+    kind: str
+    strategy_instance_id: str | None
+    operator_id: str | None
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> CustodySubjectRegisteredFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
+class ManualTicketLegReservedFacts:
+    """One immutable manual-ticket leg, before any broker eligibility exists."""
+
+    leg_id: str
+    instruction_hash: str
+    instruction: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class ManualTicketReservedFacts:
+    """The complete durable reservation of one non-atomic manual ticket."""
+
+    ticket_id: str
+    subject_id: str
+    operator_id: str
+    instruction_hash: str
+    legs: tuple[ManualTicketLegReservedFacts, ...]
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> ManualTicketReservedFacts:
+        value = json.loads(facts_json)
+        try:
+            value["legs"] = tuple(
+                ManualTicketLegReservedFacts(**leg) for leg in value["legs"]
+            )
+        except (KeyError, TypeError) as exc:
+            raise ValueError("manual ticket legs must be typed facts") from exc
+        return cls(**value)
+
+
+@dataclass(frozen=True)
+class ManualTicketStateFacts:
+    """A backend-authored terminal or paused state for one manual ticket."""
+
+    ticket_id: str
+    subject_id: str
+    state: str
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> ManualTicketStateFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
+class ManualOrderAcceptedFacts:
+    """One manual BUY or custody-reducing SELL market/DAY leg made broker-eligible by SQLite.
+
+    The ticket reservation establishes immutable user input; this fact captures
+    the command/effect identities that bind that reservation to exactly one
+    broker client-order identity before any network call is attempted.
+    """
+
+    ticket_id: str
+    leg_id: str
+    subject_id: str
+    operator_id: str
+    instruction_hash: str
+    idempotency_key: str
+    payload_hash: str
+    kind: str
+    action: str
+    intended_end_state: str | None
+    effect_idempotency_key: str
+    effect_kind: str
+    leg: dict[str, Any]
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> ManualOrderAcceptedFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
+class ManualOrderCancelAcceptedFacts:
+    """Immutable cancellation identity for one already-owned manual order."""
+
+    order_ref: str
+    subject_id: str
+    operator_id: str
+    cancel_request_id: str
+    idempotency_key: str
+    payload_hash: str
+    kind: str
+    action: str
+    intended_end_state: str | None
+    effect_idempotency_key: str
+    effect_kind: str
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> ManualOrderCancelAcceptedFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
+class ManualOrderCancelResultFacts:
+    """Exact local or broker proof resolving one cancellation effect."""
+
+    outcome: str
+    why: str
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> ManualOrderCancelResultFacts:
         return cls(**json.loads(facts_json))
 
 
@@ -469,6 +699,199 @@ def validate_execution_slice_facts(facts: ExecutionSliceFilledFacts) -> None:
         raise ValueError("not_reported fee_fidelity requires fee=None")
     if isinstance(facts.source_event_at_ms, bool) or not isinstance(facts.source_event_at_ms, int):
         raise ValueError("source_event_at_ms must be an int64 millisecond timestamp")
+
+
+def validate_execution_coverage_quarantined_facts(
+    facts: ExecutionCoverageQuarantinedFacts,
+) -> ExecutionSliceFilledFacts:
+    if not isinstance(facts.order_ref, str) or not facts.order_ref:
+        raise ValueError("quarantined coverage requires order_ref")
+    exact_execution = facts.exact_execution
+    validate_execution_slice_facts(exact_execution)
+    if not isinstance(facts.conflict_execution_id, str) or not facts.conflict_execution_id:
+        raise ValueError("quarantined coverage requires conflict_execution_id")
+    fill_ids = facts.conflicting_cumulative_fill_ids
+    if (
+        not isinstance(fill_ids, list)
+        or not fill_ids
+        or any(not isinstance(fill_id, str) or not fill_id for fill_id in fill_ids)
+        or fill_ids != sorted(set(fill_ids))
+    ):
+        raise ValueError("quarantined coverage requires unique sorted cumulative fill ids")
+    if facts.uncertainty is not None:
+        try:
+            cause = ExecutionCoverageConflictCause.from_mapping(facts.uncertainty.cause_facts)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("quarantined coverage uncertainty cause is invalid") from exc
+        if (
+            facts.uncertainty.reason_code != "EXECUTION_COVERAGE_CONFLICT"
+            or not facts.uncertainty.blocks_new_exposure
+            or facts.uncertainty.allows_reduction
+            or cause.order_ref != facts.order_ref
+            or cause.execution_id != facts.conflict_execution_id
+            or exact_execution.execution_id != facts.conflict_execution_id
+        ):
+            raise ValueError("initial coverage quarantine must embed its blocking uncertainty")
+    return exact_execution
+
+
+def validate_execution_coverage_resolved_facts(
+    facts: ExecutionCoverageResolvedFacts,
+) -> ExecutionSliceFilledFacts:
+    if not isinstance(facts.uncertainty_id, str) or not facts.uncertainty_id:
+        raise ValueError("coverage resolution requires uncertainty_id")
+    if not isinstance(facts.account_id, str) or not facts.account_id:
+        raise ValueError("coverage resolution requires account_id")
+    if (
+        isinstance(facts.authority_generation, bool)
+        or not isinstance(facts.authority_generation, int)
+        or facts.authority_generation < 1
+    ):
+        raise ValueError("coverage resolution requires authority_generation")
+    if not isinstance(facts.db_identity_token, str) or not facts.db_identity_token:
+        raise ValueError("coverage resolution requires db_identity_token")
+    if (
+        isinstance(facts.expected_control_revision, bool)
+        or not isinstance(facts.expected_control_revision, int)
+        or facts.expected_control_revision < 0
+    ):
+        raise ValueError("coverage resolution requires expected_control_revision")
+    if not isinstance(facts.order_ref, str) or not facts.order_ref:
+        raise ValueError("coverage resolution requires order_ref")
+    if facts.resolution_kind != "EXACT_REPLACES_CUMULATIVE":
+        raise ValueError("coverage resolution kind is not supported")
+    if not isinstance(facts.replaced_cumulative_fill_id, str) or not facts.replaced_cumulative_fill_id:
+        raise ValueError("coverage resolution requires a cumulative fill id")
+    if (
+        not isinstance(facts.evidence_refs, list)
+        or not facts.evidence_refs
+        or any(not isinstance(reference, str) or not reference for reference in facts.evidence_refs)
+        or facts.evidence_refs != sorted(set(facts.evidence_refs))
+    ):
+        raise ValueError("coverage resolution requires unique sorted evidence references")
+    validate_execution_slice_facts(facts.exact_execution)
+    return facts.exact_execution
+
+
+def validate_custody_subject_registered_facts(facts: CustodySubjectRegisteredFacts) -> None:
+    """Validate a closed custody-subject identity before it reaches a fold."""
+    from app.broker.alpaca.clerk.sqlite.custody_subjects import CustodySubject
+
+    CustodySubject(
+        subject_id=facts.subject_id,
+        kind=facts.kind,
+        strategy_instance_id=facts.strategy_instance_id,
+        operator_id=facts.operator_id,
+    ).validate()
+
+
+def validate_manual_ticket_reserved_facts(facts: ManualTicketReservedFacts) -> None:
+    """Validate the immutable ticket envelope before any manual leg exists."""
+    from app.broker.contract.models import BrokerOrderLeg
+
+    if not all(
+        isinstance(value, str) and value
+        for value in (facts.ticket_id, facts.subject_id, facts.operator_id, facts.instruction_hash)
+    ):
+        raise ValueError("manual ticket requires non-empty identity and instruction fields")
+    if not facts.legs:
+        raise ValueError("manual ticket requires at least one reserved leg")
+    leg_ids = [leg.leg_id for leg in facts.legs]
+    if (
+        len(leg_ids) != len(set(leg_ids))
+        or any(not isinstance(leg_id, str) or not leg_id for leg_id in leg_ids)
+        or any(not isinstance(leg.instruction_hash, str) or not leg.instruction_hash for leg in facts.legs)
+    ):
+        raise ValueError("manual ticket requires unique legs with instruction hashes")
+    for leg in facts.legs:
+        # v9/v10 reserved only one immediately accepted leg, whose full
+        # instruction remains recoverable from MANUAL_ORDER_ACCEPTED. New
+        # ordered tickets retain it here before any leg becomes eligible.
+        if leg.instruction is None:
+            continue
+        normalized = BrokerOrderLeg.model_validate(leg.instruction)
+        expected_hash = hashlib.sha256(
+            canonicalize(normalized.model_dump(mode="json")).encode("utf-8")
+        ).hexdigest()
+        if leg.instruction_hash != expected_hash:
+            raise ValueError("manual ticket leg instruction hash does not match its normalized instruction")
+
+
+def validate_manual_ticket_state_facts(facts: ManualTicketStateFacts) -> None:
+    if not isinstance(facts.ticket_id, str) or not facts.ticket_id:
+        raise ValueError("manual ticket state requires ticket_id")
+    if not isinstance(facts.subject_id, str) or not facts.subject_id:
+        raise ValueError("manual ticket state requires subject_id")
+    if facts.state not in {"PAUSED_UNKNOWN", "COMPLETED", "CANCELED"}:
+        raise ValueError("manual ticket state is not supported")
+
+
+def validate_manual_order_accepted_facts(facts: ManualOrderAcceptedFacts) -> None:
+    """Keep each supported manual leg durable and replayable."""
+    from app.broker.alpaca.clerk.sqlite.custody_subjects import manual_operator_subject_id
+    from app.broker.contract.models import BrokerOrderLeg, OrderSide, OrderType, TimeInForce
+
+    if not all(
+        isinstance(value, str) and value
+        for value in (
+            facts.ticket_id,
+            facts.leg_id,
+            facts.subject_id,
+            facts.operator_id,
+            facts.instruction_hash,
+            facts.idempotency_key,
+            facts.payload_hash,
+            facts.effect_idempotency_key,
+        )
+    ):
+        raise ValueError("manual order acceptance requires complete immutable identities")
+    if facts.subject_id != manual_operator_subject_id(facts.operator_id):
+        raise ValueError("manual order acceptance has a noncanonical operator subject")
+    if facts.kind != "manual_order" or facts.action != "SUBMIT_MANUAL_ORDER":
+        raise ValueError("manual order acceptance has an unsupported command shape")
+    if facts.effect_kind != "MANUAL_ORDER":
+        raise ValueError("manual order acceptance has an unsupported effect kind")
+    leg = BrokerOrderLeg.model_validate(facts.leg)
+    if leg.side not in {OrderSide.BUY, OrderSide.SELL} or leg.order_type not in {
+        OrderType.MARKET,
+        OrderType.LIMIT,
+    } or leg.time_in_force not in {TimeInForce.DAY, TimeInForce.GTC}:
+        raise ValueError("manual tickets accept only BUY or SELL market/limit DAY/GTC equity legs")
+    expected_instruction_hash = hashlib.sha256(
+        canonicalize(leg.model_dump(mode="json")).encode("utf-8")
+    ).hexdigest()
+    if facts.instruction_hash != expected_instruction_hash:
+        raise ValueError("manual order acceptance instruction hash does not match its leg")
+
+
+def validate_manual_order_cancel_accepted_facts(facts: ManualOrderCancelAcceptedFacts) -> None:
+    """Reject a cancel identity that could cross a manual custody boundary."""
+    from app.broker.alpaca.clerk.sqlite.custody_subjects import manual_operator_subject_id
+
+    if not all(
+        isinstance(value, str) and value
+        for value in (
+            facts.order_ref,
+            facts.subject_id,
+            facts.operator_id,
+            facts.cancel_request_id,
+            facts.idempotency_key,
+            facts.payload_hash,
+            facts.effect_idempotency_key,
+        )
+    ):
+        raise ValueError("manual cancellation requires complete immutable identities")
+    if facts.subject_id != manual_operator_subject_id(facts.operator_id):
+        raise ValueError("manual cancellation has a noncanonical operator subject")
+    if facts.kind != "manual_order" or facts.action != "CANCEL_MANUAL_ORDER":
+        raise ValueError("manual cancellation has an unsupported command shape")
+    if facts.effect_kind != "CANCEL":
+        raise ValueError("manual cancellation has an unsupported effect kind")
+
+
+def validate_manual_order_cancel_result_facts(facts: ManualOrderCancelResultFacts) -> None:
+    if facts.outcome not in {"CANCELED", "TARGET_TERMINAL"} or not facts.why:
+        raise ValueError("manual cancellation result has an unsupported outcome")
 
 
 def validate_execution_corrected_facts(facts: ExecutionCorrectedFacts) -> None:

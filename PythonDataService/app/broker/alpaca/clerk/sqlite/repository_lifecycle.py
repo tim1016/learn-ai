@@ -408,6 +408,12 @@ def _validate_control_identity(
             f"requested {account_id!r}"
         )
     if control_row["schema_version"] < schema.SCHEMA_VERSION:
+        if control_row["schema_version"] == 8:
+            conn.close()
+            raise SchemaVersionMismatch(
+                f"{db_path} schema_version=8 requires the offline v8-to-v9 Clerk upgrade; "
+                "stop the data plane, create a verified backup, and run the v9 upgrade ceremony"
+            )
         try:
             schema.migrate_schema(conn, from_version=control_row["schema_version"])
         except ValueError as exc:

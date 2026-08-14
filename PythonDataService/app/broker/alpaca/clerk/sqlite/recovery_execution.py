@@ -108,11 +108,39 @@ async def execute_recovery_action(
             )
 
     context = await current_context()
+    if request.action_id == "resolve_execution_coverage" and request.execution_ref is not None:
+        receipt = facade.repository.execution_coverage_resolution_receipt(
+            request.execution_ref
+        )
+        if receipt is not None:
+            return RecoveryExecutionResult(
+                action_id=request.action_id,
+                applied=receipt.applied,
+                receipt_id=receipt.receipt_id,
+                recorded_at_ms=receipt.recorded_at_ms,
+            )
     capability = recheck_recovery_action(
         context,
         action_id=request.action_id,
         concurrency_token=request.concurrency_token,
     )
+    if request.action_id == "resolve_execution_coverage":
+        if capability.execution_ref is None or request.execution_ref != capability.execution_ref:
+            raise RecoveryExecutionError(
+                "The selected coverage conflict does not match the presented Clerk action."
+            )
+        receipt = facade.repository.resolve_execution_coverage_conflict(
+            uncertainty_id=capability.execution_ref,
+            expected_authority_generation=context.authority_generation,
+            expected_db_identity_token=context.db_identity_token,
+            expected_control_revision=context.control_revision,
+        )
+        return RecoveryExecutionResult(
+            action_id=request.action_id,
+            applied=receipt.applied,
+            receipt_id=receipt.receipt_id,
+            recorded_at_ms=receipt.recorded_at_ms,
+        )
     if request.action_id == "stop_bot_decisions":
         strategy_instance_id = _require_strategy_instance(context)
         if capability.execution_ref is None or request.execution_ref != capability.execution_ref:

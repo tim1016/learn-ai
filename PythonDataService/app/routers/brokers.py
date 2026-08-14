@@ -37,6 +37,20 @@ from app.broker.alpaca.clerk.sqlite.economic_projection import (
     EconomicProjectionError,
     MarketMark,
 )
+from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError
+from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import (
+    ManualOrderCancelConflictError,
+    ManualOrderCancelOwnershipError,
+    ManualOrderCancelTerminalError,
+    ManualTicketCancelError,
+)
+from app.broker.alpaca.clerk.sqlite.manual_order_runtime import ManualPreviewStaleError
+from app.broker.alpaca.clerk.sqlite.manual_orders import (
+    ManualTicketConflictError,
+    ManualTicketContinuationError,
+    ManualTicketLeg,
+)
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.errors import (
     BrokerError,
     BrokerRateLimited,
@@ -63,7 +77,19 @@ from app.schemas.account_pnl_attribution import (
     AccountPnlReconciliationResponse,
     PortfolioHistoryProofResponse,
 )
-from app.security.data_plane_control import require_data_plane_control_secret
+from app.schemas.manual_orders import (
+    ManualOrderCancellationResponse,
+    ManualOrderCancelRequest,
+    ManualOrderCapabilityResponse,
+    ManualOrderPreviewRequest,
+    ManualOrderPreviewResponse,
+    ManualOrderSubmitRequest,
+    ManualOrderTicketResponse,
+)
+from app.security.data_plane_control import (
+    require_data_plane_control_secret,
+    require_data_plane_control_secret_always,
+)
 from app.services.account_pnl_reconciliation import reconcile_broker_curve_to_local_pnl
 from app.services.broker_account_snapshot import resolve_broker_account_snapshot
 from app.services.broker_order_groups import group_orders_by_symbol
@@ -121,6 +147,44 @@ async def _run[T](broker: str, call: Callable[[BrokerReadPort], Awaitable[T]]) -
         return await call(port)
     except BrokerError as error:
         _raise_http(error)
+
+
+def _require_sqlite_manual_facade(account_id: str) -> SqliteAlpacaClerkFacade:
+    """Resolve the only authority permitted to mutate a manual ticket."""
+    facade = active_sqlite_facade("alpaca")
+    if facade is None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason": "sqlite_authority_inactive",
+                "message": "Manual order tickets require the active SQLite Account Clerk.",
+            },
+        )
+    if facade.account_id != account_id:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "reason": "sqlite_account_not_selected",
+                "message": "This account is not the active SQLite Account Clerk authority.",
+            },
+        )
+    return facade
+
+
+def _manual_ticket_response(
+    facade: SqliteAlpacaClerkFacade,
+    ticket_id: str,
+) -> ManualOrderTicketResponse:
+    ticket = facade.manual_order_ticket(ticket_id)
+    if ticket is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "reason": "manual_ticket_not_found",
+                "message": "No durable manual order ticket has this identity.",
+            },
+        )
+    return ManualOrderTicketResponse.from_resource(ticket, repo=facade.repository)
 
 
 @router.get("/{broker}/account", response_model=BrokerAccountSnapshot)
@@ -260,9 +324,7 @@ async def get_portfolio_history_proof(
                 for position in positions
                 if position.current_price is not None
             },
-            position_quantities={
-                position.symbol.upper(): position.quantity for position in positions
-            },
+            position_quantities={position.symbol.upper(): position.quantity for position in positions},
         )
     except (ClerkTransactionProjectionUnavailable, EconomicProjectionError):
         return _history_without_proof(
@@ -383,6 +445,195 @@ async def submit_orders(broker: str, request: BrokerOrderRequest) -> OrderSubmit
         _raise_http(error)
 
 
+@router.get(
+    "/alpaca/accounts/{account_id}/manual-orders/capability",
+    response_model=ManualOrderCapabilityResponse,
+    dependencies=[Depends(require_data_plane_control_secret_always)],
+)
+async def sqlite_manual_order_capability(account_id: str) -> ManualOrderCapabilityResponse:
+    """Return the current policy answer before a browser opens a ticket."""
+    facade = _require_sqlite_manual_facade(account_id)
+    try:
+        capability = await facade.manual_order_capability()
+    except BrokerError as error:
+        _raise_http(error)
+    return ManualOrderCapabilityResponse.from_domain(capability)
+
+
+@router.post(
+    "/alpaca/accounts/{account_id}/manual-orders/preview",
+    response_model=ManualOrderPreviewResponse,
+    dependencies=[Depends(require_data_plane_control_secret)],
+)
+async def preview_sqlite_manual_order(
+    account_id: str,
+    request: ManualOrderPreviewRequest,
+) -> ManualOrderPreviewResponse:
+    """Bind one browser-stable ticket leg to fresh server authority facts."""
+    facade = _require_sqlite_manual_facade(account_id)
+    try:
+        preview = await facade.preview_manual_order(
+            operator_id=settings.PANEL_OPERATOR_IDENTITY,
+            ticket_id=str(request.ticket_id),
+            legs=tuple(ManualTicketLeg(leg_id=str(leg.leg_id), instruction=leg.instruction) for leg in request.legs),
+        )
+    except BrokerError as error:
+        _raise_http(error)
+    return ManualOrderPreviewResponse.from_domain(preview)
+
+
+@router.put(
+    "/alpaca/accounts/{account_id}/manual-order-tickets/{ticket_id}",
+    response_model=ManualOrderTicketResponse,
+    status_code=202,
+    dependencies=[Depends(require_data_plane_control_secret)],
+)
+async def submit_sqlite_manual_order(
+    account_id: str,
+    ticket_id: UUID,
+    request: ManualOrderSubmitRequest,
+) -> ManualOrderTicketResponse:
+    """Durably accept then submit exactly one previewed manual market-order leg."""
+    facade = _require_sqlite_manual_facade(account_id)
+    ticket = str(ticket_id)
+    try:
+        await facade.submit_manual_order(
+            operator_id=settings.PANEL_OPERATOR_IDENTITY,
+            ticket_id=ticket,
+            legs=tuple(ManualTicketLeg(leg_id=str(leg.leg_id), instruction=leg.instruction) for leg in request.legs),
+            preview_token=request.preview_token,
+        )
+    except ManualPreviewStaleError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "manual_preview_stale", "message": str(exc)},
+        ) from exc
+    except (DurableConflictError, ManualTicketConflictError, ManualTicketContinuationError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "manual_ticket_conflict", "message": str(exc)},
+        ) from exc
+    except BrokerError as error:
+        _raise_http(error)
+    return _manual_ticket_response(facade, ticket)
+
+
+@router.post(
+    "/alpaca/accounts/{account_id}/manual-order-tickets/{ticket_id}/continue",
+    response_model=ManualOrderTicketResponse,
+    status_code=202,
+    dependencies=[Depends(require_data_plane_control_secret)],
+)
+async def continue_sqlite_manual_order_ticket(
+    account_id: str,
+    ticket_id: UUID,
+    request: ManualOrderSubmitRequest,
+) -> ManualOrderTicketResponse:
+    """Activate only the next acknowledged ticket leg after a fresh review."""
+    facade = _require_sqlite_manual_facade(account_id)
+    ticket = str(ticket_id)
+    try:
+        await facade.submit_manual_order(
+            operator_id=settings.PANEL_OPERATOR_IDENTITY,
+            ticket_id=ticket,
+            legs=tuple(ManualTicketLeg(leg_id=str(leg.leg_id), instruction=leg.instruction) for leg in request.legs),
+            preview_token=request.preview_token,
+            continuation=True,
+        )
+    except ManualPreviewStaleError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "manual_preview_stale", "message": str(exc)},
+        ) from exc
+    except (DurableConflictError, ManualTicketConflictError, ManualTicketContinuationError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "manual_ticket_continuation_refused", "message": str(exc)},
+        ) from exc
+    except BrokerError as error:
+        _raise_http(error)
+    return _manual_ticket_response(facade, ticket)
+
+
+@router.get(
+    "/alpaca/accounts/{account_id}/manual-order-tickets/{ticket_id}",
+    response_model=ManualOrderTicketResponse,
+    dependencies=[Depends(require_data_plane_control_secret_always)],
+)
+async def get_sqlite_manual_order_ticket(
+    account_id: str,
+    ticket_id: UUID,
+) -> ManualOrderTicketResponse:
+    """Restore a durable manual ticket after refresh or a lost submit response."""
+    facade = _require_sqlite_manual_facade(account_id)
+    return _manual_ticket_response(facade, str(ticket_id))
+
+
+@router.post(
+    "/alpaca/accounts/{account_id}/manual-order-tickets/{ticket_id}/cancel",
+    response_model=ManualOrderTicketResponse,
+    status_code=202,
+    dependencies=[Depends(require_data_plane_control_secret)],
+)
+async def cancel_sqlite_manual_ticket(
+    account_id: str,
+    ticket_id: UUID,
+    request: ManualOrderCancelRequest,
+) -> ManualOrderTicketResponse:
+    """Cancel every verified working order owned by one manual ticket."""
+    facade = _require_sqlite_manual_facade(account_id)
+    try:
+        ticket = await facade.cancel_manual_ticket(
+            operator_id=settings.PANEL_OPERATOR_IDENTITY,
+            ticket_id=str(ticket_id),
+            cancel_request_id=str(request.cancel_request_id),
+        )
+    except (
+        DurableConflictError,
+        ManualOrderCancelConflictError,
+        ManualOrderCancelOwnershipError,
+        ManualOrderCancelTerminalError,
+        ManualTicketCancelError,
+    ) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "manual_ticket_cancel_refused", "message": str(exc)},
+        ) from exc
+    return ManualOrderTicketResponse.from_resource(ticket, repo=facade.repository)
+
+
+@router.post(
+    "/alpaca/accounts/{account_id}/manual-orders/{order_ref:path}/cancel",
+    response_model=ManualOrderCancellationResponse,
+    status_code=202,
+    dependencies=[Depends(require_data_plane_control_secret)],
+)
+async def cancel_sqlite_manual_order(
+    account_id: str,
+    order_ref: str,
+    request: ManualOrderCancelRequest,
+) -> ManualOrderCancellationResponse:
+    """Durably cancel one SQLite-owned manual order by Clerk reference only."""
+    facade = _require_sqlite_manual_facade(account_id)
+    try:
+        submission = await facade.cancel_manual_order(
+            operator_id=settings.PANEL_OPERATOR_IDENTITY,
+            order_ref=order_ref,
+            cancel_request_id=str(request.cancel_request_id),
+        )
+    except (
+        DurableConflictError,
+        ManualOrderCancelConflictError,
+        ManualOrderCancelOwnershipError,
+        ManualOrderCancelTerminalError,
+    ) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "manual_order_cancel_refused", "message": str(exc)},
+        ) from exc
+    return ManualOrderCancellationResponse.from_domain(submission)
+
+
 @router.delete(
     "/{broker}/orders/{order_id}",
     response_model=OrderCancelResult,
@@ -416,9 +667,7 @@ class ClearHoldRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     operator: str = Field(default="operator", max_length=64)
-    reason: str = Field(
-        default="Operator cleared the exposure hold.", min_length=1, max_length=512
-    )
+    reason: str = Field(default="Operator cleared the exposure hold.", min_length=1, max_length=512)
 
     @field_validator("reason")
     @classmethod
@@ -510,9 +759,7 @@ async def clear_clerk_hold(broker: str, request: ClearHoldRequest) -> ClerkStatu
     responses={409: {"model": CustodyConflictResponse}},
     dependencies=[Depends(require_data_plane_control_secret)],
 )
-async def resolve_custody(
-    broker: str, request: CustodyResolutionRequest
-) -> CustodyResolutionReceipt:
+async def resolve_custody(broker: str, request: CustodyResolutionRequest) -> CustodyResolutionReceipt:
     """Resolve Clerk↔broker divergence: run the diagnosed plan, journal the reason.
 
     A control mutation. The typed token is a UI friction gate; the operator

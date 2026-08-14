@@ -92,6 +92,7 @@ ActionId = Literal[
     "clear_hold",
     "record_inventory_baseline",
     "reconcile_now",
+    "resolve_execution_coverage",
     "cancel_verified_working_orders",
     "prepare_safe_flatten",
     "stop_bot_decisions",
@@ -111,6 +112,7 @@ ACTION_IDS: Final[tuple[ActionId, ...]] = (
     "clear_hold",
     "record_inventory_baseline",
     "reconcile_now",
+    "resolve_execution_coverage",
     "cancel_verified_working_orders",
     "prepare_safe_flatten",
     "stop_bot_decisions",
@@ -284,6 +286,10 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
     ),
     "reconcile_now": OperatorCopy(
         "Reconcile now", "Run a reconciliation sweep against the broker immediately."
+    ),
+    "resolve_execution_coverage": OperatorCopy(
+        "Resolve execution coverage",
+        "Replace one matching cumulative recovery record with verified exact execution evidence.",
     ),
     "cancel_verified_working_orders": OperatorCopy(
         "Cancel verified working orders",

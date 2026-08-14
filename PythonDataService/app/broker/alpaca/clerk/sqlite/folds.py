@@ -20,6 +20,12 @@ from collections.abc import Callable
 from typing import Any
 
 from app.broker.alpaca.clerk.sqlite import reads
+from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
+from app.broker.alpaca.clerk.sqlite.execution_coverage import (
+    FILL_QTY_EPSILON,
+    active_execution_coverage_conflicts,
+    execution_coverage_proof,
+)
 from app.broker.alpaca.clerk.sqlite.external_order_folds import (
     fold_external_order_acknowledged as _fold_external_order_acknowledged,
 )
@@ -32,16 +38,32 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     CommandRejectedFacts,
     EnterAcceptedFacts,
     ExecutionCorrectedFacts,
+    ExecutionCoverageQuarantinedFacts,
+    ExecutionCoverageResolvedFacts,
     ExecutionSliceFilledFacts,
     ExitAcceptedFacts,
+    ManualOrderCancelResultFacts,
     OrderFillObservedFacts,
     ReconciliationAttemptedFacts,
     RunStartedFacts,
     RunStoppedFacts,
     validate_execution_corrected_facts,
+    validate_execution_coverage_quarantined_facts,
+    validate_execution_coverage_resolved_facts,
     validate_execution_slice_facts,
+    validate_manual_order_cancel_result_facts,
 )
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
+from app.broker.alpaca.clerk.sqlite.manual_ticket_folds import (
+    fold_custody_subject_registered,
+    fold_manual_order_accepted,
+    fold_manual_order_cancel_accepted,
+    fold_manual_ticket_reserved,
+    fold_manual_ticket_state,
+    pause_manual_ticket_for_unknown_cancellation,
+    rederive_manual_ticket_state_for_order,
+    sync_manual_ticket_effect_state,
+)
 from app.broker.alpaca.clerk.sqlite.uncertainty_folds import (
     fold_uncertainty_raised as _fold_uncertainty_raised,
 )
@@ -124,6 +146,16 @@ def _fold_strategy_instance_registered(conn: sqlite3.Connection, payload: dict[s
             payload["recorded_at_ms"],
         ),
     )
+    conn.execute(
+        "INSERT INTO custody_subjects "
+        "(subject_id, kind, strategy_instance_id, operator_id, created_at_ms) "
+        "VALUES (?, 'BOT', ?, NULL, ?)",
+        (
+            bot_subject_id(payload["strategy_instance_id"]),
+            payload["strategy_instance_id"],
+            payload["recorded_at_ms"],
+        ),
+    )
 
 
 def _insert_command_row(
@@ -134,7 +166,8 @@ def _insert_command_row(
     idempotency_key: str,
     payload_hash: str,
     kind: str,
-    strategy_instance_id: str,
+    subject_id: str,
+    strategy_instance_id: str | None,
     run_id: str | None,
     action: str,
     intended_end_state: str | None,
@@ -155,15 +188,16 @@ def _insert_command_row(
     """
     conn.execute(
         "INSERT INTO commands (command_id, authority_generation, idempotency_key, "
-        "payload_hash, kind, strategy_instance_id, run_id, action, intended_end_state, "
+        "payload_hash, kind, subject_id, strategy_instance_id, run_id, action, intended_end_state, "
         "state, effect_operation_id, receipt_id, created_at_ms, updated_at_ms) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)",
         (
             command_id,
             authority_generation,
             idempotency_key,
             payload_hash,
             kind,
+            subject_id,
             strategy_instance_id,
             run_id,
             action,
@@ -245,6 +279,7 @@ def _fold_run_started(conn: sqlite3.Connection, payload: dict[str, Any]) -> None
         idempotency_key=facts.idempotency_key,
         payload_hash=facts.payload_hash,
         kind=facts.kind,
+        subject_id=bot_subject_id(payload["strategy_instance_id"]),
         strategy_instance_id=payload["strategy_instance_id"],
         run_id=payload["run_id"],
         action=facts.action,
@@ -268,6 +303,7 @@ def _fold_run_stopped(conn: sqlite3.Connection, payload: dict[str, Any]) -> None
         idempotency_key=facts.idempotency_key,
         payload_hash=facts.payload_hash,
         kind=facts.kind,
+        subject_id=bot_subject_id(payload["strategy_instance_id"]),
         strategy_instance_id=payload["strategy_instance_id"],
         run_id=payload["run_id"],
         action=facts.action,
@@ -287,6 +323,7 @@ def _fold_command_rejected(conn: sqlite3.Connection, payload: dict[str, Any]) ->
         idempotency_key=facts.idempotency_key,
         payload_hash=facts.payload_hash,
         kind=facts.kind,
+        subject_id=bot_subject_id(payload["strategy_instance_id"]),
         strategy_instance_id=payload["strategy_instance_id"],
         run_id=payload["run_id"],
         action=facts.action,
@@ -323,6 +360,7 @@ def _fold_enter_accepted(conn: sqlite3.Connection, payload: dict[str, Any]) -> N
         idempotency_key=facts.idempotency_key,
         payload_hash=facts.payload_hash,
         kind=facts.kind,
+        subject_id=bot_subject_id(payload["strategy_instance_id"]),
         strategy_instance_id=payload["strategy_instance_id"],
         run_id=payload["run_id"],
         action=facts.action,
@@ -332,14 +370,15 @@ def _fold_enter_accepted(conn: sqlite3.Connection, payload: dict[str, Any]) -> N
     )
     conn.execute(
         "INSERT INTO effect_operations (effect_operation_id, authority_generation, "
-        "idempotency_key, command_id, strategy_instance_id, run_id, kind, state, "
+        "idempotency_key, command_id, subject_id, strategy_instance_id, run_id, kind, state, "
         "custody_owner, created_at_ms, updated_at_ms, terminal_receipt_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, 'accepted', 'ACCOUNT_CLERK', ?, ?, NULL)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'accepted', 'ACCOUNT_CLERK', ?, ?, NULL)",
         (
             payload["effect_operation_id"],
             payload["authority_generation"],
             facts.effect_idempotency_key,
             payload["command_id"],
+            bot_subject_id(payload["strategy_instance_id"]),
             payload["strategy_instance_id"],
             payload["run_id"],
             facts.effect_kind,
@@ -388,6 +427,7 @@ def _fold_exit_accepted(conn: sqlite3.Connection, payload: dict[str, Any]) -> No
         idempotency_key=facts.idempotency_key,
         payload_hash=facts.payload_hash,
         kind=facts.kind,
+        subject_id=bot_subject_id(payload["strategy_instance_id"]),
         strategy_instance_id=payload["strategy_instance_id"],
         run_id=payload["run_id"],
         action=facts.action,
@@ -397,14 +437,15 @@ def _fold_exit_accepted(conn: sqlite3.Connection, payload: dict[str, Any]) -> No
     )
     conn.execute(
         "INSERT INTO effect_operations (effect_operation_id, authority_generation, "
-        "idempotency_key, command_id, strategy_instance_id, run_id, kind, state, "
+        "idempotency_key, command_id, subject_id, strategy_instance_id, run_id, kind, state, "
         "custody_owner, created_at_ms, updated_at_ms, terminal_receipt_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, 'accepted', 'ACCOUNT_CLERK', ?, ?, NULL)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'accepted', 'ACCOUNT_CLERK', ?, ?, NULL)",
         (
             payload["effect_operation_id"],
             payload["authority_generation"],
             facts.effect_idempotency_key,
             payload["command_id"],
+            bot_subject_id(payload["strategy_instance_id"]),
             payload["strategy_instance_id"],
             payload["run_id"],
             facts.effect_kind,
@@ -543,6 +584,13 @@ def _fold_order_submit_acked(conn: sqlite3.Connection, payload: dict[str, Any]) 
             "AND state NOT IN ('succeeded','failed','rejected')",
             (payload["recorded_at_ms"], payload["command_id"]),
         )
+        sync_manual_ticket_effect_state(
+            conn,
+            payload,
+            effect_state="in_progress",
+            leg_state="IN_PROGRESS",
+            ticket_state="ACTIVE",
+        )
 
 
 def _fold_effect_terminal(conn: sqlite3.Connection, payload: dict[str, Any], *, terminal_state: str) -> None:
@@ -584,11 +632,109 @@ def _fold_effect_terminal(conn: sqlite3.Connection, payload: dict[str, Any], *, 
     _resolve_unknown_outcome_if_proven(conn, payload)
 
 
+def _sync_manual_cancellation_effect_state(
+    conn: sqlite3.Connection,
+    payload: dict[str, Any],
+    *,
+    effect_state: str,
+    cancellation_state: str,
+) -> None:
+    """Keep the cancellation projection aligned with its own effect only."""
+    effect = conn.execute(
+        "SELECT kind, state FROM effect_operations WHERE effect_operation_id = ?",
+        (payload["effect_operation_id"],),
+    ).fetchone()
+    if effect is None or effect["kind"] != "CANCEL" or effect["state"] != effect_state:
+        return
+    updated = conn.execute(
+        "UPDATE manual_order_cancellations SET state = ?, updated_at_ms = ? WHERE effect_operation_id = ?",
+        (cancellation_state, payload["recorded_at_ms"], payload["effect_operation_id"]),
+    )
+    if updated.rowcount != 1:
+        raise ValueError("manual cancellation effect requires exactly one durable cancellation")
+
+
+def _fold_manual_order_filled(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Terminal success needs both a filled broker state and exact fill coverage.
+
+    ``order_evidence`` appends this only after it proves that the effective
+    execution total covers the immutable manual leg. The fold then makes the
+    receipt and bounded ticket projection agree with that final custody fact.
+    """
+    _fold_effect_terminal(conn, payload, terminal_state="succeeded")
+    sync_manual_ticket_effect_state(
+        conn,
+        payload,
+        effect_state="succeeded",
+        leg_state="SUCCEEDED",
+        ticket_state="COMPLETED",
+    )
+
+
 def _fold_order_submit_failed(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Definitive submit failure (vendor 4xx/409/auth/rate-limit) or absence
     proven past the R4 uncertainty grace window — both fold to the same
     terminal ``failed`` outcome with a receipt."""
     _fold_effect_terminal(conn, payload, terminal_state="failed")
+    sync_manual_ticket_effect_state(
+        conn,
+        payload,
+        effect_state="failed",
+        leg_state="FAILED",
+        ticket_state="COMPLETED",
+    )
+
+
+def _fold_manual_order_canceled(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Terminally cancel a source leg only after local or exact broker proof."""
+    validate_manual_order_cancel_result_facts(ManualOrderCancelResultFacts.from_facts_json(payload["facts_json"]))
+    _fold_effect_terminal(conn, payload, terminal_state="failed")
+    sync_manual_ticket_effect_state(
+        conn,
+        payload,
+        effect_state="failed",
+        leg_state="CANCELED",
+        ticket_state="CANCELED",
+    )
+
+
+def _fold_manual_order_terminal(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Close an owned manual leg on exact expired/rejected broker evidence."""
+    validate_manual_order_cancel_result_facts(ManualOrderCancelResultFacts.from_facts_json(payload["facts_json"]))
+    _fold_effect_terminal(conn, payload, terminal_state="failed")
+    sync_manual_ticket_effect_state(
+        conn,
+        payload,
+        effect_state="failed",
+        leg_state="FAILED",
+        ticket_state="COMPLETED",
+    )
+
+
+def _fold_manual_order_cancel_confirmed(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Record a proved cancellation as success of the cancel effect itself."""
+    validate_manual_order_cancel_result_facts(ManualOrderCancelResultFacts.from_facts_json(payload["facts_json"]))
+    _fold_effect_terminal(conn, payload, terminal_state="succeeded")
+    _sync_manual_cancellation_effect_state(
+        conn,
+        payload,
+        effect_state="succeeded",
+        cancellation_state="SUCCEEDED",
+    )
+    rederive_manual_ticket_state_for_order(conn, payload)
+
+
+def _fold_manual_order_cancel_terminal(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Record that cancellation had a proved terminal target and did not act."""
+    validate_manual_order_cancel_result_facts(ManualOrderCancelResultFacts.from_facts_json(payload["facts_json"]))
+    _fold_effect_terminal(conn, payload, terminal_state="failed")
+    _sync_manual_cancellation_effect_state(
+        conn,
+        payload,
+        effect_state="failed",
+        cancellation_state="FAILED",
+    )
+    rederive_manual_ticket_state_for_order(conn, payload)
 
 
 def _fold_exit_attributed_flat(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
@@ -621,13 +767,22 @@ def _fold_order_submit_uncertain(conn: sqlite3.Connection, payload: dict[str, An
         (payload["effect_operation_id"],),
     ).fetchone()
     if effect is not None and effect["state"] == "unknown":
+        sync_manual_ticket_effect_state(
+            conn,
+            payload,
+            effect_state="unknown",
+            leg_state="UNKNOWN",
+            ticket_state="PAUSED_UNKNOWN",
+        )
+        _sync_manual_cancellation_effect_state(
+            conn,
+            payload,
+            effect_state="unknown",
+            cancellation_state="UNKNOWN",
+        )
+        pause_manual_ticket_for_unknown_cancellation(conn, payload)
         _open_or_refresh_unknown_outcome(conn, payload)
 
-
-#: Numerical-rigor tolerance for the fill-quantity delta gate below — see
-#: ``docs/references/clerk-fill-quantity-tolerance.md`` for the citation and
-#: reasoning (`.claude/rules/numerical-rigor.md`).
-FILL_QTY_EPSILON = 1e-9
 
 #: Numerical-rigor tolerance for "is this position flat/drifted" — same
 #: absolute-tolerance rationale as ``FILL_QTY_EPSILON`` above (see
@@ -659,15 +814,22 @@ def _apply_attributed_position_delta(
     side: str,
     quantity: float,
 ) -> None:
+    owner = conn.execute(
+        "SELECT subject_id, strategy_instance_id FROM effect_operations WHERE effect_operation_id = ?",
+        (payload["effect_operation_id"],),
+    ).fetchone()
+    if owner is None:
+        raise ValueError("execution fill requires its durable owning effect")
     signed_delta = quantity if side == "BUY" else -quantity
     conn.execute(
-        "INSERT INTO positions (strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
-        "VALUES (?, ?, ?, ?) "
-        "ON CONFLICT(strategy_instance_id, symbol) DO UPDATE SET "
+        "INSERT INTO positions (subject_id, strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
+        "VALUES (?, ?, ?, ?, ?) "
+        "ON CONFLICT(subject_id, symbol) DO UPDATE SET "
         "attributed_qty = attributed_qty + excluded.attributed_qty, "
         "updated_at_ms = excluded.updated_at_ms",
         (
-            payload["strategy_instance_id"],
+            owner["subject_id"],
+            owner["strategy_instance_id"],
             symbol.upper(),
             signed_delta,
             payload["recorded_at_ms"],
@@ -690,9 +852,7 @@ def _fold_execution_slice_filled(conn: sqlite3.Connection, payload: dict[str, An
     if payload["source_event_at_ms"] != facts.source_event_at_ms:
         raise ValueError("execution source_event_at_ms must match the typed facts")
 
-    already_recorded = conn.execute(
-        "SELECT 1 FROM fills WHERE execution_id = ?", (facts.execution_id,)
-    ).fetchone()
+    already_recorded = conn.execute("SELECT 1 FROM fills WHERE execution_id = ?", (facts.execution_id,)).fetchone()
     if already_recorded is not None:
         return
     conn.execute(
@@ -725,6 +885,140 @@ def _fold_execution_slice_filled(conn: sqlite3.Connection, payload: dict[str, An
     )
 
 
+def _fold_execution_coverage_quarantined(
+    conn: sqlite3.Connection,
+    payload: dict[str, Any],
+) -> None:
+    """Keep ambiguous exact evidence in the hash chain, outside economics.
+
+    The immutable transition facts are the quarantine fold. No economic
+    current-state row is written here, but the embedded typed uncertainty is
+    folded in the same SQLite transaction so a crash cannot leave the account
+    with recorded ambiguity and no admission block.
+    """
+    facts = ExecutionCoverageQuarantinedFacts.from_facts_json(payload["facts_json"])
+    exact = validate_execution_coverage_quarantined_facts(facts)
+    if facts.order_ref != payload["order_ref"]:
+        raise ValueError("quarantined coverage order_ref must match its transition")
+    if payload["source_event_at_ms"] != exact.source_event_at_ms:
+        raise ValueError("quarantined coverage timestamp must match exact evidence")
+    if facts.uncertainty is not None:
+        if active_execution_coverage_conflicts(conn, order_ref=facts.order_ref):
+            raise ValueError("initial coverage quarantine cannot reopen an active conflict")
+        uncertainty_payload = dict(payload)
+        uncertainty_payload["transition_kind"] = "UNCERTAINTY_RAISED"
+        uncertainty_payload["facts_json"] = facts.uncertainty.to_facts_json()
+        _fold_uncertainty_raised(conn, uncertainty_payload)
+        return
+    active = active_execution_coverage_conflicts(
+        conn,
+        order_ref=facts.order_ref,
+    )
+    if not any(conflict.conflict_execution_id == facts.conflict_execution_id for conflict in active):
+        raise ValueError("additional coverage evidence requires its active conflict episode")
+
+
+def _fold_execution_coverage_resolved(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Replace exactly one cumulative fold with verified exact economics.
+
+    Formula: Δposition = 0 because the replacement is admitted only when
+    exact and cumulative quantity/price/side agree within the Clerk's pinned
+    execution tolerance.  The raw cumulative and exact observations remain
+    custody transitions; ``fills`` is rebuilt from the selected coverage.
+    Reference: docs/prds/2026-08-13-sqlite-clerk-manual-orders.md §11.
+    Canonical implementation: this file.
+    Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
+      test_folds_execution.py::test_coverage_resolution_replaces_one_cumulative_fill_once.
+    """
+    facts = ExecutionCoverageResolvedFacts.from_facts_json(payload["facts_json"])
+    exact = validate_execution_coverage_resolved_facts(facts)
+    meta = reads.control_meta_snapshot(conn)
+    if (
+        facts.account_id != meta.account_id
+        or facts.authority_generation != meta.authority_generation
+        or facts.db_identity_token != meta.db_identity_token
+        or facts.expected_control_revision != meta.control_revision
+    ):
+        raise ValueError("coverage resolution binding does not match the current Clerk authority")
+    active = active_execution_coverage_conflicts(
+        conn,
+        uncertainty_id=facts.uncertainty_id,
+    )
+    if len(active) != 1 or active[0].order_ref != facts.order_ref:
+        raise ValueError("coverage resolution requires its selected active conflict")
+    proof = execution_coverage_proof(conn, conflict=active[0])
+    cumulative = proof.cumulative
+    if (
+        not proof.proof_available
+        or proof.exact_execution != exact
+        or cumulative is None
+        or cumulative.fill_id != facts.replaced_cumulative_fill_id
+    ):
+        raise ValueError("coverage resolution proof does not match immutable evidence")
+    if conn.execute("SELECT 1 FROM fills WHERE execution_id = ?", (exact.execution_id,)).fetchone() is not None:
+        raise ValueError("coverage resolution exact execution already exists")
+    conn.execute("DELETE FROM fills WHERE fill_id = ?", (facts.replaced_cumulative_fill_id,))
+    conn.execute(
+        "INSERT INTO fills (fill_id, order_ref, qty, price, side, is_correction, execution_id, "
+        "evidence_source, event_kind, superseded_execution_ref, fee, fee_fidelity, "
+        "source_event_at_ms, clerk_observed_at_ms, recorded_at_ms, recorded_transition_sequence) "
+        "VALUES (?, ?, ?, ?, ?, 0, ?, ?, 'fill', NULL, ?, ?, ?, ?, ?, ?)",
+        (
+            exact.execution_id,
+            facts.order_ref,
+            exact.slice_qty,
+            exact.slice_price,
+            exact.side,
+            exact.execution_id,
+            exact.evidence_source,
+            exact.fee,
+            exact.fee_fidelity,
+            exact.source_event_at_ms,
+            payload["clerk_observed_at_ms"],
+            payload["recorded_at_ms"],
+            _this_transition_sequence(conn),
+        ),
+    )
+    conn.execute(
+        "UPDATE uncertainties SET resolved_at_ms = ? WHERE uncertainty_id = ? "
+        "AND reason_code = 'EXECUTION_COVERAGE_CONFLICT' AND resolved_at_ms IS NULL",
+        (payload["recorded_at_ms"], facts.uncertainty_id),
+    )
+    manual_order = conn.execute(
+        "SELECT effect.kind, effect.state, effect.command_id, effect.effect_operation_id, "
+        "order_row.broker_state, json_extract(acceptance.facts_json, '$.leg.quantity') "
+        "AS requested_quantity FROM orders order_row JOIN effect_operations effect "
+        "ON effect.effect_operation_id = order_row.effect_operation_id "
+        "JOIN custody_transitions acceptance ON acceptance.sequence = ("
+        "SELECT MIN(accepted.sequence) FROM custody_transitions accepted "
+        "WHERE accepted.effect_operation_id = effect.effect_operation_id "
+        "AND accepted.order_ref = order_row.order_ref "
+        "AND accepted.transition_kind = 'MANUAL_ORDER_ACCEPTED') "
+        "WHERE order_row.order_ref = ?",
+        (facts.order_ref,),
+    ).fetchone()
+    if (
+        manual_order is None
+        or manual_order["kind"] != "MANUAL_ORDER"
+        or manual_order["state"] in {"succeeded", "failed", "rejected"}
+        or (manual_order["broker_state"] or "").lower() != "filled"
+    ):
+        return
+    exact_quantity, _ = reads.effective_exact_fill_totals_for_order(conn, facts.order_ref)
+    if abs(exact_quantity - float(manual_order["requested_quantity"])) > FILL_QTY_EPSILON:
+        return
+    completion_payload = dict(payload)
+    completion_payload.update(
+        command_id=manual_order["command_id"],
+        effect_operation_id=manual_order["effect_operation_id"],
+        order_ref=facts.order_ref,
+        transition_kind="MANUAL_ORDER_FILLED",
+        operation_state="succeeded",
+        summary_code="MANUAL_ORDER_FILLED",
+    )
+    _fold_manual_order_filled(conn, completion_payload)
+
+
 def _fold_execution_corrected(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Replace one effective execution while retaining its audit history.
 
@@ -739,30 +1033,42 @@ def _fold_execution_corrected(conn: sqlite3.Connection, payload: dict[str, Any])
     facts = ExecutionCorrectedFacts.from_facts_json(payload["facts_json"])
     validate_execution_corrected_facts(facts)
 
-    already_recorded = conn.execute(
-        "SELECT 1 FROM fills WHERE execution_id = ?", (facts.execution_id,)
-    ).fetchone()
+    already_recorded = conn.execute("SELECT 1 FROM fills WHERE execution_id = ?", (facts.execution_id,)).fetchone()
     if already_recorded is not None:
         return
+    owner = conn.execute(
+        "SELECT subject_id, strategy_instance_id FROM effect_operations WHERE effect_operation_id = ?",
+        (payload["effect_operation_id"],),
+    ).fetchone()
+    if owner is None:
+        raise ValueError("correction requires its durable owning effect")
     superseded = conn.execute(
         "SELECT f.fill_id, f.order_ref, f.qty, f.price, f.side, f.evidence_source, f.fee, "
-        "f.fee_fidelity, e.strategy_instance_id, s.symbol "
+        "f.fee_fidelity, e.subject_id, e.strategy_instance_id, "
+        "COALESCE(s.symbol, json_extract(manual_acceptance.facts_json, '$.leg.symbol')) AS symbol "
         "FROM fills f JOIN orders o ON o.order_ref = f.order_ref "
         "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
-        "JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id "
+        "LEFT JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id "
+        "LEFT JOIN custody_transitions manual_acceptance ON manual_acceptance.sequence = ("
+        "SELECT MIN(acceptance.sequence) FROM custody_transitions acceptance "
+        "WHERE acceptance.order_ref = o.order_ref "
+        "AND acceptance.effect_operation_id = e.effect_operation_id "
+        "AND acceptance.transition_kind = 'MANUAL_ORDER_ACCEPTED') "
         "WHERE f.execution_id = ? "
         "AND NOT EXISTS (SELECT 1 FROM fills successor "
         "WHERE successor.superseded_execution_ref = f.execution_id)",
         (facts.superseded_execution_ref,),
     ).fetchone()
     if superseded is None:
-        raise ValueError(
-            f"correction target {facts.superseded_execution_ref!r} is missing or no longer effective"
-        )
+        raise ValueError(f"correction target {facts.superseded_execution_ref!r} is missing or no longer effective")
     if superseded["order_ref"] != payload["order_ref"]:
         raise ValueError("correction target belongs to a different order")
-    if superseded["strategy_instance_id"] != payload["strategy_instance_id"]:
+    if superseded["subject_id"] != owner["subject_id"]:
+        raise ValueError("correction target belongs to a different custody subject")
+    if superseded["strategy_instance_id"] != owner["strategy_instance_id"]:
         raise ValueError("correction target belongs to a different strategy instance")
+    if not isinstance(superseded["symbol"], str) or not superseded["symbol"]:
+        raise ValueError("correction target is missing owned symbol evidence")
     if superseded["symbol"].upper() != facts.symbol.upper():
         raise ValueError("correction symbol does not match the superseded execution")
     if superseded["side"] != facts.side:
@@ -880,19 +1186,12 @@ def _fold_order_fill_observed(conn: sqlite3.Connection, payload: dict[str, Any])
             _this_transition_sequence(conn),
         ),
     )
-    signed_delta = delta_qty if facts.side == "BUY" else -delta_qty
-    conn.execute(
-        "INSERT INTO positions (strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
-        "VALUES (?, ?, ?, ?) "
-        "ON CONFLICT(strategy_instance_id, symbol) DO UPDATE SET "
-        "attributed_qty = attributed_qty + excluded.attributed_qty, "
-        "updated_at_ms = excluded.updated_at_ms",
-        (
-            payload["strategy_instance_id"],
-            facts.symbol.upper(),
-            signed_delta,
-            payload["recorded_at_ms"],
-        ),
+    _apply_attributed_position_delta(
+        conn,
+        payload=payload,
+        symbol=facts.symbol,
+        side=facts.side,
+        quantity=delta_qty,
     )
 
 
@@ -978,6 +1277,7 @@ DEFAULT_FOLD_REGISTRY.register("EXIT_REDUCING_ORDER_CREATED", _fold_exit_reducin
 DEFAULT_FOLD_REGISTRY.register("EXIT_ATTRIBUTED_FLAT", _fold_exit_attributed_flat)
 DEFAULT_FOLD_REGISTRY.register("EXIT_NOT_FLAT", _fold_order_submit_failed)
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_ACKED", _fold_order_submit_acked)
+DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_FILLED", _fold_manual_order_filled)
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_FAILED", _fold_order_submit_failed)
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_UNCERTAIN", _fold_order_submit_uncertain)
 # EXIT's cancel-analog (#1379): same generic "effect/command -> unknown, no
@@ -986,6 +1286,19 @@ DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_UNCERTAIN", _fold_order_submit_unce
 DEFAULT_FOLD_REGISTRY.register("ORDER_CANCEL_UNCERTAIN", _fold_order_submit_uncertain)
 DEFAULT_FOLD_REGISTRY.register("ORDER_FILL_OBSERVED", _fold_order_fill_observed)
 DEFAULT_FOLD_REGISTRY.register("EXECUTION_SLICE_FILLED", _fold_execution_slice_filled)
+DEFAULT_FOLD_REGISTRY.register("EXECUTION_COVERAGE_QUARANTINED", _fold_execution_coverage_quarantined)
+DEFAULT_FOLD_REGISTRY.register("EXECUTION_COVERAGE_RESOLVED", _fold_execution_coverage_resolved)
+DEFAULT_FOLD_REGISTRY.register("CUSTODY_SUBJECT_REGISTERED", fold_custody_subject_registered)
+DEFAULT_FOLD_REGISTRY.register("MANUAL_TICKET_RESERVED", fold_manual_ticket_reserved)
+DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_ACCEPTED", fold_manual_order_accepted)
+DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_CANCEL_ACCEPTED", fold_manual_order_cancel_accepted)
+DEFAULT_FOLD_REGISTRY.register("MANUAL_TICKET_PAUSED_UNKNOWN", fold_manual_ticket_state)
+DEFAULT_FOLD_REGISTRY.register("MANUAL_TICKET_COMPLETED", fold_manual_ticket_state)
+DEFAULT_FOLD_REGISTRY.register("MANUAL_TICKET_CANCELED", fold_manual_ticket_state)
+DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_CANCELED", _fold_manual_order_canceled)
+DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_TERMINAL", _fold_manual_order_terminal)
+DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_CANCEL_CONFIRMED", _fold_manual_order_cancel_confirmed)
+DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_CANCEL_TERMINAL", _fold_manual_order_cancel_terminal)
 DEFAULT_FOLD_REGISTRY.register("EXECUTION_CORRECTED", _fold_execution_corrected)
 DEFAULT_FOLD_REGISTRY.register("RECONCILIATION_ATTEMPTED", _fold_reconciliation_attempted)
 DEFAULT_FOLD_REGISTRY.register("ACCOUNT_HOLD_RAISED", _fold_account_hold_raised)

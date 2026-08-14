@@ -37,14 +37,23 @@ from app.broker.alpaca.clerk.sqlite.decision_receipts import (
     append_decision_receipt_row,
     update_decision_receipt_for_bar,
 )
+from app.broker.alpaca.clerk.sqlite.execution_coverage import (
+    active_execution_coverage_conflicts,
+    execution_is_quarantined,
+)
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExecutionCorrectedFacts,
+    ExecutionCoverageQuarantinedFacts,
     ExecutionSliceFilledFacts,
     UncertaintyRaisedFacts,
     validate_execution_corrected_facts,
+    validate_execution_coverage_quarantined_facts,
     validate_execution_slice_facts,
 )
-from app.broker.alpaca.clerk.sqlite.folds import DEFAULT_FOLD_REGISTRY, FoldRegistry
+from app.broker.alpaca.clerk.sqlite.folds import (
+    DEFAULT_FOLD_REGISTRY,
+    FoldRegistry,
+)
 from app.broker.alpaca.clerk.sqlite.hashchain import (
     GENESIS,
     canonical_payload,
@@ -60,6 +69,9 @@ from app.broker.alpaca.clerk.sqlite.models import (
     DecisionReceiptResource,
     OperationClaim,
     TransitionInput,
+)
+from app.broker.alpaca.clerk.sqlite.repository_execution_coverage_api import (
+    ClerkSqliteRepositoryExecutionCoverageApi,
 )
 from app.broker.alpaca.clerk.sqlite.repository_external_order_api import (
     ClerkSqliteRepositoryExternalOrderApi,
@@ -134,7 +146,11 @@ class OperationClaimError(ClerkSqliteError):
     """Scope D: an ``effect_operations`` claim attempt found a live owner."""
 
 
-class ClerkSqliteRepository(ClerkSqliteRepositoryReadApi, ClerkSqliteRepositoryExternalOrderApi):
+class ClerkSqliteRepository(
+    ClerkSqliteRepositoryReadApi,
+    ClerkSqliteRepositoryExternalOrderApi,
+    ClerkSqliteRepositoryExecutionCoverageApi,
+):
     """One Alpaca account's event-sourced SQLite authority.
 
     Construct via :meth:`initialize` (a brand-new generation) or
@@ -456,8 +472,8 @@ class ClerkSqliteRepository(ClerkSqliteRepositoryReadApi, ClerkSqliteRepositoryE
         typed uncertainty fences new exposure instead.
 
         Outcomes are ``"appended"``, ``"duplicate"``,
-        ``"coverage_conflict_raised"``, or
-        ``"coverage_conflict_already_raised"``. A changed delivery that
+        ``"coverage_conflict_raised"``, ``"coverage_conflict_quarantined"``,
+        or ``"coverage_conflict_already_raised"``. A changed delivery that
         reuses an immutable broker execution ID cannot be a truthful new
         execution or correction (a correction needs its own broker identity),
         so it raises the same fail-closed coverage uncertainty instead of
@@ -489,18 +505,47 @@ class ClerkSqliteRepository(ClerkSqliteRepositoryReadApi, ClerkSqliteRepositoryE
             if reads.execution_exists(self._conn, execution_id):
                 return "duplicate"
             if reads.cumulative_recovery_fill_exists_for_order(self._conn, order_ref):
-                if reads.execution_coverage_conflict_uncertainty_exists(
+                candidate = build_transition()
+                facts = self._validated_execution_slice_transition(
+                    candidate,
+                    execution_id=execution_id,
+                    order_ref=order_ref,
+                )
+                active_conflicts = active_execution_coverage_conflicts(
                     self._conn,
                     order_ref=order_ref,
-                ):
-                    return "coverage_conflict_already_raised"
+                )
+                if active_conflicts:
+                    conflict = active_conflicts[0]
+                    if execution_is_quarantined(
+                        self._conn,
+                        conflict=conflict,
+                        execution_id=execution_id,
+                    ):
+                        return "coverage_conflict_already_raised"
+                    self.append_transition(
+                        self._execution_coverage_quarantine_transition(
+                            exact_transition=candidate,
+                            facts=facts,
+                            conflict_execution_id=conflict.conflict_execution_id,
+                            uncertainty=None,
+                        )
+                    )
+                    return "coverage_conflict_quarantined"
                 uncertainty = build_coverage_conflict()
                 self._validate_execution_coverage_conflict(
                     uncertainty=uncertainty,
                     execution_id=execution_id,
                     order_ref=order_ref,
                 )
-                self.append_transition(uncertainty)
+                self.append_transition(
+                    self._execution_coverage_quarantine_transition(
+                        exact_transition=candidate,
+                        facts=facts,
+                        conflict_execution_id=facts.execution_id,
+                        uncertainty=uncertainty,
+                    )
+                )
                 return "coverage_conflict_raised"
             transition = build_transition()
             self._validated_execution_slice_transition(
@@ -511,8 +556,8 @@ class ClerkSqliteRepository(ClerkSqliteRepositoryReadApi, ClerkSqliteRepositoryE
             self.append_transition(transition)
             return "appended"
 
-    @staticmethod
     def _validated_execution_slice_transition(
+        self,
         transition: TransitionInput,
         *,
         execution_id: str,
@@ -527,7 +572,88 @@ class ClerkSqliteRepository(ClerkSqliteRepositoryReadApi, ClerkSqliteRepositoryE
             raise ValueError("execution_id must match the transition facts")
         if transition.order_ref != order_ref:
             raise ValueError("order_ref must match the exact execution transition")
+        self._validate_order_effect_ownership(transition, order_ref=order_ref)
         return facts
+
+    def _validate_order_effect_ownership(
+        self,
+        transition: TransitionInput,
+        *,
+        order_ref: str,
+    ) -> dict:
+        """Bind execution evidence to its order's immutable effect owner.
+
+        Manual custody has no strategy instance, so an effect's subject is the
+        canonical identity.  The optional strategy field remains a
+        compatibility assertion for bot-owned effects only.
+        """
+        if transition.effect_operation_id is None or transition.command_id is None:
+            raise ValueError("execution evidence requires its durable owning effect and command")
+        owner = self._conn.execute(
+            "SELECT command_id, subject_id, strategy_instance_id FROM effect_operations "
+            "WHERE effect_operation_id = ?",
+            (transition.effect_operation_id,),
+        ).fetchone()
+        if owner is None:
+            raise ValueError("execution evidence requires an existing durable owning effect")
+        if (
+            transition.command_id != owner["command_id"]
+            or transition.strategy_instance_id != owner["strategy_instance_id"]
+        ):
+            raise ValueError("execution evidence ownership does not match its durable effect")
+        linked = self._conn.execute(
+            "SELECT 1 FROM orders o LEFT JOIN operation_order_links l "
+            "ON l.order_ref = o.order_ref AND l.effect_operation_id = ? "
+            "WHERE o.order_ref = ? AND (o.effect_operation_id = ? OR l.effect_operation_id IS NOT NULL)",
+            (transition.effect_operation_id, order_ref, transition.effect_operation_id),
+        ).fetchone()
+        if linked is None:
+            raise ValueError("execution evidence effect does not own the exact order")
+        return dict(owner)
+
+    def _execution_coverage_quarantine_transition(
+        self,
+        *,
+        exact_transition: TransitionInput,
+        facts: ExecutionSliceFilledFacts,
+        conflict_execution_id: str,
+        uncertainty: TransitionInput | None,
+    ) -> TransitionInput:
+        """Build a no-economic fold carrying the exact rejected evidence."""
+        if exact_transition.order_ref is None:
+            raise ValueError("quarantined coverage requires an order reference")
+        quarantined = ExecutionCoverageQuarantinedFacts(
+            order_ref=exact_transition.order_ref,
+            conflict_execution_id=conflict_execution_id,
+            exact_execution=facts,
+            conflicting_cumulative_fill_ids=reads.cumulative_recovery_fill_ids_for_order(
+                self._conn,
+                exact_transition.order_ref,
+            ),
+            uncertainty=(
+                None
+                if uncertainty is None
+                else UncertaintyRaisedFacts.from_facts_json(uncertainty.facts_json)
+            ),
+        )
+        validate_execution_coverage_quarantined_facts(quarantined)
+        return TransitionInput(
+            strategy_instance_id=exact_transition.strategy_instance_id,
+            run_id=exact_transition.run_id,
+            command_id=exact_transition.command_id,
+            effect_operation_id=exact_transition.effect_operation_id,
+            order_ref=exact_transition.order_ref,
+            broker_order_id=exact_transition.broker_order_id,
+            transition_kind="EXECUTION_COVERAGE_QUARANTINED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="in_progress",
+            proof_reference=exact_transition.proof_reference,
+            source_event_at_ms=facts.source_event_at_ms,
+            clerk_observed_at_ms=self._clock(),
+            summary_code="EXECUTION_COVERAGE_QUARANTINED",
+            facts_json=quarantined.to_facts_json(),
+        )
 
     @staticmethod
     def _same_execution_slice(
@@ -545,8 +671,8 @@ class ClerkSqliteRepository(ClerkSqliteRepositoryReadApi, ClerkSqliteRepositoryE
             and float(existing["price"]) == facts.slice_price
         )
 
-    @staticmethod
     def _validate_execution_coverage_conflict(
+        self,
         *,
         uncertainty: TransitionInput,
         execution_id: str,
@@ -554,8 +680,21 @@ class ClerkSqliteRepository(ClerkSqliteRepositoryReadApi, ClerkSqliteRepositoryE
     ) -> None:
         if uncertainty.transition_kind != "UNCERTAINTY_RAISED":
             raise ValueError("coverage conflict must raise UNCERTAINTY_RAISED")
-        if uncertainty.order_ref != order_ref or uncertainty.strategy_instance_id is None:
-            raise ValueError("coverage conflict must identify the order and strategy")
+        if uncertainty.order_ref != order_ref or uncertainty.effect_operation_id is None:
+            raise ValueError("coverage conflict must identify the order and owning effect")
+        owner = self._conn.execute(
+            "SELECT command_id, subject_id, strategy_instance_id FROM effect_operations "
+            "WHERE effect_operation_id = ?",
+            (uncertainty.effect_operation_id,),
+        ).fetchone()
+        if owner is None:
+            raise ValueError("coverage conflict requires its durable owning effect")
+        if (
+            uncertainty.command_id != owner["command_id"]
+            or uncertainty.strategy_instance_id != owner["strategy_instance_id"]
+        ):
+            raise ValueError("coverage conflict ownership does not match its durable effect")
+        self._validate_order_effect_ownership(uncertainty, order_ref=order_ref)
         facts = UncertaintyRaisedFacts.from_facts_json(uncertainty.facts_json)
         if facts.reason_code != EXECUTION_COVERAGE_CONFLICT_REASON_CODE:
             raise ValueError("coverage conflict must use the execution coverage reason code")
@@ -613,8 +752,15 @@ class ClerkSqliteRepository(ClerkSqliteRepositoryReadApi, ClerkSqliteRepositoryE
         correction: TransitionInput,
         facts: ExecutionCorrectedFacts,
     ) -> str | None:
-        if correction.order_ref is None or correction.strategy_instance_id is None:
-            return "correction transition is missing order or strategy identity"
+        if correction.order_ref is None:
+            return "correction transition is missing order identity"
+        try:
+            owner = self._validate_order_effect_ownership(
+                correction,
+                order_ref=correction.order_ref,
+            )
+        except ValueError as exc:
+            return str(exc)
         target = reads.effective_execution_slice(self._conn, facts.superseded_execution_ref)
         if target is None:
             return (
@@ -623,8 +769,12 @@ class ClerkSqliteRepository(ClerkSqliteRepositoryReadApi, ClerkSqliteRepositoryE
             )
         if target["order_ref"] != correction.order_ref:
             return "superseded execution belongs to a different order"
-        if target["strategy_instance_id"] != correction.strategy_instance_id:
+        if target["subject_id"] != owner["subject_id"]:
+            return "superseded execution belongs to a different custody subject"
+        if target["strategy_instance_id"] != owner["strategy_instance_id"]:
             return "superseded execution belongs to a different strategy instance"
+        if not isinstance(target["symbol"], str) or not target["symbol"]:
+            return "superseded execution is missing owned symbol evidence"
         if target["symbol"].upper() != facts.symbol.upper():
             return "superseded execution has a different symbol"
         if target["side"] != facts.side:

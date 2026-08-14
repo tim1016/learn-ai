@@ -2,7 +2,13 @@
   <div class="order-entry__toolbar">
     <div>
       <strong>Order ticket</strong>
-      <p>Each leg is journaled separately before submission.</p>
+      <p>
+        @if (manualTicketMode()) {
+          This SQLite ticket journals each ordered equity leg before it reaches Alpaca. A later leg always needs a new confirmation.
+        } @else {
+          Each leg is journaled separately before submission.
+        }
+      </p>
     </div>
     <p-button
       label="Add another"
@@ -27,6 +33,7 @@
         <app-alpaca-order-leg-row
           [legForm]="legsForm[$index]"
           [position]="$index"
+          [manualMarketOnly]="false"
           (removed)="removeLeg(leg.id)"
         />
       }
@@ -43,7 +50,7 @@
         icon="pi pi-arrow-right"
         iconPos="right"
         size="small"
-        [disabled]="!canSubmit()"
+        [disabled]="!canConfirm() || submitting()"
         (onClick)="openPreview()"
       />
     </div>
@@ -53,7 +60,72 @@
     <p-message severity="error">{{ error }}</p-message>
   }
 
-  <app-alpaca-order-results [results]="results()" />
+  @if (manualTicketMode()) {
+    @if (manualCapability()?.available === false) {
+      <p-message severity="warn">{{ manualCapability()?.unavailable?.message }}</p-message>
+    }
+    @if (manualTicket(); as ticket) {
+      <section aria-live="polite" aria-label="Manual ticket status">
+        <p-message severity="info">
+          Ticket <code>{{ ticket.ticket_id }}</code> is {{ ticket.state | receiptLabel }}.
+          Updated <app-timestamp-display [value]="ticket.updated_at_ms" mode="local" />.
+        </p-message>
+        <dl>
+          @for (leg of ticket.legs; track leg.leg_id) {
+            <div>
+              <dt>Leg {{ leg.sequence_index + 1 }}</dt>
+              <dd><code>{{ leg.leg_id }}</code> · {{ leg.state | receiptLabel }}</dd>
+              @if (leg.instruction; as instruction) {
+                <app-asset-identity [symbol]="instruction.symbol" size="sm" />
+                {{ instruction.side | receiptLabel }} {{ instruction.quantity }}
+                {{ instruction.order_type | receiptLabel }} {{ instruction.time_in_force | receiptLabel }}
+                @if (instruction.limit_price !== undefined && instruction.limit_price !== null) {
+                  at {{ instruction.limit_price }}
+                }
+              }
+              @if (leg.order; as order) {
+                <div>Order reference <code>{{ order.order_ref }}</code></div>
+                @if (order.broker_state) {
+                  <div>Broker state {{ order.broker_state | receiptLabel }}</div>
+                }
+              }
+              @if (leg.effect?.terminal_receipt_id; as receipt) {
+                <div>Terminal receipt <code>{{ receipt }}</code></div>
+              }
+            </div>
+          }
+        </dl>
+        @if (cancelableManualTicketId(); as ticketId) {
+          <p-button
+            label="Cancel ticket"
+            icon="pi pi-times"
+            severity="danger"
+            size="small"
+            [disabled]="cancelling()"
+            (onClick)="cancelManualTicket()"
+            [ariaLabel]="'Cancel manual ticket ' + ticketId"
+          />
+        }
+        @if (canContinueTicket()) {
+          <p-button
+            label="Continue remaining legs"
+            icon="pi pi-arrow-right"
+            size="small"
+            [disabled]="submitting()"
+            (onClick)="continueManualTicket()"
+          />
+        }
+        @if (displayedManualCancellation(); as cancellation) {
+          <p-message [severity]="cancellation.state === 'UNKNOWN' ? 'warn' : 'info'">
+            Cancellation <code>{{ cancellation.cancel_request_id }}</code> is {{ cancellation.state | receiptLabel }}.
+            {{ cancellation.message }} {{ cancellation.impact }} Next: {{ cancellation.next_action }}
+          </p-message>
+        }
+      </section>
+    }
+  } @else {
+    <app-alpaca-order-results [results]="results()" />
+  }
 </div>
 
 <app-alpaca-order-preview

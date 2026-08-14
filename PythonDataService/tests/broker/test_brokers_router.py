@@ -156,6 +156,11 @@ class _FakePort:
         self.assets_call = {"status": status, "limit": limit}
         return self._assets
 
+    async def get_asset(self, symbol: str) -> BrokerAsset | None:
+        if self._error is not None:
+            raise self._error
+        return next((asset for asset in self._assets if asset.symbol == symbol), None)
+
     async def get_clock_evidence(self) -> BrokerClockEvidence:
         if self._error is not None:
             raise self._error

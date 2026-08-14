@@ -37,6 +37,26 @@
   filled-average prices. The additive v7 → v8 migration backfills only
   execution rows whose transition facts name their execution identity; any
   unprovable legacy sequence remains unavailable to sequence-sensitive reads.
+- Schema-v9 makes the economic actor explicit through immutable
+  `custody_subjects`: an existing strategy receives exactly one `BOT` subject,
+  and a trusted human receives exactly one `MANUAL_OPERATOR` subject. The v8 →
+  v9 path is deliberately **offline only**: normal startup refuses v8, while
+  the operator ceremony verifies a backup, replays finalized mirror facts into
+  a staged v9 authority, proves journal/projection parity, fsyncs a prepared
+  receipt, and atomically swaps only a verified stage. A stopped retry
+  finalizes a post-swap prepared receipt only after it re-verifies the selected
+  v9 journal identity. See the recovery runbook's “Offline v8-to-v9
+  custody-subject upgrade” procedure.
+- Schema-v10 adds the immutable `manual_order_cancellations` resource and
+  expands the subject-bound effect trigger to admit its `CANCEL` effect. The
+  registered v9 → v10 migration creates that resource and replaces the two
+  effect-subject triggers in the same transaction; the verified v8 → v9
+  ceremony remains exactly v9 and startup then applies this additive upgrade.
+- Schema-v11 adds an immutable `sequence_index` to each replayable manual
+  ticket leg. The registered v10 → v11 migration deterministically backfills
+  distinct indices for every historical ticket, adds the per-ticket uniqueness fence, and
+  replaces the leg-identity trigger so an operator cannot reorder a reserved
+  ticket after confirmation.
 - **Source of truth ranking:** ADR 0035 (decision rationale) →
   `docs/prds/alpaca-account-clerk-sqlite-control-plane.md` §9–§11 (functional
   contract) → this document (concrete, implementable pin). Where this document
@@ -184,15 +204,43 @@ CREATE INDEX ix_runs_strategy_started_at
     ON runs(strategy_instance_id, started_at_ms DESC);
 
 -- ============================================================
+-- custody_subjects — durable economic owners, never pseudo-bots
+-- ============================================================
+CREATE TABLE custody_subjects (
+    subject_id              TEXT PRIMARY KEY,
+    kind                    TEXT NOT NULL CHECK (kind IN ('BOT','MANUAL_OPERATOR')),
+    strategy_instance_id    TEXT UNIQUE REFERENCES strategy_instances(strategy_instance_id),
+    operator_id             TEXT UNIQUE,
+    created_at_ms           INTEGER NOT NULL,
+    CHECK (
+        (kind = 'BOT' AND strategy_instance_id IS NOT NULL AND operator_id IS NULL
+            AND subject_id = 'bot:' || strategy_instance_id)
+        OR (kind = 'MANUAL_OPERATOR' AND strategy_instance_id IS NULL AND operator_id IS NOT NULL
+            AND subject_id = 'manual-operator:' || operator_id)
+    )
+);
+CREATE TRIGGER trg_custody_subject_identity_immutable
+BEFORE UPDATE OF subject_id, kind, strategy_instance_id, operator_id ON custody_subjects
+BEGIN
+    SELECT RAISE(ABORT, 'custody_subjects identity is immutable');
+END;
+CREATE TRIGGER trg_custody_subject_delete_forbidden
+BEFORE DELETE ON custody_subjects
+BEGIN
+    SELECT RAISE(ABORT, 'custody_subjects are append-only');
+END;
+
+-- ============================================================
 -- commands — content-addressed request identity (R2)
 -- ============================================================
 CREATE TABLE commands (
     command_id              TEXT PRIMARY KEY,       -- opaque durable resource id (GET /commands/{command_id})
     authority_generation    INTEGER NOT NULL,
+    subject_id              TEXT NOT NULL REFERENCES custody_subjects(subject_id),
     idempotency_key         TEXT NOT NULL,           -- canonical natural key, see §3a below
     payload_hash            TEXT NOT NULL,           -- immutable once first committed
-    kind                    TEXT NOT NULL CHECK (kind IN ('strategy_decision','operator_lifecycle')),
-    strategy_instance_id    TEXT NOT NULL REFERENCES strategy_instances(strategy_instance_id),
+    kind                    TEXT NOT NULL CHECK (kind IN ('strategy_decision','operator_lifecycle','manual_order')),
+    strategy_instance_id    TEXT REFERENCES strategy_instances(strategy_instance_id),
     run_id                  TEXT,                    -- null only for pre-run commands; see composite FK below
     action                  TEXT NOT NULL,           -- e.g. START, RESUME, STOP, STOP_AND_FLATTEN, decision replay
     intended_end_state      TEXT,                    -- operator-lifecycle only
@@ -213,6 +261,34 @@ CREATE UNIQUE INDEX ux_commands_idempotency
 CREATE INDEX ix_commands_updated_at ON commands(updated_at_ms DESC, command_id DESC);
 CREATE INDEX ix_commands_strategy_updated_at
     ON commands(strategy_instance_id, updated_at_ms DESC, command_id DESC);
+CREATE INDEX ix_commands_subject_updated_at
+    ON commands(subject_id, updated_at_ms DESC, command_id DESC);
+CREATE TRIGGER trg_commands_subject_compatible_insert
+BEFORE INSERT ON commands
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM custody_subjects
+        WHERE subject_id = NEW.subject_id AND (
+            (kind = 'BOT' AND strategy_instance_id = NEW.strategy_instance_id
+                AND NEW.kind IN ('strategy_decision', 'operator_lifecycle'))
+            OR (kind = 'MANUAL_OPERATOR' AND NEW.kind = 'manual_order'
+                AND NEW.strategy_instance_id IS NULL AND NEW.run_id IS NULL)
+        )
+    ) THEN RAISE(ABORT, 'commands subject must own its bot strategy or be a strategy-free manual order') END;
+END;
+CREATE TRIGGER trg_commands_subject_compatible_update
+BEFORE UPDATE OF subject_id, kind, strategy_instance_id, run_id ON commands
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM custody_subjects
+        WHERE subject_id = NEW.subject_id AND (
+            (kind = 'BOT' AND strategy_instance_id = NEW.strategy_instance_id
+                AND NEW.kind IN ('strategy_decision', 'operator_lifecycle'))
+            OR (kind = 'MANUAL_OPERATOR' AND NEW.kind = 'manual_order'
+                AND NEW.strategy_instance_id IS NULL AND NEW.run_id IS NULL)
+        )
+    ) THEN RAISE(ABORT, 'commands subject must own its bot strategy or be a strategy-free manual order') END;
+END;
 
 -- ============================================================
 -- effect_operations — Clerk-owned ENTER/EXIT/cancel/recovery work (§7)
@@ -220,12 +296,13 @@ CREATE INDEX ix_commands_strategy_updated_at
 CREATE TABLE effect_operations (
     effect_operation_id     TEXT PRIMARY KEY,
     authority_generation    INTEGER NOT NULL,
+    subject_id              TEXT NOT NULL REFERENCES custody_subjects(subject_id),
     idempotency_key         TEXT NOT NULL,           -- Clerk effect idempotency identity, distinct from command's
     command_id              TEXT NOT NULL REFERENCES commands(command_id),
-    strategy_instance_id    TEXT NOT NULL REFERENCES strategy_instances(strategy_instance_id),
+    strategy_instance_id    TEXT REFERENCES strategy_instances(strategy_instance_id),
     run_id                  TEXT,                    -- see composite FK below
     kind                    TEXT NOT NULL CHECK (kind IN
-                             ('ENTER','EXIT','CANCEL','RECONCILE','STOP','STOP_AND_FLATTEN')),
+                             ('ENTER','EXIT','CANCEL','RECONCILE','STOP','STOP_AND_FLATTEN','MANUAL_ORDER')),
     state                   TEXT NOT NULL CHECK (state IN
                              ('reserved','rejected','accepted','in_progress','unknown','succeeded','failed')),
     custody_owner           TEXT NOT NULL DEFAULT 'ACCOUNT_CLERK',
@@ -267,6 +344,46 @@ CREATE INDEX ix_effect_operations_created_at
     ON effect_operations(created_at_ms DESC, effect_operation_id DESC);
 CREATE INDEX ix_effect_operations_strategy_created_at
     ON effect_operations(strategy_instance_id, created_at_ms DESC, effect_operation_id DESC);
+CREATE INDEX ix_effect_operations_subject_created_at
+    ON effect_operations(subject_id, created_at_ms DESC, effect_operation_id DESC);
+CREATE TRIGGER trg_effect_operations_subject_compatible_insert
+BEFORE INSERT ON effect_operations
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1
+        FROM commands command
+        JOIN custody_subjects subject ON subject.subject_id = NEW.subject_id
+        WHERE command.command_id = NEW.command_id
+            AND command.subject_id = NEW.subject_id
+            AND command.strategy_instance_id IS NEW.strategy_instance_id
+            AND command.run_id IS NEW.run_id
+            AND (
+                (subject.kind = 'BOT' AND subject.strategy_instance_id = NEW.strategy_instance_id
+                    AND NEW.kind != 'MANUAL_ORDER')
+                OR (subject.kind = 'MANUAL_OPERATOR' AND NEW.kind = 'MANUAL_ORDER'
+                    AND NEW.strategy_instance_id IS NULL AND NEW.run_id IS NULL)
+            )
+    ) THEN RAISE(ABORT, 'effect operation must stay within its command custody subject') END;
+END;
+CREATE TRIGGER trg_effect_operations_subject_compatible_update
+BEFORE UPDATE OF subject_id, command_id, strategy_instance_id, run_id, kind ON effect_operations
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1
+        FROM commands command
+        JOIN custody_subjects subject ON subject.subject_id = NEW.subject_id
+        WHERE command.command_id = NEW.command_id
+            AND command.subject_id = NEW.subject_id
+            AND command.strategy_instance_id IS NEW.strategy_instance_id
+            AND command.run_id IS NEW.run_id
+            AND (
+                (subject.kind = 'BOT' AND subject.strategy_instance_id = NEW.strategy_instance_id
+                    AND NEW.kind != 'MANUAL_ORDER')
+                OR (subject.kind = 'MANUAL_OPERATOR' AND NEW.kind = 'MANUAL_ORDER'
+                    AND NEW.strategy_instance_id IS NULL AND NEW.run_id IS NULL)
+            )
+    ) THEN RAISE(ABORT, 'effect operation must stay within its command custody subject') END;
+END;
 
 -- ============================================================
 -- orders — one row per broker/client order identity (R7)
@@ -276,7 +393,7 @@ CREATE TABLE orders (
     effect_operation_id      TEXT NOT NULL REFERENCES effect_operations(effect_operation_id),
     client_order_id          TEXT NOT NULL,           -- Alpaca reconciliation identity (R7)
     broker_order_id          TEXT,                    -- filled in once Alpaca acknowledges
-    role                     TEXT NOT NULL CHECK (role IN ('ENTRY','REDUCING','OTHER')),
+    role                     TEXT NOT NULL CHECK (role IN ('ENTRY','REDUCING','OTHER','MANUAL')),
     broker_state             TEXT,                    -- last proven Alpaca order status
     submitted_at_ms          INTEGER,
     updated_at_ms            INTEGER NOT NULL
@@ -387,35 +504,83 @@ CREATE INDEX ix_decision_receipts_strategy_observed_at
 -- (never nets from raw broker position — preserves existing exposure.py semantics)
 -- ============================================================
 CREATE TABLE positions (
-    strategy_instance_id     TEXT NOT NULL REFERENCES strategy_instances(strategy_instance_id),
+    subject_id               TEXT NOT NULL REFERENCES custody_subjects(subject_id),
+    strategy_instance_id     TEXT REFERENCES strategy_instances(strategy_instance_id),
     symbol                   TEXT NOT NULL,
     attributed_qty           REAL NOT NULL DEFAULT 0,
     updated_at_ms             INTEGER NOT NULL,
-    PRIMARY KEY (strategy_instance_id, symbol)
+    PRIMARY KEY (subject_id, symbol)
 );
+CREATE UNIQUE INDEX ux_positions_strategy_symbol
+    ON positions(strategy_instance_id, symbol) WHERE strategy_instance_id IS NOT NULL;
+CREATE TRIGGER trg_positions_subject_compatible_insert
+BEFORE INSERT ON positions
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM custody_subjects
+        WHERE subject_id = NEW.subject_id AND (
+            (kind = 'BOT' AND strategy_instance_id = NEW.strategy_instance_id)
+            OR (kind = 'MANUAL_OPERATOR' AND NEW.strategy_instance_id IS NULL)
+        )
+    ) THEN RAISE(ABORT, 'position subject must own its bot strategy or be manual without strategy') END;
+END;
+CREATE TRIGGER trg_positions_subject_compatible_update
+BEFORE UPDATE OF subject_id, strategy_instance_id ON positions
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM custody_subjects
+        WHERE subject_id = NEW.subject_id AND (
+            (kind = 'BOT' AND strategy_instance_id = NEW.strategy_instance_id)
+            OR (kind = 'MANUAL_OPERATOR' AND NEW.strategy_instance_id IS NULL)
+        )
+    ) THEN RAISE(ABORT, 'position subject must own its bot strategy or be manual without strategy') END;
+END;
 
 -- ============================================================
 -- holds — active and resolved bot/Account-Clerk holds; fold of the log
 -- ============================================================
 CREATE TABLE holds (
     hold_id                  TEXT PRIMARY KEY,
-    scope                    TEXT NOT NULL CHECK (scope IN ('BOT','ACCOUNT_CLERK')),
-    strategy_instance_id     TEXT REFERENCES strategy_instances(strategy_instance_id),  -- null for ACCOUNT_CLERK scope
+    scope                    TEXT NOT NULL CHECK (scope IN ('CUSTODY_SUBJECT','ACCOUNT_CLERK')),
+    subject_id               TEXT REFERENCES custody_subjects(subject_id),
+    strategy_instance_id     TEXT REFERENCES strategy_instances(strategy_instance_id),  -- bot compatibility projection
     reason_code               TEXT NOT NULL,
     state                     TEXT NOT NULL CHECK (state IN ('ACTIVE','RESOLVED')),
     opened_at_ms               INTEGER NOT NULL,
     resolved_at_ms             INTEGER,
     evidence_refs_json         TEXT,
-    -- scope is truthfully coupled to bot identity, not just documented by a
-    -- comment: BOT requires a strategy instance, ACCOUNT_CLERK forbids one.
-    CHECK ((scope = 'BOT' AND strategy_instance_id IS NOT NULL)
-        OR (scope = 'ACCOUNT_CLERK' AND strategy_instance_id IS NULL))
+    CHECK ((scope = 'CUSTODY_SUBJECT' AND subject_id IS NOT NULL)
+        OR (scope = 'ACCOUNT_CLERK' AND subject_id IS NULL AND strategy_instance_id IS NULL))
 );
 CREATE UNIQUE INDEX ux_holds_one_active_cause
-    ON holds(scope, reason_code, COALESCE(strategy_instance_id, ''))
+    ON holds(scope, reason_code, COALESCE(subject_id, ''))
     WHERE state = 'ACTIVE';
 CREATE INDEX ix_holds_active_strategy_opened_at
     ON holds(strategy_instance_id, opened_at_ms DESC) WHERE state = 'ACTIVE';
+CREATE TRIGGER trg_holds_subject_compatible_insert
+BEFORE INSERT ON holds
+WHEN NEW.scope = 'CUSTODY_SUBJECT'
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM custody_subjects
+        WHERE subject_id = NEW.subject_id AND (
+            (kind = 'BOT' AND strategy_instance_id = NEW.strategy_instance_id)
+            OR (kind = 'MANUAL_OPERATOR' AND NEW.strategy_instance_id IS NULL)
+        )
+    ) THEN RAISE(ABORT, 'hold subject must own its bot strategy or be manual without strategy') END;
+END;
+CREATE TRIGGER trg_holds_subject_compatible_update
+BEFORE UPDATE OF scope, subject_id, strategy_instance_id ON holds
+WHEN NEW.scope = 'CUSTODY_SUBJECT'
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM custody_subjects
+        WHERE subject_id = NEW.subject_id AND (
+            (kind = 'BOT' AND strategy_instance_id = NEW.strategy_instance_id)
+            OR (kind = 'MANUAL_OPERATOR' AND NEW.strategy_instance_id IS NULL)
+        )
+    ) THEN RAISE(ABORT, 'hold subject must own its bot strategy or be manual without strategy') END;
+END;
 
 -- ============================================================
 -- uncertainties — active nonterminal unknowns; fold of the log. Columns are
@@ -423,12 +588,13 @@ CREATE INDEX ix_holds_active_strategy_opened_at
 -- ============================================================
 CREATE TABLE uncertainties (
     uncertainty_id            TEXT PRIMARY KEY,
-    scope                     TEXT NOT NULL CHECK (scope IN ('BOT','ACCOUNT_CLERK')),
+    scope                     TEXT NOT NULL CHECK (scope IN ('CUSTODY_SUBJECT','ACCOUNT_CLERK')),
     severity                  TEXT NOT NULL,
     blocks_new_exposure       INTEGER NOT NULL CHECK (blocks_new_exposure IN (0,1)),
     allows_reduction          INTEGER NOT NULL CHECK (allows_reduction IN (0,1)),
     custody_owner             TEXT NOT NULL DEFAULT 'ACCOUNT_CLERK',
-    strategy_instance_id      TEXT REFERENCES strategy_instances(strategy_instance_id),  -- null for ACCOUNT_CLERK
+    subject_id                TEXT REFERENCES custody_subjects(subject_id),
+    strategy_instance_id      TEXT REFERENCES strategy_instances(strategy_instance_id),  -- bot compatibility projection
     reason_code               TEXT NOT NULL,
     headline                  TEXT NOT NULL,
     explanation               TEXT NOT NULL,
@@ -439,16 +605,183 @@ CREATE TABLE uncertainties (
     evidence_refs_json        TEXT,
     facts_schema_version      INTEGER NOT NULL,
     facts_json                TEXT NOT NULL,
-    -- same truthful scope/identity coupling as holds, above:
-    CHECK ((scope = 'BOT' AND strategy_instance_id IS NOT NULL)
-        OR (scope = 'ACCOUNT_CLERK' AND strategy_instance_id IS NULL))
+    CHECK ((scope = 'CUSTODY_SUBJECT' AND subject_id IS NOT NULL)
+        OR (scope = 'ACCOUNT_CLERK' AND subject_id IS NULL AND strategy_instance_id IS NULL))
 );
 CREATE UNIQUE INDEX ux_uncertainties_one_active_cause
-    ON uncertainties(scope, reason_code, COALESCE(strategy_instance_id, ''))
+    ON uncertainties(scope, reason_code, COALESCE(subject_id, ''))
     WHERE resolved_at_ms IS NULL;
 CREATE INDEX ix_uncertainties_active_strategy_observed_at
     ON uncertainties(strategy_instance_id, observed_at_ms DESC)
     WHERE resolved_at_ms IS NULL;
+CREATE INDEX ix_uncertainties_active_subject_observed_at
+    ON uncertainties(subject_id, observed_at_ms DESC)
+    WHERE resolved_at_ms IS NULL;
+CREATE TRIGGER trg_uncertainties_subject_compatible_insert
+BEFORE INSERT ON uncertainties
+WHEN NEW.scope = 'CUSTODY_SUBJECT'
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM custody_subjects
+        WHERE subject_id = NEW.subject_id AND (
+            (kind = 'BOT' AND strategy_instance_id = NEW.strategy_instance_id)
+            OR (kind = 'MANUAL_OPERATOR' AND NEW.strategy_instance_id IS NULL)
+        )
+    ) THEN RAISE(ABORT, 'uncertainty subject must own its bot strategy or be manual without strategy') END;
+END;
+CREATE TRIGGER trg_uncertainties_subject_compatible_update
+BEFORE UPDATE OF scope, subject_id, strategy_instance_id ON uncertainties
+WHEN NEW.scope = 'CUSTODY_SUBJECT'
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM custody_subjects
+        WHERE subject_id = NEW.subject_id AND (
+            (kind = 'BOT' AND strategy_instance_id = NEW.strategy_instance_id)
+            OR (kind = 'MANUAL_OPERATOR' AND NEW.strategy_instance_id IS NULL)
+        )
+    ) THEN RAISE(ABORT, 'uncertainty subject must own its bot strategy or be manual without strategy') END;
+END;
+
+-- ============================================================
+-- manual_order_tickets / manual_order_legs — replayable manual custody state
+-- ============================================================
+CREATE TABLE manual_order_tickets (
+    ticket_id                TEXT PRIMARY KEY,
+    subject_id               TEXT NOT NULL REFERENCES custody_subjects(subject_id),
+    operator_id              TEXT NOT NULL,
+    instruction_hash         TEXT NOT NULL,
+    state                    TEXT NOT NULL CHECK (state IN ('RESERVED','ACTIVE','PAUSED_UNKNOWN','COMPLETED','CANCELED')),
+    created_at_ms            INTEGER NOT NULL,
+    updated_at_ms            INTEGER NOT NULL
+);
+CREATE INDEX ix_manual_order_tickets_subject_updated_at
+    ON manual_order_tickets(subject_id, updated_at_ms DESC, ticket_id DESC);
+CREATE TRIGGER trg_manual_order_tickets_subject_compatible_insert
+BEFORE INSERT ON manual_order_tickets
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM custody_subjects
+        WHERE subject_id = NEW.subject_id
+            AND kind = 'MANUAL_OPERATOR'
+            AND operator_id = NEW.operator_id
+    ) THEN RAISE(ABORT, 'manual ticket requires its canonical manual operator subject') END;
+END;
+CREATE TRIGGER trg_manual_order_tickets_subject_compatible_update
+BEFORE UPDATE OF subject_id, operator_id ON manual_order_tickets
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM custody_subjects
+        WHERE subject_id = NEW.subject_id
+            AND kind = 'MANUAL_OPERATOR'
+            AND operator_id = NEW.operator_id
+    ) THEN RAISE(ABORT, 'manual ticket requires its canonical manual operator subject') END;
+END;
+CREATE TRIGGER trg_manual_order_ticket_identity_immutable
+BEFORE UPDATE OF ticket_id, subject_id, operator_id, instruction_hash ON manual_order_tickets
+BEGIN
+    SELECT RAISE(ABORT, 'manual_order_tickets identity is immutable');
+END;
+CREATE TRIGGER trg_manual_order_ticket_delete_forbidden
+BEFORE DELETE ON manual_order_tickets
+BEGIN
+    SELECT RAISE(ABORT, 'manual_order_tickets are append-only');
+END;
+
+CREATE TABLE manual_order_legs (
+    ticket_id                TEXT NOT NULL REFERENCES manual_order_tickets(ticket_id),
+    leg_id                   TEXT NOT NULL,
+    subject_id               TEXT NOT NULL REFERENCES custody_subjects(subject_id),
+    instruction_hash         TEXT NOT NULL,
+    command_id               TEXT REFERENCES commands(command_id),
+    effect_operation_id      TEXT REFERENCES effect_operations(effect_operation_id),
+    order_ref                TEXT REFERENCES orders(order_ref),
+    state                    TEXT NOT NULL CHECK (state IN ('RESERVED','ACCEPTED','IN_PROGRESS','UNKNOWN','SUCCEEDED','FAILED','CANCELED')),
+    created_at_ms            INTEGER NOT NULL,
+    updated_at_ms            INTEGER NOT NULL,
+    PRIMARY KEY (ticket_id, leg_id)
+);
+CREATE UNIQUE INDEX ux_manual_order_legs_command
+    ON manual_order_legs(command_id) WHERE command_id IS NOT NULL;
+CREATE UNIQUE INDEX ux_manual_order_legs_effect
+    ON manual_order_legs(effect_operation_id) WHERE effect_operation_id IS NOT NULL;
+CREATE UNIQUE INDEX ux_manual_order_legs_order
+    ON manual_order_legs(order_ref) WHERE order_ref IS NOT NULL;
+CREATE TRIGGER trg_manual_order_leg_identity_immutable
+BEFORE UPDATE OF ticket_id, leg_id, subject_id, instruction_hash ON manual_order_legs
+BEGIN
+    SELECT RAISE(ABORT, 'manual_order_legs identity is immutable');
+END;
+CREATE TRIGGER trg_manual_order_leg_delete_forbidden
+BEFORE DELETE ON manual_order_legs
+BEGIN
+    SELECT RAISE(ABORT, 'manual_order_legs are append-only');
+END;
+CREATE TRIGGER trg_manual_order_legs_subject_compatible_insert
+BEFORE INSERT ON manual_order_legs
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1
+        FROM manual_order_tickets ticket
+        JOIN custody_subjects subject ON subject.subject_id = ticket.subject_id
+        WHERE ticket.ticket_id = NEW.ticket_id
+            AND ticket.subject_id = NEW.subject_id
+            AND subject.kind = 'MANUAL_OPERATOR'
+    ) THEN RAISE(ABORT, 'manual leg must belong to its ticket manual subject') END;
+    SELECT CASE WHEN (NEW.command_id IS NULL) != (NEW.effect_operation_id IS NULL)
+        OR (NEW.command_id IS NULL) != (NEW.order_ref IS NULL)
+        THEN RAISE(ABORT, 'manual leg resources must be all null or one complete manual chain') END;
+    SELECT CASE WHEN NEW.command_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1
+        FROM commands command
+        JOIN effect_operations effect ON effect.effect_operation_id = NEW.effect_operation_id
+        JOIN orders ord ON ord.order_ref = NEW.order_ref
+        WHERE command.command_id = NEW.command_id
+            AND command.subject_id = NEW.subject_id
+            AND command.kind = 'manual_order'
+            AND command.strategy_instance_id IS NULL
+            AND command.run_id IS NULL
+            AND effect.command_id = command.command_id
+            AND effect.subject_id = NEW.subject_id
+            AND effect.kind = 'MANUAL_ORDER'
+            AND effect.strategy_instance_id IS NULL
+            AND effect.run_id IS NULL
+            AND ord.effect_operation_id = effect.effect_operation_id
+            AND ord.role = 'MANUAL'
+    ) THEN RAISE(ABORT, 'manual leg resources must be one chain in the ticket subject') END;
+END;
+CREATE TRIGGER trg_manual_order_legs_subject_compatible_update
+BEFORE UPDATE OF ticket_id, subject_id, command_id, effect_operation_id, order_ref ON manual_order_legs
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1
+        FROM manual_order_tickets ticket
+        JOIN custody_subjects subject ON subject.subject_id = ticket.subject_id
+        WHERE ticket.ticket_id = NEW.ticket_id
+            AND ticket.subject_id = NEW.subject_id
+            AND subject.kind = 'MANUAL_OPERATOR'
+    ) THEN RAISE(ABORT, 'manual leg must belong to its ticket manual subject') END;
+    SELECT CASE WHEN (NEW.command_id IS NULL) != (NEW.effect_operation_id IS NULL)
+        OR (NEW.command_id IS NULL) != (NEW.order_ref IS NULL)
+        THEN RAISE(ABORT, 'manual leg resources must be all null or one complete manual chain') END;
+    SELECT CASE WHEN NEW.command_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1
+        FROM commands command
+        JOIN effect_operations effect ON effect.effect_operation_id = NEW.effect_operation_id
+        JOIN orders ord ON ord.order_ref = NEW.order_ref
+        WHERE command.command_id = NEW.command_id
+            AND command.subject_id = NEW.subject_id
+            AND command.kind = 'manual_order'
+            AND command.strategy_instance_id IS NULL
+            AND command.run_id IS NULL
+            AND effect.command_id = command.command_id
+            AND effect.subject_id = NEW.subject_id
+            AND effect.kind = 'MANUAL_ORDER'
+            AND effect.strategy_instance_id IS NULL
+            AND effect.run_id IS NULL
+            AND ord.effect_operation_id = effect.effect_operation_id
+            AND ord.role = 'MANUAL'
+    ) THEN RAISE(ABORT, 'manual leg resources must be one chain in the ticket subject') END;
+END;
 
 -- ============================================================
 -- reconciliations — reconciliation attempts and terminal receipts
@@ -587,6 +920,115 @@ WHEN OLD.state IN ('succeeded','failed','rejected') AND NEW.state != OLD.state
 BEGIN
     SELECT RAISE(ABORT, 'effect_operations.state cannot change once terminal');
 END;
+
+CREATE TABLE manual_order_cancellations (
+    order_ref                 TEXT PRIMARY KEY REFERENCES orders(order_ref),
+    subject_id                TEXT NOT NULL REFERENCES custody_subjects(subject_id),
+    cancel_request_id         TEXT NOT NULL UNIQUE,
+    command_id                TEXT NOT NULL UNIQUE REFERENCES commands(command_id),
+    effect_operation_id       TEXT NOT NULL UNIQUE REFERENCES effect_operations(effect_operation_id),
+    state                     TEXT NOT NULL CHECK (state IN ('ACCEPTED','UNKNOWN','SUCCEEDED','FAILED')),
+    created_at_ms             INTEGER NOT NULL,
+    updated_at_ms             INTEGER NOT NULL
+);
+CREATE INDEX ix_manual_order_cancellations_effect
+    ON manual_order_cancellations(effect_operation_id);
+DROP TRIGGER trg_effect_operations_subject_compatible_insert;
+DROP TRIGGER trg_effect_operations_subject_compatible_update;
+CREATE TRIGGER trg_effect_operations_subject_compatible_insert
+BEFORE INSERT ON effect_operations
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1
+        FROM commands command
+        JOIN custody_subjects subject ON subject.subject_id = NEW.subject_id
+        WHERE command.command_id = NEW.command_id
+            AND command.subject_id = NEW.subject_id
+            AND command.strategy_instance_id IS NEW.strategy_instance_id
+            AND command.run_id IS NEW.run_id
+            AND (
+                (subject.kind = 'BOT' AND subject.strategy_instance_id = NEW.strategy_instance_id
+                    AND NEW.kind != 'MANUAL_ORDER')
+                OR (subject.kind = 'MANUAL_OPERATOR' AND NEW.kind IN ('MANUAL_ORDER', 'CANCEL')
+                    AND NEW.strategy_instance_id IS NULL AND NEW.run_id IS NULL)
+            )
+    ) THEN RAISE(ABORT, 'effect operation must stay within its command custody subject') END;
+END;
+CREATE TRIGGER trg_effect_operations_subject_compatible_update
+BEFORE UPDATE OF subject_id, command_id, strategy_instance_id, run_id, kind ON effect_operations
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1
+        FROM commands command
+        JOIN custody_subjects subject ON subject.subject_id = NEW.subject_id
+        WHERE command.command_id = NEW.command_id
+            AND command.subject_id = NEW.subject_id
+            AND command.strategy_instance_id IS NEW.strategy_instance_id
+            AND command.run_id IS NEW.run_id
+            AND (
+                (subject.kind = 'BOT' AND subject.strategy_instance_id = NEW.strategy_instance_id
+                    AND NEW.kind != 'MANUAL_ORDER')
+                OR (subject.kind = 'MANUAL_OPERATOR' AND NEW.kind IN ('MANUAL_ORDER', 'CANCEL')
+                    AND NEW.strategy_instance_id IS NULL AND NEW.run_id IS NULL)
+            )
+    ) THEN RAISE(ABORT, 'effect operation must stay within its command custody subject') END;
+END;
+CREATE TRIGGER trg_manual_order_cancellation_identity_immutable
+BEFORE UPDATE OF order_ref, subject_id, cancel_request_id, command_id, effect_operation_id
+ON manual_order_cancellations
+BEGIN
+    SELECT RAISE(ABORT, 'manual_order_cancellations identity is immutable');
+END;
+CREATE TRIGGER trg_manual_order_cancellation_delete_forbidden
+BEFORE DELETE ON manual_order_cancellations
+BEGIN
+    SELECT RAISE(ABORT, 'manual_order_cancellations are append-only');
+END;
+CREATE TRIGGER trg_manual_order_cancellation_subject_compatible_insert
+BEFORE INSERT ON manual_order_cancellations
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1
+        FROM manual_order_legs leg
+        JOIN custody_subjects subject ON subject.subject_id = leg.subject_id
+        JOIN commands command ON command.command_id = NEW.command_id
+        JOIN effect_operations effect ON effect.effect_operation_id = NEW.effect_operation_id
+        WHERE leg.order_ref = NEW.order_ref
+            AND leg.subject_id = NEW.subject_id
+            AND subject.kind = 'MANUAL_OPERATOR'
+            AND command.subject_id = NEW.subject_id
+            AND command.kind = 'manual_order'
+            AND command.action = 'CANCEL_MANUAL_ORDER'
+            AND command.strategy_instance_id IS NULL
+            AND command.run_id IS NULL
+            AND effect.command_id = command.command_id
+            AND effect.subject_id = NEW.subject_id
+            AND effect.kind = 'CANCEL'
+            AND effect.strategy_instance_id IS NULL
+            AND effect.run_id IS NULL
+    ) THEN RAISE(ABORT, 'manual cancellation must own one manual ticket order') END;
+END;
+
+
+ALTER TABLE manual_order_legs ADD COLUMN sequence_index INTEGER NOT NULL DEFAULT 0;
+UPDATE manual_order_legs AS leg
+SET sequence_index = (
+    SELECT COUNT(*)
+    FROM manual_order_legs AS earlier
+    WHERE earlier.ticket_id = leg.ticket_id
+        AND (
+            earlier.created_at_ms < leg.created_at_ms
+            OR (earlier.created_at_ms = leg.created_at_ms AND earlier.leg_id < leg.leg_id)
+        )
+);
+CREATE UNIQUE INDEX ux_manual_order_legs_sequence
+    ON manual_order_legs(ticket_id, sequence_index);
+DROP TRIGGER trg_manual_order_leg_identity_immutable;
+CREATE TRIGGER trg_manual_order_leg_identity_immutable
+BEFORE UPDATE OF ticket_id, leg_id, sequence_index, subject_id, instruction_hash ON manual_order_legs
+BEGIN
+    SELECT RAISE(ABORT, 'manual_order_legs identity is immutable');
+END;
 ```
 
 Five `custody_transitions` foreign keys (`strategy_instance_id`, `run_id`,
@@ -677,11 +1119,27 @@ must round-trip through facts.
 | `COMMAND_REJECTED` | `idempotency_key`, `payload_hash`, `kind`, `action`, `intended_end_state`, `reason_code`, `operator_reason` |
 | `RUN_STOPPED` | `idempotency_key`, `payload_hash`, `kind`, `action`, `intended_end_state`, `lifecycle_run_id`, `operator_reason` |
 | `ENTER_ACCEPTED` | command idempotency key/hash/kind/action; decision id; effect idempotency key/kind; complete immutable broker leg/captured order fields |
+| `MANUAL_ORDER_ACCEPTED` | immutable `ticket_id`/`leg_id`/manual-subject/operator identities; ticket-leg instruction hash; command idempotency key/hash/kind/action; effect idempotency key/kind; complete BUY/market/DAY broker leg. The outer strategy and run identities are null. |
+| `MANUAL_ORDER_FILLED` | none (`{}`). It may be appended only after the broker's terminal `filled` state and effective exact execution quantity both cover the immutable manual leg; its fold creates the shared terminal success receipt and completes the one-leg ticket. |
+
+For this completion rule, exact execution means an effective broker-issued
+`websocket` or `activity_recovery` slice with an execution identity. Aggregate
+`cumulative_recovery` evidence may recover exposure and broker lifecycle state,
+but never completes a manual ticket.
 
 Implemented in `app/broker/alpaca/clerk/sqlite/facts.py`. `ENTER_ACCEPTED`'s
 dataclass and fold are not implemented in the corrective slice — no command
 flow appends that transition kind yet — but its facts shape is pinned here so
 issue #1377's rebuild has a fixed target rather than inventing one ad hoc.
+`MANUAL_ORDER_ACCEPTED` is the S2 manual-market tracer's implemented
+strategy-free counterpart: it is legal only after an immutable ticket/leg
+reservation, and its fold creates one manual command/effect/order resource
+chain before the caller may contact the broker. Every later execution,
+aggregate recovery, coverage conflict, and account FIFO/history projection
+resolves custody from that effect's immutable `subject_id`: manual fills are
+reported as `manual` origin and never as a synthetic strategy. Ticket/leg
+state is updated by those same canonical folds (acknowledged, unknown, failed,
+and exact-filled), never inferred only at the HTTP boundary.
 
 ### 3e. Reconciliation and hold transition facts (#1378)
 
@@ -741,6 +1199,8 @@ creates or mutates a `commands` row, only the `uncertainties` table (§3):
 | `UNCERTAINTY_RAISED` | `severity`, `blocks_new_exposure`, `allows_reduction`, `reason_code`, `headline`, `explanation`, `operator_impact`, `next_step`, `evidence_refs`, and versioned `cause_facts` | Inserts one uncertainty episode and persists both `facts_schema_version` and the complete `facts_json`. Scope comes from the registered reason policy; an unknown reason is forced account-wide and reduction-blocking. A partial unique index enforces one active cause. |
 | `UNCERTAINTY_REFRESHED` | Same stable envelope and typed cause facts as the raise | Updates the active episode only when its evidence/facts changed; unchanged observations append nothing. |
 | `UNCERTAINTY_RESOLVED` | `uncertainty_id`, closed `resolution_kind`, and `evidence_refs` | `UPDATE`s `resolved_at_ms` on the named active episode. Only a reason-specific recovery function with its required fresh evidence may build this transition; there is no generic clear. |
+| `EXECUTION_COVERAGE_QUARANTINED` | `order_ref`, stable conflict-origin execution id, full typed exact execution facts, sorted conflicting cumulative `fill_id`s, and the typed blocking uncertainty only for the originating exact execution | Persists every distinct rejected exact execution in the hash-chained transition stream. The origin opens its blocking uncertainty in the same SQLite transaction; later evidence is linked to that same active episode. No quarantine writes `fills`, positions, FIFO, or P&L, so ambiguous executions cannot be double-applied or become unblocked after a partial write. |
+| `EXECUTION_COVERAGE_RESOLVED` | `uncertainty_id`, account identity, authority generation, database identity, expected control revision, `order_ref`, closed `resolution_kind`, selected cumulative `fill_id`, full typed exact execution facts, and sorted evidence references | Supported only for `EXACT_REPLACES_CUMULATIVE`: validates that the episode contains exactly one quarantined exact execution and one current cumulative-recovery fold with matching side, quantity, and price within `FILL_QTY_EPSILON`; it replaces the rebuildable `fills` row without a position delta and resolves only the named `EXECUTION_COVERAGE_CONFLICT` episode. |
 
 All are raised/refreshed/resolved through
 `app/broker/alpaca/clerk/sqlite/uncertainty.py`; the repository performs each
@@ -754,6 +1214,21 @@ order_ref)` pair and closes the episode only after no recorded pair remains.
 Evidence for another order linked to the same EXIT cannot clear a lost reducing
 submit. Thus there is no committed UNKNOWN effect that can briefly admit
 another ENTER.
+
+### 3g.i. Execution-coverage recovery (#1521)
+
+`EXECUTION_COVERAGE_CONFLICT` is not a generic reconciliation instruction. A
+late exact execution that overlaps cumulative recovery is first quarantined
+with the complete immutable economics. The presented
+`resolve_execution_coverage` action binds the account, authority generation,
+database identity, relevant control revision, uncertainty id, order reference,
+execution id, and selected cumulative fold through its recovery token; the
+committed resolution facts preserve that authority binding for audit. Retry
+after a committed resolution returns the original `coverage-resolution:<seq>`
+receipt and performs no second economic fold. A mismatch, more than one
+cumulative fold, more than one quarantined exact execution, a missing
+quarantine, or unreadable facts remains unavailable with backend-authored
+evidence requirements; the UI must never invent a retry or override.
 
 **R6 capability policy** (`uncertainty.decide_capability`/
 `require_capability`) folds both uncertainties and holds for `NEW_EXPOSURE`,

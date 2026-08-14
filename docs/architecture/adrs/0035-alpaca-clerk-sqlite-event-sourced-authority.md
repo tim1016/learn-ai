@@ -176,8 +176,8 @@ following load-bearing decisions.
     legacy JSONL, initialize a new Clerk authority generation, and redeploy
     desired instances. There is no dual-authority mode.
 
-11. **Two uncertainty scopes, extensible causes.** Blast radius is `BOT` or
-    `ACCOUNT_CLERK`; symbol/venue/order and future attributes ride as
+11. **Two uncertainty scopes, extensible causes.** Blast radius is a
+    `CUSTODY_SUBJECT` or `ACCOUNT_CLERK`; symbol/venue/order and future attributes ride as
     extensible `reason_code` + `facts_json`, not new top-level scopes.
     Unrecognized reasons default to `ACCOUNT_CLERK` and block new exposure
     (fail-closed).
@@ -200,6 +200,22 @@ following load-bearing decisions.
     product fallback while this authority generation is active. This scope is
     delivered by the fresh-generation program; it does not retroactively claim
     that the accepted generation-1 projections already supply every field.
+
+14. **Schema v9 names custody subjects and upgrades only by an offline proof
+    ceremony.** A `BOT` subject is bound one-to-one to an existing strategy;
+    a `MANUAL_OPERATOR` subject is bound one-to-one to an approved human
+    operator. Commands, effects, positions, holds, and uncertainties name the
+    subject, while a manual order leaves outer strategy/run identity null. A
+    data-bearing v8 file is never altered by startup: the stopped authority is
+    verified and backed up, a v9 stage is rebuilt from finalized mirror facts,
+    journal and projection parity are proved, and only then is the staged
+    database atomically swapped. A failed pre-publication proof leaves v8
+    selected with a durable failure receipt. Immediately before the swap, a
+    fsynced prepared receipt binds the verified backup and staged journal
+    identity; an interruption after the swap is deterministically finalized
+    from that receipt on a stopped retry rather than mislabeled as a failed v8
+    ceremony. The completed receipt's verified backup supports the bounded
+    rollback procedure.
 
 **Crown-jewel invariants preserved unchanged** (they are application logic,
 orthogonal to storage, and must be re-proven under SQLite with tests):
@@ -230,6 +246,24 @@ from the canonical NYSE calendar, including half-days.
   the effective position and FIFO projection. A quantity regression without a
   matching superseded slice is an exposure-blocking uncertainty, not a silently
   accepted fill.
+- An **execution-coverage quarantine** is an immutable exact execution fact
+  that arrives after a cumulative recovery fold for the same order. It is
+  appended to the custody transition stream but deliberately does not enter
+  `fills`, positions, FIFO, or P&L until a closed proof selects its economic
+  coverage. Its typed `EXECUTION_COVERAGE_CONFLICT` uncertainty opens in the
+  same SQLite transaction, so a partial write cannot leave new exposure or
+  reduction unblocked while that proof is absent.
+- The only initial coverage resolution vocabulary is
+  `EXACT_REPLACES_CUMULATIVE`: one quarantined exact execution must have the
+  same order, side, quantity, and price (within the pinned execution
+  tolerance) as exactly one current `cumulative_recovery` fold. The resolution
+  replaces that rebuildable fold with the exact execution in the same SQLite
+  transaction and closes only the named conflict. The resolution facts record
+  the account, authority generation, database identity, and expected control
+  revision that admitted it. Both original observations and the resolution
+  remain immutable custody transitions. Multiple aggregate
+  rows, changed economics, unreadable facts, or an identity mismatch remain
+  blocked with an explicit evidence-insufficiency reason; there is no override.
 - **`realized_pnl_today`** is computed by running FIFO over the complete
   effective fill history and summing only closed lots whose
   `closed_at_ms ∈ [session_open_ms, session_close_ms)`. The result is therefore

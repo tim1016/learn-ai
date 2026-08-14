@@ -36,11 +36,21 @@ from app.broker.alpaca.clerk.sqlite.idempotency import (
 )
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_uncertain
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, OperationClaimError
-from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError, raise_uncertainty
-from app.broker.contract.errors import BrokerError, BrokerRequestInvalid, BrokerUnavailable
+from app.broker.alpaca.clerk.sqlite.repository import (
+    ClerkSqliteRepository,
+    OperationClaimError,
+)
+from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    AdmissionBlockedError,
+    raise_uncertainty,
+)
+from app.broker.contract.errors import (
+    BrokerError,
+    BrokerRequestInvalid,
+    BrokerUnavailable,
+)
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
-from conftest import _clock_at
+from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at
 
 ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
@@ -342,7 +352,7 @@ async def test_cancelled_submit_retains_unknown_custody_before_claim_release(
     effect = repo.effect_operation("effect:spy-bot:cancelled-submit")
     assert effect is not None and effect.state == "unknown"
     uncertainty = repo.active_uncertainty(
-        scope="BOT",
+        scope="CUSTODY_SUBJECT",
         reason_code="ORDER_OUTCOME_UNKNOWN",
         strategy_instance_id=SID,
     )
@@ -582,9 +592,13 @@ async def test_resolve_stays_unknown_on_a_mismatched_client_order_id(
     trade = _FakeTrade(lookup_result=mismatched)
     resolved = await resolve_enter_submission(repo, order_ref=accepted.order_ref, trade=trade)
     effect = repo.effect_operation(resolved.effect_operation_id)
-    assert effect is not None and effect.state == "accepted"
+    assert effect is not None and effect.state == "unknown"
     order = repo.order(accepted.order_ref)
     assert order is not None and order.broker_order_id is None
+    assert any(
+        transition["transition_kind"] == "ORDER_SUBMIT_UNCERTAIN"
+        for transition in repo.transitions_for_order(accepted.order_ref)
+    )
 
 
 # ── Namespace-attributed exposure and fold idempotency ──────────────────────
@@ -1149,7 +1163,7 @@ async def test_lost_submit_atomically_blocks_more_exposure_until_exact_recovery(
         trade=lost,
     )
     uncertainty = repo.active_uncertainty(
-        scope="BOT",
+        scope="CUSTODY_SUBJECT",
         reason_code="ORDER_OUTCOME_UNKNOWN",
         strategy_instance_id=SID,
     )
@@ -1173,7 +1187,7 @@ async def test_lost_submit_atomically_blocks_more_exposure_until_exact_recovery(
     )
     assert (
         repo.active_uncertainty(
-            scope="BOT",
+            scope="CUSTODY_SUBJECT",
             reason_code="ORDER_OUTCOME_UNKNOWN",
             strategy_instance_id=SID,
         )
@@ -1234,7 +1248,7 @@ def test_exact_recovery_advances_each_effect_while_a_sibling_unknown_remains(
     assert first_after is not None and first_after.state == "in_progress"
     assert second_after is not None and second_after.state == "unknown"
     assert repo.active_uncertainty(
-        scope="BOT",
+        scope="CUSTODY_SUBJECT",
         reason_code="ORDER_OUTCOME_UNKNOWN",
         strategy_instance_id=SID,
     )
@@ -1248,7 +1262,7 @@ def test_exact_recovery_advances_each_effect_while_a_sibling_unknown_remains(
     assert repo.effect_operation(second.effect_operation_id).state == "in_progress"  # type: ignore[union-attr]
     assert (
         repo.active_uncertainty(
-            scope="BOT",
+            scope="CUSTODY_SUBJECT",
             reason_code="ORDER_OUTCOME_UNKNOWN",
             strategy_instance_id=SID,
         )
