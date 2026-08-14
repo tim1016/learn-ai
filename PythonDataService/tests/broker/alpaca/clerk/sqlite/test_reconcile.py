@@ -44,7 +44,7 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError, raise_uncertainty
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, BrokerPosition
-from conftest import _clock_at, _hold_transition
+from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at, _hold_transition
 
 ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
