@@ -48,7 +48,7 @@
               <span role="cell"><app-asset-identity [symbol]="row.symbol" size="sm" /></span>
               <span role="cell"><app-timestamp-display [value]="row.closed_at_ms" mode="local" /></span>
               <span role="cell">{{ row.realized_pnl | currency }}</span>
-              <span role="cell"><code>{{ row.entry_subject_id }}</code> → <code>{{ row.exit_subject_id }}</code></span>
+              <span role="cell"><code>{{ row.entry_subject_id | receiptLabel }}</code> → <code>{{ row.exit_subject_id | receiptLabel }}</code></span>
             </div>
           }
         </div>
