@@ -17,6 +17,7 @@ from app.broker.alpaca.clerk.sqlite.economic_projection import ExecutionRow
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts
+from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import accept_manual_order_cancellation
 from app.broker.alpaca.clerk.sqlite.manual_orders import accept_manual_order
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.projection_models import (
@@ -29,6 +30,7 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
 from app.engine.live.order_identity import build_manual_order_namespace, build_order_ref
+from app.schemas.clerk_transaction_projection import ClerkTransactionSummaryRow
 from app.services.clerk_transaction_projection import ClerkTransactionProjectionUnavailable
 from app.services.sqlite_clerk_transaction_projection import (
     _assert_history_hydration_revision,
@@ -204,7 +206,14 @@ def test_account_transaction_projection_includes_manual_ticket_without_bot_run(t
         operator_id="operator-42",
         ticket_id="7de3a77c-b698-4e0d-a5d1-2f624574ed35",
         leg_id="09d6d63e-6375-4e6d-8d20-3b1bf70c2465",
-        leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+        leg=BrokerOrderLeg(
+            symbol="SPY",
+            side="buy",
+            quantity=1,
+            order_type="limit",
+            limit_price=500,
+            time_in_force="gtc",
+        ),
     )
     broker = _UnusedBroker()
     set_active_clerk_runtime(
@@ -243,11 +252,86 @@ def test_account_transaction_projection_includes_manual_ticket_without_bot_run(t
     assert summary.strategy_instance_id is None
     assert summary.run_id is None
     assert summary.order_ref == accepted.leg.order_ref
+    assert summary.order_instruction.symbol == "SPY"
+    assert summary.order_instruction.action == "buy"
+    assert summary.order_instruction.quantity == 1.0
+    assert summary.order_instruction.order_type == "limit"
+    assert summary.order_instruction.limit_price == 500.0
+    assert summary.order_instruction.time_in_force == "gtc"
     assert active is True
     assert detail is not None
     assert detail.subject_id == "manual-operator:operator-42"
     assert detail.receipt["subject_id"] == "manual-operator:operator-42"
     assert [event.event_kind for event in detail.events] == ["MANUAL_ORDER_ACCEPTED"]
+
+
+def test_manual_cancellation_transaction_keeps_its_target_order_reference(tmp_path: Path) -> None:
+    repo = ClerkSqliteRepository.initialize(
+        account_id="PA-ACCOUNT-DESK",
+        artifacts_root=tmp_path,
+    )
+    manual = accept_manual_order(
+        repo,
+        account_id="PA-ACCOUNT-DESK",
+        operator_id="operator-42",
+        ticket_id="7de3a77c-b698-4e0d-a5d1-2f624574ed35",
+        leg_id="09d6d63e-6375-4e6d-8d20-3b1bf70c2465",
+        leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+    )
+    assert manual.leg.order_ref is not None
+    cancellation = accept_manual_order_cancellation(
+        repo,
+        account_id="PA-ACCOUNT-DESK",
+        operator_id="operator-42",
+        order_ref=manual.leg.order_ref,
+        cancel_request_id="9a7a6d68-2e6a-4512-9252-40fa4c4da1b2",
+    )
+    broker = _UnusedBroker()
+    set_active_clerk_runtime(
+        ActiveClerkRuntime(
+            authority_kind="sqlite",
+            clerk=SqliteAlpacaClerkFacade(
+                repo=repo,
+                read=broker,  # type: ignore[arg-type]
+                trade=broker,  # type: ignore[arg-type]
+            ),
+        )
+    )
+    try:
+        active, detail = sqlite_transaction_detail(
+            account_id="PA-ACCOUNT-DESK",
+            transaction_id=cancellation.effect.effect_operation_id,
+        )
+    finally:
+        set_active_clerk_runtime(None)
+        repo.close()
+
+    assert active is True
+    assert detail is not None
+    assert detail.order_ref == manual.leg.order_ref
+    assert detail.order_instruction.symbol == "SPY"
+    assert detail.receipt["order_refs"] == [manual.leg.order_ref]
+
+
+def test_transaction_response_accepts_the_longest_canonical_manual_subject_id() -> None:
+    subject_id = "manual-operator:" + "a" * 128
+
+    row = ClerkTransactionSummaryRow(
+        transaction_id="manual-effect",
+        account_id="PA-ACCOUNT-DESK",
+        journal_seq=1,
+        recorded_at_ms=1,
+        transaction_kind="MANUAL_ORDER",
+        subject_id=subject_id,
+        strategy_instance_id=None,
+        run_id=None,
+        intent_id=None,
+        order_ref=None,
+        lifecycle_state="accepted",
+        event_count=1,
+    )
+
+    assert row.subject_id == subject_id
 
 
 def test_transaction_projection_preserves_each_effective_execution_economics(

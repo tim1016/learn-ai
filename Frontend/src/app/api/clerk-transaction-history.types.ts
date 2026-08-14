@@ -101,6 +101,8 @@ export interface ClerkTransactionSummary {
   readonly transaction_kind: string;
   readonly transaction_origin?: ClerkTransactionOrigin;
   readonly order_instruction?: ClerkOrderInstruction;
+  /** Immutable custody identity, including manual operator subjects. */
+  readonly subject_id?: string | null;
   /** Null for external orders that have no Clerk-owned bot identity. */
   readonly strategy_instance_id: string | null;
   readonly run_id: string | null;

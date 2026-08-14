@@ -53,6 +53,9 @@ class ProjectedOrder:
     symbol: str | None = None
     side: str | None = None
     quantity: float | None = None
+    order_type: str | None = None
+    limit_price: float | None = None
+    time_in_force: str | None = None
     filled_quantity: float | None = None
 
 
