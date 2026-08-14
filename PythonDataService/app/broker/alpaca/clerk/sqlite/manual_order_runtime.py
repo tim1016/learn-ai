@@ -80,10 +80,7 @@ def _preview_token(
             "account_id": account_id,
             "operator_id": operator_id,
             "ticket_id": ticket_id,
-            "legs": [
-                {"leg_id": leg.leg_id, "instruction": leg.instruction.model_dump(mode="json")}
-                for leg in legs
-            ],
+            "legs": [{"leg_id": leg.leg_id, "instruction": leg.instruction.model_dump(mode="json")} for leg in legs],
             "authority_generation": meta.authority_generation,
             "db_identity_token": meta.db_identity_token,
             "control_revision": meta.control_revision,
@@ -192,9 +189,7 @@ async def preview_manual_order(
     subject_id = manual_operator_subject_id(operator_id)
     existing_ticket = repo.manual_order_ticket(ticket_id)
     continuation_ticket_id = (
-        ticket_id
-        if existing_ticket is not None and existing_ticket.subject_id == subject_id
-        else None
+        ticket_id if existing_ticket is not None and existing_ticket.subject_id == subject_id else None
     )
     try:
         active_leg_id = (
@@ -404,7 +399,10 @@ async def submit_previewed_manual_order(
     """Recheck one ticket preview, then activate only its selected serial leg."""
     if not legs:
         raise ManualPreviewStaleError("The manual ticket has no leg to submit.")
-    active_leg = next_manual_ticket_leg(repo, ticket_id=ticket_id) if continuation else legs[0]
+    try:
+        active_leg = next_manual_ticket_leg(repo, ticket_id=ticket_id) if continuation else legs[0]
+    except ManualTicketContinuationError as exc:
+        raise ManualPreviewStaleError(str(exc)) from exc
     if continuation and active_leg.leg_id not in {leg.leg_id for leg in legs}:
         raise ManualPreviewStaleError("The refreshed manual ticket no longer contains its next leg.")
     if repo.get_command(manual_order_command_id(ticket_id, active_leg.leg_id)) is None:
@@ -425,9 +423,7 @@ async def submit_previewed_manual_order(
             assert preview.capability.unavailable is not None
             raise ManualPreviewStaleError(preview.capability.unavailable.message)
         if not hmac.compare_digest(preview.preview_token or "", preview_token):
-            raise ManualPreviewStaleError(
-                "The manual-order preview is stale. Refresh the ticket before confirming."
-            )
+            raise ManualPreviewStaleError("The manual-order preview is stale. Refresh the ticket before confirming.")
     return await submit_manual_order(
         repo,
         account_id=account_id,

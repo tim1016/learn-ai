@@ -324,9 +324,7 @@ async def get_portfolio_history_proof(
                 for position in positions
                 if position.current_price is not None
             },
-            position_quantities={
-                position.symbol.upper(): position.quantity for position in positions
-            },
+            position_quantities={position.symbol.upper(): position.quantity for position in positions},
         )
     except (ClerkTransactionProjectionUnavailable, EconomicProjectionError):
         return _history_without_proof(
@@ -477,10 +475,7 @@ async def preview_sqlite_manual_order(
         preview = await facade.preview_manual_order(
             operator_id=settings.PANEL_OPERATOR_IDENTITY,
             ticket_id=str(request.ticket_id),
-            legs=tuple(
-                ManualTicketLeg(leg_id=str(leg.leg_id), instruction=leg.instruction)
-                for leg in request.legs
-            ),
+            legs=tuple(ManualTicketLeg(leg_id=str(leg.leg_id), instruction=leg.instruction) for leg in request.legs),
         )
     except BrokerError as error:
         _raise_http(error)
@@ -505,10 +500,7 @@ async def submit_sqlite_manual_order(
         await facade.submit_manual_order(
             operator_id=settings.PANEL_OPERATOR_IDENTITY,
             ticket_id=ticket,
-            legs=tuple(
-                ManualTicketLeg(leg_id=str(leg.leg_id), instruction=leg.instruction)
-                for leg in request.legs
-            ),
+            legs=tuple(ManualTicketLeg(leg_id=str(leg.leg_id), instruction=leg.instruction) for leg in request.legs),
             preview_token=request.preview_token,
         )
     except ManualPreviewStaleError as exc:
@@ -544,10 +536,7 @@ async def continue_sqlite_manual_order_ticket(
         await facade.submit_manual_order(
             operator_id=settings.PANEL_OPERATOR_IDENTITY,
             ticket_id=ticket,
-            legs=tuple(
-                ManualTicketLeg(leg_id=str(leg.leg_id), instruction=leg.instruction)
-                for leg in request.legs
-            ),
+            legs=tuple(ManualTicketLeg(leg_id=str(leg.leg_id), instruction=leg.instruction) for leg in request.legs),
             preview_token=request.preview_token,
             continuation=True,
         )
@@ -600,6 +589,7 @@ async def cancel_sqlite_manual_ticket(
             cancel_request_id=str(request.cancel_request_id),
         )
     except (
+        DurableConflictError,
         ManualOrderCancelConflictError,
         ManualOrderCancelOwnershipError,
         ManualOrderCancelTerminalError,
@@ -632,6 +622,7 @@ async def cancel_sqlite_manual_order(
             cancel_request_id=str(request.cancel_request_id),
         )
     except (
+        DurableConflictError,
         ManualOrderCancelConflictError,
         ManualOrderCancelOwnershipError,
         ManualOrderCancelTerminalError,
@@ -676,9 +667,7 @@ class ClearHoldRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     operator: str = Field(default="operator", max_length=64)
-    reason: str = Field(
-        default="Operator cleared the exposure hold.", min_length=1, max_length=512
-    )
+    reason: str = Field(default="Operator cleared the exposure hold.", min_length=1, max_length=512)
 
     @field_validator("reason")
     @classmethod
@@ -770,9 +759,7 @@ async def clear_clerk_hold(broker: str, request: ClearHoldRequest) -> ClerkStatu
     responses={409: {"model": CustodyConflictResponse}},
     dependencies=[Depends(require_data_plane_control_secret)],
 )
-async def resolve_custody(
-    broker: str, request: CustodyResolutionRequest
-) -> CustodyResolutionReceipt:
+async def resolve_custody(broker: str, request: CustodyResolutionRequest) -> CustodyResolutionReceipt:
     """Resolve Clerk↔broker divergence: run the diagnosed plan, journal the reason.
 
     A control mutation. The typed token is a UI friction gate; the operator

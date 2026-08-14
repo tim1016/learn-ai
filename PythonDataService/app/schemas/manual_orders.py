@@ -38,7 +38,11 @@ class ManualOrderPreviewRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     ticket_id: UUID
-    legs: tuple[ManualOrderLegRequest, ...] = Field(min_length=1, max_length=8)
+    legs: tuple[ManualOrderLegRequest, ...] = Field(
+        min_length=1,
+        max_length=8,
+        json_schema_extra={"minItems": 1, "maxItems": 8},
+    )
 
 
 class ManualOrderSubmitRequest(BaseModel):
@@ -46,7 +50,11 @@ class ManualOrderSubmitRequest(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    legs: tuple[ManualOrderLegRequest, ...] = Field(min_length=1, max_length=8)
+    legs: tuple[ManualOrderLegRequest, ...] = Field(
+        min_length=1,
+        max_length=8,
+        json_schema_extra={"minItems": 1, "maxItems": 8},
+    )
     preview_token: str = Field(min_length=64, max_length=128)
 
 
@@ -270,11 +278,7 @@ class ManualOrderLegResponse(BaseModel):
         command = repo.get_command(leg.command_id) if leg.command_id is not None else None
         effect = repo.effect_operation(leg.effect_operation_id) if leg.effect_operation_id is not None else None
         order = repo.order(leg.order_ref) if leg.order_ref is not None else None
-        cancellation = (
-            repo.manual_order_cancellation(order_ref=leg.order_ref)
-            if leg.order_ref is not None
-            else None
-        )
+        cancellation = repo.manual_order_cancellation(order_ref=leg.order_ref) if leg.order_ref is not None else None
         return cls(
             leg_id=leg.leg_id,
             sequence_index=leg.sequence_index,

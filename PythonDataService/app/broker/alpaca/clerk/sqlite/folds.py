@@ -61,6 +61,7 @@ from app.broker.alpaca.clerk.sqlite.manual_ticket_folds import (
     fold_manual_ticket_reserved,
     fold_manual_ticket_state,
     pause_manual_ticket_for_unknown_cancellation,
+    rederive_manual_ticket_state_for_order,
     sync_manual_ticket_effect_state,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_folds import (
@@ -646,8 +647,7 @@ def _sync_manual_cancellation_effect_state(
     if effect is None or effect["kind"] != "CANCEL" or effect["state"] != effect_state:
         return
     updated = conn.execute(
-        "UPDATE manual_order_cancellations SET state = ?, updated_at_ms = ? "
-        "WHERE effect_operation_id = ?",
+        "UPDATE manual_order_cancellations SET state = ?, updated_at_ms = ? WHERE effect_operation_id = ?",
         (cancellation_state, payload["recorded_at_ms"], payload["effect_operation_id"]),
     )
     if updated.rowcount != 1:
@@ -687,9 +687,7 @@ def _fold_order_submit_failed(conn: sqlite3.Connection, payload: dict[str, Any])
 
 def _fold_manual_order_canceled(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Terminally cancel a source leg only after local or exact broker proof."""
-    validate_manual_order_cancel_result_facts(
-        ManualOrderCancelResultFacts.from_facts_json(payload["facts_json"])
-    )
+    validate_manual_order_cancel_result_facts(ManualOrderCancelResultFacts.from_facts_json(payload["facts_json"]))
     _fold_effect_terminal(conn, payload, terminal_state="failed")
     sync_manual_ticket_effect_state(
         conn,
@@ -702,9 +700,7 @@ def _fold_manual_order_canceled(conn: sqlite3.Connection, payload: dict[str, Any
 
 def _fold_manual_order_terminal(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Close an owned manual leg on exact expired/rejected broker evidence."""
-    validate_manual_order_cancel_result_facts(
-        ManualOrderCancelResultFacts.from_facts_json(payload["facts_json"])
-    )
+    validate_manual_order_cancel_result_facts(ManualOrderCancelResultFacts.from_facts_json(payload["facts_json"]))
     _fold_effect_terminal(conn, payload, terminal_state="failed")
     sync_manual_ticket_effect_state(
         conn,
@@ -717,9 +713,7 @@ def _fold_manual_order_terminal(conn: sqlite3.Connection, payload: dict[str, Any
 
 def _fold_manual_order_cancel_confirmed(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Record a proved cancellation as success of the cancel effect itself."""
-    validate_manual_order_cancel_result_facts(
-        ManualOrderCancelResultFacts.from_facts_json(payload["facts_json"])
-    )
+    validate_manual_order_cancel_result_facts(ManualOrderCancelResultFacts.from_facts_json(payload["facts_json"]))
     _fold_effect_terminal(conn, payload, terminal_state="succeeded")
     _sync_manual_cancellation_effect_state(
         conn,
@@ -727,13 +721,12 @@ def _fold_manual_order_cancel_confirmed(conn: sqlite3.Connection, payload: dict[
         effect_state="succeeded",
         cancellation_state="SUCCEEDED",
     )
+    rederive_manual_ticket_state_for_order(conn, payload)
 
 
 def _fold_manual_order_cancel_terminal(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Record that cancellation had a proved terminal target and did not act."""
-    validate_manual_order_cancel_result_facts(
-        ManualOrderCancelResultFacts.from_facts_json(payload["facts_json"])
-    )
+    validate_manual_order_cancel_result_facts(ManualOrderCancelResultFacts.from_facts_json(payload["facts_json"]))
     _fold_effect_terminal(conn, payload, terminal_state="failed")
     _sync_manual_cancellation_effect_state(
         conn,
@@ -741,6 +734,7 @@ def _fold_manual_order_cancel_terminal(conn: sqlite3.Connection, payload: dict[s
         effect_state="failed",
         cancellation_state="FAILED",
     )
+    rederive_manual_ticket_state_for_order(conn, payload)
 
 
 def _fold_exit_attributed_flat(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
@@ -858,9 +852,7 @@ def _fold_execution_slice_filled(conn: sqlite3.Connection, payload: dict[str, An
     if payload["source_event_at_ms"] != facts.source_event_at_ms:
         raise ValueError("execution source_event_at_ms must match the typed facts")
 
-    already_recorded = conn.execute(
-        "SELECT 1 FROM fills WHERE execution_id = ?", (facts.execution_id,)
-    ).fetchone()
+    already_recorded = conn.execute("SELECT 1 FROM fills WHERE execution_id = ?", (facts.execution_id,)).fetchone()
     if already_recorded is not None:
         return
     conn.execute(
@@ -922,10 +914,7 @@ def _fold_execution_coverage_quarantined(
         conn,
         order_ref=facts.order_ref,
     )
-    if not any(
-        conflict.conflict_execution_id == facts.conflict_execution_id
-        for conflict in active
-    ):
+    if not any(conflict.conflict_execution_id == facts.conflict_execution_id for conflict in active):
         raise ValueError("additional coverage evidence requires its active conflict episode")
 
 
@@ -1044,14 +1033,11 @@ def _fold_execution_corrected(conn: sqlite3.Connection, payload: dict[str, Any])
     facts = ExecutionCorrectedFacts.from_facts_json(payload["facts_json"])
     validate_execution_corrected_facts(facts)
 
-    already_recorded = conn.execute(
-        "SELECT 1 FROM fills WHERE execution_id = ?", (facts.execution_id,)
-    ).fetchone()
+    already_recorded = conn.execute("SELECT 1 FROM fills WHERE execution_id = ?", (facts.execution_id,)).fetchone()
     if already_recorded is not None:
         return
     owner = conn.execute(
-        "SELECT subject_id, strategy_instance_id FROM effect_operations "
-        "WHERE effect_operation_id = ?",
+        "SELECT subject_id, strategy_instance_id FROM effect_operations WHERE effect_operation_id = ?",
         (payload["effect_operation_id"],),
     ).fetchone()
     if owner is None:
@@ -1074,9 +1060,7 @@ def _fold_execution_corrected(conn: sqlite3.Connection, payload: dict[str, Any])
         (facts.superseded_execution_ref,),
     ).fetchone()
     if superseded is None:
-        raise ValueError(
-            f"correction target {facts.superseded_execution_ref!r} is missing or no longer effective"
-        )
+        raise ValueError(f"correction target {facts.superseded_execution_ref!r} is missing or no longer effective")
     if superseded["order_ref"] != payload["order_ref"]:
         raise ValueError("correction target belongs to a different order")
     if superseded["subject_id"] != owner["subject_id"]:

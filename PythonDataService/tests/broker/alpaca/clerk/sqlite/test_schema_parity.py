@@ -65,9 +65,7 @@ def test_schema_creates_all_twenty_two_pinned_tables() -> None:
     schema.apply_schema(conn)
     tables = {
         row[0]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name != 'sqlite_sequence'"
-        )
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name != 'sqlite_sequence'")
     }
     assert tables == {
         "control_meta",
@@ -100,10 +98,7 @@ def test_v9_execution_provenance_and_custody_subject_schema() -> None:
     schema.configure_connection(conn)
     schema.apply_schema(conn)
 
-    fills_columns = {
-        row[1]: row
-        for row in conn.execute("PRAGMA table_info(fills)")
-    }
+    fills_columns = {row[1]: row for row in conn.execute("PRAGMA table_info(fills)")}
     assert set(fills_columns) >= {
         "execution_id",
         "evidence_source",
@@ -118,10 +113,7 @@ def test_v9_execution_provenance_and_custody_subject_schema() -> None:
     assert fills_columns["event_kind"][4] == "'fill'"
     assert fills_columns["fee_fidelity"][4] == "'not_reported'"
 
-    index_names = {
-        row[0]
-        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")
-    }
+    index_names = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
     assert {
         "ux_fills_execution_id",
         "ux_external_orders_broker_order_id",
@@ -145,9 +137,12 @@ def test_v9_authority_migrates_the_manual_cancellation_resource_and_leg_order_to
     conn = sqlite3.connect(":memory:")
     schema.configure_connection(conn)
     schema.apply_v9_schema(conn)
-    assert conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'manual_order_cancellations'"
-    ).fetchone() is None
+    assert (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'manual_order_cancellations'"
+        ).fetchone()
+        is None
+    )
     conn.execute(
         "INSERT INTO control_meta "
         "(id, schema_version, broker, account_id, db_identity_token, authority_generation, "
@@ -160,11 +155,54 @@ def test_v9_authority_migrates_the_manual_cancellation_resource_and_leg_order_to
     schema.migrate_schema(conn, from_version=9)
 
     assert conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0] == 11
-    assert conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'manual_order_cancellations'"
-    ).fetchone() is not None
+    assert (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'manual_order_cancellations'"
+        ).fetchone()
+        is not None
+    )
     leg_columns = {row[1] for row in conn.execute("PRAGMA table_info(manual_order_legs)")}
     assert "sequence_index" in leg_columns
+
+
+def test_v10_multi_leg_ticket_migrates_to_distinct_stable_sequence_indices() -> None:
+    conn = sqlite3.connect(":memory:")
+    schema.configure_connection(conn)
+    schema.apply_v9_schema(conn)
+    conn.execute(
+        "INSERT INTO control_meta "
+        "(id, schema_version, broker, account_id, db_identity_token, authority_generation, "
+        "control_revision, created_at_ms, last_open_at_ms, reset_provenance_json, "
+        "execution_lease_owner, execution_lease_expires_at_ms) "
+        "VALUES (1, 9, 'alpaca', 'PA1', 'identity', 1, 0, 1, 1, NULL, NULL, NULL)"
+    )
+    for statement in schema.SCHEMA_MIGRATIONS[9]:
+        conn.execute(statement)
+    conn.execute("UPDATE control_meta SET schema_version = 10 WHERE id = 1")
+    conn.execute(
+        "INSERT INTO custody_subjects "
+        "(subject_id, kind, strategy_instance_id, operator_id, created_at_ms) "
+        "VALUES ('manual-operator:operator', 'MANUAL_OPERATOR', NULL, 'operator', 1)"
+    )
+    conn.execute(
+        "INSERT INTO manual_order_tickets "
+        "(ticket_id, subject_id, operator_id, instruction_hash, state, created_at_ms, updated_at_ms) "
+        "VALUES ('ticket', 'manual-operator:operator', 'operator', 'hash', 'RESERVED', 1, 1)"
+    )
+    conn.executemany(
+        "INSERT INTO manual_order_legs "
+        "(ticket_id, leg_id, subject_id, instruction_hash, state, created_at_ms, updated_at_ms) "
+        "VALUES ('ticket', ?, 'manual-operator:operator', ?, 'RESERVED', ?, ?)",
+        (("leg-b", "hash-b", 2, 2), ("leg-a", "hash-a", 1, 1)),
+    )
+    conn.commit()
+
+    schema.migrate_schema(conn, from_version=10)
+
+    rows = conn.execute(
+        "SELECT leg_id, sequence_index FROM manual_order_legs WHERE ticket_id = 'ticket' ORDER BY sequence_index"
+    ).fetchall()
+    assert rows == [("leg-a", 0), ("leg-b", 1)]
 
 
 def test_v9_subject_ownership_invariants_reject_counterfeit_and_cross_wired_rows() -> None:
@@ -203,8 +241,7 @@ def test_v9_subject_ownership_invariants_reject_counterfeit_and_cross_wired_rows
     )
     with pytest.raises(sqlite3.IntegrityError, match="custody_subjects identity is immutable"):
         conn.execute(
-            "UPDATE custody_subjects SET operator_id = 'operator-b' "
-            "WHERE subject_id = 'manual-operator:operator-a'"
+            "UPDATE custody_subjects SET operator_id = 'operator-b' WHERE subject_id = 'manual-operator:operator-a'"
         )
 
     with pytest.raises(sqlite3.IntegrityError, match="commands subject"):
@@ -285,26 +322,19 @@ def test_v9_subject_ownership_invariants_reject_counterfeit_and_cross_wired_rows
         "VALUES ('manual-ticket', 'leg-a', 'manual-operator:operator-a', 'leg-h', 'RESERVED', 1, 1)"
     )
     with pytest.raises(sqlite3.IntegrityError, match="manual_order_tickets identity is immutable"):
-        conn.execute(
-            "UPDATE manual_order_tickets SET operator_id = 'operator-b' "
-            "WHERE ticket_id = 'manual-ticket'"
-        )
+        conn.execute("UPDATE manual_order_tickets SET operator_id = 'operator-b' WHERE ticket_id = 'manual-ticket'")
     with pytest.raises(sqlite3.IntegrityError, match="manual_order_tickets are append-only"):
         conn.execute("DELETE FROM manual_order_tickets WHERE ticket_id = 'manual-ticket'")
     with pytest.raises(sqlite3.IntegrityError, match="manual_order_legs identity is immutable"):
         conn.execute(
-            "UPDATE manual_order_legs SET leg_id = 'renamed-leg' "
-            "WHERE ticket_id = 'manual-ticket' AND leg_id = 'leg-a'"
+            "UPDATE manual_order_legs SET leg_id = 'renamed-leg' WHERE ticket_id = 'manual-ticket' AND leg_id = 'leg-a'"
         )
     with pytest.raises(sqlite3.IntegrityError, match="manual_order_legs identity is immutable"):
         conn.execute(
-            "UPDATE manual_order_legs SET sequence_index = 1 "
-            "WHERE ticket_id = 'manual-ticket' AND leg_id = 'leg-a'"
+            "UPDATE manual_order_legs SET sequence_index = 1 WHERE ticket_id = 'manual-ticket' AND leg_id = 'leg-a'"
         )
     with pytest.raises(sqlite3.IntegrityError, match="manual_order_legs are append-only"):
-        conn.execute(
-            "DELETE FROM manual_order_legs WHERE ticket_id = 'manual-ticket' AND leg_id = 'leg-a'"
-        )
+        conn.execute("DELETE FROM manual_order_legs WHERE ticket_id = 'manual-ticket' AND leg_id = 'leg-a'")
     with pytest.raises(sqlite3.IntegrityError, match="manual leg resources"):
         conn.execute(
             "UPDATE manual_order_legs SET command_id = 'bot-command', effect_operation_id = 'bot-effect', "
@@ -355,8 +385,7 @@ def test_v9_subject_ownership_invariants_reject_counterfeit_and_cross_wired_rows
     )
     with pytest.raises(sqlite3.IntegrityError, match="manual_order_cancellations identity is immutable"):
         conn.execute(
-            "UPDATE manual_order_cancellations SET cancel_request_id = 'other-request' "
-            "WHERE order_ref = 'manual-order'"
+            "UPDATE manual_order_cancellations SET cancel_request_id = 'other-request' WHERE order_ref = 'manual-order'"
         )
     with pytest.raises(sqlite3.IntegrityError, match="manual_order_cancellations are append-only"):
         conn.execute("DELETE FROM manual_order_cancellations WHERE order_ref = 'manual-order'")
@@ -382,9 +411,10 @@ def test_empty_v6_authority_stops_at_the_required_offline_v8_to_v9_ceremony() ->
         schema.migrate_schema(conn, from_version=6)
 
     assert conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0] == 6
-    assert conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'decision_receipts'"
-    ).fetchone() is None
+    assert (
+        conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'decision_receipts'").fetchone()
+        is None
+    )
 
 
 def test_data_bearing_v6_authority_fails_closed_without_schema_mutation() -> None:
@@ -402,9 +432,10 @@ def test_data_bearing_v6_authority_fails_closed_without_schema_mutation() -> Non
 
     assert conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0] == 6
     assert list(conn.execute("PRAGMA table_info(fills)")) == fills_before
-    assert conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'decision_receipts'"
-    ).fetchone() is None
+    assert (
+        conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'decision_receipts'").fetchone()
+        is None
+    )
 
 
 def test_v6_to_v8_migration_rolls_back_partial_ddl_on_failure() -> None:

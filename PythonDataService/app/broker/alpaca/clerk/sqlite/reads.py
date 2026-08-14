@@ -177,8 +177,7 @@ def external_order(
     external_order_id: str,
 ) -> ExternalOrderResource | None:
     row = conn.execute(
-        f"SELECT {_EXTERNAL_ORDER_SELECT} FROM external_orders eo "
-        "WHERE external_order_id = ?",
+        f"SELECT {_EXTERNAL_ORDER_SELECT} FROM external_orders eo WHERE external_order_id = ?",
         (external_order_id,),
     ).fetchone()
     return _external_order_resource(row) if row is not None else None
@@ -189,8 +188,7 @@ def external_order_by_broker_order_id(
     broker_order_id: str,
 ) -> ExternalOrderResource | None:
     row = conn.execute(
-        f"SELECT {_EXTERNAL_ORDER_SELECT} FROM external_orders eo "
-        "WHERE broker_order_id = ?",
+        f"SELECT {_EXTERNAL_ORDER_SELECT} FROM external_orders eo WHERE broker_order_id = ?",
         (broker_order_id,),
     ).fetchone()
     return _external_order_resource(row) if row is not None else None
@@ -232,8 +230,7 @@ def external_order_page(
         params = (limit,)
     else:
         where_clauses.append(
-            f"({observation_sequence} < ? OR ({observation_sequence} = ? "
-            "AND eo.external_order_id < ?))"
+            f"({observation_sequence} < ? OR ({observation_sequence} = ? AND eo.external_order_id < ?))"
         )
         params = (
             observation_sequence_before,
@@ -264,16 +261,13 @@ def command_by_idempotency_key(
     conn: sqlite3.Connection, *, authority_generation: int, idempotency_key: str
 ) -> CommandResource | None:
     row = conn.execute(
-        f"SELECT {', '.join(_COMMAND_COLUMNS)} FROM commands "
-        "WHERE authority_generation = ? AND idempotency_key = ?",
+        f"SELECT {', '.join(_COMMAND_COLUMNS)} FROM commands WHERE authority_generation = ? AND idempotency_key = ?",
         (authority_generation, idempotency_key),
     ).fetchone()
     return _row_to_command_resource(row) if row is not None else None
 
 
-def effect_operation(
-    conn: sqlite3.Connection, effect_operation_id: str
-) -> EffectOperationResource | None:
+def effect_operation(conn: sqlite3.Connection, effect_operation_id: str) -> EffectOperationResource | None:
     row = conn.execute(
         "SELECT effect_operation_id, authority_generation, idempotency_key, command_id, "
         "strategy_instance_id, run_id, kind, state, custody_owner, created_at_ms, "
@@ -293,9 +287,7 @@ def order(conn: sqlite3.Connection, order_ref: str) -> OrderResource | None:
     return OrderResource(**dict(row)) if row is not None else None
 
 
-def order_for_effect_operation(
-    conn: sqlite3.Connection, effect_operation_id: str
-) -> OrderResource | None:
+def order_for_effect_operation(conn: sqlite3.Connection, effect_operation_id: str) -> OrderResource | None:
     """The order originally created by a single-order effect (ENTER)."""
     row = conn.execute(
         "SELECT order_ref, effect_operation_id, client_order_id, broker_order_id, role, "
@@ -402,9 +394,7 @@ def custody_subject(conn: sqlite3.Connection, subject_id: str) -> dict | None:
     return dict(row) if row is not None else None
 
 
-def orders_for_effect_operation(
-    conn: sqlite3.Connection, effect_operation_id: str
-) -> list[OrderResource]:
+def orders_for_effect_operation(conn: sqlite3.Connection, effect_operation_id: str) -> list[OrderResource]:
     """Every order linked to this operation, without changing order origin."""
     rows = conn.execute(
         "SELECT o.order_ref, o.effect_operation_id, o.client_order_id, o.broker_order_id, o.role, "
@@ -422,9 +412,7 @@ def all_order_refs(conn: sqlite3.Connection) -> frozenset[str]:
     return frozenset(row["order_ref"] for row in rows)
 
 
-def entry_orders_for_strategy(
-    conn: sqlite3.Connection, strategy_instance_id: str
-) -> list[OrderResource]:
+def entry_orders_for_strategy(conn: sqlite3.Connection, strategy_instance_id: str) -> list[OrderResource]:
     """Every entry order whose immutable origin belongs to one strategy."""
     rows = conn.execute(
         "SELECT o.order_ref, o.effect_operation_id, o.client_order_id, o.broker_order_id, "
@@ -437,9 +425,7 @@ def entry_orders_for_strategy(
     return [OrderResource(**dict(row)) for row in rows]
 
 
-def orders_for_strategy(
-    conn: sqlite3.Connection, strategy_instance_id: str
-) -> list[OrderResource]:
+def orders_for_strategy(conn: sqlite3.Connection, strategy_instance_id: str) -> list[OrderResource]:
     """Every order (ENTRY and REDUCING alike) belonging to one strategy.
 
     Unlike :func:`entry_orders_for_strategy`, this is not role-filtered — the
@@ -472,9 +458,7 @@ def active_exit_for_order(conn: sqlite3.Connection, order_ref: str) -> EffectOpe
     return EffectOperationResource(**dict(row)) if row is not None else None
 
 
-def active_exit_for_strategy(
-    conn: sqlite3.Connection, strategy_instance_id: str
-) -> EffectOperationResource | None:
+def active_exit_for_strategy(conn: sqlite3.Connection, strategy_instance_id: str) -> EffectOperationResource | None:
     """The strategy's live EXIT fence against concurrently admitted ENTERs."""
     row = conn.execute(
         "SELECT effect_operation_id, authority_generation, idempotency_key, command_id, "
@@ -526,9 +510,7 @@ def fills_for_order(conn: sqlite3.Connection, order_ref: str) -> list[dict]:
 
 
 def execution_exists(conn: sqlite3.Connection, execution_id: str) -> bool:
-    row = conn.execute(
-        "SELECT 1 FROM fills WHERE execution_id = ? LIMIT 1", (execution_id,)
-    ).fetchone()
+    row = conn.execute("SELECT 1 FROM fills WHERE execution_id = ? LIMIT 1", (execution_id,)).fetchone()
     return row is not None
 
 
@@ -549,8 +531,7 @@ def cumulative_recovery_fill_exists_for_order(conn: sqlite3.Connection, order_re
 def cumulative_recovery_fill_ids_for_order(conn: sqlite3.Connection, order_ref: str) -> list[str]:
     """Return the immutable fold identities covered by aggregate recovery."""
     rows = conn.execute(
-        "SELECT fill_id FROM fills WHERE order_ref = ? AND evidence_source = 'cumulative_recovery' "
-        "ORDER BY fill_id",
+        "SELECT fill_id FROM fills WHERE order_ref = ? AND evidence_source = 'cumulative_recovery' ORDER BY fill_id",
         (order_ref,),
     ).fetchall()
     return [str(row["fill_id"]) for row in rows]
@@ -615,9 +596,7 @@ def _effective_fill_totals_for_order(
         parameters += evidence_sources
     row = conn.execute(
         "SELECT COALESCE(SUM(f.qty), 0) AS qty, COALESCE(SUM(f.qty * f.price), 0) AS cost "
-        "FROM fills f WHERE f.order_ref = ? "
-        + source_predicate
-        + "AND NOT EXISTS (SELECT 1 FROM fills successor "
+        "FROM fills f WHERE f.order_ref = ? " + source_predicate + "AND NOT EXISTS (SELECT 1 FROM fills successor "
         "WHERE successor.superseded_execution_ref = f.execution_id)",
         parameters,
     ).fetchone()
@@ -670,15 +649,12 @@ def attributed_positions_by_symbol(conn: sqlite3.Connection) -> dict[str, float]
     against the broker's own account-wide position snapshot. Never nets
     against the raw broker position; this is our side of that comparison."""
     rows = conn.execute(
-        "SELECT UPPER(symbol) AS symbol, SUM(attributed_qty) AS qty "
-        "FROM positions GROUP BY UPPER(symbol)"
+        "SELECT UPPER(symbol) AS symbol, SUM(attributed_qty) AS qty FROM positions GROUP BY UPPER(symbol)"
     ).fetchall()
     return {row["symbol"]: row["qty"] for row in rows}
 
 
-def attributed_positions_for_strategy(
-    conn: sqlite3.Connection, strategy_instance_id: str
-) -> dict[str, float]:
+def attributed_positions_for_strategy(conn: sqlite3.Connection, strategy_instance_id: str) -> dict[str, float]:
     rows = conn.execute(
         "SELECT UPPER(symbol) AS symbol, SUM(attributed_qty) AS qty FROM positions "
         "WHERE strategy_instance_id = ? GROUP BY UPPER(symbol)",
@@ -729,8 +705,10 @@ def manual_reduction_available_quantity(
         "AS requested_qty FROM effect_operations effect "
         "JOIN manual_order_legs leg ON leg.effect_operation_id = effect.effect_operation_id "
         "JOIN custody_transitions acceptance "
-        "ON acceptance.effect_operation_id = effect.effect_operation_id "
-        "AND acceptance.transition_kind = 'MANUAL_ORDER_ACCEPTED' "
+        "ON acceptance.sequence = ("
+        "SELECT MIN(candidate.sequence) FROM custody_transitions candidate "
+        "WHERE candidate.effect_operation_id = effect.effect_operation_id "
+        "AND candidate.transition_kind = 'MANUAL_ORDER_ACCEPTED') "
         "WHERE effect.kind = 'MANUAL_ORDER' AND effect.subject_id = ? "
         "AND effect.state NOT IN ('succeeded', 'failed', 'rejected') "
         "AND UPPER(json_extract(acceptance.facts_json, '$.leg.symbol')) = ? "
@@ -740,8 +718,7 @@ def manual_reduction_available_quantity(
     reserved_quantity = sum(
         max(
             0.0,
-            float(row["requested_qty"])
-            - effective_fill_totals_for_order(conn, str(row["order_ref"]))[0],
+            float(row["requested_qty"]) - effective_fill_totals_for_order(conn, str(row["order_ref"]))[0],
         )
         for row in reservations
     )

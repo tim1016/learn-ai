@@ -90,8 +90,7 @@ def _ticket_instruction_hash(
                 "subject_id": subject_id,
                 "ticket_id": ticket_id,
                 "legs": [
-                    {"leg_id": leg.leg_id, "instruction_hash": manual_instruction_hash(leg.instruction)}
-                    for leg in legs
+                    {"leg_id": leg.leg_id, "instruction_hash": manual_instruction_hash(leg.instruction)} for leg in legs
                 ],
             }
         ).encode("utf-8")
@@ -155,6 +154,11 @@ def _require_manual_leg_admission(
     leg: BrokerOrderLeg,
     continuation_ticket_id: str | None = None,
 ) -> None:
+    # ``accept_manual_order`` invokes this planner while
+    # ``commit_first_transition`` holds the repository's reentrant write
+    # coordinator.  Keep the reduction read here: moving it before that
+    # commit primitive would split the available-quantity check from the
+    # durable MANUAL_ORDER_ACCEPTED reservation and reopen an oversell race.
     if leg.side is OrderSide.BUY:
         require_manual_admission(
             repo,
@@ -223,9 +227,7 @@ def next_manual_ticket_leg(
                 "the ticket remains paused until the prior manual order outcome is reconciled"
             )
         if prior_states & {"RESERVED", "ACCEPTED"}:
-            raise ManualTicketContinuationError(
-                "the prior manual ticket leg has not reached broker acknowledgement"
-            )
+            raise ManualTicketContinuationError("the prior manual ticket leg has not reached broker acknowledgement")
         if resource.instruction is None:
             raise ManualTicketContinuationError(
                 "this legacy ticket lacks durable instruction evidence for a safe continuation"
@@ -269,12 +271,9 @@ def _ensure_subject_and_ticket(
     )
     ticket = repo.manual_order_ticket(ticket_id)
     if ticket is not None:
-        persisted_legs = tuple(
-            (item.leg_id, item.sequence_index, item.instruction_hash) for item in ticket.legs
-        )
+        persisted_legs = tuple((item.leg_id, item.sequence_index, item.instruction_hash) for item in ticket.legs)
         expected_legs = tuple(
-            (leg.leg_id, index, manual_instruction_hash(leg.instruction))
-            for index, leg in enumerate(legs)
+            (leg.leg_id, index, manual_instruction_hash(leg.instruction)) for index, leg in enumerate(legs)
         )
         if (
             ticket.subject_id != subject_id
@@ -384,9 +383,7 @@ def accept_manual_order(
                 )
             next_leg = next_manual_ticket_leg(repo, ticket_id=ticket_id)
             if next_leg.leg_id != leg_id:
-                raise ManualTicketContinuationError(
-                    "this manual ticket leg is not the next eligible continuation"
-                )
+                raise ManualTicketContinuationError("this manual ticket leg is not the next eligible continuation")
         _require_manual_leg_admission(
             repo,
             subject_id=subject_id,

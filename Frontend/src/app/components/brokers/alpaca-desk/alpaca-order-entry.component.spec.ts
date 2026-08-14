@@ -306,6 +306,10 @@ describe('AlpacaOrderEntryComponent', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /Continue remaining legs/i }));
 
+    const firstLeg = screen.getByText('Leg 1').parentElement;
+    expect(firstLeg?.textContent).toContain('Buy 1 Market Day');
+    expect(firstLeg?.textContent).not.toContain('Buy 1 Market Day at');
+
     await vi.waitFor(() => expect(previewSqliteManualOrder).toHaveBeenCalledWith('PA1', {
       ticket_id: ticket.ticket_id,
       legs: [
@@ -318,6 +322,63 @@ describe('AlpacaOrderEntryComponent', () => {
       ticket.ticket_id,
       expect.objectContaining({ preview_token: 'c'.repeat(64) }),
     );
+  });
+
+  it('shows a safe error instead of silently continuing a ticket with missing instruction evidence', async () => {
+    const ticket = {
+      ticket_id: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
+      subject_id: 'manual-operator:operator',
+      state: 'ACTIVE',
+      created_at_ms: 1,
+      updated_at_ms: 2,
+      legs: [
+        {
+          leg_id: '09d6d63e-6375-4e6d-8d20-3b1bf70c2465',
+          sequence_index: 0,
+          instruction_hash: 'first-hash',
+          instruction: null,
+          state: 'IN_PROGRESS',
+          command: { command_id: 'first-command', state: 'in_progress', action: 'SUBMIT_MANUAL_ORDER', receipt_id: null },
+          effect: { effect_operation_id: 'first-effect', state: 'in_progress', kind: 'MANUAL_ORDER', terminal_receipt_id: null },
+          order: { order_ref: 'manual/operator/v1:first', client_order_id: 'manual/operator/v1:first', broker_order_id: 'broker-first', broker_state: 'accepted' },
+          cancellation: null,
+        },
+        {
+          leg_id: '5791929d-4a3f-4ffc-a15f-62c34cb6c873',
+          sequence_index: 1,
+          instruction_hash: 'second-hash',
+          instruction: { symbol: 'SPY', side: 'buy', quantity: 2, order_type: 'market', time_in_force: 'day' },
+          state: 'RESERVED',
+          command: null,
+          effect: null,
+          order: null,
+          cancellation: null,
+        },
+      ],
+    };
+    const previewSqliteManualOrder = vi.fn();
+    const continueSqliteManualOrderTicket = vi.fn();
+    await render(AlpacaOrderEntryComponent, {
+      inputs: {
+        expectedAccountId: 'PA1',
+        sqliteManualAuthority: true,
+        manualTicketId: ticket.ticket_id,
+      },
+      providers: [{
+        provide: BrokersService,
+        useValue: {
+          getSqliteManualOrderTicket: vi.fn().mockResolvedValue(ticket),
+          previewSqliteManualOrder,
+          continueSqliteManualOrderTicket,
+        },
+      }],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /Continue remaining legs/i }));
+
+    expect(await screen.findByText('The Clerk cannot recover this ticket leg for a safe continuation.')).toBeTruthy();
+    expect(previewSqliteManualOrder).not.toHaveBeenCalled();
+    expect(continueSqliteManualOrderTicket).not.toHaveBeenCalled();
   });
 
   it('cancels the manual ticket once and renders durable unknown guidance', async () => {

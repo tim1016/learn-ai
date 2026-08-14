@@ -132,7 +132,9 @@ export class AlpacaOrderEntryComponent {
     const ticket = this.manualTicket();
     if (ticket === null || ticket.state === 'PAUSED_UNKNOWN' || ticket.state === 'CANCELED') return false;
     const nextIndex = ticket.legs.findIndex((leg) => leg.state === 'RESERVED');
-    return nextIndex > 0 && ticket.legs.slice(0, nextIndex).every((leg) => leg.state !== 'ACCEPTED');
+    return nextIndex > 0 && ticket.legs.slice(0, nextIndex).every(
+      (leg) => !['ACCEPTED', 'RESERVED', 'UNKNOWN'].includes(leg.state),
+    );
   });
 
   constructor() {
@@ -328,15 +330,16 @@ export class AlpacaOrderEntryComponent {
   protected async continueManualTicket(): Promise<void> {
     const ticket = this.manualTicket();
     if (ticket === null || !this.canContinueTicket() || this.submitting()) return;
-    const legs = ticket.legs.map((leg) => {
-      if (leg.instruction === null) {
-        throw new Error('The Clerk cannot recover this ticket leg for a safe continuation.');
-      }
-      return { leg_id: leg.leg_id, instruction: leg.instruction };
-    });
     this.submitting.set(true);
     this.submitError.set(null);
     try {
+      const legs = ticket.legs.map((leg) => {
+        const instruction = leg.instruction;
+        if (instruction === null) {
+          throw new Error('The Clerk cannot recover this ticket leg for a safe continuation.');
+        }
+        return { leg_id: leg.leg_id, instruction };
+      });
       const preview = await this.brokers.previewSqliteManualOrder(this.expectedAccountId(), {
         ticket_id: ticket.ticket_id,
         legs,
@@ -384,8 +387,9 @@ export class AlpacaOrderEntryComponent {
     const legs = this.legs().map((leg, index) => {
       let legId = ids.get(leg.id);
       if (legId === undefined) {
-        legId = index === 0 && this.manualLegId() !== null
-          ? this.manualLegId()!
+        const suppliedLegId = this.manualLegId();
+        legId = index === 0 && suppliedLegId !== null
+          ? suppliedLegId
           : this.newStableRequestId();
         ids.set(leg.id, legId);
         changed = true;

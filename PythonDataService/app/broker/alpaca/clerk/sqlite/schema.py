@@ -608,12 +608,27 @@ SCHEMA_V10_DDL = (
 # v11 adds a durable ordinal to the existing replayable leg projection.
 _MANUAL_LEG_SEQUENCE_V11_DDL = """\
 ALTER TABLE manual_order_legs ADD COLUMN sequence_index INTEGER NOT NULL DEFAULT 0;
+UPDATE manual_order_legs AS leg
+SET sequence_index = (
+    SELECT COUNT(*)
+    FROM manual_order_legs AS earlier
+    WHERE earlier.ticket_id = leg.ticket_id
+        AND (
+            earlier.created_at_ms < leg.created_at_ms
+            OR (earlier.created_at_ms = leg.created_at_ms AND earlier.leg_id < leg.leg_id)
+        )
+);
 CREATE UNIQUE INDEX ux_manual_order_legs_sequence
     ON manual_order_legs(ticket_id, sequence_index);
 DROP TRIGGER trg_manual_order_leg_identity_immutable;
 """ + MANUAL_LEG_IDENTITY_V11_DDL
 _MANUAL_LEG_SEQUENCE_V11_MIGRATION_STATEMENTS: tuple[str, ...] = (
     "ALTER TABLE manual_order_legs ADD COLUMN sequence_index INTEGER NOT NULL DEFAULT 0",
+    "UPDATE manual_order_legs AS leg SET sequence_index = ("
+    "SELECT COUNT(*) FROM manual_order_legs AS earlier "
+    "WHERE earlier.ticket_id = leg.ticket_id AND ("
+    "earlier.created_at_ms < leg.created_at_ms OR ("
+    "earlier.created_at_ms = leg.created_at_ms AND earlier.leg_id < leg.leg_id)))",
     "CREATE UNIQUE INDEX ux_manual_order_legs_sequence "
     "ON manual_order_legs(ticket_id, sequence_index)",
     "DROP TRIGGER trg_manual_order_leg_identity_immutable",
@@ -818,10 +833,10 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
         *EFFECT_SUBJECT_COMPATIBILITY_V10_MIGRATION_STATEMENTS,
         *MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_STATEMENTS,
     ),
-    # v10 -> v11: an ordered ticket must retain the sequence explicitly. v10
-    # only permitted one immediate leg, so ordinal zero is the faithful
-    # backfill. Replacing this narrow identity trigger makes the new ordering
-    # as immutable as the ticket/leg identities it governs.
+    # v10 -> v11: an ordered ticket must retain the sequence explicitly. A
+    # deterministic created-at/leg-id backfill makes every pre-v11 ticket
+    # unique before the per-ticket fence exists. Replacing this narrow identity
+    # trigger then makes the ordering as immutable as the ticket/leg identities.
     10: _MANUAL_LEG_SEQUENCE_V11_MIGRATION_STATEMENTS,
 }
 

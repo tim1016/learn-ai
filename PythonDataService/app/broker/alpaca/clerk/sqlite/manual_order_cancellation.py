@@ -165,9 +165,7 @@ def accept_manual_order_cancellation(
     existing = repo.get_command(command_id)
     if existing is not None:
         if existing.payload_hash != payload_hash:
-            raise ManualOrderCancelConflictError(
-                "manual cancellation identity conflicts with its durable request"
-            )
+            raise ManualOrderCancelConflictError("manual cancellation identity conflicts with its durable request")
         return _submission(
             repo,
             order_ref=order_ref,
@@ -307,20 +305,12 @@ def _append_cancellation_result(
             command_id=effect.command_id,
             effect_operation_id=effect.effect_operation_id,
             order_ref=cancellation.order_ref,
-            transition_kind=(
-                "MANUAL_ORDER_CANCEL_CONFIRMED"
-                if succeeded
-                else "MANUAL_ORDER_CANCEL_TERMINAL"
-            ),
+            transition_kind=("MANUAL_ORDER_CANCEL_CONFIRMED" if succeeded else "MANUAL_ORDER_CANCEL_TERMINAL"),
             custody_owner="ACCOUNT_CLERK",
             execution_authority="ACCOUNT_CLERK",
             operation_state="succeeded" if succeeded else "failed",
             clerk_observed_at_ms=repo.clock(),
-            summary_code=(
-                "MANUAL_ORDER_CANCEL_CONFIRMED"
-                if succeeded
-                else "MANUAL_ORDER_CANCEL_TARGET_TERMINAL"
-            ),
+            summary_code=("MANUAL_ORDER_CANCEL_CONFIRMED" if succeeded else "MANUAL_ORDER_CANCEL_TARGET_TERMINAL"),
             facts_json=facts.to_facts_json(),
         )
     )
@@ -354,21 +344,6 @@ async def _resolve_claimed_manual_order_cancellation(
             ),
         )
         return
-    if source_effect.state == "accepted" and target.broker_order_id is None:
-        _append_source_canceled(
-            repo,
-            order_ref=target.order_ref,
-            source_effect=source_effect,
-            why="The manual leg was canceled locally before broker activation.",
-        )
-        _append_cancellation_result(
-            repo,
-            cancellation=cancellation,
-            succeeded=True,
-            why="The manual leg had not reached the broker and was canceled locally.",
-        )
-        return
-
     observed = await broker.observe_exact(target.client_order_id)
     if isinstance(observed, BrokerError) or observed is None:
         fold_uncertain(
@@ -489,6 +464,14 @@ async def _resolve_claimed_manual_order_cancellation(
             succeeded=False,
             why="The manual order became terminal before cancellation could be proven.",
         )
+    elif cancel_error is not None:
+        fold_uncertain(
+            repo,
+            effect_operation_id=cancellation.effect_operation_id,
+            order_ref=target_after.order_ref,
+            why=(f"{cancel_error}; exact broker evidence still reports the manual order working."),
+            transition_kind="ORDER_CANCEL_UNCERTAIN",
+        )
 
 
 async def resolve_manual_order_cancellation(
@@ -604,7 +587,9 @@ async def submit_manual_ticket_cancellation(
         ):
             order_refs.append(leg.order_ref)
     if not order_refs:
-        if all(leg.state in {"RESERVED", "SUCCEEDED", "FAILED", "CANCELED"} for leg in ticket.legs):
+        if ticket.state in {"COMPLETED", "CANCELED"}:
+            return ()
+        if all(leg.state == "RESERVED" for leg in ticket.legs):
             repo.append_transition(
                 TransitionInput(
                     transition_kind="MANUAL_TICKET_CANCELED",

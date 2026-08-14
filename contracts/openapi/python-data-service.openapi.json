@@ -26287,7 +26287,9 @@
             "items": {
               "$ref": "#/components/schemas/ManualOrderLegRequest"
             },
+            "maxItems": 8,
             "maxLength": 8,
+            "minItems": 1,
             "minLength": 1,
             "title": "Legs",
             "type": "array"
@@ -26385,7 +26387,9 @@
             "items": {
               "$ref": "#/components/schemas/ManualOrderLegRequest"
             },
+            "maxItems": 8,
             "maxLength": 8,
+            "minItems": 1,
             "minLength": 1,
             "title": "Legs",
             "type": "array"

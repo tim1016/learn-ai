@@ -84,10 +84,7 @@ def fold_manual_ticket_reserved(conn: sqlite3.Connection, payload: dict[str, Any
                 (facts.ticket_id,),
             )
         )
-        expected_legs = tuple(
-            (leg.leg_id, facts.subject_id, leg.instruction_hash)
-            for leg in facts.legs
-        )
+        expected_legs = tuple((leg.leg_id, facts.subject_id, leg.instruction_hash) for leg in facts.legs)
         if persisted_legs != expected_legs:
             raise ValueError("manual ticket legs conflict with prior immutable reservation")
         return
@@ -130,8 +127,7 @@ def fold_manual_ticket_state(conn: sqlite3.Connection, payload: dict[str, Any]) 
     validate_manual_ticket_state_facts(facts)
     _require_manual_outer_identity_is_null(payload)
     updated = conn.execute(
-        "UPDATE manual_order_tickets SET state = ?, updated_at_ms = ? "
-        "WHERE ticket_id = ? AND subject_id = ?",
+        "UPDATE manual_order_tickets SET state = ?, updated_at_ms = ? WHERE ticket_id = ? AND subject_id = ?",
         (facts.state, payload["recorded_at_ms"], facts.ticket_id, facts.subject_id),
     )
     if updated.rowcount != 1:
@@ -160,8 +156,7 @@ def sync_manual_ticket_effect_state(
     if effect is None or effect["kind"] != "MANUAL_ORDER" or effect["state"] != effect_state:
         return
     updated = conn.execute(
-        "UPDATE manual_order_legs SET state = ?, updated_at_ms = ? "
-        "WHERE effect_operation_id = ?",
+        "UPDATE manual_order_legs SET state = ?, updated_at_ms = ? WHERE effect_operation_id = ?",
         (leg_state, payload["recorded_at_ms"], payload["effect_operation_id"]),
     )
     if updated.rowcount != 1:
@@ -179,6 +174,20 @@ def sync_manual_ticket_effect_state(
             "WHERE ticket_id = ? AND state = 'RESERVED'",
             (payload["recorded_at_ms"], ticket_id),
         )
+    rederive_manual_ticket_state(
+        conn,
+        ticket_id=ticket_id,
+        recorded_at_ms=payload["recorded_at_ms"],
+    )
+
+
+def rederive_manual_ticket_state(
+    conn: sqlite3.Connection,
+    *,
+    ticket_id: str,
+    recorded_at_ms: int,
+) -> None:
+    """Derive the ticket's public state from its durable leg states."""
     states = tuple(
         row["state"]
         for row in conn.execute(
@@ -190,14 +199,14 @@ def sync_manual_ticket_effect_state(
         "PAUSED_UNKNOWN"
         if "UNKNOWN" in states
         else "CANCELED"
-        if ticket_state == "CANCELED" and states and all(state == "CANCELED" for state in states)
+        if states and all(state == "CANCELED" for state in states)
         else "COMPLETED"
         if states and all(state in {"SUCCEEDED", "FAILED", "CANCELED"} for state in states)
         else "ACTIVE"
     )
     ticket_updated = conn.execute(
         "UPDATE manual_order_tickets SET state = ?, updated_at_ms = ? WHERE ticket_id = ?",
-        (next_state, payload["recorded_at_ms"], ticket_id),
+        (next_state, recorded_at_ms, ticket_id),
     )
     if ticket_updated.rowcount != 1:
         raise ValueError("manual order effect requires exactly one ticket")
@@ -209,20 +218,39 @@ def pause_manual_ticket_for_unknown_cancellation(
 ) -> None:
     """Pause the owning ticket before a lost cancel outcome can permit continuation."""
     ticket = conn.execute(
-        "SELECT leg.ticket_id FROM manual_order_cancellations cancellation "
+        "SELECT ticket.ticket_id, ticket.state FROM manual_order_cancellations cancellation "
         "JOIN manual_order_legs leg ON leg.order_ref = cancellation.order_ref "
+        "JOIN manual_order_tickets ticket ON ticket.ticket_id = leg.ticket_id "
         "WHERE cancellation.effect_operation_id = ?",
         (payload["effect_operation_id"],),
     ).fetchone()
     if ticket is None:
         return
+    if ticket["state"] in {"COMPLETED", "CANCELED"}:
+        return
     updated = conn.execute(
-        "UPDATE manual_order_tickets SET state = 'PAUSED_UNKNOWN', updated_at_ms = ? "
-        "WHERE ticket_id = ?",
+        "UPDATE manual_order_tickets SET state = 'PAUSED_UNKNOWN', updated_at_ms = ? WHERE ticket_id = ?",
         (payload["recorded_at_ms"], ticket["ticket_id"]),
     )
     if updated.rowcount != 1:
         raise ValueError("manual cancellation requires exactly one ticket")
+
+
+def rederive_manual_ticket_state_for_order(
+    conn: sqlite3.Connection,
+    payload: dict[str, Any],
+) -> None:
+    """Refresh the owning ticket after terminal cancellation evidence."""
+    ticket = conn.execute(
+        "SELECT ticket_id FROM manual_order_legs WHERE order_ref = ?",
+        (payload["order_ref"],),
+    ).fetchone()
+    if ticket is not None:
+        rederive_manual_ticket_state(
+            conn,
+            ticket_id=ticket["ticket_id"],
+            recorded_at_ms=payload["recorded_at_ms"],
+        )
 
 
 def fold_manual_order_accepted(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:

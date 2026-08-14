@@ -79,7 +79,7 @@
                 <app-asset-identity [symbol]="instruction.symbol" size="sm" />
                 {{ instruction.side | receiptLabel }} {{ instruction.quantity }}
                 {{ instruction.order_type | receiptLabel }} {{ instruction.time_in_force | receiptLabel }}
-                @if (instruction.limit_price !== null) {
+                @if (instruction.limit_price !== undefined && instruction.limit_price !== null) {
                   at {{ instruction.limit_price }}
                 }
               }

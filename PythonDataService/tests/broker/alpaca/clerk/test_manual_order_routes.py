@@ -109,9 +109,7 @@ class FakeAlpacaPort:
         self.submit_calls.append(client_order_id)
         ticket = self.repo.manual_order_ticket(TICKET_ID)
         self.durable_before_submit = bool(
-            ticket
-            and ticket.legs[0].order_ref == client_order_id
-            and ticket.legs[0].effect_operation_id is not None
+            ticket and ticket.legs[0].order_ref == client_order_id and ticket.legs[0].effect_operation_id is not None
         )
         order = BrokerOrder(
             broker="alpaca",
@@ -408,6 +406,43 @@ async def test_manual_ticket_continue_requires_a_fresh_preview_and_activates_one
 
 
 @pytest.mark.asyncio
+async def test_manual_ticket_continuation_rejects_a_prior_leg_that_stales_after_preview(
+    api: tuple[FastAPI, ClerkSqliteRepository, FakeAlpacaPort, dict[str, bool]],
+) -> None:
+    app, repo, port, _health = api
+    preview_path = f"/api/brokers/alpaca/accounts/{ACCOUNT_ID}/manual-orders/preview"
+    ticket_path = f"/api/brokers/alpaca/accounts/{ACCOUNT_ID}/manual-order-tickets/{TICKET_ID}"
+    continuation_path = f"{ticket_path}/continue"
+    payload = _two_leg_preview_payload()
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        initial_preview = await client.post(preview_path, headers=_headers(), json=payload)
+        initial = await client.put(
+            ticket_path,
+            headers=_headers(),
+            json={"legs": payload["legs"], "preview_token": initial_preview.json()["preview_token"]},
+        )
+        refreshed_preview = await client.post(preview_path, headers=_headers(), json=payload)
+        repo._conn.execute(
+            "UPDATE manual_order_legs SET state = 'ACCEPTED' WHERE ticket_id = ? AND sequence_index = 0",
+            (TICKET_ID,),
+        )
+        repo._conn.commit()
+        continued = await client.post(
+            continuation_path,
+            headers=_headers(),
+            json={"legs": payload["legs"], "preview_token": refreshed_preview.json()["preview_token"]},
+        )
+
+    assert initial.status_code == 202
+    assert refreshed_preview.status_code == 200
+    assert refreshed_preview.json()["capability"]["available"] is True
+    assert continued.status_code == 409
+    assert continued.json()["detail"]["reason"] == "manual_preview_stale"
+    assert len(port.submit_calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_manual_ticket_continuation_preview_checks_only_the_next_reserved_leg(
     api: tuple[FastAPI, ClerkSqliteRepository, FakeAlpacaPort, dict[str, bool]],
 ) -> None:
@@ -479,8 +514,7 @@ async def test_manual_ticket_continuation_preview_checks_only_the_next_reserved_
             json={
                 "ticket_id": ticket_id,
                 "legs": [
-                    {"leg_id": leg.leg_id, "instruction": leg.instruction.model_dump(mode="json")}
-                    for leg in legs
+                    {"leg_id": leg.leg_id, "instruction": leg.instruction.model_dump(mode="json")} for leg in legs
                 ],
             },
         )

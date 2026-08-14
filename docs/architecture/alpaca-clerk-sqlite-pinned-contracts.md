@@ -53,8 +53,8 @@
   effect-subject triggers in the same transaction; the verified v8 → v9
   ceremony remains exactly v9 and startup then applies this additive upgrade.
 - Schema-v11 adds an immutable `sequence_index` to each replayable manual
-  ticket leg. The registered v10 → v11 migration backfills index zero for the
-  historical one-leg tickets, adds the per-ticket uniqueness fence, and
+  ticket leg. The registered v10 → v11 migration deterministically backfills
+  distinct indices for every historical ticket, adds the per-ticket uniqueness fence, and
   replaces the leg-identity trigger so an operator cannot reorder a reserved
   ticket after confirmation.
 - **Source of truth ranking:** ADR 0035 (decision rationale) →
@@ -1011,6 +1011,16 @@ END;
 
 
 ALTER TABLE manual_order_legs ADD COLUMN sequence_index INTEGER NOT NULL DEFAULT 0;
+UPDATE manual_order_legs AS leg
+SET sequence_index = (
+    SELECT COUNT(*)
+    FROM manual_order_legs AS earlier
+    WHERE earlier.ticket_id = leg.ticket_id
+        AND (
+            earlier.created_at_ms < leg.created_at_ms
+            OR (earlier.created_at_ms = leg.created_at_ms AND earlier.leg_id < leg.leg_id)
+        )
+);
 CREATE UNIQUE INDEX ux_manual_order_legs_sequence
     ON manual_order_legs(ticket_id, sequence_index);
 DROP TRIGGER trg_manual_order_leg_identity_immutable;
