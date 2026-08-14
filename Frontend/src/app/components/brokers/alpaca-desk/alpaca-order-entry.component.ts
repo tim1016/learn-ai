@@ -23,6 +23,7 @@ import type {
   OrderLegResult,
 } from '../../../api/alpaca.types';
 import { BrokersService } from '../../../services/brokers.service';
+import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
 import type { AlpacaOrderDraftLeg } from './alpaca-order-entry.types';
@@ -47,6 +48,7 @@ import { AlpacaOrderResultsComponent } from './alpaca-order-results.component';
     AlpacaOrderLegRowComponent,
     AlpacaOrderPreviewComponent,
     AlpacaOrderResultsComponent,
+    AssetIdentityComponent,
     ReceiptLabelPipe,
     TimestampDisplayComponent,
   ],
@@ -78,8 +80,9 @@ export class AlpacaOrderEntryComponent {
   protected readonly manualTicket = signal<ManualOrderTicket | null>(null);
   protected readonly manualCancellation = signal<ManualOrderCancellation | null>(null);
   private readonly manualPreview = signal<ManualOrderPreview | null>(null);
+  private readonly manualLegIds = signal<ReadonlyMap<number, string>>(new Map());
   private readonly manualCancelRequestId = signal<string | null>(null);
-  private readonly manualCancelTargetOrderRef = signal<string | null>(null);
+  private readonly manualCancelTicketId = signal<string | null>(null);
   protected readonly submitError = signal<string | null>(null);
   protected readonly cancelling = signal(false);
   /** Fires after any broker submission attempt, including uncertain outcomes. */
@@ -94,33 +97,43 @@ export class AlpacaOrderEntryComponent {
       && this.legs().every((leg) => this.legValid(leg)),
   );
 
-  protected readonly manualMarketOnly = computed(() => this.sqliteManualAuthority());
+  protected readonly manualTicketMode = computed(() => this.sqliteManualAuthority());
   protected readonly manualSubmissionAvailable = computed(
     () =>
       !this.sqliteManualAuthority()
-      || this.legs()[0]?.side === 'sell'
-      || this.manualCapability()?.available === true,
+      || this.manualCapability()?.available === true
+      || this.legs().every((leg) => leg.side === 'sell'),
+  );
+  protected readonly activeManualLeg = computed(() =>
+    this.manualTicket()?.legs.find((leg) => leg.order !== null && !['SUCCEEDED', 'FAILED', 'CANCELED'].includes(leg.state)) ?? null,
   );
   protected readonly displayedManualCancellation = computed(
-    () => this.manualTicket()?.legs[0]?.cancellation ?? this.manualCancellation(),
+    () => this.activeManualLeg()?.cancellation ?? this.manualCancellation(),
   );
-  protected readonly cancelableManualOrderRef = computed(() => {
+  protected readonly cancelableManualTicketId = computed(() => {
     const ticket = this.manualTicket();
-    const orderRef = ticket?.legs[0]?.order?.order_ref;
     return ticket !== null
-      && orderRef !== undefined
       && this.ticketNeedsRefresh(ticket)
-      && this.displayedManualCancellation() === null
-      ? orderRef
+      && ticket.legs.some(
+        (leg) => leg.order !== null
+          && ['ACCEPTED', 'IN_PROGRESS'].includes(leg.state)
+          && leg.cancellation === null,
+      )
+      ? ticket.ticket_id
       : null;
   });
   protected readonly canConfirm = computed(
     () =>
       this.canSubmit()
       && this.manualSubmissionAvailable()
-      && (!this.sqliteManualAuthority()
-        || (this.manualTicketId() !== null && this.manualLegId() !== null)),
+      && (!this.sqliteManualAuthority() || this.manualTicketId() !== null),
   );
+  protected readonly canContinueTicket = computed(() => {
+    const ticket = this.manualTicket();
+    if (ticket === null || ticket.state === 'PAUSED_UNKNOWN' || ticket.state === 'CANCELED') return false;
+    const nextIndex = ticket.legs.findIndex((leg) => leg.state === 'RESERVED');
+    return nextIndex > 0 && ticket.legs.slice(0, nextIndex).every((leg) => leg.state !== 'ACCEPTED');
+  });
 
   constructor() {
     effect(() => {
@@ -129,8 +142,9 @@ export class AlpacaOrderEntryComponent {
       this.manualTicketId();
       this.manualLegId();
       this.manualCancelRequestId.set(null);
-      this.manualCancelTargetOrderRef.set(null);
+      this.manualCancelTicketId.set(null);
       this.manualCancellation.set(null);
+      this.manualLegIds.set(new Map());
     });
     effect(() => {
       const accountId = this.expectedAccountId();
@@ -170,7 +184,6 @@ export class AlpacaOrderEntryComponent {
   }
 
   protected addEquityLeg(): void {
-    if (this.sqliteManualAuthority()) return;
     this.legs.update((legs) => [...legs, this.newLeg(this.nextId++, '')]);
     // A new draft invalidates the last submit's results view.
     this.results.set(null);
@@ -178,7 +191,6 @@ export class AlpacaOrderEntryComponent {
   }
 
   protected removeLeg(id: number): void {
-    if (this.sqliteManualAuthority()) return;
     this.legs.update((legs) => legs.filter((leg) => leg.id !== id));
     // Editing the draft (removing a leg) invalidates the last submit's results
     // view, so a stale results table isn't left rendered against an empty draft.
@@ -194,14 +206,12 @@ export class AlpacaOrderEntryComponent {
       return;
     }
     const ticketId = this.manualTicketId();
-    const legId = this.manualLegId();
-    const leg = this.legs()[0];
-    if (ticketId === null || legId === null || leg === undefined) return;
+    if (ticketId === null) return;
     this.submitting.set(true);
     try {
       const preview = await this.brokers.previewSqliteManualOrder(this.expectedAccountId(), {
         ticket_id: ticketId,
-        leg: { leg_id: legId, instruction: this.toRequestLeg(leg) },
+        legs: this.manualRequestLegs(),
       });
       this.manualPreview.set(preview);
       if (!preview.capability.available || preview.preview_token === null) {
@@ -249,14 +259,12 @@ export class AlpacaOrderEntryComponent {
 
   private async confirmSqliteManualOrder(): Promise<void> {
     const ticketId = this.manualTicketId();
-    const legId = this.manualLegId();
-    const leg = this.legs()[0];
     const previewToken = this.manualPreview()?.preview_token;
-    if (ticketId === null || legId === null || leg === undefined || previewToken === null || previewToken === undefined) {
+    if (ticketId === null || previewToken === null || previewToken === undefined) {
       throw new Error('Refresh the manual order preview before confirming.');
     }
     const ticket = await this.brokers.submitSqliteManualOrder(this.expectedAccountId(), ticketId, {
-      leg: { leg_id: legId, instruction: this.toRequestLeg(leg) },
+      legs: this.manualRequestLegs(),
       preview_token: previewToken,
     });
     this.manualTicket.set(ticket);
@@ -270,19 +278,12 @@ export class AlpacaOrderEntryComponent {
       );
       if (this.manualTicketId() !== ticketId || this.expectedAccountId() !== accountId) return;
       this.manualTicket.set(ticket);
-      const cancellation = ticket.legs[0]?.cancellation ?? null;
-      const currentCancellation = this.manualCancellation();
-      const orderRef = ticket.legs[0]?.order?.order_ref;
-      if (
-        this.manualCancelTargetOrderRef() !== null
-        && this.manualCancelTargetOrderRef() !== orderRef
-      ) {
+      const cancellation = ticket.legs.find((leg) => leg.cancellation !== null)?.cancellation ?? null;
+      if (this.manualCancelTicketId() !== null && this.manualCancelTicketId() !== ticket.ticket_id) {
         this.manualCancelRequestId.set(null);
-        this.manualCancelTargetOrderRef.set(null);
+        this.manualCancelTicketId.set(null);
       }
-      if (cancellation !== null || currentCancellation?.order_ref !== orderRef) {
-        this.manualCancellation.set(cancellation);
-      }
+      this.manualCancellation.set(cancellation);
     } catch (err) {
       if (
         (err instanceof HttpErrorResponse && err.status === 404)
@@ -297,24 +298,25 @@ export class AlpacaOrderEntryComponent {
     return !['COMPLETED', 'CANCELED', 'PAUSED_UNKNOWN'].includes(ticket.state);
   }
 
-  protected async cancelManualOrder(): Promise<void> {
-    const orderRef = this.cancelableManualOrderRef();
-    if (orderRef === null || this.cancelling()) return;
+  protected async cancelManualTicket(): Promise<void> {
+    const ticketId = this.cancelableManualTicketId();
+    if (ticketId === null || this.cancelling()) return;
     this.cancelling.set(true);
     this.submitError.set(null);
     try {
       const cancelRequestId =
-        this.manualCancelTargetOrderRef() === orderRef
-          ? (this.manualCancelRequestId() ?? this.newCancelRequestId())
-          : this.newCancelRequestId();
+        this.manualCancelTicketId() === ticketId
+          ? (this.manualCancelRequestId() ?? this.newStableRequestId())
+          : this.newStableRequestId();
       this.manualCancelRequestId.set(cancelRequestId);
-      this.manualCancelTargetOrderRef.set(orderRef);
-      const cancellation = await this.brokers.cancelSqliteManualOrder(this.expectedAccountId(), orderRef, {
+      this.manualCancelTicketId.set(ticketId);
+      const ticket = await this.brokers.cancelSqliteManualOrderTicket(this.expectedAccountId(), ticketId, {
         cancel_request_id: cancelRequestId,
       });
-      this.manualCancellation.set(cancellation);
-      const ticketId = this.manualTicketId();
-      if (ticketId !== null) await this.restoreManualTicket(ticketId, this.expectedAccountId());
+      this.manualTicket.set(ticket);
+      this.manualCancellation.set(
+        ticket.legs.find((leg) => leg.cancellation !== null)?.cancellation ?? null,
+      );
     } catch (err) {
       this.submitError.set(this.submissionErrorMessage(err));
     } finally {
@@ -323,9 +325,42 @@ export class AlpacaOrderEntryComponent {
     }
   }
 
-  private newCancelRequestId(): string {
+  protected async continueManualTicket(): Promise<void> {
+    const ticket = this.manualTicket();
+    if (ticket === null || !this.canContinueTicket() || this.submitting()) return;
+    const legs = ticket.legs.map((leg) => {
+      if (leg.instruction === null) {
+        throw new Error('The Clerk cannot recover this ticket leg for a safe continuation.');
+      }
+      return { leg_id: leg.leg_id, instruction: leg.instruction };
+    });
+    this.submitting.set(true);
+    this.submitError.set(null);
+    try {
+      const preview = await this.brokers.previewSqliteManualOrder(this.expectedAccountId(), {
+        ticket_id: ticket.ticket_id,
+        legs,
+      });
+      if (!preview.capability.available || preview.preview_token === null) {
+        this.submitError.set(preview.capability.unavailable?.message ?? 'Manual ticket continuation is unavailable.');
+        return;
+      }
+      this.manualTicket.set(await this.brokers.continueSqliteManualOrderTicket(
+        this.expectedAccountId(),
+        ticket.ticket_id,
+        { legs, preview_token: preview.preview_token },
+      ));
+    } catch (err) {
+      this.submitError.set(this.submissionErrorMessage(err));
+    } finally {
+      this.submitting.set(false);
+      this.submissionFinished.emit();
+    }
+  }
+
+  private newStableRequestId(): string {
     if (typeof globalThis.crypto?.randomUUID !== 'function') {
-      throw new Error('This browser cannot create a durable cancellation identity.');
+      throw new Error('This browser cannot create a durable request identity.');
     }
     return globalThis.crypto.randomUUID();
   }
@@ -341,6 +376,24 @@ export class AlpacaOrderEntryComponent {
     return leg.orderType === 'limit'
       ? { ...base, limit_price: Number(leg.limitPrice) }
       : base;
+  }
+
+  private manualRequestLegs(): { leg_id: string; instruction: BrokerOrderLeg }[] {
+    const ids = new Map(this.manualLegIds());
+    let changed = false;
+    const legs = this.legs().map((leg, index) => {
+      let legId = ids.get(leg.id);
+      if (legId === undefined) {
+        legId = index === 0 && this.manualLegId() !== null
+          ? this.manualLegId()!
+          : this.newStableRequestId();
+        ids.set(leg.id, legId);
+        changed = true;
+      }
+      return { leg_id: legId, instruction: this.toRequestLeg(leg) };
+    });
+    if (changed) this.manualLegIds.set(ids);
+    return legs;
   }
 
   private newLeg(id: number, symbol: string): AlpacaOrderDraftLeg {

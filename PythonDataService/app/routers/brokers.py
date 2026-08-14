@@ -42,9 +42,14 @@ from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import (
     ManualOrderCancelConflictError,
     ManualOrderCancelOwnershipError,
     ManualOrderCancelTerminalError,
+    ManualTicketCancelError,
 )
 from app.broker.alpaca.clerk.sqlite.manual_order_runtime import ManualPreviewStaleError
-from app.broker.alpaca.clerk.sqlite.manual_orders import ManualTicketConflictError
+from app.broker.alpaca.clerk.sqlite.manual_orders import (
+    ManualTicketConflictError,
+    ManualTicketContinuationError,
+    ManualTicketLeg,
+)
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.errors import (
     BrokerError,
@@ -472,8 +477,10 @@ async def preview_sqlite_manual_order(
         preview = await facade.preview_manual_order(
             operator_id=settings.PANEL_OPERATOR_IDENTITY,
             ticket_id=str(request.ticket_id),
-            leg_id=str(request.leg.leg_id),
-            leg=request.leg.instruction,
+            legs=tuple(
+                ManualTicketLeg(leg_id=str(leg.leg_id), instruction=leg.instruction)
+                for leg in request.legs
+            ),
         )
     except BrokerError as error:
         _raise_http(error)
@@ -498,8 +505,10 @@ async def submit_sqlite_manual_order(
         await facade.submit_manual_order(
             operator_id=settings.PANEL_OPERATOR_IDENTITY,
             ticket_id=ticket,
-            leg_id=str(request.leg.leg_id),
-            leg=request.leg.instruction,
+            legs=tuple(
+                ManualTicketLeg(leg_id=str(leg.leg_id), instruction=leg.instruction)
+                for leg in request.legs
+            ),
             preview_token=request.preview_token,
         )
     except ManualPreviewStaleError as exc:
@@ -507,10 +516,50 @@ async def submit_sqlite_manual_order(
             status_code=409,
             detail={"reason": "manual_preview_stale", "message": str(exc)},
         ) from exc
-    except (DurableConflictError, ManualTicketConflictError) as exc:
+    except (DurableConflictError, ManualTicketConflictError, ManualTicketContinuationError) as exc:
         raise HTTPException(
             status_code=409,
             detail={"reason": "manual_ticket_conflict", "message": str(exc)},
+        ) from exc
+    except BrokerError as error:
+        _raise_http(error)
+    return _manual_ticket_response(facade, ticket)
+
+
+@router.post(
+    "/alpaca/accounts/{account_id}/manual-order-tickets/{ticket_id}/continue",
+    response_model=ManualOrderTicketResponse,
+    status_code=202,
+    dependencies=[Depends(require_data_plane_control_secret)],
+)
+async def continue_sqlite_manual_order_ticket(
+    account_id: str,
+    ticket_id: UUID,
+    request: ManualOrderSubmitRequest,
+) -> ManualOrderTicketResponse:
+    """Activate only the next acknowledged ticket leg after a fresh review."""
+    facade = _require_sqlite_manual_facade(account_id)
+    ticket = str(ticket_id)
+    try:
+        await facade.submit_manual_order(
+            operator_id=settings.PANEL_OPERATOR_IDENTITY,
+            ticket_id=ticket,
+            legs=tuple(
+                ManualTicketLeg(leg_id=str(leg.leg_id), instruction=leg.instruction)
+                for leg in request.legs
+            ),
+            preview_token=request.preview_token,
+            continuation=True,
+        )
+    except ManualPreviewStaleError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "manual_preview_stale", "message": str(exc)},
+        ) from exc
+    except (DurableConflictError, ManualTicketConflictError, ManualTicketContinuationError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "manual_ticket_continuation_refused", "message": str(exc)},
         ) from exc
     except BrokerError as error:
         _raise_http(error)
@@ -529,6 +578,38 @@ async def get_sqlite_manual_order_ticket(
     """Restore a durable manual ticket after refresh or a lost submit response."""
     facade = _require_sqlite_manual_facade(account_id)
     return _manual_ticket_response(facade, str(ticket_id))
+
+
+@router.post(
+    "/alpaca/accounts/{account_id}/manual-order-tickets/{ticket_id}/cancel",
+    response_model=ManualOrderTicketResponse,
+    status_code=202,
+    dependencies=[Depends(require_data_plane_control_secret)],
+)
+async def cancel_sqlite_manual_ticket(
+    account_id: str,
+    ticket_id: UUID,
+    request: ManualOrderCancelRequest,
+) -> ManualOrderTicketResponse:
+    """Cancel every verified working order owned by one manual ticket."""
+    facade = _require_sqlite_manual_facade(account_id)
+    try:
+        ticket = await facade.cancel_manual_ticket(
+            operator_id=settings.PANEL_OPERATOR_IDENTITY,
+            ticket_id=str(ticket_id),
+            cancel_request_id=str(request.cancel_request_id),
+        )
+    except (
+        ManualOrderCancelConflictError,
+        ManualOrderCancelOwnershipError,
+        ManualOrderCancelTerminalError,
+        ManualTicketCancelError,
+    ) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "manual_ticket_cancel_refused", "message": str(exc)},
+        ) from exc
+    return ManualOrderTicketResponse.from_resource(ticket, repo=facade.repository)
 
 
 @router.post(

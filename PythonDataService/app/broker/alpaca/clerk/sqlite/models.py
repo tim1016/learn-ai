@@ -10,6 +10,7 @@ connection.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -197,8 +198,10 @@ class ManualOrderLegResource:
 
     ticket_id: str
     leg_id: str
+    sequence_index: int
     subject_id: str
     instruction_hash: str
+    instruction: dict[str, Any] | None
     command_id: str | None
     effect_operation_id: str | None
     order_ref: str | None

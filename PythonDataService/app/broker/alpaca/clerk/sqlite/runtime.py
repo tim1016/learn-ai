@@ -41,6 +41,7 @@ from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import (
     ManualOrderCancellationSubmission,
     submit_manual_order_cancellation,
+    submit_manual_ticket_cancellation,
 )
 from app.broker.alpaca.clerk.sqlite.manual_order_runtime import (
     ManualOrderCapability,
@@ -50,7 +51,7 @@ from app.broker.alpaca.clerk.sqlite.manual_order_runtime import (
     preview_manual_order,
     submit_previewed_manual_order,
 )
-from app.broker.alpaca.clerk.sqlite.manual_orders import ManualOrderSubmission
+from app.broker.alpaca.clerk.sqlite.manual_orders import ManualOrderSubmission, ManualTicketLeg
 from app.broker.alpaca.clerk.sqlite.models import ManualOrderTicketResource, OrderResource, TransitionInput
 from app.broker.alpaca.clerk.sqlite.reconcile import (
     AccountReconciliationResult,
@@ -188,8 +189,7 @@ class SqliteAlpacaClerkFacade:
         *,
         operator_id: str,
         ticket_id: str,
-        leg_id: str,
-        leg: BrokerOrderLeg,
+        legs: tuple[ManualTicketLeg, ...],
     ) -> ManualOrderPreview:
         """Bind one browser-stable ticket leg to current SQLite authority facts."""
         async with self._intake:
@@ -203,8 +203,7 @@ class SqliteAlpacaClerkFacade:
                 account_id=self.account_id,
                 operator_id=operator_id,
                 ticket_id=ticket_id,
-                leg_id=leg_id,
-                leg=leg,
+                legs=legs,
             )
 
     async def submit_manual_order(
@@ -212,9 +211,9 @@ class SqliteAlpacaClerkFacade:
         *,
         operator_id: str,
         ticket_id: str,
-        leg_id: str,
-        leg: BrokerOrderLeg,
+        legs: tuple[ManualTicketLeg, ...],
         preview_token: str,
+        continuation: bool = False,
     ) -> ManualOrderSubmission:
         """Accept and submit one previewed manual leg under the intake fence."""
         async with self._intake:
@@ -229,9 +228,9 @@ class SqliteAlpacaClerkFacade:
                 account_id=self.account_id,
                 operator_id=operator_id,
                 ticket_id=ticket_id,
-                leg_id=leg_id,
-                leg=leg,
+                legs=legs,
                 preview_token=preview_token,
+                continuation=continuation,
             )
 
     def manual_order_ticket(self, ticket_id: str) -> ManualOrderTicketResource | None:
@@ -255,6 +254,28 @@ class SqliteAlpacaClerkFacade:
                 cancel_request_id=cancel_request_id,
                 trade=self._trade,
             )
+
+    async def cancel_manual_ticket(
+        self,
+        *,
+        operator_id: str,
+        ticket_id: str,
+        cancel_request_id: str,
+    ) -> ManualOrderTicketResource:
+        """Cancel the ticket's owned working orders with one replayable request."""
+        async with self._intake:
+            await submit_manual_ticket_cancellation(
+                self._repo,
+                account_id=self.account_id,
+                operator_id=operator_id,
+                ticket_id=ticket_id,
+                cancel_request_id=cancel_request_id,
+                trade=self._trade,
+            )
+            ticket = get_manual_ticket(self._repo, ticket_id)
+            if ticket is None:
+                raise RuntimeError("manual ticket disappeared after cancellation")
+            return ticket
 
     async def register_strategy_run(self, binding: BrokerBotBinding) -> None:
         """Durably register immutable strategy + run before order capability."""

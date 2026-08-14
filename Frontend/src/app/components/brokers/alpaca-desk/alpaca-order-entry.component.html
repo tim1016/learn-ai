@@ -3,14 +3,13 @@
     <div>
       <strong>Order ticket</strong>
       <p>
-        @if (manualMarketOnly()) {
-          This SQLite ticket supports one BUY or SELL market DAY equity leg. The server journals it before submission.
+        @if (manualTicketMode()) {
+          This SQLite ticket journals each ordered equity leg before it reaches Alpaca. A later leg always needs a new confirmation.
         } @else {
           Each leg is journaled separately before submission.
         }
       </p>
     </div>
-    @if (!manualMarketOnly()) {
     <p-button
       label="Add another"
       icon="pi pi-plus"
@@ -20,7 +19,6 @@
       ariaLabel="Add equity leg"
       (onClick)="addEquityLeg()"
     />
-    }
   </div>
 
   @if (legs().length === 0) {
@@ -35,7 +33,7 @@
         <app-alpaca-order-leg-row
           [legForm]="legsForm[$index]"
           [position]="$index"
-          [manualMarketOnly]="manualMarketOnly()"
+          [manualMarketOnly]="false"
           (removed)="removeLeg(leg.id)"
         />
       }
@@ -44,12 +42,8 @@
     <div class="order-entry__footer">
       <div class="order-capabilities">
         <span><i class="pi pi-check" aria-hidden="true"></i> Market</span>
-        @if (!manualMarketOnly()) {
         <span><i class="pi pi-check" aria-hidden="true"></i> Limit</span>
         <span><i class="pi pi-clock" aria-hidden="true"></i> Day or GTC</span>
-        } @else {
-          <span><i class="pi pi-clock" aria-hidden="true"></i> Day</span>
-        }
       </div>
       <p-button
         label="Preview order"
@@ -66,8 +60,8 @@
     <p-message severity="error">{{ error }}</p-message>
   }
 
-  @if (manualMarketOnly()) {
-    @if (manualCapability()?.available === false && legs()[0]?.side !== 'sell') {
+  @if (manualTicketMode()) {
+    @if (manualCapability()?.available === false) {
       <p-message severity="warn">{{ manualCapability()?.unavailable?.message }}</p-message>
     }
     @if (manualTicket(); as ticket) {
@@ -76,39 +70,56 @@
           Ticket <code>{{ ticket.ticket_id }}</code> is {{ ticket.state | receiptLabel }}.
           Updated <app-timestamp-display [value]="ticket.updated_at_ms" mode="local" />.
         </p-message>
-        @if (ticket.legs[0]; as leg) {
-          <dl>
-            <div><dt>Leg</dt><dd><code>{{ leg.leg_id }}</code> · {{ leg.state | receiptLabel }}</dd></div>
-            @if (leg.order; as order) {
-              <div><dt>Order reference</dt><dd><code>{{ order.order_ref }}</code></dd></div>
-              @if (order.broker_state) {
-                <div><dt>Broker state</dt><dd>{{ order.broker_state | receiptLabel }}</dd></div>
+        <dl>
+          @for (leg of ticket.legs; track leg.leg_id) {
+            <div>
+              <dt>Leg {{ leg.sequence_index + 1 }}</dt>
+              <dd><code>{{ leg.leg_id }}</code> · {{ leg.state | receiptLabel }}</dd>
+              @if (leg.instruction; as instruction) {
+                <app-asset-identity [symbol]="instruction.symbol" size="sm" />
+                {{ instruction.side | receiptLabel }} {{ instruction.quantity }}
+                {{ instruction.order_type | receiptLabel }} {{ instruction.time_in_force | receiptLabel }}
+                @if (instruction.limit_price !== null) {
+                  at {{ instruction.limit_price }}
+                }
               }
-            }
-            @if (leg.effect; as effect) {
-              <div><dt>Effect</dt><dd>{{ effect.state | receiptLabel }}</dd></div>
-              @if (effect.terminal_receipt_id) {
-                <div><dt>Terminal receipt</dt><dd><code>{{ effect.terminal_receipt_id }}</code></dd></div>
+              @if (leg.order; as order) {
+                <div>Order reference <code>{{ order.order_ref }}</code></div>
+                @if (order.broker_state) {
+                  <div>Broker state {{ order.broker_state | receiptLabel }}</div>
+                }
               }
-            }
-          </dl>
-          @if (cancelableManualOrderRef(); as orderRef) {
-            <p-button
-              label="Cancel order"
-              icon="pi pi-times"
-              severity="danger"
-              size="small"
-              [disabled]="cancelling()"
-              (onClick)="cancelManualOrder()"
-              [ariaLabel]="'Cancel order ' + orderRef"
-            />
+              @if (leg.effect?.terminal_receipt_id; as receipt) {
+                <div>Terminal receipt <code>{{ receipt }}</code></div>
+              }
+            </div>
           }
-          @if (displayedManualCancellation(); as cancellation) {
-            <p-message [severity]="cancellation.state === 'UNKNOWN' ? 'warn' : 'info'">
-              Cancellation <code>{{ cancellation.cancel_request_id }}</code> is {{ cancellation.state | receiptLabel }}.
-              {{ cancellation.message }} {{ cancellation.impact }} Next: {{ cancellation.next_action }}
-            </p-message>
-          }
+        </dl>
+        @if (cancelableManualTicketId(); as ticketId) {
+          <p-button
+            label="Cancel ticket"
+            icon="pi pi-times"
+            severity="danger"
+            size="small"
+            [disabled]="cancelling()"
+            (onClick)="cancelManualTicket()"
+            [ariaLabel]="'Cancel manual ticket ' + ticketId"
+          />
+        }
+        @if (canContinueTicket()) {
+          <p-button
+            label="Continue remaining legs"
+            icon="pi pi-arrow-right"
+            size="small"
+            [disabled]="submitting()"
+            (onClick)="continueManualTicket()"
+          />
+        }
+        @if (displayedManualCancellation(); as cancellation) {
+          <p-message [severity]="cancellation.state === 'UNKNOWN' ? 'warn' : 'info'">
+            Cancellation <code>{{ cancellation.cancel_request_id }}</code> is {{ cancellation.state | receiptLabel }}.
+            {{ cancellation.message }} {{ cancellation.impact }} Next: {{ cancellation.next_action }}
+          </p-message>
         }
       </section>
     }

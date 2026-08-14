@@ -12,6 +12,9 @@ from httpx import ASGITransport
 from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime, set_active_clerk_runtime
 from app.broker.alpaca.clerk.models import ChannelHealth
 from app.broker.alpaca.clerk.sqlite.custody_subjects import manual_operator_subject_id
+from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts
+from app.broker.alpaca.clerk.sqlite.manual_orders import ManualTicketLeg, submit_manual_order
+from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
@@ -24,6 +27,7 @@ from app.security.data_plane_control import CONTROL_SECRET_HEADER
 ACCOUNT_ID = "PA-MANUAL-ROUTE"
 TICKET_ID = "7de3a77c-b698-4e0d-a5d1-2f624574ed35"
 LEG_ID = "09d6d63e-6375-4e6d-8d20-3b1bf70c2465"
+SECOND_LEG_ID = "5791929d-4a3f-4ffc-a15f-62c34cb6c873"
 
 
 def _account(*, account_mode: str = "paper") -> BrokerAccountSnapshot:
@@ -104,7 +108,7 @@ class FakeAlpacaPort:
         )
         order = BrokerOrder(
             broker="alpaca",
-            order_id="broker-manual-1",
+            order_id=f"broker-manual-{len(self.submit_calls)}",
             client_order_id=client_order_id,
             symbol=leg.symbol,
             asset_class="us_equity",
@@ -194,10 +198,35 @@ def _headers() -> dict[str, str]:
 def _preview_payload(*, quantity: float = 1) -> dict[str, object]:
     return {
         "ticket_id": TICKET_ID,
-        "leg": {
-            "leg_id": LEG_ID,
-            "instruction": {"symbol": "SPY", "side": "buy", "quantity": quantity},
-        },
+        "legs": [
+            {
+                "leg_id": LEG_ID,
+                "instruction": {"symbol": "SPY", "side": "buy", "quantity": quantity},
+            }
+        ],
+    }
+
+
+def _two_leg_preview_payload() -> dict[str, object]:
+    return {
+        "ticket_id": TICKET_ID,
+        "legs": [
+            {
+                "leg_id": LEG_ID,
+                "instruction": {"symbol": "SPY", "side": "buy", "quantity": 1},
+            },
+            {
+                "leg_id": SECOND_LEG_ID,
+                "instruction": {
+                    "symbol": "SPY",
+                    "side": "buy",
+                    "quantity": 2,
+                    "order_type": "limit",
+                    "limit_price": 499.5,
+                    "time_in_force": "gtc",
+                },
+            },
+        ],
     }
 
 
@@ -221,7 +250,7 @@ async def test_disabled_manual_capability_refuses_without_contacting_alpaca(
             "code": "MANUAL_TRADING_NOT_QUALIFIED",
             "message": "Manual SQLite trading remains disabled until paper qualification is complete.",
         },
-        "supported_order_shape": "BUY or SELL market DAY equity, one leg",
+        "supported_order_shape": "BUY or SELL market/limit DAY/GTC equity, one to eight ordered legs",
     }
     assert port.account_calls == 0
     assert port.asset_calls == 0
@@ -244,12 +273,13 @@ async def test_manual_ticket_preview_submit_replay_and_read_are_durable(
             headers=_headers(),
             json={**_preview_payload(), "operator": "browser-spoof"},
         )
-        unsupported_shape = await client.post(
+        limit_ticket = await client.post(
             preview_path,
             headers=_headers(),
             json={
                 **_preview_payload(),
-                    "leg": {
+                "legs": [
+                    {
                         "leg_id": LEG_ID,
                         "instruction": {
                             "symbol": "SPY",
@@ -257,20 +287,22 @@ async def test_manual_ticket_preview_submit_replay_and_read_are_durable(
                             "quantity": 1,
                             "order_type": "limit",
                             "limit_price": 500,
+                            "time_in_force": "gtc",
                         },
-                },
+                    }
+                ],
             },
         )
         preview = await client.post(preview_path, headers=_headers(), json=_preview_payload())
         token = preview.json()["preview_token"]
-        submit_body = {"leg": _preview_payload()["leg"], "preview_token": token}
+        submit_body = {"legs": _preview_payload()["legs"], "preview_token": token}
         submitted = await client.put(ticket_path, headers=_headers(), json=submit_body)
         replayed = await client.put(ticket_path, headers=_headers(), json=submit_body)
         restored = await client.get(ticket_path, headers=_headers())
         conflict = await client.put(
             ticket_path,
             headers=_headers(),
-            json={"leg": _preview_payload(quantity=2)["leg"], "preview_token": token},
+            json={"legs": _preview_payload(quantity=2)["legs"], "preview_token": token},
         )
         cancel_path = (
             f"/api/brokers/alpaca/accounts/{ACCOUNT_ID}/manual-orders/"
@@ -300,8 +332,8 @@ async def test_manual_ticket_preview_submit_replay_and_read_are_durable(
     assert capability.status_code == 200
     assert capability.json()["available"] is True
     assert rejected_operator.status_code == 422
-    assert unsupported_shape.status_code == 200
-    assert unsupported_shape.json()["capability"]["unavailable"]["code"] == "UNSUPPORTED_MANUAL_ORDER_SHAPE"
+    assert limit_ticket.status_code == 200
+    assert limit_ticket.json()["capability"]["available"] is True
     assert preview.status_code == 200
     assert preview.json()["capability"]["available"] is True
     assert submitted.status_code == replayed.status_code == 202
@@ -322,6 +354,134 @@ async def test_manual_ticket_preview_submit_replay_and_read_are_durable(
 
 
 @pytest.mark.asyncio
+async def test_manual_ticket_continue_requires_a_fresh_preview_and_activates_one_next_leg(
+    api: tuple[FastAPI, ClerkSqliteRepository, FakeAlpacaPort, dict[str, bool]],
+) -> None:
+    app, _repo, port, _health = api
+    preview_path = f"/api/brokers/alpaca/accounts/{ACCOUNT_ID}/manual-orders/preview"
+    ticket_path = f"/api/brokers/alpaca/accounts/{ACCOUNT_ID}/manual-order-tickets/{TICKET_ID}"
+    continuation_path = f"{ticket_path}/continue"
+    payload = _two_leg_preview_payload()
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        initial_preview = await client.post(preview_path, headers=_headers(), json=payload)
+        initial = await client.put(
+            ticket_path,
+            headers=_headers(),
+            json={"legs": payload["legs"], "preview_token": initial_preview.json()["preview_token"]},
+        )
+        stale_continue = await client.post(
+            continuation_path,
+            headers=_headers(),
+            json={"legs": payload["legs"], "preview_token": initial_preview.json()["preview_token"]},
+        )
+        refreshed_preview = await client.post(preview_path, headers=_headers(), json=payload)
+        continued = await client.post(
+            continuation_path,
+            headers=_headers(),
+            json={"legs": payload["legs"], "preview_token": refreshed_preview.json()["preview_token"]},
+        )
+        cancelled = await client.post(
+            f"{ticket_path}/cancel",
+            headers=_headers(),
+            json={"cancel_request_id": "d38e6b15-9f4f-47a4-88fd-2e5c91031eb0"},
+        )
+
+    assert initial.status_code == 202
+    assert [leg["state"] for leg in initial.json()["legs"]] == ["IN_PROGRESS", "RESERVED"]
+    assert stale_continue.status_code == 409
+    assert stale_continue.json()["detail"]["reason"] == "manual_preview_stale"
+    assert continued.status_code == 202
+    assert [leg["state"] for leg in continued.json()["legs"]] == ["IN_PROGRESS", "IN_PROGRESS"]
+    assert len(port.submit_calls) == 2
+    assert cancelled.status_code == 202
+    assert [leg["state"] for leg in cancelled.json()["legs"]] == ["CANCELED", "CANCELED"]
+    assert len(port.cancel_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_manual_ticket_continuation_preview_checks_only_the_next_reserved_leg(
+    api: tuple[FastAPI, ClerkSqliteRepository, FakeAlpacaPort, dict[str, bool]],
+) -> None:
+    app, repo, port, _health = api
+    seeded = await submit_manual_order(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id="operator",
+        ticket_id="b5d667d3-6820-4c60-927a-2130f3c02aaf",
+        leg_id="91cd2b42-12b1-4c04-9caa-ffdfc346fbc2",
+        leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=2),
+        trade=port,
+    )
+    assert seeded.leg.effect_operation_id is not None and seeded.leg.order_ref is not None
+    fill = ExecutionSliceFilledFacts(
+        execution_id="manual-owned-long-for-preview",
+        symbol="SPY",
+        side="BUY",
+        slice_qty=2,
+        slice_price=500,
+        fee=None,
+        fee_fidelity="not_reported",
+        evidence_source="websocket",
+        source_event_at_ms=1_700_000_000_200,
+    )
+    repo.append_transition(
+        TransitionInput(
+            command_id=seeded.command.command_id,
+            effect_operation_id=seeded.leg.effect_operation_id,
+            order_ref=seeded.leg.order_ref,
+            transition_kind="EXECUTION_SLICE_FILLED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="in_progress",
+            source_event_at_ms=fill.source_event_at_ms,
+            clerk_observed_at_ms=repo.clock(),
+            summary_code="EXECUTION_SLICE_FILLED",
+            facts_json=fill.to_facts_json(),
+        )
+    )
+    ticket_id = "c721e10b-9c80-4caf-bacf-c3cd988aa539"
+    first_leg = ManualTicketLeg(
+        leg_id="3bfe6f0b-7ee2-4a12-ba54-2e3eb2e5522f",
+        instruction=BrokerOrderLeg(symbol="SPY", side="sell", quantity=1.5),
+    )
+    second_leg = ManualTicketLeg(
+        leg_id="65a12102-c7c7-4350-8648-7f9dc9377d4a",
+        instruction=BrokerOrderLeg(symbol="SPY", side="sell", quantity=0.5),
+    )
+    legs = (first_leg, second_leg)
+    await submit_manual_order(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id="operator",
+        ticket_id=ticket_id,
+        leg_id=first_leg.leg_id,
+        leg=first_leg.instruction,
+        ticket_legs=legs,
+        trade=port,
+    )
+    assert repo.manual_reduction_available_quantity(
+        subject_id=manual_operator_subject_id("operator"), symbol="SPY"
+    ) == pytest.approx(0.5, abs=1e-9, rel=0)
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        preview = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCOUNT_ID}/manual-orders/preview",
+            headers=_headers(),
+            json={
+                "ticket_id": ticket_id,
+                "legs": [
+                    {"leg_id": leg.leg_id, "instruction": leg.instruction.model_dump(mode="json")}
+                    for leg in legs
+                ],
+            },
+        )
+
+    assert preview.status_code == 200
+    assert preview.json()["capability"]["available"] is True
+
+
+@pytest.mark.asyncio
 async def test_manual_cancel_unknown_response_uses_server_authored_recovery_copy(
     api: tuple[FastAPI, ClerkSqliteRepository, FakeAlpacaPort, dict[str, bool]],
 ) -> None:
@@ -333,7 +493,7 @@ async def test_manual_cancel_unknown_response_uses_server_authored_recovery_copy
         submitted = await client.put(
             ticket_path,
             headers=_headers(),
-            json={"leg": _preview_payload()["leg"], "preview_token": preview.json()["preview_token"]},
+            json={"legs": _preview_payload()["legs"], "preview_token": preview.json()["preview_token"]},
         )
         order_ref = submitted.json()["legs"][0]["order"]["order_ref"]
         port.cancel_unavailable = True
@@ -364,7 +524,7 @@ async def test_manual_preview_is_fresh_and_live_accounts_are_refused(
         stale = await client.put(
             ticket_path,
             headers=_headers(),
-            json={"leg": _preview_payload()["leg"], "preview_token": preview.json()["preview_token"]},
+            json={"legs": _preview_payload()["legs"], "preview_token": preview.json()["preview_token"]},
         )
         port.account_mode = "live"
         capability = await client.get(

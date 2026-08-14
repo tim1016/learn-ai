@@ -64,7 +64,7 @@ def repo(tmp_path: Path):
 
 
 def test_schema_version_includes_custody_subject_and_cancellation_tables() -> None:
-    assert schema.SCHEMA_VERSION == 10
+    assert schema.SCHEMA_VERSION == 11
 
 
 def test_stale_schema_version_fails_closed_on_open(tmp_path: Path) -> None:

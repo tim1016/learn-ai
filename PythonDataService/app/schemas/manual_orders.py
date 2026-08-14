@@ -38,7 +38,7 @@ class ManualOrderPreviewRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     ticket_id: UUID
-    leg: ManualOrderLegRequest
+    legs: tuple[ManualOrderLegRequest, ...] = Field(min_length=1, max_length=8)
 
 
 class ManualOrderSubmitRequest(BaseModel):
@@ -46,7 +46,7 @@ class ManualOrderSubmitRequest(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    leg: ManualOrderLegRequest
+    legs: tuple[ManualOrderLegRequest, ...] = Field(min_length=1, max_length=8)
     preview_token: str = Field(min_length=64, max_length=128)
 
 
@@ -76,7 +76,7 @@ class ManualOrderCapabilityResponse(BaseModel):
 
     available: bool
     unavailable: ManualOrderUnavailableResponse | None
-    supported_order_shape: str = "BUY or SELL market DAY equity, one leg"
+    supported_order_shape: str = "BUY or SELL market/limit DAY/GTC equity, one to eight ordered legs"
 
     @classmethod
     def from_domain(cls, capability: ManualOrderCapability) -> ManualOrderCapabilityResponse:
@@ -251,7 +251,9 @@ class ManualOrderLegResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     leg_id: str
+    sequence_index: int
     instruction_hash: str
+    instruction: BrokerOrderLeg | None
     state: str
     command: ManualOrderCommandResponse | None
     effect: ManualOrderEffectResponse | None
@@ -275,7 +277,9 @@ class ManualOrderLegResponse(BaseModel):
         )
         return cls(
             leg_id=leg.leg_id,
+            sequence_index=leg.sequence_index,
             instruction_hash=leg.instruction_hash,
+            instruction=(BrokerOrderLeg.model_validate(leg.instruction) if leg.instruction is not None else None),
             state=leg.state,
             command=(
                 ManualOrderCommandResponse(

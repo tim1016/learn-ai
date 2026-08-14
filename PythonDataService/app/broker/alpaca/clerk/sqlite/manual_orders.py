@@ -1,4 +1,4 @@
-"""SQLite-native single-leg manual-order acceptance and broker submission.
+"""SQLite-native ordered manual-ticket acceptance and broker submission.
 
 This is deliberately separate from ``enter.py``: a manual ticket has no
 strategy instance or run, and attaching it to one would corrupt bot custody.
@@ -49,6 +49,18 @@ class ManualTicketConflictError(ValueError):
     """A stable browser ticket UUID was reused with another immutable leg."""
 
 
+class ManualTicketContinuationError(ValueError):
+    """A later ticket leg was not explicitly eligible for activation."""
+
+
+@dataclass(frozen=True)
+class ManualTicketLeg:
+    """One browser-stable ordered ticket leg before it reaches broker custody."""
+
+    leg_id: str
+    instruction: BrokerOrderLeg
+
+
 @dataclass(frozen=True)
 class ManualOrderSubmission:
     """Current resources for a single ticket leg, after one submit attempt."""
@@ -65,7 +77,11 @@ def manual_instruction_hash(leg: BrokerOrderLeg) -> str:
 
 
 def _ticket_instruction_hash(
-    *, account_id: str, subject_id: str, ticket_id: str, leg_id: str, instruction_hash: str
+    *,
+    account_id: str,
+    subject_id: str,
+    ticket_id: str,
+    legs: tuple[ManualTicketLeg, ...],
 ) -> str:
     return hashlib.sha256(
         canonicalize(
@@ -73,7 +89,10 @@ def _ticket_instruction_hash(
                 "account_id": account_id,
                 "subject_id": subject_id,
                 "ticket_id": ticket_id,
-                "legs": [{"leg_id": leg_id, "instruction_hash": instruction_hash}],
+                "legs": [
+                    {"leg_id": leg.leg_id, "instruction_hash": manual_instruction_hash(leg.instruction)}
+                    for leg in legs
+                ],
             }
         ).encode("utf-8")
     ).hexdigest()
@@ -110,13 +129,23 @@ def manual_order_command_id(ticket_id: str, leg_id: str) -> str:
     return f"cmd:manual:{ticket_id}:{leg_id}"
 
 
-def _require_tracer_leg(leg: BrokerOrderLeg) -> None:
+def _require_supported_leg(leg: BrokerOrderLeg) -> None:
     if (
         leg.side not in {OrderSide.BUY, OrderSide.SELL}
-        or leg.order_type is not OrderType.MARKET
-        or leg.time_in_force is not TimeInForce.DAY
+        or leg.order_type not in {OrderType.MARKET, OrderType.LIMIT}
+        or leg.time_in_force not in {TimeInForce.DAY, TimeInForce.GTC}
     ):
-        raise ValueError("manual trading currently supports one BUY or SELL market DAY equity leg")
+        raise ValueError("manual tickets support only BUY or SELL market/limit DAY/GTC equity legs")
+
+
+def _require_ticket_legs(legs: tuple[ManualTicketLeg, ...]) -> None:
+    if not legs or len(legs) > 8:
+        raise ManualTicketConflictError("manual tickets require between one and eight ordered legs")
+    leg_ids = [leg.leg_id for leg in legs]
+    if any(not leg_id for leg_id in leg_ids) or len(set(leg_ids)) != len(leg_ids):
+        raise ManualTicketConflictError("manual tickets require unique stable leg identities")
+    for leg in legs:
+        _require_supported_leg(leg.instruction)
 
 
 def _require_manual_leg_admission(
@@ -124,9 +153,14 @@ def _require_manual_leg_admission(
     *,
     subject_id: str,
     leg: BrokerOrderLeg,
+    continuation_ticket_id: str | None = None,
 ) -> None:
     if leg.side is OrderSide.BUY:
-        require_manual_admission(repo, subject_id=subject_id)
+        require_manual_admission(
+            repo,
+            subject_id=subject_id,
+            continuation_ticket_id=continuation_ticket_id,
+        )
         return
     require_manual_reduction(
         repo,
@@ -152,6 +186,54 @@ def _submission(
     return ManualOrderSubmission(ticket=ticket, leg=leg, command=command, created=created)
 
 
+def next_manual_ticket_leg(
+    repo: ClerkSqliteRepository,
+    *,
+    ticket_id: str,
+) -> ManualTicketLeg:
+    """Return the one next reserved leg after broker acknowledgement.
+
+    This is deliberately a read-only eligibility check. The caller must still
+    present a fresh preview token and invoke the explicit continuation path
+    before this returned instruction can become a broker effect.
+    """
+    ticket = repo.manual_order_ticket(ticket_id)
+    if ticket is None:
+        raise ManualTicketContinuationError("manual ticket does not exist")
+    for index, resource in enumerate(ticket.legs):
+        if resource.state != "RESERVED":
+            continue
+        if index == 0:
+            if resource.instruction is None:
+                raise ManualTicketContinuationError(
+                    "this legacy ticket lacks durable instruction evidence for a safe activation"
+                )
+            return ManualTicketLeg(resource.leg_id, BrokerOrderLeg.model_validate(resource.instruction))
+        prior_states = {leg.state for leg in ticket.legs[:index]}
+        for prior_leg in ticket.legs[:index]:
+            if prior_leg.order_ref is None:
+                continue
+            cancellation = repo.manual_order_cancellation(order_ref=prior_leg.order_ref)
+            if cancellation is not None and cancellation.state in {"ACCEPTED", "UNKNOWN"}:
+                raise ManualTicketContinuationError(
+                    "the ticket remains paused until the prior manual cancellation is terminal"
+                )
+        if "UNKNOWN" in prior_states:
+            raise ManualTicketContinuationError(
+                "the ticket remains paused until the prior manual order outcome is reconciled"
+            )
+        if prior_states & {"RESERVED", "ACCEPTED"}:
+            raise ManualTicketContinuationError(
+                "the prior manual ticket leg has not reached broker acknowledgement"
+            )
+        if resource.instruction is None:
+            raise ManualTicketContinuationError(
+                "this legacy ticket lacks durable instruction evidence for a safe continuation"
+            )
+        return ManualTicketLeg(resource.leg_id, BrokerOrderLeg.model_validate(resource.instruction))
+    raise ManualTicketContinuationError("manual ticket has no remaining leg to continue")
+
+
 def _ensure_subject_and_ticket(
     repo: ClerkSqliteRepository,
     *,
@@ -159,8 +241,7 @@ def _ensure_subject_and_ticket(
     operator_id: str,
     subject_id: str,
     ticket_id: str,
-    leg_id: str,
-    instruction_hash: str,
+    legs: tuple[ManualTicketLeg, ...],
 ) -> None:
     if repo.custody_subject(subject_id) is None:
         subject_facts = CustodySubjectRegisteredFacts(
@@ -184,19 +265,22 @@ def _ensure_subject_and_ticket(
         account_id=account_id,
         subject_id=subject_id,
         ticket_id=ticket_id,
-        leg_id=leg_id,
-        instruction_hash=instruction_hash,
+        legs=legs,
     )
     ticket = repo.manual_order_ticket(ticket_id)
     if ticket is not None:
-        persisted_leg = next((item for item in ticket.legs if item.leg_id == leg_id), None)
+        persisted_legs = tuple(
+            (item.leg_id, item.sequence_index, item.instruction_hash) for item in ticket.legs
+        )
+        expected_legs = tuple(
+            (leg.leg_id, index, manual_instruction_hash(leg.instruction))
+            for index, leg in enumerate(legs)
+        )
         if (
             ticket.subject_id != subject_id
             or ticket.operator_id != operator_id
             or ticket.instruction_hash != ticket_hash
-            or len(ticket.legs) != 1
-            or persisted_leg is None
-            or persisted_leg.instruction_hash != instruction_hash
+            or persisted_legs != expected_legs
         ):
             raise ManualTicketConflictError("manual ticket identity conflicts with its durable reservation")
         return
@@ -205,7 +289,14 @@ def _ensure_subject_and_ticket(
         subject_id=subject_id,
         operator_id=operator_id,
         instruction_hash=ticket_hash,
-        legs=(ManualTicketLegReservedFacts(leg_id=leg_id, instruction_hash=instruction_hash),),
+        legs=tuple(
+            ManualTicketLegReservedFacts(
+                leg_id=leg.leg_id,
+                instruction_hash=manual_instruction_hash(leg.instruction),
+                instruction=leg.instruction.model_dump(mode="json"),
+            )
+            for leg in legs
+        ),
     )
     repo.append_transition(
         TransitionInput(
@@ -228,9 +319,15 @@ def accept_manual_order(
     ticket_id: str,
     leg_id: str,
     leg: BrokerOrderLeg,
+    ticket_legs: tuple[ManualTicketLeg, ...] | None = None,
+    continuation: bool = False,
 ) -> ManualOrderSubmission:
     """Finalize one ticket leg locally before the caller may contact Alpaca."""
-    _require_tracer_leg(leg)
+    ticket_legs = ticket_legs or (ManualTicketLeg(leg_id=leg_id, instruction=leg),)
+    _require_ticket_legs(ticket_legs)
+    requested_leg = next((item for item in ticket_legs if item.leg_id == leg_id), None)
+    if requested_leg is None or requested_leg.instruction != leg:
+        raise ManualTicketConflictError("manual leg does not match its immutable ticket reservation")
     validate_strategy_instance_id(operator_id)
     subject_id = manual_operator_subject_id(operator_id)
     idempotency_key, payload_hash, command_id, effect_key, instruction_hash = _identity(
@@ -244,6 +341,14 @@ def accept_manual_order(
     if existing is not None:
         if existing.payload_hash != payload_hash:
             raise DurableConflictError(existing)
+        _ensure_subject_and_ticket(
+            repo,
+            account_id=account_id,
+            operator_id=operator_id,
+            subject_id=subject_id,
+            ticket_id=ticket_id,
+            legs=ticket_legs,
+        )
         return _submission(
             repo,
             ticket_id=ticket_id,
@@ -259,10 +364,35 @@ def accept_manual_order(
             operator_id=operator_id,
             subject_id=subject_id,
             ticket_id=ticket_id,
-            leg_id=leg_id,
-            instruction_hash=instruction_hash,
+            legs=ticket_legs,
         )
-        _require_manual_leg_admission(repo, subject_id=subject_id, leg=leg)
+        ticket = repo.manual_order_ticket(ticket_id)
+        if ticket is None:
+            raise RuntimeError("manual ticket disappeared while accepting its first leg")
+        current_index = next(
+            (index for index, item in enumerate(ticket.legs) if item.leg_id == leg_id),
+            None,
+        )
+        if current_index is None or ticket.legs[current_index].state != "RESERVED":
+            raise ManualTicketContinuationError("this manual ticket leg is not awaiting activation")
+        if current_index == 0 and continuation:
+            raise ManualTicketContinuationError("the first manual ticket leg must use initial confirmation")
+        if current_index > 0:
+            if not continuation:
+                raise ManualTicketContinuationError(
+                    "later manual ticket legs require an explicit Continue remaining legs confirmation"
+                )
+            next_leg = next_manual_ticket_leg(repo, ticket_id=ticket_id)
+            if next_leg.leg_id != leg_id:
+                raise ManualTicketContinuationError(
+                    "this manual ticket leg is not the next eligible continuation"
+                )
+        _require_manual_leg_admission(
+            repo,
+            subject_id=subject_id,
+            leg=leg,
+            continuation_ticket_id=ticket_id if continuation else None,
+        )
         order_ref = build_order_ref(build_manual_order_namespace(operator_id), mint_intent_id())
         facts = ManualOrderAcceptedFacts(
             ticket_id=ticket_id,
@@ -327,6 +457,8 @@ async def submit_manual_order(
     leg_id: str,
     leg: BrokerOrderLeg,
     trade: BrokerTradePort,
+    ticket_legs: tuple[ManualTicketLeg, ...] | None = None,
+    continuation: bool = False,
 ) -> ManualOrderSubmission:
     """Accept once, claim once, and submit the exact durable order identity."""
     accepted = accept_manual_order(
@@ -336,6 +468,8 @@ async def submit_manual_order(
         ticket_id=ticket_id,
         leg_id=leg_id,
         leg=leg,
+        ticket_legs=ticket_legs,
+        continuation=continuation,
     )
     if not accepted.created:
         return accepted
@@ -420,8 +554,11 @@ __all__ = [
     "ACTION_SUBMIT_MANUAL_ORDER",
     "ManualOrderSubmission",
     "ManualTicketConflictError",
+    "ManualTicketContinuationError",
+    "ManualTicketLeg",
     "accept_manual_order",
     "manual_instruction_hash",
     "manual_order_command_id",
+    "next_manual_ticket_leg",
     "submit_manual_order",
 ]

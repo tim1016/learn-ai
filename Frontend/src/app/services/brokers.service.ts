@@ -168,7 +168,7 @@ export class BrokersService {
     );
   }
 
-  /** SQLite authority's policy answer for its narrow manual market-order tracer. */
+  /** SQLite authority's policy answer for an ordered manual equity ticket. */
   getSqliteManualOrderCapability(accountId: string): Promise<ManualOrderCapability> {
     return firstValueFrom(
       this.http.get<ManualOrderCapability>(
@@ -197,6 +197,34 @@ export class BrokersService {
     return firstValueFrom(
       this.http.put<ManualOrderTicket>(
         `${this.base}/alpaca/accounts/${encodeURIComponent(accountId)}/manual-order-tickets/${encodeURIComponent(ticketId)}`,
+        request,
+      ),
+    );
+  }
+
+  /** Explicitly activate the next reviewed SQLite manual-ticket leg. */
+  continueSqliteManualOrderTicket(
+    accountId: string,
+    ticketId: string,
+    request: ManualOrderSubmitRequest,
+  ): Promise<ManualOrderTicket> {
+    return firstValueFrom(
+      this.http.post<ManualOrderTicket>(
+        `${this.base}/alpaca/accounts/${encodeURIComponent(accountId)}/manual-order-tickets/${encodeURIComponent(ticketId)}/continue`,
+        request,
+      ),
+    );
+  }
+
+  /** Cancel all verified working orders owned by one manual ticket. */
+  cancelSqliteManualOrderTicket(
+    accountId: string,
+    ticketId: string,
+    request: ManualOrderCancelRequest,
+  ): Promise<ManualOrderTicket> {
+    return firstValueFrom(
+      this.http.post<ManualOrderTicket>(
+        `${this.base}/alpaca/accounts/${encodeURIComponent(accountId)}/manual-order-tickets/${encodeURIComponent(ticketId)}/cancel`,
         request,
       ),
     );

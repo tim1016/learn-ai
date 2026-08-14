@@ -26058,7 +26058,7 @@
             "type": "boolean"
           },
           "supported_order_shape": {
-            "default": "BUY or SELL market DAY equity, one leg",
+            "default": "BUY or SELL market/limit DAY/GTC equity, one to eight ordered legs",
             "title": "Supported Order Shape",
             "type": "string"
           },
@@ -26202,6 +26202,16 @@
               }
             ]
           },
+          "instruction": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BrokerOrderLeg"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "instruction_hash": {
             "title": "Instruction Hash",
             "type": "string"
@@ -26220,6 +26230,10 @@
               }
             ]
           },
+          "sequence_index": {
+            "title": "Sequence Index",
+            "type": "integer"
+          },
           "state": {
             "title": "State",
             "type": "string"
@@ -26227,7 +26241,9 @@
         },
         "required": [
           "leg_id",
+          "sequence_index",
           "instruction_hash",
+          "instruction",
           "state",
           "command",
           "effect",
@@ -26241,8 +26257,14 @@
         "additionalProperties": false,
         "description": "Preview never accepts operator identity; the server attributes that fact.",
         "properties": {
-          "leg": {
-            "$ref": "#/components/schemas/ManualOrderLegRequest"
+          "legs": {
+            "items": {
+              "$ref": "#/components/schemas/ManualOrderLegRequest"
+            },
+            "maxLength": 8,
+            "minLength": 1,
+            "title": "Legs",
+            "type": "array"
           },
           "ticket_id": {
             "format": "uuid",
@@ -26252,7 +26274,7 @@
         },
         "required": [
           "ticket_id",
-          "leg"
+          "legs"
         ],
         "title": "ManualOrderPreviewRequest",
         "type": "object"
@@ -26333,8 +26355,14 @@
         "additionalProperties": false,
         "description": "Confirmation for the exact previewed ticket and leg.",
         "properties": {
-          "leg": {
-            "$ref": "#/components/schemas/ManualOrderLegRequest"
+          "legs": {
+            "items": {
+              "$ref": "#/components/schemas/ManualOrderLegRequest"
+            },
+            "maxLength": 8,
+            "minLength": 1,
+            "title": "Legs",
+            "type": "array"
           },
           "preview_token": {
             "maxLength": 128,
@@ -26344,7 +26372,7 @@
           }
         },
         "required": [
-          "leg",
+          "legs",
           "preview_token"
         ],
         "title": "ManualOrderSubmitRequest",
@@ -49726,6 +49754,164 @@
           }
         },
         "summary": "Submit Sqlite Manual Order",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/accounts/{account_id}/manual-order-tickets/{ticket_id}/cancel": {
+      "post": {
+        "description": "Cancel every verified working order owned by one manual ticket.",
+        "operationId": "cancel_sqlite_manual_ticket_api_brokers_alpaca_accounts__account_id__manual_order_tickets__ticket_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "ticket_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Ticket Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualOrderCancelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManualOrderTicketResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Sqlite Manual Ticket",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/accounts/{account_id}/manual-order-tickets/{ticket_id}/continue": {
+      "post": {
+        "description": "Activate only the next acknowledged ticket leg after a fresh review.",
+        "operationId": "continue_sqlite_manual_order_ticket_api_brokers_alpaca_accounts__account_id__manual_order_tickets__ticket_id__continue_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "ticket_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Ticket Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualOrderSubmitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManualOrderTicketResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Continue Sqlite Manual Order Ticket",
         "tags": [
           "brokers-v2"
         ]

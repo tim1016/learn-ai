@@ -52,6 +52,11 @@
   registered v9 → v10 migration creates that resource and replaces the two
   effect-subject triggers in the same transaction; the verified v8 → v9
   ceremony remains exactly v9 and startup then applies this additive upgrade.
+- Schema-v11 adds an immutable `sequence_index` to each replayable manual
+  ticket leg. The registered v10 → v11 migration backfills index zero for the
+  historical one-leg tickets, adds the per-ticket uniqueness fence, and
+  replaces the leg-identity trigger so an operator cannot reorder a reserved
+  ticket after confirmation.
 - **Source of truth ranking:** ADR 0035 (decision rationale) →
   `docs/prds/alpaca-account-clerk-sqlite-control-plane.md` §9–§11 (functional
   contract) → this document (concrete, implementable pin). Where this document
@@ -1002,6 +1007,17 @@ BEGIN
             AND effect.strategy_instance_id IS NULL
             AND effect.run_id IS NULL
     ) THEN RAISE(ABORT, 'manual cancellation must own one manual ticket order') END;
+END;
+
+
+ALTER TABLE manual_order_legs ADD COLUMN sequence_index INTEGER NOT NULL DEFAULT 0;
+CREATE UNIQUE INDEX ux_manual_order_legs_sequence
+    ON manual_order_legs(ticket_id, sequence_index);
+DROP TRIGGER trg_manual_order_leg_identity_immutable;
+CREATE TRIGGER trg_manual_order_leg_identity_immutable
+BEFORE UPDATE OF ticket_id, leg_id, sequence_index, subject_id, instruction_hash ON manual_order_legs
+BEGIN
+    SELECT RAISE(ABORT, 'manual_order_legs identity is immutable');
 END;
 ```
 
