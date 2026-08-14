@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
 
@@ -44,7 +44,6 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.errors import BrokerRequestInvalid, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
-from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at
 
 ACCOUNT_ID = "PA-TEST"
@@ -167,6 +166,11 @@ class _FakeTrade:
         )
 
 
+class _NoReconciler:
+    async def reconcile_account(self, *, trigger: str) -> Any:
+        raise AssertionError(f"unexpected reconciliation trigger: {trigger}")
+
+
 async def _make_entry(
     repo: ClerkSqliteRepository,
     *,
@@ -236,9 +240,8 @@ async def test_coverage_resolution_resumes_accepted_exit_without_second_intent(
     )
     sink = SqliteTradeUpdateEvidenceSink(
         repo=repo,
-        read=cast(BrokerReadPort, _FakeTrade()),
-        trade=cast(BrokerTradePort, _FakeTrade()),
         intake=ReentrantAsyncLock(),
+        reconciler=_NoReconciler(),
     )
     await sink.record_lifecycle_event(
         client_order_id=entry_ref,

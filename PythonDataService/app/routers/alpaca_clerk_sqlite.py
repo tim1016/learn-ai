@@ -41,7 +41,6 @@ from app.broker.alpaca.clerk.sqlite.projections import (
     ProjectionReadError,
     SqliteClerkProjectionReader,
 )
-from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
 from app.broker.alpaca.clerk.sqlite.recovery_execution import (
     RecoveryExecutionError,
     RecoveryExecutionRequest,
@@ -743,7 +742,7 @@ async def execute_bot_recovery_action(
 )
 async def reconcile_now(account_id: str) -> ReconciliationResponse:
     """Run the same fail-closed account pass used by the automatic sweep."""
-    repo = await _repo(account_id)
+    facade = _active_sqlite_facade(account_id)
     try:
         port = get_broker_registry().resolve("alpaca")
     except UnknownBrokerError as exc:
@@ -772,12 +771,7 @@ async def reconcile_now(account_id: str) -> ReconciliationResponse:
                     ),
                 },
             )
-        result = await reconcile_account(
-            repo,
-            read=port,
-            trade=port,
-            trigger="OPERATOR_RECONCILE_NOW",
-        )
+        result = await facade.reconcile_account(trigger="OPERATOR_RECONCILE_NOW")
     except (ExecutionLeaseLost, RepositoryPoisoned) as exc:
         raise _unavailable_response(exc) from exc
     except BrokerError as exc:
