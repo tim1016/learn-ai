@@ -134,15 +134,27 @@ async def test_existing_reads_project_active_sqlite_authority(sqlite_desk: FastA
         "/api/brokers/alpaca/clerk/custody-diagnosis",
     ],
 )
+@pytest.mark.parametrize("projection_failure", ["read_error", "missing"])
 async def test_existing_reads_map_sqlite_projection_failures_to_typed_unavailable(
     sqlite_desk: FastAPI,
     monkeypatch: pytest.MonkeyPatch,
     path: str,
+    projection_failure: str,
 ) -> None:
+    """Both projection failure modes must fail closed on both retained reads."""
+
     def unreadable_projection(**_kwargs: Any) -> NoReturn:
         raise ProjectionReadError("simulated malformed durable projection")
 
-    monkeypatch.setattr(brokers_router, "sqlite_projection", unreadable_projection)
+    def missing_projection(**_kwargs: Any) -> None:
+        return None
+
+    projection_reader = (
+        unreadable_projection
+        if projection_failure == "read_error"
+        else missing_projection
+    )
+    monkeypatch.setattr(brokers_router, "sqlite_projection", projection_reader)
     async with httpx.AsyncClient(
         transport=ASGITransport(app=sqlite_desk), base_url="http://test"
     ) as client:
