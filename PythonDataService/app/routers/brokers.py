@@ -74,7 +74,10 @@ from app.schemas.manual_orders import (
     ManualOrderSubmitRequest,
     ManualOrderTicketResponse,
 )
-from app.security.data_plane_control import require_data_plane_control_secret
+from app.security.data_plane_control import (
+    require_data_plane_control_secret,
+    require_data_plane_control_secret_always,
+)
 from app.services.account_pnl_reconciliation import reconcile_broker_curve_to_local_pnl
 from app.services.broker_account_snapshot import resolve_broker_account_snapshot
 from app.services.broker_order_groups import group_orders_by_symbol
@@ -435,11 +438,15 @@ async def submit_orders(broker: str, request: BrokerOrderRequest) -> OrderSubmit
 @router.get(
     "/alpaca/accounts/{account_id}/manual-orders/capability",
     response_model=ManualOrderCapabilityResponse,
+    dependencies=[Depends(require_data_plane_control_secret_always)],
 )
 async def sqlite_manual_order_capability(account_id: str) -> ManualOrderCapabilityResponse:
     """Return the current policy answer before a browser opens a ticket."""
     facade = _require_sqlite_manual_facade(account_id)
-    capability = await facade.manual_order_capability()
+    try:
+        capability = await facade.manual_order_capability()
+    except BrokerError as error:
+        _raise_http(error)
     return ManualOrderCapabilityResponse.from_domain(capability)
 
 
@@ -454,12 +461,15 @@ async def preview_sqlite_manual_order(
 ) -> ManualOrderPreviewResponse:
     """Bind one browser-stable ticket leg to fresh server authority facts."""
     facade = _require_sqlite_manual_facade(account_id)
-    preview = await facade.preview_manual_order(
-        operator_id=settings.PANEL_OPERATOR_IDENTITY,
-        ticket_id=str(request.ticket_id),
-        leg_id=str(request.leg.leg_id),
-        leg=request.leg.instruction,
-    )
+    try:
+        preview = await facade.preview_manual_order(
+            operator_id=settings.PANEL_OPERATOR_IDENTITY,
+            ticket_id=str(request.ticket_id),
+            leg_id=str(request.leg.leg_id),
+            leg=request.leg.instruction,
+        )
+    except BrokerError as error:
+        _raise_http(error)
     return ManualOrderPreviewResponse.from_domain(preview)
 
 
@@ -495,12 +505,15 @@ async def submit_sqlite_manual_order(
             status_code=409,
             detail={"reason": "manual_ticket_conflict", "message": str(exc)},
         ) from exc
+    except BrokerError as error:
+        _raise_http(error)
     return _manual_ticket_response(facade, ticket)
 
 
 @router.get(
     "/alpaca/accounts/{account_id}/manual-order-tickets/{ticket_id}",
     response_model=ManualOrderTicketResponse,
+    dependencies=[Depends(require_data_plane_control_secret_always)],
 )
 async def get_sqlite_manual_order_ticket(
     account_id: str,

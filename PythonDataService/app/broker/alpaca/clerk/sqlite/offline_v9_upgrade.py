@@ -73,6 +73,7 @@ def upgrade_v8_authority_offline(
     process_stop_proof: ProcessStopProof,
     clock: Clock = now_ms_utc,
     fold_registry: FoldRegistry = DEFAULT_FOLD_REGISTRY,
+    max_process_stop_proof_age_ms: int = PROCESS_STOP_PROOF_MAX_AGE_MS,
     before_swap: Callable[[Path], None] | None = None,
     after_swap: Callable[[Path], None] | None = None,
 ) -> OfflineV9UpgradeReceipt:
@@ -86,7 +87,12 @@ def upgrade_v8_authority_offline(
     """
     with exclusive_recovery_fence(artifacts_root=artifacts_root, account_id=account_id):
         now = clock()
-        _validate_process_stop_proof(process_stop_proof, account_id=account_id, now_ms=now)
+        _validate_process_stop_proof(
+            process_stop_proof,
+            account_id=account_id,
+            now_ms=now,
+            max_age_ms=max_process_stop_proof_age_ms,
+        )
         return _upgrade_v8_authority_offline_fenced(
             account_id=account_id,
             artifacts_root=artifacts_root,
@@ -237,6 +243,7 @@ def _validate_process_stop_proof(
     *,
     account_id: str,
     now_ms: int,
+    max_age_ms: int = PROCESS_STOP_PROOF_MAX_AGE_MS,
 ) -> None:
     if (
         proof.account_id != account_id
@@ -245,8 +252,10 @@ def _validate_process_stop_proof(
         or not proof.proof_reference
     ):
         raise OfflineV9UpgradeRefused("offline upgrade requires an account-bound process-stop proof")
+    if type(max_age_ms) is not int or max_age_ms < 0:
+        raise OfflineV9UpgradeRefused("process-stop proof maximum age must be a non-negative integer")
     age_ms = now_ms - proof.observed_at_ms
-    if age_ms < 0 or age_ms > PROCESS_STOP_PROOF_MAX_AGE_MS:
+    if age_ms < 0 or age_ms > max_age_ms:
         raise OfflineV9UpgradeRefused("process-stop proof is stale; obtain fresh offline evidence")
 
 
@@ -255,6 +264,7 @@ def rollback_v9_upgrade_offline(
     account_id: str,
     artifacts_root: Path,
     process_stop_proof: ProcessStopProof,
+    max_process_stop_proof_age_ms: int = PROCESS_STOP_PROOF_MAX_AGE_MS,
     clock: Clock = now_ms_utc,
 ) -> RecoveryReceipt:
     """Restore the verified v8 backup recorded by a completed upgrade receipt.
@@ -265,7 +275,12 @@ def rollback_v9_upgrade_offline(
     hand-selected backup path.
     """
     now = clock()
-    _validate_process_stop_proof(process_stop_proof, account_id=account_id, now_ms=now)
+    _validate_process_stop_proof(
+        process_stop_proof,
+        account_id=account_id,
+        now_ms=now,
+        max_age_ms=max_process_stop_proof_age_ms,
+    )
     _, account_dir = writes.account_paths(artifacts_root, account_id)
     control = _read_control(writes.confined_account_file(artifacts_root, account_id, DB_FILENAME))
     if control["schema_version"] != schema.SCHEMA_VERSION:
@@ -282,7 +297,7 @@ def rollback_v9_upgrade_offline(
         artifacts_root=artifacts_root,
         bundle_path=artifacts_root / receipt.backup_reference,
         process_stop_proof=process_stop_proof,
-        max_process_stop_proof_age_ms=PROCESS_STOP_PROOF_MAX_AGE_MS,
+        max_process_stop_proof_age_ms=max_process_stop_proof_age_ms,
         clock=clock,
     )
 

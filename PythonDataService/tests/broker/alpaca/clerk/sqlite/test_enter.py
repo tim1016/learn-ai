@@ -592,9 +592,13 @@ async def test_resolve_stays_unknown_on_a_mismatched_client_order_id(
     trade = _FakeTrade(lookup_result=mismatched)
     resolved = await resolve_enter_submission(repo, order_ref=accepted.order_ref, trade=trade)
     effect = repo.effect_operation(resolved.effect_operation_id)
-    assert effect is not None and effect.state == "accepted"
+    assert effect is not None and effect.state == "unknown"
     order = repo.order(accepted.order_ref)
     assert order is not None and order.broker_order_id is None
+    assert any(
+        transition["transition_kind"] == "ORDER_SUBMIT_UNCERTAIN"
+        for transition in repo.transitions_for_order(accepted.order_ref)
+    )
 
 
 # ── Namespace-attributed exposure and fold idempotency ──────────────────────

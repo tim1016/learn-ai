@@ -380,6 +380,15 @@ async def resolve_order_submission(
             return
 
         if order is not None and order.client_order_id != order_ref:
+            fold_uncertain(
+                repo,
+                effect_operation_id=effect.effect_operation_id,
+                order_ref=order_ref,
+                why=(
+                    f"broker lookup returned client_order_id={order.client_order_id!r}, "
+                    f"expected {order_ref!r}"
+                ),
+            )
             return
 
         if order is None:

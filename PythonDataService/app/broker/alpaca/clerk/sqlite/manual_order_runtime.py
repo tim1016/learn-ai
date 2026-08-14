@@ -20,9 +20,9 @@ from app.broker.alpaca.clerk.stream_health import StreamHealthGate
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerAccountSnapshot, BrokerOrderLeg, OrderSide, OrderType, TimeInForce
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
+from app.engine.live.identity import validate_strategy_instance_id
 
 _LOCAL_PREVIEW_KEY = b"learn-ai/local-manual-preview/v1"
-_MANUAL_ASSET_LOOKUP_LIMIT = 10_000
 
 
 @dataclass(frozen=True)
@@ -109,7 +109,7 @@ async def _manual_asset_unavailable(
 ) -> ManualOrderUnavailable | None:
     """Require fresh broker-listed, tradable US-equity evidence before intent."""
     try:
-        assets = await read.list_assets(status="active", limit=_MANUAL_ASSET_LOOKUP_LIMIT)
+        assets = await read.list_assets(status="active", limit=None)
     except BrokerError:
         return ManualOrderUnavailable(
             "ASSET_EVIDENCE_UNAVAILABLE",
@@ -144,6 +144,23 @@ async def preview_manual_order(
     leg: BrokerOrderLeg,
 ) -> ManualOrderPreview:
     """Build the backend-owned capability and opaque freshness token."""
+    try:
+        validate_strategy_instance_id(operator_id)
+    except ValueError:
+        return ManualOrderPreview(
+            capability=ManualOrderCapability(
+                False,
+                ManualOrderUnavailable(
+                    "INVALID_MANUAL_OPERATOR",
+                    "Manual order submission requires a valid configured operator identity.",
+                ),
+            ),
+            preview_token=None,
+            authority_generation=None,
+            db_identity_token=None,
+            control_revision=None,
+            subject_id=None,
+        )
     if (
         leg.side is not OrderSide.BUY
         or leg.order_type is not OrderType.MARKET

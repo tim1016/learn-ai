@@ -55,6 +55,7 @@ class FakeAlpacaPort:
         self.account_calls = 0
         self.asset_available = True
         self.asset_calls = 0
+        self.asset_limits: list[int | None] = []
         self.submit_calls: list[str] = []
         self.durable_before_submit = False
 
@@ -66,13 +67,13 @@ class FakeAlpacaPort:
         self,
         *,
         status: str | None = None,
-        limit: int = 100,
+        limit: int | None = 100,
     ) -> list[BrokerAsset]:
         self.asset_calls += 1
+        self.asset_limits.append(limit)
         if not self.asset_available:
             return []
         assert status == "active"
-        assert limit >= 1
         return [
             BrokerAsset(
                 broker="alpaca",
@@ -189,7 +190,8 @@ async def test_disabled_manual_capability_refuses_without_contacting_alpaca(
     monkeypatch.setattr(settings, "ALPACA_SQLITE_MANUAL_TRADING_ENABLED", False)
     async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get(
-            f"/api/brokers/alpaca/accounts/{ACCOUNT_ID}/manual-orders/capability"
+            f"/api/brokers/alpaca/accounts/{ACCOUNT_ID}/manual-orders/capability",
+            headers=_headers(),
         )
 
     assert response.status_code == 200
@@ -214,7 +216,8 @@ async def test_manual_ticket_preview_submit_replay_and_read_are_durable(
     ticket_path = f"/api/brokers/alpaca/accounts/{ACCOUNT_ID}/manual-order-tickets/{TICKET_ID}"
     async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         capability = await client.get(
-            f"/api/brokers/alpaca/accounts/{ACCOUNT_ID}/manual-orders/capability"
+            f"/api/brokers/alpaca/accounts/{ACCOUNT_ID}/manual-orders/capability",
+            headers=_headers(),
         )
         rejected_operator = await client.post(
             preview_path,
@@ -237,7 +240,7 @@ async def test_manual_ticket_preview_submit_replay_and_read_are_durable(
         submit_body = {"leg": _preview_payload()["leg"], "preview_token": token}
         submitted = await client.put(ticket_path, headers=_headers(), json=submit_body)
         replayed = await client.put(ticket_path, headers=_headers(), json=submit_body)
-        restored = await client.get(ticket_path)
+        restored = await client.get(ticket_path, headers=_headers())
         conflict = await client.put(
             ticket_path,
             headers=_headers(),
@@ -289,7 +292,8 @@ async def test_manual_preview_is_fresh_and_live_accounts_are_refused(
         )
         port.account_mode = "live"
         capability = await client.get(
-            f"/api/brokers/alpaca/accounts/{ACCOUNT_ID}/manual-orders/capability"
+            f"/api/brokers/alpaca/accounts/{ACCOUNT_ID}/manual-orders/capability",
+            headers=_headers(),
         )
 
     assert stale.status_code == 409
@@ -301,7 +305,8 @@ async def test_manual_preview_is_fresh_and_live_accounts_are_refused(
     health["execution"] = False
     async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         unhealthy = await client.get(
-            f"/api/brokers/alpaca/accounts/{ACCOUNT_ID}/manual-orders/capability"
+            f"/api/brokers/alpaca/accounts/{ACCOUNT_ID}/manual-orders/capability",
+            headers=_headers(),
         )
     assert unhealthy.status_code == 200
     assert unhealthy.json()["unavailable"]["code"] == "BROKER_CHANNEL_UNHEALTHY"
@@ -322,3 +327,37 @@ async def test_manual_preview_refuses_an_unlisted_asset_before_durable_acceptanc
     assert preview.json()["capability"]["unavailable"]["code"] == "UNSUPPORTED_MANUAL_ASSET"
     assert repo.manual_order_ticket(TICKET_ID) is None
     assert port.submit_calls == []
+    assert port.asset_limits == [None]
+
+
+@pytest.mark.asyncio
+async def test_manual_ticket_reads_and_capability_require_control_authentication(
+    api: tuple[FastAPI, ClerkSqliteRepository, FakeAlpacaPort, dict[str, bool]],
+) -> None:
+    app, _repo, _port, _health = api
+    capability_path = f"/api/brokers/alpaca/accounts/{ACCOUNT_ID}/manual-orders/capability"
+    ticket_path = f"/api/brokers/alpaca/accounts/{ACCOUNT_ID}/manual-order-tickets/{TICKET_ID}"
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        capability = await client.get(capability_path)
+        ticket = await client.get(ticket_path)
+
+    assert capability.status_code == ticket.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_invalid_configured_manual_operator_refuses_before_ticket_reservation(
+    api: tuple[FastAPI, ClerkSqliteRepository, FakeAlpacaPort, dict[str, bool]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, repo, port, _health = api
+    monkeypatch.setattr(settings, "PANEL_OPERATOR_IDENTITY", "invalid operator")
+    preview_path = f"/api/brokers/alpaca/accounts/{ACCOUNT_ID}/manual-orders/preview"
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        preview = await client.post(preview_path, headers=_headers(), json=_preview_payload())
+
+    assert preview.status_code == 200
+    assert preview.json()["capability"]["unavailable"]["code"] == "INVALID_MANUAL_OPERATOR"
+    assert repo.manual_order_ticket(TICKET_ID) is None
+    assert port.asset_calls == 0

@@ -103,15 +103,20 @@ export class AlpacaOrderEntryComponent {
 
   constructor() {
     effect(() => {
+      const accountId = this.expectedAccountId();
       if (!this.sqliteManualAuthority()) return;
       const ticketId = this.manualTicketId();
+      this.manualTicket.set(null);
       if (ticketId === null) return;
-      void this.restoreManualTicket(ticketId);
+      void this.restoreManualTicket(ticketId, accountId);
     });
     effect((onCleanup) => {
       const ticket = this.manualTicket();
       if (!this.sqliteManualAuthority() || ticket === null || !this.ticketNeedsRefresh(ticket)) return;
-      const refresh = globalThis.setInterval(() => void this.restoreManualTicket(ticket.ticket_id), 5_000);
+      const refresh = globalThis.setInterval(
+        () => void this.restoreManualTicket(ticket.ticket_id, this.expectedAccountId()),
+        5_000,
+      );
       onCleanup(() => globalThis.clearInterval(refresh));
     });
   }
@@ -227,21 +232,26 @@ export class AlpacaOrderEntryComponent {
     this.manualTicket.set(ticket);
   }
 
-  private async restoreManualTicket(ticketId: string): Promise<void> {
+  private async restoreManualTicket(ticketId: string, accountId: string): Promise<void> {
     try {
       const ticket = await this.brokers.getSqliteManualOrderTicket(
-        this.expectedAccountId(),
+        accountId,
         ticketId,
       );
+      if (this.manualTicketId() !== ticketId || this.expectedAccountId() !== accountId) return;
       this.manualTicket.set(ticket);
     } catch (err) {
-      if (err instanceof HttpErrorResponse && err.status === 404) return;
+      if (
+        (err instanceof HttpErrorResponse && err.status === 404)
+        || this.manualTicketId() !== ticketId
+        || this.expectedAccountId() !== accountId
+      ) return;
       this.submitError.set(this.submissionErrorMessage(err));
     }
   }
 
   private ticketNeedsRefresh(ticket: ManualOrderTicket): boolean {
-    return !['COMPLETED', 'CANCELED'].includes(ticket.state);
+    return !['COMPLETED', 'CANCELED', 'PAUSED_UNKNOWN'].includes(ticket.state);
   }
 
   private toRequestLeg(leg: AlpacaOrderDraftLeg): BrokerOrderLeg {
@@ -270,6 +280,9 @@ export class AlpacaOrderEntryComponent {
   }
 
   private submissionErrorMessage(err: unknown): string {
+    if (err instanceof Error && err.message === 'Refresh the manual order preview before confirming.') {
+      return err.message;
+    }
     if (err instanceof HttpErrorResponse && err.status !== 0) {
       const detail = err.error?.detail;
       const nestedMessage =

@@ -113,7 +113,7 @@ class AlpacaBroker:
         self,
         *,
         status: str | None = None,
-        limit: int = 100,
+        limit: int | None = 100,
     ) -> list[BrokerAsset]:
         payloads = await self._client.list_assets(status=status, limit=limit)
         return [adapter.from_alpaca_asset(payload) for payload in payloads]

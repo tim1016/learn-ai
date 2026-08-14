@@ -15,7 +15,16 @@ def manual_order_has_exact_terminal_coverage(
     order_ref: str,
     broker_state: str,
 ) -> bool:
-    """Whether exact evidence proves one manual tracer leg has fully filled."""
+    """Whether exact evidence proves one manual tracer leg has fully filled.
+
+    Formula: ``abs(exact_effective_qty - requested_qty) <= FILL_QTY_EPSILON``.
+    Reference: docs/references/clerk-fill-quantity-tolerance.md — an absolute
+    ``1e-9`` tolerance admits float64 aggregation residue without treating a
+    material fractional-share remainder as complete.
+    Canonical implementation: this predicate, reused by order evidence.
+    Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
+      test_manual_orders.py::test_manual_order_exact_coverage_tolerance.
+    """
     if broker_state.lower() != "filled":
         return False
     effect = repo.effect_operation(effect_operation_id)

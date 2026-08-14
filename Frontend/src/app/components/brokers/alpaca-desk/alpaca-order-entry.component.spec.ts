@@ -228,6 +228,90 @@ describe('AlpacaOrderEntryComponent', () => {
     setIntervalSpy.mockRestore();
   });
 
+  it('stops polling a terminally uncertain SQLite ticket', async () => {
+    const pausedTicket = {
+      ticket_id: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
+      subject_id: 'manual-operator:operator',
+      state: 'PAUSED_UNKNOWN',
+      created_at_ms: 1,
+      updated_at_ms: 2,
+      legs: [],
+    };
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
+    const getSqliteManualOrderTicket = vi.fn().mockResolvedValue(pausedTicket);
+
+    await render(AlpacaOrderEntryComponent, {
+      inputs: {
+        expectedAccountId: 'PA1',
+        sqliteManualAuthority: true,
+        manualTicketId: pausedTicket.ticket_id,
+      },
+      providers: [{
+        provide: BrokersService,
+        useValue: { getSqliteManualOrderTicket },
+      }],
+    });
+
+    expect(await screen.findByLabelText('Manual ticket status')).toBeTruthy();
+    expect(setIntervalSpy.mock.calls.some(([, delay]) => delay === 5_000)).toBe(false);
+    setIntervalSpy.mockRestore();
+  });
+
+  it('drops a late ticket read when the desk account changes', async () => {
+    let resolveInitialTicket: ((ticket: {
+      ticket_id: string;
+      subject_id: string;
+      state: string;
+      created_at_ms: number;
+      updated_at_ms: number;
+      legs: never[];
+    }) => void) | undefined;
+    const initialTicket = new Promise<{
+      ticket_id: string;
+      subject_id: string;
+      state: string;
+      created_at_ms: number;
+      updated_at_ms: number;
+      legs: never[];
+    }>((resolve) => { resolveInitialTicket = resolve; });
+    const getSqliteManualOrderTicket = vi.fn()
+      .mockReturnValueOnce(initialTicket)
+      .mockRejectedValueOnce(new HttpErrorResponse({ status: 404 }));
+    const view = await render(AlpacaOrderEntryComponent, {
+      inputs: {
+        expectedAccountId: 'PA1',
+        sqliteManualAuthority: true,
+        manualTicketId: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
+      },
+      providers: [{
+        provide: BrokersService,
+        useValue: { getSqliteManualOrderTicket },
+      }],
+    });
+
+    await vi.waitFor(() => expect(getSqliteManualOrderTicket).toHaveBeenCalledWith(
+      'PA1',
+      '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
+    ));
+    view.fixture.componentRef.setInput('expectedAccountId', 'PA2');
+    view.fixture.detectChanges();
+    await vi.waitFor(() => expect(getSqliteManualOrderTicket).toHaveBeenCalledWith(
+      'PA2',
+      '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
+    ));
+    if (resolveInitialTicket === undefined) throw new Error('expected initial ticket resolver');
+    resolveInitialTicket({
+      ticket_id: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
+      subject_id: 'manual-operator:operator',
+      state: 'ACTIVE',
+      created_at_ms: 1,
+      updated_at_ms: 2,
+      legs: [],
+    });
+
+    await vi.waitFor(() => expect(screen.queryByLabelText('Manual ticket status')).toBeNull());
+  });
+
   it('reveals the limit-price field only when the order type is Limit', async () => {
     await renderPanel(vi.fn());
     await fillFirstLeg('spy', '2');

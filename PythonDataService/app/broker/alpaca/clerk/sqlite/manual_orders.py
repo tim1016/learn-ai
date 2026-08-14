@@ -35,6 +35,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import require_manual_admission
 from app.broker.contract.errors import BrokerError, BrokerUnavailable
 from app.broker.contract.models import BrokerOrderLeg, OrderSide, OrderType, TimeInForce
 from app.broker.contract.ports import BrokerTradePort
+from app.engine.live.identity import validate_strategy_instance_id
 from app.engine.live.order_identity import build_manual_order_namespace, build_order_ref, mint_intent_id
 
 ACTION_SUBMIT_MANUAL_ORDER = "SUBMIT_MANUAL_ORDER"
@@ -210,6 +211,7 @@ def accept_manual_order(
 ) -> ManualOrderSubmission:
     """Finalize one ticket leg locally before the caller may contact Alpaca."""
     _require_tracer_leg(leg)
+    validate_strategy_instance_id(operator_id)
     subject_id = manual_operator_subject_id(operator_id)
     idempotency_key, payload_hash, command_id, effect_key, instruction_hash = _identity(
         account_id=account_id,
@@ -230,17 +232,16 @@ def accept_manual_order(
             created=False,
         )
 
-    _ensure_subject_and_ticket(
-        repo,
-        account_id=account_id,
-        operator_id=operator_id,
-        subject_id=subject_id,
-        ticket_id=ticket_id,
-        leg_id=leg_id,
-        instruction_hash=instruction_hash,
-    )
-
     def build_transition() -> TransitionInput:
+        _ensure_subject_and_ticket(
+            repo,
+            account_id=account_id,
+            operator_id=operator_id,
+            subject_id=subject_id,
+            ticket_id=ticket_id,
+            leg_id=leg_id,
+            instruction_hash=instruction_hash,
+        )
         require_manual_admission(repo, subject_id=subject_id)
         order_ref = build_order_ref(build_manual_order_namespace(operator_id), mint_intent_id())
         facts = ManualOrderAcceptedFacts(
@@ -332,6 +333,7 @@ async def submit_manual_order(
         claim_token=claim.token,
         trade=trade,
     )
+    unexpected_error: Exception | None = None
     try:
         try:
             order = await broker.submit(leg, client_order_id=accepted.leg.order_ref)
@@ -351,6 +353,14 @@ async def submit_manual_order(
                 reason="The manual order did not reach Alpaca.",
                 why=str(exc),
             )
+        except Exception as exc:
+            fold_uncertain(
+                repo,
+                effect_operation_id=accepted.leg.effect_operation_id,
+                order_ref=accepted.leg.order_ref,
+                why=f"manual broker submission raised {type(exc).__name__}: {exc}",
+            )
+            unexpected_error = exc
         else:
             if order.client_order_id == accepted.leg.order_ref:
                 fold_order_submission_acknowledgement(
@@ -373,6 +383,8 @@ async def submit_manual_order(
             effect_operation_id=accepted.leg.effect_operation_id,
             token=claim.token,
         )
+    if unexpected_error is not None:
+        raise unexpected_error
     command = repo.get_command(accepted.command.command_id)
     assert command is not None
     return _submission(

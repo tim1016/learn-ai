@@ -75,7 +75,8 @@ def fold_manual_ticket_reserved(conn: sqlite3.Connection, payload: dict[str, Any
         if tuple(existing) != expected:
             raise ValueError("manual ticket identity conflicts with prior immutable reservation")
         persisted_legs = tuple(
-            conn.execute(
+            tuple(row)
+            for row in conn.execute(
                 "SELECT leg_id, subject_id, instruction_hash FROM manual_order_legs "
                 "WHERE ticket_id = ? ORDER BY leg_id",
                 (facts.ticket_id,),
@@ -161,7 +162,7 @@ def fold_manual_order_accepted(conn: sqlite3.Connection, payload: dict[str, Any]
     if any(existing_resources):
         if existing_resources != requested_resources:
             raise ValueError("manual ticket leg resources conflict with prior acceptance")
-        return
+        raise ValueError("manual ticket leg already has an immutable acceptance transition")
     conn.execute(
         "INSERT INTO commands (command_id, authority_generation, idempotency_key, payload_hash, kind, "
         "subject_id, strategy_instance_id, run_id, action, intended_end_state, state, "

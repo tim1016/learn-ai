@@ -939,6 +939,39 @@ def _fold_execution_coverage_resolved(conn: sqlite3.Connection, payload: dict[st
         "AND reason_code = 'EXECUTION_COVERAGE_CONFLICT' AND resolved_at_ms IS NULL",
         (payload["recorded_at_ms"], facts.uncertainty_id),
     )
+    manual_order = conn.execute(
+        "SELECT effect.kind, effect.state, effect.command_id, effect.effect_operation_id, "
+        "order_row.broker_state, json_extract(acceptance.facts_json, '$.leg.quantity') "
+        "AS requested_quantity FROM orders order_row JOIN effect_operations effect "
+        "ON effect.effect_operation_id = order_row.effect_operation_id "
+        "JOIN custody_transitions acceptance ON acceptance.sequence = ("
+        "SELECT MIN(accepted.sequence) FROM custody_transitions accepted "
+        "WHERE accepted.effect_operation_id = effect.effect_operation_id "
+        "AND accepted.order_ref = order_row.order_ref "
+        "AND accepted.transition_kind = 'MANUAL_ORDER_ACCEPTED') "
+        "WHERE order_row.order_ref = ?",
+        (facts.order_ref,),
+    ).fetchone()
+    if (
+        manual_order is None
+        or manual_order["kind"] != "MANUAL_ORDER"
+        or manual_order["state"] in {"succeeded", "failed", "rejected"}
+        or (manual_order["broker_state"] or "").lower() != "filled"
+    ):
+        return
+    exact_quantity, _ = reads.effective_exact_fill_totals_for_order(conn, facts.order_ref)
+    if abs(exact_quantity - float(manual_order["requested_quantity"])) > FILL_QTY_EPSILON:
+        return
+    completion_payload = dict(payload)
+    completion_payload.update(
+        command_id=manual_order["command_id"],
+        effect_operation_id=manual_order["effect_operation_id"],
+        order_ref=facts.order_ref,
+        transition_kind="MANUAL_ORDER_FILLED",
+        operation_state="succeeded",
+        summary_code="MANUAL_ORDER_FILLED",
+    )
+    _fold_manual_order_filled(conn, completion_payload)
 
 
 def _fold_execution_corrected(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
@@ -974,9 +1007,11 @@ def _fold_execution_corrected(conn: sqlite3.Connection, payload: dict[str, Any])
         "FROM fills f JOIN orders o ON o.order_ref = f.order_ref "
         "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
         "LEFT JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id "
-        "LEFT JOIN custody_transitions manual_acceptance "
-        "ON manual_acceptance.effect_operation_id = e.effect_operation_id "
-        "AND manual_acceptance.transition_kind = 'MANUAL_ORDER_ACCEPTED' "
+        "LEFT JOIN custody_transitions manual_acceptance ON manual_acceptance.sequence = ("
+        "SELECT MIN(acceptance.sequence) FROM custody_transitions acceptance "
+        "WHERE acceptance.order_ref = o.order_ref "
+        "AND acceptance.effect_operation_id = e.effect_operation_id "
+        "AND acceptance.transition_kind = 'MANUAL_ORDER_ACCEPTED') "
         "WHERE f.execution_id = ? "
         "AND NOT EXISTS (SELECT 1 FROM fills successor "
         "WHERE successor.superseded_execution_ref = f.execution_id)",

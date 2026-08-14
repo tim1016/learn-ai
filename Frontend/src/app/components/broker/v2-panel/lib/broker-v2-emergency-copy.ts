@@ -146,6 +146,11 @@ export const BROKER_V2_EMERGENCY_COPY: Readonly<Record<string, VocabularyCopy>> 
     label: 'Reconcile now',
     explanation: 'Run a reconciliation sweep against the broker immediately.',
   },
+  resolve_execution_coverage: {
+    label: 'Resolve execution coverage',
+    explanation:
+      'Replace one matching cumulative recovery record with verified exact execution evidence.',
+  },
   prepare_safe_flatten: {
     label: 'Prepare safe flatten',
     explanation: 'Prepare a fresh reduction plan without submitting an order.',

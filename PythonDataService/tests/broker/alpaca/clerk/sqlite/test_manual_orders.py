@@ -5,15 +5,18 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from conftest import _clock_at
 
 from app.broker.alpaca.clerk.sqlite.custody_subjects import manual_operator_subject_id
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
     MarketMark,
     SqliteEconomicProjectionReader,
 )
+from app.broker.alpaca.clerk.sqlite.execution_coverage import FILL_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExecutionCorrectedFacts,
     ExecutionSliceFilledFacts,
+    UncertaintyRaisedFacts,
 )
 from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError
 from app.broker.alpaca.clerk.sqlite.manual_orders import (
@@ -21,10 +24,14 @@ from app.broker.alpaca.clerk.sqlite.manual_orders import (
     submit_manual_order,
 )
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
+from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+    ExecutionCoverageConflictCause,
+)
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
-from conftest import _clock_at
 
 ACCOUNT_ID = "PA-TEST"
 OPERATOR_ID = "operator"
@@ -35,9 +42,18 @@ LEG_ID = "09d6d63e-6375-4e6d-8d20-3b1bf70c2465"
 class FakeTrade:
     broker_id = "alpaca"
 
-    def __init__(self, *, repo: ClerkSqliteRepository, unavailable: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        repo: ClerkSqliteRepository,
+        unavailable: bool = False,
+        unexpected: bool = False,
+        mismatched_client_order_id: bool = False,
+    ) -> None:
         self.repo = repo
         self.unavailable = unavailable
+        self.unexpected = unexpected
+        self.mismatched_client_order_id = mismatched_client_order_id
         self.submit_calls: list[str] = []
         self.order_was_durable_at_submit = False
 
@@ -51,10 +67,12 @@ class FakeTrade:
         )
         if self.unavailable:
             raise BrokerUnavailable("response lost", broker="alpaca")
+        if self.unexpected:
+            raise RuntimeError("malformed broker response")
         return BrokerOrder(
             broker="alpaca",
             order_id="broker-order-1",
-            client_order_id=client_order_id,
+            client_order_id=("wrong-client-order-id" if self.mismatched_client_order_id else client_order_id),
             symbol=leg.symbol,
             asset_class="us_equity",
             side=leg.side.value,
@@ -101,6 +119,33 @@ def repo(tmp_path: Path):
 
 def market_buy(quantity: float = 1) -> BrokerOrderLeg:
     return BrokerOrderLeg(symbol="SPY", side="buy", quantity=quantity)
+
+
+def filled_order(order_ref: str) -> BrokerOrder:
+    return BrokerOrder(
+        broker="alpaca",
+        order_id="broker-order-1",
+        client_order_id=order_ref,
+        symbol="SPY",
+        asset_class="us_equity",
+        side="buy",
+        order_type="market",
+        time_in_force="day",
+        quantity=1,
+        filled_quantity=1,
+        limit_price=None,
+        stop_price=None,
+        filled_avg_price=500,
+        status="filled",
+        submitted_at_ms=1_700_000_000_100,
+        created_at_ms=1_700_000_000_100,
+        updated_at_ms=1_700_000_000_300,
+        filled_at_ms=1_700_000_000_300,
+        canceled_at_ms=None,
+        expired_at_ms=None,
+        events=[],
+        observed_at_ms=1_700_000_000_300,
+    )
 
 
 @pytest.mark.asyncio
@@ -198,6 +243,206 @@ async def test_lost_manual_submit_response_remains_queryable_unknown(
     )
     assert uncertainty[0]["scope"] == "CUSTODY_SUBJECT"
     assert uncertainty[0]["strategy_instance_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_manual_submit_unexpected_broker_error_is_durable_uncertain_then_reraised(
+    repo: ClerkSqliteRepository,
+) -> None:
+    trade = FakeTrade(repo=repo, unexpected=True)
+
+    with pytest.raises(RuntimeError, match="malformed broker response"):
+        await submit_manual_order(
+            repo,
+            account_id=ACCOUNT_ID,
+            operator_id=OPERATOR_ID,
+            ticket_id=TICKET_ID,
+            leg_id=LEG_ID,
+            leg=market_buy(),
+            trade=trade,
+        )
+
+    ticket = repo.manual_order_ticket(TICKET_ID)
+    assert ticket is not None
+    assert ticket.state == "PAUSED_UNKNOWN"
+    assert ticket.legs[0].state == "UNKNOWN"
+    assert trade.submit_calls == [ticket.legs[0].order_ref]
+
+
+@pytest.mark.asyncio
+async def test_manual_submit_mismatched_client_order_id_is_durable_uncertain(
+    repo: ClerkSqliteRepository,
+) -> None:
+    submitted = await submit_manual_order(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id=OPERATOR_ID,
+        ticket_id=TICKET_ID,
+        leg_id=LEG_ID,
+        leg=market_buy(),
+        trade=FakeTrade(repo=repo, mismatched_client_order_id=True),
+    )
+
+    assert submitted.command.state == "unknown"
+    assert submitted.ticket.state == "PAUSED_UNKNOWN"
+    assert submitted.leg.state == "UNKNOWN"
+
+
+@pytest.mark.asyncio
+async def test_manual_order_exact_coverage_tolerance_completes_the_ticket(
+    repo: ClerkSqliteRepository,
+) -> None:
+    submitted = await submit_manual_order(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id=OPERATOR_ID,
+        ticket_id=TICKET_ID,
+        leg_id=LEG_ID,
+        leg=market_buy(),
+        trade=FakeTrade(repo=repo),
+    )
+    assert submitted.leg.effect_operation_id is not None
+    assert submitted.leg.order_ref is not None
+    exact = ExecutionSliceFilledFacts(
+        execution_id="manual-execution-complete",
+        symbol="SPY",
+        side="BUY",
+        slice_qty=1 + FILL_QTY_EPSILON / 2,
+        slice_price=500,
+        fee=None,
+        fee_fidelity="not_reported",
+        evidence_source="websocket",
+        source_event_at_ms=1_700_000_000_200,
+    )
+    repo.append_transition(
+        TransitionInput(
+            command_id=submitted.command.command_id,
+            effect_operation_id=submitted.leg.effect_operation_id,
+            order_ref=submitted.leg.order_ref,
+            transition_kind="EXECUTION_SLICE_FILLED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="in_progress",
+            source_event_at_ms=exact.source_event_at_ms,
+            clerk_observed_at_ms=repo.clock(),
+            summary_code="EXECUTION_SLICE_FILLED",
+            facts_json=exact.to_facts_json(),
+        )
+    )
+    fold_order_evidence(
+        repo,
+        effect_operation_id=submitted.leg.effect_operation_id,
+        order=filled_order(submitted.leg.order_ref),
+    )
+
+    ticket = repo.manual_order_ticket(TICKET_ID)
+    assert ticket is not None
+    assert ticket.state == "COMPLETED"
+    assert ticket.legs[0].state == "SUCCEEDED"
+    assert repo.effect_operation(submitted.leg.effect_operation_id).state == "succeeded"  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_coverage_resolution_completes_a_filled_manual_ticket(
+    repo: ClerkSqliteRepository,
+) -> None:
+    submitted = await submit_manual_order(
+        repo,
+        account_id=ACCOUNT_ID,
+        operator_id=OPERATOR_ID,
+        ticket_id=TICKET_ID,
+        leg_id=LEG_ID,
+        leg=market_buy(),
+        trade=FakeTrade(repo=repo),
+    )
+    assert submitted.leg.effect_operation_id is not None
+    assert submitted.leg.order_ref is not None
+    fold_order_evidence(
+        repo,
+        effect_operation_id=submitted.leg.effect_operation_id,
+        order=filled_order(submitted.leg.order_ref),
+    )
+    exact = ExecutionSliceFilledFacts(
+        execution_id="manual-coverage-resolution-execution",
+        symbol="SPY",
+        side="BUY",
+        slice_qty=1,
+        slice_price=500,
+        fee=None,
+        fee_fidelity="not_reported",
+        evidence_source="websocket",
+        source_event_at_ms=1_700_000_000_400,
+    )
+
+    def exact_transition() -> TransitionInput:
+        return TransitionInput(
+            command_id=submitted.command.command_id,
+            effect_operation_id=submitted.leg.effect_operation_id,
+            order_ref=submitted.leg.order_ref,
+            transition_kind="EXECUTION_SLICE_FILLED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="in_progress",
+            source_event_at_ms=exact.source_event_at_ms,
+            clerk_observed_at_ms=repo.clock(),
+            summary_code="EXECUTION_SLICE_FILLED",
+            facts_json=exact.to_facts_json(),
+        )
+
+    def coverage_conflict() -> TransitionInput:
+        conflict = UncertaintyRaisedFacts(
+            severity="error",
+            blocks_new_exposure=True,
+            allows_reduction=False,
+            reason_code=EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+            headline="Exact execution overlaps aggregate recovery evidence",
+            explanation="The evidence must be reconciled before new exposure can resume.",
+            operator_impact="New exposure is blocked until coverage is reconciled.",
+            next_step="Resolve the exact execution coverage.",
+            evidence_refs=[exact.execution_id],
+            cause_facts=ExecutionCoverageConflictCause(
+                order_ref=submitted.leg.order_ref,
+                execution_id=exact.execution_id,
+            ).to_mapping(),
+        )
+        return TransitionInput(
+            command_id=submitted.command.command_id,
+            effect_operation_id=submitted.leg.effect_operation_id,
+            order_ref=submitted.leg.order_ref,
+            transition_kind="UNCERTAINTY_RAISED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="succeeded",
+            clerk_observed_at_ms=repo.clock(),
+            summary_code=EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+            facts_json=conflict.to_facts_json(),
+        )
+
+    assert repo.append_execution_slice_if_absent(
+        execution_id=exact.execution_id,
+        order_ref=submitted.leg.order_ref,
+        build_transition=exact_transition,
+        build_coverage_conflict=coverage_conflict,
+    ) == "coverage_conflict_raised"
+    uncertainty = repo.active_uncertainties_for_admission(
+        subject_id=manual_operator_subject_id(OPERATOR_ID),
+    )
+    assert len(uncertainty) == 1
+    meta = repo.control_meta_snapshot()
+
+    receipt = repo.resolve_execution_coverage_conflict(
+        uncertainty_id=uncertainty[0]["uncertainty_id"],
+        expected_authority_generation=meta.authority_generation,
+        expected_db_identity_token=meta.db_identity_token,
+        expected_control_revision=meta.control_revision,
+    )
+
+    assert receipt.applied is True
+    ticket = repo.manual_order_ticket(TICKET_ID)
+    assert ticket is not None
+    assert ticket.state == "COMPLETED"
+    assert ticket.legs[0].state == "SUCCEEDED"
+    assert repo.effect_operation(submitted.leg.effect_operation_id).state == "succeeded"  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio

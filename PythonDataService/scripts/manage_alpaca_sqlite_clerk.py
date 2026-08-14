@@ -166,6 +166,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.process_stop_evidence,
                 args.account_id,
             ),
+            max_process_stop_proof_age_ms=args.max_process_stop_evidence_age_ms,
         )
     elif args.operation == "rollback-v9":
         result = rollback_v9_upgrade_offline(
@@ -174,6 +175,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.process_stop_evidence,
                 args.account_id,
             ),
+            max_process_stop_proof_age_ms=args.max_process_stop_evidence_age_ms,
         )
     elif args.operation == "reset":
         result = reset_authority(

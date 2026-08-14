@@ -456,6 +456,28 @@ def test_manual_subject_and_ticket_facts_are_replayable_without_a_bot_or_run(tmp
             ).to_facts_json(),
         )
     )
+    # A replay of the exact reservation is a no-op. This asserts the persisted
+    # SQLite rows are compared by value, not by their sqlite3.Row wrapper.
+    repo.append_transition(
+        TransitionInput(
+            transition_kind="MANUAL_TICKET_RESERVED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="reserved",
+            clerk_observed_at_ms=clock(),
+            summary_code="MANUAL_TICKET_RESERVED",
+            facts_json=ManualTicketReservedFacts(
+                ticket_id="ticket-a",
+                subject_id=subject_id,
+                operator_id="operator-a",
+                instruction_hash="request-hash-a",
+                legs=(
+                    ManualTicketLegReservedFacts("leg-a", "leg-hash-a"),
+                    ManualTicketLegReservedFacts("leg-b", "leg-hash-b"),
+                ),
+            ).to_facts_json(),
+        )
+    )
     with pytest.raises(ValueError, match="manual ticket legs conflict"):
         repo.append_transition(
             TransitionInput(

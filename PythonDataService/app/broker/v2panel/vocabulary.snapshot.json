@@ -41,6 +41,7 @@
     "reconcile_now",
     "record_inventory_baseline",
     "reset_authority",
+    "resolve_execution_coverage",
     "resume",
     "retire",
     "satisfied",
@@ -197,6 +198,10 @@
     "reset_authority": {
       "label": "Reset authority",
       "explanation": "Create a new authority generation only after fresh flat and order-free proof."
+    },
+    "resolve_execution_coverage": {
+      "label": "Resolve execution coverage",
+      "explanation": "Replace one matching cumulative recovery record with verified exact execution evidence."
     },
     "resume": {
       "label": "Resume",

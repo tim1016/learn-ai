@@ -259,7 +259,7 @@ class AlpacaTradingClient:
         self,
         *,
         status: str | None = None,
-        limit: int,
+        limit: int | None,
     ) -> list[dict[str, Any]]:
         kwargs: dict[str, Any] = {}
         if status is not None:
@@ -268,9 +268,10 @@ class AlpacaTradingClient:
         payloads = await self._call(
             lambda c: c.get_all_assets(filter=request), describe="assets"
         )
-        # Alpaca's assets endpoint has no limit/pagination parameter. Cap at
-        # the SDK boundary so the adapter never maps an unbounded response.
-        return payloads[:limit]
+        # Alpaca's assets endpoint has no limit/pagination parameter. Most
+        # read screens request a bounded prefix, while eligibility checks pass
+        # ``None`` to inspect the complete authoritative asset set.
+        return payloads if limit is None else payloads[:limit]
 
     async def get_clock(self) -> dict[str, Any]:
         return await self._call(lambda c: c.get_clock(), describe="clock")

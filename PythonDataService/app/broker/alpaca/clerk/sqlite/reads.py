@@ -520,15 +520,41 @@ def effective_execution_slice(conn: sqlite3.Connection, execution_id: str) -> di
         "FROM fills f JOIN orders o ON o.order_ref = f.order_ref "
         "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
         "LEFT JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id "
-        "LEFT JOIN custody_transitions manual_acceptance "
-        "ON manual_acceptance.effect_operation_id = e.effect_operation_id "
-        "AND manual_acceptance.transition_kind = 'MANUAL_ORDER_ACCEPTED' "
+        "LEFT JOIN custody_transitions manual_acceptance ON manual_acceptance.sequence = ("
+        "SELECT MIN(acceptance.sequence) FROM custody_transitions acceptance "
+        "WHERE acceptance.order_ref = o.order_ref "
+        "AND acceptance.effect_operation_id = e.effect_operation_id "
+        "AND acceptance.transition_kind = 'MANUAL_ORDER_ACCEPTED') "
         "WHERE f.execution_id = ? "
         "AND NOT EXISTS (SELECT 1 FROM fills successor "
         "WHERE successor.superseded_execution_ref = f.execution_id)",
         (execution_id,),
     ).fetchone()
     return dict(row) if row is not None else None
+
+
+def _effective_fill_totals_for_order(
+    conn: sqlite3.Connection,
+    order_ref: str,
+    *,
+    evidence_sources: tuple[str, ...] | None = None,
+) -> tuple[float, float]:
+    """Canonical effective-fill aggregation with an optional evidence filter."""
+    source_predicate = ""
+    parameters: tuple[object, ...] = (order_ref,)
+    if evidence_sources is not None:
+        placeholders = ", ".join("?" for _ in evidence_sources)
+        source_predicate = f"AND f.evidence_source IN ({placeholders}) "
+        parameters += evidence_sources
+    row = conn.execute(
+        "SELECT COALESCE(SUM(f.qty), 0) AS qty, COALESCE(SUM(f.qty * f.price), 0) AS cost "
+        "FROM fills f WHERE f.order_ref = ? "
+        + source_predicate
+        + "AND NOT EXISTS (SELECT 1 FROM fills successor "
+        "WHERE successor.superseded_execution_ref = f.execution_id)",
+        parameters,
+    ).fetchone()
+    return float(row["qty"]), float(row["cost"])
 
 
 def effective_fill_totals_for_order(conn: sqlite3.Connection, order_ref: str) -> tuple[float, float]:
@@ -540,14 +566,7 @@ def effective_fill_totals_for_order(conn: sqlite3.Connection, order_ref: str) ->
     Canonical implementation: this query, reused by cumulative recovery.
     Validated against: ``test_cumulative_recovery_fill_is_explicitly_tagged``.
     """
-    row = conn.execute(
-        "SELECT COALESCE(SUM(f.qty), 0) AS qty, COALESCE(SUM(f.qty * f.price), 0) AS cost "
-        "FROM fills f WHERE f.order_ref = ? "
-        "AND NOT EXISTS (SELECT 1 FROM fills successor "
-        "WHERE successor.superseded_execution_ref = f.execution_id)",
-        (order_ref,),
-    ).fetchone()
-    return float(row["qty"]), float(row["cost"])
+    return _effective_fill_totals_for_order(conn, order_ref)
 
 
 def effective_exact_fill_totals_for_order(conn: sqlite3.Connection, order_ref: str) -> tuple[float, float]:
@@ -557,15 +576,11 @@ def effective_exact_fill_totals_for_order(conn: sqlite3.Connection, order_ref: s
     exposure and an acknowledgement, but only a broker-issued execution ID
     may complete a manual ticket.
     """
-    row = conn.execute(
-        "SELECT COALESCE(SUM(f.qty), 0) AS qty, COALESCE(SUM(f.qty * f.price), 0) AS cost "
-        "FROM fills f WHERE f.order_ref = ? "
-        "AND f.evidence_source IN ('websocket', 'activity_recovery') "
-        "AND NOT EXISTS (SELECT 1 FROM fills successor "
-        "WHERE successor.superseded_execution_ref = f.execution_id)",
-        (order_ref,),
-    ).fetchone()
-    return float(row["qty"]), float(row["cost"])
+    return _effective_fill_totals_for_order(
+        conn,
+        order_ref,
+        evidence_sources=("websocket", "activity_recovery"),
+    )
 
 
 def uncertain_orders(conn: sqlite3.Connection) -> list[OrderResource]:

@@ -913,8 +913,13 @@ class SqliteEconomicProjectionReader:
                 JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id
                 LEFT JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id
                 LEFT JOIN custody_transitions manual_acceptance
-                    ON manual_acceptance.effect_operation_id = e.effect_operation_id
-                    AND manual_acceptance.transition_kind = 'MANUAL_ORDER_ACCEPTED'
+                    ON manual_acceptance.sequence = (
+                        SELECT MIN(acceptance.sequence)
+                        FROM custody_transitions acceptance
+                        WHERE acceptance.order_ref = o.order_ref
+                          AND acceptance.effect_operation_id = e.effect_operation_id
+                          AND acceptance.transition_kind = 'MANUAL_ORDER_ACCEPTED'
+                    )
                 JOIN roots ON roots.effective_fill_id = f.fill_id
                 WHERE NOT EXISTS (
                     SELECT 1 FROM fills successor
@@ -984,8 +989,13 @@ class SqliteEconomicProjectionReader:
             JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id
             LEFT JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id
             LEFT JOIN custody_transitions manual_acceptance
-                ON manual_acceptance.effect_operation_id = e.effect_operation_id
-                AND manual_acceptance.transition_kind = 'MANUAL_ORDER_ACCEPTED'
+                ON manual_acceptance.sequence = (
+                    SELECT MIN(acceptance.sequence)
+                    FROM custody_transitions acceptance
+                    WHERE acceptance.order_ref = o.order_ref
+                      AND acceptance.effect_operation_id = e.effect_operation_id
+                      AND acceptance.transition_kind = 'MANUAL_ORDER_ACCEPTED'
+                )
             LEFT JOIN roots ON roots.effective_fill_id = f.fill_id
             WHERE {' AND '.join(where)}
             ORDER BY f.recorded_at_ms DESC, COALESCE(f.execution_id, f.fill_id) DESC
@@ -1028,8 +1038,13 @@ class SqliteEconomicProjectionReader:
                 JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id
                 LEFT JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id
                 LEFT JOIN custody_transitions manual_acceptance
-                    ON manual_acceptance.effect_operation_id = e.effect_operation_id
-                    AND manual_acceptance.transition_kind = 'MANUAL_ORDER_ACCEPTED'
+                    ON manual_acceptance.sequence = (
+                        SELECT MIN(acceptance.sequence)
+                        FROM custody_transitions acceptance
+                        WHERE acceptance.order_ref = o.order_ref
+                          AND acceptance.effect_operation_id = e.effect_operation_id
+                          AND acceptance.transition_kind = 'MANUAL_ORDER_ACCEPTED'
+                    )
                 JOIN roots ON roots.effective_fill_id = f.fill_id
                 WHERE f.order_ref IN ({placeholders})
                   AND NOT EXISTS (
