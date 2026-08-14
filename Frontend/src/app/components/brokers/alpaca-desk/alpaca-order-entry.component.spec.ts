@@ -108,10 +108,10 @@ describe('AlpacaOrderEntryComponent', () => {
     expect(await screen.findByText('manual/desk/v1:abc123')).toBeTruthy();
   });
 
-  it('uses the SQLite ticket path for one BUY market DAY leg without a browser operator', async () => {
+  it('uses the SQLite ticket path for one market DAY leg without a browser operator', async () => {
     const submitOrder = vi.fn();
     const previewSqliteManualOrder = vi.fn().mockResolvedValue({
-      capability: { available: true, unavailable: null, supported_order_shape: 'BUY market DAY equity, one leg' },
+      capability: { available: true, unavailable: null, supported_order_shape: 'BUY or SELL market DAY equity, one leg' },
       preview_token: 'a'.repeat(64),
       authority_generation: 1,
       db_identity_token: 'db-token',
@@ -132,6 +132,7 @@ describe('AlpacaOrderEntryComponent', () => {
           command: { command_id: 'cmd', state: 'in_progress', action: 'SUBMIT_MANUAL_ORDER', receipt_id: null },
           effect: { effect_operation_id: 'effect', state: 'in_progress', kind: 'MANUAL_ORDER', terminal_receipt_id: null },
           order: { order_ref: 'manual/operator/v1:abc', client_order_id: 'manual/operator/v1:abc', broker_order_id: 'broker', broker_state: 'accepted' },
+          cancellation: null,
         },
       ],
     });
@@ -144,7 +145,7 @@ describe('AlpacaOrderEntryComponent', () => {
         manualCapability: {
           available: true,
           unavailable: null,
-          supported_order_shape: 'BUY market DAY equity, one leg',
+          supported_order_shape: 'BUY or SELL market DAY equity, one leg',
         },
       },
       providers: [{
@@ -160,8 +161,7 @@ describe('AlpacaOrderEntryComponent', () => {
 
     await fillFirstLeg('spy', '2');
     expect(screen.queryByRole('button', { name: /Add another/i })).toBeNull();
-    expect(screen.queryByLabelText('Leg 1 side')).toBeNull();
-    expect(screen.getByText('Buy')).toBeTruthy();
+    expect(screen.getByLabelText('Leg 1 side')).toBeTruthy();
     expect(screen.getAllByText('Market').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Day').length).toBeGreaterThan(0);
 
@@ -188,6 +188,103 @@ describe('AlpacaOrderEntryComponent', () => {
     expect(await screen.findByText(/Ticket.*is Active/)).toBeTruthy();
     expect(screen.getByText('manual/operator/v1:abc')).toBeTruthy();
     expect(screen.getByText('In Progress')).toBeTruthy();
+  });
+
+  it('lets a SQLite ticket preview a SELL reduction even when new exposure is unavailable', async () => {
+    const previewSqliteManualOrder = vi.fn().mockResolvedValue({
+      capability: { available: true, unavailable: null, supported_order_shape: 'BUY or SELL market DAY equity, one leg' },
+      preview_token: 'b'.repeat(64),
+      authority_generation: 1,
+      db_identity_token: 'db-token',
+      control_revision: 1,
+      subject_id: 'manual-operator:operator',
+    });
+    await render(AlpacaOrderEntryComponent, {
+      inputs: {
+        expectedAccountId: 'PA1',
+        sqliteManualAuthority: true,
+        manualTicketId: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
+        manualLegId: '09d6d63e-6375-4e6d-8d20-3b1bf70c2465',
+        manualCapability: {
+          available: false,
+          unavailable: { code: 'MANUAL_ORDER_OUTSTANDING', message: 'A manual order is unresolved.' },
+          supported_order_shape: 'BUY or SELL market DAY equity, one leg',
+        },
+      },
+      providers: [{
+        provide: BrokersService,
+        useValue: {
+          previewSqliteManualOrder,
+          getSqliteManualOrderTicket: vi.fn().mockRejectedValue(new HttpErrorResponse({ status: 404 })),
+        },
+      }],
+    });
+
+    await fillFirstLeg('spy', '2');
+    selectOption('Leg 1 side', 'sell');
+    fireEvent.click(screen.getByRole('button', { name: /Preview order/i }));
+
+    await vi.waitFor(() => expect(previewSqliteManualOrder).toHaveBeenCalledWith('PA1', {
+      ticket_id: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
+      leg: {
+        leg_id: '09d6d63e-6375-4e6d-8d20-3b1bf70c2465',
+        instruction: {
+          symbol: 'SPY', side: 'sell', quantity: 2, order_type: 'market', time_in_force: 'day',
+        },
+      },
+    }));
+  });
+
+  it('cancels the exact manual order once and renders durable unknown guidance', async () => {
+    const cancellation = {
+      order_ref: 'manual/operator/v1:abc',
+      cancel_request_id: '50ce3186-4d73-4d3a-bce9-d0f1768f0be5',
+      state: 'UNKNOWN',
+      message: 'The cancellation outcome is not yet known.',
+      impact: 'The Clerk will not create another cancellation while exact broker evidence is unresolved.',
+      next_action: 'Refresh this ticket while the Clerk reconciles the cancellation by its exact order reference.',
+      command: { command_id: 'cancel-command', state: 'unknown', action: 'CANCEL_MANUAL_ORDER', receipt_id: null },
+      effect: { effect_operation_id: 'cancel-effect', state: 'unknown', kind: 'CANCEL', terminal_receipt_id: null },
+    };
+    const ticket = {
+      ticket_id: '7de3a77c-b698-4e0d-a5d1-2f624574ed35',
+      subject_id: 'manual-operator:operator',
+      state: 'ACTIVE',
+      created_at_ms: 1,
+      updated_at_ms: 2,
+      legs: [{
+        leg_id: '09d6d63e-6375-4e6d-8d20-3b1bf70c2465',
+        instruction_hash: 'hash',
+        state: 'IN_PROGRESS',
+        command: { command_id: 'cmd', state: 'in_progress', action: 'SUBMIT_MANUAL_ORDER', receipt_id: null },
+        effect: { effect_operation_id: 'effect', state: 'in_progress', kind: 'MANUAL_ORDER', terminal_receipt_id: null },
+        order: { order_ref: 'manual/operator/v1:abc', client_order_id: 'manual/operator/v1:abc', broker_order_id: 'broker', broker_state: 'accepted' },
+        cancellation: null,
+      }],
+    };
+    const getSqliteManualOrderTicket = vi.fn().mockResolvedValue(ticket);
+    const cancelSqliteManualOrder = vi.fn().mockResolvedValue(cancellation);
+    await render(AlpacaOrderEntryComponent, {
+      inputs: {
+        expectedAccountId: 'PA1',
+        sqliteManualAuthority: true,
+        manualTicketId: ticket.ticket_id,
+      },
+      providers: [{
+        provide: BrokersService,
+        useValue: { cancelSqliteManualOrder, getSqliteManualOrderTicket },
+      }],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /Cancel order manual\/operator\/v1:abc/i }));
+
+    await vi.waitFor(() => expect(cancelSqliteManualOrder).toHaveBeenCalledWith(
+      'PA1',
+      'manual/operator/v1:abc',
+      { cancel_request_id: expect.any(String) },
+    ));
+    expect(await screen.findByText(/Refresh this ticket while the Clerk reconciles/i)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Cancel order/i })).toBeNull();
   });
 
   it('refreshes a nonterminal SQLite ticket from its durable status resource', async () => {

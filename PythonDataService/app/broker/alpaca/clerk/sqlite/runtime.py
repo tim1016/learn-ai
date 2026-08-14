@@ -38,6 +38,10 @@ from app.broker.alpaca.clerk.sqlite.exit_resolution import cancel_and_prove_owne
 from app.broker.alpaca.clerk.sqlite.facts import AccountHoldRaisedFacts, AccountHoldResolvedFacts
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
+from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import (
+    ManualOrderCancellationSubmission,
+    submit_manual_order_cancellation,
+)
 from app.broker.alpaca.clerk.sqlite.manual_order_runtime import (
     ManualOrderCapability,
     ManualOrderPreview,
@@ -233,6 +237,24 @@ class SqliteAlpacaClerkFacade:
     def manual_order_ticket(self, ticket_id: str) -> ManualOrderTicketResource | None:
         """Read one durable ticket without presenting repository mutation access."""
         return get_manual_ticket(self._repo, ticket_id)
+
+    async def cancel_manual_order(
+        self,
+        *,
+        operator_id: str,
+        order_ref: str,
+        cancel_request_id: str,
+    ) -> ManualOrderCancellationSubmission:
+        """Accept and reconcile one durable manual-order cancellation."""
+        async with self._intake:
+            return await submit_manual_order_cancellation(
+                self._repo,
+                account_id=self.account_id,
+                operator_id=operator_id,
+                order_ref=order_ref,
+                cancel_request_id=cancel_request_id,
+                trade=self._trade,
+            )
 
     async def register_strategy_run(self, binding: BrokerBotBinding) -> None:
         """Durably register immutable strategy + run before order capability."""

@@ -18,6 +18,8 @@ import type {
   OrderCancelResult,
   OrderSubmitResult,
   ManualOrderCapability,
+  ManualOrderCancelRequest,
+  ManualOrderCancellation,
   ManualOrderPreview,
   ManualOrderPreviewRequest,
   ManualOrderSubmitRequest,
@@ -204,6 +206,20 @@ export class BrokersService {
     return firstValueFrom(
       this.http.get<ManualOrderTicket>(
         `${this.base}/alpaca/accounts/${encodeURIComponent(accountId)}/manual-order-tickets/${encodeURIComponent(ticketId)}`,
+      ),
+    );
+  }
+
+  /** Cancel the exact SQLite-owned manual order reference once, durably. */
+  cancelSqliteManualOrder(
+    accountId: string,
+    orderRef: string,
+    request: ManualOrderCancelRequest,
+  ): Promise<ManualOrderCancellation> {
+    return firstValueFrom(
+      this.http.post<ManualOrderCancellation>(
+        `${this.base}/alpaca/accounts/${encodeURIComponent(accountId)}/manual-orders/${encodeURIComponent(orderRef)}/cancel`,
+        request,
       ),
     );
   }

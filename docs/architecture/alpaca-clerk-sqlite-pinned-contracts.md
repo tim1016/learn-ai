@@ -350,7 +350,7 @@ BEGIN
             AND (
                 (subject.kind = 'BOT' AND subject.strategy_instance_id = NEW.strategy_instance_id
                     AND NEW.kind != 'MANUAL_ORDER')
-                OR (subject.kind = 'MANUAL_OPERATOR' AND NEW.kind = 'MANUAL_ORDER'
+                OR (subject.kind = 'MANUAL_OPERATOR' AND NEW.kind IN ('MANUAL_ORDER', 'CANCEL')
                     AND NEW.strategy_instance_id IS NULL AND NEW.run_id IS NULL)
             )
     ) THEN RAISE(ABORT, 'effect operation must stay within its command custody subject') END;
@@ -369,7 +369,7 @@ BEGIN
             AND (
                 (subject.kind = 'BOT' AND subject.strategy_instance_id = NEW.strategy_instance_id
                     AND NEW.kind != 'MANUAL_ORDER')
-                OR (subject.kind = 'MANUAL_OPERATOR' AND NEW.kind = 'MANUAL_ORDER'
+                OR (subject.kind = 'MANUAL_OPERATOR' AND NEW.kind IN ('MANUAL_ORDER', 'CANCEL')
                     AND NEW.strategy_instance_id IS NULL AND NEW.run_id IS NULL)
             )
     ) THEN RAISE(ABORT, 'effect operation must stay within its command custody subject') END;
@@ -771,6 +771,54 @@ BEGIN
             AND ord.effect_operation_id = effect.effect_operation_id
             AND ord.role = 'MANUAL'
     ) THEN RAISE(ABORT, 'manual leg resources must be one chain in the ticket subject') END;
+END;
+
+CREATE TABLE manual_order_cancellations (
+    order_ref                 TEXT PRIMARY KEY REFERENCES orders(order_ref),
+    subject_id                TEXT NOT NULL REFERENCES custody_subjects(subject_id),
+    cancel_request_id         TEXT NOT NULL UNIQUE,
+    command_id                TEXT NOT NULL UNIQUE REFERENCES commands(command_id),
+    effect_operation_id       TEXT NOT NULL UNIQUE REFERENCES effect_operations(effect_operation_id),
+    state                     TEXT NOT NULL CHECK (state IN ('ACCEPTED','UNKNOWN','SUCCEEDED','FAILED')),
+    created_at_ms             INTEGER NOT NULL,
+    updated_at_ms             INTEGER NOT NULL
+);
+CREATE INDEX ix_manual_order_cancellations_effect
+    ON manual_order_cancellations(effect_operation_id);
+CREATE TRIGGER trg_manual_order_cancellation_identity_immutable
+BEFORE UPDATE OF order_ref, subject_id, cancel_request_id, command_id, effect_operation_id
+ON manual_order_cancellations
+BEGIN
+    SELECT RAISE(ABORT, 'manual_order_cancellations identity is immutable');
+END;
+CREATE TRIGGER trg_manual_order_cancellation_delete_forbidden
+BEFORE DELETE ON manual_order_cancellations
+BEGIN
+    SELECT RAISE(ABORT, 'manual_order_cancellations are append-only');
+END;
+CREATE TRIGGER trg_manual_order_cancellation_subject_compatible_insert
+BEFORE INSERT ON manual_order_cancellations
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1
+        FROM manual_order_legs leg
+        JOIN custody_subjects subject ON subject.subject_id = leg.subject_id
+        JOIN commands command ON command.command_id = NEW.command_id
+        JOIN effect_operations effect ON effect.effect_operation_id = NEW.effect_operation_id
+        WHERE leg.order_ref = NEW.order_ref
+            AND leg.subject_id = NEW.subject_id
+            AND subject.kind = 'MANUAL_OPERATOR'
+            AND command.subject_id = NEW.subject_id
+            AND command.kind = 'manual_order'
+            AND command.action = 'CANCEL_MANUAL_ORDER'
+            AND command.strategy_instance_id IS NULL
+            AND command.run_id IS NULL
+            AND effect.command_id = command.command_id
+            AND effect.subject_id = NEW.subject_id
+            AND effect.kind = 'CANCEL'
+            AND effect.strategy_instance_id IS NULL
+            AND effect.run_id IS NULL
+    ) THEN RAISE(ABORT, 'manual cancellation must own one manual ticket order') END;
 END;
 
 -- ============================================================

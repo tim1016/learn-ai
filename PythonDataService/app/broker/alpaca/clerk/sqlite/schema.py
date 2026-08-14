@@ -22,6 +22,7 @@ from app.broker.alpaca.clerk.sqlite.custody_schema_contract import (
     CUSTODY_SUBJECT_IDENTITY_DDL,
     EFFECT_SUBJECT_COMPATIBILITY_DDL,
     HOLD_SUBJECT_COMPATIBILITY_DDL,
+    MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_DDL,
     MANUAL_LEG_SUBJECT_COMPATIBILITY_DDL,
     MANUAL_TICKET_SUBJECT_COMPATIBILITY_DDL,
     POSITION_SUBJECT_COMPATIBILITY_DDL,
@@ -429,6 +430,20 @@ CREATE UNIQUE INDEX ux_manual_order_legs_effect
 CREATE UNIQUE INDEX ux_manual_order_legs_order
     ON manual_order_legs(order_ref) WHERE order_ref IS NOT NULL;
 """ + MANUAL_LEG_SUBJECT_COMPATIBILITY_DDL + """\
+
+CREATE TABLE manual_order_cancellations (
+    order_ref                 TEXT PRIMARY KEY REFERENCES orders(order_ref),
+    subject_id                TEXT NOT NULL REFERENCES custody_subjects(subject_id),
+    cancel_request_id         TEXT NOT NULL UNIQUE,
+    command_id                TEXT NOT NULL UNIQUE REFERENCES commands(command_id),
+    effect_operation_id       TEXT NOT NULL UNIQUE REFERENCES effect_operations(effect_operation_id),
+    state                     TEXT NOT NULL CHECK (state IN ('ACCEPTED','UNKNOWN','SUCCEEDED','FAILED')),
+    created_at_ms             INTEGER NOT NULL,
+    updated_at_ms             INTEGER NOT NULL
+);
+CREATE INDEX ix_manual_order_cancellations_effect
+    ON manual_order_cancellations(effect_operation_id);
+""" + MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_DDL + """\
 
 -- ============================================================
 -- reconciliations — reconciliation attempts and terminal receipts

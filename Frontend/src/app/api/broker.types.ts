@@ -1813,6 +1813,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/alpaca/accounts/{account_id}/manual-orders/{order_ref}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel Sqlite Manual Order
+         * @description Durably cancel one SQLite-owned manual order by Clerk reference only.
+         */
+        post: operations["cancel_sqlite_manual_order_api_brokers_alpaca_accounts__account_id__manual_orders__order_ref__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/account": {
         parameters: {
             query?: never;
@@ -17175,6 +17195,37 @@ export interface components {
             order_ref: string;
         };
         /**
+         * ManualOrderCancelRequest
+         * @description One stable browser-generated cancellation identity for a Clerk order ref.
+         */
+        ManualOrderCancelRequest: {
+            /**
+             * Cancel Request Id
+             * Format: uuid
+             */
+            cancel_request_id: string;
+        };
+        /**
+         * ManualOrderCancellationResponse
+         * @description Durable cancellation receipt; `UNKNOWN` never claims broker success.
+         */
+        ManualOrderCancellationResponse: {
+            /** Cancel Request Id */
+            cancel_request_id: string;
+            command: components["schemas"]["ManualOrderCommandResponse"];
+            effect: components["schemas"]["ManualOrderEffectResponse"];
+            /** Impact */
+            impact: string;
+            /** Message */
+            message: string;
+            /** Next Action */
+            next_action: string;
+            /** Order Ref */
+            order_ref: string;
+            /** State */
+            state: string;
+        };
+        /**
          * ManualOrderCapabilityResponse
          * @description The policy answer shown before an operator may create exposure.
          */
@@ -17183,7 +17234,7 @@ export interface components {
             available: boolean;
             /**
              * Supported Order Shape
-             * @default BUY market DAY equity, one leg
+             * @default BUY or SELL market DAY equity, one leg
              */
             supported_order_shape?: string;
             unavailable: components["schemas"]["ManualOrderUnavailableResponse"] | null;
@@ -17224,6 +17275,7 @@ export interface components {
         };
         /** ManualOrderLegResponse */
         ManualOrderLegResponse: {
+            cancellation: components["schemas"]["ManualOrderCancellationResponse"] | null;
             command: components["schemas"]["ManualOrderCommandResponse"] | null;
             effect: components["schemas"]["ManualOrderEffectResponse"] | null;
             /** Instruction Hash */
@@ -28023,6 +28075,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ManualOrderPreviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_sqlite_manual_order_api_brokers_alpaca_accounts__account_id__manual_orders__order_ref__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+                order_ref: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManualOrderCancelRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManualOrderCancellationResponse"];
                 };
             };
             /** @description Validation Error */

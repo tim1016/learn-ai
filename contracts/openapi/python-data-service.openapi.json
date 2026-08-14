@@ -25987,6 +25987,69 @@
         "title": "ManualOrderBrokerOrderResponse",
         "type": "object"
       },
+      "ManualOrderCancelRequest": {
+        "additionalProperties": false,
+        "description": "One stable browser-generated cancellation identity for a Clerk order ref.",
+        "properties": {
+          "cancel_request_id": {
+            "format": "uuid",
+            "title": "Cancel Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cancel_request_id"
+        ],
+        "title": "ManualOrderCancelRequest",
+        "type": "object"
+      },
+      "ManualOrderCancellationResponse": {
+        "description": "Durable cancellation receipt; `UNKNOWN` never claims broker success.",
+        "properties": {
+          "cancel_request_id": {
+            "title": "Cancel Request Id",
+            "type": "string"
+          },
+          "command": {
+            "$ref": "#/components/schemas/ManualOrderCommandResponse"
+          },
+          "effect": {
+            "$ref": "#/components/schemas/ManualOrderEffectResponse"
+          },
+          "impact": {
+            "title": "Impact",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "next_action": {
+            "title": "Next Action",
+            "type": "string"
+          },
+          "order_ref": {
+            "title": "Order Ref",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "order_ref",
+          "cancel_request_id",
+          "state",
+          "message",
+          "impact",
+          "next_action",
+          "command",
+          "effect"
+        ],
+        "title": "ManualOrderCancellationResponse",
+        "type": "object"
+      },
       "ManualOrderCapabilityResponse": {
         "description": "The policy answer shown before an operator may create exposure.",
         "properties": {
@@ -25995,7 +26058,7 @@
             "type": "boolean"
           },
           "supported_order_shape": {
-            "default": "BUY market DAY equity, one leg",
+            "default": "BUY or SELL market DAY equity, one leg",
             "title": "Supported Order Shape",
             "type": "string"
           },
@@ -26109,6 +26172,16 @@
       },
       "ManualOrderLegResponse": {
         "properties": {
+          "cancellation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ManualOrderCancellationResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "command": {
             "anyOf": [
               {
@@ -26158,7 +26231,8 @@
           "state",
           "command",
           "effect",
-          "order"
+          "order",
+          "cancellation"
         ],
         "title": "ManualOrderLegResponse",
         "type": "object"
@@ -49780,6 +49854,84 @@
           }
         },
         "summary": "Preview Sqlite Manual Order",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/alpaca/accounts/{account_id}/manual-orders/{order_ref}/cancel": {
+      "post": {
+        "description": "Durably cancel one SQLite-owned manual order by Clerk reference only.",
+        "operationId": "cancel_sqlite_manual_order_api_brokers_alpaca_accounts__account_id__manual_orders__order_ref__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "order_ref",
+            "required": true,
+            "schema": {
+              "title": "Order Ref",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualOrderCancelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManualOrderCancellationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Sqlite Manual Order",
         "tags": [
           "brokers-v2"
         ]

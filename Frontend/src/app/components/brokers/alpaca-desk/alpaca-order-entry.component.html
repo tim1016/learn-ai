@@ -4,7 +4,7 @@
       <strong>Order ticket</strong>
       <p>
         @if (manualMarketOnly()) {
-          This SQLite ticket supports one BUY market DAY equity leg. The server journals it before submission.
+          This SQLite ticket supports one BUY or SELL market DAY equity leg. The server journals it before submission.
         } @else {
           Each leg is journaled separately before submission.
         }
@@ -67,7 +67,7 @@
   }
 
   @if (manualMarketOnly()) {
-    @if (manualCapability()?.available === false) {
+    @if (manualCapability()?.available === false && legs()[0]?.side !== 'sell') {
       <p-message severity="warn">{{ manualCapability()?.unavailable?.message }}</p-message>
     }
     @if (manualTicket(); as ticket) {
@@ -92,6 +92,23 @@
               }
             }
           </dl>
+          @if (cancelableManualOrderRef(); as orderRef) {
+            <p-button
+              label="Cancel order"
+              icon="pi pi-times"
+              severity="danger"
+              size="small"
+              [disabled]="cancelling()"
+              (onClick)="cancelManualOrder()"
+              [ariaLabel]="'Cancel order ' + orderRef"
+            />
+          }
+          @if (displayedManualCancellation(); as cancellation) {
+            <p-message [severity]="cancellation.state === 'UNKNOWN' ? 'warn' : 'info'">
+              Cancellation <code>{{ cancellation.cancel_request_id }}</code> is {{ cancellation.state | receiptLabel }}.
+              {{ cancellation.message }} {{ cancellation.impact }} Next: {{ cancellation.next_action }}
+            </p-message>
+          }
         }
       </section>
     }

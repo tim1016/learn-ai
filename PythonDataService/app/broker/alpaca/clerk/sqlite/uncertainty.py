@@ -367,6 +367,16 @@ def decide_capability(
                 reason_code="RECONCILIATION_IN_PROGRESS",
                 why="Account reconciliation is proving fresh broker truth.",
             )
+        if repo.has_nonterminal_manual_order():
+            return CapabilityDecision(
+                allowed=False,
+                capability=capability,
+                reason_code="MANUAL_ORDER_OUTSTANDING",
+                why=(
+                    "A manual order still has a working or unknown broker outcome; "
+                    "new account exposure waits for exact resolution."
+                ),
+            )
         active_exit = (
             repo.active_exit_for_strategy(strategy_instance_id)
             if strategy_instance_id is not None
@@ -501,6 +511,36 @@ def require_manual_admission(repo: ClerkSqliteRepository, *, subject_id: str) ->
     )
 
 
+def require_manual_reduction(
+    repo: ClerkSqliteRepository,
+    *,
+    subject_id: str,
+    intent: ReductionIntent,
+) -> None:
+    """Authorize a manual sell only within its independently owned long custody."""
+    require_capability(
+        repo,
+        capability=Capability.REDUCE,
+        subject_id=subject_id,
+        reduction_intent=intent,
+    )
+    available_quantity = repo.manual_reduction_available_quantity(
+        subject_id=subject_id,
+        symbol=intent.symbol,
+    )
+    if intent.side.upper() != "SELL" or intent.quantity > available_quantity + REDUCTION_QTY_EPSILON:
+        decision = CapabilityDecision(
+            allowed=False,
+            capability=Capability.REDUCE,
+            reason_code="MANUAL_LONG_QUANTITY_UNAVAILABLE",
+            why=(
+                f"Only {available_quantity:g} {intent.symbol.upper()} is available from this manual "
+                "custody subject after pending manual reductions."
+            ),
+        )
+        raise AdmissionBlockedError(decision)
+
+
 __all__ = [
     "BROKER_SNAPSHOT_STALE_REASON_CODE",
     "DRIFT_REDUCTION_EVIDENCE_MAX_AGE_MS",
@@ -518,6 +558,7 @@ __all__ = [
     "require_admission",
     "require_capability",
     "require_manual_admission",
+    "require_manual_reduction",
     "resolve_exit_not_flat_uncertainty",
     "resolve_reconciliation_uncertainty",
 ]

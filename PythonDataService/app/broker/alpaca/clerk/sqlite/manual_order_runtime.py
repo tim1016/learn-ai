@@ -15,7 +15,12 @@ from app.broker.alpaca.clerk.sqlite.manual_orders import (
 )
 from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot, ManualOrderTicketResource
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError, require_manual_admission
+from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    AdmissionBlockedError,
+    ReductionIntent,
+    require_manual_admission,
+    require_manual_reduction,
+)
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerAccountSnapshot, BrokerOrderLeg, OrderSide, OrderType, TimeInForce
@@ -162,7 +167,7 @@ async def preview_manual_order(
             subject_id=None,
         )
     if (
-        leg.side is not OrderSide.BUY
+        leg.side not in {OrderSide.BUY, OrderSide.SELL}
         or leg.order_type is not OrderType.MARKET
         or leg.time_in_force is not TimeInForce.DAY
     ):
@@ -171,7 +176,7 @@ async def preview_manual_order(
                 False,
                 ManualOrderUnavailable(
                     "UNSUPPORTED_MANUAL_ORDER_SHAPE",
-                    "The manual SQLite tracer supports one BUY market DAY equity leg.",
+                    "The manual SQLite tracer supports one BUY or SELL market DAY equity leg.",
                 ),
             ),
             preview_token=None,
@@ -210,7 +215,14 @@ async def preview_manual_order(
         )
     subject_id = manual_operator_subject_id(operator_id)
     try:
-        require_manual_admission(repo, subject_id=subject_id)
+        if leg.side is OrderSide.BUY:
+            require_manual_admission(repo, subject_id=subject_id)
+        else:
+            require_manual_reduction(
+                repo,
+                subject_id=subject_id,
+                intent=ReductionIntent(symbol=leg.symbol, side=leg.side.value, quantity=leg.quantity),
+            )
     except AdmissionBlockedError as exc:
         return ManualOrderPreview(
             capability=ManualOrderCapability(
