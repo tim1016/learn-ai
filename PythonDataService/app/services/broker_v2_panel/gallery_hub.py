@@ -1,11 +1,19 @@
 """GalleryHub — snapshot composition for the broker-v2 bot gallery.
 
-Aggregates the running-bot catalog (``panel_data_source.get_catalog`` in
-production) and per-symbol live bars (``LIVE_BAR_AGGREGATOR`` in production)
-into one versioned ``GalleryLiveSnapshot`` for the gallery wall's REST
-bootstrap and SSE channel. Bar mapping reuses the existing live-pane
-conversion in ``chart_projection_service.aggregator_bars_to_chart_bars`` — no
-new bar→``ChartBar`` mapping is introduced here.
+Aggregates the bot catalog (``panel_data_source.get_catalog`` in production)
+and per-symbol live bars (``LIVE_BAR_AGGREGATOR`` in production) into one
+versioned ``GalleryLiveSnapshot`` for the gallery wall's REST bootstrap and
+SSE channel. The wall shows every **non-retired** bot — running and
+stopped/off-duty alike (bot-gallery-redesign spec §7.1, D3) — filtered by the
+closed-vocabulary phase (``BotCatalogView.phase == "RETIRED"``, mirroring
+``catalog_projection_service.status_label_for``; see ``_is_retired``).
+Retired bots never reach the snapshot or update. A stopped bot still needs
+today's bars to chart, so its symbol is subscribed/read exactly like a
+running one's — this can subscribe more symbols than the old running-only
+scope when a stopped bot holds an otherwise-unwatched symbol; accepted (spec
+§11 risk). Bar mapping reuses the existing live-pane conversion in
+``chart_projection_service.aggregator_bars_to_chart_bars`` — no new bar→
+``ChartBar`` mapping is introduced here.
 
 ``catalog_source`` and ``aggregator`` are constructor-injected so unit tests
 exercise this module against fakes instead of the production singletons;
@@ -46,12 +54,28 @@ from app.utils.timestamps import now_ms_utc
 _PROCESS_NONCE = uuid4().hex
 
 
-def running_symbols(catalog: list[BotCatalogView]) -> list[str]:
-    """Distinct symbols among running bots, in first-seen order."""
+def _is_retired(row: BotCatalogView) -> bool:
+    """True when the catalog row's closed-vocabulary phase is Retired.
+
+    Mirrors the predicate in
+    ``catalog_projection_service.status_label_for`` (``status.phase ==
+    "RETIRED"``) — the single source of truth for the phase→status-label
+    vocabulary. Retired bots are archived, off-wall by design (spec §11):
+    a Resume affordance on a retired tile would be a lie.
+    """
+    return getattr(row, "phase", "") == "RETIRED"
+
+
+def shown_symbols(catalog: list[BotCatalogView]) -> list[str]:
+    """Distinct symbols among shown (non-retired) bots, in first-seen order.
+
+    "Shown" includes both running and stopped/off-duty bots — a stopped bot
+    still needs today's bars to chart on the wall.
+    """
     seen: set[str] = set()
     out: list[str] = []
     for row in catalog:
-        if getattr(row, "running", False) and row.symbol not in seen:
+        if not _is_retired(row) and row.symbol not in seen:
             seen.add(row.symbol)
             out.append(row.symbol)
     return out
@@ -87,7 +111,7 @@ class GalleryBarAggregator(Protocol):
 
 
 class GalleryHub:
-    """Composes one versioned snapshot of the running bot gallery for one account."""
+    """Composes one versioned snapshot of the non-retired bot gallery for one account."""
 
     def __init__(
         self,
@@ -154,12 +178,13 @@ class GalleryHub:
             primary_action=self._primary_action(row),
         )
 
-    async def _fetch_running_and_bars(
+    async def _fetch_shown_and_bars(
         self, *, since_bar_ms: dict[str, int] | None
     ) -> tuple[list[BotCatalogView], list[GallerySymbolBars]]:
         """Shared core of ``build_snapshot``/``build_update``: fetch the catalog,
-        filter to running bots, and subscribe-then-read each running symbol's
-        bars exactly once (``running_symbols`` dedup).
+        filter out retired bots (every other bot — running or stopped — is
+        shown), and subscribe-then-read each shown symbol's bars exactly once
+        (``shown_symbols`` dedup).
 
         ``since_bar_ms`` is ``None`` for a full snapshot read; when provided,
         each symbol's bars are read with ``since_ms=since_bar_ms.get(symbol)``
@@ -170,9 +195,9 @@ class GalleryHub:
         even on a poll that saw no new bar for it.
         """
         catalog = await self._catalog_source.get_catalog(self._broker, self._account_id)
-        running = [row for row in catalog if getattr(row, "running", False)]
+        shown = [row for row in catalog if not _is_retired(row)]
         symbol_bars: list[GallerySymbolBars] = []
-        for symbol in running_symbols(catalog):
+        for symbol in shown_symbols(catalog):
             await self._aggregator.ensure_subscribed(symbol)
             since_ms = since_bar_ms.get(symbol) if since_bar_ms is not None else None
             raw = self._aggregator.snapshot(symbol, since_ms=since_ms)
@@ -180,21 +205,22 @@ class GalleryHub:
                 GallerySymbolBars(symbol=symbol, bars=aggregator_bars_to_chart_bars(raw))
             )
         self._latest_bar_end_ms.update(_latest_bar_end_ms(symbol_bars))
-        return running, symbol_bars
+        return shown, symbol_bars
 
     async def build_snapshot(self) -> GalleryLiveSnapshot:
-        """Build one versioned snapshot: running bots + deduped per-symbol bars.
+        """Build one versioned snapshot: every non-retired bot (running +
+        stopped/off-duty) + deduped per-symbol bars.
 
         ``markers`` is left empty — see module docstring.
         """
-        running, symbol_bars = await self._fetch_running_and_bars(since_bar_ms=None)
+        shown, symbol_bars = await self._fetch_shown_and_bars(since_bar_ms=None)
         self._version += 1
         return GalleryLiveSnapshot(
             stream_epoch=self._epoch,
             surface_version=self._version,
             as_of_ms=now_ms_utc(),
             resolution="1m",
-            bots=[self._project_bot(row) for row in running],
+            bots=[self._project_bot(row) for row in shown],
             symbols=symbol_bars,
             markers={},
         )
@@ -204,20 +230,25 @@ class GalleryHub:
     ) -> GalleryLiveUpdate:
         """Build one incremental update: new bars per symbol + bot deltas + removals.
 
-        Every running bot is re-projected into ``bots_delta`` (no dirty-tracking
-        yet). ``known_sids`` is the *caller's own* last-observed running
-        roster — each SSE stream tracks this itself (see the router's
+        Every shown (non-retired) bot is re-projected into ``bots_delta`` (no
+        dirty-tracking yet) — this includes a bot that stopped since the last
+        call, which re-projects with ``running=False`` (``_primary_action``
+        then derives Resume) rather than dropping it from the wall.
+        ``known_sids`` is the *caller's own* last-observed shown roster —
+        each SSE stream tracks this itself (see the router's
         ``_gallery_event_source``) rather than the hub holding one shared
         roster baseline. A single ``GalleryHub`` is cached per account and
         shared by every concurrent client (reconnects, multiple tabs); a
-        hub-wide baseline would let the first client's poll consume a
-        removal, leaving every other client's ``removed_sids`` empty and its
-        stopped tile stuck forever. ``removed_sids`` diffs ``known_sids``
-        against this call's running roster. ``markers_delta`` is left empty
-        — see module docstring.
+        hub-wide baseline would let the first client's poll consume a bot's
+        departure from the catalog, leaving every other client's
+        ``removed_sids`` empty for it. ``removed_sids`` diffs ``known_sids``
+        against this call's shown roster, so it fires only when a bot
+        actually leaves the catalog (retired or deleted) — never merely
+        because it stopped running. ``markers_delta`` is left empty — see
+        module docstring.
         """
-        running, symbol_bars = await self._fetch_running_and_bars(since_bar_ms=since_bar_ms)
-        current_sids = {row.strategy_instance_id for row in running}
+        shown, symbol_bars = await self._fetch_shown_and_bars(since_bar_ms=since_bar_ms)
+        current_sids = {row.strategy_instance_id for row in shown}
         removed_sids = sorted(known_sids - current_sids)
         self._version += 1
         return GalleryLiveUpdate(
@@ -225,6 +256,6 @@ class GalleryHub:
             as_of_ms=now_ms_utc(),
             symbols=symbol_bars,
             markers_delta={},
-            bots_delta=[self._project_bot(row, model=GalleryBotDelta) for row in running],
+            bots_delta=[self._project_bot(row, model=GalleryBotDelta) for row in shown],
             removed_sids=removed_sids,
         )
