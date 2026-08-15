@@ -547,7 +547,17 @@ def exact_replaces_cumulative(
     exact: ExecutionSliceFilledFacts,
     cumulative: CumulativeRecoveryFill,
 ) -> bool:
-    """Closed equality predicate shared by read, write, and fold paths."""
+    """Temporary S0 one-to-one mirror of the canonical set-proof predicate.
+
+    Formula: exact and cumulative sides/prices/quantities agree within the
+      S0 strict `FILL_QTY_EPSILON` boundary.
+    Reference: Project-authored S0 operator contract retained during the
+      execution-coverage migration in PRD #1543.
+    Canonical implementation: prove_execution_coverage_set in this file; this
+      S0 predicate remains only for the shipped operator flow.
+    Validated against: tests/broker/alpaca/clerk/sqlite/
+      test_execution_coverage_set_proof.py::test_s0_one_to_one_predicate_matches_canonical_set_proof_on_unambiguous_inputs.
+    """
     return (
         cumulative.side == exact.side
         and abs(cumulative.quantity - exact.slice_qty) < FILL_QTY_EPSILON

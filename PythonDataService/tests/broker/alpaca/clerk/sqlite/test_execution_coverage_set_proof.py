@@ -2,24 +2,32 @@
 
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     CumulativeCoverageObservation,
+    CumulativeRecoveryFill,
     ExactCoverageObservation,
     ExecutionCoverageIdentity,
     ExecutionCoverageSetCandidate,
     ExecutionCoverageSetProofRefusal,
     ExecutionCoverageSetProofRefusalReason,
     ExecutionCoverageSetProofSuccess,
+    exact_replaces_cumulative,
     prove_execution_coverage_set,
 )
+from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts
 
 EXPECTED_QTY_ATOL = 1e-9
 EXPECTED_PRICE_ATOL = 1e-9
+_GOLDEN_FIXTURE_DIRECTORY = (
+    Path(__file__).parents[4] / "fixtures/golden/clerk-execution-coverage-set-proof/one_to_one"
+)
 
 
 def _identity(**changes: object) -> ExecutionCoverageIdentity:
@@ -86,6 +94,46 @@ def _candidate(
     )
 
 
+def _golden_one_to_one_candidate() -> tuple[ExecutionCoverageSetCandidate, dict[str, object]]:
+    input_payload = json.loads((_GOLDEN_FIXTURE_DIRECTORY / "input.json").read_text(encoding="utf-8"))
+    expected_payload = json.loads((_GOLDEN_FIXTURE_DIRECTORY / "output.json").read_text(encoding="utf-8"))
+    identity = _identity(**input_payload["identity"])
+    cumulative = tuple(
+        _cumulative(
+            row["source_id"],
+            row["quantity"],
+            row["price"],
+            identity=identity,
+        )
+        for row in input_payload["cumulative_recovery"]
+    )
+    prior = tuple(
+        _exact(
+            row["source_id"],
+            row["quantity"],
+            row["price"],
+            identity=identity,
+            fee=row["fee"],
+        )
+        for row in input_payload["prior_quarantined_exact"]
+    )
+    incoming = input_payload["incoming_exact"]
+    return (
+        _candidate(
+            cumulative=cumulative,
+            prior=prior,
+            incoming=_exact(
+                incoming["source_id"],
+                incoming["quantity"],
+                incoming["price"],
+                identity=identity,
+                fee=incoming["fee"],
+            ),
+        ),
+        expected_payload,
+    )
+
+
 def _aggregate(observations: tuple[CumulativeCoverageObservation | ExactCoverageObservation, ...]) -> tuple[float, float, float]:
     """Encode the issue's fsum equations independently of the production proof."""
     ordered = tuple(sorted(observations, key=lambda item: item.source_id))
@@ -120,6 +168,97 @@ def test_prove_execution_coverage_set_accepts_one_exact_for_one_cumulative() -> 
     assert abs(result.exact.quantity - result.cumulative.quantity) < EXPECTED_QTY_ATOL
     assert abs(result.exact.gross_cost - result.cumulative.gross_cost) <= (
         max(result.exact.quantity, result.cumulative.quantity) * EXPECTED_PRICE_ATOL
+    )
+
+
+def test_prove_execution_coverage_set_matches_the_one_to_one_golden_fixture() -> None:
+    candidate, expected = _golden_one_to_one_candidate()
+
+    result = _assert_success(prove_execution_coverage_set(candidate))
+
+    tolerances = expected["tolerances"]
+    assert expected["accepted"] is True
+    for actual, expected_aggregate in (
+        (result.exact, expected["exact"]),
+        (result.cumulative, expected["cumulative"]),
+    ):
+        assert actual.quantity == pytest.approx(
+            expected_aggregate["quantity"],
+            abs=tolerances["quantity_atol"],
+            rel=tolerances["rtol"],
+        )
+        assert actual.gross_cost == pytest.approx(
+            expected_aggregate["gross_cost"],
+            abs=tolerances["gross_cost_atol"],
+            rel=tolerances["rtol"],
+        )
+        assert actual.vwap == pytest.approx(
+            expected_aggregate["vwap"],
+            abs=tolerances["price_atol"],
+            rel=tolerances["rtol"],
+        )
+    assert result.position_delta == pytest.approx(
+        expected["position_delta"],
+        abs=tolerances["quantity_atol"],
+        rel=tolerances["rtol"],
+    )
+    assert tuple(item.source_id for item in result.retained_exact_observations) == tuple(
+        expected["retained_exact_source_ids"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("exact_quantity", "exact_price", "cumulative_quantity", "cumulative_price", "cumulative_side"),
+    [
+        (2.5, 101.25, 2.5, 101.25, "BUY"),
+        (2.5, 101.25, 2.5, 101.250000002, "BUY"),
+        (2.5, 101.25, 2.500000002, 101.25, "BUY"),
+        (2.5, 101.25, 2.5, 101.25, "SELL"),
+    ],
+)
+def test_s0_one_to_one_predicate_matches_canonical_set_proof_on_unambiguous_inputs(
+    exact_quantity: float,
+    exact_price: float,
+    cumulative_quantity: float,
+    cumulative_price: float,
+    cumulative_side: str,
+) -> None:
+    exact = ExecutionSliceFilledFacts(
+        execution_id="execution-1",
+        symbol="SPY",
+        side="BUY",
+        slice_qty=exact_quantity,
+        slice_price=exact_price,
+        fee=None,
+        fee_fidelity="unavailable",
+        evidence_source="golden-fixture",
+        source_event_at_ms=1_723_748_800_000,
+    )
+    cumulative = CumulativeRecoveryFill(
+        fill_id="recovery-1",
+        order_ref="order-1",
+        quantity=cumulative_quantity,
+        price=cumulative_price,
+        side=cumulative_side,
+    )
+    cumulative_identity = _identity(side=cumulative_side)
+    candidate = _candidate(
+        cumulative=(
+            _cumulative(
+                "recovery-1",
+                cumulative_quantity,
+                cumulative_price,
+                identity=cumulative_identity,
+            ),
+        ),
+        incoming=_exact("execution-1", exact_quantity, exact_price),
+    )
+
+    canonical_result = prove_execution_coverage_set(candidate)
+
+    assert exact_replaces_cumulative(exact=exact, cumulative=cumulative) is isinstance(
+        canonical_result,
+        ExecutionCoverageSetProofSuccess,
     )
 
 

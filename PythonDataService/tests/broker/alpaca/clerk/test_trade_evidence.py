@@ -173,7 +173,7 @@ async def test_sqlite_activity_recovery_never_reads_or_writes_legacy_window(
     repo.close()
 
 
-async def test_sqlite_gap_reconciliation_uses_the_authority_facade(tmp_path: Path) -> None:
+async def test_reconcile_gap_uses_authority_facade(tmp_path: Path) -> None:
     class _Reconciler:
         def __init__(self) -> None:
             self.triggers: list[str] = []

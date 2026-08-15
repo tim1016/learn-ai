@@ -834,7 +834,7 @@ async def test_reconcile_now_runs_operator_pass(
 ) -> None:
     observed: dict[str, object] = {}
 
-    async def fake_reconcile(*, trigger):
+    async def fake_reconcile(*, trigger: str) -> AccountReconciliationResult:
         observed.update(trigger=trigger)
         return AccountReconciliationResult(
             verdict="position_drift",

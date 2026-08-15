@@ -1,0 +1,24 @@
+{
+  "identity": {
+    "account_id": "PA-TEST",
+    "authority_generation": 2,
+    "database_identity_token": "database-identity",
+    "order_ref": "order-1",
+    "symbol": "SPY",
+    "side": "BUY"
+  },
+  "cumulative_recovery": [
+    {
+      "source_id": "recovery-0001",
+      "quantity": 2.5,
+      "price": 101.25
+    }
+  ],
+  "prior_quarantined_exact": [],
+  "incoming_exact": {
+    "source_id": "execution-0001",
+    "quantity": 2.5,
+    "price": 101.25,
+    "fee": 0.125
+  }
+}
