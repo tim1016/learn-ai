@@ -15,6 +15,8 @@ import pytest
 
 from app.broker.alpaca.clerk.models import EffectPurpose
 from app.broker.alpaca.clerk.sqlite import reconcile as reconcile_module
+from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_ports
+from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
@@ -190,7 +192,14 @@ async def _open_qqq_runtime(tmp_path: Path) -> _QqqRuntime:
     """Build the real runtime composition shared by the incident scenarios."""
     repo = ClerkSqliteRepository.initialize(account_id="PA-QQQ", artifacts_root=tmp_path)
     broker = _ParkedQqqBroker()
-    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+    intake = ReentrantAsyncLock()
+    guarded_read, guarded_trade = guard_broker_ports(read=broker, trade=broker, intake=intake)
+    facade = SqliteAlpacaClerkFacade(
+        repo=repo,
+        read=guarded_read,
+        trade=guarded_trade,
+        intake=intake,
+    )
     sink = SqliteTradeUpdateEvidenceSink(repo=repo, intake=facade.intake, reconciler=facade)
     return _QqqRuntime(repo=repo, broker=broker, facade=facade, sink=sink)
 
