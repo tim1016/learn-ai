@@ -7,30 +7,6 @@ import { loadLayout } from '../lib/gallery-layout';
 import type { ChartBar, ChartFillMarker, GalleryBotView, GalleryLiveStatus } from '../lib/gallery.types';
 import { BotGalleryDockComponent } from './bot-gallery-dock.component';
 
-// Mounting `<app-bot-tile>` mounts lightweight-charts underneath — mock it
-// the same way `bot-tile.component.spec.ts` does; the dock's own behavior
-// (layout, reorder, pagination, filter, footer) doesn't touch the chart.
-vi.mock('lightweight-charts', () => {
-  const createMockSeries = () => ({
-    setData: vi.fn(),
-    applyOptions: vi.fn(),
-    priceScale: vi.fn().mockReturnValue({ applyOptions: vi.fn() }),
-  });
-  const createSeriesMarkers = vi.fn().mockReturnValue({ setMarkers: vi.fn() });
-  const createMockChart = () => ({
-    addSeries: vi.fn().mockReturnValue(createMockSeries()),
-    timeScale: vi.fn().mockReturnValue({ fitContent: vi.fn() }),
-    remove: vi.fn(),
-  });
-  return {
-    createChart: vi.fn().mockImplementation(() => createMockChart()),
-    createSeriesMarkers,
-    CandlestickSeries: 'CandlestickSeries',
-    HistogramSeries: 'HistogramSeries',
-    TickMarkType: { Year: 0, Month: 1, DayOfMonth: 2, Time: 3, TimeWithSeconds: 4 },
-  };
-});
-
 const ACCOUNT_ID = 'PA3';
 const BROKER = 'alpaca';
 

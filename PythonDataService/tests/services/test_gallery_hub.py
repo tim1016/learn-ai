@@ -57,12 +57,30 @@ class _FakeFillSource:
         return "", self.fills_by_sid.get(sid, ())
 
 
+def _status_label_for(*, phase: str, running: bool) -> str:
+    """Mirrors ``catalog_projection_service.status_label_for`` so these
+    fakes carry an accurate ``status_label`` — the field ``GalleryHub``
+    actually reads (``_is_retired``), not the raw ``phase``."""
+    if phase == "RETIRED":
+        return "Retired"
+    return "Working" if running else "Off duty"
+
+
 class _Cat:
     def __init__(self, sid: str, symbol: str, running: bool, *, phase: str = "ON_DUTY") -> None:
         self.strategy_instance_id = sid
         self.symbol = symbol
         self.running = running
         self.phase = phase
+
+    @property
+    def status_label(self) -> str:
+        # A property, not an init-time value: mirrors production, where a
+        # freshly-fetched catalog row's status_label is always computed from
+        # its current phase/running, never stale. Several tests mutate
+        # ``.phase``/``.running`` in place mid-test to simulate a poll
+        # observing a changed row — an init-time value would go stale there.
+        return _status_label_for(phase=self.phase, running=self.running)
 
 
 def test_shown_symbols_dedupes_across_running_and_stopped_bots() -> None:
@@ -108,6 +126,12 @@ class _Cat2:
         self.fills_today = fills_today
         self.needs_attention = needs_attention
         self.phase = phase
+
+    @property
+    def status_label(self) -> str:
+        # See ``_Cat.status_label`` for why this is a property, not an
+        # init-time value.
+        return _status_label_for(phase=self.phase, running=self.running)
 
 
 class _FakeCatalogSource:

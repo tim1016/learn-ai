@@ -18,11 +18,22 @@ from httpx import ASGITransport
 from app.config import settings
 from app.main import app
 from app.routers import broker_v2_gallery
+from app.services.broker_v2_panel import panel_chart_data_source
 from app.services.broker_v2_panel.gallery_hub import GalleryHub
+from app.services.broker_v2_panel.panel_data_source import PanelUnavailableError, UnknownBotError
 
 _BROKER = "alpaca"
 _ACCOUNT_ID = "PA3"
 _URL_PREFIX = f"/api/brokers/{_BROKER}/accounts/{_ACCOUNT_ID}/gallery"
+
+
+def _status_label_for(*, phase: str, running: bool) -> str:
+    """Mirrors ``catalog_projection_service.status_label_for`` so this fake
+    carries an accurate ``status_label`` — the field ``GalleryHub`` actually
+    reads (``_is_retired``), not the raw ``phase``."""
+    if phase == "RETIRED":
+        return "Retired"
+    return "Working" if running else "Off duty"
 
 
 class _Cat2:
@@ -50,6 +61,14 @@ class _Cat2:
         self.fills_today = fills_today
         self.needs_attention = needs_attention
         self.phase = phase
+
+    @property
+    def status_label(self) -> str:
+        # A property, not an init-time value: several tests mutate
+        # ``.phase``/``.running`` in place mid-test to simulate a poll
+        # observing a changed row, mirroring how a freshly-fetched
+        # production catalog row's status_label is always derived fresh.
+        return _status_label_for(phase=self.phase, running=self.running)
 
 
 class _FakeCatalogSource:
@@ -278,3 +297,28 @@ async def test_gallery_stream_matching_cursor_skips_reset() -> None:
 
     assert "event: reset" not in frame
     assert "event: snapshot" in frame
+
+
+@pytest.mark.parametrize("error", [PanelUnavailableError("clerk unavailable"), UnknownBotError("no such bot")])
+async def test_panel_chart_fill_source_degrades_to_empty_on_panel_error(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    """``_PanelChartFillSource`` exists specifically so one bot's unavailable
+    fill evidence never fails the whole gallery snapshot for every other bot
+    (its own docstring). Exercise the REAL adapter — not a fake that already
+    assumes the contract — against both exception types
+    ``panel_chart_data_source.resolve_symbol_and_fills`` can raise, and
+    assert it degrades to an empty result instead of propagating."""
+
+    async def _raise(*args: object, **kwargs: object) -> tuple[str, tuple]:
+        raise error
+
+    monkeypatch.setattr(panel_chart_data_source, "resolve_symbol_and_fills", _raise)
+    source = broker_v2_gallery._PanelChartFillSource()
+
+    symbol, fills = await source.resolve_symbol_and_fills(
+        _BROKER, _ACCOUNT_ID, "some-sid", now_ms=1_700_000_000_000
+    )
+
+    assert symbol == ""
+    assert fills == ()

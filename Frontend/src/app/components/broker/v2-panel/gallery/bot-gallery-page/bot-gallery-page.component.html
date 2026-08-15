@@ -15,8 +15,8 @@
     }
     @case ('empty') {
       <div class="gallery-page__empty" role="status">
-        <strong>No running bots</strong>
-        <span>Nothing is running for this account right now.</span>
+        <strong>No bots yet</strong>
+        <span>This account has no bots set up.</span>
         <a
           class="gallery-page__empty-link"
           [routerLink]="['/brokers', broker(), 'accounts', accountId(), 'bots']"

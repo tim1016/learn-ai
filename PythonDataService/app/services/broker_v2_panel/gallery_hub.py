@@ -5,8 +5,9 @@ and per-symbol live bars (``LIVE_BAR_AGGREGATOR`` in production) into one
 versioned ``GalleryLiveSnapshot`` for the gallery wall's REST bootstrap and
 SSE channel. The wall shows every **non-retired** bot — running and
 stopped/off-duty alike (bot-gallery-redesign spec §7.1, D3) — filtered by the
-closed-vocabulary phase (``BotCatalogView.phase == "RETIRED"``, mirroring
-``catalog_projection_service.status_label_for``; see ``_is_retired``).
+closed-vocabulary status label (``BotCatalogView.status_label == "Retired"``,
+the field ``catalog_projection_service.status_label_for`` already populates;
+see ``_is_retired``).
 Retired bots never reach the snapshot or update. A stopped bot still needs
 today's bars to chart, so its symbol is subscribed/read exactly like a
 running one's — this can subscribe more symbols than the old running-only
@@ -31,6 +32,8 @@ empty, matching this module's prior hard-coded behavior.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections.abc import Sequence
 from typing import Protocol
 from uuid import uuid4
@@ -52,6 +55,8 @@ from app.services.broker_v2_panel.chart_projection_service import (
 )
 from app.utils.timestamps import now_ms_utc
 
+logger = logging.getLogger(__name__)
+
 # Per-process nonce so a fresh hub after a data-plane restart never produces
 # an epoch byte-identical to the prior process's. Without this, a
 # reconnecting client's stale high cursor (e.g. version 300) would compare
@@ -64,15 +69,16 @@ _PROCESS_NONCE = uuid4().hex
 
 
 def _is_retired(row: BotCatalogView) -> bool:
-    """True when the catalog row's closed-vocabulary phase is Retired.
+    """True when the catalog row's closed status label is Retired.
 
-    Mirrors the predicate in
-    ``catalog_projection_service.status_label_for`` (``status.phase ==
-    "RETIRED"``) — the single source of truth for the phase→status-label
-    vocabulary. Retired bots are archived, off-wall by design (spec §11):
-    a Resume affordance on a retired tile would be a lie.
+    Reads the already-materialized ``status_label`` field — populated once by
+    the single source of truth for the phase→status-label vocabulary,
+    ``catalog_projection_service.status_label_for`` — rather than
+    re-deriving the phase comparison here, so this predicate can never drift
+    from the canonical mapping. Retired bots are archived, off-wall by design
+    (spec §11): a Resume affordance on a retired tile would be a lie.
     """
-    return getattr(row, "phase", "") == "RETIRED"
+    return getattr(row, "status_label", "") == "Retired"
 
 
 def shown_symbols(catalog: list[BotCatalogView]) -> list[str]:
@@ -265,16 +271,41 @@ class GalleryHub:
         today's window is omitted from the result entirely, mirroring how
         ``_latest_bar_end_ms`` omits a symbol with no new bars — never an
         empty list under the key.
+
+        Fanned out via ``asyncio.gather`` — this runs once per shown bot on
+        every ~1s SSE poll (``broker_v2_gallery._gallery_event_source``), so
+        a sequential per-bot await chain would scale poll latency linearly
+        with the account's bot count. Mirrors the same fan-out idiom
+        ``live_projection.py`` already uses for its per-hub refresh.
+        ``return_exceptions=True`` is a defensive backstop, not the expected
+        path: the production ``fill_source`` (``_PanelChartFillSource``)
+        already catches and degrades per bot, so a raised exception here
+        would mean an *unexpected* fill-source failure — logged and skipped
+        rather than allowed to fail every other bot's markers too.
         """
         if self._fill_source is None:
             return {}
         open_ms, close_ms = live_window(now_ms)
+        sids = [row.strategy_instance_id for row in shown]
+        results = await asyncio.gather(
+            *(
+                self._fill_source.resolve_symbol_and_fills(
+                    self._broker, self._account_id, sid, now_ms=now_ms
+                )
+                for sid in sids
+            ),
+            return_exceptions=True,
+        )
         markers: dict[str, list[ChartFillMarker]] = {}
-        for row in shown:
-            sid = row.strategy_instance_id
-            _symbol, fills = await self._fill_source.resolve_symbol_and_fills(
-                self._broker, self._account_id, sid, now_ms=now_ms
-            )
+        for sid, result in zip(sids, results, strict=True):
+            if isinstance(result, BaseException):
+                logger.warning(
+                    "[GALLERY] unexpected fill-source failure for bot; rendering no markers",
+                    extra={"broker": self._broker, "account_id": self._account_id, "sid": sid},
+                    exc_info=result,
+                )
+                continue
+            _symbol, fills = result
             projected = markers_in_window(fills, from_ms=open_ms, to_ms=close_ms)
             if projected:
                 markers[sid] = projected

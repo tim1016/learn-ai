@@ -11,29 +11,6 @@ import { GalleryLiveStore } from '../lib/gallery-live-store.service';
 import type { GalleryBotView, GalleryLiveStatus } from '../lib/gallery.types';
 import { BotGalleryPageComponent } from './bot-gallery-page.component';
 
-// Mounting the dock mounts `<app-bot-tile>`, which mounts lightweight-charts
-// — mock it the same way `bot-tile.component.spec.ts` does.
-vi.mock('lightweight-charts', () => {
-  const createMockSeries = () => ({
-    setData: vi.fn(),
-    applyOptions: vi.fn(),
-    priceScale: vi.fn().mockReturnValue({ applyOptions: vi.fn() }),
-  });
-  const createSeriesMarkers = vi.fn().mockReturnValue({ setMarkers: vi.fn() });
-  const createMockChart = () => ({
-    addSeries: vi.fn().mockReturnValue(createMockSeries()),
-    timeScale: vi.fn().mockReturnValue({ fitContent: vi.fn() }),
-    remove: vi.fn(),
-  });
-  return {
-    createChart: vi.fn().mockImplementation(() => createMockChart()),
-    createSeriesMarkers,
-    CandlestickSeries: 'CandlestickSeries',
-    HistogramSeries: 'HistogramSeries',
-    TickMarkType: { Year: 0, Month: 1, DayOfMonth: 2, Time: 3, TimeWithSeconds: 4 },
-  };
-});
-
 const BROKER = 'alpaca';
 const ACCOUNT_ID = 'PA3';
 
@@ -142,7 +119,7 @@ describe('BotGalleryPageComponent', () => {
     await renderPage(store);
 
     expect(screen.getByLabelText('Loading bot gallery')).toBeTruthy();
-    expect(screen.queryByText('No running bots')).toBeNull();
+    expect(screen.queryByText('No bots yet')).toBeNull();
   });
 
   it('renders the dock once bots are present', async () => {
@@ -154,12 +131,12 @@ describe('BotGalleryPageComponent', () => {
     expect(screen.queryByLabelText('Loading bot gallery')).toBeNull();
   });
 
-  it('shows the honest empty state with a link to the bots roster when nothing is running', async () => {
+  it('shows the honest empty state with a link to the bots roster when the account has no bots', async () => {
     const store = fakeGalleryStore({ status: 'live', bots: [] });
 
     await renderPage(store);
 
-    expect(screen.getByText('No running bots')).toBeTruthy();
+    expect(screen.getByText('No bots yet')).toBeTruthy();
     const link = screen.getByRole('link', { name: 'View bots roster' }) as HTMLAnchorElement;
     expect(link.getAttribute('href')).toBe(`/brokers/${BROKER}/accounts/${ACCOUNT_ID}/bots`);
   });
