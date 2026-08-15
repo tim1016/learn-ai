@@ -106,6 +106,7 @@ __all__ = [
     "accept_enter",
     "fold_order_evidence",
     "resolve_enter_submission",
+    "submit_accepted_enter",
     "submit_enter",
 ]
 
@@ -276,6 +277,17 @@ async def submit_enter(
         lifecycle_run_id=lifecycle_run_id,
         leg=leg,
     )
+    return await submit_accepted_enter(repo, accepted=accepted, leg=leg, trade=trade)
+
+
+async def submit_accepted_enter(
+    repo: ClerkSqliteRepository,
+    *,
+    accepted: EnterSubmission,
+    leg: BrokerOrderLeg,
+    trade: BrokerTradePort,
+) -> EnterSubmission:
+    """Drive a previously accepted ENTER outside the intake decision segment."""
     if not accepted.created:
         return accepted
 

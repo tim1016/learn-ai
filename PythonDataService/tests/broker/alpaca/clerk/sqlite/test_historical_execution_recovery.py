@@ -645,6 +645,44 @@ async def test_historical_exact_execution_recovery_rejects_a_stale_clerk_plan(
 
 
 @pytest.mark.asyncio
+async def test_historical_recovery_discards_remote_observation_after_competing_transition(
+    tmp_path: Path,
+) -> None:
+    repo, _ = _seed_historical_conflict(tmp_path)
+
+    class _InterleavingRead(_Read):
+        async def list_activities(
+            self,
+            *,
+            after_ms: int | None = None,
+            limit: int = 100,
+        ) -> list[BrokerActivity]:
+            del after_ms
+            repo.register_strategy_instance(
+                strategy_instance_id="competing-transition",
+                symbol="QQQ",
+                config_hash="competing",
+            )
+            return self._activities[:limit]
+
+    try:
+        context, action = _recovery_action(repo)
+        with pytest.raises(HistoricalExecutionRecoveryRefused) as captured:
+            await prepare_historical_execution_recovery(
+                repo=repo,
+                read=_InterleavingRead(activities=[_activity()]),
+                context=context,
+                concurrency_token=action.concurrency_token,
+                control_secret="test-control-secret",
+                allow_unauthenticated_control=False,
+            )
+
+        assert captured.value.reason == "RECOVERY_PLAN_STALE"
+    finally:
+        repo.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("read", "reason"),
     [

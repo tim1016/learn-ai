@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from app.broker.alpaca.clerk.models import ClerkEntryKind
+from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_read_port
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.facts import (
     AccountHoldRaisedFacts,
@@ -18,6 +19,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     UncertaintyRaisedFacts,
 )
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
+from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fold_order_acknowledgement,
@@ -38,6 +40,9 @@ UNEXPLAINED_TRADE_UPDATE_REASON_CODE = "UNEXPLAINED_ORDER"
 class TradeUpdateEvidenceSink(Protocol):
     """The durable destination selected for one account at process boot."""
 
+    def guard_reconnect_read(self, read: BrokerReadPort) -> BrokerReadPort:
+        """Return the read port normalized for this authority's intake domain."""
+
     async def record_lifecycle_event(
         self,
         *,
@@ -57,12 +62,6 @@ class TradeUpdateEvidenceSink(Protocol):
     ) -> int: ...
 
     async def reconcile_gap(self) -> None: ...
-
-
-class AsyncIntakeFence(Protocol):
-    async def __aenter__(self) -> object: ...
-
-    async def __aexit__(self, *exc: object) -> None: ...
 
 
 class SqliteReconciliationFacade(Protocol):
@@ -107,6 +106,9 @@ class LegacyTradeUpdateEvidenceSink:
 
     def __init__(self, clerk: LegacyLifecycleRecorder) -> None:
         self._clerk = clerk
+
+    def guard_reconnect_read(self, read: BrokerReadPort) -> BrokerReadPort:
+        return read
 
     async def record_lifecycle_event(
         self,
@@ -159,12 +161,21 @@ class SqliteTradeUpdateEvidenceSink:
         self,
         *,
         repo: ClerkSqliteRepository,
-        intake: AsyncIntakeFence,
+        intake: ReentrantAsyncLock,
         reconciler: SqliteReconciliationFacade,
     ) -> None:
         self._repo = repo
         self._intake = intake
         self._reconciler = reconciler
+
+    @property
+    def intake(self) -> ReentrantAsyncLock:
+        """The shared SQLite fold fence used to guard reconnect reads."""
+        return self._intake
+
+    def guard_reconnect_read(self, read: BrokerReadPort) -> BrokerReadPort:
+        """Keep reconnect REST reads outside, and forbidden from, SQLite intake."""
+        return guard_broker_read_port(read, intake=self._intake)
 
     async def record_lifecycle_event(
         self,
@@ -366,7 +377,6 @@ class SqliteTradeUpdateEvidenceSink:
 __all__ = [
     "UNEXPLAINED_TRADE_UPDATE_REASON_CODE",
     "ActivityRecoveryRecorder",
-    "AsyncIntakeFence",
     "LegacyLifecycleRecorder",
     "LegacyTradeUpdateEvidenceSink",
     "SqliteReconciliationFacade",

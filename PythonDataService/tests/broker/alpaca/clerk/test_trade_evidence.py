@@ -59,6 +59,11 @@ class _EvidenceSink:
         self.consumer: TradeUpdatesConsumer | None = None
         self.gap_connection_states: list[bool] = []
         self.activity_recoveries = 0
+        self.reconnect_read_guarded = False
+
+    def guard_reconnect_read(self, read: BrokerReadPort) -> BrokerReadPort:
+        self.reconnect_read_guarded = True
+        return read
 
     async def record_lifecycle_event(self, **_kwargs: Any) -> ClerkEntryKind:
         return ClerkEntryKind.ORDER_EVENT
@@ -698,6 +703,7 @@ async def test_reconnect_reconciles_selected_sink_before_connection_reopens() ->
 
     assert sink.gap_connection_states == [False]
     assert sink.activity_recoveries == 1
+    assert sink.reconnect_read_guarded is True
 
 
 async def _no_backoff() -> None:
