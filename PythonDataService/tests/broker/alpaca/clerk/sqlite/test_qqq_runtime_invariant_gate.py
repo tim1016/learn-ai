@@ -481,23 +481,31 @@ async def test_qqq_large_snapshot_releases_the_fold_domain_between_orders(
         pytest.fail("reconciliation did not reach its per-order cooperative checkpoint")
     assert checkpoint_fold_state == (True, False)
 
-    await runtime.sink.record_lifecycle_event(
-        client_order_id=second.client_order_id,
-        event=BrokerOrderEvent(
-            event_type="pending_new",
-            occurred_at_ms=1_700_000_000_600,
-            price=None,
-            quantity=None,
-        ),
-        event_key="qqq-fair-pending",
-        order=second.filled_order.model_copy(
-            update={"status": "pending_new", "filled_quantity": 0.0, "filled_avg_price": None}
-        ),
-        recovery_source=None,
-        recovery_window_limit=None,
+    pending_frame = asyncio.create_task(
+        runtime.sink.record_lifecycle_event(
+            client_order_id=second.client_order_id,
+            event=BrokerOrderEvent(
+                event_type="pending_new",
+                occurred_at_ms=1_700_000_000_600,
+                price=None,
+                quantity=None,
+            ),
+            event_key="qqq-fair-pending",
+            order=second.filled_order.model_copy(
+                update={"status": "pending_new", "filled_quantity": 0.0, "filled_avg_price": None}
+            ),
+            recovery_source=None,
+            recovery_window_limit=None,
+        )
     )
-    release_checkpoint.set()
-    result = await reconciliation
+    try:
+        await original_sleep(0)
+        assert pending_frame.done(), "snapshot processing must release intake between units"
+    finally:
+        release_checkpoint.set()
+        await asyncio.gather(pending_frame, reconciliation, return_exceptions=True)
+    pending_frame.result()
+    result = reconciliation.result()
 
     assert result.verdict == "clean"
     assert checkpoint_count == 1
