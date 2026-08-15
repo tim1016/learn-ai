@@ -1,0 +1,23 @@
+{
+  "accepted": true,
+  "tolerances": {
+    "quantity_atol": 1e-9,
+    "gross_cost_atol": 2.5e-9,
+    "price_atol": 1e-9,
+    "rtol": 0
+  },
+  "exact": {
+    "quantity": 2.5,
+    "gross_cost": 253.125,
+    "vwap": 101.25
+  },
+  "cumulative": {
+    "quantity": 2.5,
+    "gross_cost": 253.125,
+    "vwap": 101.25
+  },
+  "position_delta": 0,
+  "retained_exact_source_ids": [
+    "execution-0001"
+  ]
+}

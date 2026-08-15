@@ -69,3 +69,37 @@ fill row already carries its own qty/price).
 - `test_fractional_residual_reobservation_does_not_create_a_spurious_fill`
   pins that a re-observation differing only by `4e-13` float residue
   produces no second fill row and does not drift the attributed position.
+
+## Automatic execution-coverage set proof
+
+`PythonDataService/app/broker/alpaca/clerk/sqlite/execution_coverage.py::prove_execution_coverage_set`
+is authored project logic, not a port or reuse of an external proof. It is the
+canonical predicate for a future automatic exact-after-cumulative replacement;
+the shipped S0 one-exact/one-cumulative operator flow remains unchanged and is
+an intentionally temporary duplicate.
+
+For the complete cumulative-recovery set `R` and exact set
+`E = E_prior ∪ {e_in}`, rows are sorted by immutable `source_id` before each
+`math.fsum` calculation:
+
+- `Q_E = Σ qty(E)` and `Q_R = Σ qty(R)` in **shares**;
+- `C_E = Σ qty × price(E)` and `C_R = Σ qty × price(R)` in **currency**;
+- `P_E = C_E / Q_E` and `P_R = C_R / Q_R` in **currency/share**.
+
+`QTY_ATOL = 1e-9` shares and `PRICE_ATOL = 1e-9` currency/share use zero
+relative tolerance. Quantity comparison is strict:
+`abs(Q_E - Q_R) < QTY_ATOL`. Gross-cost comparison is inclusive:
+`abs(C_E - C_R) <= max(Q_E, Q_R) × PRICE_ATOL`. The replacement's
+`Δposition = Q_E - Q_R` is therefore zero under that same pinned absolute
+share-tolerance policy; the fold that will consume a proven result must not
+mutate the position projection.
+
+This deliberately separate cost gate rejects a high-price, sub-share-epsilon
+quantity residue when its economic consequence is material. Fees are excluded
+from the equivalence arithmetic because cumulative recovery has no fee
+observation; exact fees remain unchanged on the returned exact observations.
+Malformed, unreadable, duplicate, already-effective, or identity-incompatible
+evidence returns a typed refusal rather than a generic false result.
+
+The pure proof's independent-equation matrix is
+`PythonDataService/tests/broker/alpaca/clerk/sqlite/test_execution_coverage_set_proof.py`.

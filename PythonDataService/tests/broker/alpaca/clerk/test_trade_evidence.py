@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 from app.broker.alpaca.clerk.models import ClerkEntryKind
@@ -21,7 +22,7 @@ from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.alpaca.trade_updates import TradeUpdatesConsumer
 from app.broker.capture.journal import CaptureJournal
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
-from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
+from app.broker.contract.ports import BrokerReadPort
 
 ACCOUNT_ID = "PA-TEST"
 STRATEGY_INSTANCE_ID = "spy-bot"
@@ -46,6 +47,11 @@ class _NoBrokerMutation:
 
     async def get_order_by_client_order_id(self, _client_order_id: str) -> None:
         return None
+
+
+class _NoReconciler:
+    async def reconcile_account(self, *, trigger: str) -> SimpleNamespace:
+        raise AssertionError(f"unexpected reconciliation trigger: {trigger}")
 
 
 class _EvidenceSink:
@@ -133,9 +139,8 @@ def _initialize_owned_order(tmp_path: Path) -> tuple[ClerkSqliteRepository, str]
 def _sqlite_sink(repo: ClerkSqliteRepository) -> SqliteTradeUpdateEvidenceSink:
     return SqliteTradeUpdateEvidenceSink(
         repo=repo,
-        read=cast(BrokerReadPort, _ReadWithoutLegacyActivities()),
-        trade=cast(BrokerTradePort, _NoBrokerMutation()),
         intake=ReentrantAsyncLock(),
+        reconciler=_NoReconciler(),
     )
 
 
@@ -157,15 +162,37 @@ async def test_sqlite_activity_recovery_never_reads_or_writes_legacy_window(
     read_port = cast(BrokerReadPort, read)
     sink = SqliteTradeUpdateEvidenceSink(
         repo=repo,
-        read=read_port,
-        trade=cast(BrokerTradePort, _NoBrokerMutation()),
         intake=ReentrantAsyncLock(),
+        reconciler=_NoReconciler(),
     )
 
     recorded = await sink.recover_activity_window(read=read_port, limit=100)
 
     assert recorded == 0
     assert read.activity_reads == 0
+    repo.close()
+
+
+async def test_reconcile_gap_uses_authority_facade(tmp_path: Path) -> None:
+    class _Reconciler:
+        def __init__(self) -> None:
+            self.triggers: list[str] = []
+
+        async def reconcile_account(self, *, trigger: str) -> SimpleNamespace:
+            self.triggers.append(trigger)
+            return SimpleNamespace(verdict="clean")
+
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    reconciler = _Reconciler()
+    sink = SqliteTradeUpdateEvidenceSink(
+        repo=repo,
+        intake=ReentrantAsyncLock(),
+        reconciler=reconciler,
+    )
+
+    await sink.reconcile_gap()
+
+    assert reconciler.triggers == ["AUTOMATIC"]
     repo.close()
 
 

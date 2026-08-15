@@ -302,9 +302,8 @@ async def select_active_clerk_runtime(
         sweep=sweep,
         evidence_sink=SqliteTradeUpdateEvidenceSink(
             repo=repository,
-            read=read,
-            trade=trade,
             intake=facade.intake,
+            reconciler=facade,
         ),
         _sqlite_repository=repository,
     )

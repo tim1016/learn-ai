@@ -834,16 +834,19 @@ async def test_reconcile_now_runs_operator_pass(
 ) -> None:
     observed: dict[str, object] = {}
 
-    async def fake_reconcile(repo, *, read, trade, trigger):
-        observed.update(repo=repo, read=read, trade=trade, trigger=trigger)
+    async def fake_reconcile(*, trigger: str) -> AccountReconciliationResult:
+        observed.update(trigger=trigger)
         return AccountReconciliationResult(
             verdict="position_drift",
             resolved_count=2,
             drifted_symbols=("SPY",),
         )
 
+    runtime = get_active_clerk_runtime()
+    assert runtime is not None
+    assert isinstance(runtime.clerk, SqliteAlpacaClerkFacade)
     monkeypatch.setattr(alpaca_clerk_sqlite, "get_broker_registry", lambda: FakeRegistry())
-    monkeypatch.setattr(alpaca_clerk_sqlite, "reconcile_account", fake_reconcile)
+    monkeypatch.setattr(runtime.clerk, "reconcile_account", fake_reconcile)
 
     async with _client(api) as client:
         response = await client.post(
@@ -858,7 +861,6 @@ async def test_reconcile_now_runs_operator_pass(
         "drifted_symbols": ["SPY"],
     }
     assert observed["trigger"] == "OPERATOR_RECONCILE_NOW"
-    assert observed["read"] is observed["trade"]
 
 
 @pytest.mark.asyncio
@@ -868,8 +870,11 @@ async def test_reconcile_now_translates_broker_failure(
     async def fake_reconcile(*_args, **_kwargs):
         raise BrokerUnavailable("broker offline")
 
+    runtime = get_active_clerk_runtime()
+    assert runtime is not None
+    assert isinstance(runtime.clerk, SqliteAlpacaClerkFacade)
     monkeypatch.setattr(alpaca_clerk_sqlite, "get_broker_registry", lambda: FakeRegistry())
-    monkeypatch.setattr(alpaca_clerk_sqlite, "reconcile_account", fake_reconcile)
+    monkeypatch.setattr(runtime.clerk, "reconcile_account", fake_reconcile)
 
     async with _client(api) as client:
         response = await client.post(
@@ -887,8 +892,11 @@ async def test_reconcile_now_translates_poisoned_repository(
     async def fake_reconcile(*_args, **_kwargs):
         raise RepositoryPoisoned("mirror finalize failed")
 
+    runtime = get_active_clerk_runtime()
+    assert runtime is not None
+    assert isinstance(runtime.clerk, SqliteAlpacaClerkFacade)
     monkeypatch.setattr(alpaca_clerk_sqlite, "get_broker_registry", lambda: FakeRegistry())
-    monkeypatch.setattr(alpaca_clerk_sqlite, "reconcile_account", fake_reconcile)
+    monkeypatch.setattr(runtime.clerk, "reconcile_account", fake_reconcile)
 
     async with _client(api) as client:
         response = await client.post(
@@ -911,8 +919,11 @@ async def test_reconcile_now_rejects_mismatched_broker_account_before_recovery(
         raise AssertionError("must not reconcile the wrong broker account")
 
     registry = FakeRegistry(FakeAlpacaPort(account_id="PA-OTHER"))
+    runtime = get_active_clerk_runtime()
+    assert runtime is not None
+    assert isinstance(runtime.clerk, SqliteAlpacaClerkFacade)
     monkeypatch.setattr(alpaca_clerk_sqlite, "get_broker_registry", lambda: registry)
-    monkeypatch.setattr(alpaca_clerk_sqlite, "reconcile_account", fake_reconcile)
+    monkeypatch.setattr(runtime.clerk, "reconcile_account", fake_reconcile)
 
     async with _client(api) as client:
         response = await client.post(

@@ -45,6 +45,10 @@ from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import (
     prepare_historical_execution_recovery,
     replay_historical_execution_recovery,
 )
+from app.broker.alpaca.clerk.sqlite.intake_fence import (
+    IntakeFenceYieldError,
+    ReentrantAsyncLock,
+)
 from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import (
     ManualOrderCancellationSubmission,
     submit_manual_order_cancellation,
@@ -111,36 +115,6 @@ class StrategyRegistrationConflictError(RuntimeError):
 
 class MissingEntryCustodyError(RuntimeError):
     """An EXIT decision has no SQLite-owned entry identity to target."""
-
-
-class ReentrantAsyncLock:
-    """Task-reentrant intake fence shared by facade and evidence sink."""
-
-    def __init__(self) -> None:
-        self._lock = asyncio.Lock()
-        self._owner: asyncio.Task[object] | None = None
-        self._depth = 0
-
-    async def __aenter__(self) -> ReentrantAsyncLock:
-        current = asyncio.current_task()
-        if current is None:
-            raise RuntimeError("SQLite Clerk intake requires an asyncio task")
-        if self._owner is current:
-            self._depth += 1
-            return self
-        await self._lock.acquire()
-        self._owner = current
-        self._depth = 1
-        return self
-
-    async def __aexit__(self, *_exc: object) -> None:
-        current = asyncio.current_task()
-        if self._owner is not current:
-            raise RuntimeError("SQLite Clerk intake released by a non-owner task")
-        self._depth -= 1
-        if self._depth == 0:
-            self._owner = None
-            self._lock.release()
 
 
 class SqliteAlpacaClerkFacade:
@@ -987,6 +961,7 @@ def _count_fact(count: int, *, trusted: bool) -> CustodyCountFact:
 
 
 __all__ = [
+    "IntakeFenceYieldError",
     "MissingEntryCustodyError",
     "ReentrantAsyncLock",
     "SqliteAlpacaClerkFacade",

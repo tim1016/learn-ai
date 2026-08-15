@@ -598,9 +598,8 @@ async def test_sqlite_trade_update_redelivery_and_regression_are_idempotent(
     assert observed is not None
     sink = SqliteTradeUpdateEvidenceSink(
         repo=repo,
-        read=broker,
-        trade=broker,
         intake=facade.intake,
+        reconciler=facade,
     )
     event = BrokerOrderEvent(
         event_type="new",
