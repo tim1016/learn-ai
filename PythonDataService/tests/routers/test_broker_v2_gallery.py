@@ -39,6 +39,7 @@ class _Cat2:
         *,
         strategy_label: str = "",
         needs_attention: bool = False,
+        phase: str = "ON_DUTY",
     ) -> None:
         self.strategy_instance_id = sid
         self.symbol = symbol
@@ -48,6 +49,7 @@ class _Cat2:
         self.open_pnl = open_pnl
         self.fills_today = fills_today
         self.needs_attention = needs_attention
+        self.phase = phase
 
 
 class _FakeCatalogSource:
@@ -123,6 +125,73 @@ async def test_gallery_snapshot_returns_running_bots(gallery_app) -> None:
     assert {b["sid"] for b in body["bots"]} == {"Aug11-02"}
     assert {s["symbol"] for s in body["symbols"]} == {"SPY"}
     assert body["bots"][0]["last_bar_at_ms"] == 1_700_000_060_000  # SPY's latest bar end_ms
+
+
+async def test_gallery_snapshot_includes_stopped_bot_and_excludes_retired(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The snapshot shows every non-retired bot — a stopped bot projects
+    with ``running=False`` + a Resume action and its symbol's bars are
+    fetched, while a retired bot (and its otherwise-unwatched symbol) never
+    reaches the payload."""
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "")
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", True)
+    rows = [
+        _Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12, phase="ON_DUTY"),
+        _Cat2("Aug11-03", "QQQ", False, 5.0, 0.0, 1, phase="OFF_DUTY"),
+        _Cat2("Aug11-04", "IWM", False, None, None, None, phase="RETIRED"),
+    ]
+    hub = GalleryHub(
+        broker=_BROKER,
+        account_id=_ACCOUNT_ID,
+        catalog_source=_FakeCatalogSource(rows),
+        aggregator=_FakeAggregator(),
+    )
+    app.dependency_overrides[broker_v2_gallery.get_gallery_hub] = lambda: hub
+    try:
+        transport = ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get(f"{_URL_PREFIX}/snapshot")
+    finally:
+        app.dependency_overrides.pop(broker_v2_gallery.get_gallery_hub, None)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert {b["sid"] for b in body["bots"]} == {"Aug11-02", "Aug11-03"}  # retired excluded
+    assert {s["symbol"] for s in body["symbols"]} == {"SPY", "QQQ"}  # IWM (retired) never subscribed
+    stopped = next(b for b in body["bots"] if b["sid"] == "Aug11-03")
+    assert stopped["running"] is False
+    assert stopped["primary_action"]["action_id"] == "resume"
+    assert stopped["primary_action"]["label"] == "Resume"
+
+
+async def test_gallery_stream_stopped_bot_survives_update() -> None:
+    """A bot that stops between polls stays on the wall as a stopped tile —
+    it must not appear in ``removed_sids``."""
+    rows = [_Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12)]
+    hub = GalleryHub(
+        broker=_BROKER,
+        account_id=_ACCOUNT_ID,
+        catalog_source=_FakeCatalogSource(rows),
+        aggregator=_FakeAggregator(),
+    )
+
+    response = await broker_v2_gallery.stream_gallery(cursor=None, hub=hub)
+    try:
+        await asyncio.wait_for(response.body_iterator.__anext__(), timeout=5.0)  # snapshot frame
+
+        rows[0].running = False  # bot stops before the next poll
+
+        frame = await asyncio.wait_for(response.body_iterator.__anext__(), timeout=5.0)
+    finally:
+        await response.body_iterator.aclose()
+
+    assert "event: update" in frame
+    payload = _frame_payload(frame)
+    assert payload["removed_sids"] == []
+    assert {b["sid"] for b in payload["bots_delta"]} == {"Aug11-02"}
+    assert payload["bots_delta"][0]["running"] is False
+    assert payload["bots_delta"][0]["primary_action"]["action_id"] == "resume"
 
 
 def _frame_payload(frame: str) -> dict:

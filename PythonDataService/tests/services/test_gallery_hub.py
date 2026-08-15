@@ -4,19 +4,33 @@ from __future__ import annotations
 
 import pytest
 
-from app.services.broker_v2_panel.gallery_hub import GalleryHub, running_symbols
+from app.services.broker_v2_panel.gallery_hub import GalleryHub, shown_symbols
 
 
 class _Cat:
-    def __init__(self, sid: str, symbol: str, running: bool) -> None:
+    def __init__(self, sid: str, symbol: str, running: bool, *, phase: str = "ON_DUTY") -> None:
         self.strategy_instance_id = sid
         self.symbol = symbol
         self.running = running
+        self.phase = phase
 
 
-def test_running_symbols_dedupes_and_keeps_only_running() -> None:
-    cat = [_Cat("a", "SPY", True), _Cat("b", "SPY", True), _Cat("c", "QQQ", True), _Cat("d", "IWM", False)]
-    assert running_symbols(cat) == ["SPY", "QQQ"]
+def test_shown_symbols_dedupes_across_running_and_stopped_bots() -> None:
+    cat = [_Cat("a", "SPY", True), _Cat("b", "SPY", False), _Cat("c", "QQQ", True), _Cat("d", "IWM", False)]
+    assert shown_symbols(cat) == ["SPY", "QQQ", "IWM"]
+
+
+def test_shown_symbols_includes_symbol_held_only_by_a_stopped_bot() -> None:
+    cat = [_Cat("a", "IWM", False)]
+    assert shown_symbols(cat) == ["IWM"]
+
+
+def test_shown_symbols_excludes_retired_bot_symbols() -> None:
+    cat = [
+        _Cat("a", "SPY", True, phase="ON_DUTY"),
+        _Cat("b", "IWM", False, phase="RETIRED"),
+    ]
+    assert shown_symbols(cat) == ["SPY"]
 
 
 class _Cat2:
@@ -33,6 +47,7 @@ class _Cat2:
         *,
         strategy_label: str = "",
         needs_attention: bool = False,
+        phase: str = "ON_DUTY",
     ) -> None:
         self.strategy_instance_id = sid
         self.symbol = symbol
@@ -42,6 +57,7 @@ class _Cat2:
         self.open_pnl = open_pnl
         self.fills_today = fills_today
         self.needs_attention = needs_attention
+        self.phase = phase
 
 
 class _FakeCatalogSource:
@@ -104,6 +120,55 @@ async def test_build_snapshot_subscribes_once_per_symbol_and_projects_bots() -> 
     assert all(b.last_bar_at_ms == 1_700_000_060_000 for b in snap.bots)  # SPY's latest bar end_ms
 
 
+@pytest.mark.asyncio
+async def test_build_snapshot_includes_stopped_bot_with_resume_action_and_its_bars() -> None:
+    """A stopped (non-retired) bot stays on the wall — projected with
+    ``running=False`` and a Resume primary action — and its symbol's bars
+    are fetched even though nothing running holds that symbol."""
+    rows = [
+        _Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12, phase="ON_DUTY"),
+        _Cat2("Aug11-03", "QQQ", False, 5.0, 0.0, 1, phase="OFF_DUTY"),
+    ]
+    aggregator = _FakeAggregator()
+    hub = GalleryHub(
+        broker="alpaca",
+        account_id="PA3",
+        catalog_source=_FakeCatalogSource(rows),
+        aggregator=aggregator,
+    )
+
+    snap = await hub.build_snapshot()
+
+    assert {b.sid for b in snap.bots} == {"Aug11-02", "Aug11-03"}
+    assert {s.symbol for s in snap.symbols} == {"SPY", "QQQ"}
+    assert sorted(aggregator.subscribed) == ["QQQ", "SPY"]
+    stopped = next(b for b in snap.bots if b.sid == "Aug11-03")
+    assert stopped.running is False
+    assert stopped.primary_action.action_id == "resume"
+    assert stopped.primary_action.label == "Resume"
+
+
+@pytest.mark.asyncio
+async def test_build_snapshot_excludes_retired_bot_and_its_bars() -> None:
+    rows = [
+        _Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12, phase="ON_DUTY"),
+        _Cat2("Aug11-04", "IWM", False, None, None, None, phase="RETIRED"),
+    ]
+    aggregator = _FakeAggregator()
+    hub = GalleryHub(
+        broker="alpaca",
+        account_id="PA3",
+        catalog_source=_FakeCatalogSource(rows),
+        aggregator=aggregator,
+    )
+
+    snap = await hub.build_snapshot()
+
+    assert {b.sid for b in snap.bots} == {"Aug11-02"}
+    assert {s.symbol for s in snap.symbols} == {"SPY"}
+    assert aggregator.subscribed == ["SPY"]  # retired bot's symbol never subscribed
+
+
 class _EmptyAggregator(_FakeAggregator):
     """Same subscribe-tracking as ``_FakeAggregator``, but no bars for any symbol."""
 
@@ -144,7 +209,10 @@ async def test_build_update_returns_only_new_bars_and_bumps_version() -> None:
 
 
 @pytest.mark.asyncio
-async def test_build_update_removed_sids_when_bot_stops_between_calls() -> None:
+async def test_build_update_stopped_bot_survives_not_removed() -> None:
+    """A bot that stops between calls stays on the wall as a stopped
+    (Resume) tile — only a bot that leaves the catalog entirely (retired or
+    deleted) lands in ``removed_sids``, never one that merely stopped."""
     rows = [
         _Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12),
         _Cat2("Aug11-03", "SPY", True, 10.0, 0.0, 3),
@@ -154,6 +222,50 @@ async def test_build_update_removed_sids_when_bot_stops_between_calls() -> None:
     snapshot = await hub.build_snapshot()
 
     rows[1].running = False  # bot stops between snapshot and update
+
+    upd = await hub.build_update(
+        since_bar_ms={}, known_sids={b.sid for b in snapshot.bots}
+    )
+
+    assert upd.removed_sids == []
+    assert {b.sid for b in upd.bots_delta} == {"Aug11-02", "Aug11-03"}
+    stopped = next(b for b in upd.bots_delta if b.sid == "Aug11-03")
+    assert stopped.running is False
+    assert stopped.primary_action.action_id == "resume"
+
+
+@pytest.mark.asyncio
+async def test_build_update_removed_sids_when_bot_retires_between_calls() -> None:
+    rows = [
+        _Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12),
+        _Cat2("Aug11-03", "SPY", True, 10.0, 0.0, 3),
+    ]
+    agg = _FakeAggregator()
+    hub = GalleryHub(broker="alpaca", account_id="PA3", catalog_source=_FakeCatalogSource(rows), aggregator=agg)
+    snapshot = await hub.build_snapshot()
+
+    rows[1].phase = "RETIRED"  # bot retires between snapshot and update
+
+    upd = await hub.build_update(
+        since_bar_ms={}, known_sids={b.sid for b in snapshot.bots}
+    )
+
+    assert upd.removed_sids == ["Aug11-03"]
+    assert {b.sid for b in upd.bots_delta} == {"Aug11-02"}
+
+
+@pytest.mark.asyncio
+async def test_build_update_removed_sids_when_bot_leaves_catalog_entirely() -> None:
+    rows = [
+        _Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12),
+        _Cat2("Aug11-03", "SPY", True, 10.0, 0.0, 3),
+    ]
+    catalog_source = _FakeCatalogSource(rows)
+    agg = _FakeAggregator()
+    hub = GalleryHub(broker="alpaca", account_id="PA3", catalog_source=catalog_source, aggregator=agg)
+    snapshot = await hub.build_snapshot()
+
+    catalog_source._rows = [rows[0]]  # bot deleted from the catalog between calls
 
     upd = await hub.build_update(
         since_bar_ms={}, known_sids={b.sid for b in snapshot.bots}
@@ -179,7 +291,7 @@ async def test_build_update_removed_sids_visible_to_every_independent_client() -
     snapshot = await hub.build_snapshot()
     baseline = {b.sid for b in snapshot.bots}
 
-    rows[1].running = False  # bot stops before either client polls again
+    rows[1].phase = "RETIRED"  # bot leaves the catalog before either client polls again
 
     client_a = await hub.build_update(since_bar_ms={}, known_sids=baseline)
     client_b = await hub.build_update(since_bar_ms={}, known_sids=baseline)

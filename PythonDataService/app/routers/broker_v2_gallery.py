@@ -2,10 +2,11 @@
 
 ``/api/brokers/{broker}/accounts/{account_id}/gallery/...`` — the gallery
 wall's REST bootstrap (``snapshot``) and SSE channel (``stream``) for the
-live 20-bot candlestick wall (one account, all running bots + their shared
-per-symbol bars). The router validates/parses the HTTP request and delegates
-all composition to ``GalleryHub`` (``app.services.broker_v2_panel.gallery_hub``)
-— no business logic lives here, mirroring the router-freeze discipline of
+live 20-bot candlestick wall (one account, every non-retired bot — running
+and stopped/off-duty alike — + their shared per-symbol bars). The router
+validates/parses the HTTP request and delegates all composition to
+``GalleryHub`` (``app.services.broker_v2_panel.gallery_hub``) — no business
+logic lives here, mirroring the router-freeze discipline of
 ``broker_v2_panel.py``.
 
 ``get_gallery_hub`` is a FastAPI dependency (not a plain helper) specifically
@@ -23,16 +24,17 @@ cache) is out of scope for this task.
 
 The stream is poll-driven (``GalleryHub`` has no pub/sub producer): each
 iteration calls ``build_update`` against the last-emitted bar per symbol.
-``GalleryHub.build_update`` re-projects every running bot into
+``GalleryHub.build_update`` re-projects every shown (non-retired) bot into
 ``bots_delta`` on every call (no per-bot dirty-tracking yet — see its
 module docstring), so in practice an ``update`` frame is emitted on
-essentially every ~1s poll while any bot is running; only the bar deltas
-are genuinely incremental. The ``: keepalive`` comment (at most every
-~15s) only fires once zero bots are running. The ``cursor`` query
-parameter and ``reset`` event mirror ``broker_v2_panel.py``'s
-``/live-stream`` reconnect handling: a reconnecting client's remembered
-epoch is compared once against the hub's current epoch before entering
-the loop.
+essentially every ~1s poll while the account has at least one non-retired
+bot — running or stopped; only the bar deltas are genuinely incremental.
+The ``: keepalive`` comment (at most every ~15s) only fires once the
+account has zero non-retired bots (a bot no longer drops out of
+``bots_delta`` merely by stopping). The ``cursor`` query parameter and
+``reset`` event mirror ``broker_v2_panel.py``'s ``/live-stream`` reconnect
+handling: a reconnecting client's remembered epoch is compared once against
+the hub's current epoch before entering the loop.
 """
 
 from __future__ import annotations
@@ -119,13 +121,13 @@ async def _gallery_event_source(hub: GalleryHub, *, cursor: str | None) -> Async
     yield f"id: {current_id}\nevent: snapshot\ndata: {snapshot.model_dump_json()}\n\n"
 
     since_bar_ms = _latest_bar_start_ms(snapshot.symbols)
-    # This stream's own last-observed running roster, passed to every
-    # ``build_update`` call. Deliberately local to this generator (one per
-    # SSE connection) rather than read off ``hub`` — the same account's
+    # This stream's own last-observed shown (non-retired) roster, passed to
+    # every ``build_update`` call. Deliberately local to this generator (one
+    # per SSE connection) rather than read off ``hub`` — the same account's
     # ``GalleryHub`` is shared across every concurrent client (reconnects,
     # multiple tabs), so a hub-wide baseline would let the first client's
-    # poll consume a bot's removal and leave every other client's
-    # ``removed_sids`` empty for it.
+    # poll consume a bot's departure from the catalog and leave every other
+    # client's ``removed_sids`` empty for it.
     known_sids = {bot.sid for bot in snapshot.bots}
     last_emit = time.monotonic()
     # No subscription/queue to release on exit: this is a poll loop, not a
@@ -136,17 +138,18 @@ async def _gallery_event_source(hub: GalleryHub, *, cursor: str | None) -> Async
         await asyncio.sleep(_POLL_INTERVAL_S)
         update = await hub.build_update(since_bar_ms, known_sids=known_sids)
         since_bar_ms.update(_latest_bar_start_ms(update.symbols))
-        # ``bots_delta`` is always the full running roster (see the hub's
-        # docstring), so it doubles as this stream's next known-roster
-        # baseline with no extra bookkeeping.
+        # ``bots_delta`` is always the full shown (non-retired) roster (see
+        # the hub's docstring), so it doubles as this stream's next
+        # known-roster baseline with no extra bookkeeping.
         known_sids = {bot.sid for bot in update.bots_delta}
         has_new_bars = any(entry.bars for entry in update.symbols)
-        # ``bots_delta`` is always the full running roster (GalleryHub has no
-        # per-bot dirty-tracking yet), so this is effectively "any bot
-        # running" rather than "a bot actually changed" — an update frame
-        # goes out on essentially every poll while bots are running. Only
-        # ``has_new_bars``/``removed_sids`` are genuinely incremental.
-        # Keepalive only fires once ``bots_delta`` is empty (zero bots).
+        # ``bots_delta`` is always the full shown roster (GalleryHub has no
+        # per-bot dirty-tracking yet), so this is effectively "any bot is
+        # shown" rather than "a bot actually changed" — an update frame goes
+        # out on essentially every poll while the account has at least one
+        # non-retired bot. Only ``has_new_bars``/``removed_sids`` are
+        # genuinely incremental. Keepalive only fires once ``bots_delta`` is
+        # empty (the account has zero non-retired bots).
         changed = has_new_bars or bool(update.bots_delta) or bool(update.removed_sids)
         now = time.monotonic()
         if changed:
