@@ -52,13 +52,23 @@ class Subtract(_OperandBase):
     right: Operand
 
 
-# Phase 1 ships only IndicatorRef, Const, Subtract — every operand kind
-# the evaluator can actually run. Add/Multiply/Divide/Abs and BarField
-# (raw OHLCV references) are reserved for Phase 2; they are deliberately
-# absent from the union so a spec that loads is also a spec that runs,
-# rather than a spec that schema-validates and then crashes mid-backtest.
+class DifferenceBps(_OperandBase):
+    """Relative difference between two operands, expressed in basis points.
+
+    This domain operand keeps normalized-threshold strategies explicit in
+    serialized specs without admitting a general arithmetic language.
+    """
+
+    kind: Literal["DifferenceBps"]
+    left: IndicatorRef
+    right: IndicatorRef
+
+
+# The union contains every operand kind the evaluator can actually run.
+# General Add/Multiply/Divide/Abs and BarField expressions remain absent so
+# schema-valid specs cannot crash later on an unsupported arithmetic node.
 Operand = Annotated[
-    IndicatorRef | ConstOperand | Subtract,
+    IndicatorRef | ConstOperand | Subtract | DifferenceBps,
     Field(discriminator="kind"),
 ]
 Subtract.model_rebuild()
@@ -539,7 +549,7 @@ class StrategySpec(BaseModel):
         def _walk_operand(op: Operand) -> None:
             if isinstance(op, IndicatorRef):
                 refs.append(op.indicator)
-            elif isinstance(op, Subtract):
+            elif isinstance(op, (Subtract, DifferenceBps)):
                 _walk_operand(op.left)
                 _walk_operand(op.right)
             # BarField and ConstOperand carry no indicator refs.

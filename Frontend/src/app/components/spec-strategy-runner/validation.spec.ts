@@ -214,6 +214,29 @@ describe('collectIndicatorReferences', () => {
     expect(refs.has('ema10')).toBe(true);
   });
 
+  it('finds refs in IndicatorComparison DifferenceBps operands', () => {
+    const refs = collectIndicatorReferences({
+      ...VALID_SPEC,
+      entry: {
+        ...VALID_SPEC.entry,
+        conditions: [
+          {
+            kind: 'IndicatorComparison',
+            left: {
+              kind: 'DifferenceBps',
+              left: { kind: 'IndicatorRef', indicator: 'ema5' },
+              right: { kind: 'IndicatorRef', indicator: 'ema10' },
+            },
+            op: '>=',
+            right: { kind: 'Const', value: 4 },
+          },
+        ],
+      },
+    });
+    expect(refs.has('ema5')).toBe(true);
+    expect(refs.has('ema10')).toBe(true);
+  });
+
   it('finds refs in survival rules', () => {
     const refs = collectIndicatorReferences({
       ...VALID_SPEC,

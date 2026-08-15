@@ -9,21 +9,87 @@ same configuration.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from app.research.runs.result import EquityCurvePoint, RunMetrics
 
 
-class SplitPolicySpec(BaseModel):
-    """Wire-shape for a split policy. ``kind`` discriminates; the rest of
-    the fields are policy-specific (validated again in ``splits.py``).
-    """
+class ChronologicalSplitPolicySpec(BaseModel):
+    """Strict HTTP/storage shape for one chronological split."""
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["chronological", "rolling", "anchored"]
+    kind: Literal["chronological"]
+    train_pct: float = Field(gt=0, lt=1, strict=True, allow_inf_nan=False)
+
+
+class RollingSplitPolicySpec(BaseModel):
+    """Strict HTTP/storage shape for one rolling split."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["rolling"]
+    train_days: int = Field(gt=0, strict=True)
+    test_days: int = Field(gt=0, strict=True)
+    step_days: int = Field(gt=0, strict=True)
+
+
+class AnchoredSplitPolicySpec(BaseModel):
+    """Strict HTTP/storage shape for one anchored split."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["anchored"]
+    initial_train_days: int = Field(gt=0, strict=True)
+    test_days: int = Field(gt=0, strict=True)
+    step_days: int = Field(gt=0, strict=True)
+
+
+SplitPolicySpec = Annotated[
+    ChronologicalSplitPolicySpec | RollingSplitPolicySpec | AnchoredSplitPolicySpec,
+    Field(discriminator="kind"),
+]
+_SPLIT_POLICY_ADAPTER = TypeAdapter(SplitPolicySpec)
+
+
+def parse_split_policy_spec(value: object) -> SplitPolicySpec:
+    """Validate untrusted split JSON through the discriminated union."""
+    return _SPLIT_POLICY_ADAPTER.validate_python(value)
+
+
+class ParameterCandidateConfig(BaseModel):
+    """One fully-materialized strategy candidate in a train-side grid."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    parameters: dict[str, float]
+    strategy_spec_hash: str
+    strategy_spec_json: dict
+
+
+class ParameterSearchConfig(BaseModel):
+    """Persisted, replayable definition of train-side model selection."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    objective: Literal["sharpe_ratio"] = "sharpe_ratio"
+    min_trades: int = Field(ge=1)
+    candidates: list[ParameterCandidateConfig] = Field(min_length=2)
+
+
+class TrainingCandidateResult(BaseModel):
+    """Auditable train-window outcome for one parameter candidate."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    parameters: dict[str, float]
+    train_run_id: str
+    train_metrics: RunMetrics
+    eligible: bool
+    receipt_persisted: bool = True
+    ineligibility_reason: str | None = None
 
 
 class FoldResult(BaseModel):
@@ -48,16 +114,29 @@ class FoldResult(BaseModel):
     train_end_ms: int
     test_start_ms: int
     test_end_ms: int
-    test_run_id: str
+    test_run_id: str | None
     test_metrics: RunMetrics
     test_trade_count: int
     status: Literal["completed", "failed"] = "completed"
     failure_reason: str | None = None
-    # ``selected_parameters`` is empty under Phase 4A (fixed spec) and
-    # reserved for Phase 4B (parameter selection on train, frozen on
-    # test). Surfacing it now means the client never has to handle
-    # "missing field" later.
-    selected_parameters: dict = Field(default_factory=dict)
+    selected_parameters: dict[str, float] = Field(default_factory=dict)
+    training_candidates: list[TrainingCandidateResult] = Field(default_factory=list)
+    selected_train_sharpe: float | None = None
+    oos_retention: float | None = None
+
+
+class SelectionFailureResult(BaseModel):
+    """Train-side evidence retained when a fold cannot select a winner."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    fold_index: int
+    train_start_ms: int
+    train_end_ms: int
+    test_start_ms: int
+    test_end_ms: int
+    training_candidates: list[TrainingCandidateResult] = Field(default_factory=list)
+    failure_reason: str
 
 
 class WalkForwardConfig(BaseModel):
@@ -83,16 +162,25 @@ class WalkForwardConfig(BaseModel):
     slippage_per_share: float
     random_seed: int
     split_policy: SplitPolicySpec
+    parameter_search: ParameterSearchConfig | None = None
+    fold_position_policy: Literal["flat_at_test_boundaries"] = "flat_at_test_boundaries"
+    protocol_id: str | None = None
+    protocol_version: str | None = None
     created_at_ms: int
+
+    @model_validator(mode="after")
+    def _protocol_identity_is_complete(self) -> WalkForwardConfig:
+        if (self.protocol_id is None) != (self.protocol_version is None):
+            raise ValueError("protocol_id and protocol_version must be provided together")
+        return self
 
 
 class WalkForwardResult(BaseModel):
     """Aggregated walk-forward output.
 
-    The ``combined_oos_equity_curve`` is **compounded** across folds
-    (fold N's start equity = fold N-1's end equity), which models the
-    investor experience of holding through the strategy across all
-    test windows. Rebased-per-fold is a future toggle if needed.
+    The ``combined_oos_equity_curve`` compounds independently-flat OOS
+    fold returns. Indicator state is pre-rolled from each fold's train
+    window, but positions never cross an OOS boundary.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -102,11 +190,19 @@ class WalkForwardResult(BaseModel):
     strategy_spec_hash: str
     split_policy: SplitPolicySpec
     folds: list[FoldResult] = Field(default_factory=list)
+    selection_failures: list[SelectionFailureResult] = Field(default_factory=list)
     combined_oos_equity_curve: list[EquityCurvePoint] = Field(default_factory=list)
     mean_oos_sharpe: float | None = None
     median_oos_sharpe: float | None = None
     pct_profitable_folds: float | None = None
     oos_retention: float | None = None
+    oos_retention_basis: (
+        Literal[
+            "mean_fold_test_to_selected_train",
+            "mean_oos_to_parent",
+        ]
+        | None
+    ) = None
     alpha_decay: float | None = None
     warnings: list[str] = Field(default_factory=list)
     created_at_ms: int

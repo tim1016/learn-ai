@@ -1,25 +1,20 @@
 """``run_walk_forward`` — orchestrates fold execution and aggregation.
 
 Takes a validated ``StrategySpec`` plus a window plus a split policy,
-generates folds, runs each fold's TEST window through the canonical
-engine via ``run_strategy_spec``, persists every fold as a child
-``RunLedger`` linked back to this walk-forward by ``parent_run_id``,
-and aggregates fold-level metrics into a ``WalkForwardResult``.
-
-**Phase 4A only.** The train side of each fold is recorded but not
-executed — there's no parameter selection happening on train, so
-running the train window would just produce a redundant in-sample
-fit. Phase 4B (parameter selection on train, frozen on test) plugs
-into the same fold list with a non-empty ``selected_parameters``
-field per fold.
+generates folds, and runs each fold through the canonical engine. With no
+``parameter_search`` it preserves Phase 4A fixed-spec behavior. With a search,
+it runs every fully-materialized candidate on TRAIN, deterministically selects
+the best eligible train Sharpe, freezes that candidate, and runs it on TEST.
+Every train candidate and test fold is persisted as a child ``RunLedger``.
 
 Failures are persisted, not raised. A fold that hits an unsupported
 spec feature, infrastructure error, or engine crash gets a
 ``status='failed'`` ledger via the underlying ``run_strategy_spec``
 contract — the WF runner records the failure in the fold list,
 skips it from aggregation, and continues with the remaining folds.
-The WF result itself only flips to ``status='failed'`` when *every*
-fold fails (or the split policy emits zero folds).
+The WF result flips to ``status='failed'`` when the split is degenerate,
+every test fold fails, or train-side selection cannot produce an eligible
+candidate. Selection failure is fail-closed: no fallback threshold is tested.
 """
 
 from __future__ import annotations
@@ -27,10 +22,11 @@ from __future__ import annotations
 import logging
 import statistics
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date as Date
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from app.engine.strategy.spec import StrategySpec
@@ -39,11 +35,20 @@ from app.research.runs.hashing import hash_payload
 from app.research.runs.result import BacktestRunResult, EquityCurvePoint
 from app.research.walk_forward.result import (
     FoldResult,
-    SplitPolicySpec,
+    ParameterCandidateConfig,
+    ParameterSearchConfig,
+    SelectionFailureResult,
+    TrainingCandidateResult,
     WalkForwardConfig,
     WalkForwardResult,
+    parse_split_policy_spec,
 )
-from app.research.walk_forward.splits import SplitPolicy, date_str_to_ms
+from app.research.walk_forward.selection import (
+    ParameterSearchRequest,
+    ParameterSelectionError,
+    select_candidate_index,
+)
+from app.research.walk_forward.splits import FoldWindow, SplitPolicy, date_str_to_ms
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -71,6 +76,23 @@ class WalkForwardRequest:
     slippage_per_share: float = 0.0
     random_seed: int = 0
     parent_run_id: str | None = None
+    parameter_search: ParameterSearchRequest | None = None
+    fold_position_policy: Literal["flat_at_test_boundaries"] = "flat_at_test_boundaries"
+    protocol_id: str | None = None
+    protocol_version: str | None = None
+
+    def __post_init__(self) -> None:
+        if (self.protocol_id is None) != (self.protocol_version is None):
+            raise ValueError("protocol_id and protocol_version must be provided together")
+        if self.parameter_search is None:
+            return
+        symbol = self.spec.symbols[0]
+        resolution = self.spec.resolution.period_minutes
+        for candidate in self.parameter_search.candidates:
+            if candidate.spec.symbols[0] != symbol:
+                raise ValueError("parameter candidates must use the base spec symbol")
+            if candidate.spec.resolution.period_minutes != resolution:
+                raise ValueError("parameter candidates must use the base spec resolution")
 
 
 def run_walk_forward(
@@ -81,6 +103,8 @@ def run_walk_forward(
     data_root_revision: str | None = None,
     parent_sharpe: float | None = None,
     walk_forward_id: str | None = None,
+    on_progress: Callable[[int, int, str], None] | None = None,
+    cancel_check: Callable[[], None] | None = None,
 ) -> tuple[WalkForwardConfig, WalkForwardResult]:
     """Execute a walk-forward analysis and return ``(config, result)``.
 
@@ -106,6 +130,7 @@ def run_walk_forward(
     start_ms = date_str_to_ms(request.start_date)
     end_ms = date_str_to_ms(request.end_date)
 
+    split_policy_spec = parse_split_policy_spec(request.split_policy.describe())
     config = WalkForwardConfig(
         walk_forward_id=wf_id,
         parent_run_id=request.parent_run_id,
@@ -120,7 +145,11 @@ def run_walk_forward(
         commission_per_order=request.commission_per_order,
         slippage_per_share=request.slippage_per_share,
         random_seed=request.random_seed,
-        split_policy=SplitPolicySpec.model_validate(request.split_policy.describe()),
+        split_policy=split_policy_spec,
+        parameter_search=_parameter_search_config(request.parameter_search),
+        fold_position_policy=request.fold_position_policy,
+        protocol_id=request.protocol_id,
+        protocol_version=request.protocol_version,
         created_at_ms=created_at,
     )
 
@@ -139,18 +168,92 @@ def run_walk_forward(
             wf_id, spec_hash, request, created_at, "split policy produced zero folds"
         )
 
-    # 2. Run each fold's test window. Persist every result — failed
-    #    folds are first-class research records (same contract as
-    #    Phase A) so the listing endpoint surfaces them.
+    # 2. Select on train when configured, then run the frozen spec on test.
+    #    Every candidate and test run is persisted for auditability.
     folds: list[FoldResult] = []
     fold_curves: list[list[EquityCurvePoint]] = []
+    selection_failures: list[SelectionFailureResult] = []
     warnings: list[str] = []
+    completed_child_runs = 0
+    runs_per_fold = (
+        len(request.parameter_search.candidates) + 1
+        if request.parameter_search is not None
+        else 1
+    )
+    total_child_runs = len(windows) * runs_per_fold
+
+    def report_child_run(message: str) -> None:
+        nonlocal completed_child_runs
+        completed_child_runs += 1
+        if on_progress is not None:
+            on_progress(completed_child_runs, total_child_runs, message)
 
     for window in windows:
+        if cancel_check is not None:
+            cancel_check()
+        selected_spec = request.spec
+        selected_parameters: dict[str, float] = {}
+        training_candidates: list[TrainingCandidateResult] = []
+        selected_train_sharpe: float | None = None
+        if request.parameter_search is not None:
+            try:
+                (
+                    selected_spec,
+                    selected_parameters,
+                    training_candidates,
+                    selected_train_sharpe,
+                    selection_warnings,
+                ) = _select_fold_candidate(
+                    request,
+                    window,
+                    wf_id=wf_id,
+                    spec_hash=spec_hash,
+                    data_source_factory=data_source_factory,
+                    artifacts_root=artifacts_root,
+                    data_root_revision=data_root_revision,
+                    cancel_check=cancel_check,
+                    on_candidate_completed=report_child_run,
+                )
+                warnings.extend(selection_warnings)
+            except ParameterSelectionError as exc:
+                warnings.extend(exc.warnings)
+                reason = f"fold {window.fold_index} parameter selection failed: {exc}"
+                warnings.append(reason)
+                selection_failures.append(
+                    SelectionFailureResult(
+                        fold_index=window.fold_index,
+                        train_start_ms=window.train_start_ms,
+                        train_end_ms=window.train_end_ms,
+                        test_start_ms=window.test_start_ms,
+                        test_end_ms=window.test_end_ms,
+                        training_candidates=list(exc.candidates),
+                        failure_reason=reason,
+                    )
+                )
+                return config, _failed_wf_result(
+                    wf_id,
+                    spec_hash,
+                    request,
+                    created_at,
+                    reason,
+                    folds=folds,
+                    fold_curves=fold_curves,
+                    selection_failures=selection_failures,
+                    parent_sharpe=parent_sharpe,
+                    warnings=warnings,
+                )
+
+        # Cancellation may arrive while the final training candidate is
+        # executing. Re-check at the engine boundary so a cancelled job never
+        # launches the fold's full TEST run.
+        if cancel_check is not None:
+            cancel_check()
+
         fold_request = RunRequest(
-            spec=request.spec,
+            spec=selected_spec,
             start_date=_ms_to_date(window.test_start_ms),
             end_date=_ms_to_inclusive_end_date(window.test_end_ms),
+            warmup_start_date=_ms_to_date(window.train_start_ms),
             initial_cash=request.initial_cash,
             fill_mode=request.fill_mode,
             commission_per_order=request.commission_per_order,
@@ -165,72 +268,86 @@ def run_walk_forward(
             data_source_factory=data_source_factory,
             data_root_revision=data_root_revision,
         )
-        try:
-            save_run(ledger, result, root=artifacts_root)
-        except Exception as exc:
-            # Persistence failure for one fold doesn't stop the WF —
-            # log and continue. The fold result is still recorded
-            # in-memory but the on-disk record is missing; surface
-            # via warnings so the client sees it.
-            logger.exception(
-                "[WF] failed to persist fold %s of walk_forward=%s",
-                window.fold_index,
-                wf_id,
-            )
-            warnings.append(
-                f"fold {window.fold_index} could not be persisted: {exc}"
-            )
+        persistence_warning = _persist_child_run(
+            ledger,
+            result,
+            artifacts_root=artifacts_root,
+            context=f"fold {window.fold_index}",
+            wf_id=wf_id,
+        )
+        if persistence_warning is not None:
+            warnings.append(persistence_warning)
 
-        folds.append(_fold_to_result(window, ledger, result))
-        if ledger.status == "completed" and result.equity_curve:
+        result_failure_reason: str | None = None
+        for child_warning in result.warnings:
+            warnings.append(f"fold {window.fold_index} test warning: {child_warning}")
+        if ledger.status == "completed" and result.bars_consumed == 0:
+            result_failure_reason = (
+                "test window consumed zero input bars; refusing to treat it "
+                "as out-of-sample evidence"
+            )
+            warnings.append(f"fold {window.fold_index} {result_failure_reason}")
+
+        fold = _fold_to_result(
+            window,
+            ledger,
+            result,
+            selected_parameters=selected_parameters,
+            training_candidates=training_candidates,
+            selected_train_sharpe=selected_train_sharpe,
+            persisted=persistence_warning is None,
+            result_failure_reason=result_failure_reason,
+        )
+        folds.append(fold)
+        if fold.status == "completed" and result.equity_curve:
             fold_curves.append(result.equity_curve)
+        report_child_run(
+            f"completed out-of-sample fold {window.fold_index + 1} of {len(windows)}"
+        )
+        if persistence_warning is not None:
+            reason = (
+                f"fold {window.fold_index} test receipt persistence failed; "
+                "refusing to aggregate unverifiable OOS evidence"
+            )
+            warnings.append(reason)
+            return config, _failed_wf_result(
+                wf_id,
+                spec_hash,
+                request,
+                created_at,
+                reason,
+                folds=folds,
+                fold_curves=fold_curves,
+                selection_failures=selection_failures,
+                parent_sharpe=parent_sharpe,
+                warnings=warnings,
+            )
 
-    # 3. Aggregate.
-    # ``pct_profitable_folds`` denominator counts only successful folds —
-    # a fold that crashed at the engine boundary is an infrastructure
-    # story, not a strategy story, and shouldn't dilute the OOS
-    # scoreboard. Same rule for ``mean/median_oos_sharpe`` and
-    # ``alpha_decay`` — they all key off ``FoldResult.status`` to
-    # exclude failed folds.
-    successful_folds = [f for f in folds if f.status == "completed"]
-    sharpes = [
-        f.test_metrics.sharpe_ratio
-        for f in successful_folds
-        if f.test_metrics.sharpe_ratio is not None
-    ]
-    profitable_count = sum(
-        1 for f in successful_folds if f.test_metrics.total_return_pct > 0
-    )
-    pct_profitable = (
-        profitable_count / len(successful_folds) if successful_folds else None
-    )
-
-    combined_curve = _compound_oos_curve(fold_curves)
-    alpha_decay = _alpha_decay(successful_folds)
-    mean_oos_sharpe = statistics.fmean(sharpes) if sharpes else None
-    median_oos_sharpe = statistics.median(sharpes) if sharpes else None
-    oos_retention = _oos_retention(mean_oos_sharpe, parent_sharpe)
-
-    if not successful_folds:
-        warnings.append("every fold failed — aggregate metrics are degenerate")
-
-    completed_at = now_ms_utc()
-
-    result = WalkForwardResult(
-        walk_forward_id=wf_id,
-        parent_run_id=request.parent_run_id,
-        strategy_spec_hash=spec_hash,
-        split_policy=config.split_policy,
+    if not any(fold.status == "completed" for fold in folds):
+        reason = "every test fold failed; no auditable out-of-sample aggregate exists"
+        warnings.append(reason)
+        return config, _failed_wf_result(
+            wf_id,
+            spec_hash,
+            request,
+            created_at,
+            reason,
+            folds=folds,
+            fold_curves=fold_curves,
+            selection_failures=selection_failures,
+            parent_sharpe=parent_sharpe,
+            warnings=warnings,
+        )
+    result = _build_wf_result(
+        wf_id=wf_id,
+        spec_hash=spec_hash,
+        request=request,
+        created_at=created_at,
         folds=folds,
-        combined_oos_equity_curve=combined_curve,
-        mean_oos_sharpe=mean_oos_sharpe,
-        median_oos_sharpe=median_oos_sharpe,
-        pct_profitable_folds=pct_profitable,
-        oos_retention=oos_retention,
-        alpha_decay=alpha_decay,
+        fold_curves=fold_curves,
+        selection_failures=selection_failures,
+        parent_sharpe=parent_sharpe,
         warnings=warnings,
-        created_at_ms=created_at,
-        completed_at_ms=completed_at,
         status="completed",
     )
     return config, result
@@ -253,12 +370,12 @@ def _ms_to_inclusive_end_date(ms: int) -> Date:
     """Convert a half-open fold boundary to the *last day* of the fold.
 
     Split policies emit fold boundaries as half-open ms intervals
-    ``[test_start_ms, test_end_ms)`` — fold N+1's test_start_ms equals
-    fold N's test_end_ms (no gap, no overlap). But the engine's data
-    filter is *inclusive* on both ends (``start <= bar.date() <= end``),
-    so passing ``test_end_ms``'s NY date directly would include the
-    boundary day in *both* fold N and fold N+1, producing duplicate
-    bars in the combined OOS curve.
+    ``[test_start_ms, test_end_ms)``. The engine's data filter is
+    *inclusive* on both ends (``start <= bar.date() <= end``), so the
+    exclusive end boundary must be converted to the preceding NY-local
+    date. For adjacent folds this also prevents the boundary day from
+    appearing in both folds; generic policies may still choose a step
+    that deliberately creates a gap or overlap.
 
     Subtract one calendar day in NY-local time (DST-safe — uses
     ``timedelta(days=1)`` on a tz-aware datetime so spring-forward /
@@ -267,25 +384,204 @@ def _ms_to_inclusive_end_date(ms: int) -> Date:
     return (datetime.fromtimestamp(ms / 1000, tz=_NY) - timedelta(days=1)).date()
 
 
-def _fold_to_result(window, ledger: RunLedger, result: BacktestRunResult) -> FoldResult:
+def _fold_to_result(
+    window: FoldWindow,
+    ledger: RunLedger,
+    result: BacktestRunResult,
+    *,
+    selected_parameters: dict[str, float],
+    training_candidates: list[TrainingCandidateResult],
+    selected_train_sharpe: float | None,
+    persisted: bool,
+    result_failure_reason: str | None = None,
+) -> FoldResult:
     # Mirror the underlying ledger's lifecycle status onto the fold so
     # aggregation can exclude failed folds without re-loading ledgers.
     # Phase A's RunLedger.status is one of {"running", "completed",
     # "failed"}; "running" is a transient state the runner never
     # surfaces synchronously, so collapse to a 2-value field here.
-    fold_status = "failed" if ledger.status == "failed" else "completed"
+    fold_status = (
+        "failed"
+        if ledger.status == "failed" or not persisted or result_failure_reason is not None
+        else "completed"
+    )
+    test_sharpe = result.metrics.sharpe_ratio
+    fold_retention = _ratio(test_sharpe, selected_train_sharpe) if fold_status == "completed" else None
     return FoldResult(
         fold_index=window.fold_index,
         train_start_ms=window.train_start_ms,
         train_end_ms=window.train_end_ms,
         test_start_ms=window.test_start_ms,
         test_end_ms=window.test_end_ms,
-        test_run_id=ledger.run_id,
+        test_run_id=ledger.run_id if persisted else None,
         test_metrics=result.metrics,
         test_trade_count=result.metrics.total_trades,
         status=fold_status,
-        failure_reason=ledger.failure_reason,
+        failure_reason=(
+            ledger.failure_reason
+            if ledger.status == "failed"
+            else "test receipt could not be persisted"
+            if not persisted
+            else result_failure_reason
+        ),
+        selected_parameters=selected_parameters,
+        training_candidates=training_candidates,
+        selected_train_sharpe=selected_train_sharpe,
+        oos_retention=fold_retention,
     )
+
+
+def _parameter_search_config(
+    search: ParameterSearchRequest | None,
+) -> ParameterSearchConfig | None:
+    if search is None:
+        return None
+    return ParameterSearchConfig(
+        min_trades=search.min_trades,
+        candidates=[
+            ParameterCandidateConfig(
+                parameters=dict(candidate.parameters),
+                strategy_spec_hash=hash_payload(candidate.spec.model_dump(mode="json")),
+                strategy_spec_json=candidate.spec.model_dump(mode="json"),
+            )
+            for candidate in search.candidates
+        ],
+    )
+
+
+def _select_fold_candidate(
+    request: WalkForwardRequest,
+    window: FoldWindow,
+    *,
+    wf_id: str,
+    spec_hash: str,
+    data_source_factory: Any,
+    artifacts_root: Any | None,
+    data_root_revision: str | None,
+    cancel_check: Callable[[], None] | None,
+    on_candidate_completed: Callable[[str], None] | None,
+) -> tuple[
+    StrategySpec,
+    dict[str, float],
+    list[TrainingCandidateResult],
+    float,
+    list[str],
+]:
+    search = request.parameter_search
+    if search is None:  # pragma: no cover - caller guards
+        raise ValueError("parameter search is required")
+
+    results: list[TrainingCandidateResult] = []
+    warnings: list[str] = []
+    persistence_failures: list[str] = []
+    for candidate_index, candidate in enumerate(search.candidates):
+        if cancel_check is not None:
+            cancel_check()
+        train_request = RunRequest(
+            spec=candidate.spec,
+            start_date=_ms_to_date(window.train_start_ms),
+            end_date=_ms_to_inclusive_end_date(window.train_end_ms),
+            initial_cash=request.initial_cash,
+            fill_mode=request.fill_mode,
+            commission_per_order=request.commission_per_order,
+            slippage_per_share=request.slippage_per_share,
+            random_seed=request.random_seed,
+            strategy_spec_id=(f"wf:{wf_id}:fold-{window.fold_index}:train-{candidate_index}"),
+            parent_run_id=wf_id,
+            parent_spec_hash=spec_hash,
+        )
+        ledger, result = run_strategy_spec(
+            train_request,
+            data_source_factory=data_source_factory,
+            data_root_revision=data_root_revision,
+        )
+        persistence_warning = _persist_child_run(
+            ledger,
+            result,
+            artifacts_root=artifacts_root,
+            context=f"fold {window.fold_index} train candidate {candidate_index}",
+            wf_id=wf_id,
+        )
+        if persistence_warning is not None:
+            warnings.append(persistence_warning)
+            persistence_failures.append(persistence_warning)
+
+        ineligibility_reason = _candidate_ineligibility_reason(
+            ledger,
+            result,
+            min_trades=search.min_trades,
+        )
+        results.append(
+            TrainingCandidateResult(
+                parameters=dict(candidate.parameters),
+                train_run_id=ledger.run_id,
+                train_metrics=result.metrics,
+                receipt_persisted=persistence_warning is None,
+                eligible=ineligibility_reason is None,
+                ineligibility_reason=ineligibility_reason,
+            )
+        )
+        if on_candidate_completed is not None:
+            on_candidate_completed(
+                "completed training candidate "
+                f"{candidate_index + 1} of {len(search.candidates)} "
+                f"for fold {window.fold_index + 1}"
+            )
+
+    if persistence_failures:
+        raise ParameterSelectionError(
+            "training candidate receipt persistence failed; refusing to test an incompletely auditable selection",
+            candidates=tuple(results),
+            warnings=tuple(warnings),
+        )
+    try:
+        winner_index = select_candidate_index(results)
+    except ParameterSelectionError as exc:
+        raise ParameterSelectionError(
+            str(exc),
+            candidates=tuple(results),
+            warnings=tuple(warnings),
+        ) from exc
+    winner = search.candidates[winner_index]
+    winner_sharpe = results[winner_index].train_metrics.sharpe_ratio
+    if winner_sharpe is None:  # pragma: no cover - selection rejects this
+        raise AssertionError("selected train candidate has null Sharpe")
+    return winner.spec, dict(winner.parameters), results, winner_sharpe, warnings
+
+
+def _candidate_ineligibility_reason(
+    ledger: RunLedger,
+    result: BacktestRunResult,
+    *,
+    min_trades: int,
+) -> str | None:
+    if ledger.status != "completed":
+        return ledger.failure_reason or "training run failed"
+    if result.metrics.total_trades < min_trades:
+        return f"train trades {result.metrics.total_trades} below minimum {min_trades}"
+    if result.metrics.sharpe_ratio is None:
+        return "train Sharpe is null"
+    return None
+
+
+def _persist_child_run(
+    ledger: RunLedger,
+    result: BacktestRunResult,
+    *,
+    artifacts_root: Any | None,
+    context: str,
+    wf_id: str,
+) -> str | None:
+    try:
+        save_run(ledger, result, root=artifacts_root)
+    except Exception as exc:
+        logger.exception(
+            "[WF] failed to persist %s of walk_forward=%s",
+            context,
+            wf_id,
+        )
+        return f"{context} could not be persisted: {exc}"
+    return None
 
 
 def _alpha_decay(folds: list[FoldResult]) -> float | None:
@@ -324,9 +620,13 @@ def _oos_retention(mean_oos_sharpe: float | None, parent_sharpe: float | None) -
     Canonical implementation: this file.
     Validated against: tests/research/walk_forward/test_runner.py::test_oos_retention_uses_parent_sharpe
     """
-    if mean_oos_sharpe is None or parent_sharpe is None or parent_sharpe == 0:
+    return _ratio(mean_oos_sharpe, parent_sharpe)
+
+
+def _ratio(numerator: float | None, denominator: float | None) -> float | None:
+    if numerator is None or denominator is None or denominator == 0:
         return None
-    return mean_oos_sharpe / parent_sharpe
+    return numerator / denominator
 
 
 def _compound_oos_curve(
@@ -337,8 +637,8 @@ def _compound_oos_curve(
     Each fold's curve normally starts at the same configured
     ``initial_cash`` (because every fold runs through the same
     ``RunRequest.initial_cash`` value) and ends at some terminal
-    equity. To produce the "investor experience" curve across all
-    folds, fold N+1's curve is *scaled* so its first point equals
+    equity. To produce a compounded sequence of independently-flat OOS
+    returns, fold N+1's curve is *scaled* so its first point equals
     fold N's last point. The scale factor is
     ``fold_N_last / fold_N+1_first``.
 
@@ -376,30 +676,94 @@ def _failed_wf_result(
     request: WalkForwardRequest,
     created_at: int,
     reason: str,
+    *,
+    folds: list[FoldResult] | None = None,
+    fold_curves: list[list[EquityCurvePoint]] | None = None,
+    selection_failures: list[SelectionFailureResult] | None = None,
+    parent_sharpe: float | None = None,
+    warnings: list[str] | None = None,
 ) -> WalkForwardResult:
-    """Build an empty WF result paired with a failed status.
-
-    Used for early failures (split-policy errors, zero folds) where
-    we never get to execute any folds. Late failures (some folds
-    succeed, some don't) stay ``status='completed'`` and surface
-    per-fold via the fold list.
-    """
-    return WalkForwardResult(
-        walk_forward_id=wf_id,
-        parent_run_id=request.parent_run_id,
-        strategy_spec_hash=spec_hash,
-        split_policy=SplitPolicySpec.model_validate(request.split_policy.describe()),
-        folds=[],
-        combined_oos_equity_curve=[],
-        mean_oos_sharpe=None,
-        median_oos_sharpe=None,
-        pct_profitable_folds=None,
-        oos_retention=None,
-        alpha_decay=None,
-        warnings=[reason],
-        created_at_ms=created_at,
-        completed_at_ms=now_ms_utc(),
+    """Build a failed result without discarding already-produced evidence."""
+    return _build_wf_result(
+        wf_id=wf_id,
+        spec_hash=spec_hash,
+        request=request,
+        created_at=created_at,
+        folds=folds or [],
+        fold_curves=fold_curves or [],
+        selection_failures=selection_failures or [],
+        parent_sharpe=parent_sharpe,
+        warnings=warnings or [reason],
         status="failed",
         failure_reason=reason,
     )
 
+
+def _build_wf_result(
+    *,
+    wf_id: str,
+    spec_hash: str,
+    request: WalkForwardRequest,
+    created_at: int,
+    folds: list[FoldResult],
+    fold_curves: list[list[EquityCurvePoint]],
+    selection_failures: list[SelectionFailureResult],
+    parent_sharpe: float | None,
+    warnings: list[str],
+    status: Literal["completed", "failed"],
+    failure_reason: str | None = None,
+) -> WalkForwardResult:
+    """Aggregate only auditable completed folds into one typed result."""
+    successful_folds = [fold for fold in folds if fold.status == "completed"]
+    sharpes = [
+        fold.test_metrics.sharpe_ratio for fold in successful_folds if fold.test_metrics.sharpe_ratio is not None
+    ]
+    profitable_count = sum(1 for fold in successful_folds if fold.test_metrics.total_return_pct > 0)
+    pct_profitable = profitable_count / len(successful_folds) if successful_folds else None
+    mean_oos_sharpe = statistics.fmean(sharpes) if sharpes else None
+    median_oos_sharpe = statistics.median(sharpes) if sharpes else None
+
+    if request.parameter_search is not None:
+        oos_retention = _mean_fold_retention(successful_folds)
+        retention_basis: (
+            Literal[
+                "mean_fold_test_to_selected_train",
+                "mean_oos_to_parent",
+            ]
+            | None
+        ) = "mean_fold_test_to_selected_train"
+    else:
+        oos_retention = _oos_retention(mean_oos_sharpe, parent_sharpe)
+        retention_basis = "mean_oos_to_parent" if parent_sharpe is not None else None
+
+    return WalkForwardResult(
+        walk_forward_id=wf_id,
+        parent_run_id=request.parent_run_id,
+        strategy_spec_hash=spec_hash,
+        split_policy=parse_split_policy_spec(request.split_policy.describe()),
+        folds=folds,
+        selection_failures=selection_failures,
+        combined_oos_equity_curve=_compound_oos_curve(fold_curves),
+        mean_oos_sharpe=mean_oos_sharpe,
+        median_oos_sharpe=median_oos_sharpe,
+        pct_profitable_folds=pct_profitable,
+        oos_retention=oos_retention,
+        oos_retention_basis=retention_basis,
+        alpha_decay=_alpha_decay(successful_folds),
+        warnings=warnings,
+        created_at_ms=created_at,
+        completed_at_ms=now_ms_utc(),
+        status=status,
+        failure_reason=failure_reason,
+    )
+
+
+def _mean_fold_retention(folds: list[FoldResult]) -> float | None:
+    """Equal-weight mean of eligible fold-local test/train Sharpe ratios.
+
+    This deliberately differs from a ratio of aggregate Sharpes. Each fold's
+    TEST result is compared only with the train-side winner that selected it,
+    then the eligible ratios receive equal weight.
+    """
+    values = [fold.oos_retention for fold in folds if fold.oos_retention is not None]
+    return statistics.fmean(values) if values else None

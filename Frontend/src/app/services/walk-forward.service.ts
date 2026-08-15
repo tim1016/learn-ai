@@ -51,6 +51,10 @@ export class WalkForwardService {
       params = params.set('parent_run_id', filters.parent_run_id);
     }
     if (filters.spec_hash) params = params.set('spec_hash', filters.spec_hash);
+    if (filters.protocol_id) params = params.set('protocol_id', filters.protocol_id);
+    if (filters.protocol_version) {
+      params = params.set('protocol_version', filters.protocol_version);
+    }
     if (filters.since_ms !== undefined) {
       params = params.set('since_ms', String(filters.since_ms));
     }

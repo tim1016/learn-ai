@@ -4,11 +4,11 @@ Three endpoints under ``/api/research/strategy-runs/walk-forward``:
 
   * ``POST   /``                 — kick off a walk-forward analysis,
     persist the config + result, and return them. Synchronous: blocks
-    until every fold finishes; for grids of >10 folds consider
-    backgrounding via ``app/routers/jobs.py`` (deferred).
+    until every fold finishes. Large versioned protocols use the jobs
+    boundary in ``app/routers/jobs.py`` instead.
   * ``GET    /{wf_id}``          — load a previously-persisted WF.
   * ``GET    /``                 — list WFs, optionally filtered by
-    ``parent_run_id`` / ``spec_hash`` / ``since_ms``.
+    parent, spec hash, protocol identity, or creation time.
 
 Mounted *before* ``research_runs`` in ``app/main.py`` so the literal
 ``/walk-forward`` segment wins against the parameterised
@@ -28,10 +28,15 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.engine.strategy.spec import StrategySpec
-from app.research.runs import RunCorruptError, RunNotFoundError, load_run
+from app.research.runs import (
+    RunAlreadyExistsError,
+    RunCorruptError,
+    RunNotFoundError,
+    load_run,
+)
 from app.research.walk_forward import (
     SplitPolicySpec,
     WalkForwardAlreadyExistsError,
@@ -61,14 +66,31 @@ logger = logging.getLogger(__name__)
 class WalkForwardHttpRequest(BaseModel):
     """Inputs for ``POST /api/research/strategy-runs/walk-forward``."""
 
+    model_config = ConfigDict(extra="forbid")
+
     spec: StrategySpec = Field(..., description="Validated StrategySpec")
     start_date: str = Field(..., description="YYYY-MM-DD")
     end_date: str = Field(..., description="YYYY-MM-DD")
-    initial_cash: float = Field(100_000.0, ge=0)
+    initial_cash: float = Field(
+        100_000.0,
+        gt=0,
+        allow_inf_nan=False,
+        strict=True,
+    )
     fill_mode: str = Field("signal_bar_close")
-    commission_per_order: float = Field(0.0, ge=0)
-    slippage_per_share: float = Field(0.0, ge=0)
-    random_seed: int = 0
+    commission_per_order: float = Field(
+        0.0,
+        ge=0,
+        allow_inf_nan=False,
+        strict=True,
+    )
+    slippage_per_share: float = Field(
+        0.0,
+        ge=0,
+        allow_inf_nan=False,
+        strict=True,
+    )
+    random_seed: int = Field(0, strict=True)
     parent_run_id: str | None = Field(
         None, description="Optional baseline run this WF is derived from"
     )
@@ -170,7 +192,7 @@ def create_walk_forward(
 
     try:
         save_walk_forward(config, result, root=artifacts_root)
-    except WalkForwardAlreadyExistsError as exc:
+    except (RunAlreadyExistsError, WalkForwardAlreadyExistsError) as exc:
         logger.exception(
             "[WF] walk_forward_id collision: %s", config.walk_forward_id
         )
@@ -227,6 +249,8 @@ def get_walk_forward(
 def list_walk_forwards_endpoint(
     parent_run_id: str | None = Query(None, description="Filter by baseline run"),
     spec_hash: str | None = Query(None, description="Filter by ``strategy_spec_hash``"),
+    protocol_id: str | None = Query(None, description="Filter by exact protocol identity"),
+    protocol_version: str | None = Query(None, description="Filter by exact protocol version"),
     since_ms: int | None = Query(
         None, ge=0, description="Only return WFs created at or after this ms-since-epoch"
     ),
@@ -234,10 +258,17 @@ def list_walk_forwards_endpoint(
     artifacts_root: Path | None = Depends(get_artifacts_root),
 ) -> WalkForwardListResponse:
     """List persisted walk-forwards, optionally filtered, newest first."""
+    if (protocol_id is None) != (protocol_version is None):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="protocol_id and protocol_version filters must be provided together",
+        )
     items = list_walk_forwards(
         root=artifacts_root,
         parent_run_id=parent_run_id,
         spec_hash=spec_hash,
+        protocol_id=protocol_id,
+        protocol_version=protocol_version,
         since_ms=since_ms,
         limit=limit,
     )

@@ -1,0 +1,68 @@
+<section class="protocol" aria-labelledby="protocol-title">
+  <header class="protocol__header">
+    <div>
+      <span class="protocol__eyebrow">Rolling research design</span>
+      <h3 id="protocol-title">Learn → freeze → prove</h3>
+    </div>
+    <p>Six months in sample. One untouched month out of sample. Advance one month and repeat.</p>
+  </header>
+
+  <div class="protocol__rail" role="img" aria-label="Six training months select one frozen threshold before one out-of-sample test month">
+    <div class="protocol__phase protocol__phase--train">
+      <span>01</span>
+      <strong>Learn</strong>
+      <small>6 months · 7 candidates</small>
+    </div>
+    <span class="protocol__arrow" aria-hidden="true">→</span>
+    <div class="protocol__phase protocol__phase--freeze">
+      <span>02</span>
+      <strong>Freeze</strong>
+      <small>1 threshold · no peeking</small>
+    </div>
+    <span class="protocol__arrow" aria-hidden="true">→</span>
+    <div class="protocol__phase protocol__phase--test">
+      <span>03</span>
+      <strong>Prove</strong>
+      <small>1 month · OOS only</small>
+    </div>
+  </div>
+
+  <div class="protocol__grid">
+    <article class="protocol__card">
+      <div class="protocol__card-heading">
+        <div>
+          <span class="protocol__eyebrow">Candidate lattice</span>
+          <h4>EMA delta threshold</h4>
+        </div>
+        <span class="protocol__unit">basis points</span>
+      </div>
+      <ol class="thresholds" aria-label="Candidate EMA delta thresholds">
+        @for (threshold of thresholds; track threshold.value) {
+          <li [class.threshold--reference]="threshold.controlNeighbourhood">
+            <strong>{{ threshold.value }}</strong><span>bps</span>
+            @if (threshold.controlNeighbourhood) { <small>control neighbourhood</small> }
+          </li>
+        }
+      </ol>
+      <p class="protocol__note">The $0.20 control is price-dependent; near $500 it corresponds to 4 bps.</p>
+    </article>
+
+    <article class="protocol__card protocol__card--formula">
+      <span class="protocol__eyebrow">Entry contract</span>
+      <h4>Normalize before comparing</h4>
+      <p class="formula"><span>gap</span><sub>bps</sub> = 10,000 × (EMA<sub>5</sub> − EMA<sub>10</sub>) / EMA<sub>10</sub></p>
+      <ul class="conditions">
+        <li><span>Cross</span><strong>fresh EMA5 above EMA10</strong></li>
+        <li><span>Gate</span><strong>gap<sub>bps</sub> ≥ selected threshold</strong></li>
+        <li><span>Regime</span><strong>50 ≤ RSI14 ≤ 70</strong></li>
+      </ul>
+    </article>
+  </div>
+
+  <div class="fold-sequence">
+    <div><span class="protocol__eyebrow">Canonical OOS protocol</span><strong>18 monthly folds</strong></div>
+    <ol aria-label="Eighteen canonical monthly out-of-sample folds">
+      @for (fold of folds; track fold) { <li><span>F{{ fold }}</span></li> }
+    </ol>
+  </div>
+</section>

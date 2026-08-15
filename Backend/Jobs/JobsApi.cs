@@ -42,6 +42,7 @@ public static class JobsApi
         ["cross_sectional"] = "/api/jobs-internal/cross-sectional",
         ["feature_research"] = "/api/jobs-internal/feature-research",
         ["signal_engine"] = "/api/jobs-internal/signal-engine",
+        ["spy_ema_walk_forward"] = "/api/jobs-internal/spy-ema-walk-forward",
     };
 
     public static void MapJobsEndpoints(this WebApplication app)

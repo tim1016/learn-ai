@@ -517,19 +517,22 @@ export class SpecStrategyRunnerComponent {
 
   // -----------------------------------------------------------------------
   // Operand helpers — for the IndicatorComparison editor's two-operand UI.
-  // We only allow IndicatorRef, Const, and Subtract(IndicatorRef -
-  // IndicatorRef) in the form — Subtract is a one-shot helper for the
-  // common "EMA gap" case rather than a full nested-AST editor.
+  // The form exposes only the two domain arithmetic nodes the server can run:
+  // absolute subtraction and a normalized basis-point difference. It is not
+  // a general nested-AST editor.
   // -----------------------------------------------------------------------
-  operandKindOf(op: Operand): 'IndicatorRef' | 'Const' | 'Subtract' {
-    return op.kind === 'IndicatorRef' || op.kind === 'Const' || op.kind === 'Subtract'
+  operandKindOf(op: Operand): 'IndicatorRef' | 'Const' | 'Subtract' | 'DifferenceBps' {
+    return op.kind === 'IndicatorRef'
+      || op.kind === 'Const'
+      || op.kind === 'Subtract'
+      || op.kind === 'DifferenceBps'
       ? op.kind
       : 'Const';
   }
 
   changeOperandKind(
     op: Operand,
-    newKind: 'IndicatorRef' | 'Const' | 'Subtract',
+    newKind: 'IndicatorRef' | 'Const' | 'Subtract' | 'DifferenceBps',
     indicators: readonly IndicatorBlock[],
   ): Operand {
     const firstId = indicators[0]?.id ?? '';
@@ -537,7 +540,7 @@ export class SpecStrategyRunnerComponent {
     if (newKind === 'IndicatorRef') return { kind: 'IndicatorRef', indicator: firstId };
     if (newKind === 'Const') return { kind: 'Const', value: 0 };
     return {
-      kind: 'Subtract',
+      kind: newKind,
       left: { kind: 'IndicatorRef', indicator: firstId },
       right: { kind: 'IndicatorRef', indicator: secondId },
     };

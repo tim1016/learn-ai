@@ -2,15 +2,10 @@
 
 Phase C of the build-alpha-style research pipeline (architecture spec at
 ``docs/architecture/build-alpha-style-features-1-8-research-spec.md`` §
-Feature 4). Splits a date window into train/test folds, runs the same
-spec over each fold's test window through the canonical engine, and
-aggregates fold-level metrics into a combined OOS curve.
-
-**Milestone 4A only**: fixed spec across folds. The train window is
-*declared* but not *executed* — there's nothing being fitted on train,
-so the train side is informational only and reserved for Phase 4B
-(train-side parameter selection, which lives behind Feature 8 /
-sensitivity sweeps).
+Feature 4). Splits a date window into train/test folds, optionally selects a
+fully-materialized candidate spec on each train window, freezes it for test,
+and aggregates fold-level metrics into a combined OOS curve. Fixed-spec 4A
+and candidate-grid 4B share the same canonical runner.
 
 Each fold's test run is a normal ``RunLedger`` + ``BacktestRunResult``
 persisted under ``artifacts/runs/<fold_run_id>/`` with
@@ -31,12 +26,24 @@ from app.research.walk_forward.errors import (
     WalkForwardNotFoundError,
 )
 from app.research.walk_forward.result import (
+    AnchoredSplitPolicySpec,
+    ChronologicalSplitPolicySpec,
     FoldResult,
+    ParameterSearchConfig,
+    RollingSplitPolicySpec,
+    SelectionFailureResult,
     SplitPolicySpec,
+    TrainingCandidateResult,
     WalkForwardConfig,
     WalkForwardResult,
+    parse_split_policy_spec,
 )
 from app.research.walk_forward.runner import WalkForwardRequest, run_walk_forward
+from app.research.walk_forward.selection import (
+    ParameterCandidate,
+    ParameterSearchRequest,
+    ParameterSelectionError,
+)
 from app.research.walk_forward.splits import (
     AnchoredSplitPolicy,
     ChronologicalSplitPolicy,
@@ -54,12 +61,21 @@ from app.research.walk_forward.storage import (
 __all__ = [
     "WALK_FORWARD_ARTIFACT",
     "AnchoredSplitPolicy",
+    "AnchoredSplitPolicySpec",
     "ChronologicalSplitPolicy",
+    "ChronologicalSplitPolicySpec",
     "FoldResult",
     "FoldWindow",
+    "ParameterCandidate",
+    "ParameterSearchConfig",
+    "ParameterSearchRequest",
+    "ParameterSelectionError",
     "RollingSplitPolicy",
+    "RollingSplitPolicySpec",
+    "SelectionFailureResult",
     "SplitPolicy",
     "SplitPolicySpec",
+    "TrainingCandidateResult",
     "WalkForwardAlreadyExistsError",
     "WalkForwardConfig",
     "WalkForwardCorruptError",
@@ -69,6 +85,7 @@ __all__ = [
     "build_split_policy",
     "list_walk_forwards",
     "load_walk_forward",
+    "parse_split_policy_spec",
     "run_walk_forward",
     "save_walk_forward",
 ]

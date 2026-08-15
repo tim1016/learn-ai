@@ -76,6 +76,10 @@ function makeWfResponse(): WalkForwardResponse {
         test_days: 30,
         step_days: 30,
       },
+      parameter_search: null,
+      fold_position_policy: 'flat_at_test_boundaries',
+      protocol_id: null,
+      protocol_version: null,
       created_at_ms: 1736000000000,
     },
     result: {
@@ -89,11 +93,13 @@ function makeWfResponse(): WalkForwardResponse {
         step_days: 30,
       },
       folds: [],
+      selection_failures: [],
       combined_oos_equity_curve: [],
       mean_oos_sharpe: null,
       median_oos_sharpe: null,
       pct_profitable_folds: null,
       oos_retention: null,
+      oos_retention_basis: null,
       alpha_decay: null,
       warnings: [],
       created_at_ms: 1736000000000,
@@ -173,6 +179,8 @@ describe('WalkForwardService', () => {
       const promise = service.listWalkForwards({
         parent_run_id: 'parent',
         spec_hash: 'hash',
+        protocol_id: 'spy-ema-normalized-gap',
+        protocol_version: '1.0',
         since_ms: 1700000000000,
         limit: 10,
       });
@@ -180,6 +188,8 @@ describe('WalkForwardService', () => {
       const params = req.request.params;
       expect(params.get('parent_run_id')).toBe('parent');
       expect(params.get('spec_hash')).toBe('hash');
+      expect(params.get('protocol_id')).toBe('spy-ema-normalized-gap');
+      expect(params.get('protocol_version')).toBe('1.0');
       expect(params.get('since_ms')).toBe('1700000000000');
       expect(params.get('limit')).toBe('10');
       req.flush({ walk_forwards: [] });

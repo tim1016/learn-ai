@@ -46,6 +46,23 @@ describe('plain-english', () => {
       expect(out).toBe('EMA(5) − EMA(10) ≥ 0.2');
     });
 
+    it('renders IndicatorComparison with normalized basis-point difference', () => {
+      const out = formatCondition(
+        {
+          kind: 'IndicatorComparison',
+          left: {
+            kind: 'DifferenceBps',
+            left: { kind: 'IndicatorRef', indicator: 'ema5' },
+            right: { kind: 'IndicatorRef', indicator: 'ema10' },
+          },
+          op: '>=',
+          right: { kind: 'Const', value: 4 },
+        },
+        INDS,
+      );
+      expect(out).toBe('Δbps(EMA(5), EMA(10)) ≥ 4');
+    });
+
     it('renders IndicatorBetween inclusive vs exclusive', () => {
       expect(
         formatCondition(

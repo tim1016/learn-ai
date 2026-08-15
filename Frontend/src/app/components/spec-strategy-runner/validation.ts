@@ -116,7 +116,7 @@ export function validateStrategy(
         hint: 'Either add the indicator to your reference library or pick an existing one.',
       });
     }
-    if (op.kind === 'Subtract') {
+    if (op.kind === 'Subtract' || op.kind === 'DifferenceBps') {
       checkOperand(op.left, where);
       checkOperand(op.right, where);
     }
@@ -359,7 +359,7 @@ export function collectIndicatorReferences(spec: StrategySpec): Set<string> {
   function harvestOperand(op: Operand): void {
     if (!op) return;
     if (op.kind === 'IndicatorRef') refs.add(op.indicator);
-    if (op.kind === 'Subtract') {
+    if (op.kind === 'Subtract' || op.kind === 'DifferenceBps') {
       harvestOperand(op.left);
       harvestOperand(op.right);
     }

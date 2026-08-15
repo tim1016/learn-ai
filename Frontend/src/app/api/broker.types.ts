@@ -3654,6 +3654,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs-internal/spy-ema-walk-forward": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Spy Ema Walk Forward Job
+         * @description Run the immutable SPY EMA V1 protocol behind the jobs boundary.
+         */
+        post: operations["start_spy_ema_walk_forward_job_api_jobs_internal_spy_ema_walk_forward_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/lean-sidecar/calendar/blocked-dates": {
         parameters: {
             query?: never;
@@ -8302,6 +8322,23 @@ export interface components {
             t_stat?: number;
         };
         /**
+         * AnchoredSplitPolicySpec
+         * @description Strict HTTP/storage shape for one anchored split.
+         */
+        AnchoredSplitPolicySpec: {
+            /** Initial Train Days */
+            initial_train_days: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "anchored";
+            /** Step Days */
+            step_days: number;
+            /** Test Days */
+            test_days: number;
+        };
+        /**
          * ArbitrageDetail
          * @description Arbitrage violation diagnostics.
          */
@@ -10590,6 +10627,19 @@ export interface components {
             source: "polygon";
         };
         /**
+         * ChronologicalSplitPolicySpec
+         * @description Strict HTTP/storage shape for one chronological split.
+         */
+        ChronologicalSplitPolicySpec: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "chronological";
+            /** Train Pct */
+            train_pct: number;
+        };
+        /**
          * ClearHoldRequest
          * @description Operator's clear-hold request body (phase-2 S6).
          *
@@ -12578,6 +12628,22 @@ export interface components {
             warnings?: string[];
         };
         /**
+         * DifferenceBps
+         * @description Relative difference between two operands, expressed in basis points.
+         *
+         *     This domain operand keeps normalized-threshold strategies explicit in
+         *     serialized specs without admitting a general arithmetic language.
+         */
+        DifferenceBps: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "DifferenceBps";
+            left: components["schemas"]["IndicatorRef"];
+            right: components["schemas"]["IndicatorRef"];
+        };
+        /**
          * DivergenceCategory
          * @description Categorical divergence types — see numerical-rigor.md.
          * @enum {string}
@@ -13857,8 +13923,14 @@ export interface components {
             failure_reason?: string | null;
             /** Fold Index */
             fold_index: number;
+            /** Oos Retention */
+            oos_retention?: number | null;
             /** Selected Parameters */
-            selected_parameters?: Record<string, never>;
+            selected_parameters?: {
+                [key: string]: number;
+            };
+            /** Selected Train Sharpe */
+            selected_train_sharpe?: number | null;
             /**
              * Status
              * @default completed
@@ -13869,7 +13941,7 @@ export interface components {
             test_end_ms: number;
             test_metrics: components["schemas"]["RunMetrics"];
             /** Test Run Id */
-            test_run_id: string;
+            test_run_id: string | null;
             /** Test Start Ms */
             test_start_ms: number;
             /** Test Trade Count */
@@ -13878,6 +13950,8 @@ export interface components {
             train_end_ms: number;
             /** Train Start Ms */
             train_start_ms: number;
+            /** Training Candidates */
+            training_candidates?: components["schemas"]["TrainingCandidateResult"][];
         };
         /** FreshCross */
         FreshCross: {
@@ -15570,14 +15644,14 @@ export interface components {
              */
             kind: "IndicatorComparison";
             /** Left */
-            left: components["schemas"]["IndicatorRef"] | components["schemas"]["ConstOperand"] | components["schemas"]["Subtract-Input"];
+            left: components["schemas"]["IndicatorRef"] | components["schemas"]["ConstOperand"] | components["schemas"]["Subtract-Input"] | components["schemas"]["DifferenceBps"];
             /**
              * Op
              * @enum {string}
              */
             op: "<" | "<=" | "==" | ">=" | ">" | "!=";
             /** Right */
-            right: components["schemas"]["IndicatorRef"] | components["schemas"]["ConstOperand"] | components["schemas"]["Subtract-Input"];
+            right: components["schemas"]["IndicatorRef"] | components["schemas"]["ConstOperand"] | components["schemas"]["Subtract-Input"] | components["schemas"]["DifferenceBps"];
         };
         /** IndicatorComparison */
         "IndicatorComparison-Output": {
@@ -15587,14 +15661,14 @@ export interface components {
              */
             kind: "IndicatorComparison";
             /** Left */
-            left: components["schemas"]["IndicatorRef"] | components["schemas"]["ConstOperand"] | components["schemas"]["Subtract-Output"];
+            left: components["schemas"]["IndicatorRef"] | components["schemas"]["ConstOperand"] | components["schemas"]["Subtract-Output"] | components["schemas"]["DifferenceBps"];
             /**
              * Op
              * @enum {string}
              */
             op: "<" | "<=" | "==" | ">=" | ">" | "!=";
             /** Right */
-            right: components["schemas"]["IndicatorRef"] | components["schemas"]["ConstOperand"] | components["schemas"]["Subtract-Output"];
+            right: components["schemas"]["IndicatorRef"] | components["schemas"]["ConstOperand"] | components["schemas"]["Subtract-Output"] | components["schemas"]["DifferenceBps"];
         };
         /**
          * IndicatorConfig
@@ -19273,6 +19347,36 @@ export interface components {
             supported_action_ids: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority")[];
         };
         /**
+         * ParameterCandidateConfig
+         * @description One fully-materialized strategy candidate in a train-side grid.
+         */
+        ParameterCandidateConfig: {
+            /** Parameters */
+            parameters: {
+                [key: string]: number;
+            };
+            /** Strategy Spec Hash */
+            strategy_spec_hash: string;
+            /** Strategy Spec Json */
+            strategy_spec_json: Record<string, never>;
+        };
+        /**
+         * ParameterSearchConfig
+         * @description Persisted, replayable definition of train-side model selection.
+         */
+        ParameterSearchConfig: {
+            /** Candidates */
+            candidates: components["schemas"]["ParameterCandidateConfig"][];
+            /** Min Trades */
+            min_trades: number;
+            /**
+             * Objective
+             * @default sharpe_ratio
+             * @constant
+             */
+            objective?: "sharpe_ratio";
+        };
+        /**
          * ParameterStabilityResponse
          * @description Parameter stability assessment.
          */
@@ -20843,6 +20947,23 @@ export interface components {
             worst_month_ic?: number;
         };
         /**
+         * RollingSplitPolicySpec
+         * @description Strict HTTP/storage shape for one rolling split.
+         */
+        RollingSplitPolicySpec: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "rolling";
+            /** Step Days */
+            step_days: number;
+            /** Test Days */
+            test_days: number;
+            /** Train Days */
+            train_days: number;
+        };
+        /**
          * RollingTStatPointResponse
          * @description Single point in rolling smoothed t-stat series.
          */
@@ -21123,99 +21244,11 @@ export interface components {
          *         (sessions included / weekends + holidays excluded) for the run's
          *         date window. Older ledgers continue to load with this field as
          *         ``None``.
+         *       * v1.3: Added optional ``warmup_start_ms`` so indicator pre-roll data
+         *         is part of the auditable run boundary without changing the reported
+         *         trading window.
          */
-        RunLedger: {
-            /** Commission Per Order */
-            commission_per_order: number;
-            /** Completed At Ms */
-            completed_at_ms?: number | null;
-            /** Created At Ms */
-            created_at_ms?: number;
-            /** Data Snapshot Id */
-            data_snapshot_id: string;
-            /**
-             * Data Source
-             * @default lean_minute_reader
-             * @constant
-             */
-            data_source?: "lean_minute_reader";
-            /** End Ms */
-            end_ms: number;
-            /** Engine Git Commit */
-            engine_git_commit: string;
-            /**
-             * Engine Name
-             * @default learn_ai_event_driven
-             * @constant
-             */
-            engine_name?: "learn_ai_event_driven";
-            /**
-             * Engine Version
-             * @default 0.1.0
-             */
-            engine_version?: string;
-            /** Failure Reason */
-            failure_reason?: string | null;
-            /** Fill Mode */
-            fill_mode: string;
-            /** Initial Cash */
-            initial_cash: number;
-            /** Metrics Hash */
-            metrics_hash?: string | null;
-            /** Parent Run Id */
-            parent_run_id?: string | null;
-            /** Parent Spec Hash */
-            parent_spec_hash?: string | null;
-            /** Prediction Set Hash */
-            prediction_set_hash?: string | null;
-            /**
-             * Random Seed
-             * @default 0
-             */
-            random_seed?: number;
-            /** Resolution Minutes */
-            resolution_minutes: number;
-            /** Result Hash */
-            result_hash?: string | null;
-            /** Run Id */
-            run_id: string;
-            /**
-             * Schema Version
-             * @default 1.2
-             * @enum {string}
-             */
-            schema_version?: "1.0" | "1.1" | "1.2";
-            /**
-             * Slippage Per Share
-             * @default 0
-             */
-            slippage_per_share?: number;
-            /** Start Ms */
-            start_ms: number;
-            /**
-             * Status
-             * @default running
-             * @enum {string}
-             */
-            status?: "running" | "completed" | "failed";
-            /** Strategy Spec Hash */
-            strategy_spec_hash: string;
-            /** Strategy Spec Id */
-            strategy_spec_id: string;
-            /** Strategy Spec Json */
-            strategy_spec_json: Record<string, never>;
-            /** Symbol */
-            symbol: string;
-            /** Trade Log Hash */
-            trade_log_hash?: string | null;
-            /**
-             * Warmup Policy
-             * @default spec_indicator_warmup
-             * @constant
-             */
-            warmup_policy?: "spec_indicator_warmup";
-            window_summary?: components["schemas"]["WindowSummary"] | null;
-        };
+        RunLedger: Record<string, never>;
         /**
          * RunMetrics
          * @description Headline metrics for a backtest run.
@@ -21901,6 +21934,26 @@ export interface components {
             /** Observation Count */
             observation_count: number;
         };
+        /**
+         * SelectionFailureResult
+         * @description Train-side evidence retained when a fold cannot select a winner.
+         */
+        SelectionFailureResult: {
+            /** Failure Reason */
+            failure_reason: string;
+            /** Fold Index */
+            fold_index: number;
+            /** Test End Ms */
+            test_end_ms: number;
+            /** Test Start Ms */
+            test_start_ms: number;
+            /** Train End Ms */
+            train_end_ms: number;
+            /** Train Start Ms */
+            train_start_ms: number;
+            /** Training Candidates */
+            training_candidates?: components["schemas"]["TrainingCandidateResult"][];
+        };
         /** SeriesResponse */
         SeriesResponse: {
             /** N Snapshots */
@@ -22476,18 +22529,12 @@ export interface components {
             trade_number: number;
         };
         /**
-         * SplitPolicySpec
-         * @description Wire-shape for a split policy. ``kind`` discriminates; the rest of
-         *     the fields are policy-specific (validated again in ``splits.py``).
+         * SpyEmaWalkForwardJobRequest
+         * @description Frozen V1 protocol job; clients may provide no research overrides.
          */
-        SplitPolicySpec: {
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "chronological" | "rolling" | "anchored";
-        } & {
-            [key: string]: unknown;
+        SpyEmaWalkForwardJobRequest: {
+            /** Jobid */
+            jobId: string;
         };
         /**
          * Stage0FailureResponse
@@ -23505,9 +23552,9 @@ export interface components {
              */
             kind: "Subtract";
             /** Left */
-            left: components["schemas"]["IndicatorRef"] | components["schemas"]["ConstOperand"] | components["schemas"]["Subtract-Input"];
+            left: components["schemas"]["IndicatorRef"] | components["schemas"]["ConstOperand"] | components["schemas"]["Subtract-Input"] | components["schemas"]["DifferenceBps"];
             /** Right */
-            right: components["schemas"]["IndicatorRef"] | components["schemas"]["ConstOperand"] | components["schemas"]["Subtract-Input"];
+            right: components["schemas"]["IndicatorRef"] | components["schemas"]["ConstOperand"] | components["schemas"]["Subtract-Input"] | components["schemas"]["DifferenceBps"];
         };
         /** Subtract */
         "Subtract-Output": {
@@ -23517,9 +23564,9 @@ export interface components {
              */
             kind: "Subtract";
             /** Left */
-            left: components["schemas"]["IndicatorRef"] | components["schemas"]["ConstOperand"] | components["schemas"]["Subtract-Output"];
+            left: components["schemas"]["IndicatorRef"] | components["schemas"]["ConstOperand"] | components["schemas"]["Subtract-Output"] | components["schemas"]["DifferenceBps"];
             /** Right */
-            right: components["schemas"]["IndicatorRef"] | components["schemas"]["ConstOperand"] | components["schemas"]["Subtract-Output"];
+            right: components["schemas"]["IndicatorRef"] | components["schemas"]["ConstOperand"] | components["schemas"]["Subtract-Output"] | components["schemas"]["DifferenceBps"];
         };
         /**
          * SurfaceBuildRequest
@@ -24202,6 +24249,28 @@ export interface components {
             train_t_stat: number;
         };
         /**
+         * TrainingCandidateResult
+         * @description Auditable train-window outcome for one parameter candidate.
+         */
+        TrainingCandidateResult: {
+            /** Eligible */
+            eligible: boolean;
+            /** Ineligibility Reason */
+            ineligibility_reason?: string | null;
+            /** Parameters */
+            parameters: {
+                [key: string]: number;
+            };
+            /**
+             * Receipt Persisted
+             * @default true
+             */
+            receipt_persisted?: boolean;
+            train_metrics: components["schemas"]["RunMetrics"];
+            /** Train Run Id */
+            train_run_id: string;
+        };
+        /**
          * TransactionRail
          * @description The six-station rail rendering one selected transaction (§7.1).
          */
@@ -24564,17 +24633,29 @@ export interface components {
             end_ms: number;
             /** Fill Mode */
             fill_mode: string;
+            /**
+             * Fold Position Policy
+             * @default flat_at_test_boundaries
+             * @constant
+             */
+            fold_position_policy?: "flat_at_test_boundaries";
             /** Initial Cash */
             initial_cash: number;
+            parameter_search?: components["schemas"]["ParameterSearchConfig"] | null;
             /** Parent Run Id */
             parent_run_id?: string | null;
+            /** Protocol Id */
+            protocol_id?: string | null;
+            /** Protocol Version */
+            protocol_version?: string | null;
             /** Random Seed */
             random_seed: number;
             /** Resolution Minutes */
             resolution_minutes: number;
             /** Slippage Per Share */
             slippage_per_share: number;
-            split_policy: components["schemas"]["SplitPolicySpec"];
+            /** Split Policy */
+            split_policy: components["schemas"]["ChronologicalSplitPolicySpec"] | components["schemas"]["RollingSplitPolicySpec"] | components["schemas"]["AnchoredSplitPolicySpec"];
             /** Start Ms */
             start_ms: number;
             /** Strategy Spec Hash */
@@ -24628,8 +24709,11 @@ export interface components {
             slippage_per_share?: number;
             /** @description Validated StrategySpec */
             spec: components["schemas"]["StrategySpec-Input"];
-            /** @description ``kind`` discriminator + policy-specific fields */
-            split_policy: components["schemas"]["SplitPolicySpec"];
+            /**
+             * Split Policy
+             * @description ``kind`` discriminator + policy-specific fields
+             */
+            split_policy: components["schemas"]["ChronologicalSplitPolicySpec"] | components["schemas"]["RollingSplitPolicySpec"] | components["schemas"]["AnchoredSplitPolicySpec"];
             /**
              * Start Date
              * @description YYYY-MM-DD
@@ -24650,10 +24734,9 @@ export interface components {
          * WalkForwardResult
          * @description Aggregated walk-forward output.
          *
-         *     The ``combined_oos_equity_curve`` is **compounded** across folds
-         *     (fold N's start equity = fold N-1's end equity), which models the
-         *     investor experience of holding through the strategy across all
-         *     test windows. Rebased-per-fold is a future toggle if needed.
+         *     The ``combined_oos_equity_curve`` compounds independently-flat OOS
+         *     fold returns. Indicator state is pre-rolled from each fold's train
+         *     window, but positions never cross an OOS boundary.
          */
         WalkForwardResult: {
             /** Alpha Decay */
@@ -24674,11 +24757,16 @@ export interface components {
             median_oos_sharpe?: number | null;
             /** Oos Retention */
             oos_retention?: number | null;
+            /** Oos Retention Basis */
+            oos_retention_basis?: ("mean_fold_test_to_selected_train" | "mean_oos_to_parent") | null;
             /** Parent Run Id */
             parent_run_id?: string | null;
             /** Pct Profitable Folds */
             pct_profitable_folds?: number | null;
-            split_policy: components["schemas"]["SplitPolicySpec"];
+            /** Selection Failures */
+            selection_failures?: components["schemas"]["SelectionFailureResult"][];
+            /** Split Policy */
+            split_policy: components["schemas"]["ChronologicalSplitPolicySpec"] | components["schemas"]["RollingSplitPolicySpec"] | components["schemas"]["AnchoredSplitPolicySpec"];
             /**
              * Status
              * @default completed
@@ -31423,6 +31511,39 @@ export interface operations {
             };
         };
     };
+    start_spy_ema_walk_forward_job_api_jobs_internal_spy_ema_walk_forward_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpyEmaWalkForwardJobRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_calendar_blocked_dates_api_lean_sidecar_calendar_blocked_dates_get: {
         parameters: {
             query: {
@@ -33841,6 +33962,10 @@ export interface operations {
                 parent_run_id?: string | null;
                 /** @description Filter by ``strategy_spec_hash`` */
                 spec_hash?: string | null;
+                /** @description Filter by exact protocol identity */
+                protocol_id?: string | null;
+                /** @description Filter by exact protocol version */
+                protocol_version?: string | null;
                 /** @description Only return WFs created at or after this ms-since-epoch */
                 since_ms?: number | null;
                 /** @description Newest-first cap */

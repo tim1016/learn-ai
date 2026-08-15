@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
@@ -83,7 +84,10 @@ from app.security.data_plane_control import (
 from app.services.account_reconciliation import AccountReconciliationService
 from app.services.account_truth_refresh import AccountTruthRefreshLoop, account_truth_artifacts_root
 from app.services.fleet_contamination import record_account_journal_parity_observation
-from app.utils.error_handlers import polygon_exception_handler
+from app.utils.error_handlers import (
+    polygon_exception_handler,
+    request_validation_exception_handler,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -794,7 +798,12 @@ if settings.ALPACA_FAULT_INJECTION_ENABLED:
         "Never enable this in a live/production path."
     )
 
-# Exception handler
+# Exception handlers. Register request validation separately so rejected
+# non-finite JSON numbers cannot make FastAPI's own 422 body non-serializable.
+app.add_exception_handler(
+    RequestValidationError,
+    request_validation_exception_handler,
+)
 app.add_exception_handler(Exception, polygon_exception_handler)
 
 

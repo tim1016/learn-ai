@@ -78,6 +78,11 @@ class EvalContext:
 def evaluate_operand(operand, ctx: EvalContext) -> Decimal | None:
     """Recursively evaluate an Operand AST node.
 
+    Formula: Subtract(a,b)=a-b; DifferenceBps(a,b)=10,000*(a-b)/b.
+    Reference: docs/references/spy-ema-normalized-gap-walk-forward.md.
+    Canonical implementation: this file.
+    Validated against: tests/engine/strategy/spec/test_difference_bps_operand.py.
+
     Returns ``None`` if any referenced indicator is not ready. The caller
     (a Comparison primitive) treats ``None`` as "condition cannot fire
     this bar" — same semantics as a warmup guard.
@@ -95,6 +100,14 @@ def evaluate_operand(operand, ctx: EvalContext) -> Decimal | None:
         if left is None or right is None:
             return None
         return left - right
+    if isinstance(operand, S.DifferenceBps):
+        left = evaluate_operand(operand.left, ctx)
+        right = evaluate_operand(operand.right, ctx)
+        if left is None or right is None:
+            return None
+        if right == 0:
+            raise ZeroDivisionError("DifferenceBps denominator evaluated to zero")
+        return Decimal(10_000) * (left - right) / right
     raise TypeError(f"unknown operand type: {type(operand).__name__}")
 
 

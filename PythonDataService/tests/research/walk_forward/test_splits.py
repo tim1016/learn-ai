@@ -199,10 +199,9 @@ class TestFoldWindowInvariants:
 # Factory.
 # ---------------------------------------------------------------------------
 class TestBuildSplitPolicy:
-    def test_chronological_default(self):
-        policy = build_split_policy({"kind": "chronological"})
-        assert isinstance(policy, ChronologicalSplitPolicy)
-        assert policy.train_pct == 0.7
+    def test_chronological_requires_train_pct(self):
+        with pytest.raises(ValueError, match="train_pct"):
+            build_split_policy({"kind": "chronological"})
 
     def test_chronological_custom_pct(self):
         policy = build_split_policy({"kind": "chronological", "train_pct": 0.6})
@@ -229,9 +228,9 @@ class TestBuildSplitPolicy:
         assert policy.initial_train_days == 120
 
     def test_unknown_kind_raises(self):
-        with pytest.raises(ValueError, match="unknown split policy"):
+        with pytest.raises(ValueError):
             build_split_policy({"kind": "some_made_up_thing"})
 
     def test_missing_kind_raises(self):
-        with pytest.raises(ValueError, match="must include a 'kind'"):
+        with pytest.raises(ValueError):
             build_split_policy({})

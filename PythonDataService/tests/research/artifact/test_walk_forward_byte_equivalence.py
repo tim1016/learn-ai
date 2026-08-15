@@ -30,8 +30,8 @@ from pathlib import Path
 
 from app.research.runs.result import EquityCurvePoint, RunMetrics
 from app.research.walk_forward import (
+    ChronologicalSplitPolicySpec,
     FoldResult,
-    SplitPolicySpec,
     WalkForwardConfig,
     WalkForwardResult,
     save_walk_forward,
@@ -54,7 +54,7 @@ def _deterministic_config() -> WalkForwardConfig:
         commission_per_order=0.0,
         slippage_per_share=0.0,
         random_seed=42,
-        split_policy=SplitPolicySpec(kind="chronological"),
+        split_policy=ChronologicalSplitPolicySpec(kind="chronological", train_pct=0.7),
         created_at_ms=1_736_000_000_000,
     )
 
@@ -80,7 +80,7 @@ def _deterministic_result() -> WalkForwardResult:
         walk_forward_id="a" * 32,
         parent_run_id="b" * 32,
         strategy_spec_hash="d" * 64,
-        split_policy=SplitPolicySpec(kind="chronological"),
+        split_policy=ChronologicalSplitPolicySpec(kind="chronological", train_pct=0.7),
         folds=[
             FoldResult(
                 fold_index=0,

@@ -109,6 +109,14 @@ export const researchLabRoutes: Routes = [
           ),
         data: { title: 'Backtest Runs' },
       },
+      {
+        path: 'backtests/spy-ema-walk-forward',
+        loadComponent: () =>
+          import(
+            './spy-ema-walk-forward/spy-ema-walk-forward-page.component'
+          ).then((m) => m.SpyEmaWalkForwardPageComponent),
+        data: { title: 'SPY EMA Walk-Forward' },
+      },
 
       // Nav-invisible routes (no longer surfaced in sub-nav but still reachable)
       {

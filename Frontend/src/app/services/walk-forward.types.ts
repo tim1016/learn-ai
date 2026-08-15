@@ -7,26 +7,21 @@
  * ISO string); all metric values come from the server.
  */
 
-import type { EquityCurvePoint, RunMetrics } from './strategy-runs.types';
+import type {
+  EquityCurvePoint,
+  RunMetrics,
+  StrategyRunResponse,
+} from './strategy-runs.types';
 
 export type WalkForwardStatus = 'completed' | 'failed';
 export type FoldStatus = 'completed' | 'failed';
 
 export type SplitPolicyKind = 'chronological' | 'rolling' | 'anchored';
 
-/**
- * Wire-shape for a split policy. ``kind`` discriminates; the rest of
- * the fields are policy-specific. Server uses Pydantic's
- * ``ConfigDict(extra='allow')`` so the discriminator is enforced but
- * additional fields pass through. Modelled as an indexed interface
- * for the same flexibility (untyped policy-specific fields:
- * chronological → train_pct; rolling → train_days/test_days/step_days;
- * anchored → initial_train_days/test_days/step_days).
- */
-export interface SplitPolicySpec {
-  kind: SplitPolicyKind;
-  [field: string]: unknown;
-}
+export type SplitPolicySpec =
+  | { kind: 'chronological'; train_pct: number }
+  | { kind: 'rolling'; train_days: number; test_days: number; step_days: number }
+  | { kind: 'anchored'; initial_train_days: number; test_days: number; step_days: number };
 
 export interface FoldResult {
   fold_index: number;
@@ -34,12 +29,46 @@ export interface FoldResult {
   train_end_ms: number;
   test_start_ms: number;
   test_end_ms: number;
-  test_run_id: string;
+  test_run_id: string | null;
   test_metrics: RunMetrics;
   test_trade_count: number;
   status: FoldStatus;
   failure_reason: string | null;
-  selected_parameters: Record<string, unknown>;
+  selected_parameters: Record<string, number>;
+  training_candidates: TrainingCandidateResult[];
+  selected_train_sharpe: number | null;
+  oos_retention: number | null;
+}
+
+export interface ParameterCandidateConfig {
+  parameters: Record<string, number>;
+  strategy_spec_hash: string;
+  strategy_spec_json: Record<string, unknown>;
+}
+
+export interface ParameterSearchConfig {
+  objective: 'sharpe_ratio';
+  min_trades: number;
+  candidates: ParameterCandidateConfig[];
+}
+
+export interface TrainingCandidateResult {
+  parameters: Record<string, number>;
+  train_run_id: string;
+  train_metrics: RunMetrics;
+  receipt_persisted: boolean;
+  eligible: boolean;
+  ineligibility_reason: string | null;
+}
+
+export interface SelectionFailureResult {
+  fold_index: number;
+  train_start_ms: number;
+  train_end_ms: number;
+  test_start_ms: number;
+  test_end_ms: number;
+  training_candidates: TrainingCandidateResult[];
+  failure_reason: string;
 }
 
 export interface WalkForwardConfig {
@@ -57,6 +86,10 @@ export interface WalkForwardConfig {
   slippage_per_share: number;
   random_seed: number;
   split_policy: SplitPolicySpec;
+  parameter_search: ParameterSearchConfig | null;
+  fold_position_policy: 'flat_at_test_boundaries';
+  protocol_id: string | null;
+  protocol_version: string | null;
   created_at_ms: number;
 }
 
@@ -66,11 +99,16 @@ export interface WalkForwardResult {
   strategy_spec_hash: string;
   split_policy: SplitPolicySpec;
   folds: FoldResult[];
+  selection_failures: SelectionFailureResult[];
   combined_oos_equity_curve: EquityCurvePoint[];
   mean_oos_sharpe: number | null;
   median_oos_sharpe: number | null;
   pct_profitable_folds: number | null;
   oos_retention: number | null;
+  oos_retention_basis:
+    | 'mean_fold_test_to_selected_train'
+    | 'mean_oos_to_parent'
+    | null;
   alpha_decay: number | null;
   warnings: string[];
   created_at_ms: number;
@@ -109,6 +147,13 @@ export interface WalkForwardRequest {
 export interface WalkForwardListFilters {
   parent_run_id?: string;
   spec_hash?: string;
+  protocol_id?: string;
+  protocol_version?: string;
   since_ms?: number;
   limit?: number;
+}
+
+export interface SpyEmaPipelineResponse {
+  control: StrategyRunResponse;
+  walk_forward: WalkForwardResponse;
 }

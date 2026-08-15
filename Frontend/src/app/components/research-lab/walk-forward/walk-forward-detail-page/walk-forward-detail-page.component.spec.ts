@@ -39,6 +39,9 @@ function makeFold(overrides: Partial<FoldResult> = {}): FoldResult {
     status: 'completed',
     failure_reason: null,
     selected_parameters: {},
+    training_candidates: [],
+    selected_train_sharpe: null,
+    oos_retention: null,
     ...overrides,
   };
 }
@@ -60,6 +63,10 @@ function makeWfResponse(): WalkForwardResponse {
       slippage_per_share: 0,
       random_seed: 0,
       split_policy: { kind: 'rolling', train_days: 60, test_days: 30, step_days: 30 },
+      parameter_search: null,
+      fold_position_policy: 'flat_at_test_boundaries',
+      protocol_id: null,
+      protocol_version: null,
       created_at_ms: 1736000000000,
     },
     result: {
@@ -79,6 +86,7 @@ function makeWfResponse(): WalkForwardResponse {
           },
         }),
       ],
+      selection_failures: [],
       combined_oos_equity_curve: [
         { timestamp_ms: 1709355600000, equity: 100000 },
         { timestamp_ms: 1711945200000, equity: 102340 },
@@ -87,6 +95,7 @@ function makeWfResponse(): WalkForwardResponse {
       median_oos_sharpe: 0.5,
       pct_profitable_folds: 0.5,
       oos_retention: null,
+      oos_retention_basis: null,
       alpha_decay: -0.92,
       warnings: [],
       created_at_ms: 1736000000000,

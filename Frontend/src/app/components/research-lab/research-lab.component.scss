@@ -3,6 +3,7 @@
 }
 
 .research-lab {
+  min-width: 0;
   color: var(--text-primary);
 }
 
@@ -240,5 +241,34 @@
       background: var(--accent);
       border-radius: 2px 2px 0 0;
     }
+  }
+}
+
+@media (max-width: 660px) {
+  .rl-subnav {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .rl-parent-segmented {
+    align-self: stretch;
+    width: auto;
+    margin-inline: var(--space-3);
+    overflow-x: auto;
+  }
+
+  .rl-parent-tab {
+    flex: 0 0 auto;
+    padding-inline: 10px;
+  }
+
+  .rl-children-row {
+    flex-wrap: nowrap;
+    padding-inline: var(--space-3);
+    overflow-x: auto;
+  }
+
+  .rl-tab {
+    flex: 0 0 auto;
   }
 }

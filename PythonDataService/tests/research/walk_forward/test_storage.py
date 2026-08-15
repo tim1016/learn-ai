@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from app.research.walk_forward import (
-    SplitPolicySpec,
+    ChronologicalSplitPolicySpec,
     WalkForwardAlreadyExistsError,
     WalkForwardConfig,
     WalkForwardCorruptError,
@@ -41,7 +41,9 @@ def _make_config(**overrides) -> WalkForwardConfig:
         "commission_per_order": 0.0,
         "slippage_per_share": 0.0,
         "random_seed": 0,
-        "split_policy": SplitPolicySpec(kind="chronological"),
+        "split_policy": ChronologicalSplitPolicySpec(
+            kind="chronological", train_pct=0.7
+        ),
         "created_at_ms": 1736000000000,
     }
     base.update(overrides)
@@ -53,7 +55,9 @@ def _make_result(**overrides) -> WalkForwardResult:
         "walk_forward_id": "a" * 32,
         "parent_run_id": None,
         "strategy_spec_hash": "d" * 64,
-        "split_policy": SplitPolicySpec(kind="chronological"),
+        "split_policy": ChronologicalSplitPolicySpec(
+            kind="chronological", train_pct=0.7
+        ),
         "folds": [],
         "combined_oos_equity_curve": [],
         "mean_oos_sharpe": None,
@@ -231,6 +235,35 @@ def test_list_filter_by_spec_hash_and_since_ms(tmp_path: Path):
 
     by_since = list_walk_forwards(root=tmp_path, since_ms=1_750_000_000_000)
     assert [c.walk_forward_id for c in by_since] == [b.walk_forward_id]
+
+
+def test_list_filter_by_exact_protocol_identity(tmp_path: Path):
+    canonical = _make_config(
+        walk_forward_id="a" * 32,
+        protocol_id="spy-ema-normalized-gap",
+        protocol_version="1.0",
+    )
+    custom = _make_config(walk_forward_id="b" * 32)
+    save_walk_forward(
+        canonical,
+        _make_result(walk_forward_id=canonical.walk_forward_id),
+        root=tmp_path,
+    )
+    save_walk_forward(
+        custom,
+        _make_result(walk_forward_id=custom.walk_forward_id),
+        root=tmp_path,
+    )
+
+    filtered = list_walk_forwards(
+        root=tmp_path,
+        protocol_id="spy-ema-normalized-gap",
+        protocol_version="1.0",
+    )
+
+    assert [config.walk_forward_id for config in filtered] == [
+        canonical.walk_forward_id
+    ]
 
 
 def test_list_skips_corrupt_config(tmp_path: Path, caplog):

@@ -5389,6 +5389,39 @@
         "title": "AlphaDecayStatsResponse",
         "type": "object"
       },
+      "AnchoredSplitPolicySpec": {
+        "additionalProperties": false,
+        "description": "Strict HTTP/storage shape for one anchored split.",
+        "properties": {
+          "initial_train_days": {
+            "exclusiveMinimum": 0.0,
+            "title": "Initial Train Days",
+            "type": "integer"
+          },
+          "kind": {
+            "const": "anchored",
+            "title": "Kind"
+          },
+          "step_days": {
+            "exclusiveMinimum": 0.0,
+            "title": "Step Days",
+            "type": "integer"
+          },
+          "test_days": {
+            "exclusiveMinimum": 0.0,
+            "title": "Test Days",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "initial_train_days",
+          "test_days",
+          "step_days"
+        ],
+        "title": "AnchoredSplitPolicySpec",
+        "type": "object"
+      },
       "ArbitrageDetail": {
         "description": "Arbitrage violation diagnostics.",
         "properties": {
@@ -10909,6 +10942,28 @@
         "title": "ChartOverlayNoticeView",
         "type": "object"
       },
+      "ChronologicalSplitPolicySpec": {
+        "additionalProperties": false,
+        "description": "Strict HTTP/storage shape for one chronological split.",
+        "properties": {
+          "kind": {
+            "const": "chronological",
+            "title": "Kind"
+          },
+          "train_pct": {
+            "exclusiveMaximum": 1.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Train Pct",
+            "type": "number"
+          }
+        },
+        "required": [
+          "kind",
+          "train_pct"
+        ],
+        "title": "ChronologicalSplitPolicySpec",
+        "type": "object"
+      },
       "ClearHoldRequest": {
         "additionalProperties": false,
         "description": "Operator's clear-hold request body (phase-2 S6).\n\n``operator`` attributes the HOLD_CLEARED line (who lifted the hold);\n``reason`` is the operator's what/why the ledger records. Both are optional \u2014\na clear with no attribution still lifts the hold, journaled with defaults.",
@@ -15542,6 +15597,29 @@
         "title": "DiagnosticsResponse",
         "type": "object"
       },
+      "DifferenceBps": {
+        "additionalProperties": false,
+        "description": "Relative difference between two operands, expressed in basis points.\n\nThis domain operand keeps normalized-threshold strategies explicit in\nserialized specs without admitting a general arithmetic language.",
+        "properties": {
+          "kind": {
+            "const": "DifferenceBps",
+            "title": "Kind"
+          },
+          "left": {
+            "$ref": "#/components/schemas/IndicatorRef"
+          },
+          "right": {
+            "$ref": "#/components/schemas/IndicatorRef"
+          }
+        },
+        "required": [
+          "kind",
+          "left",
+          "right"
+        ],
+        "title": "DifferenceBps",
+        "type": "object"
+      },
       "DivergenceCategory": {
         "description": "Categorical divergence types \u2014 see numerical-rigor.md.",
         "enum": [
@@ -18484,9 +18562,34 @@
             "title": "Fold Index",
             "type": "integer"
           },
+          "oos_retention": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oos Retention"
+          },
           "selected_parameters": {
+            "additionalProperties": {
+              "type": "number"
+            },
             "title": "Selected Parameters",
             "type": "object"
+          },
+          "selected_train_sharpe": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Train Sharpe"
           },
           "status": {
             "default": "completed",
@@ -18505,8 +18608,15 @@
             "$ref": "#/components/schemas/RunMetrics"
           },
           "test_run_id": {
-            "title": "Test Run Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Test Run Id"
           },
           "test_start_ms": {
             "title": "Test Start Ms",
@@ -18523,6 +18633,13 @@
           "train_start_ms": {
             "title": "Train Start Ms",
             "type": "integer"
+          },
+          "training_candidates": {
+            "items": {
+              "$ref": "#/components/schemas/TrainingCandidateResult"
+            },
+            "title": "Training Candidates",
+            "type": "array"
           }
         },
         "required": [
@@ -22424,6 +22541,7 @@
             "discriminator": {
               "mapping": {
                 "Const": "#/components/schemas/ConstOperand",
+                "DifferenceBps": "#/components/schemas/DifferenceBps",
                 "IndicatorRef": "#/components/schemas/IndicatorRef",
                 "Subtract": "#/components/schemas/Subtract-Input"
               },
@@ -22438,6 +22556,9 @@
               },
               {
                 "$ref": "#/components/schemas/Subtract-Input"
+              },
+              {
+                "$ref": "#/components/schemas/DifferenceBps"
               }
             ],
             "title": "Left"
@@ -22458,6 +22579,7 @@
             "discriminator": {
               "mapping": {
                 "Const": "#/components/schemas/ConstOperand",
+                "DifferenceBps": "#/components/schemas/DifferenceBps",
                 "IndicatorRef": "#/components/schemas/IndicatorRef",
                 "Subtract": "#/components/schemas/Subtract-Input"
               },
@@ -22472,6 +22594,9 @@
               },
               {
                 "$ref": "#/components/schemas/Subtract-Input"
+              },
+              {
+                "$ref": "#/components/schemas/DifferenceBps"
               }
             ],
             "title": "Right"
@@ -22497,6 +22622,7 @@
             "discriminator": {
               "mapping": {
                 "Const": "#/components/schemas/ConstOperand",
+                "DifferenceBps": "#/components/schemas/DifferenceBps",
                 "IndicatorRef": "#/components/schemas/IndicatorRef",
                 "Subtract": "#/components/schemas/Subtract-Output"
               },
@@ -22511,6 +22637,9 @@
               },
               {
                 "$ref": "#/components/schemas/Subtract-Output"
+              },
+              {
+                "$ref": "#/components/schemas/DifferenceBps"
               }
             ],
             "title": "Left"
@@ -22531,6 +22660,7 @@
             "discriminator": {
               "mapping": {
                 "Const": "#/components/schemas/ConstOperand",
+                "DifferenceBps": "#/components/schemas/DifferenceBps",
                 "IndicatorRef": "#/components/schemas/IndicatorRef",
                 "Subtract": "#/components/schemas/Subtract-Output"
               },
@@ -22545,6 +22675,9 @@
               },
               {
                 "$ref": "#/components/schemas/Subtract-Output"
+              },
+              {
+                "$ref": "#/components/schemas/DifferenceBps"
               }
             ],
             "title": "Right"
@@ -30644,6 +30777,64 @@
         "title": "PanelProfile",
         "type": "object"
       },
+      "ParameterCandidateConfig": {
+        "additionalProperties": false,
+        "description": "One fully-materialized strategy candidate in a train-side grid.",
+        "properties": {
+          "parameters": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Parameters",
+            "type": "object"
+          },
+          "strategy_spec_hash": {
+            "title": "Strategy Spec Hash",
+            "type": "string"
+          },
+          "strategy_spec_json": {
+            "title": "Strategy Spec Json",
+            "type": "object"
+          }
+        },
+        "required": [
+          "parameters",
+          "strategy_spec_hash",
+          "strategy_spec_json"
+        ],
+        "title": "ParameterCandidateConfig",
+        "type": "object"
+      },
+      "ParameterSearchConfig": {
+        "additionalProperties": false,
+        "description": "Persisted, replayable definition of train-side model selection.",
+        "properties": {
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/ParameterCandidateConfig"
+            },
+            "minItems": 2,
+            "title": "Candidates",
+            "type": "array"
+          },
+          "min_trades": {
+            "minimum": 1.0,
+            "title": "Min Trades",
+            "type": "integer"
+          },
+          "objective": {
+            "const": "sharpe_ratio",
+            "default": "sharpe_ratio",
+            "title": "Objective"
+          }
+        },
+        "required": [
+          "min_trades",
+          "candidates"
+        ],
+        "title": "ParameterSearchConfig",
+        "type": "object"
+      },
       "ParameterStabilityResponse": {
         "description": "Parameter stability assessment.",
         "properties": {
@@ -34572,6 +34763,39 @@
         "title": "RobustnessResponse",
         "type": "object"
       },
+      "RollingSplitPolicySpec": {
+        "additionalProperties": false,
+        "description": "Strict HTTP/storage shape for one rolling split.",
+        "properties": {
+          "kind": {
+            "const": "rolling",
+            "title": "Kind"
+          },
+          "step_days": {
+            "exclusiveMinimum": 0.0,
+            "title": "Step Days",
+            "type": "integer"
+          },
+          "test_days": {
+            "exclusiveMinimum": 0.0,
+            "title": "Test Days",
+            "type": "integer"
+          },
+          "train_days": {
+            "exclusiveMinimum": 0.0,
+            "title": "Train Days",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "train_days",
+          "test_days",
+          "step_days"
+        ],
+        "title": "RollingSplitPolicySpec",
+        "type": "object"
+      },
       "RollingTStatPointResponse": {
         "description": "Single point in rolling smoothed t-stat series.",
         "properties": {
@@ -35090,233 +35314,7 @@
         "type": "object"
       },
       "RunLedger": {
-        "additionalProperties": false,
-        "description": "Immutable identity record for a single strategy run.\n\nPersisted as ``ledger.json`` in the run's artifact directory.\nPydantic ``extra='forbid'`` makes schema drift loud rather than\nsilent \u2014 adding a field is a deliberate ``schema_version`` bump.\n\nSchema versions:\n  * v1.0: Initial schema.\n  * v1.1: Added optional ``prediction_set_hash`` field for ML prediction set tracking.\n  * v1.2: Added optional ``window_summary`` field \u2014 calendar breakdown\n    (sessions included / weekends + holidays excluded) for the run's\n    date window. Older ledgers continue to load with this field as\n    ``None``.",
-        "properties": {
-          "commission_per_order": {
-            "minimum": 0.0,
-            "title": "Commission Per Order",
-            "type": "number"
-          },
-          "completed_at_ms": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Completed At Ms"
-          },
-          "created_at_ms": {
-            "title": "Created At Ms",
-            "type": "integer"
-          },
-          "data_snapshot_id": {
-            "title": "Data Snapshot Id",
-            "type": "string"
-          },
-          "data_source": {
-            "const": "lean_minute_reader",
-            "default": "lean_minute_reader",
-            "title": "Data Source"
-          },
-          "end_ms": {
-            "title": "End Ms",
-            "type": "integer"
-          },
-          "engine_git_commit": {
-            "title": "Engine Git Commit",
-            "type": "string"
-          },
-          "engine_name": {
-            "const": "learn_ai_event_driven",
-            "default": "learn_ai_event_driven",
-            "title": "Engine Name"
-          },
-          "engine_version": {
-            "default": "0.1.0",
-            "title": "Engine Version",
-            "type": "string"
-          },
-          "failure_reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Failure Reason"
-          },
-          "fill_mode": {
-            "title": "Fill Mode",
-            "type": "string"
-          },
-          "initial_cash": {
-            "minimum": 0.0,
-            "title": "Initial Cash",
-            "type": "number"
-          },
-          "metrics_hash": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Metrics Hash"
-          },
-          "parent_run_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Parent Run Id"
-          },
-          "parent_spec_hash": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Parent Spec Hash"
-          },
-          "prediction_set_hash": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Prediction Set Hash"
-          },
-          "random_seed": {
-            "default": 0,
-            "title": "Random Seed",
-            "type": "integer"
-          },
-          "resolution_minutes": {
-            "minimum": 1.0,
-            "title": "Resolution Minutes",
-            "type": "integer"
-          },
-          "result_hash": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Result Hash"
-          },
-          "run_id": {
-            "title": "Run Id",
-            "type": "string"
-          },
-          "schema_version": {
-            "default": "1.2",
-            "enum": [
-              "1.0",
-              "1.1",
-              "1.2"
-            ],
-            "title": "Schema Version",
-            "type": "string"
-          },
-          "slippage_per_share": {
-            "default": 0.0,
-            "minimum": 0.0,
-            "title": "Slippage Per Share",
-            "type": "number"
-          },
-          "start_ms": {
-            "title": "Start Ms",
-            "type": "integer"
-          },
-          "status": {
-            "default": "running",
-            "enum": [
-              "running",
-              "completed",
-              "failed"
-            ],
-            "title": "Status",
-            "type": "string"
-          },
-          "strategy_spec_hash": {
-            "title": "Strategy Spec Hash",
-            "type": "string"
-          },
-          "strategy_spec_id": {
-            "title": "Strategy Spec Id",
-            "type": "string"
-          },
-          "strategy_spec_json": {
-            "title": "Strategy Spec Json",
-            "type": "object"
-          },
-          "symbol": {
-            "title": "Symbol",
-            "type": "string"
-          },
-          "trade_log_hash": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Trade Log Hash"
-          },
-          "warmup_policy": {
-            "const": "spec_indicator_warmup",
-            "default": "spec_indicator_warmup",
-            "title": "Warmup Policy"
-          },
-          "window_summary": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/WindowSummary"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "run_id",
-          "strategy_spec_id",
-          "strategy_spec_hash",
-          "strategy_spec_json",
-          "engine_git_commit",
-          "symbol",
-          "resolution_minutes",
-          "start_ms",
-          "end_ms",
-          "initial_cash",
-          "fill_mode",
-          "commission_per_order",
-          "data_snapshot_id"
-        ],
+        "description": "Immutable identity record for a single strategy run.\n\nPersisted as ``ledger.json`` in the run's artifact directory.\nPydantic ``extra='forbid'`` makes schema drift loud rather than\nsilent \u2014 adding a field is a deliberate ``schema_version`` bump.\n\nSchema versions:\n  * v1.0: Initial schema.\n  * v1.1: Added optional ``prediction_set_hash`` field for ML prediction set tracking.\n  * v1.2: Added optional ``window_summary`` field \u2014 calendar breakdown\n    (sessions included / weekends + holidays excluded) for the run's\n    date window. Older ledgers continue to load with this field as\n    ``None``.\n  * v1.3: Added optional ``warmup_start_ms`` so indicator pre-roll data\n    is part of the auditable run boundary without changing the reported\n    trading window.",
         "title": "RunLedger",
         "type": "object"
       },
@@ -36869,6 +36867,53 @@
         "title": "SeasonalityMonthResponse",
         "type": "object"
       },
+      "SelectionFailureResult": {
+        "additionalProperties": false,
+        "description": "Train-side evidence retained when a fold cannot select a winner.",
+        "properties": {
+          "failure_reason": {
+            "title": "Failure Reason",
+            "type": "string"
+          },
+          "fold_index": {
+            "title": "Fold Index",
+            "type": "integer"
+          },
+          "test_end_ms": {
+            "title": "Test End Ms",
+            "type": "integer"
+          },
+          "test_start_ms": {
+            "title": "Test Start Ms",
+            "type": "integer"
+          },
+          "train_end_ms": {
+            "title": "Train End Ms",
+            "type": "integer"
+          },
+          "train_start_ms": {
+            "title": "Train Start Ms",
+            "type": "integer"
+          },
+          "training_candidates": {
+            "items": {
+              "$ref": "#/components/schemas/TrainingCandidateResult"
+            },
+            "title": "Training Candidates",
+            "type": "array"
+          }
+        },
+        "required": [
+          "fold_index",
+          "train_start_ms",
+          "train_end_ms",
+          "test_start_ms",
+          "test_end_ms",
+          "failure_reason"
+        ],
+        "title": "SelectionFailureResult",
+        "type": "object"
+      },
       "SeriesResponse": {
         "properties": {
           "n_snapshots": {
@@ -37978,24 +38023,20 @@
         "title": "SpecTradeResponse",
         "type": "object"
       },
-      "SplitPolicySpec": {
-        "additionalProperties": true,
-        "description": "Wire-shape for a split policy. ``kind`` discriminates; the rest of\nthe fields are policy-specific (validated again in ``splits.py``).",
+      "SpyEmaWalkForwardJobRequest": {
+        "additionalProperties": false,
+        "description": "Frozen V1 protocol job; clients may provide no research overrides.",
         "properties": {
-          "kind": {
-            "enum": [
-              "chronological",
-              "rolling",
-              "anchored"
-            ],
-            "title": "Kind",
+          "jobId": {
+            "minLength": 1,
+            "title": "Jobid",
             "type": "string"
           }
         },
         "required": [
-          "kind"
+          "jobId"
         ],
-        "title": "SplitPolicySpec",
+        "title": "SpyEmaWalkForwardJobRequest",
         "type": "object"
       },
       "Stage0FailureResponse": {
@@ -40394,6 +40435,7 @@
             "discriminator": {
               "mapping": {
                 "Const": "#/components/schemas/ConstOperand",
+                "DifferenceBps": "#/components/schemas/DifferenceBps",
                 "IndicatorRef": "#/components/schemas/IndicatorRef",
                 "Subtract": "#/components/schemas/Subtract-Input"
               },
@@ -40408,6 +40450,9 @@
               },
               {
                 "$ref": "#/components/schemas/Subtract-Input"
+              },
+              {
+                "$ref": "#/components/schemas/DifferenceBps"
               }
             ],
             "title": "Left"
@@ -40416,6 +40461,7 @@
             "discriminator": {
               "mapping": {
                 "Const": "#/components/schemas/ConstOperand",
+                "DifferenceBps": "#/components/schemas/DifferenceBps",
                 "IndicatorRef": "#/components/schemas/IndicatorRef",
                 "Subtract": "#/components/schemas/Subtract-Input"
               },
@@ -40430,6 +40476,9 @@
               },
               {
                 "$ref": "#/components/schemas/Subtract-Input"
+              },
+              {
+                "$ref": "#/components/schemas/DifferenceBps"
               }
             ],
             "title": "Right"
@@ -40454,6 +40503,7 @@
             "discriminator": {
               "mapping": {
                 "Const": "#/components/schemas/ConstOperand",
+                "DifferenceBps": "#/components/schemas/DifferenceBps",
                 "IndicatorRef": "#/components/schemas/IndicatorRef",
                 "Subtract": "#/components/schemas/Subtract-Output"
               },
@@ -40468,6 +40518,9 @@
               },
               {
                 "$ref": "#/components/schemas/Subtract-Output"
+              },
+              {
+                "$ref": "#/components/schemas/DifferenceBps"
               }
             ],
             "title": "Left"
@@ -40476,6 +40529,7 @@
             "discriminator": {
               "mapping": {
                 "Const": "#/components/schemas/ConstOperand",
+                "DifferenceBps": "#/components/schemas/DifferenceBps",
                 "IndicatorRef": "#/components/schemas/IndicatorRef",
                 "Subtract": "#/components/schemas/Subtract-Output"
               },
@@ -40490,6 +40544,9 @@
               },
               {
                 "$ref": "#/components/schemas/Subtract-Output"
+              },
+              {
+                "$ref": "#/components/schemas/DifferenceBps"
               }
             ],
             "title": "Right"
@@ -42028,6 +42085,54 @@
         "title": "TrainTestSplitResponse",
         "type": "object"
       },
+      "TrainingCandidateResult": {
+        "additionalProperties": false,
+        "description": "Auditable train-window outcome for one parameter candidate.",
+        "properties": {
+          "eligible": {
+            "title": "Eligible",
+            "type": "boolean"
+          },
+          "ineligibility_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ineligibility Reason"
+          },
+          "parameters": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Parameters",
+            "type": "object"
+          },
+          "receipt_persisted": {
+            "default": true,
+            "title": "Receipt Persisted",
+            "type": "boolean"
+          },
+          "train_metrics": {
+            "$ref": "#/components/schemas/RunMetrics"
+          },
+          "train_run_id": {
+            "title": "Train Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "parameters",
+          "train_run_id",
+          "train_metrics",
+          "eligible"
+        ],
+        "title": "TrainingCandidateResult",
+        "type": "object"
+      },
       "TransactionRail": {
         "description": "The six-station rail rendering one selected transaction (\u00a77.1).",
         "properties": {
@@ -42849,9 +42954,24 @@
             "title": "Fill Mode",
             "type": "string"
           },
+          "fold_position_policy": {
+            "const": "flat_at_test_boundaries",
+            "default": "flat_at_test_boundaries",
+            "title": "Fold Position Policy"
+          },
           "initial_cash": {
             "title": "Initial Cash",
             "type": "number"
+          },
+          "parameter_search": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ParameterSearchConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "parent_run_id": {
             "anyOf": [
@@ -42863,6 +42983,28 @@
               }
             ],
             "title": "Parent Run Id"
+          },
+          "protocol_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protocol Id"
+          },
+          "protocol_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protocol Version"
           },
           "random_seed": {
             "title": "Random Seed",
@@ -42877,7 +43019,26 @@
             "type": "number"
           },
           "split_policy": {
-            "$ref": "#/components/schemas/SplitPolicySpec"
+            "discriminator": {
+              "mapping": {
+                "anchored": "#/components/schemas/AnchoredSplitPolicySpec",
+                "chronological": "#/components/schemas/ChronologicalSplitPolicySpec",
+                "rolling": "#/components/schemas/RollingSplitPolicySpec"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ChronologicalSplitPolicySpec"
+              },
+              {
+                "$ref": "#/components/schemas/RollingSplitPolicySpec"
+              },
+              {
+                "$ref": "#/components/schemas/AnchoredSplitPolicySpec"
+              }
+            ],
+            "title": "Split Policy"
           },
           "start_ms": {
             "title": "Start Ms",
@@ -42920,6 +43081,7 @@
         "type": "object"
       },
       "WalkForwardHttpRequest": {
+        "additionalProperties": false,
         "description": "Inputs for ``POST /api/research/strategy-runs/walk-forward``.",
         "properties": {
           "commission_per_order": {
@@ -42940,7 +43102,7 @@
           },
           "initial_cash": {
             "default": 100000.0,
-            "minimum": 0.0,
+            "exclusiveMinimum": 0.0,
             "title": "Initial Cash",
             "type": "number"
           },
@@ -42976,12 +43138,27 @@
             "description": "Validated StrategySpec"
           },
           "split_policy": {
-            "allOf": [
+            "description": "``kind`` discriminator + policy-specific fields",
+            "discriminator": {
+              "mapping": {
+                "anchored": "#/components/schemas/AnchoredSplitPolicySpec",
+                "chronological": "#/components/schemas/ChronologicalSplitPolicySpec",
+                "rolling": "#/components/schemas/RollingSplitPolicySpec"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
               {
-                "$ref": "#/components/schemas/SplitPolicySpec"
+                "$ref": "#/components/schemas/ChronologicalSplitPolicySpec"
+              },
+              {
+                "$ref": "#/components/schemas/RollingSplitPolicySpec"
+              },
+              {
+                "$ref": "#/components/schemas/AnchoredSplitPolicySpec"
               }
             ],
-            "description": "``kind`` discriminator + policy-specific fields"
+            "title": "Split Policy"
           },
           "start_date": {
             "description": "YYYY-MM-DD",
@@ -43032,7 +43209,7 @@
       },
       "WalkForwardResult": {
         "additionalProperties": false,
-        "description": "Aggregated walk-forward output.\n\nThe ``combined_oos_equity_curve`` is **compounded** across folds\n(fold N's start equity = fold N-1's end equity), which models the\ninvestor experience of holding through the strategy across all\ntest windows. Rebased-per-fold is a future toggle if needed.",
+        "description": "Aggregated walk-forward output.\n\nThe ``combined_oos_equity_curve`` compounds independently-flat OOS\nfold returns. Indicator state is pre-rolled from each fold's train\nwindow, but positions never cross an OOS boundary.",
         "properties": {
           "alpha_decay": {
             "anyOf": [
@@ -43118,6 +43295,21 @@
             ],
             "title": "Oos Retention"
           },
+          "oos_retention_basis": {
+            "anyOf": [
+              {
+                "enum": [
+                  "mean_fold_test_to_selected_train",
+                  "mean_oos_to_parent"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oos Retention Basis"
+          },
           "parent_run_id": {
             "anyOf": [
               {
@@ -43140,8 +43332,34 @@
             ],
             "title": "Pct Profitable Folds"
           },
+          "selection_failures": {
+            "items": {
+              "$ref": "#/components/schemas/SelectionFailureResult"
+            },
+            "title": "Selection Failures",
+            "type": "array"
+          },
           "split_policy": {
-            "$ref": "#/components/schemas/SplitPolicySpec"
+            "discriminator": {
+              "mapping": {
+                "anchored": "#/components/schemas/AnchoredSplitPolicySpec",
+                "chronological": "#/components/schemas/ChronologicalSplitPolicySpec",
+                "rolling": "#/components/schemas/RollingSplitPolicySpec"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ChronologicalSplitPolicySpec"
+              },
+              {
+                "$ref": "#/components/schemas/RollingSplitPolicySpec"
+              },
+              {
+                "$ref": "#/components/schemas/AnchoredSplitPolicySpec"
+              }
+            ],
+            "title": "Split Policy"
           },
           "status": {
             "default": "completed",
@@ -56078,6 +56296,49 @@
         ]
       }
     },
+    "/api/jobs-internal/spy-ema-walk-forward": {
+      "post": {
+        "description": "Run the immutable SPY EMA V1 protocol behind the jobs boundary.",
+        "operationId": "start_spy_ema_walk_forward_job_api_jobs_internal_spy_ema_walk_forward_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpyEmaWalkForwardJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Start Spy Ema Walk Forward Job Api Jobs Internal Spy Ema Walk Forward Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Spy Ema Walk Forward Job",
+        "tags": [
+          "jobs-internal"
+        ]
+      }
+    },
     "/api/lean-sidecar/calendar/blocked-dates": {
       "get": {
         "description": "Return weekends and holidays in ``[from_, to]``.\n\nPer P2.5 the UI date picker consumes this to disable + label each\nblocked date \u2014 single backend source of truth for the NYSE\ncalendar so the picker and the validator cannot drift.\n\nEarly-close half-days are tradeable sessions and are NOT returned\nhere. Weekends and holidays return ``\"weekend\"`` and ``\"holiday\"``\nrespectively. Trading days are NOT in the payload.",
@@ -60335,6 +60596,42 @@
               ],
               "description": "Filter by ``strategy_spec_hash``",
               "title": "Spec Hash"
+            }
+          },
+          {
+            "description": "Filter by exact protocol identity",
+            "in": "query",
+            "name": "protocol_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by exact protocol identity",
+              "title": "Protocol Id"
+            }
+          },
+          {
+            "description": "Filter by exact protocol version",
+            "in": "query",
+            "name": "protocol_version",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by exact protocol version",
+              "title": "Protocol Version"
             }
           },
           {

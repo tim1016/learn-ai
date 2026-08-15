@@ -488,3 +488,78 @@ def test_result_warns_when_no_bars_consumed():
     # not an engine failure.
     assert ledger.status == "completed"
     assert len(result.trades) == 0
+
+
+def test_warmup_prerolls_fresh_cross_without_permitting_pre_window_entries():
+    """Fold warmup must continue indicator/cross state into TEST.
+
+    A monotonic rise creates one artificial up-cross when the EMA state is
+    cold-started at the report boundary. Pre-rolling from the prior day means
+    the cross already happened in TRAIN, so it must not be rediscovered in
+    TEST; entries are disabled while that state is being primed.
+    """
+    spec = StrategySpec.model_validate(
+        {
+            "schema_version": "1.0",
+            "name": "TEST warmup cross",
+            "symbols": ["TEST"],
+            "resolution": {"period_minutes": 15},
+            "indicators": [
+                {"id": "fast", "kind": "EMA", "period": 2, "source": "close"},
+                {"id": "slow", "kind": "EMA", "period": 3, "source": "close"},
+            ],
+            "entry": {
+                "logic": "AND",
+                "conditions": [
+                    {
+                        "kind": "FreshCross",
+                        "left": "fast",
+                        "right": "slow",
+                        "direction": "up",
+                    }
+                ],
+                "size": {"kind": "SetHoldings", "fraction": 1.0},
+                "pyramiding": 1,
+            },
+            "position": {"kind": "EQUITY_LONG"},
+            "survival": [],
+            "exit": {
+                "logic": "OR",
+                "conditions": [{"kind": "BarsSinceEntry", "op": ">=", "value": 1}],
+            },
+            "diagnostics": {"snapshot_at_entry": ["fast", "slow"]},
+        }
+    )
+    training_closes = [100.0 + index * 0.1 for index in range(56)]
+    report_closes = [105.5] * 20 + [105.5 + (index + 1) * 0.1 for index in range(224)]
+    bars = build_minute_bars(training_closes + report_closes)
+
+    def factory(symbol: str, start: date, end: date):
+        return FakeDataReader(bars=bars)
+
+    cold_ledger, cold_result = run_strategy_spec(
+        RunRequest(
+            spec=spec,
+            start_date=date(2024, 1, 3),
+            end_date=date(2024, 1, 4),
+        ),
+        data_source_factory=factory,
+        data_root_revision="test-revision-1",
+    )
+    warm_ledger, warm_result = run_strategy_spec(
+        RunRequest(
+            spec=spec,
+            start_date=date(2024, 1, 3),
+            end_date=date(2024, 1, 4),
+            warmup_start_date=date(2024, 1, 2),
+        ),
+        data_source_factory=factory,
+        data_root_revision="test-revision-1",
+    )
+
+    assert cold_ledger.status == warm_ledger.status == "completed"
+    assert len(cold_result.trades) == 1
+    assert warm_result.trades == []
+    assert warm_ledger.warmup_start_ms is not None
+    assert warm_ledger.warmup_start_ms < warm_ledger.start_ms
+    assert all(point.timestamp_ms >= warm_ledger.start_ms for point in warm_result.equity_curve)

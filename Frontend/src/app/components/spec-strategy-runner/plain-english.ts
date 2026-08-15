@@ -46,6 +46,8 @@ export function formatOperand(op: Operand, indicators: readonly IndicatorBlock[]
       return formatNumber(op.value);
     case 'Subtract':
       return `${formatOperand(op.left, indicators)} − ${formatOperand(op.right, indicators)}`;
+    case 'DifferenceBps':
+      return `Δbps(${formatOperand(op.left, indicators)}, ${formatOperand(op.right, indicators)})`;
   }
 }
 
@@ -241,6 +243,14 @@ function operandFragments(op: Operand, indicators: readonly IndicatorBlock[]): S
         f('verb', '−'),
         f('text', ' '),
         ...operandFragments(op.right, indicators),
+      ];
+    case 'DifferenceBps':
+      return [
+        f('verb', 'Δbps('),
+        ...operandFragments(op.left, indicators),
+        f('text', ', '),
+        ...operandFragments(op.right, indicators),
+        f('verb', ')'),
       ];
   }
 }

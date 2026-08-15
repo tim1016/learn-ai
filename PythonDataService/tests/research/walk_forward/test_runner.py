@@ -32,8 +32,19 @@ from app.engine.strategy.spec.tests._parity_helpers import (
     build_minute_bars,
     closes_for_spy_ema,
 )
-from app.research.runs.storage import list_runs
-from app.research.walk_forward.runner import WalkForwardRequest, run_walk_forward
+from app.research.runs.result import RunMetrics
+from app.research.runs.storage import list_runs, load_run
+from app.research.runs.storage import save_run as real_save_run
+from app.research.walk_forward.result import FoldResult
+from app.research.walk_forward.runner import (
+    WalkForwardRequest,
+    _mean_fold_retention,
+    run_walk_forward,
+)
+from app.research.walk_forward.selection import (
+    ParameterCandidate,
+    ParameterSearchRequest,
+)
 from app.research.walk_forward.splits import (
     ChronologicalSplitPolicy,
     RollingSplitPolicy,
@@ -89,6 +100,14 @@ def _build_test_spec() -> StrategySpec:
     )
 
 
+def _build_normalized_test_spec(threshold_bps: float) -> StrategySpec:
+    payload = _build_test_spec().model_dump(mode="json")
+    gap = payload["entry"]["conditions"][1]["left"]
+    gap["kind"] = "DifferenceBps"
+    payload["entry"]["conditions"][1]["right"]["value"] = threshold_bps
+    return StrategySpec.model_validate(payload)
+
+
 @pytest.fixture
 def fake_factory_long():
     """Synthetic data covering ~52 days — enough for rolling splits.
@@ -125,8 +144,10 @@ def test_chronological_split_emits_one_fold(tmp_path: Path, fake_factory_long):
 
     assert result.status == "completed"
     assert result.failure_reason is None
+    assert config.fold_position_policy == "flat_at_test_boundaries"
     assert len(result.folds) == 1
     fold = result.folds[0]
+    assert fold.test_run_id is not None
     assert fold.fold_index == 0
     # Train precedes test, neither is degenerate.
     assert fold.train_end_ms == fold.test_start_ms
@@ -136,15 +157,16 @@ def test_chronological_split_emits_one_fold(tmp_path: Path, fake_factory_long):
     # The fold's test run was persisted.
     assert (tmp_path / fold.test_run_id / "ledger.json").is_file()
     assert (tmp_path / fold.test_run_id / "result.json").is_file()
+    test_ledger, _ = load_run(fold.test_run_id, root=tmp_path)
+    assert test_ledger.warmup_start_ms == fold.train_start_ms
+    assert test_ledger.start_ms == fold.test_start_ms
 
     # And linked back to the WF.
     listed = list_runs(root=tmp_path, parent_run_id=config.walk_forward_id)
     assert [lg.run_id for lg in listed] == [fold.test_run_id]
 
 
-def test_chronological_split_records_correct_split_policy(
-    tmp_path: Path, fake_factory_long
-):
+def test_chronological_split_records_correct_split_policy(tmp_path: Path, fake_factory_long):
     request = WalkForwardRequest(
         spec=_build_test_spec(),
         start_date="2024-01-02",
@@ -191,9 +213,7 @@ def test_rolling_split_emits_multiple_folds(tmp_path: Path, fake_factory_long):
     assert len(set(run_ids)) == len(run_ids)
 
 
-def test_rolling_aggregates_only_count_completed_folds(
-    tmp_path: Path, fake_factory_long
-):
+def test_rolling_aggregates_only_count_completed_folds(tmp_path: Path, fake_factory_long):
     request = WalkForwardRequest(
         spec=_build_test_spec(),
         start_date="2024-01-02",
@@ -212,6 +232,262 @@ def test_rolling_aggregates_only_count_completed_folds(
     # None on synthetic data with too few trades.
     assert result.pct_profitable_folds is not None
     assert 0.0 <= result.pct_profitable_folds <= 1.0
+
+
+def test_parameter_search_persists_train_receipts_and_freezes_winner_for_test(
+    tmp_path: Path,
+    fake_factory_long,
+):
+    candidates = tuple(
+        ParameterCandidate(
+            parameters={"gap_bps": threshold},
+            spec=_build_normalized_test_spec(threshold),
+        )
+        for threshold in (1.0, 10.0)
+    )
+    request = WalkForwardRequest(
+        spec=_build_normalized_test_spec(1.0),
+        start_date="2024-01-02",
+        end_date="2024-02-22",
+        split_policy=ChronologicalSplitPolicy(train_pct=0.7),
+        parameter_search=ParameterSearchRequest(
+            candidates=candidates,
+            min_trades=1,
+        ),
+    )
+
+    config, result = run_walk_forward(
+        request,
+        data_source_factory=fake_factory_long,
+        artifacts_root=tmp_path,
+        data_root_revision="test-rev",
+    )
+
+    assert result.status == "completed"
+    assert config.parameter_search is not None
+    assert len(config.parameter_search.candidates) == 2
+    assert len(result.folds) == 1
+    fold = result.folds[0]
+    assert fold.selected_parameters["gap_bps"] in {1.0, 10.0}
+    assert len(fold.training_candidates) == 2
+    assert sum(candidate.eligible for candidate in fold.training_candidates) >= 1
+
+    persisted = list_runs(root=tmp_path, parent_run_id=config.walk_forward_id)
+    expected_ids = {
+        fold.test_run_id,
+        *(candidate.train_run_id for candidate in fold.training_candidates),
+    }
+    assert {ledger.run_id for ledger in persisted} == expected_ids
+
+    test_ledger, _ = load_run(fold.test_run_id, root=tmp_path)
+    assert test_ledger.warmup_start_ms == fold.train_start_ms
+    assert test_ledger.start_ms == fold.test_start_ms
+    selected_config = next(
+        candidate
+        for candidate in config.parameter_search.candidates
+        if candidate.parameters == fold.selected_parameters
+    )
+    assert test_ledger.strategy_spec_hash == selected_config.strategy_spec_hash
+
+
+def test_parameter_search_fails_closed_when_no_candidate_has_train_evidence(
+    tmp_path: Path,
+    fake_factory_long,
+):
+    candidates = tuple(
+        ParameterCandidate(
+            parameters={"gap_bps": threshold},
+            spec=_build_normalized_test_spec(threshold),
+        )
+        for threshold in (90.0, 100.0)
+    )
+    request = WalkForwardRequest(
+        spec=_build_normalized_test_spec(90.0),
+        start_date="2024-01-02",
+        end_date="2024-02-22",
+        split_policy=ChronologicalSplitPolicy(train_pct=0.7),
+        parameter_search=ParameterSearchRequest(
+            candidates=candidates,
+            min_trades=100,
+        ),
+    )
+
+    _, result = run_walk_forward(
+        request,
+        data_source_factory=fake_factory_long,
+        artifacts_root=tmp_path,
+        data_root_revision="test-rev",
+    )
+
+    assert result.status == "failed"
+    assert result.folds == []
+    assert "eligible non-null train Sharpe" in (result.failure_reason or "")
+    assert len(result.selection_failures) == 1
+    assert len(result.selection_failures[0].training_candidates) == 2
+
+
+def test_parameter_search_fails_closed_when_train_receipts_cannot_persist(
+    tmp_path: Path,
+    fake_factory_long,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    def fail_save(*_args, **_kwargs):
+        raise OSError("synthetic read-only artifact store")
+
+    monkeypatch.setattr(
+        "app.research.walk_forward.runner.save_run",
+        fail_save,
+    )
+    candidates = tuple(
+        ParameterCandidate(
+            parameters={"gap_bps": threshold},
+            spec=_build_normalized_test_spec(threshold),
+        )
+        for threshold in (1.0, 10.0)
+    )
+    request = WalkForwardRequest(
+        spec=_build_normalized_test_spec(1.0),
+        start_date="2024-01-02",
+        end_date="2024-02-22",
+        split_policy=ChronologicalSplitPolicy(train_pct=0.7),
+        parameter_search=ParameterSearchRequest(
+            candidates=candidates,
+            min_trades=1,
+        ),
+    )
+
+    _, result = run_walk_forward(
+        request,
+        data_source_factory=fake_factory_long,
+        artifacts_root=tmp_path,
+        data_root_revision="test-rev",
+    )
+
+    assert result.status == "failed"
+    assert result.folds == []
+    assert "incompletely auditable selection" in (result.failure_reason or "")
+    assert len(result.selection_failures) == 1
+    assert len(result.selection_failures[0].training_candidates) == 2
+
+
+def test_cancellation_after_final_candidate_does_not_start_test_run(
+    tmp_path: Path,
+    fake_factory_long,
+):
+    candidates = tuple(
+        ParameterCandidate(
+            parameters={"gap_bps": threshold},
+            spec=_build_normalized_test_spec(threshold),
+        )
+        for threshold in (1.0, 10.0)
+    )
+    request = WalkForwardRequest(
+        spec=_build_normalized_test_spec(1.0),
+        start_date="2024-01-02",
+        end_date="2024-02-22",
+        split_policy=ChronologicalSplitPolicy(train_pct=0.7),
+        parameter_search=ParameterSearchRequest(
+            candidates=candidates,
+            min_trades=1,
+        ),
+    )
+    checks = 0
+
+    def cancel_after_candidates() -> None:
+        nonlocal checks
+        checks += 1
+        if checks == 4:
+            raise RuntimeError("synthetic cancellation")
+
+    with pytest.raises(RuntimeError, match="synthetic cancellation"):
+        run_walk_forward(
+            request,
+            data_source_factory=fake_factory_long,
+            artifacts_root=tmp_path,
+            data_root_revision="test-rev",
+            cancel_check=cancel_after_candidates,
+        )
+
+    persisted = list_runs(root=tmp_path)
+    assert len(persisted) == 2
+    assert all(":train-" in ledger.strategy_spec_id for ledger in persisted)
+
+
+def test_test_receipt_persistence_failure_fails_closed_with_partial_evidence(
+    tmp_path: Path,
+    fake_factory_long,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    save_calls = {"count": 0}
+
+    def fail_only_test_receipt(ledger, result, *, root=None):
+        save_calls["count"] += 1
+        if save_calls["count"] == 3:
+            raise OSError("synthetic test-receipt failure")
+        return real_save_run(ledger, result, root=root)
+
+    monkeypatch.setattr(
+        "app.research.walk_forward.runner.save_run",
+        fail_only_test_receipt,
+    )
+    candidates = tuple(
+        ParameterCandidate(
+            parameters={"gap_bps": threshold},
+            spec=_build_normalized_test_spec(threshold),
+        )
+        for threshold in (1.0, 10.0)
+    )
+    request = WalkForwardRequest(
+        spec=_build_normalized_test_spec(1.0),
+        start_date="2024-01-02",
+        end_date="2024-02-22",
+        split_policy=ChronologicalSplitPolicy(train_pct=0.7),
+        parameter_search=ParameterSearchRequest(
+            candidates=candidates,
+            min_trades=1,
+        ),
+    )
+
+    _, result = run_walk_forward(
+        request,
+        data_source_factory=fake_factory_long,
+        artifacts_root=tmp_path,
+        data_root_revision="test-rev",
+    )
+
+    assert result.status == "failed"
+    assert len(result.folds) == 1
+    assert result.folds[0].status == "failed"
+    assert result.folds[0].test_run_id is None
+    assert result.combined_oos_equity_curve == []
+    assert "test receipt persistence failed" in (result.failure_reason or "")
+
+
+def test_parameter_search_retention_is_mean_of_fold_local_ratios():
+    def fold(index: int, test_sharpe: float, train_sharpe: float) -> FoldResult:
+        return FoldResult(
+            fold_index=index,
+            train_start_ms=index * 10,
+            train_end_ms=index * 10 + 1,
+            test_start_ms=index * 10 + 1,
+            test_end_ms=index * 10 + 2,
+            test_run_id=f"run-{index}",
+            test_metrics=RunMetrics(
+                total_trades=1,
+                winning_trades=1,
+                losing_trades=0,
+                total_return_pct=0.01,
+                sharpe_ratio=test_sharpe,
+            ),
+            test_trade_count=1,
+            selected_train_sharpe=train_sharpe,
+            oos_retention=test_sharpe / train_sharpe,
+        )
+
+    folds = [fold(0, 1.0, 2.0), fold(1, 9.0, 3.0)]
+
+    assert _mean_fold_retention(folds) == pytest.approx(1.75, abs=1e-12, rel=0)
+    assert _mean_fold_retention(folds) != pytest.approx(2.0, abs=1e-12, rel=0)
 
 
 def test_oos_retention_uses_parent_sharpe(tmp_path: Path, fake_factory_long):
@@ -243,9 +519,7 @@ def test_oos_retention_uses_parent_sharpe(tmp_path: Path, fake_factory_long):
 # ---------------------------------------------------------------------------
 # Combined OOS curve — compounded across folds.
 # ---------------------------------------------------------------------------
-def test_combined_oos_curve_is_monotonically_concatenated(
-    tmp_path: Path, fake_factory_long
-):
+def test_combined_oos_curve_is_monotonically_concatenated(tmp_path: Path, fake_factory_long):
     """Compounded curve: each fold's start equity equals the previous
     fold's end equity. Timestamps should be monotonically non-decreasing
     across the concatenated curve.
@@ -277,9 +551,61 @@ def test_combined_oos_curve_is_monotonically_concatenated(
 # ---------------------------------------------------------------------------
 # Failure paths.
 # ---------------------------------------------------------------------------
-def test_window_too_short_for_split_returns_failed_result(
-    tmp_path: Path, fake_factory_long
-):
+def test_empty_test_window_fails_fold_closed_and_is_not_aggregated(tmp_path: Path):
+    train_only_bars = build_minute_bars(closes_for_spy_ema(500))
+
+    def train_only_factory(_symbol: str, _start: date, _end: date):
+        return FakeDataReader(bars=train_only_bars)
+
+    request = WalkForwardRequest(
+        spec=_build_test_spec(),
+        start_date="2024-01-02",
+        end_date="2024-02-15",
+        split_policy=ChronologicalSplitPolicy(train_pct=0.7),
+    )
+
+    _, result = run_walk_forward(
+        request,
+        data_source_factory=train_only_factory,
+        artifacts_root=tmp_path,
+        data_root_revision="test-rev",
+    )
+
+    assert result.status == "failed"
+    assert len(result.folds) == 1
+    assert result.folds[0].status == "failed"
+    assert result.folds[0].test_run_id is not None
+    assert "zero input bars" in (result.folds[0].failure_reason or "")
+    assert result.combined_oos_equity_curve == []
+    assert result.pct_profitable_folds is None
+    assert "no auditable out-of-sample aggregate" in (result.failure_reason or "")
+
+
+def test_every_engine_failed_test_fold_marks_aggregate_failed(tmp_path: Path):
+    def broken_factory(_symbol: str, _start: date, _end: date):
+        raise RuntimeError("synthetic data failure")
+
+    request = WalkForwardRequest(
+        spec=_build_test_spec(),
+        start_date="2024-01-02",
+        end_date="2024-02-22",
+        split_policy=RollingSplitPolicy(train_days=10, test_days=5, step_days=5),
+    )
+
+    _, result = run_walk_forward(
+        request,
+        data_source_factory=broken_factory,
+        artifacts_root=tmp_path,
+        data_root_revision="test-rev",
+    )
+
+    assert len(result.folds) > 1
+    assert all(fold.status == "failed" for fold in result.folds)
+    assert result.status == "failed"
+    assert "no auditable out-of-sample aggregate" in (result.failure_reason or "")
+
+
+def test_window_too_short_for_split_returns_failed_result(tmp_path: Path, fake_factory_long):
     """A window that can't fit even one fold produces a failed-status
     WF result, NOT an exception. Storage layer can persist the failure
     uniformly with successes (matches Phase A's failed-run contract).
@@ -307,9 +633,7 @@ def test_window_too_short_for_split_returns_failed_result(
 # ---------------------------------------------------------------------------
 # Lineage.
 # ---------------------------------------------------------------------------
-def test_parent_run_id_is_recorded_on_walk_forward_result(
-    tmp_path: Path, fake_factory_long
-):
+def test_parent_run_id_is_recorded_on_walk_forward_result(tmp_path: Path, fake_factory_long):
     """When a parent run is supplied, the WF and its folds inherit it.
     The folds' parent_run_id is the WF id (not the user-supplied
     parent), which is the right shape for "give me every fold of this
@@ -338,9 +662,7 @@ def test_parent_run_id_is_recorded_on_walk_forward_result(
     assert len(fold_ledgers) == 1
 
 
-def test_failed_folds_are_excluded_from_pct_profitable_folds(
-    tmp_path: Path, fake_factory_long
-):
+def test_failed_folds_are_excluded_from_pct_profitable_folds(tmp_path: Path, fake_factory_long):
     """``pct_profitable_folds`` denominator must exclude folds whose
     underlying ``RunLedger`` is ``failed``. A WF with 3 successful
     folds and 2 failed ones should not report a 0/5 = 0% profitable
@@ -379,9 +701,7 @@ def test_failed_folds_are_excluded_from_pct_profitable_folds(
     assert len(successful) > 0, "test setup did not produce any successful folds"
 
     # The denominator must be the successful-fold count, not the total.
-    profitable_count = sum(
-        1 for f in successful if f.test_metrics.total_return_pct > 0
-    )
+    profitable_count = sum(1 for f in successful if f.test_metrics.total_return_pct > 0)
     expected = profitable_count / len(successful)
     if result.pct_profitable_folds is None:
         # Only happens when ``successful`` is empty, which we asserted
@@ -391,9 +711,7 @@ def test_failed_folds_are_excluded_from_pct_profitable_folds(
     assert result.pct_profitable_folds == expected
 
 
-def test_repeat_walk_forward_runs_have_distinct_walk_forward_ids(
-    tmp_path: Path, fake_factory_long
-):
+def test_repeat_walk_forward_runs_have_distinct_walk_forward_ids(tmp_path: Path, fake_factory_long):
     request = WalkForwardRequest(
         spec=_build_test_spec(),
         start_date="2024-01-02",

@@ -108,10 +108,12 @@ class SpecAlgorithm(Strategy):
         spec: S.StrategySpec,
         *,
         prediction_set: PredictionSet | None = None,
+        entry_start_ms: int | None = None,
     ) -> None:
         super().__init__()
         self._spec = spec
         self._prediction_set = prediction_set
+        self._entry_start_ms = entry_start_ms
 
         # Predictions sanity: a spec that declares predictions must be
         # paired with a loaded PredictionSet at construction time.
@@ -320,7 +322,12 @@ class SpecAlgorithm(Strategy):
                 self._in_position = False
                 self._entry_bar_count = None
         else:
-            if self._entry_block.evaluate(ctx):
+            entry_fired = self._entry_block.evaluate(ctx)
+            entry_allowed = (
+                self._entry_start_ms is None
+                or to_ms_utc(bar.end_time) >= self._entry_start_ms
+            )
+            if entry_allowed and entry_fired:
                 # Capture diagnostics snapshot at signal time — describes the
                 # decision that triggered the entry.
                 snapshot = self._snapshot_indicators()
