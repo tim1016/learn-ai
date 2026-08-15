@@ -76,6 +76,27 @@ export function chooseColumns(
   return { cols: best.cols, rows: best.rows };
 }
 
+/**
+ * Splice a reordered VISIBLE (filtered) sid list back into the canonical
+ * FULL (unfiltered) order, leaving every hidden sid exactly where it was.
+ *
+ * Reordering while a status filter is active must not silently drop or
+ * relocate the bots the filter is hiding — a `fullOrder` slot that held a
+ * visible sid is filled with the next sid from `reorderedVisible` (in
+ * order); a slot holding a sid the filter is hiding is left untouched. The
+ * result is that the visible sids' *relative* order becomes exactly
+ * `reorderedVisible`, while hidden sids keep their original position
+ * relative to their neighbors.
+ */
+export function spliceVisibleIntoFullOrder(
+  fullOrder: TileLayout,
+  reorderedVisible: TileLayout,
+): TileLayout {
+  const visible = new Set(reorderedVisible);
+  let cursor = 0;
+  return fullOrder.map((sid) => (visible.has(sid) ? reorderedVisible[cursor++] : sid));
+}
+
 /** Slice `items` into fixed-size pages, clamping `page` into `[0, pages)`. */
 export function paginate<T>(
   items: readonly T[],

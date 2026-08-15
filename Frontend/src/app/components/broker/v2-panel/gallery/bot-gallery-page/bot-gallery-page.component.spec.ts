@@ -25,6 +25,8 @@ function bot(overrides: Partial<GalleryBotView> = {}): GalleryBotView {
     needs_attention: false,
     realized_pnl_today: 0,
     open_pnl: 0,
+    day_pnl: 0,
+    session_change_pct: 0,
     fills_today: 0,
     last_bar_at_ms: null,
     primary_action: { action_id: 'stop', label: 'Stop', enabled: true, disabled_reason: null },

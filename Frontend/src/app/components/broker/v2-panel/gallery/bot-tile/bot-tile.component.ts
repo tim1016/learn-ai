@@ -110,22 +110,8 @@ export class BotTileComponent {
     ...this.canvasSize(),
   }));
 
-  private readonly firstBar = computed<ChartBar | null>(() => {
-    const bars = this.bars();
-    return bars.length ? bars[0] : null;
-  });
-  private readonly lastBar = computed<ChartBar | null>(() => {
-    const bars = this.bars();
-    return bars.length ? bars[bars.length - 1] : null;
-  });
-  private readonly deltaPct = computed<number | null>(() => {
-    const first = this.firstBar();
-    const last = this.lastBar();
-    if (!first || !last) return null;
-    const openPrice = Number(first.open);
-    if (openPrice === 0) return null;
-    return (Number(last.close) - openPrice) / openPrice;
-  });
+  /** Session return is server-computed (`GalleryBotView.session_change_pct`), scoped to TODAY's session — never re-derive this from `bars[0]`, which can be a prior session's tail bar (single numerical authority; CLAUDE.md #5, same reasoning as `dayPnl` below). */
+  private readonly deltaPct = computed<number | null>(() => this.bot().session_change_pct);
   protected readonly formattedDeltaPct = computed<string | null>(() => {
     const delta = this.deltaPct();
     return delta === null ? null : `${fmtSignedNumber(delta * 100, 2)}%`;
@@ -134,14 +120,8 @@ export class BotTileComponent {
 
   protected readonly formattedFills = computed(() => fmtInteger(this.bot().fills_today));
 
-  /** Day P&L = realized + open, null-safe (spec §3.4/D6: show whichever side is present; `—` only when both are null). */
-  private readonly dayPnl = computed<number | null>(() => {
-    const view = this.bot();
-    const realized = view.realized_pnl_today;
-    const open = view.open_pnl;
-    if (realized === null && open === null) return null;
-    return (realized ?? 0) + (open ?? 0);
-  });
+  /** Day P&L is server-computed (`GalleryBotView.day_pnl`) — the tile formats it, never re-derives it (single P&L authority; CLAUDE.md #5). */
+  private readonly dayPnl = computed<number | null>(() => this.bot().day_pnl);
   protected readonly formattedPnl = computed(() => fmtSignedCurrency(this.dayPnl()));
   protected readonly pnlTone = computed<SignTone>(() => signTone(this.dayPnl()));
 
@@ -195,7 +175,21 @@ export class BotTileComponent {
     return `Open ${view.symbol} · ${view.sid} detail${attentionSuffix}`;
   });
 
-  private ctx: CanvasRenderingContext2D | null = null;
+  /**
+   * A signal, not a plain field: `paint()` (below) is only invoked from
+   * `effect(() => this.paint())`, and on that effect's very first run —
+   * before `afterNextRender`'s `mountCanvas()` has fired — a plain-field
+   * `ctx` would still be `null`. `paint()` would bail out on the null check
+   * *before* reading `bars()`/`markers()`/etc., so the effect would finish
+   * that run having read zero signals and register no dependencies — it
+   * would then never re-run on its own for the lifetime of the component,
+   * since a signal effect only re-fires when a signal it actually read
+   * changes. Making `ctx` itself a signal means the effect's null check
+   * reads a tracked signal too, so `mountCanvas()` setting it (null →
+   * real context) is itself a dependency change that re-fires the effect —
+   * at which point it proceeds past the check and reads the rest.
+   */
+  private readonly ctx = signal<CanvasRenderingContext2D | null>(null);
 
   constructor() {
     effect(() => this.paint());
@@ -264,7 +258,6 @@ export class BotTileComponent {
 
   private mountCanvas(): void {
     const canvas = this.chartCanvas().nativeElement;
-    this.ctx = canvas.getContext('2d');
 
     const observer = new ResizeObserver((entries) => {
       const rect = entries[0]?.contentRect;
@@ -274,7 +267,9 @@ export class BotTileComponent {
     observer.observe(this.chartContainer().nativeElement);
     this.destroyRef.onDestroy(() => observer.disconnect());
 
-    this.paint();
+    // Setting the signal (not assigning a plain field) is what re-arms the
+    // paint effect — see the `ctx` field doc.
+    this.ctx.set(canvas.getContext('2d'));
   }
 
   /** Sizes the canvas's backing store for `devicePixelRatio` (crisp on HiDPI) while keeping the drawing API in CSS-pixel coordinates via `setTransform`. */
@@ -284,12 +279,12 @@ export class BotTileComponent {
     canvas.height = Math.round(height * dpr);
     canvas.style.width = `${width}px`;
     canvas.style.height = `${height}px`;
-    this.ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.ctx()?.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.canvasSize.set({ width, height });
   }
 
   private paint(): void {
-    const ctx = this.ctx;
+    const ctx = this.ctx();
     if (!ctx) return;
     const bars = this.bars();
     const cfg = this.rendererCfg();

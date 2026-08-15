@@ -22,6 +22,7 @@ import {
   paginate,
   resetLayout,
   saveLayout,
+  spliceVisibleIntoFullOrder,
   type TileLayout,
 } from '../lib/gallery-layout';
 
@@ -83,13 +84,18 @@ function matchesStatusFilter(bot: GalleryBotView, filter: GalleryStatusFilter): 
  *
  * The footer owns a single-select status filter (`All` / `Running` /
  * `Needs attn` / `Stopped`, design spec §5, D7) that runs *before*
- * `effectiveLayout`/pagination/`chooseColumns` — everything downstream
- * (page count, column choice, order-only persistence) operates on the
- * filtered sid set, exactly like `effectiveLayout` already reconciles the
- * persisted order against the live (now filtered) roster: dropped sids fall
- * away, new sids append at the end in catalog order. It also renders the
- * connection-status `●Live` indicator, driven by the `status` input the
- * page forwards from `GalleryLiveStore`.
+ * pagination/`chooseColumns` — everything downstream (page count, column
+ * choice) operates on the filtered sid set. Persisted order, though, is
+ * reconciled against the FULL unfiltered roster (`fullOrder`): dropped sids
+ * fall away, new sids append at the end in catalog order. `effectiveLayout`
+ * is a filtered VIEW onto `fullOrder`, never a replacement for it — a bot
+ * the active filter is hiding keeps its place in `fullOrder` even while
+ * invisible, and reordering the visible subset splices back into
+ * `fullOrder` (`spliceVisibleIntoFullOrder`) rather than overwriting it, so
+ * a drag-drop while filtered can't silently destroy a hidden bot's position
+ * (see `onDropped`). It also renders the connection-status `●Live`
+ * indicator, driven by the `status` input the page forwards from
+ * `GalleryLiveStore`.
  *
  * Order persists per account via `gallery-layout.ts` as a flat sid array
  * (no per-tile spans — resize was removed, design spec §4/D5). A roster
@@ -168,14 +174,26 @@ export class BotGalleryDockComponent {
     TILE_HEADER_HEIGHT_PX,
   ));
 
-  /** Persisted order synced to the current *filtered* roster: dropped sids fall away, new sids append in catalog order. */
-  protected readonly effectiveLayout = computed<TileLayout>(() => {
-    const bots = this.filteredBots();
+  /**
+   * Persisted order synced to the *full, unfiltered* roster: dropped sids
+   * fall away, new sids append in catalog order. This is the canonical
+   * order — `effectiveLayout` below is a filtered VIEW onto it, never a
+   * replacement for it, so a bot the active status filter is hiding keeps
+   * its place here even while invisible (see `onDropped`).
+   */
+  private readonly fullOrder = computed<TileLayout>(() => {
+    const bots = this.bots();
     const knownSids = new Set(bots.map((bot) => bot.sid));
     const persisted = this.persistedLayout().filter((sid) => knownSids.has(sid));
     const persistedSids = new Set(persisted);
     const appended = bots.filter((bot) => !persistedSids.has(bot.sid)).map((bot) => bot.sid);
     return [...persisted, ...appended];
+  });
+
+  /** `fullOrder` filtered down to the sids passing the active status filter, preserving their relative order — what's actually paginated/rendered. */
+  protected readonly effectiveLayout = computed<TileLayout>(() => {
+    const visibleSids = new Set(this.filteredBots().map((bot) => bot.sid));
+    return this.fullOrder().filter((sid) => visibleSids.has(sid));
   });
 
   private readonly botsBySid = computed(() => new Map(this.bots().map((bot) => [bot.sid, bot])));
@@ -263,9 +281,14 @@ export class BotGalleryDockComponent {
     // different-length array than what the user actually saw.
     if (this.pageBots().length !== this.pageTiles().length) return;
     const pageStart = this.page() * GALLERY_PAGE_SIZE;
-    const next = [...this.effectiveLayout()];
-    moveItemInArray(next, pageStart + event.previousIndex, pageStart + event.currentIndex);
-    this.persist(next);
+    const reorderedVisible = [...this.effectiveLayout()];
+    moveItemInArray(reorderedVisible, pageStart + event.previousIndex, pageStart + event.currentIndex);
+    // Persist against the FULL order, not the filtered `effectiveLayout` —
+    // persisting the filtered list directly would drop every sid the active
+    // filter is hiding (it's not in `effectiveLayout` to begin with), and
+    // the next read would re-append them at the end in catalog order,
+    // silently destroying whatever position they held.
+    this.persist(spliceVisibleIntoFullOrder(this.fullOrder(), reorderedVisible));
   }
 
   protected goToPage(delta: number): void {

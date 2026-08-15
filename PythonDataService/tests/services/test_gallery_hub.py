@@ -2,13 +2,33 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.contract.models import OrderSide
+from app.broker.v2panel.vocabulary import ActionId
+from app.schemas.broker_v2_panel import PanelAction
 from app.services.broker_v2_panel import gallery_hub
 from app.services.broker_v2_panel.chart_projection_service import markers_in_window
 from app.services.broker_v2_panel.gallery_hub import GalleryHub, shown_symbols
+
+
+def _row_action(action_id: ActionId, *, enabled: bool, explanation: str = "") -> PanelAction:
+    """A real ``PanelAction`` — the roster's authoritative per-row action
+    ``GalleryHub._primary_action`` reuses when present (see that method's
+    docstring for why enablement isn't unconditional for a stopped bot)."""
+    return PanelAction(
+        action_id=action_id,
+        label=action_id,
+        explanation=explanation,
+        enabled=enabled,
+        blockers=[],
+        confirmation=None,
+        revision=1,
+        concurrency_token="tok-1",
+    )
 
 # A Saturday (market closed) so ``live_window`` takes its deterministic
 # calendar-day fallback instead of a real NYSE session lookup — mirrors
@@ -50,10 +70,12 @@ class _FakeFillSource:
 
     def __init__(self, fills_by_sid: dict[str, tuple[FillRecord, ...]] | None = None) -> None:
         self.fills_by_sid: dict[str, tuple[FillRecord, ...]] = fills_by_sid or {}
+        self.call_count = 0
 
     async def resolve_symbol_and_fills(
         self, broker: str, account_id: str, sid: str, *, now_ms: int
     ) -> tuple[str, tuple[FillRecord, ...]]:
+        self.call_count += 1
         return "", self.fills_by_sid.get(sid, ())
 
 
@@ -116,6 +138,7 @@ class _Cat2:
         strategy_label: str = "",
         needs_attention: bool = False,
         phase: str = "ON_DUTY",
+        row_action: PanelAction | None = None,
     ) -> None:
         self.strategy_instance_id = sid
         self.symbol = symbol
@@ -126,6 +149,7 @@ class _Cat2:
         self.fills_today = fills_today
         self.needs_attention = needs_attention
         self.phase = phase
+        self.row_action = row_action
 
     @property
     def status_label(self) -> str:
@@ -137,37 +161,48 @@ class _Cat2:
 class _FakeCatalogSource:
     def __init__(self, rows: list[_Cat2]) -> None:
         self._rows = rows
+        self.call_count = 0
 
     async def get_catalog(self, broker: str, account_id: str) -> list[_Cat2]:
+        self.call_count += 1
         return self._rows
 
 
-class _FakeAggregator:
-    """Mirrors the REAL contract: ``ensure_subscribed`` is async, ``snapshot`` is sync."""
+def _raw_bar(**overrides: object) -> object:
+    fields = {
+        "start_ms": 1_700_000_000_000,
+        "end_ms": 1_700_000_060_000,
+        "open": 1.0,
+        "high": 1.2,
+        "low": 0.9,
+        "close": 1.1,
+        "volume": 100,
+        "source": "ibkr",
+        **overrides,
+    }
+    return type("B", (), fields)()
 
-    def __init__(self) -> None:
+
+class _FakeAggregator:
+    """Mirrors the REAL contract: ``ensure_subscribed`` is async, ``snapshot`` is sync.
+
+    ``bars_by_symbol`` is public and mutable so a test can pre-configure a
+    richer bar history (e.g. a prior-session bar followed by today's bars)
+    for symbols it cares about; any symbol not configured falls back to the
+    single default bar every existing test already relies on."""
+
+    def __init__(self, bars_by_symbol: dict[str, list[object]] | None = None) -> None:
         self.subscribed: list[str] = []
+        self.bars_by_symbol: dict[str, list[object]] = bars_by_symbol or {}
 
     async def ensure_subscribed(self, symbol: str) -> None:
         self.subscribed.append(symbol)
 
     def snapshot(self, symbol: str, since_ms: int | None = None) -> list[object]:
-        return [
-            type(
-                "B",
-                (),
-                {
-                    "start_ms": 1_700_000_000_000,
-                    "end_ms": 1_700_000_060_000,
-                    "open": 1.0,
-                    "high": 1.2,
-                    "low": 0.9,
-                    "close": 1.1,
-                    "volume": 100,
-                    "source": "ibkr",
-                },
-            )()
-        ]
+        bars = self.bars_by_symbol.get(symbol, [_raw_bar()])
+        if since_ms is None:
+            return bars
+        return [bar for bar in bars if bar.start_ms > since_ms]
 
 
 @pytest.mark.asyncio
@@ -415,6 +450,42 @@ async def test_build_snapshot_preserves_none_economics_instead_of_zero() -> None
     assert bot.fills_today is None
 
 
+@pytest.mark.asyncio
+async def test_build_snapshot_session_change_pct_excludes_a_prior_session_bar(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: the aggregator's ring buffer retains slightly more than
+    one session's worth of bars (``live_bar_aggregator.py``'s
+    ``_RING_BUFFER_SIZE`` comment). ``session_change_pct`` must be computed
+    from the first bar within TODAY's session, never from a naive
+    ``bars[0]`` that can be yesterday's tail — a prior-session close-to-open
+    gap must not leak into "today's" number."""
+    monkeypatch.setattr(gallery_hub, "now_ms_utc", lambda: _NOW)
+    prior_session_bar = _raw_bar(
+        start_ms=_OPEN_MS - 3_600_000, end_ms=_OPEN_MS - 3_540_000, open=50.0, close=200.0,
+    )
+    todays_first_bar = _raw_bar(start_ms=_OPEN_MS, end_ms=_OPEN_MS + 60_000, open=100.0, close=101.0)
+    todays_last_bar = _raw_bar(
+        start_ms=_OPEN_MS + 60_000, end_ms=_OPEN_MS + 120_000, open=101.0, close=110.0,
+    )
+    rows = [_Cat2("Aug11-02", "SPY", True, 0.0, 0.0, 0)]
+    hub = GalleryHub(
+        broker="alpaca",
+        account_id="PA3",
+        catalog_source=_FakeCatalogSource(rows),
+        aggregator=_FakeAggregator(
+            {"SPY": [prior_session_bar, todays_first_bar, todays_last_bar]}
+        ),
+    )
+
+    snap = await hub.build_snapshot()
+
+    # (110 - 100) / 100 = 0.10 — NOT (110 - 50) / 50 = 1.2, which is what a
+    # naive bars[0]-based calculation would have produced by folding in the
+    # prior session's bar.
+    assert snap.bots[0].session_change_pct == pytest.approx(0.10)
+
+
 def test_gallery_hub_reuses_canonical_markers_projection() -> None:
     """``GalleryHub`` must not redefine fill→marker mapping — it imports the
     exact ``chart_projection_service`` helper the single-bot detail chart
@@ -528,17 +599,17 @@ async def test_build_update_returns_new_fill_in_markers_delta(
     new_fill = _fill(sid="Aug11-02", event_key="exec-new", filled_at_ms=_OPEN_MS + 120_000)
     fill_source.fills_by_sid["Aug11-02"] = (new_fill,)
 
-    upd = await hub.build_update(since_bar_ms={}, known_sids={"Aug11-02"}, since_marker_ms={})
+    upd = await hub.build_update(since_bar_ms={}, known_sids={"Aug11-02"}, since_marker_keys={})
 
-    assert [m.order_ref for m in upd.markers_delta["Aug11-02"]] == [new_fill.order_ref]
+    assert [m.event_key for m in upd.markers_delta["Aug11-02"]] == [new_fill.event_key]
 
 
 @pytest.mark.asyncio
 async def test_build_update_does_not_resend_already_delivered_marker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A fill already delivered (the caller's ``since_marker_ms`` cursor is
-    at or past it) is not resent in a later ``markers_delta``."""
+    """A fill already delivered (its ``event_key`` is in the caller's
+    ``since_marker_keys`` cursor) is not resent in a later ``markers_delta``."""
     monkeypatch.setattr(gallery_hub, "now_ms_utc", lambda: _NOW)
     rows = [_Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12)]
     fill = _fill(sid="Aug11-02", event_key="exec-1", filled_at_ms=_OPEN_MS + 60_000)
@@ -551,14 +622,237 @@ async def test_build_update_does_not_resend_already_delivered_marker(
         fill_source=fill_source,
     )
     snap = await hub.build_snapshot()
-    assert [m.order_ref for m in snap.markers["Aug11-02"]] == [fill.order_ref]
+    assert [m.event_key for m in snap.markers["Aug11-02"]] == [fill.event_key]
 
-    # The caller (mirroring the router's ``since_marker_ms``) already saw
-    # this fill in the snapshot, so its cursor is seeded at the fill's time.
+    # The caller (mirroring the router's ``since_marker_keys``) already saw
+    # this fill in the snapshot, so its cursor is seeded with its event_key.
     upd = await hub.build_update(
         since_bar_ms={},
         known_sids={"Aug11-02"},
-        since_marker_ms={"Aug11-02": fill.filled_at_ms},
+        since_marker_keys={"Aug11-02": {fill.event_key}},
     )
 
     assert "Aug11-02" not in upd.markers_delta
+
+
+@pytest.mark.asyncio
+async def test_build_update_does_not_drop_a_same_millisecond_fill(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: a strict ``filled_at_ms >`` watermark would silently and
+    PERMANENTLY drop a second, genuinely distinct fill sharing the same
+    millisecond as an already-delivered one — neither fill is ever ``>`` the
+    other's timestamp. Keying on ``event_key`` instead must deliver both."""
+    monkeypatch.setattr(gallery_hub, "now_ms_utc", lambda: _NOW)
+    rows = [_Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12)]
+    same_ms = _OPEN_MS + 60_000
+    first = _fill(sid="Aug11-02", event_key="exec-1", filled_at_ms=same_ms)
+    fill_source = _FakeFillSource({"Aug11-02": (first,)})
+    hub = GalleryHub(
+        broker="alpaca",
+        account_id="PA3",
+        catalog_source=_FakeCatalogSource(rows),
+        aggregator=_FakeAggregator(),
+        fill_source=fill_source,
+    )
+    snap = await hub.build_snapshot()
+    assert [m.event_key for m in snap.markers["Aug11-02"]] == ["exec-1"]
+
+    # A second, distinct fill arrives at the SAME millisecond as the one
+    # already delivered.
+    second = _fill(sid="Aug11-02", event_key="exec-2", filled_at_ms=same_ms)
+    fill_source.fills_by_sid["Aug11-02"] = (first, second)
+
+    upd = await hub.build_update(
+        since_bar_ms={}, known_sids={"Aug11-02"}, since_marker_keys={"Aug11-02": {"exec-1"}}
+    )
+
+    assert [m.event_key for m in upd.markers_delta["Aug11-02"]] == ["exec-2"]
+
+
+def _hub_with_rows(rows: list[_Cat2]) -> GalleryHub:
+    return GalleryHub(
+        broker="alpaca",
+        account_id="PA3",
+        catalog_source=_FakeCatalogSource(rows),
+        aggregator=_FakeAggregator(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_primary_action_honors_disabled_row_action_for_stopped_bot() -> None:
+    """A stopped bot isn't unconditionally Resume-able — when the roster's
+    own authoritative row_action says Resume is blocked (e.g. admission
+    unavailable), the gallery's primary_action must say so too, not present
+    an enabled Resume the confirm-time authoritative-panel check then
+    rejects."""
+    row = _Cat2(
+        "Aug11-02", "SPY", False, None, None, None,
+        row_action=_row_action("resume", enabled=False, explanation="Admission unavailable."),
+    )
+    snap = await _hub_with_rows([row]).build_snapshot()
+
+    action = snap.bots[0].primary_action
+    assert action.action_id == "resume"
+    assert action.enabled is False
+    assert action.disabled_reason == "Admission unavailable."
+
+
+@pytest.mark.asyncio
+async def test_primary_action_uses_row_action_enabled_true_for_running_bot() -> None:
+    row = _Cat2(
+        "Aug11-02", "SPY", True, None, None, None,
+        row_action=_row_action("stop", enabled=True, explanation="Stop this bot."),
+    )
+    snap = await _hub_with_rows([row]).build_snapshot()
+
+    action = snap.bots[0].primary_action
+    assert action.action_id == "stop"
+    assert action.enabled is True
+    assert action.disabled_reason is None
+
+
+@pytest.mark.asyncio
+async def test_primary_action_falls_back_when_row_action_names_a_different_action() -> None:
+    """The roster's routine action for this row isn't stop/resume (e.g. a
+    hold needs clearing first) — the gallery's one quick-action slot can't
+    represent that yet, so it falls back to the pre-fix always-enabled
+    derivation rather than mis-attributing an unrelated action's enablement."""
+    row = _Cat2(
+        "Aug11-02", "SPY", False, None, None, None,
+        row_action=_row_action("clear_hold", enabled=False, explanation="A hold is active."),
+    )
+    snap = await _hub_with_rows([row]).build_snapshot()
+
+    action = snap.bots[0].primary_action
+    assert action.action_id == "resume"
+    assert action.enabled is True
+    assert action.disabled_reason is None
+
+
+@pytest.mark.asyncio
+async def test_primary_action_falls_back_when_no_row_action_projected() -> None:
+    """Backward compat: a catalog source that doesn't populate row_action
+    (most test doubles, and any future non-SQLite source) keeps today's
+    always-enabled derivation."""
+    row = _Cat2("Aug11-02", "SPY", False, None, None, None)  # row_action=None
+    snap = await _hub_with_rows([row]).build_snapshot()
+
+    action = snap.bots[0].primary_action
+    assert action.action_id == "resume"
+    assert action.enabled is True
+
+
+@pytest.mark.asyncio
+async def test_io_cache_collapses_concurrent_client_catalog_and_fill_fetches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: N SSE clients independently polling the SAME cached hub
+    must not each trigger their own catalog fetch and fill-source fan-out —
+    within the TTL window, they share one of each
+    (``GalleryHub.__init__``'s ``io_cache_ttl_ms`` docstring)."""
+    clock = {"now": _NOW}
+    monkeypatch.setattr(gallery_hub, "now_ms_utc", lambda: clock["now"])
+    rows = [_Cat2("Aug11-02", "SPY", True, 0.0, 0.0, 0)]
+    catalog_source = _FakeCatalogSource(rows)
+    fill_source = _FakeFillSource()
+    hub = GalleryHub(
+        broker="alpaca",
+        account_id="PA3",
+        catalog_source=catalog_source,
+        aggregator=_FakeAggregator(),
+        fill_source=fill_source,
+        io_cache_ttl_ms=1_000,
+    )
+
+    # Three "clients" polling this shared hub within the same TTL window.
+    await hub.build_snapshot()
+    await hub.build_update(since_bar_ms={}, known_sids={"Aug11-02"})
+    await hub.build_update(since_bar_ms={}, known_sids={"Aug11-02"})
+
+    assert catalog_source.call_count == 1
+    assert fill_source.call_count == 1  # one shown bot, one fan-out call
+
+    # Advance past the TTL — the next poll must fetch fresh.
+    clock["now"] += 1_001
+    await hub.build_update(since_bar_ms={}, known_sids={"Aug11-02"})
+
+    assert catalog_source.call_count == 2
+    assert fill_source.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_io_cache_disabled_by_default_fetches_fresh_every_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``io_cache_ttl_ms`` defaults to ``0`` — caching must be fully
+    disabled unless a caller opts in, exactly the pre-caching behavior every
+    other test in this file depends on."""
+    monkeypatch.setattr(gallery_hub, "now_ms_utc", lambda: _NOW)
+    rows = [_Cat2("Aug11-02", "SPY", True, 0.0, 0.0, 0)]
+    catalog_source = _FakeCatalogSource(rows)
+    hub = GalleryHub(
+        broker="alpaca",
+        account_id="PA3",
+        catalog_source=catalog_source,
+        aggregator=_FakeAggregator(),
+    )
+
+    await hub.build_snapshot()
+    await hub.build_snapshot()
+
+    assert catalog_source.call_count == 2
+
+
+class _BlockingFillSource:
+    """Blocks only the FIRST call into ``resolve_symbol_and_fills`` until
+    ``release`` is set; every call after that returns immediately —
+    regardless of which sid it's for, so this works even when both
+    concurrent ``GalleryHub`` calls share the same single bot (as they do in
+    ``test_build_update_version_not_stolen_by_a_concurrent_call``: gating on
+    a specific sid would block BOTH calls, since both resolve the same bot).
+    Deterministically makes whichever call enters ``_fetch_markers`` first
+    the "slow" one (mirrors production: one hub cached per account, called
+    by every concurrent client)."""
+
+    def __init__(self, *, release: asyncio.Event) -> None:
+        self._release = release
+        self._first_call_started = False
+
+    async def resolve_symbol_and_fills(
+        self, broker: str, account_id: str, sid: str, *, now_ms: int
+    ) -> tuple[str, tuple[FillRecord, ...]]:
+        if not self._first_call_started:
+            self._first_call_started = True
+            await self._release.wait()
+        return "", ()
+
+
+@pytest.mark.asyncio
+async def test_build_update_version_not_stolen_by_a_concurrent_call() -> None:
+    """Regression: ``surface_version`` must reflect THIS call's own claimed
+    version even when another concurrent call (same cached hub, a second SSE
+    client or the REST fallback poll) increments ``self._version`` again
+    while this call is still awaiting ``_fetch_markers``. Before the fix,
+    ``surface_version`` was read from ``self._version`` at return-construction
+    time — after the await — so the slower call would silently inherit the
+    faster call's later version number."""
+    release = asyncio.Event()
+    rows = [_Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12)]
+    hub = GalleryHub(
+        broker="alpaca",
+        account_id="PA3",
+        catalog_source=_FakeCatalogSource(rows),
+        aggregator=_FakeAggregator(),
+        fill_source=_BlockingFillSource(release=release),
+    )
+
+    slow_call = asyncio.ensure_future(hub.build_update(since_bar_ms={}, known_sids=set()))
+    await asyncio.sleep(0)  # let the slow call increment its version and start waiting
+
+    fast_result = await hub.build_update(since_bar_ms={}, known_sids=set())
+    release.set()
+    slow_result = await slow_call
+
+    assert slow_result.surface_version == 1
+    assert fast_result.surface_version == 2

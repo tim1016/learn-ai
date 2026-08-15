@@ -10451,6 +10451,8 @@ export interface components {
          *     namespace. ``side`` and ``price`` render the buy/sell marker.
          */
         ChartFillMarker: {
+            /** Event Key */
+            event_key: string;
             /** Filled At Ms */
             filled_at_ms: number;
             /** Order Ref */
@@ -13901,6 +13903,8 @@ export interface components {
          * @description One bot's tile state in the gallery wall.
          */
         GalleryBotView: {
+            /** Day Pnl */
+            day_pnl: number | null;
             /** Desired State */
             desired_state: string;
             /** Fills Today */
@@ -13920,6 +13924,8 @@ export interface components {
             realized_pnl_today: number | null;
             /** Running */
             running: boolean;
+            /** Session Change Pct */
+            session_change_pct: number | null;
             /** Sid */
             sid: string;
             /** Symbol */

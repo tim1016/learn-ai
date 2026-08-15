@@ -31,6 +31,10 @@ export interface GalleryBotView {
   readonly needs_attention: boolean;
   readonly realized_pnl_today: number | null;
   readonly open_pnl: number | null;
+  /** Null-safe `realized_pnl_today + open_pnl`, computed once server-side — the tile formats this, it never re-derives it (single P&L authority). */
+  readonly day_pnl: number | null;
+  /** Session return scoped to TODAY's session, computed server-side — never derive this from `bars[0]`, which can be a prior session's tail bar (the shared buffer retains more than one session's worth). */
+  readonly session_change_pct: number | null;
   readonly fills_today: number | null;
   readonly last_bar_at_ms: number | null;
   readonly primary_action: GalleryPrimaryAction;

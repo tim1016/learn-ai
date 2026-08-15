@@ -30,6 +30,8 @@ function bot(overrides: Partial<GalleryBotView> = {}): GalleryBotView {
     needs_attention: false,
     realized_pnl_today: 125.5,
     open_pnl: -40.25,
+    day_pnl: 85.25,
+    session_change_pct: null,
     fills_today: 3,
     last_bar_at_ms: 1_700_000_060_000,
     primary_action: {
@@ -49,6 +51,7 @@ function fillMarker(overrides: Partial<ChartFillMarker> = {}): ChartFillMarker {
     quantity: 2,
     price: 101,
     order_ref: 'order-1',
+    event_key: 'exec-1',
     ...overrides,
   };
 }
@@ -92,7 +95,7 @@ describe('BotTileComponent', () => {
   it('colours the legend delta positive on an up session', async () => {
     await render(BotTileComponent, {
       inputs: {
-        bot: bot(),
+        bot: bot({ session_change_pct: 0.1 }),
         bars: [
           bar({ start_ms: 1_700_000_000_000, open: '100.00', close: '100.00' }),
           bar({ start_ms: 1_700_000_060_000, open: '100.00', close: '110.00' }),
@@ -110,7 +113,7 @@ describe('BotTileComponent', () => {
   it('colours the legend delta negative on a down session', async () => {
     await render(BotTileComponent, {
       inputs: {
-        bot: bot(),
+        bot: bot({ session_change_pct: -0.1 }),
         bars: [
           bar({ start_ms: 1_700_000_000_000, open: '100.00', close: '100.00' }),
           bar({ start_ms: 1_700_000_060_000, open: '100.00', close: '90.00' }),
@@ -148,7 +151,7 @@ describe('BotTileComponent', () => {
     });
     const { container } = await render(BotTileComponent, {
       inputs: {
-        bot: bot(),
+        bot: bot({ session_change_pct: 0.025 }),
         bars: [bar({ start_ms: 1_700_000_000_000, end_ms: 1_700_000_060_000 }), hoveredBar],
         markers: [fillMarker({ filled_at_ms: hoveredBar.start_ms + 1_000, side: 'buy', quantity: 2, price: 101.5 })],
         broker: 'alpaca',

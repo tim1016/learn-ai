@@ -55,15 +55,21 @@ function mergeBarsBySymbol(existing: readonly ChartBar[], incoming: readonly Cha
   return [...byStart.values()].sort((a, b) => a.start_ms - b.start_ms);
 }
 
-/** Replace the marker sharing an ``order_ref`` in place; otherwise append. */
+/**
+ * Replace the marker sharing an ``event_key`` in place; otherwise append.
+ * Keyed on ``event_key``, not ``order_ref``: every partial fill of one
+ * order shares its ``order_ref``, so merging on that would let a later
+ * partial fill silently replace (and lose) an earlier one instead of the
+ * two coexisting as distinct markers.
+ */
 function mergeMarkersByRef(
   existing: readonly ChartFillMarker[],
   incoming: readonly ChartFillMarker[],
 ): ChartFillMarker[] {
   if (incoming.length === 0) return [...existing];
-  const byRef = new Map(existing.map((marker) => [marker.order_ref, marker]));
-  for (const marker of incoming) byRef.set(marker.order_ref, marker);
-  return [...byRef.values()];
+  const byKey = new Map(existing.map((marker) => [marker.event_key, marker]));
+  for (const marker of incoming) byKey.set(marker.event_key, marker);
+  return [...byKey.values()];
 }
 
 function upsertBots(existing: readonly GalleryBotView[], deltas: readonly GalleryBotView[]): GalleryBotView[] {

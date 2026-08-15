@@ -40,6 +40,8 @@ def test_snapshot_round_trips_and_is_snake_case() -> None:
                 needs_attention=False,
                 realized_pnl_today=142.0,
                 open_pnl=-8.0,
+                day_pnl=134.0,
+                session_change_pct=0.05,
                 fills_today=12,
                 last_bar_at_ms=1_700_000_060_000,
                 primary_action=GalleryPrimaryAction(
@@ -67,6 +69,8 @@ def test_bot_delta_is_self_contained_with_symbol_and_label() -> None:
         needs_attention=False,
         realized_pnl_today=150.0,
         open_pnl=-3.0,
+        day_pnl=147.0,
+        session_change_pct=0.02,
         fills_today=13,
         last_bar_at_ms=1_700_000_120_000,
         primary_action=GalleryPrimaryAction(

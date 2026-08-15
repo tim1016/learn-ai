@@ -6,8 +6,32 @@ import {
   paginate,
   resetLayout,
   saveLayout,
+  spliceVisibleIntoFullOrder,
   type TileLayout,
 } from './gallery-layout';
+
+describe('spliceVisibleIntoFullOrder', () => {
+  it('reorders visible sids in place while leaving hidden sids at their original slots', () => {
+    // A hidden, B/C/E visible, D hidden. Dragging E to the front of the
+    // visible set gives reorderedVisible = [E, B, C].
+    const fullOrder: TileLayout = ['A', 'B', 'C', 'D', 'E'];
+    const reorderedVisible: TileLayout = ['E', 'B', 'C'];
+
+    expect(spliceVisibleIntoFullOrder(fullOrder, reorderedVisible)).toEqual(
+      ['A', 'E', 'B', 'D', 'C'],
+    );
+  });
+
+  it('is a no-op when every sid is visible', () => {
+    const fullOrder: TileLayout = ['A', 'B', 'C'];
+    expect(spliceVisibleIntoFullOrder(fullOrder, ['C', 'A', 'B'])).toEqual(['C', 'A', 'B']);
+  });
+
+  it('leaves the full order untouched when nothing is visible', () => {
+    const fullOrder: TileLayout = ['A', 'B', 'C'];
+    expect(spliceVisibleIntoFullOrder(fullOrder, [])).toEqual(fullOrder);
+  });
+});
 
 describe('chooseColumns', () => {
   it('returns a single 1x1 cell for zero bots', () => {

@@ -21,6 +21,8 @@ function bot(overrides: Partial<GalleryBotView> = {}): GalleryBotView {
     needs_attention: false,
     realized_pnl_today: 0,
     open_pnl: 0,
+    day_pnl: 0,
+    session_change_pct: 0,
     fills_today: 0,
     last_bar_at_ms: null,
     primary_action: { action_id: 'stop', label: 'Stop', enabled: true, disabled_reason: null },
@@ -251,6 +253,40 @@ describe('BotGalleryDockComponent', () => {
       fireEvent.click(screen.getByRole('radio', { name: 'All 3' }));
 
       expect(cellSids(container)).toEqual(['sid-0', 'sid-1', 'sid-2']);
+    });
+
+    it('reordering the visible (filtered) subset preserves a hidden bot\'s original slot instead of appending it at the end', async () => {
+      // The hidden bot (sid-0, stopped) starts FIRST, not last — so a buggy
+      // "persist the filtered list, let it re-append at the end on the next
+      // reconcile" would move it to the END, distinctly different from the
+      // correct "leave it in its original slot" behavior this test asserts.
+      const threeBots = [
+        bot({ sid: 'sid-0', symbol: 'SYM0', running: false, needs_attention: false }),
+        bot({ sid: 'sid-1', symbol: 'SYM1', running: true, needs_attention: false }),
+        bot({ sid: 'sid-2', symbol: 'SYM2', running: true, needs_attention: false }),
+      ];
+      const { container, fixture } = await renderDock({ bots: threeBots });
+
+      // Filter to Running — sid-0 (stopped) is now hidden.
+      fireEvent.click(screen.getByRole('radio', { name: 'Running 2' }));
+      fixture.detectChanges();
+      expect(cellSids(container)).toEqual(['sid-1', 'sid-2']);
+
+      // Drag sid-2 before sid-1, among the two VISIBLE tiles.
+      const dropListDe = fixture.debugElement.query(By.directive(CdkDropList));
+      const dropEvent = { previousIndex: 1, currentIndex: 0 } as unknown as CdkDragDrop<unknown>;
+      dropListDe.triggerEventHandler('cdkDropListDropped', dropEvent);
+      fixture.detectChanges();
+      expect(cellSids(container)).toEqual(['sid-2', 'sid-1']);
+
+      // Switch back to All: sid-0 must still sit in its ORIGINAL slot
+      // (first) — not have been dropped from persistence and re-appended at
+      // the end. The visible pair's new relative order (sid-2, sid-1) is
+      // preserved around it.
+      fireEvent.click(screen.getByRole('radio', { name: 'All 3' }));
+      fixture.detectChanges();
+      expect(cellSids(container)).toEqual(['sid-0', 'sid-2', 'sid-1']);
+      expect(loadLayout(ACCOUNT_ID)).toEqual(['sid-0', 'sid-2', 'sid-1']);
     });
 
     it('shows an honest in-dock empty note when the filter matches nothing, distinct from the whole-wall empty state', async () => {

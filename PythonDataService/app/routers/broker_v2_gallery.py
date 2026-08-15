@@ -62,6 +62,11 @@ router = APIRouter(prefix="/api/brokers", tags=["broker-v2-gallery"])
 
 _KEEPALIVE_INTERVAL_S = 15.0
 _POLL_INTERVAL_S = 1.0
+# Just under one poll interval: every connected client sees fresh data at
+# least once per its own ~1s poll, while N clients polling within the same
+# window collapse to one real catalog fetch + one real fill-source fan-out
+# instead of N of each (GalleryHub.__init__'s `io_cache_ttl_ms` docstring).
+_GALLERY_IO_CACHE_TTL_MS = 800
 
 _HUB_CACHE: dict[tuple[str, str], GalleryHub] = {}
 
@@ -124,6 +129,7 @@ async def get_gallery_hub(broker: str, account_id: str) -> GalleryHub:
             catalog_source=panel_data_source,
             aggregator=LIVE_BAR_AGGREGATOR,
             fill_source=_FILL_SOURCE,
+            io_cache_ttl_ms=_GALLERY_IO_CACHE_TTL_MS,
         )
         _HUB_CACHE[key] = hub
     return hub
@@ -144,16 +150,17 @@ def _latest_bar_start_ms(symbol_bars: list[GallerySymbolBars]) -> dict[str, int]
     return {entry.symbol: entry.bars[-1].start_ms for entry in symbol_bars if entry.bars}
 
 
-def _latest_marker_ms(markers: dict[str, list[ChartFillMarker]]) -> dict[str, int]:
-    """Latest ``filled_at_ms`` per sid among the markers in one call, for
-    seeding/advancing this stream's own ``since_marker_ms`` cursor (mirrors
+def _marker_event_keys(markers: dict[str, list[ChartFillMarker]]) -> dict[str, set[str]]:
+    """Per-sid set of ``event_key``s among the markers in one call, for
+    seeding/advancing this stream's own delivered-fills cursor (mirrors
     ``_latest_bar_start_ms``). Deliberately local to the generator, not hub
-    state — see ``GalleryHub.build_update``'s cross-client race note."""
-    return {
-        sid: max(marker.filled_at_ms for marker in sid_markers)
-        for sid, sid_markers in markers.items()
-        if sid_markers
-    }
+    state — see ``GalleryHub.build_update``'s cross-client race note.
+
+    Callers must UNION this into their accumulated cursor, never replace it
+    — a sid's delivered set has to keep growing across polls, or a fill
+    delivered two polls ago would fall out of "seen" the moment a poll
+    without that sid's keys arrives, and get resent."""
+    return {sid: {marker.event_key for marker in sid_markers} for sid, sid_markers in markers.items() if sid_markers}
 
 
 async def _gallery_event_source(hub: GalleryHub, *, cursor: str | None) -> AsyncIterator[str]:
@@ -167,12 +174,13 @@ async def _gallery_event_source(hub: GalleryHub, *, cursor: str | None) -> Async
     yield f"id: {current_id}\nevent: snapshot\ndata: {snapshot.model_dump_json()}\n\n"
 
     since_bar_ms = _latest_bar_start_ms(snapshot.symbols)
-    # This stream's own last-delivered fill cursor per sid, seeded from the
-    # snapshot's markers (already fully delivered) so the first update never
-    # resends them. Deliberately local to this generator for the same
-    # cross-client reason as ``known_sids`` below (see
-    # ``GalleryHub.build_update``'s docstring).
-    since_marker_ms = _latest_marker_ms(snapshot.markers)
+    # This stream's own delivered-fills cursor per sid — a set of event_keys,
+    # not a scalar timestamp (two fills can share a millisecond; see
+    # ``gallery_hub._markers_delta``) — seeded from the snapshot's markers
+    # (already fully delivered) so the first update never resends them.
+    # Deliberately local to this generator for the same cross-client reason
+    # as ``known_sids`` below (see ``GalleryHub.build_update``'s docstring).
+    since_marker_keys = _marker_event_keys(snapshot.markers)
     # This stream's own last-observed shown (non-retired) roster, passed to
     # every ``build_update`` call. Deliberately local to this generator (one
     # per SSE connection) rather than read off ``hub`` — the same account's
@@ -189,10 +197,11 @@ async def _gallery_event_source(hub: GalleryHub, *, cursor: str | None) -> Async
     while True:
         await asyncio.sleep(_POLL_INTERVAL_S)
         update = await hub.build_update(
-            since_bar_ms, known_sids=known_sids, since_marker_ms=since_marker_ms
+            since_bar_ms, known_sids=known_sids, since_marker_keys=since_marker_keys
         )
         since_bar_ms.update(_latest_bar_start_ms(update.symbols))
-        since_marker_ms.update(_latest_marker_ms(update.markers_delta))
+        for sid, keys in _marker_event_keys(update.markers_delta).items():
+            since_marker_keys.setdefault(sid, set()).update(keys)
         # ``bots_delta`` is always the full shown (non-retired) roster (see
         # the hub's docstring), so it doubles as this stream's next
         # known-roster baseline with no extra bookkeeping.

@@ -32,6 +32,7 @@ function marker(overrides: Partial<ChartFillMarker> = {}): ChartFillMarker {
     quantity: 10,
     price: 100.25,
     order_ref: 'ord-1',
+    event_key: 'exec-1',
     ...overrides,
   };
 }
@@ -217,5 +218,46 @@ describe('draw', () => {
     const scale = computeScale(bars, CFG);
 
     expect(() => draw(ctx, bars, markers, scale, 4, CFG)).not.toThrow();
+  });
+
+  it('skips a marker outside every buffered bar window instead of clamping it onto an edge bar', () => {
+    // ctx.fill() is called exactly once per draw for the last-price tag,
+    // plus once more per drawn marker triangle (the only other `fill()`
+    // caller) — so the call count is a direct, unambiguous proxy for "was
+    // this marker actually drawn".
+    const bars = Array.from({ length: 4 }, (_, i) =>
+      bar({ start_ms: 1_700_000_000_000 + i * 60_000, end_ms: 1_700_000_000_000 + (i + 1) * 60_000 }),
+    );
+    const scale = computeScale(bars, CFG);
+
+    const tagOnly = createStubCtx();
+    draw(tagOnly, bars, [], scale, null, CFG);
+    expect(tagOnly.fill).toHaveBeenCalledTimes(1);
+
+    const withInWindowMarker = createStubCtx();
+    draw(withInWindowMarker, bars, [marker({ filled_at_ms: bars[1].start_ms + 1 })], scale, null, CFG);
+    expect(withInWindowMarker.fill).toHaveBeenCalledTimes(2);
+
+    const withNewerThanBuffer = createStubCtx();
+    draw(
+      withNewerThanBuffer,
+      bars,
+      [marker({ filled_at_ms: bars[bars.length - 1].end_ms + 60_000 })], // the forming, not-yet-closed minute
+      scale,
+      null,
+      CFG,
+    );
+    expect(withNewerThanBuffer.fill).toHaveBeenCalledTimes(1);
+
+    const withOlderThanBuffer = createStubCtx();
+    draw(
+      withOlderThanBuffer,
+      bars,
+      [marker({ filled_at_ms: bars[0].start_ms - 60_000 })], // trimmed out of the buffer
+      scale,
+      null,
+      CFG,
+    );
+    expect(withOlderThanBuffer.fill).toHaveBeenCalledTimes(1);
   });
 });

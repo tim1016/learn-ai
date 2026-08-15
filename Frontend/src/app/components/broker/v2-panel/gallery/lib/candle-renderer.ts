@@ -192,12 +192,22 @@ function formatPrice(value: number): string {
   return value.toFixed(2);
 }
 
-/** First bar index whose `[start_ms, end_ms)` window contains `ms`; clamps at both ends. */
+/**
+ * Index of the bar whose `[start_ms, end_ms)` window contains `ms`; `-1`
+ * when `ms` falls outside every buffered bar's window (older than the
+ * first bar's `start_ms` — e.g. the buffer trimmed it away — or at/after
+ * the last bar's `end_ms` — e.g. a fill in the currently-forming minute
+ * that hasn't closed into a bar yet). Callers must skip a marker that
+ * resolves to `-1`, not clamp it onto the nearest edge bar: drawing it on a
+ * neighboring candle would display the execution at a false timestamp,
+ * potentially permanently if that bar never enters the buffer.
+ */
 function findBarIndex(bars: readonly ChartBar[], ms: number): number {
+  if (bars.length === 0 || ms < bars[0].start_ms) return -1;
   for (let i = 0; i < bars.length; i++) {
     if (ms < bars[i].end_ms) return i;
   }
-  return bars.length - 1;
+  return -1;
 }
 
 /** `count` bar indices spread evenly across `[0, barCount - 1]`, deduped. */
@@ -318,6 +328,7 @@ function drawMarkers(
 ): void {
   for (const marker of markers) {
     const idx = findBarIndex(bars, marker.filled_at_ms);
+    if (idx === -1) continue;
     const { high, low } = toCandle(bars[idx]);
     const xCenter = scale.plot.left + idx * barWidth + barWidth / 2;
     const isBuy = marker.side === 'buy';

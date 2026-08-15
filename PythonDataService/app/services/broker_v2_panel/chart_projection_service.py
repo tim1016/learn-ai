@@ -127,6 +127,7 @@ def fill_to_marker(fill: FillRecord) -> ChartFillMarker:
         quantity=fill.quantity,
         price=fill.fill_price,
         order_ref=fill.order_ref,
+        event_key=fill.event_key,
     )
 
 
