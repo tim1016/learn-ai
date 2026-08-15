@@ -10,6 +10,7 @@ from app.broker.alpaca.clerk.sqlite.custody_subjects import manual_operator_subj
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.manual_orders import (
     ManualOrderSubmission,
+    ManualPreviewRevision,
     ManualTicketContinuationError,
     ManualTicketLeg,
     manual_order_command_id,
@@ -53,6 +54,21 @@ class ManualOrderPreview:
     db_identity_token: str | None
     control_revision: int | None
     subject_id: str | None
+
+    @property
+    def revision(self) -> ManualPreviewRevision | None:
+        """Return the atomic authority revision represented by this preview."""
+        if (
+            self.authority_generation is None
+            or self.db_identity_token is None
+            or self.control_revision is None
+        ):
+            return None
+        return ManualPreviewRevision(
+            authority_generation=self.authority_generation,
+            db_identity_token=self.db_identity_token,
+            control_revision=self.control_revision,
+        )
 
 
 class ManualPreviewStaleError(ValueError):
@@ -187,6 +203,7 @@ async def preview_manual_order(
             subject_id=None,
         )
     subject_id = manual_operator_subject_id(operator_id)
+    observed_meta = repo.control_meta_snapshot()
     existing_ticket = repo.manual_order_ticket(ticket_id)
     continuation_ticket_id = (
         ticket_id if existing_ticket is not None and existing_ticket.subject_id == subject_id else None
@@ -303,6 +320,21 @@ async def preview_manual_order(
                 subject_id=subject_id,
             )
     meta = repo.control_meta_snapshot()
+    if meta != observed_meta:
+        return ManualOrderPreview(
+            capability=ManualOrderCapability(
+                False,
+                ManualOrderUnavailable(
+                    "STALE_MANUAL_TICKET",
+                    "The Clerk changed while broker eligibility was observed. Refresh the ticket.",
+                ),
+            ),
+            preview_token=None,
+            authority_generation=None,
+            db_identity_token=None,
+            control_revision=None,
+            subject_id=subject_id,
+        )
     key = _preview_key(
         control_secret=control_secret,
         allow_unauthenticated_control=allow_unauthenticated_control,
@@ -405,6 +437,7 @@ async def submit_previewed_manual_order(
         raise ManualPreviewStaleError(str(exc)) from exc
     if continuation and active_leg.leg_id not in {leg.leg_id for leg in legs}:
         raise ManualPreviewStaleError("The refreshed manual ticket no longer contains its next leg.")
+    preview: ManualOrderPreview | None = None
     if repo.get_command(manual_order_command_id(ticket_id, active_leg.leg_id)) is None:
         preview = await preview_manual_order(
             repo=repo,
@@ -424,17 +457,21 @@ async def submit_previewed_manual_order(
             raise ManualPreviewStaleError(preview.capability.unavailable.message)
         if not hmac.compare_digest(preview.preview_token or "", preview_token):
             raise ManualPreviewStaleError("The manual-order preview is stale. Refresh the ticket before confirming.")
-    return await submit_manual_order(
-        repo,
-        account_id=account_id,
-        operator_id=operator_id,
-        ticket_id=ticket_id,
-        leg_id=active_leg.leg_id,
-        leg=active_leg.instruction,
-        trade=trade,
-        ticket_legs=legs,
-        continuation=continuation,
-    )
+    try:
+        return await submit_manual_order(
+            repo,
+            account_id=account_id,
+            operator_id=operator_id,
+            ticket_id=ticket_id,
+            leg_id=active_leg.leg_id,
+            leg=active_leg.instruction,
+            trade=trade,
+            ticket_legs=legs,
+            continuation=continuation,
+            expected_preview_revision=preview.revision if preview is not None else None,
+        )
+    except ManualTicketContinuationError as exc:
+        raise ManualPreviewStaleError(str(exc)) from exc
 
 
 def get_manual_ticket(repo: ClerkSqliteRepository, ticket_id: str) -> ManualOrderTicketResource | None:

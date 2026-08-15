@@ -20,9 +20,11 @@ from app.broker.alpaca.clerk.sqlite.activation import (
     ActivationRecordInvalid,
     ActivationStore,
 )
+from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_ports
 from app.broker.alpaca.clerk.sqlite.developer_reset_registry import (
     DeveloperCleanSlateResetRegistry,
 )
+from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import (
     ReconciliationSweep as SqliteReconciliationSweep,
 )
@@ -253,18 +255,26 @@ async def select_active_clerk_runtime(
         )
         if resolved is None:
             raise ActivationRecordInvalid("activation record disappeared during SQLite startup")
+        intake = ReentrantAsyncLock()
+        guarded_read, guarded_trade = guard_broker_ports(read=read, trade=trade, intake=intake)
         facade = SqliteAlpacaClerkFacade(
             repo=repository,
-            read=read,
-            trade=trade,
+            read=guarded_read,
+            trade=guarded_trade,
             stream_health=stream_health_gate,
+            intake=intake,
         )
         # Keep the execution lease alive across the (possibly slow) startup
         # recovery passes. The reconcile loop still starts after boot recovery
         # in main.py, but the lease heartbeat must begin now so a clean-account
         # boot whose recovery only reads from the broker cannot let the lease
         # expire before the sweep is running.
-        sweep = SqliteReconciliationSweep(repo=repository, read=read, trade=trade)
+        sweep = SqliteReconciliationSweep(
+            repo=repository,
+            read=guarded_read,
+            trade=guarded_trade,
+            intake=intake,
+        )
         sweep.start_lease_heartbeat()
         await asyncio.wait_for(
             facade.recover(),
@@ -302,9 +312,8 @@ async def select_active_clerk_runtime(
         sweep=sweep,
         evidence_sink=SqliteTradeUpdateEvidenceSink(
             repo=repository,
-            read=read,
-            trade=trade,
             intake=facade.intake,
+            reconciler=facade,
         ),
         _sqlite_repository=repository,
     )

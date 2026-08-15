@@ -32,6 +32,7 @@ from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import (
     submit_manual_ticket_cancellation,
 )
 from app.broker.alpaca.clerk.sqlite.manual_orders import (
+    ManualPreviewRevision,
     ManualTicketContinuationError,
     ManualTicketLeg,
     accept_manual_order,
@@ -223,6 +224,34 @@ async def test_manual_order_is_durable_before_broker_contact_and_never_a_bot(
     assert effect is not None
     assert effect.strategy_instance_id is None
     assert effect.kind == "MANUAL_ORDER"
+
+
+@pytest.mark.asyncio
+async def test_manual_acceptance_refuses_a_preview_bound_to_an_old_control_revision(
+    repo: ClerkSqliteRepository,
+) -> None:
+    observed = repo.control_meta_snapshot()
+    trade = FakeTrade(repo=repo)
+    repo.register_strategy_instance(
+        strategy_instance_id="competing-manual-transition",
+        symbol="QQQ",
+        config_hash="competing",
+    )
+
+    with pytest.raises(ManualTicketContinuationError, match="preview is stale"):
+        await submit_manual_order(
+            repo,
+            account_id=ACCOUNT_ID,
+            operator_id=OPERATOR_ID,
+            ticket_id=TICKET_ID,
+            leg_id=LEG_ID,
+            leg=market_buy(),
+            trade=trade,
+            expected_preview_revision=ManualPreviewRevision.from_meta(observed),
+        )
+
+    assert trade.submit_calls == []
+    assert repo.get_command(f"cmd:manual:{TICKET_ID}:{LEG_ID}") is None
 
 
 @pytest.mark.asyncio
@@ -613,7 +642,7 @@ async def test_manual_order_exact_coverage_tolerance_completes_the_ticket(
 
 
 @pytest.mark.asyncio
-async def test_coverage_resolution_completes_a_filled_manual_ticket(
+async def test_direct_coverage_supersession_completes_a_filled_manual_ticket(
     repo: ClerkSqliteRepository,
 ) -> None:
     submitted = await submit_manual_order(
@@ -695,29 +724,12 @@ async def test_coverage_resolution_completes_a_filled_manual_ticket(
             build_transition=exact_transition,
             build_coverage_conflict=coverage_conflict,
         )
-        == "coverage_conflict_raised"
+        == "coverage_superseded"
     )
     uncertainty = repo.active_uncertainties_for_admission(
         subject_id=manual_operator_subject_id(OPERATOR_ID),
     )
-    assert len(uncertainty) == 1
-    blocked = decide_capability(
-        repo,
-        capability=Capability.NEW_EXPOSURE,
-        subject_id=manual_operator_subject_id(OPERATOR_ID),
-    )
-    assert blocked.allowed is False
-    assert blocked.reason_code == EXECUTION_COVERAGE_CONFLICT_REASON_CODE
-    meta = repo.control_meta_snapshot()
-
-    receipt = repo.resolve_execution_coverage_conflict(
-        uncertainty_id=uncertainty[0]["uncertainty_id"],
-        expected_authority_generation=meta.authority_generation,
-        expected_db_identity_token=meta.db_identity_token,
-        expected_control_revision=meta.control_revision,
-    )
-
-    assert receipt.applied is True
+    assert uncertainty == []
     ticket = repo.manual_order_ticket(TICKET_ID)
     assert ticket is not None
     assert ticket.state == "COMPLETED"

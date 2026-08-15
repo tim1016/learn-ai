@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 from app.broker.alpaca.clerk.models import ClerkEntryKind
@@ -21,7 +22,7 @@ from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.alpaca.trade_updates import TradeUpdatesConsumer
 from app.broker.capture.journal import CaptureJournal
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
-from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
+from app.broker.contract.ports import BrokerReadPort
 
 ACCOUNT_ID = "PA-TEST"
 STRATEGY_INSTANCE_ID = "spy-bot"
@@ -48,11 +49,21 @@ class _NoBrokerMutation:
         return None
 
 
+class _NoReconciler:
+    async def reconcile_account(self, *, trigger: str) -> SimpleNamespace:
+        raise AssertionError(f"unexpected reconciliation trigger: {trigger}")
+
+
 class _EvidenceSink:
     def __init__(self) -> None:
         self.consumer: TradeUpdatesConsumer | None = None
         self.gap_connection_states: list[bool] = []
         self.activity_recoveries = 0
+        self.reconnect_read_guarded = False
+
+    def guard_reconnect_read(self, read: BrokerReadPort) -> BrokerReadPort:
+        self.reconnect_read_guarded = True
+        return read
 
     async def record_lifecycle_event(self, **_kwargs: Any) -> ClerkEntryKind:
         return ClerkEntryKind.ORDER_EVENT
@@ -133,9 +144,8 @@ def _initialize_owned_order(tmp_path: Path) -> tuple[ClerkSqliteRepository, str]
 def _sqlite_sink(repo: ClerkSqliteRepository) -> SqliteTradeUpdateEvidenceSink:
     return SqliteTradeUpdateEvidenceSink(
         repo=repo,
-        read=cast(BrokerReadPort, _ReadWithoutLegacyActivities()),
-        trade=cast(BrokerTradePort, _NoBrokerMutation()),
         intake=ReentrantAsyncLock(),
+        reconciler=_NoReconciler(),
     )
 
 
@@ -157,15 +167,37 @@ async def test_sqlite_activity_recovery_never_reads_or_writes_legacy_window(
     read_port = cast(BrokerReadPort, read)
     sink = SqliteTradeUpdateEvidenceSink(
         repo=repo,
-        read=read_port,
-        trade=cast(BrokerTradePort, _NoBrokerMutation()),
         intake=ReentrantAsyncLock(),
+        reconciler=_NoReconciler(),
     )
 
     recorded = await sink.recover_activity_window(read=read_port, limit=100)
 
     assert recorded == 0
     assert read.activity_reads == 0
+    repo.close()
+
+
+async def test_reconcile_gap_uses_authority_facade(tmp_path: Path) -> None:
+    class _Reconciler:
+        def __init__(self) -> None:
+            self.triggers: list[str] = []
+
+        async def reconcile_account(self, *, trigger: str) -> SimpleNamespace:
+            self.triggers.append(trigger)
+            return SimpleNamespace(verdict="clean")
+
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    reconciler = _Reconciler()
+    sink = SqliteTradeUpdateEvidenceSink(
+        repo=repo,
+        intake=ReentrantAsyncLock(),
+        reconciler=reconciler,
+    )
+
+    await sink.reconcile_gap()
+
+    assert reconciler.triggers == ["AUTOMATIC"]
     repo.close()
 
 
@@ -405,10 +437,10 @@ async def test_sqlite_rest_recovery_folds_cumulative_fill_without_fabricating_an
         repo.close()
 
 
-async def test_manual_rest_recovery_and_later_exact_evidence_stay_subject_scoped(
+async def test_manual_rest_recovery_and_later_exact_evidence_auto_supersede_subject_scoped(
     tmp_path: Path,
 ) -> None:
-    """Manual recovery cannot fall through a bot-only coverage-conflict path."""
+    """A direct manual exact replacement preserves the manual subject boundary."""
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
     accepted = accept_manual_order(
         repo,
@@ -447,16 +479,16 @@ async def test_manual_rest_recovery_and_later_exact_evidence_stay_subject_scoped
         )
 
         assert len(repo.fills_for_order(accepted.leg.order_ref)) == 1
+        assert repo.fills_for_order(accepted.leg.order_ref)[0]["execution_id"] == "manual-exact-after-recovery"
         uncertainty = repo.active_uncertainties_for_admission(subject_id=accepted.ticket.subject_id)
-        assert len(uncertainty) == 1
-        assert uncertainty[0]["scope"] == "CUSTODY_SUBJECT"
+        assert uncertainty == []
         admission = decide_capability(
             repo,
             capability=Capability.NEW_EXPOSURE,
             subject_id=accepted.ticket.subject_id,
         )
         assert admission.allowed is False
-        assert admission.reason_code == EXECUTION_COVERAGE_CONFLICT_REASON_CODE
+        assert admission.reason_code == "MANUAL_ORDER_OUTSTANDING"
     finally:
         repo.close()
 
@@ -578,7 +610,7 @@ async def test_sqlite_changed_execution_redelivery_raises_one_coverage_conflict(
         repo.close()
 
 
-async def test_sqlite_late_exact_execution_after_recovery_is_fenced_across_restart(
+async def test_sqlite_late_exact_execution_after_recovery_auto_supersedes_across_restart(
     tmp_path: Path,
 ) -> None:
     repo, order_ref = _initialize_owned_order(tmp_path)
@@ -612,20 +644,21 @@ async def test_sqlite_late_exact_execution_after_recovery_is_fenced_across_resta
 
         fills = repo.fills_for_order(order_ref)
         assert len(fills) == 1
-        assert fills[0]["evidence_source"] == "cumulative_recovery"
+        assert fills[0]["execution_id"] == "exec-late-after-recovery"
+        assert fills[0]["evidence_source"] == "websocket"
         assert repo.position(STRATEGY_INSTANCE_ID, "SPY") == 5.0
         transition_kinds = [
             transition["transition_kind"] for transition in repo.transitions_for_order(order_ref)
         ]
         assert "EXECUTION_SLICE_FILLED" not in transition_kinds
-        assert transition_kinds.count("EXECUTION_COVERAGE_QUARANTINED") == 1
+        assert transition_kinds.count("EXECUTION_COVERAGE_SUPERSEDED") == 1
+        assert "EXECUTION_COVERAGE_QUARANTINED" not in transition_kinds
         admission = decide_capability(
             repo,
             capability=Capability.NEW_EXPOSURE,
             strategy_instance_id=STRATEGY_INSTANCE_ID,
         )
-        assert admission.allowed is False
-        assert admission.reason_code == EXECUTION_COVERAGE_CONFLICT_REASON_CODE
+        assert admission.allowed is True
     finally:
         repo.close()
 
@@ -649,8 +682,7 @@ async def test_sqlite_late_exact_execution_after_recovery_is_fenced_across_resta
             capability=Capability.NEW_EXPOSURE,
             strategy_instance_id=STRATEGY_INSTANCE_ID,
         )
-        assert admission.allowed is False
-        assert admission.reason_code == EXECUTION_COVERAGE_CONFLICT_REASON_CODE
+        assert admission.allowed is True
     finally:
         restarted.close()
 
@@ -671,6 +703,7 @@ async def test_reconnect_reconciles_selected_sink_before_connection_reopens() ->
 
     assert sink.gap_connection_states == [False]
     assert sink.activity_recoveries == 1
+    assert sink.reconnect_read_guarded is True
 
 
 async def _no_backoff() -> None:

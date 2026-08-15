@@ -164,6 +164,16 @@ async def submit_exit(
         lifecycle_run_id=lifecycle_run_id,
         entry_order_ref=entry_order_ref,
     )
+    return await resolve_accepted_exit(repo, accepted=accepted, trade=trade)
+
+
+async def resolve_accepted_exit(
+    repo: ClerkSqliteRepository,
+    *,
+    accepted: ExitSubmission,
+    trade: BrokerTradePort,
+) -> ExitSubmission:
+    """Drive a previously accepted EXIT outside the intake decision segment."""
     assert accepted.effect_operation_id is not None
     try:
         resolved = await resolve_exit(
@@ -197,4 +207,4 @@ def _reducing_order_ref(
     return reducing.order_ref if reducing is not None else None
 
 
-__all__ = ["ExitSubmission", "accept_exit", "resolve_exit", "submit_exit"]
+__all__ = ["ExitSubmission", "accept_exit", "resolve_accepted_exit", "resolve_exit", "submit_exit"]

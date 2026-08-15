@@ -1,5 +1,6 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { By } from '@angular/platform-browser';
+import { provideRouter } from '@angular/router';
 import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -150,7 +151,10 @@ async function renderCustody(
 ) {
   return render(AlpacaSqliteCustodyComponent, {
     inputs: { accountId: 'PA1', ...inputs },
-    providers: [{ provide: BrokersService, useValue: service }],
+    providers: [
+      provideRouter([]),
+      { provide: BrokersService, useValue: service },
+    ],
   });
 }
 
@@ -187,6 +191,36 @@ describe('AlpacaSqliteCustodyComponent', () => {
     expect(screen.getByText('Source event')).toBeTruthy();
     expect(screen.getByText('Clerk observed')).toBeTruthy();
     expect(screen.getByText('Durably recorded')).toBeTruthy();
+  });
+
+  it('identifies the affected bot and links directly to its recovery controls', async () => {
+    const blocked = projection([]);
+    await renderCustody({
+      getSqliteClerkProjection: vi.fn().mockResolvedValue({
+        ...blocked,
+        uncertainties: [{
+          uncertainty_id: 'uncertainty:17',
+          scope: 'CUSTODY_SUBJECT',
+          severity: 'error',
+          blocks_new_exposure: true,
+          allows_reduction: false,
+          custody_owner: 'ACCOUNT_CLERK',
+          strategy_instance_id: 'spy-bot',
+          reason_code: 'EXECUTION_COVERAGE_CONFLICT',
+          headline: 'Exact execution conflicts with prior immutable evidence',
+          explanation: 'The execution must be recovered from Alpaca activity.',
+          operator_impact: 'New exposure remains blocked.',
+          next_step: 'Recover exact execution evidence for the affected bot.',
+          observed_at_ms: NOW,
+          evidence_age_ms: 0,
+          evidence_refs: ['execution:17'],
+        }],
+      }),
+    });
+
+    const botLink = await screen.findByRole('link', { name: 'Review spy-bot recovery' });
+    expect(botLink.getAttribute('href'))
+      .toBe('/brokers/alpaca/accounts/PA1/bots/spy-bot?lens=operator');
   });
 
   it('paginates the custody timeline instead of silently truncating past the first page', async () => {

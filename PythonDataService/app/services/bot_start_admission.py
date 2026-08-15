@@ -31,7 +31,9 @@ logger = logging.getLogger(__name__)
 CustodyGuard = Callable[[str], AbstractAsyncContextManager[ClerkCustodySnapshot]]
 ProcessFactResolver = Callable[[BrokerBotBinding, int], RunProcessAdmissionFact]
 RuntimeFactResolver = Callable[[str, int], Awaitable[StartRuntimeAdmissionFact]]
-StartActivator = Callable[[BrokerBotBinding, MarketDataFeed, int], Awaitable[BotStatusView]]
+CustodyBoundActivator = Callable[
+    [BrokerBotBinding, MarketDataFeed, int, ClerkCustodySnapshot], Awaitable[BotStatusView]
+]
 
 
 @dataclass(frozen=True)
@@ -226,7 +228,7 @@ class BotStartAdmission:
         custody_guard: CustodyGuard,
         process_fact: ProcessFactResolver,
         runtime_fact: RuntimeFactResolver,
-        activate: StartActivator,
+        activate: CustodyBoundActivator,
     ) -> None:
         self._now_ms = now_ms
         self._feed_resolver = feed_resolver
@@ -238,25 +240,25 @@ class BotStartAdmission:
     async def preview(self, request: StartRequest) -> RunAdmissionDecision:
         """Evaluate without mutation while holding the same Clerk fence."""
         binding = new_run_binding(request, now_ms=self._now_ms())
-        async with self._decision(binding) as (decision, _feed):
+        async with self._decision(binding) as (decision, _feed, _custody):
             return decision
 
     async def start(self, request: StartRequest) -> AdmittedBotStart:
         """Evaluate and activate inside one stable Clerk custody cut."""
         binding = new_run_binding(request, now_ms=self._now_ms())
-        async with self._decision(binding) as (decision, feed):
+        async with self._decision(binding) as (decision, feed, custody):
             if not decision.allowed:
                 raise StartAdmissionDenied(decision)
             assert feed is not None
             activation_ms = self._now_ms()
             binding = binding.model_copy(update={"created_at_ms": activation_ms})
-            bot = await self._activate(binding, feed, activation_ms)
+            bot = await self._activate(binding, feed, activation_ms, custody)
         return AdmittedBotStart(bot=bot, admission=decision)
 
     @asynccontextmanager
     async def _decision(
         self, binding: BrokerBotBinding
-    ) -> AsyncIterator[tuple[RunAdmissionDecision, MarketDataFeed | None]]:
+    ) -> AsyncIterator[tuple[RunAdmissionDecision, MarketDataFeed | None, ClerkCustodySnapshot]]:
         try:
             async with self._custody_guard(binding.strategy_instance_id) as custody:
                 observed_at_ms = self._now_ms()
@@ -283,6 +285,7 @@ class BotStartAdmission:
                         evaluated_at_ms=self._now_ms(),
                     ),
                     feed,
+                    custody,
                 )
         except ClerkAdmissionSnapshotChangedError as exc:
             raise StartAdmissionEvidenceChanged("Clerk custody evidence changed before Start could be fenced.") from exc

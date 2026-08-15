@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import AbstractAsyncContextManager
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.models import (
@@ -18,6 +18,24 @@ if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.models import OrderResource
     from app.schemas.action_plan import ActionPlan
     from app.services.bot_binding_repository import BrokerBotBinding
+
+
+class ClerkAdmissionSnapshotStaleError(RuntimeError):
+    """A revision-bound Clerk rejected an admission snapshot at activation."""
+
+
+@runtime_checkable
+class RevisionBoundRunRegistrar(Protocol):
+    """Clerk capability for atomic Start/Resume admission-token validation."""
+
+    supports_revision_bound_admission: Literal[True]
+
+    async def register_strategy_run(
+        self,
+        binding: BrokerBotBinding,
+        *,
+        admission_snapshot: ClerkCustodySnapshot,
+    ) -> None: ...
 
 
 class ActiveAlpacaClerk(Protocol):
@@ -74,4 +92,8 @@ class ActiveAlpacaClerk(Protocol):
     ) -> tuple[OrderCancelResult | OrderResource, ...]: ...
 
 
-__all__ = ["ActiveAlpacaClerk"]
+__all__ = [
+    "ActiveAlpacaClerk",
+    "ClerkAdmissionSnapshotStaleError",
+    "RevisionBoundRunRegistrar",
+]

@@ -15,8 +15,10 @@ import pytest
 
 from app.broker.alpaca.adapter import from_alpaca_trade_update
 from app.broker.alpaca.clerk.sqlite import repository as repository_module
+from app.broker.alpaca.clerk.sqlite import repository_execution_coverage_api as coverage_api_module
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
+from app.broker.alpaca.clerk.sqlite.execution_coverage import ExecutionCoverageSupersededFacts
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExecutionCorrectedFacts,
     ExecutionCoverageQuarantinedFacts,
@@ -36,9 +38,6 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     build_recovery_catalog,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.repository_execution_coverage_api import (
-    ExecutionCoverageResolutionUnavailable,
-)
 from app.broker.alpaca.clerk.sqlite.uncertainty import Capability, decide_capability
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
@@ -120,51 +119,62 @@ def _slice_transition(
     )
 
 
+def _coverage_conflict_transition(
+    repo: ClerkSqliteRepository,
+    *,
+    accepted: EnterSubmission,
+    facts: ExecutionSliceFilledFacts,
+) -> TransitionInput:
+    conflict_facts = UncertaintyRaisedFacts(
+        severity="error",
+        blocks_new_exposure=True,
+        allows_reduction=False,
+        reason_code=EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+        headline="Exact execution overlaps aggregate recovery evidence",
+        explanation=(
+            "A late websocket execution cannot be safely matched to the order's "
+            "previously recorded cumulative-recovery fill."
+        ),
+        operator_impact="New exposure is blocked until the coverage is reconciled.",
+        next_step="Reconcile the broker order and execution slices before resuming.",
+        evidence_refs=[facts.execution_id],
+        cause_facts=ExecutionCoverageConflictCause(
+            order_ref=accepted.order_ref or "",
+            execution_id=facts.execution_id,
+        ).to_mapping(),
+    )
+    return TransitionInput(
+        strategy_instance_id=accepted.command.strategy_instance_id,
+        run_id=accepted.command.run_id,
+        command_id=accepted.command.command_id,
+        effect_operation_id=accepted.effect_operation_id,
+        order_ref=accepted.order_ref,
+        transition_kind="UNCERTAINTY_RAISED",
+        custody_owner="ACCOUNT_CLERK",
+        execution_authority="ACCOUNT_CLERK",
+        operation_state="succeeded",
+        clerk_observed_at_ms=repo.clock(),
+        summary_code=EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+        facts_json=conflict_facts.to_facts_json(),
+    )
+
+
 def _append_slice(
     repo: ClerkSqliteRepository,
     *,
     accepted: EnterSubmission,
     facts: ExecutionSliceFilledFacts,
 ) -> str:
-    def _coverage_conflict_transition() -> TransitionInput:
-        conflict_facts = UncertaintyRaisedFacts(
-            severity="error",
-            blocks_new_exposure=True,
-            allows_reduction=False,
-            reason_code=EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
-            headline="Exact execution overlaps aggregate recovery evidence",
-            explanation=(
-                "A late websocket execution cannot be safely matched to the order's "
-                "previously recorded cumulative-recovery fill."
-            ),
-            operator_impact="New exposure is blocked until the coverage is reconciled.",
-            next_step="Reconcile the broker order and execution slices before resuming.",
-            evidence_refs=[facts.execution_id],
-            cause_facts=ExecutionCoverageConflictCause(
-                order_ref=accepted.order_ref or "",
-                execution_id=facts.execution_id,
-            ).to_mapping(),
-        )
-        return TransitionInput(
-            strategy_instance_id=accepted.command.strategy_instance_id,
-            run_id=accepted.command.run_id,
-            command_id=accepted.command.command_id,
-            effect_operation_id=accepted.effect_operation_id,
-            order_ref=accepted.order_ref,
-            transition_kind="UNCERTAINTY_RAISED",
-            custody_owner="ACCOUNT_CLERK",
-            execution_authority="ACCOUNT_CLERK",
-            operation_state="succeeded",
-            clerk_observed_at_ms=repo.clock(),
-            summary_code=EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
-            facts_json=conflict_facts.to_facts_json(),
-        )
 
     return repo.append_execution_slice_if_absent(
         execution_id=facts.execution_id,
         order_ref=accepted.order_ref or "",
         build_transition=lambda: _slice_transition(repo, accepted=accepted, facts=facts),
-        build_coverage_conflict=_coverage_conflict_transition,
+        build_coverage_conflict=lambda: _coverage_conflict_transition(
+            repo,
+            accepted=accepted,
+            facts=facts,
+        ),
     )
 
 
@@ -609,7 +619,7 @@ def test_cumulative_recovery_fill_is_explicitly_tagged(tmp_path: Path) -> None:
         repo.close()
 
 
-def test_late_exact_execution_after_cumulative_recovery_raises_one_coverage_conflict(
+def test_late_exact_execution_after_cumulative_recovery_auto_supersedes_coverage(
     tmp_path: Path,
 ) -> None:
     repo, accepted = _repository_for_strategy(
@@ -631,58 +641,276 @@ def test_late_exact_execution_after_cumulative_recovery_raises_one_coverage_conf
             side="BUY",
             slice_qty=5.0,
             slice_price=100.0,
-            fee=None,
-            fee_fidelity="not_reported",
+            fee=0.15,
+            fee_fidelity="reported",
             evidence_source="websocket",
             source_event_at_ms=1_786_368_000_352,
         )
 
-        assert _append_slice(repo, accepted=accepted, facts=late_exact) == "coverage_conflict_raised"
+        cumulative_transitions = repo.transitions_for_order(accepted.order_ref or "")
+        assert _append_slice(repo, accepted=accepted, facts=late_exact) == "coverage_superseded"
         fills = repo.fills_for_order(accepted.order_ref or "")
         assert len(fills) == 1
-        assert fills[0]["evidence_source"] == "cumulative_recovery"
+        assert fills[0]["execution_id"] == late_exact.execution_id
+        assert fills[0]["evidence_source"] == "websocket"
+        assert fills[0]["qty"] == pytest.approx(5.0, abs=_ATOL, rel=0)
+        assert fills[0]["price"] == pytest.approx(100.0, abs=_ATOL, rel=0)
+        assert fills[0]["fee"] == pytest.approx(0.15, abs=_ATOL, rel=0)
+        assert fills[0]["fee_fidelity"] == "reported"
         assert repo.position("recovery-conflict-bot", "SPY") == pytest.approx(
             5.0,
             abs=_ATOL,
             rel=0,
         )
-        quarantine_transitions = [
+        supersession_transitions = [
             transition
             for transition in repo.transitions_for_order(accepted.order_ref or "")
-            if transition["transition_kind"] == "EXECUTION_COVERAGE_QUARANTINED"
+            if transition["transition_kind"] == "EXECUTION_COVERAGE_SUPERSEDED"
         ]
-        assert len(quarantine_transitions) == 1
-        quarantined = ExecutionCoverageQuarantinedFacts.from_facts_json(
-            quarantine_transitions[0]["facts_json"]
+        assert len(supersession_transitions) == 1
+        supersession = ExecutionCoverageSupersededFacts.from_facts_json(
+            supersession_transitions[0]["facts_json"]
         )
-        assert quarantined.exact_execution.execution_id == late_exact.execution_id
-        assert quarantined.uncertainty is not None
-        uncertainty_facts = quarantined.uncertainty
-        assert uncertainty_facts.reason_code == EXECUTION_COVERAGE_CONFLICT_REASON_CODE
-        assert uncertainty_facts.cause_facts == {
-            "execution_id": late_exact.execution_id,
-            "order_ref": accepted.order_ref,
-        }
+        assert supersession.actor == "AUTOMATIC"
+        assert supersession.order_ref == accepted.order_ref
+        assert supersession.symbol == "SPY"
+        assert supersession.side == "BUY"
+        assert supersession.superseded_cumulative_fill_ids == [
+            f"{accepted.order_ref}:5.000000000"
+        ]
+        assert supersession.exact_execution == late_exact
+        assert supersession.exact_quantity == pytest.approx(5.0, abs=_ATOL, rel=0)
+        assert supersession.exact_gross_cost == pytest.approx(500.0, abs=_ATOL, rel=0)
+        assert supersession.cumulative_quantity == pytest.approx(5.0, abs=_ATOL, rel=0)
+        assert supersession.cumulative_gross_cost == pytest.approx(500.0, abs=_ATOL, rel=0)
+        assert supersession.resolved_uncertainty_id is None
+        assert [item["row_hash"] for item in cumulative_transitions] == [
+            item["row_hash"]
+            for item in repo.transitions_for_order(accepted.order_ref or "")[: len(cumulative_transitions)]
+        ]
         admission = decide_capability(
             repo,
             capability=Capability.NEW_EXPOSURE,
             strategy_instance_id="recovery-conflict-bot",
         )
-        assert admission.allowed is False
-        assert admission.reason_code == EXECUTION_COVERAGE_CONFLICT_REASON_CODE
+        assert admission.allowed is True
 
-        transitions_after_conflict = repo.transitions_for_order(accepted.order_ref or "")
-        assert (
-            _append_slice(repo, accepted=accepted, facts=late_exact)
-            == "coverage_conflict_already_raised"
-        )
-        assert repo.transitions_for_order(accepted.order_ref or "") == transitions_after_conflict
+        transitions_after_supersession = repo.transitions_for_order(accepted.order_ref or "")
+        assert _append_slice(repo, accepted=accepted, facts=late_exact) == "duplicate"
+        assert repo.transitions_for_order(accepted.order_ref or "") == transitions_after_supersession
     finally:
         repo.close()
 
 
-def test_coverage_conflict_retains_each_distinct_exact_execution(tmp_path: Path) -> None:
-    """A second exact slice stays auditable and cannot unlock a one-slice proof."""
+def test_one_exact_auto_supersedes_many_cumulative_recovery_rows(tmp_path: Path) -> None:
+    repo, accepted = _repository_for_strategy(
+        tmp_path,
+        strategy_instance_id="coverage-one-to-many",
+        symbol="SPY",
+    )
+    try:
+        _append_cumulative_recovery(
+            repo,
+            accepted=accepted,
+            cumulative_filled_quantity=2.0,
+            average_price=10.0,
+            source_event_at_ms=1_786_368_000_351,
+        )
+        _append_cumulative_recovery(
+            repo,
+            accepted=accepted,
+            cumulative_filled_quantity=5.0,
+            average_price=11.2,
+            source_event_at_ms=1_786_368_000_352,
+        )
+        exact = ExecutionSliceFilledFacts(
+            execution_id="coverage-one-to-many-exact",
+            symbol="SPY",
+            side="BUY",
+            slice_qty=5.0,
+            slice_price=11.2,
+            fee=0.25,
+            fee_fidelity="reported",
+            evidence_source="websocket",
+            source_event_at_ms=1_786_368_000_353,
+        )
+
+        assert _append_slice(repo, accepted=accepted, facts=exact) == "coverage_superseded"
+        fills = repo.fills_for_order(accepted.order_ref or "")
+        assert [fill["execution_id"] for fill in fills] == [exact.execution_id]
+        assert fills[0]["fee"] == pytest.approx(0.25, abs=_ATOL, rel=0)
+        assert repo.position("coverage-one-to-many", "SPY") == pytest.approx(
+            5.0,
+            abs=_ATOL,
+            rel=0,
+        )
+        assert repo.active_uncertainties_for_admission(
+            strategy_instance_id="coverage-one-to-many"
+        ) == []
+    finally:
+        repo.close()
+
+
+def test_active_coverage_episode_prevents_direct_exact_supersession(tmp_path: Path) -> None:
+    repo, accepted = _repository_for_strategy(
+        tmp_path,
+        strategy_instance_id="coverage-episode-bot",
+        symbol="SPY",
+    )
+    try:
+        _append_cumulative_recovery(
+            repo,
+            accepted=accepted,
+            cumulative_filled_quantity=5.0,
+            average_price=100.0,
+            source_event_at_ms=1_786_368_000_351,
+        )
+        exact = ExecutionSliceFilledFacts(
+            execution_id="coverage-active-episode-exact",
+            symbol="SPY",
+            side="BUY",
+            slice_qty=5.0,
+            slice_price=100.0,
+            fee=None,
+            fee_fidelity="not_reported",
+            evidence_source="websocket",
+            source_event_at_ms=1_786_368_000_352,
+        )
+        repo.append_transition(_coverage_conflict_transition(repo, accepted=accepted, facts=exact))
+
+        assert _append_slice(repo, accepted=accepted, facts=exact) == "coverage_conflict_quarantined"
+        assert not repo.has_order_transition(
+            order_ref=accepted.order_ref or "",
+            transition_kind="EXECUTION_COVERAGE_SUPERSEDED",
+        )
+        assert [fill["execution_id"] for fill in repo.fills_for_order(accepted.order_ref or "")] == [None]
+        admission = decide_capability(
+            repo,
+            capability=Capability.NEW_EXPOSURE,
+            strategy_instance_id="coverage-episode-bot",
+        )
+        assert admission.allowed is False
+        assert admission.reason_code == EXECUTION_COVERAGE_CONFLICT_REASON_CODE
+    finally:
+        repo.close()
+
+
+def test_stale_direct_coverage_proof_uses_the_existing_fail_closed_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo, accepted = _repository_for_strategy(
+        tmp_path,
+        strategy_instance_id="coverage-stale-proof-bot",
+        symbol="SPY",
+    )
+    try:
+        _append_cumulative_recovery(
+            repo,
+            accepted=accepted,
+            cumulative_filled_quantity=5.0,
+            average_price=100.0,
+            source_event_at_ms=1_786_368_000_351,
+        )
+        exact = ExecutionSliceFilledFacts(
+            execution_id="coverage-stale-proof-exact",
+            symbol="SPY",
+            side="BUY",
+            slice_qty=5.0,
+            slice_price=100.0,
+            fee=None,
+            fee_fidelity="not_reported",
+            evidence_source="websocket",
+            source_event_at_ms=1_786_368_000_352,
+        )
+        original_proof = coverage_api_module.prove_execution_coverage_set
+        changed_revision = False
+        revision_before = repo.control_meta_snapshot().control_revision
+
+        def proof_then_open_episode(candidate: object) -> object:
+            nonlocal changed_revision
+            result = original_proof(candidate)
+            if not changed_revision:
+                changed_revision = True
+                repo.append_transition(_coverage_conflict_transition(repo, accepted=accepted, facts=exact))
+            return result
+
+        monkeypatch.setattr(coverage_api_module, "prove_execution_coverage_set", proof_then_open_episode)
+        transitions_before = repo.transitions_for_order(accepted.order_ref or "")
+
+        assert _append_slice(repo, accepted=accepted, facts=exact) == "coverage_conflict_quarantined"
+        assert changed_revision is True
+        assert repo.control_meta_snapshot().control_revision == revision_before + 2
+        transitions_after = repo.transitions_for_order(accepted.order_ref or "")
+        assert [item["transition_kind"] for item in transitions_after[len(transitions_before) :]] == [
+            "UNCERTAINTY_RAISED",
+            "EXECUTION_COVERAGE_QUARANTINED",
+        ]
+        assert not any(
+            item["transition_kind"] == "EXECUTION_COVERAGE_SUPERSEDED"
+            for item in transitions_after
+        )
+        assert [fill["execution_id"] for fill in repo.fills_for_order(accepted.order_ref or "")] == [None]
+    finally:
+        repo.close()
+
+
+def test_direct_coverage_supersession_rebuilds_and_redelivers_once(tmp_path: Path) -> None:
+    repo, accepted = _repository_for_strategy(
+        tmp_path,
+        strategy_instance_id="coverage-rebuild-bot",
+        symbol="SPY",
+    )
+    repo_closed = False
+    rebuilt: ClerkSqliteRepository | None = None
+    try:
+        _append_cumulative_recovery(
+            repo,
+            accepted=accepted,
+            cumulative_filled_quantity=5.0,
+            average_price=100.0,
+            source_event_at_ms=1_786_368_000_351,
+        )
+        exact = ExecutionSliceFilledFacts(
+            execution_id="coverage-rebuild-exact",
+            symbol="SPY",
+            side="BUY",
+            slice_qty=5.0,
+            slice_price=100.0,
+            fee=None,
+            fee_fidelity="not_reported",
+            evidence_source="websocket",
+            source_event_at_ms=1_786_368_000_352,
+        )
+        assert _append_slice(repo, accepted=accepted, facts=exact) == "coverage_superseded"
+        original_transitions = repo.custody_transitions()
+        original_fills = repo.fills_for_order(accepted.order_ref or "")
+        db_path = repo.db_path
+        repo.close()
+        repo_closed = True
+        db_path.rename(db_path.with_suffix(".db.corrupt"))
+
+        rebuilt = ClerkSqliteRepository.rebuild_from_mirror(
+            account_id=_ACCOUNT_ID,
+            artifacts_root=tmp_path,
+            clock=_clock_at(1_786_368_000_400),
+        )
+        assert rebuilt.custody_transitions() == original_transitions
+        assert rebuilt.fills_for_order(accepted.order_ref or "") == original_fills
+        assert rebuilt.position("coverage-rebuild-bot", "SPY") == pytest.approx(5.0, abs=_ATOL, rel=0)
+        assert _append_slice(rebuilt, accepted=accepted, facts=exact) == "duplicate"
+        assert rebuilt.custody_transitions() == original_transitions
+    finally:
+        if rebuilt is not None:
+            rebuilt.close()
+        if not repo_closed:
+            repo.close()
+
+
+def test_partial_exact_coverage_accumulates_then_auto_supersedes_one_cumulative_fill(
+    tmp_path: Path,
+) -> None:
+    """One episode retains partial exact evidence until the set proof completes."""
     repo, accepted = _repository_for_strategy(
         tmp_path,
         strategy_instance_id="coverage-multiple-exacts",
@@ -716,11 +944,11 @@ def test_coverage_conflict_retains_each_distinct_exact_execution(tmp_path: Path)
             fee=None,
             fee_fidelity="not_reported",
             evidence_source="websocket",
-            source_event_at_ms=1_786_368_000_353,
+            source_event_at_ms=1_786_368_000_352,
         )
 
         assert _append_slice(repo, accepted=accepted, facts=first_exact) == "coverage_conflict_raised"
-        assert _append_slice(repo, accepted=accepted, facts=second_exact) == "coverage_conflict_quarantined"
+        assert _append_slice(repo, accepted=accepted, facts=second_exact) == "coverage_superseded"
         quarantines = [
             ExecutionCoverageQuarantinedFacts.from_facts_json(transition["facts_json"])
             for transition in repo.transitions_for_order(accepted.order_ref or "")
@@ -728,53 +956,362 @@ def test_coverage_conflict_retains_each_distinct_exact_execution(tmp_path: Path)
         ]
         assert [item.exact_execution.execution_id for item in quarantines] == [
             first_exact.execution_id,
-            second_exact.execution_id,
         ]
         assert quarantines[0].uncertainty is not None
-        assert quarantines[1].uncertainty is None
-        assert quarantines[1].conflict_execution_id == first_exact.execution_id
-        active = repo.active_uncertainties_for_admission(
-            strategy_instance_id="coverage-multiple-exacts"
-        )
-        assert len(active) == 1
-        meta = repo.control_meta_snapshot()
-        with pytest.raises(ExecutionCoverageResolutionUnavailable, match="Multiple exact executions"):
-            repo.resolve_execution_coverage_conflict(
-                uncertainty_id=active[0]["uncertainty_id"],
-                expected_authority_generation=meta.authority_generation,
-                expected_db_identity_token=meta.db_identity_token,
-                expected_control_revision=meta.control_revision,
-            )
-        reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
-        try:
-            context = reader.recovery_context(strategy_instance_id="coverage-multiple-exacts")
-        finally:
-            reader.close()
-        assert context is not None
-        action = next(
+        supersessions = [
             item
-            for item in build_recovery_catalog(context)
-            if item.action_id == "resolve_execution_coverage"
-        )
-        assert action.available is False
-        assert [evidence.reference for evidence in action.evidence] == [
-            f"order:{accepted.order_ref}",
-            f"execution:{first_exact.execution_id}",
-            f"execution:{second_exact.execution_id}",
-            f"fill:{accepted.order_ref}:5.000000000",
+            for item in repo.transitions_for_order(accepted.order_ref or "")
+            if item["transition_kind"] == "EXECUTION_COVERAGE_SUPERSEDED"
         ]
+        assert len(supersessions) == 1
         assert repo.active_uncertainties_for_admission(
             strategy_instance_id="coverage-multiple-exacts"
-        ) == active
-        assert [fill["execution_id"] for fill in repo.fills_for_order(accepted.order_ref or "")] == [None]
-        assert _append_slice(repo, accepted=accepted, facts=second_exact) == "coverage_conflict_already_raised"
+        ) == []
+        fills = repo.fills_for_order(accepted.order_ref or "")
+        assert [fill["execution_id"] for fill in fills] == [
+            first_exact.execution_id,
+            second_exact.execution_id,
+        ]
+        assert repo.position("coverage-multiple-exacts", "SPY") == pytest.approx(
+            5.0,
+            abs=_ATOL,
+            rel=0,
+        )
+        assert decide_capability(
+            repo,
+            capability=Capability.NEW_EXPOSURE,
+            strategy_instance_id="coverage-multiple-exacts",
+        ).allowed
+        transitions = repo.transitions_for_order(accepted.order_ref or "")
+        assert _append_slice(repo, accepted=accepted, facts=second_exact) == "duplicate"
+        assert repo.transitions_for_order(accepted.order_ref or "") == transitions
+    finally:
+        repo.close()
+
+
+def test_many_to_many_coverage_supersession_preserves_exact_provenance_and_replay(
+    tmp_path: Path,
+) -> None:
+    repo, accepted = _repository_for_strategy(
+        tmp_path,
+        strategy_instance_id="coverage-many-to-many",
+        symbol="SPY",
+    )
+    repo_closed = False
+    rebuilt: ClerkSqliteRepository | None = None
+    try:
+        _append_cumulative_recovery(
+            repo,
+            accepted=accepted,
+            cumulative_filled_quantity=2.0,
+            average_price=10.0,
+            source_event_at_ms=1_786_368_000_351,
+        )
+        _append_cumulative_recovery(
+            repo,
+            accepted=accepted,
+            cumulative_filled_quantity=5.0,
+            average_price=11.2,
+            source_event_at_ms=1_786_368_000_352,
+        )
+        first_exact = ExecutionSliceFilledFacts(
+            execution_id="coverage-many-to-many-a",
+            symbol="SPY",
+            side="BUY",
+            slice_qty=1.0,
+            slice_price=10.0,
+            fee=0.11,
+            fee_fidelity="reported",
+            evidence_source="websocket",
+            source_event_at_ms=1_786_368_000_353,
+        )
+        completing_exact = ExecutionSliceFilledFacts(
+            execution_id="coverage-many-to-many-b",
+            symbol="SPY",
+            side="BUY",
+            slice_qty=4.0,
+            slice_price=11.5,
+            fee=0.22,
+            fee_fidelity="reported",
+            evidence_source="websocket",
+            source_event_at_ms=1_786_368_000_354,
+        )
+
+        assert _append_slice(repo, accepted=accepted, facts=first_exact) == "coverage_conflict_raised"
+        quarantine = next(
+            transition
+            for transition in repo.transitions_for_order(accepted.order_ref or "")
+            if transition["transition_kind"] == "EXECUTION_COVERAGE_QUARANTINED"
+        )
+        assert _append_slice(repo, accepted=accepted, facts=completing_exact) == "coverage_superseded"
+
+        supersession_transition = next(
+            transition
+            for transition in repo.transitions_for_order(accepted.order_ref or "")
+            if transition["transition_kind"] == "EXECUTION_COVERAGE_SUPERSEDED"
+        )
+        supersession = ExecutionCoverageSupersededFacts.from_facts_json(
+            supersession_transition["facts_json"]
+        )
+        assert supersession.superseded_cumulative_fill_ids == [
+            f"{accepted.order_ref}:2.000000000",
+            f"{accepted.order_ref}:5.000000000",
+        ]
+        assert supersession.exact_execution == completing_exact
+        assert supersession.resolved_uncertainty_id is not None
+        assert supersession.prior_exact_observations[0].exact_execution == first_exact
+        assert supersession.prior_exact_observations[0].observation_transition_sequence == quarantine[
+            "sequence"
+        ]
+        assert supersession.prior_exact_observations[0].recorded_transition_sequence == quarantine[
+            "sequence"
+        ]
+        assert supersession.prior_exact_observations[0].clerk_observed_at_ms == quarantine[
+            "clerk_observed_at_ms"
+        ]
+        assert supersession.prior_exact_observations[0].recorded_at_ms == quarantine[
+            "recorded_at_ms"
+        ]
+
+        original_transitions = repo.custody_transitions()
+        original_fills = repo.fills_for_order(accepted.order_ref or "")
+        assert [fill["execution_id"] for fill in original_fills] == [
+            first_exact.execution_id,
+            completing_exact.execution_id,
+        ]
+        assert [fill["fee"] for fill in original_fills] == pytest.approx([0.11, 0.22], abs=_ATOL, rel=0)
+        assert repo.position("coverage-many-to-many", "SPY") == pytest.approx(
+            5.0,
+            abs=_ATOL,
+            rel=0,
+        )
+        assert repo.active_uncertainties_for_admission(
+            strategy_instance_id="coverage-many-to-many"
+        ) == []
+
+        db_path = repo.db_path
+        repo.close()
+        repo_closed = True
+        db_path.rename(db_path.with_suffix(".db.corrupt"))
+        rebuilt = ClerkSqliteRepository.rebuild_from_mirror(
+            account_id=_ACCOUNT_ID,
+            artifacts_root=tmp_path,
+            clock=_clock_at(1_786_368_000_400),
+        )
+        assert rebuilt.custody_transitions() == original_transitions
+        assert rebuilt.fills_for_order(accepted.order_ref or "") == original_fills
+        assert rebuilt.position("coverage-many-to-many", "SPY") == pytest.approx(
+            5.0,
+            abs=_ATOL,
+            rel=0,
+        )
+        assert _append_slice(rebuilt, accepted=accepted, facts=completing_exact) == "duplicate"
+    finally:
+        if rebuilt is not None:
+            rebuilt.close()
+        if not repo_closed:
+            repo.close()
+
+
+def test_unreadable_coverage_quarantine_refuses_later_exact_without_partial_mutation(
+    tmp_path: Path,
+) -> None:
+    repo, accepted = _repository_for_strategy(
+        tmp_path,
+        strategy_instance_id="coverage-unreadable",
+        symbol="SPY",
+    )
+    try:
+        _append_cumulative_recovery(
+            repo,
+            accepted=accepted,
+            cumulative_filled_quantity=5.0,
+            average_price=100.0,
+            source_event_at_ms=1_786_368_000_351,
+        )
+        first_exact = ExecutionSliceFilledFacts(
+            execution_id="coverage-unreadable-a",
+            symbol="SPY",
+            side="BUY",
+            slice_qty=2.0,
+            slice_price=100.0,
+            fee=None,
+            fee_fidelity="not_reported",
+            evidence_source="websocket",
+            source_event_at_ms=1_786_368_000_352,
+        )
+        completing_exact = ExecutionSliceFilledFacts(
+            execution_id="coverage-unreadable-b",
+            symbol="SPY",
+            side="BUY",
+            slice_qty=3.0,
+            slice_price=100.0,
+            fee=None,
+            fee_fidelity="not_reported",
+            evidence_source="websocket",
+            source_event_at_ms=1_786_368_000_353,
+        )
+
+        assert _append_slice(repo, accepted=accepted, facts=first_exact) == "coverage_conflict_raised"
+        quarantine = next(
+            transition
+            for transition in repo.transitions_for_order(accepted.order_ref or "")
+            if transition["transition_kind"] == "EXECUTION_COVERAGE_QUARANTINED"
+        )
+        repo._conn.execute(
+            "DROP TRIGGER trg_custody_transitions_immutable_update"
+        )
+        repo._conn.execute(
+            "UPDATE custody_transitions SET facts_json = '{}' WHERE sequence = ?",
+            (quarantine["sequence"],),
+        )
+        transitions_before = repo.transitions_for_order(accepted.order_ref or "")
+
+        assert (
+            _append_slice(repo, accepted=accepted, facts=completing_exact)
+            == "coverage_conflict_already_raised"
+        )
+        assert repo.transitions_for_order(accepted.order_ref or "") == transitions_before
+        assert [fill["execution_id"] for fill in repo.fills_for_order(accepted.order_ref or "")] == [
+            None
+        ]
+    finally:
+        repo.close()
+
+
+def test_ambiguous_coverage_episodes_refuse_later_exact_without_selecting_one(
+    tmp_path: Path,
+) -> None:
+    repo, accepted = _repository_for_strategy(
+        tmp_path,
+        strategy_instance_id="coverage-ambiguous",
+        symbol="SPY",
+    )
+    try:
+        _append_cumulative_recovery(
+            repo,
+            accepted=accepted,
+            cumulative_filled_quantity=5.0,
+            average_price=100.0,
+            source_event_at_ms=1_786_368_000_351,
+        )
+        first_exact = ExecutionSliceFilledFacts(
+            execution_id="coverage-ambiguous-a",
+            symbol="SPY",
+            side="BUY",
+            slice_qty=2.0,
+            slice_price=100.0,
+            fee=None,
+            fee_fidelity="not_reported",
+            evidence_source="websocket",
+            source_event_at_ms=1_786_368_000_352,
+        )
+        second_episode_exact = ExecutionSliceFilledFacts(
+            execution_id="coverage-ambiguous-b",
+            symbol="SPY",
+            side="BUY",
+            slice_qty=1.0,
+            slice_price=100.0,
+            fee=None,
+            fee_fidelity="not_reported",
+            evidence_source="websocket",
+            source_event_at_ms=1_786_368_000_353,
+        )
+        incoming_exact = ExecutionSliceFilledFacts(
+            execution_id="coverage-ambiguous-c",
+            symbol="SPY",
+            side="BUY",
+            slice_qty=3.0,
+            slice_price=100.0,
+            fee=None,
+            fee_fidelity="not_reported",
+            evidence_source="websocket",
+            source_event_at_ms=1_786_368_000_354,
+        )
+
+        assert _append_slice(repo, accepted=accepted, facts=first_exact) == "coverage_conflict_raised"
+        repo._conn.execute(
+            "DROP INDEX ux_uncertainties_one_active_cause"
+        )
+        repo.append_transition(
+            _coverage_conflict_transition(repo, accepted=accepted, facts=second_episode_exact)
+        )
+        transitions_before = repo.transitions_for_order(accepted.order_ref or "")
+
+        assert (
+            _append_slice(repo, accepted=accepted, facts=incoming_exact)
+            == "coverage_conflict_already_raised"
+        )
+        assert repo.transitions_for_order(accepted.order_ref or "") == transitions_before
+        assert [fill["execution_id"] for fill in repo.fills_for_order(accepted.order_ref or "")] == [
+            None
+        ]
+    finally:
+        repo.close()
+
+
+@pytest.mark.parametrize(
+    ("second_quantity", "second_price"),
+    [
+        (4.0, 100.0),  # aggregate exact quantity overshoots cumulative coverage.
+        (3.0, 100.1),  # matching quantity but incompatible aggregate economics.
+    ],
+)
+def test_unsafe_accumulated_coverage_stays_quarantined(
+    tmp_path: Path,
+    second_quantity: float,
+    second_price: float,
+) -> None:
+    repo, accepted = _repository_for_strategy(
+        tmp_path,
+        strategy_instance_id="coverage-unsafe",
+        symbol="SPY",
+    )
+    try:
+        _append_cumulative_recovery(
+            repo,
+            accepted=accepted,
+            cumulative_filled_quantity=5.0,
+            average_price=100.0,
+            source_event_at_ms=1_786_368_000_351,
+        )
+        first_exact = ExecutionSliceFilledFacts(
+            execution_id="coverage-unsafe-a",
+            symbol="SPY",
+            side="BUY",
+            slice_qty=2.0,
+            slice_price=100.0,
+            fee=None,
+            fee_fidelity="not_reported",
+            evidence_source="websocket",
+            source_event_at_ms=1_786_368_000_352,
+        )
+        unsafe_exact = ExecutionSliceFilledFacts(
+            execution_id="coverage-unsafe-b",
+            symbol="SPY",
+            side="BUY",
+            slice_qty=second_quantity,
+            slice_price=second_price,
+            fee=None,
+            fee_fidelity="not_reported",
+            evidence_source="websocket",
+            source_event_at_ms=1_786_368_000_353,
+        )
+
+        assert _append_slice(repo, accepted=accepted, facts=first_exact) == "coverage_conflict_raised"
+        assert _append_slice(repo, accepted=accepted, facts=unsafe_exact) == "coverage_conflict_quarantined"
+        assert not repo.has_order_transition(
+            order_ref=accepted.order_ref or "",
+            transition_kind="EXECUTION_COVERAGE_SUPERSEDED",
+        )
+        assert [fill["execution_id"] for fill in repo.fills_for_order(accepted.order_ref or "")] == [
+            None
+        ]
         assert len(
-            [
-                item
-                for item in repo.transitions_for_order(accepted.order_ref or "")
-                if item["transition_kind"] == "EXECUTION_COVERAGE_QUARANTINED"
-            ]
-        ) == 2
+            repo.active_uncertainties_for_admission(
+                strategy_instance_id="coverage-unsafe"
+            )
+        ) == 1
     finally:
         repo.close()
 
@@ -804,7 +1341,8 @@ def test_coverage_resolution_replaces_one_cumulative_fill_once(tmp_path: Path) -
             evidence_source="websocket",
             source_event_at_ms=1_786_368_000_352,
         )
-        assert _append_slice(repo, accepted=accepted, facts=exact) == "coverage_conflict_raised"
+        repo.append_transition(_coverage_conflict_transition(repo, accepted=accepted, facts=exact))
+        assert _append_slice(repo, accepted=accepted, facts=exact) == "coverage_conflict_quarantined"
         meta = repo.control_meta_snapshot()
         active = repo.active_uncertainties_for_admission(
             strategy_instance_id="coverage-resolution-bot"
@@ -887,7 +1425,8 @@ def test_coverage_resolution_survives_restart_without_a_second_delta(tmp_path: P
             evidence_source="websocket",
             source_event_at_ms=1_786_368_000_352,
         )
-        assert _append_slice(repo, accepted=accepted, facts=exact) == "coverage_conflict_raised"
+        repo.append_transition(_coverage_conflict_transition(repo, accepted=accepted, facts=exact))
+        assert _append_slice(repo, accepted=accepted, facts=exact) == "coverage_conflict_quarantined"
         uncertainty_id = repo.active_uncertainties_for_admission(
             strategy_instance_id="coverage-restart"
         )[0]["uncertainty_id"]
@@ -944,7 +1483,8 @@ async def test_presented_coverage_resolution_replays_its_original_receipt(
             evidence_source="websocket",
             source_event_at_ms=1_786_368_000_352,
         )
-        assert _append_slice(repo, accepted=accepted, facts=exact) == "coverage_conflict_raised"
+        repo.append_transition(_coverage_conflict_transition(repo, accepted=accepted, facts=exact))
+        assert _append_slice(repo, accepted=accepted, facts=exact) == "coverage_conflict_quarantined"
 
         async def current_context() -> RecoveryPolicyContext:
             reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)

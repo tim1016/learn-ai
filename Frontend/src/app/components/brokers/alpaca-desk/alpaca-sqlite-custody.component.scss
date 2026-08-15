@@ -107,6 +107,25 @@
   padding-left: 1.25rem;
 }
 
+.sqlite-custody__uncertainty-scope {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.sqlite-custody__uncertainty-scope > span {
+  color: var(--text-color-secondary);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.sqlite-custody__uncertainty-scope a {
+  color: var(--primary-color);
+  font-weight: 700;
+}
+
 .sqlite-custody__timeline dl {
   display: flex;
   flex-wrap: wrap;

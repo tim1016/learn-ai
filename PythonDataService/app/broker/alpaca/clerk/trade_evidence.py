@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from app.broker.alpaca.clerk.models import ClerkEntryKind
+from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_read_port
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.facts import (
     AccountHoldRaisedFacts,
@@ -18,25 +19,29 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     UncertaintyRaisedFacts,
 )
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
+from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fold_order_acknowledgement,
     fold_order_evidence,
 )
-from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
+from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
     ExecutionCoverageConflictCause,
 )
 from app.broker.contract.models import BrokerActivity, BrokerOrder, BrokerOrderEvent
-from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
+from app.broker.contract.ports import BrokerReadPort
 
 UNEXPLAINED_TRADE_UPDATE_REASON_CODE = "UNEXPLAINED_ORDER"
 
 
 class TradeUpdateEvidenceSink(Protocol):
     """The durable destination selected for one account at process boot."""
+
+    def guard_reconnect_read(self, read: BrokerReadPort) -> BrokerReadPort:
+        """Return the read port normalized for this authority's intake domain."""
 
     async def record_lifecycle_event(
         self,
@@ -59,10 +64,14 @@ class TradeUpdateEvidenceSink(Protocol):
     async def reconcile_gap(self) -> None: ...
 
 
-class AsyncIntakeFence(Protocol):
-    async def __aenter__(self) -> object: ...
+class SqliteReconciliationFacade(Protocol):
+    """The active facade owns broker access for account reconciliation."""
 
-    async def __aexit__(self, *exc: object) -> None: ...
+    async def reconcile_account(
+        self,
+        *,
+        trigger: str,
+    ) -> AccountReconciliationResult: ...
 
 
 class ActivityRecoveryRecorder(Protocol):
@@ -97,6 +106,9 @@ class LegacyTradeUpdateEvidenceSink:
 
     def __init__(self, clerk: LegacyLifecycleRecorder) -> None:
         self._clerk = clerk
+
+    def guard_reconnect_read(self, read: BrokerReadPort) -> BrokerReadPort:
+        return read
 
     async def record_lifecycle_event(
         self,
@@ -149,14 +161,21 @@ class SqliteTradeUpdateEvidenceSink:
         self,
         *,
         repo: ClerkSqliteRepository,
-        read: BrokerReadPort,
-        trade: BrokerTradePort,
-        intake: AsyncIntakeFence,
+        intake: ReentrantAsyncLock,
+        reconciler: SqliteReconciliationFacade,
     ) -> None:
         self._repo = repo
-        self._read = read
-        self._trade = trade
         self._intake = intake
+        self._reconciler = reconciler
+
+    @property
+    def intake(self) -> ReentrantAsyncLock:
+        """The shared SQLite fold fence used to guard reconnect reads."""
+        return self._intake
+
+    def guard_reconnect_read(self, read: BrokerReadPort) -> BrokerReadPort:
+        """Keep reconnect REST reads outside, and forbidden from, SQLite intake."""
+        return guard_broker_read_port(read, intake=self._intake)
 
     async def record_lifecycle_event(
         self,
@@ -350,23 +369,17 @@ class SqliteTradeUpdateEvidenceSink:
         return 0
 
     async def reconcile_gap(self) -> None:
-        async with self._intake:
-            result = await reconcile_account(
-                self._repo,
-                read=self._read,
-                trade=self._trade,
-                trigger="AUTOMATIC",
-            )
-            if result.verdict == "stale":
-                raise RuntimeError("SQLite Alpaca Clerk could not reconcile the trade-update gap")
+        result = await self._reconciler.reconcile_account(trigger="AUTOMATIC")
+        if result.verdict == "stale":
+            raise RuntimeError("SQLite Alpaca Clerk could not reconcile the trade-update gap")
 
 
 __all__ = [
     "UNEXPLAINED_TRADE_UPDATE_REASON_CODE",
     "ActivityRecoveryRecorder",
-    "AsyncIntakeFence",
     "LegacyLifecycleRecorder",
     "LegacyTradeUpdateEvidenceSink",
+    "SqliteReconciliationFacade",
     "SqliteTradeUpdateEvidenceSink",
     "TradeUpdateEvidenceSink",
 ]
