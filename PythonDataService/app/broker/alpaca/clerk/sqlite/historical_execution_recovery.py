@@ -148,7 +148,11 @@ def _require_exact_activity(
     broker_order_id: str,
     symbol: str,
 ) -> BrokerActivity:
-    matches = [activity for activity in activities if activity.activity_id == execution_id]
+    matches = [
+        activity
+        for activity in activities
+        if _execution_id_from_activity_id(activity.activity_id) == execution_id
+    ]
     if not matches:
         raise HistoricalExecutionRecoveryRefused(
             "EXECUTION_ACTIVITY_NOT_FOUND",
@@ -199,13 +203,28 @@ def _require_exact_activity(
     return activity
 
 
+def _execution_id_from_activity_id(activity_id: str) -> str:
+    """Recover Alpaca's execution identity from its account-activity identity.
+
+    Trade updates expose the bare execution UUID, while account activities may
+    prefix that same UUID with the vendor timestamp and ``::``. The full
+    activity ID remains opaque everywhere else; only this evidence bridge
+    compares the embedded execution identity retained by Clerk custody.
+    """
+    timestamp_prefix, separator, embedded_execution_id = activity_id.rpartition("::")
+    if separator and timestamp_prefix.isdigit() and embedded_execution_id:
+        return embedded_execution_id
+    return activity_id
+
+
 def _require_matching_economics(
     *,
     activity: BrokerActivity,
     cumulative: CumulativeRecoveryFill,
+    execution_id: str,
 ) -> None:
     exact = ExecutionSliceFilledFacts(
-        execution_id=activity.activity_id,
+        execution_id=execution_id,
         symbol=activity.symbol or "unknown",
         side=(activity.side or "").upper(),
         slice_qty=activity.quantity or 0.0,
@@ -325,7 +344,11 @@ async def prepare_historical_execution_recovery(
         broker_order_id=target.order.broker_order_id,
         symbol=target.symbol,
     )
-    _require_matching_economics(activity=activity, cumulative=target.cumulative)
+    _require_matching_economics(
+        activity=activity,
+        cumulative=target.cumulative,
+        execution_id=target.execution_id,
+    )
     current_target, current_generation, current_revision, current_token = await asyncio.to_thread(
         _capture_recovery_target,
         repo,
@@ -348,7 +371,7 @@ async def prepare_historical_execution_recovery(
         "uncertainty_id": target.uncertainty_id,
         "order_ref": target.order_ref,
         "broker_order_id": target.order.broker_order_id,
-        "execution_id": activity.activity_id,
+        "execution_id": target.execution_id,
         "exact_symbol": activity.symbol,
         "exact_quantity": activity.quantity,
         "exact_price": activity.price,

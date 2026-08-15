@@ -30,6 +30,24 @@
         @for (uncertainty of custody.uncertainties; track uncertainty.uncertainty_id) {
           <li>
             <strong>{{ uncertainty.headline }}</strong>
+            @if (uncertainty.strategy_instance_id; as strategyInstanceId) {
+              <div class="sqlite-custody__uncertainty-scope">
+                <span>Affected bot</span>
+                <a
+                  [routerLink]="[
+                    '/brokers',
+                    'alpaca',
+                    'accounts',
+                    accountId(),
+                    'bots',
+                    strategyInstanceId,
+                  ]"
+                  [queryParams]="operatorLensQuery"
+                >Review <code>{{ strategyInstanceId }}</code> recovery</a>
+              </div>
+            } @else {
+              <span>Scope: Account-wide</span>
+            }
             <span>{{ uncertainty.explanation }}</span>
             <span>{{ uncertainty.operator_impact }} {{ uncertainty.next_step }}</span>
           </li>
