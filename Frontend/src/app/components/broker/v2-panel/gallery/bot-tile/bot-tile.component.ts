@@ -13,61 +13,56 @@ import {
   viewChild,
 } from '@angular/core';
 import { Router } from '@angular/router';
-import {
-  CandlestickSeries,
-  HistogramSeries,
-  type IChartApi,
-  type ISeriesApi,
-  type ISeriesMarkersPluginApi,
-  type SeriesMarker,
-  type Time,
-  TickMarkType,
-  type UTCTimestamp,
-  createSeriesMarkers,
-} from 'lightweight-charts';
+import { TickMarkType } from 'lightweight-charts';
 import type { ChartBar, ChartFillMarker, GalleryBotView } from '../lib/gallery.types';
+import {
+  CFG,
+  barIndexAtX,
+  computeScale,
+  draw,
+  type CandleRendererConfig,
+} from '../lib/candle-renderer';
 import { toCandle } from '../../lib/chart-bar-mapping';
-import { fmtCurrency, fmtSignedNumber } from '../../../format';
-import { createAppChart, formatChartAxisTick } from '../../../../../shared/charts/chart-utils';
+import { fmtInteger, fmtNumber, fmtSignedCurrency, fmtSignedNumber } from '../../../format';
+import { formatChartAxisTick } from '../../../../../shared/charts/chart-utils';
 import { AssetIdentityComponent } from '../../../../../shared/asset-identity';
 
+export type BotStatusTone = 'bull' | 'warn' | 'muted';
+type SignTone = 'positive' | 'negative' | 'neutral';
+
 /**
- * Map a ChartBar to a volume histogram point, colored by the bar's own
- * direction. Tile-specific (the volume overlay is not part of
- * `DualPaneChartComponent`'s market tape), so this stays local rather than
- * moving into the shared `chart-bar-mapping` module — see `toCandle` there
- * for the mapping that *is* shared.
+ * Pure status-ring colour derivation (design spec §6, D4): running &
+ * healthy → bull green, running & needing attention → warn amber, not
+ * running (stopped/off-duty) → muted grey. Kept standalone/exported so the
+ * mapping is unit-testable without rendering the component.
  */
-export function toVolumeBar(bar: ChartBar): { time: UTCTimestamp; value: number; color: string } {
-  return {
-    time: Math.floor(bar.start_ms / 1000) as UTCTimestamp,
-    value: bar.volume,
-    color: Number(bar.close) >= Number(bar.open) ? '#26a69a' : '#ef5350',
-  };
+export function botStatusTone(bot: Pick<GalleryBotView, 'running' | 'needs_attention'>): BotStatusTone {
+  if (!bot.running) return 'muted';
+  return bot.needs_attention ? 'warn' : 'bull';
 }
 
-/** Map fills to candle-series markers: buys below the bar, sells above. */
-export function toTileMarkers(markers: readonly ChartFillMarker[]): SeriesMarker<UTCTimestamp>[] {
-  return markers
-    .map((marker) => {
-      const isBuy = marker.side === 'buy';
-      return {
-        time: Math.floor(marker.filled_at_ms / 1000) as UTCTimestamp,
-        position: isBuy ? 'belowBar' : 'aboveBar',
-        color: isBuy ? '#26a69a' : '#ef5350',
-        shape: isBuy ? 'arrowUp' : 'arrowDown',
-        text: `${marker.side.toUpperCase()} ${marker.quantity} @ ${marker.price}`,
-      } satisfies SeriesMarker<UTCTimestamp>;
-    })
-    .sort((a, b) => a.time - b.time);
+function signTone(value: number | null): SignTone {
+  if (value === null || value === 0) return 'neutral';
+  return value > 0 ? 'positive' : 'negative';
+}
+
+/** First fill in `markers` landing inside `bar`'s `[start_ms, end_ms)` window, formatted `SIDE qty @ price`. */
+function fillTextForBar(bar: ChartBar, markers: readonly ChartFillMarker[]): string | null {
+  const match = markers.find((m) => m.filled_at_ms >= bar.start_ms && m.filled_at_ms < bar.end_ms);
+  return match ? `${match.side.toUpperCase()} ${match.quantity} @ ${match.price}` : null;
 }
 
 /**
- * One live bot's gallery tile: header identity/price, a thin candlestick +
- * volume chart with fill markers, and a single guarded icon action in the
- * header. The chart is mounted and updated imperatively so a 20-tile wall
- * never routes tick-by-tick data through Angular's change detection — see
- * `dual-pane-chart.component.ts` for the same lightweight-charts v5 idioms.
+ * One live bot's gallery tile: header identity/status ring, a custom-canvas
+ * candle chart with a DOM legend, and a single guarded quick action.
+ *
+ * The chart is painted on a plain `<canvas>` via `lib/candle-renderer.ts`
+ * (pure geometry/draw functions — this component owns the DOM, the
+ * `ResizeObserver`, and pointer events only, per design spec §3.2/§3.3). No
+ * per-tick Angular change detection: bars/markers ticking in are read
+ * inside an `effect()` that calls `computeScale` + `draw` directly, the
+ * same zoneless discipline the previous lightweight-charts mount used
+ * (`series.setData()` swapped for a canvas repaint).
  */
 @Component({
   selector: 'app-bot-tile',
@@ -94,23 +89,34 @@ export class BotTileComponent {
   private readonly destroyRef = inject(DestroyRef);
   private readonly chartContainer =
     viewChild.required<ElementRef<HTMLDivElement>>('chartContainer');
+  private readonly chartCanvas = viewChild.required<ElementRef<HTMLCanvasElement>>('chartCanvas');
   private readonly confirmCancelButton =
     viewChild<ElementRef<HTMLButtonElement>>('confirmCancelButton');
   private readonly actionButton = viewChild<ElementRef<HTMLButtonElement>>('actionButton');
 
   protected readonly confirmOpen = signal(false);
-
-  private readonly lastBar = computed<ChartBar | null>(() => {
-    const bars = this.bars();
-    return bars.length ? bars[bars.length - 1] : null;
+  /** Hovered bar index for the crosshair + legend swap; `null` when the pointer is off the chart. */
+  protected readonly hoverIndex = signal<number | null>(null);
+  /** The canvas's last applied CSS-pixel size — seeded with the renderer default so the very first paint (and any host where `ResizeObserver` never fires, e.g. tests) still draws at a sane size. */
+  private readonly canvasSize = signal<{ width: number; height: number }>({
+    width: CFG.width,
+    height: CFG.height,
   });
+
+  protected readonly statusTone = computed(() => botStatusTone(this.bot()));
+
+  private readonly rendererCfg = computed<CandleRendererConfig>(() => ({
+    ...CFG,
+    ...this.canvasSize(),
+  }));
+
   private readonly firstBar = computed<ChartBar | null>(() => {
     const bars = this.bars();
     return bars.length ? bars[0] : null;
   });
-  private readonly lastPrice = computed<number | null>(() => {
-    const bar = this.lastBar();
-    return bar ? Number(bar.close) : null;
+  private readonly lastBar = computed<ChartBar | null>(() => {
+    const bars = this.bars();
+    return bars.length ? bars[bars.length - 1] : null;
   });
   private readonly deltaPct = computed<number | null>(() => {
     const first = this.firstBar();
@@ -120,16 +126,40 @@ export class BotTileComponent {
     if (openPrice === 0) return null;
     return (Number(last.close) - openPrice) / openPrice;
   });
-
-  protected readonly formattedPrice = computed(() => fmtCurrency(this.lastPrice()));
   protected readonly formattedDeltaPct = computed<string | null>(() => {
     const delta = this.deltaPct();
     return delta === null ? null : `${fmtSignedNumber(delta * 100, 2)}%`;
   });
-  protected readonly deltaTone = computed<'positive' | 'negative' | 'neutral'>(() => {
-    const delta = this.deltaPct();
-    if (delta === null || delta === 0) return 'neutral';
-    return delta > 0 ? 'positive' : 'negative';
+  protected readonly deltaTone = computed<SignTone>(() => signTone(this.deltaPct()));
+
+  protected readonly formattedFills = computed(() => fmtInteger(this.bot().fills_today));
+
+  /** Day P&L = realized + open, null-safe (spec §3.4/D6: show whichever side is present; `—` only when both are null). */
+  private readonly dayPnl = computed<number | null>(() => {
+    const view = this.bot();
+    const realized = view.realized_pnl_today;
+    const open = view.open_pnl;
+    if (realized === null && open === null) return null;
+    return (realized ?? 0) + (open ?? 0);
+  });
+  protected readonly formattedPnl = computed(() => fmtSignedCurrency(this.dayPnl()));
+  protected readonly pnlTone = computed<SignTone>(() => signTone(this.dayPnl()));
+
+  private readonly hoverBar = computed<ChartBar | null>(() => {
+    const idx = this.hoverIndex();
+    if (idx === null) return null;
+    const bars = this.bars();
+    return idx >= 0 && idx < bars.length ? bars[idx] : null;
+  });
+  /** `HH:MM O H L C V [SIDE qty @ price]` for the hovered bar; `null` reverts the legend to the default Δ%/fills/P&L readout. */
+  protected readonly hoverLegend = computed<string | null>(() => {
+    const bar = this.hoverBar();
+    if (!bar) return null;
+    const candle = toCandle(bar);
+    const time = formatChartAxisTick(candle.time, undefined, TickMarkType.Time);
+    const ohlcv = `${time} O${fmtNumber(candle.open)} H${fmtNumber(candle.high)} L${fmtNumber(candle.low)} C${fmtNumber(candle.close)} V${fmtInteger(bar.volume)}`;
+    const fill = fillTextForBar(bar, this.markers());
+    return fill ? `${ohlcv} ${fill}` : ohlcv;
   });
 
   protected readonly actionTitle = computed(() => {
@@ -151,14 +181,24 @@ export class BotTileComponent {
     const view = this.bot();
     return `${view.primary_action.label} ${view.symbol} · ${view.sid}?`;
   });
+  /**
+   * The status ring's colour is not the only `needs_attention` signal (spec
+   * §8) — running-healthy and running-needing-attention both show the same
+   * "Stop" action, so colour alone would be the only differentiator between
+   * them. Folding a text hint into the chart region's existing aria-label
+   * (rather than inventing a separate ARIA construct on the decorative
+   * ring) keeps it on an element already in the accessibility tree.
+   */
+  protected readonly chartAriaLabel = computed(() => {
+    const view = this.bot();
+    const attentionSuffix = view.needs_attention ? ' — needs attention' : '';
+    return `Open ${view.symbol} · ${view.sid} detail${attentionSuffix}`;
+  });
 
-  private chart: IChartApi | null = null;
-  private candleSeries: ISeriesApi<'Candlestick'> | null = null;
-  private volumeSeries: ISeriesApi<'Histogram'> | null = null;
-  private markersApi: ISeriesMarkersPluginApi<Time> | null = null;
+  private ctx: CanvasRenderingContext2D | null = null;
 
   constructor() {
-    effect(() => this.syncChart());
+    effect(() => this.paint());
     effect(() => {
       // Move keyboard focus into the confirm when it opens, mirroring
       // `TypedHaltConfirmComponent` — a wall of tiles with no focus
@@ -168,7 +208,7 @@ export class BotTileComponent {
         queueMicrotask(() => this.confirmCancelButton()?.nativeElement.focus());
       }
     });
-    afterNextRender(() => this.mountChart());
+    afterNextRender(() => this.mountCanvas());
   }
 
   protected onBodyClick(): void {
@@ -182,6 +222,18 @@ export class BotTileComponent {
     // since Space here activates navigation instead.
     event.preventDefault();
     this.onBodyClick();
+  }
+
+  protected onChartHover(event: MouseEvent): void {
+    const bars = this.bars();
+    if (bars.length === 0) return;
+    const rect = this.chartContainer().nativeElement.getBoundingClientRect();
+    const scale = computeScale(bars, this.rendererCfg());
+    this.hoverIndex.set(barIndexAtX(event.clientX - rect.left, scale, bars.length));
+  }
+
+  protected onChartLeave(): void {
+    this.hoverIndex.set(null);
   }
 
   protected onActionClick(): void {
@@ -210,55 +262,38 @@ export class BotTileComponent {
     }
   }
 
-  private mountChart(): void {
-    const container = this.chartContainer().nativeElement;
-    this.chart = createAppChart(container, {
-      layout: {
-        background: { color: 'transparent' },
-        textColor: '#9598a1',
-      },
-      grid: {
-        vertLines: { color: 'rgba(42, 46, 57, 0.35)' },
-        horzLines: { color: 'rgba(42, 46, 57, 0.35)' },
-      },
-      rightPriceScale: { borderColor: '#2a2e39' },
-      timeScale: {
-        borderColor: '#2a2e39',
-        timeVisible: true,
-        secondsVisible: false,
-        tickMarkFormatter: (time: Time) => formatChartAxisTick(
-          time,
-          undefined,
-          TickMarkType.Time,
-        ),
-      },
-      autoSize: true,
+  private mountCanvas(): void {
+    const canvas = this.chartCanvas().nativeElement;
+    this.ctx = canvas.getContext('2d');
+
+    const observer = new ResizeObserver((entries) => {
+      const rect = entries[0]?.contentRect;
+      if (!rect || rect.width <= 0 || rect.height <= 0) return;
+      this.applyCanvasSize(canvas, rect.width, rect.height);
     });
-    this.candleSeries = this.chart.addSeries(CandlestickSeries, {});
-    this.volumeSeries = this.chart.addSeries(HistogramSeries, {
-      priceFormat: { type: 'volume' },
-      priceScaleId: '',
-    });
-    this.volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
-    this.markersApi = createSeriesMarkers(this.candleSeries, []);
-    this.syncChart();
-    this.destroyRef.onDestroy(() => this.cleanup());
+    observer.observe(this.chartContainer().nativeElement);
+    this.destroyRef.onDestroy(() => observer.disconnect());
+
+    this.paint();
   }
 
-  private syncChart(): void {
+  /** Sizes the canvas's backing store for `devicePixelRatio` (crisp on HiDPI) while keeping the drawing API in CSS-pixel coordinates via `setTransform`. */
+  private applyCanvasSize(canvas: HTMLCanvasElement, width: number, height: number): void {
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+    this.ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.canvasSize.set({ width, height });
+  }
+
+  private paint(): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
     const bars = this.bars();
-    const markers = this.markers();
-    if (!this.candleSeries || !this.volumeSeries || !this.markersApi) return;
-    this.candleSeries.setData(bars.map(toCandle));
-    this.volumeSeries.setData(bars.map(toVolumeBar));
-    this.markersApi.setMarkers(toTileMarkers(markers));
-  }
-
-  private cleanup(): void {
-    this.chart?.remove();
-    this.chart = null;
-    this.candleSeries = null;
-    this.volumeSeries = null;
-    this.markersApi = null;
+    const cfg = this.rendererCfg();
+    const scale = computeScale(bars, cfg);
+    draw(ctx, bars, this.markers(), scale, this.hoverIndex(), cfg);
   }
 }

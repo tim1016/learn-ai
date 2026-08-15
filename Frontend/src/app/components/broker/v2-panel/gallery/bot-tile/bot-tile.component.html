@@ -1,18 +1,15 @@
 <article class="bot-tile" [class.bot-tile--attention]="bot().needs_attention">
   <header class="bot-tile__header">
     <span
-      class="bot-tile__dot"
-      [class.bot-tile__dot--running]="bot().running"
-      aria-hidden="true"
-    ></span>
-    <app-asset-identity class="bot-tile__symbol" [symbol]="bot().symbol" size="sm" />
-    <span class="bot-tile__label">{{ bot().label }}</span>
-    <span class="bot-tile__price">{{ formattedPrice() }}</span>
-    <span
-      class="bot-tile__delta"
-      [class.bot-tile__delta--positive]="deltaTone() === 'positive'"
-      [class.bot-tile__delta--negative]="deltaTone() === 'negative'"
-    >{{ formattedDeltaPct() ?? '—' }}</span>
+      class="bot-tile__ring"
+      [class.bot-tile__ring--bull]="statusTone() === 'bull'"
+      [class.bot-tile__ring--warn]="statusTone() === 'warn'"
+      [class.bot-tile__ring--muted]="statusTone() === 'muted'"
+    >
+      <app-asset-identity [symbol]="bot().symbol" size="sm" />
+    </span>
+    <span class="bot-tile__strategy">{{ bot().label }}</span>
+
     <div class="bot-tile__action">
       <button
         #actionButton
@@ -54,14 +51,37 @@
   </header>
 
   <div
+    #chartContainer
     class="bot-tile__chart"
     role="button"
     tabindex="0"
-    [attr.aria-label]="'Open ' + bot().symbol + ' · ' + bot().sid + ' detail'"
+    [attr.aria-label]="chartAriaLabel()"
     (click)="onBodyClick()"
     (keydown.enter)="onBodyClick()"
     (keydown.space)="onBodySpaceKey($event)"
+    (mousemove)="onChartHover($event)"
+    (mouseleave)="onChartLeave()"
   >
-    <div #chartContainer class="bot-tile__chart-canvas"></div>
+    <canvas #chartCanvas class="bot-tile__canvas"></canvas>
+
+    <div class="bot-tile__legend" aria-hidden="true">
+      @if (hoverLegend(); as legend) {
+        <span class="bot-tile__legend-text">{{ legend }}</span>
+      } @else {
+        <span
+          class="bot-tile__legend-item"
+          [class.bot-tile__legend-item--positive]="deltaTone() === 'positive'"
+          [class.bot-tile__legend-item--negative]="deltaTone() === 'negative'"
+        >{{ formattedDeltaPct() ?? '—' }}</span>
+        <span class="bot-tile__legend-sep">·</span>
+        <span class="bot-tile__legend-item">{{ formattedFills() }}</span>
+        <span class="bot-tile__legend-sep">·</span>
+        <span
+          class="bot-tile__legend-item"
+          [class.bot-tile__legend-item--positive]="pnlTone() === 'positive'"
+          [class.bot-tile__legend-item--negative]="pnlTone() === 'negative'"
+        >{{ formattedPnl() }}</span>
+      }
+    </div>
   </div>
 </article>

@@ -19,7 +19,7 @@
 
 .bot-tile__header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--border);
@@ -27,47 +27,39 @@
   font-family: var(--font-mono);
 }
 
-.bot-tile__dot {
-  width: 0.5rem;
-  height: 0.5rem;
+.bot-tile__ring {
+  display: inline-flex;
   flex: none;
   border-radius: 50%;
-  background: var(--text-muted);
+  box-shadow: 0 0 0 2px var(--text-muted);
+  transition: box-shadow 0.15s ease;
 
-  &--running {
-    background: var(--bull);
-    box-shadow: 0 0 8px var(--bull);
-  }
+  &--bull { box-shadow: 0 0 0 2px var(--bull), 0 0 6px var(--bull); }
+  &--warn { box-shadow: 0 0 0 2px var(--warn), 0 0 6px var(--warn); }
+  &--muted { box-shadow: 0 0 0 2px var(--text-muted); }
 }
 
-.bot-tile__symbol {
-  color: var(--text-primary);
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-bold);
-}
-
-.bot-tile__label {
+// Always in the DOM (never `@if`-gated) so it stays reachable to assistive
+// tech and keyboard users; hidden at rest and revealed on hover/focus, the
+// same "always focusable, hover is an enhancement" pattern as
+// `copy-button.component.scss`.
+.bot-tile__strategy {
   overflow: hidden;
+  max-width: 0;
   color: var(--text-muted);
   font-size: var(--fs-xxs);
   text-overflow: ellipsis;
   white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.15s ease, max-width 0.15s ease, transform 0.15s ease;
+  transform: translateX(-4px);
 }
 
-.bot-tile__price {
-  margin-left: auto;
-  color: var(--text-primary);
-  font-size: var(--fs-sm);
-  font-variant-numeric: tabular-nums;
-}
-
-.bot-tile__delta {
-  color: var(--text-muted);
-  font-size: var(--fs-xxs);
-  font-variant-numeric: tabular-nums;
-
-  &--positive { color: var(--bull); }
-  &--negative { color: var(--bear); }
+.bot-tile:hover .bot-tile__strategy,
+.bot-tile:focus-within .bot-tile__strategy {
+  max-width: 12rem;
+  opacity: 1;
+  transform: translateX(0);
 }
 
 .bot-tile__chart {
@@ -79,9 +71,38 @@
   &:focus-visible { outline: 2px solid var(--info); outline-offset: -2px; }
 }
 
-.bot-tile__chart-canvas {
+.bot-tile__canvas {
   position: absolute;
   inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.bot-tile__legend {
+  position: absolute;
+  top: var(--space-1);
+  left: var(--space-1);
+  display: flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xxs);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.bot-tile__legend-sep {
+  color: var(--text-subtle);
+}
+
+.bot-tile__legend-item {
+  &--positive { color: var(--bull); }
+  &--negative { color: var(--bear); }
+}
+
+.bot-tile__legend-text {
+  color: var(--text-secondary);
 }
 
 .bot-tile__action {
@@ -89,6 +110,7 @@
   display: flex;
   flex: none;
   align-self: center;
+  margin-left: auto;
 }
 
 .bot-tile__action-button {
