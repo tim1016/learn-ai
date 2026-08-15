@@ -1,8 +1,10 @@
 """Closed proof vocabulary for exact executions that overlap aggregate recovery.
 
 Formula: Q = fsum(qty); C = fsum(qty × price); P = C / Q. The canonical
-  set proof accepts only abs(Q_E - Q_R) < 1e-9 shares and
-  abs(C_E - C_R) <= max(Q_E, Q_R) × 1e-9 currency/share.
+  set proof accepts only abs(Q_E - Q_R) < 1e-9 shares,
+  abs(P_E - P_R) < 1e-9 currency/share, and
+  abs(C_E - C_R) <= max(|Q_E|, |Q_R|) × 1e-9
+  + max(|P_E|, |P_R|) × 1e-9 + 1e-18 currency.
 Reference: Project-authored execution-coverage contract in PRD #1543, stories
   18, 19, 28, and 33; this is authored project logic, not a reused proof.
 Canonical implementation: this file's prove_execution_coverage_set. The
@@ -84,11 +86,31 @@ class ExactCoverageObservation:
 
 
 @dataclass(frozen=True)
+class ExecutionCoverageExactProvenance:
+    """One prior quarantined exact's immutable custody observation clocks.
+
+    The automatic supersession fold restores the effective fill from this
+    record rather than assigning the later resolving transition's clocks. The
+    two sequence fields intentionally agree: one names the custody transition
+    that quarantined the source, while the other is persisted on the rebuilt
+    fill for deterministic FIFO ordering when broker event timestamps tie.
+    """
+
+    exact_execution: ExecutionSliceFilledFacts
+    observation_transition_sequence: int
+    clerk_observed_at_ms: int
+    recorded_at_ms: int
+    recorded_transition_sequence: int
+
+
+@dataclass(frozen=True)
 class ExecutionCoverageSupersededFacts:
-    """Automatic direct replacement of one cumulative row by exact evidence.
+    """Automatic replacement of cumulative coverage by exact evidence.
 
     The cumulative source remains a prior custody transition; only its
-    rebuildable ``fills`` contribution is replaced. The fact records both
+    rebuildable ``fills`` contribution is replaced. ``exact_execution`` is
+    the incoming trigger; ``prior_exact_observations`` retains every earlier
+    quarantined exact and its original custody clocks. The fact records both
     proof aggregates and the authority revision that admitted the replacement
     so replay can independently reject a stale or broadened plan.
     """
@@ -111,10 +133,16 @@ class ExecutionCoverageSupersededFacts:
     gross_cost_tolerance: float
     resolved_uncertainty_id: str | None
     evidence_refs: list[str]
+    prior_exact_observations: list[ExecutionCoverageExactProvenance] = field(
+        default_factory=list
+    )
 
     def to_facts_json(self) -> str:
         value = asdict(self)
         value["exact_execution"] = json.loads(self.exact_execution.to_facts_json())
+        if not self.prior_exact_observations:
+            # Keep #1554's direct-transition representation byte-compatible.
+            value.pop("prior_exact_observations")
         return canonicalize(value)
 
     @classmethod
@@ -126,6 +154,18 @@ class ExecutionCoverageSupersededFacts:
             value["exact_execution"] = ExecutionSliceFilledFacts.from_facts_json(
                 canonicalize(value["exact_execution"])
             )
+            value["prior_exact_observations"] = [
+                ExecutionCoverageExactProvenance(
+                    exact_execution=ExecutionSliceFilledFacts.from_facts_json(
+                        canonicalize(item["exact_execution"])
+                    ),
+                    observation_transition_sequence=item["observation_transition_sequence"],
+                    clerk_observed_at_ms=item["clerk_observed_at_ms"],
+                    recorded_at_ms=item["recorded_at_ms"],
+                    recorded_transition_sequence=item["recorded_transition_sequence"],
+                )
+                for item in value.pop("prior_exact_observations", [])
+            ]
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError("coverage supersession exact execution is invalid") from exc
         return cls(**value)
@@ -169,6 +209,7 @@ class ExecutionCoverageSetProofRefusalReason(StrEnum):
     NONFINITE_GROSS_COST = "nonfinite_gross_cost"
     NONFINITE_AGGREGATE = "nonfinite_aggregate"
     QUANTITY_MISMATCH = "quantity_mismatch"
+    VWAP_MISMATCH = "vwap_mismatch"
     COST_MISMATCH = "cost_mismatch"
 
 
@@ -179,6 +220,7 @@ class ExecutionCoverageSetProofSuccess:
     exact: ExecutionCoverageAggregate
     cumulative: ExecutionCoverageAggregate
     position_delta: float
+    gross_cost_tolerance: float
     retained_exact_observations: tuple[ExactCoverageObservation, ...]
 
 
@@ -267,7 +309,15 @@ def prove_execution_coverage_set(
             ExecutionCoverageSetProofRefusalReason.QUANTITY_MISMATCH,
             "Exact and cumulative coverage quantities differ outside the strict share tolerance.",
         )
-    cost_tolerance = max(exact_aggregate.quantity, cumulative_aggregate.quantity) * PRICE_ATOL
+    if abs(exact_aggregate.vwap - cumulative_aggregate.vwap) >= PRICE_ATOL:
+        return _set_refusal(
+            ExecutionCoverageSetProofRefusalReason.VWAP_MISMATCH,
+            "Exact and cumulative VWAPs differ outside the strict currency-per-share tolerance.",
+        )
+    cost_tolerance = execution_coverage_gross_cost_tolerance(
+        exact=exact_aggregate,
+        cumulative=cumulative_aggregate,
+    )
     if abs(exact_aggregate.gross_cost - cumulative_aggregate.gross_cost) > cost_tolerance:
         return _set_refusal(
             ExecutionCoverageSetProofRefusalReason.COST_MISMATCH,
@@ -277,6 +327,7 @@ def prove_execution_coverage_set(
         exact=exact_aggregate,
         cumulative=cumulative_aggregate,
         position_delta=position_delta,
+        gross_cost_tolerance=cost_tolerance,
         retained_exact_observations=tuple(sorted(exact, key=lambda observation: observation.source_id)),
     )
 
@@ -323,6 +374,19 @@ def _aggregate_coverage(
         quantity=quantity,
         gross_cost=gross_cost,
         vwap=gross_cost / quantity,
+    )
+
+
+def execution_coverage_gross_cost_tolerance(
+    *,
+    exact: ExecutionCoverageAggregate,
+    cumulative: ExecutionCoverageAggregate,
+) -> float:
+    """Propagate pinned quantity and VWAP error into a gross-cost envelope."""
+    return (
+        max(abs(exact.quantity), abs(cumulative.quantity)) * PRICE_ATOL
+        + max(abs(exact.vwap), abs(cumulative.vwap)) * QTY_ATOL
+        + QTY_ATOL * PRICE_ATOL
     )
 
 
@@ -373,11 +437,11 @@ def validate_execution_coverage_superseded_facts(
     fill_ids = facts.superseded_cumulative_fill_ids
     if (
         not isinstance(fill_ids, list)
-        or len(fill_ids) != 1
+        or not fill_ids
         or any(not isinstance(fill_id, str) or not fill_id for fill_id in fill_ids)
         or fill_ids != sorted(set(fill_ids))
     ):
-        raise ValueError("coverage supersession requires one sorted cumulative fill id")
+        raise ValueError("coverage supersession requires sorted cumulative fill ids")
     exact = facts.exact_execution
     validate_execution_slice_facts(exact)
     if exact.symbol.upper() != facts.symbol.upper() or exact.side != facts.side:
@@ -388,15 +452,43 @@ def validate_execution_coverage_superseded_facts(
     _require_finite_positive_coverage(facts.cumulative_gross_cost, field="cumulative_gross_cost")
     _require_finite_positive_coverage(facts.quantity_tolerance, field="quantity_tolerance")
     _require_finite_nonnegative_coverage(facts.gross_cost_tolerance, field="gross_cost_tolerance")
-    if (
-        facts.exact_quantity != exact.slice_qty
-        or facts.exact_gross_cost != exact.slice_qty * exact.slice_price
-    ):
-        raise ValueError("coverage supersession exact aggregate is not its exact economics")
     if facts.resolved_uncertainty_id is not None and (
         not isinstance(facts.resolved_uncertainty_id, str) or not facts.resolved_uncertainty_id
     ):
         raise ValueError("coverage supersession resolved uncertainty id is invalid")
+    prior = facts.prior_exact_observations
+    if not isinstance(prior, list):
+        raise ValueError("coverage supersession prior exact observations must be a list")
+    prior_ids = [item.exact_execution.execution_id for item in prior]
+    if prior_ids != sorted(set(prior_ids)) or exact.execution_id in prior_ids:
+        raise ValueError("coverage supersession prior exact identities must be sorted and unique")
+    for item in prior:
+        validate_execution_slice_facts(item.exact_execution)
+        if (
+            item.exact_execution.symbol.upper() != facts.symbol.upper()
+            or item.exact_execution.side != facts.side
+            or item.observation_transition_sequence != item.recorded_transition_sequence
+        ):
+            raise ValueError("coverage supersession prior exact provenance is inconsistent")
+        for field_name in (
+            "observation_transition_sequence",
+            "recorded_transition_sequence",
+            "clerk_observed_at_ms",
+            "recorded_at_ms",
+        ):
+            value = getattr(item, field_name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"coverage supersession prior {field_name} is invalid")
+    all_exact = [*(item.exact_execution for item in prior), exact]
+    expected_exact_quantity = math.fsum(item.slice_qty for item in all_exact)
+    expected_exact_gross_cost = math.fsum(
+        item.slice_qty * item.slice_price for item in all_exact
+    )
+    if (
+        facts.exact_quantity != expected_exact_quantity
+        or facts.exact_gross_cost != expected_exact_gross_cost
+    ):
+        raise ValueError("coverage supersession exact aggregate is not its exact economics")
     if (
         not isinstance(facts.evidence_refs, list)
         or not facts.evidence_refs
@@ -537,18 +629,11 @@ def execution_is_quarantined(
 
 def _has_unreadable_quarantine_for_order(conn: sqlite3.Connection, *, order_ref: str) -> bool:
     """Fail closed rather than proving around malformed retained evidence."""
-    rows = conn.execute(
-        "SELECT facts_json FROM custody_transitions WHERE order_ref = ? "
-        "AND transition_kind = 'EXECUTION_COVERAGE_QUARANTINED'",
-        (order_ref,),
-    ).fetchall()
-    for row in rows:
-        try:
-            facts = ExecutionCoverageQuarantinedFacts.from_facts_json(row["facts_json"])
-            validate_execution_coverage_quarantined_facts(facts)
-        except (KeyError, TypeError, ValueError):
-            return True
-    return False
+    from app.broker.alpaca.clerk.sqlite.execution_coverage_evidence import (
+        unreadable_quarantine_source_ids_for_order,
+    )
+
+    return bool(unreadable_quarantine_source_ids_for_order(conn, order_ref=order_ref))
 
 
 def execution_coverage_proof(
@@ -700,51 +785,6 @@ def direct_cumulative_recovery_fill_for_order(
         (order_ref,),
     ).fetchone()
     return None if other_effective is not None else cumulative[0]
-
-
-def direct_execution_coverage_candidate(
-    *,
-    identity: ExecutionCoverageIdentity,
-    cumulative: CumulativeRecoveryFill,
-    exact: ExecutionSliceFilledFacts,
-    active_episode_ids: tuple[str, ...] = (),
-    effective_exact_source_ids: frozenset[str] = frozenset(),
-) -> ExecutionCoverageSetCandidate:
-    """Map direct Clerk evidence into the canonical coverage-set proof.
-
-    The cumulative recovery row owns its recorded side, while the exact
-    observation owns its recorded symbol and side. Constructing distinct
-    identities lets :func:`prove_execution_coverage_set` reject either an
-    order or side mismatch instead of inheriting the incoming exact identity.
-    """
-    cumulative_identity = ExecutionCoverageIdentity(
-        account_id=identity.account_id,
-        authority_generation=identity.authority_generation,
-        database_identity_token=identity.database_identity_token,
-        order_ref=cumulative.order_ref,
-        symbol=identity.symbol,
-        side=cumulative.side,
-    )
-    return ExecutionCoverageSetCandidate(
-        cumulative_recovery=(
-            CumulativeCoverageObservation(
-                source_id=cumulative.fill_id,
-                identity=cumulative_identity,
-                quantity=cumulative.quantity,
-                price=cumulative.price,
-            ),
-        ),
-        prior_quarantined_exact=(),
-        incoming_exact=ExactCoverageObservation(
-            source_id=exact.execution_id,
-            identity=identity,
-            quantity=exact.slice_qty,
-            price=exact.slice_price,
-            fee=exact.fee,
-        ),
-        active_episode_ids=active_episode_ids,
-        effective_exact_source_ids=effective_exact_source_ids,
-    )
 
 
 def exact_replaces_cumulative(

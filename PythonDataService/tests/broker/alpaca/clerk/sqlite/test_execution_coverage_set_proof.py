@@ -167,7 +167,9 @@ def test_prove_execution_coverage_set_accepts_one_exact_for_one_cumulative() -> 
     assert abs(result.position_delta) < EXPECTED_QTY_ATOL
     assert abs(result.exact.quantity - result.cumulative.quantity) < EXPECTED_QTY_ATOL
     assert abs(result.exact.gross_cost - result.cumulative.gross_cost) <= (
-        max(result.exact.quantity, result.cumulative.quantity) * EXPECTED_PRICE_ATOL
+        max(abs(result.exact.quantity), abs(result.cumulative.quantity)) * EXPECTED_PRICE_ATOL
+        + max(abs(result.exact.vwap), abs(result.cumulative.vwap)) * EXPECTED_QTY_ATOL
+        + EXPECTED_QTY_ATOL * EXPECTED_PRICE_ATOL
     )
 
 
@@ -350,13 +352,16 @@ def test_prove_execution_coverage_set_pins_strict_quantity_boundary() -> None:
     )
 
 
-def test_prove_execution_coverage_set_pins_inclusive_cost_boundary() -> None:
+def test_prove_execution_coverage_set_pins_strict_vwap_boundary() -> None:
     candidate = _candidate(
         cumulative=(_cumulative("recovery-1", 1.0, 0.0),),
         incoming=_exact("execution-incoming", 1.0, EXPECTED_PRICE_ATOL),
     )
 
-    _assert_success(prove_execution_coverage_set(candidate))
+    _assert_refusal(
+        prove_execution_coverage_set(candidate),
+        ExecutionCoverageSetProofRefusalReason.VWAP_MISMATCH,
+    )
 
     outside = replace(
         candidate,
@@ -364,19 +369,39 @@ def test_prove_execution_coverage_set_pins_inclusive_cost_boundary() -> None:
     )
     _assert_refusal(
         prove_execution_coverage_set(outside),
-        ExecutionCoverageSetProofRefusalReason.COST_MISMATCH,
+        ExecutionCoverageSetProofRefusalReason.VWAP_MISMATCH,
     )
 
 
-def test_prove_execution_coverage_set_refuses_high_price_sub_quantity_tolerance_cost_residue() -> None:
+def test_prove_execution_coverage_set_accepts_high_price_sub_quantity_tolerance_residue() -> None:
     candidate = _candidate(
         cumulative=(_cumulative("recovery-1", 1.0 + EXPECTED_QTY_ATOL / 2, 1_000_000_000.0),),
         incoming=_exact("execution-incoming", 1.0, 1_000_000_000.0),
     )
 
-    _assert_refusal(
-        prove_execution_coverage_set(candidate),
-        ExecutionCoverageSetProofRefusalReason.COST_MISMATCH,
+    _assert_success(prove_execution_coverage_set(candidate))
+
+
+def test_prove_execution_coverage_set_records_the_propagated_cost_envelope() -> None:
+    candidate = _candidate(
+        cumulative=(
+            _cumulative(
+                "recovery-1",
+                1.0 + EXPECTED_QTY_ATOL / 2,
+                1_000_000.0 + EXPECTED_PRICE_ATOL / 2,
+            ),
+        ),
+        incoming=_exact("execution-incoming", 1.0, 1_000_000.0),
+    )
+
+    result = _assert_success(prove_execution_coverage_set(candidate))
+
+    assert result.gross_cost_tolerance == pytest.approx(
+        max(abs(result.exact.quantity), abs(result.cumulative.quantity)) * EXPECTED_PRICE_ATOL
+        + max(abs(result.exact.vwap), abs(result.cumulative.vwap)) * EXPECTED_QTY_ATOL
+        + EXPECTED_QTY_ATOL * EXPECTED_PRICE_ATOL,
+        abs=1e-18,
+        rel=0,
     )
 
 

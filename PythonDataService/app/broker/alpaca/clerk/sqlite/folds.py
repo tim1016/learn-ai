@@ -23,17 +23,11 @@ from app.broker.alpaca.clerk.sqlite import reads
 from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     FILL_QTY_EPSILON,
-    PRICE_ATOL,
-    QTY_ATOL,
-    ExecutionCoverageIdentity,
-    ExecutionCoverageSetProofSuccess,
-    ExecutionCoverageSupersededFacts,
     active_execution_coverage_conflicts,
-    direct_cumulative_recovery_fill_for_order,
-    direct_execution_coverage_candidate,
     execution_coverage_proof,
-    prove_execution_coverage_set,
-    validate_execution_coverage_superseded_facts,
+)
+from app.broker.alpaca.clerk.sqlite.execution_coverage_supersession_fold import (
+    fold_execution_coverage_superseded,
 )
 from app.broker.alpaca.clerk.sqlite.external_order_folds import (
     fold_external_order_acknowledged as _fold_external_order_acknowledged,
@@ -928,120 +922,12 @@ def _fold_execution_coverage_quarantined(
 
 
 def _fold_execution_coverage_superseded(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
-    """Replace one direct cumulative contribution with proven exact evidence.
-
-    Formula: ``Δposition = 0``. The current cumulative contribution already
-    owns the attributed quantity, so this fold swaps only its rebuildable
-    ``fills`` representation after rerunning the canonical #1552 set proof.
-    Reference: PRD #1543 story 19 and issue #1554.
-    Canonical implementation: execution_coverage.prove_execution_coverage_set.
-    Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
-      test_folds_execution.py::test_late_exact_execution_after_cumulative_recovery_auto_supersedes_coverage.
-    """
-    facts = ExecutionCoverageSupersededFacts.from_facts_json(payload["facts_json"])
-    exact = validate_execution_coverage_superseded_facts(facts)
-    if facts.resolved_uncertainty_id is not None:
-        raise ValueError("direct coverage supersession cannot resolve an uncertainty")
-    if (
-        payload["order_ref"] != facts.order_ref
-        or payload["source_event_at_ms"] != exact.source_event_at_ms
-        or payload["authority_generation"] != facts.authority_generation
-    ):
-        raise ValueError("coverage supersession transition does not match its typed evidence")
-    meta = reads.control_meta_snapshot(conn)
-    if (
-        facts.account_id != meta.account_id
-        or facts.authority_generation != meta.authority_generation
-        or facts.db_identity_token != meta.db_identity_token
-        or facts.expected_control_revision != meta.control_revision
-    ):
-        raise ValueError("coverage supersession binding does not match the current Clerk authority")
-    if active_execution_coverage_conflicts(conn, order_ref=facts.order_ref):
-        raise ValueError("direct coverage supersession cannot bypass an active uncertainty")
-    owner = conn.execute(
-        "SELECT candidate_effect.command_id, candidate_effect.strategy_instance_id, "
-        "COALESCE(strategy.symbol, json_extract(manual_acceptance.facts_json, '$.leg.symbol')) AS symbol "
-        "FROM orders order_row JOIN effect_operations order_effect "
-        "ON order_effect.effect_operation_id = order_row.effect_operation_id "
-        "JOIN effect_operations candidate_effect ON candidate_effect.effect_operation_id = ? "
-        "LEFT JOIN strategy_instances strategy "
-        "ON strategy.strategy_instance_id = order_effect.strategy_instance_id "
-        "LEFT JOIN custody_transitions manual_acceptance ON manual_acceptance.sequence = ("
-        "SELECT MIN(acceptance.sequence) FROM custody_transitions acceptance "
-        "WHERE acceptance.order_ref = order_row.order_ref "
-        "AND acceptance.effect_operation_id = order_effect.effect_operation_id "
-        "AND acceptance.transition_kind = 'MANUAL_ORDER_ACCEPTED') "
-        "WHERE order_row.order_ref = ? AND ("
-        "order_row.effect_operation_id = candidate_effect.effect_operation_id OR EXISTS ("
-        "SELECT 1 FROM operation_order_links link WHERE link.order_ref = order_row.order_ref "
-        "AND link.effect_operation_id = candidate_effect.effect_operation_id))",
-        (payload["effect_operation_id"], facts.order_ref),
-    ).fetchone()
-    if (
-        owner is None
-        or owner["command_id"] != payload["command_id"]
-        or owner["strategy_instance_id"] != payload["strategy_instance_id"]
-        or not isinstance(owner["symbol"], str)
-        or owner["symbol"].upper() != facts.symbol.upper()
-    ):
-        raise ValueError("coverage supersession does not match the durable order owner")
-    cumulative = direct_cumulative_recovery_fill_for_order(conn, order_ref=facts.order_ref)
-    if cumulative is None or [cumulative.fill_id] != facts.superseded_cumulative_fill_ids:
-        raise ValueError("coverage supersession cumulative source is stale or broadened")
-    proof = prove_execution_coverage_set(
-        direct_execution_coverage_candidate(
-            identity=ExecutionCoverageIdentity(
-                account_id=meta.account_id,
-                authority_generation=meta.authority_generation,
-                database_identity_token=meta.db_identity_token,
-                order_ref=facts.order_ref,
-                symbol=facts.symbol,
-                side=facts.side,
-            ),
-            cumulative=cumulative,
-            exact=exact,
-        )
-    )
-    if not isinstance(proof, ExecutionCoverageSetProofSuccess):
-        raise ValueError("coverage supersession proof no longer matches immutable evidence")
-    expected_cost_tolerance = max(proof.exact.quantity, proof.cumulative.quantity) * PRICE_ATOL
-    if (
-        facts.quantity_tolerance != QTY_ATOL
-        or facts.gross_cost_tolerance != expected_cost_tolerance
-        or facts.exact_quantity != proof.exact.quantity
-        or facts.exact_gross_cost != proof.exact.gross_cost
-        or facts.cumulative_quantity != proof.cumulative.quantity
-        or facts.cumulative_gross_cost != proof.cumulative.gross_cost
-    ):
-        raise ValueError("coverage supersession aggregates do not match its canonical proof")
-    if conn.execute("SELECT 1 FROM fills WHERE execution_id = ?", (exact.execution_id,)).fetchone() is not None:
-        raise ValueError("coverage supersession exact execution already exists")
-    conn.execute("DELETE FROM fills WHERE fill_id = ?", (cumulative.fill_id,))
-    conn.execute(
-        "INSERT INTO fills (fill_id, order_ref, qty, price, side, is_correction, execution_id, "
-        "evidence_source, event_kind, superseded_execution_ref, fee, fee_fidelity, "
-        "source_event_at_ms, clerk_observed_at_ms, recorded_at_ms, recorded_transition_sequence) "
-        "VALUES (?, ?, ?, ?, ?, 0, ?, ?, 'fill', NULL, ?, ?, ?, ?, ?, ?)",
-        (
-            exact.execution_id,
-            facts.order_ref,
-            exact.slice_qty,
-            exact.slice_price,
-            exact.side,
-            exact.execution_id,
-            exact.evidence_source,
-            exact.fee,
-            exact.fee_fidelity,
-            exact.source_event_at_ms,
-            payload["clerk_observed_at_ms"],
-            payload["recorded_at_ms"],
-            _this_transition_sequence(conn),
-        ),
-    )
-    _complete_filled_manual_order_if_exact_coverage_complete(
+    """Delegate this focused coverage-representation swap to its own fold module."""
+    fold_execution_coverage_superseded(
         conn,
-        payload=payload,
-        order_ref=facts.order_ref,
+        payload,
+        transition_sequence=_this_transition_sequence,
+        complete_manual_order=_complete_filled_manual_order_if_exact_coverage_complete,
     )
 
 
