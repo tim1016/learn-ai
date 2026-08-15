@@ -42,6 +42,9 @@ from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     active_execution_coverage_conflicts,
     execution_is_quarantined,
 )
+from app.broker.alpaca.clerk.sqlite.execution_coverage_evidence import (
+    unreadable_quarantine_source_ids_for_order,
+)
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExecutionCorrectedFacts,
     ExecutionCoverageQuarantinedFacts,
@@ -513,7 +516,7 @@ class ClerkSqliteRepository(
                     execution_id=execution_id,
                     order_ref=order_ref,
                 )
-                supersession = self._direct_execution_coverage_supersession_transition(
+                supersession = self._execution_coverage_supersession_transition(
                     exact_transition=candidate,
                     facts=facts,
                 )
@@ -522,7 +525,7 @@ class ClerkSqliteRepository(
                     # re-entrant caller or future admission hook that changed
                     # custody between proof and commit must take the existing
                     # fail-closed path, never append a stale replacement.
-                    current_supersession = self._direct_execution_coverage_supersession_transition(
+                    current_supersession = self._execution_coverage_supersession_transition(
                         exact_transition=candidate,
                         facts=facts,
                     )
@@ -537,6 +540,17 @@ class ClerkSqliteRepository(
                     order_ref=order_ref,
                 )
                 if active_conflicts:
+                    if len(active_conflicts) != 1:
+                        # A corrupted or otherwise ambiguous episode set has
+                        # no safe ownership target for the incoming exact.
+                        # Keep the account fail-closed without fabricating a
+                        # quarantine attachment to whichever row sorted first.
+                        return "coverage_conflict_already_raised"
+                    if unreadable_quarantine_source_ids_for_order(
+                        self._conn,
+                        order_ref=order_ref,
+                    ):
+                        return "coverage_conflict_already_raised"
                     conflict = active_conflicts[0]
                     if execution_is_quarantined(
                         self._conn,
