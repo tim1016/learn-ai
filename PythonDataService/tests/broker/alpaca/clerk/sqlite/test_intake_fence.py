@@ -3,11 +3,38 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
+from typing import Protocol
 
 import pytest
 
+from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
+    BrokerCallUnderIntakeError,
+    GuardedBrokerReadPort,
+    GuardedBrokerTradePort,
+    guard_broker_ports,
+    missing_guarded_async_methods,
+)
 from app.broker.alpaca.clerk.sqlite.runtime import IntakeFenceYieldError, ReentrantAsyncLock
+from app.broker.contract.models import BrokerOrderLeg
+from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
+
+
+class _Broker:
+    broker_id = "alpaca"
+
+    def __init__(self) -> None:
+        self.account_calls = 0
+        self.submit_calls = 0
+
+    async def get_account(self) -> object:
+        self.account_calls += 1
+        return object()
+
+    async def submit(self, _leg: BrokerOrderLeg, *, client_order_id: str) -> object:
+        self.submit_calls += 1
+        return client_order_id
 
 
 async def test_reentrant_intake_tracks_task_ownership_and_dynamic_scope_depth() -> None:
@@ -47,6 +74,58 @@ async def test_child_inherits_fenced_scope_and_unrelated_task_does_not() -> None
 
     assert child_scope == (1, False)
     assert unrelated_scope == (0, False)
+
+
+async def test_guarded_ports_reject_inherited_fenced_scope_before_contact() -> None:
+    fence = ReentrantAsyncLock()
+    broker = _Broker()
+    read, trade = guard_broker_ports(read=broker, trade=broker, intake=fence)
+
+    async with fence:
+        with pytest.raises(BrokerCallUnderIntakeError, match="get_account"):
+            await read.get_account()
+        child = asyncio.create_task(
+            trade.submit(BrokerOrderLeg(symbol="SPY", side="buy", quantity=1), client_order_id="ref-1")
+        )
+        with pytest.raises(BrokerCallUnderIntakeError, match="submit"):
+            await child
+
+    assert broker.account_calls == 0
+    assert broker.submit_calls == 0
+
+
+async def test_guarded_ports_allow_unrelated_unfenced_task() -> None:
+    fence = ReentrantAsyncLock()
+    broker = _Broker()
+    read, _trade = guard_broker_ports(read=broker, trade=broker, intake=fence)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def hold_intake() -> None:
+        async with fence:
+            entered.set()
+            await release.wait()
+
+    holder = asyncio.create_task(hold_intake())
+    await entered.wait()
+    assert await read.get_account() is not None
+    release.set()
+    await holder
+
+    assert broker.account_calls == 1
+
+
+def test_guarded_ports_are_explicitly_async_protocol_complete() -> None:
+    assert missing_guarded_async_methods(BrokerReadPort, GuardedBrokerReadPort) == frozenset()
+    assert missing_guarded_async_methods(BrokerTradePort, GuardedBrokerTradePort) == frozenset()
+
+
+def test_protocol_parity_detects_a_future_async_method_missing_from_wrapper() -> None:
+    class _FutureReadPort(Protocol):
+        async def new_broker_read(self) -> object: ...
+
+    assert inspect.iscoroutinefunction(_FutureReadPort.new_broker_read)
+    assert missing_guarded_async_methods(_FutureReadPort, GuardedBrokerReadPort) == {"new_broker_read"}
 
 
 async def test_yield_while_fenced_fails_on_outermost_release_in_strict_mode() -> None:

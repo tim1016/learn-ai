@@ -789,7 +789,7 @@ def _fold_order_submit_uncertain(conn: sqlite3.Connection, payload: dict[str, An
 #: ``docs/references/clerk-position-drift-tolerance.md``). Lives here, not in
 #: ``reconcile.py`` (its original logical home), so both ``reconcile.py`` and
 #: ``exit.py`` can import it without either depending on the other —
-#: ``reconcile_uncertain_order`` needs to call ``exit.resolve_exit`` for an
+#: account reconciliation needs to call ``exit.resolve_exit`` for an
 #: EXIT-owned order (#1379), which would otherwise be a circular import.
 POSITION_QTY_EPSILON = 1e-9
 
@@ -1214,7 +1214,7 @@ def _fold_reconciliation_attempted(conn: sqlite3.Connection, payload: dict[str, 
     fold only ever inserts into ``reconciliations``; it never touches
     ``orders``/``effect_operations``/``positions`` — those projections are
     already correct by the time this transition is appended (see
-    ``reconcile.reconcile_uncertain_order``)."""
+    ``reconcile.reconcile_account``)."""
     facts = ReconciliationAttemptedFacts.from_facts_json(payload["facts_json"])
     reconciliation_id = f"reconciliation:{_this_transition_sequence(conn)}"
     conn.execute(

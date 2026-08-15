@@ -13,6 +13,10 @@ from app.broker.alpaca.clerk.sqlite.activation import (
     ActivationRecord,
     ActivationRecordInvalid,
 )
+from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
+    GuardedBrokerReadPort,
+    GuardedBrokerTradePort,
+)
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     ExecutionLeaseHeld,
@@ -214,6 +218,13 @@ async def test_valid_activation_opens_and_recovers_only_sqlite(
     )
     assert not legacy_constructed
     assert runtime.sqlite_repository is repo
+    assert isinstance(runtime.clerk._read, GuardedBrokerReadPort)
+    assert isinstance(runtime.clerk._trade, GuardedBrokerTradePort)
+    assert runtime.sweep is not None
+    assert runtime.sweep._read is runtime.clerk._read
+    assert runtime.sweep._trade is runtime.clerk._trade
+    assert runtime.evidence_sink is not None
+    assert runtime.evidence_sink.intake is runtime.clerk.intake
     await runtime.close()
 
 

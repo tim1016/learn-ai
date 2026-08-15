@@ -299,7 +299,7 @@ class TradeUpdatesConsumer:
             if evidence_sink is not None
             else LegacyTradeUpdateEvidenceSink(clerk)
         )
-        self._read = read
+        self._read = self._evidence_sink.guard_reconnect_read(read)
         self._frame_source = frame_source
         self._journal = journal or get_capture_journal()
         self._clock = clock

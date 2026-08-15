@@ -7,6 +7,8 @@ import logging
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 
+from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_ports
+from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
@@ -35,10 +37,11 @@ class ReconciliationSweep:
         sleep: Sleep = asyncio.sleep,
         lease_sleep: Sleep = asyncio.sleep,
         max_passes: int | None = None,
+        intake: ReentrantAsyncLock | None = None,
     ) -> None:
         self._repo = repo
-        self._read = read
-        self._trade = trade
+        self._intake = intake or ReentrantAsyncLock()
+        self._read, self._trade = guard_broker_ports(read=read, trade=trade, intake=self._intake)
         self._interval_s = interval_s
         self._max_backoff_s = max(max_backoff_s, interval_s)
         self._sleep = sleep
@@ -129,6 +132,7 @@ class ReconciliationSweep:
                 read=self._read,
                 trade=self._trade,
                 trigger="AUTOMATIC",
+                intake=self._intake,
             )
             return result.verdict != "stale"
         except asyncio.CancelledError:

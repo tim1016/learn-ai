@@ -77,6 +77,7 @@ from app.services.bot_carryover import (
 )
 from app.services.bot_clerk_lifecycle import (
     ActiveClerkUnavailableError,
+    ClerkAdmissionTokenStaleError,
     commit_stop_before_task_cancel,
     register_order_capable_run,
 )
@@ -407,8 +408,15 @@ class BotTaskRegistry:
         binding: BrokerBotBinding,
         feed: MarketDataFeed,
         now_ms: int,
+        custody: ClerkCustodySnapshot,
     ) -> BotStatusView:
-        await self._activate_binding(binding, feed, now=now_ms, reason="deploy")
+        await self._activate_binding(
+            binding,
+            feed,
+            now=now_ms,
+            reason="deploy",
+            admission_snapshot=custody,
+        )
         log_run_launch(binding, reason="deploy")
         return self.status(binding.broker, binding.strategy_instance_id)
 
@@ -417,8 +425,15 @@ class BotTaskRegistry:
         binding: BrokerBotBinding,
         feed: MarketDataFeed,
         now_ms: int,
+        custody: ClerkCustodySnapshot,
     ) -> BotStatusView:
-        await self._activate_binding(binding, feed, now=now_ms, reason="resume")
+        await self._activate_binding(
+            binding,
+            feed,
+            now=now_ms,
+            reason="resume",
+            admission_snapshot=custody,
+        )
         log_run_launch(binding, reason="resume")
         return self.status(binding.broker, binding.strategy_instance_id)
 
@@ -429,54 +444,72 @@ class BotTaskRegistry:
         *,
         now: int,
         reason: Literal["deploy", "resume"],
+        admission_snapshot: ClerkCustodySnapshot | None = None,
     ) -> None:
         """Write run evidence and install supervision while caller holds its gate."""
         lifecycle_repo = self._lifecycle_repo(binding.strategy_instance_id)
-        # Preserve the prior immutable outcome before record_launch advances
-        # current_run.json. A crash between these operations must not hide a
-        # previous run's only terminal evidence from the history projection.
-        self._run_evidence.preserve_terminal(
-            binding.strategy_instance_id,
-            lifecycle_repo.read(),
-        )
-        self._bindings.record_launch(binding, launch_reason=reason)
+        registered = binding.broker == "alpaca" and binding.mode == "trade"
         try:
-            await register_order_capable_run(binding)
-        except ActiveClerkUnavailableError as exc:
+            await register_order_capable_run(binding, admission_snapshot=admission_snapshot)
+        except (ActiveClerkUnavailableError, ClerkAdmissionTokenStaleError) as exc:
             raise RunAdmissionRefusedError(
                 str(exc),
-                detail="Restore the account Clerk before starting a trade bot.",
+                detail="Refresh Clerk custody before starting a trade bot.",
             ) from exc
-        self._desired_repo(binding.strategy_instance_id).set(
-            DesiredState.RUNNING, updated_by=_UPDATED_BY, now_ms=now, reason=reason
-        )
-        lifecycle_repo.set_phase(
-            BotLifecyclePhase.ON_DUTY,
-            now_ms=now,
-            updated_by=_UPDATED_BY,
-            active_run_id=binding.run_id,
-            carryover_policy=binding.carryover_policy,
-            reason=f"{reason}_{binding.mode}_bot",
-        )
-        run_gate = asyncio.Event()
-        run_gate.set()
-        task = asyncio.create_task(
-            self._supervise(binding, feed, run_gate),
-            name=f"bot:{binding.strategy_instance_id}",
-        )
-        managed = ManagedBot(
-            binding=binding,
-            task=task,
-            run_gate=run_gate,
-        )
-        self._bots[binding.strategy_instance_id] = managed
-        self._start_history[binding.strategy_instance_id] = [
-            *self._starts_in_window(binding.strategy_instance_id, now),
-            now,
-        ]
-        # Let supervision enter its exception boundary before a Start releases
-        # Clerk intake. A first effect waits on that same fence.
-        await asyncio.sleep(0)
+        try:
+            # Preserve the prior immutable outcome before record_launch advances
+            # current_run.json. A crash between these operations must not hide a
+            # previous run's only terminal evidence from the history projection.
+            self._run_evidence.preserve_terminal(
+                binding.strategy_instance_id,
+                lifecycle_repo.read(),
+            )
+            self._bindings.record_launch(binding, launch_reason=reason)
+            self._desired_repo(binding.strategy_instance_id).set(
+                DesiredState.RUNNING, updated_by=_UPDATED_BY, now_ms=now, reason=reason
+            )
+            lifecycle_repo.set_phase(
+                BotLifecyclePhase.ON_DUTY,
+                now_ms=now,
+                updated_by=_UPDATED_BY,
+                active_run_id=binding.run_id,
+                carryover_policy=binding.carryover_policy,
+                reason=f"{reason}_{binding.mode}_bot",
+            )
+            run_gate = asyncio.Event()
+            run_gate.set()
+            task = asyncio.create_task(
+                self._supervise(binding, feed, run_gate),
+                name=f"bot:{binding.strategy_instance_id}",
+            )
+            managed = ManagedBot(
+                binding=binding,
+                task=task,
+                run_gate=run_gate,
+            )
+            self._bots[binding.strategy_instance_id] = managed
+            self._start_history[binding.strategy_instance_id] = [
+                *self._starts_in_window(binding.strategy_instance_id, now),
+                now,
+            ]
+            # Let supervision enter its exception boundary before a Start releases
+            # Clerk intake. A first effect waits on that same fence.
+            await asyncio.sleep(0)
+        except BaseException:
+            if registered:
+                try:
+                    await commit_stop_before_task_cancel(binding, reason="activation_failed_after_registration")
+                except Exception:
+                    logger.error(
+                        "SQLite Clerk could not durably stop a failed activation",
+                        extra={
+                            "action": "sqlite_clerk_activation_stop_failed",
+                            "strategy_instance_id": binding.strategy_instance_id,
+                            "run_id": binding.run_id,
+                        },
+                        exc_info=True,
+                    )
+            raise
 
     def _start_process_fact(
         self,

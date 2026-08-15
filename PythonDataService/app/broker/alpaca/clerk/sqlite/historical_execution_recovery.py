@@ -29,6 +29,7 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.repository_execution_coverage_api import (
     ExecutionCoverageResolutionUnavailable,
+    HistoricalExecutionRecoveryTarget,
 )
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerAccountSnapshot, BrokerActivity
@@ -221,6 +222,46 @@ def _require_matching_economics(
         )
 
 
+def _capture_recovery_target(
+    repo: ClerkSqliteRepository,
+    *,
+    uncertainty_id: str,
+) -> tuple[HistoricalExecutionRecoveryTarget, int, int, str]:
+    """Read one local recovery target only when its control revision is stable.
+
+    The repository revision is monotonic.  Reading it before and after the
+    target therefore detects every interleaving write without retaining intake
+    across the remote account/activity observation that follows.
+    """
+    before = repo.control_meta_snapshot()
+    target = repo.historical_execution_recovery_target(uncertainty_id)
+    after = repo.control_meta_snapshot()
+    if before != after:
+        raise HistoricalExecutionRecoveryRefused(
+            "RECOVERY_PLAN_STALE",
+            "The Clerk changed while preparing recovery evidence. Refresh and retry.",
+        )
+    return target, before.authority_generation, before.control_revision, before.db_identity_token
+
+
+def _require_context_matches_capture(
+    *,
+    context: RecoveryPolicyContext,
+    authority_generation: int,
+    control_revision: int,
+    db_identity_token: str,
+) -> None:
+    if (
+        context.authority_generation != authority_generation
+        or context.control_revision != control_revision
+        or context.db_identity_token != db_identity_token
+    ):
+        raise HistoricalExecutionRecoveryRefused(
+            "RECOVERY_PLAN_STALE",
+            "The Clerk changed after the recovery view was rendered. Refresh and retry.",
+        )
+
+
 async def prepare_historical_execution_recovery(
     *,
     repo: ClerkSqliteRepository,
@@ -245,9 +286,16 @@ async def prepare_historical_execution_recovery(
         control_secret=control_secret,
         allow_unauthenticated_control=allow_unauthenticated_control,
     )
-    target = await asyncio.to_thread(
-        repo.historical_execution_recovery_target,
-        capability.execution_ref,
+    target, authority_generation, control_revision, db_identity_token = await asyncio.to_thread(
+        _capture_recovery_target,
+        repo,
+        uncertainty_id=capability.execution_ref,
+    )
+    _require_context_matches_capture(
+        context=context,
+        authority_generation=authority_generation,
+        control_revision=control_revision,
+        db_identity_token=db_identity_token,
     )
     if target.strategy_instance_id != context.strategy_instance_id:
         raise HistoricalExecutionRecoveryRefused(
@@ -278,6 +326,21 @@ async def prepare_historical_execution_recovery(
         symbol=target.symbol,
     )
     _require_matching_economics(activity=activity, cumulative=target.cumulative)
+    current_target, current_generation, current_revision, current_token = await asyncio.to_thread(
+        _capture_recovery_target,
+        repo,
+        uncertainty_id=capability.execution_ref,
+    )
+    if (
+        current_target != target
+        or current_generation != authority_generation
+        or current_revision != control_revision
+        or current_token != db_identity_token
+    ):
+        raise HistoricalExecutionRecoveryRefused(
+            "RECOVERY_PLAN_STALE",
+            "The Clerk changed while broker history was observed. Refresh and retry.",
+        )
     now_ms = repo.clock()
     unsigned = {
         "account_id": context.account_id,
@@ -295,9 +358,9 @@ async def prepare_historical_execution_recovery(
         "cumulative_quantity": target.cumulative.quantity,
         "cumulative_price": target.cumulative.price,
         "cumulative_side": target.cumulative.side,
-        "authority_generation": context.authority_generation,
-        "db_identity_token": context.db_identity_token,
-        "control_revision": context.control_revision,
+        "authority_generation": authority_generation,
+        "db_identity_token": db_identity_token,
+        "control_revision": control_revision,
         "prepared_at_ms": now_ms,
         "expires_at_ms": now_ms + _PLAN_TTL_MS,
     }
