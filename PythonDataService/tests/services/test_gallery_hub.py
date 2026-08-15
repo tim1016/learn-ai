@@ -4,7 +4,57 @@ from __future__ import annotations
 
 import pytest
 
+from app.broker.alpaca.clerk.fills import FillRecord
+from app.broker.contract.models import OrderSide
+from app.services.broker_v2_panel import gallery_hub
+from app.services.broker_v2_panel.chart_projection_service import markers_in_window
 from app.services.broker_v2_panel.gallery_hub import GalleryHub, shown_symbols
+
+# A Saturday (market closed) so ``live_window`` takes its deterministic
+# calendar-day fallback instead of a real NYSE session lookup — mirrors
+# ``test_chart_projection.py``'s ``test_live_window_falls_back_when_market_closed``.
+_NOW = 1_700_319_600_000
+_OPEN_MS = 1_700_265_600_000
+_CLOSE_MS = _OPEN_MS + 86_400_000
+
+
+def _fill(
+    *,
+    sid: str,
+    event_key: str,
+    side: OrderSide = OrderSide.BUY,
+    quantity: float = 10.0,
+    price: float = 100.0,
+    filled_at_ms: int,
+) -> FillRecord:
+    return FillRecord(
+        account_id="PA3",
+        sid=sid,
+        intent_id="intent",
+        order_ref=f"learn-ai/{sid}/v1:intent",
+        event_key=event_key,
+        symbol="SPY",
+        side=side,
+        quantity=quantity,
+        fill_price=price,
+        filled_at_ms=filled_at_ms,
+        fee=None,
+    )
+
+
+class _FakeFillSource:
+    """Mirrors the REAL ``GalleryFillSource`` contract (production:
+    ``broker_v2_gallery._PanelChartFillSource``): returns ``(symbol, fills)``
+    per sid and never raises. ``fills_by_sid`` is public and mutable so tests
+    can simulate a new fill arriving between two calls."""
+
+    def __init__(self, fills_by_sid: dict[str, tuple[FillRecord, ...]] | None = None) -> None:
+        self.fills_by_sid: dict[str, tuple[FillRecord, ...]] = fills_by_sid or {}
+
+    async def resolve_symbol_and_fills(
+        self, broker: str, account_id: str, sid: str, *, now_ms: int
+    ) -> tuple[str, tuple[FillRecord, ...]]:
+        return "", self.fills_by_sid.get(sid, ())
 
 
 class _Cat:
@@ -339,3 +389,152 @@ async def test_build_snapshot_preserves_none_economics_instead_of_zero() -> None
     assert bot.realized_pnl_today is None
     assert bot.open_pnl is None
     assert bot.fills_today is None
+
+
+def test_gallery_hub_reuses_canonical_markers_projection() -> None:
+    """``GalleryHub`` must not redefine fill→marker mapping — it imports the
+    exact ``chart_projection_service`` helper the single-bot detail chart
+    uses (CLAUDE.md single-source-of-truth rule), not a reimplementation."""
+    assert gallery_hub.markers_in_window is markers_in_window
+
+
+@pytest.mark.asyncio
+async def test_build_snapshot_populates_markers_from_todays_fills(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(gallery_hub, "now_ms_utc", lambda: _NOW)
+    rows = [_Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12)]
+    in_window = _fill(
+        sid="Aug11-02",
+        event_key="exec-in",
+        side=OrderSide.BUY,
+        quantity=10,
+        price=101.5,
+        filled_at_ms=_OPEN_MS + 60_000,
+    )
+    out_of_window = _fill(
+        sid="Aug11-02",
+        event_key="exec-out",
+        side=OrderSide.SELL,
+        quantity=5,
+        price=99.0,
+        filled_at_ms=_OPEN_MS - 60_000,
+    )
+    fill_source = _FakeFillSource({"Aug11-02": (in_window, out_of_window)})
+    hub = GalleryHub(
+        broker="alpaca",
+        account_id="PA3",
+        catalog_source=_FakeCatalogSource(rows),
+        aggregator=_FakeAggregator(),
+        fill_source=fill_source,
+    )
+
+    snap = await hub.build_snapshot()
+
+    # Byte-identical to calling the canonical helper directly — proves the
+    # hub reused it rather than re-deriving an equivalent-looking mapping.
+    expected = markers_in_window((in_window, out_of_window), from_ms=_OPEN_MS, to_ms=_CLOSE_MS)
+    assert snap.markers == {"Aug11-02": expected}
+    marker = snap.markers["Aug11-02"][0]
+    assert marker.side == "buy"
+    assert marker.quantity == 10
+    assert marker.price == 101.5
+    assert marker.filled_at_ms == in_window.filled_at_ms
+    assert marker.order_ref == in_window.order_ref
+
+
+@pytest.mark.asyncio
+async def test_build_snapshot_bot_with_no_fills_omitted_from_markers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No fills in today's window → the sid is absent from ``markers``
+    entirely, mirroring how ``last_bar_at_ms``'s backing map omits a symbol
+    with no bars rather than storing an empty list under the key."""
+    monkeypatch.setattr(gallery_hub, "now_ms_utc", lambda: _NOW)
+    rows = [_Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12)]
+    hub = GalleryHub(
+        broker="alpaca",
+        account_id="PA3",
+        catalog_source=_FakeCatalogSource(rows),
+        aggregator=_FakeAggregator(),
+        fill_source=_FakeFillSource({"Aug11-02": ()}),
+    )
+
+    snap = await hub.build_snapshot()
+
+    assert snap.markers == {}
+
+
+@pytest.mark.asyncio
+async def test_build_snapshot_markers_empty_without_fill_source() -> None:
+    """No ``fill_source`` injected (e.g. bar/catalog-only tests) preserves
+    this module's prior hard-coded ``markers={}`` behavior."""
+    rows = [_Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12)]
+    hub = GalleryHub(
+        broker="alpaca",
+        account_id="PA3",
+        catalog_source=_FakeCatalogSource(rows),
+        aggregator=_FakeAggregator(),
+    )
+
+    snap = await hub.build_snapshot()
+
+    assert snap.markers == {}
+
+
+@pytest.mark.asyncio
+async def test_build_update_returns_new_fill_in_markers_delta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fill that lands after the snapshot shows up in the next poll's
+    ``markers_delta``."""
+    monkeypatch.setattr(gallery_hub, "now_ms_utc", lambda: _NOW)
+    rows = [_Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12)]
+    fill_source = _FakeFillSource({"Aug11-02": ()})
+    hub = GalleryHub(
+        broker="alpaca",
+        account_id="PA3",
+        catalog_source=_FakeCatalogSource(rows),
+        aggregator=_FakeAggregator(),
+        fill_source=fill_source,
+    )
+    snap = await hub.build_snapshot()
+    assert snap.markers == {}
+
+    new_fill = _fill(sid="Aug11-02", event_key="exec-new", filled_at_ms=_OPEN_MS + 120_000)
+    fill_source.fills_by_sid["Aug11-02"] = (new_fill,)
+
+    upd = await hub.build_update(since_bar_ms={}, known_sids={"Aug11-02"}, since_marker_ms={})
+
+    assert [m.order_ref for m in upd.markers_delta["Aug11-02"]] == [new_fill.order_ref]
+
+
+@pytest.mark.asyncio
+async def test_build_update_does_not_resend_already_delivered_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fill already delivered (the caller's ``since_marker_ms`` cursor is
+    at or past it) is not resent in a later ``markers_delta``."""
+    monkeypatch.setattr(gallery_hub, "now_ms_utc", lambda: _NOW)
+    rows = [_Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12)]
+    fill = _fill(sid="Aug11-02", event_key="exec-1", filled_at_ms=_OPEN_MS + 60_000)
+    fill_source = _FakeFillSource({"Aug11-02": (fill,)})
+    hub = GalleryHub(
+        broker="alpaca",
+        account_id="PA3",
+        catalog_source=_FakeCatalogSource(rows),
+        aggregator=_FakeAggregator(),
+        fill_source=fill_source,
+    )
+    snap = await hub.build_snapshot()
+    assert [m.order_ref for m in snap.markers["Aug11-02"]] == [fill.order_ref]
+
+    # The caller (mirroring the router's ``since_marker_ms``) already saw
+    # this fill in the snapshot, so its cursor is seeded at the fill's time.
+    upd = await hub.build_update(
+        since_bar_ms={},
+        known_sids={"Aug11-02"},
+        since_marker_ms={"Aug11-02": fill.filled_at_ms},
+    )
+
+    assert "Aug11-02" not in upd.markers_delta

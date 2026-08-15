@@ -48,9 +48,12 @@ from collections.abc import AsyncIterator
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 
+from app.broker.alpaca.clerk.fills import FillRecord
 from app.schemas.broker_v2_gallery import GalleryLiveSnapshot, GallerySymbolBars
-from app.services.broker_v2_panel import panel_data_source
-from app.services.broker_v2_panel.gallery_hub import GalleryHub
+from app.schemas.broker_v2_panel import ChartFillMarker
+from app.services.broker_v2_panel import panel_chart_data_source, panel_data_source
+from app.services.broker_v2_panel.gallery_hub import GalleryFillSource, GalleryHub
+from app.services.broker_v2_panel.panel_data_source import PanelUnavailableError, UnknownBotError
 from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
 
 logger = logging.getLogger(__name__)
@@ -61,6 +64,36 @@ _KEEPALIVE_INTERVAL_S = 15.0
 _POLL_INTERVAL_S = 1.0
 
 _HUB_CACHE: dict[tuple[str, str], GalleryHub] = {}
+
+
+class _PanelChartFillSource:
+    """Adapts ``panel_chart_data_source.resolve_symbol_and_fills`` to the
+    ``GalleryFillSource`` contract ``GalleryHub`` expects.
+
+    Reuses the exact SQLite-vs-legacy fill authority branch the single-bot
+    detail chart's ``get_live_chart`` uses (CLAUDE.md single-source-of-truth
+    rule) but never lets one bot's unavailable fill evidence — a SQLite
+    revision race, a bot too new to have a projection yet — fail the whole
+    gallery snapshot for every other bot; it logs and degrades to no markers
+    for that bot instead.
+    """
+
+    async def resolve_symbol_and_fills(
+        self, broker: str, account_id: str, sid: str, *, now_ms: int
+    ) -> tuple[str, tuple[FillRecord, ...]]:
+        try:
+            return await panel_chart_data_source.resolve_symbol_and_fills(
+                broker, account_id, sid, now_ms=now_ms
+            )
+        except (PanelUnavailableError, UnknownBotError) as exc:
+            logger.warning(
+                "[GALLERY] fill evidence unavailable for bot; rendering no markers",
+                extra={"broker": broker, "account_id": account_id, "sid": sid, "error": str(exc)},
+            )
+            return "", ()
+
+
+_FILL_SOURCE: GalleryFillSource = _PanelChartFillSource()
 
 
 async def get_gallery_hub(broker: str, account_id: str) -> GalleryHub:
@@ -90,6 +123,7 @@ async def get_gallery_hub(broker: str, account_id: str) -> GalleryHub:
             account_id=account_id,
             catalog_source=panel_data_source,
             aggregator=LIVE_BAR_AGGREGATOR,
+            fill_source=_FILL_SOURCE,
         )
         _HUB_CACHE[key] = hub
     return hub
@@ -110,6 +144,18 @@ def _latest_bar_start_ms(symbol_bars: list[GallerySymbolBars]) -> dict[str, int]
     return {entry.symbol: entry.bars[-1].start_ms for entry in symbol_bars if entry.bars}
 
 
+def _latest_marker_ms(markers: dict[str, list[ChartFillMarker]]) -> dict[str, int]:
+    """Latest ``filled_at_ms`` per sid among the markers in one call, for
+    seeding/advancing this stream's own ``since_marker_ms`` cursor (mirrors
+    ``_latest_bar_start_ms``). Deliberately local to the generator, not hub
+    state — see ``GalleryHub.build_update``'s cross-client race note."""
+    return {
+        sid: max(marker.filled_at_ms for marker in sid_markers)
+        for sid, sid_markers in markers.items()
+        if sid_markers
+    }
+
+
 async def _gallery_event_source(hub: GalleryHub, *, cursor: str | None) -> AsyncIterator[str]:
     snapshot = await hub.build_snapshot()
     epoch = snapshot.stream_epoch
@@ -121,6 +167,12 @@ async def _gallery_event_source(hub: GalleryHub, *, cursor: str | None) -> Async
     yield f"id: {current_id}\nevent: snapshot\ndata: {snapshot.model_dump_json()}\n\n"
 
     since_bar_ms = _latest_bar_start_ms(snapshot.symbols)
+    # This stream's own last-delivered fill cursor per sid, seeded from the
+    # snapshot's markers (already fully delivered) so the first update never
+    # resends them. Deliberately local to this generator for the same
+    # cross-client reason as ``known_sids`` below (see
+    # ``GalleryHub.build_update``'s docstring).
+    since_marker_ms = _latest_marker_ms(snapshot.markers)
     # This stream's own last-observed shown (non-retired) roster, passed to
     # every ``build_update`` call. Deliberately local to this generator (one
     # per SSE connection) rather than read off ``hub`` — the same account's
@@ -136,8 +188,11 @@ async def _gallery_event_source(hub: GalleryHub, *, cursor: str | None) -> Async
     # stops at its next ``await``.
     while True:
         await asyncio.sleep(_POLL_INTERVAL_S)
-        update = await hub.build_update(since_bar_ms, known_sids=known_sids)
+        update = await hub.build_update(
+            since_bar_ms, known_sids=known_sids, since_marker_ms=since_marker_ms
+        )
         since_bar_ms.update(_latest_bar_start_ms(update.symbols))
+        since_marker_ms.update(_latest_marker_ms(update.markers_delta))
         # ``bots_delta`` is always the full shown (non-retired) roster (see
         # the hub's docstring), so it doubles as this stream's next
         # known-roster baseline with no extra bookkeeping.
