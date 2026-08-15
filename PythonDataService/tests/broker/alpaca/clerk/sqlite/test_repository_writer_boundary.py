@@ -71,6 +71,12 @@ def _writer_call_name(node: ast.Call) -> str | None:
             return node.func.attr
         if node.func.attr == "append" and isinstance(node.func.value, ast.Name) and node.func.value.id == "receipts":
             return "append_decision_receipt"
+        if (
+            node.func.attr == "update_final_outcome"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "receipts"
+        ):
+            return "update_decision_final_outcome"
         return None
     if (
         isinstance(node.func, ast.Name)
@@ -137,6 +143,14 @@ def test_external_repository_writers_match_the_explicit_census() -> None:
     }
 
     _assert_census(_writer_calls(_PRODUCTION_ROOT), expected)
+
+
+def test_writer_census_detects_decision_final_outcome_updates() -> None:
+    assert _WriterCallSite(
+        path="app/services/bot_trade_strategy.py",
+        owner="_record_blocked_decision",
+        call="update_decision_final_outcome",
+    ) in _writer_calls(_PRODUCTION_ROOT)
 
 
 def test_unknown_external_repository_mutator_fails_until_classified(tmp_path: Path) -> None:

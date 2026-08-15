@@ -14,6 +14,7 @@ import asyncio
 import logging
 import time
 from contextvars import ContextVar, Token
+from types import TracebackType
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +80,12 @@ class ReentrantAsyncLock:
         asyncio.get_running_loop().call_soon(self._detect_event_loop_yield, current, hold_token)
         return self
 
-    async def __aexit__(self, *_exc: object) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        _exc_value: BaseException | None,
+        _traceback: TracebackType | None,
+    ) -> None:
         current = asyncio.current_task()
         if self._owner is not current:
             raise RuntimeError("SQLite Clerk intake released by a non-owner task")
@@ -97,7 +103,7 @@ class ReentrantAsyncLock:
         self._hold_started_at = None
         self._current_hold_yielded = False
         self._lock.release()
-        if yielded and self._strict_yield_detection:
+        if yielded and self._strict_yield_detection and exc_type is None:
             raise IntakeFenceYieldError()
 
     def _enter_dynamic_scope(self) -> Token[int]:

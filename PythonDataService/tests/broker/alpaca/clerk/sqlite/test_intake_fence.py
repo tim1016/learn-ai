@@ -60,6 +60,28 @@ async def test_yield_while_fenced_fails_on_outermost_release_in_strict_mode() ->
     assert fence.current_scope_depth() == 0
 
 
+async def test_strict_yield_detection_does_not_mask_task_cancellation() -> None:
+    fence = ReentrantAsyncLock(strict_yield_detection=True)
+    entered = asyncio.Event()
+    parked = asyncio.Event()
+
+    async def hold_until_cancelled() -> None:
+        async with fence:
+            entered.set()
+            await parked.wait()
+
+    holder = asyncio.create_task(hold_until_cancelled())
+    await entered.wait()
+    await asyncio.sleep(0)
+    holder.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await holder
+
+    assert not fence.held_by_current_task()
+    assert fence.current_scope_depth() == 0
+
+
 async def test_synchronously_completed_await_does_not_trip_strict_yield_detection() -> None:
     fence = ReentrantAsyncLock(strict_yield_detection=True)
 
