@@ -14,10 +14,14 @@ import asyncio
 import threading
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
+from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
+    GuardedBrokerReadPort,
+    GuardedBrokerTradePort,
+)
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter, submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
@@ -35,9 +39,9 @@ from app.broker.alpaca.clerk.sqlite.manual_orders import submit_manual_order
 from app.broker.alpaca.clerk.sqlite.models import CommittedTransition, TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.reconcile import (
+    AccountReconciliationResult,
     plan_account_reconciliation,
     reconcile_account,
-    reconcile_uncertain_order,
 )
 from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -387,52 +391,58 @@ def test_plan_drift_uses_canonical_exact_epsilon_boundary() -> None:
     assert plan.drifted_symbols == ("SPY",)
 
 
-# ── reconcile_uncertain_order ────────────────────────────────────────────────
+# ── account reconciliation recovers UNKNOWN effects ──────────────────────────
 
 
-async def test_reconcile_uncertain_order_resolves_to_resolved_success(repo: ClerkSqliteRepository) -> None:
+async def _reconcile_unknown_effect(
+    repo: ClerkSqliteRepository,
+    *,
+    trade: _FakeTrade,
+    trigger: Literal["AUTOMATIC", "OPERATOR_RECONCILE_NOW"] = "AUTOMATIC",
+) -> AccountReconciliationResult:
+    """Exercise recovery only through the public account-level reconciler."""
+    return await reconcile_account(repo, read=_FakeRead(), trade=trade, trigger=trigger)
+
+
+async def test_account_reconciliation_resolves_unknown_effect_to_success(repo: ClerkSqliteRepository) -> None:
     order_ref = await _make_uncertain_order(repo)
-    outcome = await reconcile_uncertain_order(repo, order_ref=order_ref, trigger="AUTOMATIC", trade=_FakeTrade())
-    assert outcome == "RESOLVED_SUCCESS"
+    result = await _reconcile_unknown_effect(repo, trade=_FakeTrade())
+    assert result.resolved_count == 1
     order = repo.order(order_ref)
     assert order is not None and order.broker_order_id is not None
 
 
-async def test_reconcile_uncertain_order_resolves_to_resolved_failure_past_grace(
+async def test_account_reconciliation_resolves_unknown_effect_to_failure_past_grace(
     repo: ClerkSqliteRepository,
 ) -> None:
     order_ref = await _make_uncertain_order(repo)
     repo.clock.advance(30_001)  # type: ignore[attr-defined]
-    outcome = await reconcile_uncertain_order(
-        repo, order_ref=order_ref, trigger="AUTOMATIC", trade=_FakeTrade(lookup_absent=True)
-    )
-    assert outcome == "RESOLVED_FAILURE"
+    result = await _reconcile_unknown_effect(repo, trade=_FakeTrade(lookup_absent=True))
+    assert result.resolved_count == 1
     effect = repo.effect_operation(repo.order(order_ref).effect_operation_id)  # type: ignore[union-attr]
     assert effect is not None and effect.state == "failed"
 
 
-async def test_reconcile_uncertain_order_stays_still_unknown_within_grace(
+async def test_account_reconciliation_leaves_unknown_effect_within_grace(
     repo: ClerkSqliteRepository,
 ) -> None:
     order_ref = await _make_uncertain_order(repo)
-    outcome = await reconcile_uncertain_order(
-        repo, order_ref=order_ref, trigger="AUTOMATIC", trade=_FakeTrade(lookup_absent=True)
-    )
-    assert outcome == "STILL_UNKNOWN"
+    result = await _reconcile_unknown_effect(repo, trade=_FakeTrade(lookup_absent=True))
+    assert result.resolved_count == 0
     effect = repo.effect_operation(repo.order(order_ref).effect_operation_id)  # type: ignore[union-attr]
     assert effect is not None and effect.state == "unknown"
 
 
-async def test_reconcile_uncertain_order_stays_still_unknown_on_a_broker_lookup_error(
+async def test_account_reconciliation_leaves_unknown_effect_on_broker_lookup_error(
     repo: ClerkSqliteRepository,
 ) -> None:
     """Never fabricate a terminal outcome on a broker error (#1378 acceptance,
     order-level slice of the account-wide 'truthful stale verdict' rule)."""
-    order_ref = await _make_uncertain_order(repo)
-    outcome = await reconcile_uncertain_order(
-        repo, order_ref=order_ref, trigger="AUTOMATIC", trade=_FakeTrade(lookup_error=BrokerUnavailable("down"))
+    await _make_uncertain_order(repo)
+    result = await _reconcile_unknown_effect(
+        repo, trade=_FakeTrade(lookup_error=BrokerUnavailable("down"))
     )
-    assert outcome == "STILL_UNKNOWN"
+    assert result.resolved_count == 0
 
 
 async def test_reconcile_now_refreshes_resolved_order_without_second_intent(
@@ -440,33 +450,35 @@ async def test_reconcile_now_refreshes_resolved_order_without_second_intent(
 ) -> None:
     """'Reconcile now' on an operation that already finished creates no
     second intent (#1378 acceptance)."""
-    order_ref = await _make_uncertain_order(repo)
-    await reconcile_uncertain_order(repo, order_ref=order_ref, trigger="AUTOMATIC", trade=_FakeTrade())
+    await _make_uncertain_order(repo)
+    await _reconcile_unknown_effect(repo, trade=_FakeTrade())
     before = len(repo.custody_transitions())
 
     trade = _FakeTrade()
-    outcome = await reconcile_uncertain_order(repo, order_ref=order_ref, trigger="OPERATOR_RECONCILE_NOW", trade=trade)
-    assert outcome == "RESOLVED_SUCCESS"
+    result = await _reconcile_unknown_effect(repo, trigger="OPERATOR_RECONCILE_NOW", trade=trade)
+    assert result.verdict == "clean"
     assert trade.submit_calls == []
-    assert len(repo.custody_transitions()) == before + 1  # audit attempt only
+    # Account reconciliation records the final pass and its operator receipt;
+    # neither record creates another command or broker effect.
+    assert len(repo.custody_transitions()) == before + 2
 
 
-async def test_reconcile_uncertain_order_records_reconciliations_row(repo: ClerkSqliteRepository) -> None:
+async def test_account_reconciliation_records_unknown_effect_attempt(repo: ClerkSqliteRepository) -> None:
     order_ref = await _make_uncertain_order(repo)
-    await reconcile_uncertain_order(repo, order_ref=order_ref, trigger="OPERATOR_RECONCILE_NOW", trade=_FakeTrade())
+    await _reconcile_unknown_effect(repo, trigger="OPERATOR_RECONCILE_NOW", trade=_FakeTrade())
     transitions = repo.transitions_for_order(order_ref)
     reconciliation_rows = [t for t in transitions if t["transition_kind"] == "RECONCILIATION_ATTEMPTED"]
     assert len(reconciliation_rows) == 1
 
 
-async def test_reconcile_uncertain_order_delegates_an_exit_owned_entry_to_resolve_exit(
+async def test_account_reconciliation_delegates_an_exit_owned_entry_to_resolve_exit(
     repo: ClerkSqliteRepository,
 ) -> None:
     """An entry order linked to an EXIT and stuck in cancel-uncertainty
     must NOT be resolved via the ENTER-style 'already has a broker_order_id'
     short-circuit — that field was set by the original ENTER submission long
     before EXIT began and proves nothing about whether EXIT's cancel
-    resolved. Before this dispatch existed, reconcile_uncertain_order
+    resolved. Before this dispatch existed, reconciliation
     short-circuited on it immediately, reporting a false RESOLVED_SUCCESS
     with zero broker calls and zero audit trail, while the EXIT effect
     silently stayed unknown forever."""
@@ -503,12 +515,12 @@ async def test_reconcile_uncertain_order_delegates_an_exit_owned_entry_to_resolv
     assert effect_stuck is not None and effect_stuck.state == "unknown"
 
     resolving_trade = _FakeTrade(lookup_result=_broker_order(entry_ref, status="canceled", filled_quantity=0.0))
-    outcome = await reconcile_uncertain_order(repo, order_ref=entry_ref, trigger="AUTOMATIC", trade=resolving_trade)
+    result = await _reconcile_unknown_effect(repo, trade=resolving_trade)
 
     # A genuine broker call happened (impossible under the old short-circuit,
     # which returned before ever calling the trade port).
     assert resolving_trade.cancel_calls or resolving_trade.lookup_calls
-    assert outcome == "RESOLVED_SUCCESS"
+    assert result.verdict == "clean"
     effect_after = repo.effect_operation(accepted.effect_operation_id)
     assert effect_after is not None and effect_after.state == "succeeded"
 
@@ -1336,6 +1348,19 @@ async def test_reconcile_account_operator_reconcile_now_trigger_is_recorded(
 
 
 # ── ReconciliationSweep ──────────────────────────────────────────────────────
+
+
+def test_sqlite_sweep_direct_construction_guards_raw_broker_ports(
+    repo: ClerkSqliteRepository,
+) -> None:
+    read = _FakeRead()
+    trade = _FakeTrade()
+    sweep = ReconciliationSweep(repo=repo, read=read, trade=trade)
+
+    assert isinstance(sweep._read, GuardedBrokerReadPort)
+    assert isinstance(sweep._trade, GuardedBrokerTradePort)
+    assert sweep._read.intake is sweep._intake
+    assert sweep._trade.intake is sweep._intake
 
 
 async def test_sweep_runs_bounded_passes_via_injected_sleep(repo: ClerkSqliteRepository) -> None:

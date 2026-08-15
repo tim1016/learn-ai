@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
 
@@ -44,7 +44,6 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.errors import BrokerRequestInvalid, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
-from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at
 
 ACCOUNT_ID = "PA-TEST"
@@ -167,6 +166,11 @@ class _FakeTrade:
         )
 
 
+class _NoReconciler:
+    async def reconcile_account(self, *, trigger: str) -> Any:
+        raise AssertionError(f"unexpected reconciliation trigger: {trigger}")
+
+
 async def _make_entry(
     repo: ClerkSqliteRepository,
     *,
@@ -215,7 +219,7 @@ async def _make_entry(
     return submission.order_ref
 
 
-async def test_coverage_resolution_resumes_accepted_exit_without_second_intent(
+async def test_direct_coverage_supersession_resumes_accepted_exit_without_second_intent(
     repo: ClerkSqliteRepository,
 ) -> None:
     entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
@@ -236,9 +240,8 @@ async def test_coverage_resolution_resumes_accepted_exit_without_second_intent(
     )
     sink = SqliteTradeUpdateEvidenceSink(
         repo=repo,
-        read=cast(BrokerReadPort, _FakeTrade()),
-        trade=cast(BrokerTradePort, _FakeTrade()),
         intake=ReentrantAsyncLock(),
+        reconciler=_NoReconciler(),
     )
     await sink.record_lifecycle_event(
         client_order_id=entry_ref,
@@ -255,29 +258,12 @@ async def test_coverage_resolution_resumes_accepted_exit_without_second_intent(
         recovery_window_limit=None,
     )
 
-    assert not decide_capability(
+    assert decide_capability(
         repo,
         capability=Capability.REDUCE,
         strategy_instance_id=SID,
     ).allowed
-    blocked_trade = _FakeTrade(lookup_results=[recovered_order, recovered_order])
-    with pytest.raises(AdmissionBlockedError):
-        await resolve_exit(
-            repo,
-            effect_operation_id=accepted.effect_operation_id,
-            trade=blocked_trade,
-        )
-    assert blocked_trade.submit_calls == []
-
-    uncertainty = repo.active_uncertainties_for_admission(strategy_instance_id=SID)
-    assert len(uncertainty) == 1
-    meta = repo.control_meta_snapshot()
-    repo.resolve_execution_coverage_conflict(
-        uncertainty_id=uncertainty[0]["uncertainty_id"],
-        expected_authority_generation=meta.authority_generation,
-        expected_db_identity_token=meta.db_identity_token,
-        expected_control_revision=meta.control_revision,
-    )
+    assert repo.active_uncertainties_for_admission(strategy_instance_id=SID) == []
 
     resumed_trade = _FakeTrade(
         lookup_results=[recovered_order, recovered_order],

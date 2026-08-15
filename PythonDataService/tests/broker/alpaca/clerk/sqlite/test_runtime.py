@@ -12,8 +12,17 @@ import pytest
 from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime
 from app.broker.alpaca.clerk.models import ChannelHealth, EffectOperationState, EffectPurpose
 from app.broker.alpaca.clerk.sqlite import runtime as runtime_module
+from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
+    BrokerCallUnderIntakeError,
+    GuardedBrokerReadPort,
+    GuardedBrokerTradePort,
+)
+from app.broker.alpaca.clerk.sqlite.reconcile import ReconciliationLockOrderError
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.alpaca.clerk.sqlite.runtime import (
+    SqliteAlpacaClerkFacade,
+    StrategyAdmissionStaleError,
+)
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
@@ -28,6 +37,9 @@ class _Broker:
     def __init__(self) -> None:
         self.submit_started = asyncio.Event()
         self.release_submit = asyncio.Event()
+        self.cancel_started = asyncio.Event()
+        self.release_cancel = asyncio.Event()
+        self.release_cancel.set()
         self.submissions: list[str] = []
         self.cancellations: list[str] = []
 
@@ -50,6 +62,8 @@ class _Broker:
 
     async def cancel(self, order_id: str) -> None:
         self.cancellations.append(order_id)
+        self.cancel_started.set()
+        await self.release_cancel.wait()
 
     async def get_order_by_client_order_id(self, client_order_id: str) -> BrokerOrder | None:
         order = _order(
@@ -112,6 +126,51 @@ def test_durable_decision_encoding_is_injective_across_reserved_prefix() -> None
     assert runtime_module._durable_decision_id("plain-id") == "plain-id"
 
 
+async def test_direct_facade_construction_guards_raw_broker_ports(tmp_path: Path) -> None:
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    broker = _Broker()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+
+    assert isinstance(facade._read, GuardedBrokerReadPort)
+    assert isinstance(facade._trade, GuardedBrokerTradePort)
+    async with facade.intake:
+        with pytest.raises(BrokerCallUnderIntakeError, match="list_orders"):
+            await facade._read.list_orders()
+
+    repo.close()
+
+
+async def test_reconciliation_rejects_intake_first_lock_order(tmp_path: Path) -> None:
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=_Broker(), trade=_Broker())
+
+    async with facade.intake:
+        with pytest.raises(ReconciliationLockOrderError, match="reconciliation lock before intake"):
+            await facade.reconcile_account(trigger="AUTOMATIC")
+
+    repo.close()
+
+
+async def test_registration_refuses_an_admission_snapshot_after_a_competing_transition(
+    tmp_path: Path,
+) -> None:
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=_Broker(), trade=_Broker())
+    binding = _binding()
+    snapshot = await facade.custody_snapshot(binding.strategy_instance_id)
+    repo.register_strategy_instance(
+        strategy_instance_id="competing-admission-transition",
+        symbol="QQQ",
+        config_hash="competing",
+    )
+
+    with pytest.raises(StrategyAdmissionStaleError, match="admission changed"):
+        await facade.register_strategy_run(binding, admission_snapshot=snapshot)
+
+    assert repo.active_run(binding.strategy_instance_id) is None
+    repo.close()
+
+
 async def test_registration_precedes_live_enter_and_caller_cancellation_keeps_custody(
     tmp_path: Path,
 ) -> None:
@@ -168,6 +227,49 @@ async def test_registration_precedes_live_enter_and_caller_cancellation_keeps_cu
     assert effect is not None
     assert effect.state == "in_progress"
     assert repo.active_run("spy-bot") is not None
+    repo.close()
+
+
+async def test_parked_enter_submit_does_not_block_trade_update_fold(tmp_path: Path) -> None:
+    """The operation claim, not intake, owns the broker conversation (#1548)."""
+    repo = ClerkSqliteRepository.initialize(
+        account_id="PA-TEST",
+        artifacts_root=tmp_path,
+    )
+    broker = _Broker()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+    binding = _binding()
+    await facade.register_strategy_run(binding)
+    sink = SqliteTradeUpdateEvidenceSink(repo=repo, intake=facade.intake, reconciler=facade)
+
+    enter = asyncio.create_task(
+        facade.execute_for_instance(
+            strategy_instance_id=binding.strategy_instance_id,
+            run_id=binding.run_id,
+            decision_id="decision-parked-submit",
+            purpose=EffectPurpose.ENTER,
+            action_plan=binding.action_plan,
+            quantity=binding.quantity,
+        )
+    )
+    await broker.submit_started.wait()
+
+    async def fold_frame_then_release_submit() -> None:
+        await sink.record_lifecycle_event(
+            client_order_id=None,
+            event=BrokerOrderEvent(event_type="new", occurred_at_ms=10, price=None, quantity=None),
+            event_key="unrelated-order|new|10",
+            order=None,
+            recovery_source=None,
+            recovery_window_limit=None,
+        )
+        broker.release_submit.set()
+
+    fold = asyncio.create_task(fold_frame_then_release_submit())
+    await fold
+    await enter
+
+    assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER") is not None
     repo.close()
 
 
@@ -256,7 +358,48 @@ async def test_cancel_verified_working_entry_records_intent_before_broker_contac
     repo.close()
 
 
-async def test_start_admission_fence_blocks_new_effect_intake(tmp_path: Path) -> None:
+async def test_parked_cancellation_does_not_block_trade_update_fold(tmp_path: Path) -> None:
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    broker = _Broker()
+    broker.release_submit.set()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+    binding = _binding()
+    await facade.register_strategy_run(binding)
+    receipt = await facade.execute_for_instance(
+        strategy_instance_id=binding.strategy_instance_id,
+        run_id=binding.run_id,
+        decision_id="decision-parked-cancel",
+        purpose=EffectPurpose.ENTER,
+        action_plan=binding.action_plan,
+        quantity=binding.quantity,
+    )
+    sink = SqliteTradeUpdateEvidenceSink(repo=repo, intake=facade.intake, reconciler=facade)
+    broker.cancel_started.clear()
+    broker.release_cancel.clear()
+    cancel = asyncio.create_task(
+        facade.cancel_verified_working_orders(
+            strategy_instance_id=binding.strategy_instance_id,
+            order_refs=(receipt.child_order_refs[0],),
+        )
+    )
+    await broker.cancel_started.wait()
+
+    await sink.record_lifecycle_event(
+        client_order_id=None,
+        event=BrokerOrderEvent(event_type="new", occurred_at_ms=11, price=None, quantity=None),
+        event_key="unrelated-order|new|11",
+        order=None,
+        recovery_source=None,
+        recovery_window_limit=None,
+    )
+    broker.release_cancel.set()
+    await cancel
+
+    assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER") is not None
+    repo.close()
+
+
+async def test_start_admission_snapshot_does_not_hold_intake_across_the_yield(tmp_path: Path) -> None:
     repo = ClerkSqliteRepository.initialize(
         account_id="PA-TEST",
         artifacts_root=tmp_path,
@@ -267,6 +410,8 @@ async def test_start_admission_fence_blocks_new_effect_intake(tmp_path: Path) ->
     await facade.register_strategy_run(binding)
 
     async with facade.start_admission_snapshot(binding.strategy_instance_id):
+        assert not facade.intake.held_by_current_task()
+        assert facade.intake.current_scope_depth() == 0
         effect = asyncio.create_task(
             facade.execute_for_instance(
                 strategy_instance_id=binding.strategy_instance_id,
@@ -277,11 +422,8 @@ async def test_start_admission_fence_blocks_new_effect_intake(tmp_path: Path) ->
                 quantity=binding.quantity,
             )
         )
-        await asyncio.sleep(0)
-        assert not broker.submit_started.is_set()
-
-    await broker.submit_started.wait()
-    broker.release_submit.set()
+        await broker.submit_started.wait()
+        broker.release_submit.set()
     await effect
     repo.close()
 
@@ -598,9 +740,8 @@ async def test_sqlite_trade_update_redelivery_and_regression_are_idempotent(
     assert observed is not None
     sink = SqliteTradeUpdateEvidenceSink(
         repo=repo,
-        read=broker,
-        trade=broker,
         intake=facade.intake,
+        reconciler=facade,
     )
     event = BrokerOrderEvent(
         event_type="new",

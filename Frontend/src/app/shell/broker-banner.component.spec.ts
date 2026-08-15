@@ -83,8 +83,8 @@ describe('BrokerBannerComponent', () => {
 
     const button = toggle(fixture);
     const banner = fixture.nativeElement.querySelector('.broker-banner') as HTMLElement;
-    expect(button?.getAttribute('aria-label')).toBe('Connect to IB Gateway');
-    expect(banner.textContent).toContain('Broker');
+    expect(button?.getAttribute('aria-label')).toBe('Connect IBKR market data');
+    expect(banner.textContent).toContain('Market data');
     expect(banner.firstElementChild).toBe(button);
     expect(button?.querySelector('.pi-plug')).not.toBeNull();
     expect(button?.querySelector('.broker-toggle-track')).toBeNull();
@@ -116,7 +116,7 @@ describe('BrokerBannerComponent', () => {
 
     const button = toggle(fixture);
     expect(button?.getAttribute('aria-pressed')).toBe('true');
-    expect(button?.getAttribute('aria-label')).toBe('Disconnect from IB Gateway');
+    expect(button?.getAttribute('aria-label')).toBe('Disconnect IBKR market data');
     expect(button?.querySelector('.pi-power-off')).not.toBeNull();
     button?.click();
 

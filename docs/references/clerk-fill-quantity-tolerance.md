@@ -69,3 +69,48 @@ fill row already carries its own qty/price).
 - `test_fractional_residual_reobservation_does_not_create_a_spurious_fill`
   pins that a re-observation differing only by `4e-13` float residue
   produces no second fill row and does not drift the attributed position.
+
+## Automatic execution-coverage set proof
+
+`PythonDataService/app/broker/alpaca/clerk/sqlite/execution_coverage.py::prove_execution_coverage_set`
+is authored project logic, not a port or reuse of an external proof. It is the
+canonical predicate consumed by `EXECUTION_COVERAGE_SUPERSEDED` for the direct
+one-exact/one-cumulative and accumulated many-to-many replacements. The shipped
+S0 one-exact/one-cumulative operator flow remains unchanged and is an
+intentionally temporary duplicate.
+
+For the complete cumulative-recovery set `R` and exact set
+`E = E_prior ∪ {e_in}`, rows are sorted by immutable `source_id` before each
+`math.fsum` calculation:
+
+- `Q_E = Σ qty(E)` and `Q_R = Σ qty(R)` in **shares**;
+- `C_E = Σ qty × price(E)` and `C_R = Σ qty × price(R)` in **currency**;
+- `P_E = C_E / Q_E` and `P_R = C_R / Q_R` in **currency/share**.
+
+`QTY_ATOL = 1e-9` shares and `PRICE_ATOL = 1e-9` currency/share use zero
+relative tolerance. Quantity and VWAP comparisons are strict:
+`abs(Q_E - Q_R) < QTY_ATOL` and `abs(P_E - P_R) < PRICE_ATOL`.
+Gross-cost comparison is inclusive against the propagated envelope:
+`COST_ATOL = max(|Q_E|, |Q_R|) × PRICE_ATOL + max(|P_E|, |P_R|) × QTY_ATOL
++ QTY_ATOL × PRICE_ATOL`, requiring `abs(C_E - C_R) <= COST_ATOL`.
+The replacement's `Δposition = Q_E - Q_R` is therefore zero under the pinned
+absolute share-tolerance policy; the fold records the aggregates, tolerance,
+every cumulative source, and every prior quarantined exact's original custody
+clocks before rerunning the proof in its SQLite commit. It never mutates the
+position projection.
+
+Fees are excluded from equivalence arithmetic because cumulative recovery has
+no fee observation; exact fees remain unchanged on the returned exact rows.
+Malformed, unreadable, duplicate, already-effective, identity-incompatible,
+overshot, or ambiguous evidence returns a typed refusal rather than a generic
+false result. A resolved accumulated episode deletes all selected cumulative
+rows, inserts the complete exact set in source-event/FIFO-sequence order, and
+retains the incoming exact as the transition trigger.
+
+The pure proof's independent-equation matrix is
+`PythonDataService/tests/broker/alpaca/clerk/sqlite/test_execution_coverage_set_proof.py`.
+Its direct-fold integration is covered by
+`PythonDataService/tests/broker/alpaca/clerk/sqlite/test_folds_execution.py`
+with exact replacement, active-episode refusal, deterministic stale-revision
+refusal, partial accumulation, many-to-many replacement, unreadable/ambiguous
+episode refusal, mirror rebuild, and exact-redelivery cases.

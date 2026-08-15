@@ -503,7 +503,7 @@ def fills_for_order(conn: sqlite3.Connection, order_ref: str) -> list[dict]:
         "SELECT fill_id, order_ref, qty, price, side, is_correction, execution_id, evidence_source, "
         "event_kind, superseded_execution_ref, fee, fee_fidelity, source_event_at_ms, "
         "clerk_observed_at_ms, recorded_at_ms FROM fills WHERE order_ref = ? "
-        "ORDER BY recorded_at_ms ASC",
+        "ORDER BY source_event_at_ms ASC, recorded_transition_sequence ASC, fill_id ASC",
         (order_ref,),
     ).fetchall()
     return [dict(row) for row in rows]

@@ -26,6 +26,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
     CommandExistingConflict,
     CommandExistingSame,
     CommandResource,
+    ControlMetaSnapshot,
     ManualOrderLegResource,
     ManualOrderTicketResource,
     TransitionInput,
@@ -51,6 +52,26 @@ class ManualTicketConflictError(ValueError):
 
 class ManualTicketContinuationError(ValueError):
     """A later ticket leg was not explicitly eligible for activation."""
+
+
+@dataclass(frozen=True)
+class ManualPreviewRevision:
+    """The one atomic Clerk revision a manual preview authorizes."""
+
+    authority_generation: int
+    db_identity_token: str
+    control_revision: int
+
+    @classmethod
+    def from_meta(cls, meta: ControlMetaSnapshot) -> ManualPreviewRevision:
+        return cls(
+            authority_generation=meta.authority_generation,
+            db_identity_token=meta.db_identity_token,
+            control_revision=meta.control_revision,
+        )
+
+    def matches(self, meta: ControlMetaSnapshot) -> bool:
+        return self == self.from_meta(meta)
 
 
 @dataclass(frozen=True)
@@ -320,6 +341,7 @@ def accept_manual_order(
     leg: BrokerOrderLeg,
     ticket_legs: tuple[ManualTicketLeg, ...] | None = None,
     continuation: bool = False,
+    expected_preview_revision: ManualPreviewRevision | None = None,
 ) -> ManualOrderSubmission:
     """Finalize one ticket leg locally before the caller may contact Alpaca."""
     ticket_legs = ticket_legs or (ManualTicketLeg(leg_id=leg_id, instruction=leg),)
@@ -357,6 +379,12 @@ def accept_manual_order(
         )
 
     def build_transition() -> TransitionInput:
+        if expected_preview_revision is not None:
+            meta = repo.control_meta_snapshot()
+            if not expected_preview_revision.matches(meta):
+                raise ManualTicketContinuationError(
+                    "The manual-order preview is stale. Refresh the ticket before confirming."
+                )
         _ensure_subject_and_ticket(
             repo,
             account_id=account_id,
@@ -456,6 +484,7 @@ async def submit_manual_order(
     trade: BrokerTradePort,
     ticket_legs: tuple[ManualTicketLeg, ...] | None = None,
     continuation: bool = False,
+    expected_preview_revision: ManualPreviewRevision | None = None,
 ) -> ManualOrderSubmission:
     """Accept once, claim once, and submit the exact durable order identity."""
     accepted = accept_manual_order(
@@ -467,6 +496,7 @@ async def submit_manual_order(
         leg=leg,
         ticket_legs=ticket_legs,
         continuation=continuation,
+        expected_preview_revision=expected_preview_revision,
     )
     if not accepted.created:
         return accepted
@@ -550,6 +580,7 @@ async def submit_manual_order(
 __all__ = [
     "ACTION_SUBMIT_MANUAL_ORDER",
     "ManualOrderSubmission",
+    "ManualPreviewRevision",
     "ManualTicketConflictError",
     "ManualTicketContinuationError",
     "ManualTicketLeg",

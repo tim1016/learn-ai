@@ -50,6 +50,8 @@ from app.broker.alpaca.clerk.sqlite.manual_orders import (
     ManualTicketContinuationError,
     ManualTicketLeg,
 )
+from app.broker.alpaca.clerk.sqlite.projection_errors import ProjectionReadError
+from app.broker.alpaca.clerk.sqlite.projection_models import ClerkProjection
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.errors import (
     BrokerError,
@@ -131,6 +133,35 @@ def _raise_http(error: BrokerError) -> NoReturn:
         detail=detail,
         headers=headers,
     )
+
+
+def _sqlite_projection_unavailable() -> HTTPException:
+    """Build the stable fail-closed response shared by retained broker reads."""
+    return HTTPException(
+        status_code=503,
+        detail={
+            "reason": "sqlite_projection_unavailable",
+            "message": "The Account Clerk order record could not be read safely.",
+            "next_step": ("Keep broker actions blocked and retry after the Clerk projection is repaired."),
+        },
+    )
+
+
+async def _read_sqlite_account_projection(
+    sqlite: SqliteAlpacaClerkFacade,
+) -> ClerkProjection:
+    """Map a fail-closed SQLite read to one stable Broker Desk response."""
+    try:
+        projection = await asyncio.to_thread(
+            sqlite_projection,
+            account_id=sqlite.account_id,
+            strategy_instance_id=None,
+        )
+    except ProjectionReadError as exc:
+        raise _sqlite_projection_unavailable() from exc
+    if projection is None:
+        raise _sqlite_projection_unavailable()
+    return projection
 
 
 def _resolve_port(broker: str) -> BrokerReadPort:
@@ -689,12 +720,7 @@ async def get_clerk_status(broker: str) -> ClerkStatus:
     """
     sqlite = active_sqlite_facade(broker)
     if sqlite is not None:
-        projection = await asyncio.to_thread(
-            sqlite_projection,
-            account_id=sqlite.account_id,
-            strategy_instance_id=None,
-        )
-        assert projection is not None
+        projection = await _read_sqlite_account_projection(sqlite)
         return sqlite_clerk_status(
             projection,
             channel_healths=sqlite.channel_health_snapshot(),
@@ -716,12 +742,7 @@ async def get_custody_diagnosis(broker: str) -> CustodyDiagnosis:
     """
     sqlite = active_sqlite_facade(broker)
     if sqlite is not None:
-        projection = await asyncio.to_thread(
-            sqlite_projection,
-            account_id=sqlite.account_id,
-            strategy_instance_id=None,
-        )
-        assert projection is not None
+        projection = await _read_sqlite_account_projection(sqlite)
         return sqlite_custody_diagnosis(projection)
     clerk = _require_trade_clerk(broker)
     try:

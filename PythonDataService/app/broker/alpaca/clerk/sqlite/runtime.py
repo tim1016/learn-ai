@@ -14,6 +14,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
+from app.broker.alpaca.clerk.active_protocol import ClerkAdmissionSnapshotStaleError
 from app.broker.alpaca.clerk.models import (
     AccountFreezeState,
     ChannelHealth,
@@ -27,13 +28,14 @@ from app.broker.alpaca.clerk.models import (
     InstanceCustodyProof,
     ReconciliationVerdict,
 )
+from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_ports
 from app.broker.alpaca.clerk.sqlite.commands import (
     CommandSubmission,
     submit_start_run,
     submit_stop_run,
 )
-from app.broker.alpaca.clerk.sqlite.enter import submit_enter
-from app.broker.alpaca.clerk.sqlite.exit import submit_exit
+from app.broker.alpaca.clerk.sqlite.enter import accept_enter, submit_accepted_enter
+from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_accepted_exit
 from app.broker.alpaca.clerk.sqlite.exit_resolution import cancel_and_prove_owned_entry
 from app.broker.alpaca.clerk.sqlite.facts import AccountHoldRaisedFacts, AccountHoldResolvedFacts
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
@@ -44,6 +46,10 @@ from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import (
     confirm_historical_execution_recovery,
     prepare_historical_execution_recovery,
     replay_historical_execution_recovery,
+)
+from app.broker.alpaca.clerk.sqlite.intake_fence import (
+    IntakeFenceYieldError,
+    ReentrantAsyncLock,
 )
 from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import (
     ManualOrderCancellationSubmission,
@@ -109,38 +115,12 @@ class StrategyRegistrationConflictError(RuntimeError):
     """One strategy identity was reused with different immutable semantics."""
 
 
+class StrategyAdmissionStaleError(ClerkAdmissionSnapshotStaleError):
+    """A Start or Resume snapshot no longer matches SQLite Clerk authority."""
+
+
 class MissingEntryCustodyError(RuntimeError):
     """An EXIT decision has no SQLite-owned entry identity to target."""
-
-
-class ReentrantAsyncLock:
-    """Task-reentrant intake fence shared by facade and evidence sink."""
-
-    def __init__(self) -> None:
-        self._lock = asyncio.Lock()
-        self._owner: asyncio.Task[object] | None = None
-        self._depth = 0
-
-    async def __aenter__(self) -> ReentrantAsyncLock:
-        current = asyncio.current_task()
-        if current is None:
-            raise RuntimeError("SQLite Clerk intake requires an asyncio task")
-        if self._owner is current:
-            self._depth += 1
-            return self
-        await self._lock.acquire()
-        self._owner = current
-        self._depth = 1
-        return self
-
-    async def __aexit__(self, *_exc: object) -> None:
-        current = asyncio.current_task()
-        if self._owner is not current:
-            raise RuntimeError("SQLite Clerk intake released by a non-owner task")
-        self._depth -= 1
-        if self._depth == 0:
-            self._owner = None
-            self._lock.release()
 
 
 class SqliteAlpacaClerkFacade:
@@ -148,6 +128,7 @@ class SqliteAlpacaClerkFacade:
 
     authority_kind = "sqlite"
     broker_id = "alpaca"
+    supports_revision_bound_admission = True
 
     def __init__(
         self,
@@ -156,12 +137,12 @@ class SqliteAlpacaClerkFacade:
         read: BrokerReadPort,
         trade: BrokerTradePort,
         stream_health: StreamHealthGate | None = None,
+        intake: ReentrantAsyncLock | None = None,
     ) -> None:
         self._repo = repo
-        self._read = read
-        self._trade = trade
+        self._intake = intake or ReentrantAsyncLock()
+        self._read, self._trade = guard_broker_ports(read=read, trade=trade, intake=self._intake)
         self._stream_health = stream_health
-        self._intake = ReentrantAsyncLock()
         self._effect_tasks: dict[tuple[str, str], asyncio.Task[EffectOperationReceipt]] = {}
 
     @property
@@ -188,15 +169,14 @@ class SqliteAlpacaClerkFacade:
 
     async def manual_order_capability(self) -> ManualOrderCapability:
         """Return the server-owned policy gate for the manual market tracer."""
-        async with self._intake:
-            return await manual_order_capability(
-                read=self._read,
-                stream_health=self._stream_health,
-                manual_trading_enabled=settings.ALPACA_SQLITE_MANUAL_TRADING_ENABLED,
-                control_secret=settings.DATA_PLANE_CONTROL_SECRET,
-                allow_unauthenticated_control=settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL,
-                account_id=self.account_id,
-            )
+        return await manual_order_capability(
+            read=self._read,
+            stream_health=self._stream_health,
+            manual_trading_enabled=settings.ALPACA_SQLITE_MANUAL_TRADING_ENABLED,
+            control_secret=settings.DATA_PLANE_CONTROL_SECRET,
+            allow_unauthenticated_control=settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL,
+            account_id=self.account_id,
+        )
 
     async def prepare_historical_execution_recovery(
         self,
@@ -204,16 +184,15 @@ class SqliteAlpacaClerkFacade:
         context: RecoveryPolicyContext,
         concurrency_token: str,
     ) -> HistoricalExecutionRecoveryPlan:
-        """Read paper broker evidence while the Clerk intake boundary is stable."""
-        async with self._intake:
-            return await prepare_historical_execution_recovery(
-                repo=self._repo,
-                read=self._read,
-                context=context,
-                concurrency_token=concurrency_token,
-                control_secret=settings.DATA_PLANE_CONTROL_SECRET,
-                allow_unauthenticated_control=settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL,
-            )
+        """Read paper broker evidence outside the Clerk intake boundary."""
+        return await prepare_historical_execution_recovery(
+            repo=self._repo,
+            read=self._read,
+            context=context,
+            concurrency_token=concurrency_token,
+            control_secret=settings.DATA_PLANE_CONTROL_SECRET,
+            allow_unauthenticated_control=settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL,
+        )
 
     async def confirm_historical_execution_recovery(
         self,
@@ -222,38 +201,37 @@ class SqliteAlpacaClerkFacade:
         confirmation_token: str,
     ) -> ExecutionCoverageResolutionReceipt:
         """Append only the signed plan's exact evidence and closed resolution."""
-        async with self._intake:
-            replay = await asyncio.to_thread(
-                replay_historical_execution_recovery,
-                repo=self._repo,
-                plan=plan,
-                confirmation_token=confirmation_token,
-                control_secret=settings.DATA_PLANE_CONTROL_SECRET,
-                allow_unauthenticated_control=settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL,
-            )
-            if replay is not None:
-                return replay
-            try:
-                account = await self._read.get_account()
-            except BrokerError as exc:
-                raise HistoricalExecutionRecoveryRefused(
-                    "HISTORICAL_EVIDENCE_UNAVAILABLE",
-                    "Alpaca account evidence is temporarily unavailable. Keep the exposure blocked and retry later.",
-                ) from exc
-            except Exception as exc:
-                raise HistoricalExecutionRecoveryRefused(
-                    "HISTORICAL_EVIDENCE_UNAVAILABLE",
-                    "Alpaca account evidence is temporarily unavailable. Keep the exposure blocked and retry later.",
-                ) from exc
-            return await asyncio.to_thread(
-                confirm_historical_execution_recovery,
-                repo=self._repo,
-                plan=plan,
-                confirmation_token=confirmation_token,
-                control_secret=settings.DATA_PLANE_CONTROL_SECRET,
-                allow_unauthenticated_control=settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL,
-                observed_account=account,
-            )
+        replay = await asyncio.to_thread(
+            replay_historical_execution_recovery,
+            repo=self._repo,
+            plan=plan,
+            confirmation_token=confirmation_token,
+            control_secret=settings.DATA_PLANE_CONTROL_SECRET,
+            allow_unauthenticated_control=settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL,
+        )
+        if replay is not None:
+            return replay
+        try:
+            account = await self._read.get_account()
+        except BrokerError as exc:
+            raise HistoricalExecutionRecoveryRefused(
+                "HISTORICAL_EVIDENCE_UNAVAILABLE",
+                "Alpaca account evidence is temporarily unavailable. Keep the exposure blocked and retry later.",
+            ) from exc
+        except Exception as exc:
+            raise HistoricalExecutionRecoveryRefused(
+                "HISTORICAL_EVIDENCE_UNAVAILABLE",
+                "Alpaca account evidence is temporarily unavailable. Keep the exposure blocked and retry later.",
+            ) from exc
+        return await asyncio.to_thread(
+            confirm_historical_execution_recovery,
+            repo=self._repo,
+            plan=plan,
+            confirmation_token=confirmation_token,
+            control_secret=settings.DATA_PLANE_CONTROL_SECRET,
+            allow_unauthenticated_control=settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL,
+            observed_account=account,
+        )
 
     async def preview_manual_order(
         self,
@@ -263,19 +241,18 @@ class SqliteAlpacaClerkFacade:
         legs: tuple[ManualTicketLeg, ...],
     ) -> ManualOrderPreview:
         """Bind one browser-stable ticket leg to current SQLite authority facts."""
-        async with self._intake:
-            return await preview_manual_order(
-                repo=self._repo,
-                read=self._read,
-                stream_health=self._stream_health,
-                manual_trading_enabled=settings.ALPACA_SQLITE_MANUAL_TRADING_ENABLED,
-                control_secret=settings.DATA_PLANE_CONTROL_SECRET,
-                allow_unauthenticated_control=settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL,
-                account_id=self.account_id,
-                operator_id=operator_id,
-                ticket_id=ticket_id,
-                legs=legs,
-            )
+        return await preview_manual_order(
+            repo=self._repo,
+            read=self._read,
+            stream_health=self._stream_health,
+            manual_trading_enabled=settings.ALPACA_SQLITE_MANUAL_TRADING_ENABLED,
+            control_secret=settings.DATA_PLANE_CONTROL_SECRET,
+            allow_unauthenticated_control=settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL,
+            account_id=self.account_id,
+            operator_id=operator_id,
+            ticket_id=ticket_id,
+            legs=legs,
+        )
 
     async def submit_manual_order(
         self,
@@ -286,23 +263,22 @@ class SqliteAlpacaClerkFacade:
         preview_token: str,
         continuation: bool = False,
     ) -> ManualOrderSubmission:
-        """Accept and submit one previewed manual leg under the intake fence."""
-        async with self._intake:
-            return await submit_previewed_manual_order(
-                repo=self._repo,
-                read=self._read,
-                trade=self._trade,
-                stream_health=self._stream_health,
-                manual_trading_enabled=settings.ALPACA_SQLITE_MANUAL_TRADING_ENABLED,
-                control_secret=settings.DATA_PLANE_CONTROL_SECRET,
-                allow_unauthenticated_control=settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL,
-                account_id=self.account_id,
-                operator_id=operator_id,
-                ticket_id=ticket_id,
-                legs=legs,
-                preview_token=preview_token,
-                continuation=continuation,
-            )
+        """Accept locally, then drive the previewed manual leg outside intake."""
+        return await submit_previewed_manual_order(
+            repo=self._repo,
+            read=self._read,
+            trade=self._trade,
+            stream_health=self._stream_health,
+            manual_trading_enabled=settings.ALPACA_SQLITE_MANUAL_TRADING_ENABLED,
+            control_secret=settings.DATA_PLANE_CONTROL_SECRET,
+            allow_unauthenticated_control=settings.DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL,
+            account_id=self.account_id,
+            operator_id=operator_id,
+            ticket_id=ticket_id,
+            legs=legs,
+            preview_token=preview_token,
+            continuation=continuation,
+        )
 
     def manual_order_ticket(self, ticket_id: str) -> ManualOrderTicketResource | None:
         """Read one durable ticket without presenting repository mutation access."""
@@ -316,15 +292,14 @@ class SqliteAlpacaClerkFacade:
         cancel_request_id: str,
     ) -> ManualOrderCancellationSubmission:
         """Accept and reconcile one durable manual-order cancellation."""
-        async with self._intake:
-            return await submit_manual_order_cancellation(
-                self._repo,
-                account_id=self.account_id,
-                operator_id=operator_id,
-                order_ref=order_ref,
-                cancel_request_id=cancel_request_id,
-                trade=self._trade,
-            )
+        return await submit_manual_order_cancellation(
+            self._repo,
+            account_id=self.account_id,
+            operator_id=operator_id,
+            order_ref=order_ref,
+            cancel_request_id=cancel_request_id,
+            trade=self._trade,
+        )
 
     async def cancel_manual_ticket(
         self,
@@ -334,25 +309,31 @@ class SqliteAlpacaClerkFacade:
         cancel_request_id: str,
     ) -> ManualOrderTicketResource:
         """Cancel the ticket's owned working orders with one replayable request."""
-        async with self._intake:
-            await submit_manual_ticket_cancellation(
-                self._repo,
-                account_id=self.account_id,
-                operator_id=operator_id,
-                ticket_id=ticket_id,
-                cancel_request_id=cancel_request_id,
-                trade=self._trade,
-            )
-            ticket = get_manual_ticket(self._repo, ticket_id)
-            if ticket is None:
-                raise RuntimeError("manual ticket disappeared after cancellation")
-            return ticket
+        await submit_manual_ticket_cancellation(
+            self._repo,
+            account_id=self.account_id,
+            operator_id=operator_id,
+            ticket_id=ticket_id,
+            cancel_request_id=cancel_request_id,
+            trade=self._trade,
+        )
+        ticket = get_manual_ticket(self._repo, ticket_id)
+        if ticket is None:
+            raise RuntimeError("manual ticket disappeared after cancellation")
+        return ticket
 
-    async def register_strategy_run(self, binding: BrokerBotBinding) -> None:
+    async def register_strategy_run(
+        self,
+        binding: BrokerBotBinding,
+        *,
+        admission_snapshot: ClerkCustodySnapshot | None = None,
+    ) -> None:
         """Durably register immutable strategy + run before order capability."""
         from app.services.bot_carryover import configuration_hash, immutable_configuration_payload
 
         async with self._intake:
+            if admission_snapshot is not None:
+                self._require_current_admission_snapshot(binding, admission_snapshot)
             config_hash = configuration_hash(binding)
             config_json = canonicalize(immutable_configuration_payload(binding))
             display_name = _strategy_display_name(binding.strategy_key)
@@ -401,6 +382,26 @@ class SqliteAlpacaClerkFacade:
             )
             if submission.command.state != "succeeded":
                 raise StrategyRegistrationConflictError(f"SQLite authority rejected lifecycle run {binding.run_id!r}")
+
+    def _require_current_admission_snapshot(
+        self,
+        binding: BrokerBotBinding,
+        snapshot: ClerkCustodySnapshot,
+    ) -> None:
+        """Validate the explicit two-phase Start/Resume token at activation."""
+        meta = self._repo.control_meta_snapshot()
+        expected_generation = f"sqlite:{meta.authority_generation}:{meta.db_identity_token}"
+        if (
+            snapshot.account_id != self.account_id
+            or snapshot.strategy_instance_id != binding.strategy_instance_id
+            or snapshot.clerk_generation != expected_generation
+            or snapshot.journal_sequence != meta.control_revision
+            or not snapshot.reconciliation_fresh
+            or snapshot.reconciliation_state != "clean"
+        ):
+            raise StrategyAdmissionStaleError(
+                "SQLite Clerk admission changed after preparation; refresh Start or Resume before activation"
+            )
 
     async def stop_strategy_run(
         self,
@@ -522,48 +523,43 @@ class SqliteAlpacaClerkFacade:
                         state="rejected",
                         order_refs=(),
                     )
-                submitted = await submit_enter(
+                accepted_enter = accept_enter(
                     self._repo,
                     account_id=self.account_id,
                     strategy_instance_id=strategy_instance_id,
                     decision_id=durable_decision_id,
                     lifecycle_run_id=run_id,
                     leg=operation_leg,
-                    trade=self._trade,
                 )
-                order_refs = (submitted.order_ref,) if submitted.order_ref is not None else ()
-                return _effect_receipt(
+            else:
+                candidates = [
+                    order
+                    for order in self._repo.entry_orders_for_strategy(strategy_instance_id)
+                    if _entry_symbol(self._repo, order.order_ref).upper() == entry.instrument.underlying.upper()
+                ]
+                if not candidates:
+                    raise MissingEntryCustodyError(
+                        f"strategy instance {strategy_instance_id!r} has no SQLite-owned "
+                        f"entry for {entry.instrument.underlying!r}"
+                    )
+                accepted_exit = accept_exit(
+                    self._repo,
+                    account_id=self.account_id,
                     strategy_instance_id=strategy_instance_id,
-                    run_id=run_id,
-                    decision_id=decision_id,
-                    purpose=purpose,
-                    action_plan=action_plan,
-                    quantity=quantity,
-                    state=submitted.command.state,
-                    order_refs=order_refs,
+                    decision_id=durable_decision_id,
+                    lifecycle_run_id=run_id,
+                    entry_order_ref=candidates[-1].order_ref,
                 )
 
-            candidates = [
-                order
-                for order in self._repo.entry_orders_for_strategy(strategy_instance_id)
-                if _entry_symbol(self._repo, order.order_ref).upper() == entry.instrument.underlying.upper()
-            ]
-            if not candidates:
-                raise MissingEntryCustodyError(
-                    f"strategy instance {strategy_instance_id!r} has no SQLite-owned "
-                    f"entry for {entry.instrument.underlying!r}"
-                )
-            submitted = await submit_exit(
+        if purpose is EffectPurpose.ENTER:
+            submitted_enter = await submit_accepted_enter(
                 self._repo,
-                account_id=self.account_id,
-                strategy_instance_id=strategy_instance_id,
-                decision_id=durable_decision_id,
-                lifecycle_run_id=run_id,
-                entry_order_ref=candidates[-1].order_ref,
+                accepted=accepted_enter,
+                leg=operation_leg,
                 trade=self._trade,
             )
-            order_refs = tuple(
-                ref for ref in (submitted.entry_order_ref, submitted.reducing_order_ref) if ref is not None
+            order_refs = (
+                (submitted_enter.order_ref,) if submitted_enter.order_ref is not None else ()
             )
             return _effect_receipt(
                 strategy_instance_id=strategy_instance_id,
@@ -572,9 +568,30 @@ class SqliteAlpacaClerkFacade:
                 purpose=purpose,
                 action_plan=action_plan,
                 quantity=quantity,
-                state=submitted.command.state,
+                state=submitted_enter.command.state,
                 order_refs=order_refs,
             )
+
+        submitted_exit = await resolve_accepted_exit(
+            self._repo,
+            accepted=accepted_exit,
+            trade=self._trade,
+        )
+        order_refs = tuple(
+            ref
+            for ref in (submitted_exit.entry_order_ref, submitted_exit.reducing_order_ref)
+            if ref is not None
+        )
+        return _effect_receipt(
+            strategy_instance_id=strategy_instance_id,
+            run_id=run_id,
+            decision_id=decision_id,
+            purpose=purpose,
+            action_plan=action_plan,
+            quantity=quantity,
+            state=submitted_exit.command.state,
+            order_refs=order_refs,
+        )
 
     async def recover(self) -> None:
         """Retire pre-restart runs, then recover broker-facing operations."""
@@ -590,21 +607,21 @@ class SqliteAlpacaClerkFacade:
                         lifecycle_run_id=active.lifecycle_run_id,
                         operator_reason="service_restart_recovery",
                     )
-            result = await self._reconcile()
-            if result.verdict == "stale":
-                raise RuntimeError("SQLite Alpaca Clerk recovery could not obtain broker truth")
+        result = await self._reconcile()
+        if result.verdict == "stale":
+            raise RuntimeError("SQLite Alpaca Clerk recovery could not obtain broker truth")
 
     async def reconcile_once(self) -> ReconciliationVerdict:
         return _legacy_verdict((await self._reconcile()).verdict)
 
     async def _reconcile(self) -> AccountReconciliationResult:
-        async with self._intake:
-            return await reconcile_sqlite_account(
-                self._repo,
-                read=self._read,
-                trade=self._trade,
-                trigger="AUTOMATIC",
-            )
+        return await reconcile_sqlite_account(
+            self._repo,
+            read=self._read,
+            trade=self._trade,
+            trigger="AUTOMATIC",
+            intake=self._intake,
+        )
 
     async def reconcile_account(
         self,
@@ -612,13 +629,13 @@ class SqliteAlpacaClerkFacade:
         trigger: str,
     ) -> AccountReconciliationResult:
         """Run one full account reconciliation with caller-authored provenance."""
-        async with self._intake:
-            return await reconcile_sqlite_account(
-                self._repo,
-                read=self._read,
-                trade=self._trade,
-                trigger=trigger,
-            )
+        return await reconcile_sqlite_account(
+            self._repo,
+            read=self._read,
+            trade=self._trade,
+            trigger=trigger,
+            intake=self._intake,
+        )
 
     async def unresolved_effect_count(self) -> int:
         return len(self._repo.reconcilable_effect_operations())
@@ -628,8 +645,8 @@ class SqliteAlpacaClerkFacade:
         return self._proof(strategy_instance_id, result)
 
     async def custody_snapshot(self, strategy_instance_id: str) -> ClerkCustodySnapshot:
+        result = await self._reconcile()
         async with self._intake:
-            result = await self._reconcile()
             proof = self._proof(strategy_instance_id, result)
             meta = self._repo.control_meta_snapshot()
             exposure = {
@@ -673,9 +690,8 @@ class SqliteAlpacaClerkFacade:
 
     @asynccontextmanager
     async def start_admission_snapshot(self, strategy_instance_id: str) -> AsyncIterator[ClerkCustodySnapshot]:
-        async with self._intake:
-            snapshot = await self.custody_snapshot(strategy_instance_id)
-            yield snapshot
+        snapshot = await self.custody_snapshot(strategy_instance_id)
+        yield snapshot
 
     async def cancel_working_entries_for_instance(self, strategy_instance_id: str) -> tuple[OrderResource, ...]:
         order_refs = self._working_order_refs(strategy_instance_id)
@@ -708,16 +724,16 @@ class SqliteAlpacaClerkFacade:
                     raise ValueError(f"{order_ref!r} is not owned by strategy {strategy_instance_id!r}")
                 requested.append(order)
 
-            resolved: list[OrderResource] = []
-            for order in requested:
-                if _is_working_order(order):
-                    order = await cancel_and_prove_owned_entry(
-                        self._repo,
-                        entry_order_ref=order.order_ref,
-                        trade=self._trade,
-                    )
-                resolved.append(order)
-            return tuple(resolved)
+        resolved: list[OrderResource] = []
+        for order in requested:
+            if _is_working_order(order):
+                order = await cancel_and_prove_owned_entry(
+                    self._repo,
+                    entry_order_ref=order.order_ref,
+                    trade=self._trade,
+                )
+            resolved.append(order)
+        return tuple(resolved)
 
     def _proof(
         self,
@@ -987,6 +1003,7 @@ def _count_fact(count: int, *, trusted: bool) -> CustodyCountFact:
 
 
 __all__ = [
+    "IntakeFenceYieldError",
     "MissingEntryCustodyError",
     "ReentrantAsyncLock",
     "SqliteAlpacaClerkFacade",

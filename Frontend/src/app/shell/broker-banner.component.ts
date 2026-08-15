@@ -8,7 +8,7 @@ import type { ActiveBotSidebarNotice } from './active-bot-sidebar-notice.service
 const NOTICE_ACTION_TIMEOUT_MS = 15_000;
 
 /**
- * Global IBKR broker connection control.
+ * Global IBKR market-data connection control.
  *
  * Driven by ``BrokerHealthService.bannerState`` — see the service
  * docstring for why the truth source is ``health.is_paper`` and never
@@ -88,7 +88,7 @@ const NOTICE_ACTION_TIMEOUT_MS = 15_000;
           <span class="broker-banner-kicker">IBKR</span>
           <span class="broker-banner-title">
             <span class="broker-banner-dot" aria-hidden="true"></span>
-            <span>Broker</span>
+            <span>Market data</span>
             <span class="broker-banner-state">{{ state.title }}</span>
           </span>
           <span class="broker-banner-detail" [attr.title]="state.detailTitle">
@@ -164,10 +164,10 @@ export class BrokerBannerComponent {
         title: condition?.title ?? 'Paper connected',
         detail: h?.account_id ?? 'unknown account',
         detailTitle: condition?.summary ?? h?.account_id ?? 'unknown account',
-        aria: 'Connected to IBKR paper account',
+        aria: 'IBKR paper market data is connected',
         connected: true,
         toggleLabel: 'Disconnect' as const,
-        toggleAria: 'Disconnect from IB Gateway',
+        toggleAria: 'Disconnect IBKR market data',
       };
     }
     if (state === 'live') {
@@ -176,10 +176,10 @@ export class BrokerBannerComponent {
         title: condition?.title ?? 'Live connected',
         detail: h?.account_id ?? 'unknown account',
         detailTitle: condition?.summary ?? h?.account_id ?? 'unknown account',
-        aria: 'Connected to IBKR LIVE account — real money at risk',
+        aria: 'IBKR LIVE market data is connected — real money account',
         connected: true,
         toggleLabel: 'Disconnect' as const,
-        toggleAria: 'Disconnect from IB Gateway',
+        toggleAria: 'Disconnect IBKR market data',
       };
     }
     if (state === 'degraded') {
@@ -189,10 +189,10 @@ export class BrokerBannerComponent {
         title: condition?.title ?? 'Degraded',
         detail: condition?.summary ?? label,
         detailTitle: condition?.summary ?? label,
-        aria: condition?.summary ?? `IBKR broker degraded: ${label}`,
+        aria: condition?.summary ?? `IBKR market data degraded: ${label}`,
         connected: true,
         toggleLabel: 'Disconnect' as const,
-        toggleAria: 'Disconnect from IB Gateway',
+        toggleAria: 'Disconnect IBKR market data',
       };
     }
     return {
@@ -200,10 +200,10 @@ export class BrokerBannerComponent {
       title: condition?.title ?? 'Disconnected',
       detail: condition?.summary ?? 'IBKR offline',
       detailTitle: condition?.summary ?? 'IBKR offline',
-      aria: condition?.summary ?? 'IBKR broker is disconnected',
+      aria: condition?.summary ?? 'IBKR market data is disconnected',
       connected: false,
       toggleLabel: 'Connect' as const,
-      toggleAria: 'Connect to IB Gateway',
+      toggleAria: 'Connect IBKR market data',
     };
   });
 

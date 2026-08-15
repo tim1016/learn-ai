@@ -12,12 +12,25 @@ from typing import TYPE_CHECKING, NoReturn
 
 from app.broker.alpaca.clerk.sqlite import reads
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
+    QTY_ATOL,
     CumulativeRecoveryFill,
+    ExecutionCoverageExactProvenance,
+    ExecutionCoverageIdentity,
+    ExecutionCoverageSetProofSuccess,
+    ExecutionCoverageSupersededFacts,
     active_execution_coverage_conflicts,
     cumulative_recovery_fills_for_order,
     exact_replaces_cumulative,
     execution_coverage_proof,
     execution_is_quarantined,
+    prove_execution_coverage_set,
+    validate_execution_coverage_superseded_facts,
+)
+from app.broker.alpaca.clerk.sqlite.execution_coverage_evidence import (
+    effective_exact_execution_ids_for_order,
+    execution_coverage_candidate,
+    quarantined_exact_provenance_for_conflict,
+    unreadable_quarantine_source_ids_for_order,
 )
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExecutionCoverageResolvedFacts,
@@ -25,6 +38,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     validate_execution_coverage_resolved_facts,
 )
 from app.broker.alpaca.clerk.sqlite.models import (
+    ControlMetaSnapshot,
     ExecutionCoverageResolutionReceipt,
     OrderResource,
     TransitionInput,
@@ -55,6 +69,211 @@ class HistoricalExecutionRecoveryTarget:
 
 class ClerkSqliteRepositoryExecutionCoverageApi:
     """Focused atomic mutations mixed into ``ClerkSqliteRepository``."""
+
+    def _execution_coverage_supersession_transition(
+        self: ClerkSqliteRepository,
+        *,
+        exact_transition: TransitionInput,
+        facts: ExecutionSliceFilledFacts,
+    ) -> TransitionInput | None:
+        """Choose the one safe automatic coverage plan, if evidence proves it."""
+        return self._unconflicted_execution_coverage_supersession_transition(
+            exact_transition=exact_transition,
+            facts=facts,
+        ) or self._accumulated_execution_coverage_supersession_transition(
+            exact_transition=exact_transition,
+            facts=facts,
+        )
+
+    def _unconflicted_execution_coverage_supersession_transition(
+        self: ClerkSqliteRepository,
+        *,
+        exact_transition: TransitionInput,
+        facts: ExecutionSliceFilledFacts,
+    ) -> TransitionInput | None:
+        """Build an automatic replacement before any coverage episode exists.
+
+        This covers direct and one-to-many cumulative evidence under the
+        caller's repository write coordinator. The fold repeats the proof
+        inside the append transaction before it mutates ``fills``; both checks
+        are required because a planned transition is immutable once mirrored.
+        """
+        if exact_transition.order_ref is None:
+            raise ValueError("coverage supersession requires an order reference")
+        if active_execution_coverage_conflicts(self._conn, order_ref=exact_transition.order_ref):
+            return None
+        cumulative = cumulative_recovery_fills_for_order(
+            self._conn,
+            order_ref=exact_transition.order_ref,
+        )
+        if not cumulative:
+            return None
+        meta = reads.control_meta_snapshot(self._conn)
+        identity = ExecutionCoverageIdentity(
+            account_id=meta.account_id,
+            authority_generation=meta.authority_generation,
+            database_identity_token=meta.db_identity_token,
+            order_ref=exact_transition.order_ref,
+            symbol=facts.symbol,
+            side=facts.side,
+        )
+        proof = prove_execution_coverage_set(
+            execution_coverage_candidate(
+                identity=identity,
+                cumulative=cumulative,
+                prior=(),
+                exact=facts,
+                effective_exact_source_ids=effective_exact_execution_ids_for_order(
+                    self._conn,
+                    order_ref=exact_transition.order_ref,
+                ),
+            )
+        )
+        if not isinstance(proof, ExecutionCoverageSetProofSuccess):
+            return None
+        return self._build_execution_coverage_supersession_transition(
+            exact_transition=exact_transition,
+            facts=facts,
+            meta=meta,
+            proof=proof,
+            cumulative=cumulative,
+            resolved_uncertainty_id=None,
+            prior=(),
+        )
+
+    def _accumulated_execution_coverage_supersession_transition(
+        self: ClerkSqliteRepository,
+        *,
+        exact_transition: TransitionInput,
+        facts: ExecutionSliceFilledFacts,
+    ) -> TransitionInput | None:
+        """Plan one atomic resolution of the sole compatible coverage episode.
+
+        A partial exact is already preserved in the quarantine transition. On
+        a later exact arrival, this method rehydrates all of those immutable
+        observations, proves their full set against current cumulative rows,
+        and records the original clocks needed for replay-stable FIFO fills.
+        """
+        if exact_transition.order_ref is None:
+            raise ValueError("accumulated coverage supersession requires an order reference")
+        active = active_execution_coverage_conflicts(
+            self._conn,
+            order_ref=exact_transition.order_ref,
+        )
+        if len(active) != 1:
+            return None
+        conflict = active[0]
+        prior = quarantined_exact_provenance_for_conflict(self._conn, conflict=conflict)
+        if not prior:
+            return None
+        cumulative = cumulative_recovery_fills_for_order(
+            self._conn,
+            order_ref=exact_transition.order_ref,
+        )
+        meta = reads.control_meta_snapshot(self._conn)
+        effective_exact_ids = effective_exact_execution_ids_for_order(
+            self._conn,
+            order_ref=exact_transition.order_ref,
+        )
+        proof = prove_execution_coverage_set(
+            execution_coverage_candidate(
+                identity=ExecutionCoverageIdentity(
+                    account_id=meta.account_id,
+                    authority_generation=meta.authority_generation,
+                    database_identity_token=meta.db_identity_token,
+                    order_ref=exact_transition.order_ref,
+                    symbol=facts.symbol,
+                    side=facts.side,
+                ),
+                cumulative=cumulative,
+                prior=prior,
+                exact=facts,
+                active_episode_ids=(conflict.uncertainty_id,),
+                effective_exact_source_ids=effective_exact_ids,
+                unreadable_source_ids=unreadable_quarantine_source_ids_for_order(
+                    self._conn,
+                    order_ref=exact_transition.order_ref,
+                ),
+            )
+        )
+        if not isinstance(proof, ExecutionCoverageSetProofSuccess):
+            return None
+        cumulative_ids = [item.fill_id for item in cumulative]
+        if not cumulative_ids:
+            return None
+        return self._build_execution_coverage_supersession_transition(
+            exact_transition=exact_transition,
+            facts=facts,
+            meta=meta,
+            proof=proof,
+            cumulative=cumulative,
+            resolved_uncertainty_id=conflict.uncertainty_id,
+            prior=prior,
+        )
+
+    def _build_execution_coverage_supersession_transition(
+        self: ClerkSqliteRepository,
+        *,
+        exact_transition: TransitionInput,
+        facts: ExecutionSliceFilledFacts,
+        meta: ControlMetaSnapshot,
+        proof: ExecutionCoverageSetProofSuccess,
+        cumulative: tuple[CumulativeRecoveryFill, ...],
+        resolved_uncertainty_id: str | None,
+        prior: tuple[ExecutionCoverageExactProvenance, ...],
+    ) -> TransitionInput:
+        """Materialize one immutable automatic replacement plan."""
+        if exact_transition.order_ref is None:
+            raise ValueError("coverage supersession requires an order reference")
+        superseded_facts = ExecutionCoverageSupersededFacts(
+            actor="AUTOMATIC",
+            account_id=meta.account_id,
+            authority_generation=meta.authority_generation,
+            db_identity_token=meta.db_identity_token,
+            expected_control_revision=meta.control_revision,
+            order_ref=exact_transition.order_ref,
+            symbol=facts.symbol,
+            side=facts.side,
+            superseded_cumulative_fill_ids=[item.fill_id for item in cumulative],
+            exact_execution=facts,
+            exact_quantity=proof.exact.quantity,
+            exact_gross_cost=proof.exact.gross_cost,
+            cumulative_quantity=proof.cumulative.quantity,
+            cumulative_gross_cost=proof.cumulative.gross_cost,
+            quantity_tolerance=QTY_ATOL,
+            gross_cost_tolerance=proof.gross_cost_tolerance,
+            resolved_uncertainty_id=resolved_uncertainty_id,
+            evidence_refs=sorted(
+                {
+                    *(f"execution:{item.exact_execution.execution_id}" for item in prior),
+                    f"execution:{facts.execution_id}",
+                    *(f"fill:{item.fill_id}" for item in cumulative),
+                    f"order:{exact_transition.order_ref}",
+                }
+            ),
+            prior_exact_observations=sorted(
+                prior,
+                key=lambda item: item.exact_execution.execution_id,
+            ),
+        )
+        validate_execution_coverage_superseded_facts(superseded_facts)
+        return TransitionInput(
+            strategy_instance_id=exact_transition.strategy_instance_id,
+            run_id=exact_transition.run_id,
+            command_id=exact_transition.command_id,
+            effect_operation_id=exact_transition.effect_operation_id,
+            order_ref=exact_transition.order_ref,
+            broker_order_id=exact_transition.broker_order_id,
+            transition_kind="EXECUTION_COVERAGE_SUPERSEDED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="in_progress",
+            proof_reference=exact_transition.proof_reference,
+            source_event_at_ms=facts.source_event_at_ms,
+            clerk_observed_at_ms=exact_transition.clerk_observed_at_ms,
+            summary_code="EXECUTION_COVERAGE_SUPERSEDED",
+            facts_json=superseded_facts.to_facts_json(),
+        )
 
     def historical_execution_recovery_target(
         self: ClerkSqliteRepository,

@@ -11,7 +11,7 @@ from pathlib import Path
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter, submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.runtime import ReentrantAsyncLock
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     BROKER_SNAPSHOT_STALE_REASON_CODE,
     admit_new_exposure,
@@ -109,11 +109,11 @@ async def _run_injected_frames(
                         frame_broker_order_ids.append(broker_order_id)
             yield frame
 
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
     sink = SqliteTradeUpdateEvidenceSink(
         repo=repo,
-        read=broker,
-        trade=broker,
-        intake=ReentrantAsyncLock(),
+        intake=facade.intake,
+        reconciler=facade,
     )
     journal = CaptureJournal(capture_dir=artifacts_root / "broker-captures", clock=broker.clock)
     consumer = TradeUpdatesConsumer(
@@ -508,11 +508,11 @@ async def gap_reconcile(artifacts_root: Path) -> SyntheticScenarioObservation:
         seam_permitted = fault_seam_permitted(registry)
         if seam_permitted:
             registry.arm(FrameFaultKind.DISCONNECT.value)
+        facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
         sink = SqliteTradeUpdateEvidenceSink(
             repo=repo,
-            read=broker,
-            trade=broker,
-            intake=ReentrantAsyncLock(),
+            intake=facade.intake,
+            reconciler=facade,
         )
         consumer = TradeUpdatesConsumer(
             read=broker,

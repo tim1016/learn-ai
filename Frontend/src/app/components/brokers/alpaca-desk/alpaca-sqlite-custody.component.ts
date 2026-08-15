@@ -11,6 +11,7 @@ import {
   signal,
   untracked,
 } from '@angular/core';
+import { RouterLink } from '@angular/router';
 
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
@@ -79,6 +80,7 @@ function actionProblem(error: unknown, fallback: string): ActionProblem {
   imports: [
     PanelActionReceiptComponent,
     ReceiptLabelPipe,
+    RouterLink,
     SafeFlattenPlanComponent,
     TimestampDisplayComponent,
     TypedHaltConfirmComponent,
@@ -88,6 +90,7 @@ function actionProblem(error: unknown, fallback: string): ActionProblem {
 })
 export class AlpacaSqliteCustodyComponent {
   readonly accountId = input.required<string>();
+  protected readonly operatorLensQuery = { lens: 'operator' } as const;
   readonly projectionRefreshVersion = input(0);
   readonly timelineQuery = input<SqliteTimelineQuery | null>(null);
   readonly legacyAuthorityChanged = output<boolean>();

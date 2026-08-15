@@ -26,6 +26,9 @@ from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     active_execution_coverage_conflicts,
     execution_coverage_proof,
 )
+from app.broker.alpaca.clerk.sqlite.execution_coverage_supersession_fold import (
+    fold_execution_coverage_superseded,
+)
 from app.broker.alpaca.clerk.sqlite.external_order_folds import (
     fold_external_order_acknowledged as _fold_external_order_acknowledged,
 )
@@ -789,7 +792,7 @@ def _fold_order_submit_uncertain(conn: sqlite3.Connection, payload: dict[str, An
 #: ``docs/references/clerk-position-drift-tolerance.md``). Lives here, not in
 #: ``reconcile.py`` (its original logical home), so both ``reconcile.py`` and
 #: ``exit.py`` can import it without either depending on the other —
-#: ``reconcile_uncertain_order`` needs to call ``exit.resolve_exit`` for an
+#: account reconciliation needs to call ``exit.resolve_exit`` for an
 #: EXIT-owned order (#1379), which would otherwise be a circular import.
 POSITION_QTY_EPSILON = 1e-9
 
@@ -918,6 +921,16 @@ def _fold_execution_coverage_quarantined(
         raise ValueError("additional coverage evidence requires its active conflict episode")
 
 
+def _fold_execution_coverage_superseded(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Delegate this focused coverage-representation swap to its own fold module."""
+    fold_execution_coverage_superseded(
+        conn,
+        payload,
+        transition_sequence=_this_transition_sequence,
+        complete_manual_order=_complete_filled_manual_order_if_exact_coverage_complete,
+    )
+
+
 def _fold_execution_coverage_resolved(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Replace exactly one cumulative fold with verified exact economics.
 
@@ -984,6 +997,26 @@ def _fold_execution_coverage_resolved(conn: sqlite3.Connection, payload: dict[st
         "AND reason_code = 'EXECUTION_COVERAGE_CONFLICT' AND resolved_at_ms IS NULL",
         (payload["recorded_at_ms"], facts.uncertainty_id),
     )
+    _complete_filled_manual_order_if_exact_coverage_complete(
+        conn,
+        payload=payload,
+        order_ref=facts.order_ref,
+    )
+
+
+def _complete_filled_manual_order_if_exact_coverage_complete(
+    conn: sqlite3.Connection,
+    *,
+    payload: dict[str, Any],
+    order_ref: str,
+) -> None:
+    """Complete a filled manual ticket only after exact economics are effective.
+
+    Both the direct automatic path and the retained S0 operator path replace a
+    cumulative fold with the same exact evidence. Keeping this lifecycle
+    consequence shared prevents their differing admission routes from
+    changing manual-ticket completion semantics.
+    """
     manual_order = conn.execute(
         "SELECT effect.kind, effect.state, effect.command_id, effect.effect_operation_id, "
         "order_row.broker_state, json_extract(acceptance.facts_json, '$.leg.quantity') "
@@ -995,7 +1028,7 @@ def _fold_execution_coverage_resolved(conn: sqlite3.Connection, payload: dict[st
         "AND accepted.order_ref = order_row.order_ref "
         "AND accepted.transition_kind = 'MANUAL_ORDER_ACCEPTED') "
         "WHERE order_row.order_ref = ?",
-        (facts.order_ref,),
+        (order_ref,),
     ).fetchone()
     if (
         manual_order is None
@@ -1004,14 +1037,14 @@ def _fold_execution_coverage_resolved(conn: sqlite3.Connection, payload: dict[st
         or (manual_order["broker_state"] or "").lower() != "filled"
     ):
         return
-    exact_quantity, _ = reads.effective_exact_fill_totals_for_order(conn, facts.order_ref)
+    exact_quantity, _ = reads.effective_exact_fill_totals_for_order(conn, order_ref)
     if abs(exact_quantity - float(manual_order["requested_quantity"])) > FILL_QTY_EPSILON:
         return
     completion_payload = dict(payload)
     completion_payload.update(
         command_id=manual_order["command_id"],
         effect_operation_id=manual_order["effect_operation_id"],
-        order_ref=facts.order_ref,
+        order_ref=order_ref,
         transition_kind="MANUAL_ORDER_FILLED",
         operation_state="succeeded",
         summary_code="MANUAL_ORDER_FILLED",
@@ -1214,7 +1247,7 @@ def _fold_reconciliation_attempted(conn: sqlite3.Connection, payload: dict[str, 
     fold only ever inserts into ``reconciliations``; it never touches
     ``orders``/``effect_operations``/``positions`` — those projections are
     already correct by the time this transition is appended (see
-    ``reconcile.reconcile_uncertain_order``)."""
+    ``reconcile.reconcile_account``)."""
     facts = ReconciliationAttemptedFacts.from_facts_json(payload["facts_json"])
     reconciliation_id = f"reconciliation:{_this_transition_sequence(conn)}"
     conn.execute(
@@ -1287,6 +1320,7 @@ DEFAULT_FOLD_REGISTRY.register("ORDER_CANCEL_UNCERTAIN", _fold_order_submit_unce
 DEFAULT_FOLD_REGISTRY.register("ORDER_FILL_OBSERVED", _fold_order_fill_observed)
 DEFAULT_FOLD_REGISTRY.register("EXECUTION_SLICE_FILLED", _fold_execution_slice_filled)
 DEFAULT_FOLD_REGISTRY.register("EXECUTION_COVERAGE_QUARANTINED", _fold_execution_coverage_quarantined)
+DEFAULT_FOLD_REGISTRY.register("EXECUTION_COVERAGE_SUPERSEDED", _fold_execution_coverage_superseded)
 DEFAULT_FOLD_REGISTRY.register("EXECUTION_COVERAGE_RESOLVED", _fold_execution_coverage_resolved)
 DEFAULT_FOLD_REGISTRY.register("CUSTODY_SUBJECT_REGISTERED", fold_custody_subject_registered)
 DEFAULT_FOLD_REGISTRY.register("MANUAL_TICKET_RESERVED", fold_manual_ticket_reserved)

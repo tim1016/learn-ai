@@ -20,6 +20,7 @@ from app.schemas.run_admission import (
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_carryover import configuration_hash
 from app.services.bot_start_admission import (
+    CustodyBoundActivator,
     StartAdmissionDenied,
     StartAdmissionEvidenceChanged,
     StartRequest,
@@ -33,7 +34,6 @@ CustodyGuard = Callable[[str], AbstractAsyncContextManager[ClerkCustodySnapshot]
 ProcessFactResolver = Callable[[BrokerBotBinding, int], RunProcessAdmissionFact]
 RuntimeFactResolver = Callable[[str, int], Awaitable[StartRuntimeAdmissionFact]]
 CheckpointResolver = Callable[[BrokerBotBinding], ResumeCheckpointAdmissionFact | None]
-ResumeActivator = Callable[[BrokerBotBinding, MarketDataFeed, int], Awaitable[BotStatusView]]
 
 
 @dataclass(frozen=True)
@@ -56,7 +56,7 @@ class BotResumeAdmission:
         process_fact: ProcessFactResolver,
         runtime_fact: RuntimeFactResolver,
         checkpoint: CheckpointResolver,
-        activate: ResumeActivator,
+        activate: CustodyBoundActivator,
         carryover_account_policy_enabled: bool,
     ) -> None:
         self._now_ms = now_ms
@@ -75,7 +75,7 @@ class BotResumeAdmission:
     ) -> RunAdmissionDecision:
         """Evaluate Resume without mutation while holding the Clerk fence."""
         proposed = new_run_binding(_request_from(prior), now_ms=self._now_ms())
-        async with self._decision(prior, proposed, status) as (decision, _feed):
+        async with self._decision(prior, proposed, status) as (decision, _feed, _custody):
             return decision
 
     async def resume(
@@ -85,13 +85,13 @@ class BotResumeAdmission:
     ) -> AdmittedBotResume:
         """Evaluate and activate a new run inside one Clerk custody cut."""
         proposed = new_run_binding(_request_from(prior), now_ms=self._now_ms())
-        async with self._decision(prior, proposed, status) as (decision, feed):
+        async with self._decision(prior, proposed, status) as (decision, feed, custody):
             if not decision.allowed:
                 raise StartAdmissionDenied(decision)
             assert feed is not None
             activation_ms = self._now_ms()
             proposed = proposed.model_copy(update={"created_at_ms": activation_ms})
-            bot = await self._activate(proposed, feed, activation_ms)
+            bot = await self._activate(proposed, feed, activation_ms, custody)
         return AdmittedBotResume(bot=bot, admission=decision)
 
     @asynccontextmanager
@@ -100,7 +100,7 @@ class BotResumeAdmission:
         prior: BrokerBotBinding,
         proposed: BrokerBotBinding,
         status: BotStatusView,
-    ) -> AsyncIterator[tuple[RunAdmissionDecision, MarketDataFeed | None]]:
+    ) -> AsyncIterator[tuple[RunAdmissionDecision, MarketDataFeed | None, ClerkCustodySnapshot]]:
         try:
             async with self._custody_guard(prior.strategy_instance_id) as custody:
                 observed_at_ms = self._now_ms()
@@ -139,6 +139,7 @@ class BotResumeAdmission:
                         evaluated_at_ms=self._now_ms(),
                     ),
                     feed,
+                    custody,
                 )
         except ClerkAdmissionSnapshotChangedError as exc:
             raise StartAdmissionEvidenceChanged(

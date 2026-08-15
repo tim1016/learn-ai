@@ -36,15 +36,35 @@
           <strong class="text-[length:var(--fs-md)] leading-tight">{{ view.eligibility.headline }}</strong>
           <p class="m-0 text-[length:var(--fs-sm)] leading-snug text-[var(--text-secondary)]">{{ view.eligibility.explanation }}</p>
         </div>
-        @if (!view.eligibility.eligible && activeLens() === 'trader') {
-          <button
-            pButton
-            type="button"
-            size="small"
-            severity="danger"
-            [outlined]="true"
-            (click)="selectLens('operator')"
-          >Review blocker</button>
+        @if (!view.eligibility.eligible) {
+          @if (activeLens() === 'trader') {
+            <button
+              pButton
+              type="button"
+              size="small"
+              severity="danger"
+              [outlined]="true"
+              (click)="selectLens('operator')"
+            >Review blocker</button>
+          } @else {
+            <nav class="flex flex-wrap gap-2" aria-label="Deployment recovery">
+              <a
+                pButton
+                size="small"
+                severity="danger"
+                [outlined]="true"
+                [routerLink]="['/brokers', 'alpaca']"
+                [queryParams]="operatorLensQuery"
+              >Open account recovery</a>
+              <a
+                pButton
+                size="small"
+                severity="secondary"
+                [outlined]="true"
+                [routerLink]="['/brokers', 'alpaca', 'bots']"
+              >Review bot fleet</a>
+            </nav>
+          }
         }
       </div>
       <dl class="m-0 flex flex-wrap gap-5">
