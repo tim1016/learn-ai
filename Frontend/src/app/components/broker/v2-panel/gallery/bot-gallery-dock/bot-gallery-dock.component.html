@@ -1,56 +1,73 @@
 <section class="gallery-dock">
-  <div
-    #galleryGrid
-    cdkDropList
-    cdkDropListOrientation="mixed"
-    class="gallery-dock__grid"
-    [style.grid-template-columns]="'repeat(' + grid().cols + ', 1fr)'"
-    (cdkDropListDropped)="onDropped($event)"
-  >
-    @for (bot of pageBots(); track bot.sid) {
-      <div
-        cdkDrag
-        class="gallery-dock__cell"
-        [attr.data-sid]="bot.sid"
-        [style.grid-column]="'span ' + colSpanFor(bot.sid)"
-        [style.grid-row]="'span ' + rowSpanFor(bot.sid)"
-      >
-        <button
-          type="button"
-          cdkDragHandle
-          class="gallery-dock__drag-handle"
-          [attr.aria-label]="'Reorder ' + bot.symbol + ' tile'"
-          tabindex="-1"
-          aria-hidden="true"
-        >⠿</button>
+  @if (filteredBots().length === 0) {
+    <div class="gallery-dock__filter-empty" role="status">No bots match this filter</div>
+  } @else {
+    <div
+      #galleryGrid
+      cdkDropList
+      cdkDropListOrientation="mixed"
+      class="gallery-dock__grid"
+      [style.--gallery-cols]="grid().cols"
+      [style.--gallery-rows]="grid().rows"
+      (cdkDropListDropped)="onDropped($event)"
+    >
+      @for (bot of pageBots(); track bot.sid) {
+        <div
+          cdkDrag
+          class="gallery-dock__cell"
+          [attr.data-sid]="bot.sid"
+        >
+          <button
+            type="button"
+            cdkDragHandle
+            class="gallery-dock__drag-handle"
+            [attr.aria-label]="'Reorder ' + bot.symbol + ' tile'"
+            tabindex="-1"
+            aria-hidden="true"
+          >⠿</button>
 
-        <app-bot-tile
-          class="gallery-dock__tile"
-          [bot]="bot"
-          [bars]="barsBySymbol().get(bot.symbol) ?? []"
-          [markers]="markersBySid().get(bot.sid) ?? []"
-          [broker]="broker()"
-          [accountId]="accountId()"
-          [pending]="pendingSids().has(bot.sid)"
-          (action)="forwardAction($event)"
-        />
-
-        <button
-          type="button"
-          class="gallery-dock__resize-handle"
-          [attr.aria-label]="'Resize ' + bot.symbol + ' tile'"
-          tabindex="-1"
-          aria-hidden="true"
-          (pointerdown)="onResizePointerStart($event, bot.sid)"
-        ></button>
-      </div>
-    }
-  </div>
+          <app-bot-tile
+            class="gallery-dock__tile"
+            [bot]="bot"
+            [bars]="barsBySymbol().get(bot.symbol) ?? []"
+            [markers]="markersBySid().get(bot.sid) ?? []"
+            [broker]="broker()"
+            [accountId]="accountId()"
+            [pending]="pendingSids().has(bot.sid)"
+            (action)="forwardAction($event)"
+          />
+        </div>
+      }
+    </div>
+  }
 
   <footer class="gallery-dock__footer">
     <button type="button" class="gallery-dock__reset" (click)="onResetLayout()">
       Reset layout
     </button>
+
+    <div class="gallery-dock__filters" role="radiogroup" aria-label="Filter bots by status">
+      @for (option of filterOptions; track option.value) {
+        <button
+          type="button"
+          role="radio"
+          class="gallery-dock__filter-btn"
+          [class.gallery-dock__filter-btn--active]="filter() === option.value"
+          [attr.aria-checked]="filter() === option.value"
+          (click)="onFilterChange(option.value)"
+        >{{ option.label }} <span class="gallery-dock__filter-count">{{ filterCounts()[option.value] }}</span></button>
+      }
+    </div>
+
+    <div class="gallery-dock__status" role="status">
+      <span class="gallery-dock__timeframe">Today · 1m</span>
+      <span
+        class="gallery-dock__live"
+        [class.gallery-dock__live--live]="status() === 'live'"
+        [class.gallery-dock__live--stale]="status() === 'stale'"
+        [class.gallery-dock__live--muted]="status() === 'connecting' || status() === 'error'"
+      ><span class="gallery-dock__live-dot" aria-hidden="true"></span>{{ statusLabel() }}</span>
+    </div>
 
     <div class="gallery-dock__pager">
       <button

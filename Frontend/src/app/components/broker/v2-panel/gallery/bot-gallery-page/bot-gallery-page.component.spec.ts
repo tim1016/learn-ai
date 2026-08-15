@@ -173,6 +173,23 @@ describe('BotGalleryPageComponent', () => {
     expect(screen.getByText('SPY')).toBeTruthy();
   });
 
+  it('has no page-level toolbar or title — the dock owns the whole view', async () => {
+    const store = fakeGalleryStore({ status: 'live', bots: [bot()] });
+
+    await renderPage(store);
+
+    expect(screen.queryByRole('heading', { name: 'Bot gallery' })).toBeNull();
+    expect(screen.queryByText('Bot gallery')).toBeNull();
+  });
+
+  it('forwards the store connection status down to the dock footer', async () => {
+    const store = fakeGalleryStore({ status: 'connecting', bots: [bot()] });
+
+    await renderPage(store);
+
+    expect(screen.getByText('Connecting…')).toBeTruthy();
+  });
+
   it('shows an error banner when the feed has never connected', async () => {
     const store = fakeGalleryStore({ status: 'error', bots: [] });
 

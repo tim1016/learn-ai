@@ -4,12 +4,12 @@ import { fireEvent, render, screen } from '@testing-library/angular';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { loadLayout } from '../lib/gallery-layout';
-import type { ChartBar, ChartFillMarker, GalleryBotView } from '../lib/gallery.types';
+import type { ChartBar, ChartFillMarker, GalleryBotView, GalleryLiveStatus } from '../lib/gallery.types';
 import { BotGalleryDockComponent } from './bot-gallery-dock.component';
 
 // Mounting `<app-bot-tile>` mounts lightweight-charts underneath — mock it
 // the same way `bot-tile.component.spec.ts` does; the dock's own behavior
-// (grid division, reorder, resize, pagination) doesn't touch the chart.
+// (layout, reorder, pagination, filter, footer) doesn't touch the chart.
 vi.mock('lightweight-charts', () => {
   const createMockSeries = () => ({
     setData: vi.fn(),
@@ -57,24 +57,6 @@ function bots(n: number): GalleryBotView[] {
     bot({ sid: `sid-${i}`, symbol: `SYM${i}`, label: `Bot ${i}` }));
 }
 
-/**
- * Narrow, test-only view of the component's protected surface. `applyResize`
- * is the resize-application seam: rather than synthesizing a pointerdown /
- * pointermove / pointerup sequence through jsdom (which has patchy
- * PointerEvent/setPointerCapture support), this calls the same method the
- * real pointermove handler calls once it has computed a delta — the exact
- * fallback the task brief sanctions for a resize interaction that's hard to
- * drive via synthetic pointer events. Mirrors the `as unknown as Harness`
- * pattern already used in `dual-pane-chart.component.spec.ts`.
- */
-interface DockHarness {
-  applyResize(sid: string, colSpan: number, rowSpan: number): void;
-}
-
-function harness(component: BotGalleryDockComponent): DockHarness {
-  return component as unknown as DockHarness;
-}
-
 interface RenderInputs {
   bots: GalleryBotView[];
   barsBySymbol?: ReadonlyMap<string, readonly ChartBar[]>;
@@ -82,6 +64,7 @@ interface RenderInputs {
   broker?: string;
   accountId?: string;
   pendingSids?: ReadonlySet<string>;
+  status?: GalleryLiveStatus;
 }
 
 async function renderDock(inputs: RenderInputs) {
@@ -94,6 +77,7 @@ async function renderDock(inputs: RenderInputs) {
       broker: inputs.broker ?? BROKER,
       accountId: inputs.accountId ?? ACCOUNT_ID,
       pendingSids: inputs.pendingSids ?? new Set(),
+      status: inputs.status ?? 'live',
     },
     on: { action: onAction },
   });
@@ -110,15 +94,13 @@ describe('BotGalleryDockComponent', () => {
     localStorage.clear();
   });
 
-  it('renders one tile per bot, laid out in a ceil(sqrt(n))-column auto grid', async () => {
+  it('renders one tile per bot', async () => {
     const { container } = await renderDock({ bots: bots(6) });
 
     expect(cellSids(container)).toHaveLength(6);
-    const grid = container.querySelector<HTMLElement>('.gallery-dock__grid');
-    expect(grid?.style.gridTemplateColumns).toBe('repeat(3, 1fr)');
   });
 
-  it('reorders on a CDK drop and persists the new order', async () => {
+  it('reorders on a CDK drop and persists the new order-only layout', async () => {
     const { container, fixture } = await renderDock({ bots: bots(4) });
     expect(cellSids(container)).toEqual(['sid-0', 'sid-1', 'sid-2', 'sid-3']);
 
@@ -130,41 +112,16 @@ describe('BotGalleryDockComponent', () => {
 
     const expectedOrder = ['sid-1', 'sid-2', 'sid-0', 'sid-3'];
     expect(cellSids(container)).toEqual(expectedOrder);
-    expect(loadLayout(ACCOUNT_ID).map((tile) => tile.sid)).toEqual(expectedOrder);
+    expect(loadLayout(ACCOUNT_ID)).toEqual(expectedOrder);
   });
 
-  it('resizing a tile updates its grid-column span and persists', async () => {
-    const { container, fixture } = await renderDock({ bots: bots(6) }); // 3-col grid
-
-    harness(fixture.componentInstance).applyResize('sid-1', 3, 1);
-    fixture.detectChanges();
-
-    const cell = container.querySelector<HTMLElement>('.gallery-dock__cell[data-sid="sid-1"]');
-    expect(cell?.style.gridColumn).toBe('span 3');
-    const persisted = loadLayout(ACCOUNT_ID).find((tile) => tile.sid === 'sid-1');
-    expect(persisted).toEqual({ sid: 'sid-1', colSpan: 3, rowSpan: 1 });
-  });
-
-  it('clamps a resize to the grid bounds', async () => {
-    const { container, fixture } = await renderDock({ bots: bots(4) }); // 2x2 grid
-
-    harness(fixture.componentInstance).applyResize('sid-1', 99, 99);
-    fixture.detectChanges();
-
-    const cell = container.querySelector<HTMLElement>('.gallery-dock__cell[data-sid="sid-1"]');
-    expect(cell?.style.gridColumn).toBe('span 2');
-    expect(cell?.style.gridRow).toBe('span 2');
-  });
-
-  it('hides the pointer-only drag and resize handles from assistive technology', async () => {
+  it('has no resize handle in the DOM — only the pointer-only drag handle remains', async () => {
     const { container } = await renderDock({ bots: bots(1) });
 
+    expect(container.querySelector('.gallery-dock__resize-handle')).toBeNull();
     const dragHandle = container.querySelector('.gallery-dock__drag-handle');
-    const resizeHandle = container.querySelector('.gallery-dock__resize-handle');
-    for (const handle of [dragHandle, resizeHandle]) {
-      expect(handle?.getAttribute('tabindex')).toBe('-1');
-      expect(handle?.getAttribute('aria-hidden')).toBe('true');
-    }
+    expect(dragHandle?.getAttribute('tabindex')).toBe('-1');
+    expect(dragHandle?.getAttribute('aria-hidden')).toBe('true');
   });
 
   it('"Reset layout" restores the auto catalog order and clears persistence', async () => {
@@ -206,18 +163,6 @@ describe('BotGalleryDockComponent', () => {
     expect(screen.getByRole('button', { name: 'Previous page' })).toHaveProperty('disabled', true);
   });
 
-  it('sizes the grid from the current page, not the full roster', async () => {
-    const { container, fixture } = await renderDock({ bots: bots(21) }); // page 1: 20, page 2: 1
-
-    const grid = container.querySelector<HTMLElement>('.gallery-dock__grid');
-    expect(grid?.style.gridTemplateColumns).toBe('repeat(5, 1fr)'); // ceil(sqrt(20))
-
-    fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
-    fixture.detectChanges();
-
-    expect(grid?.style.gridTemplateColumns).toBe('repeat(1, 1fr)'); // ceil(sqrt(1)), not sqrt(21)
-  });
-
   it('clamps the page and disables Next when the roster shrinks below the current page', async () => {
     const { fixture } = await renderDock({ bots: bots(25) });
 
@@ -245,7 +190,7 @@ describe('BotGalleryDockComponent', () => {
     dropListDe.triggerEventHandler('cdkDropListDropped', dropEvent);
     fixture.detectChanges();
 
-    const persistedSids = loadLayout(ACCOUNT_ID).map((tile) => tile.sid);
+    const persistedSids = loadLayout(ACCOUNT_ID);
     expect(persistedSids.slice(0, 20)).toEqual(bots(20).map((b) => b.sid));
     expect(persistedSids.slice(20)).toEqual(['sid-21', 'sid-22', 'sid-23', 'sid-24', 'sid-20']);
   });
@@ -270,5 +215,103 @@ describe('BotGalleryDockComponent', () => {
     expect(pending[0].disabled).toBe(true);
     expect(notPending).toHaveLength(1);
     expect(notPending[0].disabled).toBe(false);
+  });
+
+  describe('status filter', () => {
+    function mixedBots(): GalleryBotView[] {
+      return [
+        bot({ sid: 'sid-0', symbol: 'SYM0', running: true, needs_attention: false }),
+        bot({ sid: 'sid-1', symbol: 'SYM1', running: true, needs_attention: true }),
+        bot({ sid: 'sid-2', symbol: 'SYM2', running: false, needs_attention: false }),
+      ];
+    }
+
+    it('shows a live count on every segment, computed off the full unfiltered roster', async () => {
+      await renderDock({ bots: mixedBots() });
+
+      expect(screen.getByRole('radio', { name: 'All 3' })).toBeTruthy();
+      expect(screen.getByRole('radio', { name: 'Running 2' })).toBeTruthy();
+      expect(screen.getByRole('radio', { name: 'Needs attn 1' })).toBeTruthy();
+      expect(screen.getByRole('radio', { name: 'Stopped 1' })).toBeTruthy();
+    });
+
+    it('defaults to "All", showing every bot', async () => {
+      const { container } = await renderDock({ bots: mixedBots() });
+
+      expect(cellSids(container)).toEqual(['sid-0', 'sid-1', 'sid-2']);
+      expect(screen.getByRole('radio', { name: 'All 3' }).getAttribute('aria-checked')).toBe('true');
+    });
+
+    it('"Running" shows only bots with running === true', async () => {
+      const { container } = await renderDock({ bots: mixedBots() });
+
+      fireEvent.click(screen.getByRole('radio', { name: 'Running 2' }));
+
+      expect(cellSids(container)).toEqual(['sid-0', 'sid-1']);
+      expect(screen.getByRole('radio', { name: 'Running 2' }).getAttribute('aria-checked')).toBe('true');
+      expect(screen.getByRole('radio', { name: 'All 3' }).getAttribute('aria-checked')).toBe('false');
+    });
+
+    it('"Needs attn" shows only running bots flagged needs_attention', async () => {
+      const { container } = await renderDock({ bots: mixedBots() });
+
+      fireEvent.click(screen.getByRole('radio', { name: 'Needs attn 1' }));
+
+      expect(cellSids(container)).toEqual(['sid-1']);
+    });
+
+    it('"Stopped" shows only bots with running === false', async () => {
+      const { container } = await renderDock({ bots: mixedBots() });
+
+      fireEvent.click(screen.getByRole('radio', { name: 'Stopped 1' }));
+
+      expect(cellSids(container)).toEqual(['sid-2']);
+    });
+
+    it('switching back to "All" restores every bot', async () => {
+      const { container } = await renderDock({ bots: mixedBots() });
+
+      fireEvent.click(screen.getByRole('radio', { name: 'Stopped 1' }));
+      fireEvent.click(screen.getByRole('radio', { name: 'All 3' }));
+
+      expect(cellSids(container)).toEqual(['sid-0', 'sid-1', 'sid-2']);
+    });
+
+    it('shows an honest in-dock empty note when the filter matches nothing, distinct from the whole-wall empty state', async () => {
+      const allRunning = [
+        bot({ sid: 'sid-0', running: true, needs_attention: false }),
+        bot({ sid: 'sid-1', running: true, needs_attention: false }),
+      ];
+      const { container } = await renderDock({ bots: allRunning });
+
+      fireEvent.click(screen.getByRole('radio', { name: 'Stopped 0' }));
+
+      expect(screen.getByText('No bots match this filter')).toBeTruthy();
+      expect(cellSids(container)).toHaveLength(0);
+      // The footer (and its filters, so the operator can switch back) stays rendered.
+      expect(screen.getByRole('button', { name: 'Reset layout' })).toBeTruthy();
+      expect(screen.getByRole('radio', { name: 'All 2' })).toBeTruthy();
+    });
+  });
+
+  describe('footer', () => {
+    it('renders Reset layout, Today · 1m, and a pager alongside the filter', async () => {
+      await renderDock({ bots: bots(3) });
+
+      expect(screen.getByRole('button', { name: 'Reset layout' })).toBeTruthy();
+      expect(screen.getByText('Today · 1m')).toBeTruthy();
+      expect(screen.getByText('page 1 of 1')).toBeTruthy();
+    });
+
+    it.each([
+      ['live', 'Live'],
+      ['stale', 'Delayed'],
+      ['connecting', 'Connecting…'],
+      ['error', 'Feed error'],
+    ] as const)('renders the %s connection status as "%s" in the ●Live indicator', async (status, label) => {
+      await renderDock({ bots: bots(1), status });
+
+      expect(screen.getByText(label)).toBeTruthy();
+    });
   });
 });
