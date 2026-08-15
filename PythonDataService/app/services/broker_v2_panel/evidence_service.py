@@ -107,6 +107,18 @@ _SQLITE_TRANSITION_COPY: Final[dict[str, tuple[str, str]]] = {
         "Execution slice recorded",
         "The Account Clerk recorded one broker-reported execution slice.",
     ),
+    "EXECUTION_COVERAGE_QUARANTINED": (
+        "Execution coverage quarantined",
+        "The Account Clerk retained ambiguous exact execution evidence outside effective economics.",
+    ),
+    "EXECUTION_COVERAGE_SUPERSEDED": (
+        "Execution coverage superseded",
+        "The Account Clerk replaced one aggregate recovery contribution with matching exact execution evidence.",
+    ),
+    "EXECUTION_COVERAGE_RESOLVED": (
+        "Execution coverage resolved",
+        "An operator-approved proof replaced aggregate recovery with exact execution evidence.",
+    ),
     "EXECUTION_CORRECTED": (
         "Execution correction recorded",
         "The Account Clerk replaced a prior execution slice with corrected broker evidence.",
@@ -150,6 +162,54 @@ _SQLITE_TRANSITION_COPY: Final[dict[str, tuple[str, str]]] = {
     "UNCERTAINTY_RESOLVED": (
         "Uncertainty resolved",
         "Fresh evidence satisfied the Account Clerk's uncertainty resolution policy.",
+    ),
+    "CUSTODY_SUBJECT_REGISTERED": (
+        "Custody subject registered",
+        "The Account Clerk registered the durable economic custody subject.",
+    ),
+    "MANUAL_TICKET_RESERVED": (
+        "Manual ticket reserved",
+        "The Account Clerk reserved the manual order ticket before broker contact.",
+    ),
+    "MANUAL_ORDER_ACCEPTED": (
+        "Manual order accepted",
+        "The Account Clerk accepted one manual order leg for submission.",
+    ),
+    "MANUAL_ORDER_CANCEL_ACCEPTED": (
+        "Manual cancellation accepted",
+        "The Account Clerk accepted a verified manual-order cancellation.",
+    ),
+    "MANUAL_TICKET_PAUSED_UNKNOWN": (
+        "Manual ticket paused",
+        "The Account Clerk paused the ticket while a broker outcome remains unknown.",
+    ),
+    "MANUAL_TICKET_COMPLETED": (
+        "Manual ticket completed",
+        "The Account Clerk completed every required ticket leg.",
+    ),
+    "MANUAL_TICKET_CANCELED": (
+        "Manual ticket canceled",
+        "The Account Clerk recorded the terminal ticket cancellation.",
+    ),
+    "MANUAL_ORDER_CANCELED": (
+        "Manual order canceled",
+        "The broker confirmed the manual order cancellation.",
+    ),
+    "MANUAL_ORDER_FILLED": (
+        "Manual order filled",
+        "The Account Clerk recorded complete exact fill coverage for the manual order.",
+    ),
+    "MANUAL_ORDER_TERMINAL": (
+        "Manual order terminal",
+        "The Account Clerk recorded the manual order's terminal broker state.",
+    ),
+    "MANUAL_ORDER_CANCEL_CONFIRMED": (
+        "Manual cancellation confirmed",
+        "The Account Clerk confirmed the manual order was canceled at the broker.",
+    ),
+    "MANUAL_ORDER_CANCEL_TERMINAL": (
+        "Manual cancellation terminal",
+        "The Account Clerk recorded the terminal outcome of the manual cancellation.",
     ),
 }
 

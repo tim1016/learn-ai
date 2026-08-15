@@ -469,10 +469,11 @@ class ClerkSqliteRepository(
         consumer therefore cannot add a redundant custody transition after its
         in-memory dedup map has been lost.  If aggregate cumulative-recovery
         evidence already exists for the order, its coverage cannot be matched
-        safely to the later exact slice.  The exact slice is not folded; a
-        typed uncertainty fences new exposure instead.
+        safely to the later exact slice. A direct exact-to-one-cumulative
+        match may be replaced automatically after the canonical set proof is
+        revalidated; every other shape is withheld behind a typed uncertainty.
 
-        Outcomes are ``"appended"``, ``"duplicate"``,
+        Outcomes are ``"appended"``, ``"duplicate"``, ``"coverage_superseded"``,
         ``"coverage_conflict_raised"``, ``"coverage_conflict_quarantined"``,
         or ``"coverage_conflict_already_raised"``. A changed delivery that
         reuses an immutable broker execution ID cannot be a truthful new
@@ -512,6 +513,25 @@ class ClerkSqliteRepository(
                     execution_id=execution_id,
                     order_ref=order_ref,
                 )
+                supersession = self._direct_execution_coverage_supersession_transition(
+                    exact_transition=candidate,
+                    facts=facts,
+                )
+                if supersession is not None:
+                    # The plan is deliberately rebuilt before the append. A
+                    # re-entrant caller or future admission hook that changed
+                    # custody between proof and commit must take the existing
+                    # fail-closed path, never append a stale replacement.
+                    current_supersession = self._direct_execution_coverage_supersession_transition(
+                        exact_transition=candidate,
+                        facts=facts,
+                    )
+                    if (
+                        current_supersession is not None
+                        and current_supersession.facts_json == supersession.facts_json
+                    ):
+                        self.append_transition(supersession)
+                        return "coverage_superseded"
                 active_conflicts = active_execution_coverage_conflicts(
                     self._conn,
                     order_ref=order_ref,

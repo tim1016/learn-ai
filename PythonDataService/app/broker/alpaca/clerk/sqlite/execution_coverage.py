@@ -6,20 +6,24 @@ Formula: Q = fsum(qty); C = fsum(qty × price); P = C / Q. The canonical
 Reference: Project-authored execution-coverage contract in PRD #1543, stories
   18, 19, 28, and 33; this is authored project logic, not a reused proof.
 Canonical implementation: this file's prove_execution_coverage_set. The
-  existing exact_replaces_cumulative remains the temporary S0 operator proof.
+  direct exact-to-one-cumulative replacement is consumed by the #1554 Clerk
+  fold; the existing exact_replaces_cumulative remains the temporary S0
+  operator proof.
 Validated against: tests/broker/alpaca/clerk/sqlite/test_execution_coverage_set_proof.py
 
 The existing typed query below continues to describe the shipped S0 operator
-flow. The new pure set proof deliberately has no fold integration in this
-slice; keeping both vocabularies together makes the temporary boundary
-auditable without changing that operator path.
+flow. The direct automatic fold reuses this proof without changing that
+operator path. Accumulated quarantined-exact reconciliation remains a later
+slice, so keeping both vocabularies together preserves the temporary boundary
+for audit.
 """
 
 from __future__ import annotations
 
+import json
 import math
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 
 from app.broker.alpaca.clerk.sqlite.facts import (
@@ -27,7 +31,9 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     ExecutionSliceFilledFacts,
     UncertaintyRaisedFacts,
     validate_execution_coverage_quarantined_facts,
+    validate_execution_slice_facts,
 )
+from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
     ExecutionCoverageConflictCause,
@@ -75,6 +81,54 @@ class ExactCoverageObservation:
     quantity: float
     price: float
     fee: float | None
+
+
+@dataclass(frozen=True)
+class ExecutionCoverageSupersededFacts:
+    """Automatic direct replacement of one cumulative row by exact evidence.
+
+    The cumulative source remains a prior custody transition; only its
+    rebuildable ``fills`` contribution is replaced. The fact records both
+    proof aggregates and the authority revision that admitted the replacement
+    so replay can independently reject a stale or broadened plan.
+    """
+
+    actor: str
+    account_id: str
+    authority_generation: int
+    db_identity_token: str
+    expected_control_revision: int
+    order_ref: str
+    symbol: str
+    side: str
+    superseded_cumulative_fill_ids: list[str]
+    exact_execution: ExecutionSliceFilledFacts
+    exact_quantity: float
+    exact_gross_cost: float
+    cumulative_quantity: float
+    cumulative_gross_cost: float
+    quantity_tolerance: float
+    gross_cost_tolerance: float
+    resolved_uncertainty_id: str | None
+    evidence_refs: list[str]
+
+    def to_facts_json(self) -> str:
+        value = asdict(self)
+        value["exact_execution"] = json.loads(self.exact_execution.to_facts_json())
+        return canonicalize(value)
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> ExecutionCoverageSupersededFacts:
+        value = json.loads(facts_json)
+        if not isinstance(value, dict):
+            raise ValueError("coverage supersession facts must be an object")
+        try:
+            value["exact_execution"] = ExecutionSliceFilledFacts.from_facts_json(
+                canonicalize(value["exact_execution"])
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("coverage supersession exact execution is invalid") from exc
+        return cls(**value)
 
 
 @dataclass(frozen=True)
@@ -281,6 +335,86 @@ def _set_refusal(
     detail: str,
 ) -> ExecutionCoverageSetProofRefusal:
     return ExecutionCoverageSetProofRefusal(reason=reason, detail=detail)
+
+
+def validate_execution_coverage_superseded_facts(
+    facts: ExecutionCoverageSupersededFacts,
+) -> ExecutionSliceFilledFacts:
+    """Validate the closed direct-coverage replacement record.
+
+    The fold re-runs the canonical proof against current immutable rows. This
+    boundary validator instead makes the recorded plan self-contained and
+    unambiguous before it reaches the custody hash chain.
+    """
+    if facts.actor != "AUTOMATIC":
+        raise ValueError("coverage supersession actor must be AUTOMATIC")
+    if not isinstance(facts.account_id, str) or not facts.account_id:
+        raise ValueError("coverage supersession requires account_id")
+    if (
+        isinstance(facts.authority_generation, bool)
+        or not isinstance(facts.authority_generation, int)
+        or facts.authority_generation < 1
+    ):
+        raise ValueError("coverage supersession requires authority_generation")
+    if not isinstance(facts.db_identity_token, str) or not facts.db_identity_token:
+        raise ValueError("coverage supersession requires db_identity_token")
+    if (
+        isinstance(facts.expected_control_revision, bool)
+        or not isinstance(facts.expected_control_revision, int)
+        or facts.expected_control_revision < 0
+    ):
+        raise ValueError("coverage supersession requires expected_control_revision")
+    if not isinstance(facts.order_ref, str) or not facts.order_ref:
+        raise ValueError("coverage supersession requires order_ref")
+    if not isinstance(facts.symbol, str) or not facts.symbol:
+        raise ValueError("coverage supersession requires symbol")
+    if facts.side not in {"BUY", "SELL"}:
+        raise ValueError("coverage supersession requires an exact side")
+    fill_ids = facts.superseded_cumulative_fill_ids
+    if (
+        not isinstance(fill_ids, list)
+        or len(fill_ids) != 1
+        or any(not isinstance(fill_id, str) or not fill_id for fill_id in fill_ids)
+        or fill_ids != sorted(set(fill_ids))
+    ):
+        raise ValueError("coverage supersession requires one sorted cumulative fill id")
+    exact = facts.exact_execution
+    validate_execution_slice_facts(exact)
+    if exact.symbol.upper() != facts.symbol.upper() or exact.side != facts.side:
+        raise ValueError("coverage supersession exact identity does not match its authority")
+    _require_finite_positive_coverage(facts.exact_quantity, field="exact_quantity")
+    _require_finite_positive_coverage(facts.exact_gross_cost, field="exact_gross_cost")
+    _require_finite_positive_coverage(facts.cumulative_quantity, field="cumulative_quantity")
+    _require_finite_positive_coverage(facts.cumulative_gross_cost, field="cumulative_gross_cost")
+    _require_finite_positive_coverage(facts.quantity_tolerance, field="quantity_tolerance")
+    _require_finite_nonnegative_coverage(facts.gross_cost_tolerance, field="gross_cost_tolerance")
+    if (
+        facts.exact_quantity != exact.slice_qty
+        or facts.exact_gross_cost != exact.slice_qty * exact.slice_price
+    ):
+        raise ValueError("coverage supersession exact aggregate is not its exact economics")
+    if facts.resolved_uncertainty_id is not None and (
+        not isinstance(facts.resolved_uncertainty_id, str) or not facts.resolved_uncertainty_id
+    ):
+        raise ValueError("coverage supersession resolved uncertainty id is invalid")
+    if (
+        not isinstance(facts.evidence_refs, list)
+        or not facts.evidence_refs
+        or any(not isinstance(reference, str) or not reference for reference in facts.evidence_refs)
+        or facts.evidence_refs != sorted(set(facts.evidence_refs))
+    ):
+        raise ValueError("coverage supersession requires unique sorted evidence references")
+    return exact
+
+
+def _require_finite_positive_coverage(value: object, *, field: str) -> None:
+    if not _is_finite(value) or value <= 0:
+        raise ValueError(f"{field} must be finite and positive")
+
+
+def _require_finite_nonnegative_coverage(value: object, *, field: str) -> None:
+    if not _is_finite(value) or value < 0:
+        raise ValueError(f"{field} must be finite and non-negative")
 
 
 @dataclass(frozen=True)
@@ -539,6 +673,77 @@ def cumulative_recovery_fills_for_order(
             side=row["side"],
         )
         for row in rows
+    )
+
+
+def direct_cumulative_recovery_fill_for_order(
+    conn: sqlite3.Connection,
+    *,
+    order_ref: str,
+) -> CumulativeRecoveryFill | None:
+    """Return one isolated aggregate row eligible for direct replacement.
+
+    #1554 is deliberately narrower than the set proof: automatic admission
+    is allowed only while this order's effective economics consist of exactly
+    one cumulative-recovery row. Any other effective fill must retain the
+    established fail-closed coverage path until the accumulated-set slice can
+    account for it.
+    """
+    cumulative = cumulative_recovery_fills_for_order(conn, order_ref=order_ref)
+    if len(cumulative) != 1:
+        return None
+    other_effective = conn.execute(
+        "SELECT 1 FROM fills f WHERE f.order_ref = ? "
+        "AND f.evidence_source != 'cumulative_recovery' "
+        "AND NOT EXISTS (SELECT 1 FROM fills successor "
+        "WHERE successor.superseded_execution_ref = f.execution_id) LIMIT 1",
+        (order_ref,),
+    ).fetchone()
+    return None if other_effective is not None else cumulative[0]
+
+
+def direct_execution_coverage_candidate(
+    *,
+    identity: ExecutionCoverageIdentity,
+    cumulative: CumulativeRecoveryFill,
+    exact: ExecutionSliceFilledFacts,
+    active_episode_ids: tuple[str, ...] = (),
+    effective_exact_source_ids: frozenset[str] = frozenset(),
+) -> ExecutionCoverageSetCandidate:
+    """Map direct Clerk evidence into the canonical coverage-set proof.
+
+    The cumulative recovery row owns its recorded side, while the exact
+    observation owns its recorded symbol and side. Constructing distinct
+    identities lets :func:`prove_execution_coverage_set` reject either an
+    order or side mismatch instead of inheriting the incoming exact identity.
+    """
+    cumulative_identity = ExecutionCoverageIdentity(
+        account_id=identity.account_id,
+        authority_generation=identity.authority_generation,
+        database_identity_token=identity.database_identity_token,
+        order_ref=cumulative.order_ref,
+        symbol=identity.symbol,
+        side=cumulative.side,
+    )
+    return ExecutionCoverageSetCandidate(
+        cumulative_recovery=(
+            CumulativeCoverageObservation(
+                source_id=cumulative.fill_id,
+                identity=cumulative_identity,
+                quantity=cumulative.quantity,
+                price=cumulative.price,
+            ),
+        ),
+        prior_quarantined_exact=(),
+        incoming_exact=ExactCoverageObservation(
+            source_id=exact.execution_id,
+            identity=identity,
+            quantity=exact.slice_qty,
+            price=exact.slice_price,
+            fee=exact.fee,
+        ),
+        active_episode_ids=active_episode_ids,
+        effective_exact_source_ids=effective_exact_source_ids,
     )
 
 

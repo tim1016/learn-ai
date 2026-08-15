@@ -437,10 +437,10 @@ async def test_sqlite_rest_recovery_folds_cumulative_fill_without_fabricating_an
         repo.close()
 
 
-async def test_manual_rest_recovery_and_later_exact_evidence_stay_subject_scoped(
+async def test_manual_rest_recovery_and_later_exact_evidence_auto_supersede_subject_scoped(
     tmp_path: Path,
 ) -> None:
-    """Manual recovery cannot fall through a bot-only coverage-conflict path."""
+    """A direct manual exact replacement preserves the manual subject boundary."""
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
     accepted = accept_manual_order(
         repo,
@@ -479,16 +479,16 @@ async def test_manual_rest_recovery_and_later_exact_evidence_stay_subject_scoped
         )
 
         assert len(repo.fills_for_order(accepted.leg.order_ref)) == 1
+        assert repo.fills_for_order(accepted.leg.order_ref)[0]["execution_id"] == "manual-exact-after-recovery"
         uncertainty = repo.active_uncertainties_for_admission(subject_id=accepted.ticket.subject_id)
-        assert len(uncertainty) == 1
-        assert uncertainty[0]["scope"] == "CUSTODY_SUBJECT"
+        assert uncertainty == []
         admission = decide_capability(
             repo,
             capability=Capability.NEW_EXPOSURE,
             subject_id=accepted.ticket.subject_id,
         )
         assert admission.allowed is False
-        assert admission.reason_code == EXECUTION_COVERAGE_CONFLICT_REASON_CODE
+        assert admission.reason_code == "MANUAL_ORDER_OUTSTANDING"
     finally:
         repo.close()
 
@@ -610,7 +610,7 @@ async def test_sqlite_changed_execution_redelivery_raises_one_coverage_conflict(
         repo.close()
 
 
-async def test_sqlite_late_exact_execution_after_recovery_is_fenced_across_restart(
+async def test_sqlite_late_exact_execution_after_recovery_auto_supersedes_across_restart(
     tmp_path: Path,
 ) -> None:
     repo, order_ref = _initialize_owned_order(tmp_path)
@@ -644,20 +644,21 @@ async def test_sqlite_late_exact_execution_after_recovery_is_fenced_across_resta
 
         fills = repo.fills_for_order(order_ref)
         assert len(fills) == 1
-        assert fills[0]["evidence_source"] == "cumulative_recovery"
+        assert fills[0]["execution_id"] == "exec-late-after-recovery"
+        assert fills[0]["evidence_source"] == "websocket"
         assert repo.position(STRATEGY_INSTANCE_ID, "SPY") == 5.0
         transition_kinds = [
             transition["transition_kind"] for transition in repo.transitions_for_order(order_ref)
         ]
         assert "EXECUTION_SLICE_FILLED" not in transition_kinds
-        assert transition_kinds.count("EXECUTION_COVERAGE_QUARANTINED") == 1
+        assert transition_kinds.count("EXECUTION_COVERAGE_SUPERSEDED") == 1
+        assert "EXECUTION_COVERAGE_QUARANTINED" not in transition_kinds
         admission = decide_capability(
             repo,
             capability=Capability.NEW_EXPOSURE,
             strategy_instance_id=STRATEGY_INSTANCE_ID,
         )
-        assert admission.allowed is False
-        assert admission.reason_code == EXECUTION_COVERAGE_CONFLICT_REASON_CODE
+        assert admission.allowed is True
     finally:
         repo.close()
 
@@ -681,8 +682,7 @@ async def test_sqlite_late_exact_execution_after_recovery_is_fenced_across_resta
             capability=Capability.NEW_EXPOSURE,
             strategy_instance_id=STRATEGY_INSTANCE_ID,
         )
-        assert admission.allowed is False
-        assert admission.reason_code == EXECUTION_COVERAGE_CONFLICT_REASON_CODE
+        assert admission.allowed is True
     finally:
         restarted.close()
 

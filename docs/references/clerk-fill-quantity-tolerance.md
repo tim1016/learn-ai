@@ -74,9 +74,10 @@ fill row already carries its own qty/price).
 
 `PythonDataService/app/broker/alpaca/clerk/sqlite/execution_coverage.py::prove_execution_coverage_set`
 is authored project logic, not a port or reuse of an external proof. It is the
-canonical predicate for a future automatic exact-after-cumulative replacement;
-the shipped S0 one-exact/one-cumulative operator flow remains unchanged and is
-an intentionally temporary duplicate.
+canonical predicate consumed by `EXECUTION_COVERAGE_SUPERSEDED` for the direct
+one-exact/one-cumulative replacement. The shipped S0 one-exact/one-cumulative
+operator flow remains unchanged and is an intentionally temporary duplicate;
+accumulated quarantined-exact replacement remains pending #1557.
 
 For the complete cumulative-recovery set `R` and exact set
 `E = E_prior ∪ {e_in}`, rows are sorted by immutable `source_id` before each
@@ -91,7 +92,8 @@ relative tolerance. Quantity comparison is strict:
 `abs(Q_E - Q_R) < QTY_ATOL`. Gross-cost comparison is inclusive:
 `abs(C_E - C_R) <= max(Q_E, Q_R) × PRICE_ATOL`. The replacement's
 `Δposition = Q_E - Q_R` is therefore zero under that same pinned absolute
-share-tolerance policy; the fold that will consume a proven result must not
+share-tolerance policy; the direct fold records the aggregates and tolerances
+in its transition facts, reruns the proof in its SQLite commit, and does not
 mutate the position projection.
 
 This deliberately separate cost gate rejects a high-price, sub-share-epsilon
@@ -103,3 +105,7 @@ evidence returns a typed refusal rather than a generic false result.
 
 The pure proof's independent-equation matrix is
 `PythonDataService/tests/broker/alpaca/clerk/sqlite/test_execution_coverage_set_proof.py`.
+Its direct-fold integration is covered by
+`PythonDataService/tests/broker/alpaca/clerk/sqlite/test_folds_execution.py`
+with exact replacement, active-episode refusal, deterministic stale-revision
+refusal, mirror rebuild, and exact-redelivery cases.
