@@ -455,18 +455,31 @@ async def test_qqq_large_snapshot_releases_the_fold_domain_between_orders(
     release_checkpoint = asyncio.Event()
     original_sleep = asyncio.sleep
     checkpoint_count = 0
+    checkpoint_fold_state: tuple[bool, bool] | None = None
 
     async def hold_first_cooperative_checkpoint(delay: float, result: object | None = None) -> None:
-        nonlocal checkpoint_count
+        nonlocal checkpoint_count, checkpoint_fold_state
         if delay == 0 and checkpoint_count == 0:
             checkpoint_count += 1
+            checkpoint_fold_state = (
+                bool(runtime.repo.fills_for_order(first.client_order_id)),
+                bool(runtime.repo.fills_for_order(second.client_order_id)),
+            )
             checkpoint_entered.set()
             await release_checkpoint.wait()
         await original_sleep(delay, result=result)
 
     monkeypatch.setattr(reconcile_module.asyncio, "sleep", hold_first_cooperative_checkpoint)
     reconciliation = asyncio.create_task(runtime.facade.reconcile_account(trigger="AUTOMATIC"))
-    await checkpoint_entered.wait()
+    try:
+        # The bound only prevents a missing cooperative yield from stalling the
+        # suite; the recorded fold state below, not elapsed time, is the proof.
+        await asyncio.wait_for(checkpoint_entered.wait(), timeout=1)
+    except TimeoutError:
+        reconciliation.cancel()
+        await asyncio.gather(reconciliation, return_exceptions=True)
+        pytest.fail("reconciliation did not reach its per-order cooperative checkpoint")
+    assert checkpoint_fold_state == (True, False)
 
     await runtime.sink.record_lifecycle_event(
         client_order_id=second.client_order_id,
