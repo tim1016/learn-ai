@@ -27,6 +27,7 @@ from app.research.runs import (
     RunRequest,
     list_runs,
     load_run,
+    run_date_to_ms,
     run_strategy_spec,
     save_run,
 )
@@ -93,8 +94,8 @@ def _make_run(spec, factory, *, run_id=None, parent_run_id=None, parent_spec_has
     return run_strategy_spec(
         RunRequest(
             spec=spec,
-            start_date=date(2024, 1, 2),
-            end_date=date(2024, 12, 31),
+            start_ms=run_date_to_ms(date(2024, 1, 2)),
+            end_ms=run_date_to_ms(date(2024, 12, 31)),
             parent_run_id=parent_run_id,
             parent_spec_hash=parent_spec_hash,
         ),
@@ -160,12 +161,12 @@ def test_load_run_with_malformed_run_id_raises_value_error(tmp_path: Path):
         "..",
         "/",
         "abc/../def",
-        "abc def",                 # whitespace
+        "abc def",  # whitespace
         "../" + "a" * 30,
-        "abcz",                    # 'z' not in hex alphabet
-        "a" * 7,                   # below length
-        "a" * 33,                  # above length
-        "-" * 32,                  # hyphens — used to pass the loose regex (PR #107 round 2)
+        "abcz",  # 'z' not in hex alphabet
+        "a" * 7,  # below length
+        "a" * 33,  # above length
+        "-" * 32,  # hyphens — used to pass the loose regex (PR #107 round 2)
         "ABCDEFABCDEFABCDEFABCDEFABCDEFAB",  # 32 chars but uppercase
     ]
     for bad in bad_ids:
@@ -290,7 +291,11 @@ def test_list_filter_by_status(tmp_path: Path, fake_data_factory):
         raise RuntimeError("synthetic failure")
 
     failed_ledger, failed_result = run_strategy_spec(
-        RunRequest(spec=spec, start_date=date(2024, 1, 2), end_date=date(2024, 12, 31)),
+        RunRequest(
+            spec=spec,
+            start_ms=run_date_to_ms(date(2024, 1, 2)),
+            end_ms=run_date_to_ms(date(2024, 12, 31)),
+        ),
         data_source_factory=broken_factory,
         data_root_revision="test-revision-1",
     )
@@ -306,9 +311,7 @@ def test_list_filter_by_parent_run_id(tmp_path: Path, fake_data_factory):
     """Phase C/D/E child runs are discoverable via parent_run_id filter."""
     spec = _build_test_spec()
     parent_ledger, parent_result = _make_run(spec, fake_data_factory)
-    child_ledger, child_result = _make_run(
-        spec, fake_data_factory, parent_run_id=parent_ledger.run_id
-    )
+    child_ledger, child_result = _make_run(spec, fake_data_factory, parent_run_id=parent_ledger.run_id)
     save_run(parent_ledger, parent_result, root=tmp_path)
     save_run(child_ledger, child_result, root=tmp_path)
 
@@ -382,10 +385,7 @@ def test_list_skips_corrupt_ledger(tmp_path: Path, fake_data_factory, caplog):
     with caplog.at_level(logging.WARNING):
         listed = list_runs(root=tmp_path)
     assert [lg.run_id for lg in listed] == [good_ledger.run_id]
-    assert any(
-        rec.message.startswith("[RUNS]") and "skipping corrupt" in rec.message
-        for rec in caplog.records
-    )
+    assert any(rec.message.startswith("[RUNS]") and "skipping corrupt" in rec.message for rec in caplog.records)
 
 
 # ---------------------------------------------------------------------------

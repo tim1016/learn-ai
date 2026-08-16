@@ -12634,7 +12634,9 @@ export interface components {
          * @description Relative difference between two operands, expressed in basis points.
          *
          *     This domain operand keeps normalized-threshold strategies explicit in
-         *     serialized specs without admitting a general arithmetic language.
+         *     serialized specs without admitting a general arithmetic language. An
+         *     unready operand evaluates to ``None``; a zero right operand is invalid and
+         *     raises ``ZeroDivisionError`` rather than producing a non-finite value.
          */
         DifferenceBps: {
             /**
@@ -21254,7 +21256,100 @@ export interface components {
          *         is part of the auditable run boundary without changing the reported
          *         trading window.
          */
-        RunLedger: Record<string, never>;
+        RunLedger: {
+            /** Commission Per Order */
+            commission_per_order: number;
+            /** Completed At Ms */
+            completed_at_ms?: number | null;
+            /** Created At Ms */
+            created_at_ms?: number;
+            /** Data Snapshot Id */
+            data_snapshot_id: string;
+            /**
+             * Data Source
+             * @default lean_minute_reader
+             * @constant
+             */
+            data_source?: "lean_minute_reader";
+            /** End Ms */
+            end_ms: number;
+            /** Engine Git Commit */
+            engine_git_commit: string;
+            /**
+             * Engine Name
+             * @default learn_ai_event_driven
+             * @constant
+             */
+            engine_name?: "learn_ai_event_driven";
+            /**
+             * Engine Version
+             * @default 0.1.0
+             */
+            engine_version?: string;
+            /** Failure Reason */
+            failure_reason?: string | null;
+            /** Fill Mode */
+            fill_mode: string;
+            /** Initial Cash */
+            initial_cash: number;
+            /** Metrics Hash */
+            metrics_hash?: string | null;
+            /** Parent Run Id */
+            parent_run_id?: string | null;
+            /** Parent Spec Hash */
+            parent_spec_hash?: string | null;
+            /** Prediction Set Hash */
+            prediction_set_hash?: string | null;
+            /**
+             * Random Seed
+             * @default 0
+             */
+            random_seed?: number;
+            /** Resolution Minutes */
+            resolution_minutes: number;
+            /** Result Hash */
+            result_hash?: string | null;
+            /** Run Id */
+            run_id: string;
+            /**
+             * Schema Version
+             * @default 1.3
+             * @enum {string}
+             */
+            schema_version?: "1.0" | "1.1" | "1.2" | "1.3";
+            /**
+             * Slippage Per Share
+             * @default 0
+             */
+            slippage_per_share?: number;
+            /** Start Ms */
+            start_ms: number;
+            /**
+             * Status
+             * @default running
+             * @enum {string}
+             */
+            status?: "running" | "completed" | "failed";
+            /** Strategy Spec Hash */
+            strategy_spec_hash: string;
+            /** Strategy Spec Id */
+            strategy_spec_id: string;
+            /** Strategy Spec Json */
+            strategy_spec_json: Record<string, never>;
+            /** Symbol */
+            symbol: string;
+            /** Trade Log Hash */
+            trade_log_hash?: string | null;
+            /**
+             * Warmup Policy
+             * @default spec_indicator_warmup
+             * @constant
+             */
+            warmup_policy?: "spec_indicator_warmup";
+            /** Warmup Start Ms */
+            warmup_start_ms?: number | null;
+            window_summary?: components["schemas"]["WindowSummary"] | null;
+        };
         /**
          * RunMetrics
          * @description Headline metrics for a backtest run.
@@ -24684,10 +24779,10 @@ export interface components {
              */
             commission_per_order?: number;
             /**
-             * End Date
-             * @description YYYY-MM-DD
+             * End Ms
+             * @description UTC epoch milliseconds
              */
-            end_date: string;
+            end_ms: number;
             /**
              * Fill Mode
              * @default signal_bar_close
@@ -24721,10 +24816,10 @@ export interface components {
              */
             split_policy: components["schemas"]["ChronologicalSplitPolicySpec"] | components["schemas"]["RollingSplitPolicySpec"] | components["schemas"]["AnchoredSplitPolicySpec"];
             /**
-             * Start Date
-             * @description YYYY-MM-DD
+             * Start Ms
+             * @description UTC epoch milliseconds
              */
-            start_date: string;
+            start_ms: number;
         };
         /** WalkForwardListResponse */
         WalkForwardListResponse: {

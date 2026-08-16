@@ -117,6 +117,13 @@ export function validateStrategy(
       });
     }
     if (op.kind === 'Subtract' || op.kind === 'DifferenceBps') {
+      if (op.kind === 'DifferenceBps' && operandsEqual(op.left, op.right)) {
+        issues.push({
+          sev: 'error',
+          text: `${where} uses the same expression on both sides of a basis-point difference.`,
+          hint: 'Choose two different indicators so the normalized gap is meaningful.',
+        });
+      }
       checkOperand(op.left, where);
       checkOperand(op.right, where);
     }
@@ -348,6 +355,23 @@ export function validateStrategy(
   }
 
   return issues;
+}
+
+function operandsEqual(left: Operand, right: Operand): boolean {
+  if (left.kind !== right.kind) return false;
+  switch (left.kind) {
+    case 'IndicatorRef':
+      return right.kind === 'IndicatorRef' && left.indicator === right.indicator;
+    case 'Const':
+      return right.kind === 'Const' && left.value === right.value;
+    case 'Subtract':
+    case 'DifferenceBps':
+      return (
+        right.kind === left.kind
+        && operandsEqual(left.left, right.left)
+        && operandsEqual(left.right, right.right)
+      );
+  }
 }
 
 /**

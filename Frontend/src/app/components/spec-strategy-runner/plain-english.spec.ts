@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { IndicatorBlock, StrategySpec } from '../../graphql/spec-strategy.models';
 import {
+  buildSummaryFragments,
   formatCondition,
   formatEntryBlock,
   formatExitBlock,
@@ -13,6 +14,20 @@ const INDS: readonly IndicatorBlock[] = [
   { id: 'ema10', kind: 'EMA', period: 10 },
   { id: 'rsi14', kind: 'RSI', period: 14 },
 ];
+
+const VALID_SUMMARY_SPEC: StrategySpec = {
+  schema_version: '1.0',
+  name: 'test',
+  symbols: ['SPY'],
+  resolution: { period_minutes: 15 },
+  indicators: [...INDS],
+  entry: {
+    logic: 'AND',
+    size: { kind: 'SetHoldings', fraction: 1 },
+    conditions: [{ kind: 'FreshCross', left: 'ema5', right: 'ema10', direction: 'up' }],
+  },
+  exit: { logic: 'OR', conditions: [{ kind: 'BarsSinceEntry', op: '>=', value: 5 }] },
+};
 
 describe('plain-english', () => {
   describe('formatCondition', () => {
@@ -61,6 +76,31 @@ describe('plain-english', () => {
         INDS,
       );
       expect(out).toBe('Δbps(EMA(5), EMA(10)) ≥ 4');
+    });
+
+    it('renders normalized basis-point differences in rich summary fragments', () => {
+      const fragments = buildSummaryFragments({
+        ...VALID_SUMMARY_SPEC,
+        entry: {
+          ...VALID_SUMMARY_SPEC.entry,
+          conditions: [
+            {
+              kind: 'IndicatorComparison',
+              left: {
+                kind: 'DifferenceBps',
+                left: { kind: 'IndicatorRef', indicator: 'ema5' },
+                right: { kind: 'IndicatorRef', indicator: 'ema10' },
+              },
+              op: '>=',
+              right: { kind: 'Const', value: 4 },
+            },
+          ],
+        },
+      });
+
+      expect(fragments.map((fragment) => fragment.text).join('')).toContain(
+        'Δbps(EMA(5), EMA(10)) ≥ 4',
+      );
     });
 
     it('renders IndicatorBetween inclusive vs exclusive', () => {

@@ -6,6 +6,8 @@ import {
   inject,
   signal,
 } from '@angular/core';
+import { ButtonModule } from 'primeng/button';
+import { ProgressBarModule } from 'primeng/progressbar';
 
 import { JobsService } from '../../../services/jobs.service';
 import { StrategyRunsService } from '../../../services/strategy-runs.service';
@@ -30,6 +32,8 @@ const JOB_TYPE = 'spy_ema_walk_forward';
   selector: 'app-spy-ema-walk-forward-page',
   imports: [
     AssetIdentityComponent,
+    ButtonModule,
+    ProgressBarModule,
     SpyEmaEvidenceComponent,
     SpyEmaProtocolComponent,
   ],
@@ -54,6 +58,12 @@ export class SpyEmaWalkForwardPageComponent {
   readonly running = computed(() => {
     const status = this.job()?.status;
     return this.starting() || status === 'queued' || status === 'running';
+  });
+  readonly progressPercent = computed(() => {
+    const current = this.job()?.current;
+    const total = this.job()?.total;
+    if (current === undefined || total === undefined || total <= 0) return 0;
+    return Math.min(100, Math.round((current / total) * 100));
   });
   readonly error = signal<string | null>(null);
   readonly walkForwardError = signal<string | null>(null);

@@ -1,13 +1,20 @@
-"""Production research pipeline for SPY EMA normalized-gap walk-forward."""
+"""Production research pipeline for SPY EMA normalized-gap walk-forward.
+
+The frozen V1 protocol uses 180-day training windows, 30-day test windows,
+and 30-day steps. Orders fill at the next bar open with zero commission and
+zero slippage. See ``docs/references/spy-ema-normalized-gap-walk-forward.md``
+for the source, fixture, and tolerance record.
+"""
 
 from __future__ import annotations
 
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date as Date
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from app.engine.strategy.spec import StrategySpec, load_spec_from_path
 from app.engine.strategy.spec.schema import (
@@ -24,27 +31,28 @@ from app.research.runs import (
 )
 from app.research.runs.ledger import resolve_data_root_revision
 from app.research.walk_forward.result import WalkForwardConfig, WalkForwardResult
-from app.research.walk_forward.runner import WalkForwardRequest, run_walk_forward
+from app.research.walk_forward.runner import (
+    CancelCheck,
+    WalkForwardRequest,
+    run_walk_forward,
+)
 from app.research.walk_forward.selection import (
     ParameterCandidate,
     ParameterSearchRequest,
 )
-from app.research.walk_forward.splits import (
-    RollingSplitPolicy,
-    SplitPolicy,
-    date_str_to_ms,
-)
+from app.research.walk_forward.splits import RollingSplitPolicy, SplitPolicy
 from app.research.walk_forward.storage import save_walk_forward
 
 DEFAULT_GAP_THRESHOLDS_BPS = (1.0, 2.0, 3.0, 4.0, 5.0, 7.5, 10.0)
 SPY_EMA_PROTOCOL_ID = "spy-ema-normalized-gap"
 SPY_EMA_PROTOCOL_VERSION = "1.0"
-SPY_EMA_PROTOCOL_START_DATE = "2024-08-01"
-SPY_EMA_PROTOCOL_END_DATE = "2026-08-01"
+SPY_EMA_PROTOCOL_START_MS = 1_722_484_800_000
+SPY_EMA_PROTOCOL_END_MS = 1_785_556_800_000
 
 _FIXTURE_ROOT = Path(__file__).resolve().parents[2] / "engine" / "strategy" / "spec" / "fixtures"
 _CONTROL_FIXTURE = _FIXTURE_ROOT / "spy_ema_crossover.spec.json"
 _NORMALIZED_FIXTURE = _FIXTURE_ROOT / "spy_ema_normalized_gap.spec.json"
+_NY = ZoneInfo("America/New_York")
 
 
 class SpyEmaPipelineError(RuntimeError):
@@ -53,8 +61,8 @@ class SpyEmaPipelineError(RuntimeError):
 
 @dataclass(frozen=True)
 class SpyEmaPipelineRequest:
-    start_date: str
-    end_date: str
+    start_ms: int
+    end_ms: int
     split_policy: SplitPolicy
     thresholds_bps: tuple[float, ...] = DEFAULT_GAP_THRESHOLDS_BPS
     min_train_trades: int = 5
@@ -67,10 +75,8 @@ class SpyEmaPipelineRequest:
     protocol_version: str | None = None
 
     def __post_init__(self) -> None:
-        start = Date.fromisoformat(self.start_date)
-        end = Date.fromisoformat(self.end_date)
-        if start >= end:
-            raise ValueError("start_date must be strictly before end_date")
+        if self.start_ms >= self.end_ms:
+            raise ValueError("start_ms must be strictly before end_ms")
         if (self.protocol_id is None) != (self.protocol_version is None):
             raise ValueError("protocol_id and protocol_version must be provided together")
         if len(self.thresholds_bps) < 2:
@@ -102,8 +108,8 @@ class SpyEmaPipelineResult:
 def frozen_spy_ema_v1_request() -> SpyEmaPipelineRequest:
     """Return the immutable, server-owned V1 research protocol."""
     return SpyEmaPipelineRequest(
-        start_date=SPY_EMA_PROTOCOL_START_DATE,
-        end_date=SPY_EMA_PROTOCOL_END_DATE,
+        start_ms=SPY_EMA_PROTOCOL_START_MS,
+        end_ms=SPY_EMA_PROTOCOL_END_MS,
         split_policy=RollingSplitPolicy(
             train_days=180,
             test_days=30,
@@ -121,25 +127,25 @@ def run_spy_ema_pipeline(
     artifacts_root: Any | None = None,
     data_root_revision: str | None = None,
     on_progress: Callable[[int, int, str], None] | None = None,
-    cancel_check: Callable[[], None] | None = None,
+    cancel_check: CancelCheck | None = None,
 ) -> SpyEmaPipelineResult:
     """Run and persist the absolute-gap control plus optimized OOS study."""
+    start_date = datetime.fromtimestamp(request.start_ms / 1000, tz=_NY).date()
+    end_date = datetime.fromtimestamp(request.end_ms / 1000, tz=_NY).date()
     pinned_revision = data_root_revision or resolve_data_root_revision(
         symbol="SPY",
-        start_date=Date.fromisoformat(request.start_date),
-        end_date=Date.fromisoformat(request.end_date),
+        start_date=start_date,
+        end_date=end_date,
     )
-    start_ms = date_str_to_ms(request.start_date)
-    end_ms = date_str_to_ms(request.end_date)
-    fold_count = len(request.split_policy.folds(start_ms, end_ms))
+    fold_count = len(request.split_policy.folds(request.start_ms, request.end_ms))
     total_steps = 1 + fold_count * (len(request.thresholds_bps) + 1)
     if cancel_check is not None:
         cancel_check()
     control_spec = load_spec_from_path(_CONTROL_FIXTURE)
     control_request = RunRequest(
         spec=control_spec,
-        start_date=Date.fromisoformat(request.start_date),
-        end_date=Date.fromisoformat(request.end_date),
+        start_ms=request.start_ms,
+        end_ms=request.end_ms,
         initial_cash=request.initial_cash,
         fill_mode=request.fill_mode,
         commission_per_order=request.commission_per_order,
@@ -168,8 +174,8 @@ def run_spy_ema_pipeline(
     )
     wf_request = WalkForwardRequest(
         spec=normalized_spec,
-        start_date=request.start_date,
-        end_date=request.end_date,
+        start_ms=request.start_ms,
+        end_ms=request.end_ms,
         split_policy=request.split_policy,
         initial_cash=request.initial_cash,
         fill_mode=request.fill_mode,

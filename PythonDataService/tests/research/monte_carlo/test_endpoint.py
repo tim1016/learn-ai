@@ -22,7 +22,7 @@ from app.engine.strategy.spec.tests._parity_helpers import (
     closes_for_spy_ema,
 )
 from app.main import app
-from app.research.runs import RunRequest, run_strategy_spec, save_run
+from app.research.runs import RunRequest, run_date_to_ms, run_strategy_spec, save_run
 from app.routers.research_runs import (
     get_artifacts_root,
     get_data_source_factory,
@@ -99,8 +99,8 @@ def parent_run_id(configured_app, tmp_path: Path):
     ledger, result = run_strategy_spec(
         RunRequest(
             spec=_build_test_spec(),
-            start_date=date(2024, 1, 2),
-            end_date=date(2024, 12, 31),
+            start_ms=run_date_to_ms(date(2024, 1, 2)),
+            end_ms=run_date_to_ms(date(2024, 12, 31)),
         ),
         data_source_factory=factory,
         data_root_revision="test-revision-1",
@@ -121,9 +121,7 @@ async def client(configured_app):
 # ---------------------------------------------------------------------------
 # Happy paths.
 # ---------------------------------------------------------------------------
-async def test_post_reshuffle_creates_persisted_monte_carlo(
-    client, parent_run_id, tmp_path: Path
-):
+async def test_post_reshuffle_creates_persisted_monte_carlo(client, parent_run_id, tmp_path: Path):
     response = await client.post(
         "/api/research/strategy-runs/monte-carlo",
         json={
@@ -255,9 +253,7 @@ async def test_post_simulation_count_above_cap_returns_422(client, parent_run_id
     assert response.status_code == 422
 
 
-async def test_post_missing_parent_run_persists_failed_mc(
-    client, configured_app, tmp_path: Path
-):
+async def test_post_missing_parent_run_persists_failed_mc(client, configured_app, tmp_path: Path):
     """A non-existent parent_run_id is a *failed* MC, not a 4xx — the
     runner persists the failure for discoverability (Phase A's
     failed-runs-are-first-class contract carried forward).
@@ -285,16 +281,12 @@ async def test_post_missing_parent_run_persists_failed_mc(
 # GET single + 404.
 # ---------------------------------------------------------------------------
 async def test_get_missing_returns_404(client):
-    response = await client.get(
-        "/api/research/strategy-runs/monte-carlo/" + "f" * 32
-    )
+    response = await client.get("/api/research/strategy-runs/monte-carlo/" + "f" * 32)
     assert response.status_code == 404
 
 
 async def test_get_path_traversal_id_returns_400(client):
-    response = await client.get(
-        "/api/research/strategy-runs/monte-carlo/..%2Fetc%2Fpasswd"
-    )
+    response = await client.get("/api/research/strategy-runs/monte-carlo/..%2Fetc%2Fpasswd")
     assert response.status_code in {400, 404}, response.text
 
 
@@ -331,9 +323,7 @@ async def test_list_filter_by_parent_run_id(client, parent_run_id):
         params={"parent_run_id": parent_run_id},
     )
     items = response.json()["monte_carlos"]
-    assert [c["monte_carlo_id"] for c in items] == [
-        a.json()["config"]["monte_carlo_id"]
-    ]
+    assert [c["monte_carlo_id"] for c in items] == [a.json()["config"]["monte_carlo_id"]]
 
 
 async def test_list_filter_by_method(client, parent_run_id):
@@ -359,9 +349,7 @@ async def test_list_filter_by_method(client, parent_run_id):
         params={"method": "reshuffle"},
     )
     items = response.json()["monte_carlos"]
-    assert [c["monte_carlo_id"] for c in items] == [
-        rs.json()["config"]["monte_carlo_id"]
-    ]
+    assert [c["monte_carlo_id"] for c in items] == [rs.json()["config"]["monte_carlo_id"]]
 
 
 # ---------------------------------------------------------------------------

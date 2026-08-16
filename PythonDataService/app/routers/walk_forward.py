@@ -3,9 +3,9 @@
 Three endpoints under ``/api/research/strategy-runs/walk-forward``:
 
   * ``POST   /``                 — kick off a walk-forward analysis,
-    persist the config + result, and return them. Synchronous: blocks
-    until every fold finishes. Large versioned protocols use the jobs
-    boundary in ``app/routers/jobs.py`` instead.
+    persist the config + result, and return them. Blocking engine and
+    filesystem work is offloaded from the event loop. Large versioned
+    protocols use the jobs boundary in ``app/routers/jobs.py`` instead.
   * ``GET    /{wf_id}``          — load a previously-persisted WF.
   * ``GET    /``                 — list WFs, optionally filtered by
     parent, spec hash, protocol identity, or creation time.
@@ -14,8 +14,6 @@ Mounted *before* ``research_runs`` in ``app/main.py`` so the literal
 ``/walk-forward`` segment wins against the parameterised
 ``GET /{run_id}`` route on the parent router.
 
-Like ``research_runs.py`` this is a sync handler — every operation is
-blocking I/O and FastAPI's threadpool is the right place for it.
 GraphQL passthrough deliberately deferred until a UI consumer needs it.
 """
 
@@ -23,10 +21,11 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import date as Date
-from datetime import datetime
+from functools import partial
 from pathlib import Path
+from typing import Any
 
+from anyio import to_thread
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -69,11 +68,11 @@ class WalkForwardHttpRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     spec: StrategySpec = Field(..., description="Validated StrategySpec")
-    start_date: str = Field(..., description="YYYY-MM-DD")
-    end_date: str = Field(..., description="YYYY-MM-DD")
+    start_ms: int = Field(..., ge=0, strict=True, description="UTC epoch milliseconds")
+    end_ms: int = Field(..., ge=0, strict=True, description="UTC epoch milliseconds")
     initial_cash: float = Field(
         100_000.0,
-        gt=0,
+        ge=0,
         allow_inf_nan=False,
         strict=True,
     )
@@ -91,12 +90,8 @@ class WalkForwardHttpRequest(BaseModel):
         strict=True,
     )
     random_seed: int = Field(0, strict=True)
-    parent_run_id: str | None = Field(
-        None, description="Optional baseline run this WF is derived from"
-    )
-    split_policy: SplitPolicySpec = Field(
-        ..., description="``kind`` discriminator + policy-specific fields"
-    )
+    parent_run_id: str | None = Field(None, description="Optional baseline run this WF is derived from")
+    split_policy: SplitPolicySpec = Field(..., description="``kind`` discriminator + policy-specific fields")
 
 
 class WalkForwardResponse(BaseModel):
@@ -106,19 +101,6 @@ class WalkForwardResponse(BaseModel):
 
 class WalkForwardListResponse(BaseModel):
     walk_forwards: list[WalkForwardConfig]
-
-
-# ---------------------------------------------------------------------------
-# Helpers.
-# ---------------------------------------------------------------------------
-def _parse_date(s: str, field: str) -> Date:
-    try:
-        return datetime.strptime(s, "%Y-%m-%d").date()
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"{field} must be YYYY-MM-DD: {s!r}",
-        ) from exc
 
 
 def _validate_fill_mode(s: str) -> None:
@@ -134,22 +116,17 @@ def _validate_fill_mode(s: str) -> None:
 # Endpoints.
 # ---------------------------------------------------------------------------
 @router.post("", response_model=WalkForwardResponse)
-def create_walk_forward(
+async def create_walk_forward(
     request: WalkForwardHttpRequest,
     data_source_factory=Depends(get_data_source_factory),
     artifacts_root: Path | None = Depends(get_artifacts_root),
 ) -> WalkForwardResponse:
     """Run a walk-forward analysis, persist, and return ``(config, result)``."""
-    start_d = _parse_date(request.start_date, "start_date")
-    end_d = _parse_date(request.end_date, "end_date")
     _validate_fill_mode(request.fill_mode)
-    if start_d >= end_d:
+    if request.start_ms >= request.end_ms:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                f"start_date must be strictly before end_date "
-                f"(got start={start_d.isoformat()}, end={end_d.isoformat()})"
-            ),
+            detail=(f"start_ms must be strictly before end_ms (got start={request.start_ms}, end={request.end_ms})"),
         )
 
     # Build the typed split policy from the JSON discriminator.
@@ -163,8 +140,8 @@ def create_walk_forward(
 
     wf_request = WalkForwardRequest(
         spec=request.spec,
-        start_date=request.start_date,
-        end_date=request.end_date,
+        start_ms=request.start_ms,
+        end_ms=request.end_ms,
         split_policy=split_policy,
         initial_cash=request.initial_cash,
         fill_mode=request.fill_mode,
@@ -173,59 +150,25 @@ def create_walk_forward(
         random_seed=request.random_seed,
         parent_run_id=request.parent_run_id,
     )
-    parent_sharpe = _load_parent_sharpe(
-        request.parent_run_id,
-        artifacts_root=artifacts_root,
-    )
-
-    config, result = run_walk_forward(
-        wf_request,
-        data_source_factory=data_source_factory,
-        artifacts_root=artifacts_root,
-        parent_sharpe=parent_sharpe,
-        # Resolve the data root revision via the same env-driven path
-        # the runner uses by default — ``None`` triggers the default
-        # ``resolve_data_root_revision()`` lookup inside
-        # ``run_strategy_spec`` per fold.
-        data_root_revision=os.environ.get("LEAN_DATA_ROOT_REVISION") or None,
-    )
-
-    try:
-        save_walk_forward(config, result, root=artifacts_root)
-    except (RunAlreadyExistsError, WalkForwardAlreadyExistsError) as exc:
-        logger.exception(
-            "[WF] walk_forward_id collision: %s", config.walk_forward_id
+    return await to_thread.run_sync(
+        partial(
+            _run_and_persist_walk_forward,
+            wf_request,
+            data_source_factory=data_source_factory,
+            artifacts_root=artifacts_root,
+            parent_run_id=request.parent_run_id,
         )
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"walk_forward_id collision: {config.walk_forward_id}",
-        ) from exc
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
-    except Exception as exc:
-        logger.exception(
-            "[WF] failed to persist walk_forward_id=%s",
-            config.walk_forward_id,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"walk-forward completed but persistence failed: {exc}",
-        ) from exc
-
-    return WalkForwardResponse(config=config, result=result)
+    )
 
 
 @router.get("/{wf_id}", response_model=WalkForwardResponse)
-def get_walk_forward(
+async def get_walk_forward(
     wf_id: str,
     artifacts_root: Path | None = Depends(get_artifacts_root),
 ) -> WalkForwardResponse:
     """Load a previously-persisted walk-forward."""
     try:
-        config, result = load_walk_forward(wf_id, root=artifacts_root)
+        config, result = await to_thread.run_sync(partial(load_walk_forward, wf_id, root=artifacts_root))
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -246,14 +189,12 @@ def get_walk_forward(
 
 
 @router.get("", response_model=WalkForwardListResponse)
-def list_walk_forwards_endpoint(
+async def list_walk_forwards_endpoint(
     parent_run_id: str | None = Query(None, description="Filter by baseline run"),
     spec_hash: str | None = Query(None, description="Filter by ``strategy_spec_hash``"),
     protocol_id: str | None = Query(None, description="Filter by exact protocol identity"),
     protocol_version: str | None = Query(None, description="Filter by exact protocol version"),
-    since_ms: int | None = Query(
-        None, ge=0, description="Only return WFs created at or after this ms-since-epoch"
-    ),
+    since_ms: int | None = Query(None, ge=0, description="Only return WFs created at or after this ms-since-epoch"),
     limit: int | None = Query(None, ge=1, description="Newest-first cap"),
     artifacts_root: Path | None = Depends(get_artifacts_root),
 ) -> WalkForwardListResponse:
@@ -263,16 +204,64 @@ def list_walk_forwards_endpoint(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="protocol_id and protocol_version filters must be provided together",
         )
-    items = list_walk_forwards(
-        root=artifacts_root,
-        parent_run_id=parent_run_id,
-        spec_hash=spec_hash,
-        protocol_id=protocol_id,
-        protocol_version=protocol_version,
-        since_ms=since_ms,
-        limit=limit,
+    items = await to_thread.run_sync(
+        partial(
+            list_walk_forwards,
+            root=artifacts_root,
+            parent_run_id=parent_run_id,
+            spec_hash=spec_hash,
+            protocol_id=protocol_id,
+            protocol_version=protocol_version,
+            since_ms=since_ms,
+            limit=limit,
+        )
     )
     return WalkForwardListResponse(walk_forwards=items)
+
+
+def _run_and_persist_walk_forward(
+    request: WalkForwardRequest,
+    *,
+    data_source_factory: Any,
+    artifacts_root: Path | None,
+    parent_run_id: str | None,
+) -> WalkForwardResponse:
+    """Execute blocking engine and artifact work inside a worker thread."""
+    parent_sharpe = _load_parent_sharpe(
+        parent_run_id,
+        artifacts_root=artifacts_root,
+    )
+    config, result = run_walk_forward(
+        request,
+        data_source_factory=data_source_factory,
+        artifacts_root=artifacts_root,
+        parent_sharpe=parent_sharpe,
+        data_root_revision=os.environ.get("LEAN_DATA_ROOT_REVISION") or None,
+    )
+
+    try:
+        save_walk_forward(config, result, root=artifacts_root)
+    except (RunAlreadyExistsError, WalkForwardAlreadyExistsError) as exc:
+        logger.exception("[WF] walk_forward_id collision: %s", config.walk_forward_id)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"walk_forward_id collision: {config.walk_forward_id}",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        logger.exception(
+            "[WF] failed to persist walk_forward_id=%s",
+            config.walk_forward_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"walk-forward completed but persistence failed: {exc}",
+        ) from exc
+    return WalkForwardResponse(config=config, result=result)
 
 
 def _load_parent_sharpe(

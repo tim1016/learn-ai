@@ -48,6 +48,7 @@ from app.research.walk_forward.selection import (
 from app.research.walk_forward.splits import (
     ChronologicalSplitPolicy,
     RollingSplitPolicy,
+    date_str_to_ms,
 )
 
 
@@ -131,8 +132,8 @@ def fake_factory_long():
 def test_chronological_split_emits_one_fold(tmp_path: Path, fake_factory_long):
     request = WalkForwardRequest(
         spec=_build_test_spec(),
-        start_date="2024-01-02",
-        end_date="2024-02-15",  # ~6 weeks
+        start_ms=date_str_to_ms("2024-01-02"),
+        end_ms=date_str_to_ms("2024-02-15"),  # ~6 weeks
         split_policy=ChronologicalSplitPolicy(train_pct=0.6),
     )
     config, result = run_walk_forward(
@@ -169,8 +170,8 @@ def test_chronological_split_emits_one_fold(tmp_path: Path, fake_factory_long):
 def test_chronological_split_records_correct_split_policy(tmp_path: Path, fake_factory_long):
     request = WalkForwardRequest(
         spec=_build_test_spec(),
-        start_date="2024-01-02",
-        end_date="2024-02-15",
+        start_ms=date_str_to_ms("2024-01-02"),
+        end_ms=date_str_to_ms("2024-02-15"),
         split_policy=ChronologicalSplitPolicy(train_pct=0.5),
     )
     _, result = run_walk_forward(
@@ -190,8 +191,8 @@ def test_chronological_split_records_correct_split_policy(tmp_path: Path, fake_f
 def test_rolling_split_emits_multiple_folds(tmp_path: Path, fake_factory_long):
     request = WalkForwardRequest(
         spec=_build_test_spec(),
-        start_date="2024-01-02",
-        end_date="2024-02-22",  # ~50 days
+        start_ms=date_str_to_ms("2024-01-02"),
+        end_ms=date_str_to_ms("2024-02-22"),  # ~50 days
         split_policy=RollingSplitPolicy(train_days=10, test_days=5, step_days=5),
     )
     _, result = run_walk_forward(
@@ -216,8 +217,8 @@ def test_rolling_split_emits_multiple_folds(tmp_path: Path, fake_factory_long):
 def test_rolling_aggregates_only_count_completed_folds(tmp_path: Path, fake_factory_long):
     request = WalkForwardRequest(
         spec=_build_test_spec(),
-        start_date="2024-01-02",
-        end_date="2024-02-22",
+        start_ms=date_str_to_ms("2024-01-02"),
+        end_ms=date_str_to_ms("2024-02-22"),
         split_policy=RollingSplitPolicy(train_days=10, test_days=5, step_days=5),
     )
     _, result = run_walk_forward(
@@ -247,8 +248,8 @@ def test_parameter_search_persists_train_receipts_and_freezes_winner_for_test(
     )
     request = WalkForwardRequest(
         spec=_build_normalized_test_spec(1.0),
-        start_date="2024-01-02",
-        end_date="2024-02-22",
+        start_ms=date_str_to_ms("2024-01-02"),
+        end_ms=date_str_to_ms("2024-02-22"),
         split_policy=ChronologicalSplitPolicy(train_pct=0.7),
         parameter_search=ParameterSearchRequest(
             candidates=candidates,
@@ -303,8 +304,8 @@ def test_parameter_search_fails_closed_when_no_candidate_has_train_evidence(
     )
     request = WalkForwardRequest(
         spec=_build_normalized_test_spec(90.0),
-        start_date="2024-01-02",
-        end_date="2024-02-22",
+        start_ms=date_str_to_ms("2024-01-02"),
+        end_ms=date_str_to_ms("2024-02-22"),
         split_policy=ChronologicalSplitPolicy(train_pct=0.7),
         parameter_search=ParameterSearchRequest(
             candidates=candidates,
@@ -347,8 +348,8 @@ def test_parameter_search_fails_closed_when_train_receipts_cannot_persist(
     )
     request = WalkForwardRequest(
         spec=_build_normalized_test_spec(1.0),
-        start_date="2024-01-02",
-        end_date="2024-02-22",
+        start_ms=date_str_to_ms("2024-01-02"),
+        end_ms=date_str_to_ms("2024-02-22"),
         split_policy=ChronologicalSplitPolicy(train_pct=0.7),
         parameter_search=ParameterSearchRequest(
             candidates=candidates,
@@ -383,8 +384,8 @@ def test_cancellation_after_final_candidate_does_not_start_test_run(
     )
     request = WalkForwardRequest(
         spec=_build_normalized_test_spec(1.0),
-        start_date="2024-01-02",
-        end_date="2024-02-22",
+        start_ms=date_str_to_ms("2024-01-02"),
+        end_ms=date_str_to_ms("2024-02-22"),
         split_policy=ChronologicalSplitPolicy(train_pct=0.7),
         parameter_search=ParameterSearchRequest(
             candidates=candidates,
@@ -396,6 +397,8 @@ def test_cancellation_after_final_candidate_does_not_start_test_run(
     def cancel_after_candidates() -> None:
         nonlocal checks
         checks += 1
+        # Checks 1-3 bracket fold setup and the two training candidates;
+        # check 4 is immediately before the OOS test run is launched.
         if checks == 4:
             raise RuntimeError("synthetic cancellation")
 
@@ -422,6 +425,8 @@ def test_test_receipt_persistence_failure_fails_closed_with_partial_evidence(
 
     def fail_only_test_receipt(ledger, result, *, root=None):
         save_calls["count"] += 1
+        # Two training receipts are saved first; the third save is the
+        # selected candidate's OOS test receipt.
         if save_calls["count"] == 3:
             raise OSError("synthetic test-receipt failure")
         return real_save_run(ledger, result, root=root)
@@ -439,8 +444,8 @@ def test_test_receipt_persistence_failure_fails_closed_with_partial_evidence(
     )
     request = WalkForwardRequest(
         spec=_build_normalized_test_spec(1.0),
-        start_date="2024-01-02",
-        end_date="2024-02-22",
+        start_ms=date_str_to_ms("2024-01-02"),
+        end_ms=date_str_to_ms("2024-02-22"),
         split_policy=ChronologicalSplitPolicy(train_pct=0.7),
         parameter_search=ParameterSearchRequest(
             candidates=candidates,
@@ -493,8 +498,8 @@ def test_parameter_search_retention_is_mean_of_fold_local_ratios():
 def test_oos_retention_uses_parent_sharpe(tmp_path: Path, fake_factory_long):
     request = WalkForwardRequest(
         spec=_build_test_spec(),
-        start_date="2024-01-02",
-        end_date="2024-02-22",
+        start_ms=date_str_to_ms("2024-01-02"),
+        end_ms=date_str_to_ms("2024-02-22"),
         split_policy=RollingSplitPolicy(train_days=10, test_days=5, step_days=5),
         parent_run_id="abcabcabcabcabcabcabcabcabcabcab",
     )
@@ -526,8 +531,8 @@ def test_combined_oos_curve_is_monotonically_concatenated(tmp_path: Path, fake_f
     """
     request = WalkForwardRequest(
         spec=_build_test_spec(),
-        start_date="2024-01-02",
-        end_date="2024-02-22",
+        start_ms=date_str_to_ms("2024-01-02"),
+        end_ms=date_str_to_ms("2024-02-22"),
         split_policy=RollingSplitPolicy(train_days=10, test_days=5, step_days=5),
     )
     _, result = run_walk_forward(
@@ -559,8 +564,8 @@ def test_empty_test_window_fails_fold_closed_and_is_not_aggregated(tmp_path: Pat
 
     request = WalkForwardRequest(
         spec=_build_test_spec(),
-        start_date="2024-01-02",
-        end_date="2024-02-15",
+        start_ms=date_str_to_ms("2024-01-02"),
+        end_ms=date_str_to_ms("2024-02-15"),
         split_policy=ChronologicalSplitPolicy(train_pct=0.7),
     )
 
@@ -587,8 +592,8 @@ def test_every_engine_failed_test_fold_marks_aggregate_failed(tmp_path: Path):
 
     request = WalkForwardRequest(
         spec=_build_test_spec(),
-        start_date="2024-01-02",
-        end_date="2024-02-22",
+        start_ms=date_str_to_ms("2024-01-02"),
+        end_ms=date_str_to_ms("2024-02-22"),
         split_policy=RollingSplitPolicy(train_days=10, test_days=5, step_days=5),
     )
 
@@ -612,8 +617,8 @@ def test_window_too_short_for_split_returns_failed_result(tmp_path: Path, fake_f
     """
     request = WalkForwardRequest(
         spec=_build_test_spec(),
-        start_date="2024-01-02",
-        end_date="2024-01-05",  # 3 days
+        start_ms=date_str_to_ms("2024-01-02"),
+        end_ms=date_str_to_ms("2024-01-05"),  # 3 days
         split_policy=RollingSplitPolicy(train_days=30, test_days=15, step_days=7),
     )
     _, result = run_walk_forward(
@@ -641,8 +646,8 @@ def test_parent_run_id_is_recorded_on_walk_forward_result(tmp_path: Path, fake_f
     """
     request = WalkForwardRequest(
         spec=_build_test_spec(),
-        start_date="2024-01-02",
-        end_date="2024-02-15",
+        start_ms=date_str_to_ms("2024-01-02"),
+        end_ms=date_str_to_ms("2024-02-15"),
         split_policy=ChronologicalSplitPolicy(),
         parent_run_id="abcabcabcabcabcabcabcabcabcabcab",  # not validated; informational
     )
@@ -684,8 +689,8 @@ def test_failed_folds_are_excluded_from_pct_profitable_folds(tmp_path: Path, fak
 
     request = WalkForwardRequest(
         spec=_build_test_spec(),
-        start_date="2024-01-02",
-        end_date="2024-02-22",
+        start_ms=date_str_to_ms("2024-01-02"),
+        end_ms=date_str_to_ms("2024-02-22"),
         split_policy=RollingSplitPolicy(train_days=10, test_days=5, step_days=5),
     )
     _, result = run_walk_forward(
@@ -714,8 +719,8 @@ def test_failed_folds_are_excluded_from_pct_profitable_folds(tmp_path: Path, fak
 def test_repeat_walk_forward_runs_have_distinct_walk_forward_ids(tmp_path: Path, fake_factory_long):
     request = WalkForwardRequest(
         spec=_build_test_spec(),
-        start_date="2024-01-02",
-        end_date="2024-02-15",
+        start_ms=date_str_to_ms("2024-01-02"),
+        end_ms=date_str_to_ms("2024-02-15"),
         split_policy=ChronologicalSplitPolicy(),
     )
     config1, _ = run_walk_forward(

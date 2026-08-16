@@ -38,3 +38,7 @@ def test_export_excludes_dev_fault_routes_when_caller_environment_enables_them(
         legs = contract["components"]["schemas"][schema_name]["properties"]["legs"]
         assert legs["minItems"] == 1
         assert legs["maxItems"] == 8
+
+    run_ledger = contract["components"]["schemas"]["RunLedger"]
+    assert run_ledger["type"] == "object"
+    assert {"run_id", "start_ms", "end_ms", "warmup_start_ms"} <= set(run_ledger["properties"])

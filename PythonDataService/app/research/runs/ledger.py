@@ -29,9 +29,9 @@ import subprocess
 from datetime import date as Date
 from datetime import timedelta
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.research.runs.window import WindowSummary
 from app.utils.timestamps import now_ms_utc
@@ -204,8 +204,7 @@ def resolve_data_root_revision(
                 if sha:
                     return sha
             logger.debug(
-                "[RUNS] data root %s: git rev-parse returned %d; "
-                "falling back to per-file fingerprint",
+                "[RUNS] data root %s: git rev-parse returned %d; falling back to per-file fingerprint",
                 root,
                 proc.returncode,
             )
@@ -293,13 +292,9 @@ class RunLedger(BaseModel):
     # ``window_summary=None``. New runs always populate it.
     window_summary: WindowSummary | None = None
 
-    @model_serializer(mode="wrap")
-    def _preserve_pre_v1_3_bytes(
-        self,
-        handler: SerializerFunctionWrapHandler,
-    ) -> dict:
-        """Do not inject the v1.3 field when re-saving an older ledger."""
-        payload = handler(self)
-        if self.schema_version != "1.3":
+    def model_dump(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        """Preserve legacy persisted bytes without erasing the OpenAPI schema."""
+        payload = super().model_dump(*args, **kwargs)
+        if self.schema_version in {"1.0", "1.1", "1.2"}:
             payload.pop("warmup_start_ms", None)
         return payload

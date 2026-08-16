@@ -15604,7 +15604,7 @@
       },
       "DifferenceBps": {
         "additionalProperties": false,
-        "description": "Relative difference between two operands, expressed in basis points.\n\nThis domain operand keeps normalized-threshold strategies explicit in\nserialized specs without admitting a general arithmetic language.",
+        "description": "Relative difference between two operands, expressed in basis points.\n\nThis domain operand keeps normalized-threshold strategies explicit in\nserialized specs without admitting a general arithmetic language. An\nunready operand evaluates to ``None``; a zero right operand is invalid and\nraises ``ZeroDivisionError`` rather than producing a non-finite value.",
         "properties": {
           "kind": {
             "const": "DifferenceBps",
@@ -35343,7 +35343,245 @@
         "type": "object"
       },
       "RunLedger": {
+        "additionalProperties": false,
         "description": "Immutable identity record for a single strategy run.\n\nPersisted as ``ledger.json`` in the run's artifact directory.\nPydantic ``extra='forbid'`` makes schema drift loud rather than\nsilent \u2014 adding a field is a deliberate ``schema_version`` bump.\n\nSchema versions:\n  * v1.0: Initial schema.\n  * v1.1: Added optional ``prediction_set_hash`` field for ML prediction set tracking.\n  * v1.2: Added optional ``window_summary`` field \u2014 calendar breakdown\n    (sessions included / weekends + holidays excluded) for the run's\n    date window. Older ledgers continue to load with this field as\n    ``None``.\n  * v1.3: Added optional ``warmup_start_ms`` so indicator pre-roll data\n    is part of the auditable run boundary without changing the reported\n    trading window.",
+        "properties": {
+          "commission_per_order": {
+            "minimum": 0.0,
+            "title": "Commission Per Order",
+            "type": "number"
+          },
+          "completed_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At Ms"
+          },
+          "created_at_ms": {
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "data_snapshot_id": {
+            "title": "Data Snapshot Id",
+            "type": "string"
+          },
+          "data_source": {
+            "const": "lean_minute_reader",
+            "default": "lean_minute_reader",
+            "title": "Data Source"
+          },
+          "end_ms": {
+            "title": "End Ms",
+            "type": "integer"
+          },
+          "engine_git_commit": {
+            "title": "Engine Git Commit",
+            "type": "string"
+          },
+          "engine_name": {
+            "const": "learn_ai_event_driven",
+            "default": "learn_ai_event_driven",
+            "title": "Engine Name"
+          },
+          "engine_version": {
+            "default": "0.1.0",
+            "title": "Engine Version",
+            "type": "string"
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "fill_mode": {
+            "title": "Fill Mode",
+            "type": "string"
+          },
+          "initial_cash": {
+            "minimum": 0.0,
+            "title": "Initial Cash",
+            "type": "number"
+          },
+          "metrics_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metrics Hash"
+          },
+          "parent_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Run Id"
+          },
+          "parent_spec_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Spec Hash"
+          },
+          "prediction_set_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prediction Set Hash"
+          },
+          "random_seed": {
+            "default": 0,
+            "title": "Random Seed",
+            "type": "integer"
+          },
+          "resolution_minutes": {
+            "minimum": 1.0,
+            "title": "Resolution Minutes",
+            "type": "integer"
+          },
+          "result_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Hash"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "default": "1.3",
+            "enum": [
+              "1.0",
+              "1.1",
+              "1.2",
+              "1.3"
+            ],
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "slippage_per_share": {
+            "default": 0.0,
+            "minimum": 0.0,
+            "title": "Slippage Per Share",
+            "type": "number"
+          },
+          "start_ms": {
+            "title": "Start Ms",
+            "type": "integer"
+          },
+          "status": {
+            "default": "running",
+            "enum": [
+              "running",
+              "completed",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "strategy_spec_hash": {
+            "title": "Strategy Spec Hash",
+            "type": "string"
+          },
+          "strategy_spec_id": {
+            "title": "Strategy Spec Id",
+            "type": "string"
+          },
+          "strategy_spec_json": {
+            "title": "Strategy Spec Json",
+            "type": "object"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "trade_log_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trade Log Hash"
+          },
+          "warmup_policy": {
+            "const": "spec_indicator_warmup",
+            "default": "spec_indicator_warmup",
+            "title": "Warmup Policy"
+          },
+          "warmup_start_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warmup Start Ms"
+          },
+          "window_summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WindowSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "run_id",
+          "strategy_spec_id",
+          "strategy_spec_hash",
+          "strategy_spec_json",
+          "engine_git_commit",
+          "symbol",
+          "resolution_minutes",
+          "start_ms",
+          "end_ms",
+          "initial_cash",
+          "fill_mode",
+          "commission_per_order",
+          "data_snapshot_id"
+        ],
         "title": "RunLedger",
         "type": "object"
       },
@@ -43119,10 +43357,11 @@
             "title": "Commission Per Order",
             "type": "number"
           },
-          "end_date": {
-            "description": "YYYY-MM-DD",
-            "title": "End Date",
-            "type": "string"
+          "end_ms": {
+            "description": "UTC epoch milliseconds",
+            "minimum": 0.0,
+            "title": "End Ms",
+            "type": "integer"
           },
           "fill_mode": {
             "default": "signal_bar_close",
@@ -43131,7 +43370,7 @@
           },
           "initial_cash": {
             "default": 100000.0,
-            "exclusiveMinimum": 0.0,
+            "minimum": 0.0,
             "title": "Initial Cash",
             "type": "number"
           },
@@ -43189,16 +43428,17 @@
             ],
             "title": "Split Policy"
           },
-          "start_date": {
-            "description": "YYYY-MM-DD",
-            "title": "Start Date",
-            "type": "string"
+          "start_ms": {
+            "description": "UTC epoch milliseconds",
+            "minimum": 0.0,
+            "title": "Start Ms",
+            "type": "integer"
           }
         },
         "required": [
           "spec",
-          "start_date",
-          "end_date",
+          "start_ms",
+          "end_ms",
           "split_policy"
         ],
         "title": "WalkForwardHttpRequest",

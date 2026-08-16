@@ -30,7 +30,13 @@ from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from app.engine.strategy.spec import StrategySpec
-from app.research.runs import RunLedger, RunRequest, run_strategy_spec, save_run
+from app.research.runs import (
+    RunLedger,
+    RunRequest,
+    run_date_to_ms,
+    run_strategy_spec,
+    save_run,
+)
 from app.research.runs.hashing import hash_payload
 from app.research.runs.result import BacktestRunResult, EquityCurvePoint
 from app.research.walk_forward.result import (
@@ -38,6 +44,7 @@ from app.research.walk_forward.result import (
     ParameterCandidateConfig,
     ParameterSearchConfig,
     SelectionFailureResult,
+    SplitPolicySpec,
     TrainingCandidateResult,
     WalkForwardConfig,
     WalkForwardResult,
@@ -48,12 +55,13 @@ from app.research.walk_forward.selection import (
     ParameterSelectionError,
     select_candidate_index,
 )
-from app.research.walk_forward.splits import FoldWindow, SplitPolicy, date_str_to_ms
+from app.research.walk_forward.splits import FoldWindow, SplitPolicy
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
 _NY = ZoneInfo("America/New_York")
+CancelCheck = Callable[[], bool | None]
 
 
 @dataclass(frozen=True)
@@ -67,8 +75,8 @@ class WalkForwardRequest:
     """
 
     spec: StrategySpec
-    start_date: str  # YYYY-MM-DD
-    end_date: str
+    start_ms: int
+    end_ms: int
     split_policy: SplitPolicy
     initial_cash: float = 100_000.0
     fill_mode: str = "signal_bar_close"
@@ -82,6 +90,8 @@ class WalkForwardRequest:
     protocol_version: str | None = None
 
     def __post_init__(self) -> None:
+        if self.start_ms >= self.end_ms:
+            raise ValueError("start_ms must be strictly before end_ms")
         if (self.protocol_id is None) != (self.protocol_version is None):
             raise ValueError("protocol_id and protocol_version must be provided together")
         if self.parameter_search is None:
@@ -104,7 +114,7 @@ def run_walk_forward(
     parent_sharpe: float | None = None,
     walk_forward_id: str | None = None,
     on_progress: Callable[[int, int, str], None] | None = None,
-    cancel_check: Callable[[], None] | None = None,
+    cancel_check: CancelCheck | None = None,
 ) -> tuple[WalkForwardConfig, WalkForwardResult]:
     """Execute a walk-forward analysis and return ``(config, result)``.
 
@@ -127,8 +137,8 @@ def run_walk_forward(
     symbol = request.spec.symbols[0]
     resolution = request.spec.resolution.period_minutes
 
-    start_ms = date_str_to_ms(request.start_date)
-    end_ms = date_str_to_ms(request.end_date)
+    start_ms = request.start_ms
+    end_ms = request.end_ms
 
     split_policy_spec = parse_split_policy_spec(request.split_policy.describe())
     config = WalkForwardConfig(
@@ -160,12 +170,22 @@ def run_walk_forward(
         windows = request.split_policy.folds(start_ms, end_ms)
     except ValueError as exc:
         return config, _failed_wf_result(
-            wf_id, spec_hash, request, created_at, f"split-policy error: {exc}"
+            wf_id,
+            spec_hash,
+            request,
+            split_policy_spec,
+            created_at,
+            f"split-policy error: {exc}",
         )
 
     if not windows:
         return config, _failed_wf_result(
-            wf_id, spec_hash, request, created_at, "split policy produced zero folds"
+            wf_id,
+            spec_hash,
+            request,
+            split_policy_spec,
+            created_at,
+            "split policy produced zero folds",
         )
 
     # 2. Select on train when configured, then run the frozen spec on test.
@@ -175,11 +195,7 @@ def run_walk_forward(
     selection_failures: list[SelectionFailureResult] = []
     warnings: list[str] = []
     completed_child_runs = 0
-    runs_per_fold = (
-        len(request.parameter_search.candidates) + 1
-        if request.parameter_search is not None
-        else 1
-    )
+    runs_per_fold = len(request.parameter_search.candidates) + 1 if request.parameter_search is not None else 1
     total_child_runs = len(windows) * runs_per_fold
 
     def report_child_run(message: str) -> None:
@@ -234,6 +250,7 @@ def run_walk_forward(
                     wf_id,
                     spec_hash,
                     request,
+                    split_policy_spec,
                     created_at,
                     reason,
                     folds=folds,
@@ -251,9 +268,9 @@ def run_walk_forward(
 
         fold_request = RunRequest(
             spec=selected_spec,
-            start_date=_ms_to_date(window.test_start_ms),
-            end_date=_ms_to_inclusive_end_date(window.test_end_ms),
-            warmup_start_date=_ms_to_date(window.train_start_ms),
+            start_ms=window.test_start_ms,
+            end_ms=run_date_to_ms(_ms_to_inclusive_end_date(window.test_end_ms)),
+            warmup_start_ms=window.train_start_ms,
             initial_cash=request.initial_cash,
             fill_mode=request.fill_mode,
             commission_per_order=request.commission_per_order,
@@ -283,8 +300,7 @@ def run_walk_forward(
             warnings.append(f"fold {window.fold_index} test warning: {child_warning}")
         if ledger.status == "completed" and result.bars_consumed == 0:
             result_failure_reason = (
-                "test window consumed zero input bars; refusing to treat it "
-                "as out-of-sample evidence"
+                "test window consumed zero input bars; refusing to treat it as out-of-sample evidence"
             )
             warnings.append(f"fold {window.fold_index} {result_failure_reason}")
 
@@ -301,9 +317,7 @@ def run_walk_forward(
         folds.append(fold)
         if fold.status == "completed" and result.equity_curve:
             fold_curves.append(result.equity_curve)
-        report_child_run(
-            f"completed out-of-sample fold {window.fold_index + 1} of {len(windows)}"
-        )
+        report_child_run(f"completed out-of-sample fold {window.fold_index + 1} of {len(windows)}")
         if persistence_warning is not None:
             reason = (
                 f"fold {window.fold_index} test receipt persistence failed; "
@@ -314,6 +328,7 @@ def run_walk_forward(
                 wf_id,
                 spec_hash,
                 request,
+                split_policy_spec,
                 created_at,
                 reason,
                 folds=folds,
@@ -330,6 +345,7 @@ def run_walk_forward(
             wf_id,
             spec_hash,
             request,
+            split_policy_spec,
             created_at,
             reason,
             folds=folds,
@@ -342,6 +358,7 @@ def run_walk_forward(
         wf_id=wf_id,
         spec_hash=spec_hash,
         request=request,
+        split_policy_spec=split_policy_spec,
         created_at=created_at,
         folds=folds,
         fold_curves=fold_curves,
@@ -356,16 +373,6 @@ def run_walk_forward(
 # ---------------------------------------------------------------------------
 # Helpers.
 # ---------------------------------------------------------------------------
-def _ms_to_date(ms: int) -> Date:
-    """Convert ``int64 ms UTC`` (NY-midnight) to ``date`` for ``RunRequest``.
-
-    ``RunRequest`` declares ``start_date: Date``; the runner internally
-    re-anchors via NY-midnight, so producing a NY-local date here
-    keeps the round-trip correct.
-    """
-    return datetime.fromtimestamp(ms / 1000, tz=_NY).date()
-
-
 def _ms_to_inclusive_end_date(ms: int) -> Date:
     """Convert a half-open fold boundary to the *last day* of the fold.
 
@@ -401,9 +408,7 @@ def _fold_to_result(
     # "failed"}; "running" is a transient state the runner never
     # surfaces synchronously, so collapse to a 2-value field here.
     fold_status = (
-        "failed"
-        if ledger.status == "failed" or not persisted or result_failure_reason is not None
-        else "completed"
+        "failed" if ledger.status == "failed" or not persisted or result_failure_reason is not None else "completed"
     )
     test_sharpe = result.metrics.sharpe_ratio
     fold_retention = _ratio(test_sharpe, selected_train_sharpe) if fold_status == "completed" else None
@@ -458,7 +463,7 @@ def _select_fold_candidate(
     data_source_factory: Any,
     artifacts_root: Any | None,
     data_root_revision: str | None,
-    cancel_check: Callable[[], None] | None,
+    cancel_check: CancelCheck | None,
     on_candidate_completed: Callable[[str], None] | None,
 ) -> tuple[
     StrategySpec,
@@ -479,8 +484,8 @@ def _select_fold_candidate(
             cancel_check()
         train_request = RunRequest(
             spec=candidate.spec,
-            start_date=_ms_to_date(window.train_start_ms),
-            end_date=_ms_to_inclusive_end_date(window.train_end_ms),
+            start_ms=window.train_start_ms,
+            end_ms=run_date_to_ms(_ms_to_inclusive_end_date(window.train_end_ms)),
             initial_cash=request.initial_cash,
             fill_mode=request.fill_mode,
             commission_per_order=request.commission_per_order,
@@ -593,11 +598,7 @@ def _alpha_decay(folds: list[FoldResult]) -> float | None:
     (or improving). The metric is meant to be *directional*, not a
     pass/fail gate.
     """
-    points = [
-        (f.fold_index, f.test_metrics.sharpe_ratio)
-        for f in folds
-        if f.test_metrics.sharpe_ratio is not None
-    ]
+    points = [(f.fold_index, f.test_metrics.sharpe_ratio) for f in folds if f.test_metrics.sharpe_ratio is not None]
     if len(points) < 2:
         return None
     n = len(points)
@@ -674,6 +675,7 @@ def _failed_wf_result(
     wf_id: str,
     spec_hash: str,
     request: WalkForwardRequest,
+    split_policy_spec: SplitPolicySpec,
     created_at: int,
     reason: str,
     *,
@@ -688,6 +690,7 @@ def _failed_wf_result(
         wf_id=wf_id,
         spec_hash=spec_hash,
         request=request,
+        split_policy_spec=split_policy_spec,
         created_at=created_at,
         folds=folds or [],
         fold_curves=fold_curves or [],
@@ -704,6 +707,7 @@ def _build_wf_result(
     wf_id: str,
     spec_hash: str,
     request: WalkForwardRequest,
+    split_policy_spec: SplitPolicySpec,
     created_at: int,
     folds: list[FoldResult],
     fold_curves: list[list[EquityCurvePoint]],
@@ -740,7 +744,7 @@ def _build_wf_result(
         walk_forward_id=wf_id,
         parent_run_id=request.parent_run_id,
         strategy_spec_hash=spec_hash,
-        split_policy=parse_split_policy_spec(request.split_policy.describe()),
+        split_policy=split_policy_spec,
         folds=folds,
         selection_failures=selection_failures,
         combined_oos_equity_curve=_compound_oos_curve(fold_curves),

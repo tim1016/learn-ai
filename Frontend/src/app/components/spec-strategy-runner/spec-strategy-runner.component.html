@@ -758,7 +758,9 @@
         [ngModel]="op.left.kind === 'IndicatorRef' ? op.left.indicator : ''"
         (ngModelChange)="emitOperandChange(side, c, ctx, ruleIndex, index, { kind: 'DifferenceBps', left: { kind: 'IndicatorRef', indicator: $event }, right: op.right })"
       >
-        @for (ind of spec().indicators; track ind.id) { <option [value]="ind.id">{{ ind.id }}</option> }
+        @for (ind of spec().indicators; track ind.id) {
+          <option [value]="ind.id" [disabled]="op.right.kind === 'IndicatorRef' && op.right.indicator === ind.id">{{ ind.id }}</option>
+        }
       </select>
       <span class="ssr-inline-label">Δ bps vs</span>
       <select
@@ -766,7 +768,9 @@
         [ngModel]="op.right.kind === 'IndicatorRef' ? op.right.indicator : ''"
         (ngModelChange)="emitOperandChange(side, c, ctx, ruleIndex, index, { kind: 'DifferenceBps', left: op.left, right: { kind: 'IndicatorRef', indicator: $event } })"
       >
-        @for (ind of spec().indicators; track ind.id) { <option [value]="ind.id">{{ ind.id }}</option> }
+        @for (ind of spec().indicators; track ind.id) {
+          <option [value]="ind.id" [disabled]="op.left.kind === 'IndicatorRef' && op.left.indicator === ind.id">{{ ind.id }}</option>
+        }
       </select>
     }
   </div>

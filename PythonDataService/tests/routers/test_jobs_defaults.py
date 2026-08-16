@@ -15,7 +15,13 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 
+from app.main import app
+from app.research.walk_forward.spy_ema import (
+    SPY_EMA_PROTOCOL_END_MS,
+    SPY_EMA_PROTOCOL_START_MS,
+)
 from app.routers.jobs import (
     CrossSectionalJobRequest,
     FeatureResearchJobRequest,
@@ -24,6 +30,7 @@ from app.routers.jobs import (
     SpyEmaWalkForwardJobRequest,
     start_spy_ema_walk_forward_job,
 )
+from app.routers.research_runs import get_artifacts_root, get_data_source_factory
 
 
 class TestRuleBasedBacktestDefaults:
@@ -104,7 +111,6 @@ class TestSpyEmaWalkForwardJob:
         with pytest.raises(ValidationError):
             SpyEmaWalkForwardJobRequest.model_validate({"jobId": "j1", "thresholdsBps": [1, 2]})
 
-    @pytest.mark.asyncio
     async def test_job_runs_the_frozen_v1_protocol(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -168,8 +174,8 @@ class TestSpyEmaWalkForwardJob:
 
         assert response == {"job_id": "job-1", "status": "queued"}
         request = captured["request"]
-        assert request.start_date == "2024-08-01"
-        assert request.end_date == "2026-08-01"
+        assert request.start_ms == SPY_EMA_PROTOCOL_START_MS
+        assert request.end_ms == SPY_EMA_PROTOCOL_END_MS
         assert request.protocol_id == "spy-ema-normalized-gap"
         assert request.protocol_version == "1.0"
         assert request.thresholds_bps == (1.0, 2.0, 3.0, 4.0, 5.0, 7.5, 10.0)
@@ -186,6 +192,37 @@ class TestSpyEmaWalkForwardJob:
             "persisting_evidence",
         ]
         assert captured["result"]["walk_forward"]["config"]["protocol_version"] == "1.0"
+
+    async def test_job_is_available_through_the_async_http_boundary(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        import app.routers.jobs as jobs_router
+
+        queued: list[str] = []
+
+        def queue_without_running(job_id: str, _work, **_kwargs: Any) -> None:
+            queued.append(job_id)
+
+        monkeypatch.setattr(jobs_router, "run_in_thread", queue_without_running)
+        app.dependency_overrides[get_data_source_factory] = lambda: lambda *_args: None
+        app.dependency_overrides[get_artifacts_root] = lambda: tmp_path
+        try:
+            async with AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+            ) as client:
+                response = await client.post(
+                    "/api/jobs-internal/spy-ema-walk-forward",
+                    json={"jobId": "job-http"},
+                )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 202, response.text
+        assert response.json() == {"job_id": "job-http", "status": "queued"}
+        assert queued == ["job-http"]
 
 
 class TestCamelCaseWire:

@@ -54,13 +54,13 @@
           <ol class="evidence__fold-strip" [attr.aria-label]="hasParameterSearch() ? 'Selected-threshold fold returns' : 'Fixed-parameter fold returns'">
             @for (fold of wf.result.folds; track fold.fold_index) {
               <li [class.fold--gain]="fold.status === 'completed' && fold.test_metrics.total_return_pct > 0" [class.fold--loss]="fold.status === 'completed' && fold.test_metrics.total_return_pct < 0" [class.fold--failed]="fold.status === 'failed'">
-                @if (fold.status === 'completed' && fold.test_run_id !== null) {
-                  <a [routerLink]="['/research-lab/strategy-runs', fold.test_run_id]" [attr.aria-label]="'Fold ' + (fold.fold_index + 1) + ' return ' + (fold.test_metrics.total_return_pct | percent:'1.2-2')">
+                @if (fold.test_run_id !== null) {
+                  <a [routerLink]="['/research-lab/strategy-runs', fold.test_run_id]" [attr.aria-label]="fold.status === 'completed' ? 'Fold ' + (fold.fold_index + 1) + ' return ' + (fold.test_metrics.total_return_pct | percent:'1.2-2') : 'Fold ' + (fold.fold_index + 1) + ' failed test receipt'">
                     <span>F{{ fold.fold_index + 1 }}</span>
                     @if (fold.selected_parameters['gap_bps']; as gapBps) {
                       <small>{{ gapBps | number:'1.0-1' }} bps</small>
                     }
-                    <strong>{{ fold.test_metrics.total_return_pct | percent:'1.1-1' }}</strong>
+                    <strong>{{ fold.status === 'completed' ? (fold.test_metrics.total_return_pct | percent:'1.1-1') : 'failed' }}</strong>
                   </a>
                 } @else {
                   <div [attr.aria-label]="'Fold ' + (fold.fold_index + 1) + ' failed without a persisted test receipt'">
@@ -103,7 +103,7 @@
         } @else {
           <div class="evidence__phase-gap">
             <span>04B</span><strong>No normalized-gap study is persisted yet</strong>
-            <p>Run the 24-month study above to create the control, train receipts, frozen thresholds, and out-of-sample folds.</p>
+            <p>Run the canonical study above to create the control, train receipts, frozen thresholds, and rolling 30-day out-of-sample folds.</p>
           </div>
           @if (walkForwardError(); as wfError) { <p class="evidence__suberror">{{ wfError }}</p> }
         }
@@ -112,7 +112,7 @@
   } @else {
     <div class="evidence__notice">
       <strong>No completed canonical SPY EMA study found.</strong>
-      <p>Run the 24-month study above to populate both control and optimized out-of-sample evidence.</p>
+      <p>Run the canonical study above to populate both control and optimized out-of-sample evidence.</p>
       <a routerLink="/research-lab/backtests/strategy-runs">Go to Strategy Runs →</a>
     </div>
   }

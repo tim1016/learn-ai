@@ -133,8 +133,8 @@ export interface WalkForwardListResponse {
  */
 export interface WalkForwardRequest {
   spec: unknown;
-  start_date: string; // YYYY-MM-DD
-  end_date: string;
+  start_ms: number;
+  end_ms: number;
   split_policy: SplitPolicySpec;
   initial_cash?: number;
   fill_mode?: string;
@@ -144,14 +144,18 @@ export interface WalkForwardRequest {
   parent_run_id?: string | null;
 }
 
-export interface WalkForwardListFilters {
+interface WalkForwardBaseFilters {
   parent_run_id?: string;
   spec_hash?: string;
-  protocol_id?: string;
-  protocol_version?: string;
   since_ms?: number;
   limit?: number;
 }
+
+type ProtocolIdentityFilter =
+  | { protocol_id: string; protocol_version: string }
+  | { protocol_id?: never; protocol_version?: never };
+
+export type WalkForwardListFilters = WalkForwardBaseFilters & ProtocolIdentityFilter;
 
 export interface SpyEmaPipelineResponse {
   control: StrategyRunResponse;

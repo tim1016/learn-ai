@@ -131,13 +131,13 @@ describe('WalkForwardService', () => {
     it('POSTs the request body verbatim and returns config + result', async () => {
       const promise = service.createWalkForward({
         spec: { schema_version: '1.0', name: 'inline' },
-        start_date: '2024-01-02',
-        end_date: '2024-12-31',
+        start_ms: 1704171600000,
+        end_ms: 1735621200000,
         split_policy: { kind: 'chronological', train_pct: 0.7 },
       });
       const req = httpMock.expectOne(BASE_URL);
       expect(req.request.method).toBe('POST');
-      expect(req.request.body.start_date).toBe('2024-01-02');
+      expect(req.request.body.start_ms).toBe(1704171600000);
       expect(req.request.body.split_policy.kind).toBe('chronological');
       req.flush(makeWfResponse());
       const result = await promise;
@@ -207,9 +207,9 @@ describe('WalkForwardService', () => {
       const body = req.request.body;
       // Spec is the run's spec JSON, not its hash.
       expect(body.spec).toEqual(run.strategy_spec_json);
-      // Window converts run's int64 ms boundaries to YYYY-MM-DD.
-      expect(body.start_date).toBe('2024-01-02');
-      expect(body.end_date).toBe('2024-12-31');
+      // Timestamp boundaries pass through unchanged.
+      expect(body.start_ms).toBe(run.start_ms);
+      expect(body.end_ms).toBe(run.end_ms);
       // Hard-coded default split for v1.
       expect(body.split_policy).toEqual({
         kind: 'rolling',

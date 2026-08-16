@@ -56,7 +56,9 @@ class DifferenceBps(_OperandBase):
     """Relative difference between two operands, expressed in basis points.
 
     This domain operand keeps normalized-threshold strategies explicit in
-    serialized specs without admitting a general arithmetic language.
+    serialized specs without admitting a general arithmetic language. An
+    unready operand evaluates to ``None``; a zero right operand is invalid and
+    raises ``ZeroDivisionError`` rather than producing a non-finite value.
     """
 
     kind: Literal["DifferenceBps"]

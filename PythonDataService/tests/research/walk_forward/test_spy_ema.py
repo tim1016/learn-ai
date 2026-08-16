@@ -59,24 +59,24 @@ def test_pipeline_request_requires_an_ordered_unique_threshold_grid() -> None:
 
     with pytest.raises(ValueError, match="ascending order"):
         SpyEmaPipelineRequest(
-            start_date="2024-08-01",
-            end_date="2026-08-01",
+            start_ms=date_str_to_ms("2024-08-01"),
+            end_ms=date_str_to_ms("2026-08-01"),
             split_policy=split,
             thresholds_bps=(2.0, 1.0),
         )
 
     with pytest.raises(ValueError, match="unique"):
         SpyEmaPipelineRequest(
-            start_date="2024-08-01",
-            end_date="2026-08-01",
+            start_ms=date_str_to_ms("2024-08-01"),
+            end_ms=date_str_to_ms("2026-08-01"),
             split_policy=split,
             thresholds_bps=(1.0, 1.0),
         )
 
     with pytest.raises(ValueError, match="thresholds must be in"):
         SpyEmaPipelineRequest(
-            start_date="2024-08-01",
-            end_date="2026-08-01",
+            start_ms=date_str_to_ms("2024-08-01"),
+            end_ms=date_str_to_ms("2026-08-01"),
             split_policy=split,
             thresholds_bps=(1.0, float("nan")),
         )
@@ -99,8 +99,8 @@ def test_pipeline_request_rejects_non_finite_money_inputs(
 
     with pytest.raises(ValueError, match=message):
         SpyEmaPipelineRequest(
-            start_date="2024-08-01",
-            end_date="2026-08-01",
+            start_ms=date_str_to_ms("2024-08-01"),
+            end_ms=date_str_to_ms("2026-08-01"),
             split_policy=split,
             **{field: value},
         )
@@ -120,8 +120,8 @@ def test_default_protocol_produces_eighteen_oos_folds() -> None:
     assert (
         len(
             split.folds(
-                date_str_to_ms(request.start_date),
-                date_str_to_ms(request.end_date),
+                request.start_ms,
+                request.end_ms,
             )
         )
         == 18
@@ -153,17 +153,15 @@ def test_pipeline_persists_control_training_and_oos_lineage(
 
     pipeline = run_spy_ema_pipeline(
         SpyEmaPipelineRequest(
-            start_date="2024-01-02",
-            end_date="2024-02-22",
+            start_ms=date_str_to_ms("2024-01-02"),
+            end_ms=date_str_to_ms("2024-02-22"),
             split_policy=ChronologicalSplitPolicy(train_pct=0.7),
             thresholds_bps=(1.0, 10.0),
             min_train_trades=1,
         ),
         data_source_factory=factory,
         artifacts_root=tmp_path,
-        on_progress=lambda current, total, message: progress.append(
-            (current, total, message)
-        ),
+        on_progress=lambda current, total, message: progress.append((current, total, message)),
     )
 
     assert pipeline.control_ledger.status == "completed"

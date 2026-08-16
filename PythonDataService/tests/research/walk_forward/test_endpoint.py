@@ -20,6 +20,7 @@ from app.engine.strategy.spec.tests._parity_helpers import (
     closes_for_spy_ema,
 )
 from app.main import app
+from app.research.walk_forward.splits import date_str_to_ms
 from app.routers.research_runs import (
     get_artifacts_root,
     get_data_source_factory,
@@ -69,8 +70,8 @@ def _spec_dict() -> dict:
 def _request_body(split_policy: dict, **overrides) -> dict:
     body = {
         "spec": _spec_dict(),
-        "start_date": "2024-01-02",
-        "end_date": "2024-02-22",
+        "start_ms": date_str_to_ms("2024-01-02"),
+        "end_ms": date_str_to_ms("2024-02-22"),
         "initial_cash": 100_000.0,
         "fill_mode": "signal_bar_close",
         "commission_per_order": 0.0,
@@ -121,6 +122,19 @@ async def test_post_chronological_creates_persisted_walk_forward(client, tmp_pat
     # Persisted under tmp_path/walk-forward/<wf_id>/.
     assert (tmp_path / "walk-forward" / wf_id / "config.json").is_file()
     assert (tmp_path / "walk-forward" / wf_id / "result.json").is_file()
+
+
+async def test_post_accepts_integer_json_tokens_for_float_costs(client) -> None:
+    body = _request_body(
+        split_policy={"kind": "chronological", "train_pct": 0.6},
+        initial_cash=100_000,
+        commission_per_order=0,
+        slippage_per_share=0,
+    )
+
+    response = await client.post("/api/research/strategy-runs/walk-forward", json=body)
+
+    assert response.status_code == 200, response.text
 
 
 async def test_post_rolling_creates_multiple_folds(client):
@@ -204,11 +218,11 @@ async def test_response_timestamps_are_int64_ms(client):
 # ---------------------------------------------------------------------------
 # Validation errors.
 # ---------------------------------------------------------------------------
-async def test_post_invalid_date_returns_400(client):
+async def test_post_invalid_timestamp_returns_422(client):
     body = _request_body(split_policy={"kind": "chronological", "train_pct": 0.7})
-    body["start_date"] = "not-a-date"
+    body["start_ms"] = "not-a-timestamp"
     response = await client.post("/api/research/strategy-runs/walk-forward", json=body)
-    assert response.status_code == 400
+    assert response.status_code == 422
 
 
 async def test_post_unknown_split_kind_returns_400(client):
@@ -279,7 +293,7 @@ async def test_post_window_too_short_persists_failed_walk_forward(client, tmp_pa
             "step_days": 7,
         },
     )
-    body["end_date"] = "2024-01-05"  # 3-day window can't fit a 30+15-day fold
+    body["end_ms"] = date_str_to_ms("2024-01-05")  # 3 days cannot fit a 30+15-day fold
 
     response = await client.post("/api/research/strategy-runs/walk-forward", json=body)
     assert response.status_code == 200, response.text

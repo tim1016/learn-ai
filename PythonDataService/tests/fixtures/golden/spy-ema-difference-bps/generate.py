@@ -1,29 +1,28 @@
-"""Generate the independent Decimal reference output for DifferenceBps."""
+"""Materialize the independently derived DifferenceBps oracle rows."""
 
 from __future__ import annotations
 
 import json
-from decimal import Decimal
 from pathlib import Path
+
+REFERENCE_ROWS = [
+    {"left": "500.20", "right": "500.00", "difference_bps": "4.0000"},
+    {"left": "499.80", "right": "500.00", "difference_bps": "-4.0000"},
+    {"left": "125.056789", "right": "125.000000", "difference_bps": "4.5431200"},
+    {"left": "100.00", "right": "100.00", "difference_bps": "0"},
+    {"left": "1.00", "right": "0.00", "error": "division_by_zero"},
+]
 
 
 def main() -> None:
     fixture_dir = Path(__file__).resolve().parent
-    rows = json.loads((fixture_dir / "input.json").read_text(encoding="utf-8"))
-    output = [
-        {
-            "left": row["left"],
-            "right": row["right"],
-            "difference_bps": str(
-                (Decimal(row["left"]) - Decimal(row["right"]))
-                / Decimal(row["right"])
-                * Decimal(10_000)
-            ),
-        }
-        for row in rows
-    ]
+    inputs = [{"left": row["left"], "right": row["right"]} for row in REFERENCE_ROWS]
+    (fixture_dir / "input.json").write_text(
+        json.dumps(inputs, indent=2) + "\n",
+        encoding="utf-8",
+    )
     (fixture_dir / "output.json").write_text(
-        json.dumps(output, indent=2) + "\n",
+        json.dumps(REFERENCE_ROWS, indent=2) + "\n",
         encoding="utf-8",
     )
 

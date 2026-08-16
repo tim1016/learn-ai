@@ -269,9 +269,9 @@ describe('SpyEmaWalkForwardPageComponent', () => {
       name: 'Can a normalized EMA gap survive out of sample?',
     })).toBeTruthy();
     expect(screen.getByRole('img', {
-      name: /Six training months select one frozen threshold/,
+      name: /180 training days select one frozen threshold/,
     })).toBeTruthy();
-    expect(screen.getByText('control neighbourhood')).toBeTruthy();
+    expect(screen.getByText('2 rolling 30-day folds')).toBeTruthy();
     expect(screen.getByText('2.50%')).toBeTruthy();
     expect(screen.getByText('1.24')).toBeTruthy();
     expect(screen.getByText('2/2', { selector: '.evidence__fold-summary strong' })).toBeTruthy();
@@ -291,7 +291,7 @@ describe('SpyEmaWalkForwardPageComponent', () => {
     expect(strategyRuns.listRuns).not.toHaveBeenCalled();
   });
 
-  it('runs the canonical 24-month pipeline and renders selected thresholds', async () => {
+  it('runs the canonical pipeline and renders selected thresholds', async () => {
     walkForwards.listWalkForwards.mockResolvedValue({ walk_forwards: [] });
     const fixture = TestBed.createComponent(SpyEmaWalkForwardPageComponent);
     fixture.detectChanges();
@@ -388,6 +388,30 @@ describe('SpyEmaWalkForwardPageComponent', () => {
     expect(screen.getByText('The persisted result contains no equity points.')).toBeTruthy();
     expect(screen.queryByRole('link', { name: /Fold 1 return/ })).toBeNull();
     expect(screen.getByText(/test receipt could not be persisted/)).toBeTruthy();
+  });
+
+  it('keeps a persisted failed-fold receipt linkable', async () => {
+    const failed = makeWalkForward();
+    failed.result = {
+      ...failed.result,
+      status: 'failed',
+      failure_reason: 'fold 1 consumed zero report-window bars',
+      folds: [{
+        ...failed.result.folds[0],
+        status: 'failed',
+        test_run_id: '3'.repeat(32),
+        failure_reason: 'test window consumed zero input bars',
+      }],
+    };
+    walkForwards.getWalkForward.mockResolvedValue(failed);
+    const fixture = TestBed.createComponent(SpyEmaWalkForwardPageComponent);
+    fixture.detectChanges();
+    await fixture.componentInstance.refresh();
+    fixture.detectChanges();
+
+    const receipt = screen.getByRole('link', { name: 'Fold 1 failed test receipt' });
+    expect(receipt.getAttribute('href')).toContain('3'.repeat(32));
+    expect(receipt.closest('li')?.classList.contains('fold--failed')).toBe(true);
   });
 
   it('does not accept a lookalike control identified only by its display name', async () => {

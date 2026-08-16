@@ -28,7 +28,7 @@ from app.engine.strategy.spec.tests._parity_helpers import (
     build_minute_bars,
     closes_for_spy_ema,
 )
-from app.research.runs import RunRequest, run_strategy_spec
+from app.research.runs import RunRequest, run_date_to_ms, run_strategy_spec
 from app.research.runs.ledger import RunLedger
 from app.research.runs.result import BacktestRunResult
 from app.research.runs.runner import _VALID_FILL_MODES, _normalize_fill_mode, _parse_fill_mode, _summarize_metrics
@@ -138,8 +138,8 @@ def _run(
     return run_strategy_spec(
         RunRequest(
             spec=spec,
-            start_date=start,
-            end_date=end,
+            start_ms=run_date_to_ms(start),
+            end_ms=run_date_to_ms(end),
             fill_mode=fill_mode,
             commission_per_order=commission,
             random_seed=seed,
@@ -250,8 +250,8 @@ def test_slippage_per_share_actually_changes_fills(fake_data_factory):
         return run_strategy_spec(
             RunRequest(
                 spec=spec,
-                start_date=date(2024, 1, 2),
-                end_date=date(2024, 12, 31),
+                start_ms=run_date_to_ms(date(2024, 1, 2)),
+                end_ms=run_date_to_ms(date(2024, 12, 31)),
                 slippage_per_share=slip,
             ),
             data_source_factory=fake_data_factory,
@@ -384,8 +384,8 @@ def test_failed_data_source_produces_failed_ledger():
     ledger, result = run_strategy_spec(
         RunRequest(
             spec=spec,
-            start_date=date(2024, 1, 2),
-            end_date=date(2024, 12, 31),
+            start_ms=run_date_to_ms(date(2024, 1, 2)),
+            end_ms=run_date_to_ms(date(2024, 12, 31)),
         ),
         data_source_factory=broken_factory,
         data_root_revision="test",
@@ -410,8 +410,8 @@ def test_parent_run_id_round_trips(fake_data_factory):
     ledger, _ = run_strategy_spec(
         RunRequest(
             spec=spec,
-            start_date=date(2024, 1, 2),
-            end_date=date(2024, 12, 31),
+            start_ms=run_date_to_ms(date(2024, 1, 2)),
+            end_ms=run_date_to_ms(date(2024, 12, 31)),
             parent_run_id="parent-abc",
             parent_spec_hash="spec-hash-xyz",
         ),
@@ -475,8 +475,8 @@ def test_result_warns_when_no_bars_consumed():
     ledger, result = run_strategy_spec(
         RunRequest(
             spec=spec,
-            start_date=date(2024, 1, 2),
-            end_date=date(2024, 12, 31),
+            start_ms=run_date_to_ms(date(2024, 1, 2)),
+            end_ms=run_date_to_ms(date(2024, 12, 31)),
         ),
         data_source_factory=empty_factory,
         data_root_revision="test-revision-1",
@@ -540,8 +540,8 @@ def test_warmup_prerolls_fresh_cross_without_permitting_pre_window_entries():
     cold_ledger, cold_result = run_strategy_spec(
         RunRequest(
             spec=spec,
-            start_date=date(2024, 1, 3),
-            end_date=date(2024, 1, 4),
+            start_ms=run_date_to_ms(date(2024, 1, 3)),
+            end_ms=run_date_to_ms(date(2024, 1, 4)),
         ),
         data_source_factory=factory,
         data_root_revision="test-revision-1",
@@ -549,9 +549,9 @@ def test_warmup_prerolls_fresh_cross_without_permitting_pre_window_entries():
     warm_ledger, warm_result = run_strategy_spec(
         RunRequest(
             spec=spec,
-            start_date=date(2024, 1, 3),
-            end_date=date(2024, 1, 4),
-            warmup_start_date=date(2024, 1, 2),
+            start_ms=run_date_to_ms(date(2024, 1, 3)),
+            end_ms=run_date_to_ms(date(2024, 1, 4)),
+            warmup_start_ms=run_date_to_ms(date(2024, 1, 2)),
         ),
         data_source_factory=factory,
         data_root_revision="test-revision-1",

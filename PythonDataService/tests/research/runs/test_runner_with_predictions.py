@@ -37,7 +37,7 @@ from app.research.ml.artifact import (
     write_chunk_rows,
 )
 from app.research.ml.coverage import iter_consolidated_bars
-from app.research.runs.runner import RunRequest, run_strategy_spec
+from app.research.runs.runner import RunRequest, run_date_to_ms, run_strategy_spec
 
 
 def _build_spec_with_prediction(prediction_set_id: str) -> StrategySpec:
@@ -107,10 +107,7 @@ def _make_artifact(
     chunk_dir = set_dir / "chunks"
     chunk_dir.mkdir(parents=True)
 
-    rows = [
-        {"timestamp_ms": ts, "symbol": symbol, "prediction": 0.0}
-        for ts in bar_end_times_ms
-    ]
+    rows = [{"timestamp_ms": ts, "symbol": symbol, "prediction": 0.0} for ts in bar_end_times_ms]
     trained_through_ms = bar_end_times_ms[0] - 1
     chunk_path = chunk_dir / f"{trained_through_ms}.parquet"
     write_chunk_rows(chunk_path, rows, field_names=["prediction"])
@@ -194,16 +191,12 @@ def artifacts_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 # ---------------------------------------------------------------------------
 # Happy path: prediction set loads, covers, and its hash threads to the ledger.
 # ---------------------------------------------------------------------------
-def test_runner_threads_prediction_set_hash_into_ledger(
-    fake_data_factory, artifacts_root: Path
-) -> None:
+def test_runner_threads_prediction_set_hash_into_ledger(fake_data_factory, artifacts_root: Path) -> None:
     """The runner loads the artifact, validates it, and records its hash."""
     start = Date(2024, 1, 2)
     end = Date(2024, 12, 31)
 
-    expected_ts_ms = _harvest_consolidated_end_times_ms(
-        fake_data_factory, "TEST", start, end, resolution_minutes=15
-    )
+    expected_ts_ms = _harvest_consolidated_end_times_ms(fake_data_factory, "TEST", start, end, resolution_minutes=15)
     assert expected_ts_ms, "synthetic data must fire at least one consolidated bar"
 
     set_id = "pred_test_v001"
@@ -211,7 +204,7 @@ def test_runner_threads_prediction_set_hash_into_ledger(
 
     spec = _build_spec_with_prediction(set_id)
     ledger, result = run_strategy_spec(
-        RunRequest(spec=spec, start_date=start, end_date=end),
+        RunRequest(spec=spec, start_ms=run_date_to_ms(start), end_ms=run_date_to_ms(end)),
         data_source_factory=fake_data_factory,
         data_root_revision="test-revision-1",
     )
@@ -224,13 +217,13 @@ def test_runner_threads_prediction_set_hash_into_ledger(
 # ---------------------------------------------------------------------------
 # Failure paths — each must produce a ``failed`` ledger, not a thrown exception.
 # ---------------------------------------------------------------------------
-def test_runner_fails_when_artifact_directory_is_missing(
-    fake_data_factory, artifacts_root: Path
-) -> None:
+def test_runner_fails_when_artifact_directory_is_missing(fake_data_factory, artifacts_root: Path) -> None:
     spec = _build_spec_with_prediction("pred_missing_v001")
     ledger, result = run_strategy_spec(
         RunRequest(
-            spec=spec, start_date=Date(2024, 1, 2), end_date=Date(2024, 12, 31)
+            spec=spec,
+            start_ms=run_date_to_ms(Date(2024, 1, 2)),
+            end_ms=run_date_to_ms(Date(2024, 12, 31)),
         ),
         data_source_factory=fake_data_factory,
         data_root_revision="test-revision-1",
@@ -246,22 +239,18 @@ def test_runner_fails_when_artifact_directory_is_missing(
     assert result.warnings == [ledger.failure_reason]
 
 
-def test_runner_fails_when_prediction_set_does_not_pair_with_spec(
-    fake_data_factory, artifacts_root: Path
-) -> None:
+def test_runner_fails_when_prediction_set_does_not_pair_with_spec(fake_data_factory, artifacts_root: Path) -> None:
     """Symbol mismatch — spec wants TEST but artifact says SPY."""
     start = Date(2024, 1, 2)
     end = Date(2024, 12, 31)
-    expected_ts_ms = _harvest_consolidated_end_times_ms(
-        fake_data_factory, "TEST", start, end, resolution_minutes=15
-    )
+    expected_ts_ms = _harvest_consolidated_end_times_ms(fake_data_factory, "TEST", start, end, resolution_minutes=15)
 
     set_id = "pred_wrong_symbol_v001"
     _make_artifact(artifacts_root, set_id, expected_ts_ms, symbol="SPY")
 
     spec = _build_spec_with_prediction(set_id)
     ledger, _ = run_strategy_spec(
-        RunRequest(spec=spec, start_date=start, end_date=end),
+        RunRequest(spec=spec, start_ms=run_date_to_ms(start), end_ms=run_date_to_ms(end)),
         data_source_factory=fake_data_factory,
         data_root_revision="test-revision-1",
     )
@@ -273,15 +262,11 @@ def test_runner_fails_when_prediction_set_does_not_pair_with_spec(
     assert ledger.prediction_set_hash is None
 
 
-def test_runner_fails_when_artifact_has_gaps_in_bar_clock_coverage(
-    fake_data_factory, artifacts_root: Path
-) -> None:
+def test_runner_fails_when_artifact_has_gaps_in_bar_clock_coverage(fake_data_factory, artifacts_root: Path) -> None:
     """Drop a few bar end_times from the artifact -> coverage must fail."""
     start = Date(2024, 1, 2)
     end = Date(2024, 12, 31)
-    expected_ts_ms = _harvest_consolidated_end_times_ms(
-        fake_data_factory, "TEST", start, end, resolution_minutes=15
-    )
+    expected_ts_ms = _harvest_consolidated_end_times_ms(fake_data_factory, "TEST", start, end, resolution_minutes=15)
     assert len(expected_ts_ms) > 5
 
     # Drop the last 3 timestamps so coverage check finds a gap.
@@ -291,7 +276,7 @@ def test_runner_fails_when_artifact_has_gaps_in_bar_clock_coverage(
 
     spec = _build_spec_with_prediction(set_id)
     ledger, _ = run_strategy_spec(
-        RunRequest(spec=spec, start_date=start, end_date=end),
+        RunRequest(spec=spec, start_ms=run_date_to_ms(start), end_ms=run_date_to_ms(end)),
         data_source_factory=fake_data_factory,
         data_root_revision="test-revision-1",
     )

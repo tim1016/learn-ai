@@ -62,12 +62,12 @@ class RunRequest:
     """
 
     spec: StrategySpec
-    start_date: Date
-    end_date: Date
+    start_ms: int
+    end_ms: int
     # Optional earlier data boundary used only to prime indicators/state.
-    # Entries are suppressed before ``start_date`` and all reported metrics,
-    # curves, trades, and bar counts remain scoped to ``start_date`` onward.
-    warmup_start_date: Date | None = None
+    # Entries are suppressed before ``start_ms`` and all reported metrics,
+    # curves, trades, and bar counts remain scoped to ``start_ms`` onward.
+    warmup_start_ms: int | None = None
     initial_cash: float = 100_000.0
     fill_mode: str = "signal_bar_close"
     commission_per_order: float = 0.0
@@ -138,6 +138,16 @@ def _date_to_ny_midnight_ms(d: Date) -> int:
     only the *moment* the date represents shifts to NY-local midnight.
     """
     return int(datetime(d.year, d.month, d.day, tzinfo=_NY).timestamp() * 1000)
+
+
+def run_date_to_ms(d: Date) -> int:
+    """Convert a legacy run-date boundary to its canonical UTC-ms value."""
+    return _date_to_ny_midnight_ms(d)
+
+
+def _ms_to_run_date(ms: int) -> Date:
+    """Convert a canonical run boundary to a local date for engine arithmetic."""
+    return datetime.fromtimestamp(ms / 1000, tz=_NY).date()
 
 
 def _bars_held(entry_time: datetime, exit_time: datetime, resolution_minutes: int) -> int:
@@ -288,16 +298,18 @@ def run_strategy_spec(
     fill_mode_norm = _normalize_fill_mode(request.fill_mode)
     if fill_mode_norm not in _VALID_FILL_MODES:
         raise ValueError(f"unknown fill_mode {request.fill_mode!r} — expected one of {sorted(_VALID_FILL_MODES)}")
-    if request.start_date >= request.end_date:
+    if request.start_ms >= request.end_ms:
         raise ValueError(
-            f"start_date must be strictly before end_date (got start={request.start_date}, end={request.end_date})"
+            f"start_ms must be strictly before end_ms (got start={request.start_ms}, end={request.end_ms})"
         )
-    data_start_date = request.warmup_start_date or request.start_date
-    if data_start_date > request.start_date:
+    data_start_ms = request.warmup_start_ms if request.warmup_start_ms is not None else request.start_ms
+    if data_start_ms > request.start_ms:
         raise ValueError(
-            "warmup_start_date must be on or before start_date "
-            f"(got warmup={data_start_date}, start={request.start_date})"
+            f"warmup_start_ms must be on or before start_ms (got warmup={data_start_ms}, start={request.start_ms})"
         )
+    start_date = _ms_to_run_date(request.start_ms)
+    end_date = _ms_to_run_date(request.end_ms)
+    data_start_date = _ms_to_run_date(data_start_ms)
     # ``StrategySpec`` validates ``len(symbols) == 1`` at construction (Phase 1
     # boundary), so multi-symbol specs can't reach here. Still guard against
     # an empty list — that's the one shape Pydantic admits at the type level
@@ -307,9 +319,9 @@ def run_strategy_spec(
 
     symbol = spec.symbols[0]
     resolution = spec.resolution.period_minutes
-    start_ms = _date_to_ny_midnight_ms(request.start_date)
-    end_ms = _date_to_ny_midnight_ms(request.end_date)
-    warmup_start_ms = _date_to_ny_midnight_ms(data_start_date)
+    start_ms = request.start_ms
+    end_ms = request.end_ms
+    warmup_start_ms = data_start_ms
     # Truthy check rather than ``is not None``: an empty string would
     # produce a trailing-pipe ``data_snapshot_id`` indistinguishable
     # from a regression in ``resolve_data_root_revision``. Treat it as
@@ -323,7 +335,7 @@ def run_strategy_spec(
         else resolve_data_root_revision(
             symbol=symbol,
             start_date=data_start_date,
-            end_date=request.end_date,
+            end_date=end_date,
         )
     )
 
@@ -338,7 +350,7 @@ def run_strategy_spec(
     )
 
     rid = run_id or uuid.uuid4().hex
-    window_summary = summarize_window(request.start_date, request.end_date)
+    window_summary = summarize_window(start_date, end_date)
     ledger = RunLedger(
         run_id=rid,
         parent_run_id=request.parent_run_id,
@@ -351,7 +363,7 @@ def run_strategy_spec(
         resolution_minutes=resolution,
         start_ms=start_ms,
         end_ms=end_ms,
-        warmup_start_ms=(warmup_start_ms if data_start_date < request.start_date else None),
+        warmup_start_ms=(warmup_start_ms if data_start_ms < request.start_ms else None),
         initial_cash=request.initial_cash,
         fill_mode=fill_mode_norm,
         commission_per_order=request.commission_per_order,
@@ -365,7 +377,7 @@ def run_strategy_spec(
     # not strategy errors — surface as a failed-status ledger rather
     # than a thrown exception so the caller can persist the failure.
     try:
-        data_source = data_source_factory(symbol, data_start_date, request.end_date)
+        data_source = data_source_factory(symbol, data_start_date, end_date)
     except Exception as exc:
         logger.exception("[RUNS] data source unavailable for %s", symbol)
         return _failed(ledger, f"data source unavailable: {exc}")
@@ -406,7 +418,7 @@ def run_strategy_spec(
                 data_source,
                 symbol=symbol,
                 start_date=data_start_date,
-                end_date=request.end_date,
+                end_date=end_date,
                 resolution_minutes=resolution,
             )
             assert_bar_clock_coverage(prediction_set, bar_stream, refs=spec.predictions)
@@ -426,7 +438,7 @@ def run_strategy_spec(
         strategy = SpecAlgorithm(
             spec,
             prediction_set=prediction_set,
-            entry_start_ms=(start_ms if data_start_date < request.start_date else None),
+            entry_start_ms=(start_ms if data_start_ms < request.start_ms else None),
         )
     except NotImplementedError as exc:
         return _failed(ledger, f"spec uses unsupported feature: {exc}")
@@ -438,7 +450,7 @@ def run_strategy_spec(
     def _patched_init() -> None:
         orig_init()
         strategy.set_start_date(data_start_date.year, data_start_date.month, data_start_date.day)
-        strategy.set_end_date(request.end_date.year, request.end_date.month, request.end_date.day)
+        strategy.set_end_date(end_date.year, end_date.month, end_date.day)
         strategy.set_cash(request.initial_cash)
 
     strategy.initialize = _patched_init  # type: ignore[assignment]
@@ -490,8 +502,7 @@ def run_strategy_spec(
     warnings: list[str] = []
     if bars_consumed == 0:
         warnings.append(
-            "no input bars consumed for the requested window — "
-            "check LEAN data root / cache or your symbol+date filters"
+            "no input bars consumed for the requested window — check LEAN data root / cache or your symbol+date filters"
         )
 
     result = BacktestRunResult(
@@ -499,8 +510,7 @@ def run_strategy_spec(
         initial_cash=float(engine_result.initial_cash),
         final_equity=float(engine_result.final_equity),
         equity_curve=[
-            EquityCurvePoint(timestamp_ms=to_ms_utc(s.timestamp), equity=float(s.equity))
-            for s in report_equity_curve
+            EquityCurvePoint(timestamp_ms=to_ms_utc(s.timestamp), equity=float(s.equity)) for s in report_equity_curve
         ],
         drawdown_curve=_build_drawdown_curve(report_equity_curve),
         trades=[_trade_to_run_trade(i, t, resolution) for i, t in enumerate(trades)],

@@ -81,8 +81,8 @@ export class WalkForwardService {
   async runFromRun(run: RunLedger): Promise<WalkForwardResponse> {
     return this.createWalkForward({
       spec: run.strategy_spec_json,
-      start_date: msToDateString(run.start_ms),
-      end_date: msToDateString(run.end_ms),
+      start_ms: run.start_ms,
+      end_ms: run.end_ms,
       split_policy: { kind: 'rolling', train_days: 60, test_days: 30, step_days: 30 },
       initial_cash: run.initial_cash,
       fill_mode: run.fill_mode,
@@ -92,15 +92,4 @@ export class WalkForwardService {
       parent_run_id: run.run_id,
     });
   }
-}
-
-/**
- * Convert `int64 ms UTC` (NY-midnight anchored) to `YYYY-MM-DD`.
- * The backend's `_date_str_to_ny_midnight_ms` re-parses this in NY
- * timezone, so producing a UTC date here is fine — the run's stored
- * `start_ms` is NY-midnight UTC, and `Date.toISOString().slice(0,10)`
- * extracts the UTC date which matches.
- */
-function msToDateString(ms: number): string {
-  return new Date(ms).toISOString().slice(0, 10);
 }

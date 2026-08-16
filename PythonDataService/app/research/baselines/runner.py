@@ -34,9 +34,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any
-from zoneinfo import ZoneInfo
 
 import numpy as np
 
@@ -63,8 +61,6 @@ from app.research.runs.storage import RunNotFoundError, load_run
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
-
-_NY = ZoneInfo("America/New_York")
 
 # Default null-distribution coverage. Architecture spec § Feature 7
 # calls out Sharpe / max drawdown / profit factor / return as the
@@ -109,9 +105,7 @@ def run_baselines(
     # Load the parent run. Failures here surface as failed-status
     # records (Phase A/C/D contract).
     try:
-        parent_ledger, _parent_result = load_run(
-            request.parent_run_id, root=artifacts_root
-        )
+        parent_ledger, _parent_result = load_run(request.parent_run_id, root=artifacts_root)
     except RunNotFoundError as exc:
         return _failed(bid, request, created_at, f"parent run not found: {exc}")
     except ValueError as exc:
@@ -136,7 +130,9 @@ def run_baselines(
         # ``numpy.random.default_rng`` raises for negative seeds — same
         # belt-and-suspenders as ``run_monte_carlo``.
         return _failed(
-            bid, request, created_at,
+            bid,
+            request,
+            created_at,
             f"random_seed must be >= 0 (got {request.random_seed})",
         )
 
@@ -151,9 +147,7 @@ def run_baselines(
     try:
         spec_records = _generate_specs(parent_ledger, request, rng)
     except ValueError as exc:
-        return _failed(
-            bid, request, created_at, f"baseline generator error: {exc}"
-        )
+        return _failed(bid, request, created_at, f"baseline generator error: {exc}")
 
     # Run each baseline. Use the parent's symbol/window/cost model;
     # only the strategy logic varies across baselines.
@@ -165,8 +159,8 @@ def run_baselines(
     for spec, params in spec_records:
         run_request = RunRequest(
             spec=spec,
-            start_date=_ms_to_date(parent_ledger.start_ms),
-            end_date=_ms_to_date(parent_ledger.end_ms),
+            start_ms=parent_ledger.start_ms,
+            end_ms=parent_ledger.end_ms,
             initial_cash=parent_ledger.initial_cash,
             fill_mode=parent_ledger.fill_mode,
             commission_per_order=parent_ledger.commission_per_order,
@@ -188,9 +182,7 @@ def run_baselines(
                 "[BASELINES] failed to persist baseline_run_id=%s",
                 ledger.run_id,
             )
-            warnings.append(
-                f"baseline run {ledger.run_id} could not be persisted: {exc}"
-            )
+            warnings.append(f"baseline run {ledger.run_id} could not be persisted: {exc}")
 
         record = BaselineRunRecord(
             baseline_run_id=ledger.run_id,
@@ -206,15 +198,11 @@ def run_baselines(
             completed_metrics.append(result.metrics)
 
     if not completed_metrics:
-        warnings.append(
-            "every baseline run failed — null distribution is empty"
-        )
+        warnings.append("every baseline run failed — null distribution is empty")
 
     # Compute null distributions per target metric.
     distributions = _build_null_distributions(
-        parent_metrics=_load_parent_metrics(
-            request.parent_run_id, artifacts_root
-        ),
+        parent_metrics=_load_parent_metrics(request.parent_run_id, artifacts_root),
         completed_metrics=completed_metrics,
         target_metrics=request.target_metrics,
     )
@@ -286,9 +274,7 @@ def _method_params(request: BaselineRequest) -> dict:
 # ---------------------------------------------------------------------------
 # Null-distribution aggregation.
 # ---------------------------------------------------------------------------
-def _load_parent_metrics(
-    parent_run_id: str, artifacts_root: Any | None
-) -> RunMetrics:
+def _load_parent_metrics(parent_run_id: str, artifacts_root: Any | None) -> RunMetrics:
     """Load the parent run's RunMetrics fresh from disk.
 
     Loaded a second time here (the runner already loaded the ledger
@@ -375,23 +361,6 @@ def _maybe_float(v: Any) -> float | None:
 
 
 # ---------------------------------------------------------------------------
-# Window helpers.
-# ---------------------------------------------------------------------------
-# Phase A persists ``RunLedger.end_ms`` as the NY-midnight of the
-# *inclusive* end date the parent ran with — same convention as the
-# input ``end_date`` to ``RunRequest`` (see ``runs/runner.py``
-# ``_date_to_ny_midnight_ms``). The engine's date filter is inclusive
-# on both ends. So converting parent.end_ms back to its NY-local date
-# directly reproduces the parent's window verbatim — no day
-# subtraction. (Walk-forward's ``_ms_to_inclusive_end_date`` does
-# subtract one day, but only because split policies emit half-open
-# ``[start_ms, end_ms)`` fold boundaries. Different convention.)
-def _ms_to_date(ms: int) -> Any:
-    """Convert ``int64 ms UTC`` (NY-midnight) to ``date``."""
-    return datetime.fromtimestamp(ms / 1000, tz=_NY).date()
-
-
-# ---------------------------------------------------------------------------
 # Failure path.
 # ---------------------------------------------------------------------------
 def _failed(
@@ -430,5 +399,3 @@ def _failed(
         failure_reason=reason,
     )
     return config, result
-
-

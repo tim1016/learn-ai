@@ -43,13 +43,13 @@
 
   @if (walkForward(); as data) {
     @if (data.result.status === 'failed' && data.result.failure_reason; as reason) {
-      <p-message severity="warn" class="wfd-warn">{{ reason }}</p-message>
+      <p-message severity="warn" class="wfd-warn mb-3 block">{{ reason }}</p-message>
     }
 
     @if (data.result.warnings.length > 0) {
-      <p-message severity="info" class="wfd-warn">
+      <p-message severity="info" class="wfd-warn mb-3 block">
         <ng-template #content>
-          <ul class="wfd-warning-list">
+          <ul class="wfd-warning-list m-0 grid gap-2 pl-5">
             @for (w of data.result.warnings; track w) {
               <li>{{ w }}</li>
             }
@@ -59,9 +59,9 @@
     }
 
     @if (data.result.selection_failures.length > 0) {
-      <p-message severity="warn" class="wfd-warn">
+      <p-message severity="warn" class="wfd-warn mb-3 block">
         <ng-template #content>
-          <ul class="wfd-warning-list">
+          <ul class="wfd-warning-list m-0 grid gap-2 pl-5">
             @for (failure of data.result.selection_failures; track failure.fold_index) {
               <li>Fold {{ failure.fold_index }} retained {{ failure.training_candidates.length }} candidate outcomes: {{ failure.failure_reason }}</li>
             }

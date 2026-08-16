@@ -53,6 +53,56 @@ describe('validateStrategy', () => {
     ).toBe(true);
   });
 
+  it('flags unknown references nested inside DifferenceBps operands', () => {
+    const issues = validateStrategy({
+      ...VALID_SPEC,
+      entry: {
+        ...VALID_SPEC.entry,
+        conditions: [
+          {
+            kind: 'IndicatorComparison',
+            left: {
+              kind: 'DifferenceBps',
+              left: { kind: 'IndicatorRef', indicator: 'ema5' },
+              right: { kind: 'IndicatorRef', indicator: 'ghost' },
+            },
+            op: '>=',
+            right: { kind: 'Const', value: 4 },
+          },
+        ],
+      },
+    });
+
+    expect(
+      issues.some((issue) => issue.sev === 'error' && issue.text.includes('"ghost"')),
+    ).toBe(true);
+  });
+
+  it('rejects identical DifferenceBps operands', () => {
+    const issues = validateStrategy({
+      ...VALID_SPEC,
+      entry: {
+        ...VALID_SPEC.entry,
+        conditions: [
+          {
+            kind: 'IndicatorComparison',
+            left: {
+              kind: 'DifferenceBps',
+              left: { kind: 'IndicatorRef', indicator: 'ema5' },
+              right: { kind: 'IndicatorRef', indicator: 'ema5' },
+            },
+            op: '>=',
+            right: { kind: 'Const', value: 4 },
+          },
+        ],
+      },
+    });
+
+    expect(
+      issues.some((issue) => issue.sev === 'error' && issue.text.includes('same expression')),
+    ).toBe(true);
+  });
+
   it('flags reversed lo/hi in IndicatorBetween', () => {
     const issues = validateStrategy({
       ...VALID_SPEC,

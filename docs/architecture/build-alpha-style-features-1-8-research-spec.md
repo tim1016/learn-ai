@@ -429,7 +429,7 @@ Run EMA crossover across rolling folds:
 
 - each fold reports train/test windows with integer ms timestamps,
 - the same frozen EMA parameters are used in test for milestone 4A,
-- milestone 4B selects EMA windows on train and freezes them on test,
+- milestone 4B selects one of seven normalized EMA-gap thresholds on train and freezes it on test,
 - test ledgers record train-start pre-roll while persisted metrics begin at test,
 - parameter-search retention uses each selected winner's train Sharpe, never a different control strategy,
 - combined OOS curve is built only from test folds.
@@ -439,7 +439,7 @@ Run EMA crossover across rolling folds:
 - Fold boundary tests.
 - Train/test boundary and indicator-state pre-roll tests.
 - Fixed-spec fold replay test.
-- Parameter-freeze test for EMA windows.
+- Parameter-freeze test for normalized EMA-gap thresholds.
 - Regression test for insufficient folds warning.
 
 ## Feature 5 - Monte Carlo Risk Lab

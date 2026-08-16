@@ -27,7 +27,7 @@ from app.engine.strategy.spec.tests._parity_helpers import (
     closes_for_spy_ema,
 )
 from app.research.baselines.runner import BaselineRequest, run_baselines
-from app.research.runs import RunRequest, run_strategy_spec, save_run
+from app.research.runs import RunRequest, run_date_to_ms, run_strategy_spec, save_run
 from app.research.runs.storage import list_runs
 
 
@@ -85,8 +85,8 @@ def parent_run(tmp_path: Path):
     ledger, result = run_strategy_spec(
         RunRequest(
             spec=_build_parent_spec(),
-            start_date=date(2024, 1, 2),
-            end_date=date(2024, 12, 31),
+            start_ms=run_date_to_ms(date(2024, 1, 2)),
+            end_ms=run_date_to_ms(date(2024, 12, 31)),
         ),
         data_source_factory=factory,
         data_root_revision="test-revision-1",
@@ -173,9 +173,7 @@ def test_random_ema_windows_generates_n_runs(tmp_path: Path, parent_run):
         assert bl.parameters["slow"] > bl.parameters["fast"]
 
 
-def test_random_ema_windows_same_seed_produces_identical_parameters(
-    tmp_path: Path, parent_run
-):
+def test_random_ema_windows_same_seed_produces_identical_parameters(tmp_path: Path, parent_run):
     ledger, _, factory = parent_run
     request = BaselineRequest(
         parent_run_id=ledger.run_id,
@@ -279,10 +277,7 @@ def test_p_value_for_extreme_parent_is_smallest_possible(tmp_path: Path, parent_
             found_extreme = True
             break
     if not found_extreme:
-        pytest.skip(
-            "No metric had parent strictly above every null on this fixture; "
-            "test is informational"
-        )
+        pytest.skip("No metric had parent strictly above every null on this fixture; test is informational")
 
 
 # ---------------------------------------------------------------------------
@@ -353,9 +348,7 @@ def test_failed_parent_run_returns_failed(tmp_path: Path, parent_run):
     parent_ledger, parent_result, factory = parent_run
     # Re-persist the same ledger with status='failed' so the loader
     # returns a parent in failed state.
-    failed_ledger = parent_ledger.model_copy(
-        update={"status": "failed", "failure_reason": "engine refused spec"}
-    )
+    failed_ledger = parent_ledger.model_copy(update={"status": "failed", "failure_reason": "engine refused spec"})
     save_run(failed_ledger, parent_result, root=tmp_path, replace=True)
 
     _, result = run_baselines(

@@ -10,13 +10,18 @@
     "difference_bps": "-4.0000"
   },
   {
-    "left": "123.456789",
-    "right": "123.400000",
-    "difference_bps": "4.602025931928687196110210697"
+    "left": "125.056789",
+    "right": "125.000000",
+    "difference_bps": "4.5431200"
   },
   {
     "left": "100.00",
     "right": "100.00",
     "difference_bps": "0"
+  },
+  {
+    "left": "1.00",
+    "right": "0.00",
+    "error": "division_by_zero"
   }
 ]

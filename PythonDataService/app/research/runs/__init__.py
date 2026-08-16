@@ -34,7 +34,7 @@ from app.research.runs.result import (
     RunMetrics,
     RunTrade,
 )
-from app.research.runs.runner import RunRequest, run_strategy_spec
+from app.research.runs.runner import RunRequest, run_date_to_ms, run_strategy_spec
 from app.research.runs.storage import (
     list_runs,
     load_run,
@@ -66,6 +66,7 @@ __all__ = [
     "list_runs",
     "load_run",
     "make_data_snapshot_id",
+    "run_date_to_ms",
     "run_strategy_spec",
     "save_run",
     "summarize_window",

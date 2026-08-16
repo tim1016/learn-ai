@@ -33,7 +33,7 @@ def _context(left: str, right: str) -> EvalContext:
     )
 
 
-def _operand():
+def _operand() -> Operand:
     return TypeAdapter(Operand).validate_python(
         {
             "kind": "DifferenceBps",
@@ -47,10 +47,13 @@ def test_difference_bps_matches_decimal_golden_fixture() -> None:
     fixture_dir = Path(__file__).resolve().parents[3] / "fixtures" / "golden" / "spy-ema-difference-bps"
     expected_rows = json.loads((fixture_dir / "output.json").read_text(encoding="utf-8"))
 
-    actual = [evaluate_operand(_operand(), _context(row["left"], row["right"])) for row in expected_rows]
-    expected = [Decimal(row["difference_bps"]) for row in expected_rows]
-
-    assert actual == expected
+    for row in expected_rows:
+        if row.get("error") == "division_by_zero":
+            with pytest.raises(ZeroDivisionError, match="denominator evaluated to zero"):
+                evaluate_operand(_operand(), _context(row["left"], row["right"]))
+        else:
+            actual = evaluate_operand(_operand(), _context(row["left"], row["right"]))
+            assert actual == Decimal(row["difference_bps"])
 
 
 def test_difference_bps_returns_none_during_indicator_warmup() -> None:

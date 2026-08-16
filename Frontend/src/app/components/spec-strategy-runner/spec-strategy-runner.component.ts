@@ -536,7 +536,7 @@ export class SpecStrategyRunnerComponent {
     indicators: readonly IndicatorBlock[],
   ): Operand {
     const firstId = indicators[0]?.id ?? '';
-    const secondId = indicators[1]?.id ?? firstId;
+    const secondId = indicators[1]?.id ?? '';
     if (newKind === 'IndicatorRef') return { kind: 'IndicatorRef', indicator: firstId };
     if (newKind === 'Const') return { kind: 'Const', value: 0 };
     return {

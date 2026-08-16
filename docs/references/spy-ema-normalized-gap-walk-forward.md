@@ -2,7 +2,7 @@
 
 ## Provenance
 
-This research protocol was derived from the project discussion in the supplied [ChatGPT research conversation](https://chatgpt.com/c/6a7ff340-8f44-83ea-9ccf-bb8b13ca2eee) and then made executable under learn-ai's Python-owned numerical contract. The conversation is design provenance, not an independent numerical oracle. The formula fixture below checks exact `Decimal` arithmetic with independently declared inputs/expected values, but it implements the same algebra and is not an external reference oracle. The EMA and RSI implementations retain their existing LEAN-pinned references and parity tests.
+This research protocol was derived from the project discussion in the supplied [ChatGPT research conversation](https://chatgpt.com/c/6a7ff340-8f44-83ea-9ccf-bb8b13ca2eee) and then made executable under learn-ai's Python-owned numerical contract. The conversation is design provenance, not a numerical oracle. The 10,000 scale is independently grounded in the U.S. Securities and Exchange Commission's Investor.gov [basis-point definition](https://www.investor.gov/introduction-investing/investing-basics/glossary/basis-point), and the formula fixture pins manually derived exact-rational outputs rather than regenerating expectations with the production algebra. The EMA and RSI implementations retain their existing LEAN-pinned references and parity tests.
 
 ## Frozen protocol
 
@@ -41,7 +41,7 @@ The denominator must be non-zero. Indicator warmup propagates `None`, so the com
 - Canonical implementation: `PythonDataService/app/engine/strategy/spec/primitives.py::evaluate_operand`, `DifferenceBps` branch.
 - Serialized AST: `PythonDataService/app/engine/strategy/spec/schema.py::DifferenceBps`.
 - Golden input/output: `PythonDataService/tests/fixtures/golden/spy-ema-difference-bps/`.
-- Tolerance: exact `Decimal` equality (`rtol = 0`, `atol = 0`). The expected strings are generated independently from the evaluator.
+- Tolerance: exact `Decimal` equality (`rtol = 0`, `atol = 0`). Expected strings are fixed exact-rational oracle literals; the fixture materializer performs no arithmetic.
 - Validating test: `PythonDataService/tests/engine/strategy/spec/test_difference_bps_operand.py`.
 
 ## Selection formula
