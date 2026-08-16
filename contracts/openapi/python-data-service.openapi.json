@@ -10613,6 +10613,10 @@
       "ChartFillMarker": {
         "description": "One fill marker for a chart pane (\u00a78, \u00a710).\n\nProjected from the clerk journal's fill events filtered by the bot's\nnamespace. ``side`` and ``price`` render the buy/sell marker.",
         "properties": {
+          "event_key": {
+            "title": "Event Key",
+            "type": "string"
+          },
           "filled_at_ms": {
             "title": "Filled At Ms",
             "type": "integer"
@@ -10643,7 +10647,8 @@
           "side",
           "quantity",
           "price",
-          "order_ref"
+          "order_ref",
+          "event_key"
         ],
         "title": "ChartFillMarker",
         "type": "object"
@@ -18691,6 +18696,17 @@
       "GalleryBotView": {
         "description": "One bot's tile state in the gallery wall.",
         "properties": {
+          "day_pnl": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Day Pnl"
+          },
           "desired_state": {
             "title": "Desired State",
             "type": "string"
@@ -18758,6 +18774,17 @@
             "title": "Running",
             "type": "boolean"
           },
+          "session_change_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Change Pct"
+          },
           "sid": {
             "title": "Sid",
             "type": "string"
@@ -18777,6 +18804,8 @@
           "needs_attention",
           "realized_pnl_today",
           "open_pnl",
+          "day_pnl",
+          "session_change_pct",
           "fills_today",
           "primary_action"
         ],

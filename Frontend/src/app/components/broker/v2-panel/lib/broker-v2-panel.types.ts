@@ -144,6 +144,8 @@ export interface ChartFillMarker {
   readonly quantity: number;
   readonly price: number;
   readonly order_ref: string;
+  /** Stable per-fill identity — distinct from `order_ref`, which every partial fill of one order shares. Consumers distinguishing individual fills (an incremental cursor, a merge across partial fills) must key on this. */
+  readonly event_key: string;
 }
 
 export interface ChartOverlayNoticeView {

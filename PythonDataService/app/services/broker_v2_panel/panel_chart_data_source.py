@@ -102,17 +102,23 @@ async def _build_live_chart_from_fills(
     )
 
 
-async def get_live_chart(
+async def resolve_symbol_and_fills(
     broker: str,
     account_id: str,
     sid: str,
     *,
-    resolution: Literal["5s", "1m"] = "1m",
-    now_ms: int | None = None,
-) -> ChartLiveResponse:
-    """Build the LIVE chart from SQLite or normalized legacy fills."""
+    now_ms: int,
+) -> tuple[str, Sequence[FillRecord]]:
+    """Resolve one bot's symbol + today's SQLite-native fills.
+
+    Canonical implementation of "which fills back a bot's chart" — honors the
+    same SQLite-vs-legacy authority branch ``get_live_chart`` has always used.
+    Extracted so the bot gallery wall's marker projection
+    (``gallery_hub.GalleryHub``) reuses this exact resolution instead of
+    re-deriving it, keeping the wall and the single-bot detail chart from ever
+    diverging on fill provenance (CLAUDE.md single-source-of-truth rule).
+    """
     resolved = await validate_panel_account_scope(broker, account_id)
-    observed_at_ms = now_ms_utc() if now_ms is None else now_ms
     if sqlite_authority_selected_but_unavailable(broker):
         raise PanelUnavailableError(
             "The activated SQLite chart authority is unavailable.",
@@ -124,7 +130,7 @@ async def get_live_chart(
                 broker,
                 resolved,
                 sid,
-                now_ms=observed_at_ms,
+                now_ms=now_ms,
             )
         except SqlitePanelEconomicUnavailable as exc:
             raise PanelUnavailableError(
@@ -133,14 +139,25 @@ async def get_live_chart(
             ) from exc
         if evidence is None:
             raise UnknownBotError(f"No SQLite custody projection exists for bot '{sid}'.")
-        status = evidence.status
-        fills = evidence.economics.session_fills
-    else:
-        status = read_legacy_chart_status(broker, sid)
-        fills = read_legacy_chart_fills(broker, resolved, sid)
+        return evidence.status.symbol, evidence.economics.session_fills
+    status = read_legacy_chart_status(broker, sid)
+    return status.symbol, read_legacy_chart_fills(broker, resolved, sid)
+
+
+async def get_live_chart(
+    broker: str,
+    account_id: str,
+    sid: str,
+    *,
+    resolution: Literal["5s", "1m"] = "1m",
+    now_ms: int | None = None,
+) -> ChartLiveResponse:
+    """Build the LIVE chart from SQLite or normalized legacy fills."""
+    observed_at_ms = now_ms_utc() if now_ms is None else now_ms
+    symbol, fills = await resolve_symbol_and_fills(broker, account_id, sid, now_ms=observed_at_ms)
     return await _build_live_chart_from_fills(
         sid,
-        status.symbol,
+        symbol,
         fills,
         resolution=resolution,
         now_ms=observed_at_ms,

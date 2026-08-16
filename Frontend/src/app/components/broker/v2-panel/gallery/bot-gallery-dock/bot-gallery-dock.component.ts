@@ -1,9 +1,11 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  DestroyRef,
   ElementRef,
   computed,
   effect,
+  inject,
   input,
   output,
   signal,
@@ -12,58 +14,100 @@ import {
 import { type CdkDragDrop, DragDropModule, moveItemInArray } from '@angular/cdk/drag-drop';
 
 import { BotTileComponent } from '../bot-tile/bot-tile.component';
-import type { ChartBar, ChartFillMarker, GalleryBotView } from '../lib/gallery.types';
+import type { ChartBar, ChartFillMarker, GalleryBotView, GalleryLiveStatus } from '../lib/gallery.types';
 import {
   GALLERY_PAGE_SIZE,
-  autoDivision,
+  chooseColumns,
   loadLayout,
   paginate,
   resetLayout,
   saveLayout,
+  spliceVisibleIntoFullOrder,
   type TileLayout,
 } from '../lib/gallery-layout';
 
-const MIN_SPAN = 1;
+/** Matches `--space-3` in `_tokens.scss`, the gap `.gallery-dock__grid` renders between cells — kept in sync by hand since `chooseColumns` needs a px number, not a CSS custom property. */
+const GALLERY_GAP_PX = 12;
+/** Matches the tile header's fixed height (design spec §3.3, `.bot-tile__header`). */
+const TILE_HEADER_HEIGHT_PX = 28;
+/** Assumed grid area before the first `ResizeObserver` measurement lands — a reasonable widescreen default so the very first paint (and any environment where the observer never fires, e.g. tests) still gets a sane column count instead of a degenerate one from an unmeasured 0x0 element. */
+const DEFAULT_GRID_WIDTH_PX = 1600;
+const DEFAULT_GRID_HEIGHT_PX = 900;
 
-interface ResizeSession {
-  readonly sid: string;
-  readonly startColSpan: number;
-  readonly startRowSpan: number;
-  readonly startClientX: number;
-  readonly startClientY: number;
-  readonly cellWidth: number;
-  readonly cellHeight: number;
+export type GalleryStatusFilter = 'all' | 'running' | 'needs_attention' | 'stopped';
+
+interface FilterOption {
+  readonly value: GalleryStatusFilter;
+  readonly label: string;
+}
+
+const FILTER_OPTIONS: readonly FilterOption[] = [
+  { value: 'all', label: 'All' },
+  { value: 'running', label: 'Running' },
+  { value: 'needs_attention', label: 'Needs attn' },
+  { value: 'stopped', label: 'Stopped' },
+];
+
+const STATUS_LABEL: Record<GalleryLiveStatus, string> = {
+  connecting: 'Connecting…',
+  live: 'Live',
+  stale: 'Delayed',
+  error: 'Feed error',
+};
+
+/** Single-select status predicate for the footer filter (design spec §5, D7). */
+function matchesStatusFilter(bot: GalleryBotView, filter: GalleryStatusFilter): boolean {
+  switch (filter) {
+    case 'all': return true;
+    case 'running': return bot.running;
+    case 'needs_attention': return bot.running && bot.needs_attention;
+    case 'stopped': return !bot.running;
+  }
 }
 
 /**
- * Reorderable, resizable, paginated wall of `BotTileComponent`s for the
+ * Reorderable, paginated, filterable wall of `BotTileComponent`s for the
  * broker-v2 bot gallery.
  *
- * Default arrangement is a near-square auto grid (`autoDivision`, row-major
- * catalog order), overridable per tile by a persisted `TileLayout`. Reorder
- * uses Angular CDK (`cdkDropList` with `cdkDropListOrientation="mixed"` for
- * 2D grid reordering, `moveItemInArray` on drop); drag is restricted to a
- * small grip (`cdkDragHandle`) so it never competes with the tile's own
- * click-to-navigate body or quick-action button. Resize has no CDK
- * primitive, so it's a custom corner handle driven by raw pointer events:
- * `pointerdown` on the handle captures the pointer there
- * (`setPointerCapture`) and attaches `pointermove`/`pointerup`/
- * `pointercancel` listeners scoped to that one element for the duration of
- * the drag, rather than a lifetime `document`-level listener that would run
- * change detection on every mouse move across the whole page — the one page
- * designed to hold up to 20 live charts. Snaps to whole grid cells, clamped
- * to `[1, cols]` / `[1, rows]` of the *current page's* grid.
+ * Layout is a uniform, aspect-ratio-optimised `flex-wrap` grid
+ * (`chooseColumns` — see `lib/gallery-layout.ts`): tiles are `flex: 1 1
+ * <one-column-basis>` so a short trailing row grows to fill the full width
+ * instead of leaving a dead cell. The column/row division is recomputed off
+ * the grid container's live measured size (`ResizeObserver`, re-attached
+ * whenever the `@if`-gated grid element itself changes identity — e.g. the
+ * status filter toggling the "no matches" note in and out).
  *
- * Order + spans persist per account via `gallery-layout.ts`. A roster over
- * `GALLERY_PAGE_SIZE` paginates; reorder/resize act on the current page only
+ * Reorder uses Angular CDK (`cdkDropList` with `cdkDropListOrientation="mixed"`
+ * for 2D wrap reordering, `moveItemInArray` on drop); drag is restricted to
+ * a small grip (`cdkDragHandle`) so it never competes with the tile's own
+ * click-to-navigate body or quick-action button.
+ *
+ * The footer owns a single-select status filter (`All` / `Running` /
+ * `Needs attn` / `Stopped`, design spec §5, D7) that runs *before*
+ * pagination/`chooseColumns` — everything downstream (page count, column
+ * choice) operates on the filtered sid set. Persisted order, though, is
+ * reconciled against the FULL unfiltered roster (`fullOrder`): dropped sids
+ * fall away, new sids append at the end in catalog order. `effectiveLayout`
+ * is a filtered VIEW onto `fullOrder`, never a replacement for it — a bot
+ * the active filter is hiding keeps its place in `fullOrder` even while
+ * invisible, and reordering the visible subset splices back into
+ * `fullOrder` (`spliceVisibleIntoFullOrder`) rather than overwriting it, so
+ * a drag-drop while filtered can't silently destroy a hidden bot's position
+ * (see `onDropped`). It also renders the connection-status `●Live`
+ * indicator, driven by the `status` input the page forwards from
+ * `GalleryLiveStore`.
+ *
+ * Order persists per account via `gallery-layout.ts` as a flat sid array
+ * (no per-tile spans — resize was removed, design spec §4/D5). A roster
+ * over `GALLERY_PAGE_SIZE` paginates; reorder acts on the current page only
  * — page-relative indices are translated to the full-list offset before
  * mutating so a drop on page 2 doesn't corrupt page 1's order.
  *
- * KNOWN LIMITATION: both handles are pointer/touch-only — neither has a
- * keyboard equivalent yet, so both are marked `tabindex="-1"
- * aria-hidden="true"` rather than advertising a focusable control that
- * Enter/Space silently does nothing on. The always-available auto grid is
- * the working fallback. Real keyboard reorder/resize is a follow-up.
+ * KNOWN LIMITATION: the drag handle is pointer/touch-only — it has no
+ * keyboard equivalent yet, so it's marked `tabindex="-1" aria-hidden="true"`
+ * rather than advertising a focusable control that Enter/Space silently
+ * does nothing on. The always-available catalog order is the working
+ * fallback. Real keyboard reorder is a follow-up (design spec §11).
  */
 @Component({
   selector: 'app-bot-gallery-dock',
@@ -80,43 +124,79 @@ export class BotGalleryDockComponent {
   readonly accountId = input.required<string>();
   /** Sids with a confirmed quick action in flight — forwarded to each tile's `pending` input (mirrors `bots-roster`'s `pendingBotIds`). */
   readonly pendingSids = input<ReadonlySet<string>>(new Set());
+  /** The account's live-feed connection status, forwarded from `GalleryLiveStore` via the page — drives the footer's `●Live` indicator. */
+  readonly status = input.required<GalleryLiveStatus>();
 
   readonly action = output<{ sid: string; actionId: string }>();
 
   private readonly galleryGrid = viewChild<ElementRef<HTMLDivElement>>('galleryGrid');
+  private readonly destroyRef = inject(DestroyRef);
 
-  /** Raw page-navigation state. The roster can shrink independent of any explicit navigation, so nothing reads this directly — see `page` below. */
+  protected readonly filterOptions = FILTER_OPTIONS;
+  protected readonly filter = signal<GalleryStatusFilter>('all');
+
+  /** Raw page-navigation state. The roster/filter can shrink independent of any explicit navigation, so nothing reads this directly — see `page` below. */
   private readonly pageState = signal(0);
 
-  private readonly persistedLayout = signal<readonly TileLayout[]>([]);
+  private readonly persistedLayout = signal<TileLayout>([]);
   private loadedAccountId: string | null = null;
-  private resizeSession: ResizeSession | null = null;
-  private resizeHandleEl: HTMLElement | null = null;
 
-  /** Grid division for the *current page* — a >20-bot roster's page 2 has
-   * far fewer tiles than the full roster, so dividing by `bots().length`
-   * would give it the wrong column count and let resize clamp against
-   * bounds the operator never actually sees rendered. */
-  protected readonly grid = computed(() => autoDivision(this.pageTiles().length));
+  /** The grid container's last measured size — updated by `ResizeObserver`; seeded with a widescreen default so the first paint (and any host that never fires the observer, e.g. tests) still gets a sane column count. */
+  private readonly gridSize = signal<{ width: number; height: number }>({
+    width: DEFAULT_GRID_WIDTH_PX,
+    height: DEFAULT_GRID_HEIGHT_PX,
+  });
 
-  /** Persisted order/spans synced to the current roster: dropped sids fall away, new sids append at 1x1 in catalog order. */
-  protected readonly effectiveLayout = computed<readonly TileLayout[]>(() => {
+  protected readonly statusLabel = computed(() => STATUS_LABEL[this.status()]);
+
+  /** Live per-bucket counts against the *unfiltered* roster, so switching filters doesn't make the other segments' counts move. */
+  protected readonly filterCounts = computed<Record<GalleryStatusFilter, number>>(() => {
+    const bots = this.bots();
+    return {
+      all: bots.length,
+      running: bots.filter((bot) => bot.running).length,
+      needs_attention: bots.filter((bot) => bot.running && bot.needs_attention).length,
+      stopped: bots.filter((bot) => !bot.running).length,
+    };
+  });
+
+  protected readonly filteredBots = computed<GalleryBotView[]>(() => {
+    const filter = this.filter();
+    return this.bots().filter((bot) => matchesStatusFilter(bot, filter));
+  });
+
+  /** Grid division for the *current page* — a >20-bot roster's page 2 has far fewer tiles than the full roster, so dividing by the full count would give it the wrong column count. */
+  protected readonly grid = computed(() => chooseColumns(
+    this.pageTiles().length,
+    this.gridSize().width,
+    this.gridSize().height,
+    GALLERY_GAP_PX,
+    TILE_HEADER_HEIGHT_PX,
+  ));
+
+  /**
+   * Persisted order synced to the *full, unfiltered* roster: dropped sids
+   * fall away, new sids append in catalog order. This is the canonical
+   * order — `effectiveLayout` below is a filtered VIEW onto it, never a
+   * replacement for it, so a bot the active status filter is hiding keeps
+   * its place here even while invisible (see `onDropped`).
+   */
+  private readonly fullOrder = computed<TileLayout>(() => {
     const bots = this.bots();
     const knownSids = new Set(bots.map((bot) => bot.sid));
-    const persisted = this.persistedLayout().filter((tile) => knownSids.has(tile.sid));
-    const persistedSids = new Set(persisted.map((tile) => tile.sid));
-    const appended = bots
-      .filter((bot) => !persistedSids.has(bot.sid))
-      .map((bot): TileLayout => ({ sid: bot.sid, colSpan: 1, rowSpan: 1 }));
+    const persisted = this.persistedLayout().filter((sid) => knownSids.has(sid));
+    const persistedSids = new Set(persisted);
+    const appended = bots.filter((bot) => !persistedSids.has(bot.sid)).map((bot) => bot.sid);
     return [...persisted, ...appended];
   });
 
-  private readonly botsBySid = computed(() => new Map(this.bots().map((bot) => [bot.sid, bot])));
+  /** `fullOrder` filtered down to the sids passing the active status filter, preserving their relative order — what's actually paginated/rendered. */
+  protected readonly effectiveLayout = computed<TileLayout>(() => {
+    const visibleSids = new Set(this.filteredBots().map((bot) => bot.sid));
+    return this.fullOrder().filter((sid) => visibleSids.has(sid));
+  });
 
-  /** `effectiveLayout` keyed by sid — every span lookup below is per-tile inside a `@for`, so this avoids an O(n) `find` per tile. */
-  private readonly effectiveLayoutBySid = computed(
-    () => new Map(this.effectiveLayout().map((tile) => [tile.sid, tile])),
-  );
+  private readonly botsBySid = computed(() => new Map(this.bots().map((bot) => [bot.sid, bot])));
 
   // `pages` only depends on the item count, not on which page was
   // requested — `page: 0` here is an arbitrary valid argument, not a
@@ -126,13 +206,13 @@ export class BotGalleryDockComponent {
   protected readonly pageCount = computed(() => paginate(this.effectiveLayout(), 0).pages);
 
   /**
-   * `pageState` clamped to `[0, pageCount)`. The roster can shrink (bots
-   * leaving) independent of any explicit `goToPage` navigation, so every
-   * consumer of "the current page" — the footer text, the Next/Previous
-   * disabled state, and the page-relative index math in `onDropped` /
-   * `onResizePointerStart` — must read through this, never `pageState`
+   * `pageState` clamped to `[0, pageCount)`. The filtered roster can shrink
+   * (bots leaving, or a filter narrowing) independent of any explicit
+   * `goToPage` navigation, so every consumer of "the current page" — the
+   * footer text, the Next/Previous disabled state, and the page-relative
+   * index math in `onDropped` — must read through this, never `pageState`
    * directly, or a stale out-of-range page desyncs the footer ("page 2 of
-   * 1") and can misalign a drop/resize against the wrong slice.
+   * 1") and can misalign a drop against the wrong slice.
    */
   protected readonly page = computed(() => Math.max(0, Math.min(this.pageState(), this.pageCount() - 1)));
 
@@ -144,8 +224,8 @@ export class BotGalleryDockComponent {
   protected readonly pageBots = computed<GalleryBotView[]>(() => {
     const bySid = this.botsBySid();
     const bots: GalleryBotView[] = [];
-    for (const tile of this.pageTiles()) {
-      const bot = bySid.get(tile.sid);
+    for (const sid of this.pageTiles()) {
+      const bot = bySid.get(sid);
       if (bot) bots.push(bot);
     }
     return bots;
@@ -154,7 +234,7 @@ export class BotGalleryDockComponent {
   constructor() {
     // Reload the persisted layout only when the account identity actually
     // changes — a same-account signal churn (new bars/markers ticking in)
-    // must not clobber an in-session reorder/resize with a stale re-read.
+    // must not clobber an in-session reorder with a stale re-read.
     effect(() => {
       const accountId = this.accountId();
       if (this.loadedAccountId === accountId) return;
@@ -162,21 +242,36 @@ export class BotGalleryDockComponent {
       this.persistedLayout.set(loadLayout(accountId));
       this.pageState.set(0);
     });
+
+    // Track the grid container's real size so `chooseColumns` scores
+    // against the actual viewport rather than only the seeded default.
+    // Re-attached (not bound once) because the grid element is `@if`-gated
+    // behind the filter's "no matches" note and gets a new identity each
+    // time it reappears.
+    const observer = new ResizeObserver((entries) => {
+      const rect = entries[0]?.contentRect;
+      if (!rect || rect.width <= 0 || rect.height <= 0) return;
+      this.gridSize.set({ width: rect.width, height: rect.height });
+    });
+    this.destroyRef.onDestroy(() => observer.disconnect());
+    effect(() => {
+      const gridEl = this.galleryGrid()?.nativeElement;
+      observer.disconnect();
+      if (gridEl) observer.observe(gridEl);
+    });
   }
 
-  protected colSpanFor(sid: string): number {
-    return this.effectiveLayoutBySid().get(sid)?.colSpan ?? MIN_SPAN;
-  }
-
-  protected rowSpanFor(sid: string): number {
-    return this.effectiveLayoutBySid().get(sid)?.rowSpan ?? MIN_SPAN;
+  protected onFilterChange(next: GalleryStatusFilter): void {
+    if (this.filter() === next) return;
+    this.filter.set(next);
+    this.pageState.set(0);
   }
 
   protected forwardAction(event: { sid: string; actionId: string }): void {
     this.action.emit(event);
   }
 
-  protected onDropped(event: CdkDragDrop<readonly TileLayout[]>): void {
+  protected onDropped(event: CdkDragDrop<TileLayout>): void {
     if (event.previousIndex === event.currentIndex) return;
     // `previousIndex`/`currentIndex` are positions within the rendered
     // `pageBots` DOM order. `pageTiles` (and the `effectiveLayout` offset
@@ -186,9 +281,14 @@ export class BotGalleryDockComponent {
     // different-length array than what the user actually saw.
     if (this.pageBots().length !== this.pageTiles().length) return;
     const pageStart = this.page() * GALLERY_PAGE_SIZE;
-    const next = [...this.effectiveLayout()];
-    moveItemInArray(next, pageStart + event.previousIndex, pageStart + event.currentIndex);
-    this.persist(next);
+    const reorderedVisible = [...this.effectiveLayout()];
+    moveItemInArray(reorderedVisible, pageStart + event.previousIndex, pageStart + event.currentIndex);
+    // Persist against the FULL order, not the filtered `effectiveLayout` —
+    // persisting the filtered list directly would drop every sid the active
+    // filter is hiding (it's not in `effectiveLayout` to begin with), and
+    // the next read would re-append them at the end in catalog order,
+    // silently destroying whatever position they held.
+    this.persist(spliceVisibleIntoFullOrder(this.fullOrder(), reorderedVisible));
   }
 
   protected goToPage(delta: number): void {
@@ -202,72 +302,7 @@ export class BotGalleryDockComponent {
     this.pageState.set(0);
   }
 
-  protected onResizePointerStart(event: PointerEvent, sid: string): void {
-    // Left button only for mouse; touch/pen have no `button` semantics.
-    if (event.pointerType === 'mouse' && event.button !== 0) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const tile = this.effectiveLayoutBySid().get(sid);
-    const gridEl = this.galleryGrid()?.nativeElement;
-    if (!tile || !gridEl) return;
-    const { cols, rows } = this.grid();
-    this.resizeSession = {
-      sid,
-      startColSpan: tile.colSpan,
-      startRowSpan: tile.rowSpan,
-      startClientX: event.clientX,
-      startClientY: event.clientY,
-      cellWidth: gridEl.clientWidth / Math.max(cols, 1) || 1,
-      cellHeight: gridEl.clientHeight / Math.max(rows, 1) || 1,
-    };
-    // Scope the move/end listeners to this one drag rather than binding
-    // them for the component's lifetime — see the class docstring. Capture
-    // ensures they keep firing on this element even if the pointer leaves
-    // it mid-drag, without needing a `pointerId` equality check on every
-    // move.
-    const handle = event.currentTarget as HTMLElement;
-    this.resizeHandleEl = handle;
-    handle.setPointerCapture(event.pointerId);
-    handle.addEventListener('pointermove', this.onResizePointerMove);
-    handle.addEventListener('pointerup', this.onResizePointerEnd);
-    handle.addEventListener('pointercancel', this.onResizePointerEnd);
-  }
-
-  private readonly onResizePointerMove = (event: PointerEvent): void => {
-    const session = this.resizeSession;
-    if (!session) return;
-    const deltaCols = Math.round((event.clientX - session.startClientX) / session.cellWidth);
-    const deltaRows = Math.round((event.clientY - session.startClientY) / session.cellHeight);
-    this.applyResize(session.sid, session.startColSpan + deltaCols, session.startRowSpan + deltaRows);
-  };
-
-  private readonly onResizePointerEnd = (): void => {
-    const handle = this.resizeHandleEl;
-    handle?.removeEventListener('pointermove', this.onResizePointerMove);
-    handle?.removeEventListener('pointerup', this.onResizePointerEnd);
-    handle?.removeEventListener('pointercancel', this.onResizePointerEnd);
-    this.resizeHandleEl = null;
-    this.resizeSession = null;
-  };
-
-  /**
-   * Clamps to `[1, cols]` / `[1, rows]` and persists. Kept as its own
-   * method (rather than inlined into the pointermove handler) so the
-   * span-persistence behavior is directly unit-testable without
-   * synthesizing a full pointer-drag sequence through jsdom.
-   */
-  protected applyResize(sid: string, colSpan: number, rowSpan: number): void {
-    const { cols, rows } = this.grid();
-    const clampedCol = Math.min(Math.max(colSpan, MIN_SPAN), Math.max(cols, MIN_SPAN));
-    const clampedRow = Math.min(Math.max(rowSpan, MIN_SPAN), Math.max(rows, MIN_SPAN));
-    const existing = this.effectiveLayoutBySid().get(sid);
-    if (!existing || (existing.colSpan === clampedCol && existing.rowSpan === clampedRow)) return;
-    const next = this.effectiveLayout().map((tile): TileLayout =>
-      tile.sid === sid ? { ...tile, colSpan: clampedCol, rowSpan: clampedRow } : tile);
-    this.persist(next);
-  }
-
-  private persist(layout: readonly TileLayout[]): void {
+  private persist(layout: TileLayout): void {
     this.persistedLayout.set(layout);
     saveLayout(this.accountId(), layout);
   }

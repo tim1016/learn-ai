@@ -3,36 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ChartBar, ChartFillMarker, GalleryBotView } from '../lib/gallery.types';
-import { BotTileComponent, toTileMarkers, toVolumeBar } from './bot-tile.component';
-
-// Mock lightweight-charts — the actual DOM chart is not exercised in unit
-// tests (see dual-pane-chart.component.spec.ts for the grounding pattern).
-vi.mock('lightweight-charts', () => {
-  const createMockSeries = () => ({
-    setData: vi.fn(),
-    applyOptions: vi.fn(),
-    priceScale: vi.fn().mockReturnValue({ applyOptions: vi.fn() }),
-  });
-  const createSeriesMarkers = vi.fn().mockReturnValue({ setMarkers: vi.fn() });
-  const createMockChart = () => ({
-    addSeries: vi.fn().mockReturnValue(createMockSeries()),
-    timeScale: vi.fn().mockReturnValue({ fitContent: vi.fn() }),
-    remove: vi.fn(),
-  });
-  return {
-    createChart: vi.fn().mockImplementation(() => createMockChart()),
-    createSeriesMarkers,
-    CandlestickSeries: 'CandlestickSeries',
-    HistogramSeries: 'HistogramSeries',
-    TickMarkType: {
-      Year: 0,
-      Month: 1,
-      DayOfMonth: 2,
-      Time: 3,
-      TimeWithSeconds: 4,
-    },
-  };
-});
+import { BotTileComponent, botStatusTone } from './bot-tile.component';
 
 function bar(overrides: Partial<ChartBar> = {}): ChartBar {
   return {
@@ -59,6 +30,8 @@ function bot(overrides: Partial<GalleryBotView> = {}): GalleryBotView {
     needs_attention: false,
     realized_pnl_today: 125.5,
     open_pnl: -40.25,
+    day_pnl: 85.25,
+    session_change_pct: null,
     fills_today: 3,
     last_bar_at_ms: 1_700_000_060_000,
     primary_action: {
@@ -71,15 +44,58 @@ function bot(overrides: Partial<GalleryBotView> = {}): GalleryBotView {
   };
 }
 
+function fillMarker(overrides: Partial<ChartFillMarker> = {}): ChartFillMarker {
+  return {
+    filled_at_ms: 1_700_000_030_000,
+    side: 'buy',
+    quantity: 2,
+    price: 101,
+    order_ref: 'order-1',
+    event_key: 'exec-1',
+    ...overrides,
+  };
+}
+
 function routerProvider(navigate = vi.fn().mockResolvedValue(true)) {
   return { provide: Router, useValue: { navigate } };
 }
 
+describe('botStatusTone', () => {
+  it('is bull when running and healthy', () => {
+    expect(botStatusTone({ running: true, needs_attention: false })).toBe('bull');
+  });
+
+  it('is warn when running and needing attention', () => {
+    expect(botStatusTone({ running: true, needs_attention: true })).toBe('warn');
+  });
+
+  it('is muted when not running, regardless of needs_attention', () => {
+    expect(botStatusTone({ running: false, needs_attention: false })).toBe('muted');
+    expect(botStatusTone({ running: false, needs_attention: true })).toBe('muted');
+  });
+});
+
 describe('BotTileComponent', () => {
-  it('renders the header identity, live price, and a green delta on an up day', async () => {
+  it('renders the header identity and strategy label', async () => {
     const { container } = await render(BotTileComponent, {
       inputs: {
         bot: bot(),
+        bars: [bar()],
+        broker: 'alpaca',
+        accountId: 'PA3',
+      },
+      providers: [routerProvider()],
+    });
+
+    expect(screen.getByText('SPY')).toBeTruthy();
+    expect(container.querySelector('app-asset-identity')?.textContent).toContain('SPY');
+    expect(screen.getByText('ORB breakout')).toBeTruthy();
+  });
+
+  it('colours the legend delta positive on an up session', async () => {
+    await render(BotTileComponent, {
+      inputs: {
+        bot: bot({ session_change_pct: 0.1 }),
         bars: [
           bar({ start_ms: 1_700_000_000_000, open: '100.00', close: '100.00' }),
           bar({ start_ms: 1_700_000_060_000, open: '100.00', close: '110.00' }),
@@ -90,18 +106,14 @@ describe('BotTileComponent', () => {
       providers: [routerProvider()],
     });
 
-    expect(screen.getByText('SPY')).toBeTruthy();
-    expect(container.querySelector('app-asset-identity')?.textContent).toContain('SPY');
-    expect(screen.getByText('ORB breakout')).toBeTruthy();
-    expect(screen.getByText('$110.00')).toBeTruthy();
     const delta = screen.getByText('+10.00%');
-    expect(delta.classList.contains('bot-tile__delta--positive')).toBe(true);
+    expect(delta.classList.contains('bot-tile__legend-item--positive')).toBe(true);
   });
 
-  it('renders a red delta on a down day', async () => {
+  it('colours the legend delta negative on a down session', async () => {
     await render(BotTileComponent, {
       inputs: {
-        bot: bot(),
+        bot: bot({ session_change_pct: -0.1 }),
         bars: [
           bar({ start_ms: 1_700_000_000_000, open: '100.00', close: '100.00' }),
           bar({ start_ms: 1_700_000_060_000, open: '100.00', close: '90.00' }),
@@ -113,36 +125,168 @@ describe('BotTileComponent', () => {
     });
 
     const delta = screen.getByText('-10.00%');
-    expect(delta.classList.contains('bot-tile__delta--negative')).toBe(true);
+    expect(delta.classList.contains('bot-tile__legend-item--negative')).toBe(true);
   });
 
-  it('shows a placeholder price and delta when there are no bars yet', async () => {
+  it('renders the default legend (Δ%/fills/P&L) and mounts the canvas without throwing when there are no bars yet', async () => {
     await render(BotTileComponent, {
       inputs: { bot: bot(), bars: [], broker: 'alpaca', accountId: 'PA3' },
       providers: [routerProvider()],
     });
 
-    expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+    expect(screen.getByText('—')).toBeTruthy(); // Δ% — fewer than 1 bar
+    expect(screen.getByText('3')).toBeTruthy(); // fills_today
+    expect(screen.getByText('+$85.25')).toBeTruthy(); // realized_pnl_today + open_pnl
   });
 
-  it('marks the state dot running when the bot is running', async () => {
+  it('repaints when bars change after the canvas context mounts', async () => {
+    const clearRect = vi.fn();
+    const context = new Proxy(
+      {
+        clearRect,
+        measureText: (text: string) => ({ width: text.length * 6 }),
+      },
+      {
+        get: (target, property) => (property in target ? target[property as keyof typeof target] : () => undefined),
+        set: () => true,
+      },
+    ) as unknown as CanvasRenderingContext2D;
+    const getContext = vi
+      .spyOn(HTMLCanvasElement.prototype, 'getContext')
+      .mockImplementation(((kind: string) => (kind === '2d' ? context : null)) as HTMLCanvasElement['getContext']);
+
+    try {
+      const { fixture } = await render(BotTileComponent, {
+        inputs: {
+          bot: bot(),
+          bars: [bar()],
+          broker: 'alpaca',
+          accountId: 'PA3',
+        },
+        providers: [routerProvider()],
+      });
+      await waitFor(() => expect(clearRect).toHaveBeenCalled());
+      const paintsAfterMount = clearRect.mock.calls.length;
+
+      fixture.componentRef.setInput('bars', [bar(), bar({ start_ms: 1_700_000_060_000, end_ms: 1_700_000_120_000 })]);
+      fixture.detectChanges();
+
+      await waitFor(() => expect(clearRect.mock.calls.length).toBeGreaterThan(paintsAfterMount));
+    } finally {
+      getContext.mockRestore();
+    }
+  });
+
+  it('swaps the legend to the hovered bar\'s OHLCV (with a matching fill) on mousemove, and reverts on mouseleave', async () => {
+    const hoveredBar = bar({
+      start_ms: 1_700_000_060_000,
+      end_ms: 1_700_000_120_000,
+      open: '100.00',
+      high: '105.00',
+      low: '95.00',
+      close: '102.50',
+      volume: 4_200,
+    });
     const { container } = await render(BotTileComponent, {
-      inputs: { bot: bot({ running: true }), bars: [bar()], broker: 'alpaca', accountId: 'PA3' },
+      inputs: {
+        bot: bot({ session_change_pct: 0.025 }),
+        bars: [bar({ start_ms: 1_700_000_000_000, end_ms: 1_700_000_060_000 }), hoveredBar],
+        markers: [fillMarker({ filled_at_ms: hoveredBar.start_ms + 1_000, side: 'buy', quantity: 2, price: 101.5 })],
+        broker: 'alpaca',
+        accountId: 'PA3',
+      },
+      providers: [routerProvider()],
+    });
+
+    // Default legend, before any hover.
+    expect(screen.getByText('+2.50%')).toBeTruthy();
+
+    const chartRegion = container.querySelector('.bot-tile__chart') as Element;
+    // x=200 lands on the second bar with the default (unsized-by-ResizeObserver)
+    // renderer config: plot.left=4, plot.width=312, barCount=2 -> barWidth=156.
+    fireEvent.mouseMove(chartRegion, { clientX: 200 });
+
+    await waitFor(() => {
+      const legendText = container.querySelector('.bot-tile__legend-text')?.textContent ?? '';
+      expect(legendText).toContain('O100.00');
+      expect(legendText).toContain('H105.00');
+      expect(legendText).toContain('L95.00');
+      expect(legendText).toContain('C102.50');
+      expect(legendText).toContain('V4,200');
+      expect(legendText).toContain('BUY 2 @ 101.5');
+    });
+    expect(screen.queryByText('+2.50%')).toBeNull();
+
+    fireEvent.mouseLeave(chartRegion);
+
+    await waitFor(() => {
+      expect(container.querySelector('.bot-tile__legend-text')).toBeNull();
+    });
+    expect(screen.getByText('+2.50%')).toBeTruthy();
+  });
+
+  it('applies a bull status ring when running and healthy', async () => {
+    const { container } = await render(BotTileComponent, {
+      inputs: {
+        bot: bot({ running: true, needs_attention: false }),
+        bars: [bar()],
+        broker: 'alpaca',
+        accountId: 'PA3',
+      },
       providers: [routerProvider()],
     });
     expect(
-      container.querySelector('.bot-tile__dot')?.classList.contains('bot-tile__dot--running'),
+      container.querySelector('.bot-tile__ring')?.classList.contains('bot-tile__ring--bull'),
     ).toBe(true);
   });
 
-  it('does not mark the state dot running when the bot is stopped', async () => {
+  it('applies a warn status ring when running and needing attention', async () => {
     const { container } = await render(BotTileComponent, {
-      inputs: { bot: bot({ running: false }), bars: [bar()], broker: 'alpaca', accountId: 'PA3' },
+      inputs: {
+        bot: bot({ running: true, needs_attention: true }),
+        bars: [bar()],
+        broker: 'alpaca',
+        accountId: 'PA3',
+      },
       providers: [routerProvider()],
     });
     expect(
-      container.querySelector('.bot-tile__dot')?.classList.contains('bot-tile__dot--running'),
-    ).toBe(false);
+      container.querySelector('.bot-tile__ring')?.classList.contains('bot-tile__ring--warn'),
+    ).toBe(true);
+  });
+
+  it('applies a muted status ring when not running', async () => {
+    const { container } = await render(BotTileComponent, {
+      inputs: {
+        bot: bot({
+          running: false,
+          primary_action: { action_id: 'resume', label: 'Resume', enabled: true, disabled_reason: null },
+        }),
+        bars: [bar()],
+        broker: 'alpaca',
+        accountId: 'PA3',
+      },
+      providers: [routerProvider()],
+    });
+    expect(
+      container.querySelector('.bot-tile__ring')?.classList.contains('bot-tile__ring--muted'),
+    ).toBe(true);
+  });
+
+  it('carries needs_attention as a text hint on the chart region, not colour alone', async () => {
+    const { container } = await render(BotTileComponent, {
+      inputs: {
+        bot: bot({ running: true, needs_attention: true }),
+        bars: [bar()],
+        broker: 'alpaca',
+        accountId: 'PA3',
+      },
+      providers: [routerProvider()],
+    });
+
+    expect(container.querySelector('.bot-tile__chart')?.getAttribute('aria-label')).toBe(
+      'Open SPY · sid-1 detail — needs attention',
+    );
   });
 
   it('disables the quick action and surfaces the reason when not enabled', async () => {
@@ -229,6 +373,32 @@ describe('BotTileComponent', () => {
 
     expect(onAction).toHaveBeenCalledWith({ sid: 'sid-1', actionId: 'stop' });
     expect(screen.queryByText('Stop SPY · sid-1?')).toBeNull();
+  });
+
+  it('opens an inline confirm and emits resume for a stopped bot', async () => {
+    const onAction = vi.fn();
+    await render(BotTileComponent, {
+      inputs: {
+        bot: bot({
+          running: false,
+          primary_action: { action_id: 'resume', label: 'Resume', enabled: true, disabled_reason: null },
+        }),
+        bars: [bar()],
+        broker: 'alpaca',
+        accountId: 'PA3',
+      },
+      on: { action: onAction },
+      providers: [routerProvider()],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    expect(onAction).not.toHaveBeenCalled();
+    expect(screen.getByText('Resume SPY · sid-1?')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+
+    expect(onAction).toHaveBeenCalledWith({ sid: 'sid-1', actionId: 'resume' });
+    expect(screen.queryByText('Resume SPY · sid-1?')).toBeNull();
   });
 
   it('does not emit when the inline confirm is cancelled', async () => {
@@ -353,62 +523,5 @@ describe('BotTileComponent', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Stop$/i }));
 
     expect(navigate).not.toHaveBeenCalled();
-  });
-});
-
-describe('toVolumeBar', () => {
-  it('floors start_ms to seconds, keeps the raw volume, and colors an up bar green', () => {
-    expect(toVolumeBar(bar({ open: '100', close: '105', volume: 500 }))).toEqual({
-      time: 1_700_000_000,
-      value: 500,
-      color: '#26a69a',
-    });
-  });
-
-  it('colors a down bar red', () => {
-    expect(toVolumeBar(bar({ open: '105', close: '100', volume: 500 }))).toEqual({
-      time: 1_700_000_000,
-      value: 500,
-      color: '#ef5350',
-    });
-  });
-});
-
-describe('toTileMarkers', () => {
-  function fillMarker(overrides: Partial<ChartFillMarker> = {}): ChartFillMarker {
-    return {
-      filled_at_ms: 1_700_000_030_000,
-      side: 'buy',
-      quantity: 2,
-      price: 101,
-      order_ref: 'order-1',
-      ...overrides,
-    };
-  }
-
-  it('maps a buy fill to a green up-arrow below the bar, at the floored second', () => {
-    const [marker] = toTileMarkers([fillMarker()]);
-
-    expect(marker).toEqual({
-      time: 1_700_000_030,
-      position: 'belowBar',
-      color: '#26a69a',
-      shape: 'arrowUp',
-      text: 'BUY 2 @ 101',
-    });
-  });
-
-  it('maps a sell fill to a red down-arrow above the bar', () => {
-    const [marker] = toTileMarkers([
-      fillMarker({ filled_at_ms: 1_700_000_045_000, side: 'sell', quantity: 1, price: 99.5, order_ref: 'order-2' }),
-    ]);
-
-    expect(marker).toEqual({
-      time: 1_700_000_045,
-      position: 'aboveBar',
-      color: '#ef5350',
-      shape: 'arrowDown',
-      text: 'SELL 1 @ 99.5',
-    });
   });
 });

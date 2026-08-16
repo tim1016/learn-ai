@@ -2,10 +2,11 @@
 
 ``/api/brokers/{broker}/accounts/{account_id}/gallery/...`` — the gallery
 wall's REST bootstrap (``snapshot``) and SSE channel (``stream``) for the
-live 20-bot candlestick wall (one account, all running bots + their shared
-per-symbol bars). The router validates/parses the HTTP request and delegates
-all composition to ``GalleryHub`` (``app.services.broker_v2_panel.gallery_hub``)
-— no business logic lives here, mirroring the router-freeze discipline of
+live 20-bot candlestick wall (one account, every non-retired bot — running
+and stopped/off-duty alike — + their shared per-symbol bars). The router
+validates/parses the HTTP request and delegates all composition to
+``GalleryHub`` (``app.services.broker_v2_panel.gallery_hub``) — no business
+logic lives here, mirroring the router-freeze discipline of
 ``broker_v2_panel.py``.
 
 ``get_gallery_hub`` is a FastAPI dependency (not a plain helper) specifically
@@ -23,16 +24,17 @@ cache) is out of scope for this task.
 
 The stream is poll-driven (``GalleryHub`` has no pub/sub producer): each
 iteration calls ``build_update`` against the last-emitted bar per symbol.
-``GalleryHub.build_update`` re-projects every running bot into
+``GalleryHub.build_update`` re-projects every shown (non-retired) bot into
 ``bots_delta`` on every call (no per-bot dirty-tracking yet — see its
 module docstring), so in practice an ``update`` frame is emitted on
-essentially every ~1s poll while any bot is running; only the bar deltas
-are genuinely incremental. The ``: keepalive`` comment (at most every
-~15s) only fires once zero bots are running. The ``cursor`` query
-parameter and ``reset`` event mirror ``broker_v2_panel.py``'s
-``/live-stream`` reconnect handling: a reconnecting client's remembered
-epoch is compared once against the hub's current epoch before entering
-the loop.
+essentially every ~1s poll while the account has at least one non-retired
+bot — running or stopped; only the bar deltas are genuinely incremental.
+The ``: keepalive`` comment (at most every ~15s) only fires once the
+account has zero non-retired bots (a bot no longer drops out of
+``bots_delta`` merely by stopping). The ``cursor`` query parameter and
+``reset`` event mirror ``broker_v2_panel.py``'s ``/live-stream`` reconnect
+handling: a reconnecting client's remembered epoch is compared once against
+the hub's current epoch before entering the loop.
 """
 
 from __future__ import annotations
@@ -46,9 +48,16 @@ from collections.abc import AsyncIterator
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 
+from app.broker.alpaca.clerk.fills import FillRecord
 from app.schemas.broker_v2_gallery import GalleryLiveSnapshot, GallerySymbolBars
-from app.services.broker_v2_panel import panel_data_source
-from app.services.broker_v2_panel.gallery_hub import GalleryHub
+from app.schemas.broker_v2_panel import ChartFillMarker, PanelAction
+from app.services.broker_v2_panel import panel_chart_data_source, panel_data_source
+from app.services.broker_v2_panel.gallery_hub import (
+    GalleryFillSource,
+    GalleryHub,
+    GalleryPrimaryActionSource,
+)
+from app.services.broker_v2_panel.panel_data_source import PanelUnavailableError, UnknownBotError
 from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
 
 logger = logging.getLogger(__name__)
@@ -57,8 +66,68 @@ router = APIRouter(prefix="/api/brokers", tags=["broker-v2-gallery"])
 
 _KEEPALIVE_INTERVAL_S = 15.0
 _POLL_INTERVAL_S = 1.0
+# Just under one poll interval: every connected client sees fresh data at
+# least once per its own ~1s poll, while N clients polling within the same
+# window collapse to one real catalog fetch + one real fill-source fan-out
+# instead of N of each (GalleryHub.__init__'s `io_cache_ttl_ms` docstring).
+_GALLERY_IO_CACHE_TTL_MS = 800
 
 _HUB_CACHE: dict[tuple[str, str], GalleryHub] = {}
+
+
+class _PanelChartFillSource:
+    """Adapts ``panel_chart_data_source.resolve_symbol_and_fills`` to the
+    ``GalleryFillSource`` contract ``GalleryHub`` expects.
+
+    Reuses the exact SQLite-vs-legacy fill authority branch the single-bot
+    detail chart's ``get_live_chart`` uses (CLAUDE.md single-source-of-truth
+    rule) but never lets one bot's unavailable fill evidence — a SQLite
+    revision race, a bot too new to have a projection yet — fail the whole
+    gallery snapshot for every other bot; it logs and degrades to no markers
+    for that bot instead.
+    """
+
+    async def resolve_symbol_and_fills(
+        self, broker: str, account_id: str, sid: str, *, now_ms: int
+    ) -> tuple[str, tuple[FillRecord, ...]]:
+        try:
+            return await panel_chart_data_source.resolve_symbol_and_fills(
+                broker, account_id, sid, now_ms=now_ms
+            )
+        except (PanelUnavailableError, UnknownBotError) as exc:
+            logger.warning(
+                "[GALLERY] fill evidence unavailable for bot; rendering no markers",
+                extra={"broker": broker, "account_id": account_id, "sid": sid, "error": str(exc)},
+            )
+            return "", ()
+
+
+_FILL_SOURCE: GalleryFillSource = _PanelChartFillSource()
+
+
+class _PanelPrimaryActionSource:
+    """Resolve the full panel's request-specific Resume admission action.
+
+    The catalog intentionally publishes no Resume row action, so the gallery
+    must consult this authoritative projection before enabling a stopped bot's
+    quick action.
+    """
+
+    async def resolve_resume_action(
+        self, broker: str, account_id: str, sid: str
+    ) -> PanelAction | None:
+        try:
+            panel = await panel_data_source.get_panel(broker, account_id, sid)
+        except (PanelUnavailableError, UnknownBotError) as exc:
+            logger.warning(
+                "[GALLERY] Resume admission unavailable for bot; disabling quick action",
+                extra={"broker": broker, "account_id": account_id, "sid": sid, "error": str(exc)},
+            )
+            return None
+        return next((action for action in panel.actions if action.action_id == "resume"), None)
+
+
+_PRIMARY_ACTION_SOURCE: GalleryPrimaryActionSource = _PanelPrimaryActionSource()
 
 
 async def get_gallery_hub(broker: str, account_id: str) -> GalleryHub:
@@ -88,6 +157,9 @@ async def get_gallery_hub(broker: str, account_id: str) -> GalleryHub:
             account_id=account_id,
             catalog_source=panel_data_source,
             aggregator=LIVE_BAR_AGGREGATOR,
+            fill_source=_FILL_SOURCE,
+            primary_action_source=_PRIMARY_ACTION_SOURCE,
+            io_cache_ttl_ms=_GALLERY_IO_CACHE_TTL_MS,
         )
         _HUB_CACHE[key] = hub
     return hub
@@ -108,6 +180,19 @@ def _latest_bar_start_ms(symbol_bars: list[GallerySymbolBars]) -> dict[str, int]
     return {entry.symbol: entry.bars[-1].start_ms for entry in symbol_bars if entry.bars}
 
 
+def _marker_event_keys(markers: dict[str, list[ChartFillMarker]]) -> dict[str, set[str]]:
+    """Per-sid set of ``event_key``s among the markers in one call, for
+    seeding/advancing this stream's own delivered-fills cursor (mirrors
+    ``_latest_bar_start_ms``). Deliberately local to the generator, not hub
+    state — see ``GalleryHub.build_update``'s cross-client race note.
+
+    Callers must UNION this into their accumulated cursor, never replace it
+    — a sid's delivered set has to keep growing across polls, or a fill
+    delivered two polls ago would fall out of "seen" the moment a poll
+    without that sid's keys arrives, and get resent."""
+    return {sid: {marker.event_key for marker in sid_markers} for sid, sid_markers in markers.items() if sid_markers}
+
+
 async def _gallery_event_source(hub: GalleryHub, *, cursor: str | None) -> AsyncIterator[str]:
     snapshot = await hub.build_snapshot()
     epoch = snapshot.stream_epoch
@@ -119,13 +204,20 @@ async def _gallery_event_source(hub: GalleryHub, *, cursor: str | None) -> Async
     yield f"id: {current_id}\nevent: snapshot\ndata: {snapshot.model_dump_json()}\n\n"
 
     since_bar_ms = _latest_bar_start_ms(snapshot.symbols)
-    # This stream's own last-observed running roster, passed to every
-    # ``build_update`` call. Deliberately local to this generator (one per
-    # SSE connection) rather than read off ``hub`` — the same account's
+    # This stream's own delivered-fills cursor per sid — a set of event_keys,
+    # not a scalar timestamp (two fills can share a millisecond; see
+    # ``gallery_hub._markers_delta``) — seeded from the snapshot's markers
+    # (already fully delivered) so the first update never resends them.
+    # Deliberately local to this generator for the same cross-client reason
+    # as ``known_sids`` below (see ``GalleryHub.build_update``'s docstring).
+    since_marker_keys = _marker_event_keys(snapshot.markers)
+    # This stream's own last-observed shown (non-retired) roster, passed to
+    # every ``build_update`` call. Deliberately local to this generator (one
+    # per SSE connection) rather than read off ``hub`` — the same account's
     # ``GalleryHub`` is shared across every concurrent client (reconnects,
     # multiple tabs), so a hub-wide baseline would let the first client's
-    # poll consume a bot's removal and leave every other client's
-    # ``removed_sids`` empty for it.
+    # poll consume a bot's departure from the catalog and leave every other
+    # client's ``removed_sids`` empty for it.
     known_sids = {bot.sid for bot in snapshot.bots}
     last_emit = time.monotonic()
     # No subscription/queue to release on exit: this is a poll loop, not a
@@ -134,19 +226,24 @@ async def _gallery_event_source(hub: GalleryHub, *, cursor: str | None) -> Async
     # stops at its next ``await``.
     while True:
         await asyncio.sleep(_POLL_INTERVAL_S)
-        update = await hub.build_update(since_bar_ms, known_sids=known_sids)
+        update = await hub.build_update(
+            since_bar_ms, known_sids=known_sids, since_marker_keys=since_marker_keys
+        )
         since_bar_ms.update(_latest_bar_start_ms(update.symbols))
-        # ``bots_delta`` is always the full running roster (see the hub's
-        # docstring), so it doubles as this stream's next known-roster
-        # baseline with no extra bookkeeping.
+        for sid, keys in _marker_event_keys(update.markers_delta).items():
+            since_marker_keys.setdefault(sid, set()).update(keys)
+        # ``bots_delta`` is always the full shown (non-retired) roster (see
+        # the hub's docstring), so it doubles as this stream's next
+        # known-roster baseline with no extra bookkeeping.
         known_sids = {bot.sid for bot in update.bots_delta}
         has_new_bars = any(entry.bars for entry in update.symbols)
-        # ``bots_delta`` is always the full running roster (GalleryHub has no
-        # per-bot dirty-tracking yet), so this is effectively "any bot
-        # running" rather than "a bot actually changed" — an update frame
-        # goes out on essentially every poll while bots are running. Only
-        # ``has_new_bars``/``removed_sids`` are genuinely incremental.
-        # Keepalive only fires once ``bots_delta`` is empty (zero bots).
+        # ``bots_delta`` is always the full shown roster (GalleryHub has no
+        # per-bot dirty-tracking yet), so this is effectively "any bot is
+        # shown" rather than "a bot actually changed" — an update frame goes
+        # out on essentially every poll while the account has at least one
+        # non-retired bot. Only ``has_new_bars``/``removed_sids`` are
+        # genuinely incremental. Keepalive only fires once ``bots_delta`` is
+        # empty (the account has zero non-retired bots).
         changed = has_new_bars or bool(update.bots_delta) or bool(update.removed_sids)
         now = time.monotonic()
         if changed:

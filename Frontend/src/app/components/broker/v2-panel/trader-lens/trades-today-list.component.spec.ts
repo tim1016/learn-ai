@@ -9,6 +9,7 @@ const BUY_FILL: ChartFillMarker = {
   quantity: 100,
   price: 512.3,
   order_ref: 'ord-buy-001',
+  event_key: 'exec-buy-001',
 };
 
 const SELL_FILL: ChartFillMarker = {
@@ -17,6 +18,7 @@ const SELL_FILL: ChartFillMarker = {
   quantity: 100,
   price: 512.9,
   order_ref: 'ord-sell-001',
+  event_key: 'exec-sell-001',
 };
 
 describe('TradesTodayListComponent', () => {

@@ -115,7 +115,11 @@ def _polygon_bar_to_chart_bar(bar: PolygonBar, *, span_ms: int) -> ChartBar:
     )
 
 
-def _fill_to_marker(fill: FillRecord) -> ChartFillMarker:
+# Canonical fill→marker projection, shared by this module's LIVE/HISTORY panes
+# and the bot gallery wall (``gallery_hub.GalleryHub``) — promoted from a
+# module-private helper so the gallery reuses it instead of redefining fill→
+# marker mapping (CLAUDE.md single-source-of-truth rule, guiding philosophy #5).
+def fill_to_marker(fill: FillRecord) -> ChartFillMarker:
     side = "buy" if fill.side is OrderSide.BUY else "sell"
     return ChartFillMarker(
         filled_at_ms=fill.filled_at_ms,
@@ -123,17 +127,18 @@ def _fill_to_marker(fill: FillRecord) -> ChartFillMarker:
         quantity=fill.quantity,
         price=fill.fill_price,
         order_ref=fill.order_ref,
+        event_key=fill.event_key,
     )
 
 
-def _markers_in_window(
+def markers_in_window(
     fills: Sequence[FillRecord],
     *,
     from_ms: int,
     to_ms: int,
 ) -> list[ChartFillMarker]:
     return [
-        _fill_to_marker(fill)
+        fill_to_marker(fill)
         for fill in sorted(fills, key=lambda fill: (fill.filled_at_ms, fill.event_key))
         if from_ms <= fill.filled_at_ms < to_ms
     ]
@@ -181,7 +186,7 @@ def build_live_chart(
     open_ms, close_ms = window
 
     bars = aggregator_bars_to_chart_bars(chart_window.bars)
-    markers = _markers_in_window(fills, from_ms=open_ms, to_ms=close_ms)
+    markers = markers_in_window(fills, from_ms=open_ms, to_ms=close_ms)
     notices = [
         ChartOverlayNoticeView(code=notice.code, message=notice.message, source="polygon")
         for notice in chart_window.overlay_notices
@@ -258,7 +263,7 @@ async def build_history_chart(
         polygon_bars = polygon_bars[-_MAX_HISTORY_BARS:]
 
     bars = [_polygon_bar_to_chart_bar(bar, span_ms=plan.span_ms) for bar in polygon_bars]
-    markers = _markers_in_window(fills, from_ms=plan.from_ms, to_ms=plan.to_ms)
+    markers = markers_in_window(fills, from_ms=plan.from_ms, to_ms=plan.to_ms)
     return ChartHistoryResponse(
         strategy_instance_id=strategy_instance_id,
         symbol=symbol,

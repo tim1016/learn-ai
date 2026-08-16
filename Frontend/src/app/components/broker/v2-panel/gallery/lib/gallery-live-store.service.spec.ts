@@ -47,13 +47,14 @@ function bar(startMs: number, close = '100.00'): ChartBar {
   };
 }
 
-function marker(orderRef: string, filledAtMs: number): ChartFillMarker {
+function marker(orderRef: string, filledAtMs: number, eventKey = orderRef): ChartFillMarker {
   return {
     filled_at_ms: filledAtMs,
     side: 'buy',
     quantity: 10,
     price: 100,
     order_ref: orderRef,
+    event_key: eventKey,
   };
 }
 
@@ -68,6 +69,8 @@ function bot(sid: string, overrides: Partial<GalleryBotView> = {}): GalleryBotVi
     needs_attention: false,
     realized_pnl_today: 0,
     open_pnl: 0,
+    day_pnl: 0,
+    session_change_pct: 0,
     fills_today: 0,
     last_bar_at_ms: null,
     primary_action: { action_id: 'stop', label: 'Stop', enabled: true, disabled_reason: null },
@@ -137,24 +140,47 @@ describe('GalleryLiveStore', () => {
       expect(store.barsBySymbol().get('QQQ')).toEqual([bar(1_000)]);
     });
 
-    it('dedupes markers by order_ref, replacing the existing entry in place rather than duplicating', () => {
+    it('dedupes markers by event_key, replacing the existing entry in place rather than duplicating', () => {
       const store = TestBed.inject(GalleryLiveStore);
       store.ingestSnapshot(
-        snapshot({ markers: { 'sid-1': [marker('order-1', 1), marker('order-2', 2)] } }),
+        snapshot({ markers: { 'sid-1': [marker('order-1', 1, 'exec-1'), marker('order-2', 2, 'exec-2')] } }),
       );
 
+      // A redelivery of the SAME fill event (identical event_key) replaces
+      // in place, not duplicates.
       store.ingestUpdate({
         surface_version: 2,
         as_of_ms: 2,
         symbols: [],
-        markers_delta: { 'sid-1': [marker('order-1', 99)] },
+        markers_delta: { 'sid-1': [marker('order-1', 99, 'exec-1')] },
         bots_delta: [],
         removed_sids: [],
       });
 
       const markers = store.markersBySid().get('sid-1');
-      expect(markers?.map((m) => m.order_ref)).toEqual(['order-1', 'order-2']);
-      expect(markers?.find((m) => m.order_ref === 'order-1')?.filled_at_ms).toBe(99);
+      expect(markers?.map((m) => m.event_key)).toEqual(['exec-1', 'exec-2']);
+      expect(markers?.find((m) => m.event_key === 'exec-1')?.filled_at_ms).toBe(99);
+    });
+
+    it('appends a distinct fill sharing an order_ref rather than replacing the earlier partial fill', () => {
+      const store = TestBed.inject(GalleryLiveStore);
+      store.ingestSnapshot(snapshot({ markers: { 'sid-1': [marker('order-1', 1, 'exec-1')] } }));
+
+      // A second, genuinely different partial fill of the SAME order — same
+      // order_ref, distinct event_key — must be preserved alongside the
+      // first, not overwrite it.
+      store.ingestUpdate({
+        surface_version: 2,
+        as_of_ms: 2,
+        symbols: [],
+        markers_delta: { 'sid-1': [marker('order-1', 2, 'exec-2')] },
+        bots_delta: [],
+        removed_sids: [],
+      });
+
+      const markers = store.markersBySid().get('sid-1');
+      expect(markers?.map((m) => m.event_key)).toEqual(['exec-1', 'exec-2']);
+      expect(markers?.every((m) => m.order_ref === 'order-1')).toBe(true);
     });
 
     it('ignores an update whose surface_version does not advance past the last-adopted version', () => {

@@ -9,8 +9,8 @@ describe('FillTableComponent', () => {
       inputs: {
         label: 'All fills today',
         fills: [
-          { filled_at_ms: 1_753_800_000_000, side: 'buy', quantity: 2, price: 625.1, order_ref: 'buy-1' },
-          { filled_at_ms: 1_753_800_005_000, side: 'sell', quantity: 1, price: 626.2, order_ref: 'sell-1' },
+          { filled_at_ms: 1_753_800_000_000, side: 'buy', quantity: 2, price: 625.1, order_ref: 'buy-1', event_key: 'exec-buy-1' },
+          { filled_at_ms: 1_753_800_005_000, side: 'sell', quantity: 1, price: 626.2, order_ref: 'sell-1', event_key: 'exec-sell-1' },
         ],
       },
     });

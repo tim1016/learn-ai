@@ -18,11 +18,23 @@ from httpx import ASGITransport
 from app.config import settings
 from app.main import app
 from app.routers import broker_v2_gallery
+from app.schemas.broker_v2_panel import PanelAction
+from app.services.broker_v2_panel import panel_chart_data_source, panel_data_source
 from app.services.broker_v2_panel.gallery_hub import GalleryHub
+from app.services.broker_v2_panel.panel_data_source import PanelUnavailableError, UnknownBotError
 
 _BROKER = "alpaca"
 _ACCOUNT_ID = "PA3"
 _URL_PREFIX = f"/api/brokers/{_BROKER}/accounts/{_ACCOUNT_ID}/gallery"
+
+
+def _status_label_for(*, phase: str, running: bool) -> str:
+    """Mirrors ``catalog_projection_service.status_label_for`` so this fake
+    carries an accurate ``status_label`` — the field ``GalleryHub`` actually
+    reads (``_is_retired``), not the raw ``phase``."""
+    if phase == "RETIRED":
+        return "Retired"
+    return "Working" if running else "Off duty"
 
 
 class _Cat2:
@@ -39,6 +51,7 @@ class _Cat2:
         *,
         strategy_label: str = "",
         needs_attention: bool = False,
+        phase: str = "ON_DUTY",
     ) -> None:
         self.strategy_instance_id = sid
         self.symbol = symbol
@@ -48,6 +61,15 @@ class _Cat2:
         self.open_pnl = open_pnl
         self.fills_today = fills_today
         self.needs_attention = needs_attention
+        self.phase = phase
+
+    @property
+    def status_label(self) -> str:
+        # A property, not an init-time value: several tests mutate
+        # ``.phase``/``.running`` in place mid-test to simulate a poll
+        # observing a changed row, mirroring how a freshly-fetched
+        # production catalog row's status_label is always derived fresh.
+        return _status_label_for(phase=self.phase, running=self.running)
 
 
 class _FakeCatalogSource:
@@ -123,6 +145,75 @@ async def test_gallery_snapshot_returns_running_bots(gallery_app) -> None:
     assert {b["sid"] for b in body["bots"]} == {"Aug11-02"}
     assert {s["symbol"] for s in body["symbols"]} == {"SPY"}
     assert body["bots"][0]["last_bar_at_ms"] == 1_700_000_060_000  # SPY's latest bar end_ms
+
+
+async def test_gallery_snapshot_includes_stopped_bot_and_excludes_retired(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The snapshot shows every non-retired bot — a stopped bot projects
+    with ``running=False`` + a Resume action and its symbol's bars are
+    fetched, while a retired bot (and its otherwise-unwatched symbol) never
+    reaches the payload."""
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "")
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", True)
+    rows = [
+        _Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12, phase="ON_DUTY"),
+        _Cat2("Aug11-03", "QQQ", False, 5.0, 0.0, 1, phase="OFF_DUTY"),
+        _Cat2("Aug11-04", "IWM", False, None, None, None, phase="RETIRED"),
+    ]
+    hub = GalleryHub(
+        broker=_BROKER,
+        account_id=_ACCOUNT_ID,
+        catalog_source=_FakeCatalogSource(rows),
+        aggregator=_FakeAggregator(),
+    )
+    app.dependency_overrides[broker_v2_gallery.get_gallery_hub] = lambda: hub
+    try:
+        transport = ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get(f"{_URL_PREFIX}/snapshot")
+    finally:
+        app.dependency_overrides.pop(broker_v2_gallery.get_gallery_hub, None)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert {b["sid"] for b in body["bots"]} == {"Aug11-02", "Aug11-03"}  # retired excluded
+    assert {s["symbol"] for s in body["symbols"]} == {"SPY", "QQQ"}  # IWM (retired) never subscribed
+    stopped = next(b for b in body["bots"] if b["sid"] == "Aug11-03")
+    assert stopped["running"] is False
+    assert stopped["primary_action"]["action_id"] == "resume"
+    assert stopped["primary_action"]["label"] == "Resume"
+    assert stopped["primary_action"]["enabled"] is False
+
+
+async def test_gallery_stream_stopped_bot_survives_update() -> None:
+    """A bot that stops between polls stays on the wall as a stopped tile —
+    it must not appear in ``removed_sids``."""
+    rows = [_Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12)]
+    hub = GalleryHub(
+        broker=_BROKER,
+        account_id=_ACCOUNT_ID,
+        catalog_source=_FakeCatalogSource(rows),
+        aggregator=_FakeAggregator(),
+    )
+
+    response = await broker_v2_gallery.stream_gallery(cursor=None, hub=hub)
+    try:
+        await asyncio.wait_for(response.body_iterator.__anext__(), timeout=5.0)  # snapshot frame
+
+        rows[0].running = False  # bot stops before the next poll
+
+        frame = await asyncio.wait_for(response.body_iterator.__anext__(), timeout=5.0)
+    finally:
+        await response.body_iterator.aclose()
+
+    assert "event: update" in frame
+    payload = _frame_payload(frame)
+    assert payload["removed_sids"] == []
+    assert {b["sid"] for b in payload["bots_delta"]} == {"Aug11-02"}
+    assert payload["bots_delta"][0]["running"] is False
+    assert payload["bots_delta"][0]["primary_action"]["action_id"] == "resume"
+    assert payload["bots_delta"][0]["primary_action"]["enabled"] is False
 
 
 def _frame_payload(frame: str) -> dict:
@@ -209,3 +300,74 @@ async def test_gallery_stream_matching_cursor_skips_reset() -> None:
 
     assert "event: reset" not in frame
     assert "event: snapshot" in frame
+
+
+@pytest.mark.parametrize("error", [PanelUnavailableError("clerk unavailable"), UnknownBotError("no such bot")])
+async def test_panel_chart_fill_source_degrades_to_empty_on_panel_error(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    """``_PanelChartFillSource`` exists specifically so one bot's unavailable
+    fill evidence never fails the whole gallery snapshot for every other bot
+    (its own docstring). Exercise the REAL adapter — not a fake that already
+    assumes the contract — against both exception types
+    ``panel_chart_data_source.resolve_symbol_and_fills`` can raise, and
+    assert it degrades to an empty result instead of propagating."""
+
+    async def _raise(*args: object, **kwargs: object) -> tuple[str, tuple]:
+        raise error
+
+    monkeypatch.setattr(panel_chart_data_source, "resolve_symbol_and_fills", _raise)
+    source = broker_v2_gallery._PanelChartFillSource()
+
+    symbol, fills = await source.resolve_symbol_and_fills(
+        _BROKER, _ACCOUNT_ID, "some-sid", now_ms=1_700_000_000_000
+    )
+
+    assert symbol == ""
+    assert fills == ()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [PanelUnavailableError("clerk unavailable"), UnknownBotError("no such bot")],
+)
+async def test_panel_primary_action_source_degrades_to_none_on_panel_error(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    async def _raise(*args: object, **kwargs: object) -> object:
+        raise error
+
+    monkeypatch.setattr(panel_data_source, "get_panel", _raise)
+
+    action = await broker_v2_gallery._PanelPrimaryActionSource().resolve_resume_action(
+        _BROKER, _ACCOUNT_ID, "some-sid"
+    )
+
+    assert action is None
+
+
+async def test_panel_primary_action_source_returns_authoritative_resume_action(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resume = PanelAction(
+        action_id="resume",
+        label="Resume",
+        explanation="Resume is blocked by current admission evidence.",
+        enabled=False,
+        blockers=[],
+        confirmation=None,
+        revision=7,
+        concurrency_token="resume-token",
+    )
+    panel = type("Panel", (), {"actions": [resume]})()
+
+    async def _get_panel(*args: object, **kwargs: object) -> object:
+        return panel
+
+    monkeypatch.setattr(panel_data_source, "get_panel", _get_panel)
+
+    action = await broker_v2_gallery._PanelPrimaryActionSource().resolve_resume_action(
+        _BROKER, _ACCOUNT_ID, "some-sid"
+    )
+
+    assert action is resume
