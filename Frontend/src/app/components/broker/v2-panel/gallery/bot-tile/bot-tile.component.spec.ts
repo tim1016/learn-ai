@@ -139,6 +139,44 @@ describe('BotTileComponent', () => {
     expect(screen.getByText('+$85.25')).toBeTruthy(); // realized_pnl_today + open_pnl
   });
 
+  it('repaints when bars change after the canvas context mounts', async () => {
+    const clearRect = vi.fn();
+    const context = new Proxy(
+      {
+        clearRect,
+        measureText: (text: string) => ({ width: text.length * 6 }),
+      },
+      {
+        get: (target, property) => (property in target ? target[property as keyof typeof target] : () => undefined),
+        set: () => true,
+      },
+    ) as unknown as CanvasRenderingContext2D;
+    const getContext = vi
+      .spyOn(HTMLCanvasElement.prototype, 'getContext')
+      .mockImplementation(((kind: string) => (kind === '2d' ? context : null)) as HTMLCanvasElement['getContext']);
+
+    try {
+      const { fixture } = await render(BotTileComponent, {
+        inputs: {
+          bot: bot(),
+          bars: [bar()],
+          broker: 'alpaca',
+          accountId: 'PA3',
+        },
+        providers: [routerProvider()],
+      });
+      await waitFor(() => expect(clearRect).toHaveBeenCalled());
+      const paintsAfterMount = clearRect.mock.calls.length;
+
+      fixture.componentRef.setInput('bars', [bar(), bar({ start_ms: 1_700_000_060_000, end_ms: 1_700_000_120_000 })]);
+      fixture.detectChanges();
+
+      await waitFor(() => expect(clearRect.mock.calls.length).toBeGreaterThan(paintsAfterMount));
+    } finally {
+      getContext.mockRestore();
+    }
+  });
+
   it('swaps the legend to the hovered bar\'s OHLCV (with a matching fill) on mousemove, and reverts on mouseleave', async () => {
     const hoveredBar = bar({
       start_ms: 1_700_000_060_000,

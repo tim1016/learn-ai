@@ -203,9 +203,8 @@ function formatPrice(value: number): string {
  * potentially permanently if that bar never enters the buffer.
  */
 function findBarIndex(bars: readonly ChartBar[], ms: number): number {
-  if (bars.length === 0 || ms < bars[0].start_ms) return -1;
   for (let i = 0; i < bars.length; i++) {
-    if (ms < bars[i].end_ms) return i;
+    if (ms >= bars[i].start_ms && ms < bars[i].end_ms) return i;
   }
   return -1;
 }

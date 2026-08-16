@@ -50,9 +50,13 @@ from fastapi.responses import StreamingResponse
 
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.schemas.broker_v2_gallery import GalleryLiveSnapshot, GallerySymbolBars
-from app.schemas.broker_v2_panel import ChartFillMarker
+from app.schemas.broker_v2_panel import ChartFillMarker, PanelAction
 from app.services.broker_v2_panel import panel_chart_data_source, panel_data_source
-from app.services.broker_v2_panel.gallery_hub import GalleryFillSource, GalleryHub
+from app.services.broker_v2_panel.gallery_hub import (
+    GalleryFillSource,
+    GalleryHub,
+    GalleryPrimaryActionSource,
+)
 from app.services.broker_v2_panel.panel_data_source import PanelUnavailableError, UnknownBotError
 from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
 
@@ -101,6 +105,31 @@ class _PanelChartFillSource:
 _FILL_SOURCE: GalleryFillSource = _PanelChartFillSource()
 
 
+class _PanelPrimaryActionSource:
+    """Resolve the full panel's request-specific Resume admission action.
+
+    The catalog intentionally publishes no Resume row action, so the gallery
+    must consult this authoritative projection before enabling a stopped bot's
+    quick action.
+    """
+
+    async def resolve_resume_action(
+        self, broker: str, account_id: str, sid: str
+    ) -> PanelAction | None:
+        try:
+            panel = await panel_data_source.get_panel(broker, account_id, sid)
+        except (PanelUnavailableError, UnknownBotError) as exc:
+            logger.warning(
+                "[GALLERY] Resume admission unavailable for bot; disabling quick action",
+                extra={"broker": broker, "account_id": account_id, "sid": sid, "error": str(exc)},
+            )
+            return None
+        return next((action for action in panel.actions if action.action_id == "resume"), None)
+
+
+_PRIMARY_ACTION_SOURCE: GalleryPrimaryActionSource = _PanelPrimaryActionSource()
+
+
 async def get_gallery_hub(broker: str, account_id: str) -> GalleryHub:
     """Return the per-``(broker, account_id)`` cached ``GalleryHub``.
 
@@ -129,6 +158,7 @@ async def get_gallery_hub(broker: str, account_id: str) -> GalleryHub:
             catalog_source=panel_data_source,
             aggregator=LIVE_BAR_AGGREGATOR,
             fill_source=_FILL_SOURCE,
+            primary_action_source=_PRIMARY_ACTION_SOURCE,
             io_cache_ttl_ms=_GALLERY_IO_CACHE_TTL_MS,
         )
         _HUB_CACHE[key] = hub

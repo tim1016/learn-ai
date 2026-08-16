@@ -259,5 +259,14 @@ describe('draw', () => {
       CFG,
     );
     expect(withOlderThanBuffer.fill).toHaveBeenCalledTimes(1);
+
+    const barsWithGap = [
+      bar({ start_ms: 1_700_000_000_000, end_ms: 1_700_000_060_000 }),
+      bar({ start_ms: 1_700_000_120_000, end_ms: 1_700_000_180_000 }),
+    ];
+    const gapScale = computeScale(barsWithGap, CFG);
+    const withMarkerInGap = createStubCtx();
+    draw(withMarkerInGap, barsWithGap, [marker({ filled_at_ms: 1_700_000_090_000 })], gapScale, null, CFG);
+    expect(withMarkerInGap.fill).toHaveBeenCalledTimes(1);
   });
 });

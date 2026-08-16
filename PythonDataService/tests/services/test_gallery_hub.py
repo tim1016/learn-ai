@@ -79,6 +79,16 @@ class _FakeFillSource:
         return "", self.fills_by_sid.get(sid, ())
 
 
+class _FakePrimaryActionSource:
+    def __init__(self, actions_by_sid: dict[str, PanelAction | None]) -> None:
+        self.actions_by_sid = actions_by_sid
+
+    async def resolve_resume_action(
+        self, broker: str, account_id: str, sid: str
+    ) -> PanelAction | None:
+        return self.actions_by_sid.get(sid)
+
+
 def _status_label_for(*, phase: str, running: bool) -> str:
     """Mirrors ``catalog_projection_service.status_label_for`` so these
     fakes carry an accurate ``status_label`` — the field ``GalleryHub``
@@ -121,6 +131,29 @@ def test_shown_symbols_excludes_retired_bot_symbols() -> None:
         _Cat("b", "IWM", False, phase="RETIRED"),
     ]
     assert shown_symbols(cat) == ["SPY"]
+
+
+@pytest.mark.parametrize(
+    ("realized", "open_pnl", "expected"),
+    [
+        (125.5, -40.25, 85.25),
+        (125.5, None, 125.5),
+        (None, -40.25, -40.25),
+        (0.0, 0.0, 0.0),
+        (None, None, None),
+    ],
+)
+def test_day_pnl_null_safe_projection(
+    realized: float | None,
+    open_pnl: float | None,
+    expected: float | None,
+) -> None:
+    result = gallery_hub._day_pnl(realized, open_pnl)
+
+    if expected is None:
+        assert result is None
+    else:
+        assert result == pytest.approx(expected, abs=1e-6, rel=0)
 
 
 class _Cat2:
@@ -483,7 +516,7 @@ async def test_build_snapshot_session_change_pct_excludes_a_prior_session_bar(
     # (110 - 100) / 100 = 0.10 — NOT (110 - 50) / 50 = 1.2, which is what a
     # naive bars[0]-based calculation would have produced by folding in the
     # prior session's bar.
-    assert snap.bots[0].session_change_pct == pytest.approx(0.10)
+    assert snap.bots[0].session_change_pct == pytest.approx(0.10, abs=1e-9, rel=0)
 
 
 def test_gallery_hub_reuses_canonical_markers_projection() -> None:
@@ -670,32 +703,47 @@ async def test_build_update_does_not_drop_a_same_millisecond_fill(
     assert [m.event_key for m in upd.markers_delta["Aug11-02"]] == ["exec-2"]
 
 
-def _hub_with_rows(rows: list[_Cat2]) -> GalleryHub:
+def _hub_with_rows(
+    rows: list[_Cat2],
+    *,
+    primary_action_source: _FakePrimaryActionSource | None = None,
+) -> GalleryHub:
     return GalleryHub(
         broker="alpaca",
         account_id="PA3",
         catalog_source=_FakeCatalogSource(rows),
         aggregator=_FakeAggregator(),
+        primary_action_source=primary_action_source,
     )
 
 
 @pytest.mark.asyncio
-async def test_primary_action_honors_disabled_row_action_for_stopped_bot() -> None:
-    """A stopped bot isn't unconditionally Resume-able — when the roster's
-    own authoritative row_action says Resume is blocked (e.g. admission
-    unavailable), the gallery's primary_action must say so too, not present
-    an enabled Resume the confirm-time authoritative-panel check then
-    rejects."""
-    row = _Cat2(
-        "Aug11-02", "SPY", False, None, None, None,
-        row_action=_row_action("resume", enabled=False, explanation="Admission unavailable."),
+async def test_primary_action_honors_disabled_panel_resume_action_for_stopped_bot() -> None:
+    """A stopped bot uses the full panel's request-specific Resume action;
+    the catalog deliberately has no Resume admission decision."""
+    row = _Cat2("Aug11-02", "SPY", False, None, None, None)
+    action_source = _FakePrimaryActionSource(
+        {"Aug11-02": _row_action("resume", enabled=False, explanation="Admission unavailable.")}
     )
-    snap = await _hub_with_rows([row]).build_snapshot()
+    snap = await _hub_with_rows([row], primary_action_source=action_source).build_snapshot()
 
     action = snap.bots[0].primary_action
     assert action.action_id == "resume"
     assert action.enabled is False
     assert action.disabled_reason == "Admission unavailable."
+
+
+@pytest.mark.asyncio
+async def test_primary_action_honors_enabled_panel_resume_action() -> None:
+    row = _Cat2("Aug11-02", "SPY", False, None, None, None)
+    action_source = _FakePrimaryActionSource({"Aug11-02": _row_action("resume", enabled=True)})
+
+    snap = await _hub_with_rows([row], primary_action_source=action_source).build_snapshot()
+
+    action = snap.bots[0].primary_action
+    assert action.action_id == "resume"
+    assert action.enabled is True
+    assert action.disabled_reason is None
 
 
 @pytest.mark.asyncio
@@ -713,11 +761,8 @@ async def test_primary_action_uses_row_action_enabled_true_for_running_bot() -> 
 
 
 @pytest.mark.asyncio
-async def test_primary_action_falls_back_when_row_action_names_a_different_action() -> None:
-    """The roster's routine action for this row isn't stop/resume (e.g. a
-    hold needs clearing first) — the gallery's one quick-action slot can't
-    represent that yet, so it falls back to the pre-fix always-enabled
-    derivation rather than mis-attributing an unrelated action's enablement."""
+async def test_primary_action_fails_closed_when_catalog_action_is_not_resume() -> None:
+    """A catalog action for another command is not Resume eligibility."""
     row = _Cat2(
         "Aug11-02", "SPY", False, None, None, None,
         row_action=_row_action("clear_hold", enabled=False, explanation="A hold is active."),
@@ -726,21 +771,20 @@ async def test_primary_action_falls_back_when_row_action_names_a_different_actio
 
     action = snap.bots[0].primary_action
     assert action.action_id == "resume"
-    assert action.enabled is True
-    assert action.disabled_reason is None
+    assert action.enabled is False
+    assert action.disabled_reason is not None
 
 
 @pytest.mark.asyncio
-async def test_primary_action_falls_back_when_no_row_action_projected() -> None:
-    """Backward compat: a catalog source that doesn't populate row_action
-    (most test doubles, and any future non-SQLite source) keeps today's
-    always-enabled derivation."""
+async def test_primary_action_fails_closed_when_resume_projection_is_unavailable() -> None:
+    """Missing panel admission evidence must never become enabled Resume."""
     row = _Cat2("Aug11-02", "SPY", False, None, None, None)  # row_action=None
     snap = await _hub_with_rows([row]).build_snapshot()
 
     action = snap.bots[0].primary_action
     assert action.action_id == "resume"
-    assert action.enabled is True
+    assert action.enabled is False
+    assert action.disabled_reason is not None
 
 
 @pytest.mark.asyncio
@@ -829,14 +873,10 @@ class _BlockingFillSource:
 
 
 @pytest.mark.asyncio
-async def test_build_update_version_not_stolen_by_a_concurrent_call() -> None:
-    """Regression: ``surface_version`` must reflect THIS call's own claimed
-    version even when another concurrent call (same cached hub, a second SSE
-    client or the REST fallback poll) increments ``self._version`` again
-    while this call is still awaiting ``_fetch_markers``. Before the fix,
-    ``surface_version`` was read from ``self._version`` at return-construction
-    time — after the await — so the slower call would silently inherit the
-    faster call's later version number."""
+async def test_surface_versions_publish_after_async_collection_in_order() -> None:
+    """A second caller cannot publish around an older call that is still
+    collecting marker data. Versions are assigned after collection, in the
+    same order coherent responses are published."""
     release = asyncio.Event()
     rows = [_Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12)]
     hub = GalleryHub(
@@ -848,11 +888,14 @@ async def test_build_update_version_not_stolen_by_a_concurrent_call() -> None:
     )
 
     slow_call = asyncio.ensure_future(hub.build_update(since_bar_ms={}, known_sids=set()))
-    await asyncio.sleep(0)  # let the slow call increment its version and start waiting
+    await asyncio.sleep(0)  # let the first call enter marker collection and block
 
-    fast_result = await hub.build_update(since_bar_ms={}, known_sids=set())
+    second_call = asyncio.ensure_future(hub.build_update(since_bar_ms={}, known_sids=set()))
+    await asyncio.sleep(0)
+    assert second_call.done() is False
+
     release.set()
-    slow_result = await slow_call
+    slow_result, second_result = await asyncio.gather(slow_call, second_call)
 
     assert slow_result.surface_version == 1
-    assert fast_result.surface_version == 2
+    assert second_result.surface_version == 2

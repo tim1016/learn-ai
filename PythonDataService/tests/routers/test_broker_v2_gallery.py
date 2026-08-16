@@ -18,7 +18,8 @@ from httpx import ASGITransport
 from app.config import settings
 from app.main import app
 from app.routers import broker_v2_gallery
-from app.services.broker_v2_panel import panel_chart_data_source
+from app.schemas.broker_v2_panel import PanelAction
+from app.services.broker_v2_panel import panel_chart_data_source, panel_data_source
 from app.services.broker_v2_panel.gallery_hub import GalleryHub
 from app.services.broker_v2_panel.panel_data_source import PanelUnavailableError, UnknownBotError
 
@@ -182,6 +183,7 @@ async def test_gallery_snapshot_includes_stopped_bot_and_excludes_retired(
     assert stopped["running"] is False
     assert stopped["primary_action"]["action_id"] == "resume"
     assert stopped["primary_action"]["label"] == "Resume"
+    assert stopped["primary_action"]["enabled"] is False
 
 
 async def test_gallery_stream_stopped_bot_survives_update() -> None:
@@ -211,6 +213,7 @@ async def test_gallery_stream_stopped_bot_survives_update() -> None:
     assert {b["sid"] for b in payload["bots_delta"]} == {"Aug11-02"}
     assert payload["bots_delta"][0]["running"] is False
     assert payload["bots_delta"][0]["primary_action"]["action_id"] == "resume"
+    assert payload["bots_delta"][0]["primary_action"]["enabled"] is False
 
 
 def _frame_payload(frame: str) -> dict:
@@ -322,3 +325,49 @@ async def test_panel_chart_fill_source_degrades_to_empty_on_panel_error(
 
     assert symbol == ""
     assert fills == ()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [PanelUnavailableError("clerk unavailable"), UnknownBotError("no such bot")],
+)
+async def test_panel_primary_action_source_degrades_to_none_on_panel_error(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    async def _raise(*args: object, **kwargs: object) -> object:
+        raise error
+
+    monkeypatch.setattr(panel_data_source, "get_panel", _raise)
+
+    action = await broker_v2_gallery._PanelPrimaryActionSource().resolve_resume_action(
+        _BROKER, _ACCOUNT_ID, "some-sid"
+    )
+
+    assert action is None
+
+
+async def test_panel_primary_action_source_returns_authoritative_resume_action(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resume = PanelAction(
+        action_id="resume",
+        label="Resume",
+        explanation="Resume is blocked by current admission evidence.",
+        enabled=False,
+        blockers=[],
+        confirmation=None,
+        revision=7,
+        concurrency_token="resume-token",
+    )
+    panel = type("Panel", (), {"actions": [resume]})()
+
+    async def _get_panel(*args: object, **kwargs: object) -> object:
+        return panel
+
+    monkeypatch.setattr(panel_data_source, "get_panel", _get_panel)
+
+    action = await broker_v2_gallery._PanelPrimaryActionSource().resolve_resume_action(
+        _BROKER, _ACCOUNT_ID, "some-sid"
+    )
+
+    assert action is resume

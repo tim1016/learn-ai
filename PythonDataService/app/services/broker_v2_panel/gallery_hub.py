@@ -47,7 +47,7 @@ from app.schemas.broker_v2_gallery import (
     GalleryPrimaryAction,
     GallerySymbolBars,
 )
-from app.schemas.broker_v2_panel import BotCatalogView, ChartBar, ChartFillMarker
+from app.schemas.broker_v2_panel import BotCatalogView, ChartBar, ChartFillMarker, PanelAction
 from app.services.broker_v2_panel.chart_projection_service import (
     aggregator_bars_to_chart_bars,
     live_window,
@@ -84,6 +84,14 @@ def _is_retired(row: BotCatalogView) -> bool:
 def _day_pnl(realized: float | None, open_pnl: float | None) -> float | None:
     """Null-safe ``realized + open`` — the wall's one day-P&L authority.
 
+    Formula: day_pnl = realized_pnl_today + open_pnl, treating one absent
+      component as zero and returning None iff both are absent.
+    Reference: docs/superpowers/specs/2026-08-14-bot-gallery-redesign-design.md
+      section 3.4; component economics follow docs/references/broker-v2-fifo-pnl.md.
+    Canonical implementation: this file.
+    Validated against:
+      tests/services/test_gallery_hub.py::test_day_pnl_null_safe_projection.
+
     ``None`` only when both components are unavailable; a lone-present
     component contributes its own value (mirrors the "show whichever side is
     present" display intent this replaces the frontend's own summing of).
@@ -106,6 +114,14 @@ def _session_change_pct(bars: Sequence[ChartBar], *, open_ms: int) -> float | No
     can silently fold in a stale close-to-open gap from a prior day.
     ``None`` when no bar falls within ``[open_ms, ...)`` yet, or that
     session's first open is zero.
+
+    Formula: session_change_pct = (last_session_close - first_session_open)
+      / first_session_open for bars whose start_ms is at or after open_ms.
+    Reference: docs/superpowers/specs/2026-08-14-bot-gallery-redesign-design.md
+      section 3.4 (internal product contract; no external software port).
+    Canonical implementation: this file.
+    Validated against:
+      tests/services/test_gallery_hub.py::test_build_snapshot_session_change_pct_excludes_a_prior_session_bar.
     """
     session_bars = [bar for bar in bars if bar.start_ms >= open_ms]
     if not session_bars:
@@ -205,6 +221,20 @@ class GalleryFillSource(Protocol):
     ) -> tuple[str, Sequence[FillRecord]]: ...
 
 
+class GalleryPrimaryActionSource(Protocol):
+    """Production implementation resolves the stopped bot's authoritative
+    ``resume`` action from the full broker-v2 panel projection.
+
+    The catalog deliberately omits Resume because its admission decision is
+    request-specific. The gallery therefore cannot infer Resume enablement
+    from ``running=False`` or from a missing catalog ``row_action``.
+    """
+
+    async def resolve_resume_action(
+        self, broker: str, account_id: str, sid: str
+    ) -> PanelAction | None: ...
+
+
 class GalleryHub:
     """Composes one versioned snapshot of the non-retired bot gallery for one account."""
 
@@ -216,6 +246,7 @@ class GalleryHub:
         catalog_source: GalleryCatalogSource,
         aggregator: GalleryBarAggregator,
         fill_source: GalleryFillSource | None = None,
+        primary_action_source: GalleryPrimaryActionSource | None = None,
         io_cache_ttl_ms: int = 0,
     ) -> None:
         self._broker = broker
@@ -223,8 +254,14 @@ class GalleryHub:
         self._catalog_source = catalog_source
         self._aggregator = aggregator
         self._fill_source = fill_source
+        self._primary_action_source = primary_action_source
         self._epoch = f"{broker}:{account_id}:{_PROCESS_NONCE}"
         self._version = 0
+        # A response receives its version only after every awaited input has
+        # been collected. Serializing collection and publication prevents an
+        # older, slower response from receiving a later version and replacing
+        # a fresher response in the client store.
+        self._publish_lock = asyncio.Lock()
         # Cumulative per-symbol "latest known bar end_ms", merged (never
         # replaced) on every fetch — see ``_latest_bar_end_ms``. Safe to
         # share across every SSE client for this account: it only ever
@@ -256,32 +293,52 @@ class GalleryHub:
         self._catalog_cache_at_ms = -1
         self._markers_cache: dict[str, list[ChartFillMarker]] | None = None
         self._markers_cache_at_ms = -1
+        self._primary_actions_cache: dict[str, PanelAction] | None = None
+        self._primary_actions_cache_at_ms = -1
 
-    def _primary_action(self, row: BotCatalogView) -> GalleryPrimaryAction:
+    def _primary_action(
+        self,
+        row: BotCatalogView,
+        *,
+        resume_actions: dict[str, PanelAction],
+    ) -> GalleryPrimaryAction:
         """Derive the wall's single quick action: Stop while running, Resume
         while not. Enablement/disabled_reason reuse the roster's own
-        authoritative ``row_action`` (``panel_data_source.get_catalog`` →
-        ``build_roster_action``, admission/hold/flatten-aware) when it's
-        present and its ``action_id`` matches what this projects — a stopped
-        bot is not unconditionally resumable (e.g. admission unavailable, an
-        active hold), and presenting an enabled Resume the confirm-time
-        authoritative-panel check then rejects is a real, if non-fatal, bad
-        experience. Falls back to always-enabled when no ``row_action`` was
-        projected (catalog sources that don't populate it, incl. most test
-        doubles) or it names a different routine action for this row — the
-        gallery's one quick-action slot has no way to represent a non-
-        stop/resume routine action yet, unchanged from before this fix.
+        authoritative catalog ``row_action`` for Stop and the full panel's
+        request-specific ``resume`` action for Resume. The catalog
+        intentionally omits Resume admission; a missing panel action therefore
+        fails closed instead of inventing an enabled command.
         """
         running = getattr(row, "running", False)
         action_id = "stop" if running else "resume"
         label = "Stop" if running else "Resume"
         row_action = getattr(row, "row_action", None)
-        if row_action is not None and row_action.action_id == action_id:
+        authoritative = (
+            row_action
+            if running and row_action is not None and row_action.action_id == action_id
+            else resume_actions.get(row.strategy_instance_id)
+        )
+        if authoritative is not None and authoritative.action_id == action_id:
+            disabled_reason = None
+            if not authoritative.enabled:
+                disabled_reason = (
+                    authoritative.blockers[0].detail if authoritative.blockers else authoritative.explanation
+                )
             return GalleryPrimaryAction(
                 action_id=action_id,
                 label=label,
-                enabled=row_action.enabled,
-                disabled_reason=None if row_action.enabled else row_action.explanation,
+                enabled=authoritative.enabled,
+                disabled_reason=disabled_reason,
+            )
+        if not running:
+            return GalleryPrimaryAction(
+                action_id=action_id,
+                label=label,
+                enabled=False,
+                disabled_reason=(
+                    "Resume eligibility is unavailable. Open the bot panel "
+                    "and refresh its safety evidence."
+                ),
             )
         return GalleryPrimaryAction(
             action_id=action_id,
@@ -295,6 +352,7 @@ class GalleryHub:
         row: BotCatalogView,
         *,
         session_change_pcts: dict[str, float],
+        resume_actions: dict[str, PanelAction],
         model: type[GalleryBotView] = GalleryBotView,
     ) -> GalleryBotView:
         """Project one catalog row into ``model`` (``GalleryBotView`` or its ``GalleryBotDelta`` subtype).
@@ -327,7 +385,7 @@ class GalleryHub:
             session_change_pct=session_change_pcts.get(row.symbol),
             fills_today=getattr(row, "fills_today", None),
             last_bar_at_ms=self._latest_bar_end_ms.get(row.symbol),
-            primary_action=self._primary_action(row),
+            primary_action=self._primary_action(row, resume_actions=resume_actions),
         )
 
     async def _fetch_catalog(self) -> list[BotCatalogView]:
@@ -470,44 +528,90 @@ class GalleryHub:
         self._markers_cache_at_ms = now_ms
         return markers
 
+    async def _fetch_resume_actions(
+        self, shown: list[BotCatalogView], *, now_ms: int
+    ) -> dict[str, PanelAction]:
+        """Resolve authoritative Resume actions for every stopped bot.
+
+        Resume admission is deliberately absent from the catalog and is
+        authored only by the full panel's action policy. Fan-out and short-TTL
+        caching mirror marker collection; one bot's unavailable panel leaves
+        that bot fail-closed without hiding the rest of the gallery.
+        """
+        if self._primary_action_source is None:
+            return {}
+        if (
+            self._primary_actions_cache is not None
+            and now_ms - self._primary_actions_cache_at_ms < self._io_cache_ttl_ms
+        ):
+            return self._primary_actions_cache
+        stopped_sids = [
+            row.strategy_instance_id
+            for row in shown
+            if not getattr(row, "running", False)
+        ]
+        results = await asyncio.gather(
+            *(
+                self._primary_action_source.resolve_resume_action(
+                    self._broker, self._account_id, sid
+                )
+                for sid in stopped_sids
+            ),
+            return_exceptions=True,
+        )
+        actions: dict[str, PanelAction] = {}
+        for sid, result in zip(stopped_sids, results, strict=True):
+            if isinstance(result, BaseException):
+                logger.warning(
+                    "[GALLERY] Resume action unavailable for bot; disabling quick action",
+                    extra={"broker": self._broker, "account_id": self._account_id, "sid": sid},
+                    exc_info=result,
+                )
+                continue
+            if result is not None and result.action_id == "resume":
+                actions[sid] = result
+        self._primary_actions_cache = actions
+        self._primary_actions_cache_at_ms = now_ms
+        return actions
+
     async def build_snapshot(self) -> GalleryLiveSnapshot:
         """Build one versioned snapshot: every non-retired bot (running +
         stopped/off-duty) + deduped per-symbol bars + today's fill markers
         per bot (see ``_fetch_markers``).
 
-        ``version`` is captured into a local right after the increment, not
-        read back from ``self._version`` at return time: this hub is cached
-        per account and shared by every concurrent caller (REST fallback
-        poll racing an SSE stream, multiple SSE clients), and ``_fetch_markers``
-        below awaits real I/O — during that gap another concurrent call can
-        also increment ``self._version``. Reading the instance field again at
-        construction time would let a later call's increment leak into this
-        call's response (two responses claiming the same version, or this
-        call's genuinely-older payload inheriting a newer number than the
-        response that already went out under it) — the same class of
-        cross-client race ``known_sids``/``since_marker_keys`` are kept
-        caller-local to avoid, just on the hub's own counter instead.
+        Collection and publication are serialized by ``_publish_lock``. The
+        version is incremented only after every awaited input is complete, so
+        response versions are unique and ordered by coherent publication.
         """
-        shown, symbol_bars = await self._fetch_shown_and_bars(since_bar_ms=None)
-        self._version += 1
-        version = self._version
-        as_of_ms = now_ms_utc()
-        markers = await self._fetch_markers(shown, now_ms=as_of_ms)
-        open_ms, _close_ms = live_window(as_of_ms)
-        session_change_pcts = self._fetch_session_change_pcts(
-            sorted({row.symbol for row in shown}), open_ms=open_ms
-        )
-        return GalleryLiveSnapshot(
-            stream_epoch=self._epoch,
-            surface_version=version,
-            as_of_ms=as_of_ms,
-            resolution="1m",
-            bots=[
-                self._project_bot(row, session_change_pcts=session_change_pcts) for row in shown
-            ],
-            symbols=symbol_bars,
-            markers=markers,
-        )
+        async with self._publish_lock:
+            shown, symbol_bars = await self._fetch_shown_and_bars(since_bar_ms=None)
+            as_of_ms = now_ms_utc()
+            markers, resume_actions = await asyncio.gather(
+                self._fetch_markers(shown, now_ms=as_of_ms),
+                self._fetch_resume_actions(shown, now_ms=as_of_ms),
+            )
+            open_ms, _close_ms = live_window(as_of_ms)
+            session_change_pcts = self._fetch_session_change_pcts(
+                sorted({row.symbol for row in shown}), open_ms=open_ms
+            )
+            self._version += 1
+            version = self._version
+            return GalleryLiveSnapshot(
+                stream_epoch=self._epoch,
+                surface_version=version,
+                as_of_ms=as_of_ms,
+                resolution="1m",
+                bots=[
+                    self._project_bot(
+                        row,
+                        session_change_pcts=session_change_pcts,
+                        resume_actions=resume_actions,
+                    )
+                    for row in shown
+                ],
+                symbols=symbol_bars,
+                markers=markers,
+            )
 
     async def build_update(
         self,
@@ -545,30 +649,38 @@ class GalleryHub:
         resent — see ``_markers_delta`` for why this is keyed on
         ``event_key``, not ``filled_at_ms``.
 
-        ``version`` is captured into a local right after the increment — see
-        ``build_snapshot`` for why reading ``self._version`` back at return
-        time (after the ``_fetch_markers`` await) would be a race.
+        Collection and publication use the same lock and post-collection
+        version assignment as ``build_snapshot``.
         """
-        shown, symbol_bars = await self._fetch_shown_and_bars(since_bar_ms=since_bar_ms)
-        current_sids = {row.strategy_instance_id for row in shown}
-        removed_sids = sorted(known_sids - current_sids)
-        self._version += 1
-        version = self._version
-        as_of_ms = now_ms_utc()
-        markers = await self._fetch_markers(shown, now_ms=as_of_ms)
-        markers_delta = _markers_delta(markers, since_marker_keys)
-        open_ms, _close_ms = live_window(as_of_ms)
-        session_change_pcts = self._fetch_session_change_pcts(
-            sorted({row.symbol for row in shown}), open_ms=open_ms
-        )
-        return GalleryLiveUpdate(
-            surface_version=version,
-            as_of_ms=as_of_ms,
-            symbols=symbol_bars,
-            markers_delta=markers_delta,
-            bots_delta=[
-                self._project_bot(row, session_change_pcts=session_change_pcts, model=GalleryBotDelta)
-                for row in shown
-            ],
-            removed_sids=removed_sids,
-        )
+        async with self._publish_lock:
+            shown, symbol_bars = await self._fetch_shown_and_bars(since_bar_ms=since_bar_ms)
+            current_sids = {row.strategy_instance_id for row in shown}
+            removed_sids = sorted(known_sids - current_sids)
+            as_of_ms = now_ms_utc()
+            markers, resume_actions = await asyncio.gather(
+                self._fetch_markers(shown, now_ms=as_of_ms),
+                self._fetch_resume_actions(shown, now_ms=as_of_ms),
+            )
+            markers_delta = _markers_delta(markers, since_marker_keys)
+            open_ms, _close_ms = live_window(as_of_ms)
+            session_change_pcts = self._fetch_session_change_pcts(
+                sorted({row.symbol for row in shown}), open_ms=open_ms
+            )
+            self._version += 1
+            version = self._version
+            return GalleryLiveUpdate(
+                surface_version=version,
+                as_of_ms=as_of_ms,
+                symbols=symbol_bars,
+                markers_delta=markers_delta,
+                bots_delta=[
+                    self._project_bot(
+                        row,
+                        session_change_pcts=session_change_pcts,
+                        resume_actions=resume_actions,
+                        model=GalleryBotDelta,
+                    )
+                    for row in shown
+                ],
+                removed_sids=removed_sids,
+            )
