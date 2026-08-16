@@ -1,4 +1,5 @@
 """Tests for the schema 1.0 -> 1.1 ledger bump."""
+
 from __future__ import annotations
 
 import pytest
@@ -26,9 +27,10 @@ def _base_ledger_kwargs() -> dict:
     )
 
 
-def test_ledger_writes_schema_1_2_by_default() -> None:
+def test_ledger_writes_schema_1_3_by_default() -> None:
     ledger = RunLedger(**_base_ledger_kwargs())
-    assert ledger.schema_version == "1.2"
+    assert ledger.schema_version == "1.3"
+    assert ledger.warmup_start_ms is None
 
 
 def test_ledger_loads_legacy_1_0_dict() -> None:
@@ -37,6 +39,7 @@ def test_ledger_loads_legacy_1_0_dict() -> None:
     assert ledger.schema_version == "1.0"
     assert ledger.prediction_set_hash is None
     assert ledger.window_summary is None
+    assert "warmup_start_ms" not in ledger.model_dump(mode="json")
 
 
 def test_ledger_loads_1_1_with_prediction_set_hash() -> None:

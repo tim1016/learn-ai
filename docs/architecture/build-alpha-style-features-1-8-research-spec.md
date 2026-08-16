@@ -386,8 +386,12 @@ the discipline later automated discovery must obey.
 
 Milestone 4A should validate a fixed `StrategySpec` across folds.
 
-Milestone 4B can add parameter-grid selection on train, then freeze the chosen
-parameters on test.
+Milestone 4B shipped 2026-08-15 with fully materialized parameter candidates,
+deterministic train-side selection, persisted comparison receipts, and a frozen
+winner on test. The first versioned consumer is the SPY EMA normalized-gap
+protocol documented in `docs/references/spy-ema-normalized-gap-walk-forward.md`.
+Its 145 engine runs execute through the cancellable jobs boundary. TEST children
+pre-roll indicator/state from TRAIN but begin and end with flat positions.
 
 Do not implement genetic search here.
 
@@ -396,6 +400,8 @@ Do not implement genetic search here.
 - `validation_id`
 - `parent_run_id`
 - `split_policy`
+- `fold_position_policy`
+- `protocol_id` / `protocol_version` for a versioned consumer
 - `folds[]`
   - `fold_index`
   - `train_start_ms`
@@ -403,9 +409,12 @@ Do not implement genetic search here.
   - `test_start_ms`
   - `test_end_ms`
   - `selected_parameters`
-  - `train_metrics`
+  - all `training_candidates`
+  - `selected_train_sharpe`
   - `test_metrics`
   - `test_trade_count`
+  - fold-local `oos_retention`
+- `selection_failures[]` with retained train-side evidence
 - `combined_oos_equity_curve`
 - `mean_oos_sharpe`
 - `median_oos_sharpe`
@@ -420,15 +429,17 @@ Run EMA crossover across rolling folds:
 
 - each fold reports train/test windows with integer ms timestamps,
 - the same frozen EMA parameters are used in test for milestone 4A,
-- milestone 4B selects EMA windows on train and freezes them on test,
+- milestone 4B selects one of seven normalized EMA-gap thresholds on train and freezes it on test,
+- test ledgers record train-start pre-roll while persisted metrics begin at test,
+- parameter-search retention uses each selected winner's train Sharpe, never a different control strategy,
 - combined OOS curve is built only from test folds.
 
 ### Tests
 
 - Fold boundary tests.
-- No-overlap train/test tests.
+- Train/test boundary and indicator-state pre-roll tests.
 - Fixed-spec fold replay test.
-- Parameter-freeze test for EMA windows.
+- Parameter-freeze test for normalized EMA-gap thresholds.
 - Regression test for insufficient folds warning.
 
 ## Feature 5 - Monte Carlo Risk Lab
@@ -868,8 +879,8 @@ For each feature that introduces or moves numerical authority:
 
 1. File-backed vs database-backed run ledger for v1.
 2. Unified feature catalog vs separate engine/research registries.
-3. Fixed StrategySpec walk-forward vs parameter-selection walk-forward in the
-   first implementation milestone.
+3. **Resolved:** fixed `StrategySpec` shipped first (4A); deterministic
+   train-side parameter selection shipped as the separate 4B milestone.
 4. Exact metric set for the first result DTO.
 5. Default Monte Carlo simulation count and warning thresholds.
 6. First OHLC noise model and invariant enforcement.

@@ -18,6 +18,7 @@ type Schema = components['schemas'];
 export type IndicatorRef = Schema['IndicatorRef'];
 export type ConstOperand = Schema['ConstOperand'];
 export type SubtractOperand = Schema['Subtract-Input'];
+export type DifferenceBpsOperand = Schema['DifferenceBps'];
 export type Operand = Schema['IndicatorComparison-Input']['left'];
 
 export type IndicatorKind = Schema['IndicatorBlock']['kind'];

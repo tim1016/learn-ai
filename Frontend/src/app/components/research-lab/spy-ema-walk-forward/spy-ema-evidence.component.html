@@ -1,0 +1,119 @@
+<section class="evidence" aria-labelledby="evidence-title">
+  <header class="evidence__header">
+    <div>
+      <span class="evidence__eyebrow">Persisted engine evidence</span>
+      <h3 id="evidence-title">What the canonical engine has persisted</h3>
+    </div>
+    <button type="button" (click)="refreshRequested.emit()" [disabled]="loading() || running()">
+      <span aria-hidden="true">↻</span> Refresh evidence
+    </button>
+  </header>
+
+  @if (error(); as errorMessage) {
+    <div class="evidence__notice evidence__notice--error" role="alert">{{ errorMessage }}</div>
+  } @else if (loading()) {
+    <div class="evidence__loading" role="status">Loading the latest SPY EMA run ledger…</div>
+  } @else if (control(); as run) {
+    <div class="evidence__metrics" aria-label="Canonical control metrics">
+      <div><span>Control return</span><strong>{{ run.result.metrics.total_return_pct | percent:'1.2-2' }}</strong></div>
+      <div><span>Control Sharpe</span><strong>{{ run.result.metrics.sharpe_ratio === null ? '—' : (run.result.metrics.sharpe_ratio | number:'1.2-2') }}</strong></div>
+      <div><span>Control drawdown</span><strong>{{ run.result.metrics.max_drawdown_pct === null ? '—' : (run.result.metrics.max_drawdown_pct | percent:'1.2-2') }}</strong></div>
+      <div><span>Control trades</span><strong>{{ run.result.metrics.total_trades | number:'1.0-0' }}</strong></div>
+      <a [routerLink]="['/research-lab/strategy-runs', run.ledger.run_id]">Open control receipt →</a>
+    </div>
+
+    <div class="evidence__body">
+      <article class="evidence__chart-card">
+        <div class="evidence__chart-heading">
+          <div><span class="evidence__eyebrow">{{ curveLabel() }}</span><h4>Equity path</h4></div>
+          <span class="evidence__source">Python-owned</span>
+        </div>
+        @if (curve().length > 0) {
+          <div #chartElement class="evidence__chart" role="img" [attr.aria-label]="curveAriaLabel()"></div>
+        } @else {
+          <p class="evidence__empty-chart">The persisted result contains no equity points.</p>
+        }
+      </article>
+
+      <article class="evidence__fold-card">
+        <span class="evidence__eyebrow">Walk-forward receipt</span>
+        @if (walkForward(); as wf) {
+          @if (wf.result.status === 'failed') {
+            <div class="evidence__notice evidence__notice--error" role="alert">
+              <strong>Protocol failed closed</strong>
+              <p>{{ wf.result.failure_reason ?? 'The run could not produce fully auditable out-of-sample evidence.' }}</p>
+              <span>{{ completedFoldCount() }} completed · {{ failedFoldCount() }} failed · {{ wf.result.selection_failures.length }} selection failures</span>
+            </div>
+          }
+          <div class="evidence__fold-summary">
+            <div><strong>{{ completedFoldCount() }}/{{ wf.result.folds.length }}</strong><span>auditable folds</span></div>
+            <div><strong>{{ wf.result.mean_oos_sharpe === null ? '—' : (wf.result.mean_oos_sharpe | number:'1.2-2') }}</strong><span>mean OOS Sharpe</span></div>
+            <div><strong>{{ wf.result.pct_profitable_folds === null ? '—' : (wf.result.pct_profitable_folds | percent:'1.0-1') }}</strong><span>profitable folds</span></div>
+            <div><strong>{{ wf.result.oos_retention === null ? '—' : (wf.result.oos_retention | number:'1.2-2') }}</strong><span>mean fold retention</span></div>
+          </div>
+          <ol class="evidence__fold-strip" [attr.aria-label]="hasParameterSearch() ? 'Selected-threshold fold returns' : 'Fixed-parameter fold returns'">
+            @for (fold of wf.result.folds; track fold.fold_index) {
+              <li [class.fold--gain]="fold.status === 'completed' && fold.test_metrics.total_return_pct > 0" [class.fold--loss]="fold.status === 'completed' && fold.test_metrics.total_return_pct < 0" [class.fold--failed]="fold.status === 'failed'">
+                @if (fold.test_run_id !== null) {
+                  <a [routerLink]="['/research-lab/strategy-runs', fold.test_run_id]" [attr.aria-label]="fold.status === 'completed' ? 'Fold ' + (fold.fold_index + 1) + ' return ' + (fold.test_metrics.total_return_pct | percent:'1.2-2') : 'Fold ' + (fold.fold_index + 1) + ' failed test receipt'">
+                    <span>F{{ fold.fold_index + 1 }}</span>
+                    @if (fold.selected_parameters['gap_bps']; as gapBps) {
+                      <small>{{ gapBps | number:'1.0-1' }} bps</small>
+                    }
+                    <strong>{{ fold.status === 'completed' ? (fold.test_metrics.total_return_pct | percent:'1.1-1') : 'failed' }}</strong>
+                  </a>
+                } @else {
+                  <div [attr.aria-label]="'Fold ' + (fold.fold_index + 1) + ' failed without a persisted test receipt'">
+                  <span>F{{ fold.fold_index + 1 }}</span>
+                  @if (fold.selected_parameters['gap_bps']; as gapBps) {
+                    <small>{{ gapBps | number:'1.0-1' }} bps</small>
+                  }
+                    <strong>failed</strong>
+                  </div>
+                }
+              </li>
+            }
+          </ol>
+          @if (wf.result.selection_failures.length > 0) {
+            <div class="evidence__failure-list">
+              <strong>Selection evidence retained</strong>
+              <ul>
+                @for (failure of wf.result.selection_failures; track failure.fold_index) {
+                  <li>Fold {{ failure.fold_index + 1 }} · {{ failure.training_candidates.length }} candidate outcomes · {{ failure.failure_reason }}</li>
+                }
+              </ul>
+            </div>
+          }
+          @if (wf.result.warnings.length > 0) {
+            <details class="evidence__warnings">
+              <summary>{{ wf.result.warnings.length }} research warning{{ wf.result.warnings.length === 1 ? '' : 's' }}</summary>
+              <ul>
+                @for (warning of wf.result.warnings; track warning) { <li>{{ warning }}</li> }
+              </ul>
+            </details>
+          }
+          <p class="evidence__scope">
+            @if (hasParameterSearch()) {
+              Each threshold was chosen only from its trailing training window and frozen for test. Indicators are pre-rolled from training; positions start and finish flat at every OOS boundary.
+            } @else {
+              These folds replay one fixed specification; no train-side parameter search is recorded.
+            }
+          </p>
+          <a class="evidence__receipt-link" [routerLink]="['/research-lab/walk-forward', wf.result.walk_forward_id]">Open walk-forward receipt →</a>
+        } @else {
+          <div class="evidence__phase-gap">
+            <span>04B</span><strong>No normalized-gap study is persisted yet</strong>
+            <p>Run the canonical study above to create the control, train receipts, frozen thresholds, and rolling 30-day out-of-sample folds.</p>
+          </div>
+          @if (walkForwardError(); as wfError) { <p class="evidence__suberror">{{ wfError }}</p> }
+        }
+      </article>
+    </div>
+  } @else {
+    <div class="evidence__notice">
+      <strong>No completed canonical SPY EMA study found.</strong>
+      <p>Run the canonical study above to populate both control and optimized out-of-sample evidence.</p>
+      <a routerLink="/research-lab/backtests/strategy-runs">Go to Strategy Runs →</a>
+    </div>
+  }
+</section>

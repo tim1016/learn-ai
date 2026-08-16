@@ -35,6 +35,14 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from app.research.walk_forward.result import (
+    AnchoredSplitPolicySpec,
+    ChronologicalSplitPolicySpec,
+    RollingSplitPolicySpec,
+    SplitPolicySpec,
+    parse_split_policy_spec,
+)
+
 _NY = ZoneInfo("America/New_York")
 
 
@@ -74,9 +82,9 @@ def _ny_calendar_days_between(start_ms: int, end_ms: int) -> int:
 class FoldWindow:
     """One train+test pair in ``int64 ms UTC``.
 
-    Phase 4A only consumes the test side (the spec runs against the
-    test window only); train fields are recorded for ledger
-    transparency and Phase 4B reuse.
+    Fixed-spec runs consume only the test side. Parameter-search runs execute
+    every declared candidate on the train side, freeze one deterministic
+    winner, and consume the test side only for that winner.
     """
 
     fold_index: int
@@ -134,8 +142,7 @@ class ChronologicalSplitPolicy(SplitPolicy):
 
     ``train_pct=0.7`` means the first 70% (in calendar ms) is the train
     fold and the remaining 30% is the test fold. The train window is
-    informational only in Phase 4A — the runner only executes the
-    test side.
+    informational for fixed-spec runs and executable for parameter search.
     """
 
     train_pct: float = 0.7
@@ -322,35 +329,24 @@ class AnchoredSplitPolicy(SplitPolicy):
 # ---------------------------------------------------------------------------
 # Factory.
 # ---------------------------------------------------------------------------
-def build_split_policy(spec: dict) -> SplitPolicy:
-    """Construct a policy from a kind-discriminated dict.
-
-    The HTTP layer passes the policy as a dict on the request body
-    (matches the ``StrategySpec`` precedent — JSON-as-spec is the
-    repository's convention). This function is the boundary between
-    untyped JSON and the typed dataclass policies.
-    """
-    if "kind" not in spec:
-        raise ValueError("split_policy must include a 'kind' discriminator")
-    kind = spec["kind"]
-    if kind == "chronological":
-        return ChronologicalSplitPolicy(train_pct=float(spec.get("train_pct", 0.7)))
-    if kind == "rolling":
+def build_split_policy(spec: SplitPolicySpec | object) -> SplitPolicy:
+    """Construct a policy from a strictly-validated discriminated shape."""
+    parsed = parse_split_policy_spec(spec)
+    if isinstance(parsed, ChronologicalSplitPolicySpec):
+        return ChronologicalSplitPolicy(train_pct=parsed.train_pct)
+    if isinstance(parsed, RollingSplitPolicySpec):
         return RollingSplitPolicy(
-            train_days=int(spec["train_days"]),
-            test_days=int(spec["test_days"]),
-            step_days=int(spec["step_days"]),
+            train_days=parsed.train_days,
+            test_days=parsed.test_days,
+            step_days=parsed.step_days,
         )
-    if kind == "anchored":
+    if isinstance(parsed, AnchoredSplitPolicySpec):
         return AnchoredSplitPolicy(
-            initial_train_days=int(spec["initial_train_days"]),
-            test_days=int(spec["test_days"]),
-            step_days=int(spec["step_days"]),
+            initial_train_days=parsed.initial_train_days,
+            test_days=parsed.test_days,
+            step_days=parsed.step_days,
         )
-    raise ValueError(
-        f"unknown split policy kind {kind!r} — expected one of "
-        f"chronological / rolling / anchored"
-    )
+    raise AssertionError(f"unhandled split policy type: {type(parsed)!r}")
 
 
 # ---------------------------------------------------------------------------

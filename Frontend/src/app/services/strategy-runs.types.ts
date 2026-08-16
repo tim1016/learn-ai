@@ -18,7 +18,7 @@ export type RunStatus = 'running' | 'completed' | 'failed';
 export type RunResult = 'WIN' | 'LOSS';
 
 export interface RunLedger {
-  schema_version: '1.0';
+  schema_version: '1.0' | '1.1' | '1.2' | '1.3';
   run_id: string;
 
   parent_run_id: string | null;
@@ -36,6 +36,7 @@ export interface RunLedger {
   resolution_minutes: number;
   start_ms: number;
   end_ms: number;
+  warmup_start_ms?: number | null;
   initial_cash: number;
   fill_mode: string;
   commission_per_order: number;

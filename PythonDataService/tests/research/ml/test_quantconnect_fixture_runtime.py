@@ -44,7 +44,7 @@ from app.engine.data.trade_bar import TradeBar
 from app.engine.strategy.spec import StrategySpec
 from app.engine.strategy.spec.tests._parity_helpers import FakeDataReader
 from app.research.ml.generators.quantconnect_fixture import import_qc_fixture
-from app.research.runs.runner import RunRequest, run_strategy_spec
+from app.research.runs.runner import RunRequest, run_date_to_ms, run_strategy_spec
 
 _FIXTURE_DIR = Path(__file__).resolve().parents[2] / "fixtures" / "golden" / "qc-precomputed-predictions"
 _QC_EXPORT = _FIXTURE_DIR / "qc_export.json"
@@ -214,8 +214,8 @@ def test_qc_fixture_strategy_spec_run_ledger_hash_pinned(qc_spy_data_factory, qc
     ledger, _ = run_strategy_spec(
         RunRequest(
             spec=spec,
-            start_date=Date(2026, 2, 10),
-            end_date=Date(2026, 3, 12),
+            start_ms=run_date_to_ms(Date(2026, 2, 10)),
+            end_ms=run_date_to_ms(Date(2026, 3, 12)),
         ),
         data_source_factory=qc_spy_data_factory,
         data_root_revision="qc-parity-fixture-v1",
@@ -239,8 +239,8 @@ def test_qc_fixture_strategy_spec_result_hash_pinned(qc_spy_data_factory, qc_art
     ledger, _ = run_strategy_spec(
         RunRequest(
             spec=spec,
-            start_date=Date(2026, 2, 10),
-            end_date=Date(2026, 3, 12),
+            start_ms=run_date_to_ms(Date(2026, 2, 10)),
+            end_ms=run_date_to_ms(Date(2026, 3, 12)),
         ),
         data_source_factory=qc_spy_data_factory,
         data_root_revision="qc-parity-fixture-v1",

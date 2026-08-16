@@ -7,6 +7,7 @@ artifacts root.
 
 from __future__ import annotations
 
+import json
 from datetime import date
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from app.engine.strategy.spec.tests._parity_helpers import (
     closes_for_spy_ema,
 )
 from app.main import app
+from app.research.walk_forward.splits import date_str_to_ms
 from app.routers.research_runs import (
     get_artifacts_root,
     get_data_source_factory,
@@ -68,8 +70,8 @@ def _spec_dict() -> dict:
 def _request_body(split_policy: dict, **overrides) -> dict:
     body = {
         "spec": _spec_dict(),
-        "start_date": "2024-01-02",
-        "end_date": "2024-02-22",
+        "start_ms": date_str_to_ms("2024-01-02"),
+        "end_ms": date_str_to_ms("2024-02-22"),
         "initial_cash": 100_000.0,
         "fill_mode": "signal_bar_close",
         "commission_per_order": 0.0,
@@ -106,13 +108,9 @@ async def client(configured_app):
 # ---------------------------------------------------------------------------
 # Happy paths.
 # ---------------------------------------------------------------------------
-async def test_post_chronological_creates_persisted_walk_forward(
-    client, tmp_path: Path
-):
+async def test_post_chronological_creates_persisted_walk_forward(client, tmp_path: Path):
     body = _request_body(split_policy={"kind": "chronological", "train_pct": 0.6})
-    response = await client.post(
-        "/api/research/strategy-runs/walk-forward", json=body
-    )
+    response = await client.post("/api/research/strategy-runs/walk-forward", json=body)
     assert response.status_code == 200, response.text
     payload = response.json()
     assert "config" in payload and "result" in payload
@@ -126,6 +124,19 @@ async def test_post_chronological_creates_persisted_walk_forward(
     assert (tmp_path / "walk-forward" / wf_id / "result.json").is_file()
 
 
+async def test_post_accepts_integer_json_tokens_for_float_costs(client) -> None:
+    body = _request_body(
+        split_policy={"kind": "chronological", "train_pct": 0.6},
+        initial_cash=100_000,
+        commission_per_order=0,
+        slippage_per_share=0,
+    )
+
+    response = await client.post("/api/research/strategy-runs/walk-forward", json=body)
+
+    assert response.status_code == 200, response.text
+
+
 async def test_post_rolling_creates_multiple_folds(client):
     body = _request_body(
         split_policy={
@@ -135,9 +146,7 @@ async def test_post_rolling_creates_multiple_folds(client):
             "step_days": 5,
         }
     )
-    response = await client.post(
-        "/api/research/strategy-runs/walk-forward", json=body
-    )
+    response = await client.post("/api/research/strategy-runs/walk-forward", json=body)
     assert response.status_code == 200, response.text
     folds = response.json()["result"]["folds"]
     assert len(folds) >= 5
@@ -170,9 +179,7 @@ async def test_post_with_parent_run_computes_oos_retention(client):
         },
         parent_run_id=parent_id,
     )
-    response = await client.post(
-        "/api/research/strategy-runs/walk-forward", json=body
-    )
+    response = await client.post("/api/research/strategy-runs/walk-forward", json=body)
 
     assert response.status_code == 200, response.text
     result = response.json()["result"]
@@ -186,10 +193,8 @@ async def test_post_with_parent_run_computes_oos_retention(client):
 
 
 async def test_post_then_get_round_trips(client):
-    body = _request_body(split_policy={"kind": "chronological"})
-    posted = (
-        await client.post("/api/research/strategy-runs/walk-forward", json=body)
-    ).json()
+    body = _request_body(split_policy={"kind": "chronological", "train_pct": 0.7})
+    posted = (await client.post("/api/research/strategy-runs/walk-forward", json=body)).json()
     wf_id = posted["config"]["walk_forward_id"]
 
     fetched = await client.get(f"/api/research/strategy-runs/walk-forward/{wf_id}")
@@ -198,10 +203,8 @@ async def test_post_then_get_round_trips(client):
 
 
 async def test_response_timestamps_are_int64_ms(client):
-    body = _request_body(split_policy={"kind": "chronological"})
-    response = await client.post(
-        "/api/research/strategy-runs/walk-forward", json=body
-    )
+    body = _request_body(split_policy={"kind": "chronological", "train_pct": 0.7})
+    response = await client.post("/api/research/strategy-runs/walk-forward", json=body)
     payload = response.json()
     assert isinstance(payload["config"]["start_ms"], int)
     assert isinstance(payload["config"]["end_ms"], int)
@@ -215,28 +218,73 @@ async def test_response_timestamps_are_int64_ms(client):
 # ---------------------------------------------------------------------------
 # Validation errors.
 # ---------------------------------------------------------------------------
-async def test_post_invalid_date_returns_400(client):
-    body = _request_body(split_policy={"kind": "chronological"})
-    body["start_date"] = "not-a-date"
-    response = await client.post(
-        "/api/research/strategy-runs/walk-forward", json=body
-    )
-    assert response.status_code == 400
+async def test_post_invalid_timestamp_returns_422(client):
+    body = _request_body(split_policy={"kind": "chronological", "train_pct": 0.7})
+    body["start_ms"] = "not-a-timestamp"
+    response = await client.post("/api/research/strategy-runs/walk-forward", json=body)
+    assert response.status_code == 422
 
 
 async def test_post_unknown_split_kind_returns_400(client):
     body = _request_body(split_policy={"kind": "totally_made_up"})
-    response = await client.post(
-        "/api/research/strategy-runs/walk-forward", json=body
-    )
+    response = await client.post("/api/research/strategy-runs/walk-forward", json=body)
     # Pydantic 422 — the SplitPolicySpec literal-field validation
     # rejects unknown kinds before the route body runs.
     assert response.status_code == 422, response.text
 
 
-async def test_post_window_too_short_persists_failed_walk_forward(
-    client, tmp_path: Path
+@pytest.mark.parametrize(
+    "split_policy",
+    [
+        {"kind": "rolling"},
+        {
+            "kind": "rolling",
+            "train_days": 10,
+            "test_days": 5,
+            "step_days": 5,
+            "unexpected": 1,
+        },
+        {
+            "kind": "rolling",
+            "train_days": True,
+            "test_days": 5,
+            "step_days": 5,
+        },
+        {
+            "kind": "rolling",
+            "train_days": "10",
+            "test_days": 5,
+            "step_days": 5,
+        },
+    ],
+)
+async def test_post_rejects_incomplete_extra_or_coerced_split_fields(
+    client,
+    split_policy: dict,
 ):
+    response = await client.post(
+        "/api/research/strategy-runs/walk-forward",
+        json=_request_body(split_policy=split_policy),
+    )
+
+    assert response.status_code == 422, response.text
+
+
+async def test_post_rejects_non_finite_money(client):
+    body = _request_body(
+        split_policy={"kind": "chronological", "train_pct": 0.7},
+        initial_cash=float("inf"),
+    )
+    response = await client.post(
+        "/api/research/strategy-runs/walk-forward",
+        content=json.dumps(body),
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 422
+
+
+async def test_post_window_too_short_persists_failed_walk_forward(client, tmp_path: Path):
     body = _request_body(
         split_policy={
             "kind": "rolling",
@@ -245,11 +293,9 @@ async def test_post_window_too_short_persists_failed_walk_forward(
             "step_days": 7,
         },
     )
-    body["end_date"] = "2024-01-05"  # 3-day window can't fit a 30+15-day fold
+    body["end_ms"] = date_str_to_ms("2024-01-05")  # 3 days cannot fit a 30+15-day fold
 
-    response = await client.post(
-        "/api/research/strategy-runs/walk-forward", json=body
-    )
+    response = await client.post("/api/research/strategy-runs/walk-forward", json=body)
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["result"]["status"] == "failed"
@@ -264,16 +310,12 @@ async def test_post_window_too_short_persists_failed_walk_forward(
 # GET single + 404.
 # ---------------------------------------------------------------------------
 async def test_get_missing_walk_forward_returns_404(client):
-    response = await client.get(
-        "/api/research/strategy-runs/walk-forward/" + "f" * 32
-    )
+    response = await client.get("/api/research/strategy-runs/walk-forward/" + "f" * 32)
     assert response.status_code == 404
 
 
 async def test_get_path_traversal_id_returns_400(client):
-    response = await client.get(
-        "/api/research/strategy-runs/walk-forward/..%2Fetc%2Fpasswd"
-    )
+    response = await client.get("/api/research/strategy-runs/walk-forward/..%2Fetc%2Fpasswd")
     assert response.status_code in {400, 404}, response.text
 
 
@@ -286,8 +328,18 @@ async def test_list_empty_returns_empty(client):
     assert response.json() == {"walk_forwards": []}
 
 
+async def test_list_requires_complete_protocol_filter_identity(client):
+    response = await client.get(
+        "/api/research/strategy-runs/walk-forward",
+        params={"protocol_id": "spy-ema-normalized-gap"},
+    )
+
+    assert response.status_code == 400
+    assert "must be provided together" in response.json()["detail"]
+
+
 async def test_list_returns_recent_first(client):
-    body = _request_body(split_policy={"kind": "chronological"})
+    body = _request_body(split_policy={"kind": "chronological", "train_pct": 0.7})
     await client.post("/api/research/strategy-runs/walk-forward", json=body)
     await client.post("/api/research/strategy-runs/walk-forward", json=body)
 
@@ -314,12 +366,13 @@ async def test_list_filter_by_parent_run_id(client):
     a = await client.post(
         "/api/research/strategy-runs/walk-forward",
         json=_request_body(
-            split_policy={"kind": "chronological"}, parent_run_id=parent_id
+            split_policy={"kind": "chronological", "train_pct": 0.7},
+            parent_run_id=parent_id,
         ),
     )
     await client.post(
         "/api/research/strategy-runs/walk-forward",
-        json=_request_body(split_policy={"kind": "chronological"}),
+        json=_request_body(split_policy={"kind": "chronological", "train_pct": 0.7}),
     )
 
     response = await client.get(
@@ -328,9 +381,7 @@ async def test_list_filter_by_parent_run_id(client):
     )
     assert response.status_code == 200
     items = response.json()["walk_forwards"]
-    assert [c["walk_forward_id"] for c in items] == [
-        a.json()["config"]["walk_forward_id"]
-    ]
+    assert [c["walk_forward_id"] for c in items] == [a.json()["config"]["walk_forward_id"]]
 
 
 # ---------------------------------------------------------------------------

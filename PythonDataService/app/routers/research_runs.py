@@ -61,6 +61,7 @@ from app.research.runs import (
     WindowSummary,
     list_runs,
     load_run,
+    run_date_to_ms,
     run_strategy_spec,
     save_run,
     summarize_window,
@@ -205,8 +206,8 @@ def create_run(
 
     run_request = RunRequest(
         spec=request.spec,
-        start_date=start_d,
-        end_date=end_d,
+        start_ms=run_date_to_ms(start_d),
+        end_ms=run_date_to_ms(end_d),
         initial_cash=request.initial_cash,
         fill_mode=request.fill_mode,
         commission_per_order=request.commission_per_order,
@@ -341,5 +342,3 @@ def list_runs_endpoint(
         limit=limit,
     )
     return StrategyRunListResponse(runs=runs)
-
-

@@ -728,6 +728,7 @@
       <option value="IndicatorRef">indicator</option>
       <option value="Const">number</option>
       <option value="Subtract">indicator − indicator</option>
+      <option value="DifferenceBps">indicator difference in bps</option>
     </select>
     @if (op.kind === 'IndicatorRef') {
       <select class="ssr-input ssr-input--narrow" [ngModel]="op.indicator" (ngModelChange)="emitOperandChange(side, c, ctx, ruleIndex, index, { kind: 'IndicatorRef', indicator: $event })">
@@ -750,6 +751,26 @@
         (ngModelChange)="emitOperandChange(side, c, ctx, ruleIndex, index, { kind: 'Subtract', left: op.left, right: { kind: 'IndicatorRef', indicator: $event } })"
       >
         @for (ind of spec().indicators; track ind.id) { <option [value]="ind.id">{{ ind.id }}</option> }
+      </select>
+    } @else if (op.kind === 'DifferenceBps') {
+      <select
+        class="ssr-input ssr-input--narrow"
+        [ngModel]="op.left.kind === 'IndicatorRef' ? op.left.indicator : ''"
+        (ngModelChange)="emitOperandChange(side, c, ctx, ruleIndex, index, { kind: 'DifferenceBps', left: { kind: 'IndicatorRef', indicator: $event }, right: op.right })"
+      >
+        @for (ind of spec().indicators; track ind.id) {
+          <option [value]="ind.id" [disabled]="op.right.kind === 'IndicatorRef' && op.right.indicator === ind.id">{{ ind.id }}</option>
+        }
+      </select>
+      <span class="ssr-inline-label">Δ bps vs</span>
+      <select
+        class="ssr-input ssr-input--narrow"
+        [ngModel]="op.right.kind === 'IndicatorRef' ? op.right.indicator : ''"
+        (ngModelChange)="emitOperandChange(side, c, ctx, ruleIndex, index, { kind: 'DifferenceBps', left: op.left, right: { kind: 'IndicatorRef', indicator: $event } })"
+      >
+        @for (ind of spec().indicators; track ind.id) {
+          <option [value]="ind.id" [disabled]="op.left.kind === 'IndicatorRef' && op.left.indicator === ind.id">{{ ind.id }}</option>
+        }
       </select>
     }
   </div>

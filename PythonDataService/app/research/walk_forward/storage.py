@@ -97,6 +97,8 @@ def list_walk_forwards(
     root: Path | None = None,
     parent_run_id: str | None = None,
     spec_hash: str | None = None,
+    protocol_id: str | None = None,
+    protocol_version: str | None = None,
     since_ms: int | None = None,
     limit: int | None = None,
 ) -> list[WalkForwardConfig]:
@@ -107,10 +109,10 @@ def list_walk_forwards(
     with full fetch on-demand via ``GET /walk-forward/{wf_id}``.
 
     Shared filters (``parent_run_id``, ``since_ms``) are applied
-    inside the artifact store; the WF-specific ``spec_hash`` filter
-    is applied here because the store doesn't (and shouldn't) know
-    about phase-specific Pydantic fields. ``limit`` is enforced
-    *after* the ``spec_hash`` filter — matching the pre-seam
+    inside the artifact store; the WF-specific ``spec_hash`` and
+    protocol-identity filters are applied here because the store
+    doesn't (and shouldn't) know about phase-specific Pydantic fields.
+    ``limit`` is enforced *after* those filters — matching the pre-seam
     behaviour where every filter ran before the limit truncated.
 
     Corrupt configs and configs that fail Pydantic validation are
@@ -147,6 +149,10 @@ def list_walk_forwards(
             )
             continue
         if spec_hash is not None and config.strategy_spec_hash != spec_hash:
+            continue
+        if protocol_id is not None and config.protocol_id != protocol_id:
+            continue
+        if protocol_version is not None and config.protocol_version != protocol_version:
             continue
         out.append(config)
 

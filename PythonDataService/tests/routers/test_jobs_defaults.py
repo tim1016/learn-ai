@@ -10,14 +10,27 @@ to the base or to the override surfaces explicitly.
 
 from __future__ import annotations
 
-import pytest
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+from app.main import app
+from app.research.walk_forward.spy_ema import (
+    SPY_EMA_PROTOCOL_END_MS,
+    SPY_EMA_PROTOCOL_START_MS,
+)
 from app.routers.jobs import (
     CrossSectionalJobRequest,
     FeatureResearchJobRequest,
     RuleBasedBacktestJobRequest,
     SignalEngineJobRequest,
+    SpyEmaWalkForwardJobRequest,
+    start_spy_ema_walk_forward_job,
 )
+from app.routers.research_runs import get_artifacts_root, get_data_source_factory
 
 
 class TestRuleBasedBacktestDefaults:
@@ -87,6 +100,129 @@ class TestCrossSectionalDefaults:
         assert c.symbols == ["SPY", "QQQ"]
         assert c.target_type == "directional"
         assert c.force is False
+
+
+class TestSpyEmaWalkForwardJob:
+    def test_request_accepts_only_job_identity(self) -> None:
+        from pydantic import ValidationError
+
+        request = SpyEmaWalkForwardJobRequest.model_validate({"jobId": "j1"})
+        assert request.job_id == "j1"
+        with pytest.raises(ValidationError):
+            SpyEmaWalkForwardJobRequest.model_validate({"jobId": "j1", "thresholdsBps": [1, 2]})
+
+    async def test_job_runs_the_frozen_v1_protocol(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        import app.routers.jobs as jobs_router
+
+        captured: dict[str, Any] = {}
+
+        class _Dump:
+            def __init__(self, value: dict[str, Any]) -> None:
+                self.value = value
+
+            def model_dump(self, *, mode: str) -> dict[str, Any]:
+                assert mode == "json"
+                return self.value
+
+        def fake_pipeline(request, **kwargs):
+            captured["request"] = request
+            captured["kwargs"] = kwargs
+            kwargs["on_progress"](1, 2, "control persisted")
+            kwargs["on_progress"](2, 2, "fold complete")
+            return SimpleNamespace(
+                control_ledger=_Dump({"run_id": "control"}),
+                control_result=_Dump({"metrics": {}}),
+                walk_forward_config=_Dump({"protocol_id": "spy-ema-normalized-gap", "protocol_version": "1.0"}),
+                walk_forward_result=_Dump({"status": "completed"}),
+            )
+
+        class _Cancel:
+            def raise_if_cancelled(self) -> None:
+                return None
+
+        class _Emitter:
+            def __init__(self) -> None:
+                self.phases: list[str] = []
+
+            def phase(self, phase: str) -> None:
+                self.phases.append(phase)
+
+            def log(self, _message: str) -> None:
+                return None
+
+            def progress(self, **_kwargs: Any) -> None:
+                return None
+
+        def run_sync(_job_id: str, work, **kwargs):
+            captured["thread_kwargs"] = kwargs
+            emitter = _Emitter()
+            captured["result"] = work(emitter, _Cancel())
+            captured["phases"] = emitter.phases
+
+        monkeypatch.setattr(jobs_router, "run_spy_ema_pipeline", fake_pipeline)
+        monkeypatch.setattr(jobs_router, "run_in_thread", run_sync)
+
+        response = await start_spy_ema_walk_forward_job(
+            SpyEmaWalkForwardJobRequest(job_id="job-1"),
+            data_source_factory=lambda *_args: None,
+            artifacts_root=tmp_path,
+        )
+
+        assert response == {"job_id": "job-1", "status": "queued"}
+        request = captured["request"]
+        assert request.start_ms == SPY_EMA_PROTOCOL_START_MS
+        assert request.end_ms == SPY_EMA_PROTOCOL_END_MS
+        assert request.protocol_id == "spy-ema-normalized-gap"
+        assert request.protocol_version == "1.0"
+        assert request.thresholds_bps == (1.0, 2.0, 3.0, 4.0, 5.0, 7.5, 10.0)
+        assert request.split_policy.describe() == {
+            "kind": "rolling",
+            "train_days": 180,
+            "test_days": 30,
+            "step_days": 30,
+        }
+        assert captured["thread_kwargs"]["cancel_check_every_n"] == 1
+        assert captured["phases"] == [
+            "running_control",
+            "walking_forward",
+            "persisting_evidence",
+        ]
+        assert captured["result"]["walk_forward"]["config"]["protocol_version"] == "1.0"
+
+    async def test_job_is_available_through_the_async_http_boundary(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        import app.routers.jobs as jobs_router
+
+        queued: list[str] = []
+
+        def queue_without_running(job_id: str, _work, **_kwargs: Any) -> None:
+            queued.append(job_id)
+
+        monkeypatch.setattr(jobs_router, "run_in_thread", queue_without_running)
+        app.dependency_overrides[get_data_source_factory] = lambda: lambda *_args: None
+        app.dependency_overrides[get_artifacts_root] = lambda: tmp_path
+        try:
+            async with AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+            ) as client:
+                response = await client.post(
+                    "/api/jobs-internal/spy-ema-walk-forward",
+                    json={"jobId": "job-http"},
+                )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 202, response.text
+        assert response.json() == {"job_id": "job-http", "status": "queued"}
+        assert queued == ["job-http"]
 
 
 class TestCamelCaseWire:

@@ -28,7 +28,7 @@ from app.engine.strategy.spec.tests._parity_helpers import (
     closes_for_spy_ema,
 )
 from app.research.monte_carlo.runner import MonteCarloRequest, run_monte_carlo
-from app.research.runs import RunRequest, run_strategy_spec, save_run
+from app.research.runs import RunRequest, run_date_to_ms, run_strategy_spec, save_run
 
 
 def _build_test_spec() -> StrategySpec:
@@ -94,8 +94,8 @@ def parent_run(tmp_path: Path):
     ledger, result = run_strategy_spec(
         RunRequest(
             spec=_build_test_spec(),
-            start_date=date(2024, 1, 2),
-            end_date=date(2024, 12, 31),
+            start_ms=run_date_to_ms(date(2024, 1, 2)),
+            end_ms=run_date_to_ms(date(2024, 12, 31)),
         ),
         data_source_factory=factory,
         data_root_revision="test-revision-1",
@@ -386,9 +386,7 @@ def test_malformed_parent_run_id_returns_failed(tmp_path: Path):
     assert "parent_run_id rejected" in (mc.failure_reason or "")
 
 
-def test_reshuffle_with_mismatched_projection_returns_failed(
-    tmp_path: Path, parent_run
-):
+def test_reshuffle_with_mismatched_projection_returns_failed(tmp_path: Path, parent_run):
     ledger, result = parent_run
     if not result.trades:
         pytest.skip("zero trades on parent run")
@@ -465,9 +463,7 @@ def test_low_simulation_count_emits_warning(tmp_path: Path, parent_run):
 # ---------------------------------------------------------------------------
 # Equity-curve compounding sanity check (independent of parent run).
 # ---------------------------------------------------------------------------
-def test_resample_equity_curve_matches_compound_of_resampled_returns(
-    tmp_path: Path, parent_run
-):
+def test_resample_equity_curve_matches_compound_of_resampled_returns(tmp_path: Path, parent_run):
     """Spot-check: each simulation's equity curve at the last index
     equals ``initial_equity * prod(1 + sampled_returns)``.
 
@@ -493,9 +489,7 @@ def test_resample_equity_curve_matches_compound_of_resampled_returns(
 
     # Replay the same draw locally.
     rng = np.random.default_rng(123)
-    sampled = returns[
-        rng.integers(low=0, high=returns.size, size=mc.realised_trade_count)
-    ]
+    sampled = returns[rng.integers(low=0, high=returns.size, size=mc.realised_trade_count)]
     expected_terminal = initial * float(np.prod(1.0 + sampled))
 
     assert mc.equity_bands[-1].p50 == pytest.approx(expected_terminal)

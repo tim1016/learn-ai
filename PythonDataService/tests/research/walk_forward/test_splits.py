@@ -94,10 +94,7 @@ class TestRollingSplit:
         policy = RollingSplitPolicy(train_days=60, test_days=30, step_days=30)
         folds = policy.folds(START_MS, END_MS)
         for prev, cur in itertools.pairwise(folds):
-            assert (
-                _ny_calendar_days_between(prev.train_start_ms, cur.train_start_ms)
-                == 30
-            )
+            assert _ny_calendar_days_between(prev.train_start_ms, cur.train_start_ms) == 30
 
     def test_dst_spanning_window_produces_clean_day_counts(self):
         """DST regression: a window that crosses spring-forward
@@ -153,9 +150,7 @@ class TestAnchoredSplit:
             assert cur.train_end_ms > prev.train_end_ms
 
     def test_anchored_window_too_short_raises(self):
-        policy = AnchoredSplitPolicy(
-            initial_train_days=300, test_days=120, step_days=30
-        )
+        policy = AnchoredSplitPolicy(initial_train_days=300, test_days=120, step_days=30)
         with pytest.raises(ValueError, match="too short"):
             policy.folds(START_MS, END_MS)
 
@@ -199,20 +194,17 @@ class TestFoldWindowInvariants:
 # Factory.
 # ---------------------------------------------------------------------------
 class TestBuildSplitPolicy:
-    def test_chronological_default(self):
-        policy = build_split_policy({"kind": "chronological"})
-        assert isinstance(policy, ChronologicalSplitPolicy)
-        assert policy.train_pct == 0.7
+    def test_chronological_requires_train_pct(self) -> None:
+        with pytest.raises(ValueError, match="train_pct"):
+            build_split_policy({"kind": "chronological"})
 
-    def test_chronological_custom_pct(self):
+    def test_chronological_custom_pct(self) -> None:
         policy = build_split_policy({"kind": "chronological", "train_pct": 0.6})
         assert isinstance(policy, ChronologicalSplitPolicy)
         assert policy.train_pct == 0.6
 
     def test_rolling(self):
-        policy = build_split_policy(
-            {"kind": "rolling", "train_days": 90, "test_days": 30, "step_days": 30}
-        )
+        policy = build_split_policy({"kind": "rolling", "train_days": 90, "test_days": 30, "step_days": 30})
         assert isinstance(policy, RollingSplitPolicy)
         assert (policy.train_days, policy.test_days, policy.step_days) == (90, 30, 30)
 
@@ -228,10 +220,10 @@ class TestBuildSplitPolicy:
         assert isinstance(policy, AnchoredSplitPolicy)
         assert policy.initial_train_days == 120
 
-    def test_unknown_kind_raises(self):
-        with pytest.raises(ValueError, match="unknown split policy"):
+    def test_unknown_kind_raises(self) -> None:
+        with pytest.raises(ValueError):
             build_split_policy({"kind": "some_made_up_thing"})
 
-    def test_missing_kind_raises(self):
-        with pytest.raises(ValueError, match="must include a 'kind'"):
+    def test_missing_kind_raises(self) -> None:
+        with pytest.raises(ValueError):
             build_split_policy({})

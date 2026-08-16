@@ -5,8 +5,12 @@ from __future__ import annotations
 import json
 
 from fastapi import Request
+from fastapi.exceptions import RequestValidationError
 
-from app.utils.error_handlers import polygon_exception_handler
+from app.utils.error_handlers import (
+    polygon_exception_handler,
+    request_validation_exception_handler,
+)
 
 
 def _make_request() -> Request:
@@ -20,7 +24,7 @@ def _make_request() -> Request:
     return Request(scope)
 
 
-async def test_polygon_exception_handler_returns_500_json_response():
+async def test_polygon_exception_handler_returns_500_json_response() -> None:
     request = _make_request()
     exc = RuntimeError("boom")
 
@@ -35,7 +39,7 @@ async def test_polygon_exception_handler_returns_500_json_response():
     }
 
 
-async def test_polygon_exception_handler_serializes_exception_message():
+async def test_polygon_exception_handler_serializes_exception_message() -> None:
     request = _make_request()
     exc = ValueError("unexpected value: 42")
 
@@ -44,3 +48,24 @@ async def test_polygon_exception_handler_serializes_exception_message():
     body = json.loads(response.body)
     assert body["success"] is False
     assert body["error"] == "unexpected value: 42"
+
+
+async def test_request_validation_handler_serializes_nested_non_finite_inputs() -> None:
+    exc = RequestValidationError(
+        [
+            {
+                "type": "float_parsing",
+                "loc": ("body", "value"),
+                "msg": "Input should be a valid number",
+                "input": {"nested": float("nan")},
+                "ctx": {"input": [float("inf")]},
+            }
+        ]
+    )
+
+    response = await request_validation_exception_handler(_make_request(), exc)
+
+    assert response.status_code == 422
+    detail = json.loads(response.body)["detail"][0]
+    assert detail["input"]["nested"] == "nan"
+    assert detail["ctx"]["input"] == ["inf"]

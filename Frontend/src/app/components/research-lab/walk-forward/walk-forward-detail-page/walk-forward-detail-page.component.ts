@@ -150,7 +150,7 @@ export class WalkForwardDetailPageComponent implements AfterViewInit, OnDestroy 
       case 'anchored':
         return `anchored · ${policy['initial_train_days']}d initial train / ${policy['test_days']}d test / ${policy['step_days']}d step`;
       default:
-        return policy.kind;
+        return 'unknown split policy';
     }
   }
 

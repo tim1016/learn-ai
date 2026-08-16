@@ -76,6 +76,10 @@ function makeWfResponse(): WalkForwardResponse {
         test_days: 30,
         step_days: 30,
       },
+      parameter_search: null,
+      fold_position_policy: 'flat_at_test_boundaries',
+      protocol_id: null,
+      protocol_version: null,
       created_at_ms: 1736000000000,
     },
     result: {
@@ -89,11 +93,13 @@ function makeWfResponse(): WalkForwardResponse {
         step_days: 30,
       },
       folds: [],
+      selection_failures: [],
       combined_oos_equity_curve: [],
       mean_oos_sharpe: null,
       median_oos_sharpe: null,
       pct_profitable_folds: null,
       oos_retention: null,
+      oos_retention_basis: null,
       alpha_decay: null,
       warnings: [],
       created_at_ms: 1736000000000,
@@ -125,13 +131,13 @@ describe('WalkForwardService', () => {
     it('POSTs the request body verbatim and returns config + result', async () => {
       const promise = service.createWalkForward({
         spec: { schema_version: '1.0', name: 'inline' },
-        start_date: '2024-01-02',
-        end_date: '2024-12-31',
+        start_ms: 1704171600000,
+        end_ms: 1735621200000,
         split_policy: { kind: 'chronological', train_pct: 0.7 },
       });
       const req = httpMock.expectOne(BASE_URL);
       expect(req.request.method).toBe('POST');
-      expect(req.request.body.start_date).toBe('2024-01-02');
+      expect(req.request.body.start_ms).toBe(1704171600000);
       expect(req.request.body.split_policy.kind).toBe('chronological');
       req.flush(makeWfResponse());
       const result = await promise;
@@ -173,6 +179,8 @@ describe('WalkForwardService', () => {
       const promise = service.listWalkForwards({
         parent_run_id: 'parent',
         spec_hash: 'hash',
+        protocol_id: 'spy-ema-normalized-gap',
+        protocol_version: '1.0',
         since_ms: 1700000000000,
         limit: 10,
       });
@@ -180,6 +188,8 @@ describe('WalkForwardService', () => {
       const params = req.request.params;
       expect(params.get('parent_run_id')).toBe('parent');
       expect(params.get('spec_hash')).toBe('hash');
+      expect(params.get('protocol_id')).toBe('spy-ema-normalized-gap');
+      expect(params.get('protocol_version')).toBe('1.0');
       expect(params.get('since_ms')).toBe('1700000000000');
       expect(params.get('limit')).toBe('10');
       req.flush({ walk_forwards: [] });
@@ -197,9 +207,9 @@ describe('WalkForwardService', () => {
       const body = req.request.body;
       // Spec is the run's spec JSON, not its hash.
       expect(body.spec).toEqual(run.strategy_spec_json);
-      // Window converts run's int64 ms boundaries to YYYY-MM-DD.
-      expect(body.start_date).toBe('2024-01-02');
-      expect(body.end_date).toBe('2024-12-31');
+      // Timestamp boundaries pass through unchanged.
+      expect(body.start_ms).toBe(run.start_ms);
+      expect(body.end_ms).toBe(run.end_ms);
       // Hard-coded default split for v1.
       expect(body.split_policy).toEqual({
         kind: 'rolling',

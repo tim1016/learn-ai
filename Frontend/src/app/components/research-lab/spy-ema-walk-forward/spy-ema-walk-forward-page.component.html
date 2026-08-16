@@ -1,0 +1,82 @@
+<main class="wfa-page" aria-labelledby="wfa-page-title">
+  <header class="wfa-hero">
+    <div class="wfa-hero__copy">
+      <span class="wfa-kicker">Research protocol · V1</span>
+      <div class="wfa-title-row">
+        <app-asset-identity symbol="SPY" name="SPDR S&amp;P 500 ETF Trust" size="lg" />
+        <h2 id="wfa-page-title">Can a normalized EMA gap survive out of sample?</h2>
+      </div>
+      <p>
+        Replace the price-dependent $0.20 filter with a basis-point threshold,
+        select it on trailing data, freeze it, and judge only the next 30-day window.
+      </p>
+      <ul class="wfa-contract" aria-label="Fixed strategy controls">
+        <li>15-minute RTH</li>
+        <li>EMA 5 / 10</li>
+        <li>RSI 14 · 50–70</li>
+        <li>5-bar exit</li>
+        <li>Long only</li>
+      </ul>
+    </div>
+
+    <aside class="wfa-gate" aria-label="Implementation readiness">
+      <span class="wfa-gate__index">04B</span>
+      <div>
+        <strong>Optimization gate</strong>
+        <p>Python selects on each 180-day training window, freezes the winner, then scores only the next 30 days.</p>
+      </div>
+      <span class="wfa-gate__status">
+        @if (running()) { {{ job()?.phaseLabel ?? 'Queued' }} } @else { Ready }
+      </span>
+      @if (running()) {
+        @if (job(); as activeJob) {
+          <div class="wfa-gate__progress" role="status">
+            <p-progress-bar
+              [value]="progressPercent()"
+              [showValue]="false"
+              [mode]="activeJob.total === undefined ? 'indeterminate' : 'determinate'"
+            />
+            <span>{{ activeJob.message ?? 'Preparing the frozen V1 protocol…' }}</span>
+          </div>
+        }
+      }
+      <div class="wfa-gate__actions">
+        <p-button
+          [label]="running() ? 'Running canonical study…' : 'Run canonical study'"
+          icon="pi pi-play"
+          [disabled]="running() || loading()"
+          (onClick)="runStudy()"
+        />
+        @if (running()) {
+          <p-button
+            label="Cancel"
+            icon="pi pi-stop-circle"
+            severity="secondary"
+            [outlined]="true"
+            (onClick)="cancelStudy()"
+          />
+        }
+      </div>
+    </aside>
+  </header>
+
+  <app-spy-ema-protocol
+    [config]="walkForward()?.config ?? null"
+    [result]="walkForward()?.result ?? null"
+  />
+
+  <app-spy-ema-evidence
+    [control]="control()"
+    [walkForward]="walkForward()"
+    [loading]="loading()"
+    [running]="running()"
+    [error]="error()"
+    [walkForwardError]="walkForwardError()"
+    (refreshRequested)="refresh()"
+  />
+
+  <footer class="wfa-disclaimer">
+    Research and education only. A walk-forward result is evidence about this
+    historical protocol, not a forecast or trading recommendation.
+  </footer>
+</main>

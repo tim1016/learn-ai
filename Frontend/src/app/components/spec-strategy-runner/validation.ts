@@ -116,7 +116,14 @@ export function validateStrategy(
         hint: 'Either add the indicator to your reference library or pick an existing one.',
       });
     }
-    if (op.kind === 'Subtract') {
+    if (op.kind === 'Subtract' || op.kind === 'DifferenceBps') {
+      if (op.kind === 'DifferenceBps' && operandsEqual(op.left, op.right)) {
+        issues.push({
+          sev: 'error',
+          text: `${where} uses the same expression on both sides of a basis-point difference.`,
+          hint: 'Choose two different indicators so the normalized gap is meaningful.',
+        });
+      }
       checkOperand(op.left, where);
       checkOperand(op.right, where);
     }
@@ -350,6 +357,23 @@ export function validateStrategy(
   return issues;
 }
 
+function operandsEqual(left: Operand, right: Operand): boolean {
+  if (left.kind !== right.kind) return false;
+  switch (left.kind) {
+    case 'IndicatorRef':
+      return right.kind === 'IndicatorRef' && left.indicator === right.indicator;
+    case 'Const':
+      return right.kind === 'Const' && left.value === right.value;
+    case 'Subtract':
+    case 'DifferenceBps':
+      return (
+        right.kind === left.kind
+        && operandsEqual(left.left, right.left)
+        && operandsEqual(left.right, right.right)
+      );
+  }
+}
+
 /**
  * Collect every indicator id referenced by any condition in the spec.
  * Used to flag unused indicators and to dim them in the reference panel.
@@ -359,7 +383,7 @@ export function collectIndicatorReferences(spec: StrategySpec): Set<string> {
   function harvestOperand(op: Operand): void {
     if (!op) return;
     if (op.kind === 'IndicatorRef') refs.add(op.indicator);
-    if (op.kind === 'Subtract') {
+    if (op.kind === 'Subtract' || op.kind === 'DifferenceBps') {
       harvestOperand(op.left);
       harvestOperand(op.right);
     }

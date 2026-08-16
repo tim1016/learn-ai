@@ -105,12 +105,20 @@ LEAN_ENGINE_RUN_PHASES: tuple[Phase, ...] = (
 )
 
 
+SPY_EMA_WALK_FORWARD_PHASES: tuple[Phase, ...] = (
+    Phase("running_control", "Running the canonical control", 1),
+    Phase("walking_forward", "Selecting and testing each fold", 8),
+    Phase("persisting_evidence", "Persisting research evidence", 1),
+)
+
+
 JOB_PHASES: dict[str, tuple[Phase, ...]] = {
     "cross_sectional": CROSS_SECTIONAL_PHASES,
     "feature_research": FEATURE_RESEARCH_PHASES,
     "signal_engine": SIGNAL_ENGINE_PHASES,
     "engine_backtest": ENGINE_BACKTEST_PHASES,
     "lean_engine_run": LEAN_ENGINE_RUN_PHASES,
+    "spy_ema_walk_forward": SPY_EMA_WALK_FORWARD_PHASES,
 }
 
 

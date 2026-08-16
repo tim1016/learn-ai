@@ -1,0 +1,78 @@
+<section class="grid min-w-0 gap-4" aria-labelledby="protocol-title">
+  <header class="flex flex-col justify-between gap-3 lg:flex-row lg:items-end">
+    <div>
+      <span class="protocol-eyebrow">Rolling research design</span>
+      <h3 id="protocol-title" class="mt-1 text-xl font-semibold">Learn → freeze → prove</h3>
+    </div>
+    @if (rollingPolicy(); as policy) {
+      <p class="m-0 max-w-2xl text-sm text-color-secondary lg:text-right">
+        {{ policy.train_days }} training days. One untouched {{ policy.test_days }}-day
+        out-of-sample window. Advance {{ policy.step_days }} days and repeat.
+      </p>
+    } @else {
+      <p-message severity="secondary" text="Protocol parameters appear after a server-owned receipt is loaded." />
+    }
+  </header>
+
+  @if (rollingPolicy(); as policy) {
+    <div class="grid gap-2 rounded-lg border border-surface p-3 lg:grid-cols-[6fr_auto_2fr_auto_3fr]" role="img" [attr.aria-label]="policy.train_days + ' training days select one frozen threshold before a ' + policy.test_days + '-day out-of-sample window'">
+      <p-card styleClass="h-full protocol-phase protocol-phase--train">
+        <span class="protocol-eyebrow">01</span><strong>Learn</strong>
+        <small>{{ policy.train_days }} days · {{ thresholds().length }} candidates</small>
+      </p-card>
+      <span class="self-center justify-self-center text-color-secondary" aria-hidden="true">→</span>
+      <p-card styleClass="h-full protocol-phase protocol-phase--freeze">
+        <span class="protocol-eyebrow">02</span><strong>Freeze</strong><small>1 threshold · no peeking</small>
+      </p-card>
+      <span class="self-center justify-self-center text-color-secondary" aria-hidden="true">→</span>
+      <p-card styleClass="h-full protocol-phase protocol-phase--test">
+        <span class="protocol-eyebrow">03</span><strong>Prove</strong><small>{{ policy.test_days }} days · OOS only</small>
+      </p-card>
+    </div>
+  }
+
+  <div class="grid gap-4 xl:grid-cols-2">
+    <p-card styleClass="h-full">
+      <ng-template #title>EMA delta threshold</ng-template>
+      <ng-template #subtitle>Candidate lattice · basis points</ng-template>
+      @if (thresholds().length > 0) {
+        <ol class="grid list-none grid-cols-2 gap-2 p-0 sm:grid-cols-4" aria-label="Candidate EMA delta thresholds">
+          @for (threshold of thresholds(); track threshold) {
+            <li class="grid min-h-20 place-content-center rounded-lg border border-surface bg-emphasis text-center">
+              <strong class="font-mono text-lg">{{ threshold }}</strong><span class="text-xs text-color-secondary">bps</span>
+            </li>
+          }
+        </ol>
+      } @else {
+        <p-message severity="secondary" text="Candidate thresholds are unavailable until the receipt loads." />
+      }
+    </p-card>
+
+    <p-card styleClass="h-full protocol-formula-card">
+      <ng-template #title>Normalize before comparing</ng-template>
+      <ng-template #subtitle>Entry contract</ng-template>
+      <p class="formula"><span>gap</span><sub>bps</sub> = 10,000 × (EMA<sub>5</sub> − EMA<sub>10</sub>) / EMA<sub>10</sub></p>
+      <ul class="m-0 grid list-none gap-2 p-0 text-sm">
+        <li><span>Cross</span><strong>fresh EMA5 above EMA10</strong></li>
+        <li><span>Gate</span><strong>gap<sub>bps</sub> ≥ selected threshold</strong></li>
+        <li><span>Regime</span><strong>50 ≤ RSI14 ≤ 70</strong></li>
+      </ul>
+    </p-card>
+  </div>
+
+  @if (rollingPolicy(); as policy) {
+    <div class="rounded-lg border border-surface bg-emphasis p-4">
+      <div class="mb-3 flex items-end justify-between gap-4">
+        <span class="protocol-eyebrow">Canonical OOS protocol</span>
+        <strong class="text-sm">{{ folds().length }} rolling {{ policy.test_days }}-day folds</strong>
+      </div>
+      @if (folds().length > 0) {
+        <ol class="folds" [attr.aria-label]="folds().length + ' rolling out-of-sample folds'">
+          @for (fold of folds(); track fold.fold_index) { <li>F{{ fold.fold_index + 1 }}</li> }
+        </ol>
+      } @else {
+        <p-message severity="secondary" text="Fold evidence has not been loaded yet." />
+      }
+    </div>
+  }
+</section>

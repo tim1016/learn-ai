@@ -29,7 +29,7 @@ import subprocess
 from datetime import date as Date
 from datetime import timedelta
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -204,8 +204,7 @@ def resolve_data_root_revision(
                 if sha:
                     return sha
             logger.debug(
-                "[RUNS] data root %s: git rev-parse returned %d; "
-                "falling back to per-file fingerprint",
+                "[RUNS] data root %s: git rev-parse returned %d; falling back to per-file fingerprint",
                 root,
                 proc.returncode,
             )
@@ -235,11 +234,14 @@ class RunLedger(BaseModel):
         (sessions included / weekends + holidays excluded) for the run's
         date window. Older ledgers continue to load with this field as
         ``None``.
+      * v1.3: Added optional ``warmup_start_ms`` so indicator pre-roll data
+        is part of the auditable run boundary without changing the reported
+        trading window.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1.0", "1.1", "1.2"] = "1.2"
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3"] = "1.3"
     run_id: str
 
     # Lineage — set on child runs (folds, MC simulations, sweep points).
@@ -261,6 +263,7 @@ class RunLedger(BaseModel):
     resolution_minutes: int = Field(ge=1)
     start_ms: int
     end_ms: int
+    warmup_start_ms: int | None = None
     initial_cash: float = Field(ge=0.0)
     fill_mode: str  # "signal_bar_close" | "next_bar_open"
     commission_per_order: float = Field(ge=0.0)
@@ -288,3 +291,10 @@ class RunLedger(BaseModel):
     # midnights. Optional so v1.0 / v1.1 ledgers still load with
     # ``window_summary=None``. New runs always populate it.
     window_summary: WindowSummary | None = None
+
+    def model_dump(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        """Preserve legacy persisted bytes without erasing the OpenAPI schema."""
+        payload = super().model_dump(*args, **kwargs)
+        if self.schema_version in {"1.0", "1.1", "1.2"}:
+            payload.pop("warmup_start_ms", None)
+        return payload
