@@ -15,14 +15,6 @@ import { BrokerV2PanelService } from '../../lib/broker-v2-panel.service';
 import { actionOutcomeToast, deriveActionRejection } from '../../lib/panel-action-outcome';
 import { BotGalleryDockComponent } from '../bot-gallery-dock/bot-gallery-dock.component';
 import { GalleryLiveStore } from '../lib/gallery-live-store.service';
-import type { GalleryLiveStatus } from '../lib/gallery.types';
-
-const STATUS_LABEL: Record<GalleryLiveStatus, string> = {
-  connecting: 'Connecting…',
-  live: 'Live',
-  stale: 'Delayed',
-  error: 'Feed error',
-};
 
 type GalleryViewState = 'loading' | 'error' | 'empty' | 'ready';
 
@@ -31,8 +23,10 @@ type GalleryViewState = 'loading' | 'error' | 'empty' | 'ready';
  * `GalleryLiveStore` for this account — component-provided, started from the
  * routed `broker`/`accountId` in a constructor `effect`, stopped on destroy
  * — and renders the loading/error/empty/ready states around
- * `BotGalleryDockComponent` (which already owns pagination and "Reset
- * layout"; this host does not duplicate either).
+ * `BotGalleryDockComponent` (which owns pagination, "Reset layout", the
+ * status filter, and — via the `status` input below — the footer's
+ * `●Live` indicator; this host does not duplicate any of that). The page
+ * itself no longer has its own toolbar/title: the dock is the page.
  *
  * `GalleryLiveStore.status()` can only be `'error'` while no snapshot has
  * ever been adopted (see the store's `applyTransportStatus`), which means
@@ -77,7 +71,7 @@ export class BotGalleryPageComponent {
    */
   protected readonly pendingSids = signal<ReadonlySet<string>>(new Set());
 
-  protected readonly statusLabel = computed(() => STATUS_LABEL[this.store.status()]);
+  /** Drives the non-blocking stale banner above the dock; the dock's own footer renders the compact `●Delayed` indicator off the same `store.status()`, forwarded via the `status` input. */
   protected readonly stale = computed(() => this.store.status() === 'stale');
 
   protected readonly viewState = computed<GalleryViewState>(() => {

@@ -503,6 +503,15 @@ class ChartFillMarker(BaseModel):
     quantity: float
     price: float
     order_ref: str
+    # Stable per-fill identity (mirrors FillRecord.event_key) — distinct
+    # from order_ref, which is shared by every partial fill of one order.
+    # Consumers that need to distinguish individual fills (a gallery
+    # incremental cursor, a client-side merge across partial fills of the
+    # same order) must key on this, not on order_ref or filled_at_ms alone:
+    # neither is guaranteed unique per fill (two fills of one order share
+    # order_ref; two fills — of the same or different orders — can share a
+    # millisecond timestamp).
+    event_key: str
 
 
 class ChartOverlayNoticeView(BaseModel):

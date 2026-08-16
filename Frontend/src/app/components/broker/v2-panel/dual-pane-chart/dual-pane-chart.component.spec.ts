@@ -369,6 +369,7 @@ describe('DualPaneChartComponent', () => {
           quantity: 2,
           price: 101,
           order_ref: 'order-1',
+          event_key: 'exec-1',
         },
       ],
       [
@@ -415,6 +416,7 @@ describe('DualPaneChartComponent', () => {
         quantity: 1,
         price: 101.25,
         order_ref: 'order-2',
+        event_key: 'exec-2',
       },
     ], bars);
 
@@ -431,6 +433,7 @@ describe('DualPaneChartComponent', () => {
           quantity: 1,
           price: 99,
           order_ref: 'before-buffer',
+          event_key: 'exec-before-buffer',
         },
       ],
       [

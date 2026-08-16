@@ -1,29 +1,83 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  autoDivision,
+  chooseColumns,
   loadLayout,
   paginate,
   resetLayout,
   saveLayout,
+  spliceVisibleIntoFullOrder,
   type TileLayout,
 } from './gallery-layout';
 
-describe('autoDivision', () => {
-  it('divides 20 into a 5x4 near-square grid', () => {
-    expect(autoDivision(20)).toEqual({ cols: 5, rows: 4 });
+describe('spliceVisibleIntoFullOrder', () => {
+  it('reorders visible sids in place while leaving hidden sids at their original slots', () => {
+    // A hidden, B/C/E visible, D hidden. Dragging E to the front of the
+    // visible set gives reorderedVisible = [E, B, C].
+    const fullOrder: TileLayout = ['A', 'B', 'C', 'D', 'E'];
+    const reorderedVisible: TileLayout = ['E', 'B', 'C'];
+
+    expect(spliceVisibleIntoFullOrder(fullOrder, reorderedVisible)).toEqual(
+      ['A', 'E', 'B', 'D', 'C'],
+    );
   });
 
-  it('divides 9 into a 3x3 square grid', () => {
-    expect(autoDivision(9)).toEqual({ cols: 3, rows: 3 });
+  it('is a no-op when every sid is visible', () => {
+    const fullOrder: TileLayout = ['A', 'B', 'C'];
+    expect(spliceVisibleIntoFullOrder(fullOrder, ['C', 'A', 'B'])).toEqual(['C', 'A', 'B']);
   });
 
-  it('divides 6 into a 3x2 grid', () => {
-    expect(autoDivision(6)).toEqual({ cols: 3, rows: 2 });
+  it('leaves the full order untouched when nothing is visible', () => {
+    const fullOrder: TileLayout = ['A', 'B', 'C'];
+    expect(spliceVisibleIntoFullOrder(fullOrder, [])).toEqual(fullOrder);
   });
+});
 
+describe('chooseColumns', () => {
   it('returns a single 1x1 cell for zero bots', () => {
-    expect(autoDivision(0)).toEqual({ cols: 1, rows: 1 });
+    expect(chooseColumns(0, 1600, 900, 12, 28)).toEqual({ cols: 1, rows: 1 });
+  });
+
+  it('picks the aspect-ratio-optimal column count for a 20-tile widescreen wall', () => {
+    // At 1600x900 with a 12px gap and a 28px header, 4 columns (5 rows)
+    // lands closest to the 2.2 target chart AR — verified by hand in the
+    // design spec's worked example.
+    expect(chooseColumns(20, 1600, 900, 12, 28)).toEqual({ cols: 4, rows: 5 });
+  });
+
+  it('never considers more than 6 columns even for a large roster', () => {
+    const { cols } = chooseColumns(40, 3200, 1200, 12, 28);
+    expect(cols).toBeLessThanOrEqual(6);
+  });
+
+  it('caps columns at n for a roster smaller than MAX_COLS', () => {
+    const { cols, rows } = chooseColumns(2, 1600, 900, 12, 28);
+    expect(cols).toBeLessThanOrEqual(2);
+    expect(cols * rows).toBeGreaterThanOrEqual(2);
+  });
+
+  it('produces a division that fits every tile (rows*cols >= n)', () => {
+    for (const n of [1, 2, 3, 5, 7, 11, 13, 20, 25]) {
+      const { cols, rows } = chooseColumns(n, 1600, 900, 12, 28);
+      expect(cols * rows).toBeGreaterThanOrEqual(n);
+    }
+  });
+
+  it('falls back to the tallest-tile division when every candidate is unusably short', () => {
+    // A tiny 100x40 area can't clear headerHeight(28) + 70 = 98px of tile
+    // height at any column count for 10 tiles — every candidate is
+    // rejected, so the fallback (tallest tile) must still return a valid,
+    // fully-covering division rather than throwing or picking nothing.
+    const { cols, rows } = chooseColumns(10, 100, 40, 12, 28);
+    expect(cols).toBeGreaterThanOrEqual(1);
+    expect(rows).toBeGreaterThanOrEqual(1);
+    expect(cols * rows).toBeGreaterThanOrEqual(10);
+  });
+
+  it('prefers more columns for a wider grid at the same tile count', () => {
+    const narrow = chooseColumns(12, 900, 900, 12, 28);
+    const wide = chooseColumns(12, 2400, 900, 12, 28);
+    expect(wide.cols).toBeGreaterThanOrEqual(narrow.cols);
   });
 });
 
@@ -70,11 +124,8 @@ describe('loadLayout / saveLayout / resetLayout', () => {
     localStorage.clear();
   });
 
-  it('round-trips a saved layout', () => {
-    const layout: TileLayout[] = [
-      { sid: 'sid-1', colSpan: 2, rowSpan: 1 },
-      { sid: 'sid-2', colSpan: 1, rowSpan: 1 },
-    ];
+  it('round-trips a saved order-only layout', () => {
+    const layout: TileLayout = ['sid-1', 'sid-2'];
 
     saveLayout(accountId, layout);
 
@@ -91,18 +142,17 @@ describe('loadLayout / saveLayout / resetLayout', () => {
     expect(loadLayout(accountId)).toEqual([]);
   });
 
-  it('returns [] for a well-formed JSON value that is not a tile-layout array', () => {
+  it('returns [] for a well-formed JSON value that is not a sid array', () => {
     localStorage.setItem(`gallery-layout:${accountId}`, JSON.stringify({ not: 'an array' }));
 
     expect(loadLayout(accountId)).toEqual([]);
   });
 
-  it('returns [] for a corrupted entry with a NaN, negative, or fractional span', () => {
+  it('returns [] for an array containing a non-string entry', () => {
     for (const bad of [
-      [{ sid: 'sid-1', colSpan: Number.NaN, rowSpan: 1 }],
-      [{ sid: 'sid-1', colSpan: -1, rowSpan: 1 }],
-      [{ sid: 'sid-1', colSpan: 0, rowSpan: 1 }],
-      [{ sid: 'sid-1', colSpan: 1.5, rowSpan: 1 }],
+      ['sid-1', 42],
+      ['sid-1', null],
+      ['sid-1', { sid: 'sid-2' }],
     ]) {
       localStorage.setItem(`gallery-layout:${accountId}`, JSON.stringify(bad));
       expect(loadLayout(accountId)).toEqual([]);
@@ -120,7 +170,7 @@ describe('loadLayout / saveLayout / resetLayout', () => {
   });
 
   it('clears the persisted layout on reset', () => {
-    saveLayout(accountId, [{ sid: 'sid-1', colSpan: 1, rowSpan: 1 }]);
+    saveLayout(accountId, ['sid-1']);
 
     resetLayout(accountId);
 
@@ -132,7 +182,7 @@ describe('loadLayout / saveLayout / resetLayout', () => {
       throw new Error('quota exceeded');
     });
 
-    expect(() => saveLayout(accountId, [{ sid: 'sid-1', colSpan: 1, rowSpan: 1 }])).not.toThrow();
+    expect(() => saveLayout(accountId, ['sid-1'])).not.toThrow();
 
     setItemSpy.mockRestore();
   });

@@ -12,55 +12,10 @@
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
-}
-
-.gallery-page__toolbar {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  padding: var(--space-4);
-
-  h1 {
-    margin: 0;
-    font-size: var(--fs-h1);
-    font-weight: var(--fw-semi);
-    letter-spacing: var(--ls-tight);
-  }
-}
-
-.gallery-page__meta {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  font-size: var(--fs-sm);
-}
-
-.gallery-page__timeframe {
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-}
-
-.gallery-page__status {
-  padding: 0.2rem 0.6rem;
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-sm);
-  color: var(--text-secondary);
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-semi);
-}
-
-.gallery-page__status--stale {
-  border-color: rgba(255, 152, 0, 0.42);
-  background: var(--warn-soft);
-  color: var(--text-primary);
-}
-
-.gallery-page__status--error {
-  border-color: rgba(239, 83, 80, 0.42);
-  background: var(--bear-soft);
-  color: var(--text-primary);
+  // No toolbar sits above the view-state switch anymore (D10 removed it) —
+  // this is the one place that opens up the top breathing room every
+  // branch below relied on the toolbar for.
+  padding-top: var(--space-4);
 }
 
 .gallery-page__skeleton {
