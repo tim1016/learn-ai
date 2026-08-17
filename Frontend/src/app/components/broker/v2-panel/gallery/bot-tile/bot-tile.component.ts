@@ -15,6 +15,7 @@ import {
 import { Router } from '@angular/router';
 import { TickMarkType } from 'lightweight-charts';
 import type { ChartBar, ChartFillMarker, GalleryBotView } from '../lib/gallery.types';
+import { GALLERY_TILE_HEADER_HEIGHT_PX } from '../lib/gallery-layout';
 import {
   CFG,
   barIndexAtX,
@@ -58,11 +59,14 @@ function fillTextForBar(bar: ChartBar, markers: readonly ChartFillMarker[]): str
   imports: [AssetIdentityComponent],
   host: {
     '(document:keydown.escape)': 'onEscape()',
+    '[style.--gallery-tile-header-height.px]': 'tileHeaderHeightPx',
   },
   templateUrl: './bot-tile.component.html',
   styleUrl: './bot-tile.component.scss',
 })
 export class BotTileComponent {
+  protected readonly tileHeaderHeightPx = GALLERY_TILE_HEADER_HEIGHT_PX;
+
   readonly bot = input.required<GalleryBotView>();
   readonly bars = input.required<readonly ChartBar[]>();
   readonly markers = input<readonly ChartFillMarker[]>([]);

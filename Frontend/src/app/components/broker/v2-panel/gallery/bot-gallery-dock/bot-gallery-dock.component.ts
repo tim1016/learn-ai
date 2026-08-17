@@ -17,6 +17,7 @@ import { BotTileComponent } from '../bot-tile/bot-tile.component';
 import type { ChartBar, ChartFillMarker, GalleryBotView, GalleryLiveStatus } from '../lib/gallery.types';
 import {
   GALLERY_PAGE_SIZE,
+  GALLERY_TILE_HEADER_HEIGHT_PX,
   chooseColumns,
   loadLayout,
   paginate,
@@ -28,8 +29,6 @@ import {
 
 /** Matches `--space-3` in `_tokens.scss`, the gap `.gallery-dock__grid` renders between cells — kept in sync by hand since `chooseColumns` needs a px number, not a CSS custom property. */
 const GALLERY_GAP_PX = 12;
-/** Matches the tile header's fixed height (design spec §3.3, `.bot-tile__header`). */
-const TILE_HEADER_HEIGHT_PX = 24;
 /** Assumed grid area before the first `ResizeObserver` measurement lands — a reasonable widescreen default so the very first paint (and any environment where the observer never fires, e.g. tests) still gets a sane column count instead of a degenerate one from an unmeasured 0x0 element. */
 const DEFAULT_GRID_WIDTH_PX = 1600;
 const DEFAULT_GRID_HEIGHT_PX = 900;
@@ -171,7 +170,7 @@ export class BotGalleryDockComponent {
     this.gridSize().width,
     this.gridSize().height,
     GALLERY_GAP_PX,
-    TILE_HEADER_HEIGHT_PX,
+    GALLERY_TILE_HEADER_HEIGHT_PX,
   ));
 
   /**

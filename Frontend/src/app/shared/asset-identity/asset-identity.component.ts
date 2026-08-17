@@ -1,6 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, input, signal } from '@angular/core';
 
-export type AssetIdentitySize = 'sm' | 'md' | 'lg';
+export type AssetIdentitySize = 'xs' | 'sm' | 'md' | 'lg';
 export type AssetIdentityTone = 'default' | 'inverse';
 
 const TRADINGVIEW_LOGO_BASE_URL = 'https://s3-symbol-logo.tradingview.com';
@@ -148,6 +148,7 @@ function fallbackTextForSymbol(symbol: string): string {
   styleUrl: './asset-identity.component.scss',
   host: {
     class: 'asset-identity',
+    '[class.asset-identity--xs]': 'size() === "xs"',
     '[class.asset-identity--sm]': 'size() === "sm"',
     '[class.asset-identity--lg]': 'size() === "lg"',
     '[class.asset-identity--inverse]': 'tone() === "inverse"',

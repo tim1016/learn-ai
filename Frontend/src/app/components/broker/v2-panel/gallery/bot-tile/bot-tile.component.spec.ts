@@ -77,6 +77,23 @@ describe('BotTileComponent', () => {
     expect(screen.getByText('ORB breakout')).toBeTruthy();
   });
 
+  it('keeps the gallery asset identity compact inside the 24px header', async () => {
+    const { container } = await render(BotTileComponent, {
+      inputs: {
+        bot: bot(),
+        bars: [bar()],
+        broker: 'alpaca',
+        accountId: 'PA3',
+      },
+      providers: [routerProvider()],
+    });
+
+    const identity = container.querySelector('app-asset-identity');
+    if (!(identity instanceof HTMLElement)) throw new Error('expected asset identity to render');
+    expect(identity.classList.contains('asset-identity--xs')).toBe(true);
+    expect(getComputedStyle(identity).getPropertyValue('--asset-identity-logo-size').trim()).toBe('16px');
+  });
+
   it('colours the legend delta positive on an up session', async () => {
     await render(BotTileComponent, {
       inputs: {

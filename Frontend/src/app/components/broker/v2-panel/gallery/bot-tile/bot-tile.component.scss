@@ -19,8 +19,8 @@
 
 .bot-tile__header {
   display: flex;
-  height: 1.5rem;
-  min-height: 1.5rem;
+  height: var(--gallery-tile-header-height);
+  min-height: var(--gallery-tile-header-height);
   flex: none;
   align-items: center;
   gap: var(--space-1);
@@ -30,11 +30,9 @@
 }
 
 .bot-tile__identity {
-  --asset-identity-logo-size: 1rem;
   --asset-identity-fallback-border: transparent;
 
   flex: none;
-  gap: var(--space-1);
   font-size: var(--fs-xs);
   line-height: 1;
 }
@@ -108,7 +106,7 @@
 .bot-tile__action {
   position: relative;
   display: flex;
-  height: 1.5rem;
+  height: var(--gallery-tile-header-height);
   flex: none;
   align-self: center;
   margin-left: auto;
@@ -116,9 +114,9 @@
 
 .bot-tile__action-button {
   display: grid;
-  width: 1.5rem;
-  min-width: 1.5rem;
-  height: 1.5rem;
+  width: var(--gallery-tile-header-height);
+  min-width: var(--gallery-tile-header-height);
+  height: var(--gallery-tile-header-height);
   place-items: center;
   padding: 0;
   border: 0;
