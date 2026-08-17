@@ -2726,6 +2726,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/chart/indicators": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Chart Indicators
+         * @description Compute indicators on the exact bar sequence already shown by a caller.
+         */
+        post: operations["chart_indicators_api_chart_indicators_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/chart/indicators/supported": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Supported Chart Indicators
+         * @description Return only indicators proven compatible with caller-owned chart bars.
+         */
+        get: operations["supported_chart_indicators_api_chart_indicators_supported_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/chart/timeframes": {
         parameters: {
             query?: never;
@@ -10679,6 +10719,46 @@ export interface components {
             truncated: boolean;
         };
         /**
+         * ChartIndicatorBar
+         * @description One canonical bar supplied by a chart that already owns its data.
+         */
+        ChartIndicatorBar: {
+            /** C */
+            c: number;
+            /** H */
+            h: number;
+            /** L */
+            l: number;
+            /** O */
+            o: number;
+            /**
+             * T
+             * @description Bar-close timestamp as int64 ms UTC
+             */
+            t: number;
+            /** V */
+            v: number;
+        };
+        /**
+         * ChartIndicatorBatchRequest
+         * @description Compute indicators on the caller's exact, already-bucketed bars.
+         */
+        ChartIndicatorBatchRequest: {
+            /** Bars */
+            bars: components["schemas"]["ChartIndicatorBar"][];
+            /** Indicators */
+            indicators: components["schemas"]["ChartIndicatorEntry"][];
+            /** Symbol */
+            symbol: string;
+        };
+        /** ChartIndicatorBatchResponse */
+        ChartIndicatorBatchResponse: {
+            /** Indicators */
+            indicators: components["schemas"]["ChartIndicatorResult"][];
+            /** Symbol */
+            symbol: string;
+        };
+        /**
          * ChartIndicatorEntry
          * @description Single indicator specification.
          */
@@ -10721,6 +10801,11 @@ export interface components {
             refs?: number[];
             /** Type */
             type: string;
+        };
+        /** ChartIndicatorSupportResponse */
+        ChartIndicatorSupportResponse: {
+            /** Names */
+            names: string[];
         };
         /**
          * ChartLiveResponse
@@ -30745,6 +30830,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    chart_indicators_api_chart_indicators_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChartIndicatorBatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChartIndicatorBatchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    supported_chart_indicators_api_chart_indicators_supported_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChartIndicatorSupportResponse"];
                 };
             };
         };

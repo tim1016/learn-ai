@@ -10909,6 +10909,105 @@
         "title": "ChartHistoryResponse",
         "type": "object"
       },
+      "ChartIndicatorBar": {
+        "description": "One canonical bar supplied by a chart that already owns its data.",
+        "properties": {
+          "c": {
+            "title": "C",
+            "type": "number"
+          },
+          "h": {
+            "title": "H",
+            "type": "number"
+          },
+          "l": {
+            "title": "L",
+            "type": "number"
+          },
+          "o": {
+            "title": "O",
+            "type": "number"
+          },
+          "t": {
+            "description": "Bar-close timestamp as int64 ms UTC",
+            "minimum": 0.0,
+            "title": "T",
+            "type": "integer"
+          },
+          "v": {
+            "minimum": 0.0,
+            "title": "V",
+            "type": "number"
+          }
+        },
+        "required": [
+          "t",
+          "o",
+          "h",
+          "l",
+          "c",
+          "v"
+        ],
+        "title": "ChartIndicatorBar",
+        "type": "object"
+      },
+      "ChartIndicatorBatchRequest": {
+        "description": "Compute indicators on the caller's exact, already-bucketed bars.",
+        "properties": {
+          "bars": {
+            "items": {
+              "$ref": "#/components/schemas/ChartIndicatorBar"
+            },
+            "maxItems": 20000,
+            "minItems": 1,
+            "title": "Bars",
+            "type": "array"
+          },
+          "indicators": {
+            "items": {
+              "$ref": "#/components/schemas/ChartIndicatorEntry"
+            },
+            "maxItems": 12,
+            "minItems": 1,
+            "title": "Indicators",
+            "type": "array"
+          },
+          "symbol": {
+            "maxLength": 16,
+            "minLength": 1,
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "bars",
+          "indicators"
+        ],
+        "title": "ChartIndicatorBatchRequest",
+        "type": "object"
+      },
+      "ChartIndicatorBatchResponse": {
+        "properties": {
+          "indicators": {
+            "items": {
+              "$ref": "#/components/schemas/ChartIndicatorResult"
+            },
+            "title": "Indicators",
+            "type": "array"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "indicators"
+        ],
+        "title": "ChartIndicatorBatchResponse",
+        "type": "object"
+      },
       "ChartIndicatorEntry": {
         "description": "Single indicator specification.",
         "properties": {
@@ -11030,6 +11129,22 @@
           "data"
         ],
         "title": "ChartIndicatorResult",
+        "type": "object"
+      },
+      "ChartIndicatorSupportResponse": {
+        "properties": {
+          "names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Names",
+            "type": "array"
+          }
+        },
+        "required": [
+          "names"
+        ],
+        "title": "ChartIndicatorSupportResponse",
         "type": "object"
       },
       "ChartLiveResponse": {
@@ -55778,6 +55893,70 @@
           }
         },
         "summary": "Chart Data",
+        "tags": [
+          "chart"
+        ]
+      }
+    },
+    "/api/chart/indicators": {
+      "post": {
+        "description": "Compute indicators on the exact bar sequence already shown by a caller.",
+        "operationId": "chart_indicators_api_chart_indicators_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChartIndicatorBatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChartIndicatorBatchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Chart Indicators",
+        "tags": [
+          "chart"
+        ]
+      }
+    },
+    "/api/chart/indicators/supported": {
+      "get": {
+        "description": "Return only indicators proven compatible with caller-owned chart bars.",
+        "operationId": "supported_chart_indicators_api_chart_indicators_supported_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChartIndicatorSupportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Supported Chart Indicators",
         "tags": [
           "chart"
         ]

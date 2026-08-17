@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+import math
+from numbers import Integral, Real
+from typing import Any
+
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class ChartIndicatorEntry(BaseModel):
@@ -10,6 +14,20 @@ class ChartIndicatorEntry(BaseModel):
 
     name: str = Field(..., min_length=1, description="Indicator name (e.g. 'ema', 'rsi', 'macd')")
     params: dict[str, int | float] = Field(default_factory=dict, description="Indicator parameters")
+
+    @field_validator("params", mode="before")
+    @classmethod
+    def validate_numeric_params(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        for name, parameter in value.items():
+            if (
+                isinstance(parameter, bool)
+                or not isinstance(parameter, Real)
+                or (not isinstance(parameter, Integral) and not math.isfinite(parameter))
+            ):
+                raise ValueError(f"indicator parameter {name} must be a finite number")
+        return value
 
 
 class ChartIndicatorPoint(BaseModel):
@@ -25,6 +43,51 @@ class ChartIndicatorResult(BaseModel):
     data: list[ChartIndicatorPoint] | dict[str, list[ChartIndicatorPoint]]
     refs: list[float] = Field(default_factory=list)
     default_visible: bool | None = None
+
+
+class ChartIndicatorBar(BaseModel):
+    """One canonical bar supplied by a chart that already owns its data."""
+
+    t: int = Field(..., ge=0, description="Bar-close timestamp as int64 ms UTC")
+    o: float = Field(..., allow_inf_nan=False)
+    h: float = Field(..., allow_inf_nan=False)
+    l: float = Field(..., allow_inf_nan=False)
+    c: float = Field(..., allow_inf_nan=False)
+    v: float = Field(..., ge=0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def validate_ohlc(self) -> ChartIndicatorBar:
+        if self.l > min(self.o, self.c) or self.h < max(self.o, self.c) or self.l > self.h:
+            raise ValueError("bar must satisfy low <= open/close <= high")
+        return self
+
+
+class ChartIndicatorBatchRequest(BaseModel):
+    """Compute indicators on the caller's exact, already-bucketed bars."""
+
+    symbol: str = Field(..., min_length=1, max_length=16)
+    bars: list[ChartIndicatorBar] = Field(..., min_length=1, max_length=20_000)
+    indicators: list[ChartIndicatorEntry] = Field(..., min_length=1, max_length=12)
+
+
+class ChartIndicatorBatchResponse(BaseModel):
+    symbol: str
+    indicators: list[ChartIndicatorResult]
+
+    @classmethod
+    def from_engine_result(
+        cls,
+        symbol: str,
+        indicators: list[dict[str, Any]],
+    ) -> ChartIndicatorBatchResponse:
+        return cls(
+            symbol=symbol,
+            indicators=[ChartIndicatorResult.model_validate(item) for item in indicators],
+        )
+
+
+class ChartIndicatorSupportResponse(BaseModel):
+    names: list[str]
 
 
 class ChartDataRequest(BaseModel):

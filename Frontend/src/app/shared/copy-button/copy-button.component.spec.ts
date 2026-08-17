@@ -19,16 +19,19 @@ function button(el: HTMLElement): HTMLButtonElement {
   return node as HTMLButtonElement;
 }
 
-describe('CopyButtonComponent', () => {
-  // Mutate only `navigator.clipboard` (never the whole `navigator`) so we
-  // don't strip `userAgent` — Angular Forms' DefaultValueAccessor reads
-  // `navigator.userAgent.toLowerCase()`, and a replaced navigator would leak
-  // to later test files in the same worker and crash them.
-  const originalClipboard = navigator.clipboard;
+function stubClipboard(clipboard: unknown): void {
+  const navigatorWithClipboard = Object.create(window.navigator) as Navigator;
+  Object.defineProperty(navigatorWithClipboard, 'clipboard', {
+    configurable: true,
+    value: clipboard,
+  });
+  vi.stubGlobal('navigator', navigatorWithClipboard);
+}
 
+describe('CopyButtonComponent', () => {
   afterEach(() => {
-    Object.assign(navigator, { clipboard: originalClipboard });
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('exposes an accessible name even in the icon variant', () => {
@@ -40,7 +43,7 @@ describe('CopyButtonComponent', () => {
 
   it('copies the text and confirms on success', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, { clipboard: { writeText } });
+    stubClipboard({ writeText });
 
     const fixture = TestBed.createComponent(Host);
     fixture.detectChanges();
@@ -56,7 +59,7 @@ describe('CopyButtonComponent', () => {
   });
 
   it('surfaces a fallback message when the clipboard is unavailable', async () => {
-    Object.assign(navigator, { clipboard: undefined });
+    stubClipboard(undefined);
 
     const fixture = TestBed.createComponent(Host);
     fixture.detectChanges();

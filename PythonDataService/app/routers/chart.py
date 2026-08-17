@@ -5,9 +5,16 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.schemas.chart import AllowedTimeframesRequest, ChartDataRequest
+from app.schemas.chart import (
+    AllowedTimeframesRequest,
+    ChartDataRequest,
+    ChartIndicatorBatchRequest,
+    ChartIndicatorBatchResponse,
+    ChartIndicatorSupportResponse,
+)
+from app.services.chart_indicator_service import ChartIndicatorService, get_chart_indicator_service
 from app.services.chart_service import (
     TIMEFRAME_DEFS,
     get_allowed_timeframes,
@@ -22,6 +29,32 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────
 # Endpoints
 # ──────────────────────────────────────────────
+@router.post("/indicators", response_model=ChartIndicatorBatchResponse)
+async def chart_indicators(
+    request: ChartIndicatorBatchRequest,
+    service: ChartIndicatorService = Depends(get_chart_indicator_service),
+) -> ChartIndicatorBatchResponse:
+    """Compute indicators on the exact bar sequence already shown by a caller."""
+    try:
+        symbol, indicators = await asyncio.to_thread(
+            service.compute,
+            request.symbol,
+            [bar.model_dump() for bar in request.bars],
+            [indicator.model_dump() for indicator in request.indicators],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return ChartIndicatorBatchResponse.from_engine_result(symbol, indicators)
+
+
+@router.get("/indicators/supported", response_model=ChartIndicatorSupportResponse)
+async def supported_chart_indicators(
+    service: ChartIndicatorService = Depends(get_chart_indicator_service),
+) -> ChartIndicatorSupportResponse:
+    """Return only indicators proven compatible with caller-owned chart bars."""
+    return ChartIndicatorSupportResponse(names=service.supported_names())
+
+
 @router.post("/data")
 async def chart_data(request: ChartDataRequest):
     """
