@@ -12,6 +12,7 @@ from app.schemas.chart import (
     ChartDataRequest,
     ChartIndicatorBatchRequest,
     ChartIndicatorBatchResponse,
+    ChartIndicatorSupportResponse,
 )
 from app.services.chart_indicator_service import ChartIndicatorService, get_chart_indicator_service
 from app.services.chart_service import (
@@ -44,6 +45,14 @@ async def chart_indicators(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return ChartIndicatorBatchResponse.from_engine_result(symbol, indicators)
+
+
+@router.get("/indicators/supported", response_model=ChartIndicatorSupportResponse)
+async def supported_chart_indicators(
+    service: ChartIndicatorService = Depends(get_chart_indicator_service),
+) -> ChartIndicatorSupportResponse:
+    """Return only indicators proven compatible with caller-owned chart bars."""
+    return ChartIndicatorSupportResponse(names=service.supported_names())
 
 
 @router.post("/data")

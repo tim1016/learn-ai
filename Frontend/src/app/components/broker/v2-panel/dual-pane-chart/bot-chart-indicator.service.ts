@@ -7,12 +7,19 @@ import type { ChartBar } from '../lib/broker-v2-panel.types';
 import type { ChartIndicatorEntry } from '../../../../shared/trading-chart';
 import {
   type ChartIndicatorBatchResponse,
+  type ChartIndicatorSupportResponse,
   toChartIndicatorRequestBars,
 } from './dual-pane-chart-indicators';
 
 @Injectable({ providedIn: 'root' })
 export class BotChartIndicatorService {
   private readonly http = inject(HttpClient);
+
+  supportedIndicators(): Observable<ChartIndicatorSupportResponse> {
+    return this.http.get<ChartIndicatorSupportResponse>(
+      `${environment.pythonServiceUrl}/api/chart/indicators/supported`,
+    );
+  }
 
   calculate(
     symbol: string,

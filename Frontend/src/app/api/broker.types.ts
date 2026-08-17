@@ -2746,6 +2746,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/chart/indicators/supported": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Supported Chart Indicators
+         * @description Return only indicators proven compatible with caller-owned chart bars.
+         */
+        get: operations["supported_chart_indicators_api_chart_indicators_supported_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/chart/timeframes": {
         parameters: {
             query?: never;
@@ -10753,6 +10773,11 @@ export interface components {
             refs?: number[];
             /** Type */
             type: string;
+        };
+        /** ChartIndicatorSupportResponse */
+        ChartIndicatorSupportResponse: {
+            /** Names */
+            names: string[];
         };
         /**
          * ChartLiveResponse
@@ -30737,6 +30762,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    supported_chart_indicators_api_chart_indicators_supported_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChartIndicatorSupportResponse"];
                 };
             };
         };

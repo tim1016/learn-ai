@@ -46,6 +46,15 @@ describe('dual-pane chart indicators', () => {
     ]);
   });
 
+  it('uses the canonical floored candle anchor for subsecond chart bars', () => {
+    const subsecondBar = [{ ...BARS[0], start_ms: 1_700_000_000_999 }];
+
+    expect(toIndicatorSeriesPlans([{
+      id: 'sma_2', panel: 'main', type: 'line', color: '#FF9800',
+      data: [{ t: subsecondBar[0].end_ms, value: 100 }], refs: [],
+    }], subsecondBar)[0].points).toEqual([{ time: 1_700_000_000, value: 100 }]);
+  });
+
   it('deduplicates the same indicator recipe', () => {
     const once = selectChartIndicator([], { name: 'sma', params: { length: 20 } });
 

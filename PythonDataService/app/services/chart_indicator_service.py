@@ -7,7 +7,6 @@ constructs the canonical DataFrame shape, and delegates all numerical work to
 
 from __future__ import annotations
 
-from functools import lru_cache
 from numbers import Integral, Real
 from typing import Any
 
@@ -18,22 +17,14 @@ from app.services.chart_service import compute_indicator_results
 from app.services.dataset_service import (
     INDICATOR_CONFIGS,
     assert_canonical_bar_stream,
-    list_available_indicators,
 )
 
-
-@lru_cache(maxsize=1)
-def _available_indicator_names() -> frozenset[str]:
-    return frozenset(
-        item["name"]
-        for category in list_available_indicators().values()
-        for item in category
-    )
+CHART_INDICATOR_NAMES = frozenset(INDICATOR_CONFIGS)
 
 
 def _validate_indicator(entry: dict[str, Any]) -> dict[str, Any]:
     name = str(entry.get("name", "")).lower()
-    if name not in _available_indicator_names():
+    if name not in CHART_INDICATOR_NAMES:
         raise ValueError(f"unknown chart indicator: {name or '<empty>'}")
 
     params = entry.get("params", {})
@@ -94,6 +85,7 @@ class ChartIndicatorService:
                 "volume": pd.Series([bar["volume"] for bar in canonical_bars], dtype="float64"),
             }
         )
+        frame.index = pd.to_datetime(frame["timestamp"], unit="ms", utc=True)
         results = compute_indicator_results(frame, validated_indicators)
         missing = [
             entry["name"]
@@ -110,6 +102,10 @@ class ChartIndicatorService:
                 + ", ".join(missing)
             )
         return safe_symbol, results
+
+    def supported_names(self) -> list[str]:
+        """Return the catalog subset proven compatible with exact chart bars."""
+        return sorted(CHART_INDICATOR_NAMES)
 
 
 _CHART_INDICATOR_SERVICE = ChartIndicatorService()

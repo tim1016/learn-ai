@@ -6,6 +6,25 @@ import { describe, expect, it } from 'vitest';
 import { BotChartIndicatorService } from './bot-chart-indicator.service';
 
 describe('BotChartIndicatorService', () => {
+  it('loads the catalog subset supported by the exact-bar adapter', () => {
+    TestBed.configureTestingModule({
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    });
+    const service = TestBed.inject(BotChartIndicatorService);
+    const http = TestBed.inject(HttpTestingController);
+
+    service.supportedIndicators().subscribe((response) => {
+      expect(response.names).toEqual(['ema', 'sma']);
+    });
+
+    const request = http.expectOne((candidate) =>
+      candidate.url.endsWith('/api/chart/indicators/supported'),
+    );
+    expect(request.request.method).toBe('GET');
+    request.flush({ names: ['ema', 'sma'] });
+    http.verify();
+  });
+
   it('posts exact chart bars and indicator recipes to the Python authority', () => {
     TestBed.configureTestingModule({
       providers: [provideHttpClient(), provideHttpClientTesting()],

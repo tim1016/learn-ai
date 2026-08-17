@@ -1,4 +1,6 @@
 import type { ChartBar } from '../lib/broker-v2-panel.types';
+import { toCandle } from '../lib/chart-bar-mapping';
+import type { UTCTimestamp } from 'lightweight-charts';
 import type { components } from '../../../../api/broker.types';
 import {
   CHART_INDICATOR_FALLBACK_COLOR,
@@ -18,13 +20,14 @@ export interface SelectedChartIndicator extends ChartIndicatorEntry {
 
 export type ChartIndicatorRequestBar = components['schemas']['ChartIndicatorBar'];
 export type ChartIndicatorBatchResponse = components['schemas']['ChartIndicatorBatchResponse'];
+export type ChartIndicatorSupportResponse = components['schemas']['ChartIndicatorSupportResponse'];
 
 export interface IndicatorSeriesPlan {
   id: string;
   pane: string;
   type: 'line' | 'histogram';
   color: string;
-  points: { time: number; value: number }[];
+  points: { time: UTCTimestamp; value: number }[];
   referenceLevels: readonly number[];
 }
 
@@ -95,7 +98,7 @@ export function toIndicatorSeriesPlans(
   results: readonly ChartIndicatorResult[],
   bars: readonly ChartBar[],
 ): IndicatorSeriesPlan[] {
-  const chartTimes = new Map(bars.map((bar) => [bar.end_ms, bar.start_ms / 1_000]));
+  const chartTimes = new Map(bars.map((bar) => [bar.end_ms, toCandle(bar).time]));
   return results.flatMap((result) => {
     if (Array.isArray(result.data)) {
       return [seriesPlan(result, result.id, result.data, result.type === 'histogram', chartTimes, result.refs ?? [])];
@@ -121,7 +124,7 @@ function seriesPlan(
   id: string,
   points: readonly ChartIndicatorPoint[],
   histogram: boolean,
-  chartTimes: ReadonlyMap<number, number>,
+  chartTimes: ReadonlyMap<number, UTCTimestamp>,
   referenceLevels: readonly number[],
   color = result.color,
 ): IndicatorSeriesPlan {

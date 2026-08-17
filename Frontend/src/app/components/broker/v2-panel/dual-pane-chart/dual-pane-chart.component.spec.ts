@@ -1,6 +1,7 @@
 import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/angular';
+import { render, screen, waitFor, within } from '@testing-library/angular';
+import userEvent from '@testing-library/user-event';
 import { of, Subject } from 'rxjs';
 import { beforeEach, describe, it, expect, vi } from 'vitest';
 import {
@@ -22,6 +23,7 @@ const chartMocks = vi.hoisted(() => ({
   fitContent: vi.fn(),
   addSeries: vi.fn(),
   calculateIndicators: vi.fn(),
+  supportedIndicators: vi.fn(),
 }));
 
 // Mock lightweight-charts — the actual DOM chart is not exercised in unit tests.
@@ -118,7 +120,10 @@ describe('DualPaneChartComponent', () => {
         },
         {
           provide: BotChartIndicatorService,
-          useValue: { calculate: chartMocks.calculateIndicators },
+          useValue: {
+            calculate: chartMocks.calculateIndicators,
+            supportedIndicators: chartMocks.supportedIndicators,
+          },
         },
       ],
     });
@@ -130,6 +135,8 @@ describe('DualPaneChartComponent', () => {
     chartMocks.addSeries.mockReset();
     chartMocks.calculateIndicators.mockReset();
     chartMocks.calculateIndicators.mockReturnValue(of({ symbol: 'SPY', indicators: [] }));
+    chartMocks.supportedIndicators.mockReset();
+    chartMocks.supportedIndicators.mockReturnValue(of({ names: ['sma'] }));
     localStorage.removeItem('broker-v2.chart-timezone.v1');
   });
 
@@ -229,12 +236,13 @@ describe('DualPaneChartComponent', () => {
   });
 
   it('restores the indicator picker rail when the market chart is expanded', async () => {
+    const user = userEvent.setup();
     const { fixture } = await render(DualPaneChartComponent, {
       inputs: { symbol: 'SPY', liveBars: [], histBars: [] },
     });
 
     expect(screen.queryByRole('complementary', { name: 'Indicator picker rail' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Expand market chart' }));
+    await user.click(screen.getByRole('button', { name: 'Expand market chart' }));
     fixture.detectChanges();
 
     const rail = screen.getByRole('complementary', { name: 'Indicator picker rail' });
@@ -243,6 +251,7 @@ describe('DualPaneChartComponent', () => {
   });
 
   it('adds an indicator from the restored rail using the visible candle set', async () => {
+    const user = userEvent.setup();
     const bars = [liveBar(1_700_000_000_000, 1_700_000_060_000)];
     chartMocks.calculateIndicators.mockReturnValue(of({
       symbol: 'SPY',
@@ -258,13 +267,13 @@ describe('DualPaneChartComponent', () => {
     const { fixture } = await render(DualPaneChartComponent, {
       inputs: { symbol: 'SPY', liveBars: bars, histBars: [] },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Expand market chart' }));
+    await user.click(screen.getByRole('button', { name: 'Expand market chart' }));
     fixture.detectChanges();
     const rail = screen.getByRole('complementary', { name: 'Indicator picker rail' });
     const trendButtons = within(rail).getAllByRole('button', { name: /trend/i });
-    fireEvent.click(trendButtons[trendButtons.length - 1]);
+    await user.click(trendButtons[trendButtons.length - 1]);
     fixture.detectChanges();
-    fireEvent.click(within(rail).getByRole('button', { name: 'Add', hidden: true }));
+    await user.click(within(rail).getByRole('button', { name: 'Add', hidden: true }));
     fixture.detectChanges();
 
     await waitFor(() => expect(chartMocks.calculateIndicators).toHaveBeenCalledWith(
@@ -285,6 +294,7 @@ describe('DualPaneChartComponent', () => {
   });
 
   it('keeps the last indicator series visible while refreshed candles are recalculated', async () => {
+    const user = userEvent.setup();
     const firstResponse = new Subject<ChartIndicatorBatchResponse>();
     const secondResponse = new Subject<ChartIndicatorBatchResponse>();
     chartMocks.calculateIndicators
@@ -294,11 +304,11 @@ describe('DualPaneChartComponent', () => {
     const { fixture } = await render(DualPaneChartComponent, {
       inputs: { symbol: 'SPY', liveBars: firstBars, histBars: [] },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Expand market chart' }));
+    await user.click(screen.getByRole('button', { name: 'Expand market chart' }));
     const rail = screen.getByRole('complementary', { name: 'Indicator picker rail' });
     const trendButtons = within(rail).getAllByRole('button', { name: /trend/i });
-    fireEvent.click(trendButtons[trendButtons.length - 1]);
-    fireEvent.click(within(rail).getByRole('button', { name: 'Add', hidden: true }));
+    await user.click(trendButtons[trendButtons.length - 1]);
+    await user.click(within(rail).getByRole('button', { name: 'Add', hidden: true }));
     firstResponse.next({
       symbol: 'SPY',
       indicators: [{
@@ -328,12 +338,13 @@ describe('DualPaneChartComponent', () => {
   });
 
   it('defaults chart labels to local time and persists an explicit ET choice', async () => {
+    const user = userEvent.setup();
     await render(DualPaneChartComponent, {
       inputs: { symbol: 'SPY', liveBars: [], histBars: [] },
     });
 
     expect(screen.getByRole('button', { name: 'Local' }).getAttribute('aria-pressed')).toBe('true');
-    fireEvent.click(screen.getByRole('button', { name: 'ET' }));
+    await user.click(screen.getByRole('button', { name: 'ET' }));
     expect(screen.getByRole('button', { name: 'ET' }).getAttribute('aria-pressed')).toBe('true');
     expect(localStorage.getItem('broker-v2.chart-timezone.v1')).toBe('et');
   });

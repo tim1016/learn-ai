@@ -11131,6 +11131,22 @@
         "title": "ChartIndicatorResult",
         "type": "object"
       },
+      "ChartIndicatorSupportResponse": {
+        "properties": {
+          "names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Names",
+            "type": "array"
+          }
+        },
+        "required": [
+          "names"
+        ],
+        "title": "ChartIndicatorSupportResponse",
+        "type": "object"
+      },
       "ChartLiveResponse": {
         "description": "Today's merged, source-tagged LIVE-pane bars + today's fill markers (\u00a78).\n\n``as_of_ms`` and the two session boundaries derive from the canonical NY\ncalendar \u2014 \"today\" is the NY trading date, never browser-local midnight.",
         "properties": {
@@ -55630,6 +55646,28 @@
           }
         },
         "summary": "Chart Indicators",
+        "tags": [
+          "chart"
+        ]
+      }
+    },
+    "/api/chart/indicators/supported": {
+      "get": {
+        "description": "Return only indicators proven compatible with caller-owned chart bars.",
+        "operationId": "supported_chart_indicators_api_chart_indicators_supported_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChartIndicatorSupportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Supported Chart Indicators",
         "tags": [
           "chart"
         ]

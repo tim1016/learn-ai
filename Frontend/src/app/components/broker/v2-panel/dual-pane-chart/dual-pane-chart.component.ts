@@ -214,8 +214,22 @@ export class DualPaneChartComponent implements AfterViewInit {
   private readonly selectedIndicators = signal<readonly SelectedChartIndicator[]>([]);
   protected readonly presets = HISTORY_PRESETS;
   protected readonly liveResolutions = LIVE_RESOLUTIONS;
-  protected readonly indicatorCategories = this.indicatorCatalog.categories;
-  protected readonly indicatorCatalogLoading = this.indicatorCatalog.loading;
+  private readonly supportedIndicatorResource = rxResource({
+    params: () => 'chart-indicator-catalog',
+    stream: () => this.indicatorService.supportedIndicators(),
+  });
+  protected readonly indicatorCategories = computed(() => {
+    const supported = new Set(this.supportedIndicatorResource.value()?.names ?? []);
+    return this.indicatorCatalog.categories()
+      .map((category) => ({
+        ...category,
+        indicators: category.indicators.filter((indicator) => supported.has(indicator.name)),
+      }))
+      .filter((category) => category.indicators.length > 0);
+  });
+  protected readonly indicatorCatalogLoading = computed(() =>
+    this.indicatorCatalog.loading() || this.supportedIndicatorResource.isLoading(),
+  );
 
   protected readonly liveSource = computed<ChartSource | null>(() => {
     const bars = this.liveBars();
@@ -265,7 +279,12 @@ export class DualPaneChartComponent implements AfterViewInit {
   protected readonly indicatorCalculationLoading = computed(() =>
     this.selectedIndicators().length > 0 && this.indicatorResource.isLoading(),
   );
-  protected readonly indicatorError = computed(() => this.indicatorResource.value()?.error ?? null);
+  protected readonly indicatorError = computed(() => {
+    if (this.supportedIndicatorResource.error()) {
+      return 'The chart indicator catalog could not be loaded.';
+    }
+    return this.indicatorResource.value()?.error ?? null;
+  });
   private readonly renderedIndicatorResults = signal<readonly ChartIndicatorResult[]>([]);
   protected readonly activeIndicatorChips = computed(() =>
     toActiveIndicatorChips(this.selectedIndicators(), this.renderedIndicatorResults()),
@@ -487,7 +506,7 @@ export class DualPaneChartComponent implements AfterViewInit {
             crosshairMarkerVisible: false,
           }, paneIndex);
       rendered.setData(plan.points.map((point) => ({
-        time: point.time as UTCTimestamp,
+        time: point.time,
         value: point.value,
       })));
       for (const price of plan.referenceLevels) {

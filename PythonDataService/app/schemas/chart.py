@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import math
+from numbers import Integral, Real
 from typing import Any
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class ChartIndicatorEntry(BaseModel):
@@ -12,6 +14,20 @@ class ChartIndicatorEntry(BaseModel):
 
     name: str = Field(..., min_length=1, description="Indicator name (e.g. 'ema', 'rsi', 'macd')")
     params: dict[str, int | float] = Field(default_factory=dict, description="Indicator parameters")
+
+    @field_validator("params", mode="before")
+    @classmethod
+    def validate_numeric_params(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        for name, parameter in value.items():
+            if (
+                isinstance(parameter, bool)
+                or not isinstance(parameter, Real)
+                or (not isinstance(parameter, Integral) and not math.isfinite(parameter))
+            ):
+                raise ValueError(f"indicator parameter {name} must be a finite number")
+        return value
 
 
 class ChartIndicatorPoint(BaseModel):
@@ -68,6 +84,10 @@ class ChartIndicatorBatchResponse(BaseModel):
             symbol=symbol,
             indicators=[ChartIndicatorResult.model_validate(item) for item in indicators],
         )
+
+
+class ChartIndicatorSupportResponse(BaseModel):
+    names: list[str]
 
 
 class ChartDataRequest(BaseModel):

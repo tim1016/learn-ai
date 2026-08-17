@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 
-from app.services.chart_indicator_service import ChartIndicatorService
-from app.services.dataset_service import CanonicalBarsError
+from app.services.chart_indicator_service import CHART_INDICATOR_NAMES, ChartIndicatorService
+from app.services.dataset_service import INDICATOR_CONFIGS, CanonicalBarsError
 
 
 def _bars() -> list[dict[str, int | float]]:
@@ -13,6 +15,24 @@ def _bars() -> list[dict[str, int | float]]:
         {"t": 1_700_000_120_000, "o": 100.0, "h": 103.0, "l": 99.0, "c": 102.0, "v": 11.0},
         {"t": 1_700_000_180_000, "o": 102.0, "h": 105.0, "l": 101.0, "c": 104.0, "v": 12.0},
     ]
+
+
+def _catalog_bars() -> list[dict[str, int | float]]:
+    bars: list[dict[str, int | float]] = []
+    for index in range(700):
+        close = 100.0 + index * 0.02 + math.sin(index / 7)
+        open_ = close - 0.1
+        bars.append(
+            {
+                "t": 1_700_000_000_000 + (index + 1) * 60_000,
+                "o": open_,
+                "h": max(open_, close) + 0.5,
+                "l": min(open_, close) - 0.5,
+                "c": close,
+                "v": 1_000.0 + index,
+            }
+        )
+    return bars
 
 
 def test_compute_preserves_bar_close_timestamps_and_canonical_indicator_values() -> None:
@@ -79,6 +99,22 @@ def test_compute_preserves_every_series_from_dataframe_indicators() -> None:
         atol=1e-9,
         rtol=0,
     )
+
+
+@pytest.mark.parametrize("name", sorted(CHART_INDICATOR_NAMES))
+def test_supported_chart_indicator_catalog_produces_at_least_one_series(name: str) -> None:
+    params = {
+        definition["name"]: definition["default"]
+        for definition in INDICATOR_CONFIGS[name]
+    }
+
+    _, results = ChartIndicatorService().compute(
+        "SPY",
+        _catalog_bars(),
+        [{"name": name, "params": params}],
+    )
+
+    assert results, f"{name} is advertised as supported but produced no chart series"
 
 
 def test_compute_rejects_duplicate_bar_close_timestamps() -> None:
