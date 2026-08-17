@@ -148,6 +148,10 @@ def test_performance_memory_entries_cover_horizon_timing_seasonality_and_overlap
         "calendar_month_median_compounded_return.validation_analytics.v1",
         "rolling_trade_average_return.validation_analytics.v1",
         "rolling_trade_win_rate.validation_analytics.v1",
+        "rolling_daily_sharpe.validation_analytics.v1",
+        "cumulative_pnl_divergence.validation_analytics.v1",
+        "divergence_observation_share.validation_analytics.v1",
+        "longest_divergence_streak.validation_analytics.v1",
     }
 
     entries = {entry.variant_id: entry for entry in PERFORMANCE_MEMORY_VARIANTS}
@@ -155,6 +159,7 @@ def test_performance_memory_entries_cover_horizon_timing_seasonality_and_overlap
     assert "America/New_York" in entries["timing_cell_average_return.validation_analytics.v1"].input_series
     assert "overlapping trailing windows" in entries["rolling_trade_win_rate.validation_analytics.v1"].input_series
     assert "full horizon" in entries["trailing_horizon_return.validation_analytics.v1"].definition
+    assert "do not treat it as a trading signal" in entries["cumulative_pnl_divergence.validation_analytics.v1"].interpretation
 
 
 def test_results_catalog_variant_ids_are_unique() -> None:

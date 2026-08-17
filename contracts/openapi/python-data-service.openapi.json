@@ -17041,6 +17041,16 @@
             "title": "Seasonality",
             "type": "array"
           },
+          "sharpe_pnl_divergence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SharpePnlDivergenceResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "timing_cells": {
             "items": {
               "$ref": "#/components/schemas/TimingCellResponse"
@@ -38366,6 +38376,165 @@
           }
         },
         "title": "SharpeCiResponse",
+        "type": "object"
+      },
+      "SharpePnlDivergencePointResponse": {
+        "properties": {
+          "cumulative_pnl": {
+            "title": "Cumulative Pnl",
+            "type": "number"
+          },
+          "is_divergence": {
+            "default": false,
+            "title": "Is Divergence",
+            "type": "boolean"
+          },
+          "is_trend_eligible": {
+            "default": false,
+            "title": "Is Trend Eligible",
+            "type": "boolean"
+          },
+          "rolling_sharpe": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rolling Sharpe"
+          },
+          "timestamp_ms_utc": {
+            "title": "Timestamp Ms Utc",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "timestamp_ms_utc",
+          "cumulative_pnl"
+        ],
+        "title": "SharpePnlDivergencePointResponse",
+        "type": "object"
+      },
+      "SharpePnlDivergenceResponse": {
+        "properties": {
+          "annualization_sessions": {
+            "minimum": 1.0,
+            "title": "Annualization Sessions",
+            "type": "integer"
+          },
+          "currently_diverging": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currently Diverging"
+          },
+          "daily_observation_count": {
+            "minimum": 0.0,
+            "title": "Daily Observation Count",
+            "type": "integer"
+          },
+          "divergence_observation_count": {
+            "minimum": 0.0,
+            "title": "Divergence Observation Count",
+            "type": "integer"
+          },
+          "divergence_ratio": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Divergence Ratio"
+          },
+          "eligible_observation_count": {
+            "minimum": 0.0,
+            "title": "Eligible Observation Count",
+            "type": "integer"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "latest_cumulative_pnl": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Cumulative Pnl"
+          },
+          "latest_rolling_sharpe": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Rolling Sharpe"
+          },
+          "longest_divergence_streak": {
+            "minimum": 0.0,
+            "title": "Longest Divergence Streak",
+            "type": "integer"
+          },
+          "minimum_observation_count": {
+            "minimum": 2.0,
+            "title": "Minimum Observation Count",
+            "type": "integer"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/SharpePnlDivergencePointResponse"
+            },
+            "title": "Points",
+            "type": "array"
+          },
+          "return_window_sessions": {
+            "minimum": 2.0,
+            "title": "Return Window Sessions",
+            "type": "integer"
+          },
+          "trend_window_sessions": {
+            "minimum": 2.0,
+            "title": "Trend Window Sessions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "return_window_sessions",
+          "trend_window_sessions",
+          "annualization_sessions",
+          "minimum_observation_count",
+          "daily_observation_count",
+          "eligible_observation_count",
+          "divergence_observation_count",
+          "longest_divergence_streak"
+        ],
+        "title": "SharpePnlDivergenceResponse",
         "type": "object"
       },
       "SignalBehaviorMetricsResponse": {

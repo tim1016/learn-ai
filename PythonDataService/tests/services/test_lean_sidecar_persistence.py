@@ -593,7 +593,7 @@ def test_build_persist_payload_includes_validation_analytics_envelope(tmp_path: 
     )
 
     envelope = json.loads(payload["validation_analytics_json"])
-    assert envelope["schema_version"] == 1
+    assert envelope["schema_version"] == 2
     assert envelope["engine"] == "lean"
     assert envelope["computed_at_ms"] > 0
     analytics = envelope["analytics"]

@@ -28,7 +28,7 @@ def test_catalog_contains_the_two_source_aware_sharpe_variants() -> None:
     variants = {variant.variant_id: variant for variant in result.variants}
 
     assert result.catalog_version == CATALOG_VERSION
-    assert len(result.variants) == 132
+    assert len(result.variants) == 136
     assert {"sharpe.platform.v1", "sharpe.lean_native.v1"} <= set(variants)
     assert all(
         alternative in variants

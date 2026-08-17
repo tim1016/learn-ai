@@ -50,6 +50,11 @@
       @case ("analysis") {
         <app-strategy-lab-lean-analysis [findings]="leanAnalysis()" />
       }
+      @case ("divergence") {
+        @if (result().validation_analytics?.sharpe_pnl_divergence; as study) {
+          <app-sharpe-pnl-divergence [study]="study" />
+        }
+      }
       @case ("atlas") {
         @if (result().validation_analytics; as analytics) {
           <app-validation-atlas [analytics]="analytics" />

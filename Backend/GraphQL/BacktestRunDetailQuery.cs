@@ -347,6 +347,7 @@ public sealed record BacktestRunDetailType
                 TimingCells = envelope.Analytics?.TimingCells ?? [],
                 Seasonality = envelope.Analytics?.Seasonality ?? [],
                 RollingTradeStability = envelope.Analytics?.RollingTradeStability ?? [],
+                SharpePnlDivergence = envelope.Analytics?.SharpePnlDivergence,
             };
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
@@ -372,7 +373,8 @@ public sealed record BacktestRunDetailType
         List<ValidationHorizonType>? Horizons,
         List<ValidationTimingCellType>? TimingCells,
         List<ValidationSeasonalityMonthType>? Seasonality,
-        List<ValidationRollingTradePointType>? RollingTradeStability);
+        List<ValidationRollingTradePointType>? RollingTradeStability,
+        ValidationSharpePnlDivergenceType? SharpePnlDivergence);
 
     private static BacktestRunEquityCurvesType? ParseEquityCurve(string? json, int executionId, ILogger logger)
     {
@@ -563,6 +565,7 @@ public sealed record BacktestRunValidationAnalyticsType
     public IReadOnlyList<ValidationTimingCellType> TimingCells { get; init; } = [];
     public IReadOnlyList<ValidationSeasonalityMonthType> Seasonality { get; init; } = [];
     public IReadOnlyList<ValidationRollingTradePointType> RollingTradeStability { get; init; } = [];
+    public ValidationSharpePnlDivergenceType? SharpePnlDivergence { get; init; }
 }
 
 public sealed record ValidationHorizonType
@@ -603,6 +606,33 @@ public sealed record ValidationRollingTradePointType
     public int WindowSize { get; init; }
     public double AverageReturn { get; init; }
     public double WinRate { get; init; }
+}
+
+public sealed record ValidationSharpePnlDivergenceType
+{
+    public string? Error { get; init; }
+    public int ReturnWindowSessions { get; init; }
+    public int TrendWindowSessions { get; init; }
+    public int AnnualizationSessions { get; init; }
+    public int MinimumObservationCount { get; init; }
+    public int DailyObservationCount { get; init; }
+    public int EligibleObservationCount { get; init; }
+    public int DivergenceObservationCount { get; init; }
+    public double? DivergenceRatio { get; init; }
+    public int LongestDivergenceStreak { get; init; }
+    public double? LatestRollingSharpe { get; init; }
+    public double? LatestCumulativePnl { get; init; }
+    public bool? CurrentlyDiverging { get; init; }
+    public IReadOnlyList<ValidationSharpePnlDivergencePointType> Points { get; init; } = [];
+}
+
+public sealed record ValidationSharpePnlDivergencePointType
+{
+    public long TimestampMsUtc { get; init; }
+    public double CumulativePnl { get; init; }
+    public double? RollingSharpe { get; init; }
+    public bool IsDivergence { get; init; }
+    public bool IsTrendEligible { get; init; }
 }
 
 public sealed record BacktestRunEquityPointType(long T, decimal E);

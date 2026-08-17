@@ -864,6 +864,7 @@ def _validation_analytics_json(
             ValidationEquityPoint(timestamp_ms_utc=int(p["ms_utc"]), equity=float(p["value"]))
             for p in equity_curve
         ]
+        performance_equity = validation_equity
         if compatibility_mode:
             validation_equity = build_compatibility_equity_curve(
                 validation_trades,
@@ -874,6 +875,7 @@ def _validation_analytics_json(
         analytics = compute_engine_validation_analytics(
             trades=validation_trades,
             equity_curve=validation_equity,
+            performance_equity_curve=performance_equity,
         )
     except (ValueError, KeyError, TypeError) as exc:
         logger.warning("Validation analytics unavailable for LEAN run: %s", exc)

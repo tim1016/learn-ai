@@ -1,0 +1,80 @@
+<section class="divergence" aria-labelledby="sharpe-pnl-divergence-title">
+  <header class="divergence__header">
+    <div>
+      <p class="eyebrow">Strategy decay study</p>
+      <h2 id="sharpe-pnl-divergence-title">Rolling Sharpe vs cumulative P&amp;L</h2>
+      <p>
+        See whether the portfolio is still accumulating dollars while its recent
+        risk-adjusted performance is weakening.
+      </p>
+    </div>
+    <span class="authority">Calculated by Python</span>
+  </header>
+
+  @if (study().error; as error) {
+    <p class="study-error" role="note">{{ error }}</p>
+  } @else {
+    <div class="metrics" aria-label="Divergence study summary">
+      <article [class.metric--warning]="study().currently_diverging === true">
+        <span>Current state</span>
+        <strong>{{ statusLabel() }}</strong>
+        <small>{{ study().daily_observation_count }} daily observations</small>
+      </article>
+      <article>
+        <span>Latest rolling Sharpe</span>
+        <strong>{{ study().latest_rolling_sharpe === null ? '—' : (study().latest_rolling_sharpe | number:'1.2-2') }}</strong>
+        <small>{{ study().return_window_sessions }}-session window · {{ study().annualization_sessions }} sessions/year</small>
+      </article>
+      <article>
+        <span>Latest cumulative P&amp;L</span>
+        <strong>{{ study().latest_cumulative_pnl === null ? '—' : (study().latest_cumulative_pnl | currency:'USD':'symbol':'1.0-0') }}</strong>
+        <small>Native mark-to-market equity minus starting equity</small>
+      </article>
+      <article>
+        <span>Divergence share</span>
+        <strong>{{ study().divergence_ratio === null ? '—' : (study().divergence_ratio | percent:'1.1-1') }}</strong>
+        <small>{{ study().divergence_observation_count }} of {{ study().eligible_observation_count }} eligible observations</small>
+      </article>
+      <article>
+        <span>Longest divergence streak</span>
+        <strong>{{ study().longest_divergence_streak }}</strong>
+        <small>consecutive sessions</small>
+      </article>
+    </div>
+
+    @if (study().points.length > 0) {
+      <div class="legend" aria-label="Chart legend">
+        <span><i class="legend__pnl"></i>Cumulative P&amp;L · left axis</span>
+        <span><i class="legend__sharpe"></i>Rolling Sharpe · right axis</span>
+        <span><i class="legend__divergence"></i>Divergence ribbon</span>
+      </div>
+      <div
+        #chartElement
+        class="chart"
+        role="img"
+        [attr.aria-label]="chartAriaLabel()"
+      ></div>
+    } @else {
+      <p class="empty-state">
+        At least {{ study().minimum_observation_count }} daily observations are required
+        to fill both rolling windows.
+      </p>
+    }
+
+    <aside class="interpretation" role="note">
+      <h3>How to read this</h3>
+      <p>
+        A highlighted ribbon means cumulative P&amp;L had a positive
+        {{ study().trend_window_sessions }}-session trend while rolling Sharpe had a
+        negative trend. That can reveal decaying trade quality behind an equity curve
+        that still looks healthy.
+      </p>
+      <p>
+        Sharpe is not the portfolio’s growth rate. It compares average return with
+        volatility. This is an exploratory decay diagnostic, not a trading signal or
+        proof that the strategy has stopped working; confirm it with walk-forward OOS
+        evidence, drawdown, trade count, and regime analysis.
+      </p>
+    </aside>
+  }
+</section>

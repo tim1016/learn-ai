@@ -34,10 +34,35 @@ export interface RollingTradePoint {
   win_rate: number;
 }
 
+export interface SharpePnlDivergencePoint {
+  timestamp_ms_utc: number;
+  cumulative_pnl: number;
+  rolling_sharpe: number | null;
+  is_divergence: boolean;
+  is_trend_eligible: boolean;
+}
+
+export interface SharpePnlDivergence {
+  error: string | null;
+  return_window_sessions: number;
+  trend_window_sessions: number;
+  annualization_sessions: number;
+  minimum_observation_count: number;
+  daily_observation_count: number;
+  eligible_observation_count: number;
+  divergence_observation_count: number;
+  divergence_ratio: number | null;
+  longest_divergence_streak: number;
+  latest_rolling_sharpe: number | null;
+  latest_cumulative_pnl: number | null;
+  currently_diverging: boolean | null;
+  points: SharpePnlDivergencePoint[];
+}
+
 export interface EngineValidationAnalytics {
   horizons: PerformanceHorizon[];
   timing_cells: TimingCell[];
   seasonality: SeasonalityMonth[];
   rolling_trade_stability: RollingTradePoint[];
+  sharpe_pnl_divergence: SharpePnlDivergence | null;
 }
-

@@ -1360,6 +1360,7 @@ def execute_engine_backtest(
             )
             for point in equity_curve_dicts
         ]
+        performance_equity = validation_equity
         if (
             request.compatibility_profile == COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1
             and request.from_date is not None
@@ -1376,6 +1377,7 @@ def execute_engine_backtest(
         validation_analytics = compute_engine_validation_analytics(
             trades=validation_trades,
             equity_curve=validation_equity,
+            performance_equity_curve=performance_equity,
         )
     except Exception as exc:
         logger.exception("[ENGINE] Validation analytics rejected engine output")
