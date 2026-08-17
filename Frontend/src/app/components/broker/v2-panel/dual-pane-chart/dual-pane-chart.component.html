@@ -173,5 +173,20 @@
         }
       </footer>
     </section>
+
+    @if (fullscreen()) {
+      <app-chart-indicator-rail
+        class="market-tape__indicator-rail"
+        [activeIndicators]="activeIndicatorChips()"
+        [activeKeys]="activeIndicatorKeys()"
+        [categories]="indicatorCategories()"
+        [catalogLoading]="indicatorCatalogLoading()"
+        [calculationLoading]="indicatorCalculationLoading()"
+        [error]="indicatorError()"
+        [allowAdditionalInstances]="false"
+        (indicatorAdded)="addIndicator($event)"
+        (indicatorRemoved)="removeIndicator($event)"
+      />
+    }
   </div>
 </article>

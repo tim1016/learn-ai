@@ -15,15 +15,20 @@ import {
 } from '@angular/core';
 import {
   CandlestickSeries,
+  HistogramSeries,
+  LineSeries,
   type IChartApi,
   type ISeriesApi,
   type ISeriesMarkersPluginApi,
   type SeriesMarker,
+  type SeriesType,
   type Time,
   type TickMarkType,
   type UTCTimestamp,
   createSeriesMarkers,
 } from 'lightweight-charts';
+import { rxResource } from '@angular/core/rxjs-interop';
+import { catchError, map, of } from 'rxjs';
 import type {
   ChartBar,
   ChartFillMarker,
@@ -35,10 +40,30 @@ import { toCandle } from '../lib/chart-bar-mapping';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import type { TickerQuoteView } from '../../../../shared/ticker-quote/ticker-quote.component';
 import { createAppChart, formatChartAxisTick } from '../../../../shared/charts/chart-utils';
+import { IndicatorCatalogService } from '../../../../shared/indicator-catalog/indicator-catalog.service';
+import {
+  ChartIndicatorRailComponent,
+  type ChartIndicatorEntry,
+  type ChartIndicatorResult,
+} from '../../../../shared/trading-chart';
+import type { IndicatorPickerAdd } from '../../../../shared/indicator-picker/indicator-picker.component';
 import { PanelInstrumentQuoteComponent } from '../instrument-quote/panel-instrument-quote.component';
+import { BotChartIndicatorService } from './bot-chart-indicator.service';
+import {
+  type SelectedChartIndicator,
+  resultBelongsToIndicator,
+  selectChartIndicator,
+  toActiveIndicatorChips,
+  toIndicatorSeriesPlans,
+} from './dual-pane-chart-indicators';
 
 type ChartPane = 'live' | 'polygon';
 export type ChartTimeZone = 'local' | 'et';
+
+interface IndicatorLoadState {
+  indicators: readonly ChartIndicatorResult[];
+  error: string | null;
+}
 
 const TIME_ZONE_STORAGE_KEY = 'broker-v2.chart-timezone.v1';
 
@@ -155,9 +180,10 @@ export const DUAL_PANE_CHART_FACTORY = new InjectionToken<typeof createAppChart>
 @Component({
   selector: 'app-dual-pane-chart',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [PanelInstrumentQuoteComponent, ReceiptLabelPipe],
+  imports: [ChartIndicatorRailComponent, PanelInstrumentQuoteComponent, ReceiptLabelPipe],
   templateUrl: './dual-pane-chart.component.html',
   styleUrl: './dual-pane-chart.component.scss',
+  host: { '(keydown.escape)': 'collapseFullscreen()' },
 })
 export class DualPaneChartComponent implements AfterViewInit {
   readonly symbol = input.required<string>();
@@ -179,12 +205,31 @@ export class DualPaneChartComponent implements AfterViewInit {
     viewChild.required<ElementRef<HTMLDivElement>>('chartContainer');
   private readonly destroyRef = inject(DestroyRef);
   private readonly createChart = inject(DUAL_PANE_CHART_FACTORY);
+  private readonly indicatorCatalog = inject(IndicatorCatalogService);
+  private readonly indicatorService = inject(BotChartIndicatorService);
 
   protected readonly activePane = signal<ChartPane>('live');
   protected readonly fullscreen = signal(false);
   protected readonly timeZone = signal<ChartTimeZone>(persistedChartTimeZone());
+  private readonly selectedIndicators = signal<readonly SelectedChartIndicator[]>([]);
   protected readonly presets = HISTORY_PRESETS;
   protected readonly liveResolutions = LIVE_RESOLUTIONS;
+  private readonly supportedIndicatorResource = rxResource({
+    params: () => 'chart-indicator-catalog',
+    stream: () => this.indicatorService.supportedIndicators(),
+  });
+  protected readonly indicatorCategories = computed(() => {
+    const supported = new Set(this.supportedIndicatorResource.value()?.names ?? []);
+    return this.indicatorCatalog.categories()
+      .map((category) => ({
+        ...category,
+        indicators: category.indicators.filter((indicator) => supported.has(indicator.name)),
+      }))
+      .filter((category) => category.indicators.length > 0);
+  });
+  protected readonly indicatorCatalogLoading = computed(() =>
+    this.indicatorCatalog.loading() || this.supportedIndicatorResource.isLoading(),
+  );
 
   protected readonly liveSource = computed<ChartSource | null>(() => {
     const bars = this.liveBars();
@@ -205,14 +250,65 @@ export class DualPaneChartComponent implements AfterViewInit {
   protected readonly visibleFillCount = computed(() =>
     toSeriesMarkers(this.activeMarkers(), this.activeBars()).length,
   );
+  protected readonly activeIndicatorKeys = computed(() =>
+    this.selectedIndicators().map((indicator) => indicator.name),
+  );
+  private readonly indicatorResource = rxResource<IndicatorLoadState, {
+    symbol: string;
+    bars: readonly ChartBar[];
+    indicators: readonly ChartIndicatorEntry[];
+  }>({
+    params: () => ({
+      symbol: this.symbol(),
+      bars: this.activeBars(),
+      indicators: this.selectedIndicators(),
+    }),
+    stream: ({ params }) => {
+      if (params.bars.length === 0 || params.indicators.length === 0) {
+        return of<IndicatorLoadState>({ indicators: [], error: null });
+      }
+      return this.indicatorService.calculate(params.symbol, params.bars, params.indicators).pipe(
+        map((response): IndicatorLoadState => ({ indicators: response.indicators, error: null })),
+        catchError(() => of<IndicatorLoadState>({
+          indicators: [],
+          error: 'Indicators could not be calculated for this candle window.',
+        })),
+      );
+    },
+  });
+  protected readonly indicatorCalculationLoading = computed(() =>
+    this.selectedIndicators().length > 0 && this.indicatorResource.isLoading(),
+  );
+  protected readonly indicatorError = computed(() => {
+    if (this.supportedIndicatorResource.error()) {
+      return 'The chart indicator catalog could not be loaded.';
+    }
+    return this.indicatorResource.value()?.error ?? null;
+  });
+  private readonly renderedIndicatorResults = signal<readonly ChartIndicatorResult[]>([]);
+  protected readonly activeIndicatorChips = computed(() =>
+    toActiveIndicatorChips(this.selectedIndicators(), this.renderedIndicatorResults()),
+  );
   private chart: IChartApi | null = null;
   private series: ISeriesApi<'Candlestick'> | null = null;
   private markers: ISeriesMarkersPluginApi<Time> | null = null;
+  private indicatorSeries: ISeriesApi<SeriesType>[] = [];
   private renderedViewKey: string | null = null;
   private renderedBars: readonly ChartBar[] = [];
 
   constructor() {
+    void this.indicatorCatalog.load();
     effect(() => this.renderActivePane());
+    effect(() => {
+      const selected = this.selectedIndicators();
+      const loaded = this.indicatorResource.value();
+      if (selected.length === 0) {
+        this.renderedIndicatorResults.set([]);
+      } else if (loaded?.error === null) {
+        this.renderedIndicatorResults.set(loaded.indicators);
+      }
+    });
+    effect(() => this.renderIndicators(this.renderedIndicatorResults(), this.activeBars()));
     effect(() => {
       this.timeZone();
       this.applyTimeZoneFormatting();
@@ -238,6 +334,7 @@ export class DualPaneChartComponent implements AfterViewInit {
     this.markers = createSeriesMarkers(this.series, []);
     this.applyTimeZoneFormatting();
     this.renderActivePane();
+    this.renderIndicators(this.renderedIndicatorResults(), this.activeBars());
     this.destroyRef.onDestroy(() => this.cleanup());
   }
 
@@ -274,6 +371,26 @@ export class DualPaneChartComponent implements AfterViewInit {
   protected toggleFullscreen(): void {
     this.fullscreen.update((value) => !value);
     requestAnimationFrame(() => this.chart?.timeScale().fitContent());
+  }
+
+  protected collapseFullscreen(): void {
+    if (!this.fullscreen()) return;
+    this.fullscreen.set(false);
+    requestAnimationFrame(() => this.chart?.timeScale().fitContent());
+  }
+
+  protected addIndicator(entry: IndicatorPickerAdd): void {
+    this.selectedIndicators.update((current) => selectChartIndicator(current, entry));
+  }
+
+  protected removeIndicator(id: string): void {
+    const removed = this.selectedIndicators().find((indicator) => indicator.id === id);
+    this.selectedIndicators.update((current) => current.filter((indicator) => indicator.id !== id));
+    if (removed) {
+      this.renderedIndicatorResults.update((results) =>
+        results.filter((result) => !resultBelongsToIndicator(result, removed)),
+      );
+    }
   }
 
   private renderActivePane(): void {
@@ -338,6 +455,7 @@ export class DualPaneChartComponent implements AfterViewInit {
     this.chart = null;
     this.series = null;
     this.markers = null;
+    this.indicatorSeries = [];
     this.renderedViewKey = null;
     this.renderedBars = [];
   }
@@ -356,5 +474,51 @@ export class DualPaneChartComponent implements AfterViewInit {
         ),
       },
     });
+  }
+
+  private renderIndicators(
+    results: readonly ChartIndicatorResult[],
+    bars: readonly ChartBar[],
+  ): void {
+    if (!this.chart) return;
+    for (const rendered of this.indicatorSeries) this.chart.removeSeries(rendered);
+    this.indicatorSeries = [];
+
+    const paneIndices = new Map<string, number>();
+    for (const plan of toIndicatorSeriesPlans(results, bars)) {
+      let paneIndex = 0;
+      if (plan.pane !== 'main') {
+        const existing = paneIndices.get(plan.pane);
+        paneIndex = existing ?? paneIndices.size + 1;
+        paneIndices.set(plan.pane, paneIndex);
+      }
+      const rendered = plan.type === 'histogram'
+        ? this.chart.addSeries(HistogramSeries, {
+            color: plan.color,
+            priceLineVisible: false,
+            lastValueVisible: false,
+          }, paneIndex)
+        : this.chart.addSeries(LineSeries, {
+            color: plan.color,
+            lineWidth: 2,
+            priceLineVisible: false,
+            lastValueVisible: false,
+            crosshairMarkerVisible: false,
+          }, paneIndex);
+      rendered.setData(plan.points.map((point) => ({
+        time: point.time,
+        value: point.value,
+      })));
+      for (const price of plan.referenceLevels) {
+        rendered.createPriceLine({
+          price,
+          color: '#4a5068',
+          lineWidth: 1,
+          lineStyle: 2,
+          axisLabelVisible: true,
+        });
+      }
+      this.indicatorSeries.push(rendered);
+    }
   }
 }

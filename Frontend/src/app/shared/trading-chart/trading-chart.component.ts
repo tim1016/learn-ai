@@ -31,11 +31,9 @@ import {
 
 import { createAppChart } from "../charts/chart-utils";
 import type { IndicatorCategory } from "../indicator-catalog/indicator-catalog.service";
-import {
-  IndicatorPickerComponent,
-  type IndicatorPickerAdd,
-} from "../indicator-picker/indicator-picker.component";
+import type { IndicatorPickerAdd } from "../indicator-picker/indicator-picker.component";
 import { TickerQuoteComponent, type TickerQuoteView } from "../ticker-quote/ticker-quote.component";
+import { ChartIndicatorRailComponent } from "./chart-indicator-rail.component";
 import type {
   TradingCandle,
   TradingIndicatorChip,
@@ -80,7 +78,7 @@ const THEME = {
 /** One native lightweight-charts pane tree for a shared horizontal clock. */
 @Component({
   selector: "app-trading-chart",
-  imports: [IndicatorPickerComponent, TickerQuoteComponent],
+  imports: [ChartIndicatorRailComponent, TickerQuoteComponent],
   templateUrl: "./trading-chart.component.html",
   styleUrl: "./trading-chart.component.scss",
   changeDetection: ChangeDetectionStrategy.OnPush,

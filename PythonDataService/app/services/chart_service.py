@@ -832,22 +832,23 @@ def _format_indicator_results(
                     )
 
         else:
-            # Single-series indicator (RSI, OBV, EMA, SMA, etc.)
-            meta = cols[0]
-            col = meta["column"]
             timestamps = df["timestamp"].tolist()
-            values = df[col].tolist()
-            series_data = [
-                {"t": int(t), "value": None if pd.isna(v) else round(float(v), 6)}
-                for t, v in zip(timestamps, values, strict=False)
-            ]
+            series_by_column = {
+                meta["column"]: [
+                    {"t": int(t), "value": None if pd.isna(v) else round(float(v), 6)}
+                    for t, v in zip(timestamps, df[meta["column"]].tolist(), strict=False)
+                ]
+                for meta in cols
+            }
             results.append(
                 {
                     "id": ind_id,
                     "panel": panel,
                     "type": "line",
                     "color": base_color,
-                    "data": series_data,
+                    "data": next(iter(series_by_column.values()))
+                    if len(series_by_column) == 1
+                    else series_by_column,
                     "refs": refs,
                 }
             )

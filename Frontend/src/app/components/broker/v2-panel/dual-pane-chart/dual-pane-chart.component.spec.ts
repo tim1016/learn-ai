@@ -1,5 +1,8 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
+import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
+import { render, screen, waitFor, within } from '@testing-library/angular';
+import userEvent from '@testing-library/user-event';
+import { of, Subject } from 'rxjs';
 import { beforeEach, describe, it, expect, vi } from 'vitest';
 import {
   DUAL_PANE_CHART_FACTORY,
@@ -8,6 +11,9 @@ import {
   toSeriesMarkers,
 } from './dual-pane-chart.component';
 import type { ChartBar } from '../lib/broker-v2-panel.types';
+import { IndicatorCatalogService } from '../../../../shared/indicator-catalog/indicator-catalog.service';
+import { BotChartIndicatorService } from './bot-chart-indicator.service';
+import type { ChartIndicatorBatchResponse } from './dual-pane-chart-indicators';
 
 const chartMocks = vi.hoisted(() => ({
   createChart: vi.fn(),
@@ -15,6 +21,9 @@ const chartMocks = vi.hoisted(() => ({
   setData: vi.fn(),
   update: vi.fn(),
   fitContent: vi.fn(),
+  addSeries: vi.fn(),
+  calculateIndicators: vi.fn(),
+  supportedIndicators: vi.fn(),
 }));
 
 // Mock lightweight-charts — the actual DOM chart is not exercised in unit tests.
@@ -25,7 +34,11 @@ vi.mock('lightweight-charts', () => {
   return {
     createChart: chartMocks.createChart,
     createSeriesMarkers,
+    AreaSeries: 'AreaSeries',
     CandlestickSeries: 'CandlestickSeries',
+    HistogramSeries: 'HistogramSeries',
+    LineSeries: 'LineSeries',
+    LineType: { Simple: 0, WithSteps: 1 },
     TickMarkType: { Year: 0, Month: 1, DayOfMonth: 2, Time: 3, TimeWithSeconds: 4 },
   };
 });
@@ -36,9 +49,11 @@ function createMockChart(): object {
     setData: chartMocks.setData,
     update: chartMocks.update,
     applyOptions: vi.fn(),
+    createPriceLine: vi.fn(),
   });
+  chartMocks.addSeries.mockImplementation(() => createMockSeries());
   return {
-    addSeries: vi.fn().mockReturnValue(createMockSeries()),
+    addSeries: chartMocks.addSeries,
     removeSeries: vi.fn(),
     timeScale: vi.fn().mockReturnValue(mockTimeScale),
     applyOptions: vi.fn(),
@@ -77,16 +92,53 @@ function liveBar(startMs: number, endMs = startMs + 5_000): ChartBar {
 describe('DualPaneChartComponent', () => {
   beforeEach(() => {
     TestBed.configureTestingModule({
-      providers: [{
-        provide: DUAL_PANE_CHART_FACTORY,
-        useValue: chartMocks.createChart.mockImplementation(() => createMockChart()),
-      }],
+      providers: [
+        {
+          provide: DUAL_PANE_CHART_FACTORY,
+          useValue: chartMocks.createChart.mockImplementation(() => createMockChart()),
+        },
+        {
+          provide: IndicatorCatalogService,
+          useValue: {
+            load: vi.fn().mockResolvedValue(undefined),
+            categories: signal([{
+              name: 'trend',
+              indicators: [{
+                name: 'sma',
+                category: 'trend',
+                description: 'Simple moving average',
+                configurable_params: [{
+                  name: 'length',
+                  type: 'int',
+                  default: 2,
+                  min: 1,
+                  max: 200,
+                  description: 'Lookback length',
+                }],
+              }],
+            }]),
+            loading: signal(false),
+          },
+        },
+        {
+          provide: BotChartIndicatorService,
+          useValue: {
+            calculate: chartMocks.calculateIndicators,
+            supportedIndicators: chartMocks.supportedIndicators,
+          },
+        },
+      ],
     });
     chartMocks.createChart.mockClear();
     chartMocks.setMarkers.mockClear();
     chartMocks.setData.mockClear();
     chartMocks.update.mockClear();
     chartMocks.fitContent.mockClear();
+    chartMocks.addSeries.mockReset();
+    chartMocks.calculateIndicators.mockReset();
+    chartMocks.calculateIndicators.mockReturnValue(of({ symbol: 'SPY', indicators: [] }));
+    chartMocks.supportedIndicators.mockReset();
+    chartMocks.supportedIndicators.mockReturnValue(of({ names: ['sma'] }));
     localStorage.removeItem('broker-v2.chart-timezone.v1');
   });
 
@@ -185,13 +237,116 @@ describe('DualPaneChartComponent', () => {
     ).toBeTruthy();
   });
 
+  it('restores the indicator picker rail when the market chart is expanded', async () => {
+    const user = userEvent.setup();
+    const { fixture } = await render(DualPaneChartComponent, {
+      inputs: { symbol: 'SPY', liveBars: [], histBars: [] },
+    });
+
+    expect(screen.queryByRole('complementary', { name: 'Indicator picker rail' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Expand market chart' }));
+    fixture.detectChanges();
+
+    const rail = screen.getByRole('complementary', { name: 'Indicator picker rail' });
+    expect(within(rail).getByText('Active')).toBeTruthy();
+    expect(within(rail).getByText('Indicators')).toBeTruthy();
+  });
+
+  it('adds an indicator from the restored rail using the visible candle set', async () => {
+    const user = userEvent.setup();
+    const bars = [liveBar(1_700_000_000_000, 1_700_000_060_000)];
+    chartMocks.calculateIndicators.mockReturnValue(of({
+      symbol: 'SPY',
+      indicators: [{
+        id: 'sma_2',
+        panel: 'main',
+        type: 'line',
+        color: '#FF9800',
+        data: [{ t: 1_700_000_060_000, value: 101 }],
+        refs: [],
+      }],
+    }));
+    const { fixture } = await render(DualPaneChartComponent, {
+      inputs: { symbol: 'SPY', liveBars: bars, histBars: [] },
+    });
+    await user.click(screen.getByRole('button', { name: 'Expand market chart' }));
+    fixture.detectChanges();
+    const rail = screen.getByRole('complementary', { name: 'Indicator picker rail' });
+    const trendButtons = within(rail).getAllByRole('button', { name: /trend/i });
+    await user.click(trendButtons[trendButtons.length - 1]);
+    fixture.detectChanges();
+    await user.click(within(rail).getByRole('button', { name: 'Add', hidden: true }));
+    fixture.detectChanges();
+
+    await waitFor(() => expect(chartMocks.calculateIndicators).toHaveBeenCalledWith(
+      'SPY',
+      bars,
+      [expect.objectContaining({ name: 'sma', params: { length: 2 } })],
+    ));
+    expect(within(rail).getByRole('button', { name: 'Remove SMA 2' })).toBeTruthy();
+    await waitFor(() => expect(chartMocks.addSeries).toHaveBeenCalledWith(
+      'LineSeries',
+      expect.objectContaining({ color: '#FF9800' }),
+      0,
+    ));
+    expect(within(rail).getByRole<HTMLButtonElement>(
+      'button',
+      { name: 'Added', hidden: true },
+    ).disabled).toBe(true);
+  });
+
+  it('keeps the last indicator series visible while refreshed candles are recalculated', async () => {
+    const user = userEvent.setup();
+    const firstResponse = new Subject<ChartIndicatorBatchResponse>();
+    const secondResponse = new Subject<ChartIndicatorBatchResponse>();
+    chartMocks.calculateIndicators
+      .mockReturnValueOnce(firstResponse.asObservable())
+      .mockReturnValueOnce(secondResponse.asObservable());
+    const firstBars = [liveBar(1_700_000_000_000, 1_700_000_060_000)];
+    const { fixture } = await render(DualPaneChartComponent, {
+      inputs: { symbol: 'SPY', liveBars: firstBars, histBars: [] },
+    });
+    await user.click(screen.getByRole('button', { name: 'Expand market chart' }));
+    const rail = screen.getByRole('complementary', { name: 'Indicator picker rail' });
+    const trendButtons = within(rail).getAllByRole('button', { name: /trend/i });
+    await user.click(trendButtons[trendButtons.length - 1]);
+    await user.click(within(rail).getByRole('button', { name: 'Add', hidden: true }));
+    firstResponse.next({
+      symbol: 'SPY',
+      indicators: [{
+        id: 'sma_2', panel: 'main', type: 'line', color: '#FF9800',
+        data: [{ t: 1_700_000_060_000, value: 101 }], refs: [],
+      }],
+    });
+    firstResponse.complete();
+    fixture.detectChanges();
+    await waitFor(() => expect(chartMocks.addSeries).toHaveBeenCalledWith(
+      'LineSeries', expect.any(Object), 0,
+    ));
+    const lineAddsBeforeRefresh = chartMocks.addSeries.mock.calls
+      .filter(([seriesType]) => seriesType === 'LineSeries').length;
+
+    fixture.componentRef.setInput('liveBars', [
+      ...firstBars,
+      liveBar(1_700_000_060_000, 1_700_000_120_000),
+    ]);
+    fixture.detectChanges();
+
+    await waitFor(() => expect(chartMocks.calculateIndicators).toHaveBeenCalledTimes(2));
+    expect(chartMocks.addSeries.mock.calls
+      .filter(([seriesType]) => seriesType === 'LineSeries').length).toBeGreaterThan(
+      lineAddsBeforeRefresh,
+    );
+  });
+
   it('defaults chart labels to local time and persists an explicit ET choice', async () => {
+    const user = userEvent.setup();
     await render(DualPaneChartComponent, {
       inputs: { symbol: 'SPY', liveBars: [], histBars: [] },
     });
 
     expect(screen.getByRole('button', { name: 'Local' }).getAttribute('aria-pressed')).toBe('true');
-    fireEvent.click(screen.getByRole('button', { name: 'ET' }));
+    await user.click(screen.getByRole('button', { name: 'ET' }));
     expect(screen.getByRole('button', { name: 'ET' }).getAttribute('aria-pressed')).toBe('true');
     expect(localStorage.getItem('broker-v2.chart-timezone.v1')).toBe('et');
   });
