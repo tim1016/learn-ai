@@ -46,11 +46,11 @@ throwing away the current tile/chart/layout code.
 | D1 | **Chart engine** | **Custom canvas renderer**, per-tile. Retire lightweight-charts *for the gallery* (it stays in Strategy Lab / `TradingChartComponent`). Rationale + rejected alternatives in §3.1. |
 | D2 | **Fill markers** | First-class, always drawn. **Buy → `--accent` #2962ff (blue) triangle below the bar; Sell → `--warn` #ff9800 (orange) triangle above.** Theme tokens, chosen to contrast the green/red candles. Backend must populate them. |
 | D3 | **Wall scope** | Show **all** bots (running + stopped/off-duty). **Retired** stays **off-wall by default** (archive; a Resume affordance on a retired tile would be a lie). |
-| D4 | **Status ring** | Wraps the asset icon. 🟢 green = running & healthy; 🟠 amber (`--warn`) = running & `needs_attention`; ⚪ grey = not running (stopped/off-duty). |
+| D4 | **Asset identity** | Render the canonical asset identity without a gallery-added ring, glow, pill, or border. Status remains available through the Stop/Resume action and the chart region's accessible attention hint. |
 | D5 | **Layout** | **Uniform auto-fit** — column count auto-chosen to keep each chart near a target aspect ratio; last row stretches to fill (no dead cells). **Drag-reorder + Reset layout kept; per-tile resize removed.** |
-| D6 | **Tile readouts** | Minimal header (ring + asset icon + symbol + strategy-on-hover + Stop/Resume + drag). Stats live in a **top-left chart legend: Δ% · fills · P&L**; on hover the legend swaps to the hovered bar's **OHLCV**. No separate live quote. |
+| D6 | **Tile readouts** | Minimal 24px header (asset icon + symbol + strategy-on-hover + icon-only Stop/Resume + rightmost drag grip). Header controls are borderless. Stats live in a **top-left chart legend: Δ% · fills · P&L**; on hover the legend swaps to the hovered bar's **OHLCV**. No separate live quote. |
 | D7 | **Filter** | **Single-select segmented control in the footer**: `All · Running · Needs attn · Stopped`. |
-| D8 | **Asset icon** | Reuse the existing **`AssetIdentityComponent`** (`app-asset-identity`) for the per-symbol brand icon; the ring is a box-shadow around it. |
+| D8 | **Asset icon** | Reuse the existing **`AssetIdentityComponent`** (`app-asset-identity`) for the per-symbol brand icon, with a compact gallery-local logo size and no added frame. |
 | D9 | **Selection border** | The mock's amber `is-selected` border becomes the **keyboard-focus / active-tile** affordance, not a persistent selection model. |
 | D10 | **App bar** | Out of scope — the Market Scope shell is consumed, not changed. |
 
@@ -69,7 +69,7 @@ bot-gallery-dock  (the wall: status filter + uniform auto-fit layout + reorder +
   │  ── removes: per-tile resize + CSS-grid spans.
   │  ── layout math moves to lib/gallery-layout.ts (rewritten, order-only).
   ▼
-bot-tile          (header identity + custom-canvas chart + legend + markers)
+bot-tile          (compact unframed identity + custom-canvas chart + legend + markers)
   │  ── uses:    lib/candle-renderer.ts  (pure drawing + geometry)
   ▼
 lib/candle-renderer.ts   (NEW — pure canvas draw fns + geometry, no Angular)
@@ -141,9 +141,10 @@ value shown is a rendered artifact, never stored or re-sent).
 - **Mount:** `afterNextRender` creates the canvas + a `ResizeObserver`; an
   `effect()` repaints on `bars()`/`markers()` change. No per-tick change
   detection through Angular (mirrors the current imperative pattern; zoneless).
-- **Header (28px):** `[status ring]` `app-asset-identity` `SYMBOL`
-  `strategy(hover-reveal)` … `Stop`/`Resume` `⠿drag`. Ring colour from the
-  derived status (§6). Strategy text = `bot().label`, revealed on
+- **Header (24px):** `app-asset-identity` `SYMBOL`
+  `strategy(hover-reveal)` … icon-only `Stop`/`Resume` `⠿drag`. The action and
+  drag controls are borderless, and the projected drag grip is the final
+  rightmost header item. Strategy text = `bot().label`, revealed on
   `:hover`/`:focus-within`.
 - **Chart body:** canvas + a DOM legend (top-left). Legend default =
   `Δ% · Nf · P&L`; on `mousemove` over the chart it swaps to
@@ -188,8 +189,10 @@ Replace the near-square CSS-grid + per-tile spans with the mock's
 
 ## 5. Filter (D7) + Footer
 
-The page loses its `<h1>`/top toolbar entirely; the grid owns all vertical
-space. A single **32px footer**:
+The page loses its `<h1>`/top toolbar entirely and declares the route as a
+full-bleed workspace. One compact 8px gallery inset replaces the shell/page
+padding stack, and the grid owns all remaining vertical space above a single
+**32px footer**:
 
 ```
 [Reset layout] | [ All · Running · Needs attn · Stopped ] | Today · 1m · ●Live | ‹ page x/y ›
@@ -207,21 +210,21 @@ space. A single **32px footer**:
   `●Live` indicator (green live / amber stale / muted connecting), replacing the
   old top-right status label.
 
-## 6. Status derivation (D3, D4) — backend + frontend
+## 6. Status actions (D3, D4) — backend + frontend
 
 The wall's status is derived, not a new field. From the existing
 `GalleryBotView` (`running`, `needs_attention`, `desired_state`, `phase`):
 
-| Ring | Condition | Header action |
+| Condition | Header action | Accessible status signal |
 |---|---|---|
-| 🟢 green | `running && !needs_attention` | ■ Stop |
-| 🟠 amber | `running && needs_attention` | ■ Stop |
-| ⚪ grey | `!running` (stopped / off-duty) | ▶ Resume |
+| `running && !needs_attention` | ■ Stop | Stop action label |
+| `running && needs_attention` | ■ Stop | Chart-region `needs attention` hint |
+| `!running` (stopped / off-duty) | ▶ Resume | Resume action label |
 
 `primary_action` already encodes Stop-vs-Resume (`action_id = "stop" if running
-else "resume"` — `gallery_hub._primary_action`), so grey tiles get Resume for
+else "resume"` — `gallery_hub._primary_action`), so stopped tiles get Resume for
 free once non-running bots are in scope. **Retired** bots are excluded upstream
-(§7); they never reach the ring table.
+(§7); they never reach the action table.
 
 ## 7. Backend slices
 
@@ -238,10 +241,10 @@ free once non-running bots are in scope. **Retired** bots are excluded upstream
 - **Retired exclusion:** filter out retired rows using the catalog's existing
   lifecycle — `BotCatalogView.phase == RETIRED` (equivalently `status_label ==
   "Retired"`, the closed vocabulary from `catalog_projection_service`) — so they
-  never enter the wall or the ring table (§6). (Opt-in retired view is a
+  never enter the wall or the action table (§6). (Opt-in retired view is a
   deliberate non-goal for this PRD — §11.)
 - `removed_sids` semantics (router `_gallery_event_source` + `hub.build_update`):
-  a bot that **stops** is no longer "removed" — it stays as a grey tile. Only a
+  a bot that **stops** is no longer "removed" — it stays on the wall. Only a
   bot that leaves the catalog (retired/deleted) is removed. Update the roster
   diff + the docstrings that say "stopped tile stuck forever" (that reasoning was
   for the running-only model).
@@ -272,9 +275,8 @@ the renderer maps `buy→--accent`, `sell→--warn`.
   drag handle stays `aria-hidden` pointer-only — the **known keyboard-reorder
   gap carries over** and is explicitly out of scope, with the always-available
   catalog order as the fallback, unchanged from today).
-- Status ring colour is **not** the only status signal: the header action
-  (Stop vs Resume) and — for `needs_attention` — a text/`aria` hint carry it too,
-  so the wall passes AXE / WCAG AA without relying on colour alone.
+- Status does not rely on a decorative colour ring: the header action (Stop vs
+  Resume) and — for `needs_attention` — a text/`aria` hint carry it.
 - Legend and tag are decorative duplicates of accessible data; the tile's
   `aria-label` still names symbol + sid for the navigate target.
 - Filter segments are a labelled single-select group (radio semantics).
@@ -289,9 +291,9 @@ the renderer maps `buy→--accent`, `sell→--warn`.
 - **Layout (`gallery-layout.spec.ts`)** — `chooseColumns` picks the expected
   cols across sizes; short-final-row flex basis; order-only persistence
   round-trips + corruption guard (kept from today, spans removed).
-- **Filter + status derivation** — the page's filter predicate and the ring
-  mapping table (§6) are pure and unit-tested across all four buckets +
-  needs_attention + stopped.
+- **Filter + status actions** — the page's filter predicate is unit-tested
+  across all four buckets; tile tests cover Stop/Resume and the accessible
+  needs-attention hint.
 - **Tile (`bot-tile.component.spec.ts`)** — Testing Library: renders symbol,
   reveals strategy on hover, shows Resume for a stopped bot, emits the action on
   confirm, legend swaps to OHLCV on chart hover.
@@ -346,7 +348,7 @@ independently shippable PR with its own tests + thermo gate.
 
 - `Frontend/.../gallery/lib/candle-renderer.ts` — **new**
 - `Frontend/.../gallery/lib/gallery-layout.ts` — rewritten (order-only, AR-fit)
-- `Frontend/.../gallery/bot-tile/*` — rewritten (custom canvas + legend + markers)
+- `Frontend/.../gallery/bot-tile/*` — rewritten (compact unframed header + custom canvas + legend + markers)
 - `Frontend/.../gallery/bot-gallery-dock/*` — rewritten (uniform layout, footer + filter, no resize)
 - `Frontend/.../gallery/bot-gallery-page/*` — toolbar/h1 removed; filter state
 - `PythonDataService/app/services/broker_v2_panel/gallery_hub.py` — all-bots scope + markers

@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ChartBar, ChartFillMarker, GalleryBotView } from '../lib/gallery.types';
-import { BotTileComponent, botStatusTone } from './bot-tile.component';
+import { BotTileComponent } from './bot-tile.component';
 
 function bar(overrides: Partial<ChartBar> = {}): ChartBar {
   return {
@@ -59,21 +59,6 @@ function fillMarker(overrides: Partial<ChartFillMarker> = {}): ChartFillMarker {
 function routerProvider(navigate = vi.fn().mockResolvedValue(true)) {
   return { provide: Router, useValue: { navigate } };
 }
-
-describe('botStatusTone', () => {
-  it('is bull when running and healthy', () => {
-    expect(botStatusTone({ running: true, needs_attention: false })).toBe('bull');
-  });
-
-  it('is warn when running and needing attention', () => {
-    expect(botStatusTone({ running: true, needs_attention: true })).toBe('warn');
-  });
-
-  it('is muted when not running, regardless of needs_attention', () => {
-    expect(botStatusTone({ running: false, needs_attention: false })).toBe('muted');
-    expect(botStatusTone({ running: false, needs_attention: true })).toBe('muted');
-  });
-});
 
 describe('BotTileComponent', () => {
   it('renders the header identity and strategy label', async () => {
@@ -225,54 +210,6 @@ describe('BotTileComponent', () => {
     expect(screen.getByText('+2.50%')).toBeTruthy();
   });
 
-  it('applies a bull status ring when running and healthy', async () => {
-    const { container } = await render(BotTileComponent, {
-      inputs: {
-        bot: bot({ running: true, needs_attention: false }),
-        bars: [bar()],
-        broker: 'alpaca',
-        accountId: 'PA3',
-      },
-      providers: [routerProvider()],
-    });
-    expect(
-      container.querySelector('.bot-tile__ring')?.classList.contains('bot-tile__ring--bull'),
-    ).toBe(true);
-  });
-
-  it('applies a warn status ring when running and needing attention', async () => {
-    const { container } = await render(BotTileComponent, {
-      inputs: {
-        bot: bot({ running: true, needs_attention: true }),
-        bars: [bar()],
-        broker: 'alpaca',
-        accountId: 'PA3',
-      },
-      providers: [routerProvider()],
-    });
-    expect(
-      container.querySelector('.bot-tile__ring')?.classList.contains('bot-tile__ring--warn'),
-    ).toBe(true);
-  });
-
-  it('applies a muted status ring when not running', async () => {
-    const { container } = await render(BotTileComponent, {
-      inputs: {
-        bot: bot({
-          running: false,
-          primary_action: { action_id: 'resume', label: 'Resume', enabled: true, disabled_reason: null },
-        }),
-        bars: [bar()],
-        broker: 'alpaca',
-        accountId: 'PA3',
-      },
-      providers: [routerProvider()],
-    });
-    expect(
-      container.querySelector('.bot-tile__ring')?.classList.contains('bot-tile__ring--muted'),
-    ).toBe(true);
-  });
-
   it('carries needs_attention as a text hint on the chart region, not colour alone', async () => {
     const { container } = await render(BotTileComponent, {
       inputs: {
@@ -322,7 +259,7 @@ describe('BotTileComponent', () => {
     expect(button.disabled).toBe(true);
     expect(button.getAttribute('aria-busy')).toBe('true');
     expect(button.querySelector('.pi-spinner')).not.toBeNull();
-    expect(button.textContent?.trim()).toBe('Stop');
+    expect(button.textContent?.trim()).toBe('');
   });
 
   it('keeps the quick action actionable when not pending', async () => {
@@ -335,7 +272,7 @@ describe('BotTileComponent', () => {
     expect(button.disabled).toBe(false);
     expect(button.getAttribute('aria-busy')).toBe('false');
     expect(button.querySelector('.pi-stop')).not.toBeNull();
-    expect(button.textContent?.trim()).toBe('Stop');
+    expect(button.textContent?.trim()).toBe('');
     expect(container.querySelector('.bot-tile__header .bot-tile__action-button')).toBe(button);
     expect(container.querySelector('.bot-tile__footer')).toBeNull();
     expect(screen.queryByText('Realized')).toBeNull();

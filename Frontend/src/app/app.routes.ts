@@ -371,8 +371,9 @@ export const routes: Routes = [
       ).then((m) => m.BotsListPageComponent),
   },
   {
-    // Broker v2 panel — live gallery wall for every running bot in the account.
+    // Broker v2 panel — live gallery wall for every shown bot in the account.
     path: 'brokers/:broker/accounts/:accountId/gallery',
+    data: { fullBleed: true },
     loadComponent: () =>
       import(
         './components/broker/v2-panel/gallery/bot-gallery-page/bot-gallery-page.component'

@@ -93,13 +93,16 @@ describe('BotGalleryDockComponent', () => {
     expect(loadLayout(ACCOUNT_ID)).toEqual(expectedOrder);
   });
 
-  it('has no resize handle in the DOM — only the pointer-only drag handle remains', async () => {
+  it('places the pointer-only drag handle at the far right of the tile header', async () => {
     const { container } = await renderDock({ bots: bots(1) });
 
     expect(container.querySelector('.gallery-dock__resize-handle')).toBeNull();
     const dragHandle = container.querySelector('.gallery-dock__drag-handle');
+    const header = container.querySelector('.bot-tile__header');
     expect(dragHandle?.getAttribute('tabindex')).toBe('-1');
     expect(dragHandle?.getAttribute('aria-hidden')).toBe('true');
+    expect(header?.contains(dragHandle)).toBe(true);
+    expect(header?.lastElementChild).toBe(dragHandle);
   });
 
   it('"Reset layout" restores the auto catalog order and clears persistence', async () => {
