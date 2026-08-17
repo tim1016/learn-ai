@@ -34,6 +34,7 @@ describe('routes', () => {
   it.each([
     'options-lab',
     'strategy-lab',
+    'brokers/:broker/accounts/:accountId/gallery',
     'brokers/:broker/accounts/:accountId/bots/:sid',
   ])('marks %s as an intentionally full-bleed workspace', (path) => {
     expect(routes.find((route) => route.path === path)?.data).toMatchObject({ fullBleed: true });

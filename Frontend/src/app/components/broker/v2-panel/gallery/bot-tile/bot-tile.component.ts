@@ -15,6 +15,7 @@ import {
 import { Router } from '@angular/router';
 import { TickMarkType } from 'lightweight-charts';
 import type { ChartBar, ChartFillMarker, GalleryBotView } from '../lib/gallery.types';
+import { GALLERY_TILE_HEADER_HEIGHT_PX } from '../lib/gallery-layout';
 import {
   CFG,
   barIndexAtX,
@@ -27,19 +28,7 @@ import { fmtInteger, fmtNumber, fmtSignedCurrency, fmtSignedNumber } from '../..
 import { formatChartAxisTick } from '../../../../../shared/charts/chart-utils';
 import { AssetIdentityComponent } from '../../../../../shared/asset-identity';
 
-export type BotStatusTone = 'bull' | 'warn' | 'muted';
 type SignTone = 'positive' | 'negative' | 'neutral';
-
-/**
- * Pure status-ring colour derivation (design spec §6, D4): running &
- * healthy → bull green, running & needing attention → warn amber, not
- * running (stopped/off-duty) → muted grey. Kept standalone/exported so the
- * mapping is unit-testable without rendering the component.
- */
-export function botStatusTone(bot: Pick<GalleryBotView, 'running' | 'needs_attention'>): BotStatusTone {
-  if (!bot.running) return 'muted';
-  return bot.needs_attention ? 'warn' : 'bull';
-}
 
 function signTone(value: number | null): SignTone {
   if (value === null || value === 0) return 'neutral';
@@ -53,7 +42,7 @@ function fillTextForBar(bar: ChartBar, markers: readonly ChartFillMarker[]): str
 }
 
 /**
- * One live bot's gallery tile: header identity/status ring, a custom-canvas
+ * One live bot's gallery tile: compact header identity, a custom-canvas
  * candle chart with a DOM legend, and a single guarded quick action.
  *
  * The chart is painted on a plain `<canvas>` via `lib/candle-renderer.ts`
@@ -70,11 +59,14 @@ function fillTextForBar(bar: ChartBar, markers: readonly ChartFillMarker[]): str
   imports: [AssetIdentityComponent],
   host: {
     '(document:keydown.escape)': 'onEscape()',
+    '[style.--gallery-tile-header-height.px]': 'tileHeaderHeightPx',
   },
   templateUrl: './bot-tile.component.html',
   styleUrl: './bot-tile.component.scss',
 })
 export class BotTileComponent {
+  protected readonly tileHeaderHeightPx = GALLERY_TILE_HEADER_HEIGHT_PX;
+
   readonly bot = input.required<GalleryBotView>();
   readonly bars = input.required<readonly ChartBar[]>();
   readonly markers = input<readonly ChartFillMarker[]>([]);
@@ -102,8 +94,6 @@ export class BotTileComponent {
     width: CFG.width,
     height: CFG.height,
   });
-
-  protected readonly statusTone = computed(() => botStatusTone(this.bot()));
 
   private readonly rendererCfg = computed<CandleRendererConfig>(() => ({
     ...CFG,
@@ -161,14 +151,7 @@ export class BotTileComponent {
     const view = this.bot();
     return `${view.primary_action.label} ${view.symbol} · ${view.sid}?`;
   });
-  /**
-   * The status ring's colour is not the only `needs_attention` signal (spec
-   * §8) — running-healthy and running-needing-attention both show the same
-   * "Stop" action, so colour alone would be the only differentiator between
-   * them. Folding a text hint into the chart region's existing aria-label
-   * (rather than inventing a separate ARIA construct on the decorative
-   * ring) keeps it on an element already in the accessibility tree.
-   */
+  /** Keeps `needs_attention` available as text on an existing interactive element. */
   protected readonly chartAriaLabel = computed(() => {
     const view = this.bot();
     const attentionSuffix = view.needs_attention ? ' — needs attention' : '';
