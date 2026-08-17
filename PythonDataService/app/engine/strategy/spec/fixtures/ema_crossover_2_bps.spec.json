@@ -1,0 +1,50 @@
+{
+  "schema_version": "1.0",
+  "strategy_key": "ema_crossover_2_bps",
+  "name": "EMA Crossover 2 bps",
+  "description": "LEAN-pinned 15-minute SPY strategy. Enter on a fresh EMA5/EMA10 up-cross when their relative gap is at least 2 basis points and 50 <= RSI14 <= 70; exit after 5 bars.",
+  "symbols": ["SPY"],
+  "resolution": {"period_minutes": 15},
+  "indicators": [
+    {"id": "ema5", "kind": "EMA", "period": 5, "source": "close"},
+    {"id": "ema10", "kind": "EMA", "period": 10, "source": "close"},
+    {"id": "rsi14", "kind": "RSI", "period": 14, "source": "close", "ma_type": "wilders"}
+  ],
+  "entry": {
+    "logic": "AND",
+    "conditions": [
+      {"kind": "FreshCross", "left": "ema5", "right": "ema10", "direction": "up"},
+      {
+        "kind": "IndicatorComparison",
+        "left": {
+          "kind": "DifferenceBps",
+          "left": {"kind": "IndicatorRef", "indicator": "ema5"},
+          "right": {"kind": "IndicatorRef", "indicator": "ema10"}
+        },
+        "op": ">=",
+        "right": {"kind": "Const", "value": 2.0}
+      },
+      {"kind": "IndicatorBetween", "indicator": "rsi14", "lo": 50, "hi": 70, "inclusive": true}
+    ],
+    "size": {"kind": "SetHoldings", "fraction": 1.0},
+    "pyramiding": 1
+  },
+  "position": {"kind": "EQUITY_LONG"},
+  "survival": [],
+  "exit": {
+    "logic": "OR",
+    "conditions": [
+      {"kind": "BarsSinceEntry", "op": ">=", "value": 5}
+    ]
+  },
+  "diagnostics": {
+    "snapshot_at_entry": ["ema5", "ema10", "rsi14"]
+  },
+  "submit_mode": "live_paper",
+  "bar_source_descriptor": "ibkr_realtime_bars",
+  "decision_columns": [
+    {"name": "ema5", "dtype": "float64", "nullable": false, "semantic": "EMA(5) of consolidated close at decision time"},
+    {"name": "ema10", "dtype": "float64", "nullable": false, "semantic": "EMA(10) of consolidated close at decision time"},
+    {"name": "rsi", "dtype": "float64", "nullable": false, "semantic": "Wilders RSI(14) of consolidated close at decision time"}
+  ]
+}

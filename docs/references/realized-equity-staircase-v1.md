@@ -12,6 +12,14 @@ trade's `exit_ms_utc`:
 This is distinct from the independently authored mark-to-market curve. It is
 evidence for realized P&L, not an input to Sharpe, Sortino, or drawdown.
 
+For ordinary Engine Lab runs, persisted trade P&L subtracts the configured
+flat entry and exit fees. For `us-equity-raw-ibkr-v1` compatibility runs, the
+flat-fee control is not the executed policy: both the engine and persistence
+delegate each fill to the canonical `IbkrEquityCommissionModel`. This matters
+when the per-share tier exceeds the `$1.00` floor. The sum of those net trade
+steps must equal completed final equity within `atol=1e-6, rtol=0`; otherwise
+the receipt fails closed instead of saving contradictory evidence.
+
 ## Timestamp and boundary rules
 
 - All inputs and output timestamps are `int64 ms UTC`.
@@ -28,6 +36,8 @@ inputs and an independently hand-computed Decimal oracle. The fixture checks
 equal-exit aggregation and both boundary-folding cases without importing the
 canonical implementation. `test_realized_equity_matches_golden_fixture` pins
 `atol=1e-6, rtol=0`, the fixed transport tolerance for accumulated P&L.
+The compatibility-fee regression is
+`tests/integration/test_engine_persistence_quantity_pnl.py::test_save_study_payload_uses_executed_ibkr_fees_for_compatibility_runs`.
 
 Regenerate the frozen receipt with:
 

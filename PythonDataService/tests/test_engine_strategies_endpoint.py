@@ -23,13 +23,17 @@ aren't needed to test the registry contract.
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 
 import pytest
+
+from app.engine.strategy.registry import _STRATEGY_REGISTRY
 
 EXPECTED_STRATEGY_KEYS = {
     # VCR-0004 / Phase 2 — registry keys are now module names so the runner
     # can import every registered strategy by ``app.engine.strategy.algorithms.{key}``.
     "ema_crossover_signal",
+    "ema_crossover_2_bps",
     "sma_crossover",
     "daily_sma_crossover",
     "rsi_mean_reversion",
@@ -151,6 +155,52 @@ def test_ema_signal_advertises_its_matching_lean_validation_template():
     strategy = next(strategy for strategy in _list_strategies() if strategy["name"] == "ema_crossover_signal")
 
     assert strategy["lean_twin"] == "ema_crossover_signal"
+
+
+def test_ema_two_bps_is_a_selectable_default_spy_strategy_with_a_lean_twin():
+    strategy = next(strategy for strategy in _list_strategies() if strategy["name"] == "ema_crossover_2_bps")
+
+    assert strategy["display_name"] == "EMA Crossover 2 bps"
+    assert strategy["lean_twin"] == "ema_crossover_2_bps"
+    assert strategy["params_schema"]["properties"]["symbol"]["default"] == "SPY"
+    assert strategy["params_schema"]["properties"]["gap_bps"] == {
+        "default": 2.0,
+        "description": "Minimum EMA(5) minus EMA(10) crossover gap, measured in basis points of EMA(10).",
+        "maximum": 100.0,
+        "minimum": 0.0,
+        "title": "Crossover gap (bps)",
+        "type": "number",
+    }
+    assert strategy["params_schema"]["properties"]["rsi_min"]["default"] == 50.0
+    assert strategy["params_schema"]["properties"]["rsi_max"]["default"] == 70.0
+    assert strategy["strategy_bars"] == {
+        "timespan": "minute",
+        "multiplier": 15,
+        "parameter": None,
+    }
+
+
+def test_ema_two_bps_parameter_model_rejects_invalid_rsi_band() -> None:
+    from pydantic import ValidationError
+
+    registration = _STRATEGY_REGISTRY["ema_crossover_2_bps"]
+
+    with pytest.raises(ValidationError, match="rsi_min must be less than rsi_max"):
+        registration.param_schema.model_validate(
+            {"symbol": "SPY", "gap_bps": 2, "rsi_min": 70, "rsi_max": 50}
+        )
+
+
+def test_ema_two_bps_registry_build_forwards_validated_parameters() -> None:
+    registration = _STRATEGY_REGISTRY["ema_crossover_2_bps"]
+    params = registration.param_schema.model_validate(
+        {"symbol": "SPY", "gap_bps": 4, "rsi_min": 52, "rsi_max": 68}
+    )
+
+    strategy = registration.build(params)
+
+    assert strategy._gap_bps == Decimal("4")
+    assert strategy._rsi_gate_bounds() == (Decimal("52"), Decimal("68"))
 
 
 def test_orb_gotchas_include_traded_today_guard():

@@ -1304,6 +1304,47 @@
       "status": "active"
     },
     {
+      "id": "ENG-007",
+      "name": "EMA Crossover 2 bps LEAN trade parity",
+      "category": "strategy-parity",
+      "canonical_module": "PythonDataService/app/engine/strategy/algorithms/ema_crossover_2_bps.py",
+      "canonical_callable": "EmaCrossover2BpsAlgorithm",
+      "reference": {
+        "kind": "cross_engine",
+        "oracle": "QuantConnect LEAN 17748 at source commit 261366a7e26ae942df858ab20df4fef8fa07de67",
+        "citation": "Pinned LEAN sidecar receipt companion-pg-e4edc7a8afa84d9ea55a; see attribution.md for image, algorithm, and input hashes."
+      },
+      "market_input": {
+        "source": "polygon",
+        "vendor": "Polygon/Massive",
+        "generated_by": "tests/fixtures/golden/ema-crossover-2-bps-lean/generate.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-06,
+        "rtol": 0.0,
+        "note": "Order timestamps, directions, quantities, and fees are exact; Decimal fill prices and final equity are pinned at absolute tolerance 0.000001. Observed max errors are zero."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.json",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "678ee6ec277e0607d873bcf7bd9dcacb360da729140e1c4e16910602d9f5e1fc",
+            "output.json": "3357a0ecc4fb70340c9faa0cb11e0778f81a9f4f83ced5e62745a367b8e16a80"
+          },
+          "file_sha256": {
+            "input.arrow": "41105e06c381494f8f7931a4f08a1ae9bf26b26a9af92487f454647e56fb4314",
+            "output.json": "8e288ce0b6861dc70d922291d4bb4748f6abb696220d3152baeefb61419204de",
+            "attribution.md": "41bfa1226a84db2e731aaca3ab216476980efddd3ed7d129d7e93b3832fa54ab"
+          }
+        }
+      },
+      "status": "active"
+    },
+    {
       "id": "ENG-006",
       "name": "Persisted realized-equity staircase",
       "category": "engine-results",

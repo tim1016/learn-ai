@@ -65,7 +65,7 @@
         <span>Sampling</span><strong class="mono">{{ samplingSummary() }}</strong>
       </div>
 
-      @if (engine() !== "lean" && parameterEntries().length > 0) {
+      @if (parameterEntries().length > 0) {
         <fieldset class="advanced-params">
           <legend>Strategy parameters</legend>
           @for (entry of parameterEntries(); track entry.field) {
@@ -78,6 +78,7 @@
                 [max]="entry.property.maximum ?? null"
                 (input)="onParameterEvent(entry.field, entry.property.type, $event)"
               />
+              @if (entry.property.description) { <small>{{ entry.property.description }}</small> }
             </label>
           }
         </fieldset>
@@ -104,7 +105,7 @@
             <input type="number" min="0" step="0.01" [value]="commissionPerOrder()" (input)="onCommissionEvent($event)" />
           </label>
         } @else {
-          <p>Strategy parameters, fills, and fees are defined by the aligned LEAN template.</p>
+          <p>Fills and fees are defined by the aligned LEAN template.</p>
         }
       </fieldset>
 

@@ -3654,6 +3654,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs-internal/spy-ema-exhaustive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Spy Ema Exhaustive Job
+         * @description Run the frozen full-data plus fixed-gap stability protocol.
+         */
+        post: operations["start_spy_ema_exhaustive_job_api_jobs_internal_spy_ema_exhaustive_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs-internal/spy-ema-walk-forward": {
         parameters: {
             query?: never;
@@ -5071,6 +5091,46 @@ export interface paths {
          * @description Return complete mathematical documentation for the UI information panel.
          */
         get: operations["get_documentation_api_research_documentation_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/exhaustive-runs/by-walk-forward/{walk_forward_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Latest Exhaustive Run For Walk Forward
+         * @description Load the newest Exhaustive Run derived from one walk-forward receipt.
+         */
+        get: operations["get_latest_exhaustive_run_for_walk_forward_api_research_exhaustive_runs_by_walk_forward__walk_forward_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/exhaustive-runs/{exhaustive_run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Exhaustive Run
+         * @description Load one Exhaustive Run by its immutable artifact id.
+         */
+        get: operations["get_exhaustive_run_api_research_exhaustive_runs__exhaustive_run_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -10349,6 +10409,57 @@ export interface components {
             ticker: string;
         };
         /**
+         * CandidateFoldEvidence
+         * @description One fixed-gap forward fold plus its matching training evidence.
+         */
+        CandidateFoldEvidence: {
+            /** Failure Reason */
+            failure_reason?: string | null;
+            /** Fold Index */
+            fold_index: number;
+            /** Retention */
+            retention?: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "completed" | "failed";
+            /** Test End Ms */
+            test_end_ms: number;
+            test_metrics: components["schemas"]["RunMetrics"];
+            /** Test Run Id */
+            test_run_id: string | null;
+            /** Test Start Ms */
+            test_start_ms: number;
+            /** Train End Ms */
+            train_end_ms: number;
+            train_metrics: components["schemas"]["RunMetrics"];
+            /** Train Run Id */
+            train_run_id: string;
+            /** Train Start Ms */
+            train_start_ms: number;
+        };
+        /**
+         * CandidateForwardStability
+         * @description Fixed-gap evidence across every canonical forward test fold.
+         */
+        CandidateForwardStability: {
+            /** Alpha Decay */
+            alpha_decay?: number | null;
+            /** Folds */
+            folds: components["schemas"]["CandidateFoldEvidence"][];
+            /** Mean Fold Retention */
+            mean_fold_retention?: number | null;
+            /** Mean Oos Sharpe */
+            mean_oos_sharpe?: number | null;
+            /** Median Oos Sharpe */
+            median_oos_sharpe?: number | null;
+            /** Pct Profitable Folds */
+            pct_profitable_folds?: number | null;
+            /** Walk Forward Id */
+            walk_forward_id: string;
+        };
+        /**
          * ChannelHealth
          * @description One submission-affecting stream's health fact, with its age (P7).
          *
@@ -12780,6 +12891,27 @@ export interface components {
             rho_sum?: number;
         };
         /**
+         * EmaCrossover2BpsStrategyParametersModel
+         * @description Validated runtime gates accepted by the parameterized LEAN twin.
+         */
+        EmaCrossover2BpsStrategyParametersModel: {
+            /**
+             * Gap Bps
+             * @default 2
+             */
+            gap_bps?: number;
+            /**
+             * Rsi Max
+             * @default 70
+             */
+            rsi_max?: number;
+            /**
+             * Rsi Min
+             * @default 50
+             */
+            rsi_min?: number;
+        };
+        /**
          * EmergencyFlattenRequest
          * @description Body for the account-wide emergency flatten (§ 7.2 #6).
          *
@@ -13344,6 +13476,133 @@ export interface components {
             /** Row Count */
             row_count: number;
         };
+        /**
+         * ExhaustiveCandidateResult
+         * @description Full-data and forward-stability evidence for one unique specification.
+         */
+        ExhaustiveCandidateResult: {
+            /** Appearance Count */
+            appearance_count: number;
+            /** Appearance Fold Indices */
+            appearance_fold_indices: number[];
+            /** Best Fold Rank */
+            best_fold_rank: number;
+            /** Failure Reason */
+            failure_reason?: string | null;
+            forward_stability?: components["schemas"]["CandidateForwardStability"] | null;
+            full_period_metrics?: components["schemas"]["RunMetrics"] | null;
+            /** Full Period Run Id */
+            full_period_run_id?: string | null;
+            /** Latest Selected Fold Index */
+            latest_selected_fold_index: number;
+            /** Mean Selection Score */
+            mean_selection_score: number;
+            /** Parameters */
+            parameters: {
+                [key: string]: number;
+            };
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "completed" | "failed";
+            /** Strategy Spec Hash */
+            strategy_spec_hash: string;
+            trade_recency?: components["schemas"]["TradeRecencySummary"] | null;
+        };
+        /**
+         * ExhaustiveRunConfig
+         * @description Frozen inputs and lineage for an Exhaustive Run artifact.
+         */
+        ExhaustiveRunConfig: {
+            /** Commission Per Order */
+            commission_per_order: number;
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Data Root Revision */
+            data_root_revision: string;
+            /** End Ms */
+            end_ms: number;
+            /** Exhaustive Run Id */
+            exhaustive_run_id: string;
+            /** Fill Mode */
+            fill_mode: string;
+            /** Initial Cash */
+            initial_cash: number;
+            /**
+             * Max Candidates Per Fold
+             * @default 5
+             * @constant
+             */
+            max_candidates_per_fold?: 5;
+            /**
+             * Protocol Id
+             * @default spy-ema-exhaustive-run
+             * @constant
+             */
+            protocol_id?: "spy-ema-exhaustive-run";
+            /**
+             * Protocol Version
+             * @default 1.0
+             * @constant
+             */
+            protocol_version?: "1.0";
+            /** Random Seed */
+            random_seed: number;
+            /**
+             * Ranking Method
+             * @default equal_weight_train_sharpe_return_percentile
+             * @constant
+             */
+            ranking_method?: "equal_weight_train_sharpe_return_percentile";
+            /** Recent Window Start Ms */
+            recent_window_start_ms: number;
+            /** Slippage Per Share */
+            slippage_per_share: number;
+            /** Source Protocol Id */
+            source_protocol_id: string;
+            /** Source Protocol Version */
+            source_protocol_version: string;
+            /** Source Walk Forward Id */
+            source_walk_forward_id: string;
+            /** Start Ms */
+            start_ms: number;
+        };
+        /**
+         * ExhaustiveRunResponse
+         * @description One persisted Exhaustive Run config/result pair.
+         */
+        ExhaustiveRunResponse: {
+            config: components["schemas"]["ExhaustiveRunConfig"];
+            result: components["schemas"]["ExhaustiveRunResult"];
+        };
+        /**
+         * ExhaustiveRunResult
+         * @description Sortable result set plus every fold-level selection receipt.
+         */
+        ExhaustiveRunResult: {
+            /** Candidates */
+            candidates: components["schemas"]["ExhaustiveCandidateResult"][];
+            /** Completed At Ms */
+            completed_at_ms: number;
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Exhaustive Run Id */
+            exhaustive_run_id: string;
+            /** Failure Reason */
+            failure_reason?: string | null;
+            /** Selections */
+            selections: components["schemas"]["FoldCandidateSelection"][];
+            /** Source Walk Forward Id */
+            source_walk_forward_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "completed" | "failed";
+            /** Warnings */
+            warnings?: string[];
+        };
         /** ExitBlock */
         "ExitBlock-Input": {
             /** Conditions */
@@ -13906,6 +14165,27 @@ export interface components {
             };
             /** Strategy Instance Id */
             strategy_instance_id: string;
+        };
+        /**
+         * FoldCandidateSelection
+         * @description One candidate retained from one fold's training-only leaderboard.
+         */
+        FoldCandidateSelection: {
+            /** Fold Index */
+            fold_index: number;
+            /** Fold Rank */
+            fold_rank: number;
+            /** Parameters */
+            parameters: {
+                [key: string]: number;
+            };
+            /** Selection Score */
+            selection_score: number;
+            /** Strategy Spec Hash */
+            strategy_spec_hash: string;
+            train_metrics: components["schemas"]["RunMetrics"];
+            /** Train Run Id */
+            train_run_id: string;
         };
         /**
          * FoldResult
@@ -22630,6 +22910,16 @@ export interface components {
             trade_number: number;
         };
         /**
+         * SpyEmaExhaustiveJobRequest
+         * @description Frozen Exhaustive Run request linked to canonical SPY EMA V1 evidence.
+         */
+        SpyEmaExhaustiveJobRequest: {
+            /** Jobid */
+            jobId: string;
+            /** Walkforwardid */
+            walkForwardId: string;
+        };
+        /**
          * SpyEmaWalkForwardJobRequest
          * @description Frozen V1 protocol job; clients may provide no research overrides.
          */
@@ -24205,6 +24495,28 @@ export interface components {
             /** Rtol */
             rtol: number;
         };
+        /**
+         * TradeRecencySummary
+         * @description Completed-trade concentration in the final six study months.
+         */
+        TradeRecencySummary: {
+            /** Last Trade Exit Ms */
+            last_trade_exit_ms?: number | null;
+            /** Prior Trade Count */
+            prior_trade_count: number;
+            /** Recent Trade Count */
+            recent_trade_count: number;
+            /** Recent Trade Share */
+            recent_trade_share?: number | null;
+            /** Recent Vs Prior Rate Ratio */
+            recent_vs_prior_rate_ratio?: number | null;
+            /** Recent Window End Ms */
+            recent_window_end_ms: number;
+            /** Recent Window Start Ms */
+            recent_window_start_ms: number;
+            /** Total Trade Count */
+            total_trade_count: number;
+        };
         /** TradeSimRunBody */
         TradeSimRunBody: {
             /** Bars */
@@ -24461,6 +24773,8 @@ export interface components {
              * @default 100000
              */
             starting_cash?: number;
+            /** @description Validated strategy-logic parameters for a bundled trusted template. Currently accepted only by ema_crossover_2_bps; omitted values use that template's canonical 2/50/70 defaults. */
+            strategy_parameters?: components["schemas"]["EmaCrossover2BpsStrategyParametersModel"] | null;
             /**
              * Symbol
              * @description DEPRECATED (PR B): use ``data_policy.symbol``.
@@ -24517,7 +24831,7 @@ export interface components {
          * @description Stable wire names for bundled LEAN algorithm sources.
          * @enum {string}
          */
-        TrustedTemplate: "trusted_default" | "reconciliation" | "ema_crossover" | "ema_crossover_signal" | "deployment_validation";
+        TrustedTemplate: "trusted_default" | "reconciliation" | "ema_crossover" | "ema_crossover_signal" | "ema_crossover_2_bps" | "deployment_validation";
         /**
          * UnderlyingSnapshot
          * @description Underlying asset info from snapshot
@@ -31612,6 +31926,39 @@ export interface operations {
             };
         };
     };
+    start_spy_ema_exhaustive_job_api_jobs_internal_spy_ema_exhaustive_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpyEmaExhaustiveJobRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     start_spy_ema_walk_forward_job_api_jobs_internal_spy_ema_walk_forward_post: {
         parameters: {
             query?: never;
@@ -33533,6 +33880,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
+    get_latest_exhaustive_run_for_walk_forward_api_research_exhaustive_runs_by_walk_forward__walk_forward_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                walk_forward_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExhaustiveRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_exhaustive_run_api_research_exhaustive_runs__exhaustive_run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                exhaustive_run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExhaustiveRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

@@ -15,6 +15,7 @@ from app.lean_sidecar.trusted_samples.buy_and_hold_reconciliation import (
 )
 from app.lean_sidecar.trusted_samples.deployment_validation import DEPLOYMENT_VALIDATION_SOURCE
 from app.lean_sidecar.trusted_samples.ema_crossover import EMA_CROSSOVER_SOURCE
+from app.lean_sidecar.trusted_samples.ema_crossover_2_bps import EMA_CROSSOVER_2_BPS_SOURCE
 from app.lean_sidecar.trusted_samples.ema_crossover_signal import EMA_CROSSOVER_SIGNAL_SOURCE
 
 
@@ -25,6 +26,7 @@ class TrustedTemplate(StrEnum):
     RECONCILIATION = "reconciliation"
     EMA_CROSSOVER = "ema_crossover"
     EMA_CROSSOVER_SIGNAL = "ema_crossover_signal"
+    EMA_CROSSOVER_2_BPS = "ema_crossover_2_bps"
     DEPLOYMENT_VALIDATION = "deployment_validation"
 
 
@@ -52,6 +54,10 @@ TRUSTED_TEMPLATE_DEFINITIONS: Final[Mapping[TrustedTemplate, TrustedTemplateDefi
         ),
         TrustedTemplate.EMA_CROSSOVER_SIGNAL: TrustedTemplateDefinition(
             source=EMA_CROSSOVER_SIGNAL_SOURCE,
+            brokerage_policy="interactive_brokers",
+        ),
+        TrustedTemplate.EMA_CROSSOVER_2_BPS: TrustedTemplateDefinition(
+            source=EMA_CROSSOVER_2_BPS_SOURCE,
             brokerage_policy="interactive_brokers",
         ),
         TrustedTemplate.DEPLOYMENT_VALIDATION: TrustedTemplateDefinition(

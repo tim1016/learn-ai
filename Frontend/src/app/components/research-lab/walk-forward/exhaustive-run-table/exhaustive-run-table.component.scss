@@ -1,0 +1,93 @@
+:host {
+  display: block;
+  min-width: 0;
+}
+
+.evidence-table {
+  min-width: 0;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-sunken);
+  overflow: hidden;
+
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+}
+
+:host ::ng-deep .evidence-table {
+  .p-datatable-table {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    font-variant-numeric: tabular-nums;
+  }
+
+  th {
+    min-width: 7rem;
+    background: var(--bg-sunken);
+    color: var(--text-secondary);
+    white-space: nowrap;
+  }
+
+  td {
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .group-row th {
+    border-bottom: 2px solid var(--accent);
+    color: var(--accent-text);
+    font-family: var(--font-sans);
+    font-size: var(--fs-xxs);
+    letter-spacing: var(--ls-caps);
+    text-align: left;
+    text-transform: uppercase;
+  }
+}
+
+.gap-cell {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  color: var(--accent-text);
+  font-weight: var(--fw-bold);
+  text-align: left;
+}
+
+button {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--accent-faint);
+  color: var(--accent-text);
+  cursor: pointer;
+  font: inherit;
+
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+}
+
+.failed-row td {
+  background: var(--bear-soft);
+}
+
+.evidence-table__note {
+  margin: var(--space-3) 0 0;
+  color: var(--text-subtle);
+  font-size: var(--fs-xs);
+
+  + .evidence-table__note {
+    margin-top: var(--space-1);
+  }
+}
+
+.evidence-table__warning {
+  margin: var(--space-3) 0 0;
+  color: var(--bear);
+  font-size: var(--fs-sm);
+}

@@ -42,6 +42,7 @@ from app.research.batch_runner import (
     run_cross_sectional_study,
 )
 from app.research.config import ResearchConfig
+from app.research.exhaustive_run.runner import run_exhaustive_analysis
 from app.research.runner import run_feature_research
 from app.research.signal.config import SignalConfig
 from app.research.signal.engine import run_signal_engine
@@ -271,6 +272,19 @@ class SpyEmaWalkForwardJobRequest(_CamelCaseModel):
     )
 
     job_id: str = Field(..., min_length=1)
+
+
+class SpyEmaExhaustiveJobRequest(_CamelCaseModel):
+    """Frozen Exhaustive Run request linked to canonical SPY EMA V1 evidence."""
+
+    model_config = ConfigDict(
+        alias_generator=to_camel,
+        populate_by_name=True,
+        extra="forbid",
+    )
+
+    job_id: str = Field(..., min_length=1)
+    walk_forward_id: str = Field(..., pattern=r"^[0-9a-f]{32}$")
 
 
 # ---------------------------------------------------------------------------
@@ -546,6 +560,11 @@ async def start_lean_engine_run_job(req: LeanEngineRunJobRequest) -> dict:
         template=payload.template,
         data_policy=data_policy,
         parity_group_id=payload.parity_group_id,
+        strategy_parameters=(
+            tuple(payload.strategy_parameters.model_dump().items())
+            if payload.strategy_parameters is not None
+            else ()
+        ),
     )
 
     def work(emit: ProgressEmitter, cancel) -> dict | None:
@@ -1051,6 +1070,65 @@ async def start_spy_ema_walk_forward_job(
         req.job_id,
         work,
         thread_name=f"spy-ema-wf-{req.job_id[:8]}",
+        cancel_check_every_n=1,
+    )
+    return {"job_id": req.job_id, "status": "queued"}
+
+
+@router.post("/spy-ema-exhaustive", status_code=status.HTTP_202_ACCEPTED)
+async def start_spy_ema_exhaustive_job(
+    req: SpyEmaExhaustiveJobRequest,
+    data_source_factory=Depends(get_data_source_factory),
+    artifacts_root: Path | None = Depends(get_artifacts_root),
+) -> dict:
+    """Run the frozen full-data plus fixed-gap stability protocol."""
+
+    def work(emit: ProgressEmitter, cancel) -> dict:
+        _emit_friendly_phase(
+            emit,
+            cancel,
+            "spy_ema_exhaustive",
+            "selecting_candidates",
+        )
+        _emit_friendly_phase(
+            emit,
+            cancel,
+            "spy_ema_exhaustive",
+            "running_candidates",
+        )
+
+        def on_progress(current: int, total: int, message: str) -> None:
+            cancel.raise_if_cancelled()
+            emit.progress(
+                current=current,
+                total=total,
+                unit="runs",
+                message=message,
+            )
+
+        config, result = run_exhaustive_analysis(
+            req.walk_forward_id,
+            data_source_factory=data_source_factory,
+            artifacts_root=artifacts_root,
+            on_progress=on_progress,
+            cancel_check=cancel.raise_if_cancelled,
+        )
+        cancel.raise_if_cancelled()
+        _emit_friendly_phase(
+            emit,
+            cancel,
+            "spy_ema_exhaustive",
+            "finalizing_evidence",
+        )
+        return {
+            "config": config.model_dump(mode="json"),
+            "result": result.model_dump(mode="json"),
+        }
+
+    run_in_thread(
+        req.job_id,
+        work,
+        thread_name=f"spy-ema-exhaustive-{req.job_id[:8]}",
         cancel_check_every_n=1,
     )
     return {"job_id": req.job_id, "status": "queued"}

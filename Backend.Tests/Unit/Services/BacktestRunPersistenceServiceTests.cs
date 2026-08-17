@@ -85,6 +85,12 @@ public class BacktestRunPersistenceServiceTests
             MetricDocumentationJson = """
             [{"metric_id":"sharpe","variant_id":"sharpe.lean_native.v1","producer":"lean_native","contract_id":"lean-statistics-oracle-v1"}]
             """,
+            Parameters = new Dictionary<string, JsonElement>
+            {
+                ["gap_bps"] = JsonSerializer.SerializeToElement(4.0),
+                ["rsi_min"] = JsonSerializer.SerializeToElement(52.0),
+                ["rsi_max"] = JsonSerializer.SerializeToElement(68.0),
+            },
         };
 
         var id = await service.PersistAsync(payload, CancellationToken.None);
@@ -93,7 +99,12 @@ public class BacktestRunPersistenceServiceTests
         Assert.Equal("lean-sidecar", row.Source);
         Assert.Equal("ui_run_new", row.LeanRunId);
         Assert.Equal("ema_crossover", row.StrategyName);
-        Assert.Equal("""{"symbol":"SPY"}""", row.Parameters);
+        var parameters = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(row.Parameters);
+        Assert.NotNull(parameters);
+        Assert.Equal("SPY", parameters["symbol"].GetString());
+        Assert.Equal(4.0, parameters["gap_bps"].GetDouble());
+        Assert.Equal(52.0, parameters["rsi_min"].GetDouble());
+        Assert.Equal(68.0, parameters["rsi_max"].GetDouble());
         Assert.DoesNotContain("starting_cash", row.Parameters, StringComparison.Ordinal);
         Assert.Equal(1, row.TotalTrades);
         Assert.Equal(9m, row.TotalPnL);

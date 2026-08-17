@@ -154,4 +154,20 @@ describe("StrategyLabConfigRailComponent", () => {
     expect(button?.textContent).toContain("Check launcher");
     expect(button?.disabled).toBe(true);
   });
+
+  it("keeps declared strategy parameters editable in LEAN mode", async () => {
+    const fixture = await createRail();
+    fixture.componentRef.setInput("engine", "lean");
+    fixture.detectChanges();
+
+    const advanced = (fixture.nativeElement as HTMLElement)
+      .querySelector<HTMLDetailsElement>("details.advanced");
+    if (!advanced) throw new Error("Advanced disclosure is missing");
+    advanced.open = true;
+    fixture.detectChanges();
+
+    expect(advanced.textContent).toContain("Strategy parameters");
+    expect(advanced.querySelectorAll(".advanced-params input")).toHaveLength(3);
+    expect(advanced.textContent).toContain("Fills and fees are defined by the aligned LEAN template.");
+  });
 });

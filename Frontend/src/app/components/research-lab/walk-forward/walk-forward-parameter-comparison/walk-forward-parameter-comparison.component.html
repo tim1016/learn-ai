@@ -1,0 +1,94 @@
+<section class="comparison" aria-labelledby="parameter-comparison-title">
+  <header class="comparison__header">
+    <div>
+      <span class="comparison__eyebrow">Parameter stability</span>
+      <h2 id="parameter-comparison-title">How each candidate behaved across folds</h2>
+    </div>
+    <div class="comparison__legend" aria-label="Comparison legend">
+      <span><i class="legend-key legend-key--selected" aria-hidden="true"></i>Selected</span>
+      @if (activeMetric().positiveLegend; as positiveLegend) {
+        <span><i class="legend-key legend-key--positive" aria-hidden="true"></i>{{ positiveLegend }}</span>
+      }
+      @if (activeMetric().negativeLegend; as negativeLegend) {
+        <span><i class="legend-key legend-key--negative" aria-hidden="true"></i>{{ negativeLegend }}</span>
+      }
+      <span><i class="legend-key legend-key--ineligible" aria-hidden="true"></i>Not eligible</span>
+    </div>
+  </header>
+
+  <p class="comparison__explanation">
+    Every matrix value is <strong>training evidence</strong>. The outlined winner was frozen,
+    then tested once in the next out-of-sample window. Unselected candidates have no OOS result.
+  </p>
+
+  @if (hasTrainingEvidence()) {
+    <div class="comparison__metric-control">
+      <div class="comparison__metric-switch" role="group" aria-label="Training matrix metric">
+        @for (metric of metricOptions; track metric.key) {
+          <button type="button" [attr.aria-pressed]="activeMetricKey() === metric.key" (click)="selectMetric(metric.key)">{{ metric.label }}</button>
+        }
+      </div>
+      <p aria-live="polite"><strong>{{ activeMetric().label }}</strong> — {{ activeMetric().description }}</p>
+    </div>
+    <p class="comparison__fold-guide">Fold numbers move forward through time: F1 is oldest and the highest-numbered fold is newest. Select any fold label for its exact dates.</p>
+    <div
+      class="comparison__matrix-scroll"
+      role="region"
+      [attr.aria-label]="activeMetric().evidenceLabel + ' comparison by candidate and fold'"
+      tabindex="0"
+    >
+      <table class="comparison__matrix">
+        <caption>{{ activeMetric().evidenceLabel }} for every parameter candidate in every fold</caption>
+        <thead>
+          <tr>
+            <th scope="col">{{ parameterHeading() }}</th>
+            @for (fold of folds(); track fold.fold_index; let isLatest = $last) {
+              <th scope="col">
+                <button type="button" class="fold-header-button" (click)="explainFold(fold)" [attr.aria-label]="'Explain fold ' + (fold.fold_index + 1) + (isLatest ? ', most recent fold' : '')">
+                  <span>F{{ fold.fold_index + 1 }}</span>
+                  @if (isLatest) { <em>Latest</em> }
+                  <small>{{ activeMetric().columnLabel }}</small>
+                </button>
+              </th>
+            }
+          </tr>
+        </thead>
+        <tbody>
+          @for (row of rows(); track row.id) {
+            <tr>
+              <th scope="row">{{ row.label }}</th>
+              @for (cell of row.cells; track cell.fold.fold_index) {
+                <td
+                  [class.matrix-cell--positive]="cell.positive"
+                  [class.matrix-cell--negative]="cell.negative"
+                  [class.matrix-cell--ineligible]="cell.training !== null && !cell.training.eligible"
+                  [class.matrix-cell--selected]="cell.selected"
+                  [attr.aria-label]="cellAriaLabel(row, cell)"
+                  [attr.title]="cellAriaLabel(row, cell)"
+                >
+                  <span class="matrix-cell__value">{{ cell.displayValue }}</span>
+                  @if (cell.selected) {
+                    <small class="matrix-cell__selection"><span aria-hidden="true">✓</span> chosen</small>
+                  } @else if (cell.training !== null && !cell.training.eligible) {
+                    <small class="matrix-cell__selection">not eligible</small>
+                  }
+                </td>
+              }
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+
+    <app-walk-forward-selected-outcomes [outcomes]="outcomes()" />
+  } @else {
+    <p class="comparison__empty">This receipt does not contain persisted candidate training results.</p>
+  }
+
+  <app-walk-forward-fold-explainer
+    [fold]="explainedFold()"
+    [folds]="folds()"
+    [parameterLabel]="explainedParameterLabel()"
+    (closed)="explainedFold.set(null)"
+  />
+</section>

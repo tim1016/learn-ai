@@ -78,6 +78,28 @@ def test_failed_lean_payload_preserves_requested_engine_for_history(tmp_path: Pa
     assert payload["requested_engine"] == "both"
 
 
+def test_failed_lean_payload_preserves_strategy_parameters_for_history(tmp_path: Path) -> None:
+    from app.services.lean_sidecar_persistence import build_persist_payload
+
+    payload = build_persist_payload(
+        workspace_path=tmp_path,
+        run_id="history-parameters",
+        starting_cash=100_000,
+        symbol="SPY",
+        algorithm_name="ema_crossover_2_bps",
+        start_date_ms=1_700_000_000_000,
+        end_date_ms=1_700_000_600_000,
+        parameters={"gap_bps": 4.0, "rsi_min": 52.0, "rsi_max": 68.0},
+    )
+
+    assert payload["parameters"] == {
+        "symbol": "SPY",
+        "gap_bps": 4.0,
+        "rsi_min": 52.0,
+        "rsi_max": 68.0,
+    }
+
+
 def test_pair_skips_non_filled_events() -> None:
     events = [
         {**_filled_event(1, "buy", 1_700_000_000_000, 100.0, 10), "status": "submitted"},

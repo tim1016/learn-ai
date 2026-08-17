@@ -1,0 +1,53 @@
+<div class="evidence-table" role="region" aria-label="Sortable Exhaustive Run candidate comparison" tabindex="0">
+  <p-table [value]="candidates()" [scrollable]="true" sortField="full_period_metrics.total_return_pct" [sortOrder]="-1" [rowTrackBy]="trackCandidate">
+    <ng-template #header>
+      <tr class="group-row"><th colspan="5">Selection evidence</th><th colspan="8">Full two-year fit · look-ahead</th><th colspan="6">Forward stability · 18 OOS folds</th></tr>
+      <tr>
+        <th pSortableColumn="parameters.gap_bps">Gap <p-sort-icon field="parameters.gap_bps" /></th>
+        <th pSortableColumn="appearance_count">Fold picks <p-sort-icon field="appearance_count" /></th>
+        <th pSortableColumn="best_fold_rank">Best rank <p-sort-icon field="best_fold_rank" /></th>
+        <th pSortableColumn="latest_selected_fold_index">Latest pick <p-sort-icon field="latest_selected_fold_index" /></th>
+        <th pSortableColumn="mean_selection_score">Train score <p-sort-icon field="mean_selection_score" /></th>
+        <th pSortableColumn="full_period_metrics.total_return_pct">Net return <p-sort-icon field="full_period_metrics.total_return_pct" /></th>
+        <th pSortableColumn="full_period_metrics.sharpe_ratio">Sharpe <p-sort-icon field="full_period_metrics.sharpe_ratio" /></th>
+        <th pSortableColumn="full_period_metrics.max_drawdown_pct">Max DD <p-sort-icon field="full_period_metrics.max_drawdown_pct" /></th>
+        <th pSortableColumn="full_period_metrics.total_trades">Trades <p-sort-icon field="full_period_metrics.total_trades" /></th>
+        <th pSortableColumn="trade_recency.recent_trade_count">Recent trades <p-sort-icon field="trade_recency.recent_trade_count" /></th>
+        <th pSortableColumn="trade_recency.recent_trade_share">Recent share <p-sort-icon field="trade_recency.recent_trade_share" /></th>
+        <th pSortableColumn="trade_recency.recent_vs_prior_rate_ratio">Rate ratio <p-sort-icon field="trade_recency.recent_vs_prior_rate_ratio" /></th>
+        <th pSortableColumn="trade_recency.last_trade_exit_ms">Last trade <p-sort-icon field="trade_recency.last_trade_exit_ms" /></th>
+        <th pSortableColumn="forward_stability.pct_profitable_folds">Profitable <p-sort-icon field="forward_stability.pct_profitable_folds" /></th>
+        <th pSortableColumn="forward_stability.mean_oos_sharpe">Mean Sharpe <p-sort-icon field="forward_stability.mean_oos_sharpe" /></th>
+        <th pSortableColumn="forward_stability.median_oos_sharpe">Median Sharpe <p-sort-icon field="forward_stability.median_oos_sharpe" /></th>
+        <th pSortableColumn="forward_stability.alpha_decay">Alpha decay <p-sort-icon field="forward_stability.alpha_decay" /></th>
+        <th pSortableColumn="forward_stability.mean_fold_retention">Retention <p-sort-icon field="forward_stability.mean_fold_retention" /></th>
+        <th>All folds</th>
+      </tr>
+    </ng-template>
+    <ng-template #body let-candidate>
+      <tr [class.failed-row]="candidate.status === 'failed'">
+        <td class="gap-cell">{{ candidate.parameters['gap_bps'] | number:'1.0-2' }} bps</td>
+        <td>{{ candidate.appearance_count }}/18</td><td>#{{ candidate.best_fold_rank }}</td><td>F{{ candidate.latest_selected_fold_index + 1 }}</td><td>{{ candidate.mean_selection_score | percent:'1.0-0' }}</td>
+        @if (candidate.full_period_metrics; as metrics) {
+          <td>{{ metrics.total_return_pct | percent:'1.2-2' }}</td><td>{{ metrics.sharpe_ratio === null ? '—' : (metrics.sharpe_ratio | number:'1.2-2') }}</td><td>{{ metrics.max_drawdown_pct === null ? '—' : (metrics.max_drawdown_pct | percent:'1.2-2') }}</td><td>{{ metrics.total_trades }}</td>
+        } @else { <td colspan="4">Run failed</td> }
+        @if (candidate.trade_recency; as recent) {
+          <td>{{ recent.recent_trade_count }}</td><td>{{ recent.recent_trade_share === null ? '—' : (recent.recent_trade_share | percent:'1.0-0') }}</td><td>{{ recent.recent_vs_prior_rate_ratio === null ? '—' : (recent.recent_vs_prior_rate_ratio | number:'1.2-2') }}×</td><td>{{ recent.last_trade_exit_ms | timestampDisplay:'date-et' }}</td>
+        } @else { <td colspan="4">—</td> }
+        @if (candidate.forward_stability; as stability) {
+          <td>{{ stability.pct_profitable_folds === null ? '—' : (stability.pct_profitable_folds | percent:'1.0-0') }}</td><td>{{ stability.mean_oos_sharpe === null ? '—' : (stability.mean_oos_sharpe | number:'1.2-2') }}</td><td>{{ stability.median_oos_sharpe === null ? '—' : (stability.median_oos_sharpe | number:'1.2-2') }}</td><td>{{ stability.alpha_decay === null ? '—' : (stability.alpha_decay | number:'1.3-3') }}</td><td>{{ stability.mean_fold_retention === null ? '—' : (stability.mean_fold_retention | percent:'1.0-0') }}</td><td><button type="button" (click)="explainedCandidate.set(candidate)" [attr.aria-label]="'Show all 18 folds for ' + candidate.parameters['gap_bps'] + ' basis points'">18 folds</button></td>
+        } @else { <td colspan="6">{{ candidate.failure_reason ?? 'Unavailable' }}</td> }
+      </tr>
+    </ng-template>
+  </p-table>
+</div>
+<p class="evidence-table__note">
+  Net return is the strategy’s percentage change in equity. Sharpe measures
+  risk-adjusted consistency; it is not the portfolio’s growth rate.
+</p>
+<p class="evidence-table__note">
+  Mean retention is TEST Sharpe ÷ the same gap’s TRAIN Sharpe, averaged by fold.
+  It can exceed 100% and becomes unstable when a TRAIN Sharpe is near zero.
+</p>
+@if (failedCandidates().length > 0) { <p class="evidence-table__warning">{{ failedCandidates().length }} candidate run(s) failed. Their missing fields are not zero results.</p> }
+<app-exhaustive-run-folds-dialog [candidate]="explainedCandidate()" (closed)="explainedCandidate.set(null)" />

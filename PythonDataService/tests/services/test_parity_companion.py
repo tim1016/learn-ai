@@ -129,6 +129,47 @@ def test_dispatch_migrated_signal_launches_its_named_lean_template():
 
 
 @respx.mock
+@pytest.mark.parametrize(
+    ("params", "expected"),
+    [
+        (
+            {"symbol": "SPY"},
+            {"gap_bps": 2.0, "rsi_min": 50.0, "rsi_max": 70.0},
+        ),
+        (
+            {"symbol": "SPY", "gap_bps": 4.0, "rsi_min": 52.0, "rsi_max": 68.0},
+            {"gap_bps": 4.0, "rsi_min": 52.0, "rsi_max": 68.0},
+        ),
+    ],
+)
+def test_dispatch_two_bps_companion_carries_resolved_strategy_parameters(params, expected):
+    """A paired run must execute the same configured rules in both engines."""
+    launched: dict = {}
+
+    def _capture_job(request: httpx.Request) -> httpx.Response:
+        launched.update(json.loads(request.content))
+        return httpx.Response(202, json={"id": "job-two-bps"})
+
+    respx.post(f"{BACKEND}/api/parity-verdicts").mock(return_value=httpx.Response(200, json={"id": 1}))
+    respx.post(f"{BACKEND}/api/jobs/lean_engine_run").mock(side_effect=_capture_job)
+
+    dispatch_parity_companion(
+        registration=_STRATEGY_REGISTRY["ema_crossover_2_bps"],
+        request=_request(strategy_name="ema_crossover_2_bps", params=params),
+        parity_group_id="pg-two-bps-params",
+        left_execution_id=44,
+        validated_parameters=(
+            _STRATEGY_REGISTRY["ema_crossover_2_bps"]
+            .param_schema.model_validate(params)
+            .model_dump(mode="json")
+        ),
+    )
+
+    assert launched["request"]["template"] == "ema_crossover_2_bps"
+    assert launched["request"]["strategy_parameters"] == expected
+
+
+@respx.mock
 def test_dispatch_ineligible_records_unavailable_and_launches_nothing():
     created: dict = {}
 

@@ -109,14 +109,15 @@ public class BacktestRunPersistenceService : IBacktestRunPersistenceService
         var endDateStr = DateTimeOffset.FromUnixTimeMilliseconds(payload.EndDateMs)
             .UtcDateTime.ToString("yyyy-MM-dd");
 
+        var parameters = payload.Parameters?.ToDictionary(pair => pair.Key, pair => pair.Value)
+            ?? new Dictionary<string, JsonElement>();
+        parameters["symbol"] = JsonSerializer.SerializeToElement(payload.Symbol);
+
         var execution = new StrategyExecution
         {
             TickerId = ticker.Id,
             StrategyName = payload.StrategyName,
-            Parameters = JsonSerializer.Serialize(new
-            {
-                symbol = payload.Symbol,
-            }),
+            Parameters = JsonSerializer.Serialize(parameters),
             StartDate = startDateStr,
             EndDate = endDateStr,
             Timespan = "minute",

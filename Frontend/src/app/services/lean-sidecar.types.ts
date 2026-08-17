@@ -61,7 +61,13 @@ export interface TrustedRunRequest {
    * is provided (operator-pasted source pins its own brokerage via
    * ``SetBrokerageModel``).
    */
-  template?: "trusted_default" | "reconciliation" | "ema_crossover" | "ema_crossover_signal" | "deployment_validation";
+  template?: "trusted_default" | "reconciliation" | "ema_crossover" | "ema_crossover_signal" | "ema_crossover_2_bps" | "deployment_validation";
+  /** Runtime gates accepted by the parameterized EMA Crossover 2 bps template. */
+  strategy_parameters?: {
+    gap_bps: number;
+    rsi_min: number;
+    rsi_max: number;
+  };
   /**
    * PR B (2026-05-19) — canonical DataPolicy block. When provided, the
    * legacy top-level ``symbol`` field must be omitted (the router rejects

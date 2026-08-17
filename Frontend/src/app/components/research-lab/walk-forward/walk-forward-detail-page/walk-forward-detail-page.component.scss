@@ -5,6 +5,7 @@
   padding: 1.5rem;
   max-width: 1400px;
   margin: 0 auto;
+  color: var(--text-primary);
 }
 
 .wfd-header {
@@ -15,7 +16,7 @@
 
 .wfd-back {
   font-size: 0.875rem;
-  color: var(--text-color-secondary, #6b7280);
+  color: var(--accent-text);
   text-decoration: none;
 }
 
@@ -40,26 +41,26 @@
   flex-wrap: wrap;
   gap: 1.25rem;
   font-size: 0.875rem;
-  color: var(--text-color-secondary, #6b7280);
+  color: var(--text-secondary);
 
   code {
-    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-family: var(--font-mono);
     font-size: 0.8125rem;
-    color: var(--text-color, #111827);
+    color: var(--text-primary);
   }
 }
 
 .wfd-parent {
   font-size: 0.875rem;
-  color: var(--text-color-secondary, #6b7280);
+  color: var(--text-secondary);
 
   code {
-    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-family: var(--font-mono);
     font-size: 0.8125rem;
   }
 
   a {
-    color: var(--primary-color, #2563eb);
+    color: var(--accent-text);
     text-decoration: none;
   }
 
@@ -88,19 +89,19 @@
     margin: 0;
     font-size: 1rem;
     font-weight: 600;
-    color: var(--text-color, #111827);
+    color: var(--text-primary);
   }
 
   .wfd-section-count {
     margin-left: 0.35rem;
-    color: var(--text-color-secondary, #6b7280);
+    color: var(--text-subtle);
     font-weight: 400;
     font-size: 0.875rem;
   }
 
   .wfd-section-hint {
     margin: 0;
-    color: var(--text-color-secondary, #6b7280);
+    color: var(--text-secondary);
     font-size: 0.8125rem;
     max-width: 70ch;
   }
@@ -117,15 +118,16 @@
   flex-direction: column;
   gap: 0.25rem;
   padding: 0.75rem 1rem;
-  background: var(--surface-50, #f9fafb);
-  border: 1px solid var(--surface-border, #e5e7eb);
-  border-radius: 6px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
 
   .wfd-metric-label {
     font-size: 0.75rem;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    color: var(--text-color-secondary, #6b7280);
+    color: var(--text-subtle);
   }
 
   .wfd-metric-value {
@@ -137,7 +139,7 @@
       margin-left: 0.35rem;
       font-size: 0.75rem;
       font-weight: 400;
-      color: var(--text-color-secondary, #6b7280);
+      color: var(--text-secondary);
     }
   }
 }
@@ -145,7 +147,9 @@
 .wfd-chart {
   width: 100%;
   height: 300px;
-  border-radius: 6px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
   overflow: hidden;
 }
 
@@ -155,16 +159,41 @@
     font-variant-numeric: tabular-nums;
   }
 
+  .p-datatable-thead > tr > th {
+    border-color: var(--border-light);
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+  }
+
+  .p-datatable-tbody > tr {
+    background: var(--bg-surface);
+    color: var(--text-primary);
+
+    > td {
+      border-color: var(--border);
+    }
+
+    &:hover > td {
+      background: var(--bg-hover);
+    }
+  }
+
   .wfd-window-cell {
     white-space: nowrap;
   }
 
+  .wfd-parameter-cell {
+    color: var(--accent-text);
+    font-family: var(--font-mono);
+    white-space: nowrap;
+  }
+
   .wfd-hash-cell {
-    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-family: var(--font-mono);
     font-size: 0.8125rem;
 
     a {
-      color: var(--primary-color, #2563eb);
+      color: var(--accent-text);
       text-decoration: none;
     }
 

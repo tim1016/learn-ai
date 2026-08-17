@@ -63,7 +63,7 @@
         <ng-template #content>
           <ul class="wfd-warning-list m-0 grid gap-2 pl-5">
             @for (failure of data.result.selection_failures; track failure.fold_index) {
-              <li>Fold {{ failure.fold_index }} retained {{ failure.training_candidates.length }} candidate outcomes: {{ failure.failure_reason }}</li>
+              <li>Fold {{ failure.fold_index + 1 }} retained {{ failure.training_candidates.length }} candidate outcomes: {{ failure.failure_reason }}</li>
             }
           </ul>
         </ng-template>
@@ -124,6 +124,17 @@
       </div>
     </section>
 
+    @if (data.config.parameter_search; as parameterSearch) {
+      <app-walk-forward-parameter-comparison
+        [folds]="data.result.folds"
+        [parameterSearch]="parameterSearch"
+      />
+
+      <app-exhaustive-run-panel
+        [walkForwardId]="data.config.walk_forward_id"
+      />
+    }
+
     <!-- Combined OOS curve -->
     <section class="wfd-section">
       <h2>Combined OOS equity curve</h2>
@@ -150,6 +161,7 @@
             <th>Status</th>
             <th>Train</th>
             <th>Test</th>
+            <th>Selected gap</th>
             <th>Trades</th>
             <th>Return</th>
             <th>Max DD</th>
@@ -159,7 +171,7 @@
         </ng-template>
         <ng-template #body let-fold>
           <tr class="wfd-fold-row">
-            <td>{{ fold.fold_index }}</td>
+            <td>{{ fold.fold_index + 1 }}</td>
             <td>
               <p-tag
                 [value]="fold.status"
@@ -173,6 +185,11 @@
             <td class="wfd-window-cell">
               {{ fold.test_start_ms | timestampDisplay: 'date-et' }} →
               {{ fold.test_end_ms | timestampDisplay: 'date-et' }}
+            </td>
+            <td class="wfd-parameter-cell">
+              @if (fold.selected_parameters['gap_bps'] !== undefined) {
+                {{ fold.selected_parameters['gap_bps'] | number:'1.0-2' }} bps
+              } @else { — }
             </td>
             <td>{{ fold.test_metrics.total_trades }}</td>
             <td>{{ fold.test_metrics.total_return_pct | percent: '1.2-2' }}</td>

@@ -1969,6 +1969,76 @@ class TestTemplateSelection:
 
         assert model.template == "ema_crossover_signal"
 
+    async def test_two_bps_template_defaults_its_strategy_parameters(self) -> None:
+        from app.routers.lean_sidecar import TrustedRunRequestModel
+
+        payload = _good_payload()
+        payload["template"] = "ema_crossover_2_bps"
+
+        model = TrustedRunRequestModel.model_validate(payload)
+
+        assert model.strategy_parameters is not None
+        assert model.strategy_parameters.model_dump() == {
+            "gap_bps": 2.0,
+            "rsi_min": 50.0,
+            "rsi_max": 70.0,
+        }
+
+    async def test_two_bps_template_accepts_valid_strategy_parameters(self) -> None:
+        from app.routers.lean_sidecar import TrustedRunRequestModel
+
+        payload = _good_payload()
+        payload["template"] = "ema_crossover_2_bps"
+        payload["strategy_parameters"] = {
+            "gap_bps": 4,
+            "rsi_min": 52,
+            "rsi_max": 68,
+        }
+
+        model = TrustedRunRequestModel.model_validate(payload)
+
+        assert model.strategy_parameters is not None
+        assert model.strategy_parameters.gap_bps == 4
+
+    @pytest.mark.parametrize(
+        "strategy_parameters",
+        [
+            {"gap_bps": -1, "rsi_min": 50, "rsi_max": 70},
+            {"gap_bps": 2, "rsi_min": 70, "rsi_max": 50},
+            {"gap_bps": 2, "rsi_min": 50, "rsi_max": 70, "unknown": 1},
+        ],
+    )
+    async def test_two_bps_template_rejects_invalid_strategy_parameters(
+        self,
+        strategy_parameters: dict[str, float],
+    ) -> None:
+        from pydantic import ValidationError
+
+        from app.routers.lean_sidecar import TrustedRunRequestModel
+
+        payload = _good_payload()
+        payload["template"] = "ema_crossover_2_bps"
+        payload["strategy_parameters"] = strategy_parameters
+
+        with pytest.raises(ValidationError):
+            TrustedRunRequestModel.model_validate(payload)
+
+    async def test_non_parameterized_template_rejects_strategy_parameters(self) -> None:
+        from pydantic import ValidationError
+
+        from app.routers.lean_sidecar import TrustedRunRequestModel
+
+        payload = _good_payload()
+        payload["template"] = "ema_crossover_signal"
+        payload["strategy_parameters"] = {
+            "gap_bps": 2,
+            "rsi_min": 50,
+            "rsi_max": 70,
+        }
+
+        with pytest.raises(ValidationError, match="does not accept strategy_parameters"):
+            TrustedRunRequestModel.model_validate(payload)
+
     async def test_template_rejects_unknown_value(self, client: AsyncClient) -> None:
         """A typo or unknown template must 422 — silently falling
         through to the default would mask brokerage intent."""

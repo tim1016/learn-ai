@@ -1,0 +1,53 @@
+<p-dialog
+  [visible]="fold() !== null"
+  (visibleChange)="onVisibleChange($event)"
+  [modal]="true"
+  [draggable]="false"
+  [resizable]="false"
+  [closable]="true"
+  closeAriaLabel="Close fold explanation"
+  styleClass="fold-explainer-dialog"
+>
+  @if (fold(); as selectedFold) {
+    @if (recency(); as foldRecency) {
+      <ng-template #header>
+        <div class="fold-explainer__header">
+          <span>Fold {{ foldRecency.position }} of {{ foldRecency.total }}</span>
+          <strong>{{ foldRecency.label }}</strong>
+        </div>
+      </ng-template>
+
+      <section class="fold-explainer" aria-label="Fold chronology and evidence">
+        <p class="fold-explainer__lead">
+          Folds are ordered by their out-of-sample test window. F1 is the earliest;
+          F{{ foldRecency.total }} is the latest in this persisted receipt.
+        </p>
+
+        <div class="fold-explainer__windows">
+          <article>
+            <span>1 · Learn</span>
+            <strong>{{ selectedFold.train_start_ms | timestampDisplay:'date-et' }} → {{ selectedFold.train_end_ms | timestampDisplay:'date-et' }}</strong>
+            <p>Every candidate was scored on this training window. Neighboring training windows may overlap.</p>
+          </article>
+          <article>
+            <span>2 · Prove</span>
+            <strong>{{ selectedFold.test_start_ms | timestampDisplay:'date-et' }} → {{ selectedFold.test_end_ms | timestampDisplay:'date-et' }}</strong>
+            <p>The chosen parameter was frozen and evaluated on this previously unseen OOS window.</p>
+          </article>
+        </div>
+
+        <dl class="fold-explainer__result">
+          <div><dt>Selected parameter</dt><dd>{{ parameterLabel() }}</dd></div>
+          <div><dt>OOS return</dt><dd>{{ selectedFold.status === 'completed' ? (selectedFold.test_metrics.total_return_pct | percent:'1.2-2') : 'failed' }}</dd></div>
+          <div><dt>OOS trades</dt><dd>{{ selectedFold.test_metrics.total_trades }}</dd></div>
+          <div><dt>OOS Sharpe</dt><dd>{{ selectedFold.test_metrics.sharpe_ratio === null ? '—' : (selectedFold.test_metrics.sharpe_ratio | number:'1.2-2') }}</dd></div>
+        </dl>
+
+        <div class="fold-explainer__recency">
+          <strong>{{ foldRecency.newerFoldCopy }}</strong>
+          <p>“Most recent” means latest inside this frozen analysis—not live market data or the current production parameter.</p>
+        </div>
+      </section>
+    }
+  }
+</p-dialog>

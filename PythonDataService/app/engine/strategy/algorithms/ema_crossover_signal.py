@@ -87,6 +87,14 @@ class EmaCrossoverSignalAlgorithm(Strategy):
     STRATEGY_KEY = "ema_crossover_signal"
     CONSOLIDATOR_PERIOD_MIN = 15
 
+    def _gap_is_sufficient(self, ema_fast: Decimal, ema_slow: Decimal) -> bool:
+        """Apply the original absolute-dollar entry threshold."""
+        return ema_fast - ema_slow >= Decimal("0.20")
+
+    def _rsi_gate_bounds(self) -> tuple[Decimal, Decimal]:
+        """Return the original inclusive RSI entry band."""
+        return Decimal(50), Decimal(70)
+
     def __init__(self, symbol: str = "SPY", output_dir: Path | None = None) -> None:
         super().__init__()
         # This is the signal stream, not an execution target. The Action Plan
@@ -245,8 +253,9 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         else:
             # Entry check.
             fresh_crossover = current_above and not self._prev_ema5_above_ema10
-            gap_ok = ema_gap >= Decimal("0.20")
-            rsi_ok = Decimal(50) <= rsi_val <= Decimal(70)
+            gap_ok = self._gap_is_sufficient(ema5_val, ema10_val)
+            rsi_lower, rsi_upper = self._rsi_gate_bounds()
+            rsi_ok = rsi_lower <= rsi_val <= rsi_upper
 
             if fresh_crossover and gap_ok and rsi_ok:
                 # Stash the indicator snapshot — it describes the
@@ -268,9 +277,11 @@ class EmaCrossoverSignalAlgorithm(Strategy):
                 # The insight describes the signal stream. The action plan
                 # may select a different traded asset for the same intent.
                 rsi_float = float(rsi_val)
-                # Confidence derived from RSI position in the 50-70 band.
-                # Peak confidence at RSI=60 (center of the band).
-                rsi_position = (rsi_float - 50.0) / 20.0  # 0.0 at 50, 1.0 at 70
+                # Confidence derived from RSI position in the configured
+                # gate. Peak confidence is at the center of the band.
+                rsi_lower_float = float(rsi_lower)
+                rsi_upper_float = float(rsi_upper)
+                rsi_position = (rsi_float - rsi_lower_float) / (rsi_upper_float - rsi_lower_float)
                 confidence = 0.5 + 0.3 * (1.0 - abs(rsi_position - 0.5))
 
                 self.ctx.emit_insight(
