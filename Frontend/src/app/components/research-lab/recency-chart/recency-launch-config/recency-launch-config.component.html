@@ -1,0 +1,81 @@
+<div class="launch-config">
+  <section class="symbols">
+    <label for="recency-symbols">Symbols (comma-separated)</label>
+    <input
+      id="recency-symbols"
+      type="text"
+      placeholder="SPY, AAPL, QQQ"
+      (input)="setSymbolsText($any($event.target).value)"
+    />
+  </section>
+
+  <section class="strategies">
+    <h3>Strategies</h3>
+    @for (strategy of eligibleStrategies(); track strategy.name) {
+      <div class="strategy-row">
+        <label>
+          <input
+            type="checkbox"
+            [checked]="isSelected(strategy)"
+            (change)="toggleStrategy(strategy)"
+          />
+          {{ strategy.display_name }}
+        </label>
+
+        @if (isSelected(strategy)) {
+          <div class="param-ranges">
+            @for (entry of numericParams(strategy); track entry[0]) {
+              <app-recency-param-range-input
+                [paramName]="entry[0]"
+                [title]="entry[1].title || entry[0]"
+                [defaultValue]="$any(entry[1].default) ?? 0"
+                [range]="rangeFor(strategy.name, entry[0])"
+                (rangeChange)="updateRange(strategy.name, entry[0], $event)"
+              ></app-recency-param-range-input>
+            }
+          </div>
+        }
+      </div>
+    }
+  </section>
+
+  <section class="duration">
+    <h3>Duration</h3>
+    <div role="radiogroup" aria-label="Lookback duration">
+      <label>
+        <input type="radio" name="duration" [checked]="durationPreset() === '3m'" (change)="setDurationPreset('3m')" />
+        3 months
+      </label>
+      <label>
+        <input type="radio" name="duration" [checked]="durationPreset() === '6m'" (change)="setDurationPreset('6m')" />
+        6 months
+      </label>
+      <label>
+        <input type="radio" name="duration" [checked]="durationPreset() === '12m'" (change)="setDurationPreset('12m')" />
+        12 months
+      </label>
+      <label>
+        <input type="radio" name="duration" [checked]="durationPreset() === '24m'" (change)="setDurationPreset('24m')" />
+        24 months
+      </label>
+      <label>
+        <input type="radio" name="duration" [checked]="durationPreset() === 'custom'" (change)="setDurationPreset('custom')" />
+        Custom
+      </label>
+    </div>
+    @if (durationPreset() === 'custom') {
+      <label for="recency-custom-months">Custom months</label>
+      <input
+        id="recency-custom-months"
+        type="number"
+        [value]="customMonths()"
+        (input)="setCustomMonths($any($event.target).value)"
+      />
+    }
+  </section>
+
+  <section class="launch-bar">
+    <p class="run-count">{{ runCount() }} run{{ runCount() === 1 ? '' : 's' }}</p>
+    <button type="button" (click)="launch()">Launch</button>
+  </section>
+</div>

@@ -692,6 +692,10 @@ type Mutation {
   deleteDataLabSession(id: UUID!): DataLabSessionResult! @cost(weight: "10")
   runSpecStrategyBacktest(specJson: String! startDate: String! endDate: String! initialCash: Decimal! = 100000 fillMode: String! = "signal_bar_close" commissionPerOrder: Decimal! = 0): SpecStrategyBacktestResultType! @cost(weight: "10")
   updateBacktestRunNotes(id: Int! notes: String!): BacktestRunNotesResult! @cost(weight: "10")
+  softDeleteRecencyRun(runId: Int!): IRecencyRunMutationResult! @cost(weight: "10")
+  restoreRecencyRun(runId: Int!): IRecencyRunMutationResult! @cost(weight: "10")
+  softDeleteRecencyLaunch(launchId: String!): IRecencyLaunchMutationResult! @cost(weight: "10")
+  restoreRecencyLaunch(launchId: String!): IRecencyLaunchMutationResult! @cost(weight: "10")
 }
 
 type OptionContract {
@@ -1062,6 +1066,8 @@ type Query {
   dataLabSession(id: UUID!): DataLabSession @cost(weight: "10")
   backtestRuns(engine: Engine symbol: String "Returns the first _n_ elements from the list." first: Int "Returns the elements in the list that come after the specified cursor." after: String "Returns the last _n_ elements from the list." last: Int "Returns the elements in the list that come before the specified cursor." before: String): BacktestRunsConnection @listSize(assumedSize: 100, slicingArguments: [ "first", "last" ], slicingArgumentDefaultValue: 25, sizedFields: [ "edges", "nodes" ], requireOneSlicingArgument: false) @cost(weight: "10")
   backtestRun(id: Int!): BacktestRunDetailType @cost(weight: "10")
+  recencyTrades(fromMs: Long! toMs: Long! symbols: [String!] strategies: [String!]): [RecencyTradeType!]! @cost(weight: "10")
+  recencyHero(symbols: [String!] strategies: [String!] fromMs: Long! toMs: Long!): [RecencyHeroType!]! @cost(weight: "10")
 }
 
 type Quote {
@@ -1086,6 +1092,59 @@ type RebuildResult {
   positionCount: Int!
   message: String
   error: String
+}
+
+type RecencyHeroType {
+  symbol: String!
+  strategyKey: String!
+  paramsHash: String!
+  totalPnl: Decimal!
+  recencyRunId: Int!
+}
+
+type RecencyLaunchMutationSuccess {
+  launchId: String!
+}
+
+type RecencyLaunchNotFoundError {
+  message: String!
+  code: String!
+}
+
+type RecencyRunMutationSuccess {
+  recencyRunId: Int!
+}
+
+type RecencyRunNotFoundError {
+  message: String!
+  code: String!
+}
+
+type RecencyTradeMembershipType {
+  recencyRunId: Int!
+  studyId: Int
+  createdAtMs: Long!
+}
+
+type RecencyTradeType {
+  symbol: String!
+  strategyKey: String!
+  paramsHash: String!
+  paramsJson: String!
+  fingerprint: String!
+  entryMs: Long!
+  exitMs: Long!
+  pnlPts: Decimal!
+  pnlPct: Decimal!
+  quantity: Decimal!
+  pnl: Decimal!
+  holdingSessions: Int!
+  sharpe: Decimal
+  studyId: Int
+  recencyRunId: Int!
+  isSyntheticExit: Boolean!
+  signalReason: String!
+  memberships: [RecencyTradeMembershipType!]!
 }
 
 type ReconciliationReport {
@@ -1907,6 +1966,10 @@ type WalkForwardWindowType {
   oosDates: [String!]!
   oosCumulativeReturns: [Float!]!
 }
+
+union IRecencyLaunchMutationResult = RecencyLaunchMutationSuccess | RecencyLaunchNotFoundError
+
+union IRecencyRunMutationResult = RecencyRunMutationSuccess | RecencyRunNotFoundError
 
 input AccountFilterInput {
   and: [AccountFilterInput!]

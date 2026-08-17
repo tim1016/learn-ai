@@ -147,6 +147,12 @@ builder.Services.AddHttpClient("python", client =>
     client.BaseAddress = new Uri(baseUrl);
     client.Timeout = TimeSpan.FromSeconds(60);
 });
+builder.Services.AddHttpClient<IRecencyHeroClient, RecencyHeroClient>(client =>
+{
+    var baseUrl = builder.Configuration["PolygonService:BaseUrl"] ?? "http://python-service:8000";
+    client.BaseAddress = new Uri(baseUrl);
+    client.Timeout = TimeSpan.FromSeconds(60);
+});
 
 // Minimal API JSON: accept snake_case payloads from PythonDataService
 // (and PascalCase from any other caller) without 500-null-column errors.
@@ -164,6 +170,8 @@ builder.Services.ConfigureHttpJsonOptions(opts =>
 // Register business services (testable via interfaces)
 builder.Services.AddScoped<IMarketDataService, MarketDataService>();
 builder.Services.AddScoped<IBacktestRunPersistenceService, BacktestRunPersistenceService>();
+builder.Services.AddScoped<IRecencyLaunchService, RecencyLaunchService>();
+builder.Services.AddScoped<IRecencyPersistenceService, RecencyPersistenceService>();
 builder.Services.AddScoped<IParityVerdictService, ParityVerdictService>();
 builder.Services.AddScoped<IPositionEngine, PositionEngine>();
 builder.Services.AddScoped<IPortfolioService, PortfolioService>();
@@ -188,11 +196,17 @@ builder.Services
     .AddTypeExtension<BacktestRunsQuery>()
     .AddTypeExtension<BacktestRunDetailQuery>()
     .AddTypeExtension<BacktestRunResolver>()
+    .AddTypeExtension(typeof(RecencyQuery))
     .AddMutationType<Mutation>()
     .AddTypeExtension<PortfolioMutation>()
     .AddTypeExtension<DataLabMutation>()
     .AddTypeExtension<SpecStrategyMutation>()
     .AddTypeExtension<BacktestRunMutation>()
+    .AddTypeExtension(typeof(RecencyMutation))
+    .AddType<RecencyRunMutationSuccess>()
+    .AddType<RecencyRunNotFoundError>()
+    .AddType<RecencyLaunchMutationSuccess>()
+    .AddType<RecencyLaunchNotFoundError>()
     .AddProjections()
     .AddFiltering()
     .AddSorting()
@@ -218,6 +232,7 @@ if (!isGraphQLSchemaCommand)
 app.UseCors();
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
 app.MapStudiesEndpoints();
+app.MapRecencyEndpoints();
 app.MapBacktestRunsEndpoints();
 app.MapParityVerdictsEndpoints();
 app.MapJobsEndpoints();
