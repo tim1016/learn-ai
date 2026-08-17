@@ -4,21 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TradingChartComponent, TRADING_CHART_FACTORY } from "./trading-chart.component";
 
-// The component only needs lightweight-charts for its series-type constants —
-// the chart itself arrives through TRADING_CHART_FACTORY below. Declared here
-// explicitly rather than left to ambient state: sibling specs install their own
-// partial 'lightweight-charts' factories, and this file must not depend on which
-// of them happens to share its worker.
-vi.mock("lightweight-charts", () => ({
-  createChart: vi.fn(),
-  AreaSeries: "AreaSeries",
-  CandlestickSeries: "CandlestickSeries",
-  HistogramSeries: "HistogramSeries",
-  LineSeries: "LineSeries",
-  LineType: { Simple: 0, WithSteps: 1 },
-  createSeriesMarkers: vi.fn(),
-}));
-
 const chartHarness: {
   options: Record<string, unknown> | null;
   addSeries: ReturnType<typeof vi.fn>;
