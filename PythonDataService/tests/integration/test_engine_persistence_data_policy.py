@@ -221,7 +221,7 @@ def test_resolved_snapshot_freezes_strategy_defaults_for_history() -> None:
 
     assert snapshot.start_date == "2024-03-28"
     assert snapshot.end_date == "2026-03-27"
-    assert snapshot.parameters == {"symbol": "SPY"}
+    assert snapshot.parameters == {"symbol": "SPY", "gap": 0.2, "rsi_min": 50.0, "rsi_max": 70.0}
     assert request.data_policy is not None
     assert request.data_policy.symbol == "SPY"
 

@@ -100,6 +100,17 @@ _CODE_REVISION = (
 )
 
 
+def resolved_code_revision() -> str:
+    """Return the process's resolved code revision (env override or git SHA).
+
+    Public accessor for callers outside this module that need the same
+    provenance value ``data_plane_health()`` reports — e.g. the Recency
+    Chart's evidence fingerprint (design spec D16), which must distinguish
+    trades produced by different strategy-code revisions.
+    """
+    return _CODE_REVISION
+
+
 def data_plane_health() -> DataPlaneHealth:
     """Return stable process metadata plus request-time freshness."""
     return DataPlaneHealth(

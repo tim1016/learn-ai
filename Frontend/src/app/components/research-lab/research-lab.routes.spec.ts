@@ -6,6 +6,7 @@ import {
   SpyEmaWalkForwardManualPageComponent,
 } from './spy-ema-walk-forward/manual/spy-ema-walk-forward-manual-page.component';
 import { SpyEmaWalkForwardPageComponent } from './spy-ema-walk-forward/spy-ema-walk-forward-page.component';
+import { RecencyChartPageComponent } from './recency-chart/recency-chart-page.component';
 
 describe('Research Lab route configuration', () => {
   it('registers the SPY EMA walk-forward page in the Backtests navigation', async () => {
@@ -38,5 +39,23 @@ describe('Research Lab route configuration', () => {
       SpyEmaWalkForwardManualPageComponent,
     );
     expect(manualRoute.data?.['title']).toBe('SPY EMA Walk-Forward Manual');
+  });
+
+  it('registers the Recency Chart page in the Backtests navigation', async () => {
+    const shell = researchLabRoutes.find((route) => route.path === '');
+    const pageRoute = shell?.children?.find(
+      (route) => route.path === 'backtests/recency-chart',
+    );
+    const backtests = RESEARCH_LAB_NAV.find((group) => group.label === 'Backtests');
+
+    if (pageRoute?.loadComponent === undefined) {
+      throw new Error('Recency Chart route is missing.');
+    }
+    expect(await pageRoute.loadComponent()).toBe(RecencyChartPageComponent);
+    expect(pageRoute?.data?.['title']).toBe('Recency Chart');
+    expect(backtests?.items).toContainEqual({
+      path: 'backtests/recency-chart',
+      label: 'Recency Chart',
+    });
   });
 });

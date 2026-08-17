@@ -66,6 +66,7 @@ from app.models.responses import (
     LeanStatisticsResponse,
     LeanTradeStatsResponse,
 )
+from app.research.recency.eligibility import is_recency_supported
 from app.schemas.engine_chart import EngineChartRequest, EngineChartResponse
 from app.schemas.engine_validation import EngineValidationAnalyticsResponse
 from app.schemas.run_verdict import RunVerdict
@@ -651,6 +652,10 @@ class StrategyInfo(BaseModel):
     # semantics. ``None`` means Engine Lab must not offer a LEAN parity run.
     lean_twin: str | None = None
     strategy_bars: StrategyBarCadenceInfo
+    # Recency Chart eligibility (design spec D1) — True iff every param
+    # besides ``symbol`` is numeric (int/float). Derived structurally from
+    # the schema, not hand-flagged; see app/research/recency/eligibility.py.
+    recency_supported: bool = False
 
 
 @router.get("/strategies", response_model=list[StrategyInfo])
@@ -683,6 +688,7 @@ def list_engine_strategies() -> list[StrategyInfo]:
                 pine_available=reg.pine_generator is not None,
                 sizing_surface=reg.sizing_surface,
                 lean_twin=reg.lean_twin,
+                recency_supported=is_recency_supported(reg.param_schema),
                 strategy_bars=StrategyBarCadenceInfo(
                     timespan=reg.strategy_bars.timespan,
                     multiplier=multiplier,

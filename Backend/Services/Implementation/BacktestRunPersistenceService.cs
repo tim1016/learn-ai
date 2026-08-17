@@ -188,7 +188,7 @@ public class BacktestRunPersistenceService : IBacktestRunPersistenceService
         {
             await _db.SaveChangesAsync(ct);  // populates execution.Id
         }
-        catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+        catch (DbUpdateException ex) when (PostgresErrors.IsUniqueViolation(ex))
         {
             // A concurrent call won the race and inserted the same LeanRunId.
             // PostgreSQL aborts the current transaction after a unique
@@ -266,12 +266,6 @@ public class BacktestRunPersistenceService : IBacktestRunPersistenceService
                 "[PARITY] Verdict computation failed for group {Group} (right={RightId}); verdict left pending",
                 payload.ParityGroupId, executionId);
         }
-    }
-
-    private static bool IsUniqueViolation(DbUpdateException ex)
-    {
-        // Npgsql: SqlState 23505 == unique_violation
-        return ex.InnerException is Npgsql.PostgresException pg && pg.SqlState == "23505";
     }
 
     private static void EnsureRequestedEngineMatchesExisting(

@@ -1,0 +1,42 @@
+<div class="focus-panel">
+  @if (trade(); as t) {
+    <div class="header">
+      <app-asset-identity [symbol]="t.symbol" size="sm" />
+      <span class="strategy">{{ t.strategyKey }}</span>
+      <span class="pnl">{{ pnlLabel() }}</span>
+    </div>
+
+    @if (params(); as parsed) {
+      <dl class="params">
+        @for (p of parsed; track p.name) {
+          <dt>{{ p.name }}</dt>
+          <dd>{{ p.value }}</dd>
+        }
+      </dl>
+    } @else {
+      <p class="params-unavailable">Parameters unavailable</p>
+    }
+
+    <dl class="fields">
+      <dt>Entry</dt>
+      <dd><app-timestamp-display [value]="t.entryMs" mode="local" /></dd>
+      <dt>Exit</dt>
+      <dd><app-timestamp-display [value]="t.exitMs" mode="local" /></dd>
+      <dt>Held</dt>
+      <dd>{{ durationLabel() }}</dd>
+      <dt>Sharpe</dt>
+      <dd>{{ t.sharpe ?? "—" }}</dd>
+    </dl>
+
+    <div class="actions">
+      @if (studyUrl(); as url) {
+        <a class="open-run" [href]="url">Open run ▸</a>
+      }
+      <button type="button" class="delete-run" (click)="requestDelete()">Delete run</button>
+    </div>
+
+    <p class="oos-caption">In-sample selection, not out-of-sample proof.</p>
+  } @else {
+    <p class="placeholder">Click a bar to pin its details here.</p>
+  }
+</div>
