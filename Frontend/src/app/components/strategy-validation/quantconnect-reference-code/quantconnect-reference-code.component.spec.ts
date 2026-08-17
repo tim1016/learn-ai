@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { QuantConnectReferenceCodeComponent } from './quantconnect-reference-code.component';
 
@@ -10,10 +10,23 @@ const REFERENCE_CODE = {
   source: 'class SpyEmaCrossoverAlgorithm(QCAlgorithm):\n    pass\n',
 };
 
+function stubClipboard(writeText: ReturnType<typeof vi.fn>): void {
+  const navigatorWithClipboard = Object.create(window.navigator) as Navigator;
+  Object.defineProperty(navigatorWithClipboard, 'clipboard', {
+    configurable: true,
+    value: { writeText },
+  });
+  vi.stubGlobal('navigator', navigatorWithClipboard);
+}
+
 describe('QuantConnectReferenceCodeComponent', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('copies the exact SHA-pinned audit copy for a QuantConnect backtest', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, { clipboard: { writeText } });
+    stubClipboard(writeText);
     await render(QuantConnectReferenceCodeComponent, {
       inputs: { referenceCode: REFERENCE_CODE },
     });
@@ -33,7 +46,7 @@ describe('QuantConnectReferenceCodeComponent', () => {
 
   it('explains when the browser blocks clipboard access', async () => {
     const writeText = vi.fn().mockRejectedValue(new Error('clipboard denied'));
-    Object.assign(navigator, { clipboard: { writeText } });
+    stubClipboard(writeText);
     await render(QuantConnectReferenceCodeComponent, {
       inputs: { referenceCode: REFERENCE_CODE },
     });

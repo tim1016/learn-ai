@@ -34,6 +34,7 @@ vi.mock('lightweight-charts', () => {
   return {
     createChart: chartMocks.createChart,
     createSeriesMarkers,
+    AreaSeries: 'AreaSeries',
     CandlestickSeries: 'CandlestickSeries',
     HistogramSeries: 'HistogramSeries',
     LineSeries: 'LineSeries',
