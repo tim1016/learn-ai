@@ -56,8 +56,13 @@ public class RecencyLaunchService : IRecencyLaunchService
             launch.FailedRuns = failedRuns.Value;
         if (launch.SucceededRuns + launch.FailedRuns > launch.ExpectedRuns)
             throw new ArgumentException("Succeeded plus failed runs cannot exceed expected runs.");
-        if (status is "COMPLETED" or "FAILED" && launch.SucceededRuns + launch.FailedRuns != launch.ExpectedRuns)
-            throw new ArgumentException("Completed or failed launches must account for every expected run.");
+        // Only COMPLETED asserts full accounting. FAILED covers two cases: the
+        // runner finished and reported failures (it passes both counts, so the
+        // sum still reconciles), and the launch aborted mid-flight (no summary
+        // exists to report). Demanding full accounting for the abort case
+        // rejected the only write that could move the launch off RUNNING.
+        if (status is "COMPLETED" && launch.SucceededRuns + launch.FailedRuns != launch.ExpectedRuns)
+            throw new ArgumentException("Completed launches must account for every expected run.");
 
         launch.Status = status;
         launch.CompletedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();

@@ -9,6 +9,7 @@ reach a worker thread.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 
 import httpx
@@ -16,7 +17,7 @@ import pytest
 from httpx import ASGITransport
 
 from app.main import app
-from app.routers.jobs import _ms_to_date_str
+from app.routers.jobs import _ms_to_date_str, record_recency_abort_state
 
 
 def test_ms_to_date_str_resolves_the_et_calendar_date_not_utc() -> None:
@@ -189,3 +190,39 @@ class TestValidateBeforeDispatch:
         )
         assert response.status_code == 400
         assert "window_start_ms" in response.json()["detail"]
+
+
+class TestRecordRecencyAbortState:
+    """The abort path must move a launch off RUNNING without hiding the abort.
+
+    A launch that dies mid-flight has no summary, so the terminal-state write
+    carries no run counts. If that write fails — the backend is down, or it
+    rejects the body — the exception that actually ended the launch is what
+    the operator needs to see, so the failure is logged, not raised.
+    """
+
+    def test_returns_normally_so_the_original_exception_survives(self, monkeypatch, caplog) -> None:
+        async def boom(*args: object, **kwargs: object) -> None:
+            raise httpx.ConnectError("backend unreachable")
+
+        monkeypatch.setattr("app.routers.jobs.update_recency_launch", boom)
+
+        with caplog.at_level(logging.ERROR, logger="app.routers.jobs"):
+            record_recency_abort_state("launch-1", "FAILED", backend_url="http://backend")
+
+        assert "failed to record recency launch terminal state" in caplog.text
+
+    def test_forwards_the_terminal_status_when_the_write_succeeds(self, monkeypatch) -> None:
+        seen: dict[str, object] = {}
+
+        async def capture(launch_id: str, **kwargs: object) -> None:
+            seen["launch_id"] = launch_id
+            seen.update(kwargs)
+
+        monkeypatch.setattr("app.routers.jobs.update_recency_launch", capture)
+
+        record_recency_abort_state("launch-2", "CANCELLED", backend_url="http://backend")
+
+        assert seen["launch_id"] == "launch-2"
+        assert seen["status"] == "CANCELLED"
+        assert seen["base_url"] == "http://backend"

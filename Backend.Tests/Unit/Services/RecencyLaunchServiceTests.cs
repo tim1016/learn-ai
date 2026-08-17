@@ -65,4 +65,23 @@ public class RecencyLaunchServiceTests
         await Assert.ThrowsAsync<ArgumentException>(() =>
             service.SetTerminalStatusAsync("launch-1", "COMPLETED", 2, 0, CancellationToken.None));
     }
+
+    [Fact]
+    public async Task SetTerminalStatusAsync_AbortedLaunchWithoutCounts_RecordsFailureAnyway()
+    {
+        // A launch that dies mid-flight cannot account for every expected run —
+        // that is what FAILED means on the abort path, and the runner has no
+        // summary to report. Requiring full accounting here left the launch
+        // stuck at RUNNING forever and masked the original exception with the
+        // rejected status write.
+        var service = CreateService(out var db);
+        await service.CreateLaunchAsync("launch-1", "{}", 4, CancellationToken.None);
+
+        var found = await service.SetTerminalStatusAsync("launch-1", "FAILED", null, null, CancellationToken.None);
+
+        Assert.True(found);
+        var launch = await db.RecencyLaunches.SingleAsync(l => l.Id == "launch-1");
+        Assert.Equal("FAILED", launch.Status);
+        Assert.NotNull(launch.CompletedAtMs);
+    }
 }

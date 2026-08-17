@@ -600,6 +600,22 @@ async def validate_recency_chart_job(req: RecencyChartJobRequest) -> dict[str, i
     return {"expected_runs": expected_runs}
 
 
+def record_recency_abort_state(launch_id: str, terminal_status: str, *, backend_url: str) -> None:
+    """Move an aborted launch off RUNNING without masking why it aborted.
+
+    The exception that ended the launch is what the operator needs; a failure
+    to record the terminal state must not replace it in the traceback. Logged
+    rather than raised — never swallowed silently.
+    """
+    try:
+        asyncio.run(update_recency_launch(launch_id, status=terminal_status, base_url=backend_url))
+    except Exception:
+        logger.exception(
+            "failed to record recency launch terminal state",
+            extra={"launch_id": launch_id, "terminal_status": terminal_status},
+        )
+
+
 @router.post("/recency-chart", status_code=status.HTTP_202_ACCEPTED)
 async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
     """Kick off a Recency Chart launch in a worker thread. Returns 202.
@@ -664,10 +680,10 @@ async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
                 cancel_check=cancel.raise_if_cancelled,
             )
         except JobCancelled:
-            asyncio.run(update_recency_launch(config.launch_id, status="CANCELLED", base_url=backend_url))
+            record_recency_abort_state(config.launch_id, "CANCELLED", backend_url=backend_url)
             raise
         except Exception:
-            asyncio.run(update_recency_launch(config.launch_id, status="FAILED", base_url=backend_url))
+            record_recency_abort_state(config.launch_id, "FAILED", backend_url=backend_url)
             raise
 
         asyncio.run(
