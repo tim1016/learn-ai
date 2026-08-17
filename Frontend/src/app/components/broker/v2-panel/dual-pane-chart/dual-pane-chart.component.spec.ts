@@ -38,6 +38,7 @@ vi.mock('lightweight-charts', () => {
     CandlestickSeries: 'CandlestickSeries',
     HistogramSeries: 'HistogramSeries',
     LineSeries: 'LineSeries',
+    LineType: { Simple: 0, WithSteps: 1 },
     TickMarkType: { Year: 0, Month: 1, DayOfMonth: 2, Time: 3, TimeWithSeconds: 4 },
   };
 });
