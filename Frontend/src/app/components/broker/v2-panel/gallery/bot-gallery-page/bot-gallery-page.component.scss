@@ -12,10 +12,7 @@
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
-  // No toolbar sits above the view-state switch anymore (D10 removed it) —
-  // this is the one place that opens up the top breathing room every
-  // branch below relied on the toolbar for.
-  padding-top: var(--space-4);
+  padding: var(--space-2);
 }
 
 .gallery-page__skeleton {
@@ -24,7 +21,7 @@
   min-height: 0;
   gap: var(--space-3);
   grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
-  padding: 0 var(--space-4) var(--space-4);
+  padding: 0;
 
   span {
     border-radius: var(--radius-md);
@@ -50,7 +47,7 @@
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
-  margin: 0 var(--space-4) var(--space-4);
+  margin: 0;
   padding: var(--space-8);
   border-radius: var(--radius-md);
   color: var(--text-secondary);
@@ -79,7 +76,7 @@
 
 .gallery-page__stale-banner {
   flex: 0 0 auto;
-  margin: 0 var(--space-4) var(--space-2);
+  margin: 0 0 var(--space-2);
   padding: var(--space-2) var(--space-3);
   border: 1px solid rgba(255, 152, 0, 0.42);
   border-radius: var(--radius);
@@ -91,5 +88,5 @@
 .gallery-page__dock {
   flex: 1;
   min-height: 0;
-  margin: 0 var(--space-4) var(--space-4);
+  margin: 0;
 }

@@ -1,13 +1,6 @@
 <article class="bot-tile" [class.bot-tile--attention]="bot().needs_attention">
   <header class="bot-tile__header">
-    <span
-      class="bot-tile__ring"
-      [class.bot-tile__ring--bull]="statusTone() === 'bull'"
-      [class.bot-tile__ring--warn]="statusTone() === 'warn'"
-      [class.bot-tile__ring--muted]="statusTone() === 'muted'"
-    >
-      <app-asset-identity [symbol]="bot().symbol" size="sm" />
-    </span>
+    <app-asset-identity class="bot-tile__identity" [symbol]="bot().symbol" size="xs" />
     <span class="bot-tile__strategy">{{ bot().label }}</span>
 
     <div class="bot-tile__action">
@@ -30,9 +23,6 @@
           [class.pi-spinner]="pending()"
           aria-hidden="true"
         ></i>
-        @if (actionIsStop()) {
-          <span>{{ bot().primary_action.label }}</span>
-        }
       </button>
 
       @if (confirmOpen()) {
@@ -48,6 +38,8 @@
         </div>
       }
     </div>
+
+    <ng-content select="[tileDragHandle]" />
   </header>
 
   <div

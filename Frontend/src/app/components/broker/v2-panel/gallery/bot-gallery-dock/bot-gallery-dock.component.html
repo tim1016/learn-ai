@@ -17,15 +17,6 @@
           class="gallery-dock__cell"
           [attr.data-sid]="bot.sid"
         >
-          <button
-            type="button"
-            cdkDragHandle
-            class="gallery-dock__drag-handle"
-            [attr.aria-label]="'Reorder ' + bot.symbol + ' tile'"
-            tabindex="-1"
-            aria-hidden="true"
-          >⠿</button>
-
           <app-bot-tile
             class="gallery-dock__tile"
             [bot]="bot"
@@ -35,7 +26,17 @@
             [accountId]="accountId()"
             [pending]="pendingSids().has(bot.sid)"
             (action)="forwardAction($event)"
-          />
+          >
+            <button
+              type="button"
+              cdkDragHandle
+              tileDragHandle
+              class="gallery-dock__drag-handle"
+              [attr.aria-label]="'Reorder ' + bot.symbol + ' tile'"
+              tabindex="-1"
+              aria-hidden="true"
+            >⠿</button>
+          </app-bot-tile>
         </div>
       }
     </div>

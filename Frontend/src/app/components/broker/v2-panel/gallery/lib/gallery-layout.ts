@@ -11,6 +11,8 @@ export type TileLayout = readonly string[];
 
 /** Default page size for `paginate` and the dock's page-relative reorder index math. */
 export const GALLERY_PAGE_SIZE = 20;
+/** Fixed tile-header height used by both layout scoring and rendered tile chrome. */
+export const GALLERY_TILE_HEADER_HEIGHT_PX = 24;
 
 /** `chooseColumns` never considers more columns than this, even for a large roster (the mock's cap). */
 const MAX_COLS = 6;

@@ -43,6 +43,19 @@ describe('AssetIdentityComponent', () => {
     expect(screen.getByText('Apple Inc.')).toBeTruthy();
   });
 
+  it('provides an extra-compact identity size for dense layouts', async () => {
+    const { fixture } = await render(AssetIdentityComponent, {
+      inputs: { symbol: 'SPY', size: 'xs' },
+    });
+
+    const host: unknown = fixture.nativeElement;
+    if (!(host instanceof HTMLElement)) throw new Error('expected asset identity host to render');
+    const styles = getComputedStyle(host);
+    expect(host.classList.contains('asset-identity--xs')).toBe(true);
+    expect(styles.getPropertyValue('--asset-identity-logo-size').trim()).toBe('16px');
+    expect(styles.gap).toBe('4px');
+  });
+
   it('uses initials without a logo request for an unlisted symbol', async () => {
     const { container } = await render(AssetIdentityComponent, {
       inputs: { symbol: 'UNKNOWN' },

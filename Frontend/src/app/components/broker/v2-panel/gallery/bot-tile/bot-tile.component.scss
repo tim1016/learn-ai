@@ -19,24 +19,22 @@
 
 .bot-tile__header {
   display: flex;
+  height: var(--gallery-tile-header-height);
+  min-height: var(--gallery-tile-header-height);
+  flex: none;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--border);
+  gap: var(--space-1);
+  padding: 0 0 0 var(--space-2);
   background: var(--bg-surface);
   font-family: var(--font-mono);
 }
 
-.bot-tile__ring {
-  display: inline-flex;
-  flex: none;
-  border-radius: 50%;
-  box-shadow: 0 0 0 2px var(--text-muted);
-  transition: box-shadow 0.15s ease;
+.bot-tile__identity {
+  --asset-identity-fallback-border: transparent;
 
-  &--bull { box-shadow: 0 0 0 2px var(--bull), 0 0 6px var(--bull); }
-  &--warn { box-shadow: 0 0 0 2px var(--warn), 0 0 6px var(--warn); }
-  &--muted { box-shadow: 0 0 0 2px var(--text-muted); }
+  flex: none;
+  font-size: var(--fs-xs);
+  line-height: 1;
 }
 
 // Always in the DOM (never `@if`-gated) so it stays reachable to assistive
@@ -64,7 +62,7 @@
 
 .bot-tile__chart {
   position: relative;
-  min-height: 8rem;
+  min-height: 0;
   flex: 1;
   cursor: pointer;
 
@@ -108,6 +106,7 @@
 .bot-tile__action {
   position: relative;
   display: flex;
+  height: var(--gallery-tile-header-height);
   flex: none;
   align-self: center;
   margin-left: auto;
@@ -115,25 +114,25 @@
 
 .bot-tile__action-button {
   display: grid;
-  min-width: 1.75rem;
-  height: 1.75rem;
-  grid-auto-flow: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.35rem;
-  padding: 0 0.45rem;
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-md);
+  width: var(--gallery-tile-header-height);
+  min-width: var(--gallery-tile-header-height);
+  height: var(--gallery-tile-header-height);
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
   background: transparent;
   color: var(--text-primary);
   font-weight: var(--fw-semi);
   cursor: pointer;
 
-  &:hover:not(:disabled) { border-color: var(--info); }
-  &:focus-visible { outline: 2px solid var(--info); outline-offset: 2px; }
+  &:hover:not(:disabled) { background: var(--bg-hover); }
+  &:focus-visible { outline: 2px solid var(--info); outline-offset: -2px; }
   &:disabled { color: var(--text-muted); cursor: not-allowed; opacity: 0.6; }
 
   &--stop { color: var(--bear); }
+
+  .pi { font-size: var(--fs-xs); }
 }
 
 .bot-tile__confirm {

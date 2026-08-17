@@ -19,6 +19,12 @@
   gap: 6px;
 }
 
+:host(.asset-identity--xs) {
+  --asset-identity-logo-size: 16px;
+
+  gap: 4px;
+}
+
 :host(.asset-identity--lg) {
   --asset-identity-logo-size: 36px;
 
@@ -64,6 +70,10 @@
 
 :host(.asset-identity--sm) .asset-identity__fallback {
   font-size: 0.56rem;
+}
+
+:host(.asset-identity--xs) .asset-identity__fallback {
+  font-size: 0.5rem;
 }
 
 .asset-identity__copy {
