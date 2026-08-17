@@ -52,33 +52,14 @@
     </div>
 
     @if (expanded()) {
-      <aside class="trading-chart__rail" aria-label="Indicator picker rail">
-        <section class="trading-chart__active">
-          <h3>Active</h3>
-          @if (activeIndicators().length === 0) {
-            <p>No indicators added.</p>
-          } @else {
-            @for (indicator of activeIndicators(); track indicator.id) {
-              <button type="button" (click)="indicatorRemoved.emit(indicator.id)">
-                <i [style.background]="indicator.color" aria-hidden="true"></i>
-                <span>{{ indicator.label }}</span>
-                <b aria-hidden="true">×</b>
-              </button>
-            }
-          }
-        </section>
-        <section class="trading-chart__add">
-          <h3>Add</h3>
-          <app-indicator-picker
-            [categories]="indicatorCategories()"
-            [activeKeys]="[]"
-            [presets]="[]"
-            [loading]="indicatorCatalogLoading()"
-            (add)="onIndicatorAdded($event)"
-            (addInstance)="onIndicatorAdded($event)"
-          />
-        </section>
-      </aside>
+      <app-chart-indicator-rail
+        class="trading-chart__rail"
+        [activeIndicators]="activeIndicators()"
+        [categories]="indicatorCategories()"
+        [catalogLoading]="indicatorCatalogLoading()"
+        (indicatorAdded)="onIndicatorAdded($event)"
+        (indicatorRemoved)="indicatorRemoved.emit($event)"
+      />
     }
   </div>
 </section>

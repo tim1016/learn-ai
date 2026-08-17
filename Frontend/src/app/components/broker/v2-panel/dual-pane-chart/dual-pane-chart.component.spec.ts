@@ -1,5 +1,7 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
+import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/angular';
+import { of } from 'rxjs';
 import { beforeEach, describe, it, expect, vi } from 'vitest';
 import {
   DUAL_PANE_CHART_FACTORY,
@@ -8,6 +10,8 @@ import {
   toSeriesMarkers,
 } from './dual-pane-chart.component';
 import type { ChartBar } from '../lib/broker-v2-panel.types';
+import { IndicatorCatalogService } from '../../../../shared/indicator-catalog/indicator-catalog.service';
+import { BotChartIndicatorService } from './bot-chart-indicator.service';
 
 const chartMocks = vi.hoisted(() => ({
   createChart: vi.fn(),
@@ -15,6 +19,8 @@ const chartMocks = vi.hoisted(() => ({
   setData: vi.fn(),
   update: vi.fn(),
   fitContent: vi.fn(),
+  addSeries: vi.fn(),
+  calculateIndicators: vi.fn(),
 }));
 
 // Mock lightweight-charts — the actual DOM chart is not exercised in unit tests.
@@ -26,6 +32,8 @@ vi.mock('lightweight-charts', () => {
     createChart: chartMocks.createChart,
     createSeriesMarkers,
     CandlestickSeries: 'CandlestickSeries',
+    HistogramSeries: 'HistogramSeries',
+    LineSeries: 'LineSeries',
     TickMarkType: { Year: 0, Month: 1, DayOfMonth: 2, Time: 3, TimeWithSeconds: 4 },
   };
 });
@@ -36,9 +44,11 @@ function createMockChart(): object {
     setData: chartMocks.setData,
     update: chartMocks.update,
     applyOptions: vi.fn(),
+    createPriceLine: vi.fn(),
   });
+  chartMocks.addSeries.mockImplementation(() => createMockSeries());
   return {
-    addSeries: vi.fn().mockReturnValue(createMockSeries()),
+    addSeries: chartMocks.addSeries,
     removeSeries: vi.fn(),
     timeScale: vi.fn().mockReturnValue(mockTimeScale),
     applyOptions: vi.fn(),
@@ -77,16 +87,48 @@ function liveBar(startMs: number, endMs = startMs + 5_000): ChartBar {
 describe('DualPaneChartComponent', () => {
   beforeEach(() => {
     TestBed.configureTestingModule({
-      providers: [{
-        provide: DUAL_PANE_CHART_FACTORY,
-        useValue: chartMocks.createChart.mockImplementation(() => createMockChart()),
-      }],
+      providers: [
+        {
+          provide: DUAL_PANE_CHART_FACTORY,
+          useValue: chartMocks.createChart.mockImplementation(() => createMockChart()),
+        },
+        {
+          provide: IndicatorCatalogService,
+          useValue: {
+            load: vi.fn().mockResolvedValue(undefined),
+            categories: signal([{
+              name: 'trend',
+              indicators: [{
+                name: 'sma',
+                category: 'trend',
+                description: 'Simple moving average',
+                configurable_params: [{
+                  name: 'length',
+                  type: 'int',
+                  default: 2,
+                  min: 1,
+                  max: 200,
+                  description: 'Lookback length',
+                }],
+              }],
+            }]),
+            loading: signal(false),
+          },
+        },
+        {
+          provide: BotChartIndicatorService,
+          useValue: { calculate: chartMocks.calculateIndicators },
+        },
+      ],
     });
     chartMocks.createChart.mockClear();
     chartMocks.setMarkers.mockClear();
     chartMocks.setData.mockClear();
     chartMocks.update.mockClear();
     chartMocks.fitContent.mockClear();
+    chartMocks.addSeries.mockReset();
+    chartMocks.calculateIndicators.mockReset();
+    chartMocks.calculateIndicators.mockReturnValue(of({ symbol: 'SPY', indicators: [] }));
     localStorage.removeItem('broker-v2.chart-timezone.v1');
   });
 
@@ -183,6 +225,60 @@ describe('DualPaneChartComponent', () => {
     expect(
       screen.getByRole('button', { name: /expand market chart/i }),
     ).toBeTruthy();
+  });
+
+  it('restores the indicator picker rail when the market chart is expanded', async () => {
+    const { fixture } = await render(DualPaneChartComponent, {
+      inputs: { symbol: 'SPY', liveBars: [], histBars: [] },
+    });
+
+    expect(screen.queryByRole('complementary', { name: 'Indicator picker rail' })).toBeNull();
+    screen.getByRole('button', { name: 'Expand market chart' }).click();
+    fixture.detectChanges();
+
+    const rail = screen.getByRole('complementary', { name: 'Indicator picker rail' });
+    expect(within(rail).getByText('Active')).toBeTruthy();
+    expect(within(rail).getByText('Indicators')).toBeTruthy();
+  });
+
+  it('adds an indicator from the restored rail using the visible candle set', async () => {
+    const bars = [liveBar(1_700_000_000_000, 1_700_000_060_000)];
+    chartMocks.calculateIndicators.mockReturnValue(of({
+      symbol: 'SPY',
+      indicators: [{
+        id: 'sma_2',
+        panel: 'main',
+        type: 'line',
+        color: '#FF9800',
+        data: [{ t: 1_700_000_060_000, value: 101 }],
+        refs: [],
+      }],
+    }));
+    const { fixture } = await render(DualPaneChartComponent, {
+      inputs: { symbol: 'SPY', liveBars: bars, histBars: [] },
+    });
+    screen.getByRole('button', { name: 'Expand market chart' }).click();
+    fixture.detectChanges();
+    const rail = screen.getByRole('complementary', { name: 'Indicator picker rail' });
+    const trendButtons = within(rail).getAllByRole('button', { name: /trend/i });
+    trendButtons[trendButtons.length - 1].click();
+    fixture.detectChanges();
+    const addButton = rail.querySelector<HTMLButtonElement>('.ip-btn:not(.iconic)');
+    if (!addButton) throw new Error('indicator add button did not render');
+    addButton.click();
+    fixture.detectChanges();
+
+    await waitFor(() => expect(chartMocks.calculateIndicators).toHaveBeenCalledWith(
+      'SPY',
+      bars,
+      [expect.objectContaining({ name: 'sma', params: { length: 2 } })],
+    ));
+    expect(within(rail).getByRole('button', { name: 'Remove SMA 2' })).toBeTruthy();
+    await waitFor(() => expect(chartMocks.addSeries).toHaveBeenCalledWith(
+      'LineSeries',
+      expect.objectContaining({ color: '#FF9800' }),
+      0,
+    ));
   });
 
   it('defaults chart labels to local time and persists an explicit ET choice', async () => {

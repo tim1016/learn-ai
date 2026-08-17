@@ -1,0 +1,38 @@
+<section class="indicator-rail__active">
+  <div class="indicator-rail__heading">
+    <h3>Active</h3>
+    @if (calculationLoading()) {
+      <span role="status">Updating…</span>
+    }
+  </div>
+  @if (activeIndicators().length === 0) {
+    <p>No indicators added.</p>
+  } @else {
+    @for (indicator of activeIndicators(); track indicator.id) {
+      <button
+        type="button"
+        [attr.aria-label]="'Remove ' + indicator.label"
+        (click)="indicatorRemoved.emit(indicator.id)"
+      >
+        <i [style.background]="indicator.color" aria-hidden="true"></i>
+        <span>{{ indicator.label }}</span>
+        <b aria-hidden="true">×</b>
+      </button>
+    }
+  }
+  @if (error(); as message) {
+    <p class="indicator-rail__error" role="alert">{{ message }}</p>
+  }
+</section>
+
+<section class="indicator-rail__add">
+  <h3>Add</h3>
+  <app-indicator-picker
+    [categories]="categories()"
+    [activeKeys]="activeKeys()"
+    [presets]="[]"
+    [loading]="catalogLoading()"
+    (add)="indicatorAdded.emit($event)"
+    (addInstance)="indicatorAdded.emit($event)"
+  />
+</section>

@@ -25,7 +25,11 @@
     flex-direction: column;
     box-shadow: var(--shadow-pop);
 
-    .tape-workspace { flex: 1; min-height: 0; }
+    .tape-workspace {
+      flex: 1;
+      min-height: 0;
+      grid-template-columns: minmax(0, 1fr) 20rem;
+    }
     .chart-deck { min-height: 0; }
     .chart-stage { flex: 1; }
   }
@@ -128,8 +132,16 @@
 }
 
 .tape-workspace {
+  position: relative;
+  display: grid;
   flex: 1;
+  grid-template-columns: minmax(0, 1fr);
   min-height: 0;
+}
+
+.market-tape__indicator-rail {
+  min-height: 0;
+  border-left: 1px solid var(--border-light);
 }
 
 .source-switcher {
@@ -383,6 +395,9 @@
   .chart-stage { min-height: 20rem; }
   .tape-legend { flex-wrap: wrap; }
   .tape-legend .legend-note { width: 100%; margin-left: 0; }
+  .market-tape--fullscreen .tape-workspace {
+    grid-template-columns: minmax(0, 1fr) min(18rem, 38vw);
+  }
 }
 
 @media (max-width: 500px) {
@@ -392,6 +407,14 @@
   .tape-tools { align-items: flex-start; flex-direction: column; }
   .deck-toolbar { align-items: flex-start; flex-direction: column; }
   .feed-clock, .delay-badge { align-self: flex-end; }
+  .market-tape--fullscreen .tape-workspace { grid-template-columns: minmax(0, 1fr); }
+  .market-tape__indicator-rail {
+    position: absolute;
+    z-index: 4;
+    inset: 0 0 0 auto;
+    width: min(20rem, 92vw);
+    box-shadow: var(--shadow-pop);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

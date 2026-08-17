@@ -324,6 +324,7 @@
   }
 
   &:hover .ip-row-actions,
+  &:focus-within .ip-row-actions,
   &[data-active='true'] .ip-row-actions { opacity: 1; }
 }
 .ip-pane-marker {
