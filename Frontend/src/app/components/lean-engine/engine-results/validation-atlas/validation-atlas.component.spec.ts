@@ -64,6 +64,7 @@ function analytics(): EngineValidationAnalytics {
         win_rate: 0.6,
       },
     ],
+    sharpe_pnl_divergence: null,
   };
 }
 

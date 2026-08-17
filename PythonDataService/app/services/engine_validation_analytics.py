@@ -3,10 +3,13 @@
 Formula: horizon return = E_end / E_start - 1; bucket expectancy =
   arithmetic mean of closed-trade returns; bucket win rate = wins / trades;
   calendar-month return = product(1 + trade_return_i) - 1; rolling stability
-  applies the same expectancy and win-rate formulas to the trailing N trades.
+  applies the same expectancy and win-rate formulas to the trailing N trades;
+  rolling Sharpe = sqrt(252) * mean(r) / sample_std(r); cumulative P&L =
+  E_t - E_0; divergence = slope(P&L) > 0 and slope(rolling Sharpe) < 0.
 Reference: Pardo, *The Evaluation and Optimization of Trading Strategies*
   (2e), chapter 4 (trade performance ratios); Bacon, *Practical Portfolio
-  Performance Measurement* (2e), chapter 2 (period returns).
+  Performance Measurement* (2e), chapter 2 (period returns); Sharpe (1994),
+  *The Sharpe Ratio*; Lo (2002), *The Statistics of Sharpe Ratios*.
 Canonical implementation: this file.
 Validated against:
   PythonDataService/tests/services/test_engine_validation_analytics.py.
@@ -32,11 +35,16 @@ from app.schemas.engine_validation import (
     PerformanceHorizonResponse,
     RollingTradePointResponse,
     SeasonalityMonthResponse,
+    SharpePnlDivergencePointResponse,
+    SharpePnlDivergenceResponse,
     TimingCellResponse,
 )
 
 _ET = ZoneInfo("America/New_York")
 _DAY_MS = 86_400_000
+_TRADING_SESSIONS_PER_YEAR = 252
+_DEFAULT_SHARPE_WINDOW_SESSIONS = 20
+_DEFAULT_DIVERGENCE_TREND_SESSIONS = 20
 _WEEKDAY_LABELS = ("Mon", "Tue", "Wed", "Thu", "Fri")
 _MONTH_LABELS = (
     "Jan",
@@ -87,7 +95,7 @@ class ValidationEquityPoint:
 # Version stamp for the persisted ``ValidationAnalyticsJson`` envelope.
 # Bump when the analytics shape changes so old rows stay interpretable
 # (persisted analytics are frozen at run time, never recomputed).
-VALIDATION_ANALYTICS_SCHEMA_VERSION = 1
+VALIDATION_ANALYTICS_SCHEMA_VERSION = 2
 
 
 def build_validation_analytics_envelope(
@@ -116,10 +124,40 @@ def compute_engine_validation_analytics(
     *,
     trades: Sequence[ValidationTrade],
     equity_curve: Sequence[ValidationEquityPoint],
+    performance_equity_curve: Sequence[ValidationEquityPoint] | None = None,
     rolling_window: int = 20,
+    sharpe_window_sessions: int = _DEFAULT_SHARPE_WINDOW_SESSIONS,
+    divergence_trend_sessions: int = _DEFAULT_DIVERGENCE_TREND_SESSIONS,
 ) -> EngineValidationAnalyticsResponse:
     """Compute display-ready validation analytics from one canonical run."""
     _validate_inputs(trades=trades, equity_curve=equity_curve, rolling_window=rolling_window)
+    native_equity = equity_curve if performance_equity_curve is None else performance_equity_curve
+    if sharpe_window_sessions < 2:
+        raise ValueError("sharpe_window_sessions must be at least 2")
+    if divergence_trend_sessions < 2:
+        raise ValueError("divergence_trend_sessions must be at least 2")
+
+    try:
+        _validate_equity_curve(native_equity)
+        sharpe_pnl_divergence = _compute_sharpe_pnl_divergence(
+            native_equity,
+            sharpe_window_sessions=sharpe_window_sessions,
+            divergence_trend_sessions=divergence_trend_sessions,
+        )
+    except ValueError as exc:
+        sharpe_pnl_divergence = SharpePnlDivergenceResponse(
+            error=f"Native equity curve rejected: {exc}",
+            return_window_sessions=sharpe_window_sessions,
+            trend_window_sessions=divergence_trend_sessions,
+            annualization_sessions=_TRADING_SESSIONS_PER_YEAR,
+            minimum_observation_count=(
+                sharpe_window_sessions + divergence_trend_sessions
+            ),
+            daily_observation_count=0,
+            eligible_observation_count=0,
+            divergence_observation_count=0,
+            longest_divergence_streak=0,
+        )
 
     end_ms_utc = _resolve_end_ms(trades=trades, equity_curve=equity_curve)
     return EngineValidationAnalyticsResponse(
@@ -127,6 +165,7 @@ def compute_engine_validation_analytics(
         timing_cells=_compute_timing_cells(trades),
         seasonality=_compute_seasonality(trades),
         rolling_trade_stability=_compute_rolling_stability(trades, rolling_window),
+        sharpe_pnl_divergence=sharpe_pnl_divergence,
     )
 
 
@@ -181,6 +220,10 @@ def _validate_inputs(
             raise ValueError(f"trade {index} has invalid canonical timestamps")
         if not math.isfinite(trade.pnl_pct):
             raise ValueError(f"trade {index} has non-finite pnl_pct")
+    _validate_equity_curve(equity_curve)
+
+
+def _validate_equity_curve(equity_curve: Sequence[ValidationEquityPoint]) -> None:
     prior_timestamp = 0
     for index, point in enumerate(equity_curve):
         if point.timestamp_ms_utc <= prior_timestamp:
@@ -188,6 +231,145 @@ def _validate_inputs(
         if point.equity <= 0 or not math.isfinite(point.equity):
             raise ValueError(f"equity point {index} has invalid equity")
         prior_timestamp = point.timestamp_ms_utc
+
+
+def _compute_sharpe_pnl_divergence(
+    equity_curve: Sequence[ValidationEquityPoint],
+    *,
+    sharpe_window_sessions: int,
+    divergence_trend_sessions: int,
+) -> SharpePnlDivergenceResponse:
+    """Compare rolling daily Sharpe with the native cumulative P&L path.
+
+    Formula: r_t = E_t/E_(t-1)-1; SR_t = sqrt(252) * mean(r) /
+      sample_std(r) over the trailing return window; PnL_t = E_t-E_0;
+      divergence_t is true when the OLS slope of trailing P&L is positive
+      and the OLS slope of trailing rolling Sharpe is negative.
+    Reference: Sharpe (1994), *The Sharpe Ratio*; Lo (2002), *The
+      Statistics of Sharpe Ratios*. The paired-slope flag is a documented
+      repository exploratory diagnostic, not a significance test.
+    Canonical implementation: this function.
+    Validated against:
+      PythonDataService/tests/services/test_engine_validation_analytics.py::test_validation_analytics_matches_pandas_rolling_sharpe_and_flags_pnl_divergence.
+    """
+    daily_equity = _last_equity_per_new_york_session(equity_curve)
+    if not daily_equity:
+        return SharpePnlDivergenceResponse(
+            return_window_sessions=sharpe_window_sessions,
+            trend_window_sessions=divergence_trend_sessions,
+            annualization_sessions=_TRADING_SESSIONS_PER_YEAR,
+            minimum_observation_count=(
+                sharpe_window_sessions + divergence_trend_sessions
+            ),
+            daily_observation_count=0,
+            eligible_observation_count=0,
+            divergence_observation_count=0,
+            longest_divergence_streak=0,
+        )
+
+    initial_equity = daily_equity[0].equity
+    daily_returns = [
+        daily_equity[index].equity / daily_equity[index - 1].equity - 1.0
+        for index in range(1, len(daily_equity))
+    ]
+    points = [
+        SharpePnlDivergencePointResponse(
+            timestamp_ms_utc=point.timestamp_ms_utc,
+            cumulative_pnl=point.equity - initial_equity,
+            rolling_sharpe=_rolling_sharpe_at(
+                daily_returns,
+                equity_index=index,
+                window=sharpe_window_sessions,
+            ),
+        )
+        for index, point in enumerate(daily_equity)
+    ]
+
+    for index in range(divergence_trend_sessions - 1, len(points)):
+        window = points[index - divergence_trend_sessions + 1 : index + 1]
+        sharpes = [point.rolling_sharpe for point in window]
+        if any(value is None for value in sharpes):
+            continue
+        pnl_slope = _ordinary_least_squares_slope(
+            [point.cumulative_pnl for point in window]
+        )
+        sharpe_slope = _ordinary_least_squares_slope(
+            [float(value) for value in sharpes if value is not None]
+        )
+        points[index].is_trend_eligible = True
+        points[index].is_divergence = pnl_slope > 0 and sharpe_slope < 0
+
+    eligible_points = [point for point in points if point.is_trend_eligible]
+    divergence_count = sum(point.is_divergence for point in eligible_points)
+    latest = points[-1]
+    return SharpePnlDivergenceResponse(
+        return_window_sessions=sharpe_window_sessions,
+        trend_window_sessions=divergence_trend_sessions,
+        annualization_sessions=_TRADING_SESSIONS_PER_YEAR,
+        minimum_observation_count=(
+            sharpe_window_sessions + divergence_trend_sessions
+        ),
+        daily_observation_count=len(points),
+        eligible_observation_count=len(eligible_points),
+        divergence_observation_count=divergence_count,
+        divergence_ratio=(
+            divergence_count / len(eligible_points) if eligible_points else None
+        ),
+        longest_divergence_streak=_longest_divergence_streak(points),
+        latest_rolling_sharpe=latest.rolling_sharpe,
+        latest_cumulative_pnl=latest.cumulative_pnl,
+        currently_diverging=(latest.is_divergence if latest.is_trend_eligible else None),
+        points=points,
+    )
+
+
+def _last_equity_per_new_york_session(
+    equity_curve: Sequence[ValidationEquityPoint],
+) -> list[ValidationEquityPoint]:
+    daily: dict[tuple[int, int, int], ValidationEquityPoint] = {}
+    for point in equity_curve:
+        local = datetime.fromtimestamp(
+            point.timestamp_ms_utc / 1000,
+            tz=UTC,
+        ).astimezone(_ET)
+        daily[(local.year, local.month, local.day)] = point
+    return list(daily.values())
+
+
+def _rolling_sharpe_at(
+    daily_returns: Sequence[float],
+    *,
+    equity_index: int,
+    window: int,
+) -> float | None:
+    if equity_index < window:
+        return None
+    sample = daily_returns[equity_index - window : equity_index]
+    mean_return = sum(sample) / window
+    variance = sum((value - mean_return) ** 2 for value in sample) / (window - 1)
+    if variance <= 0:
+        return None
+    return math.sqrt(_TRADING_SESSIONS_PER_YEAR) * mean_return / math.sqrt(variance)
+
+
+def _ordinary_least_squares_slope(values: Sequence[float]) -> float:
+    count = len(values)
+    x_mean = (count - 1) / 2
+    y_mean = sum(values) / count
+    numerator = sum((index - x_mean) * (value - y_mean) for index, value in enumerate(values))
+    denominator = sum((index - x_mean) ** 2 for index in range(count))
+    return numerator / denominator
+
+
+def _longest_divergence_streak(
+    points: Sequence[SharpePnlDivergencePointResponse],
+) -> int:
+    longest = 0
+    current = 0
+    for point in points:
+        current = current + 1 if point.is_divergence else 0
+        longest = max(longest, current)
+    return longest
 
 
 def _resolve_end_ms(

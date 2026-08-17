@@ -12,8 +12,9 @@ import type { StrategyLabParityView } from "../strategy-lab.models";
 import { CompatibilityEvidenceComponent } from "./compatibility-evidence/compatibility-evidence.component";
 import { LeanAnalysisComponent } from "./lean-analysis/lean-analysis.component";
 import { ReceiptLabelPipe } from "../../../shared/pipes/receipt-label.pipe";
+import { SharpePnlDivergenceComponent } from "./sharpe-pnl-divergence/sharpe-pnl-divergence.component";
 
-type EvidenceSectionId = "compatibility" | "statistics" | "analysis" | "atlas" | "ledger";
+type EvidenceSectionId = "compatibility" | "statistics" | "analysis" | "divergence" | "atlas" | "ledger";
 type EvidenceSectionSummary =
   | { kind: "copy"; value: string }
   | { kind: "receipt"; value: string };
@@ -32,6 +33,7 @@ interface EvidenceSection {
     LeanAnalysisComponent,
     LeanStatisticsComponent,
     ReceiptLabelPipe,
+    SharpePnlDivergenceComponent,
     TradeLedgerComponent,
     ValidationAtlasComponent,
   ],
@@ -77,6 +79,19 @@ export class StrategyLabDeepDivesComponent {
         summary: {
           kind: "copy",
           value: `${analysis.length} Oracle finding${analysis.length === 1 ? "" : "s"} with complete evidence`,
+        },
+      });
+    }
+    const divergence = result.validation_analytics?.sharpe_pnl_divergence;
+    if (divergence) {
+      sections.push({
+        id: "divergence",
+        label: "Sharpe–P&L divergence",
+        summary: {
+          kind: "copy",
+          value: divergence.error
+            ? "Native equity study unavailable"
+            : `${divergence.return_window_sessions}-session Sharpe versus cumulative P&L`,
         },
       });
     }

@@ -202,6 +202,7 @@ type BacktestRunValidationAnalyticsType {
   timingCells: [ValidationTimingCellType!]!
   seasonality: [ValidationSeasonalityMonthType!]!
   rollingTradeStability: [ValidationRollingTradePointType!]!
+  sharpePnlDivergence: ValidationSharpePnlDivergenceType
 }
 
 "A connection to a list of items."
@@ -1838,6 +1839,31 @@ type ValidationSeasonalityMonthType {
   monthLabel: String!
   observationCount: Int!
   medianCompoundedReturn: Float
+}
+
+type ValidationSharpePnlDivergencePointType {
+  timestampMsUtc: Long!
+  cumulativePnl: Float!
+  rollingSharpe: Float
+  isDivergence: Boolean!
+  isTrendEligible: Boolean!
+}
+
+type ValidationSharpePnlDivergenceType {
+  error: String
+  returnWindowSessions: Int!
+  trendWindowSessions: Int!
+  annualizationSessions: Int!
+  minimumObservationCount: Int!
+  dailyObservationCount: Int!
+  eligibleObservationCount: Int!
+  divergenceObservationCount: Int!
+  divergenceRatio: Float
+  longestDivergenceStreak: Int!
+  latestRollingSharpe: Float
+  latestCumulativePnl: Float
+  currentlyDiverging: Boolean
+  points: [ValidationSharpePnlDivergencePointType!]!
 }
 
 type ValidationSuiteResult {

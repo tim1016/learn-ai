@@ -166,6 +166,28 @@ export const BACKTEST_RUN_DETAIL_QUERY = gql`
           average_return: averageReturn
           win_rate: winRate
         }
+        sharpe_pnl_divergence: sharpePnlDivergence {
+          error
+          return_window_sessions: returnWindowSessions
+          trend_window_sessions: trendWindowSessions
+          annualization_sessions: annualizationSessions
+          minimum_observation_count: minimumObservationCount
+          daily_observation_count: dailyObservationCount
+          eligible_observation_count: eligibleObservationCount
+          divergence_observation_count: divergenceObservationCount
+          divergence_ratio: divergenceRatio
+          longest_divergence_streak: longestDivergenceStreak
+          latest_rolling_sharpe: latestRollingSharpe
+          latest_cumulative_pnl: latestCumulativePnl
+          currently_diverging: currentlyDiverging
+          points {
+            timestamp_ms_utc: timestampMsUtc
+            cumulative_pnl: cumulativePnl
+            rolling_sharpe: rollingSharpe
+            is_divergence: isDivergence
+            is_trend_eligible: isTrendEligible
+          }
+        }
       }
       metricDocumentation {
         metricId

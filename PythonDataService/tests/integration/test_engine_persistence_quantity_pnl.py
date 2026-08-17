@@ -423,7 +423,7 @@ def test_save_study_payload_includes_validation_analytics_envelope() -> None:
     )
 
     envelope = json.loads(captured["validationAnalyticsJson"])
-    assert envelope["schema_version"] == 1
+    assert envelope["schema_version"] == 2
     assert envelope["engine"] == "python"
     assert envelope["computed_at_ms"] > 0
     assert set(envelope["analytics"].keys()) == {
@@ -431,6 +431,7 @@ def test_save_study_payload_includes_validation_analytics_envelope() -> None:
         "timing_cells",
         "seasonality",
         "rolling_trade_stability",
+        "sharpe_pnl_divergence",
     }
 
 

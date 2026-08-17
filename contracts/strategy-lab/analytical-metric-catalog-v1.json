@@ -8624,6 +8624,237 @@
       "variables": [],
       "variant_id": "rolling_trade_win_rate.validation_analytics.v1",
       "verdict_membership": null
+    },
+    {
+      "aliases": [
+        "Rolling 20-session Sharpe",
+        "Performance Memory"
+      ],
+      "alternative_variant_ids": [],
+      "annualization": null,
+      "benchmark": null,
+      "canonical_symbol": "PythonDataService/app/services/engine_validation_analytics.py",
+      "category": "validation_atlas",
+      "common_misreadings": [
+        "This view is descriptive evidence, not an independent confirmation of the backtest."
+      ],
+      "contract_id": "engine-validation-analytics-v1",
+      "cost_treatment": "Uses closed-trade returns and the run's configured execution costs as already represented in persisted evidence.",
+      "definition": "Annualized arithmetic mean daily return divided by sample standard deviation over each trailing 20-session native mark-to-market window.",
+      "fixture_or_receipt": null,
+      "formatting": "two decimal places",
+      "formula_latex": null,
+      "input_series": "Last native mark-to-market equity observation per America/New_York session, using overlapping trailing windows of 20 returns.",
+      "interpretation": "Compare recent return per unit of volatility with the cumulative dollar path; a falling value can reveal weakening quality before total P&L rolls over.",
+      "label": "Rolling 20-session Sharpe",
+      "metric_id": "rolling_daily_sharpe",
+      "numerical_tolerance": "absolute=1e-12, relative=0 in focused analytics tests",
+      "output_scale": "producer-native value",
+      "producer": "validation_analytics",
+      "results_surfaces": [
+        "Strategy Lab Results · Performance Memory"
+      ],
+      "risk_free_rate": null,
+      "sampling_cadence": "Computed when the run completes from the recorded equity curve and closed-trade ledger.",
+      "search_terms": [
+        "performance memory",
+        "validation atlas",
+        "rolling daily sharpe"
+      ],
+      "source_keys": [],
+      "source_reference": "Pardo, The Evaluation and Optimization of Trading Strategies (2e), chapter 4; Bacon, Practical Portfolio Performance Measurement (2e), chapter 2.",
+      "timezone_convention": "Weekday and hour buckets use America/New_York; all other timestamps remain int64 ms UTC until local display.",
+      "units": "annualized ratio",
+      "validating_tests": [
+        "PythonDataService/tests/services/test_engine_validation_analytics.py"
+      ],
+      "value_states": [
+        {
+          "display": "0",
+          "scoring_behavior": "A computed zero remains a value; it is not missing evidence.",
+          "state": "zero"
+        },
+        {
+          "display": "Unavailable",
+          "scoring_behavior": "Not a zero. A required verdict input remains incomplete until the platform producer records it.",
+          "state": "unavailable"
+        }
+      ],
+      "variables": [],
+      "variant_id": "rolling_daily_sharpe.validation_analytics.v1",
+      "verdict_membership": null
+    },
+    {
+      "aliases": [
+        "Sharpe–P&L divergence state",
+        "Performance Memory"
+      ],
+      "alternative_variant_ids": [],
+      "annualization": null,
+      "benchmark": null,
+      "canonical_symbol": "PythonDataService/app/services/engine_validation_analytics.py",
+      "category": "validation_atlas",
+      "common_misreadings": [
+        "This view is descriptive evidence, not an independent confirmation of the backtest."
+      ],
+      "contract_id": "engine-validation-analytics-v1",
+      "cost_treatment": "Uses closed-trade returns and the run's configured execution costs as already represented in persisted evidence.",
+      "definition": "True when the trailing 20-observation OLS slope of cumulative native P&L is positive and the matching rolling-Sharpe slope is negative.",
+      "fixture_or_receipt": null,
+      "formatting": "Diverging or Aligned",
+      "formula_latex": null,
+      "input_series": "Python-authored cumulative native P&L and rolling 20-session Sharpe study points over the same trailing 20-observation trend window.",
+      "interpretation": "Use the flag as an exploratory decay warning when cumulative P&L trends upward while rolling Sharpe trends downward; do not treat it as a trading signal.",
+      "label": "Sharpe–P&L divergence state",
+      "metric_id": "cumulative_pnl_divergence",
+      "numerical_tolerance": "absolute=1e-12, relative=0 in focused analytics tests",
+      "output_scale": "producer-native value",
+      "producer": "validation_analytics",
+      "results_surfaces": [
+        "Strategy Lab Results · Performance Memory"
+      ],
+      "risk_free_rate": null,
+      "sampling_cadence": "Computed when the run completes from the recorded equity curve and closed-trade ledger.",
+      "search_terms": [
+        "performance memory",
+        "validation atlas",
+        "cumulative pnl divergence"
+      ],
+      "source_keys": [],
+      "source_reference": "Pardo, The Evaluation and Optimization of Trading Strategies (2e), chapter 4; Bacon, Practical Portfolio Performance Measurement (2e), chapter 2.",
+      "timezone_convention": "Weekday and hour buckets use America/New_York; all other timestamps remain int64 ms UTC until local display.",
+      "units": "boolean diagnostic",
+      "validating_tests": [
+        "PythonDataService/tests/services/test_engine_validation_analytics.py"
+      ],
+      "value_states": [
+        {
+          "display": "Unavailable",
+          "scoring_behavior": "Not a zero. A required verdict input remains incomplete until the platform producer records it.",
+          "state": "unavailable"
+        }
+      ],
+      "variables": [],
+      "variant_id": "cumulative_pnl_divergence.validation_analytics.v1",
+      "verdict_membership": null
+    },
+    {
+      "aliases": [
+        "Divergence observation share",
+        "Performance Memory"
+      ],
+      "alternative_variant_ids": [],
+      "annualization": null,
+      "benchmark": null,
+      "canonical_symbol": "PythonDataService/app/services/engine_validation_analytics.py",
+      "category": "validation_atlas",
+      "common_misreadings": [
+        "This view is descriptive evidence, not an independent confirmation of the backtest."
+      ],
+      "contract_id": "engine-validation-analytics-v1",
+      "cost_treatment": "Uses closed-trade returns and the run's configured execution costs as already represented in persisted evidence.",
+      "definition": "Eligible divergence observations flagged true divided by all observations with complete Sharpe and trend windows.",
+      "fixture_or_receipt": null,
+      "formatting": "percentage, one decimal place",
+      "formula_latex": null,
+      "input_series": "Python-authored divergence flags after both rolling windows are fully observed.",
+      "interpretation": "Use the share to see how often the eligible history showed upward P&L alongside weakening rolling Sharpe, while checking the observation count.",
+      "label": "Divergence observation share",
+      "metric_id": "divergence_observation_share",
+      "numerical_tolerance": "absolute=1e-12, relative=0 in focused analytics tests",
+      "output_scale": "producer-native value",
+      "producer": "validation_analytics",
+      "results_surfaces": [
+        "Strategy Lab Results · Performance Memory"
+      ],
+      "risk_free_rate": null,
+      "sampling_cadence": "Computed when the run completes from the recorded equity curve and closed-trade ledger.",
+      "search_terms": [
+        "performance memory",
+        "validation atlas",
+        "divergence observation share"
+      ],
+      "source_keys": [],
+      "source_reference": "Pardo, The Evaluation and Optimization of Trading Strategies (2e), chapter 4; Bacon, Practical Portfolio Performance Measurement (2e), chapter 2.",
+      "timezone_convention": "Weekday and hour buckets use America/New_York; all other timestamps remain int64 ms UTC until local display.",
+      "units": "fraction",
+      "validating_tests": [
+        "PythonDataService/tests/services/test_engine_validation_analytics.py"
+      ],
+      "value_states": [
+        {
+          "display": "0",
+          "scoring_behavior": "A computed zero remains a value; it is not missing evidence.",
+          "state": "zero"
+        },
+        {
+          "display": "Unavailable",
+          "scoring_behavior": "Not a zero. A required verdict input remains incomplete until the platform producer records it.",
+          "state": "unavailable"
+        }
+      ],
+      "variables": [],
+      "variant_id": "divergence_observation_share.validation_analytics.v1",
+      "verdict_membership": null
+    },
+    {
+      "aliases": [
+        "Longest divergence streak",
+        "Performance Memory"
+      ],
+      "alternative_variant_ids": [],
+      "annualization": null,
+      "benchmark": null,
+      "canonical_symbol": "PythonDataService/app/services/engine_validation_analytics.py",
+      "category": "validation_atlas",
+      "common_misreadings": [
+        "This view is descriptive evidence, not an independent confirmation of the backtest."
+      ],
+      "contract_id": "engine-validation-analytics-v1",
+      "cost_treatment": "Uses closed-trade returns and the run's configured execution costs as already represented in persisted evidence.",
+      "definition": "Maximum consecutive eligible observations whose cumulative-P&L slope is positive while rolling-Sharpe slope is negative.",
+      "fixture_or_receipt": null,
+      "formatting": "integer sessions",
+      "formula_latex": null,
+      "input_series": "Chronological Python-authored divergence flags from the saved run.",
+      "interpretation": "Use the longest streak to distinguish isolated divergence noise from a sustained period of weakening risk-adjusted performance.",
+      "label": "Longest divergence streak",
+      "metric_id": "longest_divergence_streak",
+      "numerical_tolerance": "absolute=1e-12, relative=0 in focused analytics tests",
+      "output_scale": "producer-native value",
+      "producer": "validation_analytics",
+      "results_surfaces": [
+        "Strategy Lab Results · Performance Memory"
+      ],
+      "risk_free_rate": null,
+      "sampling_cadence": "Computed when the run completes from the recorded equity curve and closed-trade ledger.",
+      "search_terms": [
+        "performance memory",
+        "validation atlas",
+        "longest divergence streak"
+      ],
+      "source_keys": [],
+      "source_reference": "Pardo, The Evaluation and Optimization of Trading Strategies (2e), chapter 4; Bacon, Practical Portfolio Performance Measurement (2e), chapter 2.",
+      "timezone_convention": "Weekday and hour buckets use America/New_York; all other timestamps remain int64 ms UTC until local display.",
+      "units": "sessions",
+      "validating_tests": [
+        "PythonDataService/tests/services/test_engine_validation_analytics.py"
+      ],
+      "value_states": [
+        {
+          "display": "0",
+          "scoring_behavior": "A computed zero remains a value; it is not missing evidence.",
+          "state": "zero"
+        },
+        {
+          "display": "Unavailable",
+          "scoring_behavior": "Not a zero. A required verdict input remains incomplete until the platform producer records it.",
+          "state": "unavailable"
+        }
+      ],
+      "variables": [],
+      "variant_id": "longest_divergence_streak.validation_analytics.v1",
+      "verdict_membership": null
     }
   ]
 }

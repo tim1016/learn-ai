@@ -13366,6 +13366,7 @@ export interface components {
             rolling_trade_stability?: components["schemas"]["RollingTradePointResponse"][];
             /** Seasonality */
             seasonality?: components["schemas"]["SeasonalityMonthResponse"][];
+            sharpe_pnl_divergence?: components["schemas"]["SharpePnlDivergenceResponse"] | null;
             /** Timing Cells */
             timing_cells?: components["schemas"]["TimingCellResponse"][];
         };
@@ -22542,6 +22543,56 @@ export interface components {
              * @default false
              */
             valid?: boolean;
+        };
+        /** SharpePnlDivergencePointResponse */
+        SharpePnlDivergencePointResponse: {
+            /** Cumulative Pnl */
+            cumulative_pnl: number;
+            /**
+             * Is Divergence
+             * @default false
+             */
+            is_divergence?: boolean;
+            /**
+             * Is Trend Eligible
+             * @default false
+             */
+            is_trend_eligible?: boolean;
+            /** Rolling Sharpe */
+            rolling_sharpe?: number | null;
+            /** Timestamp Ms Utc */
+            timestamp_ms_utc: number;
+        };
+        /** SharpePnlDivergenceResponse */
+        SharpePnlDivergenceResponse: {
+            /** Annualization Sessions */
+            annualization_sessions: number;
+            /** Currently Diverging */
+            currently_diverging?: boolean | null;
+            /** Daily Observation Count */
+            daily_observation_count: number;
+            /** Divergence Observation Count */
+            divergence_observation_count: number;
+            /** Divergence Ratio */
+            divergence_ratio?: number | null;
+            /** Eligible Observation Count */
+            eligible_observation_count: number;
+            /** Error */
+            error?: string | null;
+            /** Latest Cumulative Pnl */
+            latest_cumulative_pnl?: number | null;
+            /** Latest Rolling Sharpe */
+            latest_rolling_sharpe?: number | null;
+            /** Longest Divergence Streak */
+            longest_divergence_streak: number;
+            /** Minimum Observation Count */
+            minimum_observation_count: number;
+            /** Points */
+            points?: components["schemas"]["SharpePnlDivergencePointResponse"][];
+            /** Return Window Sessions */
+            return_window_sessions: number;
+            /** Trend Window Sessions */
+            trend_window_sessions: number;
         };
         /**
          * SignalBehaviorMetricsResponse

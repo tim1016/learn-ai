@@ -26,7 +26,28 @@ describe("StrategyLabDeepDivesComponent", () => {
       lean_analysis: [],
       trades: [],
       total_trades: 0,
-      validation_analytics: null,
+      validation_analytics: {
+        horizons: [],
+        timing_cells: [],
+        seasonality: [],
+        rolling_trade_stability: [],
+        sharpe_pnl_divergence: {
+          error: null,
+          return_window_sessions: 20,
+          trend_window_sessions: 20,
+          annualization_sessions: 252,
+          minimum_observation_count: 40,
+          daily_observation_count: 60,
+          eligible_observation_count: 21,
+          divergence_observation_count: 6,
+          divergence_ratio: 6 / 21,
+          longest_divergence_streak: 3,
+          latest_rolling_sharpe: 0.42,
+          latest_cumulative_pnl: 8_200,
+          currently_diverging: true,
+          points: [],
+        },
+      },
     } as unknown as EngineResultData);
     fixture.componentRef.setInput("parity", {
       status: "diverged",
@@ -42,6 +63,8 @@ describe("StrategyLabDeepDivesComponent", () => {
     expect(compatibility?.getAttribute("aria-haspopup")).toBe("dialog");
     expect(root.querySelector("details")).toBeNull();
     expect(root.textContent).toContain("Native LEAN statistics");
+    expect(root.textContent).toContain("Sharpe–P&L divergence");
+    expect(root.textContent).toContain("20-session Sharpe versus cumulative P&L");
 
     compatibility?.click();
     fixture.detectChanges();

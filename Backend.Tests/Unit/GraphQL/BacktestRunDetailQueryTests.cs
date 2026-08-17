@@ -249,7 +249,7 @@ public class BacktestRunDetailQueryTests
             StrategyName = "ema_crossover",
             ValidationAnalyticsJson = """
             {
-              "schema_version": 1,
+              "schema_version": 2,
               "computed_at_ms": 1783958400000,
               "engine": "python",
               "analytics": {
@@ -272,7 +272,30 @@ public class BacktestRunDetailQueryTests
                 ],
                 "rolling_trade_stability": [
                   { "trade_number": 20, "end_ms_utc": 1700500000000, "window_size": 20, "average_return": 0.002, "win_rate": 0.6 }
-                ]
+                ],
+                "sharpe_pnl_divergence": {
+                  "return_window_sessions": 20,
+                  "trend_window_sessions": 20,
+                  "annualization_sessions": 252,
+                  "minimum_observation_count": 40,
+                  "daily_observation_count": 60,
+                  "eligible_observation_count": 21,
+                  "divergence_observation_count": 6,
+                  "divergence_ratio": 0.2857142857142857,
+                  "longest_divergence_streak": 3,
+                  "latest_rolling_sharpe": 0.42,
+                  "latest_cumulative_pnl": 8200.5,
+                  "currently_diverging": true,
+                  "points": [
+                    {
+                      "timestamp_ms_utc": 1700500000000,
+                      "cumulative_pnl": 8200.5,
+                      "rolling_sharpe": 0.42,
+                      "is_divergence": true,
+                      "is_trend_eligible": true
+                    }
+                  ]
+                }
               }
             }
             """,
@@ -282,7 +305,7 @@ public class BacktestRunDetailQueryTests
 
         Assert.NotNull(detail.ValidationAnalytics);
         Assert.Null(detail.ValidationAnalytics.Error);
-        Assert.Equal(1, detail.ValidationAnalytics.SchemaVersion);
+        Assert.Equal(2, detail.ValidationAnalytics.SchemaVersion);
         Assert.Equal(1_783_958_400_000, detail.ValidationAnalytics.ComputedAtMs);
         Assert.Equal("python", detail.ValidationAnalytics.Engine);
         var horizon = Assert.Single(detail.ValidationAnalytics.Horizons);
@@ -295,6 +318,12 @@ public class BacktestRunDetailQueryTests
         Assert.Equal("Jan", month.MonthLabel);
         var rolling = Assert.Single(detail.ValidationAnalytics.RollingTradeStability);
         Assert.Equal(20, rolling.WindowSize);
+        Assert.NotNull(detail.ValidationAnalytics.SharpePnlDivergence);
+        Assert.True(detail.ValidationAnalytics.SharpePnlDivergence.CurrentlyDiverging);
+        Assert.Equal(0.42, detail.ValidationAnalytics.SharpePnlDivergence.LatestRollingSharpe);
+        var divergencePoint = Assert.Single(detail.ValidationAnalytics.SharpePnlDivergence.Points);
+        Assert.True(divergencePoint.IsDivergence);
+        Assert.Equal(8_200.5, divergencePoint.CumulativePnl);
     }
 
     [Fact]
@@ -310,6 +339,36 @@ public class BacktestRunDetailQueryTests
         var detail = BacktestRunDetailType.FromExecution(execution, [], NullLogger.Instance);
 
         Assert.Null(detail.ValidationAnalytics);
+    }
+
+    [Fact]
+    public void FromExecution_LegacyValidationAnalytics_LeavesDivergenceStudyUnavailable()
+    {
+        var execution = new StrategyExecution
+        {
+            Ticker = new Ticker { Symbol = "SPY", Name = "SPY", Market = "stocks" },
+            Source = "engine",
+            StrategyName = "ema_crossover",
+            ValidationAnalyticsJson = """
+            {
+              "schema_version": 1,
+              "computed_at_ms": 1783958400000,
+              "engine": "python",
+              "analytics": {
+                "horizons": [],
+                "timing_cells": [],
+                "seasonality": [],
+                "rolling_trade_stability": []
+              }
+            }
+            """,
+        };
+
+        var detail = BacktestRunDetailType.FromExecution(execution, [], NullLogger.Instance);
+
+        Assert.NotNull(detail.ValidationAnalytics);
+        Assert.Equal(1, detail.ValidationAnalytics.SchemaVersion);
+        Assert.Null(detail.ValidationAnalytics.SharpePnlDivergence);
     }
 
     [Fact]
