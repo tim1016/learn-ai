@@ -157,6 +157,7 @@ async def get_gallery_hub(broker: str, account_id: str) -> GalleryHub:
             account_id=account_id,
             catalog_source=panel_data_source,
             aggregator=LIVE_BAR_AGGREGATOR,
+            resolution="5s",
             fill_source=_FILL_SOURCE,
             primary_action_source=_PRIMARY_ACTION_SOURCE,
             io_cache_ttl_ms=_GALLERY_IO_CACHE_TTL_MS,

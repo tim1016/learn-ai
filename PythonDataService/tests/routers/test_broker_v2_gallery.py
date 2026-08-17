@@ -118,6 +118,16 @@ def _fake_hub() -> GalleryHub:
     )
 
 
+async def test_get_gallery_hub_configures_the_production_wall_for_five_second_bars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(broker_v2_gallery, "_HUB_CACHE", {})
+
+    hub = await broker_v2_gallery.get_gallery_hub(_BROKER, _ACCOUNT_ID)
+
+    assert hub._resolution == "5s"
+
+
 @pytest.fixture
 def gallery_app(monkeypatch: pytest.MonkeyPatch):
     # These routes carry PROTECTED_DATA_PLANE_READ_DEPENDENCIES in main.py

@@ -13,6 +13,7 @@ import type {
   GalleryLiveSnapshot,
   GalleryLiveStatus,
   GalleryLiveUpdate,
+  GalleryResolution,
 } from './gallery.types';
 
 const FALLBACK_POLL_MS = 5_000;
@@ -22,6 +23,10 @@ interface GalleryRequest {
   readonly accountId: string;
 }
 
+function isGalleryResolution(value: unknown): value is GalleryResolution {
+  return value === '5s' || value === '1m';
+}
+
 function isGalleryLiveSnapshot(value: unknown): value is GalleryLiveSnapshot {
   if (typeof value !== 'object' || value === null) return false;
   const candidate = value as Partial<GalleryLiveSnapshot>;
@@ -29,6 +34,7 @@ function isGalleryLiveSnapshot(value: unknown): value is GalleryLiveSnapshot {
     && candidate.stream_epoch.length > 0
     && typeof candidate.surface_version === 'number'
     && Number.isInteger(candidate.surface_version)
+    && isGalleryResolution(candidate.resolution)
     && Array.isArray(candidate.bots)
     && Array.isArray(candidate.symbols)
     && typeof candidate.markers === 'object'
@@ -112,11 +118,13 @@ export class GalleryLiveStore {
   private readonly botsState = signal<GalleryBotView[]>([]);
   private readonly barsState = signal<ReadonlyMap<string, readonly ChartBar[]>>(new Map());
   private readonly markersState = signal<ReadonlyMap<string, readonly ChartFillMarker[]>>(new Map());
+  private readonly resolutionState = signal<GalleryResolution>('1m');
   private readonly statusState = signal<GalleryLiveStatus>('connecting');
 
   readonly bots = this.botsState.asReadonly();
   readonly barsBySymbol = this.barsState.asReadonly();
   readonly markersBySid = this.markersState.asReadonly();
+  readonly resolution = this.resolutionState.asReadonly();
   readonly status = this.statusState.asReadonly();
 
   private request: GalleryRequest | null = null;
@@ -169,6 +177,7 @@ export class GalleryLiveStore {
     if (this.epoch === snapshot.stream_epoch && snapshot.surface_version <= this.surfaceVersion) return;
     this.epoch = snapshot.stream_epoch;
     this.surfaceVersion = snapshot.surface_version;
+    this.resolutionState.set(snapshot.resolution);
     this.botsState.set([...snapshot.bots]);
     this.barsState.set(new Map(snapshot.symbols.map((entry) => [entry.symbol, [...entry.bars]])));
     this.markersState.set(

@@ -9,20 +9,28 @@
         type="button"
         class="bot-tile__action-button"
         [class.bot-tile__action-button--stop]="actionIsStop()"
+        [class.bot-tile__action-button--play]="!actionIsStop()"
         [disabled]="pending() || !bot().primary_action.enabled"
         [attr.aria-busy]="pending()"
         [attr.title]="actionTitle()"
         [attr.aria-label]="actionAriaLabel()"
         (click)="onActionClick()"
       >
-        <i
-          class="pi"
-          [class.pi-stop]="actionIsStop() && !pending()"
-          [class.pi-play]="!actionIsStop() && !pending()"
-          [class.pi-spin]="pending()"
-          [class.pi-spinner]="pending()"
-          aria-hidden="true"
-        ></i>
+        @if (pending()) {
+          <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+        } @else if (actionIsStop()) {
+          <svg
+            class="bot-tile__action-icon"
+            viewBox="0 0 16 16"
+            aria-hidden="true"
+          ><rect x="3" y="3" width="10" height="10" rx="1" /></svg>
+        } @else {
+          <svg
+            class="bot-tile__action-icon"
+            viewBox="0 0 16 16"
+            aria-hidden="true"
+          ><path d="M4 2.75a1 1 0 0 1 1.51-.86l8 5.25a1 1 0 0 1 0 1.72l-8 5.25A1 1 0 0 1 4 13.25V2.75Z" /></svg>
+        }
       </button>
 
       @if (confirmOpen()) {

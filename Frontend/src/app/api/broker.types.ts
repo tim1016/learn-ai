@@ -14387,9 +14387,9 @@ export interface components {
             };
             /**
              * Resolution
-             * @default 1m
+             * @enum {string}
              */
-            resolution?: string;
+            resolution: "5s" | "1m";
             /** Stream Epoch */
             stream_epoch: string;
             /** Surface Version */

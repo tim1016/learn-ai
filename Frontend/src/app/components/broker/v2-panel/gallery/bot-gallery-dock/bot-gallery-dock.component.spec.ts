@@ -4,7 +4,13 @@ import { fireEvent, render, screen } from '@testing-library/angular';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { loadLayout } from '../lib/gallery-layout';
-import type { ChartBar, ChartFillMarker, GalleryBotView, GalleryLiveStatus } from '../lib/gallery.types';
+import type {
+  ChartBar,
+  ChartFillMarker,
+  GalleryBotView,
+  GalleryLiveStatus,
+  GalleryResolution,
+} from '../lib/gallery.types';
 import { BotGalleryDockComponent } from './bot-gallery-dock.component';
 
 const ACCOUNT_ID = 'PA3';
@@ -42,6 +48,7 @@ interface RenderInputs {
   broker?: string;
   accountId?: string;
   pendingSids?: ReadonlySet<string>;
+  resolution?: GalleryResolution;
   status?: GalleryLiveStatus;
 }
 
@@ -55,6 +62,7 @@ async function renderDock(inputs: RenderInputs) {
       broker: inputs.broker ?? BROKER,
       accountId: inputs.accountId ?? ACCOUNT_ID,
       pendingSids: inputs.pendingSids ?? new Set(),
+      resolution: inputs.resolution ?? '5s',
       status: inputs.status ?? 'live',
     },
     on: { action: onAction },
@@ -310,11 +318,11 @@ describe('BotGalleryDockComponent', () => {
   });
 
   describe('footer', () => {
-    it('renders Reset layout, Today · 1m, and a pager alongside the filter', async () => {
+    it('renders Reset layout, the backend candle resolution, and a pager alongside the filter', async () => {
       await renderDock({ bots: bots(3) });
 
       expect(screen.getByRole('button', { name: 'Reset layout' })).toBeTruthy();
-      expect(screen.getByText('Today · 1m')).toBeTruthy();
+      expect(screen.getByText('Today · 5s')).toBeTruthy();
       expect(screen.getByText('page 1 of 1')).toBeTruthy();
     });
 

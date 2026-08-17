@@ -61,7 +61,7 @@
     </div>
 
     <div class="gallery-dock__status" role="status">
-      <span class="gallery-dock__timeframe">Today · 1m</span>
+      <span class="gallery-dock__timeframe">Today · {{ resolution() }}</span>
       <span
         class="gallery-dock__live"
         [class.gallery-dock__live--live]="status() === 'live'"

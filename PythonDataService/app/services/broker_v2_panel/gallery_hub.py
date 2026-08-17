@@ -45,6 +45,7 @@ from app.schemas.broker_v2_gallery import (
     GalleryLiveSnapshot,
     GalleryLiveUpdate,
     GalleryPrimaryAction,
+    GalleryResolution,
     GallerySymbolBars,
 )
 from app.schemas.broker_v2_panel import BotCatalogView, ChartBar, ChartFillMarker, PanelAction
@@ -107,11 +108,11 @@ def _day_pnl(realized: float | None, open_pnl: float | None) -> float | None:
 
 def _session_change_pct(bars: Sequence[ChartBar], *, open_ms: int) -> float | None:
     """Session return from the first bar within TODAY's session to the last
-    bar overall — never ``bars[0]``, which can be a prior session's bar: the
-    aggregator's ring buffer intentionally retains slightly more than one
-    session's worth (``live_bar_aggregator.py``'s ``_RING_BUFFER_SIZE``
-    comment: "covers a full session plus"), so a naive first-element read
-    can silently fold in a stale close-to-open gap from a prior day.
+    bar overall. Its input is always the aggregator's full-session 1-minute
+    buffer, never a resolution-specific chart buffer: the 5-second buffer is
+    deliberately shorter than a trading session, while the 1-minute buffer
+    retains a complete session plus tail. A naive ``bars[0]`` can therefore
+    either fold in a prior-session gap or silently begin late in the session.
     ``None`` when no bar falls within ``[open_ms, ...)`` yet, or that
     session's first open is zero.
 
@@ -202,6 +203,10 @@ class GalleryBarAggregator(Protocol):
 
     def snapshot(self, symbol: str, since_ms: int | None = None) -> list[object]: ...
 
+    async def ensure_subscribed_5s(self, symbol: str) -> object: ...
+
+    def snapshot_5s(self, symbol: str, since_ms: int | None = None) -> list[object]: ...
+
 
 class GalleryFillSource(Protocol):
     """Production implementation: an adapter over
@@ -245,6 +250,7 @@ class GalleryHub:
         account_id: str,
         catalog_source: GalleryCatalogSource,
         aggregator: GalleryBarAggregator,
+        resolution: GalleryResolution = "1m",
         fill_source: GalleryFillSource | None = None,
         primary_action_source: GalleryPrimaryActionSource | None = None,
         io_cache_ttl_ms: int = 0,
@@ -253,6 +259,7 @@ class GalleryHub:
         self._account_id = account_id
         self._catalog_source = catalog_source
         self._aggregator = aggregator
+        self._resolution = resolution
         self._fill_source = fill_source
         self._primary_action_source = primary_action_source
         self._epoch = f"{broker}:{account_id}:{_PROCESS_NONCE}"
@@ -295,6 +302,21 @@ class GalleryHub:
         self._markers_cache_at_ms = -1
         self._primary_actions_cache: dict[str, PanelAction] | None = None
         self._primary_actions_cache_at_ms = -1
+
+    async def _ensure_chart_subscription(self, symbol: str) -> None:
+        if self._resolution == "5s":
+            await self._aggregator.ensure_subscribed_5s(symbol)
+            return
+        await self._aggregator.ensure_subscribed(symbol)
+
+    def _snapshot_symbol_bars(self, symbol: str, *, since_ms: int | None) -> list[object]:
+        if self._resolution == "5s":
+            return self._aggregator.snapshot_5s(symbol, since_ms=since_ms)
+        return self._aggregator.snapshot(symbol, since_ms=since_ms)
+
+    async def _ensure_session_change_subscription(self, symbol: str) -> None:
+        if self._resolution == "5s":
+            await self._aggregator.ensure_subscribed(symbol)
 
     def _primary_action(
         self,
@@ -429,9 +451,10 @@ class GalleryHub:
         shown = [row for row in catalog if not _is_retired(row)]
         symbol_bars: list[GallerySymbolBars] = []
         for symbol in shown_symbols(catalog):
-            await self._aggregator.ensure_subscribed(symbol)
+            await self._ensure_chart_subscription(symbol)
+            await self._ensure_session_change_subscription(symbol)
             since_ms = since_bar_ms.get(symbol) if since_bar_ms is not None else None
-            raw = self._aggregator.snapshot(symbol, since_ms=since_ms)
+            raw = self._snapshot_symbol_bars(symbol, since_ms=since_ms)
             symbol_bars.append(
                 GallerySymbolBars(symbol=symbol, bars=aggregator_bars_to_chart_bars(raw))
             )
@@ -600,7 +623,7 @@ class GalleryHub:
                 stream_epoch=self._epoch,
                 surface_version=version,
                 as_of_ms=as_of_ms,
-                resolution="1m",
+                resolution=self._resolution,
                 bots=[
                     self._project_bot(
                         row,
