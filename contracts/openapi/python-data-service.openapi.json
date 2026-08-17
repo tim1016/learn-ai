@@ -19527,7 +19527,10 @@
             "type": "object"
           },
           "resolution": {
-            "default": "1m",
+            "enum": [
+              "5s",
+              "1m"
+            ],
             "title": "Resolution",
             "type": "string"
           },
@@ -19551,6 +19554,7 @@
           "stream_epoch",
           "surface_version",
           "as_of_ms",
+          "resolution",
           "bots",
           "symbols"
         ],

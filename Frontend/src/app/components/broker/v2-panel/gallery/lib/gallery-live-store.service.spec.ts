@@ -83,7 +83,7 @@ function snapshot(overrides: Partial<GalleryLiveSnapshot> = {}): GalleryLiveSnap
     stream_epoch: 'epoch-a',
     surface_version: 1,
     as_of_ms: 1_700_000_000_000,
-    resolution: '1m',
+    resolution: '5s',
     bots: [bot('sid-1'), bot('sid-2', { symbol: 'QQQ' })],
     symbols: [
       { symbol: 'SPY', bars: [bar(1_000), bar(2_000)] },
@@ -118,6 +118,7 @@ describe('GalleryLiveStore', () => {
 
       store.ingestSnapshot(snapshot());
       expect(store.bots().map((b) => b.sid)).toEqual(['sid-1', 'sid-2']);
+      expect(store.resolution()).toBe('5s');
       expect(store.barsBySymbol().get('SPY')).toEqual([bar(1_000), bar(2_000)]);
 
       const update: GalleryLiveUpdate = {

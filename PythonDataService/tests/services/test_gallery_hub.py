@@ -217,7 +217,7 @@ def _raw_bar(**overrides: object) -> object:
 
 
 class _FakeAggregator:
-    """Mirrors the REAL contract: ``ensure_subscribed`` is async, ``snapshot`` is sync.
+    """Mirrors the real resolution-aware aggregator contract.
 
     ``bars_by_symbol`` is public and mutable so a test can pre-configure a
     richer bar history (e.g. a prior-session bar followed by today's bars)
@@ -226,13 +226,24 @@ class _FakeAggregator:
 
     def __init__(self, bars_by_symbol: dict[str, list[object]] | None = None) -> None:
         self.subscribed: list[str] = []
+        self.subscribed_5s: list[str] = []
         self.bars_by_symbol: dict[str, list[object]] = bars_by_symbol or {}
+        self.bars_5s_by_symbol: dict[str, list[object]] = {}
 
     async def ensure_subscribed(self, symbol: str) -> None:
         self.subscribed.append(symbol)
 
+    async def ensure_subscribed_5s(self, symbol: str) -> None:
+        self.subscribed_5s.append(symbol)
+
     def snapshot(self, symbol: str, since_ms: int | None = None) -> list[object]:
         bars = self.bars_by_symbol.get(symbol, [_raw_bar()])
+        if since_ms is None:
+            return bars
+        return [bar for bar in bars if bar.start_ms > since_ms]
+
+    def snapshot_5s(self, symbol: str, since_ms: int | None = None) -> list[object]:
+        bars = self.bars_5s_by_symbol.get(symbol, [_raw_bar(end_ms=1_700_000_005_000)])
         if since_ms is None:
             return bars
         return [bar for bar in bars if bar.start_ms > since_ms]
@@ -260,6 +271,26 @@ async def test_build_snapshot_subscribes_once_per_symbol_and_projects_bots() -> 
     assert snap.resolution == "1m"
     assert aggregator.subscribed == ["SPY"]  # subscribed exactly once
     assert all(b.last_bar_at_ms == 1_700_000_060_000 for b in snap.bots)  # SPY's latest bar end_ms
+
+
+@pytest.mark.asyncio
+async def test_build_snapshot_uses_the_five_second_buffer_when_configured() -> None:
+    aggregator = _FakeAggregator()
+    aggregator.bars_5s_by_symbol["SPY"] = [_raw_bar(end_ms=1_700_000_005_000)]
+    hub = GalleryHub(
+        broker="alpaca",
+        account_id="PA3",
+        catalog_source=_FakeCatalogSource([_Cat2("Aug11-02", "SPY", True, 142.0, -8.0, 12)]),
+        aggregator=aggregator,
+        resolution="5s",
+    )
+
+    snapshot = await hub.build_snapshot()
+
+    assert snapshot.resolution == "5s"
+    assert aggregator.subscribed == ["SPY"]
+    assert aggregator.subscribed_5s == ["SPY"]
+    assert snapshot.symbols[0].bars[0].end_ms - snapshot.symbols[0].bars[0].start_ms == 5_000
 
 
 @pytest.mark.asyncio
@@ -484,15 +515,11 @@ async def test_build_snapshot_preserves_none_economics_instead_of_zero() -> None
 
 
 @pytest.mark.asyncio
-async def test_build_snapshot_session_change_pct_excludes_a_prior_session_bar(
+async def test_build_snapshot_session_change_pct_uses_full_session_bars_for_a_five_second_gallery(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Regression: the aggregator's ring buffer retains slightly more than
-    one session's worth of bars (``live_bar_aggregator.py``'s
-    ``_RING_BUFFER_SIZE`` comment). ``session_change_pct`` must be computed
-    from the first bar within TODAY's session, never from a naive
-    ``bars[0]`` that can be yesterday's tail — a prior-session close-to-open
-    gap must not leak into "today's" number."""
+    """5-second chart buffers are shorter than a session, so the current-
+    session return must retain the full-session 1-minute source."""
     monkeypatch.setattr(gallery_hub, "now_ms_utc", lambda: _NOW)
     prior_session_bar = _raw_bar(
         start_ms=_OPEN_MS - 3_600_000, end_ms=_OPEN_MS - 3_540_000, open=50.0, close=200.0,
@@ -502,13 +529,15 @@ async def test_build_snapshot_session_change_pct_excludes_a_prior_session_bar(
         start_ms=_OPEN_MS + 60_000, end_ms=_OPEN_MS + 120_000, open=101.0, close=110.0,
     )
     rows = [_Cat2("Aug11-02", "SPY", True, 0.0, 0.0, 0)]
+    aggregator = _FakeAggregator(
+        {"SPY": [prior_session_bar, todays_first_bar, todays_last_bar]}
+    )
     hub = GalleryHub(
         broker="alpaca",
         account_id="PA3",
         catalog_source=_FakeCatalogSource(rows),
-        aggregator=_FakeAggregator(
-            {"SPY": [prior_session_bar, todays_first_bar, todays_last_bar]}
-        ),
+        aggregator=aggregator,
+        resolution="5s",
     )
 
     snap = await hub.build_snapshot()
@@ -517,6 +546,8 @@ async def test_build_snapshot_session_change_pct_excludes_a_prior_session_bar(
     # naive bars[0]-based calculation would have produced by folding in the
     # prior session's bar.
     assert snap.bots[0].session_change_pct == pytest.approx(0.10, abs=1e-9, rel=0)
+    assert aggregator.subscribed == ["SPY"]
+    assert aggregator.subscribed_5s == ["SPY"]
 
 
 def test_gallery_hub_reuses_canonical_markers_projection() -> None:
