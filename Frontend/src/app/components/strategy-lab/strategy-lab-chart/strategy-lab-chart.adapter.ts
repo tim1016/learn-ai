@@ -1,12 +1,13 @@
-import type {
-  ChartIndicatorPoint,
-  ChartIndicatorResult,
-  TradingPoint,
-  TradingSeries,
-  TradingSubPane,
+import {
+  CHART_INDICATOR_SERIES_COLORS,
+  type ChartIndicatorPoint,
+  type ChartIndicatorResult,
+  type TradingPoint,
+  type TradingSeries,
+  type TradingSubPane,
 } from "../../../shared/trading-chart";
 
-export const SERIES_COLORS = ["#ffb300", "#ff6d00", "#7aa9ff", "#ab47bc", "#26a69a", "#ec407a"];
+export const SERIES_COLORS = CHART_INDICATOR_SERIES_COLORS;
 
 export interface ChartIndicatorSpec {
   id: string;

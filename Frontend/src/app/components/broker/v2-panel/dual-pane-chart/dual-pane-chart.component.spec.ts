@@ -1,7 +1,7 @@
 import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/angular';
-import { of } from 'rxjs';
+import { of, Subject } from 'rxjs';
 import { beforeEach, describe, it, expect, vi } from 'vitest';
 import {
   DUAL_PANE_CHART_FACTORY,
@@ -12,6 +12,7 @@ import {
 import type { ChartBar } from '../lib/broker-v2-panel.types';
 import { IndicatorCatalogService } from '../../../../shared/indicator-catalog/indicator-catalog.service';
 import { BotChartIndicatorService } from './bot-chart-indicator.service';
+import type { ChartIndicatorBatchResponse } from './dual-pane-chart-indicators';
 
 const chartMocks = vi.hoisted(() => ({
   createChart: vi.fn(),
@@ -233,7 +234,7 @@ describe('DualPaneChartComponent', () => {
     });
 
     expect(screen.queryByRole('complementary', { name: 'Indicator picker rail' })).toBeNull();
-    screen.getByRole('button', { name: 'Expand market chart' }).click();
+    fireEvent.click(screen.getByRole('button', { name: 'Expand market chart' }));
     fixture.detectChanges();
 
     const rail = screen.getByRole('complementary', { name: 'Indicator picker rail' });
@@ -257,15 +258,13 @@ describe('DualPaneChartComponent', () => {
     const { fixture } = await render(DualPaneChartComponent, {
       inputs: { symbol: 'SPY', liveBars: bars, histBars: [] },
     });
-    screen.getByRole('button', { name: 'Expand market chart' }).click();
+    fireEvent.click(screen.getByRole('button', { name: 'Expand market chart' }));
     fixture.detectChanges();
     const rail = screen.getByRole('complementary', { name: 'Indicator picker rail' });
     const trendButtons = within(rail).getAllByRole('button', { name: /trend/i });
-    trendButtons[trendButtons.length - 1].click();
+    fireEvent.click(trendButtons[trendButtons.length - 1]);
     fixture.detectChanges();
-    const addButton = rail.querySelector<HTMLButtonElement>('.ip-btn:not(.iconic)');
-    if (!addButton) throw new Error('indicator add button did not render');
-    addButton.click();
+    fireEvent.click(within(rail).getByRole('button', { name: 'Add', hidden: true }));
     fixture.detectChanges();
 
     await waitFor(() => expect(chartMocks.calculateIndicators).toHaveBeenCalledWith(
@@ -279,6 +278,53 @@ describe('DualPaneChartComponent', () => {
       expect.objectContaining({ color: '#FF9800' }),
       0,
     ));
+    expect(within(rail).getByRole<HTMLButtonElement>(
+      'button',
+      { name: 'Added', hidden: true },
+    ).disabled).toBe(true);
+  });
+
+  it('keeps the last indicator series visible while refreshed candles are recalculated', async () => {
+    const firstResponse = new Subject<ChartIndicatorBatchResponse>();
+    const secondResponse = new Subject<ChartIndicatorBatchResponse>();
+    chartMocks.calculateIndicators
+      .mockReturnValueOnce(firstResponse.asObservable())
+      .mockReturnValueOnce(secondResponse.asObservable());
+    const firstBars = [liveBar(1_700_000_000_000, 1_700_000_060_000)];
+    const { fixture } = await render(DualPaneChartComponent, {
+      inputs: { symbol: 'SPY', liveBars: firstBars, histBars: [] },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Expand market chart' }));
+    const rail = screen.getByRole('complementary', { name: 'Indicator picker rail' });
+    const trendButtons = within(rail).getAllByRole('button', { name: /trend/i });
+    fireEvent.click(trendButtons[trendButtons.length - 1]);
+    fireEvent.click(within(rail).getByRole('button', { name: 'Add', hidden: true }));
+    firstResponse.next({
+      symbol: 'SPY',
+      indicators: [{
+        id: 'sma_2', panel: 'main', type: 'line', color: '#FF9800',
+        data: [{ t: 1_700_000_060_000, value: 101 }], refs: [],
+      }],
+    });
+    firstResponse.complete();
+    fixture.detectChanges();
+    await waitFor(() => expect(chartMocks.addSeries).toHaveBeenCalledWith(
+      'LineSeries', expect.any(Object), 0,
+    ));
+    const lineAddsBeforeRefresh = chartMocks.addSeries.mock.calls
+      .filter(([seriesType]) => seriesType === 'LineSeries').length;
+
+    fixture.componentRef.setInput('liveBars', [
+      ...firstBars,
+      liveBar(1_700_000_060_000, 1_700_000_120_000),
+    ]);
+    fixture.detectChanges();
+
+    await waitFor(() => expect(chartMocks.calculateIndicators).toHaveBeenCalledTimes(2));
+    expect(chartMocks.addSeries.mock.calls
+      .filter(([seriesType]) => seriesType === 'LineSeries').length).toBeGreaterThan(
+      lineAddsBeforeRefresh,
+    );
   });
 
   it('defaults chart labels to local time and persists an explicit ET choice', async () => {

@@ -49,6 +49,7 @@ export class IndicatorPickerComponent implements AfterViewChecked {
   readonly activeKeys = input<readonly string[]>([]);
   readonly presets = input<readonly IndicatorPreset[]>(INDICATOR_PRESETS);
   readonly loading = input<boolean>(false);
+  readonly allowAdditionalInstances = input(true);
 
   // ── Outputs ─────────────────────────────────────────────────
   readonly add = output<IndicatorPickerAdd>();

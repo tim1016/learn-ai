@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { ChartBar } from '../lib/broker-v2-panel.types';
 import {
   selectChartIndicator,
+  toActiveIndicatorChips,
   toChartIndicatorRequestBars,
   toIndicatorSeriesPlans,
 } from './dual-pane-chart-indicators';
@@ -50,5 +51,17 @@ describe('dual-pane chart indicators', () => {
 
     expect(selectChartIndicator(once, { name: 'sma', params: { length: 20 } })).toBe(once);
     expect(once[0]).toEqual(expect.objectContaining({ id: 'sma|length:20', label: 'SMA 20' }));
+  });
+
+  it('uses the Python presentation color for the active rail chip', () => {
+    const selected = selectChartIndicator([], { name: 'sma', params: { length: 20 } });
+
+    expect(toActiveIndicatorChips(selected, [{
+      id: 'sma_20',
+      panel: 'main',
+      type: 'line',
+      color: '#FF9800',
+      data: [],
+    }])).toEqual([{ id: 'sma|length:20', label: 'SMA 20', color: '#FF9800' }]);
   });
 });

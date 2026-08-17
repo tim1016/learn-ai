@@ -32,6 +32,7 @@
     [activeKeys]="activeKeys()"
     [presets]="[]"
     [loading]="catalogLoading()"
+    [allowAdditionalInstances]="allowAdditionalInstances()"
     (add)="indicatorAdded.emit($event)"
     (addInstance)="indicatorAdded.emit($event)"
   />

@@ -51,7 +51,9 @@ import { PanelInstrumentQuoteComponent } from '../instrument-quote/panel-instrum
 import { BotChartIndicatorService } from './bot-chart-indicator.service';
 import {
   type SelectedChartIndicator,
+  resultBelongsToIndicator,
   selectChartIndicator,
+  toActiveIndicatorChips,
   toIndicatorSeriesPlans,
 } from './dual-pane-chart-indicators';
 
@@ -234,7 +236,6 @@ export class DualPaneChartComponent implements AfterViewInit {
   protected readonly visibleFillCount = computed(() =>
     toSeriesMarkers(this.activeMarkers(), this.activeBars()).length,
   );
-  protected readonly activeIndicatorChips = computed(() => this.selectedIndicators());
   protected readonly activeIndicatorKeys = computed(() =>
     this.selectedIndicators().map((indicator) => indicator.name),
   );
@@ -265,8 +266,9 @@ export class DualPaneChartComponent implements AfterViewInit {
     this.selectedIndicators().length > 0 && this.indicatorResource.isLoading(),
   );
   protected readonly indicatorError = computed(() => this.indicatorResource.value()?.error ?? null);
-  private readonly indicatorResults = computed(() =>
-    this.indicatorResource.isLoading() ? [] : this.indicatorResource.value()?.indicators ?? [],
+  private readonly renderedIndicatorResults = signal<readonly ChartIndicatorResult[]>([]);
+  protected readonly activeIndicatorChips = computed(() =>
+    toActiveIndicatorChips(this.selectedIndicators(), this.renderedIndicatorResults()),
   );
   private chart: IChartApi | null = null;
   private series: ISeriesApi<'Candlestick'> | null = null;
@@ -278,7 +280,16 @@ export class DualPaneChartComponent implements AfterViewInit {
   constructor() {
     void this.indicatorCatalog.load();
     effect(() => this.renderActivePane());
-    effect(() => this.renderIndicators(this.indicatorResults(), this.activeBars()));
+    effect(() => {
+      const selected = this.selectedIndicators();
+      const loaded = this.indicatorResource.value();
+      if (selected.length === 0) {
+        this.renderedIndicatorResults.set([]);
+      } else if (loaded?.error === null) {
+        this.renderedIndicatorResults.set(loaded.indicators);
+      }
+    });
+    effect(() => this.renderIndicators(this.renderedIndicatorResults(), this.activeBars()));
     effect(() => {
       this.timeZone();
       this.applyTimeZoneFormatting();
@@ -304,7 +315,7 @@ export class DualPaneChartComponent implements AfterViewInit {
     this.markers = createSeriesMarkers(this.series, []);
     this.applyTimeZoneFormatting();
     this.renderActivePane();
-    this.renderIndicators(this.indicatorResults(), this.activeBars());
+    this.renderIndicators(this.renderedIndicatorResults(), this.activeBars());
     this.destroyRef.onDestroy(() => this.cleanup());
   }
 
@@ -354,9 +365,13 @@ export class DualPaneChartComponent implements AfterViewInit {
   }
 
   protected removeIndicator(id: string): void {
-    this.selectedIndicators.update((current) =>
-      current.filter((indicator) => indicator.id !== id),
-    );
+    const removed = this.selectedIndicators().find((indicator) => indicator.id === id);
+    this.selectedIndicators.update((current) => current.filter((indicator) => indicator.id !== id));
+    if (removed) {
+      this.renderedIndicatorResults.update((results) =>
+        results.filter((result) => !resultBelongsToIndicator(result, removed)),
+      );
+    }
   }
 
   private renderActivePane(): void {

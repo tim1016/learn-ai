@@ -122,16 +122,19 @@
                     <span class="ip-desc">{{ ind.description }}</span>
                   </div>
                   <div class="ip-row-actions">
-                    @if (ind.configurable_params.length) {
+                    @if (ind.configurable_params.length && allowAdditionalInstances()) {
                       <button class="ip-btn iconic" type="button"
                               title="Add another instance with different params"
                               (click)="onAddInstance(ind)">
                         <span class="plus">+</span>
                       </button>
                     }
-                    <button class="ip-btn" type="button"
+                    <button
+                            class="ip-btn"
+                            type="button"
+                            [disabled]="!allowAdditionalInstances() && active > 0"
                             (click)="onAdd(ind)">
-                      Add
+                      {{ !allowAdditionalInstances() && active > 0 ? 'Added' : 'Add' }}
                     </button>
                   </div>
 

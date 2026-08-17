@@ -1,5 +1,9 @@
 import type { ChartBar } from '../lib/broker-v2-panel.types';
 import type { components } from '../../../../api/broker.types';
+import {
+  CHART_INDICATOR_FALLBACK_COLOR,
+  CHART_INDICATOR_SERIES_COLORS,
+} from '../../../../shared/trading-chart';
 import type {
   ChartIndicatorEntry,
   ChartIndicatorPoint,
@@ -7,11 +11,10 @@ import type {
   TradingIndicatorChip,
 } from '../../../../shared/trading-chart';
 
-const INDICATOR_COLORS = [
-  '#ffb300', '#7aa9ff', '#ab47bc', '#26a69a', '#ec407a', '#ff6d00',
-] as const;
-
-export interface SelectedChartIndicator extends ChartIndicatorEntry, TradingIndicatorChip {}
+export interface SelectedChartIndicator extends ChartIndicatorEntry {
+  id: string;
+  label: string;
+}
 
 export type ChartIndicatorRequestBar = components['schemas']['ChartIndicatorBar'];
 export type ChartIndicatorBatchResponse = components['schemas']['ChartIndicatorBatchResponse'];
@@ -38,7 +41,6 @@ export function selectChartIndicator(
       params: { ...entry.params },
       id,
       label: indicatorLabel(entry),
-      color: INDICATOR_COLORS[current.length % INDICATOR_COLORS.length],
     },
   ];
 }
@@ -49,6 +51,31 @@ export function indicatorRecipeId(entry: ChartIndicatorEntry): string {
     .map(([name, value]) => `${name}:${value}`)
     .join('|');
   return params ? `${entry.name}|${params}` : entry.name;
+}
+
+export function engineIndicatorId(entry: ChartIndicatorEntry): string {
+  const values = Object.values(entry.params).join('_');
+  return values ? `${entry.name}_${values}` : entry.name;
+}
+
+export function resultBelongsToIndicator(
+  result: ChartIndicatorResult,
+  entry: ChartIndicatorEntry,
+): boolean {
+  const engineId = engineIndicatorId(entry);
+  return result.id === engineId || result.id.startsWith(`${engineId}_`);
+}
+
+export function toActiveIndicatorChips(
+  selected: readonly SelectedChartIndicator[],
+  results: readonly ChartIndicatorResult[],
+): TradingIndicatorChip[] {
+  return selected.map((indicator) => ({
+    id: indicator.id,
+    label: indicator.label,
+    color: results.find((result) => resultBelongsToIndicator(result, indicator))?.color
+      ?? CHART_INDICATOR_FALLBACK_COLOR,
+  }));
 }
 
 export function toChartIndicatorRequestBars(
@@ -81,6 +108,9 @@ export function toIndicatorSeriesPlans(
         name.toLowerCase().includes('histogram'),
         chartTimes,
         index === 0 ? result.refs ?? [] : [],
+        index === 0
+          ? result.color
+          : CHART_INDICATOR_SERIES_COLORS[index % CHART_INDICATOR_SERIES_COLORS.length],
       ),
     );
   });
@@ -93,12 +123,13 @@ function seriesPlan(
   histogram: boolean,
   chartTimes: ReadonlyMap<number, number>,
   referenceLevels: readonly number[],
+  color = result.color,
 ): IndicatorSeriesPlan {
   return {
     id,
     pane: result.panel,
     type: histogram ? 'histogram' : 'line',
-    color: result.color,
+    color,
     points: points.flatMap((point) => {
       const time = chartTimes.get(point.t);
       return point.value === null || time === undefined ? [] : [{ time, value: point.value }];

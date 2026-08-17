@@ -72,3 +72,20 @@ async def test_chart_indicators_returns_typed_series_from_exact_caller_bars(
         request["bars"],
         request["indicators"],
     )
+
+
+@pytest.mark.anyio
+async def test_chart_indicators_rejects_an_unknown_indicator(client: AsyncClient) -> None:
+    response = await client.post(
+        "/api/chart/indicators",
+        json={
+            "symbol": "SPY",
+            "bars": [
+                {"t": 1_700_000_060_000, "o": 99, "h": 101, "l": 98, "c": 100, "v": 10},
+            ],
+            "indicators": [{"name": "not_real", "params": {}}],
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "unknown chart indicator: not_real"}

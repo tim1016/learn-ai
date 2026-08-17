@@ -26,6 +26,7 @@ export class ChartIndicatorRailComponent {
   readonly catalogLoading = input(false);
   readonly calculationLoading = input(false);
   readonly error = input<string | null>(null);
+  readonly allowAdditionalInstances = input(true);
 
   readonly indicatorAdded = output<IndicatorPickerAdd>();
   readonly indicatorRemoved = output<string>();
