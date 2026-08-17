@@ -3670,6 +3670,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs-internal/recency-chart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Recency Chart Job
+         * @description Kick off a Recency Chart launch in a worker thread. Returns 202.
+         *
+         *     The grid is validated (and rejected past the sanity ceiling — D11)
+         *     eagerly, before the 202 is returned, so a malformed sweep never even
+         *     reaches the worker thread. Once running, ``run_recency`` does the
+         *     actual expansion, bounded-concurrency execution, and per-run
+         *     persistence; per-run failures surface as ``log`` events so "N of M
+         *     failed" is visible on the job's SSE stream, not just the final
+         *     summary the completed event carries.
+         */
+        post: operations["start_recency_chart_job_api_jobs_internal_recency_chart_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs-internal/recency-chart/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Validate Recency Chart Job
+         * @description Preflight a launch before .NET creates its durable launch row.
+         */
+        post: operations["validate_recency_chart_job_api_jobs_internal_recency_chart_validate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs-internal/signal-engine": {
         parameters: {
             query?: never;
@@ -5266,6 +5314,26 @@ export interface paths {
         get: operations["list_indicators_api_research_indicators_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/recency/hero": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Compute Recency Hero
+         * @description Return Python-authored visible-window winners for each symbol/strategy.
+         */
+        post: operations["compute_recency_hero_api_research_recency_hero_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -17794,6 +17862,20 @@ export interface components {
              */
             logic: "AND" | "OR";
         };
+        /** LowHighStepRangeRequest */
+        LowHighStepRangeRequest: {
+            /** High */
+            high: number;
+            /** Low */
+            low: number;
+            /** Step */
+            step: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "low_high_step";
+        };
         /** ManualOrderBrokerOrderResponse */
         ManualOrderBrokerOrderResponse: {
             /** Broker Order Id */
@@ -20773,6 +20855,88 @@ export interface components {
          */
         ReasonCode: "normal_fill" | "pending_acknowledgement" | "partial_fill" | "timing_caveat" | "reconnect_recovery" | "missing_commission" | "price_divergence" | "quantity_divergence" | "unmatched_execution" | "duplicate_execution" | "cancellation" | "rejection";
         /**
+         * RecencyChartJobRequest
+         * @description Body of POST /api/jobs-internal/recency-chart.
+         *
+         *     Each parameter's range is either an explicit value list or an
+         *     inclusive low/high/step sweep (design spec D4) — the discriminated
+         *     ``type`` field lets one dict carry either shape per parameter.
+         */
+        RecencyChartJobRequest: {
+            /**
+             * Commissionperorder
+             * @default 0
+             */
+            commissionPerOrder?: number;
+            /**
+             * Datapolicy
+             * @default polygon-adjusted-regular-minute
+             */
+            dataPolicy?: string;
+            /**
+             * Fillmode
+             * @default signal_bar_close
+             */
+            fillMode?: string;
+            /** Jobid */
+            jobId: string;
+            /** Strategies */
+            strategies: components["schemas"]["StrategyGridConfigRequest"][];
+            /** Symbols */
+            symbols: string[];
+            /** Windowendms */
+            windowEndMs: number;
+            /** Windowstartms */
+            windowStartMs: number;
+        };
+        /** RecencyHeroCandidateRequest */
+        RecencyHeroCandidateRequest: {
+            /** Params Hash */
+            params_hash: string;
+            /** Recency Run Id */
+            recency_run_id: number;
+            /** Strategy Key */
+            strategy_key: string;
+            /** Symbol */
+            symbol: string;
+            /** Trades */
+            trades: components["schemas"]["RecencyHeroTradeRequest"][];
+        };
+        /** RecencyHeroRequest */
+        RecencyHeroRequest: {
+            /** Candidates */
+            candidates: components["schemas"]["RecencyHeroCandidateRequest"][];
+            /** From Ms */
+            from_ms: number;
+            /** To Ms */
+            to_ms: number;
+        };
+        /** RecencyHeroResponse */
+        RecencyHeroResponse: {
+            /** Heroes */
+            heroes: components["schemas"]["RecencyHeroResponseItem"][];
+        };
+        /** RecencyHeroResponseItem */
+        RecencyHeroResponseItem: {
+            /** Params Hash */
+            params_hash: string;
+            /** Recency Run Id */
+            recency_run_id: number;
+            /** Strategy Key */
+            strategy_key: string;
+            /** Symbol */
+            symbol: string;
+            /** Total Pnl */
+            total_pnl: number;
+        };
+        /** RecencyHeroTradeRequest */
+        RecencyHeroTradeRequest: {
+            /** Entry Ms */
+            entry_ms: number;
+            /** Pnl */
+            pnl: number;
+        };
+        /**
          * RecentDecisionView
          * @description Bounded backend-authored decision receipt for the Trader lens.
          */
@@ -23541,6 +23705,15 @@ export interface components {
             /** Validator Code Sha256 */
             validator_code_sha256?: string | null;
         };
+        /** StrategyGridConfigRequest */
+        StrategyGridConfigRequest: {
+            /** Paramranges */
+            paramRanges?: {
+                [key: string]: components["schemas"]["ValueListRangeRequest"] | components["schemas"]["LowHighStepRangeRequest"];
+            };
+            /** Strategykey */
+            strategyKey: string;
+        };
         /** StrategyInfo */
         StrategyInfo: {
             /**
@@ -23565,6 +23738,11 @@ export interface components {
              * @default false
              */
             pine_available?: boolean;
+            /**
+             * Recency Supported
+             * @default false
+             */
+            recency_supported?: boolean;
             /**
              * Sizing Surface
              * @default policy
@@ -25068,6 +25246,16 @@ export interface components {
             passed: number;
             /** Status */
             status: string;
+        };
+        /** ValueListRangeRequest */
+        ValueListRangeRequest: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "value_list";
+            /** Values */
+            values: number[];
         };
         /**
          * Verdict
@@ -32031,6 +32219,74 @@ export interface operations {
             };
         };
     };
+    start_recency_chart_job_api_jobs_internal_recency_chart_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecencyChartJobRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validate_recency_chart_job_api_jobs_internal_recency_chart_validate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecencyChartJobRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: number;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     start_signal_engine_job_api_jobs_internal_signal_engine_post: {
         parameters: {
             query?: never;
@@ -34186,6 +34442,39 @@ export interface operations {
                     "application/json": {
                         [key: string]: components["schemas"]["IndicatorInfo"][];
                     };
+                };
+            };
+        };
+    };
+    compute_recency_hero_api_research_recency_hero_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecencyHeroRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecencyHeroResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

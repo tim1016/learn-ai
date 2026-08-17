@@ -57,6 +57,7 @@ from app.routers import (
     options,
     portfolio,
     quantlib_options,
+    recency,
     research,
     research_divergence,
     research_runs,
@@ -600,6 +601,7 @@ app.include_router(tickers.router, prefix="/api/tickers", tags=["tickers"])
 app.include_router(strategy.router, prefix="/api/strategy", tags=["strategy"])
 app.include_router(spec_strategy.router, prefix="/api/spec-strategy", tags=["spec-strategy"])
 app.include_router(research.router, prefix="/api/research", tags=["research"])
+app.include_router(recency.router, prefix="/api/research/recency", tags=["research-recency"])
 app.include_router(indicator_reliability.router, prefix="/api/research", tags=["research"])
 # Research-pipeline walk-forward (Phase C). Registered BEFORE
 # ``research_runs`` so the literal ``/walk-forward`` segment wins

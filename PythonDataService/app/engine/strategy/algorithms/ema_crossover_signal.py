@@ -88,20 +88,34 @@ class EmaCrossoverSignalAlgorithm(Strategy):
     CONSOLIDATOR_PERIOD_MIN = 15
 
     def _gap_is_sufficient(self, ema_fast: Decimal, ema_slow: Decimal) -> bool:
-        """Apply the original absolute-dollar entry threshold."""
-        return ema_fast - ema_slow >= Decimal("0.20")
+        """Apply the configured absolute-dollar entry threshold (default 0.20)."""
+        return ema_fast - ema_slow >= self._gap
 
     def _rsi_gate_bounds(self) -> tuple[Decimal, Decimal]:
-        """Return the original inclusive RSI entry band."""
-        return Decimal(50), Decimal(70)
+        """Return the configured inclusive RSI entry band (default 50–70)."""
+        return self._rsi_min, self._rsi_max
 
-    def __init__(self, symbol: str = "SPY", output_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        symbol: str = "SPY",
+        output_dir: Path | None = None,
+        gap: Decimal | float = Decimal("0.20"),
+        rsi_min: Decimal | float = Decimal(50),
+        rsi_max: Decimal | float = Decimal(70),
+    ) -> None:
         super().__init__()
         # This is the signal stream, not an execution target. The Action Plan
         # selects the traded asset for live policy deployments. SPY remains
         # the default solely to preserve the LEAN parity fixture.
         self._symbol_name = symbol.upper()
         self._output_dir = output_dir
+        # Entry gates. Defaults preserve the validated LEAN-parity point
+        # exactly (absolute gap 0.20, RSI band 50–70); the Recency Chart
+        # sweeps these as parameters. Coerced through str() so a float from
+        # the JSON param layer lands as an exact Decimal.
+        self._gap = Decimal(str(gap))
+        self._rsi_min = Decimal(str(rsi_min))
+        self._rsi_max = Decimal(str(rsi_max))
         self._symbol: str = ""
         self._ema5: ExponentialMovingAverage | None = None
         self._ema10: ExponentialMovingAverage | None = None
