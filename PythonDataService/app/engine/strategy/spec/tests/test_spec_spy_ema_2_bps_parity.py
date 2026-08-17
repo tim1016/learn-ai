@@ -1,4 +1,9 @@
-"""EMA Crossover 2 bps StrategySpec parity acceptance gate."""
+"""EMA Crossover 2 bps StrategySpec parity acceptance gate.
+
+The independent LEAN trade oracle is fixture ``ENG-007``, exercised directly
+against both implementations by
+``tests/integration/reconciliation/test_ema_crossover_2_bps_lean_golden.py``.
+"""
 
 from __future__ import annotations
 

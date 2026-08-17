@@ -12891,6 +12891,27 @@ export interface components {
             rho_sum?: number;
         };
         /**
+         * EmaCrossover2BpsStrategyParametersModel
+         * @description Validated runtime gates accepted by the parameterized LEAN twin.
+         */
+        EmaCrossover2BpsStrategyParametersModel: {
+            /**
+             * Gap Bps
+             * @default 2
+             */
+            gap_bps?: number;
+            /**
+             * Rsi Max
+             * @default 70
+             */
+            rsi_max?: number;
+            /**
+             * Rsi Min
+             * @default 50
+             */
+            rsi_min?: number;
+        };
+        /**
          * EmergencyFlattenRequest
          * @description Body for the account-wide emergency flatten (§ 7.2 #6).
          *
@@ -24752,6 +24773,8 @@ export interface components {
              * @default 100000
              */
             starting_cash?: number;
+            /** @description Validated strategy-logic parameters for a bundled trusted template. Currently accepted only by ema_crossover_2_bps; omitted values use that template's canonical 2/50/70 defaults. */
+            strategy_parameters?: components["schemas"]["EmaCrossover2BpsStrategyParametersModel"] | null;
             /**
              * Symbol
              * @description DEPRECATED (PR B): use ``data_policy.symbol``.

@@ -52,12 +52,16 @@ export class ExhaustiveRunPanelComponent {
 
   private loadedFor: string | null = null;
   private resultSettledFor: string | null = null;
+  private loadGeneration = 0;
 
   constructor() {
     effect(() => {
       const walkForwardId = this.walkForwardId();
       if (walkForwardId === this.loadedFor) return;
       this.loadedFor = walkForwardId;
+      this.jobId.set(null);
+      this.resultSettledFor = null;
+      this.response.set(null);
       void this.load(walkForwardId);
     });
 
@@ -65,7 +69,8 @@ export class ExhaustiveRunPanelComponent {
       if (this.jobId() === null) {
         const resumable = this.jobs.jobs().find((candidate) =>
           candidate.type === JOB_TYPE
-          && (candidate.status === 'queued' || candidate.status === 'running'));
+          && (candidate.status === 'queued' || candidate.status === 'running')
+          && candidate.parameters?.['walk_forward_id'] === this.walkForwardId());
         if (resumable !== undefined) this.jobId.set(resumable.id);
         return;
       }
@@ -83,27 +88,41 @@ export class ExhaustiveRunPanelComponent {
   }
 
   async load(walkForwardId: string): Promise<void> {
+    const generation = ++this.loadGeneration;
     this.loading.set(true);
     this.error.set(null);
     try {
-      this.response.set(await this.exhaustiveRuns.getLatestForWalkForward(walkForwardId));
+      const response = await this.exhaustiveRuns.getLatestForWalkForward(walkForwardId);
+      if (this.isCurrentLoad(walkForwardId, generation)) {
+        this.response.set(response);
+      }
     } catch (error) {
-      this.error.set(errorMessage(error));
+      if (this.isCurrentLoad(walkForwardId, generation)) {
+        this.error.set(errorMessage(error));
+      }
     } finally {
-      this.loading.set(false);
+      if (this.isCurrentLoad(walkForwardId, generation)) {
+        this.loading.set(false);
+      }
     }
   }
 
   async runAnalysis(): Promise<void> {
+    const walkForwardId = this.walkForwardId();
     this.starting.set(true);
     this.error.set(null);
     try {
       this.resultSettledFor = null;
-      this.jobId.set(await this.jobs.startJob(JOB_TYPE, {
-        walk_forward_id: this.walkForwardId(),
-      }));
+      const jobId = await this.jobs.startJob(JOB_TYPE, {
+        walk_forward_id: walkForwardId,
+      });
+      if (walkForwardId === this.walkForwardId()) {
+        this.jobId.set(jobId);
+      }
     } catch (error) {
-      this.error.set(errorMessage(error));
+      if (walkForwardId === this.walkForwardId()) {
+        this.error.set(errorMessage(error));
+      }
     } finally {
       this.starting.set(false);
     }
@@ -120,15 +139,25 @@ export class ExhaustiveRunPanelComponent {
   }
 
   private async loadJobResult(jobId: string): Promise<void> {
+    const walkForwardId = this.walkForwardId();
+    ++this.loadGeneration;
+    this.loading.set(false);
     try {
       const response = await this.jobs.fetchResult<ExhaustiveRunResponse>(jobId);
-      if (response.config.source_walk_forward_id !== this.walkForwardId()) {
+      if (walkForwardId !== this.walkForwardId() || jobId !== this.jobId()) return;
+      if (response.config.source_walk_forward_id !== walkForwardId) {
         throw new Error('The completed job belongs to a different walk-forward receipt.');
       }
       this.response.set(response);
     } catch (error) {
-      this.error.set(errorMessage(error));
+      if (walkForwardId === this.walkForwardId() && jobId === this.jobId()) {
+        this.error.set(errorMessage(error));
+      }
     }
+  }
+
+  private isCurrentLoad(walkForwardId: string, generation: number): boolean {
+    return walkForwardId === this.walkForwardId() && generation === this.loadGeneration;
   }
 }
 

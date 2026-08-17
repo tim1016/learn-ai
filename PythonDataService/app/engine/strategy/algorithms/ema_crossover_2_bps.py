@@ -9,7 +9,8 @@ Canonical implementation: this file delegates the normalized-gap arithmetic
 to ``app.engine.strategy.spec.primitives.difference_bps``.
 Validated against: ``tests/engine/strategy/algorithms/test_signal_only_ema_crossover.py``;
 ``app/engine/strategy/spec/tests/test_spec_spy_ema_2_bps_parity.py``; and the
-LEAN twin in ``app/lean_sidecar/trusted_samples/ema_crossover_2_bps.py``.
+trade-level LEAN golden fixture ``ENG-007`` exercised by
+``tests/integration/reconciliation/test_ema_crossover_2_bps_lean_golden.py``.
 """
 
 from __future__ import annotations

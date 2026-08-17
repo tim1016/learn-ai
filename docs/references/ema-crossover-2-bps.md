@@ -98,6 +98,24 @@ receipts establish implementation agreement for this pinned window and data
 fixture; they do not establish that the strategy has a positive edge. Both
 configurations produced negative P&L on this window.
 
+## Automated LEAN golden proof
+
+Golden fixture `ENG-007` under
+`PythonDataService/tests/fixtures/golden/strategy-parity/ENG-007/v1/` converts
+the default paired receipt into a committed CI gate. Its oracle comes from
+LEAN source commit `261366a7e26ae942df858ab20df4fef8fa07de67` in image
+`sha256:3dd003372f1ef1981b4e80038e3f1c557f1fe414d1be531f485ef870f81a5771`.
+The fixture pins the independently produced `Filled` events for the compact
+2026-02-17 through 2026-02-26 window: three closed trades across all 3,120
+regular-session input minute bars.
+
+`test_ema_crossover_2_bps_lean_golden.py` replays those committed inputs
+through both the hand-coded strategy and its StrategySpec. Timestamps,
+directions, quantities, and fees must match exactly. Fill price and final
+equity use `atol=0.000001`, `rtol=0`; observed maximum error is zero. The
+fixture manifest, attribution, source hashes, and raw archive hashes make the
+proof reproducible without requiring LEAN or market-data access in CI.
+
 ## Running LEAN locally
 
 From the repository root, start the host-side LEAN launcher with:
@@ -116,12 +134,15 @@ container reaches it through `host.containers.internal:8090`.
 - Formula golden fixture: exact `Decimal` equality (`atol=0`, `rtol=0`).
 - StrategySpec versus Python strategy: trade-by-trade exact parity on the
   controlled synthetic stream.
+- Python strategy and StrategySpec versus independent LEAN output: committed
+  `ENG-007` trade-level fixture, exact event identity, fill/equity
+  `atol=0.000001`, `rtol=0`.
 - LEAN source: parseability, pinned non-gate constants, runtime parameter reads,
   and fail-closed audited source derivation.
 - API boundaries: finite/bounded gate values, strict RSI ordering, unknown-key
   rejection, and rejection on templates that do not declare these parameters.
 - Cross-engine runtime: normal Strategy Lab persistence and compatibility
-  verdict, not an ad-hoc calculation.
+  verdict, plus the CI-enforced LEAN golden receipt above.
 
 This is research software, not financial advice. A green compatibility
 receipt proves implementation agreement, not future profitability.

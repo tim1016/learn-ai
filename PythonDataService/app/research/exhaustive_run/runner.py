@@ -43,6 +43,7 @@ from app.research.walk_forward.metrics import mean_fold_retention, sharpe_retent
 from app.research.walk_forward.result import (
     FoldResult,
     ParameterCandidateConfig,
+    ParameterSearchConfig,
     WalkForwardConfig,
     WalkForwardResult,
 )
@@ -53,6 +54,9 @@ from app.research.walk_forward.spy_ema import (
     SPY_EMA_PROTOCOL_ID,
     SPY_EMA_PROTOCOL_START_MS,
     SPY_EMA_PROTOCOL_VERSION,
+    build_spy_ema_gap_candidates,
+    frozen_spy_ema_v1_request,
+    frozen_spy_ema_v1_spec,
 )
 from app.research.walk_forward.storage import load_walk_forward, save_walk_forward
 from app.utils.timestamps import now_ms_utc
@@ -377,18 +381,77 @@ def _failed_candidate(
 
 
 def _validate_source(config: WalkForwardConfig, result: WalkForwardResult) -> None:
+    canonical = frozen_spy_ema_v1_request()
+    canonical_spec = frozen_spy_ema_v1_spec()
     if config.protocol_id != SPY_EMA_PROTOCOL_ID or config.protocol_version != SPY_EMA_PROTOCOL_VERSION:
         raise ExhaustiveRunSourceError("Exhaustive Run requires canonical SPY EMA V1 evidence")
     if config.start_ms != SPY_EMA_PROTOCOL_START_MS or config.end_ms != SPY_EMA_PROTOCOL_END_MS:
         raise ExhaustiveRunSourceError("source walk-forward does not use the frozen two-year window")
-    if config.parameter_search is None:
-        raise ExhaustiveRunSourceError("source walk-forward has no candidate grid")
+    if (
+        config.symbol != "SPY"
+        or config.resolution_minutes != 15
+        or config.initial_cash != canonical.initial_cash
+        or config.fill_mode != canonical.fill_mode
+        or config.commission_per_order != canonical.commission_per_order
+        or config.slippage_per_share != canonical.slippage_per_share
+        or config.random_seed != canonical.random_seed
+        or config.fold_position_policy != "flat_at_test_boundaries"
+        or config.split_policy.model_dump(mode="json") != canonical.split_policy.describe()
+    ):
+        raise ExhaustiveRunSourceError("source walk-forward configuration is not canonical SPY EMA V1")
+
+    canonical_spec_json = canonical_spec.model_dump(mode="json")
+    if (
+        config.strategy_spec_json != canonical_spec_json
+        or config.strategy_spec_hash != hash_payload(canonical_spec_json)
+    ):
+        raise ExhaustiveRunSourceError("source walk-forward base specification is not canonical SPY EMA V1")
+
+    expected_search = ParameterSearchConfig(
+        min_trades=canonical.min_train_trades,
+        candidates=[
+            ParameterCandidateConfig(
+                parameters=dict(candidate.parameters),
+                strategy_spec_hash=hash_payload(candidate.spec.model_dump(mode="json")),
+                strategy_spec_json=candidate.spec.model_dump(mode="json"),
+            )
+            for candidate in build_spy_ema_gap_candidates(canonical.thresholds_bps)
+        ],
+    )
+    if config.parameter_search != expected_search:
+        raise ExhaustiveRunSourceError("source walk-forward candidate grid is not canonical SPY EMA V1")
+
+    expected_folds = canonical.split_policy.folds(config.start_ms, config.end_ms)
+    actual_fold_windows = [
+        (
+            fold.fold_index,
+            fold.train_start_ms,
+            fold.train_end_ms,
+            fold.test_start_ms,
+            fold.test_end_ms,
+        )
+        for fold in result.folds
+    ]
+    expected_fold_windows = [
+        (
+            fold.fold_index,
+            fold.train_start_ms,
+            fold.train_end_ms,
+            fold.test_start_ms,
+            fold.test_end_ms,
+        )
+        for fold in expected_folds
+    ]
     if (
         result.status != "completed"
-        or len(result.folds) != 18
+        or result.walk_forward_id != config.walk_forward_id
+        or result.strategy_spec_hash != config.strategy_spec_hash
+        or result.split_policy != config.split_policy
+        or result.selection_failures
+        or actual_fold_windows != expected_fold_windows
         or any(fold.status != "completed" for fold in result.folds)
     ):
-        raise ExhaustiveRunSourceError("source walk-forward must contain 18 completed protocol folds")
+        raise ExhaustiveRunSourceError("source walk-forward must contain the 18 completed canonical protocol folds")
 
 
 def _validated_source_revision(

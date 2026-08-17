@@ -38,6 +38,9 @@ export interface JobState {
   id: string;
   type: string;
   status: JobStatus;
+  /** Original start payload. Resumed-job consumers use this to avoid
+   *  attaching a page to an unrelated job of the same type. */
+  parameters?: Readonly<Record<string, unknown>>;
   phase?: string;
   /** User-facing label for the current phase. Set to the server-supplied
    *  ``friendly`` field when present; falls back to a humanised form of
@@ -81,6 +84,7 @@ interface ServerJobState {
   completed_at?: string;
   error_code?: string;
   error_message?: string;
+  params?: string;
 }
 
 const TERMINAL: JobStatus[] = ['completed', 'failed', 'cancelled'];
@@ -135,6 +139,7 @@ export class JobsService {
       id: resp.id,
       type,
       status: 'queued',
+      parameters: payload,
       recentLogs: [],
       logSeq: 0,
     });
@@ -177,6 +182,7 @@ export class JobsService {
           id: s.id,
           type: s.type,
           status,
+          parameters: parseJobParameters(s.params),
           phase: s.phase,
           startedAt: s.started_at ? Number(s.started_at) : undefined,
           recentLogs: [],
@@ -247,6 +253,20 @@ export class JobsService {
       return next;
     });
   }
+}
+
+function parseJobParameters(value: string | undefined): Readonly<Record<string, unknown>> | undefined {
+  if (value === undefined) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Old or malformed server state is deliberately left unscoped. Consumers
+    // must not guess which page owns a job when its parameters are unavailable.
+  }
+  return undefined;
 }
 
 // Pure reducer — exported for unit testing.

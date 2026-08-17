@@ -22,6 +22,7 @@ from app.research.walk_forward.result import (
     WalkForwardResult,
 )
 from app.research.walk_forward.spy_ema import (
+    DEFAULT_GAP_THRESHOLDS_BPS,
     SPY_EMA_PROTOCOL_END_MS,
     SPY_EMA_PROTOCOL_START_MS,
     frozen_spy_ema_v1_request,
@@ -46,19 +47,20 @@ def _source() -> tuple[WalkForwardConfig, WalkForwardResult]:
         Path(__file__).resolve().parents[3]
         / "app/engine/strategy/spec/fixtures/spy_ema_normalized_gap.spec.json"
     )
-    specs = [materialize_gap_threshold(fixture, gap) for gap in (1.0, 2.0)]
+    specs = [materialize_gap_threshold(fixture, gap) for gap in DEFAULT_GAP_THRESHOLDS_BPS]
     candidates = [
         ParameterCandidateConfig(
             parameters={"gap_bps": gap},
             strategy_spec_hash=hash_payload(spec.model_dump(mode="json")),
             strategy_spec_json=spec.model_dump(mode="json"),
         )
-        for gap, spec in zip((1.0, 2.0), specs, strict=True)
+        for gap, spec in zip(DEFAULT_GAP_THRESHOLDS_BPS, specs, strict=True)
     ]
     policy = frozen_spy_ema_v1_request().split_policy
+    fixture_hash = hash_payload(fixture.model_dump(mode="json"))
     config = WalkForwardConfig(
         walk_forward_id="a" * 32,
-        strategy_spec_hash="source",
+        strategy_spec_hash=fixture_hash,
         strategy_spec_json=fixture.model_dump(mode="json"),
         symbol="SPY",
         resolution_minutes=15,
@@ -82,18 +84,17 @@ def _source() -> tuple[WalkForwardConfig, WalkForwardResult]:
     for window in policy.folds(config.start_ms, config.end_ms):
         training = [
             TrainingCandidateResult(
-                parameters={"gap_bps": 1.0},
-                train_run_id=f"train-{window.fold_index}-1",
-                train_metrics=_metrics(sharpe=2.0, total_return=0.02, trades=20),
-                eligible=True,
-            ),
-            TrainingCandidateResult(
-                parameters={"gap_bps": 2.0},
-                train_run_id=f"train-{window.fold_index}-2",
-                train_metrics=_metrics(sharpe=9.0, total_return=0.09, trades=1),
-                eligible=False,
-                ineligibility_reason="too few trades",
-            ),
+                parameters={"gap_bps": gap},
+                train_run_id=f"train-{window.fold_index}-{gap:g}",
+                train_metrics=_metrics(
+                    sharpe=2.0 if gap == 1.0 else 9.0,
+                    total_return=0.02 if gap == 1.0 else 0.09,
+                    trades=20 if gap == 1.0 else 1,
+                ),
+                eligible=gap == 1.0,
+                ineligibility_reason=None if gap == 1.0 else "too few trades",
+            )
+            for gap in DEFAULT_GAP_THRESHOLDS_BPS
         ]
         folds.append(
             FoldResult(
@@ -112,7 +113,7 @@ def _source() -> tuple[WalkForwardConfig, WalkForwardResult]:
         )
     result = WalkForwardResult(
         walk_forward_id=config.walk_forward_id,
-        strategy_spec_hash="source",
+        strategy_spec_hash=fixture_hash,
         split_policy=config.split_policy,
         folds=folds,
         status="completed",
@@ -232,3 +233,59 @@ def test_source_requires_every_canonical_fold_to_be_completed() -> None:
 
     with pytest.raises(ExhaustiveRunSourceError, match="18 completed"):
         _validate_source(config, incomplete)
+
+
+@pytest.mark.parametrize(
+    ("update", "message"),
+    [
+        ({"symbol": "QQQ"}, "configuration"),
+        ({"resolution_minutes": 30}, "configuration"),
+        ({"initial_cash": 50_000.0}, "configuration"),
+        ({"fill_mode": "signal_bar_close"}, "configuration"),
+        ({"commission_per_order": 1.0}, "configuration"),
+        ({"slippage_per_share": 0.01}, "configuration"),
+        ({"random_seed": 1}, "configuration"),
+    ],
+)
+def test_source_rejects_noncanonical_engine_configuration(
+    update: dict[str, object],
+    message: str,
+) -> None:
+    config, result = _source()
+
+    with pytest.raises(ExhaustiveRunSourceError, match=message):
+        _validate_source(config.model_copy(update=update), result)
+
+
+def test_source_rejects_noncanonical_split_policy() -> None:
+    config, result = _source()
+    changed = config.model_copy(
+        update={"split_policy": config.split_policy.model_copy(update={"train_days": 90})}
+    )
+
+    with pytest.raises(ExhaustiveRunSourceError, match="configuration"):
+        _validate_source(changed, result)
+
+
+def test_source_rejects_noncanonical_candidate_specification() -> None:
+    config, result = _source()
+    assert config.parameter_search is not None
+    changed_candidate = config.parameter_search.candidates[0].model_copy(
+        update={"parameters": {"gap_bps": 1.5}}
+    )
+    changed_search = config.parameter_search.model_copy(
+        update={"candidates": [changed_candidate, *config.parameter_search.candidates[1:]]}
+    )
+
+    with pytest.raises(ExhaustiveRunSourceError, match="candidate grid"):
+        _validate_source(config.model_copy(update={"parameter_search": changed_search}), result)
+
+
+def test_source_rejects_noncanonical_fold_boundaries() -> None:
+    config, result = _source()
+    changed_fold = result.folds[0].model_copy(
+        update={"test_start_ms": result.folds[0].test_start_ms + 1}
+    )
+
+    with pytest.raises(ExhaustiveRunSourceError, match="18 completed canonical"):
+        _validate_source(result=result.model_copy(update={"folds": [changed_fold, *result.folds[1:]]}), config=config)
