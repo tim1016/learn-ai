@@ -1,5 +1,5 @@
 <div class="page">
-  <app-recency-launch-config></app-recency-launch-config>
+  <app-recency-launch-config (launchCompleted)="onLaunchCompleted()"></app-recency-launch-config>
 
   @if (isLoading()) {
     <p class="status">Loading recency trades…</p>

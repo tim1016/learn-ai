@@ -1,4 +1,5 @@
 using Backend.Data;
+using Backend.GraphQL;
 using Backend.Models.DTOs;
 using Backend.Models.MarketData;
 using Backend.Services.Implementation;
@@ -96,6 +97,41 @@ public class RecencyPersistenceServiceTests
     }
 
     [Fact]
+    public async Task PersistSnapshotAsync_NewSnapshot_PersistsStudyIdAndSyntheticExitProvenance()
+    {
+        await using var database = await PostgresIntegrationTestDatabase.CreateMigratedAsync();
+        await using var db = await OpenContextAsync(database.ConnectionString);
+        var service = new RecencyPersistenceService(db, NullLogger<RecencyPersistenceService>.Instance);
+        await SeedLaunchAsync(db, "launch-1");
+
+        var request = BuildRequest(
+            "launch-1",
+            trades: new[]
+            {
+                new RecencyTradeSnapshotRequest(
+                    Fingerprint: "fp-synthetic",
+                    EntryMs: 100,
+                    ExitMs: 200,
+                    PnlPts: 2.0m,
+                    PnlPct: 0.02m,
+                    Quantity: 10m,
+                    Pnl: 20.0m,
+                    HoldingSessions: 1,
+                    IsSyntheticExit: true,
+                    SignalReason: "window_close"),
+            }) with
+        { StudyId = 42 };
+
+        var result = await service.PersistSnapshotAsync(request, CancellationToken.None);
+
+        var run = await db.RecencyRuns.Include(r => r.Trades).SingleAsync(r => r.Id == result.RecencyRunId);
+        Assert.Equal(42, run.StudyId);
+        var trade = run.Trades.Single();
+        Assert.True(trade.IsSyntheticExit);
+        Assert.Equal("window_close", trade.SignalReason);
+    }
+
+    [Fact]
     public async Task PersistSnapshotAsync_NewSnapshot_IncrementsLaunchSucceededRuns()
     {
         await using var database = await PostgresIntegrationTestDatabase.CreateMigratedAsync();
@@ -153,7 +189,40 @@ public class RecencyPersistenceServiceTests
         Assert.False(second.Skipped);
         Assert.Equal(2, await db.RecencyRuns.CountAsync());
         // ...but the trade evidence never duplicates.
-        Assert.Equal(1, await db.RecencyTrades.CountAsync(t => t.Fingerprint == "fp-shared"));
+        var persistedTrade = await db.RecencyTrades.SingleAsync(t => t.Fingerprint == "fp-shared");
+        // ...and BOTH runs get a membership claim on that one physical row —
+        // this is what lets either run's later soft-delete leave the trade
+        // visible as long as the other is still live.
+        Assert.Equal(2, await db.RecencyTradeMemberships.CountAsync(m => m.RecencyTradeId == persistedTrade.Id));
+    }
+
+    [Fact]
+    public async Task PersistSnapshotAsync_DuplicateFingerprint_SoftDeletingTheFirstOwningRunDoesNotVanishTheTrade()
+    {
+        // The end-to-end regression for D16's membership fix: RecencyTrade
+        // has ONE physical row per fingerprint, owned (RecencyRunId FK) by
+        // whichever run inserted it first. Soft-deleting that first owner
+        // must not remove the trade from recencyTrades as long as a second,
+        // still-live run also produced the identical evidence.
+        await using var database = await PostgresIntegrationTestDatabase.CreateMigratedAsync();
+        await using var db = await OpenContextAsync(database.ConnectionString);
+        var service = new RecencyPersistenceService(db, NullLogger<RecencyPersistenceService>.Instance);
+        await SeedLaunchAsync(db, "launch-1");
+
+        var sharedTrade = new RecencyTradeSnapshotRequest("fp-shared", 100, 200, 2m, 0.02m, 10m, 20m, 1);
+        var first = await service.PersistSnapshotAsync(BuildRequest("launch-1", trades: new[] { sharedTrade }), CancellationToken.None);
+        await service.PersistSnapshotAsync(BuildRequest("launch-1", trades: new[] { sharedTrade }), CancellationToken.None);
+
+        // Soft-delete the FIRST run — the one that physically owns the row.
+        var firstRun = await db.RecencyRuns.SingleAsync(r => r.Id == first.RecencyRunId);
+        firstRun.DeletedAtMs = 999;
+        await db.SaveChangesAsync();
+
+        var query = new RecencyQuery();
+        var trades = await query.GetRecencyTrades(db, fromMs: 0, toMs: 1000, symbols: null, strategies: null, CancellationToken.None);
+
+        Assert.Single(trades);
+        Assert.Equal("fp-shared", trades[0].Fingerprint);
     }
 
     [Fact]
@@ -253,5 +322,40 @@ public class RecencyPersistenceServiceTests
 
         var launch = await verifyDb.RecencyLaunches.SingleAsync(l => l.Id == "launch-1");
         Assert.Equal(2, launch.SucceededRuns);
+    }
+
+    [Fact]
+    public async Task PersistSnapshotAsync_BlocksOnAConcurrentTransactionHoldingTheLaunchRowLock()
+    {
+        // Proves the tombstone check is actually atomic with the insert:
+        // a persist call must block while another transaction holds a
+        // FOR UPDATE lock on the same launch row, not read a stale
+        // "not deleted" snapshot and race ahead of a concurrent
+        // soft-delete. A plain pre-check-then-insert (the prior bug)
+        // would let this call proceed immediately regardless of the held
+        // lock.
+        await using var database = await PostgresIntegrationTestDatabase.CreateMigratedAsync();
+        await using (var seedDb = await OpenContextAsync(database.ConnectionString))
+        {
+            await SeedLaunchAsync(seedDb, "launch-1");
+        }
+
+        await using var lockHolderDb = await OpenContextAsync(database.ConnectionString);
+        await using var lockHolderTx = await lockHolderDb.Database.BeginTransactionAsync();
+        await lockHolderDb.Database
+            .SqlQuery<long?>($"SELECT \"DeletedAtMs\" AS \"Value\" FROM \"RecencyLaunches\" WHERE \"Id\" = 'launch-1' FOR UPDATE")
+            .SingleAsync();
+
+        await using var db = await OpenContextAsync(database.ConnectionString);
+        var service = new RecencyPersistenceService(db, NullLogger<RecencyPersistenceService>.Instance);
+        var persistTask = service.PersistSnapshotAsync(BuildRequest("launch-1"), CancellationToken.None);
+
+        var completedFirst = await Task.WhenAny(persistTask, Task.Delay(TimeSpan.FromSeconds(2)));
+        Assert.NotSame(persistTask, completedFirst); // still blocked while the lock is held
+
+        await lockHolderTx.CommitAsync();
+        var result = await persistTask; // now unblocks
+
+        Assert.False(result.Skipped);
     }
 }

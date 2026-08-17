@@ -20,7 +20,12 @@ import { RecencyTradeFocusComponent } from "./recency-trade-focus/recency-trade-
 import { computeDisplayMode, computeDisplayWindow } from "./recency-display-mode";
 import { filterToHeroAndExpanded, groupKey, type HeroKey } from "./recency-hero-fold";
 
-const SIX_MONTHS_MS = 1000 * 60 * 60 * 24 * 30 * 6;
+// Matches the launch config's MAX_MONTHS accumulation cap (D11: no
+// product cap on generation) — fetching the full supported range and
+// letting the swimlane's own virtualization narrow what's rendered
+// avoids single-symbol mode (full history) hitting a fetch-level
+// truncation that display-window filtering alone can't undo.
+const MAX_FETCH_WINDOW_MS = 1000 * 60 * 60 * 24 * 30 * 24;
 
 /**
  * Recency Chart page: fetches the accumulated trade projection + the
@@ -45,7 +50,7 @@ export class RecencyChartPageComponent {
   private readonly messageService = inject(MessageService);
 
   private readonly fetchWindowEndMs = Date.now();
-  private readonly fetchWindowStartMs = this.fetchWindowEndMs - SIX_MONTHS_MS;
+  private readonly fetchWindowStartMs = this.fetchWindowEndMs - MAX_FETCH_WINDOW_MS;
 
   private readonly tradesResource = rxResource<RecencyTradeQueryResultItem[], { from: number; to: number }>({
     params: () => ({ from: this.fetchWindowStartMs, to: this.fetchWindowEndMs }),
@@ -189,6 +194,11 @@ export class RecencyChartPageComponent {
     if (this.selectedTrade()?.recencyRunId === recencyRunId) {
       this.selectedTrade.set(null);
     }
+  }
+
+  onLaunchCompleted(): void {
+    this.tradesResource.reload();
+    this.heroResource.reload();
   }
 }
 

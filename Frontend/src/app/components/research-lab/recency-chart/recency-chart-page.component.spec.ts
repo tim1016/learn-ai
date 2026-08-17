@@ -1,5 +1,5 @@
 import { ComponentFixture, TestBed } from "@angular/core/testing";
-import { provideZonelessChangeDetection } from "@angular/core";
+import { provideZonelessChangeDetection, signal } from "@angular/core";
 import { HttpClient } from "@angular/common/http";
 import { Apollo } from "apollo-angular";
 import { MessageService } from "primeng/api";
@@ -40,6 +40,8 @@ function makeTrade(overrides: Partial<RecencyTradeQueryResultItem> = {}): Recenc
     sharpe: 1.0,
     studyId: null,
     recencyRunId: 1,
+    isSyntheticExit: false,
+    signalReason: "",
     ...overrides,
   };
 }
@@ -121,6 +123,21 @@ describe("RecencyChartPageComponent", () => {
       (call) => call[0].query === RECENCY_TRADES_QUERY,
     ) as [{ variables: { fromMs: number; toMs: number } }];
     expect(tradesCall[0].variables.fromMs).toBeLessThan(tradesCall[0].variables.toMs);
+  });
+
+  it("fetches the full accumulation range, not just the ~6-month all-symbols display cap", async () => {
+    // Single-symbol mode is supposed to unlock the launch's full history
+    // (up to the 24-month accumulation cap) — the fetch itself must not
+    // be truncated to 6 months, or narrowing to one symbol would just
+    // re-filter an already-too-small result set.
+    await renderPage();
+
+    const tradesCall = watchQueryMock.mock.calls.find(
+      (call) => call[0].query === RECENCY_TRADES_QUERY,
+    ) as [{ variables: { fromMs: number; toMs: number } }];
+    const spanMs = tradesCall[0].variables.toMs - tradesCall[0].variables.fromMs;
+    const thirteenMonthsMs = 1000 * 60 * 60 * 24 * 30 * 13;
+    expect(spanMs).toBeGreaterThan(thirteenMonthsMs);
   });
 
   it("shows an empty-state message when no trades are returned", async () => {
@@ -226,5 +243,64 @@ describe("RecencyChartPageComponent", () => {
 
     expect(messageServiceMock.add).toHaveBeenCalledWith(expect.objectContaining({ severity: "error" }));
     expect(screen.getByTestId("lane-SPY")).not.toBeNull();
+  });
+
+  it("reloads the trades and hero projections once a launched job completes", async () => {
+    // startJob only resolves once Python accepts the job (202) — long
+    // before persistence finishes. Without a reload-on-complete, a fresh
+    // launch's trades stay invisible until a manual page reload.
+    const jobState = signal<{ status: string } | undefined>(undefined);
+    watchQueryMock = vi.fn((options: { query: unknown }) => {
+      if (options.query === RECENCY_HERO_QUERY) {
+        return { valueChanges: from([{ data: { recencyHero: [] }, loading: false }]), stopPolling: vi.fn() };
+      }
+      return { valueChanges: from([{ data: { recencyTrades: [] }, loading: false }]), stopPolling: vi.fn() };
+    });
+    messageServiceMock = { add: vi.fn() };
+
+    const strategies = [
+      {
+        name: "ema_crossover_2_bps",
+        display_name: "EMA Crossover (2 bps)",
+        description: "",
+        params_schema: { properties: { symbol: { type: "string", default: "SPY" } } },
+        supported_resolutions: ["minute"],
+        strategy_bars: { timespan: "minute", multiplier: 15 },
+        recency_supported: true,
+      },
+    ];
+
+    await TestBed.configureTestingModule({
+      imports: [RecencyChartPageComponent],
+      providers: [
+        provideZonelessChangeDetection(),
+        { provide: Apollo, useValue: { watchQuery: watchQueryMock, mutate: vi.fn() } },
+        { provide: HttpClient, useValue: { get: () => of(strategies) } },
+        {
+          provide: JobsService,
+          useValue: {
+            startJob: vi.fn(async () => "job-1"),
+            job: (id: string) => (id === "job-1" ? jobState() : undefined),
+          },
+        },
+        { provide: MessageService, useValue: messageServiceMock },
+      ],
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(RecencyChartPageComponent);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /ema crossover \(2 bps\)/i }));
+    fireEvent.click(screen.getByRole("button", { name: /launch/i }));
+    await fixture.whenStable();
+
+    const callsBeforeCompletion = watchQueryMock.mock.calls.length;
+
+    jobState.set({ status: "completed" });
+    await fixture.whenStable();
+
+    expect(watchQueryMock.mock.calls.length).toBeGreaterThan(callsBeforeCompletion);
   });
 });

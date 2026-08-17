@@ -14,6 +14,7 @@ from app.research.recency.grid import (
     RecencyGridTooLargeError,
     StrategyGridConfig,
     ValueListRange,
+    _range_size,
     expand_grid,
     expand_param,
     params_hash,
@@ -47,6 +48,26 @@ class TestExpandParamLowHighStep:
     def test_rejects_low_greater_than_high(self) -> None:
         with pytest.raises(ValueError, match="low"):
             expand_param(LowHighStepRange(low=5.0, high=1.0, step=1.0))
+
+
+class TestRangeSizeMatchesExpandParam:
+    """_range_size must count exactly what expand_param will emit — the UI's
+    run estimate and the sanity ceiling both trust _range_size, so any
+    over/under-count desyncs them from what actually executes."""
+
+    @pytest.mark.parametrize(
+        "range_spec",
+        [
+            LowHighStepRange(low=0.0, high=1.0, step=0.6),
+            LowHighStepRange(low=1.0, high=2.2, step=0.5),
+            LowHighStepRange(low=1.0, high=3.0, step=1.0),
+            LowHighStepRange(low=0.0, high=10.0, step=3.0),
+            LowHighStepRange(low=0.1, high=0.3, step=0.1),
+            ValueListRange((0.1, 0.2, 0.3)),
+        ],
+    )
+    def test_count_matches_expand_param_length(self, range_spec: LowHighStepRange | ValueListRange) -> None:
+        assert _range_size(range_spec) == len(expand_param(range_spec))
 
 
 class TestParamsHash:

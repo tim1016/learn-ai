@@ -90,3 +90,82 @@ async def test_rejects_empty_symbols() -> None:
             },
         )
     assert response.status_code == 422  # Pydantic min_length violation
+
+
+class TestValidateBeforeDispatch:
+    """A direct or stale client can submit a request that only passes range
+    arithmetic (D11) but is otherwise guaranteed to fail every child
+    backtest. These must be rejected before a durable launch is created,
+    not discovered N-runs-deep into a dispatched grid."""
+
+    async def _post(self, body: dict) -> httpx.Response:
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            return await client.post("/api/jobs-internal/recency-chart", json=body)
+
+    @pytest.mark.asyncio
+    async def test_rejects_an_unknown_strategy_key(self) -> None:
+        response = await self._post(
+            {
+                "jobId": "job-unknown-strategy",
+                "strategies": [
+                    {"strategyKey": "not_a_real_strategy", "paramRanges": {"gapBps": {"type": "value_list", "values": [2.0]}}}
+                ],
+                "symbols": ["SPY"],
+                "windowStartMs": 0,
+                "windowEndMs": 1,
+            }
+        )
+        assert response.status_code == 400
+        assert "unknown strategy_key" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_rejects_an_out_of_bounds_parameter_value(self) -> None:
+        response = await self._post(
+            {
+                "jobId": "job-oob-param",
+                "strategies": [
+                    {
+                        "strategyKey": "ema_crossover_2_bps",
+                        "paramRanges": {"gapBps": {"type": "value_list", "values": [150.0]}},  # le=100.0
+                    }
+                ],
+                "symbols": ["SPY"],
+                "windowStartMs": 0,
+                "windowEndMs": 1,
+            }
+        )
+        assert response.status_code == 400
+        assert "parameters invalid" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_rejects_an_unsupported_data_policy_label(self) -> None:
+        response = await self._post(
+            {
+                "jobId": "job-bad-policy",
+                "strategies": [
+                    {"strategyKey": "ema_crossover_2_bps", "paramRanges": {"gapBps": {"type": "value_list", "values": [2.0]}}}
+                ],
+                "symbols": ["SPY"],
+                "windowStartMs": 0,
+                "windowEndMs": 1,
+                "dataPolicy": "ibkr-raw-regular-minute",
+            }
+        )
+        assert response.status_code == 400
+        assert "data_policy" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_rejects_a_window_start_not_before_window_end(self) -> None:
+        response = await self._post(
+            {
+                "jobId": "job-bad-window",
+                "strategies": [
+                    {"strategyKey": "ema_crossover_2_bps", "paramRanges": {"gapBps": {"type": "value_list", "values": [2.0]}}}
+                ],
+                "symbols": ["SPY"],
+                "windowStartMs": 1000,
+                "windowEndMs": 1000,
+            }
+        )
+        assert response.status_code == 400
+        assert "window_start_ms" in response.json()["detail"]

@@ -1,7 +1,7 @@
 <div class="focus-panel">
   @if (trade(); as t) {
     <div class="header">
-      <span class="symbol">{{ t.symbol }}</span>
+      <app-asset-identity [symbol]="t.symbol" size="sm" />
       <span class="strategy">{{ t.strategyKey }}</span>
       <span class="pnl">{{ pnlLabel() }}</span>
     </div>
@@ -18,6 +18,10 @@
     }
 
     <dl class="fields">
+      <dt>Entry</dt>
+      <dd><app-timestamp-display [value]="t.entryMs" mode="local" /></dd>
+      <dt>Exit</dt>
+      <dd><app-timestamp-display [value]="t.exitMs" mode="local" /></dd>
       <dt>Held</dt>
       <dd>{{ durationLabel() }}</dd>
       <dt>Sharpe</dt>

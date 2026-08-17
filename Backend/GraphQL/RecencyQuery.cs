@@ -14,12 +14,22 @@ namespace Backend.GraphQL;
 public class RecencyQuery
 {
     /// <summary>
-    /// Trades entering within [fromMs, toMs], excluding any whose run or
-    /// launch has been soft-deleted. Dedup-by-fingerprint (design spec
-    /// D16) needs no query-time logic here: RecencyTrade.Fingerprint
-    /// carries a database-level unique constraint, so two rows can never
-    /// share one — every row already IS the canonical (and only)
-    /// representative of its evidence.
+    /// Trades overlapping [fromMs, toMs] — entered at or before toMs and
+    /// exited at or after fromMs — excluding any whose run or launch has
+    /// been soft-deleted. An entry-only predicate would drop a position
+    /// entered just before the window that's still open inside it; the
+    /// swimlane already clips overlapping spans at the window boundary
+    /// on render, so the fetch must actually include them. Dedup-by-
+    /// fingerprint (design spec D16) needs no query-time logic here:
+    /// RecencyTrade.Fingerprint carries a database-level unique
+    /// constraint, so two rows can never share one — every row already
+    /// IS the canonical (and only) representative of its evidence.
+    /// Liveness, though, is membership-based: a re-run of the same combo
+    /// over an overlapping window produces the identical fingerprint, and
+    /// each such run gets its own RecencyTradeMembership row — a trade
+    /// stays visible as long as ANY claiming run (and its launch) is
+    /// still live, not just the one that happened to insert the physical
+    /// row first.
     /// </summary>
     [GraphQLName("recencyTrades")]
     public async Task<List<RecencyTradeType>> GetRecencyTrades(
@@ -32,8 +42,8 @@ public class RecencyQuery
     {
         var query = context.RecencyTrades
             .AsNoTracking()
-            .Where(t => t.EntryMs >= fromMs && t.EntryMs <= toMs)
-            .Where(t => t.RecencyRun.DeletedAtMs == null && t.RecencyRun.RecencyLaunch.DeletedAtMs == null);
+            .Where(t => t.EntryMs <= toMs && t.ExitMs >= fromMs)
+            .Where(t => t.Memberships.Any(m => m.RecencyRun.DeletedAtMs == null && m.RecencyRun.RecencyLaunch.DeletedAtMs == null));
 
         if (symbols is { Count: > 0 })
             query = query.Where(t => symbols.Contains(t.RecencyRun.Symbol));
@@ -58,22 +68,30 @@ public class RecencyQuery
                 Sharpe = t.RecencyRun.Sharpe,
                 StudyId = t.RecencyRun.StudyId,
                 RecencyRunId = t.RecencyRunId,
+                IsSyntheticExit = t.IsSyntheticExit,
+                SignalReason = t.SignalReason,
             })
             .ToListAsync(cancellationToken);
     }
 
     /// <summary>
     /// The highest-TotalPnl combo per (symbol, strategy) among non-deleted
-    /// runs. v1 scope: TotalPnl was computed by Python over each run's own
-    /// generation window at persist time — this is not yet recomputed
-    /// relative to a display window the user is currently zoomed to (that
-    /// lands with the display-window UI in a later slice).
+    /// runs. Without a window, TotalPnl is Python's persisted all-time sum
+    /// over the run's own generation window. With [fromMs, toMs] (the
+    /// caller's current display window), the ranking instead sums each
+    /// run's already-Python-computed per-trade Pnl for trades entering
+    /// inside that window — a SQL SUM over numbers Python already
+    /// computed, not a new derived statistic — so a launch spanning months
+    /// can't have its all-time winner shadow the combo that's actually
+    /// best in what the all-symbols recent-window view shows.
     /// </summary>
     [GraphQLName("recencyHero")]
     public async Task<List<RecencyHeroType>> GetRecencyHero(
         AppDbContext context,
         List<string>? symbols,
         List<string>? strategies,
+        long? fromMs,
+        long? toMs,
         CancellationToken cancellationToken)
     {
         var query = context.RecencyRuns
@@ -85,9 +103,22 @@ public class RecencyQuery
         if (strategies is { Count: > 0 })
             query = query.Where(r => strategies.Contains(r.StrategyKey));
 
-        var candidates = await query
-            .Select(r => new { r.Id, r.Symbol, r.StrategyKey, r.ParamsHash, r.TotalPnl })
-            .ToListAsync(cancellationToken);
+        var candidates = fromMs is null || toMs is null
+            ? await query
+                .Select(r => new { r.Id, r.Symbol, r.StrategyKey, r.ParamsHash, TotalPnl = r.TotalPnl })
+                .ToListAsync(cancellationToken)
+            : await query
+                .Select(r => new
+                {
+                    r.Id,
+                    r.Symbol,
+                    r.StrategyKey,
+                    r.ParamsHash,
+                    TotalPnl = r.Trades
+                        .Where(t => t.EntryMs <= toMs && t.ExitMs >= fromMs)
+                        .Sum(t => (decimal?)t.Pnl) ?? 0m,
+                })
+                .ToListAsync(cancellationToken);
 
         // "Top 1 per group" grouped queries translate unreliably across EF
         // Core providers — grouped in memory instead, after already

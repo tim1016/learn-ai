@@ -1,5 +1,5 @@
 import { HttpClient } from "@angular/common/http";
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from "@angular/core";
+import { ChangeDetectionStrategy, Component, computed, effect, inject, output, signal } from "@angular/core";
 import { firstValueFrom } from "rxjs";
 
 import { environment } from "../../../../../environments/environment";
@@ -67,8 +67,25 @@ export class RecencyLaunchConfigComponent {
 
   readonly runCount = computed(() => computeGridSize(this.strategyConfigs(), this.symbols()));
 
+  /** Fires once when the most recently launched job's status turns
+   * 'completed', so the chart page can reload its projections — without
+   * this, a launch's persisted trades stay invisible until a manual
+   * page reload since startJob only resolves once Python accepts the
+   * job (202), long before persistence finishes. */
+  readonly launchCompleted = output();
+  private readonly launchedJobId = signal<string | null>(null);
+  private notifiedForJobId: string | null = null;
+
   constructor() {
     void this.loadStrategies();
+    effect(() => {
+      const jobId = this.launchedJobId();
+      if (!jobId || this.notifiedForJobId === jobId) return;
+      if (this.jobs.job(jobId)?.status === "completed") {
+        this.notifiedForJobId = jobId;
+        this.launchCompleted.emit();
+      }
+    });
   }
 
   private async loadStrategies(): Promise<void> {
@@ -131,11 +148,12 @@ export class RecencyLaunchConfigComponent {
   async launch(): Promise<void> {
     const windowEndMs = Date.now();
     const windowStartMs = windowEndMs - this.windowMonths() * 30 * MS_PER_DAY;
-    await this.jobs.startJob("recency_chart", {
+    const jobId = await this.jobs.startJob("recency_chart", {
       strategies: this.strategyConfigs().map((s) => ({ strategyKey: s.strategyKey, paramRanges: s.paramRanges })),
       symbols: this.symbols(),
       windowStartMs,
       windowEndMs,
     });
+    this.launchedJobId.set(jobId);
   }
 }

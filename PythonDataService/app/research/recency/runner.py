@@ -19,13 +19,14 @@ Validated against: tests/research/recency/test_runner.py.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from itertools import islice
 from typing import Literal, Protocol
 
 from app.research.recency.fingerprint import RunFingerprintBase, trade_fingerprint
-from app.research.recency.grid import RunSpec, StrategyGridConfig, expand_grid
+from app.research.recency.grid import RunSpec, StrategyGridConfig, expand_grid, grid_size
 from app.research.recency.stats import (
     TradeForStats,
     holding_sessions,
@@ -43,12 +44,24 @@ class TradeLike(Protocol):
     pnl_pts: float
     pnl_pct: float
     quantity: int
+    is_synthetic_exit: bool
+    signal_reason: str
+
+
+class DataPolicyLike(Protocol):
+    """Duck-typed against EngineBacktestResponse.data_policy
+    (_EngineDataPolicyModel) — any canonical-JSON-serializable policy
+    object works, keeping this module free of the engine HTTP layer."""
+
+    def model_dump_json(self) -> str: ...
 
 
 class BacktestResultLike(Protocol):
     success: bool
     error: str | None
     trades: Sequence[TradeLike]
+    study_id: int | None
+    data_policy: DataPolicyLike
 
 
 @dataclass(frozen=True)
@@ -77,6 +90,8 @@ class RecencyTradeSnapshot:
     quantity: int
     pnl: float
     holding_sessions: int
+    is_synthetic_exit: bool
+    signal_reason: str
 
 
 @dataclass(frozen=True)
@@ -91,6 +106,7 @@ class RecencyRunSnapshot:
     total_pnl: float
     sharpe: float | None
     trades: list[RecencyTradeSnapshot]
+    study_id: int | None
 
 
 @dataclass(frozen=True)
@@ -120,7 +136,11 @@ def _snapshot_for_run(
         strategy_key=run_spec.strategy_key,
         strategy_code_version=strategy_code_version,
         params_hash=run_spec.params_hash,
-        data_policy=config.data_policy,
+        # The RESOLVED policy the engine actually executed under, not the
+        # caller's requested label (config.data_policy) — a stale/direct
+        # client's unhonored request would otherwise mislabel evidence
+        # with a policy that never governed execution.
+        data_policy=result.data_policy.model_dump_json(),
         fill_mode=config.fill_mode,
         commission_per_order=config.commission_per_order,
     )
@@ -142,10 +162,15 @@ def _snapshot_for_run(
             pnl_pts=trade.pnl_pts,
             pnl_pct=trade.pnl_pct,
             quantity=trade.quantity,
-            pnl=trade_dollar_pnl(trade),
+            pnl=trade_dollar_pnl(trade, config.commission_per_order),
             holding_sessions=holding_sessions(trade.entry_ms, trade.exit_ms),
+            is_synthetic_exit=source.is_synthetic_exit,
+            signal_reason=source.signal_reason,
         )
-        for trade in stats_trades
+        # zipped against result.trades (not re-derived from stats_trades,
+        # which strips is_synthetic_exit/signal_reason) — both lists are
+        # built from result.trades in the same order, so positions line up.
+        for trade, source in zip(stats_trades, result.trades, strict=True)
     ]
     return RecencyRunSnapshot(
         launch_id=config.launch_id,
@@ -153,10 +178,20 @@ def _snapshot_for_run(
         strategy_key=run_spec.strategy_key,
         params=run_spec.params,
         params_hash=run_spec.params_hash,
-        total_pnl=total_pnl(stats_trades, config.window_start_ms, config.window_end_ms),
+        total_pnl=total_pnl(stats_trades, config.window_start_ms, config.window_end_ms, config.commission_per_order),
         sharpe=sharpe(stats_trades),
         trades=trade_snapshots,
+        study_id=result.study_id,
     )
+
+
+def _batches(run_specs: Iterator[RunSpec], size: int) -> Iterator[list[RunSpec]]:
+    it = iter(run_specs)
+    while True:
+        batch = list(islice(it, size))
+        if not batch:
+            return
+        yield batch
 
 
 def run_recency(
@@ -168,13 +203,21 @@ def run_recency(
     on_phase: Callable[[str], None] = lambda phase: None,
     on_progress: Callable[[int, int], None] = lambda done, total: None,
     on_run_failed: Callable[[RunSpec, str], None] = lambda run_spec, message: None,
-    cancel_check: Callable[[], bool] = lambda: False,
+    cancel_check: Callable[[], bool | None] = lambda: False,
     max_workers: int = MAX_CONCURRENT_RUNS,
 ) -> RecencyRunSummary:
-    """Execute one launch's grid with bounded concurrency and per-run isolation."""
+    """Execute one launch's grid with bounded concurrency and per-run isolation.
+
+    ``cancel_check`` mirrors app/research/walk_forward/runner.py's
+    CancelCheck contract: it is called once per batch and its return value
+    is IGNORED — cancellation works only by raising, and the exception
+    propagates out of this function uncaught (the caller, e.g. jobs.py,
+    wires a wrapper that raises JobCancelled so run_in_thread produces a
+    real ``job.cancelled`` terminal state instead of ``job.completed``).
+    """
     on_phase("expand")
-    run_specs = list(expand_grid(config.strategies, config.symbols))
-    expected = len(run_specs)
+    expected = grid_size(config.strategies, config.symbols)
+    run_specs = expand_grid(config.strategies, config.symbols)
     outcomes: list[RecencyRunOutcome] = []
     done = 0
 
@@ -188,25 +231,34 @@ def run_recency(
         return RecencyRunOutcome(run_spec=run_spec, status="succeeded")
 
     on_phase("run")
+    # Bounded batches (size == max_workers) rather than materializing the
+    # full grid and submitting it all at once: at most max_workers RunSpecs
+    # are pulled from the lazy expand_grid() iterator at any time, so a
+    # large-but-legitimate sweep (up to MAX_GRID_SIZE) never holds its
+    # entire grid in memory. A fully pipelined sliding window (submit-as-
+    # you-go via concurrent.futures.wait(FIRST_COMPLETED)) would trim the
+    # idle time between batches, but isn't worth the added complexity
+    # given this engine's typical grid sizes; batching already bounds
+    # in-flight futures, so there's no separate future-cancellation step
+    # needed beyond letting the pool finish the batch already dispatched
+    # when cancel_check raises.
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {}
-        for run_spec in run_specs:
-            if cancel_check():
-                break
-            futures[pool.submit(_execute_and_persist, run_spec)] = run_spec
+        for batch in _batches(run_specs, max_workers):
+            cancel_check()
+            futures = {pool.submit(_execute_and_persist, run_spec): run_spec for run_spec in batch}
 
-        for future in as_completed(futures):
-            run_spec = futures[future]
-            try:
-                outcomes.append(future.result())
-            except Exception as exc:
-                # Per-run isolation: a failing child is captured and reported,
-                # never silently dropped and never aborts the rest of the batch.
-                message = str(exc)
-                outcomes.append(RecencyRunOutcome(run_spec=run_spec, status="failed", error=message))
-                on_run_failed(run_spec, message)
-            done += 1
-            on_progress(done, expected)
+            for future in as_completed(futures):
+                run_spec = futures[future]
+                try:
+                    outcomes.append(future.result())
+                except Exception as exc:
+                    # Per-run isolation: a failing child is captured and reported,
+                    # never silently dropped and never aborts the rest of the batch.
+                    message = str(exc)
+                    outcomes.append(RecencyRunOutcome(run_spec=run_spec, status="failed", error=message))
+                    on_run_failed(run_spec, message)
+                done += 1
+                on_progress(done, expected)
 
     succeeded = sum(1 for outcome in outcomes if outcome.status == "succeeded")
     failed = sum(1 for outcome in outcomes if outcome.status == "failed")

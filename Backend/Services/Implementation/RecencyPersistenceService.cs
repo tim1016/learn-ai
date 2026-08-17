@@ -35,28 +35,23 @@ public class RecencyPersistenceService : IRecencyPersistenceService
         if (request is null)
             throw new ArgumentNullException(nameof(request));
 
-        var launch = await _db.RecencyLaunches
-            .AsNoTracking()
-            .Where(l => l.Id == request.LaunchId)
-            .Select(l => new { l.Id, l.DeletedAtMs })
-            .SingleOrDefaultAsync(ct);
-
-        if (launch is null)
+        var exists = await _db.RecencyLaunches.AsNoTracking().AnyAsync(l => l.Id == request.LaunchId, ct);
+        if (!exists)
         {
             throw new InvalidOperationException(
                 $"RecencyLaunch '{request.LaunchId}' does not exist. Launches must be persisted before dispatch " +
                 "(design spec D20) — a snapshot arriving for an unknown launch means that step was skipped.");
         }
 
-        if (launch.DeletedAtMs is not null)
+        var runId = await InsertRunAndTradesAsync(request, ct);
+
+        if (runId is null)
         {
             _logger.LogInformation(
                 "[STEP 1] Skipping recency snapshot for tombstoned launch {LaunchId} (symbol={Symbol}, strategy={StrategyKey})",
                 request.LaunchId, request.Symbol, request.StrategyKey);
             return new RecencyPersistResult(RecencyRunId: null, Skipped: true);
         }
-
-        var runId = await InsertRunAndTradesAsync(request, ct);
 
         // Concurrent persists for the same launch are the runner's default
         // execution mode (bounded-concurrency ThreadPoolExecutor in
@@ -75,21 +70,44 @@ public class RecencyPersistenceService : IRecencyPersistenceService
     }
 
     /// <summary>
-    /// Inserts the run and its non-duplicate trades in one transaction. A
-    /// concurrent writer can win the race on a shared fingerprint between
-    /// this method's pre-check and its insert (two overlapping-window
-    /// re-runs persisting the same canonical evidence at the same time);
-    /// Postgres aborts the whole transaction on that unique violation, so a
-    /// single retry re-reads what the winner just committed and inserts
-    /// only what's still missing — never silently drops this snapshot's
-    /// other trades over one collision.
+    /// Inserts the run and its trades in one transaction, or returns null
+    /// if the launch was (or became) tombstoned. The tombstone check runs
+    /// INSIDE this transaction via <c>SELECT ... FOR UPDATE</c> on the
+    /// launch row — a plain pre-check before opening the transaction has a
+    /// window where a concurrent soft-delete can commit between the check
+    /// and this insert, letting a "deleted" launch gain new children a
+    /// later restore would resurrect. Row-locking the launch here means a
+    /// concurrent soft-delete's own UPDATE blocks until this transaction
+    /// finishes, so the two operations always serialize into one
+    /// unambiguous order instead of racing.
+    ///
+    /// Duplicate-fingerprint trades (a re-run of the same combo over an
+    /// overlapping window) don't just skip the insert — every run that
+    /// produces a fingerprint records a <see cref="RecencyTradeMembership"/>
+    /// row, so soft-deleting whichever run happened to insert the trade
+    /// first doesn't vanish evidence a second, still-live run also
+    /// vouches for (see RecencyQuery.GetRecencyTrades).
     /// </summary>
-    private async Task<int> InsertRunAndTradesAsync(RecencySnapshotRequest request, CancellationToken ct, int attempt = 0)
+    private async Task<int?> InsertRunAndTradesAsync(RecencySnapshotRequest request, CancellationToken ct, int attempt = 0)
     {
-        // NOTE: InMemory EF Core does not simulate real transaction rollback —
-        // rollback behaviour is only verified against a real Postgres instance
-        // (mirrors BacktestRunPersistenceService's documented limitation).
+        // NOTE: InMemory EF Core does not simulate real transaction rollback
+        // or row locking — both are only verified against a real Postgres
+        // instance (mirrors BacktestRunPersistenceService's documented
+        // limitation).
         await using var tx = await _db.Database.BeginTransactionAsync(ct);
+
+        // EF Core's SqlQuery<T> maps a scalar T's first column to a
+        // property literally named "Value" — an unaliased column name
+        // (e.g. "DeletedAtMs") fails at read time with "column s.Value
+        // does not exist", not at compile time.
+        var deletedAtMs = await _db.Database
+            .SqlQuery<long?>($"SELECT \"DeletedAtMs\" AS \"Value\" FROM \"RecencyLaunches\" WHERE \"Id\" = {request.LaunchId} FOR UPDATE")
+            .SingleAsync(ct);
+        if (deletedAtMs is not null)
+        {
+            await tx.RollbackAsync(ct);
+            return null;
+        }
 
         var run = new RecencyRun
         {
@@ -100,24 +118,31 @@ public class RecencyPersistenceService : IRecencyPersistenceService
             ParamsHash = request.ParamsHash,
             TotalPnl = request.TotalPnl,
             Sharpe = request.Sharpe,
+            StudyId = request.StudyId,
             CreatedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
         _db.RecencyRuns.Add(run);
         await _db.SaveChangesAsync(ct); // populates run.Id
 
         var incomingFingerprints = request.Trades.Select(t => t.Fingerprint).ToList();
-        var existingFingerprints = await _db.RecencyTrades
+        var existingTradeIdsByFingerprint = await _db.RecencyTrades
             .Where(t => incomingFingerprints.Contains(t.Fingerprint))
-            .Select(t => t.Fingerprint)
-            .ToListAsync(ct);
-        var existingSet = existingFingerprints.ToHashSet(StringComparer.Ordinal);
+            .Select(t => new { t.Id, t.Fingerprint })
+            .ToDictionaryAsync(t => t.Fingerprint, t => t.Id, StringComparer.Ordinal, ct);
 
         foreach (var trade in request.Trades)
         {
-            if (existingSet.Contains(trade.Fingerprint))
-                continue; // identical canonical evidence already persisted under another run
+            if (existingTradeIdsByFingerprint.TryGetValue(trade.Fingerprint, out var existingTradeId))
+            {
+                // Identical canonical evidence already persisted under
+                // another run — this run still gets a membership claim on
+                // it, so either run's later soft-delete leaves the trade
+                // visible as long as the other one is still live.
+                _db.RecencyTradeMemberships.Add(new RecencyTradeMembership { RecencyTradeId = existingTradeId, RecencyRunId = run.Id });
+                continue;
+            }
 
-            _db.RecencyTrades.Add(new RecencyTrade
+            var newTrade = new RecencyTrade
             {
                 RecencyRunId = run.Id,
                 Fingerprint = trade.Fingerprint,
@@ -128,7 +153,11 @@ public class RecencyPersistenceService : IRecencyPersistenceService
                 Quantity = trade.Quantity,
                 Pnl = trade.Pnl,
                 HoldingSessions = trade.HoldingSessions,
-            });
+                IsSyntheticExit = trade.IsSyntheticExit,
+                SignalReason = trade.SignalReason,
+            };
+            _db.RecencyTrades.Add(newTrade);
+            _db.RecencyTradeMemberships.Add(new RecencyTradeMembership { RecencyTrade = newTrade, RecencyRunId = run.Id });
         }
 
         try

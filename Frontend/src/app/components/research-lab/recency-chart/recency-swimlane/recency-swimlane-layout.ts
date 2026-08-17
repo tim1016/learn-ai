@@ -120,7 +120,7 @@ export function packLane(trades: RecencySwimlaneTrade[]): PackedTrade[] {
 }
 
 function computePnlDomain(trades: RecencySwimlaneTrade[]): number {
-  return trades.reduce((max, t) => Math.max(max, Math.abs(t.pnl)), 0);
+  return trades.reduce((max, t) => Math.max(max, Math.abs(t.pnlPct)), 0);
 }
 
 export function computeSwimlaneLayout(trades: RecencySwimlaneTrade[]): SwimlaneLayout {
@@ -139,7 +139,7 @@ export function computeSwimlaneLayout(trades: RecencySwimlaneTrade[]): SwimlaneL
       const bars: SwimlaneBarLayout[] = packed.map((p) => ({
         trade: p.trade,
         subRow: p.subRow,
-        fillColor: pnlColor(p.trade.pnl, domain),
+        fillColor: pnlColor(p.trade.pnlPct, domain),
         opacity: sharpeToOpacity(p.trade.sharpe),
       }));
       const subRowCount = bars.reduce((max, b) => Math.max(max, b.subRow + 1), 0);

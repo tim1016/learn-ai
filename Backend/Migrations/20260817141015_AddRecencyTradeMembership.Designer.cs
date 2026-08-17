@@ -3,6 +3,7 @@ using System;
 using Backend.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Backend.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260817141015_AddRecencyTradeMembership")]
+    partial class AddRecencyTradeMembership
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -590,9 +593,6 @@ namespace Backend.Migrations
                     b.Property<int>("HoldingSessions")
                         .HasColumnType("integer");
 
-                    b.Property<bool>("IsSyntheticExit")
-                        .HasColumnType("boolean");
-
                     b.Property<decimal>("Pnl")
                         .HasPrecision(18, 8)
                         .HasColumnType("numeric(18,8)");
@@ -611,10 +611,6 @@ namespace Backend.Migrations
 
                     b.Property<int>("RecencyRunId")
                         .HasColumnType("integer");
-
-                    b.Property<string>("SignalReason")
-                        .IsRequired()
-                        .HasColumnType("text");
 
                     b.HasKey("Id");
 

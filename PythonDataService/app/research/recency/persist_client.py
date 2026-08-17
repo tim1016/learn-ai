@@ -29,10 +29,20 @@ def persist_recency_snapshot(
     *,
     base_url: str,
     timeout_seconds: float = 30.0,
-) -> int:
-    """POST a run snapshot to the backend; return the assigned RecencyRun id."""
+) -> int | None:
+    """POST a run snapshot to the backend; return the assigned RecencyRun id.
+
+    Returns ``None`` when the backend reports ``skipped: true`` — it
+    honored a launch tombstone (the launch was soft-deleted mid-flight)
+    and intentionally didn't write the run. That's a successful no-op,
+    not a failure: naively coercing its ``recency_run_id: null`` with
+    ``int(None)`` would raise and get this run misclassified as failed.
+    """
     url = f"{base_url.rstrip('/')}/api/recency/snapshots"
     with httpx.Client(timeout=timeout_seconds) as client:
         response = client.post(url, json=asdict(snapshot))
         response.raise_for_status()
-        return int(response.json()["recency_run_id"])
+        body = response.json()
+        if body.get("skipped"):
+            return None
+        return int(body["recency_run_id"])

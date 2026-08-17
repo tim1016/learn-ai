@@ -37,4 +37,17 @@ public class RecencyTrade
     public decimal Pnl { get; set; }
 
     public int HoldingSessions { get; set; }
+
+    /// <summary>
+    /// True when the engine force-closed this position at the backtest
+    /// window boundary rather than the strategy's own exit rule firing.
+    /// Python-authored (EngineTradeResponse.is_synthetic_exit) — carried
+    /// through verbatim so the chart can distinguish an end-of-window
+    /// liquidation from an ordinary strategy exit.
+    /// </summary>
+    public bool IsSyntheticExit { get; set; }
+
+    public string SignalReason { get; set; } = "";
+
+    public ICollection<RecencyTradeMembership> Memberships { get; set; } = new List<RecencyTradeMembership>();
 }

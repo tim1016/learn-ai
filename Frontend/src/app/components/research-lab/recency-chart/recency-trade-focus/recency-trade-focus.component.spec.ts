@@ -69,6 +69,21 @@ describe("RecencyTradeFocusComponent", () => {
     expect(screen.queryByRole("link", { name: /open run/i })).toBeNull();
   });
 
+  it("renders the symbol through the shared asset-identity component", async () => {
+    const { container } = await render(RecencyTradeFocusComponent, { inputs: { trade: trade() } });
+    const identity = container.querySelector("app-asset-identity");
+    expect(identity).not.toBeNull();
+    expect(identity?.getAttribute("ng-reflect-symbol") ?? identity?.textContent).toContain("SPY");
+  });
+
+  it("shows the entry and exit timestamps", async () => {
+    const t = trade({ entryMs: Date.UTC(2026, 5, 12, 13, 31), exitMs: Date.UTC(2026, 5, 27, 19, 44) });
+    const { container } = await render(RecencyTradeFocusComponent, { inputs: { trade: t } });
+
+    const displays = container.querySelectorAll("app-timestamp-display");
+    expect(displays.length).toBeGreaterThanOrEqual(2);
+  });
+
   it("shows the in-sample / not-OOS caption", async () => {
     await render(RecencyTradeFocusComponent, { inputs: { trade: trade() } });
     expect(screen.getByText(/in-sample selection/i)).not.toBeNull();

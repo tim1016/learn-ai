@@ -53,7 +53,7 @@ public class RecencyQueryTests
 
     private static async Task SeedTradeAsync(AppDbContext db, int runId, string fingerprint, long entryMs, long exitMs)
     {
-        db.RecencyTrades.Add(new RecencyTrade
+        var trade = new RecencyTrade
         {
             RecencyRunId = runId,
             Fingerprint = fingerprint,
@@ -64,7 +64,12 @@ public class RecencyQueryTests
             Quantity = 10m,
             Pnl = 10m,
             HoldingSessions = 1,
-        });
+        };
+        db.RecencyTrades.Add(trade);
+        await db.SaveChangesAsync();
+        // Liveness (GetRecencyTrades) is membership-based, not just the
+        // trade's single owning-run FK — see RecencyTradeMembership.
+        db.RecencyTradeMemberships.Add(new RecencyTradeMembership { RecencyTradeId = trade.Id, RecencyRunId = runId });
         await db.SaveChangesAsync();
     }
 
@@ -83,6 +88,57 @@ public class RecencyQueryTests
 
         Assert.Single(result);
         Assert.Equal("fp-in", result[0].Fingerprint);
+    }
+
+    [Fact]
+    public async Task GetRecencyTrades_ProjectsSyntheticExitProvenance()
+    {
+        var db = TestDbContextFactory.Create();
+        await SeedLaunchAsync(db, "l1");
+        var run = await SeedRunAsync(db, "l1", "SPY", "ema_crossover_2_bps", "hash1", 20m);
+        var trade = new RecencyTrade
+        {
+            RecencyRunId = run.Id,
+            Fingerprint = "fp-synthetic",
+            EntryMs = 500,
+            ExitMs = 600,
+            PnlPts = 1m,
+            PnlPct = 0.01m,
+            Quantity = 10m,
+            Pnl = 10m,
+            HoldingSessions = 1,
+            IsSyntheticExit = true,
+            SignalReason = "window_close",
+        };
+        db.RecencyTrades.Add(trade);
+        await db.SaveChangesAsync();
+        db.RecencyTradeMemberships.Add(new RecencyTradeMembership { RecencyTradeId = trade.Id, RecencyRunId = run.Id });
+        await db.SaveChangesAsync();
+
+        var query = new RecencyQuery();
+        var result = await query.GetRecencyTrades(db, fromMs: 100, toMs: 1000, symbols: null, strategies: null, CancellationToken.None);
+
+        Assert.Single(result);
+        Assert.True(result[0].IsSyntheticExit);
+        Assert.Equal("window_close", result[0].SignalReason);
+    }
+
+    [Fact]
+    public async Task GetRecencyTrades_IncludesAPositionEnteredBeforeTheWindowButStillOpenInsideIt()
+    {
+        var db = TestDbContextFactory.Create();
+        await SeedLaunchAsync(db, "l1");
+        var run = await SeedRunAsync(db, "l1", "SPY", "ema_crossover_2_bps", "hash1", 20m);
+        // Entered before fromMs=100, but exits at 200 — inside the window.
+        // An entry-only predicate would drop this even though the trade
+        // genuinely overlaps [100, 1000].
+        await SeedTradeAsync(db, run.Id, "fp-open-before-window", entryMs: 50, exitMs: 200);
+
+        var query = new RecencyQuery();
+        var result = await query.GetRecencyTrades(db, fromMs: 100, toMs: 1000, symbols: null, strategies: null, CancellationToken.None);
+
+        Assert.Single(result);
+        Assert.Equal("fp-open-before-window", result[0].Fingerprint);
     }
 
     [Fact]
@@ -177,7 +233,7 @@ public class RecencyQueryTests
         await SeedRunAsync(db, "l1", "AAPL", "ema_crossover_2_bps", "h-other-symbol", totalPnl: 999m);
 
         var query = new RecencyQuery();
-        var result = await query.GetRecencyHero(db, symbols: new List<string> { "SPY" }, strategies: null, CancellationToken.None);
+        var result = await query.GetRecencyHero(db, symbols: new List<string> { "SPY" }, strategies: null, fromMs: null, toMs: null, CancellationToken.None);
 
         Assert.Single(result);
         Assert.Equal("h-high", result[0].ParamsHash);
@@ -194,10 +250,71 @@ public class RecencyQueryTests
         var survivor = await SeedRunAsync(db, "l1", "SPY", "ema_crossover_2_bps", "h-survivor", totalPnl: 10m);
 
         var query = new RecencyQuery();
-        var result = await query.GetRecencyHero(db, null, null, CancellationToken.None);
+        var result = await query.GetRecencyHero(db, null, null, fromMs: null, toMs: null, CancellationToken.None);
 
         Assert.Single(result);
         Assert.Equal(survivor.Id, result[0].RecencyRunId);
+    }
+
+    [Fact]
+    public async Task GetRecencyHero_WithNoWindow_UsesTheRunsAllTimePersistedTotalPnl()
+    {
+        var db = TestDbContextFactory.Create();
+        await SeedLaunchAsync(db, "l1");
+        var run = await SeedRunAsync(db, "l1", "SPY", "ema_crossover_2_bps", "h1", totalPnl: 500m);
+        await SeedTradeAsync(db, run.Id, "fp1", entryMs: 100, exitMs: 200); // Pnl=10, unrelated to the 500 above
+
+        var query = new RecencyQuery();
+        var result = await query.GetRecencyHero(db, symbols: null, strategies: null, fromMs: null, toMs: null, CancellationToken.None);
+
+        Assert.Single(result);
+        Assert.Equal(500m, result[0].TotalPnl);
+    }
+
+    [Fact]
+    public async Task GetRecencyHero_WithAWindow_RanksByTradesEnteringInsideItNotTheRunsAllTimeTotal()
+    {
+        var db = TestDbContextFactory.Create();
+        await SeedLaunchAsync(db, "l1");
+        // Run A: huge all-time TotalPnl (e.g. from a 2-year generation
+        // window), but its only trade actually inside the display window
+        // is a small loser.
+        var runA = await SeedRunAsync(db, "l1", "SPY", "ema_crossover_2_bps", "h-alltime-winner", totalPnl: 500m);
+        db.RecencyTrades.Add(new RecencyTrade
+        {
+            RecencyRunId = runA.Id,
+            Fingerprint = "fp-a-in-window",
+            EntryMs = 500,
+            ExitMs = 600,
+            PnlPts = -1m,
+            PnlPct = -0.01m,
+            Quantity = 10m,
+            Pnl = -10m,
+            HoldingSessions = 1,
+        });
+        // Run B: modest all-time TotalPnl, but its trade inside the
+        // display window is the actual best performer right now.
+        var runB = await SeedRunAsync(db, "l1", "SPY", "ema_crossover_2_bps", "h-window-winner", totalPnl: 50m);
+        db.RecencyTrades.Add(new RecencyTrade
+        {
+            RecencyRunId = runB.Id,
+            Fingerprint = "fp-b-in-window",
+            EntryMs = 500,
+            ExitMs = 600,
+            PnlPts = 20m,
+            PnlPct = 0.2m,
+            Quantity = 10m,
+            Pnl = 200m,
+            HoldingSessions = 1,
+        });
+        await db.SaveChangesAsync();
+
+        var query = new RecencyQuery();
+        var result = await query.GetRecencyHero(db, symbols: null, strategies: null, fromMs: 100, toMs: 1000, CancellationToken.None);
+
+        Assert.Single(result);
+        Assert.Equal("h-window-winner", result[0].ParamsHash);
+        Assert.Equal(200m, result[0].TotalPnl);
     }
 
     [Fact]
@@ -210,7 +327,7 @@ public class RecencyQueryTests
         await SeedRunAsync(db, "l1", "AAPL", "ema_crossover_2_bps", "h3", 10m);
 
         var query = new RecencyQuery();
-        var result = await query.GetRecencyHero(db, null, null, CancellationToken.None);
+        var result = await query.GetRecencyHero(db, null, null, fromMs: null, toMs: null, CancellationToken.None);
 
         Assert.Equal(3, result.Count);
     }

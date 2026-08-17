@@ -23,6 +23,8 @@ public class RecencyTradeType
     public decimal? Sharpe { get; set; }
     public int? StudyId { get; set; }
     public int RecencyRunId { get; set; }
+    public bool IsSyntheticExit { get; set; }
+    public string SignalReason { get; set; } = "";
 }
 
 /// <summary>

@@ -11,8 +11,15 @@
 
 export type DisplayMode = "all-symbols" | "single-symbol";
 
-/** ~1 trading week: 5 sessions x 6.5h x 60min, in ms. */
-export const ALL_SYMBOLS_WINDOW_MS = 5 * 6.5 * 60 * 60_000;
+const ONE_DAY_MS = 24 * 60 * 60_000;
+const ALL_SYMBOLS_WEEKDAY_COUNT = 5;
+
+/**
+ * Fallback span when there's no trade history to anchor single-symbol
+ * mode's window — a calendar-day approximation of "about a week", not a
+ * trading-session count (nothing to count sessions against yet).
+ */
+const NO_HISTORY_FALLBACK_MS = 7 * ONE_DAY_MS;
 
 export interface DisplayWindow {
   start: number;
@@ -23,14 +30,37 @@ export function computeDisplayMode(visibleSymbols: string[]): DisplayMode {
   return visibleSymbols.length === 1 ? "single-symbol" : "all-symbols";
 }
 
+/**
+ * Elapsed ms spanning the last `weekdayCount` weekdays (Mon-Fri) ending at
+ * nowMs, inclusive of "today" if it's a weekday. Skips whole weekends
+ * rather than treating every elapsed hour as trading time — the prior bug
+ * subtracted 5 x 6.5 trading-hours (32.5 elapsed hours) from `now`, which
+ * on a Monday afternoon lands on Sunday morning and covers only Monday's
+ * own session. This is a frontend-only weekday approximation, not the
+ * canonical NYSE calendar (holidays aren't excluded) — acceptable here
+ * because this bounds a *display* window, not a numerical or persisted
+ * value; see .claude/rules/temporal-rigor.md for what does require the
+ * canonical calendar module.
+ */
+function weekdaySpanMs(nowMs: number, weekdayCount: number): number {
+  let cursor = nowMs;
+  let remaining = weekdayCount;
+  while (remaining > 0) {
+    const dayOfWeek = new Date(cursor).getUTCDay(); // 0=Sun, 6=Sat
+    if (dayOfWeek !== 0 && dayOfWeek !== 6) remaining--;
+    if (remaining > 0) cursor -= ONE_DAY_MS;
+  }
+  return nowMs - cursor;
+}
+
 export function computeDisplayWindow(
   mode: DisplayMode,
   nowMs: number,
   history: { earliestEntryMs: number | null } = { earliestEntryMs: null },
 ): DisplayWindow {
   if (mode === "all-symbols") {
-    return { start: nowMs - ALL_SYMBOLS_WINDOW_MS, end: nowMs };
+    return { start: nowMs - weekdaySpanMs(nowMs, ALL_SYMBOLS_WEEKDAY_COUNT), end: nowMs };
   }
-  const start = history.earliestEntryMs ?? nowMs - ALL_SYMBOLS_WINDOW_MS;
+  const start = history.earliestEntryMs ?? nowMs - NO_HISTORY_FALLBACK_MS;
   return { start: Math.min(start, nowMs - 1), end: nowMs };
 }

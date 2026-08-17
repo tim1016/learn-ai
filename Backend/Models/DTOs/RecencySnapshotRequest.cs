@@ -15,7 +15,8 @@ public record RecencySnapshotRequest(
     [property: JsonPropertyName("params_hash")] string ParamsHash,
     [property: JsonPropertyName("total_pnl")] decimal TotalPnl,
     [property: JsonPropertyName("sharpe")] decimal? Sharpe,
-    [property: JsonPropertyName("trades")] IReadOnlyList<RecencyTradeSnapshotRequest> Trades);
+    [property: JsonPropertyName("trades")] IReadOnlyList<RecencyTradeSnapshotRequest> Trades,
+    [property: JsonPropertyName("study_id")] int? StudyId = null);
 
 public record RecencyTradeSnapshotRequest(
     [property: JsonPropertyName("fingerprint")] string Fingerprint,
@@ -25,4 +26,6 @@ public record RecencyTradeSnapshotRequest(
     [property: JsonPropertyName("pnl_pct")] decimal PnlPct,
     [property: JsonPropertyName("quantity")] decimal Quantity,
     [property: JsonPropertyName("pnl")] decimal Pnl,
-    [property: JsonPropertyName("holding_sessions")] int HoldingSessions);
+    [property: JsonPropertyName("holding_sessions")] int HoldingSessions,
+    [property: JsonPropertyName("is_synthetic_exit")] bool IsSyntheticExit = false,
+    [property: JsonPropertyName("signal_reason")] string SignalReason = "");

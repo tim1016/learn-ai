@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import pytest
+
 from app.research.recency.grid import RunSpec, StrategyGridConfig, ValueListRange
 from app.research.recency.runner import RecencyLaunchConfig, run_recency
 
@@ -19,6 +21,19 @@ class _FakeTrade:
     pnl_pts: float
     pnl_pct: float
     quantity: int
+    is_synthetic_exit: bool = False
+    signal_reason: str = ""
+
+
+@dataclass
+class _FakeDataPolicy:
+    """Stands in for _EngineDataPolicyModel — the runner only needs
+    something JSON-serializable back, duck-typed via model_dump_json()."""
+
+    label: str = "polygon-adjusted-regular-minute"
+
+    def model_dump_json(self) -> str:
+        return f'{{"label": "{self.label}"}}'
 
 
 @dataclass
@@ -26,6 +41,8 @@ class _FakeBacktestResult:
     success: bool = True
     error: str | None = None
     trades: list[_FakeTrade] = field(default_factory=list)
+    study_id: int | None = None
+    data_policy: _FakeDataPolicy = field(default_factory=_FakeDataPolicy)
 
 
 def _config(**overrides: object) -> RecencyLaunchConfig:
@@ -116,6 +133,108 @@ class TestRunRecencySuccessPath:
         )
         assert progress_calls[-1] == (2, 2)
 
+    def test_snapshot_carries_study_id_from_the_backtest_result(self) -> None:
+        persisted = []
+        run_recency(
+            _config(symbols=["SPY"]),
+            execute_backtest_fn=lambda run_spec, config: _FakeBacktestResult(
+                trades=[_FakeTrade(entry_time=100, exit_time=200, pnl_pts=2.0, pnl_pct=0.02, quantity=10)],
+                study_id=42,
+            ),
+            persist_fn=persisted.append,
+            strategy_code_version_fn=lambda strategy_key: "v1",
+        )
+        assert persisted[0].study_id == 42
+
+    def test_snapshot_study_id_is_none_when_autosave_did_not_happen(self) -> None:
+        persisted = []
+        run_recency(
+            _config(symbols=["SPY"]),
+            execute_backtest_fn=lambda run_spec, config: _one_trade_result(),
+            persist_fn=persisted.append,
+            strategy_code_version_fn=lambda strategy_key: "v1",
+        )
+        assert persisted[0].study_id is None
+
+    def test_snapshot_trades_carry_synthetic_exit_and_signal_reason(self) -> None:
+        persisted = []
+        run_recency(
+            _config(symbols=["SPY"]),
+            execute_backtest_fn=lambda run_spec, config: _FakeBacktestResult(
+                trades=[
+                    _FakeTrade(
+                        entry_time=100,
+                        exit_time=200,
+                        pnl_pts=2.0,
+                        pnl_pct=0.02,
+                        quantity=10,
+                        is_synthetic_exit=True,
+                        signal_reason="window_close",
+                    )
+                ]
+            ),
+            persist_fn=persisted.append,
+            strategy_code_version_fn=lambda strategy_key: "v1",
+        )
+        trade = persisted[0].trades[0]
+        assert trade.is_synthetic_exit is True
+        assert trade.signal_reason == "window_close"
+
+    def test_ordinary_trades_default_to_not_synthetic(self) -> None:
+        persisted = []
+        run_recency(
+            _config(symbols=["SPY"]),
+            execute_backtest_fn=lambda run_spec, config: _one_trade_result(),
+            persist_fn=persisted.append,
+            strategy_code_version_fn=lambda strategy_key: "v1",
+        )
+        trade = persisted[0].trades[0]
+        assert trade.is_synthetic_exit is False
+        assert trade.signal_reason == ""
+
+    def test_total_pnl_and_trade_pnl_are_net_of_configured_commission(self) -> None:
+        persisted = []
+        run_recency(
+            _config(symbols=["SPY"], commission_per_order=1.0),
+            execute_backtest_fn=lambda run_spec, config: _one_trade_result(pnl_pts=2.0),
+            persist_fn=persisted.append,
+            strategy_code_version_fn=lambda strategy_key: "v1",
+        )
+        snap = persisted[0]
+        assert snap.total_pnl == pytest.approx(18.0)  # gross 20 - 2*1.0
+        assert snap.trades[0].pnl == pytest.approx(18.0)
+
+
+class TestRunRecencyDataPolicyFingerprint:
+    """The fingerprint must reflect what actually governed execution
+    (EngineBacktestResponse.data_policy, resolved session/adjustment/
+    resolution/provenance) rather than the caller's requested label —
+    otherwise a stale/direct client's unhonored data_policy request
+    mislabels evidence as if it had been applied."""
+
+    def _fingerprint_for_resolved_policy(self, label: str) -> str:
+        persisted: list[object] = []
+        run_recency(
+            _config(symbols=["SPY"]),  # config.data_policy stays the default label throughout
+            execute_backtest_fn=lambda run_spec, config: _FakeBacktestResult(
+                trades=[_FakeTrade(entry_time=100, exit_time=200, pnl_pts=2.0, pnl_pct=0.02, quantity=10)],
+                data_policy=_FakeDataPolicy(label=label),
+            ),
+            persist_fn=persisted.append,
+            strategy_code_version_fn=lambda strategy_key: "v1",
+        )
+        return persisted[0].trades[0].fingerprint
+
+    def test_differing_resolved_policies_produce_differing_fingerprints(self) -> None:
+        a = self._fingerprint_for_resolved_policy("polygon-adjusted-regular-minute")
+        b = self._fingerprint_for_resolved_policy("ibkr-raw-regular-minute")
+        assert a != b
+
+    def test_same_resolved_policy_is_deterministic(self) -> None:
+        a = self._fingerprint_for_resolved_policy("polygon-adjusted-regular-minute")
+        b = self._fingerprint_for_resolved_policy("polygon-adjusted-regular-minute")
+        assert a == b
+
 
 class TestRunRecencyFailureIsolation:
     def test_a_failing_backtest_is_isolated_and_reported_not_dropped(self) -> None:
@@ -157,18 +276,75 @@ class TestRunRecencyFailureIsolation:
 
 
 class TestRunRecencyCancellation:
-    def test_cancel_check_stops_dispatching_new_runs(self) -> None:
+    """Mirrors app/research/walk_forward/runner.py's CancelCheck contract:
+    cancel_check is called and its return value is IGNORED — cancellation
+    works only by raising. run_recency does not catch or translate the
+    exception; it propagates to the caller (jobs.py wires a raising
+    wrapper around CancellationCheck.raise_if_cancelled so run_in_thread's
+    JobCancelled handler produces a real job.cancelled terminal state)."""
+
+    def test_cancel_check_raising_aborts_the_run_and_propagates(self) -> None:
         calls = {"n": 0}
 
-        def cancel_after_first_check() -> bool:
-            calls["n"] += 1
-            return calls["n"] > 1
+        class _Cancelled(Exception):
+            pass
 
+        def cancel_after_first_batch() -> None:
+            calls["n"] += 1
+            if calls["n"] > 1:
+                raise _Cancelled("cancelled")
+
+        persisted: list[object] = []
+        with pytest.raises(_Cancelled):
+            run_recency(
+                _config(symbols=["SPY", "AAPL", "QQQ"]),
+                execute_backtest_fn=lambda run_spec, config: _one_trade_result(),
+                persist_fn=persisted.append,
+                strategy_code_version_fn=lambda strategy_key: "v1",
+                cancel_check=cancel_after_first_batch,
+                max_workers=1,
+            )
+        assert len(persisted) < 3
+
+    def test_cancel_check_return_value_is_ignored(self) -> None:
+        # A boolean-returning cancel_check (the old, broken contract) must
+        # NOT stop the run — only a raise does. This documents the
+        # deliberate break from the pre-fix branch-on-bool semantics.
         summary = run_recency(
-            _config(symbols=["SPY", "AAPL", "QQQ"]),
+            _config(symbols=["SPY", "AAPL"]),
             execute_backtest_fn=lambda run_spec, config: _one_trade_result(),
             persist_fn=lambda snap: None,
             strategy_code_version_fn=lambda strategy_key: "v1",
-            cancel_check=cancel_after_first_check,
+            cancel_check=lambda: True,
         )
-        assert summary.succeeded_runs < summary.expected_runs
+        assert summary.succeeded_runs == summary.expected_runs == 2
+
+
+class TestRunRecencyLazyGridExecution:
+    def test_does_not_materialize_the_full_grid_before_execution_starts(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        pulled: list[RunSpec] = []
+
+        def fake_run_specs():
+            for i in range(5):
+                spec = RunSpec(symbol=f"SYM{i}", strategy_key="ema_crossover_2_bps", params={"gap_bps": 2.0}, params_hash=f"h{i}")
+                pulled.append(spec)
+                yield spec
+
+        monkeypatch.setattr("app.research.recency.runner.expand_grid", lambda strategies, symbols: fake_run_specs())
+
+        pulled_count_at_first_done = {}
+
+        def on_progress(done: int, total: int) -> None:
+            if done == 1 and "count" not in pulled_count_at_first_done:
+                pulled_count_at_first_done["count"] = len(pulled)
+
+        run_recency(
+            _config(symbols=["SPY"]),
+            execute_backtest_fn=lambda run_spec, config: _one_trade_result(),
+            persist_fn=lambda snap: None,
+            strategy_code_version_fn=lambda strategy_key: "v1",
+            on_progress=on_progress,
+            max_workers=1,
+        )
+
+        assert pulled_count_at_first_done["count"] < 5

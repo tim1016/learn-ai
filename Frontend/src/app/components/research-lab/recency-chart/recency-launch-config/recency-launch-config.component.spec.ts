@@ -1,4 +1,5 @@
 import { HttpClient } from "@angular/common/http";
+import { signal } from "@angular/core";
 import { fireEvent, render, screen } from "@testing-library/angular";
 import { of } from "rxjs";
 import { describe, expect, it, vi } from "vitest";
@@ -26,11 +27,15 @@ function makeStrategy(overrides: Partial<StrategyInfo> = {}): StrategyInfo {
   };
 }
 
-async function renderConfig(strategies: StrategyInfo[], startJob = vi.fn(async () => "job-1")) {
+async function renderConfig(
+  strategies: StrategyInfo[],
+  startJob = vi.fn(async () => "job-1"),
+  job: (id: string) => { status: string } | undefined = () => undefined,
+) {
   const view = await render(RecencyLaunchConfigComponent, {
     providers: [
       { provide: HttpClient, useValue: { get: () => of(strategies) } },
-      { provide: JobsService, useValue: { startJob } },
+      { provide: JobsService, useValue: { startJob, job } },
     ],
   });
   return { view, startJob };
@@ -86,6 +91,28 @@ describe("RecencyLaunchConfigComponent", () => {
         ]),
       }),
     );
+  });
+
+  it("emits launchCompleted once the launched job's status turns completed", async () => {
+    const jobState = signal<{ status: string } | undefined>(undefined);
+    const startJob = vi.fn(async () => "job-1");
+    const { view } = await renderConfig([makeStrategy()], startJob, (id: string) =>
+      id === "job-1" ? jobState() : undefined,
+    );
+    const onCompleted = vi.fn();
+    view.fixture.componentInstance.launchCompleted.subscribe(onCompleted);
+
+    fireEvent.input(screen.getByLabelText(/symbols/i), { target: { value: "SPY" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: /ema crossover \(2 bps\)/i }));
+    fireEvent.click(screen.getByRole("button", { name: /launch/i }));
+    await view.fixture.whenStable();
+
+    expect(onCompleted).not.toHaveBeenCalled();
+
+    jobState.set({ status: "completed" });
+    await view.fixture.whenStable();
+
+    expect(onCompleted).toHaveBeenCalledTimes(1);
   });
 
   it("caps the custom duration input at 24 months", async () => {

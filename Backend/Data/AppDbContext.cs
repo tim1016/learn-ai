@@ -28,6 +28,7 @@ public class AppDbContext : DbContext
     public DbSet<RecencyLaunch> RecencyLaunches => Set<RecencyLaunch>();
     public DbSet<RecencyRun> RecencyRuns => Set<RecencyRun>();
     public DbSet<RecencyTrade> RecencyTrades => Set<RecencyTrade>();
+    public DbSet<RecencyTradeMembership> RecencyTradeMemberships => Set<RecencyTradeMembership>();
 
     // Data lake catalog (Slice 1a)
     public DbSet<DataLakeArtifact> DataLakeArtifacts => Set<DataLakeArtifact>();
@@ -292,6 +293,23 @@ public class AppDbContext : DbContext
             // never represent the same canonical evidence.
             entity.HasIndex(t => t.Fingerprint).IsUnique();
             entity.HasIndex(t => t.EntryMs);
+        });
+
+        // RecencyTradeMembership configuration — see the model's docstring
+        // for why a trade needs more than its single owning RecencyRunId.
+        modelBuilder.Entity<RecencyTradeMembership>(entity =>
+        {
+            entity.HasKey(m => m.Id);
+            entity.HasOne(m => m.RecencyTrade)
+                  .WithMany(t => t.Memberships)
+                  .HasForeignKey(m => m.RecencyTradeId)
+                  .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(m => m.RecencyRun)
+                  .WithMany()
+                  .HasForeignKey(m => m.RecencyRunId)
+                  .OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(m => new { m.RecencyTradeId, m.RecencyRunId }).IsUnique();
+            entity.HasIndex(m => m.RecencyRunId);
         });
 
         // ResearchExperiment configuration

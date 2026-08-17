@@ -148,12 +148,24 @@ describe("computeSwimlaneLayout", () => {
     expect(layout.lanes[1].symbol).toBe("OLD");
   });
 
-  it("computes a symmetric pnl domain across all shown trades", () => {
+  it("computes a symmetric pnl domain across all shown trades, from percentage return not dollar amount", () => {
     const layout = computeSwimlaneLayout([
-      trade({ fingerprint: "a", pnl: -30 }),
-      trade({ fingerprint: "b", pnl: 12 }),
+      trade({ fingerprint: "a", pnlPct: -0.3, pnl: -3000 }),
+      trade({ fingerprint: "b", pnlPct: 0.12, pnl: 12 }),
     ]);
-    expect(layout.pnlDomain).toBe(30);
+    expect(layout.pnlDomain).toBe(0.3);
+  });
+
+  it("colors two trades with the same percentage return identically, even with very different dollar pnl", () => {
+    // Same % outcome, wildly different dollar size (quantity/price) — the
+    // hue must be cross-symbol comparable, so it has to key off pnlPct.
+    const layout = computeSwimlaneLayout([
+      trade({ fingerprint: "small", symbol: "AAPL", pnlPct: 0.1, pnl: 5 }),
+      trade({ fingerprint: "large", symbol: "SPY", pnlPct: 0.1, pnl: 50_000 }),
+    ]);
+    const small = layout.bars.find((b) => b.trade.fingerprint === "small");
+    const large = layout.bars.find((b) => b.trade.fingerprint === "large");
+    expect(small?.fillColor).toBe(large?.fillColor);
   });
 
   it("returns an empty layout for no trades", () => {

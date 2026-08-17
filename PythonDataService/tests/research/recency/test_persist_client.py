@@ -40,8 +40,11 @@ def _snapshot() -> RecencyRunSnapshot:
                 quantity=10,
                 pnl=20.0,
                 holding_sessions=1,
+                is_synthetic_exit=False,
+                signal_reason="",
             )
         ],
+        study_id=None,
     )
 
 
@@ -59,6 +62,21 @@ def test_posts_the_snapshot_and_returns_the_assigned_run_id() -> None:
     assert sent_body["launch_id"] == "launch-1"
     assert sent_body["params_hash"] == "hash1"
     assert sent_body["trades"][0]["fingerprint"] == "fp1"
+
+
+@respx.mock
+def test_returns_none_when_the_backend_reports_a_skipped_tombstoned_launch() -> None:
+    # A launch soft-deleted mid-flight makes the backend honor the
+    # tombstone and skip the write, returning 200 with recency_run_id:
+    # null and skipped: true — an intentional no-op, not a failure.
+    route = respx.post("http://backend.test/api/recency/snapshots").mock(
+        return_value=httpx.Response(200, json={"recency_run_id": None, "skipped": True})
+    )
+
+    result = persist_recency_snapshot(_snapshot(), base_url="http://backend.test")
+
+    assert result is None
+    assert route.called
 
 
 @respx.mock

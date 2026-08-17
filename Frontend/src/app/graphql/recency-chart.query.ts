@@ -18,6 +18,8 @@ export const RECENCY_TRADES_QUERY = gql`
       sharpe
       studyId
       recencyRunId
+      isSyntheticExit
+      signalReason
     }
   }
 `;
@@ -56,6 +58,8 @@ export interface RecencyTradeQueryResultItem {
   sharpe: number | null;
   studyId: number | null;
   recencyRunId: number;
+  isSyntheticExit: boolean;
+  signalReason: string;
 }
 
 export interface RecencyTradesQueryResult {

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from itertools import product
@@ -103,9 +104,12 @@ def params_hash(strategy_key: str, params: Mapping[str, float]) -> str:
 def _range_size(range_spec: ParamRange) -> int:
     """Count a range's values analytically — never materializes the list.
 
-    Mirrors expand_param's validation and counting formula without
-    allocating, so a fat-fingered low/high/step (e.g. step=0.0001 over a
-    wide span) can be rejected by size alone before any memory is spent.
+    Mirrors expand_param's ``<= high + 1e-9`` filter via a closed-form floor
+    (not ``round``, which over-counts a non-divisible span — e.g.
+    low=0, high=1, step=0.6 rounds to 3 but expand_param's filter only
+    keeps [0, 0.6], since 1.2 > 1 + 1e-9). Never allocating means a
+    fat-fingered low/high/step (e.g. step=0.0001 over a wide span) can
+    still be rejected by size alone before any memory is spent.
     """
     if isinstance(range_spec, ValueListRange):
         if not range_spec.values:
@@ -117,7 +121,7 @@ def _range_size(range_spec: ParamRange) -> int:
     if range_spec.low > range_spec.high:
         raise ValueError("low/high/step range requires low <= high")
 
-    return round((range_spec.high - range_spec.low) / range_spec.step) + 1
+    return math.floor((range_spec.high - range_spec.low + 1e-9) / range_spec.step) + 1
 
 
 def _param_combo_count(param_ranges: Mapping[str, ParamRange]) -> int:
@@ -127,7 +131,10 @@ def _param_combo_count(param_ranges: Mapping[str, ParamRange]) -> int:
     return count
 
 
-def _grid_size(strategies: list[StrategyGridConfig], symbols: list[str]) -> int:
+def grid_size(strategies: list[StrategyGridConfig], symbols: list[str]) -> int:
+    """Count the full launch grid analytically, without expanding it — the
+    progress-total callers (jobs.py's estimate, runner.py's ``expected``
+    count) need this without materializing every RunSpec."""
     if not strategies or not symbols:
         return 0
     return len(symbols) * sum(_param_combo_count(config.param_ranges) for config in strategies)
@@ -154,7 +161,7 @@ def expand_grid(strategies: list[StrategyGridConfig], symbols: list[str]) -> Ite
     Raises :class:`RecencyGridTooLargeError` immediately (before any
     enumeration) when the grid's size exceeds :data:`MAX_GRID_SIZE`.
     """
-    size = _grid_size(strategies, symbols)
+    size = grid_size(strategies, symbols)
     if size > MAX_GRID_SIZE:
         raise RecencyGridTooLargeError(size)
     return _iter_runs(strategies, symbols)

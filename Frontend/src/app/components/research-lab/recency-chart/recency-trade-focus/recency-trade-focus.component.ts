@@ -1,4 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, input, output } from "@angular/core";
+import { AssetIdentityComponent } from "../../../../shared/asset-identity/asset-identity.component";
+import { TimestampDisplayComponent } from "../../../../shared/timestamp/timestamp-display.component";
 import type { RecencySwimlaneTrade } from "../recency-swimlane/recency-swimlane-layout";
 
 interface ParsedParam {
@@ -32,6 +34,7 @@ function parseParams(paramsJson: string | undefined): ParsedParam[] | null {
 @Component({
   selector: "app-recency-trade-focus",
   standalone: true,
+  imports: [AssetIdentityComponent, TimestampDisplayComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: "./recency-trade-focus.component.html",
   styleUrls: ["./recency-trade-focus.component.scss"],

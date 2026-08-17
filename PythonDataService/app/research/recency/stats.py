@@ -58,15 +58,30 @@ def holding_sessions(entry_ms: int, exit_ms: int) -> int:
     return trading_session_count(ms_to_et_date(entry_ms), ms_to_et_date(exit_ms))
 
 
-def trade_dollar_pnl(trade: TradeForStats) -> float:
-    """Realized dollar PnL implied by the trade's points and filled quantity."""
-    return trade.pnl_pts * trade.quantity
+def trade_dollar_pnl(trade: TradeForStats, commission_per_order: float = 0.0) -> float:
+    """Realized dollar PnL net of two flat per-order commissions (entry + exit).
+
+    Formula: gross (pnl_pts * quantity) - 2 * commission_per_order — the same
+    flat-fee branch as the canonical
+    ``app.routers.engine._persisted_trade_net_pnl`` (compatibility_profile=None),
+    which this mirrors rather than duplicates independently (CLAUDE.md
+    guiding philosophy #5). ``commission_per_order`` defaults to 0.0 so an
+    uncommissioned launch's PnL is exactly the gross figure.
+    Validated against:
+      ``tests/research/recency/test_stats.py::TestTradeDollarPnl::test_matches_the_canonical_engine_flat_fee_formula``.
+    """
+    gross = trade.pnl_pts * trade.quantity
+    return gross - (2 * commission_per_order)
 
 
-def total_pnl(trades: list[TradeForStats], window_start_ms: int, window_end_ms: int) -> float:
-    """Sum of dollar PnL for trades entering within the window (order-independent)."""
+def total_pnl(
+    trades: list[TradeForStats], window_start_ms: int, window_end_ms: int, commission_per_order: float = 0.0
+) -> float:
+    """Sum of net dollar PnL for trades entering within the window (order-independent)."""
     return sum(
-        trade_dollar_pnl(trade) for trade in trades if window_start_ms <= trade.entry_ms <= window_end_ms
+        trade_dollar_pnl(trade, commission_per_order)
+        for trade in trades
+        if window_start_ms <= trade.entry_ms <= window_end_ms
     )
 
 

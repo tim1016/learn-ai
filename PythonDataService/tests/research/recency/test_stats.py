@@ -59,6 +59,42 @@ class TestTradeDollarPnl:
         trade = _trade(_ms(2026, 6, 1), _ms(2026, 6, 1), pnl_pts=-1.5, pnl_pct=-0.015, quantity=4)
         assert trade_dollar_pnl(trade) == -6.0
 
+    def test_subtracts_two_flat_commissions_for_the_round_trip(self) -> None:
+        trade = _trade(_ms(2026, 6, 1), _ms(2026, 6, 1), pnl_pts=2.5, pnl_pct=0.025, quantity=10)
+        assert trade_dollar_pnl(trade, commission_per_order=1.5) == pytest.approx(25.0 - 3.0)
+
+    def test_zero_commission_matches_the_gross_default(self) -> None:
+        trade = _trade(_ms(2026, 6, 1), _ms(2026, 6, 1), pnl_pts=2.5, pnl_pct=0.025, quantity=10)
+        assert trade_dollar_pnl(trade, commission_per_order=0.0) == trade_dollar_pnl(trade)
+
+    def test_matches_the_canonical_engine_flat_fee_formula(self) -> None:
+        """Parity with app.routers.engine._persisted_trade_net_pnl's flat-fee
+        branch (compatibility_profile=None) — the codebase's one canonical
+        formula for round-trip net PnL under a flat per-order commission
+        (CLAUDE.md guiding philosophy #5)."""
+        from decimal import Decimal
+
+        from app.routers.engine import EngineTradeResponse, _persisted_trade_net_pnl
+
+        commission_per_order = 1.5
+        engine_trade = EngineTradeResponse(
+            trade_number=1,
+            entry_time=_ms(2026, 6, 1),
+            entry_price=100.0,
+            exit_time=_ms(2026, 6, 2),
+            exit_price=102.5,
+            quantity=10,
+            pnl_pts=2.5,
+            pnl_pct=0.025,
+            result="win",
+        )
+        expected = _persisted_trade_net_pnl(
+            trade=engine_trade, commission_per_order=commission_per_order, compatibility_profile=None
+        )
+        trade = _trade(_ms(2026, 6, 1), _ms(2026, 6, 2), pnl_pts=2.5, pnl_pct=0.025, quantity=10)
+        actual = trade_dollar_pnl(trade, commission_per_order=commission_per_order)
+        assert Decimal(str(actual)) == Decimal(str(expected))
+
 
 class TestTotalPnl:
     def test_sums_dollar_pnl_for_trades_with_entry_in_window(self) -> None:
@@ -93,6 +129,16 @@ class TestTotalPnl:
 
     def test_empty_trades_return_zero(self) -> None:
         assert total_pnl([], _ms(2026, 6, 1), _ms(2026, 6, 30)) == 0.0
+
+    def test_subtracts_commission_per_trade_in_window(self) -> None:
+        window_start = _ms(2026, 6, 1)
+        window_end = _ms(2026, 6, 30)
+        trades = [
+            _trade(_ms(2026, 6, 5), _ms(2026, 6, 6), pnl_pts=2.0, pnl_pct=0.02, quantity=10),  # gross +20
+            _trade(_ms(2026, 6, 10), _ms(2026, 6, 11), pnl_pts=-1.0, pnl_pct=-0.01, quantity=10),  # gross -10
+        ]
+        # gross 20 - 10 = 10, minus 2 trades x 2 commissions x $1 = 4 -> 6
+        assert total_pnl(trades, window_start, window_end, commission_per_order=1.0) == pytest.approx(6.0)
 
 
 class TestSharpe:

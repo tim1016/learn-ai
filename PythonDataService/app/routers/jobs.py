@@ -53,6 +53,7 @@ from app.research.recency.grid import (
 from app.research.recency.persist_client import persist_recency_snapshot
 from app.research.recency.runner import RecencyLaunchConfig, run_recency
 from app.research.recency.stats import ms_to_et_date
+from app.research.recency.validation import RecencyRequestInvalidError, validate_recency_request
 from app.research.runner import run_feature_research
 from app.research.signal.config import SignalConfig
 from app.research.signal.engine import run_signal_engine
@@ -588,6 +589,21 @@ async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"invalid parameter range: {exc}")
 
+    # Structural validation (unknown/ineligible strategy, misspelled or
+    # out-of-bounds parameter, blank symbol, inverted window, unsupported
+    # data policy) before a durable launch is created — otherwise every
+    # child backtest in the grid dispatches only to fail identically.
+    try:
+        validate_recency_request(
+            strategies=strategies,
+            symbols=req.symbols,
+            window_start_ms=req.window_start_ms,
+            window_end_ms=req.window_end_ms,
+            data_policy=req.data_policy,
+        )
+    except RecencyRequestInvalidError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
     config = RecencyLaunchConfig(
         launch_id=req.job_id,
         strategies=strategies,
@@ -631,7 +647,10 @@ async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
                 f"run failed: {run_spec.symbol}/{run_spec.strategy_key} ({run_spec.params_hash[:8]}): {message}",
                 level="warning",
             ),
-            cancel_check=cancel.should_cancel,
+            # Raises JobCancelled (its return value is ignored, matching
+            # walk_forward/runner.py's CancelCheck contract) so run_in_thread
+            # emits job.cancelled instead of job.completed on a DELETE.
+            cancel_check=cancel.raise_if_cancelled,
         )
         return {
             "launch_id": summary.launch_id,
@@ -640,7 +659,7 @@ async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
             "failed_runs": summary.failed_runs,
         }
 
-    run_in_thread(req.job_id, work, thread_name=f"recency-{req.job_id[:8]}")
+    run_in_thread(req.job_id, work, thread_name=f"recency-{req.job_id[:8]}", cancel_check_every_n=1)
     return {"job_id": req.job_id, "status": "queued"}
 
 

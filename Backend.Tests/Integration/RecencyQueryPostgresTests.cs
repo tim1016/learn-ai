@@ -55,7 +55,7 @@ public class RecencyQueryPostgresTests
         db.RecencyRuns.AddRange(runLow, runHigh);
         await db.SaveChangesAsync();
 
-        db.RecencyTrades.Add(new RecencyTrade
+        var trade = new RecencyTrade
         {
             RecencyRunId = runHigh.Id,
             Fingerprint = "fp1",
@@ -66,7 +66,10 @@ public class RecencyQueryPostgresTests
             Quantity = 10m,
             Pnl = 20m,
             HoldingSessions = 1,
-        });
+        };
+        db.RecencyTrades.Add(trade);
+        await db.SaveChangesAsync();
+        db.RecencyTradeMemberships.Add(new RecencyTradeMembership { RecencyTradeId = trade.Id, RecencyRunId = runHigh.Id });
         await db.SaveChangesAsync();
 
         var query = new RecencyQuery();
@@ -77,9 +80,80 @@ public class RecencyQueryPostgresTests
         Assert.Equal(1.2m, trades[0].Sharpe);
         Assert.Equal(7, trades[0].StudyId);
 
-        var hero = await query.GetRecencyHero(db, symbols: null, strategies: null, CancellationToken.None);
+        var hero = await query.GetRecencyHero(db, symbols: null, strategies: null, fromMs: null, toMs: null, CancellationToken.None);
         Assert.Single(hero);
         Assert.Equal("h-high", hero[0].ParamsHash);
         Assert.Equal(runHigh.Id, hero[0].RecencyRunId);
+    }
+
+    [Fact]
+    public async Task GetRecencyHero_WithAWindow_TranslatesTheCorrelatedSumSubqueryOnPostgres()
+    {
+        await using var database = await PostgresIntegrationTestDatabase.CreateMigratedAsync();
+
+        var options = new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(database.ConnectionString).Options;
+        await using var db = new AppDbContext(options);
+
+        db.RecencyLaunches.Add(new RecencyLaunch { Id = "l1", ConfigJson = "{}", Status = "RUNNING", CreatedAtMs = 1 });
+        await db.SaveChangesAsync();
+
+        // All-time winner (large TotalPnl from its own generation window)
+        // whose only trade actually inside the requested window is a
+        // loser — the windowed query must NOT pick it.
+        var allTimeWinner = new RecencyRun
+        {
+            RecencyLaunchId = "l1",
+            Symbol = "SPY",
+            StrategyKey = "ema_crossover_2_bps",
+            ParamsJson = "{}",
+            ParamsHash = "h-alltime",
+            TotalPnl = 500m,
+            CreatedAtMs = 1,
+        };
+        var windowWinner = new RecencyRun
+        {
+            RecencyLaunchId = "l1",
+            Symbol = "SPY",
+            StrategyKey = "ema_crossover_2_bps",
+            ParamsJson = "{}",
+            ParamsHash = "h-window",
+            TotalPnl = 50m,
+            CreatedAtMs = 1,
+        };
+        db.RecencyRuns.AddRange(allTimeWinner, windowWinner);
+        await db.SaveChangesAsync();
+
+        db.RecencyTrades.Add(new RecencyTrade
+        {
+            RecencyRunId = allTimeWinner.Id,
+            Fingerprint = "fp-alltime-in-window",
+            EntryMs = 500,
+            ExitMs = 600,
+            PnlPts = -1m,
+            PnlPct = -0.01m,
+            Quantity = 10m,
+            Pnl = -10m,
+            HoldingSessions = 1,
+        });
+        db.RecencyTrades.Add(new RecencyTrade
+        {
+            RecencyRunId = windowWinner.Id,
+            Fingerprint = "fp-window-in-window",
+            EntryMs = 500,
+            ExitMs = 600,
+            PnlPts = 20m,
+            PnlPct = 0.2m,
+            Quantity = 10m,
+            Pnl = 200m,
+            HoldingSessions = 1,
+        });
+        await db.SaveChangesAsync();
+
+        var query = new RecencyQuery();
+        var hero = await query.GetRecencyHero(db, symbols: null, strategies: null, fromMs: 100, toMs: 1000, CancellationToken.None);
+
+        Assert.Single(hero);
+        Assert.Equal("h-window", hero[0].ParamsHash);
+        Assert.Equal(200m, hero[0].TotalPnl);
     }
 }
