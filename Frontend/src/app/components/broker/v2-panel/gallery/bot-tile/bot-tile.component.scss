@@ -130,9 +130,16 @@
   &:focus-visible { outline: 2px solid var(--info); outline-offset: -2px; }
   &:disabled { color: var(--text-muted); cursor: not-allowed; opacity: 0.6; }
 
+  &--play { color: var(--bull); }
   &--stop { color: var(--bear); }
 
   .pi { font-size: var(--fs-xs); }
+}
+
+.bot-tile__action-icon {
+  width: var(--fs-xs);
+  height: var(--fs-xs);
+  fill: currentColor;
 }
 
 .bot-tile__confirm {

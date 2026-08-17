@@ -14,7 +14,13 @@ import {
 import { type CdkDragDrop, DragDropModule, moveItemInArray } from '@angular/cdk/drag-drop';
 
 import { BotTileComponent } from '../bot-tile/bot-tile.component';
-import type { ChartBar, ChartFillMarker, GalleryBotView, GalleryLiveStatus } from '../lib/gallery.types';
+import type {
+  ChartBar,
+  ChartFillMarker,
+  GalleryBotView,
+  GalleryLiveStatus,
+  GalleryResolution,
+} from '../lib/gallery.types';
 import {
   GALLERY_PAGE_SIZE,
   GALLERY_TILE_HEADER_HEIGHT_PX,
@@ -123,6 +129,8 @@ export class BotGalleryDockComponent {
   readonly accountId = input.required<string>();
   /** Sids with a confirmed quick action in flight — forwarded to each tile's `pending` input (mirrors `bots-roster`'s `pendingBotIds`). */
   readonly pendingSids = input<ReadonlySet<string>>(new Set());
+  /** The data-plane candle resolution, rendered as a receipt-like footer label. */
+  readonly resolution = input.required<GalleryResolution>();
   /** The account's live-feed connection status, forwarded from `GalleryLiveStore` via the page — drives the footer's `●Live` indicator. */
   readonly status = input.required<GalleryLiveStatus>();
 

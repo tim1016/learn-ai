@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from app.schemas.broker_v2_gallery import (
     GalleryBotDelta,
     GalleryBotView,
@@ -28,7 +31,7 @@ def test_snapshot_round_trips_and_is_snake_case() -> None:
         stream_epoch="e1",
         surface_version=3,
         as_of_ms=1_700_000_060_000,
-        resolution="1m",
+        resolution="5s",
         bots=[
             GalleryBotView(
                 sid="Aug11-02",
@@ -56,6 +59,18 @@ def test_snapshot_round_trips_and_is_snake_case() -> None:
     assert dumped["bots"][0]["realized_pnl_today"] == 142.0
     assert dumped["symbols"][0]["bars"][0]["start_ms"] == 1_700_000_000_000
     assert GalleryLiveSnapshot.model_validate(dumped).surface_version == 3
+
+
+def test_snapshot_rejects_an_unsupported_bar_resolution() -> None:
+    with pytest.raises(ValidationError):
+        GalleryLiveSnapshot(
+            stream_epoch="e1",
+            surface_version=3,
+            as_of_ms=1_700_000_060_000,
+            resolution="15s",
+            bots=[],
+            symbols=[],
+        )
 
 
 def test_bot_delta_is_self_contained_with_symbol_and_label() -> None:

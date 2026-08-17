@@ -11,9 +11,13 @@ Temporal fields are ``int64 ms UTC`` per ``.claude/rules/temporal-rigor.md``.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.broker_v2_panel import ChartBar, ChartFillMarker
+
+GalleryResolution = Literal["5s", "1m"]
 
 
 class GalleryPrimaryAction(BaseModel):
@@ -86,7 +90,7 @@ class GalleryLiveSnapshot(BaseModel):
     stream_epoch: str
     surface_version: int
     as_of_ms: int
-    resolution: str = "1m"
+    resolution: GalleryResolution
     bots: list[GalleryBotView]
     symbols: list[GallerySymbolBars]
     markers: dict[str, list[ChartFillMarker]] = Field(default_factory=dict)

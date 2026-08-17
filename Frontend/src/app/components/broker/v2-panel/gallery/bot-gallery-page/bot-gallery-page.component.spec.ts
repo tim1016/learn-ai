@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ChartBar, ChartFillMarker, PanelAction } from '../../lib/broker-v2-panel.types';
 import { BrokerV2PanelService } from '../../lib/broker-v2-panel.service';
 import { GalleryLiveStore } from '../lib/gallery-live-store.service';
-import type { GalleryBotView, GalleryLiveStatus } from '../lib/gallery.types';
+import type { GalleryBotView, GalleryLiveStatus, GalleryResolution } from '../lib/gallery.types';
 import { BotGalleryPageComponent } from './bot-gallery-page.component';
 
 const BROKER = 'alpaca';
@@ -51,6 +51,7 @@ interface FakeGalleryStore {
   bots: ReturnType<typeof signal<GalleryBotView[]>>;
   barsBySymbol: ReturnType<typeof signal<ReadonlyMap<string, readonly ChartBar[]>>>;
   markersBySid: ReturnType<typeof signal<ReadonlyMap<string, readonly ChartFillMarker[]>>>;
+  resolution: ReturnType<typeof signal<GalleryResolution>>;
   status: ReturnType<typeof signal<GalleryLiveStatus>>;
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
@@ -58,12 +59,14 @@ interface FakeGalleryStore {
 
 function fakeGalleryStore(overrides: {
   bots?: GalleryBotView[];
+  resolution?: GalleryResolution;
   status?: GalleryLiveStatus;
 } = {}): FakeGalleryStore {
   return {
     bots: signal<GalleryBotView[]>(overrides.bots ?? []),
     barsBySymbol: signal<ReadonlyMap<string, readonly ChartBar[]>>(new Map()),
     markersBySid: signal<ReadonlyMap<string, readonly ChartFillMarker[]>>(new Map()),
+    resolution: signal<GalleryResolution>(overrides.resolution ?? '5s'),
     status: signal<GalleryLiveStatus>(overrides.status ?? 'connecting'),
     start: vi.fn().mockResolvedValue(undefined),
     stop: vi.fn(),

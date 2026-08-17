@@ -13,6 +13,8 @@ import type { ChartBar, ChartFillMarker } from '../../lib/broker-v2-panel.types'
 
 export type { ChartBar, ChartFillMarker };
 
+export type GalleryResolution = '5s' | '1m';
+
 export interface GalleryPrimaryAction {
   readonly action_id: string;
   readonly label: string;
@@ -51,7 +53,7 @@ export interface GalleryLiveSnapshot {
   readonly stream_epoch: string;
   readonly surface_version: number;
   readonly as_of_ms: number;
-  readonly resolution: string;
+  readonly resolution: GalleryResolution;
   readonly bots: readonly GalleryBotView[];
   readonly symbols: readonly GallerySymbolBars[];
   readonly markers: Readonly<Record<string, readonly ChartFillMarker[]>>;

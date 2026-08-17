@@ -288,7 +288,8 @@ describe('BotTileComponent', () => {
     const button = screen.getByRole('button', { name: /^Stop$/i }) as HTMLButtonElement;
     expect(button.disabled).toBe(false);
     expect(button.getAttribute('aria-busy')).toBe('false');
-    expect(button.querySelector('.pi-stop')).not.toBeNull();
+    expect(button.classList).toContain('bot-tile__action-button--stop');
+    expect(button.querySelector('.bot-tile__action-icon rect')).not.toBeNull();
     expect(button.textContent?.trim()).toBe('');
     expect(container.querySelector('.bot-tile__header .bot-tile__action-button')).toBe(button);
     expect(container.querySelector('.bot-tile__footer')).toBeNull();
@@ -297,7 +298,7 @@ describe('BotTileComponent', () => {
     expect(screen.queryByText('Fills')).toBeNull();
   });
 
-  it('uses a play icon for the Resume action', async () => {
+  it('uses a filled green play icon for the Resume action', async () => {
     await render(BotTileComponent, {
       inputs: {
         bot: bot({ primary_action: { action_id: 'resume', label: 'Resume', enabled: true, disabled_reason: null } }),
@@ -308,7 +309,9 @@ describe('BotTileComponent', () => {
       providers: [routerProvider()],
     });
 
-    expect(screen.getByRole('button', { name: 'Resume' }).querySelector('.pi-play')).not.toBeNull();
+    const button = screen.getByRole('button', { name: 'Resume' });
+    expect(button.classList).toContain('bot-tile__action-button--play');
+    expect(button.querySelector('.bot-tile__action-icon path')).not.toBeNull();
   });
 
   it('opens an inline confirm on quick-action click and only emits action after confirming', async () => {
