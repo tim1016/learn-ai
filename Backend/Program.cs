@@ -147,6 +147,12 @@ builder.Services.AddHttpClient("python", client =>
     client.BaseAddress = new Uri(baseUrl);
     client.Timeout = TimeSpan.FromSeconds(60);
 });
+builder.Services.AddHttpClient<IRecencyHeroClient, RecencyHeroClient>(client =>
+{
+    var baseUrl = builder.Configuration["PolygonService:BaseUrl"] ?? "http://python-service:8000";
+    client.BaseAddress = new Uri(baseUrl);
+    client.Timeout = TimeSpan.FromSeconds(60);
+});
 
 // Minimal API JSON: accept snake_case payloads from PythonDataService
 // (and PascalCase from any other caller) without 500-null-column errors.
@@ -190,13 +196,17 @@ builder.Services
     .AddTypeExtension<BacktestRunsQuery>()
     .AddTypeExtension<BacktestRunDetailQuery>()
     .AddTypeExtension<BacktestRunResolver>()
-    .AddTypeExtension<RecencyQuery>()
+    .AddTypeExtension(typeof(RecencyQuery))
     .AddMutationType<Mutation>()
     .AddTypeExtension<PortfolioMutation>()
     .AddTypeExtension<DataLabMutation>()
     .AddTypeExtension<SpecStrategyMutation>()
     .AddTypeExtension<BacktestRunMutation>()
-    .AddTypeExtension<RecencyMutation>()
+    .AddTypeExtension(typeof(RecencyMutation))
+    .AddType<RecencyRunMutationSuccess>()
+    .AddType<RecencyRunNotFoundError>()
+    .AddType<RecencyLaunchMutationSuccess>()
+    .AddType<RecencyLaunchNotFoundError>()
     .AddProjections()
     .AddFiltering()
     .AddSorting()

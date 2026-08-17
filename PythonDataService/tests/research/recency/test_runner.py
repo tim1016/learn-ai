@@ -201,8 +201,8 @@ class TestRunRecencySuccessPath:
             strategy_code_version_fn=lambda strategy_key: "v1",
         )
         snap = persisted[0]
-        assert snap.total_pnl == pytest.approx(18.0)  # gross 20 - 2*1.0
-        assert snap.trades[0].pnl == pytest.approx(18.0)
+        assert snap.total_pnl == pytest.approx(18.0, rel=0.0, abs=1e-12)  # gross 20 - 2*1.0
+        assert snap.trades[0].pnl == pytest.approx(18.0, rel=0.0, abs=1e-12)
 
 
 class TestRunRecencyDataPolicyFingerprint:

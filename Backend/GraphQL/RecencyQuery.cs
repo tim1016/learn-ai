@@ -1,39 +1,23 @@
 using Backend.Data;
 using Backend.GraphQL.Types;
+using Backend.Models.DTOs;
+using Backend.Models.MarketData;
+using Backend.Services.Interfaces;
 using HotChocolate;
 using Microsoft.EntityFrameworkCore;
 
 namespace Backend.GraphQL;
 
 /// <summary>
-/// Reads for the Recency Chart's accumulated projection. Both resolvers
-/// only filter, join, and select already-persisted Python-authored numbers
-/// (AGENTS.md #5) — no PnL, Sharpe, or statistic is derived here.
+/// Reads for the Recency Chart projection. Python owns all numerical
+/// derivation; this transport only filters evidence and projects it.
 /// </summary>
 [ExtendObjectType(typeof(Query))]
-public class RecencyQuery
+public static class RecencyQuery
 {
-    /// <summary>
-    /// Trades overlapping [fromMs, toMs] — entered at or before toMs and
-    /// exited at or after fromMs — excluding any whose run or launch has
-    /// been soft-deleted. An entry-only predicate would drop a position
-    /// entered just before the window that's still open inside it; the
-    /// swimlane already clips overlapping spans at the window boundary
-    /// on render, so the fetch must actually include them. Dedup-by-
-    /// fingerprint (design spec D16) needs no query-time logic here:
-    /// RecencyTrade.Fingerprint carries a database-level unique
-    /// constraint, so two rows can never share one — every row already
-    /// IS the canonical (and only) representative of its evidence.
-    /// Liveness, though, is membership-based: a re-run of the same combo
-    /// over an overlapping window produces the identical fingerprint, and
-    /// each such run gets its own RecencyTradeMembership row — a trade
-    /// stays visible as long as ANY claiming run (and its launch) is
-    /// still live, not just the one that happened to insert the physical
-    /// row first.
-    /// </summary>
     [GraphQLName("recencyTrades")]
-    public async Task<List<RecencyTradeType>> GetRecencyTrades(
-        AppDbContext context,
+    public static async Task<List<RecencyTradeType>> GetRecencyTrades(
+        [Service] AppDbContext context,
         long fromMs,
         long toMs,
         List<string>? symbols,
@@ -43,99 +27,115 @@ public class RecencyQuery
         var query = context.RecencyTrades
             .AsNoTracking()
             .Where(t => t.EntryMs <= toMs && t.ExitMs >= fromMs)
-            .Where(t => t.Memberships.Any(m => m.RecencyRun.DeletedAtMs == null && m.RecencyRun.RecencyLaunch.DeletedAtMs == null));
+            .Where(t => t.Memberships.Any(m =>
+                m.RecencyRun.DeletedAtMs == null
+                && m.RecencyRun.RecencyLaunch.DeletedAtMs == null
+                && (symbols == null || symbols.Count == 0 || symbols.Contains(m.RecencyRun.Symbol))
+                && (strategies == null || strategies.Count == 0 || strategies.Contains(m.RecencyRun.StrategyKey))))
+            .Include(t => t.Memberships)
+                .ThenInclude(m => m.RecencyRun)
+                .ThenInclude(r => r.RecencyLaunch);
 
-        if (symbols is { Count: > 0 })
-            query = query.Where(t => symbols.Contains(t.RecencyRun.Symbol));
-        if (strategies is { Count: > 0 })
-            query = query.Where(t => strategies.Contains(t.RecencyRun.StrategyKey));
+        var trades = await query.ToListAsync(cancellationToken);
+        var result = new List<RecencyTradeType>(trades.Count);
+        foreach (var trade in trades)
+        {
+            var liveMemberships = trade.Memberships
+                .Where(IsLive)
+                .OrderByDescending(m => m.RecencyRun.CreatedAtMs)
+                .ThenByDescending(m => m.RecencyRunId)
+                .ToList();
+            var representative = liveMemberships.First(m =>
+                (symbols is not { Count: > 0 } || symbols.Contains(m.RecencyRun.Symbol))
+                && (strategies is not { Count: > 0 } || strategies.Contains(m.RecencyRun.StrategyKey)));
 
-        return await query
-            .Select(t => new RecencyTradeType
+            result.Add(new RecencyTradeType
             {
-                Symbol = t.RecencyRun.Symbol,
-                StrategyKey = t.RecencyRun.StrategyKey,
-                ParamsHash = t.RecencyRun.ParamsHash,
-                ParamsJson = t.RecencyRun.ParamsJson,
-                Fingerprint = t.Fingerprint,
-                EntryMs = t.EntryMs,
-                ExitMs = t.ExitMs,
-                PnlPts = t.PnlPts,
-                PnlPct = t.PnlPct,
-                Quantity = t.Quantity,
-                Pnl = t.Pnl,
-                HoldingSessions = t.HoldingSessions,
-                Sharpe = t.RecencyRun.Sharpe,
-                StudyId = t.RecencyRun.StudyId,
-                RecencyRunId = t.RecencyRunId,
-                IsSyntheticExit = t.IsSyntheticExit,
-                SignalReason = t.SignalReason,
-            })
-            .ToListAsync(cancellationToken);
+                Symbol = representative.RecencyRun.Symbol,
+                StrategyKey = representative.RecencyRun.StrategyKey,
+                ParamsHash = representative.RecencyRun.ParamsHash,
+                ParamsJson = representative.RecencyRun.ParamsJson,
+                Fingerprint = trade.Fingerprint,
+                EntryMs = trade.EntryMs,
+                ExitMs = trade.ExitMs,
+                PnlPts = trade.PnlPts,
+                PnlPct = trade.PnlPct,
+                Quantity = trade.Quantity,
+                Pnl = trade.Pnl,
+                HoldingSessions = trade.HoldingSessions,
+                Sharpe = representative.RecencyRun.Sharpe,
+                StudyId = representative.RecencyRun.StudyId,
+                RecencyRunId = representative.RecencyRunId,
+                IsSyntheticExit = trade.IsSyntheticExit,
+                SignalReason = trade.SignalReason,
+                Memberships = liveMemberships.Select(m => new RecencyTradeMembershipType
+                {
+                    RecencyRunId = m.RecencyRunId,
+                    StudyId = m.RecencyRun.StudyId,
+                    CreatedAtMs = m.RecencyRun.CreatedAtMs,
+                }).ToList(),
+            });
+        }
+        return result;
     }
 
-    /// <summary>
-    /// The highest-TotalPnl combo per (symbol, strategy) among non-deleted
-    /// runs. Without a window, TotalPnl is Python's persisted all-time sum
-    /// over the run's own generation window. With [fromMs, toMs] (the
-    /// caller's current display window), the ranking instead sums each
-    /// run's already-Python-computed per-trade Pnl for trades entering
-    /// inside that window — a SQL SUM over numbers Python already
-    /// computed, not a new derived statistic — so a launch spanning months
-    /// can't have its all-time winner shadow the combo that's actually
-    /// best in what the all-symbols recent-window view shows.
-    /// </summary>
     [GraphQLName("recencyHero")]
-    public async Task<List<RecencyHeroType>> GetRecencyHero(
-        AppDbContext context,
+    public static async Task<List<RecencyHeroType>> GetRecencyHero(
+        [Service] AppDbContext context,
+        [Service] IRecencyHeroClient heroClient,
         List<string>? symbols,
         List<string>? strategies,
-        long? fromMs,
-        long? toMs,
+        long fromMs,
+        long toMs,
         CancellationToken cancellationToken)
     {
-        var query = context.RecencyRuns
+        if (fromMs > toMs)
+            throw new ArgumentException("fromMs must be less than or equal to toMs");
+
+        var query = context.RecencyTradeMemberships
             .AsNoTracking()
-            .Where(r => r.DeletedAtMs == null && r.RecencyLaunch.DeletedAtMs == null);
-
+            .Where(m => m.RecencyRun.DeletedAtMs == null && m.RecencyRun.RecencyLaunch.DeletedAtMs == null)
+            .Where(m => m.RecencyTrade.EntryMs >= fromMs && m.RecencyTrade.EntryMs <= toMs);
         if (symbols is { Count: > 0 })
-            query = query.Where(r => symbols.Contains(r.Symbol));
+            query = query.Where(m => symbols.Contains(m.RecencyRun.Symbol));
         if (strategies is { Count: > 0 })
-            query = query.Where(r => strategies.Contains(r.StrategyKey));
+            query = query.Where(m => strategies.Contains(m.RecencyRun.StrategyKey));
 
-        var candidates = fromMs is null || toMs is null
-            ? await query
-                .Select(r => new { r.Id, r.Symbol, r.StrategyKey, r.ParamsHash, TotalPnl = r.TotalPnl })
-                .ToListAsync(cancellationToken)
-            : await query
-                .Select(r => new
-                {
-                    r.Id,
-                    r.Symbol,
-                    r.StrategyKey,
-                    r.ParamsHash,
-                    TotalPnl = r.Trades
-                        .Where(t => t.EntryMs <= toMs && t.ExitMs >= fromMs)
-                        .Sum(t => (decimal?)t.Pnl) ?? 0m,
-                })
-                .ToListAsync(cancellationToken);
+        var rows = await query.Select(m => new
+        {
+            m.RecencyRunId,
+            m.RecencyRun.Symbol,
+            m.RecencyRun.StrategyKey,
+            m.RecencyRun.ParamsHash,
+            m.RecencyTrade.EntryMs,
+            m.RecencyTrade.Pnl,
+        }).ToListAsync(cancellationToken);
 
-        // "Top 1 per group" grouped queries translate unreliably across EF
-        // Core providers — grouped in memory instead, after already
-        // filtering server-side. Recency's run cardinality is bounded
-        // (one row per symbol x strategy x combo x launch), not a
-        // millions-of-rows table.
-        return candidates
-            .GroupBy(r => (r.Symbol, r.StrategyKey))
-            .Select(g => g.OrderByDescending(r => r.TotalPnl).First())
-            .Select(r => new RecencyHeroType
-            {
-                Symbol = r.Symbol,
-                StrategyKey = r.StrategyKey,
-                ParamsHash = r.ParamsHash,
-                TotalPnl = r.TotalPnl,
-                RecencyRunId = r.Id,
-            })
+        var candidates = rows
+            .GroupBy(row => new { row.RecencyRunId, row.Symbol, row.StrategyKey, row.ParamsHash })
+            .Select(group => new RecencyHeroCandidateRequest(
+                group.Key.RecencyRunId,
+                group.Key.Symbol,
+                group.Key.StrategyKey,
+                group.Key.ParamsHash,
+                group.Select(row => new RecencyHeroTradeRequest(row.EntryMs, row.Pnl)).ToList()))
             .ToList();
+        if (candidates.Count == 0)
+            return [];
+
+        var heroes = await heroClient.SelectHeroesAsync(
+            new RecencyHeroRequest(fromMs, toMs, candidates),
+            cancellationToken);
+        return heroes.Select(hero => new RecencyHeroType
+        {
+            Symbol = hero.Symbol,
+            StrategyKey = hero.StrategyKey,
+            ParamsHash = hero.ParamsHash,
+            TotalPnl = hero.TotalPnl,
+            RecencyRunId = hero.RecencyRunId,
+        }).ToList();
     }
+
+    private static bool IsLive(RecencyTradeMembership membership) =>
+        membership.RecencyRun.DeletedAtMs is null && membership.RecencyRun.RecencyLaunch.DeletedAtMs is null;
 }

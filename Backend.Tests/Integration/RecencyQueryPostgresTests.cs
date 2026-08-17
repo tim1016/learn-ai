@@ -1,6 +1,8 @@
 using Backend.Data;
 using Backend.GraphQL;
+using Backend.Models.DTOs;
 using Backend.Models.MarketData;
+using Backend.Services.Interfaces;
 using Backend.Tests.Helpers;
 using Microsoft.EntityFrameworkCore;
 
@@ -17,6 +19,27 @@ namespace Backend.Tests.Integration;
 /// </summary>
 public class RecencyQueryPostgresTests
 {
+    private sealed class PythonHeroStub : IRecencyHeroClient
+    {
+        public Task<IReadOnlyList<RecencyHeroResponseItem>> SelectHeroesAsync(RecencyHeroRequest request, CancellationToken ct)
+        {
+            IReadOnlyList<RecencyHeroResponseItem> result = request.Candidates
+                .GroupBy(candidate => (candidate.Symbol, candidate.StrategyKey))
+                .Select(group => group.Select(candidate => new RecencyHeroResponseItem(
+                    candidate.RecencyRunId,
+                    candidate.Symbol,
+                    candidate.StrategyKey,
+                    candidate.ParamsHash,
+                    candidate.Trades.Sum(trade => trade.Pnl)))
+                    .OrderByDescending(candidate => candidate.TotalPnl)
+                    .First())
+                .ToList();
+            return Task.FromResult(result);
+        }
+    }
+
+    private static readonly IRecencyHeroClient HeroClient = new PythonHeroStub();
+
     [Fact]
     public async Task GetRecencyTrades_And_GetRecencyHero_TranslateAndExecuteOnPostgres()
     {
@@ -72,15 +95,14 @@ public class RecencyQueryPostgresTests
         db.RecencyTradeMemberships.Add(new RecencyTradeMembership { RecencyTradeId = trade.Id, RecencyRunId = runHigh.Id });
         await db.SaveChangesAsync();
 
-        var query = new RecencyQuery();
 
-        var trades = await query.GetRecencyTrades(db, fromMs: 0, toMs: 1000, symbols: new List<string> { "SPY" }, strategies: null, CancellationToken.None);
+        var trades = await RecencyQuery.GetRecencyTrades(db, fromMs: 0, toMs: 1000, symbols: new List<string> { "SPY" }, strategies: null, CancellationToken.None);
         Assert.Single(trades);
         Assert.Equal("fp1", trades[0].Fingerprint);
         Assert.Equal(1.2m, trades[0].Sharpe);
         Assert.Equal(7, trades[0].StudyId);
 
-        var hero = await query.GetRecencyHero(db, symbols: null, strategies: null, fromMs: null, toMs: null, CancellationToken.None);
+        var hero = await RecencyQuery.GetRecencyHero(db, HeroClient, symbols: null, strategies: null, fromMs: 0, toMs: 1000, CancellationToken.None);
         Assert.Single(hero);
         Assert.Equal("h-high", hero[0].ParamsHash);
         Assert.Equal(runHigh.Id, hero[0].RecencyRunId);
@@ -148,9 +170,15 @@ public class RecencyQueryPostgresTests
             HoldingSessions = 1,
         });
         await db.SaveChangesAsync();
+        var insertedTrades = await db.RecencyTrades.ToListAsync();
+        db.RecencyTradeMemberships.AddRange(insertedTrades.Select(trade => new RecencyTradeMembership
+        {
+            RecencyTradeId = trade.Id,
+            RecencyRunId = trade.RecencyRunId,
+        }));
+        await db.SaveChangesAsync();
 
-        var query = new RecencyQuery();
-        var hero = await query.GetRecencyHero(db, symbols: null, strategies: null, fromMs: 100, toMs: 1000, CancellationToken.None);
+        var hero = await RecencyQuery.GetRecencyHero(db, HeroClient, symbols: null, strategies: null, fromMs: 100, toMs: 1000, CancellationToken.None);
 
         Assert.Single(hero);
         Assert.Equal("h-window", hero[0].ParamsHash);

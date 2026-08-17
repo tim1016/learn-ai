@@ -1,6 +1,8 @@
 using Backend.Data;
 using Backend.GraphQL;
+using Backend.Models.DTOs;
 using Backend.Models.MarketData;
+using Backend.Services.Interfaces;
 using Backend.Tests.Helpers;
 using Microsoft.EntityFrameworkCore;
 
@@ -16,6 +18,30 @@ namespace Backend.Tests.Unit.GraphQL;
 /// </summary>
 public class RecencyQueryTests
 {
+    private sealed class PythonHeroStub : IRecencyHeroClient
+    {
+        public Task<IReadOnlyList<RecencyHeroResponseItem>> SelectHeroesAsync(
+            RecencyHeroRequest request,
+            CancellationToken ct)
+        {
+            IReadOnlyList<RecencyHeroResponseItem> result = request.Candidates
+                .GroupBy(candidate => (candidate.Symbol, candidate.StrategyKey))
+                .Select(group => group
+                    .Select(candidate => new RecencyHeroResponseItem(
+                        candidate.RecencyRunId,
+                        candidate.Symbol,
+                        candidate.StrategyKey,
+                        candidate.ParamsHash,
+                        candidate.Trades.Sum(trade => trade.Pnl)))
+                    .OrderByDescending(candidate => candidate.TotalPnl)
+                    .First())
+                .ToList();
+            return Task.FromResult(result);
+        }
+    }
+
+    private static readonly IRecencyHeroClient HeroClient = new PythonHeroStub();
+
     private static async Task<RecencyLaunch> SeedLaunchAsync(AppDbContext db, string id, long? deletedAtMs = null)
     {
         var launch = new RecencyLaunch { Id = id, ConfigJson = "{}", Status = "RUNNING", CreatedAtMs = 1, DeletedAtMs = deletedAtMs };
@@ -51,7 +77,13 @@ public class RecencyQueryTests
         return run;
     }
 
-    private static async Task SeedTradeAsync(AppDbContext db, int runId, string fingerprint, long entryMs, long exitMs)
+    private static async Task SeedTradeAsync(
+        AppDbContext db,
+        int runId,
+        string fingerprint,
+        long entryMs,
+        long exitMs,
+        decimal pnl = 10m)
     {
         var trade = new RecencyTrade
         {
@@ -62,7 +94,7 @@ public class RecencyQueryTests
             PnlPts = 1m,
             PnlPct = 0.01m,
             Quantity = 10m,
-            Pnl = 10m,
+            Pnl = pnl,
             HoldingSessions = 1,
         };
         db.RecencyTrades.Add(trade);
@@ -83,8 +115,7 @@ public class RecencyQueryTests
         await SeedTradeAsync(db, run.Id, "fp-before", entryMs: 50, exitMs: 60);
         await SeedTradeAsync(db, run.Id, "fp-after", entryMs: 5000, exitMs: 5100);
 
-        var query = new RecencyQuery();
-        var result = await query.GetRecencyTrades(db, fromMs: 100, toMs: 1000, symbols: null, strategies: null, CancellationToken.None);
+        var result = await RecencyQuery.GetRecencyTrades(db, fromMs: 100, toMs: 1000, symbols: null, strategies: null, CancellationToken.None);
 
         Assert.Single(result);
         Assert.Equal("fp-in", result[0].Fingerprint);
@@ -115,8 +146,7 @@ public class RecencyQueryTests
         db.RecencyTradeMemberships.Add(new RecencyTradeMembership { RecencyTradeId = trade.Id, RecencyRunId = run.Id });
         await db.SaveChangesAsync();
 
-        var query = new RecencyQuery();
-        var result = await query.GetRecencyTrades(db, fromMs: 100, toMs: 1000, symbols: null, strategies: null, CancellationToken.None);
+        var result = await RecencyQuery.GetRecencyTrades(db, fromMs: 100, toMs: 1000, symbols: null, strategies: null, CancellationToken.None);
 
         Assert.Single(result);
         Assert.True(result[0].IsSyntheticExit);
@@ -134,8 +164,7 @@ public class RecencyQueryTests
         // genuinely overlaps [100, 1000].
         await SeedTradeAsync(db, run.Id, "fp-open-before-window", entryMs: 50, exitMs: 200);
 
-        var query = new RecencyQuery();
-        var result = await query.GetRecencyTrades(db, fromMs: 100, toMs: 1000, symbols: null, strategies: null, CancellationToken.None);
+        var result = await RecencyQuery.GetRecencyTrades(db, fromMs: 100, toMs: 1000, symbols: null, strategies: null, CancellationToken.None);
 
         Assert.Single(result);
         Assert.Equal("fp-open-before-window", result[0].Fingerprint);
@@ -151,8 +180,7 @@ public class RecencyQueryTests
         await SeedTradeAsync(db, deletedRun.Id, "fp-deleted", 100, 200);
         await SeedTradeAsync(db, liveRun.Id, "fp-live", 100, 200);
 
-        var query = new RecencyQuery();
-        var result = await query.GetRecencyTrades(db, fromMs: 0, toMs: 1000, symbols: null, strategies: null, CancellationToken.None);
+        var result = await RecencyQuery.GetRecencyTrades(db, fromMs: 0, toMs: 1000, symbols: null, strategies: null, CancellationToken.None);
 
         Assert.Single(result);
         Assert.Equal("fp-live", result[0].Fingerprint);
@@ -166,8 +194,7 @@ public class RecencyQueryTests
         var run = await SeedRunAsync(db, "l1", "SPY", "ema_crossover_2_bps", "hash1", 20m);
         await SeedTradeAsync(db, run.Id, "fp1", 100, 200);
 
-        var query = new RecencyQuery();
-        var result = await query.GetRecencyTrades(db, fromMs: 0, toMs: 1000, symbols: null, strategies: null, CancellationToken.None);
+        var result = await RecencyQuery.GetRecencyTrades(db, fromMs: 0, toMs: 1000, symbols: null, strategies: null, CancellationToken.None);
 
         Assert.Empty(result);
     }
@@ -182,8 +209,7 @@ public class RecencyQueryTests
         await SeedTradeAsync(db, spyRun.Id, "fp-spy", 100, 200);
         await SeedTradeAsync(db, aaplRun.Id, "fp-aapl", 100, 200);
 
-        var query = new RecencyQuery();
-        var result = await query.GetRecencyTrades(db, 0, 1000, symbols: new List<string> { "SPY" }, strategies: null, CancellationToken.None);
+        var result = await RecencyQuery.GetRecencyTrades(db, 0, 1000, symbols: new List<string> { "SPY" }, strategies: null, CancellationToken.None);
 
         Assert.Single(result);
         Assert.Equal("fp-spy", result[0].Fingerprint);
@@ -199,8 +225,7 @@ public class RecencyQueryTests
         await db.SaveChangesAsync();
         await SeedTradeAsync(db, run.Id, "fp1", 100, 200);
 
-        var query = new RecencyQuery();
-        var result = await query.GetRecencyTrades(db, 0, 1000, null, null, CancellationToken.None);
+        var result = await RecencyQuery.GetRecencyTrades(db, 0, 1000, null, null, CancellationToken.None);
 
         Assert.Equal(1.5m, result[0].Sharpe);
         Assert.Equal(42, result[0].StudyId);
@@ -217,10 +242,40 @@ public class RecencyQueryTests
         await db.SaveChangesAsync();
         await SeedTradeAsync(db, run.Id, "fp1", 100, 200);
 
-        var query = new RecencyQuery();
-        var result = await query.GetRecencyTrades(db, 0, 1000, null, null, CancellationToken.None);
+        var result = await RecencyQuery.GetRecencyTrades(db, 0, 1000, null, null, CancellationToken.None);
 
         Assert.Equal("{\"gap_bps\":2.0,\"rsi_min\":50.0}", result[0].ParamsJson);
+    }
+
+    [Fact]
+    public async Task GetRecencyTrades_UsesLatestLiveRepresentativeAndReturnsAllMemberships()
+    {
+        var db = TestDbContextFactory.Create();
+        await SeedLaunchAsync(db, "l1");
+        var original = await SeedRunAsync(db, "l1", "SPY", "ema_crossover_2_bps", "old", 10m);
+        original.CreatedAtMs = 10;
+        var latest = await SeedRunAsync(db, "l1", "SPY", "ema_crossover_2_bps", "new", 10m);
+        latest.CreatedAtMs = 20;
+        await db.SaveChangesAsync();
+        await SeedTradeAsync(db, original.Id, "shared-fp", 100, 200);
+        var trade = await db.RecencyTrades.SingleAsync(t => t.Fingerprint == "shared-fp");
+        db.RecencyTradeMemberships.Add(new RecencyTradeMembership
+        {
+            RecencyTradeId = trade.Id,
+            RecencyRunId = latest.Id,
+        });
+        await db.SaveChangesAsync();
+
+        original.DeletedAtMs = 999;
+        await db.SaveChangesAsync();
+
+        var result = await RecencyQuery.GetRecencyTrades(db, 0, 1000, null, null, CancellationToken.None);
+
+        Assert.Single(result);
+        Assert.Equal(latest.Id, result[0].RecencyRunId);
+        Assert.Equal("new", result[0].ParamsHash);
+        Assert.Single(result[0].Memberships);
+        Assert.Equal(latest.Id, result[0].Memberships[0].RecencyRunId);
     }
 
     [Fact]
@@ -228,12 +283,14 @@ public class RecencyQueryTests
     {
         var db = TestDbContextFactory.Create();
         await SeedLaunchAsync(db, "l1");
-        await SeedRunAsync(db, "l1", "SPY", "ema_crossover_2_bps", "h-low", totalPnl: 5m);
+        var low = await SeedRunAsync(db, "l1", "SPY", "ema_crossover_2_bps", "h-low", totalPnl: 5m);
         var best = await SeedRunAsync(db, "l1", "SPY", "ema_crossover_2_bps", "h-high", totalPnl: 50m);
-        await SeedRunAsync(db, "l1", "AAPL", "ema_crossover_2_bps", "h-other-symbol", totalPnl: 999m);
+        var other = await SeedRunAsync(db, "l1", "AAPL", "ema_crossover_2_bps", "h-other-symbol", totalPnl: 999m);
+        await SeedTradeAsync(db, low.Id, "fp-low", 100, 200, 5m);
+        await SeedTradeAsync(db, best.Id, "fp-high", 100, 200, 50m);
+        await SeedTradeAsync(db, other.Id, "fp-other", 100, 200, 999m);
 
-        var query = new RecencyQuery();
-        var result = await query.GetRecencyHero(db, symbols: new List<string> { "SPY" }, strategies: null, fromMs: null, toMs: null, CancellationToken.None);
+        var result = await RecencyQuery.GetRecencyHero(db, HeroClient, symbols: new List<string> { "SPY" }, strategies: null, fromMs: 0, toMs: 1000, CancellationToken.None);
 
         Assert.Single(result);
         Assert.Equal("h-high", result[0].ParamsHash);
@@ -246,29 +303,31 @@ public class RecencyQueryTests
     {
         var db = TestDbContextFactory.Create();
         await SeedLaunchAsync(db, "l1");
-        await SeedRunAsync(db, "l1", "SPY", "ema_crossover_2_bps", "h-deleted-best", totalPnl: 999m, deletedAtMs: 1);
+        var deleted = await SeedRunAsync(db, "l1", "SPY", "ema_crossover_2_bps", "h-deleted-best", totalPnl: 999m, deletedAtMs: 1);
         var survivor = await SeedRunAsync(db, "l1", "SPY", "ema_crossover_2_bps", "h-survivor", totalPnl: 10m);
+        await SeedTradeAsync(db, deleted.Id, "fp-deleted", 100, 200, 999m);
+        await SeedTradeAsync(db, survivor.Id, "fp-survivor", 100, 200, 10m);
 
-        var query = new RecencyQuery();
-        var result = await query.GetRecencyHero(db, null, null, fromMs: null, toMs: null, CancellationToken.None);
+        var result = await RecencyQuery.GetRecencyHero(db, HeroClient, null, null, fromMs: 0, toMs: 1000, CancellationToken.None);
 
         Assert.Single(result);
         Assert.Equal(survivor.Id, result[0].RecencyRunId);
     }
 
     [Fact]
-    public async Task GetRecencyHero_WithNoWindow_UsesTheRunsAllTimePersistedTotalPnl()
+    public async Task GetRecencyHero_ExcludesRunsWithoutEntriesInTheWindow()
     {
         var db = TestDbContextFactory.Create();
         await SeedLaunchAsync(db, "l1");
-        var run = await SeedRunAsync(db, "l1", "SPY", "ema_crossover_2_bps", "h1", totalPnl: 500m);
-        await SeedTradeAsync(db, run.Id, "fp1", entryMs: 100, exitMs: 200); // Pnl=10, unrelated to the 500 above
+        var outside = await SeedRunAsync(db, "l1", "SPY", "ema_crossover_2_bps", "outside", totalPnl: 500m);
+        var inside = await SeedRunAsync(db, "l1", "SPY", "ema_crossover_2_bps", "inside", totalPnl: 1m);
+        await SeedTradeAsync(db, outside.Id, "fp-outside", entryMs: 100, exitMs: 200, pnl: 500m);
+        await SeedTradeAsync(db, inside.Id, "fp-inside", entryMs: 500, exitMs: 600, pnl: 1m);
 
-        var query = new RecencyQuery();
-        var result = await query.GetRecencyHero(db, symbols: null, strategies: null, fromMs: null, toMs: null, CancellationToken.None);
+        var result = await RecencyQuery.GetRecencyHero(db, HeroClient, symbols: null, strategies: null, fromMs: 400, toMs: 700, CancellationToken.None);
 
         Assert.Single(result);
-        Assert.Equal(500m, result[0].TotalPnl);
+        Assert.Equal("inside", result[0].ParamsHash);
     }
 
     [Fact]
@@ -308,9 +367,15 @@ public class RecencyQueryTests
             HoldingSessions = 1,
         });
         await db.SaveChangesAsync();
+        var windowTrades = await db.RecencyTrades.Where(t => t.RecencyRunId == runA.Id || t.RecencyRunId == runB.Id).ToListAsync();
+        db.RecencyTradeMemberships.AddRange(windowTrades.Select(t => new RecencyTradeMembership
+        {
+            RecencyTradeId = t.Id,
+            RecencyRunId = t.RecencyRunId,
+        }));
+        await db.SaveChangesAsync();
 
-        var query = new RecencyQuery();
-        var result = await query.GetRecencyHero(db, symbols: null, strategies: null, fromMs: 100, toMs: 1000, CancellationToken.None);
+        var result = await RecencyQuery.GetRecencyHero(db, HeroClient, symbols: null, strategies: null, fromMs: 100, toMs: 1000, CancellationToken.None);
 
         Assert.Single(result);
         Assert.Equal("h-window-winner", result[0].ParamsHash);
@@ -322,12 +387,14 @@ public class RecencyQueryTests
     {
         var db = TestDbContextFactory.Create();
         await SeedLaunchAsync(db, "l1");
-        await SeedRunAsync(db, "l1", "SPY", "ema_crossover_2_bps", "h1", 10m);
-        await SeedRunAsync(db, "l1", "SPY", "rsi_mean_reversion", "h2", 10m);
-        await SeedRunAsync(db, "l1", "AAPL", "ema_crossover_2_bps", "h3", 10m);
+        var first = await SeedRunAsync(db, "l1", "SPY", "ema_crossover_2_bps", "h1", 10m);
+        var second = await SeedRunAsync(db, "l1", "SPY", "rsi_mean_reversion", "h2", 10m);
+        var third = await SeedRunAsync(db, "l1", "AAPL", "ema_crossover_2_bps", "h3", 10m);
+        await SeedTradeAsync(db, first.Id, "fp-1", 100, 200);
+        await SeedTradeAsync(db, second.Id, "fp-2", 100, 200);
+        await SeedTradeAsync(db, third.Id, "fp-3", 100, 200);
 
-        var query = new RecencyQuery();
-        var result = await query.GetRecencyHero(db, null, null, fromMs: null, toMs: null, CancellationToken.None);
+        var result = await RecencyQuery.GetRecencyHero(db, HeroClient, null, null, fromMs: 0, toMs: 1000, CancellationToken.None);
 
         Assert.Equal(3, result.Count);
     }

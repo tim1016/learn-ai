@@ -8,5 +8,17 @@ public interface IRecencyLaunchService
     /// survives a zero-success run, a cancellation, or Redis's 24h job-state
     /// TTL. Idempotent: a retried call for the same id is a no-op.
     /// </summary>
-    Task CreateLaunchAsync(string launchId, string configJson, CancellationToken ct);
+    Task CreateLaunchAsync(string launchId, string configJson, int expectedRuns, CancellationToken ct);
+
+    /// <summary>
+    /// Set a durable terminal state. Counts are optional for cancellation,
+    /// where the latest atomically persisted success count remains authoritative.
+    /// Returns false when the launch does not exist.
+    /// </summary>
+    Task<bool> SetTerminalStatusAsync(
+        string launchId,
+        string status,
+        int? succeededRuns,
+        int? failedRuns,
+        CancellationToken ct);
 }

@@ -103,6 +103,26 @@ class TestValidateBeforeDispatch:
             return await client.post("/api/jobs-internal/recency-chart", json=body)
 
     @pytest.mark.asyncio
+    async def test_preflight_returns_expected_run_count_without_queuing(self) -> None:
+        body = {
+            "jobId": "job-preflight",
+            "strategies": [
+                {
+                    "strategyKey": "ema_crossover_2_bps",
+                    "paramRanges": {"gap_bps": {"type": "value_list", "values": [1.0, 2.0]}},
+                }
+            ],
+            "symbols": ["SPY", "QQQ"],
+            "windowStartMs": 0,
+            "windowEndMs": 1,
+        }
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/api/jobs-internal/recency-chart/validate", json=body)
+
+        assert response.status_code == 200
+        assert response.json() == {"expected_runs": 4}
+
+    @pytest.mark.asyncio
     async def test_rejects_an_unknown_strategy_key(self) -> None:
         response = await self._post(
             {

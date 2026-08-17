@@ -20,13 +20,18 @@ export const RECENCY_TRADES_QUERY = gql`
       recencyRunId
       isSyntheticExit
       signalReason
+      memberships {
+        recencyRunId
+        studyId
+        createdAtMs
+      }
     }
   }
 `;
 
 export const RECENCY_HERO_QUERY = gql`
-  query RecencyHero($symbols: [String!], $strategies: [String!]) {
-    recencyHero(symbols: $symbols, strategies: $strategies) {
+  query RecencyHero($fromMs: Long!, $toMs: Long!, $symbols: [String!], $strategies: [String!]) {
+    recencyHero(fromMs: $fromMs, toMs: $toMs, symbols: $symbols, strategies: $strategies) {
       symbol
       strategyKey
       paramsHash
@@ -38,9 +43,23 @@ export const RECENCY_HERO_QUERY = gql`
 
 export const SOFT_DELETE_RECENCY_RUN_MUTATION = gql`
   mutation SoftDeleteRecencyRun($runId: Int!) {
-    softDeleteRecencyRun(runId: $runId)
+    softDeleteRecencyRun(runId: $runId) {
+      ... on RecencyRunMutationSuccess {
+        recencyRunId
+      }
+      ... on RecencyRunNotFoundError {
+        code
+        message
+      }
+    }
   }
 `;
+
+export interface SoftDeleteRecencyRunMutationResult {
+  softDeleteRecencyRun:
+    | { recencyRunId: number; code?: never; message?: never }
+    | { recencyRunId?: never; code: string; message: string };
+}
 
 export interface RecencyTradeQueryResultItem {
   symbol: string;
@@ -60,6 +79,13 @@ export interface RecencyTradeQueryResultItem {
   recencyRunId: number;
   isSyntheticExit: boolean;
   signalReason: string;
+  memberships: RecencyTradeMembershipQueryResultItem[];
+}
+
+export interface RecencyTradeMembershipQueryResultItem {
+  recencyRunId: number;
+  studyId: number | null;
+  createdAtMs: number;
 }
 
 export interface RecencyTradesQueryResult {

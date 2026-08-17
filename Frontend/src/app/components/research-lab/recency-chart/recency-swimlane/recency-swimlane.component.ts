@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, input, output } from "@angular/core";
+import { AssetIdentityComponent } from "../../../../shared/asset-identity/asset-identity.component";
 import {
   computeSwimlaneLayout,
   type RecencySwimlaneTrade,
@@ -52,7 +53,7 @@ function durationLabelFor(trade: RecencySwimlaneTrade): string {
  */
 @Component({
   selector: "app-recency-swimlane",
-  standalone: true,
+  imports: [AssetIdentityComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: "./recency-swimlane.component.html",
   styleUrls: ["./recency-swimlane.component.scss"],

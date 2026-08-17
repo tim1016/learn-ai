@@ -25,6 +25,14 @@ public class RecencyTradeType
     public int RecencyRunId { get; set; }
     public bool IsSyntheticExit { get; set; }
     public string SignalReason { get; set; } = "";
+    public List<RecencyTradeMembershipType> Memberships { get; set; } = [];
+}
+
+public class RecencyTradeMembershipType
+{
+    public int RecencyRunId { get; set; }
+    public int? StudyId { get; set; }
+    public long CreatedAtMs { get; set; }
 }
 
 /// <summary>

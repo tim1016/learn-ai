@@ -16,7 +16,6 @@ function parseValuesList(raw: string): number[] {
  */
 @Component({
   selector: "app-recency-param-range-input",
-  standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: "./recency-param-range-input.component.html",
 })

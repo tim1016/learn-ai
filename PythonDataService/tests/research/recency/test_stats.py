@@ -13,7 +13,16 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.research.recency.stats import TradeForStats, holding_sessions, sharpe, total_pnl, trade_dollar_pnl
+from app.research.recency.stats import (
+    HeroCandidate,
+    HeroTrade,
+    TradeForStats,
+    holding_sessions,
+    select_window_heroes,
+    sharpe,
+    total_pnl,
+    trade_dollar_pnl,
+)
 
 
 def _ms(y: int, m: int, d: int, hh: int = 12, mm: int = 0) -> int:
@@ -61,7 +70,7 @@ class TestTradeDollarPnl:
 
     def test_subtracts_two_flat_commissions_for_the_round_trip(self) -> None:
         trade = _trade(_ms(2026, 6, 1), _ms(2026, 6, 1), pnl_pts=2.5, pnl_pct=0.025, quantity=10)
-        assert trade_dollar_pnl(trade, commission_per_order=1.5) == pytest.approx(25.0 - 3.0)
+        assert trade_dollar_pnl(trade, commission_per_order=1.5) == pytest.approx(25.0 - 3.0, abs=1e-9, rel=0)
 
     def test_zero_commission_matches_the_gross_default(self) -> None:
         trade = _trade(_ms(2026, 6, 1), _ms(2026, 6, 1), pnl_pts=2.5, pnl_pct=0.025, quantity=10)
@@ -138,7 +147,66 @@ class TestTotalPnl:
             _trade(_ms(2026, 6, 10), _ms(2026, 6, 11), pnl_pts=-1.0, pnl_pct=-0.01, quantity=10),  # gross -10
         ]
         # gross 20 - 10 = 10, minus 2 trades x 2 commissions x $1 = 4 -> 6
-        assert total_pnl(trades, window_start, window_end, commission_per_order=1.0) == pytest.approx(6.0)
+        assert total_pnl(trades, window_start, window_end, commission_per_order=1.0) == pytest.approx(
+            6.0, abs=1e-9, rel=0
+        )
+
+
+class TestSelectWindowHeroes:
+    def test_selects_each_symbol_strategy_winner_from_entries_inside_the_window(self) -> None:
+        heroes = select_window_heroes(
+            [
+                HeroCandidate(
+                    recency_run_id=1,
+                    symbol="SPY",
+                    strategy_key="ema",
+                    params_hash="all-time-winner",
+                    trades=(
+                        HeroTrade(entry_ms=50, pnl=1_000.0),
+                        HeroTrade(entry_ms=500, pnl=-10.0),
+                    ),
+                ),
+                HeroCandidate(
+                    recency_run_id=2,
+                    symbol="SPY",
+                    strategy_key="ema",
+                    params_hash="window-winner",
+                    trades=(HeroTrade(entry_ms=500, pnl=200.0),),
+                ),
+            ],
+            window_start_ms=100,
+            window_end_ms=1_000,
+        )
+
+        assert heroes[0].recency_run_id == 2
+        assert heroes[0].symbol == "SPY"
+        assert heroes[0].strategy_key == "ema"
+        assert heroes[0].params_hash == "window-winner"
+        assert heroes[0].total_pnl == 200.0
+
+    def test_excludes_a_trade_that_only_overlaps_the_window(self) -> None:
+        heroes = select_window_heroes(
+            [
+                HeroCandidate(
+                    recency_run_id=1,
+                    symbol="SPY",
+                    strategy_key="ema",
+                    params_hash="entered-before",
+                    trades=(HeroTrade(entry_ms=99, pnl=1_000.0),),
+                ),
+                HeroCandidate(
+                    recency_run_id=2,
+                    symbol="SPY",
+                    strategy_key="ema",
+                    params_hash="entered-inside",
+                    trades=(HeroTrade(entry_ms=100, pnl=-5.0),),
+                ),
+            ],
+            window_start_ms=100,
+            window_end_ms=1_000,
+        )
+
+        assert heroes[0].recency_run_id == 2
 
 
 class TestSharpe:

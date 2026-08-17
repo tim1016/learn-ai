@@ -2,7 +2,6 @@ using Backend.Data;
 using Backend.GraphQL;
 using Backend.Models.MarketData;
 using Backend.Tests.Helpers;
-using HotChocolate;
 using Microsoft.EntityFrameworkCore;
 
 namespace Backend.Tests.Unit.GraphQL;
@@ -38,22 +37,23 @@ public class RecencyMutationTests
     public async Task SoftDeleteRecencyRunAsync_SetsTombstone()
     {
         var db = await SeededDbAsync();
-        var mutation = new RecencyMutation();
 
-        var result = await mutation.SoftDeleteRecencyRunAsync(db, 1, CancellationToken.None);
+        var result = await RecencyMutation.SoftDeleteRecencyRunAsync(db, 1, CancellationToken.None);
 
-        Assert.True(result);
+        Assert.IsType<RecencyRunMutationSuccess>(result);
         var run = await db.RecencyRuns.SingleAsync(r => r.Id == 1);
         Assert.NotNull(run.DeletedAtMs);
     }
 
     [Fact]
-    public async Task SoftDeleteRecencyRunAsync_UnknownId_Throws()
+    public async Task SoftDeleteRecencyRunAsync_UnknownId_ReturnsTypedError()
     {
         var db = await SeededDbAsync();
-        var mutation = new RecencyMutation();
 
-        await Assert.ThrowsAsync<GraphQLException>(() => mutation.SoftDeleteRecencyRunAsync(db, 999, CancellationToken.None));
+        var result = await RecencyMutation.SoftDeleteRecencyRunAsync(db, 999, CancellationToken.None);
+
+        var error = Assert.IsType<RecencyRunNotFoundError>(result);
+        Assert.Equal("RECENCY_RUN_NOT_FOUND", error.Code);
     }
 
     [Fact]
@@ -63,11 +63,10 @@ public class RecencyMutationTests
         var run = await db.RecencyRuns.SingleAsync(r => r.Id == 1);
         run.DeletedAtMs = 500;
         await db.SaveChangesAsync();
-        var mutation = new RecencyMutation();
 
-        var result = await mutation.RestoreRecencyRunAsync(db, 1, CancellationToken.None);
+        var result = await RecencyMutation.RestoreRecencyRunAsync(db, 1, CancellationToken.None);
 
-        Assert.True(result);
+        Assert.IsType<RecencyRunMutationSuccess>(result);
         var restored = await db.RecencyRuns.SingleAsync(r => r.Id == 1);
         Assert.Null(restored.DeletedAtMs);
     }
@@ -76,11 +75,10 @@ public class RecencyMutationTests
     public async Task SoftDeleteRecencyLaunchAsync_SetsTombstone()
     {
         var db = await SeededDbAsync();
-        var mutation = new RecencyMutation();
 
-        var result = await mutation.SoftDeleteRecencyLaunchAsync(db, "l1", CancellationToken.None);
+        var result = await RecencyMutation.SoftDeleteRecencyLaunchAsync(db, "l1", CancellationToken.None);
 
-        Assert.True(result);
+        Assert.IsType<RecencyLaunchMutationSuccess>(result);
         var launch = await db.RecencyLaunches.SingleAsync(l => l.Id == "l1");
         Assert.NotNull(launch.DeletedAtMs);
     }
@@ -92,11 +90,10 @@ public class RecencyMutationTests
         var launch = await db.RecencyLaunches.SingleAsync(l => l.Id == "l1");
         launch.DeletedAtMs = 500;
         await db.SaveChangesAsync();
-        var mutation = new RecencyMutation();
 
-        var result = await mutation.RestoreRecencyLaunchAsync(db, "l1", CancellationToken.None);
+        var result = await RecencyMutation.RestoreRecencyLaunchAsync(db, "l1", CancellationToken.None);
 
-        Assert.True(result);
+        Assert.IsType<RecencyLaunchMutationSuccess>(result);
         var restored = await db.RecencyLaunches.SingleAsync(l => l.Id == "l1");
         Assert.Null(restored.DeletedAtMs);
     }
@@ -105,7 +102,7 @@ public class RecencyMutationTests
     public async Task SoftDeleteRecencyLaunchAsync_ExcludesItsRunsFromTheProjectionWithoutCascading()
     {
         var db = await SeededDbAsync();
-        db.RecencyTrades.Add(new RecencyTrade
+        var trade = new RecencyTrade
         {
             RecencyRunId = 1,
             Fingerprint = "fp1",
@@ -116,19 +113,24 @@ public class RecencyMutationTests
             Quantity = 10m,
             Pnl = 10m,
             HoldingSessions = 1,
+        };
+        db.RecencyTrades.Add(trade);
+        await db.SaveChangesAsync();
+        db.RecencyTradeMemberships.Add(new RecencyTradeMembership
+        {
+            RecencyTradeId = trade.Id,
+            RecencyRunId = 1,
         });
         await db.SaveChangesAsync();
-        var mutation = new RecencyMutation();
 
-        await mutation.SoftDeleteRecencyLaunchAsync(db, "l1", CancellationToken.None);
+        await RecencyMutation.SoftDeleteRecencyLaunchAsync(db, "l1", CancellationToken.None);
 
         // The run itself is NOT individually tombstoned...
         var run = await db.RecencyRuns.SingleAsync(r => r.Id == 1);
         Assert.Null(run.DeletedAtMs);
 
         // ...but the projection still excludes it via the launch join.
-        var query = new RecencyQuery();
-        var trades = await query.GetRecencyTrades(db, 0, 1000, null, null, CancellationToken.None);
+        var trades = await RecencyQuery.GetRecencyTrades(db, 0, 1000, null, null, CancellationToken.None);
         Assert.Empty(trades);
     }
 }

@@ -49,10 +49,11 @@ from app.research.recency.grid import (
     StrategyGridConfig,
     ValueListRange,
     expand_grid,
+    grid_size,
 )
-from app.research.recency.persist_client import persist_recency_snapshot
+from app.research.recency.persist_client import persist_recency_snapshot, update_recency_launch
 from app.research.recency.runner import RecencyLaunchConfig, run_recency
-from app.research.recency.stats import ms_to_et_date
+from app.research.recency.stats import ms_to_et_date_string
 from app.research.recency.validation import RecencyRequestInvalidError, validate_recency_request
 from app.research.runner import run_feature_research
 from app.research.signal.config import SignalConfig
@@ -560,7 +561,43 @@ def _ms_to_date_str(ms: int) -> str:
     Delegates to the canonical ET-anchored converter (temporal-rigor.md) —
     a bare UTC ``strftime`` would drift a calendar day off ET evenings.
     """
-    return ms_to_et_date(ms).isoformat()
+    return ms_to_et_date_string(ms)
+
+
+def _validated_recency_config(req: RecencyChartJobRequest) -> tuple[list[StrategyGridConfig], int]:
+    """Validate a launch and return its canonical grid plus exact run count."""
+    strategies = [
+        StrategyGridConfig(
+            strategy_key=s.strategy_key,
+            param_ranges={name: _range_request_to_grid_range(r) for name, r in s.param_ranges.items()},
+        )
+        for s in req.strategies
+    ]
+    try:
+        expand_grid(strategies, req.symbols)
+    except RecencyGridTooLargeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid parameter range: {exc}") from exc
+
+    try:
+        validate_recency_request(
+            strategies=strategies,
+            symbols=req.symbols,
+            window_start_ms=req.window_start_ms,
+            window_end_ms=req.window_end_ms,
+            data_policy=req.data_policy,
+        )
+    except RecencyRequestInvalidError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return strategies, grid_size(strategies, req.symbols)
+
+
+@router.post("/recency-chart/validate")
+async def validate_recency_chart_job(req: RecencyChartJobRequest) -> dict[str, int]:
+    """Preflight a launch before .NET creates its durable launch row."""
+    _, expected_runs = _validated_recency_config(req)
+    return {"expected_runs": expected_runs}
 
 
 @router.post("/recency-chart", status_code=status.HTTP_202_ACCEPTED)
@@ -575,34 +612,7 @@ async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
     failed" is visible on the job's SSE stream, not just the final
     summary the completed event carries.
     """
-    strategies = [
-        StrategyGridConfig(
-            strategy_key=s.strategy_key,
-            param_ranges={name: _range_request_to_grid_range(r) for name, r in s.param_ranges.items()},
-        )
-        for s in req.strategies
-    ]
-    try:
-        expand_grid(strategies, req.symbols)
-    except RecencyGridTooLargeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=f"invalid parameter range: {exc}")
-
-    # Structural validation (unknown/ineligible strategy, misspelled or
-    # out-of-bounds parameter, blank symbol, inverted window, unsupported
-    # data policy) before a durable launch is created — otherwise every
-    # child backtest in the grid dispatches only to fail identically.
-    try:
-        validate_recency_request(
-            strategies=strategies,
-            symbols=req.symbols,
-            window_start_ms=req.window_start_ms,
-            window_end_ms=req.window_end_ms,
-            data_policy=req.data_policy,
-        )
-    except RecencyRequestInvalidError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    strategies, _ = _validated_recency_config(req)
 
     config = RecencyLaunchConfig(
         launch_id=req.job_id,
@@ -634,23 +644,40 @@ async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
             return execute_engine_backtest(request=backtest_req, on_phase=lambda phase: None, on_log=lambda message: None)
 
         def persist(snapshot) -> None:
-            persist_recency_snapshot(snapshot, base_url=backend_url)
+            asyncio.run(persist_recency_snapshot(snapshot, base_url=backend_url))
 
-        summary = run_recency(
-            config,
-            execute_backtest_fn=execute_backtest_fn,
-            persist_fn=persist,
-            strategy_code_version_fn=lambda strategy_key: resolved_code_revision(),
-            on_phase=emit.phase,
-            on_progress=lambda done, total: emit.progress(done, total, unit="runs"),
-            on_run_failed=lambda run_spec, message: emit.log(
-                f"run failed: {run_spec.symbol}/{run_spec.strategy_key} ({run_spec.params_hash[:8]}): {message}",
-                level="warning",
-            ),
-            # Raises JobCancelled (its return value is ignored, matching
-            # walk_forward/runner.py's CancelCheck contract) so run_in_thread
-            # emits job.cancelled instead of job.completed on a DELETE.
-            cancel_check=cancel.raise_if_cancelled,
+        try:
+            summary = run_recency(
+                config,
+                execute_backtest_fn=execute_backtest_fn,
+                persist_fn=persist,
+                strategy_code_version_fn=lambda strategy_key: resolved_code_revision(),
+                on_phase=emit.phase,
+                on_progress=lambda done, total: emit.progress(done, total, unit="runs"),
+                on_run_failed=lambda run_spec, message: emit.log(
+                    f"run failed: {run_spec.symbol}/{run_spec.strategy_key} ({run_spec.params_hash[:8]}): {message}",
+                    level="warning",
+                ),
+                # Raises JobCancelled (its return value is ignored, matching
+                # walk_forward/runner.py's CancelCheck contract) so run_in_thread
+                # emits job.cancelled instead of job.completed on a DELETE.
+                cancel_check=cancel.raise_if_cancelled,
+            )
+        except JobCancelled:
+            asyncio.run(update_recency_launch(config.launch_id, status="CANCELLED", base_url=backend_url))
+            raise
+        except Exception:
+            asyncio.run(update_recency_launch(config.launch_id, status="FAILED", base_url=backend_url))
+            raise
+
+        asyncio.run(
+            update_recency_launch(
+                summary.launch_id,
+                status="COMPLETED" if summary.failed_runs == 0 else "FAILED",
+                succeeded_runs=summary.succeeded_runs,
+                failed_runs=summary.failed_runs,
+                base_url=backend_url,
+            )
         )
         return {
             "launch_id": summary.launch_id,

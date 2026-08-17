@@ -305,7 +305,7 @@ public class AppDbContext : DbContext
                   .HasForeignKey(m => m.RecencyTradeId)
                   .OnDelete(DeleteBehavior.Cascade);
             entity.HasOne(m => m.RecencyRun)
-                  .WithMany()
+                  .WithMany(r => r.TradeMemberships)
                   .HasForeignKey(m => m.RecencyRunId)
                   .OnDelete(DeleteBehavior.Cascade);
             entity.HasIndex(m => new { m.RecencyTradeId, m.RecencyRunId }).IsUnique();

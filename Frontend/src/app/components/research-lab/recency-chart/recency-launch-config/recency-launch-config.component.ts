@@ -27,7 +27,6 @@ function defaultRangeFor(prop: ParamProperty): ParamRange {
  */
 @Component({
   selector: "app-recency-launch-config",
-  standalone: true,
   imports: [RecencyParamRangeInputComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: "./recency-launch-config.component.html",

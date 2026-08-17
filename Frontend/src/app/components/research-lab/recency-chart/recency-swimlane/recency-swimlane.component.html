@@ -14,7 +14,9 @@
         [attr.width]="900 - 62 - 18"
         [attr.height]="lane.height + 6"
       ></rect>
-      <text class="lane-label" x="52" [attr.y]="lane.y + 11" text-anchor="end">{{ lane.symbol }}</text>
+      <foreignObject x="0" [attr.y]="lane.y - 4" width="58" height="28">
+        <app-asset-identity [symbol]="lane.symbol" size="xs" />
+      </foreignObject>
     </g>
   }
 

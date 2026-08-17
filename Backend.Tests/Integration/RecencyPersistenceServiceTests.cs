@@ -218,8 +218,13 @@ public class RecencyPersistenceServiceTests
         firstRun.DeletedAtMs = 999;
         await db.SaveChangesAsync();
 
-        var query = new RecencyQuery();
-        var trades = await query.GetRecencyTrades(db, fromMs: 0, toMs: 1000, symbols: null, strategies: null, CancellationToken.None);
+        var trades = await RecencyQuery.GetRecencyTrades(
+            db,
+            fromMs: 0,
+            toMs: 1000,
+            symbols: null,
+            strategies: null,
+            CancellationToken.None);
 
         Assert.Single(trades);
         Assert.Equal("fp-shared", trades[0].Fingerprint);

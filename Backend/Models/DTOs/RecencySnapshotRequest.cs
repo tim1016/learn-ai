@@ -29,3 +29,8 @@ public record RecencyTradeSnapshotRequest(
     [property: JsonPropertyName("holding_sessions")] int HoldingSessions,
     [property: JsonPropertyName("is_synthetic_exit")] bool IsSyntheticExit = false,
     [property: JsonPropertyName("signal_reason")] string SignalReason = "");
+
+public record RecencyLaunchStatusRequest(
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("succeeded_runs")] int? SucceededRuns,
+    [property: JsonPropertyName("failed_runs")] int? FailedRuns);

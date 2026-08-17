@@ -33,7 +33,6 @@ function parseParams(paramsJson: string | undefined): ParsedParam[] | null {
  */
 @Component({
   selector: "app-recency-trade-focus",
-  standalone: true,
   imports: [AssetIdentityComponent, TimestampDisplayComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: "./recency-trade-focus.component.html",

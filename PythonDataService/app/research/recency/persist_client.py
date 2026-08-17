@@ -10,9 +10,9 @@ failure, so a persistence outage shows up as "N of M failed" rather than
 a run silently vanishing with nothing durable written (code-review P0
 finding on the original PRD).
 
-Called from a plain worker thread (``ThreadPoolExecutor``, not an asyncio
-task), so this uses a synchronous ``httpx.Client`` rather than the
-``httpx.AsyncClient`` the legacy helpers use.
+The transport is asynchronous because HTTP is I/O. The synchronous job
+worker bridges to it at its thread boundary; the HTTP implementation itself
+never blocks an application event loop.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ import httpx
 from app.research.recency.runner import RecencyRunSnapshot
 
 
-def persist_recency_snapshot(
+async def persist_recency_snapshot(
     snapshot: RecencyRunSnapshot,
     *,
     base_url: str,
@@ -39,10 +39,31 @@ def persist_recency_snapshot(
     ``int(None)`` would raise and get this run misclassified as failed.
     """
     url = f"{base_url.rstrip('/')}/api/recency/snapshots"
-    with httpx.Client(timeout=timeout_seconds) as client:
-        response = client.post(url, json=asdict(snapshot))
+    async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+        response = await client.post(url, json=asdict(snapshot))
         response.raise_for_status()
         body = response.json()
         if body.get("skipped"):
             return None
         return int(body["recency_run_id"])
+
+
+async def update_recency_launch(
+    launch_id: str,
+    *,
+    status: str,
+    succeeded_runs: int | None = None,
+    failed_runs: int | None = None,
+    base_url: str,
+    timeout_seconds: float = 30.0,
+) -> None:
+    """Persist a launch's terminal lifecycle state; raise on any failure."""
+    body: dict[str, str | int] = {"status": status}
+    if succeeded_runs is not None:
+        body["succeeded_runs"] = succeeded_runs
+    if failed_runs is not None:
+        body["failed_runs"] = failed_runs
+    url = f"{base_url.rstrip('/')}/api/recency/launches/{launch_id}/status"
+    async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+        response = await client.put(url, json=body)
+        response.raise_for_status()

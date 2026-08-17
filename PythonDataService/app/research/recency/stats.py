@@ -24,7 +24,8 @@ from __future__ import annotations
 
 import statistics
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from math import fsum
 from zoneinfo import ZoneInfo
 
 from app.lean_sidecar.trading_calendar import trading_session_count
@@ -43,19 +44,53 @@ class TradeForStats:
     quantity: int
 
 
-def ms_to_et_date(ms: int):
+@dataclass(frozen=True)
+class HeroTrade:
+    """One already-net trade value used for visible-window hero selection."""
+
+    entry_ms: int
+    pnl: float
+
+
+@dataclass(frozen=True)
+class HeroCandidate:
+    """One parameter combo and the canonical trades claimed by that run."""
+
+    recency_run_id: int
+    symbol: str
+    strategy_key: str
+    params_hash: str
+    trades: tuple[HeroTrade, ...]
+
+
+@dataclass(frozen=True)
+class HeroSelection:
+    """Python-authored winner for one symbol/strategy pair."""
+
+    recency_run_id: int
+    symbol: str
+    strategy_key: str
+    params_hash: str
+    total_pnl: float
+
+
+def _ms_to_et_date(ms: int) -> date:
     """Resolve an ``int64 ms UTC`` instant to its America/New_York calendar date.
 
-    Public so callers elsewhere in the ``recency`` package can derive a
-    trading date (per ``.claude/rules/temporal-rigor.md``) without each
-    re-deriving their own ET conversion.
+    Kept private so a language-native ``date`` never crosses the function's
+    module boundary; canonical temporal values remain ``int64 ms UTC``.
     """
     return datetime.fromtimestamp(ms / 1000, tz=UTC).astimezone(_ET).date()
 
 
 def holding_sessions(entry_ms: int, exit_ms: int) -> int:
     """Count scheduled NYSE sessions spanned by ``[entry_ms, exit_ms]``, inclusive."""
-    return trading_session_count(ms_to_et_date(entry_ms), ms_to_et_date(exit_ms))
+    return trading_session_count(_ms_to_et_date(entry_ms), _ms_to_et_date(exit_ms))
+
+
+def ms_to_et_date_string(ms: int) -> str:
+    """Format an internal engine date without exposing a native date object."""
+    return _ms_to_et_date(ms).isoformat()
 
 
 def trade_dollar_pnl(trade: TradeForStats, commission_per_order: float = 0.0) -> float:
@@ -78,11 +113,50 @@ def total_pnl(
     trades: list[TradeForStats], window_start_ms: int, window_end_ms: int, commission_per_order: float = 0.0
 ) -> float:
     """Sum of net dollar PnL for trades entering within the window (order-independent)."""
-    return sum(
+    return fsum(
         trade_dollar_pnl(trade, commission_per_order)
         for trade in trades
         if window_start_ms <= trade.entry_ms <= window_end_ms
     )
+
+
+def select_window_heroes(
+    candidates: list[HeroCandidate],
+    window_start_ms: int,
+    window_end_ms: int,
+) -> list[HeroSelection]:
+    """Select the highest net-PnL combo per symbol/strategy in a window.
+
+    Formula: total_pnl(c, W) = fsum(t.pnl for t in c if t.entry_ms in W);
+      hero(symbol, strategy, W) = argmax_c(total_pnl(c, W)).
+    Reference: docs/superpowers/specs/2026-08-16-recency-chart-design.md
+      D5 and section 7.1.
+    Canonical implementation: this file.
+    Validated against: tests/research/recency/test_stats.py::TestSelectWindowHeroes
+      and tests/routers/test_recency_hero_endpoint.py.
+    """
+    winners: dict[tuple[str, str], HeroSelection] = {}
+    for candidate in candidates:
+        visible_pnl = [
+            trade.pnl for trade in candidate.trades if window_start_ms <= trade.entry_ms <= window_end_ms
+        ]
+        if not visible_pnl:
+            continue
+        selection = HeroSelection(
+            recency_run_id=candidate.recency_run_id,
+            symbol=candidate.symbol,
+            strategy_key=candidate.strategy_key,
+            params_hash=candidate.params_hash,
+            total_pnl=fsum(visible_pnl),
+        )
+        key = (candidate.symbol, candidate.strategy_key)
+        current = winners.get(key)
+        if current is None or (selection.total_pnl, selection.recency_run_id) > (
+            current.total_pnl,
+            current.recency_run_id,
+        ):
+            winners[key] = selection
+    return [winners[key] for key in sorted(winners)]
 
 
 def sharpe(trades: list[TradeForStats], min_trades: int = 2) -> float | None:

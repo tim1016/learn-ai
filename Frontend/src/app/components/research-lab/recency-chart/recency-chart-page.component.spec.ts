@@ -42,6 +42,7 @@ function makeTrade(overrides: Partial<RecencyTradeQueryResultItem> = {}): Recenc
     recencyRunId: 1,
     isSyntheticExit: false,
     signalReason: "",
+    memberships: [{ recencyRunId: 1, studyId: null, createdAtMs: recentEntry }],
     ...overrides,
   };
 }
@@ -64,7 +65,9 @@ let messageServiceMock: { add: ReturnType<typeof vi.fn> };
 async function renderPage(
   trades: RecencyTradeQueryResultItem[] = [makeTrade()],
   heroes: RecencyHeroQueryResultItem[] | null = null,
-  mutateImpl: ReturnType<typeof vi.fn> = vi.fn(() => of({ data: { softDeleteRecencyRun: true } })),
+  mutateImpl: ReturnType<typeof vi.fn> = vi.fn(() =>
+    of({ data: { softDeleteRecencyRun: { recencyRunId: 1 } } }),
+  ),
 ): Promise<ComponentFixture<RecencyChartPageComponent>> {
   // heroes defaults to "one hero per distinct (symbol, strategyKey, paramsHash)
   // seen in trades" so tests that don't care about fold/unfold don't need to
@@ -123,6 +126,11 @@ describe("RecencyChartPageComponent", () => {
       (call) => call[0].query === RECENCY_TRADES_QUERY,
     ) as [{ variables: { fromMs: number; toMs: number } }];
     expect(tradesCall[0].variables.fromMs).toBeLessThan(tradesCall[0].variables.toMs);
+
+    const heroCall = watchQueryMock.mock.calls.find(
+      (call) => call[0].query === RECENCY_HERO_QUERY,
+    ) as [{ variables: { fromMs: number; toMs: number } }];
+    expect(heroCall[0].variables.fromMs).toBeLessThan(heroCall[0].variables.toMs);
   });
 
   it("fetches the full accumulation range, not just the ~6-month all-symbols display cap", async () => {
@@ -204,7 +212,7 @@ describe("RecencyChartPageComponent", () => {
     expect(screen.getByText("+30.00")).not.toBeNull();
   });
 
-  it("deleting the pinned trade removes it from the swimlane and clears the focus panel", async () => {
+  it("deleting a run refetches membership-aware data instead of optimistically hiding the trade", async () => {
     const fixture = await renderPage([
       makeTrade({ fingerprint: "a", symbol: "SPY", pnl: 30, recencyRunId: 7 }),
       makeTrade({ fingerprint: "b", symbol: "AAPL", pnl: 10, recencyRunId: 8 }),
@@ -222,7 +230,10 @@ describe("RecencyChartPageComponent", () => {
         variables: { runId: 7 },
       }),
     );
-    expect(screen.queryByTestId("lane-SPY")).toBeNull();
+    // The static test response still includes SPY, modeling a surviving
+    // membership on the same canonical trade. The client must not hide it
+    // merely because the deleted run was its previous representative.
+    expect(screen.getByTestId("lane-SPY")).not.toBeNull();
     expect(screen.getByTestId("lane-AAPL")).not.toBeNull();
     expect(screen.getByText(/click a bar/i)).not.toBeNull();
   });

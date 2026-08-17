@@ -34193,6 +34193,147 @@
         "title": "RecencyChartJobRequest",
         "type": "object"
       },
+      "RecencyHeroCandidateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "params_hash": {
+            "minLength": 1,
+            "title": "Params Hash",
+            "type": "string"
+          },
+          "recency_run_id": {
+            "exclusiveMinimum": 0.0,
+            "title": "Recency Run Id",
+            "type": "integer"
+          },
+          "strategy_key": {
+            "minLength": 1,
+            "title": "Strategy Key",
+            "type": "string"
+          },
+          "symbol": {
+            "maxLength": 20,
+            "minLength": 1,
+            "title": "Symbol",
+            "type": "string"
+          },
+          "trades": {
+            "items": {
+              "$ref": "#/components/schemas/RecencyHeroTradeRequest"
+            },
+            "minItems": 1,
+            "title": "Trades",
+            "type": "array"
+          }
+        },
+        "required": [
+          "recency_run_id",
+          "symbol",
+          "strategy_key",
+          "params_hash",
+          "trades"
+        ],
+        "title": "RecencyHeroCandidateRequest",
+        "type": "object"
+      },
+      "RecencyHeroRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/RecencyHeroCandidateRequest"
+            },
+            "title": "Candidates",
+            "type": "array"
+          },
+          "from_ms": {
+            "minimum": 0.0,
+            "title": "From Ms",
+            "type": "integer"
+          },
+          "to_ms": {
+            "minimum": 0.0,
+            "title": "To Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "from_ms",
+          "to_ms",
+          "candidates"
+        ],
+        "title": "RecencyHeroRequest",
+        "type": "object"
+      },
+      "RecencyHeroResponse": {
+        "properties": {
+          "heroes": {
+            "items": {
+              "$ref": "#/components/schemas/RecencyHeroResponseItem"
+            },
+            "title": "Heroes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "heroes"
+        ],
+        "title": "RecencyHeroResponse",
+        "type": "object"
+      },
+      "RecencyHeroResponseItem": {
+        "properties": {
+          "params_hash": {
+            "title": "Params Hash",
+            "type": "string"
+          },
+          "recency_run_id": {
+            "title": "Recency Run Id",
+            "type": "integer"
+          },
+          "strategy_key": {
+            "title": "Strategy Key",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "total_pnl": {
+            "title": "Total Pnl",
+            "type": "number"
+          }
+        },
+        "required": [
+          "recency_run_id",
+          "symbol",
+          "strategy_key",
+          "params_hash",
+          "total_pnl"
+        ],
+        "title": "RecencyHeroResponseItem",
+        "type": "object"
+      },
+      "RecencyHeroTradeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "entry_ms": {
+            "minimum": 0.0,
+            "title": "Entry Ms",
+            "type": "integer"
+          },
+          "pnl": {
+            "title": "Pnl",
+            "type": "number"
+          }
+        },
+        "required": [
+          "entry_ms",
+          "pnl"
+        ],
+        "title": "RecencyHeroTradeRequest",
+        "type": "object"
+      },
       "RecentDecisionView": {
         "description": "Bounded backend-authored decision receipt for the Trader lens.",
         "properties": {
@@ -57399,6 +57540,52 @@
         ]
       }
     },
+    "/api/jobs-internal/recency-chart/validate": {
+      "post": {
+        "description": "Preflight a launch before .NET creates its durable launch row.",
+        "operationId": "validate_recency_chart_job_api_jobs_internal_recency_chart_validate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecencyChartJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "integer"
+                  },
+                  "title": "Response Validate Recency Chart Job Api Jobs Internal Recency Chart Validate Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Validate Recency Chart Job",
+        "tags": [
+          "jobs-internal"
+        ]
+      }
+    },
     "/api/jobs-internal/signal-engine": {
       "post": {
         "description": "Kick off a signal-engine run in a worker thread.\n\nEight phases (load bars \u2192 graduation). Long phases (backtest grid,\nwalk-forward) emit fine-grained ``on_progress`` so the bar moves\nwhile the worker is mid-sweep.",
@@ -61071,6 +61258,48 @@
         "summary": "List Indicators",
         "tags": [
           "research"
+        ]
+      }
+    },
+    "/api/research/recency/hero": {
+      "post": {
+        "description": "Return Python-authored visible-window winners for each symbol/strategy.",
+        "operationId": "compute_recency_hero_api_research_recency_hero_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecencyHeroRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecencyHeroResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Compute Recency Hero",
+        "tags": [
+          "research-recency"
         ]
       }
     },

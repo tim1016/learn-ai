@@ -36,4 +36,6 @@ public class RecencyRun
     public long? DeletedAtMs { get; set; }
 
     public ICollection<RecencyTrade> Trades { get; set; } = new List<RecencyTrade>();
+
+    public ICollection<RecencyTradeMembership> TradeMemberships { get; set; } = new List<RecencyTradeMembership>();
 }

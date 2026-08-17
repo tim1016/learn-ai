@@ -17,7 +17,7 @@ import httpx
 import pytest
 import respx
 
-from app.research.recency.persist_client import persist_recency_snapshot
+from app.research.recency.persist_client import persist_recency_snapshot, update_recency_launch
 from app.research.recency.runner import RecencyRunSnapshot, RecencyTradeSnapshot
 
 
@@ -49,12 +49,13 @@ def _snapshot() -> RecencyRunSnapshot:
 
 
 @respx.mock
-def test_posts_the_snapshot_and_returns_the_assigned_run_id() -> None:
+@pytest.mark.asyncio
+async def test_posts_the_snapshot_and_returns_the_assigned_run_id() -> None:
     route = respx.post("http://backend.test/api/recency/snapshots").mock(
         return_value=httpx.Response(200, json={"recency_run_id": 42})
     )
 
-    result = persist_recency_snapshot(_snapshot(), base_url="http://backend.test")
+    result = await persist_recency_snapshot(_snapshot(), base_url="http://backend.test")
 
     assert result == 42
     assert route.called
@@ -65,7 +66,8 @@ def test_posts_the_snapshot_and_returns_the_assigned_run_id() -> None:
 
 
 @respx.mock
-def test_returns_none_when_the_backend_reports_a_skipped_tombstoned_launch() -> None:
+@pytest.mark.asyncio
+async def test_returns_none_when_the_backend_reports_a_skipped_tombstoned_launch() -> None:
     # A launch soft-deleted mid-flight makes the backend honor the
     # tombstone and skip the write, returning 200 with recency_run_id:
     # null and skipped: true — an intentional no-op, not a failure.
@@ -73,23 +75,44 @@ def test_returns_none_when_the_backend_reports_a_skipped_tombstoned_launch() -> 
         return_value=httpx.Response(200, json={"recency_run_id": None, "skipped": True})
     )
 
-    result = persist_recency_snapshot(_snapshot(), base_url="http://backend.test")
+    result = await persist_recency_snapshot(_snapshot(), base_url="http://backend.test")
 
     assert result is None
     assert route.called
 
 
 @respx.mock
-def test_raises_on_server_error_instead_of_swallowing() -> None:
+@pytest.mark.asyncio
+async def test_raises_on_server_error_instead_of_swallowing() -> None:
     respx.post("http://backend.test/api/recency/snapshots").mock(return_value=httpx.Response(500))
 
     with pytest.raises(httpx.HTTPStatusError):
-        persist_recency_snapshot(_snapshot(), base_url="http://backend.test")
+        await persist_recency_snapshot(_snapshot(), base_url="http://backend.test")
 
 
 @respx.mock
-def test_raises_on_network_failure_instead_of_swallowing() -> None:
+@pytest.mark.asyncio
+async def test_raises_on_network_failure_instead_of_swallowing() -> None:
     respx.post("http://backend.test/api/recency/snapshots").mock(side_effect=httpx.ConnectError("refused"))
 
     with pytest.raises(httpx.HTTPError):
-        persist_recency_snapshot(_snapshot(), base_url="http://backend.test")
+        await persist_recency_snapshot(_snapshot(), base_url="http://backend.test")
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_updates_the_durable_launch_terminal_state() -> None:
+    route = respx.put("http://backend.test/api/recency/launches/launch-1/status").mock(
+        return_value=httpx.Response(204)
+    )
+
+    await update_recency_launch(
+        "launch-1",
+        status="COMPLETED",
+        succeeded_runs=3,
+        failed_runs=1,
+        base_url="http://backend.test",
+    )
+
+    sent_body = json.loads(route.calls.last.request.content)
+    assert sent_body == {"status": "COMPLETED", "succeeded_runs": 3, "failed_runs": 1}

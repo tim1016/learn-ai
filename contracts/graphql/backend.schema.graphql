@@ -202,6 +202,7 @@ type BacktestRunValidationAnalyticsType {
   timingCells: [ValidationTimingCellType!]!
   seasonality: [ValidationSeasonalityMonthType!]!
   rollingTradeStability: [ValidationRollingTradePointType!]!
+  sharpePnlDivergence: ValidationSharpePnlDivergenceType
 }
 
 "A connection to a list of items."
@@ -692,10 +693,10 @@ type Mutation {
   deleteDataLabSession(id: UUID!): DataLabSessionResult! @cost(weight: "10")
   runSpecStrategyBacktest(specJson: String! startDate: String! endDate: String! initialCash: Decimal! = 100000 fillMode: String! = "signal_bar_close" commissionPerOrder: Decimal! = 0): SpecStrategyBacktestResultType! @cost(weight: "10")
   updateBacktestRunNotes(id: Int! notes: String!): BacktestRunNotesResult! @cost(weight: "10")
-  softDeleteRecencyRun(runId: Int!): Boolean! @cost(weight: "10")
-  restoreRecencyRun(runId: Int!): Boolean! @cost(weight: "10")
-  softDeleteRecencyLaunch(launchId: String!): Boolean! @cost(weight: "10")
-  restoreRecencyLaunch(launchId: String!): Boolean! @cost(weight: "10")
+  softDeleteRecencyRun(runId: Int!): IRecencyRunMutationResult! @cost(weight: "10")
+  restoreRecencyRun(runId: Int!): IRecencyRunMutationResult! @cost(weight: "10")
+  softDeleteRecencyLaunch(launchId: String!): IRecencyLaunchMutationResult! @cost(weight: "10")
+  restoreRecencyLaunch(launchId: String!): IRecencyLaunchMutationResult! @cost(weight: "10")
 }
 
 type OptionContract {
@@ -1067,7 +1068,7 @@ type Query {
   backtestRuns(engine: Engine symbol: String "Returns the first _n_ elements from the list." first: Int "Returns the elements in the list that come after the specified cursor." after: String "Returns the last _n_ elements from the list." last: Int "Returns the elements in the list that come before the specified cursor." before: String): BacktestRunsConnection @listSize(assumedSize: 100, slicingArguments: [ "first", "last" ], slicingArgumentDefaultValue: 25, sizedFields: [ "edges", "nodes" ], requireOneSlicingArgument: false) @cost(weight: "10")
   backtestRun(id: Int!): BacktestRunDetailType @cost(weight: "10")
   recencyTrades(fromMs: Long! toMs: Long! symbols: [String!] strategies: [String!]): [RecencyTradeType!]! @cost(weight: "10")
-  recencyHero(symbols: [String!] strategies: [String!]): [RecencyHeroType!]! @cost(weight: "10")
+  recencyHero(symbols: [String!] strategies: [String!] fromMs: Long! toMs: Long!): [RecencyHeroType!]! @cost(weight: "10")
 }
 
 type Quote {
@@ -1102,6 +1103,30 @@ type RecencyHeroType {
   recencyRunId: Int!
 }
 
+type RecencyLaunchMutationSuccess {
+  launchId: String!
+}
+
+type RecencyLaunchNotFoundError {
+  message: String!
+  code: String!
+}
+
+type RecencyRunMutationSuccess {
+  recencyRunId: Int!
+}
+
+type RecencyRunNotFoundError {
+  message: String!
+  code: String!
+}
+
+type RecencyTradeMembershipType {
+  recencyRunId: Int!
+  studyId: Int
+  createdAtMs: Long!
+}
+
 type RecencyTradeType {
   symbol: String!
   strategyKey: String!
@@ -1118,6 +1143,9 @@ type RecencyTradeType {
   sharpe: Decimal
   studyId: Int
   recencyRunId: Int!
+  isSyntheticExit: Boolean!
+  signalReason: String!
+  memberships: [RecencyTradeMembershipType!]!
 }
 
 type ReconciliationReport {
@@ -1872,6 +1900,31 @@ type ValidationSeasonalityMonthType {
   medianCompoundedReturn: Float
 }
 
+type ValidationSharpePnlDivergencePointType {
+  timestampMsUtc: Long!
+  cumulativePnl: Float!
+  rollingSharpe: Float
+  isDivergence: Boolean!
+  isTrendEligible: Boolean!
+}
+
+type ValidationSharpePnlDivergenceType {
+  error: String
+  returnWindowSessions: Int!
+  trendWindowSessions: Int!
+  annualizationSessions: Int!
+  minimumObservationCount: Int!
+  dailyObservationCount: Int!
+  eligibleObservationCount: Int!
+  divergenceObservationCount: Int!
+  divergenceRatio: Float
+  longestDivergenceStreak: Int!
+  latestRollingSharpe: Float
+  latestCumulativePnl: Float
+  currentlyDiverging: Boolean
+  points: [ValidationSharpePnlDivergencePointType!]!
+}
+
 type ValidationSuiteResult {
   accountId: String!
   startedAt: DateTime!
@@ -1939,6 +1992,10 @@ type WalkForwardWindowType {
   oosDates: [String!]!
   oosCumulativeReturns: [Float!]!
 }
+
+union IRecencyLaunchMutationResult = RecencyLaunchMutationSuccess | RecencyLaunchNotFoundError
+
+union IRecencyRunMutationResult = RecencyRunMutationSuccess | RecencyRunNotFoundError
 
 input AccountFilterInput {
   and: [AccountFilterInput!]
