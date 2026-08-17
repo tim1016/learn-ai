@@ -1,0 +1,40 @@
+<fieldset class="param-range">
+  <legend>{{ title() || paramName() }}</legend>
+
+  <div class="mode-toggle" role="group" [attr.aria-label]="'Range mode for ' + (title() || paramName())">
+    <button type="button" [class.active]="isListMode()" (click)="switchToListMode()">List</button>
+    <button type="button" [class.active]="isRangeMode()" (click)="switchToRangeMode()">Range</button>
+  </div>
+
+  @if (isListMode()) {
+    <label [attr.for]="paramName() + '-values'">Values (comma-separated)</label>
+    <input
+      type="text"
+      [id]="paramName() + '-values'"
+      [value]="valuesText()"
+      (input)="onValuesTextInput($any($event.target).value)"
+    />
+  } @else {
+    <label [attr.for]="paramName() + '-low'">Low</label>
+    <input
+      type="number"
+      [id]="paramName() + '-low'"
+      [value]="lowValue()"
+      (input)="onLowInput($any($event.target).value)"
+    />
+    <label [attr.for]="paramName() + '-high'">High</label>
+    <input
+      type="number"
+      [id]="paramName() + '-high'"
+      [value]="highValue()"
+      (input)="onHighInput($any($event.target).value)"
+    />
+    <label [attr.for]="paramName() + '-step'">Step</label>
+    <input
+      type="number"
+      [id]="paramName() + '-step'"
+      [value]="stepValue()"
+      (input)="onStepInput($any($event.target).value)"
+    />
+  }
+</fieldset>

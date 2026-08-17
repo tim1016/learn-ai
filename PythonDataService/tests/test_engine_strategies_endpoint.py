@@ -174,6 +174,18 @@ def test_params_schema_is_round_trippable_json():
         assert json.loads(dumped) == s["params_schema"]
 
 
+def test_recency_supported_flags_numeric_only_strategies_true():
+    """Recency Chart eligibility (design spec D1) — numeric-param strategies."""
+    strategies = {strategy["name"]: strategy for strategy in _list_strategies()}
+    for key in ("ema_crossover_signal", "sma_crossover", "rsi_mean_reversion"):
+        assert strategies[key]["recency_supported"] is True, key
+
+
+def test_recency_supported_flags_options_spread_strategy_false():
+    strategies = {strategy["name"]: strategy for strategy in _list_strategies()}
+    assert strategies["spy_ema_crossover_options"]["recency_supported"] is False
+
+
 def test_registry_exposes_strategy_bar_cadence_without_frontend_name_heuristics():
     strategies = {strategy["name"]: strategy for strategy in _list_strategies()}
 

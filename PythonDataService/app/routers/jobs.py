@@ -25,7 +25,7 @@ import asyncio
 import logging
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.encoders import jsonable_encoder
@@ -42,6 +42,16 @@ from app.research.batch_runner import (
     run_cross_sectional_study,
 )
 from app.research.config import ResearchConfig
+from app.research.recency.grid import (
+    LowHighStepRange,
+    RecencyGridTooLargeError,
+    StrategyGridConfig,
+    ValueListRange,
+    expand_grid,
+)
+from app.research.recency.persist_client import persist_recency_snapshot
+from app.research.recency.runner import RecencyLaunchConfig, run_recency
+from app.research.recency.stats import ms_to_et_date
 from app.research.runner import run_feature_research
 from app.research.signal.config import SignalConfig
 from app.research.signal.engine import run_signal_engine
@@ -57,6 +67,7 @@ from app.schemas.ticker_request import (
     MultiTickerRequest,
     TickerRequest,
 )
+from app.services.data_plane_health import resolved_code_revision
 from app.services.dataset_service import RunCancelledError
 from app.services.polygon_client import PolygonClientService
 from app.services.rule_based_backtest import (
@@ -193,6 +204,47 @@ class EngineBacktestJobRequest(_CamelCaseModel):
 
     job_id: str = Field(..., min_length=1)
     backtest: dict[str, Any] = Field(default_factory=dict)
+
+
+class ValueListRangeRequest(_CamelCaseModel):
+    type: Literal["value_list"] = "value_list"
+    values: list[float] = Field(min_length=1)
+
+
+class LowHighStepRangeRequest(_CamelCaseModel):
+    type: Literal["low_high_step"] = "low_high_step"
+    low: float
+    high: float
+    step: float
+
+
+ParamRangeRequest = Annotated[
+    ValueListRangeRequest | LowHighStepRangeRequest,
+    Field(discriminator="type"),
+]
+
+
+class StrategyGridConfigRequest(_CamelCaseModel):
+    strategy_key: str = Field(..., min_length=1)
+    param_ranges: dict[str, ParamRangeRequest] = Field(default_factory=dict)
+
+
+class RecencyChartJobRequest(_CamelCaseModel):
+    """Body of POST /api/jobs-internal/recency-chart.
+
+    Each parameter's range is either an explicit value list or an
+    inclusive low/high/step sweep (design spec D4) — the discriminated
+    ``type`` field lets one dict carry either shape per parameter.
+    """
+
+    job_id: str = Field(..., min_length=1)
+    strategies: list[StrategyGridConfigRequest] = Field(min_length=1)
+    symbols: list[str] = Field(min_length=1)
+    window_start_ms: int
+    window_end_ms: int
+    data_policy: str = "polygon-adjusted-regular-minute"
+    fill_mode: str = "signal_bar_close"
+    commission_per_order: float = 0.0
 
 
 class LeanEngineRunJobRequest(_CamelCaseModel):
@@ -478,6 +530,103 @@ async def start_engine_backtest_job(req: EngineBacktestJobRequest) -> dict:
         return response.model_dump(mode="json")
 
     run_in_thread(req.job_id, work, thread_name=f"engine-{req.job_id[:8]}")
+    return {"job_id": req.job_id, "status": "queued"}
+
+
+def _range_request_to_grid_range(req: ValueListRangeRequest | LowHighStepRangeRequest) -> ValueListRange | LowHighStepRange:
+    if isinstance(req, ValueListRangeRequest):
+        return ValueListRange(tuple(req.values))
+    return LowHighStepRange(low=req.low, high=req.high, step=req.step)
+
+
+def _ms_to_date_str(ms: int) -> str:
+    """Trading-date string for EngineBacktestRequest.from_date/to_date.
+
+    Delegates to the canonical ET-anchored converter (temporal-rigor.md) —
+    a bare UTC ``strftime`` would drift a calendar day off ET evenings.
+    """
+    return ms_to_et_date(ms).isoformat()
+
+
+@router.post("/recency-chart", status_code=status.HTTP_202_ACCEPTED)
+async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
+    """Kick off a Recency Chart launch in a worker thread. Returns 202.
+
+    The grid is validated (and rejected past the sanity ceiling — D11)
+    eagerly, before the 202 is returned, so a malformed sweep never even
+    reaches the worker thread. Once running, ``run_recency`` does the
+    actual expansion, bounded-concurrency execution, and per-run
+    persistence; per-run failures surface as ``log`` events so "N of M
+    failed" is visible on the job's SSE stream, not just the final
+    summary the completed event carries.
+    """
+    strategies = [
+        StrategyGridConfig(
+            strategy_key=s.strategy_key,
+            param_ranges={name: _range_request_to_grid_range(r) for name, r in s.param_ranges.items()},
+        )
+        for s in req.strategies
+    ]
+    try:
+        expand_grid(strategies, req.symbols)
+    except RecencyGridTooLargeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid parameter range: {exc}")
+
+    config = RecencyLaunchConfig(
+        launch_id=req.job_id,
+        strategies=strategies,
+        symbols=req.symbols,
+        window_start_ms=req.window_start_ms,
+        window_end_ms=req.window_end_ms,
+        data_policy=req.data_policy,
+        fill_mode=req.fill_mode,
+        commission_per_order=req.commission_per_order,
+    )
+
+    from app.config import settings
+
+    backend_url = getattr(settings, "BACKEND_URL", "http://localhost:5000")
+
+    def work(emit: ProgressEmitter, cancel) -> dict:
+        def execute_backtest_fn(run_spec, cfg: RecencyLaunchConfig) -> Any:
+            params = dict(run_spec.params)
+            params["symbol"] = run_spec.symbol
+            backtest_req = EngineBacktestRequest(
+                strategy_name=run_spec.strategy_key,
+                params=params,
+                from_date=_ms_to_date_str(cfg.window_start_ms),
+                to_date=_ms_to_date_str(cfg.window_end_ms),
+                fill_mode=cfg.fill_mode,
+                commission_per_order=cfg.commission_per_order,
+            )
+            return execute_engine_backtest(request=backtest_req, on_phase=lambda phase: None, on_log=lambda message: None)
+
+        def persist(snapshot) -> None:
+            persist_recency_snapshot(snapshot, base_url=backend_url)
+
+        summary = run_recency(
+            config,
+            execute_backtest_fn=execute_backtest_fn,
+            persist_fn=persist,
+            strategy_code_version_fn=lambda strategy_key: resolved_code_revision(),
+            on_phase=emit.phase,
+            on_progress=lambda done, total: emit.progress(done, total, unit="runs"),
+            on_run_failed=lambda run_spec, message: emit.log(
+                f"run failed: {run_spec.symbol}/{run_spec.strategy_key} ({run_spec.params_hash[:8]}): {message}",
+                level="warning",
+            ),
+            cancel_check=cancel.should_cancel,
+        )
+        return {
+            "launch_id": summary.launch_id,
+            "expected_runs": summary.expected_runs,
+            "succeeded_runs": summary.succeeded_runs,
+            "failed_runs": summary.failed_runs,
+        }
+
+    run_in_thread(req.job_id, work, thread_name=f"recency-{req.job_id[:8]}")
     return {"job_id": req.job_id, "status": "queued"}
 
 

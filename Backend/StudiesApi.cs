@@ -340,11 +340,31 @@ public static class StudiesApi
         if (execution == null)
             return Results.NotFound(new { error = $"Study {id} not found" });
 
+        // Hard-delete guard (design spec D22, P0-4): a study backing a live
+        // Recency Chart run must go through recency soft-delete, not this
+        // endpoint — deleting it here would break "forever until you
+        // soft-delete it" (D17) out from under the chart.
+        if (await IsRecencyMemberAsync(db, id, ct))
+        {
+            return Results.Conflict(new
+            {
+                error = $"Study {id} is a live Recency Chart run member; use softDeleteRecencyRun instead of deleting the study directly.",
+            });
+        }
+
         db.StrategyExecutions.Remove(execution);
         await db.SaveChangesAsync(ct);
 
         return Results.NoContent();
     }
+
+    /// <summary>
+    /// True iff <paramref name="studyId"/> backs a non-tombstoned
+    /// RecencyRun. Internal (not private) so the guard is independently
+    /// testable — see StudiesApiRecencyGuardTests.
+    /// </summary>
+    internal static Task<bool> IsRecencyMemberAsync(AppDbContext db, int studyId, CancellationToken ct) =>
+        db.RecencyRuns.AnyAsync(r => r.StudyId == studyId && r.DeletedAtMs == null, ct);
 
     // PR B (2026-05-19) — one-cycle backwards-compat for pre-PR-B callers
     // that POST without ``DataPolicyJson``. Records the engines' actual

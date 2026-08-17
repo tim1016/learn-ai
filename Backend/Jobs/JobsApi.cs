@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Backend.Services.Interfaces;
 using Microsoft.AspNetCore.Http.HttpResults;
 using StackExchange.Redis;
 
@@ -43,6 +44,7 @@ public static class JobsApi
         ["feature_research"] = "/api/jobs-internal/feature-research",
         ["signal_engine"] = "/api/jobs-internal/signal-engine",
         ["spy_ema_walk_forward"] = "/api/jobs-internal/spy-ema-walk-forward",
+        ["recency_chart"] = "/api/jobs-internal/recency-chart",
     };
 
     public static void MapJobsEndpoints(this WebApplication app)
@@ -72,6 +74,7 @@ public static class JobsApi
         IHttpClientFactory httpFactory,
         IConfiguration config,
         ILoggerFactory loggerFactory,
+        IRecencyLaunchService recencyLaunches,
         CancellationToken ct)
     {
         var logger = loggerFactory.CreateLogger("JobsApi");
@@ -112,6 +115,15 @@ public static class JobsApi
         var activeTask = batch.SetAddAsync(ActiveSetKey, jobId);
         batch.Execute();
         await Task.WhenAll(stateTask, ttlTask, activeTask);
+
+        // Recency Chart launches persist a durable RecencyLaunch row BEFORE
+        // dispatch (design spec D20) — the row (and its config) must survive
+        // a zero-success run, a cancellation, or Redis's 24h job-state TTL,
+        // none of which the Redis-only state above guarantees on its own.
+        if (type == "recency_chart")
+        {
+            await recencyLaunches.CreateLaunchAsync(jobId, paramsJson, ct);
+        }
 
         // Forward to Python with the original payload + job_id injected.
         // The internal /api/jobs-internal/* routes accept whatever per-type

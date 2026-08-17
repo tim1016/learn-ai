@@ -24,6 +24,11 @@ public class AppDbContext : DbContext
     public DbSet<BacktestTrade> BacktestTrades => Set<BacktestTrade>();
     public DbSet<ParityVerdict> ParityVerdicts => Set<ParityVerdict>();
 
+    // Recency Chart models
+    public DbSet<RecencyLaunch> RecencyLaunches => Set<RecencyLaunch>();
+    public DbSet<RecencyRun> RecencyRuns => Set<RecencyRun>();
+    public DbSet<RecencyTrade> RecencyTrades => Set<RecencyTrade>();
+
     // Data lake catalog (Slice 1a)
     public DbSet<DataLakeArtifact> DataLakeArtifacts => Set<DataLakeArtifact>();
     public DbSet<DataLakeRun> DataLakeRuns => Set<DataLakeRun>();
@@ -237,6 +242,56 @@ public class AppDbContext : DbContext
                   .HasForeignKey(t => t.StrategyExecutionId)
                   .OnDelete(DeleteBehavior.Cascade);
             entity.HasIndex(t => t.StrategyExecutionId);
+        });
+
+        // RecencyLaunch configuration
+        modelBuilder.Entity<RecencyLaunch>(entity =>
+        {
+            entity.HasKey(l => l.Id);
+            entity.Property(l => l.Id).HasMaxLength(64);
+            entity.Property(l => l.ConfigJson).IsRequired().HasColumnType("jsonb");
+            entity.Property(l => l.Status).IsRequired().HasMaxLength(16).HasColumnType("varchar(16)");
+            entity.HasIndex(l => l.Status);
+            entity.HasIndex(l => l.DeletedAtMs);
+        });
+
+        // RecencyRun configuration
+        modelBuilder.Entity<RecencyRun>(entity =>
+        {
+            entity.HasKey(r => r.Id);
+            entity.Property(r => r.StrategyKey).IsRequired().HasMaxLength(64);
+            entity.Property(r => r.Symbol).IsRequired().HasMaxLength(20);
+            entity.Property(r => r.ParamsJson).IsRequired().HasColumnType("jsonb");
+            entity.Property(r => r.ParamsHash).IsRequired().HasMaxLength(64).HasColumnType("varchar(64)");
+            entity.Property(r => r.TotalPnl).HasPrecision(18, 8);
+            entity.Property(r => r.Sharpe).HasPrecision(18, 8);
+            entity.HasOne(r => r.RecencyLaunch)
+                  .WithMany(l => l.Runs)
+                  .HasForeignKey(r => r.RecencyLaunchId)
+                  .OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(r => new { r.Symbol, r.StrategyKey });
+            entity.HasIndex(r => r.RecencyLaunchId);
+            entity.HasIndex(r => r.DeletedAtMs);
+        });
+
+        // RecencyTrade configuration
+        modelBuilder.Entity<RecencyTrade>(entity =>
+        {
+            entity.HasKey(t => t.Id);
+            entity.Property(t => t.Fingerprint).IsRequired().HasMaxLength(64).HasColumnType("varchar(64)");
+            entity.Property(t => t.PnlPts).HasPrecision(18, 8);
+            entity.Property(t => t.PnlPct).HasPrecision(18, 8);
+            entity.Property(t => t.Quantity).HasPrecision(18, 8);
+            entity.Property(t => t.Pnl).HasPrecision(18, 8);
+            entity.HasOne(t => t.RecencyRun)
+                  .WithMany(r => r.Trades)
+                  .HasForeignKey(t => t.RecencyRunId)
+                  .OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(t => t.RecencyRunId);
+            // Structural guarantee behind D16's idempotency: two rows can
+            // never represent the same canonical evidence.
+            entity.HasIndex(t => t.Fingerprint).IsUnique();
+            entity.HasIndex(t => t.EntryMs);
         });
 
         // ResearchExperiment configuration

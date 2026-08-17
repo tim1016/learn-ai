@@ -13,7 +13,7 @@ from dataclasses import dataclass, replace
 from dataclasses import field as dc_field
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.engine.pine_generators import (
     generate_strategy_a_pine,
@@ -71,6 +71,44 @@ class EmaCrossoverParams(StrategyParamsBase):
         max_length=20,
         description="Signal-stream ticker. The live Action Plan selects the traded stock separately.",
     )
+
+
+class EmaCrossoverSignalParams(EmaCrossoverParams):
+    """EMA-crossover *signal* strategy gates, exposed as parameters.
+
+    Defaults preserve the validated LEAN-parity point exactly (absolute gap
+    0.20, RSI band 50–70); the Recency Chart sweeps them.
+    """
+
+    gap: float = Field(
+        0.20,
+        ge=0.0,
+        allow_inf_nan=False,
+        title="Crossover gap",
+        description="Minimum EMA(5) − EMA(10) gap, in absolute price, required for entry.",
+    )
+    rsi_min: float = Field(
+        50.0,
+        ge=0.0,
+        le=100.0,
+        allow_inf_nan=False,
+        title="RSI lower gate",
+        description="Inclusive lower RSI(14) value allowed for entry.",
+    )
+    rsi_max: float = Field(
+        70.0,
+        ge=0.0,
+        le=100.0,
+        allow_inf_nan=False,
+        title="RSI upper gate",
+        description="Inclusive upper RSI(14) value allowed for entry.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_rsi_band(self) -> EmaCrossoverSignalParams:
+        if self.rsi_min >= self.rsi_max:
+            raise ValueError("rsi_min must be less than rsi_max")
+        return self
 
 
 class SmaCrossoverParams(StrategyParamsBase):
@@ -497,7 +535,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "TV labels trades by bar START, Engine Lab by bar END — a fixed "
             "15-minute label offset that is cosmetic, not a fill-time bug.",
         ],
-        param_schema=EmaCrossoverParams,
+        param_schema=EmaCrossoverSignalParams,
         chart_indicators=(
             StrategyChartIndicator("ema", {"length": 5}),
             StrategyChartIndicator("ema", {"length": 10}),
@@ -506,6 +544,9 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         strategy_bars=StrategyBarCadence("minute", 15),
         build=lambda p: EmaCrossoverSignalAlgorithm(
             symbol=p.symbol,  # type: ignore[attr-defined]
+            gap=p.gap,  # type: ignore[attr-defined]
+            rsi_min=p.rsi_min,  # type: ignore[attr-defined]
+            rsi_max=p.rsi_max,  # type: ignore[attr-defined]
         ),
         instrument_surface="policy",
         action_plan_contract="single_long_stock",

@@ -1,0 +1,56 @@
+<svg
+  class="swimlane"
+  [attr.viewBox]="'0 0 900 ' + viewBoxHeight()"
+  preserveAspectRatio="xMidYMid meet"
+  role="img"
+  aria-label="Recency Chart trade swimlanes, one lane per symbol"
+>
+  @for (lane of lanes(); track lane.symbol) {
+    <g class="lane" [attr.data-testid]="'lane-' + lane.symbol">
+      <rect
+        class="lane-background"
+        x="62"
+        [attr.y]="lane.y - 4"
+        [attr.width]="900 - 62 - 18"
+        [attr.height]="lane.height + 6"
+      ></rect>
+      <text class="lane-label" x="52" [attr.y]="lane.y + 11" text-anchor="end">{{ lane.symbol }}</text>
+    </g>
+  }
+
+  @for (bar of bars(); track bar.trade.fingerprint) {
+    <g
+      class="bar"
+      role="button"
+      tabindex="0"
+      [attr.aria-label]="bar.ariaLabel"
+      [style.opacity]="bar.opacity"
+      (click)="select(bar.trade)"
+      (keydown)="onKeydown($event, bar.trade)"
+    >
+      <title>{{ bar.ariaLabel }}</title>
+      <rect
+        class="bar-body"
+        [attr.x]="bar.x"
+        [attr.y]="bar.y"
+        [attr.width]="bar.width"
+        [attr.height]="bar.height"
+        [attr.fill]="bar.fillColor"
+        rx="4"
+      ></rect>
+      <rect
+        class="bar-cap"
+        [attr.x]="bar.x"
+        [attr.y]="bar.y"
+        [attr.width]="bar.capWidth"
+        [attr.height]="bar.height"
+        rx="1.5"
+      ></rect>
+      @if (bar.showLabel) {
+        <text class="bar-label" [attr.x]="bar.x + 6" [attr.y]="bar.y + bar.height / 2 + 3.5">
+          {{ bar.durationLabel }}
+        </text>
+      }
+    </g>
+  }
+</svg>

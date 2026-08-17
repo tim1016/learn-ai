@@ -407,13 +407,13 @@ namespace Backend.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("LeftExecutionId", "RightExecutionId")
-                        .IsUnique();
-
                     b.HasIndex("ParityGroupId")
                         .IsUnique();
 
                     b.HasIndex("RightExecutionId");
+
+                    b.HasIndex("LeftExecutionId", "RightExecutionId")
+                        .IsUnique();
 
                     b.ToTable("ParityVerdicts");
                 });
@@ -465,6 +465,160 @@ namespace Backend.Migrations
                     b.HasIndex("TickerId", "Timestamp");
 
                     b.ToTable("Quotes");
+                });
+
+            modelBuilder.Entity("Backend.Models.MarketData.RecencyLaunch", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<long?>("CompletedAtMs")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("ConfigJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
+                    b.Property<long>("CreatedAtMs")
+                        .HasColumnType("bigint");
+
+                    b.Property<long?>("DeletedAtMs")
+                        .HasColumnType("bigint");
+
+                    b.Property<int>("ExpectedRuns")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("FailedRuns")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)");
+
+                    b.Property<int>("SucceededRuns")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DeletedAtMs");
+
+                    b.HasIndex("Status");
+
+                    b.ToTable("RecencyLaunches");
+                });
+
+            modelBuilder.Entity("Backend.Models.MarketData.RecencyRun", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<long>("CreatedAtMs")
+                        .HasColumnType("bigint");
+
+                    b.Property<long?>("DeletedAtMs")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("ParamsHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<string>("ParamsJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("RecencyLaunchId")
+                        .IsRequired()
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<decimal?>("Sharpe")
+                        .HasPrecision(18, 8)
+                        .HasColumnType("numeric(18,8)");
+
+                    b.Property<string>("StrategyKey")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<int?>("StudyId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Symbol")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<decimal>("TotalPnl")
+                        .HasPrecision(18, 8)
+                        .HasColumnType("numeric(18,8)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DeletedAtMs");
+
+                    b.HasIndex("RecencyLaunchId");
+
+                    b.HasIndex("Symbol", "StrategyKey");
+
+                    b.ToTable("RecencyRuns");
+                });
+
+            modelBuilder.Entity("Backend.Models.MarketData.RecencyTrade", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<long>("EntryMs")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("ExitMs")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Fingerprint")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<int>("HoldingSessions")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("Pnl")
+                        .HasPrecision(18, 8)
+                        .HasColumnType("numeric(18,8)");
+
+                    b.Property<decimal>("PnlPct")
+                        .HasPrecision(18, 8)
+                        .HasColumnType("numeric(18,8)");
+
+                    b.Property<decimal>("PnlPts")
+                        .HasPrecision(18, 8)
+                        .HasColumnType("numeric(18,8)");
+
+                    b.Property<decimal>("Quantity")
+                        .HasPrecision(18, 8)
+                        .HasColumnType("numeric(18,8)");
+
+                    b.Property<int>("RecencyRunId")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EntryMs");
+
+                    b.HasIndex("Fingerprint")
+                        .IsUnique();
+
+                    b.HasIndex("RecencyRunId");
+
+                    b.ToTable("RecencyTrades");
                 });
 
             modelBuilder.Entity("Backend.Models.MarketData.ReferenceData", b =>
@@ -766,13 +920,13 @@ namespace Backend.Migrations
                     b.Property<long>("DurationMs")
                         .HasColumnType("bigint");
 
-                    b.Property<string>("EquityCurveJson")
-                        .HasColumnType("jsonb");
-
                     b.Property<string>("EndDate")
                         .IsRequired()
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)");
+
+                    b.Property<string>("EquityCurveJson")
+                        .HasColumnType("jsonb");
 
                     b.Property<DateTime>("ExecutedAt")
                         .HasColumnType("timestamp with time zone");
@@ -782,16 +936,9 @@ namespace Backend.Migrations
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)");
 
-                    b.Property<string>("RequestedEngine")
-                        .HasMaxLength(12)
-                        .HasColumnType("varchar(12)");
-
                     b.Property<decimal>("FinalEquity")
                         .HasPrecision(18, 2)
                         .HasColumnType("numeric(18,2)");
-
-                    b.Property<string>("InsightSummaryJson")
-                        .HasColumnType("jsonb");
 
                     b.Property<decimal>("InformationRatio")
                         .HasPrecision(18, 8)
@@ -801,12 +948,15 @@ namespace Backend.Migrations
                         .HasPrecision(18, 2)
                         .HasColumnType("numeric(18,2)");
 
-                    b.Property<string>("LeanRunId")
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)");
+                    b.Property<string>("InsightSummaryJson")
+                        .HasColumnType("jsonb");
 
                     b.Property<string>("LeanAnalysisJson")
                         .HasColumnType("jsonb");
+
+                    b.Property<string>("LeanRunId")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
 
                     b.Property<string>("LeanStatisticsJson")
                         .HasColumnType("jsonb");
@@ -842,6 +992,10 @@ namespace Backend.Migrations
                     b.Property<decimal?>("ProfitFactor")
                         .HasPrecision(18, 8)
                         .HasColumnType("numeric(18,8)");
+
+                    b.Property<string>("RequestedEngine")
+                        .HasMaxLength(12)
+                        .HasColumnType("varchar(12)");
 
                     b.Property<string>("RunVerdictJson")
                         .HasColumnType("jsonb");
@@ -929,9 +1083,9 @@ namespace Backend.Migrations
 
                     b.HasIndex("ExecutedAt");
 
-                    b.HasIndex("Source");
-
                     b.HasIndex("ParityGroupId");
+
+                    b.HasIndex("Source");
 
                     b.HasIndex("Source", "LeanRunId")
                         .IsUnique()
@@ -1631,6 +1785,28 @@ namespace Backend.Migrations
                     b.Navigation("Ticker");
                 });
 
+            modelBuilder.Entity("Backend.Models.MarketData.RecencyRun", b =>
+                {
+                    b.HasOne("Backend.Models.MarketData.RecencyLaunch", "RecencyLaunch")
+                        .WithMany("Runs")
+                        .HasForeignKey("RecencyLaunchId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("RecencyLaunch");
+                });
+
+            modelBuilder.Entity("Backend.Models.MarketData.RecencyTrade", b =>
+                {
+                    b.HasOne("Backend.Models.MarketData.RecencyRun", "RecencyRun")
+                        .WithMany("Trades")
+                        .HasForeignKey("RecencyRunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("RecencyRun");
+                });
+
             modelBuilder.Entity("Backend.Models.MarketData.ReferenceData", b =>
                 {
                     b.HasOne("Backend.Models.MarketData.Ticker", "Ticker")
@@ -1901,6 +2077,16 @@ namespace Backend.Migrations
                     b.Navigation("StrategyExecution");
 
                     b.Navigation("Trade");
+                });
+
+            modelBuilder.Entity("Backend.Models.MarketData.RecencyLaunch", b =>
+                {
+                    b.Navigation("Runs");
+                });
+
+            modelBuilder.Entity("Backend.Models.MarketData.RecencyRun", b =>
+                {
+                    b.Navigation("Trades");
                 });
 
             modelBuilder.Entity("Backend.Models.MarketData.StrategyExecution", b =>

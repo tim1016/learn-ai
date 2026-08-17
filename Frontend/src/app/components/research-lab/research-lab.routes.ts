@@ -117,6 +117,14 @@ export const researchLabRoutes: Routes = [
           ).then((m) => m.SpyEmaWalkForwardPageComponent),
         data: { title: 'SPY EMA Walk-Forward' },
       },
+      {
+        path: 'backtests/recency-chart',
+        loadComponent: () =>
+          import(
+            './recency-chart/recency-chart-page.component'
+          ).then((m) => m.RecencyChartPageComponent),
+        data: { title: 'Recency Chart' },
+      },
 
       // Nav-invisible routes (no longer surfaced in sub-nav but still reachable)
       {

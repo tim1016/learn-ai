@@ -26331,6 +26331,34 @@
         "title": "LogicNodeOrConditions",
         "type": "object"
       },
+      "LowHighStepRangeRequest": {
+        "properties": {
+          "high": {
+            "title": "High",
+            "type": "number"
+          },
+          "low": {
+            "title": "Low",
+            "type": "number"
+          },
+          "step": {
+            "title": "Step",
+            "type": "number"
+          },
+          "type": {
+            "const": "low_high_step",
+            "default": "low_high_step",
+            "title": "Type"
+          }
+        },
+        "required": [
+          "low",
+          "high",
+          "step"
+        ],
+        "title": "LowHighStepRangeRequest",
+        "type": "object"
+      },
       "ManualOrderBrokerOrderResponse": {
         "properties": {
           "broker_order_id": {
@@ -33532,6 +33560,64 @@
         "title": "ReasonCode",
         "type": "string"
       },
+      "RecencyChartJobRequest": {
+        "description": "Body of POST /api/jobs-internal/recency-chart.\n\nEach parameter's range is either an explicit value list or an\ninclusive low/high/step sweep (design spec D4) \u2014 the discriminated\n``type`` field lets one dict carry either shape per parameter.",
+        "properties": {
+          "commissionPerOrder": {
+            "default": 0.0,
+            "title": "Commissionperorder",
+            "type": "number"
+          },
+          "dataPolicy": {
+            "default": "polygon-adjusted-regular-minute",
+            "title": "Datapolicy",
+            "type": "string"
+          },
+          "fillMode": {
+            "default": "signal_bar_close",
+            "title": "Fillmode",
+            "type": "string"
+          },
+          "jobId": {
+            "minLength": 1,
+            "title": "Jobid",
+            "type": "string"
+          },
+          "strategies": {
+            "items": {
+              "$ref": "#/components/schemas/StrategyGridConfigRequest"
+            },
+            "minItems": 1,
+            "title": "Strategies",
+            "type": "array"
+          },
+          "symbols": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Symbols",
+            "type": "array"
+          },
+          "windowEndMs": {
+            "title": "Windowendms",
+            "type": "integer"
+          },
+          "windowStartMs": {
+            "title": "Windowstartms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "jobId",
+          "strategies",
+          "symbols",
+          "windowStartMs",
+          "windowEndMs"
+        ],
+        "title": "RecencyChartJobRequest",
+        "type": "object"
+      },
       "RecentDecisionView": {
         "description": "Bounded backend-authored decision receipt for the Trader lens.",
         "properties": {
@@ -39421,6 +39507,41 @@
         "title": "StrategyEvidenceSnapshot",
         "type": "object"
       },
+      "StrategyGridConfigRequest": {
+        "properties": {
+          "paramRanges": {
+            "additionalProperties": {
+              "discriminator": {
+                "mapping": {
+                  "low_high_step": "#/components/schemas/LowHighStepRangeRequest",
+                  "value_list": "#/components/schemas/ValueListRangeRequest"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/ValueListRangeRequest"
+                },
+                {
+                  "$ref": "#/components/schemas/LowHighStepRangeRequest"
+                }
+              ]
+            },
+            "title": "Paramranges",
+            "type": "object"
+          },
+          "strategyKey": {
+            "minLength": 1,
+            "title": "Strategykey",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategyKey"
+        ],
+        "title": "StrategyGridConfigRequest",
+        "type": "object"
+      },
       "StrategyInfo": {
         "properties": {
           "algorithm_pseudocode": {
@@ -39465,6 +39586,11 @@
           "pine_available": {
             "default": false,
             "title": "Pine Available",
+            "type": "boolean"
+          },
+          "recency_supported": {
+            "default": false,
+            "title": "Recency Supported",
             "type": "boolean"
           },
           "sizing_surface": {
@@ -43113,6 +43239,28 @@
           "status"
         ],
         "title": "ValidationSummary",
+        "type": "object"
+      },
+      "ValueListRangeRequest": {
+        "properties": {
+          "type": {
+            "const": "value_list",
+            "default": "value_list",
+            "title": "Type"
+          },
+          "values": {
+            "items": {
+              "type": "number"
+            },
+            "minItems": 1,
+            "title": "Values",
+            "type": "array"
+          }
+        },
+        "required": [
+          "values"
+        ],
+        "title": "ValueListRangeRequest",
         "type": "object"
       },
       "Verdict": {
@@ -56517,6 +56665,49 @@
           }
         },
         "summary": "Start Lean Engine Run Job",
+        "tags": [
+          "jobs-internal"
+        ]
+      }
+    },
+    "/api/jobs-internal/recency-chart": {
+      "post": {
+        "description": "Kick off a Recency Chart launch in a worker thread. Returns 202.\n\nThe grid is validated (and rejected past the sanity ceiling \u2014 D11)\neagerly, before the 202 is returned, so a malformed sweep never even\nreaches the worker thread. Once running, ``run_recency`` does the\nactual expansion, bounded-concurrency execution, and per-run\npersistence; per-run failures surface as ``log`` events so \"N of M\nfailed\" is visible on the job's SSE stream, not just the final\nsummary the completed event carries.",
+        "operationId": "start_recency_chart_job_api_jobs_internal_recency_chart_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecencyChartJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Start Recency Chart Job Api Jobs Internal Recency Chart Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Recency Chart Job",
         "tags": [
           "jobs-internal"
         ]

@@ -164,6 +164,8 @@ builder.Services.ConfigureHttpJsonOptions(opts =>
 // Register business services (testable via interfaces)
 builder.Services.AddScoped<IMarketDataService, MarketDataService>();
 builder.Services.AddScoped<IBacktestRunPersistenceService, BacktestRunPersistenceService>();
+builder.Services.AddScoped<IRecencyLaunchService, RecencyLaunchService>();
+builder.Services.AddScoped<IRecencyPersistenceService, RecencyPersistenceService>();
 builder.Services.AddScoped<IParityVerdictService, ParityVerdictService>();
 builder.Services.AddScoped<IPositionEngine, PositionEngine>();
 builder.Services.AddScoped<IPortfolioService, PortfolioService>();
@@ -188,11 +190,13 @@ builder.Services
     .AddTypeExtension<BacktestRunsQuery>()
     .AddTypeExtension<BacktestRunDetailQuery>()
     .AddTypeExtension<BacktestRunResolver>()
+    .AddTypeExtension<RecencyQuery>()
     .AddMutationType<Mutation>()
     .AddTypeExtension<PortfolioMutation>()
     .AddTypeExtension<DataLabMutation>()
     .AddTypeExtension<SpecStrategyMutation>()
     .AddTypeExtension<BacktestRunMutation>()
+    .AddTypeExtension<RecencyMutation>()
     .AddProjections()
     .AddFiltering()
     .AddSorting()
@@ -218,6 +222,7 @@ if (!isGraphQLSchemaCommand)
 app.UseCors();
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
 app.MapStudiesEndpoints();
+app.MapRecencyEndpoints();
 app.MapBacktestRunsEndpoints();
 app.MapParityVerdictsEndpoints();
 app.MapJobsEndpoints();
