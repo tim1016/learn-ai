@@ -18,6 +18,13 @@
 
 The frozen job type `POST /api/jobs/spy_ema_walk_forward` implements protocol `spy-ema-normalized-gap` version `1.0`, captured in `docs/references/spy-ema-normalized-gap-walk-forward.md`. The public .NET jobs boundary mints the job identity, exposes progress/result/cancellation, and dispatches to Python's internal `/api/jobs-internal/spy-ema-walk-forward` worker. The worker runs an absolute `$0.20` full-window control, then evaluates the relative EMA-gap candidate grid through rolling 180-day train / 30-day test windows stepped every 30 days. The immutable 2024-08-01 through 2026-08-01 window produces 18 OOS folds.
 
+The linked `spy-ema-exhaustive-run` V1.0 protocol can subsequently retain up
+to five TRAIN candidates per fold, deduplicate their exact specs, and compare
+each unique gap through both an explicitly selection-biased full two-year run
+and a fixed-gap replay of all 18 OOS folds. Its formulas, recency definition,
+lineage, and read endpoints are documented in
+`docs/references/spy-ema-exhaustive-run.md`.
+
 ## Three split policies
 
 | Policy | Train side | Test side | When to use |

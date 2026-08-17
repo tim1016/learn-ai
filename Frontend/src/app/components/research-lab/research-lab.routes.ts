@@ -39,6 +39,14 @@ export const researchLabRoutes: Routes = [
         (m) => m.SignalReportPageComponent,
       ),
   },
+  {
+    path: 'backtests/spy-ema-walk-forward/manual',
+    loadComponent: () =>
+      import(
+        './spy-ema-walk-forward/manual/spy-ema-walk-forward-manual-page.component'
+      ).then((m) => m.SpyEmaWalkForwardManualPageComponent),
+    data: { title: 'SPY EMA Walk-Forward Manual' },
+  },
 
   // Shell with two-group sub-nav and lazy children.
   {

@@ -208,3 +208,57 @@ class MyAlgorithm(QCAlgorithm):
         if self.Portfolio[self.symbol].Invested:
             self.Liquidate(self.symbol)
 '''
+
+
+def derive_two_bps_source() -> str:
+    """Derive the configurable-bps LEAN twin with fail-closed source deltas."""
+    replacements = (
+        (
+            "    Validation oracle for the Engine Lab spec at\n"
+            "    PythonDataService/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json.",
+            "    Validation twin whose 2/50/70 defaults are receipted at\n"
+            "    PythonDataService/app/engine/strategy/spec/fixtures/ema_crossover_2_bps.spec.json.\n"
+            "    Strategy Lab may supply validated gap and RSI gate parameters at runtime.",
+        ),
+        (
+            "    GAP_MIN = 0.20\n"
+            "    RSI_LO = 50\n"
+            "    RSI_HI = 70",
+            "    GAP_BPS_DEFAULT = 2.0\n"
+            "    RSI_LO_DEFAULT = 50.0\n"
+            "    RSI_HI_DEFAULT = 70.0",
+        ),
+        (
+            '        adjustment = self.GetParameter("adjustment") or "raw"',
+            '        adjustment = self.GetParameter("adjustment") or "raw"\n'
+            '        gap_bps_min = float(self.GetParameter("gap_bps") or str(self.GAP_BPS_DEFAULT))\n'
+            '        rsi_lo = float(self.GetParameter("rsi_min") or str(self.RSI_LO_DEFAULT))\n'
+            '        rsi_hi = float(self.GetParameter("rsi_max") or str(self.RSI_HI_DEFAULT))',
+        ),
+        (
+            '        if adjustment != "raw":\n'
+            '            raise ValueError("adjustment=" + str(adjustment) + " not supported; only \'raw\' in Phase 1")',
+            '        if adjustment != "raw":\n'
+            '            raise ValueError("adjustment=" + str(adjustment) + " not supported; only \'raw\' in Phase 1")\n\n'
+            '        if not 0.0 <= gap_bps_min <= 100.0:\n'
+            '            raise ValueError("gap_bps must be between 0 and 100")\n'
+            '        if not 0.0 <= rsi_lo < rsi_hi <= 100.0:\n'
+            '            raise ValueError("rsi_min must be less than rsi_max, within 0 to 100")\n'
+            '        self.gap_bps_min = gap_bps_min\n'
+            '        self.rsi_lo = rsi_lo\n'
+            '        self.rsi_hi = rsi_hi',
+        ),
+        (
+            "            gap_ok = (fast - slow) >= self.GAP_MIN\n"
+            "            rsi_ok = self.RSI_LO <= rsi <= self.RSI_HI",
+            "            gap_bps = 10000.0 * (fast - slow) / slow\n"
+            "            gap_ok = gap_bps >= self.gap_bps_min\n"
+            "            rsi_ok = self.rsi_lo <= rsi <= self.rsi_hi",
+        ),
+    )
+    source = EMA_CROSSOVER_SOURCE
+    for original, replacement in replacements:
+        if source.count(original) != 1:
+            raise RuntimeError(f"EMA 2-bps LEAN source anchor drifted: {original!r}")
+        source = source.replace(original, replacement)
+    return source

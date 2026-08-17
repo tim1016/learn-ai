@@ -140,6 +140,44 @@ def test_save_study_payload_with_zero_commission() -> None:
 
 
 @respx.mock
+def test_save_study_payload_uses_executed_ibkr_fees_for_compatibility_runs() -> None:
+    """Compatibility persistence must mirror the fee model the engine ran.
+
+    A zero legacy flat-fee input does not disable the pinned IBKR fee model.
+    Quantities above 200 shares make its per-share tier exceed the $1 floor,
+    which catches any persistence code that incorrectly reuses the UI input.
+    """
+    response = _response_with_trade(quantity=250, pnl_pts=1.45)
+    response.total_fees = 2.50
+    response.final_equity = 100_000.0 + 250 * 1.45 - 2.50
+    response.net_profit = 250 * 1.45 - 2.50
+    captured: dict[str, Any] = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(201, json={"id": 102})
+
+    respx.post("http://localhost:5000/api/studies").mock(side_effect=_capture)
+
+    study_id = _save_study_sync(
+        response=response,
+        symbol="SPY",
+        start_date="2025-01-06",
+        end_date="2025-01-10",
+        resolution="minute",
+        params_json="{}",
+        duration_ms=1,
+        commission_per_order=0.0,
+        compatibility_profile="us-equity-raw-ibkr-v1",
+    )
+
+    assert study_id == 102
+    assert captured["trades"][0]["pnL"] == pytest.approx(360.0, abs=1e-9)
+    equity = json.loads(captured["equityCurveJson"])
+    assert equity["realized"]["points"][-1]["e"] == pytest.approx(100_360.0, abs=1e-6)
+
+
+@respx.mock
 def test_save_study_payload_preserves_a_synthetic_terminal_exit_receipt() -> None:
     """The end-of-algorithm close remains visibly identified in history."""
     response = _response_with_trade(quantity=10, pnl_pts=2.0)

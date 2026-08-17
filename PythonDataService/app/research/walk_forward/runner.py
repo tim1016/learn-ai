@@ -39,6 +39,7 @@ from app.research.runs import (
 )
 from app.research.runs.hashing import hash_payload
 from app.research.runs.result import BacktestRunResult, EquityCurvePoint
+from app.research.walk_forward.metrics import mean_fold_retention, sharpe_retention
 from app.research.walk_forward.result import (
     FoldResult,
     ParameterCandidateConfig,
@@ -411,7 +412,11 @@ def _fold_to_result(
         "failed" if ledger.status == "failed" or not persisted or result_failure_reason is not None else "completed"
     )
     test_sharpe = result.metrics.sharpe_ratio
-    fold_retention = _ratio(test_sharpe, selected_train_sharpe) if fold_status == "completed" else None
+    fold_retention = (
+        sharpe_retention(test_sharpe, selected_train_sharpe)
+        if fold_status == "completed"
+        else None
+    )
     return FoldResult(
         fold_index=window.fold_index,
         train_start_ms=window.train_start_ms,
@@ -621,13 +626,7 @@ def _oos_retention(mean_oos_sharpe: float | None, parent_sharpe: float | None) -
     Canonical implementation: this file.
     Validated against: tests/research/walk_forward/test_runner.py::test_oos_retention_uses_parent_sharpe
     """
-    return _ratio(mean_oos_sharpe, parent_sharpe)
-
-
-def _ratio(numerator: float | None, denominator: float | None) -> float | None:
-    if numerator is None or denominator is None or denominator == 0:
-        return None
-    return numerator / denominator
+    return sharpe_retention(mean_oos_sharpe, parent_sharpe)
 
 
 def _compound_oos_curve(
@@ -769,5 +768,4 @@ def _mean_fold_retention(folds: list[FoldResult]) -> float | None:
     TEST result is compared only with the train-side winner that selected it,
     then the eligible ratios receive equal weight.
     """
-    values = [fold.oos_retention for fold in folds if fold.oos_retention is not None]
-    return statistics.fmean(values) if values else None
+    return mean_fold_retention(fold.oos_retention for fold in folds)

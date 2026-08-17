@@ -21,6 +21,21 @@ const STRATEGY = {
   strategy_bars: { timespan: "minute", multiplier: 15, parameter: null },
 } satisfies StrategyInfo;
 
+const PARAMETERIZED_STRATEGY = {
+  ...STRATEGY,
+  name: "ema_crossover_2_bps",
+  display_name: "EMA Crossover 2 bps",
+  lean_twin: "ema_crossover_2_bps",
+  params_schema: {
+    properties: {
+      symbol: { type: "string", default: "SPY" },
+      gap_bps: { type: "number", default: 2 },
+      rsi_min: { type: "number", default: 50 },
+      rsi_max: { type: "number", default: 70 },
+    },
+  },
+} satisfies StrategyInfo;
+
 describe("StrategyLab configuration and runner", () => {
   let config: StrategyLabConfigStore;
   let runner: StrategyLabRunner;
@@ -163,6 +178,27 @@ describe("StrategyLab configuration and runner", () => {
       "lean_engine_run",
       expect.objectContaining({
         request: expect.objectContaining({ start_ms_utc: 1_767_624_600_000 }),
+      }),
+    );
+  });
+
+  it("forwards configurable gap and RSI gates to the aligned LEAN template", async () => {
+    config.strategies.set([PARAMETERIZED_STRATEGY]);
+    config.selectStrategy(PARAMETERIZED_STRATEGY.name);
+    config.updateParameter("gap_bps", "4", "number");
+    config.updateParameter("rsi_min", "52", "number");
+    config.updateParameter("rsi_max", "68", "number");
+    config.engine.set("lean");
+
+    await runner.run();
+
+    expect(startJob).toHaveBeenCalledWith(
+      "lean_engine_run",
+      expect.objectContaining({
+        request: expect.objectContaining({
+          template: "ema_crossover_2_bps",
+          strategy_parameters: { gap_bps: 4, rsi_min: 52, rsi_max: 68 },
+        }),
       }),
     );
   });

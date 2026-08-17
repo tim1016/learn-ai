@@ -199,6 +199,22 @@ class _DataPolicyModel(BaseModel):
     fixture_sha256: str | None = None
 
 
+class EmaCrossover2BpsStrategyParametersModel(BaseModel):
+    """Validated runtime gates accepted by the parameterized LEAN twin."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    gap_bps: float = Field(2.0, ge=0.0, le=100.0, allow_inf_nan=False)
+    rsi_min: float = Field(50.0, ge=0.0, le=100.0, allow_inf_nan=False)
+    rsi_max: float = Field(70.0, ge=0.0, le=100.0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def _validate_rsi_band(self) -> EmaCrossover2BpsStrategyParametersModel:
+        if self.rsi_min >= self.rsi_max:
+            raise ValueError("rsi_min must be less than rsi_max")
+        return self
+
+
 class TrustedRunRequestModel(BaseModel):
     """Pydantic shape for POST /api/lean-sidecar/trusted-runs.
 
@@ -277,6 +293,14 @@ class TrustedRunRequestModel(BaseModel):
             "sample; ``reconciliation`` runs the IBKR-brokerage-pinned "
             "sample that the Phase 5a fee reconciler returns a clean "
             "report for. Ignored when ``algorithm_source`` is provided."
+        ),
+    )
+    strategy_parameters: EmaCrossover2BpsStrategyParametersModel | None = Field(
+        default=None,
+        description=(
+            "Validated strategy-logic parameters for a bundled trusted template. "
+            "Currently accepted only by ema_crossover_2_bps; omitted values use "
+            "that template's canonical 2/50/70 defaults."
         ),
     )
 
@@ -378,6 +402,18 @@ class TrustedRunRequestModel(BaseModel):
                 "TrustedRunRequest using legacy top-level shape; convert to data_policy block. run_id=%s",
                 self.run_id,
             )
+        if self.algorithm_source is not None:
+            if self.strategy_parameters is not None:
+                raise ValueError("algorithm_source runs do not accept strategy_parameters")
+        elif self.template == TrustedTemplate.EMA_CROSSOVER_2_BPS:
+            if self.strategy_parameters is None:
+                object.__setattr__(
+                    self,
+                    "strategy_parameters",
+                    EmaCrossover2BpsStrategyParametersModel(),
+                )
+        elif self.strategy_parameters is not None:
+            raise ValueError(f"template {self.template.value} does not accept strategy_parameters")
         self._validate_window_normalized()
         return self
 
@@ -604,6 +640,11 @@ async def post_trusted_run(payload: TrustedRunRequestModel) -> TrustedRunRespons
         data_policy=data_policy,
         requested_engine=payload.requested_engine,
         parity_group_id=payload.parity_group_id,
+        strategy_parameters=(
+            tuple(payload.strategy_parameters.model_dump().items())
+            if payload.strategy_parameters is not None
+            else ()
+        ),
     )
     try:
         result = await run_trusted_sample(request)

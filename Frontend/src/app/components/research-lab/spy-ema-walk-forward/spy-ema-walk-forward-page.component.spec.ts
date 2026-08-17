@@ -268,6 +268,8 @@ describe('SpyEmaWalkForwardPageComponent', () => {
     expect(screen.getByRole('heading', {
       name: 'Can a normalized EMA gap survive out of sample?',
     })).toBeTruthy();
+    expect(screen.getByRole('link', { name: /new to this study/i }).getAttribute('href'))
+      .toBe('/research-lab/backtests/spy-ema-walk-forward/manual');
     expect(screen.getByRole('img', {
       name: /180 training days select one frozen threshold/,
     })).toBeTruthy();

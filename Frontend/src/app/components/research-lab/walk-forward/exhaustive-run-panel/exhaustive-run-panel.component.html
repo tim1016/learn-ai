@@ -1,0 +1,85 @@
+<section class="exhaustive" aria-labelledby="exhaustive-title">
+  <header class="exhaustive__header">
+    <div>
+      <span class="exhaustive__kicker">Candidate study · full available data</span>
+      <h2 id="exhaustive-title">Exhaustive Run</h2>
+      <p>
+        Up to five strong training candidates from every fold are deduplicated, then compared
+        on two deliberately separate tracks: a descriptive two-year fit and honest monthly OOS tests.
+      </p>
+      <a
+        class="exhaustive__manual"
+        routerLink="/research-lab/backtests/spy-ema-walk-forward/manual"
+        fragment="exhaustive-run"
+      >Read the Exhaustive Run guide →</a>
+    </div>
+    <div class="exhaustive__actions">
+      <p-button
+        [label]="response() ? 'Run again' : 'Run Exhaustive analysis'"
+        icon="pi pi-play"
+        [disabled]="running() || loading()"
+        (onClick)="runAnalysis()"
+      />
+      @if (running()) {
+        <p-button
+          label="Cancel"
+          icon="pi pi-stop-circle"
+          severity="secondary"
+          [outlined]="true"
+          (onClick)="cancelAnalysis()"
+        />
+      }
+    </div>
+  </header>
+
+  <div class="exhaustive__contract">
+    <article>
+      <strong>Full two-year fit</strong>
+      <p>Useful for trade count, net return, drawdown, and recency. It contains selection/look-ahead bias and is not OOS proof.</p>
+    </article>
+    <article>
+      <strong>18-fold forward stability</strong>
+      <p>The same fixed gap is tested in every next-month window. Use this track to judge robustness and decay.</p>
+    </article>
+    <article>
+      <strong>Cost assumption</strong>
+      <p>Commission and slippage are both zero in V1, matching the source study. Treat marginal results cautiously.</p>
+    </article>
+  </div>
+
+  @if (running()) {
+    <div class="exhaustive__progress" role="status">
+      <p-progress-bar
+        [value]="progressPercent()"
+        [showValue]="false"
+        [mode]="job()?.total === undefined ? 'indeterminate' : 'determinate'"
+      />
+      <span>{{ job()?.message ?? job()?.phaseLabel ?? 'Preparing selected candidates…' }}</span>
+    </div>
+  }
+
+  @if (error(); as message) {
+    <p-message severity="error">{{ message }}</p-message>
+  }
+
+  @if (loading()) {
+    <p class="exhaustive__empty" role="status">Loading Exhaustive Run evidence…</p>
+  } @else if (response(); as evidence) {
+    @if (evidence.result.status === 'failed') {
+      <p-message severity="warn">
+        {{ evidence.result.failure_reason ?? 'Some candidate evidence could not be completed.' }}
+      </p-message>
+    }
+    <div class="exhaustive__summary">
+      <span>{{ evidence.result.selections.length }} fold selections</span>
+      <span>{{ evidence.result.candidates.length }} unique gaps</span>
+      <span>Maximum {{ evidence.config.max_candidates_per_fold }} per fold</span>
+      <span>Recent = final six calendar months</span>
+    </div>
+    <app-exhaustive-run-table [response]="evidence" />
+  } @else if (!running()) {
+    <p class="exhaustive__empty">
+      No Exhaustive Run is linked to this receipt yet. Start it to build the sortable candidate table.
+    </p>
+  }
+</section>

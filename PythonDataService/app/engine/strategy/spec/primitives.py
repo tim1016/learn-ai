@@ -75,6 +75,20 @@ class EvalContext:
 # Operand evaluator — walks an Operand AST and returns a Decimal value
 # (or None if any referenced indicator is not yet ready).
 # ---------------------------------------------------------------------------
+def difference_bps(left: Decimal, right: Decimal) -> Decimal:
+    """Return the relative ``left - right`` gap in basis points.
+
+    Formula: ``10,000 * (left - right) / right``.
+    Reference: ``docs/references/spy-ema-normalized-gap-walk-forward.md``.
+    Canonical implementation: this function.
+    Validated against: ``tests/engine/strategy/spec/test_difference_bps_operand.py``
+    and its exact-Decimal golden fixture.
+    """
+    if right == 0:
+        raise ZeroDivisionError("DifferenceBps denominator evaluated to zero")
+    return Decimal(10_000) * (left - right) / right
+
+
 def evaluate_operand(operand, ctx: EvalContext) -> Decimal | None:
     """Recursively evaluate an Operand AST node.
 
@@ -105,9 +119,7 @@ def evaluate_operand(operand, ctx: EvalContext) -> Decimal | None:
         right = evaluate_operand(operand.right, ctx)
         if left is None or right is None:
             return None
-        if right == 0:
-            raise ZeroDivisionError("DifferenceBps denominator evaluated to zero")
-        return Decimal(10_000) * (left - right) / right
+        return difference_bps(left, right)
     raise TypeError(f"unknown operand type: {type(operand).__name__}")
 
 

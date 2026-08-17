@@ -1,0 +1,47 @@
+<section class="journey" aria-labelledby="selected-outcomes-title">
+  <header class="journey__heading">
+    <div>
+      <span class="journey__eyebrow">Selection journey</span>
+      <h3 id="selected-outcomes-title">Selected gap → next OOS outcome</h3>
+    </div>
+    <p>Bars share one return scale. The center rule is 0%.</p>
+  </header>
+
+  <div
+    class="journey__scroll"
+    role="region"
+    aria-label="Selected parameter and out-of-sample return by fold"
+    tabindex="0"
+  >
+    <ol class="journey__outcomes">
+      @for (outcome of outcomes(); track outcome.fold.fold_index) {
+        @let fold = outcome.fold;
+        <li
+          [class.outcome--gain]="fold.status === 'completed' && fold.test_metrics.total_return_pct > 0"
+          [class.outcome--loss]="fold.status === 'completed' && fold.test_metrics.total_return_pct < 0"
+          [class.outcome--failed]="fold.status === 'failed'"
+        >
+          <a
+            [routerLink]="fold.test_run_id === null ? null : ['/research-lab/strategy-runs', fold.test_run_id]"
+            [attr.aria-label]="outcomeAriaLabel(outcome)"
+          >
+            <span class="outcome__fold">F{{ fold.fold_index + 1 }}</span>
+            <strong class="outcome__parameter">{{ outcome.parameterLabel }}</strong>
+            <span class="outcome__plot" aria-hidden="true">
+              <i class="outcome__zero"></i>
+              <i
+                class="outcome__bar"
+                [class.outcome__bar--gain]="fold.status === 'completed' && fold.test_metrics.total_return_pct > 0"
+                [class.outcome__bar--loss]="fold.status === 'completed' && fold.test_metrics.total_return_pct < 0"
+                [style.height.%]="returnBarHeight(fold)"
+              ></i>
+            </span>
+            <span class="outcome__return">
+              {{ fold.status === 'completed' ? (fold.test_metrics.total_return_pct | percent:'1.2-2') : 'failed' }}
+            </span>
+          </a>
+        </li>
+      }
+    </ol>
+  </div>
+</section>

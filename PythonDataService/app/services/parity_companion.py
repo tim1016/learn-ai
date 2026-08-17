@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from collections.abc import Mapping
 from datetime import date
 from typing import TYPE_CHECKING, Any
 
@@ -84,6 +85,7 @@ def dispatch_parity_companion(
     request: EngineBacktestRequest,
     parity_group_id: str,
     left_execution_id: int,
+    validated_parameters: Mapping[str, Any] | None = None,
 ) -> None:
     """Record the parity disposition and, when eligible, launch the companion.
 
@@ -115,7 +117,12 @@ def dispatch_parity_companion(
             "reason": None,
         },
     )
-    _launch_companion_job(registration=registration, request=request, parity_group_id=parity_group_id)
+    _launch_companion_job(
+        registration=registration,
+        request=request,
+        parity_group_id=parity_group_id,
+        validated_parameters=validated_parameters,
+    )
 
 
 def mark_parity_failed(parity_group_id: str, *, status: str, detail: str) -> None:
@@ -175,6 +182,7 @@ def _launch_companion_job(
     registration: StrategyRegistration,
     request: EngineBacktestRequest,
     parity_group_id: str,
+    validated_parameters: Mapping[str, Any] | None,
 ) -> None:
     """POST the companion run through the public jobs surface.
 
@@ -205,18 +213,36 @@ def _launch_companion_job(
         mark_parity_failed(parity_group_id, status="run_failed", detail=f"companion window invalid: {exc}")
         return
 
-    body = {
-        "request": {
-            "run_id": f"companion-{parity_group_id}",
-            "start_ms_utc": start_ms,
-            "end_ms_utc": end_ms,
-            "starting_cash": request.initial_cash if request.initial_cash is not None else 100_000.0,
-            "requested_engine": request.requested_engine,
-            "template": registration.lean_twin,
-            "data_policy": request.data_policy.model_dump(),
-            "parity_group_id": parity_group_id,
+    companion_parameters: dict[str, Any] | None = None
+    if registration.lean_parameter_names:
+        missing = [
+            name
+            for name in registration.lean_parameter_names
+            if validated_parameters is None or name not in validated_parameters
+        ]
+        if missing:
+            detail = f"companion parameters missing from validated configuration: {', '.join(missing)}"
+            logger.error("[PARITY] %s for %s", detail, parity_group_id)
+            mark_parity_failed(parity_group_id, status="run_failed", detail=detail)
+            return
+        assert validated_parameters is not None
+        companion_parameters = {
+            name: validated_parameters[name] for name in registration.lean_parameter_names
         }
+
+    companion_request = {
+        "run_id": f"companion-{parity_group_id}",
+        "start_ms_utc": start_ms,
+        "end_ms_utc": end_ms,
+        "starting_cash": request.initial_cash if request.initial_cash is not None else 100_000.0,
+        "requested_engine": request.requested_engine,
+        "template": registration.lean_twin,
+        "data_policy": request.data_policy.model_dump(),
+        "parity_group_id": parity_group_id,
     }
+    if companion_parameters is not None:
+        companion_request["strategy_parameters"] = companion_parameters
+    body = {"request": companion_request}
     try:
         with httpx.Client(timeout=_HTTP_TIMEOUT_S) as client:
             response = client.post(f"{settings.BACKEND_URL}/api/jobs/lean_engine_run", json=body)
