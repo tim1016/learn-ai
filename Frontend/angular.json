@@ -76,6 +76,7 @@
           "options": {
             "tsConfig": "tsconfig.spec.json",
             "buildTarget": "frontend:build",
+            "isolate": true,
             "setupFiles": ["src/test-setup.ts"]
           }
         },

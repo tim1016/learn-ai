@@ -11,8 +11,21 @@ import type {
 import { BrokerService } from '../../../services/broker.service';
 import { BrokersService } from '../../../services/brokers.service';
 import { AlpacaDeskAccountDataService } from './alpaca-desk-account-data.service';
-import { ALPACA_PORTFOLIO_HISTORY_CHART_FACTORY } from './alpaca-portfolio-history-chart.component';
 import { AlpacaTraderLensComponent } from './alpaca-trader-lens.component';
+
+vi.mock('lightweight-charts', () => {
+  const chart = {
+    addSeries: vi.fn().mockReturnValue({ setData: vi.fn() }),
+    applyOptions: vi.fn(),
+    remove: vi.fn(),
+    timeScale: vi.fn().mockReturnValue({ fitContent: vi.fn() }),
+  };
+  return {
+    createChart: vi.fn().mockReturnValue(chart),
+    LineSeries: 'LineSeries',
+    TickMarkType: { Year: 0, Month: 1, DayOfMonth: 2, Time: 3, TimeWithSeconds: 4 },
+  };
+});
 
 function account(): BrokerAccountSnapshot {
   return {
@@ -194,16 +207,9 @@ async function renderLens(
   broker = brokers(),
   clerk = { accountTransactions: vi.fn().mockResolvedValue(transactionHistory()) },
 ) {
-  const createPortfolioHistoryChart = vi.fn().mockImplementation(() => ({
-    addSeries: vi.fn().mockReturnValue({ setData: vi.fn() }),
-    applyOptions: vi.fn(),
-    remove: vi.fn(),
-    timeScale: vi.fn().mockReturnValue({ fitContent: vi.fn() }),
-  }));
   await render(AlpacaTraderLensComponent, {
     providers: [
       AlpacaDeskAccountDataService,
-      { provide: ALPACA_PORTFOLIO_HISTORY_CHART_FACTORY, useValue: createPortfolioHistoryChart },
       { provide: BrokersService, useValue: broker },
       { provide: BrokerService, useValue: clerk },
     ],
