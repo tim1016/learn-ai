@@ -111,6 +111,12 @@ SPY_EMA_WALK_FORWARD_PHASES: tuple[Phase, ...] = (
     Phase("persisting_evidence", "Persisting research evidence", 1),
 )
 
+SPY_EMA_EXHAUSTIVE_PHASES: tuple[Phase, ...] = (
+    Phase("selecting_candidates", "Selecting each fold's strongest candidates", 1),
+    Phase("running_candidates", "Running full-data and forward evidence", 9),
+    Phase("finalizing_evidence", "Finalizing the sortable evidence table", 1),
+)
+
 
 JOB_PHASES: dict[str, tuple[Phase, ...]] = {
     "cross_sectional": CROSS_SECTIONAL_PHASES,
@@ -119,6 +125,7 @@ JOB_PHASES: dict[str, tuple[Phase, ...]] = {
     "engine_backtest": ENGINE_BACKTEST_PHASES,
     "lean_engine_run": LEAN_ENGINE_RUN_PHASES,
     "spy_ema_walk_forward": SPY_EMA_WALK_FORWARD_PHASES,
+    "spy_ema_exhaustive": SPY_EMA_EXHAUSTIVE_PHASES,
 }
 
 

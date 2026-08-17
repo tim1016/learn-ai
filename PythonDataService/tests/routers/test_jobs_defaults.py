@@ -27,7 +27,9 @@ from app.routers.jobs import (
     FeatureResearchJobRequest,
     RuleBasedBacktestJobRequest,
     SignalEngineJobRequest,
+    SpyEmaExhaustiveJobRequest,
     SpyEmaWalkForwardJobRequest,
+    start_spy_ema_exhaustive_job,
     start_spy_ema_walk_forward_job,
 )
 from app.routers.research_runs import get_artifacts_root, get_data_source_factory
@@ -216,6 +218,126 @@ class TestSpyEmaWalkForwardJob:
                 response = await client.post(
                     "/api/jobs-internal/spy-ema-walk-forward",
                     json={"jobId": "job-http"},
+                )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 202, response.text
+        assert response.json() == {"job_id": "job-http", "status": "queued"}
+        assert queued == ["job-http"]
+
+
+class TestSpyEmaExhaustiveJob:
+    def test_request_accepts_only_job_and_source_identity(self) -> None:
+        from pydantic import ValidationError
+
+        request = SpyEmaExhaustiveJobRequest.model_validate(
+            {"jobId": "j1", "walkForwardId": "a" * 32}
+        )
+        assert request.walk_forward_id == "a" * 32
+        with pytest.raises(ValidationError):
+            SpyEmaExhaustiveJobRequest.model_validate(
+                {
+                    "jobId": "j1",
+                    "walkForwardId": "a" * 32,
+                    "maxCandidatesPerFold": 7,
+                }
+            )
+
+    async def test_job_runs_and_returns_persisted_exhaustive_evidence(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        import app.routers.jobs as jobs_router
+
+        captured: dict[str, Any] = {}
+
+        class _Dump:
+            def __init__(self, value: dict[str, Any]) -> None:
+                self.value = value
+
+            def model_dump(self, *, mode: str) -> dict[str, Any]:
+                assert mode == "json"
+                return self.value
+
+        def fake_analysis(walk_forward_id: str, **kwargs):
+            captured["walk_forward_id"] = walk_forward_id
+            captured["kwargs"] = kwargs
+            kwargs["on_progress"](1, 2, "full run")
+            kwargs["on_progress"](2, 2, "fold run")
+            return _Dump({"exhaustive_run_id": "result-id"}), _Dump(
+                {"status": "completed"}
+            )
+
+        class _Cancel:
+            def raise_if_cancelled(self) -> None:
+                return None
+
+        class _Emitter:
+            def __init__(self) -> None:
+                self.phases: list[str] = []
+
+            def phase(self, phase: str) -> None:
+                self.phases.append(phase)
+
+            def log(self, _message: str) -> None:
+                return None
+
+            def progress(self, **_kwargs: Any) -> None:
+                return None
+
+        def run_sync(_job_id: str, work, **kwargs):
+            captured["thread_kwargs"] = kwargs
+            emitter = _Emitter()
+            captured["result"] = work(emitter, _Cancel())
+            captured["phases"] = emitter.phases
+
+        monkeypatch.setattr(jobs_router, "run_exhaustive_analysis", fake_analysis)
+        monkeypatch.setattr(jobs_router, "run_in_thread", run_sync)
+
+        response = await start_spy_ema_exhaustive_job(
+            SpyEmaExhaustiveJobRequest(
+                job_id="job-1",
+                walk_forward_id="a" * 32,
+            ),
+            data_source_factory=lambda *_args: None,
+            artifacts_root=tmp_path,
+        )
+
+        assert response == {"job_id": "job-1", "status": "queued"}
+        assert captured["walk_forward_id"] == "a" * 32
+        assert captured["result"]["result"]["status"] == "completed"
+        assert captured["phases"] == [
+            "selecting_candidates",
+            "running_candidates",
+            "finalizing_evidence",
+        ]
+        assert captured["thread_kwargs"]["cancel_check_every_n"] == 1
+
+    async def test_job_is_available_through_the_async_http_boundary(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        import app.routers.jobs as jobs_router
+
+        queued: list[str] = []
+
+        def queue_without_running(job_id: str, _work, **_kwargs: Any) -> None:
+            queued.append(job_id)
+
+        monkeypatch.setattr(jobs_router, "run_in_thread", queue_without_running)
+        app.dependency_overrides[get_data_source_factory] = lambda: lambda *_args: None
+        app.dependency_overrides[get_artifacts_root] = lambda: tmp_path
+        try:
+            async with AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+            ) as client:
+                response = await client.post(
+                    "/api/jobs-internal/spy-ema-exhaustive",
+                    json={"jobId": "job-http", "walkForwardId": "a" * 32},
                 )
         finally:
             app.dependency_overrides.clear()

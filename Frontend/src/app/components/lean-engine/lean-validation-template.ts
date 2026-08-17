@@ -2,16 +2,18 @@ import type { TrustedRunRequest } from '../../services/lean-sidecar.types';
 
 export type LeanValidationTemplate = Extract<
   NonNullable<TrustedRunRequest['template']>,
-  'ema_crossover_signal' | 'deployment_validation'
+  'ema_crossover_signal' | 'ema_crossover_2_bps' | 'deployment_validation'
 >;
 
 const TEMPLATE_LABELS: Readonly<Record<LeanValidationTemplate, string>> = {
   ema_crossover_signal: 'EMA Crossover Signal',
+  ema_crossover_2_bps: 'EMA Crossover 2 bps',
   deployment_validation: 'Deployment Validation',
 };
 
 const LEGACY_STRATEGY_TEMPLATES: Readonly<Record<string, LeanValidationTemplate>> = {
   ema_crossover_signal: 'ema_crossover_signal',
+  ema_crossover_2_bps: 'ema_crossover_2_bps',
   spy_ema_crossover: 'ema_crossover_signal',
   deployment_validation: 'deployment_validation',
 };
@@ -19,7 +21,9 @@ const LEGACY_STRATEGY_TEMPLATES: Readonly<Record<string, LeanValidationTemplate>
 export function isLeanValidationTemplate(
   template: string | null | undefined,
 ): template is LeanValidationTemplate {
-  return template === 'ema_crossover_signal' || template === 'deployment_validation';
+  return template === 'ema_crossover_signal' ||
+    template === 'ema_crossover_2_bps' ||
+    template === 'deployment_validation';
 }
 
 export function leanValidationTemplateLabel(template: LeanValidationTemplate): string {

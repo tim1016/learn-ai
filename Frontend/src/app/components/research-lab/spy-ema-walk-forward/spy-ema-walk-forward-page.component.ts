@@ -6,6 +6,7 @@ import {
   inject,
   signal,
 } from '@angular/core';
+import { RouterLink } from '@angular/router';
 import { ButtonModule } from 'primeng/button';
 import { ProgressBarModule } from 'primeng/progressbar';
 
@@ -34,6 +35,7 @@ const JOB_TYPE = 'spy_ema_walk_forward';
     AssetIdentityComponent,
     ButtonModule,
     ProgressBarModule,
+    RouterLink,
     SpyEmaEvidenceComponent,
     SpyEmaProtocolComponent,
   ],

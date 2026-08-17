@@ -53,7 +53,13 @@ public class PersistLeanRunPayloadTests
                 ],
                 "lean_statistics": { "parser_version": "phase-3a-r1" },
                 "lean_analysis_json": "[{\"name\":\"ExecutionSpeedAnalysis\"}]",
-                "fill_mode": "signal_bar_close"
+                "fill_mode": "signal_bar_close",
+                "parameters": {
+                    "symbol": "SPY",
+                    "gap_bps": 4,
+                    "rsi_min": 52,
+                    "rsi_max": 68
+                }
             }
             """;
 
@@ -77,6 +83,10 @@ public class PersistLeanRunPayloadTests
         Assert.Single(payload.Trades);
         Assert.Equal("[{\"name\":\"ExecutionSpeedAnalysis\"}]", payload.LeanAnalysisJson);
         Assert.Equal("signal_bar_close", payload.FillMode);
+        Assert.NotNull(payload.Parameters);
+        Assert.Equal(4, payload.Parameters["gap_bps"].GetDouble());
+        Assert.Equal(52, payload.Parameters["rsi_min"].GetDouble());
+        Assert.Equal(68, payload.Parameters["rsi_max"].GetDouble());
 
         var trade = payload.Trades[0];
         Assert.Equal(1, trade.TradeNumber);

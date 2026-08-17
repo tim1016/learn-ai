@@ -120,6 +120,25 @@ def frozen_spy_ema_v1_request() -> SpyEmaPipelineRequest:
     )
 
 
+def frozen_spy_ema_v1_spec() -> StrategySpec:
+    """Load the committed normalized-gap specification owned by V1."""
+    return load_spec_from_path(_NORMALIZED_FIXTURE)
+
+
+def build_spy_ema_gap_candidates(
+    thresholds_bps: tuple[float, ...],
+) -> tuple[ParameterCandidate, ...]:
+    """Materialize an ordered candidate grid from the committed V1 spec."""
+    normalized_spec = frozen_spy_ema_v1_spec()
+    return tuple(
+        ParameterCandidate(
+            parameters={"gap_bps": threshold},
+            spec=materialize_gap_threshold(normalized_spec, threshold),
+        )
+        for threshold in thresholds_bps
+    )
+
+
 def run_spy_ema_pipeline(
     request: SpyEmaPipelineRequest,
     *,
@@ -164,14 +183,8 @@ def run_spy_ema_pipeline(
     if on_progress is not None:
         on_progress(1, total_steps, "persisted the canonical control run")
 
-    normalized_spec = load_spec_from_path(_NORMALIZED_FIXTURE)
-    candidates = tuple(
-        ParameterCandidate(
-            parameters={"gap_bps": threshold},
-            spec=materialize_gap_threshold(normalized_spec, threshold),
-        )
-        for threshold in request.thresholds_bps
-    )
+    normalized_spec = frozen_spy_ema_v1_spec()
+    candidates = build_spy_ema_gap_candidates(request.thresholds_bps)
     wf_request = WalkForwardRequest(
         spec=normalized_spec,
         start_ms=request.start_ms,

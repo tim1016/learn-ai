@@ -13,9 +13,13 @@ import pytest
 
 from app.routers.engine import _STRATEGY_REGISTRY
 
-_POLICY_STRATEGIES = {"ema_crossover_signal"}
-_SINGLE_LONG_STOCK_ACTION_PLAN_STRATEGIES = {"deployment_validation", "ema_crossover_signal"}
-_ACTION_PLAN_SIGNAL_INTENT_STRATEGIES = {"ema_crossover_signal"}
+_POLICY_STRATEGIES = {"ema_crossover_2_bps", "ema_crossover_signal"}
+_SINGLE_LONG_STOCK_ACTION_PLAN_STRATEGIES = {
+    "deployment_validation",
+    "ema_crossover_2_bps",
+    "ema_crossover_signal",
+}
+_ACTION_PLAN_SIGNAL_INTENT_STRATEGIES = {"ema_crossover_2_bps", "ema_crossover_signal"}
 _SIGNAL_SYMBOL_INTENT_STRATEGIES = {"spy_ema_crossover"}
 
 

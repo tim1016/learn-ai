@@ -544,6 +544,7 @@ def build_persist_payload(
     cleanliness: RunVerdictCleanliness | Mapping[str, Any] | None = None,
     parity_group_id: str | None = None,
     requested_engine: Literal["python", "lean", "both"] = "lean",
+    parameters: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a JSON-serializable payload to POST to the .NET persist endpoint.
 
@@ -588,6 +589,7 @@ def build_persist_payload(
             error="No normalized/result.json — LEAN run did not produce output",
             manifest=manifest,
             requested_engine=requested_engine,
+            parameters=parameters,
         )
 
     try:
@@ -625,6 +627,7 @@ def build_persist_payload(
             error=f"normalization_error: {type(exc).__name__}: {exc}",
             manifest=manifest,
             requested_engine=requested_engine,
+            parameters=parameters,
         )
 
     lean_statistics = _normalized_to_lean_statistics_response(
@@ -692,6 +695,7 @@ def build_persist_payload(
         "fill_mode": "signal_bar_close" if parity_group_id is not None else "lean-sidecar",
         "strategy_name": algorithm_name,
         "symbol": symbol,
+        "parameters": {"symbol": symbol, **dict(parameters or {})},
         "starting_cash": starting_cash,
         "start_date_ms": start_date_ms,
         "end_date_ms": end_date_ms,
@@ -895,6 +899,7 @@ def _failed_run_payload(
     error: str,
     manifest: RunManifest | Mapping[str, Any] | None = None,
     requested_engine: Literal["python", "lean", "both"] = "lean",
+    parameters: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a zero-trade payload for a LEAN run that failed or produced no result."""
     failed_verdict = failed_run_verdict(error)
@@ -904,6 +909,7 @@ def _failed_run_payload(
         "requested_engine": requested_engine,
         "strategy_name": algorithm_name,
         "symbol": symbol,
+        "parameters": {"symbol": symbol, **dict(parameters or {})},
         "starting_cash": starting_cash,
         "start_date_ms": start_date_ms,
         "end_date_ms": end_date_ms,

@@ -22,6 +22,7 @@ from app.engine.live.run import (
     _signal_intent_executor_for_live_start,
     _strategy_param_resolution_from_live_config,
 )
+from app.engine.strategy.algorithms.ema_crossover_2_bps import EmaCrossover2BpsAlgorithm
 from app.engine.strategy.algorithms.ema_crossover_signal import EmaCrossoverSignalAlgorithm
 from app.engine.strategy.base import Strategy, StrategyContext
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
@@ -122,6 +123,84 @@ def test_ema_strategy_emits_an_asset_free_enter_intent() -> None:
     ]
     assert not hasattr(executor.intents[0], "symbol")
     assert context.portfolio.pending_orders == []
+
+
+def test_two_bps_variant_changes_only_the_gap_gate() -> None:
+    """A 3 bps relative gap passes 2 bps but remains below the $0.20 control."""
+    bar = _signal_bar()
+
+    original = EmaCrossoverSignalAlgorithm(symbol="SPY")
+    original_context = StrategyContext(portfolio=Portfolio(initial_cash=Decimal("100000")))
+    original.ctx = original_context
+    original.initialize()
+    original._ema5 = _ReadyIndicator(Decimal("500.15"))  # type: ignore[assignment]
+    original._ema10 = _ReadyIndicator(Decimal("500.00"))  # type: ignore[assignment]
+    original._rsi14 = _ReadyIndicator(Decimal("60"))  # type: ignore[assignment]
+    original._prev_ema5_above_ema10 = False
+    original_executor = _RecordingSignalIntentExecutor()
+    original_context.set_signal_intent_executor(original_executor)
+    original_context.current_time = bar.end_time
+
+    two_bps = EmaCrossover2BpsAlgorithm(symbol="SPY")
+    two_bps_context = StrategyContext(portfolio=Portfolio(initial_cash=Decimal("100000")))
+    two_bps.ctx = two_bps_context
+    two_bps.initialize()
+    two_bps._ema5 = _ReadyIndicator(Decimal("500.15"))  # type: ignore[assignment]
+    two_bps._ema10 = _ReadyIndicator(Decimal("500.00"))  # type: ignore[assignment]
+    two_bps._rsi14 = _ReadyIndicator(Decimal("60"))  # type: ignore[assignment]
+    two_bps._prev_ema5_above_ema10 = False
+    two_bps_executor = _RecordingSignalIntentExecutor()
+    two_bps_context.set_signal_intent_executor(two_bps_executor)
+    two_bps_context.current_time = bar.end_time
+
+    original._on_fifteen_minute_bar(bar)
+    two_bps._on_fifteen_minute_bar(bar)
+
+    assert original_executor.intents == []
+    assert [intent.kind for intent in two_bps_executor.intents] == [SignalIntentKind.ENTER]
+
+
+@pytest.mark.parametrize(
+    ("gap_bps", "rsi_min", "rsi_max", "ema_fast", "rsi", "should_enter"),
+    [
+        (2.0, 50.0, 70.0, "500.15", "60", True),
+        (4.0, 50.0, 70.0, "500.15", "60", False),
+        (2.0, 61.0, 70.0, "500.15", "60", False),
+        (2.0, 50.0, 59.0, "500.15", "60", False),
+        (2.0, 60.0, 70.0, "500.15", "60", True),
+    ],
+)
+def test_two_bps_variant_applies_configured_gap_and_inclusive_rsi_gates(
+    gap_bps: float,
+    rsi_min: float,
+    rsi_max: float,
+    ema_fast: str,
+    rsi: str,
+    should_enter: bool,
+) -> None:
+    strategy = EmaCrossover2BpsAlgorithm(
+        symbol="SPY",
+        gap_bps=gap_bps,
+        rsi_min=rsi_min,
+        rsi_max=rsi_max,
+    )
+    context = StrategyContext(portfolio=Portfolio(initial_cash=Decimal("100000")))
+    strategy.ctx = context
+    strategy.initialize()
+    strategy._ema5 = _ReadyIndicator(Decimal(ema_fast))  # type: ignore[assignment]
+    strategy._ema10 = _ReadyIndicator(Decimal("500.00"))  # type: ignore[assignment]
+    strategy._rsi14 = _ReadyIndicator(Decimal(rsi))  # type: ignore[assignment]
+    strategy._prev_ema5_above_ema10 = False
+    executor = _RecordingSignalIntentExecutor()
+    context.set_signal_intent_executor(executor)
+    bar = _signal_bar()
+    context.current_time = bar.end_time
+
+    strategy._on_fifteen_minute_bar(bar)
+
+    assert [intent.kind for intent in executor.intents] == (
+        [SignalIntentKind.ENTER] if should_enter else []
+    )
 
 
 def test_stock_action_plan_executor_selects_the_trade_asset() -> None:

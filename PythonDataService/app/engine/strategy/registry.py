@@ -23,6 +23,9 @@ from app.engine.pine_generators import (
 from app.engine.strategy.algorithms.deployment_validation import (
     DeploymentValidationConsecutiveGreen,
 )
+from app.engine.strategy.algorithms.ema_crossover_2_bps import (
+    EmaCrossover2BpsAlgorithm,
+)
 from app.engine.strategy.algorithms.ema_crossover_signal import (
     EmaCrossoverSignalAlgorithm,
 )
@@ -106,6 +109,41 @@ class EmaCrossoverSignalParams(EmaCrossoverParams):
 
     @model_validator(mode="after")
     def _validate_rsi_band(self) -> EmaCrossoverSignalParams:
+        if self.rsi_min >= self.rsi_max:
+            raise ValueError("rsi_min must be less than rsi_max")
+        return self
+
+
+class EmaCrossover2BpsParams(EmaCrossoverParams):
+    """Configurable gates shared by the Python strategy and its LEAN twin."""
+
+    gap_bps: float = Field(
+        2.0,
+        ge=0.0,
+        le=100.0,
+        allow_inf_nan=False,
+        title="Crossover gap (bps)",
+        description="Minimum EMA(5) minus EMA(10) crossover gap, measured in basis points of EMA(10).",
+    )
+    rsi_min: float = Field(
+        50.0,
+        ge=0.0,
+        le=100.0,
+        allow_inf_nan=False,
+        title="RSI lower gate",
+        description="Inclusive lower RSI(14) value allowed for entry.",
+    )
+    rsi_max: float = Field(
+        70.0,
+        ge=0.0,
+        le=100.0,
+        allow_inf_nan=False,
+        title="RSI upper gate",
+        description="Inclusive upper RSI(14) value allowed for entry.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_rsi_band(self) -> EmaCrossover2BpsParams:
         if self.rsi_min >= self.rsi_max:
             raise ValueError("rsi_min must be less than rsi_max")
         return self
@@ -428,6 +466,10 @@ class StrategyRegistration:
     # sharing a parity_group_id (see app/services/parity_companion.py).
     # None → honest "parity unavailable — no LEAN counterpart".
     lean_twin: str | None = None
+    # Validated strategy parameters that the LEAN twin consumes. The parity
+    # dispatcher copies these exact resolved values into the companion request;
+    # an empty tuple means the LEAN template is parameter-free.
+    lean_parameter_names: tuple[str, ...] = ()
     # Evidence-chart recipe resolved from the same validated parameter model
     # the strategy executes. Keeping this on the registration prevents the UI
     # from guessing strategy semantics from parameter names.
@@ -1351,6 +1393,38 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         ),
     ),
 }
+
+# Keep the new strategy structurally coupled to the canonical EMA signal
+# registration. Only its gap rule, names, and LEAN twin identity differ.
+_ema_signal_registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
+_STRATEGY_REGISTRY["ema_crossover_2_bps"] = replace(
+    _ema_signal_registration,
+    display_name="EMA Crossover 2 bps",
+    class_name="EmaCrossover2BpsAlgorithm",
+    description=_ema_signal_registration.description.replace(
+        "a 0.20 minimum gap",
+        "a configurable relative gap (2 basis points by default)",
+    ),
+    algorithm_pseudocode=_ema_signal_registration.algorithm_pseudocode.replace(
+        "gap_ok      = (EMA_fast - EMA_slow) >= 0.20",
+        "gap_bps     = 10,000 * (EMA_fast - EMA_slow) / EMA_slow\n"
+        "    gap_ok      = gap_bps >= gap_bps_parameter (default 2)",
+    ),
+    gotchas=[
+        *_ema_signal_registration.gotchas,
+        "The gap threshold is relative to EMA(10): 2 bps means 0.02%, "
+        "not $0.02 and not 2%. At a $500 slow EMA, the boundary is $0.10.",
+    ],
+    param_schema=EmaCrossover2BpsParams,
+    build=lambda p: EmaCrossover2BpsAlgorithm(
+        symbol=p.symbol,  # type: ignore[attr-defined]
+        gap_bps=p.gap_bps,  # type: ignore[attr-defined]
+        rsi_min=p.rsi_min,  # type: ignore[attr-defined]
+        rsi_max=p.rsi_max,  # type: ignore[attr-defined]
+    ),
+    lean_twin="ema_crossover_2_bps",
+    lean_parameter_names=("gap_bps", "rsi_min", "rsi_max"),
+)
 
 # Historical ledgers use this key and import path. Keep it executable but do
 # not offer it as a second picker option beside the migrated signal strategy.

@@ -490,6 +490,7 @@ def _dispatch_requested_parity_companion(
     request: EngineBacktestRequest,
     parity_group_id: str | None,
     study_id: int | None,
+    validated_parameters: dict[str, Any] | None = None,
 ) -> None:
     """Dispatch LEAN only when the persisted Python run belongs to a pair."""
     if study_id is None or parity_group_id is None:
@@ -499,6 +500,7 @@ def _dispatch_requested_parity_companion(
         request=request,
         parity_group_id=parity_group_id,
         left_execution_id=study_id,
+        validated_parameters=validated_parameters,
     )
 
 
@@ -1442,6 +1444,7 @@ def execute_engine_backtest(
         params_json=json.dumps(resolved_configuration.parameters, sort_keys=True),
         duration_ms=int((time.time() - _run_start) * 1000),
         commission_per_order=float(request.commission_per_order),
+        compatibility_profile=request.compatibility_profile,
         requested_engine=request.requested_engine,
         parity_group_id=parity_group_id,
     )
@@ -1455,6 +1458,7 @@ def execute_engine_backtest(
         request=request,
         parity_group_id=parity_group_id,
         study_id=response.study_id,
+        validated_parameters=resolved_configuration.parameters,
     )
 
     return response
@@ -1512,6 +1516,38 @@ def _serialize_chart_bar(b: TradeBar) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Study auto-save (fire-and-forget background task)
 # ---------------------------------------------------------------------------
+def _persisted_trade_net_pnl(
+    *,
+    trade: EngineTradeResponse,
+    commission_per_order: float,
+    compatibility_profile: Literal["us-equity-raw-ibkr-v1"] | None,
+) -> float:
+    """Return persisted round-trip dollar P&L under the executed fee policy.
+
+    Formula: net P&L = quantity * (exit_fill - entry_fill) - entry_fee - exit_fee.
+    Reference: the Strategy Lab realized-equity accounting contract in
+      ``docs/references/realized-equity-staircase-v1.md``; compatibility fees
+      use the QuantConnect IBKR equity tier cited by the canonical model.
+    Canonical implementation: gross trade P&L is carried by ``EngineTradeResponse``;
+      IBKR fees delegate to ``app.research.parity.ibkr_commission.IbkrEquityCommissionModel``.
+    Validated against:
+      ``tests/integration/test_engine_persistence_quantity_pnl.py::test_save_study_payload_uses_executed_ibkr_fees_for_compatibility_runs``.
+    """
+    gross_pnl = Decimal(str(trade.pnl_pts)) * Decimal(trade.quantity)
+    if compatibility_profile == COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1:
+        fee_model = IbkrEquityCommissionModel()
+        fees = fee_model.fee(
+            quantity=trade.quantity,
+            fill_price=Decimal(str(trade.entry_price)),
+        ) + fee_model.fee(
+            quantity=trade.quantity,
+            fill_price=Decimal(str(trade.exit_price)),
+        )
+    else:
+        fees = Decimal("2") * Decimal(str(commission_per_order))
+    return float(gross_pnl - fees)
+
+
 def _save_study_sync(
     *,
     response: EngineBacktestResponse,
@@ -1522,6 +1558,7 @@ def _save_study_sync(
     params_json: str,
     duration_ms: int,
     commission_per_order: float = 0.0,
+    compatibility_profile: Literal["us-equity-raw-ibkr-v1"] | None = None,
     requested_engine: Literal["python", "lean", "both"] = "python",
     parity_group_id: str | None = None,
 ) -> int | None:
@@ -1557,11 +1594,14 @@ def _save_study_sync(
                 "entryPrice": t.entry_price,
                 "exitPrice": t.exit_price,
                 "quantity": t.quantity,
-                # Dollar P&L net of commission, matching LEAN's persisted
-                # ``t.pnL`` semantics. The engine charges ``commission_per_order``
-                # on both entry and exit fills, so each round-trip incurs
-                # ``2 × commission_per_order``.
-                "pnL": t.pnl_pts * t.quantity - 2 * commission_per_order,
+                # Dollar P&L net of the fee policy the engine actually ran.
+                # Compatibility runs pin the IBKR tier even when the legacy
+                # flat-fee control is zero.
+                "pnL": _persisted_trade_net_pnl(
+                    trade=t,
+                    commission_per_order=commission_per_order,
+                    compatibility_profile=compatibility_profile,
+                ),
                 "cumulativePnL": 0,  # not tracked per-trade in engine format
                 "signalReason": t.signal_reason,
                 "isSyntheticExit": t.is_synthetic_exit,

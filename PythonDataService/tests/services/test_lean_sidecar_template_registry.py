@@ -6,6 +6,9 @@ from app.lean_sidecar.trusted_samples.deployment_validation import (
     DEPLOYMENT_VALIDATION_SOURCE,
 )
 from app.lean_sidecar.trusted_samples.ema_crossover import EMA_CROSSOVER_SOURCE
+from app.lean_sidecar.trusted_samples.ema_crossover_2_bps import (
+    EMA_CROSSOVER_2_BPS_SOURCE,
+)
 from app.lean_sidecar.trusted_samples.ema_crossover_signal import (
     EMA_CROSSOVER_SIGNAL_SOURCE,
 )
@@ -35,6 +38,13 @@ def test_ema_crossover_signal_brokerage_policy_is_interactive_brokers() -> None:
         TRUSTED_TEMPLATE_DEFINITIONS[TrustedTemplate.EMA_CROSSOVER_SIGNAL].brokerage_policy
         == "interactive_brokers"
     )
+
+
+def test_ema_crossover_two_bps_is_in_source_registry() -> None:
+    definition = TRUSTED_TEMPLATE_DEFINITIONS[TrustedTemplate.EMA_CROSSOVER_2_BPS]
+
+    assert definition.source is EMA_CROSSOVER_2_BPS_SOURCE
+    assert definition.brokerage_policy == "interactive_brokers"
 
 
 def test_deployment_validation_is_in_source_registry() -> None:

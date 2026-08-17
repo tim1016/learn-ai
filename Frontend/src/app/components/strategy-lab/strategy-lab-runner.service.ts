@@ -156,6 +156,7 @@ export class StrategyLabRunner {
         this.leanSidecar.nextTradingDayOpen(previousIsoDate(this.config.startDate())),
         this.leanSidecar.nextTradingDayOpen(this.config.endDate()),
       ]);
+      const strategyParameters = leanStrategyParameters(template, this.config.paramValues());
       this.leanJobId.set(
         await this.jobs.startJob("lean_engine_run", {
           request: {
@@ -166,6 +167,7 @@ export class StrategyLabRunner {
             start_ms_utc: startResolution.session_open_ms_utc,
             end_ms_utc: endResolution.session_open_ms_utc,
             data_policy: this.config.dataPolicy(),
+            ...(strategyParameters === undefined ? {} : { strategy_parameters: strategyParameters }),
           },
         }),
       );
@@ -362,6 +364,26 @@ export class StrategyLabRunner {
   private updateRunningState(): void {
     this.running.set(this.engineJobId() !== null || this.leanJobId() !== null);
   }
+}
+
+function leanStrategyParameters(
+  template: string,
+  values: Record<string, unknown>,
+): { gap_bps: number; rsi_min: number; rsi_max: number } | undefined {
+  if (template !== "ema_crossover_2_bps") return undefined;
+  return {
+    gap_bps: requiredFiniteNumber(values, "gap_bps"),
+    rsi_min: requiredFiniteNumber(values, "rsi_min"),
+    rsi_max: requiredFiniteNumber(values, "rsi_max"),
+  };
+}
+
+function requiredFiniteNumber(values: Record<string, unknown>, field: string): number {
+  const value = values[field];
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${field} must be a finite number`);
+  }
+  return value;
 }
 
 function httpErrorDetail(error: unknown): unknown {

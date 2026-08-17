@@ -33,17 +33,8 @@ import type {
 import { AssetIdentityComponent } from '../../../../shared/asset-identity/asset-identity.component';
 import { TimestampDisplayPipe } from '../../../../shared/timestamp';
 import { createAppChart } from '../../../../shared/charts/chart-utils';
-
-const CHART_THEME = {
-  bg: '#0f172a',
-  text: '#cbd5e1',
-  grid: 'rgba(148, 163, 184, 0.12)',
-  border: 'rgba(148, 163, 184, 0.25)',
-  crosshair: '#94a3b8',
-  surface: '#1e293b',
-};
-
-const COMBINED_CURVE_COLOR = '#a78bfa';
+import { ExhaustiveRunPanelComponent } from '../exhaustive-run-panel/exhaustive-run-panel.component';
+import { WalkForwardParameterComparisonComponent } from '../walk-forward-parameter-comparison/walk-forward-parameter-comparison.component';
 
 /**
  * Full-page detail view for a walk-forward analysis, mounted at
@@ -75,7 +66,9 @@ const COMBINED_CURVE_COLOR = '#a78bfa';
     DecimalPipe,
     PercentPipe,
     AssetIdentityComponent,
+    ExhaustiveRunPanelComponent,
     TimestampDisplayPipe,
+    WalkForwardParameterComparisonComponent,
   ],
   templateUrl: './walk-forward-detail-page.component.html',
   styleUrls: ['./walk-forward-detail-page.component.scss'],
@@ -169,38 +162,39 @@ export class WalkForwardDetailPageComponent implements AfterViewInit, OnDestroy 
   private createChart(): void {
     const el = this.chartEl()?.nativeElement;
     if (!el) return;
+    const theme = resolveChartTheme(el);
 
     this.chart = createAppChart(el, {
       width: el.clientWidth,
       height: 300,
-      layout: { background: { color: CHART_THEME.bg }, textColor: CHART_THEME.text },
+      layout: { background: { color: theme.background }, textColor: theme.text },
       grid: {
-        vertLines: { color: CHART_THEME.grid },
-        horzLines: { color: CHART_THEME.grid },
+        vertLines: { color: theme.grid },
+        horzLines: { color: theme.grid },
       },
       timeScale: {
         timeVisible: true,
         secondsVisible: false,
-        borderColor: CHART_THEME.border,
+        borderColor: theme.border,
       },
       crosshair: {
         mode: 0,
         vertLine: {
-          color: CHART_THEME.crosshair,
-          labelBackgroundColor: CHART_THEME.surface,
+          color: theme.crosshair,
+          labelBackgroundColor: theme.labelBackground,
         },
         horzLine: {
-          color: CHART_THEME.crosshair,
-          labelBackgroundColor: CHART_THEME.surface,
+          color: theme.crosshair,
+          labelBackgroundColor: theme.labelBackground,
         },
       },
-      rightPriceScale: { borderColor: CHART_THEME.border },
+      rightPriceScale: { borderColor: theme.border },
     });
 
     this.series = this.chart.addSeries(AreaSeries, {
-      lineColor: COMBINED_CURVE_COLOR,
-      topColor: 'rgba(167, 139, 250, 0.35)',
-      bottomColor: 'rgba(167, 139, 250, 0.02)',
+      lineColor: theme.series,
+      topColor: theme.seriesFill,
+      bottomColor: theme.seriesFade,
       lineWidth: 2,
       priceFormat: {
         type: 'custom',
@@ -253,4 +247,24 @@ function deduplicateByTime(points: AreaData[]): AreaData[] {
 function formatPct(value: unknown): string {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '?';
   return `${(value * 100).toFixed(0)}%`;
+}
+
+function resolveChartTheme(element: HTMLElement) {
+  return {
+    background: themeColor(element, '--bg-surface'),
+    text: themeColor(element, '--text-subtle'),
+    grid: themeColor(element, '--border'),
+    border: themeColor(element, '--border-light'),
+    crosshair: themeColor(element, '--text-secondary'),
+    labelBackground: themeColor(element, '--bg-elevated'),
+    series: themeColor(element, '--accent-text'),
+    seriesFill: themeColor(element, '--accent-soft'),
+    seriesFade: themeColor(element, '--accent-faint'),
+  };
+}
+
+function themeColor(element: HTMLElement, token: string): string {
+  const color = getComputedStyle(element).getPropertyValue(token).trim();
+  if (color.length === 0) throw new Error(`Required theme token ${token} is not defined`);
+  return color;
 }

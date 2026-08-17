@@ -1,0 +1,39 @@
+<p-dialog
+  [visible]="candidate() !== null"
+  (visibleChange)="onVisibleChange($event)"
+  [modal]="true"
+  [draggable]="false"
+  [resizable]="false"
+  closeAriaLabel="Close candidate fold evidence"
+  styleClass="exhaustive-folds-dialog"
+>
+  @if (candidate(); as row) {
+    <ng-template #header>
+      <div class="fold-dialog__header">
+        <span>Fixed-gap forward stability</span>
+        <strong>{{ row.parameters['gap_bps'] | number:'1.0-2' }} bps · 18 monthly tests</strong>
+      </div>
+    </ng-template>
+    @if (row.forward_stability; as stability) {
+      <p class="fold-dialog__lead">Each row reuses that fold’s six-month training score, then tests this fixed gap during the immediately following month. These are OOS results.</p>
+      <p-table [value]="stability.folds" [scrollable]="true" scrollHeight="28rem">
+        <ng-template #header>
+          <tr><th>Fold</th><th>Learn</th><th>Prove</th><th>Train Sharpe</th><th>OOS return</th><th>OOS Sharpe</th><th>Retention</th><th>Trades</th><th>Receipt</th></tr>
+        </ng-template>
+        <ng-template #body let-fold>
+          <tr>
+            <td>F{{ fold.fold_index + 1 }}</td>
+            <td class="date-cell">{{ fold.train_start_ms | timestampDisplay:'date-et' }} → {{ fold.train_end_ms | timestampDisplay:'date-et' }}</td>
+            <td class="date-cell">{{ fold.test_start_ms | timestampDisplay:'date-et' }} → {{ fold.test_end_ms | timestampDisplay:'date-et' }}</td>
+            <td>{{ fold.train_metrics.sharpe_ratio === null ? '—' : (fold.train_metrics.sharpe_ratio | number:'1.2-2') }}</td>
+            <td>{{ fold.test_metrics.total_return_pct | percent:'1.2-2' }}</td>
+            <td>{{ fold.test_metrics.sharpe_ratio === null ? '—' : (fold.test_metrics.sharpe_ratio | number:'1.2-2') }}</td>
+            <td>{{ fold.retention === null ? '—' : (fold.retention | percent:'1.0-0') }}</td>
+            <td>{{ fold.test_metrics.total_trades }}</td>
+            <td>@if (fold.test_run_id) { <a [routerLink]="['/research-lab/strategy-runs', fold.test_run_id]">Open</a> } @else { — }</td>
+          </tr>
+        </ng-template>
+      </p-table>
+    }
+  }
+</p-dialog>

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Backend.Models.MarketData;
@@ -103,6 +104,13 @@ public record PersistLeanRunPayload(
 
     [JsonPropertyName("parity_group_id")]
     public string? ParityGroupId { get; init; }
+
+    /// <summary>
+    /// Exact strategy configuration used by the producer. The persistence
+    /// service pins Symbol from the top-level validated instrument field.
+    /// </summary>
+    [JsonPropertyName("parameters")]
+    public IReadOnlyDictionary<string, JsonElement>? Parameters { get; init; }
 }
 
 public record PersistLeanTradePayload(

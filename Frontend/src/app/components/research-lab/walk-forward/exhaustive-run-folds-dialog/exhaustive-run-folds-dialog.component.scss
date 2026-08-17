@@ -1,0 +1,67 @@
+:host {
+  display: contents;
+}
+
+:host ::ng-deep .exhaustive-folds-dialog {
+  width: min(76rem, calc(100vw - var(--space-8)));
+  border: 1px solid var(--border-light);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+
+  .p-dialog-header,
+  .p-dialog-content {
+    background: var(--bg-surface);
+    color: var(--text-primary);
+  }
+
+  .p-dialog-header {
+    border-bottom: 1px solid var(--border);
+  }
+
+  th {
+    background: var(--bg-sunken);
+    color: var(--text-secondary);
+    white-space: nowrap;
+  }
+
+  td {
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    white-space: nowrap;
+  }
+
+  a {
+    color: var(--accent-text);
+  }
+}
+
+.fold-dialog__header {
+  display: grid;
+  gap: var(--space-1);
+
+  span {
+    color: var(--text-subtle);
+    font-family: var(--font-mono);
+    font-size: var(--fs-xxs);
+    letter-spacing: var(--ls-caps);
+    text-transform: uppercase;
+  }
+
+  strong {
+    font-size: var(--fs-xl);
+  }
+}
+
+.fold-dialog__lead {
+  max-width: 76ch;
+  margin: 0 0 var(--space-4);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+}
+
+.date-cell {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}

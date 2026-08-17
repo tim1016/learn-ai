@@ -268,8 +268,8 @@ class EmaCrossoverSignalAlgorithm(Strategy):
             # Entry check.
             fresh_crossover = current_above and not self._prev_ema5_above_ema10
             gap_ok = self._gap_is_sufficient(ema5_val, ema10_val)
-            rsi_gate_min, rsi_gate_max = self._rsi_gate_bounds()
-            rsi_ok = rsi_gate_min <= rsi_val <= rsi_gate_max
+            rsi_lower, rsi_upper = self._rsi_gate_bounds()
+            rsi_ok = rsi_lower <= rsi_val <= rsi_upper
 
             if fresh_crossover and gap_ok and rsi_ok:
                 # Stash the indicator snapshot — it describes the
@@ -291,9 +291,11 @@ class EmaCrossoverSignalAlgorithm(Strategy):
                 # The insight describes the signal stream. The action plan
                 # may select a different traded asset for the same intent.
                 rsi_float = float(rsi_val)
-                # Confidence derived from RSI position in the 50-70 band.
-                # Peak confidence at RSI=60 (center of the band).
-                rsi_position = (rsi_float - 50.0) / 20.0  # 0.0 at 50, 1.0 at 70
+                # Confidence derived from RSI position in the configured
+                # gate. Peak confidence is at the center of the band.
+                rsi_lower_float = float(rsi_lower)
+                rsi_upper_float = float(rsi_upper)
+                rsi_position = (rsi_float - rsi_lower_float) / (rsi_upper_float - rsi_lower_float)
                 confidence = 0.5 + 0.3 * (1.0 - abs(rsi_position - 0.5))
 
                 self.ctx.emit_insight(

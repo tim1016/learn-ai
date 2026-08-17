@@ -10407,6 +10407,182 @@
         "title": "CalculateIndicatorsResponse",
         "type": "object"
       },
+      "CandidateFoldEvidence": {
+        "additionalProperties": false,
+        "description": "One fixed-gap forward fold plus its matching training evidence.",
+        "properties": {
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "fold_index": {
+            "minimum": 0.0,
+            "title": "Fold Index",
+            "type": "integer"
+          },
+          "retention": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retention"
+          },
+          "status": {
+            "enum": [
+              "completed",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "test_end_ms": {
+            "minimum": 0.0,
+            "title": "Test End Ms",
+            "type": "integer"
+          },
+          "test_metrics": {
+            "$ref": "#/components/schemas/RunMetrics"
+          },
+          "test_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Test Run Id"
+          },
+          "test_start_ms": {
+            "minimum": 0.0,
+            "title": "Test Start Ms",
+            "type": "integer"
+          },
+          "train_end_ms": {
+            "minimum": 0.0,
+            "title": "Train End Ms",
+            "type": "integer"
+          },
+          "train_metrics": {
+            "$ref": "#/components/schemas/RunMetrics"
+          },
+          "train_run_id": {
+            "title": "Train Run Id",
+            "type": "string"
+          },
+          "train_start_ms": {
+            "minimum": 0.0,
+            "title": "Train Start Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fold_index",
+          "train_start_ms",
+          "train_end_ms",
+          "test_start_ms",
+          "test_end_ms",
+          "train_run_id",
+          "test_run_id",
+          "train_metrics",
+          "test_metrics",
+          "status"
+        ],
+        "title": "CandidateFoldEvidence",
+        "type": "object"
+      },
+      "CandidateForwardStability": {
+        "additionalProperties": false,
+        "description": "Fixed-gap evidence across every canonical forward test fold.",
+        "properties": {
+          "alpha_decay": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alpha Decay"
+          },
+          "folds": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateFoldEvidence"
+            },
+            "title": "Folds",
+            "type": "array"
+          },
+          "mean_fold_retention": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean Fold Retention"
+          },
+          "mean_oos_sharpe": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mean Oos Sharpe"
+          },
+          "median_oos_sharpe": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Median Oos Sharpe"
+          },
+          "pct_profitable_folds": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pct Profitable Folds"
+          },
+          "walk_forward_id": {
+            "title": "Walk Forward Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "walk_forward_id",
+          "folds"
+        ],
+        "title": "CandidateForwardStability",
+        "type": "object"
+      },
       "ChannelHealth": {
         "additionalProperties": false,
         "description": "One submission-affecting stream's health fact, with its age (P7).\n\n``observed_at_ms`` is mandatory: no health fact is rendered without an\nobservation time. ``reason`` is empty when healthy.",
@@ -15908,6 +16084,35 @@
         "title": "EffectiveSampleSizeResponse",
         "type": "object"
       },
+      "EmaCrossover2BpsStrategyParametersModel": {
+        "additionalProperties": false,
+        "description": "Validated runtime gates accepted by the parameterized LEAN twin.",
+        "properties": {
+          "gap_bps": {
+            "default": 2.0,
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Gap Bps",
+            "type": "number"
+          },
+          "rsi_max": {
+            "default": 70.0,
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Rsi Max",
+            "type": "number"
+          },
+          "rsi_min": {
+            "default": 50.0,
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Rsi Min",
+            "type": "number"
+          }
+        },
+        "title": "EmaCrossover2BpsStrategyParametersModel",
+        "type": "object"
+      },
       "EmergencyFlattenRequest": {
         "description": "Body for the account-wide emergency flatten (\u00a7 7.2 #6).\n\nReaches the held Account Clerk independent of any live binding, so an\noperator can flatten after a halt/poison. The Clerk closes intake, records\ncancellation uncertainty, writes any liquidations under its own broker\nsession, and only completes after a fresh paper-account snapshot is flat.",
         "properties": {
@@ -17355,6 +17560,324 @@
         "title": "ExecutionsSummary",
         "type": "object"
       },
+      "ExhaustiveCandidateResult": {
+        "additionalProperties": false,
+        "description": "Full-data and forward-stability evidence for one unique specification.",
+        "properties": {
+          "appearance_count": {
+            "minimum": 1.0,
+            "title": "Appearance Count",
+            "type": "integer"
+          },
+          "appearance_fold_indices": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Appearance Fold Indices",
+            "type": "array"
+          },
+          "best_fold_rank": {
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Best Fold Rank",
+            "type": "integer"
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "forward_stability": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CandidateForwardStability"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "full_period_metrics": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunMetrics"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "full_period_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Full Period Run Id"
+          },
+          "latest_selected_fold_index": {
+            "minimum": 0.0,
+            "title": "Latest Selected Fold Index",
+            "type": "integer"
+          },
+          "mean_selection_score": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Mean Selection Score",
+            "type": "number"
+          },
+          "parameters": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Parameters",
+            "type": "object"
+          },
+          "status": {
+            "enum": [
+              "completed",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "strategy_spec_hash": {
+            "title": "Strategy Spec Hash",
+            "type": "string"
+          },
+          "trade_recency": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TradeRecencySummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "parameters",
+          "strategy_spec_hash",
+          "appearance_count",
+          "appearance_fold_indices",
+          "best_fold_rank",
+          "latest_selected_fold_index",
+          "mean_selection_score",
+          "status"
+        ],
+        "title": "ExhaustiveCandidateResult",
+        "type": "object"
+      },
+      "ExhaustiveRunConfig": {
+        "additionalProperties": false,
+        "description": "Frozen inputs and lineage for an Exhaustive Run artifact.",
+        "properties": {
+          "commission_per_order": {
+            "minimum": 0.0,
+            "title": "Commission Per Order",
+            "type": "number"
+          },
+          "created_at_ms": {
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "data_root_revision": {
+            "title": "Data Root Revision",
+            "type": "string"
+          },
+          "end_ms": {
+            "minimum": 0.0,
+            "title": "End Ms",
+            "type": "integer"
+          },
+          "exhaustive_run_id": {
+            "title": "Exhaustive Run Id",
+            "type": "string"
+          },
+          "fill_mode": {
+            "title": "Fill Mode",
+            "type": "string"
+          },
+          "initial_cash": {
+            "exclusiveMinimum": 0.0,
+            "title": "Initial Cash",
+            "type": "number"
+          },
+          "max_candidates_per_fold": {
+            "const": 5,
+            "default": 5,
+            "title": "Max Candidates Per Fold"
+          },
+          "protocol_id": {
+            "const": "spy-ema-exhaustive-run",
+            "default": "spy-ema-exhaustive-run",
+            "title": "Protocol Id"
+          },
+          "protocol_version": {
+            "const": "1.0",
+            "default": "1.0",
+            "title": "Protocol Version"
+          },
+          "random_seed": {
+            "title": "Random Seed",
+            "type": "integer"
+          },
+          "ranking_method": {
+            "const": "equal_weight_train_sharpe_return_percentile",
+            "default": "equal_weight_train_sharpe_return_percentile",
+            "title": "Ranking Method"
+          },
+          "recent_window_start_ms": {
+            "minimum": 0.0,
+            "title": "Recent Window Start Ms",
+            "type": "integer"
+          },
+          "slippage_per_share": {
+            "minimum": 0.0,
+            "title": "Slippage Per Share",
+            "type": "number"
+          },
+          "source_protocol_id": {
+            "title": "Source Protocol Id",
+            "type": "string"
+          },
+          "source_protocol_version": {
+            "title": "Source Protocol Version",
+            "type": "string"
+          },
+          "source_walk_forward_id": {
+            "title": "Source Walk Forward Id",
+            "type": "string"
+          },
+          "start_ms": {
+            "minimum": 0.0,
+            "title": "Start Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "exhaustive_run_id",
+          "source_walk_forward_id",
+          "source_protocol_id",
+          "source_protocol_version",
+          "start_ms",
+          "end_ms",
+          "recent_window_start_ms",
+          "initial_cash",
+          "fill_mode",
+          "commission_per_order",
+          "slippage_per_share",
+          "random_seed",
+          "data_root_revision",
+          "created_at_ms"
+        ],
+        "title": "ExhaustiveRunConfig",
+        "type": "object"
+      },
+      "ExhaustiveRunResponse": {
+        "additionalProperties": false,
+        "description": "One persisted Exhaustive Run config/result pair.",
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/ExhaustiveRunConfig"
+          },
+          "result": {
+            "$ref": "#/components/schemas/ExhaustiveRunResult"
+          }
+        },
+        "required": [
+          "config",
+          "result"
+        ],
+        "title": "ExhaustiveRunResponse",
+        "type": "object"
+      },
+      "ExhaustiveRunResult": {
+        "additionalProperties": false,
+        "description": "Sortable result set plus every fold-level selection receipt.",
+        "properties": {
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/ExhaustiveCandidateResult"
+            },
+            "title": "Candidates",
+            "type": "array"
+          },
+          "completed_at_ms": {
+            "minimum": 0.0,
+            "title": "Completed At Ms",
+            "type": "integer"
+          },
+          "created_at_ms": {
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "exhaustive_run_id": {
+            "title": "Exhaustive Run Id",
+            "type": "string"
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "selections": {
+            "items": {
+              "$ref": "#/components/schemas/FoldCandidateSelection"
+            },
+            "title": "Selections",
+            "type": "array"
+          },
+          "source_walk_forward_id": {
+            "title": "Source Walk Forward Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "completed",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "exhaustive_run_id",
+          "source_walk_forward_id",
+          "selections",
+          "candidates",
+          "status",
+          "created_at_ms",
+          "completed_at_ms"
+        ],
+        "title": "ExhaustiveRunResult",
+        "type": "object"
+      },
       "ExitBlock-Input": {
         "additionalProperties": false,
         "properties": {
@@ -18546,6 +19069,58 @@
           "positions"
         ],
         "title": "FleetExplainedBucket",
+        "type": "object"
+      },
+      "FoldCandidateSelection": {
+        "additionalProperties": false,
+        "description": "One candidate retained from one fold's training-only leaderboard.",
+        "properties": {
+          "fold_index": {
+            "minimum": 0.0,
+            "title": "Fold Index",
+            "type": "integer"
+          },
+          "fold_rank": {
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Fold Rank",
+            "type": "integer"
+          },
+          "parameters": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Parameters",
+            "type": "object"
+          },
+          "selection_score": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Selection Score",
+            "type": "number"
+          },
+          "strategy_spec_hash": {
+            "title": "Strategy Spec Hash",
+            "type": "string"
+          },
+          "train_metrics": {
+            "$ref": "#/components/schemas/RunMetrics"
+          },
+          "train_run_id": {
+            "title": "Train Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fold_index",
+          "fold_rank",
+          "parameters",
+          "strategy_spec_hash",
+          "train_run_id",
+          "train_metrics",
+          "selection_score"
+        ],
+        "title": "FoldCandidateSelection",
         "type": "object"
       },
       "FoldResult": {
@@ -38376,6 +38951,28 @@
         "title": "SpecTradeResponse",
         "type": "object"
       },
+      "SpyEmaExhaustiveJobRequest": {
+        "additionalProperties": false,
+        "description": "Frozen Exhaustive Run request linked to canonical SPY EMA V1 evidence.",
+        "properties": {
+          "jobId": {
+            "minLength": 1,
+            "title": "Jobid",
+            "type": "string"
+          },
+          "walkForwardId": {
+            "pattern": "^[0-9a-f]{32}$",
+            "title": "Walkforwardid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "jobId",
+          "walkForwardId"
+        ],
+        "title": "SpyEmaExhaustiveJobRequest",
+        "type": "object"
+      },
       "SpyEmaWalkForwardJobRequest": {
         "additionalProperties": false,
         "description": "Frozen V1 protocol job; clients may provide no research overrides.",
@@ -42156,6 +42753,83 @@
         "title": "ToleranceResponse",
         "type": "object"
       },
+      "TradeRecencySummary": {
+        "additionalProperties": false,
+        "description": "Completed-trade concentration in the final six study months.",
+        "properties": {
+          "last_trade_exit_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Trade Exit Ms"
+          },
+          "prior_trade_count": {
+            "minimum": 0.0,
+            "title": "Prior Trade Count",
+            "type": "integer"
+          },
+          "recent_trade_count": {
+            "minimum": 0.0,
+            "title": "Recent Trade Count",
+            "type": "integer"
+          },
+          "recent_trade_share": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recent Trade Share"
+          },
+          "recent_vs_prior_rate_ratio": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recent Vs Prior Rate Ratio"
+          },
+          "recent_window_end_ms": {
+            "minimum": 0.0,
+            "title": "Recent Window End Ms",
+            "type": "integer"
+          },
+          "recent_window_start_ms": {
+            "minimum": 0.0,
+            "title": "Recent Window Start Ms",
+            "type": "integer"
+          },
+          "total_trade_count": {
+            "minimum": 0.0,
+            "title": "Total Trade Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "recent_window_start_ms",
+          "recent_window_end_ms",
+          "recent_trade_count",
+          "prior_trade_count",
+          "total_trade_count"
+        ],
+        "title": "TradeRecencySummary",
+        "type": "object"
+      },
       "TradeSimRunBody": {
         "properties": {
           "bars": {
@@ -42694,6 +43368,17 @@
             "title": "Starting Cash",
             "type": "number"
           },
+          "strategy_parameters": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EmaCrossover2BpsStrategyParametersModel"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Validated strategy-logic parameters for a bundled trusted template. Currently accepted only by ema_crossover_2_bps; omitted values use that template's canonical 2/50/70 defaults."
+          },
           "symbol": {
             "anyOf": [
               {
@@ -42850,6 +43535,7 @@
           "reconciliation",
           "ema_crossover",
           "ema_crossover_signal",
+          "ema_crossover_2_bps",
           "deployment_validation"
         ],
         "title": "TrustedTemplate",
@@ -56756,6 +57442,49 @@
         ]
       }
     },
+    "/api/jobs-internal/spy-ema-exhaustive": {
+      "post": {
+        "description": "Run the frozen full-data plus fixed-gap stability protocol.",
+        "operationId": "start_spy_ema_exhaustive_job_api_jobs_internal_spy_ema_exhaustive_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpyEmaExhaustiveJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Start Spy Ema Exhaustive Job Api Jobs Internal Spy Ema Exhaustive Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Spy Ema Exhaustive Job",
+        "tags": [
+          "jobs-internal"
+        ]
+      }
+    },
     "/api/jobs-internal/spy-ema-walk-forward": {
       "post": {
         "description": "Run the immutable SPY EMA V1 protocol behind the jobs boundary.",
@@ -60110,6 +60839,94 @@
         "summary": "Get Documentation",
         "tags": [
           "research"
+        ]
+      }
+    },
+    "/api/research/exhaustive-runs/by-walk-forward/{walk_forward_id}": {
+      "get": {
+        "description": "Load the newest Exhaustive Run derived from one walk-forward receipt.",
+        "operationId": "get_latest_exhaustive_run_for_walk_forward_api_research_exhaustive_runs_by_walk_forward__walk_forward_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "walk_forward_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{32}$",
+              "title": "Walk Forward Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExhaustiveRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Latest Exhaustive Run For Walk Forward",
+        "tags": [
+          "research-exhaustive-runs"
+        ]
+      }
+    },
+    "/api/research/exhaustive-runs/{exhaustive_run_id}": {
+      "get": {
+        "description": "Load one Exhaustive Run by its immutable artifact id.",
+        "operationId": "get_exhaustive_run_api_research_exhaustive_runs__exhaustive_run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "exhaustive_run_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{32}$",
+              "title": "Exhaustive Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExhaustiveRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Exhaustive Run",
+        "tags": [
+          "research-exhaustive-runs"
         ]
       }
     },

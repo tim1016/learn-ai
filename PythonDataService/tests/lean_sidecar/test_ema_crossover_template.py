@@ -7,6 +7,9 @@ import ast
 import pytest
 
 from app.lean_sidecar.trusted_samples.ema_crossover import EMA_CROSSOVER_SOURCE
+from app.lean_sidecar.trusted_samples.ema_crossover_2_bps import (
+    EMA_CROSSOVER_2_BPS_SOURCE,
+)
 from app.lean_sidecar.trusted_samples.ema_crossover_signal import (
     EMA_CROSSOVER_SIGNAL_SOURCE,
 )
@@ -15,6 +18,17 @@ from app.lean_sidecar.trusted_samples.ema_crossover_signal import (
 def test_signal_template_reuses_the_single_lean_source_of_truth() -> None:
     """The migrated strategy gets its own template key without source drift."""
     assert EMA_CROSSOVER_SIGNAL_SOURCE is EMA_CROSSOVER_SOURCE
+
+
+def test_two_bps_template_reads_configurable_gap_and_rsi_gates() -> None:
+    ast.parse(EMA_CROSSOVER_2_BPS_SOURCE)
+    assert "GAP_BPS_DEFAULT = 2.0" in EMA_CROSSOVER_2_BPS_SOURCE
+    assert 'GetParameter("gap_bps")' in EMA_CROSSOVER_2_BPS_SOURCE
+    assert 'GetParameter("rsi_min")' in EMA_CROSSOVER_2_BPS_SOURCE
+    assert 'GetParameter("rsi_max")' in EMA_CROSSOVER_2_BPS_SOURCE
+    assert "gap_bps = 10000.0 * (fast - slow) / slow" in EMA_CROSSOVER_2_BPS_SOURCE
+    assert "gap_ok = gap_bps >= self.gap_bps_min" in EMA_CROSSOVER_2_BPS_SOURCE
+    assert "rsi_ok = self.rsi_lo <= rsi <= self.rsi_hi" in EMA_CROSSOVER_2_BPS_SOURCE
 
 
 def test_source_is_non_empty_string() -> None:

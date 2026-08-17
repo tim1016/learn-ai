@@ -133,6 +133,7 @@ async def _persist_completed_run(
         ),
         parity_group_id=request.parity_group_id,
         requested_engine=request.requested_engine,
+        parameters=dict(request.strategy_parameters),
     )
     return await persist_via_dotnet(payload=persist_payload, base_url=backend_url)
 
@@ -216,6 +217,10 @@ class TrustedRunRequest:
     # StrategyExecution row so the .NET persist step can compute the
     # frozen ParityVerdict for the group.
     parity_group_id: str | None = None
+    # Validated numeric parameters for the selected bundled template. A tuple
+    # keeps the frozen request deeply immutable while remaining easy to merge
+    # into LEAN's string-valued config and the numeric audit manifest.
+    strategy_parameters: tuple[tuple[str, float], ...] = ()
 
     @property
     def symbol(self) -> str:
@@ -769,6 +774,7 @@ async def run_trusted_sample(
             "bar_minutes": str(bar_minutes_for_config),
             "session": request.data_policy.session,
             "adjustment": polygon_adjustment,
+            **{name: str(value) for name, value in request.strategy_parameters},
         }
     )
     config_path = stage_lean_config(workspace, config)
@@ -1060,6 +1066,7 @@ def _build_manifest(
             "bar_minutes": request.data_policy.strategy_bars.multiplier,
             "session": request.data_policy.session,
             "adjustment": "raw" if not request.data_policy.adjusted else "adjusted",
+            **dict(request.strategy_parameters),
         },
         # API boundary timestamps are already int64 ms UTC; pass them
         # through unchanged so the manifest's recorded window matches

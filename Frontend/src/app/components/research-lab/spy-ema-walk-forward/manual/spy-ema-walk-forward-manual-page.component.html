@@ -1,0 +1,44 @@
+<div class="manual-page">
+  <app-page-header
+    eyebrow="Internal field manual · Protocol V1.0"
+    title="SPY EMA walk-forward: from research to execution"
+    icon="pi-book"
+  >
+    <a slot="actions" routerLink="/research-lab/backtests/spy-ema-walk-forward">
+      <i class="pi pi-arrow-left" aria-hidden="true"></i> Back to study
+    </a>
+    <a
+      slot="actions"
+      href="/assets/docs/spy-ema-walk-forward-user-manual.md"
+      target="_blank"
+      rel="noopener"
+    >
+      Raw markdown <i class="pi pi-external-link" aria-hidden="true"></i>
+    </a>
+  </app-page-header>
+
+  <div class="manual-shell">
+    <nav class="manual-index" aria-label="User manual sections">
+      <span class="manual-index__eyebrow">Reading path</span>
+      <a [routerLink]="[]" fragment="start-here">Start here</a>
+      <a [routerLink]="[]" fragment="what-was-implemented">What was implemented</a>
+      <a [routerLink]="[]" fragment="how-the-analysis-works">How the analysis works</a>
+      <a [routerLink]="[]" fragment="how-to-run">How to run it</a>
+      <a [routerLink]="[]" fragment="how-to-read">How to read the evidence</a>
+      <a [routerLink]="[]" fragment="decision-gate">The decision gate</a>
+      <a [routerLink]="[]" fragment="future-execution">Future execution path</a>
+      <a [routerLink]="[]" fragment="other-strategies">Other strategies</a>
+      <a [routerLink]="[]" fragment="technical-details">Technical details</a>
+      <a [routerLink]="[]" fragment="limitations">Limitations</a>
+      <a [routerLink]="[]" fragment="glossary">Glossary</a>
+    </nav>
+
+    <article class="manual-document">
+      <div class="manual-thesis">
+        <span>Core idea</span>
+        <p>Validate the rule that chooses the threshold—not one lucky historical threshold.</p>
+      </div>
+      <app-markdown-viewer [src]="src" [scrollTo]="fragment()" />
+    </article>
+  </div>
+</div>
