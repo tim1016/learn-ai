@@ -80,6 +80,7 @@ have their decision preserved here.
 | 0032 | Broker contract v2 and verbatim capture |
 | 0033 | Account custody clocks and safety composition |
 | 0035 | Alpaca Account Clerk event-sourced SQLite authority (supersedes JSONL-authority parts of 0001/0008/0030/0033 for Alpaca only; proposed) |
+| 0036 | One flatness boundary (`abs(q) >= 1e-9`), owned by the backend; Angular holds no flatness verdict. Succeeds ADR 0013's no-frontend-derived-verdicts principle for numeric boundaries |
 
 ---
 
@@ -123,6 +124,10 @@ have their decision preserved here.
 | `docs/audits/computational-fidelity-2026-04-22-addendum.md` | Timestamp ban motivation | Addendum cited by same rule |
 | `docs/audits/structural-integrity-2026-04-22.md` | Known violation baseline | Historical context |
 | `docs/audits/bot-control-8bot-call-graph-audit-2026-07-28.md` | Eight-bot call-graph evidence | Supporting investigation only; its open findings are tracked in `docs/known-gaps.md`, and it is never an operator procedure |
+| `docs/audits/clerk-lineage-reachability-2026-08-17.md` | Alpaca-vs-IBKR Clerk lineage coupling and request reachability | Supporting evidence for wayfinder #1589 / ADR-0030/0032/0035 scope questions; distinguishes *executed* from merely *imported* |
+| `docs/audits/numeric-authority-census-2026-08-17.md` | P&L / exposure / position implementation census | Supporting evidence for #1590 and ADR 0036; refutes the suspected FIFO duplication |
+| `docs/audits/state-writer-census-2026-08-17.md` | Lifecycle and deploy state-writer inventory | Supporting evidence for #1591; input to the single-writer decision (#1598) |
+| `docs/audits/submit-to-custody-fail-open-sweep-2026-08-17.md` | Alpaca submit-to-custody fail-open seams (5 confirmed, 9 refuted) | Supporting evidence for #1592; its confirmed seams are landed in `docs/known-gaps.md` via #1604 |
 | `docs/audits/{three-bot-lifecycle-2026-07-23,2026-07-23-findings-corrected,eight-bot-deploy-ui-2026-07-27,deployment-validation-connectivity-incident-2026-07-27}.md` | Retired IBKR Bot Control validation and incident provenance | Historical evidence only; use the Broker V2 manual and `known-gaps.md` for current truth |
 | `docs/bars-open-attribute-fix.md` | IBKR bar handling | Surgical bug-fix note for `ib_async.RealTimeBar.open_` |
 | `docs/codex-phase-1-4-audit.md` | IBKR Phases 1-4 code audit | "Most recent code audit" per `ibkr-integration-authority.md` |

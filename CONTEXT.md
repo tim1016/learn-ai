@@ -1462,3 +1462,25 @@ Authority: ADR-0015 § Amendment 2026-07-08 (b).
   file writes only and is never a causal clock.
 - **Account epoch** — the accepting Clerk generation's bounded period of valid
   broker proof. Facts from an invalidated epoch cannot authorize a new entry.
+
+## Flatness boundary (resolved 2026-08-17)
+
+Decision record: ADR 0036. Sharpened during a `grill-with-docs` session on
+wayfinder ticket #1597, after the numeric authority census found the word doing
+load-bearing work with no definition behind it.
+
+- **Flat** — a quantity small enough that the system treats it as no position.
+  One rule decides it everywhere: `abs(quantity) >= 1e-9` is exposure, anything
+  smaller is flat. Exactly `1e-9` is exposure. There is no second threshold and
+  no surface that decides this for itself.
+  _Avoid_: zero position, empty, no exposure, "effectively flat".
+- **Exposure** — a quantity the flatness rule classifies as a position. Used of
+  a symbol, an instance, or an account; the rule is the same at every altitude.
+  Distinct from **Account exposure** (the broker-observed net position) and
+  **Instance-attributed account exposure** (the Clerk's identity-backed share of
+  it), which name *whose* exposure it is, not *whether* there is any.
+- **Lot exhaustion** — whether a FIFO lot has been fully consumed by offsetting
+  fills. A question about a lot, not about a position, and deliberately **not**
+  governed by the flatness rule. Naming the two alike is what previously let a
+  P&L tolerance decide an exposure question.
+  _Avoid_: flat lot, closed lot, zeroed lot.
