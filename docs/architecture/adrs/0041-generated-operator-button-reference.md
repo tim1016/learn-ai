@@ -14,15 +14,19 @@
 
 Three measurements, all against `9d6fe9c65`.
 
-**1. Only one vocabulary diverged.** The manual documents nine closed
-vocabularies. Eight — station ids, station states, hold reasons, reconciliation
-verdicts, channel states, phases, desired states, duty outcomes — are **fully
-documented**, every code present. Only `ActionId` diverges, and `DesiredState`
-misses one value (`PAUSED`).
+**1. Two vocabularies diverged, and only one badly.** The manual documents nine
+closed vocabularies. **Seven** — station ids, station states, hold reasons,
+reconciliation verdicts, channel states, phases, duty outcomes — are **fully
+documented**, every code present. `DesiredState` misses one value (`PAUSED`).
+`ActionId` misses nine.
 
-So it is not true that nothing kept the manual honest. Something did, for eight
-of nine. What failed is the one list that **grew**: the custody and recovery
-actions were added after the manual was written, and nothing brought them in.
+*(An earlier draft called this "eight of nine fully documented" while naming
+`DesiredState`'s gap in the same sentence. Seven, one small gap, one large one.)*
+
+So it is not true that nothing kept the manual honest. Something did, for seven
+of nine, and nearly so for the eighth. What failed is the list that **grew**: the
+custody and recovery actions were added after the manual was written, and nothing
+brought them in.
 
 **2. The backend already authors all of it, correctly.** Every one of the 19
 `ActionId` values has a `label` and an `explanation` in `OPERATOR_COPY`,
@@ -79,14 +83,50 @@ they are already correct. Generating them costs nothing extra, removes a second
 hand-copy, and closes the `DesiredState`/`PAUSED` gap as a side effect. Correct
 today is not the same as protected.
 
-**4. One artifact, two renderings.** The repo markdown is the source; the in-app
-view at `/brokers/:broker/manual` renders it. The live walk confirmed they agree.
-Neither is a separate authority.
+**4. One artifact, two renderings — and today there are two artifacts.**
+
+`docs/broker-v2-operator-manual.md` is the source. The in-app view at
+`/brokers/:broker/manual` must render **that** file, and the generation gate must
+cover whatever the app actually loads.
+
+This is not hypothetical housekeeping. `broker-v2-manual-page.component.ts:69`
+loads `/assets/docs/broker-v2-operator-manual.md`, a **second committed copy**,
+and the two have already drifted: the served copy documents 11 actions, the
+repo-root copy 9. A root-only generator would leave CI reporting the canonical
+file clean while operators read a stale page — the exact failure this ADR exists
+to make impossible, reintroduced through the back door. An earlier draft asserted
+the two agreed; the live walk did not check, and they do not.
+
+So the contract covers both paths: the generator writes the canonical file, the
+Frontend asset is produced from it (copied at build time or regenerated in the
+same step), and Decision 5's `git diff --exit-code` gate runs over **both**. The
+two copies are reconciled once, before the gate is switched on — the gate cannot
+be the thing that discovers the drift.
 
 **5. CI fails on a hand-edited generated block**, using the pattern the repo
 already runs for the OpenAPI and GraphQL snapshots: regenerate, then
 `git diff --exit-code`. Divergence of *content* becomes impossible; the gate
 catches divergence of *process*.
+
+**6. Generation is category-aware, and `ActionId` is pinned to what the gate iterates.**
+
+Two seams make a naive "dump `OPERATOR_COPY` into a table" generator wrong:
+
+- `OPERATOR_COPY` is not code-for-code. The emitted `DutyOutcomeKind` is
+  `STOPPED`, but its copy is stored under the synthetic key `STOPPED_OUTCOME`
+  (`vocabulary.py:167`) so it cannot collide with the desired-state sense of
+  `STOPPED`; `duty_outcome_copy_key` (`:352-354`) translates. A direct dump would
+  document `STOPPED_OUTCOME` as an emitted code, or attach desired-state copy to
+  the duty outcome. The generator renders **emitted** codes, resolving copy
+  through the same helper the projection uses.
+- `ActionId` (a `Literal`, `vocabulary.py:83`) and `ACTION_IDS` (a tuple, `:104`)
+  are maintained separately, and `ALL_VOCABULARY_CODES` unions only the tuple
+  (`:338`). Adding a member to the `Literal` alone makes the request schema accept
+  it while the copy test stays green and the generator omits it — recreating this
+  ADR's exact drift, one level down. A parity assertion is owed
+  (`set(get_args(ActionId)) == set(ACTION_IDS)`), or the tuple derives from the
+  type alias. Measurement 3's "an action cannot enter the enum undocumented" holds
+  only once that exists.
 
 ## Considered and rejected
 
