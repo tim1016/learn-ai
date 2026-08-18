@@ -68,14 +68,39 @@ ADR whose amendments changed its standing states that once, at the top.
 - `Proposed` — drafted, not yet binding. An agent may read it for context and
   must not treat it as a rule.
 - `Accepted` — binding. Follow it.
-- `Superseded` — replaced by a named later decision (ADR 0013's shape).
+- `Superseded` — **was** adopted and no longer binds, because a named later
+  decision replaced it *or* a named removal displaced the surface it governed
+  (ADR 0013's shape: "Superseded 2026-08-06 by the removal of the IBKR Bot
+  Control operator surface").
 - `Retired` — abandoned without ever being adopted (ADR 0028's shape).
+
+The line dividing the last two is **whether the decision was ever adopted**, not
+whether a successor exists. An earlier draft of this ADR defined `Superseded` as
+"replaced by a named later decision" and cited ADR 0013 as its exemplar — but
+0013 names no successor, so the definition excluded the very ADR it pointed at,
+and every deprecated-by-deletion IBKR ADR would have had the same problem. What
+`Superseded` requires is a **named displacer**: a decision, or a removal. It may
+not be left blank.
 
 `Superseded` and `Retired` are genuinely distinct and both stay. `Shipped` is
 **not** a status: under Decision 1 it answers the conformance question, which
 Status does not ask.
 
-**6. Status becomes mechanically checkable.**
+**6. Status becomes mechanically checkable, in this exact form.**
+
+```
+**Status:** <Value>[ YYYY-MM-DD]
+```
+
+Regex: `^\*\*Status:\*\* (Accepted|Proposed|Superseded|Retired)( \d{4}-\d{2}-\d{2})?$`
+— exactly one match per file, and no other line beginning with `Status`.
+
+The form is chosen by majority, not taste: of the three in the corpus,
+`**Status:**` is 23 files, `- **Status:**` 11, `**Status**:` 5. Naming it here
+rather than deferring to "whichever the gate checks" is deliberate — a decision
+record that leaves its own checkable form to the CI author has moved the
+decision, not made it, and two follow-ups could normalize the corpus
+incompatibly.
 
 One format, one closed value, one occurrence per file — a CI grep gate, sibling
 to the temporal-rigor ban list. This is what obliges the field to stay current;
@@ -110,10 +135,22 @@ register work.
    0018, 0019, 0020, 0021, 0023. Under Decision 1 this confirms only that the
    decision still stands — **no code verification**, and none should be implied.
    Any that no longer stand become `Superseded` or `Retired` instead.
-2. **Three Status formats to normalize** across 38 files, to whichever single form
-   the gate checks.
-3. **ADR 0008's two amendment Status lines fold into the header**, and its
-   `Shipped` value disappears with them.
+2. **Three Status formats to normalize** across 38 files, to the form pinned in
+   Decision 6. 16 files change shape: the 11 using `- **Status:**` and the 5
+   using `**Status**:`.
+3. **Five ADRs carry more than one Status line, not one.** Under Decision 4 every
+   extra fold into the header:
+
+   | ADR | Extra lines | Note |
+   |---|---|---|
+   | 0008 | 2 | amendment Status lines; its `Shipped` value disappears with them |
+   | 0010 | 2 | `:124` amendment, plus a bare `Status: shipping with PRs …` at `:181` |
+   | 0005 | 1 | `:91` amendment |
+   | 0014 | 1 | `:90` amendment |
+   | 0032 | 1 | `:110`, a second `- **Status:** Accepted` |
+
+   An earlier draft named only ADR 0008. Decision 6's one-occurrence-per-file gate
+   would have failed on the other four the day it landed.
 4. **`doc-authority.md` rows 0028 and 0035 lose the word "proposed."** Deletion,
    not correction.
 5. **The provenance now inside Status lines must be preserved when moved.** ADR
