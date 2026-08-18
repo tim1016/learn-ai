@@ -29,7 +29,14 @@ from app.engine.live.account_registry import (
     read_account_instance_registry,
     write_account_instance_binding,
 )
+from app.engine.live.exit_taxonomy import (
+    ENDED_WITHOUT_STATUS_REGISTRY_SOURCE,
+    LIVENESS_UNPROVEN_REGISTRY_SOURCE,
+    PROCESS_CRASHED_REGISTRY_SOURCE,
+)
+from app.schemas.account_recovery import CrashRecoveryOverrideRequest
 from app.schemas.live_runs import GateResult
+from app.services.account_crash_recovery import record_crash_recovery_override_evidence
 
 
 def _binding(
@@ -577,6 +584,134 @@ def test_crash_retired_restart_blocking_binding_ended_without_status_cleared_by_
     )
 
     assert blocking_binding is None
+
+
+@pytest.mark.parametrize(
+    "terminal_source",
+    (
+        PROCESS_CRASHED_REGISTRY_SOURCE,
+        LIVENESS_UNPROVEN_REGISTRY_SOURCE,
+        ENDED_WITHOUT_STATUS_REGISTRY_SOURCE,
+    ),
+)
+def test_crash_retired_restart_blocking_binding_preserves_terminal_retirement_after_deploy_only(
+    tmp_path: Path,
+    terminal_source: str,
+) -> None:
+    """A staged successor cannot mask a terminal same-instance retirement."""
+
+    retired = _binding(run_id="run-terminal", recorded_at_ms=1_700_000_010_000).model_copy(
+        update={
+            "lifecycle_state": "RETIRED",
+            "source": terminal_source,
+        }
+    )
+    deploy_only = retired.model_copy(
+        update={
+            "run_id": "run-staged",
+            "lifecycle_state": "DEPLOYED",
+            "recorded_at_ms": 1_700_000_020_000,
+            "source": "host_daemon.deploy",
+        }
+    )
+    write_account_instance_binding(tmp_path, retired)
+    write_account_instance_binding(tmp_path, deploy_only)
+
+    assert crash_retired_restart_blocking_binding(
+        tmp_path,
+        account_id="DU123456",
+        strategy_instance_id="spy-ema-paper-1",
+    ) == retired
+
+
+def test_crash_retired_restart_blocking_binding_reads_historic_persisted_terminal_binding_after_deploy_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Historic rows retain their restart block across the ledger read flip."""
+
+    retired = _binding(run_id="run-terminal", recorded_at_ms=1_700_000_010_000).model_copy(
+        update={
+            "lifecycle_state": "RETIRED",
+            "source": PROCESS_CRASHED_REGISTRY_SOURCE,
+        }
+    )
+    legacy_payload = retired.model_dump(mode="json")
+    legacy_payload["cohort_id"] = "historic-cohort"
+    registry_path = account_artifacts_root(tmp_path, "DU123456") / "instance_registry.jsonl"
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    registry_path.write_text(json.dumps(legacy_payload) + "\n", encoding="utf-8")
+    write_account_instance_binding(
+        tmp_path,
+        retired.model_copy(
+            update={
+                "run_id": "run-staged",
+                "lifecycle_state": "DEPLOYED",
+                "recorded_at_ms": 1_700_000_020_000,
+                "source": "host_daemon.deploy",
+            }
+        ),
+    )
+    monkeypatch.setenv("ACCOUNT_BINDING_LEDGER_READ_ENABLED", "true")
+
+    blocking_binding = crash_retired_restart_blocking_binding(
+        tmp_path,
+        account_id="DU123456",
+        strategy_instance_id="spy-ema-paper-1",
+    )
+
+    assert blocking_binding is not None
+    assert blocking_binding.run_id == "run-terminal"
+    assert blocking_binding.cohort_id == "historic-cohort"
+
+
+@pytest.mark.parametrize(
+    "terminal_source",
+    (
+        PROCESS_CRASHED_REGISTRY_SOURCE,
+        LIVENESS_UNPROVEN_REGISTRY_SOURCE,
+        ENDED_WITHOUT_STATUS_REGISTRY_SOURCE,
+    ),
+)
+def test_crash_recovery_override_clears_terminal_retirement_after_deploy_only(
+    tmp_path: Path,
+    terminal_source: str,
+) -> None:
+    """Staging must not turn a required recovery override into a no-op."""
+
+    retired = _binding(run_id="run-terminal", recorded_at_ms=1_700_000_010_000).model_copy(
+        update={
+            "lifecycle_state": "RETIRED",
+            "source": terminal_source,
+        }
+    )
+    write_account_instance_binding(tmp_path, retired)
+    write_account_instance_binding(
+        tmp_path,
+        retired.model_copy(
+            update={
+                "run_id": "run-staged",
+                "lifecycle_state": "DEPLOYED",
+                "recorded_at_ms": 1_700_000_020_000,
+                "source": "host_daemon.deploy",
+            }
+        ),
+    )
+
+    receipt = record_crash_recovery_override_evidence(
+        tmp_path,
+        account_id="DU123456",
+        strategy_instance_id="spy-ema-paper-1",
+        request=CrashRecoveryOverrideRequest(confirm_account_flat=True),
+        now_ms=1_700_000_030_000,
+    )
+
+    assert receipt.run_id == "run-terminal"
+    assert crash_retired_restart_blocking_binding(
+        tmp_path,
+        account_id="DU123456",
+        strategy_instance_id="spy-ema-paper-1",
+    ) is None
 
 
 def test_backfill_false_crash_registry_rows_repairs_disproven_latest_crash(tmp_path: Path) -> None:
