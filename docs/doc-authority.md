@@ -82,6 +82,7 @@ have their decision preserved here.
 | 0035 | Alpaca Account Clerk event-sourced SQLite authority (supersedes JSONL-authority parts of 0001/0008/0030/0033 for Alpaca only; proposed) |
 | 0036 | One flatness boundary (`abs(q) >= 1e-9`), owned by the backend; Angular holds no flatness verdict. Succeeds ADR 0013's no-frontend-derived-verdicts principle for numeric boundaries |
 | 0037 | SQLite is the sole Alpaca custody authority; legacy JSONL retired (no activation fence = no authority, never a fallback). Completes ADR 0035 |
+| 0038 | One bot control plane (Alpaca runner); the evaluator plane retires with IBKR bot-control. SQLite holds the duty facts it already fences; control intent stays file-backed so the stop latch outlives the Clerk. Supersedes ADR 0026 §4 for Alpaca |
 
 ---
 

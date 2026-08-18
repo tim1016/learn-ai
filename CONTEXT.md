@@ -1506,3 +1506,27 @@ Decision record: ADR 0037.
   custody authority.
   _Avoid_: broker connection (conflates the feed with the trading path), data
   broker, shared broker.
+
+## Bot control plane (resolved 2026-08-17)
+
+Decision record: ADR 0038.
+
+- **Bot control plane** — the single command path that starts, stops, and retires
+  a bot, and the writers it owns. A bot identity belongs to exactly one. Alpaca's
+  is the in-process runner reached through `routers/broker_bots.py`; the
+  evaluator path is IBKR lineage and retires with that surface.
+  _Avoid_: lifecycle authority, the evaluator, bot manager.
+- **Duty fact** — a fact about whether a bot is on duty, under which run, and
+  whether it is retired. For an Alpaca bot these are held and fenced by the
+  custody authority; any file carrying them is a projection of it.
+  _Avoid_: lifecycle state, duty state, phase (each names a file or a field, not
+  the fact).
+- **Control intent** — durable operator intent that outlives a run, so a stopped
+  bot refuses to restart itself. Deliberately **not** held by the custody
+  authority: it must still answer when that authority is unreachable.
+  _Avoid_: desired state (names the file), command, pause flag.
+- **Commit point** — the single durable write in a multi-artifact sequence that
+  decides the sequence happened. Everything written after it is reconstructible
+  from it; a crash past it is a repair, never an ambiguity. A launch's commit
+  point is the custody authority's run registration.
+  _Avoid_: transaction, atomic launch (neither is what this is).
