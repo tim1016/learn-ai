@@ -22,7 +22,7 @@ import sys
 from decimal import Decimal
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, computed_field
 
 from app.broker.ibkr.recovery_state_machine import RecoveryState
 from app.broker.safety_verdict import BrokerSafetyVerdict
@@ -310,6 +310,22 @@ class IbkrPosition(BaseModel):
     market_value: float | None = None
 
     fetched_at_ms: int
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def has_exposure(self) -> bool:
+        """Return the backend-authored exposure/flatness verdict.
+
+        Formula: ``has_exposure = abs(quantity) >= POSITION_QTY_EPSILON``.
+        Reference: ADR 0036.
+        Canonical implementation:
+          app/broker/alpaca/clerk/sqlite/folds.py::position_quantity_is_nonzero.
+        Validated against: tests/broker/ibkr/test_account.py::
+          test_fetch_positions_authors_canonical_exposure_verdict.
+        """
+        from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
+
+        return position_quantity_is_nonzero(self.quantity)
 
 
 class IbkrPositionsSnapshot(BaseModel):

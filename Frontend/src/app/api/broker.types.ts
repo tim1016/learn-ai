@@ -15793,6 +15793,18 @@ export interface components {
             expiry_ms?: number | null;
             /** Fetched At Ms */
             fetched_at_ms: number;
+            /**
+             * Has Exposure
+             * @description Return the backend-authored exposure/flatness verdict.
+             *
+             *     Formula: ``has_exposure = abs(quantity) >= POSITION_QTY_EPSILON``.
+             *     Reference: ADR 0036.
+             *     Canonical implementation:
+             *       app/broker/alpaca/clerk/sqlite/folds.py::position_quantity_is_nonzero.
+             *     Validated against: tests/broker/ibkr/test_account.py::
+             *       test_fetch_positions_authors_canonical_exposure_verdict.
+             */
+            readonly has_exposure: boolean;
             /** Market Price */
             market_price?: number | null;
             /** Market Value */
