@@ -606,7 +606,7 @@ export class BrokerDeployFormComponent {
     const snap = this.positions.value();
     if (!snap) return null;
     const own = snap.positions.find((p) => p.symbol.toUpperCase() === symbol);
-    if (!own || Number(own.quantity) === 0) return null;
+    if (!own || own.has_exposure === false) return null;
     return (
       `Reference parity blocked: ${symbol} already holds ${own.quantity} share(s) on this account. ` +
       'Flatten the position, or choose one share per signal / a fixed size — the capital-sleeve layer that would let ' +

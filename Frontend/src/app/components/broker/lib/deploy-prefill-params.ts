@@ -48,6 +48,8 @@ export function normalizeExposurePositionsRecord(parsed: unknown): Record<string
   const out: Record<string, number> = {};
   for (const [symbol, rawQuantity] of Object.entries(parsed)) {
     const normalized = symbol.trim().toUpperCase();
+    // ADR 0036 consequence 5: this prefill accepts integers only, so !== 0 is
+    // exactly equivalent to the canonical epsilon boundary and adds no UI verdict.
     if (!normalized || typeof rawQuantity !== 'number' || !Number.isInteger(rawQuantity)) {
       return null;
     }
@@ -112,6 +114,8 @@ export function parseActionPlan(value: string | null): ActionPlan | null {
 }
 
 export function exposurePositionsLabel(positions: Record<string, number>): string {
+  // This labels the already integer-normalized prefill record above; do not add
+  // a backend round-trip or duplicate the canonical epsilon in this formatter.
   const entries = Object.entries(positions).filter(([, quantity]) => quantity !== 0);
   if (!entries.length) return 'Flat';
   return entries
