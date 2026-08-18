@@ -71,18 +71,6 @@ are recorded in the audit doc's candidate table and should not be
 re-investigated; activated SQLite is fail-closed for ordinary faults, and each
 seam below is a specific conditional gap, not a general weakness.
 
-- **Accepted ENTER survives lookup failure without becoming admission-blocking
-  (high).** `sqlite/order_evidence.py:343-414` — exact lookup catches every
-  `BrokerError` and returns without folding uncertainty, so a
-  crash-after-accept/before-contact operation stays `operation_state=accepted`.
-  Recovery does record `RECONCILIATION_ATTEMPTED` with `STILL_UNKNOWN`
-  (`sqlite/reconcile.py:229-287`) but preserves that state and raises no
-  admission-authoritative uncertainty or hold; admission checks
-  reconciliation-in-progress, EXIT, holds, uncertainties, and manual work, but
-  **not a nonterminal ENTER** (`sqlite/uncertainty.py:347-468`). Preserve the
-  invariant: an operation whose broker outcome is unknown must block new
-  exposure, not merely be annotated. [#1614](https://github.com/tim1016/learn-ai/issues/1614)
-
 - **Capture or parse failure leaves execution health green (high).**
   `broker/alpaca/trade_updates.py:424-507` — a failed verbatim capture, invalid
   JSON, or unmappable fill returns from the frame handler and continues the same
