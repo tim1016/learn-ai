@@ -1484,3 +1484,25 @@ load-bearing work with no definition behind it.
   governed by the flatness rule. Naming the two alike is what previously let a
   P&L tolerance decide an exposure question.
   _Avoid_: flat lot, closed lot, zeroed lot.
+
+## Custody authority (resolved 2026-08-17)
+
+Decision record: ADR 0037.
+
+- **Custody authority** — the single implementation that owns what an account
+  holds and what it owes. An account has exactly one, or none; it is never
+  reconciled between two. For Alpaca it is the activated SQLite Clerk.
+  _Avoid_: the Clerk (ambiguous — names the component, not the authority),
+  custody source, position authority.
+- **Activation fence** — the durable, account- and generation-bound record that
+  binds an account to its custody authority and its database identity. Absent,
+  invalid, or reset, the account has no authority and cannot trade; none of
+  those states falls back to another implementation.
+  _Avoid_: cutover marker, migration flag, activation flag.
+- **Market-data bridge** — the sanctioned use of one broker's feed to supply bars
+  to another broker's bots. It carries bars only; order effects always flow
+  through the bot's own broker Clerk. IBKR is the bridge for Alpaca bots, so IBKR
+  connection health is an Alpaca operating concern without IBKR being an Alpaca
+  custody authority.
+  _Avoid_: broker connection (conflates the feed with the trading path), data
+  broker, shared broker.

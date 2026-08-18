@@ -81,6 +81,7 @@ have their decision preserved here.
 | 0033 | Account custody clocks and safety composition |
 | 0035 | Alpaca Account Clerk event-sourced SQLite authority (supersedes JSONL-authority parts of 0001/0008/0030/0033 for Alpaca only; proposed) |
 | 0036 | One flatness boundary (`abs(q) >= 1e-9`), owned by the backend; Angular holds no flatness verdict. Succeeds ADR 0013's no-frontend-derived-verdicts principle for numeric boundaries |
+| 0037 | SQLite is the sole Alpaca custody authority; legacy JSONL retired (no activation fence = no authority, never a fallback). Completes ADR 0035 |
 
 ---
 
