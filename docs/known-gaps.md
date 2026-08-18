@@ -27,20 +27,29 @@ say which findings remain.
 
 ### Bot Control / Account Clerk reconciliation (verified 2026-07-29; BUG-16 fixed 2026-08-17)
 
-- **Eight-bot A0 admission latency has no recorded production-load qualification
-  (high).** Normal paper entries return after the Clerk's fsynced A0 receipt while
-  later broker work runs asynchronously. The caller deadline is 10 s; deterministic
-  qualification exists, but a relevant production I/O load measurement has not been
-  recorded here. Preserve the invariant: A0 timeout is unknown, never a false retry
-  permission. Qualification: run and retain the broker-free custody campaign and an
-  appropriate paper-host load drill before relying on eight concurrent entry bursts.
+- **[IBKR lineage only] Eight-bot A0 admission latency has no recorded
+  production-load qualification (high).** Normal paper entries return after the
+  Clerk's fsynced A0 receipt while later broker work runs asynchronously. The caller
+  deadline is 10 s; deterministic qualification exists, but a relevant production I/O
+  load measurement has not been recorded here. Preserve the invariant: A0 timeout is
+  unknown, never a false retry permission. Qualification: run and retain the
+  broker-free custody campaign and an appropriate paper-host load drill before
+  relying on eight concurrent entry bursts.
+  **Scope corrected 2026-08-17:** the 2026-07-28 audit this came from explicitly
+  traces IBKR `run.py` → RPC → separate-process Account Clerk. The Alpaca Broker V2
+  route (strategy → selected in-process Clerk) was swept and **does not carry this
+  item**. An unscoped "eight-bot" entry reads as applying to whatever fleet the
+  reader has in mind, which is now the Alpaca one.
 
-- **Eight-bot end-day cancellation remains unqualified (high).** Direct operator cancel
-  timeouts were raised in #1289, but the serialized namespace-cancel path used by
-  concurrent CLOCK_OUT needs paper-broker qualification before it is advertised as
-  fleet-safe. Preserve the invariant: a cancellation timeout is uncertain and cannot
-  be represented as a clean exit. Qualification: eight-bot paper wind-down with
-  terminal Clerk receipts and post-action reconciliation.
+- **[IBKR lineage only] Eight-bot end-day cancellation remains unqualified
+  (high).** Direct operator cancel timeouts were raised in #1289, but the serialized
+  namespace-cancel path used by concurrent CLOCK_OUT needs paper-broker qualification
+  before it is advertised as fleet-safe. Preserve the invariant: a cancellation
+  timeout is uncertain and cannot be represented as a clean exit. Qualification:
+  eight-bot paper wind-down with terminal Clerk receipts and post-action
+  reconciliation.
+  **Scope corrected 2026-08-17:** same provenance and same correction as the A0 item
+  above — IBKR call graph, not reachable on the Alpaca Broker V2 route.
 
 - **Several audit findings need reachability qualification, not deletion (medium).**
   Async entry-queue saturation, broker-stream-silence under custody load, concurrent
@@ -49,6 +58,73 @@ say which findings remain.
   call-graph audit. They are not proven dead or fixed by a search. Preserve their
   respective fail-closed, durable-receipt, and no-false-actuation invariants; turn
   each into a focused regression or paper qualification before cleanup.
+
+### Alpaca submit-to-custody fail-open seams (verified 2026-08-17)
+
+Source: `docs/audits/submit-to-custody-fail-open-sweep-2026-08-17.md`, read at
+commit `e7325d2`. "Fail open" here means missing, indeterminate, or rejected
+custody evidence can reach a state where a **later new-exposure decision is
+allowed** — not merely that a display value is optimistic.
+
+The sweep confirmed five seams and **refuted nine** candidates. The refutations
+are recorded in the audit doc's candidate table and should not be
+re-investigated; activated SQLite is fail-closed for ordinary faults, and each
+seam below is a specific conditional gap, not a general weakness.
+
+- **Accepted ENTER survives lookup failure without becoming admission-blocking
+  (high).** `sqlite/order_evidence.py:343-414` — exact lookup catches every
+  `BrokerError` and returns without folding uncertainty, so a
+  crash-after-accept/before-contact operation stays `operation_state=accepted`.
+  Recovery does record `RECONCILIATION_ATTEMPTED` with `STILL_UNKNOWN`
+  (`sqlite/reconcile.py:229-287`) but preserves that state and raises no
+  admission-authoritative uncertainty or hold; admission checks
+  reconciliation-in-progress, EXIT, holds, uncertainties, and manual work, but
+  **not a nonterminal ENTER** (`sqlite/uncertainty.py:347-468`). Preserve the
+  invariant: an operation whose broker outcome is unknown must block new
+  exposure, not merely be annotated. [#1614](https://github.com/tim1016/learn-ai/issues/1614)
+
+- **Capture or parse failure leaves execution health green (high).**
+  `broker/alpaca/trade_updates.py:424-507` — a failed verbatim capture, invalid
+  JSON, or unmappable fill returns from the frame handler and continues the same
+  socket cycle. The evidence sink is never called, and health is socket-connected
+  state only, with no last-valid-frame freshness budget
+  (`trade_updates.py:318-343`). A later periodic REST pass may repair custody, but
+  until then the submit gate sees execution as healthy. Preserve the invariant:
+  a stream that is connected but not delivering usable evidence is not healthy.
+  [#1615](https://github.com/tim1016/learn-ai/issues/1615)
+
+- **A non-`BrokerError` sweep failure reopens admission without authoring
+  uncertainty (medium).** `sqlite/reconciliation_sweep.py:128-146` — an unexpected
+  periodic-pass exception is logged and converted to `False`, and the reconciler's
+  `finally` releases the admission fence. A normal snapshot `BrokerError` correctly
+  authors `BROKER_SNAPSHOT_STALE`; an adapter or programming failure *after* a
+  previously clean snapshot authors neither stale uncertainty nor hold before
+  `end_reconciliation` reopens admission. Preserve the invariant: a reconciliation
+  pass that did not complete must not leave admission in the state a completed
+  clean pass would. [#1616](https://github.com/tim1016/learn-ai/issues/1616)
+
+- **Incomplete nonterminal ENTER records `RESOLVED_FAILURE` without terminalizing
+  (low reachability, medium severity).** `sqlite/reconcile.py:221-257` — an ENTER
+  effect with no captured order raises `ReconciliationInvariantError`; the catch
+  records `RESOLVED_FAILURE`, increments `resolved_count`, and continues without
+  terminalizing the effect or raising uncertainty/hold, so the final plan can
+  return clean. Effect and order normally fold atomically, so ordinary
+  valid-state reachability is low. Does **not** extend to malformed EXIT —
+  `active_exit_for_strategy` independently blocks a later ENTER
+  (`sqlite/uncertainty.py:363-385`). Preserve the invariant: counting an
+  operation as resolved requires it to be terminal.
+  [#1617](https://github.com/tim1016/learn-ai/issues/1617)
+
+- **Legacy bot ENTER bypasses the stream-health gate (high, but see scope).**
+  `clerk/effects.py:234-301` — legacy ENTER checks desired state and an existing
+  hold, then calls `_submit_leg` directly, never consulting the installed
+  dual-channel gate that protects `submit_for_instance`. Reachable only when the
+  authority selector chooses legacy. **ADR 0038 note:** ADR 0037 retires legacy
+  JSONL as a selectable Alpaca custody authority, so this seam resolves by
+  **deletion**, not correction — the same pattern as ADR 0036 consequence 1 and
+  `rollup_cache.py`. Do not write a regression test against a module scheduled for
+  removal; verify the retirement closes it.
+  [#1618](https://github.com/tim1016/learn-ai/issues/1618)
 
 ### Resolved
 
