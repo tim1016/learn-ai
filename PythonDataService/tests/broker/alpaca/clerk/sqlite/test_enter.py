@@ -554,9 +554,10 @@ async def test_resolving_an_acknowledged_nonterminal_order_refreshes_evidence(
     assert resolved.effect_operation_id == submission.effect_operation_id
 
 
-async def test_resolve_stays_unknown_on_a_lookup_broker_error(repo: ClerkSqliteRepository) -> None:
-    """A lookup ``BrokerError`` (not absence) must never be fabricated into a
-    terminal outcome — stays ``unknown``, nothing written."""
+async def test_resolve_lookup_broker_error_folds_admission_blocking_unknown(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """A lookup error is nonterminal but must fail closed for later ENTERs."""
     accepted = accept_enter(
         repo,
         account_id=ACCOUNT_ID,
@@ -568,9 +569,19 @@ async def test_resolve_stays_unknown_on_a_lookup_broker_error(repo: ClerkSqliteR
     trade = _FakeTrade(lookup_error=BrokerError("rate limited", broker="alpaca"))
     resolved = await resolve_enter_submission(repo, order_ref=accepted.order_ref, trade=trade)
     effect = repo.effect_operation(resolved.effect_operation_id)
-    assert effect is not None and effect.state == "accepted"
+    assert effect is not None and effect.state == "unknown"
     order = repo.order(accepted.order_ref)
     assert order is not None and order.broker_order_id is None
+    with pytest.raises(AdmissionBlockedError) as exc_info:
+        accept_enter(
+            repo,
+            account_id=ACCOUNT_ID,
+            strategy_instance_id=SID,
+            decision_id="dec-after-lookup-error",
+            lifecycle_run_id=RUN_ID,
+            leg=_leg(),
+        )
+    assert exc_info.value.decision.reason_code == "ORDER_OUTCOME_UNKNOWN"
 
 
 async def test_resolve_stays_unknown_on_a_mismatched_client_order_id(

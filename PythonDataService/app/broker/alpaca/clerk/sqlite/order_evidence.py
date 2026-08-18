@@ -376,7 +376,13 @@ async def resolve_order_submission(
     try:
         try:
             order = await broker.lookup(order_ref)
-        except BrokerError:
+        except BrokerError as exc:
+            fold_uncertain(
+                repo,
+                effect_operation_id=effect.effect_operation_id,
+                order_ref=order_ref,
+                why=f"Exact broker lookup failed before outcome proof: {exc}",
+            )
             return
 
         if order is not None and order.client_order_id != order_ref:

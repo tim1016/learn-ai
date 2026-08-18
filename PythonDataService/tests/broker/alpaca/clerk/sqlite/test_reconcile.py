@@ -445,6 +445,66 @@ async def test_account_reconciliation_leaves_unknown_effect_on_broker_lookup_err
     assert result.resolved_count == 0
 
 
+async def test_accepted_enter_lookup_failure_blocks_admission_until_terminal_resolution(
+    repo: ClerkSqliteRepository,
+) -> None:
+    accepted = accept_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="dec-crash-before-contact",
+        lifecycle_run_id=RUN_ID,
+        leg=_leg(),
+    )
+    assert accepted.effect_operation_id is not None
+    assert accepted.order_ref is not None
+    assert repo.effect_operation(accepted.effect_operation_id).state == "accepted"  # type: ignore[union-attr]
+
+    result = await _reconcile_unknown_effect(
+        repo,
+        trade=_FakeTrade(lookup_error=BrokerUnavailable("exact lookup unavailable")),
+    )
+
+    assert result.resolved_count == 0
+    effect = repo.effect_operation(accepted.effect_operation_id)
+    assert effect is not None and effect.state == "unknown"
+    attempts = [
+        transition
+        for transition in repo.transitions_for_order(accepted.order_ref)
+        if transition["transition_kind"] == "RECONCILIATION_ATTEMPTED"
+    ]
+    assert len(attempts) == 1
+    assert '"outcome":"STILL_UNKNOWN"' in attempts[0]["facts_json"]
+    with pytest.raises(AdmissionBlockedError) as exc_info:
+        accept_enter(
+            repo,
+            account_id=ACCOUNT_ID,
+            strategy_instance_id=SID,
+            decision_id="dec-must-wait-for-proof",
+            lifecycle_run_id=RUN_ID,
+            leg=_leg(),
+        )
+    assert exc_info.value.decision.reason_code == "ORDER_OUTCOME_UNKNOWN"
+
+    repo.clock.advance(30_001)  # type: ignore[attr-defined]
+    resolved = await _reconcile_unknown_effect(
+        repo,
+        trade=_FakeTrade(lookup_absent=True),
+    )
+
+    assert resolved.resolved_count == 1
+    terminal = repo.effect_operation(accepted.effect_operation_id)
+    assert terminal is not None and terminal.state == "failed"
+    assert accept_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="dec-after-terminal-proof",
+        lifecycle_run_id=RUN_ID,
+        leg=_leg(),
+    ).created
+
+
 async def test_reconcile_now_refreshes_resolved_order_without_second_intent(
     repo: ClerkSqliteRepository,
 ) -> None:
