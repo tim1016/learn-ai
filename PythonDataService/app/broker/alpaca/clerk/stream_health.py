@@ -5,9 +5,9 @@ Composes the two channel-health facts the clerk's submit gate consumes:
 - **market_data** — the shared :class:`MarketDataFeed`'s ``FeedHealth``
   (S1). Unhealthy when the feed is not installed, disconnected, or stale
   past its bounded threshold.
-- **execution** — the Alpaca ``trade_updates`` websocket per its existing
-  reconnect state (the consumer's connection watermark). Unhealthy when the
-  consumer is not running or the socket is down.
+- **execution** — the Alpaca ``trade_updates`` websocket connection plus the
+  consumer's latest evidence-bearing frame outcome. Unhealthy when the consumer
+  is not running, the socket is down, or a received frame was unusable.
 
 Every fact carries its own ``observed_at_ms`` (P7: truth has age). The gate
 itself is dumb composition — the *hold* raised on an unhealthy channel lives
@@ -26,6 +26,14 @@ from app.marketdata.feed import FeedHealth
 
 ChannelHealthProvider = Callable[[], ChannelHealth]
 SymbolChannelHealthProvider = Callable[[str], ChannelHealth]
+
+
+@dataclass(frozen=True)
+class ExecutionEvidenceHealth:
+    """Latest evidence-bearing frame outcome and its int64-ms observation."""
+
+    healthy: bool
+    observed_at_ms: int
 
 
 def market_data_channel_health(
@@ -52,9 +60,10 @@ def execution_channel_health(
     *,
     connected: bool | None,
     connection_changed_at_ms: int | None,
+    evidence_health: ExecutionEvidenceHealth | None,
     now_ms: int,
 ) -> ChannelHealth:
-    """Fold the trade_updates connection watermark into the gate's fact shape.
+    """Fold trade_updates connectivity and evidence health into one gate fact.
 
     ``connected=None`` means the consumer is not running at all — fail-safe
     unhealthy, observed now.
@@ -66,12 +75,40 @@ def execution_channel_health(
             reason="Alpaca trade_updates consumer is not running.",
             observed_at_ms=now_ms,
         )
+    if not connected:
+        return ChannelHealth(
+            stream="execution",
+            healthy=False,
+            reason="Alpaca trade_updates websocket is disconnected.",
+            observed_at_ms=(
+                connection_changed_at_ms
+                if connection_changed_at_ms is not None
+                else now_ms
+            ),
+        )
+    if evidence_health is None or not evidence_health.healthy:
+        return ChannelHealth(
+            stream="execution",
+            healthy=False,
+            reason="Alpaca trade_updates received an unusable evidence frame.",
+            observed_at_ms=(
+                evidence_health.observed_at_ms
+                if evidence_health is not None
+                else now_ms
+            ),
+        )
     return ChannelHealth(
         stream="execution",
-        healthy=connected,
-        reason="" if connected else "Alpaca trade_updates websocket is disconnected.",
-        observed_at_ms=(
-            connection_changed_at_ms if connection_changed_at_ms is not None else now_ms
+        healthy=True,
+        reason="",
+        observed_at_ms=max(
+            observed_at_ms
+            for observed_at_ms in (
+                connection_changed_at_ms,
+                evidence_health.observed_at_ms,
+                now_ms,
+            )
+            if observed_at_ms is not None
         ),
     )
 
@@ -153,11 +190,15 @@ def build_default_stream_health_gate() -> StreamHealthGate:
         consumer = get_trade_updates_consumer()
         if consumer is None:
             return execution_channel_health(
-                connected=None, connection_changed_at_ms=None, now_ms=now_ms_utc()
+                connected=None,
+                connection_changed_at_ms=None,
+                evidence_health=None,
+                now_ms=now_ms_utc(),
             )
         return execution_channel_health(
             connected=consumer.connected,
             connection_changed_at_ms=consumer.connection_changed_at_ms,
+            evidence_health=consumer.evidence_health,
             now_ms=now_ms_utc(),
         )
 

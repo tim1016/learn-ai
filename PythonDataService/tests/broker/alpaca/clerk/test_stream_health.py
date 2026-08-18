@@ -25,6 +25,7 @@ from app.broker.alpaca.clerk.models import (
     ClerkEntryKind,
 )
 from app.broker.alpaca.clerk.stream_health import (
+    ExecutionEvidenceHealth,
     StreamHealthGate,
     execution_channel_health,
     market_data_channel_health,
@@ -279,12 +280,36 @@ def test_execution_channel_health_fold(
     connected: bool | None, expect_healthy: bool, expect_reason_part: str
 ) -> None:
     health = execution_channel_health(
-        connected=connected, connection_changed_at_ms=_T0, now_ms=_T0 + 1
+        connected=connected,
+        connection_changed_at_ms=_T0,
+        evidence_health=ExecutionEvidenceHealth(healthy=True, observed_at_ms=_T0),
+        now_ms=_T0 + 1,
     )
 
     assert health.stream == "execution"
     assert health.healthy is expect_healthy
     assert expect_reason_part in health.reason
+
+
+@pytest.mark.parametrize(
+    "evidence_health",
+    [ExecutionEvidenceHealth(healthy=False, observed_at_ms=_T0 + 1), None],
+)
+def test_execution_channel_health_fails_closed_on_unusable_evidence(
+    evidence_health: ExecutionEvidenceHealth | None,
+) -> None:
+    health = execution_channel_health(
+        connected=True,
+        connection_changed_at_ms=_T0,
+        evidence_health=evidence_health,
+        now_ms=_T0 + 2,
+    )
+
+    assert health.healthy is False
+    assert "unusable evidence frame" in health.reason
+    assert health.observed_at_ms == (
+        evidence_health.observed_at_ms if evidence_health is not None else _T0 + 2
+    )
 
 
 def test_stream_health_refusal_names_every_broken_stream() -> None:
