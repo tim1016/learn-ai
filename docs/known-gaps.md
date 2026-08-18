@@ -71,28 +71,6 @@ are recorded in the audit doc's candidate table and should not be
 re-investigated; activated SQLite is fail-closed for ordinary faults, and each
 seam below is a specific conditional gap, not a general weakness.
 
-- **A non-`BrokerError` sweep failure reopens admission without authoring
-  uncertainty (medium).** `sqlite/reconciliation_sweep.py:128-146` — an unexpected
-  periodic-pass exception is logged and converted to `False`, and the reconciler's
-  `finally` releases the admission fence. A normal snapshot `BrokerError` correctly
-  authors `BROKER_SNAPSHOT_STALE`; an adapter or programming failure *after* a
-  previously clean snapshot authors neither stale uncertainty nor hold before
-  `end_reconciliation` reopens admission. Preserve the invariant: a reconciliation
-  pass that did not complete must not leave admission in the state a completed
-  clean pass would. [#1616](https://github.com/tim1016/learn-ai/issues/1616)
-
-- **Incomplete nonterminal ENTER records `RESOLVED_FAILURE` without terminalizing
-  (low reachability, medium severity).** `sqlite/reconcile.py:221-257` — an ENTER
-  effect with no captured order raises `ReconciliationInvariantError`; the catch
-  records `RESOLVED_FAILURE`, increments `resolved_count`, and continues without
-  terminalizing the effect or raising uncertainty/hold, so the final plan can
-  return clean. Effect and order normally fold atomically, so ordinary
-  valid-state reachability is low. Does **not** extend to malformed EXIT —
-  `active_exit_for_strategy` independently blocks a later ENTER
-  (`sqlite/uncertainty.py:363-385`). Preserve the invariant: counting an
-  operation as resolved requires it to be terminal.
-  [#1617](https://github.com/tim1016/learn-ai/issues/1617)
-
 - **Legacy bot ENTER bypasses the stream-health gate (high, but see scope).**
   `clerk/effects.py:234-301` — legacy ENTER checks desired state and an existing
   hold, then calls `_submit_leg` directly, never consulting the installed

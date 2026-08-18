@@ -40,12 +40,17 @@ from app.broker.alpaca.clerk.sqlite.models import CommittedTransition, Transitio
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.reconcile import (
     AccountReconciliationResult,
+    _invariant_failure_outcome,
     plan_account_reconciliation,
     reconcile_account,
 )
 from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError, raise_uncertainty
+from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    AdmissionBlockedError,
+    admit_new_exposure,
+    raise_uncertainty,
+)
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, BrokerPosition
 from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at, _hold_transition
@@ -253,6 +258,47 @@ class _SequentialRead(_FakeRead):
         return self._position_snapshots.pop(0)
 
 
+class _FailingFinalSnapshotRead(_FakeRead):
+    def __init__(self) -> None:
+        super().__init__()
+        self._order_reads = 0
+
+    async def list_orders(
+        self,
+        *,
+        status: str | None = None,
+        limit: int | None = None,
+        after_ms: int | None = None,
+    ) -> list[BrokerOrder]:
+        del status, limit, after_ms
+        self._order_reads += 1
+        if self._order_reads == 2:
+            raise RuntimeError("unexpected final-snapshot failure")
+        return []
+
+
+def _remove_captured_order(
+    repo: ClerkSqliteRepository,
+    *,
+    effect_operation_id: str,
+) -> None:
+    """Surgically corrupt one real accepted effect for invariant recovery tests."""
+    with repo._write_lock:
+        repo._conn.execute("PRAGMA foreign_keys = OFF")
+        try:
+            repo._conn.execute(
+                "DELETE FROM operation_order_links WHERE effect_operation_id = ?",
+                (effect_operation_id,),
+            )
+            repo._conn.execute(
+                "DELETE FROM orders WHERE effect_operation_id = ?",
+                (effect_operation_id,),
+            )
+            repo._conn.commit()
+        finally:
+            repo._conn.execute("PRAGMA foreign_keys = ON")
+
+
 async def _make_uncertain_order(
     repo: ClerkSqliteRepository,
     *,
@@ -318,6 +364,22 @@ def test_plan_treats_an_order_with_no_client_order_id_as_foreign() -> None:
         namespaces=_namespaces(), broker_orders=[manual], broker_positions=[], attributed_positions={}
     )
     assert plan.verdict == "unexplained_order"
+
+
+@pytest.mark.parametrize(
+    ("effect_kind", "expected"),
+    [
+        ("ENTER", "STILL_UNKNOWN"),
+        ("MANUAL_ORDER", "STILL_UNKNOWN"),
+        ("CANCEL", "STILL_UNKNOWN"),
+        ("EXIT", "RESOLVED_FAILURE"),
+    ],
+)
+def test_invariant_failures_have_exhaustive_recovery_policy(
+    effect_kind: str,
+    expected: str,
+) -> None:
+    assert _invariant_failure_outcome(effect_kind) == expected
 
 
 def test_plan_treats_namespace_shaped_but_uncaptured_order_as_foreign() -> None:
@@ -1136,6 +1198,14 @@ async def test_reconcile_account_reports_stale_and_fails_closed_on_broker_read_f
         strategy_instance_id=None,
     )
     assert uncertainty is not None and uncertainty["allows_reduction"] == 0
+    assert (
+        repo.active_uncertainty(
+            scope="ACCOUNT_CLERK",
+            reason_code="RECONCILIATION_INCOMPLETE",
+            strategy_instance_id=None,
+        )
+        is None
+    )
 
 
 async def test_reconcile_fails_closed_when_open_order_snapshot_hits_limit(
@@ -1390,6 +1460,46 @@ async def test_reconcile_missing_exit_entry_records_failure_and_finishes_pass(
     ]
     assert len(attempts) == 1
     assert '"outcome":"RESOLVED_FAILURE"' in attempts[0]["facts_json"]
+    decision = admit_new_exposure(repo, strategy_instance_id=SID)
+    assert not decision.allowed
+    assert decision.reason_code == "EXIT_IN_PROGRESS"
+
+
+async def test_reconcile_missing_enter_order_remains_unresolved(
+    repo: ClerkSqliteRepository,
+) -> None:
+    accepted = accept_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="enter-with-missing-order",
+        lifecycle_run_id=RUN_ID,
+        leg=_leg(),
+    )
+    assert accepted.effect_operation_id is not None
+    effect_operation_id = accepted.effect_operation_id
+    _remove_captured_order(repo, effect_operation_id=effect_operation_id)
+
+    await ReconciliationSweep(
+        repo=repo,
+        read=_FakeRead(),
+        trade=_FakeTrade(),
+        max_passes=1,
+    ).run()
+
+    effect = repo.effect_operation(effect_operation_id)
+    assert effect is not None and effect.state not in {"succeeded", "failed", "rejected"}
+    attempts = [
+        transition
+        for transition in repo.custody_transitions()
+        if transition["effect_operation_id"] == effect_operation_id
+        and transition["transition_kind"] == "RECONCILIATION_ATTEMPTED"
+    ]
+    assert len(attempts) == 1
+    assert '"outcome":"STILL_UNKNOWN"' in attempts[0]["facts_json"]
+    decision = admit_new_exposure(repo, strategy_instance_id=SID)
+    assert not decision.allowed
+    assert decision.reason_code == "RECONCILIATION_INCOMPLETE"
 
 
 async def test_reconcile_account_operator_reconcile_now_trigger_is_recorded(
@@ -1450,6 +1560,158 @@ async def test_sweep_survives_a_broker_error_and_continues_to_the_next_pass(
     sweep = ReconciliationSweep(repo=repo, read=read, trade=_FakeTrade(), sleep=fake_sleep, max_passes=3)
     await sweep.run()  # must not raise despite every pass hitting BrokerUnavailable
     assert sleep_calls == [30.0, 60.0]
+
+
+async def test_sweep_failure_leaves_durable_admission_blocker(
+    repo: ClerkSqliteRepository,
+) -> None:
+    sweep = ReconciliationSweep(
+        repo=repo,
+        read=_FailingFinalSnapshotRead(),
+        trade=_FakeTrade(),
+        max_passes=1,
+    )
+
+    await sweep.run()
+
+    uncertainty = repo.active_uncertainty(
+        scope="ACCOUNT_CLERK",
+        reason_code="RECONCILIATION_INCOMPLETE",
+        strategy_instance_id=None,
+    )
+    assert uncertainty is not None
+    decision = admit_new_exposure(repo, strategy_instance_id=SID)
+    assert not decision.allowed
+    assert decision.reason_code == "RECONCILIATION_INCOMPLETE"
+
+
+async def test_cancelled_reconciliation_leaves_durable_admission_blocker(
+    repo: ClerkSqliteRepository,
+) -> None:
+    snapshot_started = asyncio.Event()
+
+    class BlockingRead(_FakeRead):
+        async def list_orders(self, **_kwargs: Any) -> list[BrokerOrder]:
+            snapshot_started.set()
+            await asyncio.Event().wait()
+            return []
+
+    task = asyncio.create_task(
+        reconcile_account(repo, read=BlockingRead(), trade=_FakeTrade())
+    )
+    await snapshot_started.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    decision = admit_new_exposure(repo, strategy_instance_id=SID)
+    assert not decision.allowed
+    assert decision.reason_code == "RECONCILIATION_INCOMPLETE"
+
+
+async def test_failed_blocker_publication_keeps_process_fence_closed(
+    repo: ClerkSqliteRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_uncertainty_publication(**_kwargs: Any) -> str:
+        raise RuntimeError("durable uncertainty unavailable")
+
+    monkeypatch.setattr(repo, "observe_uncertainty", fail_uncertainty_publication)
+
+    with pytest.raises(RuntimeError, match="durable uncertainty unavailable"):
+        await reconcile_account(
+            repo,
+            read=_FailingFinalSnapshotRead(),
+            trade=_FakeTrade(),
+        )
+
+    decision = admit_new_exposure(repo, strategy_instance_id=SID)
+    assert not decision.allowed
+    assert decision.reason_code == "RECONCILIATION_IN_PROGRESS"
+
+
+async def test_complete_reconciliation_resolves_incomplete_pass_uncertainty(
+    repo: ClerkSqliteRepository,
+) -> None:
+    await ReconciliationSweep(
+        repo=repo,
+        read=_FailingFinalSnapshotRead(),
+        trade=_FakeTrade(),
+        max_passes=1,
+    ).run()
+
+    result = await reconcile_account(repo, read=_FakeRead(), trade=_FakeTrade())
+
+    assert result.verdict == "clean"
+    assert (
+        repo.active_uncertainty(
+            scope="ACCOUNT_CLERK",
+            reason_code="RECONCILIATION_INCOMPLETE",
+            strategy_instance_id=None,
+        )
+        is None
+    )
+    assert admit_new_exposure(repo, strategy_instance_id=SID).allowed
+
+
+async def test_nonclean_completed_pass_records_truthful_incomplete_resolution(
+    repo: ClerkSqliteRepository,
+) -> None:
+    await ReconciliationSweep(
+        repo=repo,
+        read=_FailingFinalSnapshotRead(),
+        trade=_FakeTrade(),
+        max_passes=1,
+    ).run()
+
+    result = await reconcile_account(
+        repo,
+        read=_FakeRead(positions=[_position("SPY", quantity=5)]),
+        trade=_FakeTrade(),
+    )
+
+    assert result.verdict == "position_drift"
+    resolution = next(
+        transition
+        for transition in reversed(repo.custody_transitions())
+        if transition["transition_kind"] == "UNCERTAINTY_RESOLVED"
+    )
+    assert '"resolution_kind":"COMPLETE_ACCOUNT_RECONCILIATION"' in resolution["facts_json"]
+
+
+async def test_repeated_sweep_failures_refresh_one_incomplete_pass_episode(
+    repo: ClerkSqliteRepository,
+) -> None:
+    await ReconciliationSweep(
+        repo=repo,
+        read=_FailingFinalSnapshotRead(),
+        trade=_FakeTrade(),
+        max_passes=1,
+    ).run()
+    initial = repo.active_uncertainty(
+        scope="ACCOUNT_CLERK",
+        reason_code="RECONCILIATION_INCOMPLETE",
+        strategy_instance_id=None,
+    )
+    assert initial is not None
+    repo.clock.advance(1_000)  # type: ignore[attr-defined]
+
+    await ReconciliationSweep(
+        repo=repo,
+        read=_FailingFinalSnapshotRead(),
+        trade=_FakeTrade(),
+        max_passes=1,
+    ).run()
+
+    refreshed = repo.active_uncertainty(
+        scope="ACCOUNT_CLERK",
+        reason_code="RECONCILIATION_INCOMPLETE",
+        strategy_instance_id=None,
+    )
+    assert refreshed is not None
+    assert refreshed["uncertainty_id"] == initial["uncertainty_id"]
+    assert refreshed["observed_at_ms"] > initial["observed_at_ms"]
 
 
 async def test_sweep_backoff_is_capped_and_resets_after_success(
