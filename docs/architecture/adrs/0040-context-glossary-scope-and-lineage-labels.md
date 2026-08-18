@@ -1,0 +1,143 @@
+# ADR 0040: `CONTEXT.md` is one glossary of the live trading domain, and every entry declares its lineage
+
+- **Status:** Accepted
+- **Date:** 2026-08-18
+- **Context:** Wayfinder map [#1588](https://github.com/tim1016/learn-ai/issues/1588),
+  decision ticket [#1595](https://github.com/tim1016/learn-ai/issues/1595).
+  Grilling session: `grill-with-docs` + `domain-modeling`, 2026-08-18.
+- **Vocabulary:** none owed — this decision is about the glossary's own scope and
+  form, not about domain language. See Decision 4.
+
+## What the file actually is
+
+Measured at `9d6fe9c65`: 1533 lines, 26 sections, dated 2026-05-30 to 2026-08-17.
+
+The ticket's premise was that `CONTEXT.md` describes a retired surface — its
+header scopes it to *"the deployed-strategy operator console (the 'Paper Run'
+page and its backend)"*, and every `broker/paper-run` route now redirects to
+`brokers/alpaca/bots`. That is true of the header. It is **not** true of the
+content, and the real problem is worse.
+
+Searching for the word `IBKR` finds it in only 2 of 26 sections. Searching for
+the **artifacts ADR 0038 retires** — `run_ledger`, `cmd_resume`,
+`operator_surface`, `host_daemon`, `account_binding`, `bot_lifecycle_evaluator` —
+finds them in **13 sections spanning 1032 of 1533 lines**.
+
+The gap between those two numbers is the finding. "Sizing authority" is 178 lines
+and reads as broker-neutral; its canonical term is
+`run_ledger.live_config.sizing`, and `run_ledger.json` is one of the four deploy
+artifact families ADR 0038 retires. Nothing in the section says so.
+
+**So two-thirds of the glossary is rooted in machinery that is going away, and a
+reader cannot tell which entries those are.** Looking up a term returns a
+confident answer with no signal that it describes a dead system. That is a
+glossary failing at the one job it has.
+
+Two further facts, both established by reading the deleted file out of git:
+
+- `CONTEXT.md:6` defers *"the full identity/control-plane term list"* to
+  `docs/ibkr-paper-deployment-plan.md` **§16.4**. That section is titled
+  **"Cross-references"** and contains a PR-queue file map — ADR links and a list
+  of code surfaces affected by PRs A–K. It never held a term list. The deferral
+  was **wrong when it was written**, roughly three months before the file was
+  deleted in the 2026-07-04 prune.
+- Two more citations name *"§16.4 Resolution 5"* and *"§16.4 Resolution 7"*. The
+  Resolutions live in **§16.1**. Those section numbers were wrong too.
+
+Nobody noticed any of this because nothing ever checked. The newest section
+before this map's work was dated 2026-07-27; ADR 0034, ADR 0035, the SQLite
+execution-ledger expansion, the Broker Desk lens split, the Bot Gallery, and the
+Market Scope shell all landed after it and contributed no vocabulary.
+
+## Decision
+
+**1. One glossary. Every section declares its lineage.**
+
+`CONTEXT.md` stays a single file, and each section states which system its terms
+describe:
+
+- **live** — the current Alpaca Broker V2 ecosystem.
+- **retiring** — machinery ADR 0037 or ADR 0038 removes. The terms remain
+  accurate until the code goes; the label is the warning.
+- **neutral** — operator/trading vocabulary that survives a broker change.
+
+A reader looking up *"live sizing policy"* must see immediately that it is rooted
+in a retiring artifact. This is also what makes the eventual cleanup mechanical:
+when the IBKR lineage is deleted, everything labelled **retiring** goes with it.
+
+**2. The glossary's scope is the live trading and operator domain — not repo process.**
+
+The header's "Paper Run page and its backend" is replaced. Repo-process
+vocabulary (ADR status values, lint rules, CI gates) stays out; ADR 0039's
+deliberate abstention from a `CONTEXT.md` entry was correct and is confirmed here.
+
+**3. The §16.4 deferral is deleted, not re-homed.**
+
+There is no lost term list to recover — §16.4 is a PR-queue cross-reference table.
+`CONTEXT.md`'s own Identity ladder is the identity term list, and always was. All
+four §16.4 citations go, and the header stops deferring authority it never
+successfully delegated.
+
+**4. An accepted ADR that introduces domain language carries a `Vocabulary:` line.**
+
+Naming the `CONTEXT.md` section it added, or stating why none is owed. This is not
+a new invention — ADRs 0036, 0037, and 0038 each carry one, and ADR 0039 states
+why it owes none. It is the observed working practice made into a rule, and it is
+the obligation that was missing: for three weeks the glossary went unupdated
+because nothing but a grilling session ever triggered an update, and feature work
+never did.
+
+It is also grep-checkable, so ADR 0039's CI gate can carry it.
+
+## Considered and rejected
+
+- **Archive the retiring sections now**, into a historical file — there is
+  precedent, since `doc-authority.md` already lists the old IBKR operator manual
+  as a "Historical IBKR operator record". Rejected on timing, not principle: the
+  IBKR code has **not** been deleted yet, so archiving now would leave running
+  code with its vocabulary filed under history. Anyone sent to work on it would
+  find the terms archived. Decision 1 makes this a mechanical follow-up once the
+  code goes, which is the right order.
+- **Split into per-lineage contexts** — a root `CONTEXT-MAP.md` with separate
+  `CONTEXT.md` files, the documented alternative in the `domain-modeling` skill.
+  Rejected on two counts. The lineages are interleaved through the same
+  directories rather than living in separate trees, so there is no seam to split
+  on — the split would have to be drawn term by term, which is Decision 1 with
+  extra files. And it would institutionalise a two-context structure at the exact
+  moment one of the two is being deleted: a second context born to die.
+- **Rewrite only the header.** The cheapest fix, and it addresses the stated
+  premise. Rejected because the premise was the smaller problem: a corrected
+  header still leaves 1032 lines a reader cannot date.
+
+## Consequences
+
+These are **not implemented**. This ADR is a decision; the corrections are
+follow-up work.
+
+1. **26 sections to classify.** Some are genuinely mixed — "Broker-facing
+   identity" (155 lines) carries both lineages — and need splitting or a
+   judgement call recorded in place.
+2. **One mixed section is load-bearing for other open work.** "Continue / Pause /
+   Stop guards — shared resolver (legacy Resume naming)" is rooted in `cmd_resume`
+   and `operator_surface` (**retiring**), but it also carries the **Continue vs
+   Resume** distinction, which is **live** and which
+   [#1593](https://github.com/tim1016/learn-ai/issues/1593) /
+   [#1599](https://github.com/tim1016/learn-ai/issues/1599) depend on — the
+   operator manual omits exactly that pair. Split this one deliberately.
+3. **The header is rewritten** to Decision 2's scope; the "Paper Run page"
+   framing goes.
+4. **Four §16.4 citations deleted** — `CONTEXT.md:6`, `:9`, `:494`, `:548`. Two of
+   them additionally cite the wrong section number (`Resolution 5` / `Resolution 7`
+   are in §16.1). Delete rather than repoint.
+5. **Missing vocabulary to add**: ADR 0034 (immutable strategy instances), ADR
+   0035 (SQLite clerk authority), the SQLite execution-ledger expansion, the
+   Broker Desk lens split, the Bot Gallery, and the Market Scope shell.
+6. **ADR 0038's deploy-state naming lands here.** "Deploy state" names four
+   artifact families; two retire, and the two survivors — SQLite registration/run
+   folds, and runner JSON instance/run records — need two distinct names. ADR 0038
+   consequence 6 handed this decision to #1595; it is now owed as vocabulary.
+7. **The `Vocabulary:` line becomes checkable** by ADR 0039's gate. Until that
+   gate exists, Decision 4 is as unenforced as the practice it formalises.
+8. **Archival is a follow-up, not a non-decision.** When the IBKR lineage is
+   deleted, everything labelled **retiring** moves to the historical record in one
+   mechanical pass. Decision 1 exists partly to make that pass safe.
