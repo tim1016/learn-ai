@@ -217,6 +217,14 @@ def check_all_in_coexistence(
 ) -> CheckResult:
     """ADR 0009 § 9 / Decision 13 — symbol-scoped all-in coexistence guard.
 
+    Formula: a broker position blocks iff
+      position_quantity_is_nonzero(quantity) is true.
+    Reference: ADR 0009 Decision 13 and ADR 0036.
+    Canonical implementation: this file; flatness delegates to
+      app/broker/alpaca/clerk/sqlite/folds.py::position_quantity_is_nonzero.
+    Validated against: tests/engine/live/test_pre_flight.py::
+      test_all_in_coexistence_passes_when_symbol_has_sub_epsilon_residue.
+
     The interim stand-in for the capital-sleeve layer (which is deferred).
     Refuses to start a new run when **resolved sizing is ``SetHoldings(1.0)``**
     *and* either:
@@ -246,6 +254,8 @@ def check_all_in_coexistence(
     deploy onto a non-flat account.
     """
     from decimal import Decimal as _Decimal
+
+    from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 
     # Sniff the policy. Anything other than SetHoldings(1.0) is unconditionally OK.
     is_all_in = _is_set_holdings_full(proposed_sizing)
@@ -289,7 +299,7 @@ def check_all_in_coexistence(
             qty = _Decimal(str(pos.quantity))
         except (ValueError, TypeError):
             continue
-        if qty != 0:
+        if position_quantity_is_nonzero(float(qty)):
             return CheckResult(
                 name="all_in_coexistence",
                 passed=False,

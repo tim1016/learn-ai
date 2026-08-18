@@ -22612,6 +22612,12 @@
             "title": "Fetched At Ms",
             "type": "integer"
           },
+          "has_exposure": {
+            "description": "Return the backend-authored exposure/flatness verdict.\n\nFormula: ``has_exposure = abs(quantity) >= POSITION_QTY_EPSILON``.\nReference: ADR 0036.\nCanonical implementation:\n  app/broker/alpaca/clerk/sqlite/folds.py::position_quantity_is_nonzero.\nValidated against: tests/broker/ibkr/test_account.py::\n  test_fetch_positions_authors_canonical_exposure_verdict.",
+            "readOnly": true,
+            "title": "Has Exposure",
+            "type": "boolean"
+          },
           "market_price": {
             "anyOf": [
               {
@@ -22697,7 +22703,8 @@
           "sec_type",
           "quantity",
           "avg_cost",
-          "fetched_at_ms"
+          "fetched_at_ms",
+          "has_exposure"
         ],
         "title": "IbkrPosition",
         "type": "object"

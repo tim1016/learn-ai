@@ -637,6 +637,20 @@ def test_all_in_coexistence_passes_when_symbol_flat() -> None:
     )
 
 
+def test_all_in_coexistence_passes_when_symbol_has_sub_epsilon_residue() -> None:
+    from app.engine.live.pre_flight import check_all_in_coexistence
+
+    snapshot = _positions_snapshot([{"symbol": "SPY", "quantity": 0.75e-9}])
+
+    result = check_all_in_coexistence(
+        proposed_symbol="SPY",
+        proposed_sizing={"kind": "SetHoldings", "fraction": "1.0"},
+        broker_positions=snapshot,
+    )
+
+    assert result.passed
+
+
 def test_all_in_coexistence_blocks_on_sibling_all_in_same_symbol() -> None:
     from app.engine.live.pre_flight import check_all_in_coexistence
 
