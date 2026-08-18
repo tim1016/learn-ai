@@ -52,8 +52,17 @@ class _HistoryTimeframeSpec:
 # market-session bars, then returns only the most recent visual window. The
 # larger fetch window absorbs closed sessions without asking the client to
 # guess a date range.
+#
+# ``fetch_lookback_days`` is sized for the worst *scheduled* week, not the
+# average one. 300 one-minute bars is ~0.8 of a 390-minute session, but a
+# holiday week can strand that window behind a closed day and a half-day:
+# early on the Monday after Thanksgiving the four preceding calendar days
+# hold only Friday's 210-minute early close, so a 4-day lookback returned a
+# short chart exactly when it was being watched live. Nine days clears any
+# NYSE holiday cluster; the display cap below still trims to the visual
+# window, so the wider fetch costs pages, never extra candles.
 _HISTORY_TIMEFRAME_SPECS: dict[ChartHistoryTimeframe, _HistoryTimeframeSpec] = {
-    "1m": _HistoryTimeframeSpec(1, "minute", 4, 300),
+    "1m": _HistoryTimeframeSpec(1, "minute", 9, 300),
     "15m": _HistoryTimeframeSpec(15, "minute", 24, 300),
     "30m": _HistoryTimeframeSpec(30, "minute", 48, 300),
     "1h": _HistoryTimeframeSpec(1, "hour", 96, 300),
@@ -258,7 +267,14 @@ async def build_history_chart(
     end = datetime.fromtimestamp(plan.to_ms / 1000, tz=UTC).date() + timedelta(days=1)
 
     polygon_bars = await bar_source(symbol, start, end, plan.multiplier, plan.timespan)
-    polygon_bars = [bar for bar in polygon_bars if plan.from_ms <= bar.t_ms < plan.to_ms]
+    # A bar is labelled by its close (temporal-rigor.md), so a bar whose span
+    # has not elapsed is still open and must not be drawn as a finished candle:
+    # at 10:30 the 1h bar starting 10:00 does not close until 11:00.
+    polygon_bars = [
+        bar
+        for bar in polygon_bars
+        if plan.from_ms <= bar.t_ms and bar.t_ms + plan.span_ms <= plan.to_ms
+    ]
     polygon_bars.sort(key=lambda bar: bar.t_ms)
 
     truncated = len(polygon_bars) > plan.display_bars

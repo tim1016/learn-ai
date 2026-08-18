@@ -68,16 +68,33 @@ describe("RecencyLaunchConfigComponent", () => {
     const { view } = await renderConfig([makeStrategy()]);
     const symbols = screen.getByRole("textbox", { name: "Symbols" });
 
-    fireEvent.input(symbols, { target: { value: "spy" } });
+    // SPY is seeded by default, so entering it again proves nothing -- the chip
+    // would survive on dedup alone. Add a symbol that is not already committed.
+    fireEvent.input(symbols, { target: { value: "aapl" } });
     fireEvent.keyDown(symbols, { key: "Enter" });
     await view.fixture.whenStable();
 
-    expect(screen.getByText("SPY")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Remove AAPL" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Remove SPY" })).not.toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Remove SPY" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove AAPL" }));
     await view.fixture.whenStable();
 
-    expect(screen.queryByRole("button", { name: "Remove SPY" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remove AAPL" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Remove SPY" })).not.toBeNull();
+  });
+
+  it("refuses a fractional custom-month window", async () => {
+    const { view } = await renderConfig([makeStrategy()]);
+
+    fireEvent.click(screen.getByLabelText(/custom/i));
+    await view.fixture.whenStable();
+
+    const months = screen.getByLabelText(/custom months/i);
+    fireEvent.input(months, { target: { value: "1.5" } });
+    await view.fixture.whenStable();
+
+    expect(screen.getByText(/whole number of months/i)).not.toBeNull();
   });
 
   it("shows a range input per numeric param for the preselected strategy", async () => {

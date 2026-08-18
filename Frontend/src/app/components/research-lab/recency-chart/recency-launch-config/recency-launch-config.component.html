@@ -20,7 +20,7 @@
       <div class="symbol-entry" [class.symbol-entry--invalid]="symbolValidationMessage() !== null">
         @for (symbol of committedSymbols(); track symbol) {
           <span class="symbol-entry__chip">
-            {{ symbol }}
+            <app-asset-identity [symbol]="symbol" size="sm" />
             <button type="button" [attr.aria-label]="'Remove ' + symbol" (click)="removeSymbol(symbol)">×</button>
           </span>
         }
@@ -110,8 +110,13 @@
             min="1"
             max="24"
             [value]="customMonths()"
+            [attr.aria-invalid]="customMonthsError() ? 'true' : null"
+            [attr.aria-describedby]="customMonthsError() ? 'recency-custom-months-error' : null"
             (input)="onCustomMonthsInput($event)"
           />
+          @if (customMonthsError(); as message) {
+            <small id="recency-custom-months-error" class="launch-config__error" role="alert">{{ message }}</small>
+          }
         </label>
       }
     </section>
@@ -121,7 +126,12 @@
         <p class="launch-config__run-count">{{ runCountLabel() }}</p>
         <p class="launch-config__run-detail">The count includes selected strategies, parameter variations, and symbols.</p>
       </div>
-      <button type="button" (click)="launch()">Launch timeline</button>
+      <div class="launch-config__actions">
+        @if (strategyValidationMessage(); as message) {
+          <small class="launch-config__error" role="alert">{{ message }}</small>
+        }
+        <button type="button" (click)="launch()">Launch timeline</button>
+      </div>
     </footer>
   </div>
 </section>

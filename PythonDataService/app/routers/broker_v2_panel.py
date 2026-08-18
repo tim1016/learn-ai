@@ -40,6 +40,7 @@ from app.schemas.broker_v2_panel import (
     BotPanelLiveSnapshot,
     BotPanelView,
     ChartHistoryResponse,
+    ChartHistoryTimeframe,
     ChartLiveResponse,
     LiveSnapshotUnavailableResponse,
     PanelAction,
@@ -509,6 +510,8 @@ async def _history_chart(
     sid: str,
     timeframe: str,
 ) -> ChartHistoryResponse:
+    # The route signature already closes the enum at the schema boundary; this
+    # coercion stays as the service-side guard for non-HTTP callers.
     try:
         coerced = coerce_history_timeframe(timeframe)
     except ChartTimeframeError as exc:
@@ -528,7 +531,7 @@ async def get_history_chart_scoped(
     broker: str,
     account_id: str,
     sid: str,
-    timeframe: str = Query(..., max_length=3),
+    timeframe: ChartHistoryTimeframe = Query(...),
 ) -> ChartHistoryResponse:
     return await _history_chart(broker, account_id, sid, timeframe)
 
@@ -541,7 +544,7 @@ async def get_history_chart_scoped(
 async def get_history_chart_unscoped(
     broker: str,
     sid: str,
-    timeframe: str = Query(..., max_length=3),
+    timeframe: ChartHistoryTimeframe = Query(...),
 ) -> ChartHistoryResponse:
     account_id = await _resolve_default_account(broker)
     return await _history_chart(broker, account_id, sid, timeframe)

@@ -376,7 +376,7 @@
   width: 1px;
   height: 1px;
   overflow: hidden;
-  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
   white-space: nowrap;
 }
 
@@ -418,4 +418,17 @@
   .duration-options {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
+
+.launch-config__error {
+  display: block;
+  color: var(--bear);
+  font: 500 var(--fs-xxs)/1.3 var(--font-sans);
+}
+
+.launch-config__actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-1);
 }

@@ -25,6 +25,7 @@ from app.services.broker_v2_panel.chart_projection_service import (
     build_history_chart,
     build_live_chart,
     coerce_history_timeframe,
+    history_fill_window,
     live_window,
 )
 from app.services.live_chart_window import MAX_CHART_RANGE_MS, ChartWindowResult
@@ -137,6 +138,110 @@ async def test_history_timeframe_maps_to_fixed_bar_window(
     assert display_bars > 0
 
 
+_TIMEFRAME_SPAN_MS: dict[str, int] = {
+    "1m": 60_000,
+    "15m": 900_000,
+    "30m": 1_800_000,
+    "1h": 3_600_000,
+    "1d": 86_400_000,
+}
+
+
+def _complete_bars(*, span_ms: int, count: int, now_ms: int = _NOW) -> list[PolygonBar]:
+    """Build ``count`` bars that have all fully closed by ``now_ms``.
+
+    The newest bar closes exactly at ``now_ms``, so every bar is complete and
+    none is filtered by the still-open-candle guard.
+    """
+    return [
+        PolygonBar(
+            t_ms=now_ms - (i + 1) * span_ms,
+            open=1.0,
+            high=2.0,
+            low=0.5,
+            close=1.5,
+            volume=10,
+            vwap=1.2,
+            n=3,
+        )
+        for i in reversed(range(count))
+    ]
+
+
+@pytest.mark.parametrize(
+    ("timeframe", "display_bars"),
+    [("1m", 300), ("15m", 300), ("30m", 300), ("1h", 300), ("1d", 260)],
+)
+async def test_history_truncates_at_each_configured_display_cap(
+    timeframe: str,
+    display_bars: int,
+) -> None:
+    """Each timeframe's own cap is exercised, not just the pytest parameter.
+
+    The previous version asserted ``display_bars > 0``, which passes for any
+    cap and so could not catch a regression in ``_HISTORY_TIMEFRAME_SPECS``.
+    """
+    span_ms = _TIMEFRAME_SPAN_MS[timeframe]
+    supplied = _complete_bars(span_ms=span_ms, count=display_bars + 1)
+
+    async def _source(symbol, start, end, source_multiplier, source_timespan):
+        return list(supplied)
+
+    result = await build_history_chart(
+        timeframe,  # type: ignore[arg-type]
+        [],
+        strategy_instance_id=SID,
+        symbol="SPY",
+        bar_source=_source,
+        now_ms=_NOW,
+    )
+
+    assert result.truncated is True
+    assert len(result.bars) == display_bars
+    # The oldest supplied bar is the one dropped, so the retained window starts
+    # one span later than what the source returned.
+    assert result.bars[0].start_ms == supplied[1].t_ms
+    assert result.bars[-1].end_ms == _NOW
+
+
+@pytest.mark.parametrize("timeframe", ["1m", "15m", "30m", "1h", "1d"])
+async def test_history_excludes_the_still_open_candle(timeframe: str) -> None:
+    """A bar whose span has not elapsed is not a finished candle.
+
+    Regression for a filter that tested only the bar's start: at 10:30 the 1h
+    bar opened at 10:00 was returned as complete even though it closes at
+    11:00. Bars are labelled by their close (``temporal-rigor.md``), so an
+    unelapsed span must be withheld rather than drawn.
+    """
+    span_ms = _TIMEFRAME_SPAN_MS[timeframe]
+    closed = _complete_bars(span_ms=span_ms, count=2)
+    still_open = PolygonBar(
+        t_ms=_NOW - span_ms // 2,
+        open=9.0,
+        high=9.0,
+        low=9.0,
+        close=9.0,
+        volume=1,
+        vwap=9.0,
+        n=1,
+    )
+
+    async def _source(symbol, start, end, source_multiplier, source_timespan):
+        return [*closed, still_open]
+
+    result = await build_history_chart(
+        timeframe,  # type: ignore[arg-type]
+        [],
+        strategy_instance_id=SID,
+        symbol="SPY",
+        bar_source=_source,
+        now_ms=_NOW,
+    )
+
+    assert [bar.start_ms for bar in result.bars] == [bar.t_ms for bar in closed]
+    assert all(bar.end_ms <= _NOW for bar in result.bars)
+
+
 def test_unknown_timeframe_is_rejected() -> None:
     with pytest.raises(ChartTimeframeError):
         coerce_history_timeframe("5m")
@@ -180,14 +285,18 @@ async def test_history_bars_are_polygon_tagged_and_bounded() -> None:
 
 
 async def test_history_fill_markers_within_window() -> None:
+    # Derive the boundary from the timeframe's own window rather than repeating
+    # a lookback constant here: a test that hard-codes the window silently stops
+    # testing exclusion the moment the lookback widens.
+    window_from_ms, _ = history_fill_window("1m", _NOW)
     fills = [
         _sqlite_fill(event_key="exec-in-window", filled_at_ms=_NOW - 30_000),
-        # Outside the 1D lookback → excluded.
+        # Before the 1m fetch window opens → excluded.
         _sqlite_fill(
             event_key="exec-outside-window",
             quantity=50,
             price=400.0,
-            filled_at_ms=_NOW - 5 * 86_400_000,
+            filled_at_ms=window_from_ms - 60_000,
         ),
     ]
 

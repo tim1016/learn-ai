@@ -8,6 +8,7 @@ import {
   DUAL_PANE_CHART_FACTORY,
   DualPaneChartComponent,
   formatChartCrosshairTime,
+  countPlottedFills,
   toSeriesMarkers,
 } from './dual-pane-chart.component';
 import type { ChartBar } from '../lib/broker-v2-panel.types';
@@ -618,6 +619,53 @@ describe('DualPaneChartComponent', () => {
         text: 'BUY 2 @ 101',
       }),
     ]);
+  });
+
+  it('counts grouped fills individually in the plotted tally', () => {
+    const startMs = 1_700_000_000_000;
+    const bars = [
+      {
+        start_ms: startMs,
+        end_ms: startMs + 60_000,
+        open: '100',
+        high: '102',
+        low: '99',
+        close: '101',
+        volume: 1_000,
+        source: 'ibkr' as const,
+      },
+    ];
+    const fills = [
+      {
+        filled_at_ms: startMs + 10_000,
+        side: 'buy' as const,
+        quantity: 1,
+        price: 100.5,
+        order_ref: 'order-1',
+        event_key: 'exec-1',
+      },
+      {
+        filled_at_ms: startMs + 20_000,
+        side: 'buy' as const,
+        quantity: 2,
+        price: 100.75,
+        order_ref: 'order-2',
+        event_key: 'exec-2',
+      },
+      {
+        filled_at_ms: startMs - 600_000,
+        side: 'buy' as const,
+        quantity: 3,
+        price: 99.5,
+        order_ref: 'order-3',
+        event_key: 'exec-3',
+      },
+    ];
+
+    // Two in-window fills collapse into one arrow, so the glyph count is 1 --
+    // but two fills are represented and the readout must say so.
+    expect(toSeriesMarkers(fills, bars)).toHaveLength(1);
+    expect(countPlottedFills(fills, bars)).toBe(2);
   });
 
   it('condenses same-side fills that share a delayed candle into one readable marker', () => {

@@ -126,6 +126,24 @@ function markerText(group: FillMarkerGroup): string {
   return `${side} ${fill.quantity} @ ${fill.price}`;
 }
 
+/**
+ * Count the fills a chart actually represents, which is not the number of
+ * marker glyphs it draws: `toSeriesMarkers` collapses same-candle, same-side
+ * fills into one arrow. The tape readout reports fills, so counting glyphs
+ * under-reported it — two grouped fills plus one off-window fill rendered as
+ * "1 plotted / 3 fills".
+ */
+export function countPlottedFills(
+  markers: readonly ChartFillMarker[],
+  bars: readonly ChartBar[],
+): number {
+  let plotted = 0;
+  for (const marker of markers) {
+    if (markerTime(marker, bars) !== null) plotted += 1;
+  }
+  return plotted;
+}
+
 export function toSeriesMarkers(
   markers: readonly ChartFillMarker[],
   bars: readonly ChartBar[],
@@ -290,7 +308,7 @@ export class DualPaneChartComponent implements AfterViewInit {
     this.activePane() === 'live' ? this.liveLoading() : this.historyLoading(),
   );
   protected readonly visibleFillCount = computed(() =>
-    toSeriesMarkers(this.activeMarkers(), this.activeBars()).length,
+    countPlottedFills(this.activeMarkers(), this.activeBars()),
   );
   protected readonly activeIndicatorKeys = computed(() =>
     this.selectedIndicators().map((indicator) => indicator.name),

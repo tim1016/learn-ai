@@ -53103,7 +53103,13 @@
             "name": "timeframe",
             "required": true,
             "schema": {
-              "maxLength": 3,
+              "enum": [
+                "1m",
+                "15m",
+                "30m",
+                "1h",
+                "1d"
+              ],
               "title": "Timeframe",
               "type": "string"
             }
@@ -54328,7 +54334,13 @@
             "name": "timeframe",
             "required": true,
             "schema": {
-              "maxLength": 3,
+              "enum": [
+                "1m",
+                "15m",
+                "30m",
+                "1h",
+                "1d"
+              ],
               "title": "Timeframe",
               "type": "string"
             }

@@ -303,7 +303,12 @@ describe("RecencyChartPageComponent", () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole("checkbox", { name: /ema crossover \(2 bps\)/i }));
+    // The only catalog strategy is preselected, so this test must NOT toggle the
+    // checkbox: doing so deselected it and launched a zero-strategy job, which
+    // the launch guard now refuses.
+    expect(
+      (screen.getByRole("checkbox", { name: /ema crossover \(2 bps\)/i }) as HTMLInputElement).checked,
+    ).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: /launch/i }));
     await fixture.whenStable();
 

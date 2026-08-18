@@ -5,6 +5,7 @@ import { firstValueFrom } from "rxjs";
 import { environment } from "../../../../../environments/environment";
 import { JobsService } from "../../../../services/jobs.service";
 import type { ParamProperty, StrategyInfo } from "../../../strategy-lab/strategy-lab.models";
+import { AssetIdentityComponent } from "../../../../shared/asset-identity";
 import { RecencyParamRangeInputComponent } from "./recency-param-range-input.component";
 import { computeGridSize, type ParamRange, type StrategyRangeConfig } from "./recency-param-range";
 
@@ -49,7 +50,7 @@ function uniqueSymbols(symbols: readonly string[]): string[] {
  */
 @Component({
   selector: "app-recency-launch-config",
-  imports: [RecencyParamRangeInputComponent],
+  imports: [AssetIdentityComponent, RecencyParamRangeInputComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: "./recency-launch-config.component.html",
   styleUrl: "./recency-launch-config.component.scss",
@@ -65,6 +66,12 @@ export class RecencyLaunchConfigComponent {
   readonly committedSymbols = signal<string[]>([...DEFAULT_SYMBOLS]);
   readonly symbols = computed<string[]>(() => uniqueSymbols([...this.committedSymbols(), ...parseSymbols(this.symbolDraft())]));
   readonly attemptedLaunch = signal(false);
+  readonly customMonthsError = signal<string | null>(null);
+  readonly strategyValidationMessage = computed(() =>
+    this.attemptedLaunch() && this.strategyConfigs().length === 0
+      ? "Select at least one strategy before launching the timeline."
+      : null,
+  );
   readonly symbolValidationMessage = computed(() =>
     this.attemptedLaunch() && this.symbols().length === 0 ? "Add at least one symbol before launching the timeline." : null,
   );
@@ -207,10 +214,23 @@ export class RecencyLaunchConfigComponent {
     this.durationPreset.set(preset);
   }
 
+  /**
+   * The control means whole months, so a fraction is refused rather than
+   * silently kept: 1.5 previously survived clamping and produced a 45-day
+   * window from a field labelled "months".
+   */
   setCustomMonths(raw: string): void {
-    const parsed = Number(raw);
-    const clamped = Number.isFinite(parsed) ? Math.min(MAX_MONTHS, Math.max(1, parsed)) : 1;
-    this.customMonths.set(clamped);
+    const trimmed = raw.trim();
+    const parsed = Number(trimmed);
+    if (trimmed === "" || !Number.isFinite(parsed) || !Number.isInteger(parsed)) {
+      this.customMonthsError.set("Enter a whole number of months.");
+      return;
+    }
+    // Out-of-range still clamps -- that is the established behaviour of this
+    // number control. Only a non-whole value is refused outright, because
+    // clamping cannot express "months are whole" without inventing a value.
+    this.customMonthsError.set(null);
+    this.customMonths.set(Math.min(MAX_MONTHS, Math.max(1, parsed)));
   }
 
   onCustomMonthsInput(event: Event): void {
@@ -223,6 +243,10 @@ export class RecencyLaunchConfigComponent {
     this.attemptedLaunch.set(true);
     this.commitSymbolDraft();
     if (this.symbols().length === 0) return;
+    // Deselecting the last strategy previously launched a job with an empty
+    // strategy list and no local error.
+    if (this.strategyConfigs().length === 0) return;
+    if (this.customMonthsError() !== null) return;
 
     const windowEndMs = Date.now();
     const windowStartMs = windowEndMs - this.windowMonths() * 30 * MS_PER_DAY;

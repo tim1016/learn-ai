@@ -43,10 +43,14 @@ export class ChartIndicatorRailComponent {
   readonly indicatorColorChanged = output<ChartIndicatorColorChange>();
 
   protected readonly pendingIndicator = signal<IndicatorPickerAdd | null>(null);
+  protected readonly paramErrors = signal<Record<string, string>>({});
   protected readonly pendingInfo = computed<IndicatorInfo | null>(() => {
     const entry = this.pendingIndicator();
     return entry ? this.findIndicator(entry.name) : null;
   });
+  protected readonly pendingHasInvalidParam = computed(
+    () => Object.keys(this.paramErrors()).length > 0,
+  );
 
   protected requestIndicator(entry: IndicatorPickerAdd): void {
     const info = this.findIndicator(entry.name);
@@ -54,16 +58,45 @@ export class ChartIndicatorRailComponent {
       this.indicatorAdded.emit(entry);
       return;
     }
+    this.paramErrors.set({});
     this.pendingIndicator.set({ name: entry.name, params: { ...entry.params } });
+  }
+
+  /**
+   * Reject a parameter here rather than letting the calculation path reject it.
+   * The catalog advertises a type and a range; a fraction in an `int` field or
+   * a value outside min/max is refused by the Python indicator service with a
+   * 400, which stranded the freshly added indicator in an error state until the
+   * operator removed it. Validating at the control keeps the configuration open
+   * and says what is wrong.
+   */
+  protected validateParam(param: IndicatorParamConfig, raw: string): string | null {
+    const trimmed = raw.trim();
+    if (trimmed === '') return `${param.name} is required`;
+    const value = Number(trimmed);
+    if (!Number.isFinite(value)) return `${param.name} must be a number`;
+    if (param.type === 'int' && !Number.isInteger(value)) {
+      return `${param.name} must be a whole number`;
+    }
+    if (value < param.min || value > param.max) {
+      return `${param.name} must be between ${param.min} and ${param.max}`;
+    }
+    return null;
   }
 
   protected updatePendingParam(param: IndicatorParamConfig, event: Event): void {
     if (!(event.target instanceof HTMLInputElement)) return;
-    const value = Number(event.target.value);
-    if (!Number.isFinite(value)) return;
+    const raw = event.target.value;
+    const message = this.validateParam(param, raw);
+    this.paramErrors.update((errors) =>
+      message === null
+        ? Object.fromEntries(Object.entries(errors).filter(([name]) => name !== param.name))
+        : { ...errors, [param.name]: message },
+    );
+    if (message !== null) return;
     this.pendingIndicator.update((entry) => entry && {
       ...entry,
-      params: { ...entry.params, [param.name]: value },
+      params: { ...entry.params, [param.name]: Number(raw.trim()) },
     });
   }
 
@@ -71,15 +104,21 @@ export class ChartIndicatorRailComponent {
     return this.pendingIndicator()?.params[param.name] ?? param.default;
   }
 
+  protected paramError(param: IndicatorParamConfig): string | null {
+    return this.paramErrors()[param.name] ?? null;
+  }
+
   protected confirmPendingIndicator(): void {
     const entry = this.pendingIndicator();
-    if (!entry) return;
+    if (!entry || this.pendingHasInvalidParam()) return;
     this.indicatorAdded.emit(entry);
     this.pendingIndicator.set(null);
+    this.paramErrors.set({});
   }
 
   protected cancelPendingIndicator(): void {
     this.pendingIndicator.set(null);
+    this.paramErrors.set({});
   }
 
   protected updateIndicatorColor(id: string, event: Event): void {

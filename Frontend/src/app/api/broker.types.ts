@@ -29586,7 +29586,7 @@ export interface operations {
     get_history_chart_scoped_api_brokers__broker__accounts__account_id__bots__sid__chart_history_get: {
         parameters: {
             query: {
-                timeframe: string;
+                timeframe: "1m" | "15m" | "30m" | "1h" | "1d";
             };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;
@@ -30114,7 +30114,7 @@ export interface operations {
     get_history_chart_unscoped_api_brokers__broker__bots__sid__chart_history_get: {
         parameters: {
             query: {
-                timeframe: string;
+                timeframe: "1m" | "15m" | "30m" | "1h" | "1d";
             };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;

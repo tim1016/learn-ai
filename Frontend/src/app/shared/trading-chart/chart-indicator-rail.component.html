@@ -55,12 +55,31 @@
               [max]="param.max"
               [step]="param.type === 'float' ? 0.1 : 1"
               [value]="pendingParamValue(param)"
+              [attr.aria-invalid]="paramError(param) !== null"
+              [attr.aria-describedby]="
+                paramError(param) === null
+                  ? null
+                  : 'chart-indicator-' + info.name + '-' + param.name + '-error'
+              "
               (input)="updatePendingParam(param, $event)"
             />
+            @if (paramError(param); as message) {
+              <small
+                class="indicator-rail__param-error"
+                [id]="'chart-indicator-' + info.name + '-' + param.name + '-error'"
+                role="alert"
+                >{{ message }}</small
+              >
+            }
           </label>
         }
       </div>
-      <button type="button" class="indicator-rail__confirm" (click)="confirmPendingIndicator()">
+      <button
+        type="button"
+        class="indicator-rail__confirm"
+        [disabled]="pendingHasInvalidParam()"
+        (click)="confirmPendingIndicator()"
+      >
         Add {{ info.name.toUpperCase() }} to chart
       </button>
     </section>
