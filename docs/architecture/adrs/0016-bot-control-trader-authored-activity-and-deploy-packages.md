@@ -1,6 +1,7 @@
 # ADR 0016 — Bot Control trader-authored activity and deploy packages
 
-**Status:** Accepted 2026-06-25. Drafted during the 2026-06-25 Bot Control / Deploy a strategy grilling session.
+**Status:** Accepted 2026-06-25
+**Provenance:** Drafted during the 2026-06-25 Bot Control / Deploy a strategy grilling session.
 **Decision drivers:** The Bot Control was leaking operator-control implementation language (`endpoint_snapshot`, raw JSON, `spec_path`, account-source codes) into trader-facing surfaces; trade history for the JUNE-25 bot existed in durable artifacts but did not appear in Activity; broker/evidence tables flashed during refresh; and Deploy a strategy asked traders to assemble raw paths, settings files, account ids, and validation identifiers by hand.
 **Related:** ADR 0013 (operator-surface boundary: judgment vs evidence), ADR 0014 (broker-authored operator view, backend-rendered narratives), ADR 0015 (operator notice contract), `CONTEXT.md` (Live operator console glossary).
 

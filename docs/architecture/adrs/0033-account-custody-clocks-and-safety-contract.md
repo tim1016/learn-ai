@@ -1,7 +1,8 @@
 # ADR 0033: Account custody clocks and the safety composition contract
 
+**Status:** Accepted
+
 - **Date:** 2026-07-27
-- **Status:** Accepted
 - **Context:** Account-safe operations PRD; issues #1243–#1257; the AMD connectivity incident
 - **Amends:** ADR 0008 and ADR 0030
 

@@ -1,7 +1,9 @@
 # ADR 0035: Alpaca Account Clerk — event-sourced SQLite authority (append-only log + folded state), no Postgres in scope
 
+**Status:** Accepted 2026-08-10
+
 - **Date:** 2026-08-04
-- **Status:** Accepted for Alpaca paper on 2026-08-10. For cutover account
+- **Provenance:** Accepted for Alpaca paper on 2026-08-10. For cutover account
   `PA3KWXU1C4C3`, generation 2 on schema v8 is active as of the supervised
   2026-08-11 cutover. Other accounts select SQLite only when their valid,
   account/generation/database-bound activation fence does so. Acceptance is

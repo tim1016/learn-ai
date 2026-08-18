@@ -1,29 +1,54 @@
-# CONTEXT — Live operator console glossary
+# CONTEXT — Live trading and operator glossary
 
-Canonical language for the deployed-strategy operator console (the "Paper Run"
-page and its backend). This file is a **glossary only** — no implementation
-detail, no spec. For the full identity/control-plane term list see
-`docs/ibkr-paper-deployment-plan.md` §16.4; this file holds the operator-UI
-vocabulary that grilling sharpened and cross-references that list.
+Canonical language for the **live trading and operator domain**: bots, brokers,
+custody, execution, and the surfaces an operator acts through. This file is a
+**glossary only** — no implementation detail, no spec, no decisions. Decisions
+live in `docs/architecture/adrs/`.
 
-## Identity ladder (established — see plan §16.4)
+Repo-process vocabulary — ADR status values, lint rules, CI gates, branch and
+review conventions — is **out of scope** and does not belong here.
+
+**Lineage labels.** Two retirements are in flight and neither is implemented, so
+every section declares which system its terms describe. A reader looking a term
+up can tell at a glance whether the definition describes running machinery or
+machinery on its way out (decision record: ADR 0040).
+
+- **live** — the current Alpaca Broker V2 ecosystem.
+- **retiring (ADR 0038)** — machinery the IBKR bot-control retirement removes.
+- **retiring (ADR 0037)** — machinery the Alpaca legacy-JSONL custody cutover
+  removes.
+- **neutral** — operator/trading vocabulary that survives a broker change.
+
+The two retirements are **independent** and either may land first, so they never
+share a label; a section is archived only when *its own* trigger fires. Nothing
+is archived while the code it names still runs.
+
+## Identity ladder
+
+**Lineage: live.**
 
 - **strategy_key** — algorithm family (e.g. `ema_crossover_signal`; `spy_ema_crossover` remains a legacy compatibility key).
 - **strategy_instance_id** — one *configured* instance of a strategy_key. The
-  unit the operator actually governs. Owns the `ib_client_id`,
-  `bot_order_namespace`, durable desired-state sidecar, and (after PR-A) the
-  managed-process registry slot. One strategy_key → many instances; one
+  unit the operator actually governs. Owns the `bot_order_namespace` and the
+  durable control-intent sidecar. One strategy_key → many instances; one
   instance → many runs over time. Its configuration is immutable: changing
   strategy semantics creates a new strategy-instance identity.
+- **Bot name / strategy instance ID** — one canonical identity for a deployed
+  bot. The deploy flow may prefill a random, trader-editable name, but the final
+  value is lifetime-unique, system-safe, and is the durable
+  `strategy_instance_id` used for paths, ownership, broker attribution, and
+  operator-surface identity. There is no separate display-only bot-name
+  variable.
 - **run_id** — a single execution (one process lifetime) of an instance. An
   artifact-storage key, **not** the operator's handle.
-- **Bot process fact** — the process registry's observation of the process bound
-  to one `run_id`: process identity, lifecycle state, and observation time. The
-  process registry, not the browser and not run files, owns this liveness fact.
 - **Current run** — the newest run currently bound to a strategy instance. It is
-  shown first in the Bot Cockpit but does not replace the instance as the
-  operator's durable identity. Advancing this binding never rewrites an older
+  shown first on the bot's operator surface but does not replace the instance as
+  the operator's durable identity. Advancing this binding never rewrites an older
   run.
+- **Current run binding** — the mapping `strategy_instance_id → currently bound
+  run_id`. It is a *replaceable* pointer, never liveness proof and never terminal
+  proof. A **stale run selection must never be the operator's primary control
+  surface**.
 - **Run history** — the append-only sequence of current and previous runs for
   one strategy instance. A historical run remains inspectable but cannot become
   a command target merely because an operator selects it for viewing.
@@ -47,38 +72,41 @@ vocabulary that grilling sharpened and cross-references that list.
   intent across transport retries. Reusing it with the same action and payload
   asks for the original outcome; reusing it with a different action or payload
   is a conflict.
+- **Configuration hash** — the content hash of a strategy instance's immutable
+  configuration. Two records agreeing on it describe the same configuration; a
+  differing hash under the same `strategy_instance_id` is a conflict, never an
+  update. It is what makes an instance's immutability checkable rather than
+  merely asserted.
+  _Avoid_: config version, spec version (neither is a content hash).
+- **Launch reason** — why a run was created: a fresh deploy, a Resume of a
+  stopped instance, or a legacy record lifted from an older artifact. Recorded
+  on the run, never on the instance.
 
 ## Broker-facing identity (sharpened 2026-06-04)
+
+**Lineage: live.**
 
 How a fill is attributed to a strategy. The durable chain, distinct from the
 ephemeral session id:
 
 - **intent_id** — engine-generated, one per trading intent, created *before*
-  the order is placed. The write-ahead idempotency key and the intent ledger's
-  primary key.
-- **intent ledger** — a *reconstructed logical view*, **not a stored artifact**.
-  Its system of record is the run-scoped WAL (`intent_events.jsonl`) folded over
-  the instance-scoped projection (`live_state.json`'s `submitted_orders`, keyed
-  by `intent_id`); the fold replays WAL events after the projection's
-  `last_intent_wal_seq` cursor (a per-run monotonic sequence number, never a
-  wall-clock timestamp). There is no third store: ADR-0001's substrate is
-  unchanged.
-  An `intent_ledger.py` module may hold the *pure fold helpers* (append/read WAL
-  events, fold over the `LiveStateEnvelope`, build the in-memory view the
-  reconciler and halt logic read) but persists nothing of its own.
+  the order is placed. The write-ahead idempotency key, and the primary key of
+  the intent record the custody authority holds.
 - **bot_order_namespace** — `learn-ai/{strategy_instance_id}/v1`. The
   per-instance ownership scope (unchanged; predates this work). The **`/v1` is
   the `order_ref` *wire-format* version — not a strategy, config, spec, or model
-  version.** It versions only how `namespace:intent_id` is encoded into IBKR's
-  `orderRef` (delimiter/escaping, intent-id encoding, added segments, parse
-  shape). It does **not** bump for parameter changes, code changes, spec-hash
-  changes, retunes, or new run_ids — those live in `run_ledger` /
-  `strategy_instance_id`. A bump to `/v2` requires an ADR/migration note **and
+  version.** It versions only how `namespace:intent_id` is encoded into the
+  broker's attribution field (delimiter/escaping, intent-id encoding, added
+  segments, parse shape). It does **not** bump for parameter changes, code
+  changes, spec-hash changes, retunes, or new run_ids — those live in the run's
+  own configuration record and `strategy_instance_id`. A bump to `/v2` requires
+  an ADR/migration note **and
   dual-read ownership** (recognize both `/v1` and `/v2` as owned until every
   prior-version broker order is closed/reconciled) — otherwise the bot
   classifies its own open orders as foreign and self-poisons.
 - **order_ref** — `{bot_order_namespace}:{intent_id}`. The broker-facing
-  attribution string set on IBKR's `orderRef` and echoed back on
+  attribution string the Clerk mints onto the broker's own attribution field
+  (IBKR `orderRef`, Alpaca `client_order_id`), echoed back on
   open-order/execution callbacks. **The single ownership-proof identity.**
   _Avoid_: `client_order_id` (retired internally — the name encoded the wrong
   model and trained the `live-{order_id}` mistake; kept only as a transitional
@@ -99,11 +127,45 @@ ephemeral session id:
   not become an authority for order state. The operator view may show its full
   receipt/evidence details; the trader view receives only the backend-authored
   outcome suitable for action.
+## IBKR order-attribution ladder (sharpened 2026-06-04)
+
+**Lineage: retiring (ADR 0038).**
+
+The IBKR-side half of broker-facing identity: the broker's own order handles, the
+run-scoped write-ahead log that backed them, and the reconciler rules built on
+top. The live half is **Broker-facing identity** above.
+
+- **intent ledger** — a *reconstructed logical view*, **not a stored artifact**.
+  Its system of record is the run-scoped WAL (`intent_events.jsonl`) folded over
+  the instance-scoped projection (`live_state.json`'s `submitted_orders`, keyed
+  by `intent_id`); the fold replays WAL events after the projection's
+  `last_intent_wal_seq` cursor (a per-run monotonic sequence number, never a
+  wall-clock timestamp). There is no third store: ADR-0001's substrate is
+  unchanged.
+  An `intent_ledger.py` module may hold the *pure fold helpers* (append/read WAL
+  events, fold over the `LiveStateEnvelope`, build the in-memory view the
+  reconciler and halt logic read) but persists nothing of its own.
+- **ib_client_id** — the `clientId` one bot uses on the IBKR Gateway connection,
+  pinned per `strategy_instance_id` so executing and shadow processes never
+  collide. One Gateway, many clientIds.
 - **perm_id** — IBKR's stable per-TWS-order handle, captured post-submit.
 - **exec_id** — per-partial-fill id; dedupes fills.
 - **order_id** — IBKR's ephemeral, session-scoped order id. **Convenience for
   same-session API calls only; never an attribution key.** Deriving ownership
   from `live-{order_id}` is the bug class this ladder retires.
+- **submit_mode** — the broker-adapter-level switch on a live run: `live_paper`
+  (route through the IBKR adapter, a real order is placed) or `shadow` (route
+  through the no-submit adapter, no broker order exists). Part of the hashed
+  `live_config`, so changing it mints a new run identity.
+- **execution_source** — which world produced an execution row: `broker_fill`
+  (came from IBKR) or `shadow_sim` (synthesized by the no-submit adapter).
+- **Layer A divergence** — did broker execution diverge from what this live run
+  intended, on the same data? Slippage, latency, missed/extra/partial/rejected
+  fills, commission drift. Meaningful only for a submitting run.
+- **Layer B divergence** — did the live run's observed world diverge from the
+  canonical research world when the same session is replayed against archived
+  bars? Data drift, indicator-state drift, decision drift, coverage gaps.
+  Meaningful for submitting and shadow runs alike.
 
 ### Owned orphan vs outside mutation (sharpened 2026-06-04)
 
@@ -203,13 +265,13 @@ order:
 never branch on those strings. This retires `recovery-flatten-*`,
 `emergency-flatten-*`, and `live-{order_id}` as identity mechanisms.
 
-## Sharpened by grilling (2026-05-30)
+## Trader-facing console vocabulary (sharpened 2026-05-30)
 
-- **Bot Cockpit** — the canonical trader-facing name for the deployed-strategy
-  operator console. It is the surface where a trader monitors and controls a
-  `strategy_instance_id`. Implementation docs may refer to `cockpit-v2`, but
-  trader-facing copy should use Bot Cockpit language, not "terminal cockpit" or
-  code-oriented names.
+**Lineage: neutral.**
+
+How a console speaks to a trader. These rules bind whichever console is current,
+so they survive a broker change.
+
 - **Trader-facing event language** — Bot Cockpit rows, cards, panels, badges,
   and section summaries use human-readable labels and explanations. Raw
   event/type codes such as `endpoint_snapshot` or `account_positions` are
@@ -259,11 +321,6 @@ never branch on those strings. This retires `recovery-flatten-*`,
   happened and whether that evidence supports the intended configuration. The
   same raw fact should not be duplicated as primary content in both places; if
   needed, one surface may link to or summarize the other as provenance.
-- **Bot name / strategy instance ID** — one canonical identity for a deployed
-  bot. The deploy flow may prefill a random, trader-editable name, but the final
-  value is lifetime-unique, system-safe, and is the durable
-  `strategy_instance_id` used for paths, ownership, broker attribution, and Bot
-  Cockpit identity. There is no separate display-only bot-name variable.
 - **Closed-trade summary** — a trader-readable round-trip summary derived from
   durable trade artifacts. It is not a broker execution row and must not be
   counted as another fill; it references the constituent fill evidence that
@@ -281,6 +338,31 @@ never branch on those strings. This retires `recovery-flatten-*`,
   the connected broker session. Deploy displays this account as read-only
   evidence and fails closed when the account is unavailable or ambiguous; traders
   do not type broker account identifiers into the deploy form.
+- **Strategy Lab portfolio account** — a research/simulation account in the
+  portfolio domain, distinct from a broker-reported trading account. It is not
+  a Broker Account Authority and the two account domains are not unified.
+- **Trader-readable instrument picker** — Deploy action plans use rich,
+  trader-friendly stock and option selectors instead of raw symbol/contract
+  entry rows. Stocks surface recognisable symbol/company/exchange context when
+  available. Options surface underlying, expiry, strike, call/put, multiplier,
+  and market quote context when available; raw contract identifiers remain
+  technical details.
+- **PrimeNG-first cockpit UI** — Bot Cockpit and Deploy UI should prefer PrimeNG
+  components for tables, accordions, badges, panels, forms, dropdowns, pickers,
+  and dialogs, with custom CSS limited to layout and theme glue. Apache ECharts
+  remains appropriate for charting. Existing bespoke controls should be replaced
+  with PrimeNG only inside the narrow surface owned by the current slice, when
+  the replacement is straightforward and preserves behavior.
+- **Theme-token evidence styling** — broker/audit evidence surfaces use the
+  app's theme tokens for contrast, severity, spacing, and emphasis. One-off
+  hard-coded colors are avoided; PrimeNG components should be styled through the
+  app theme/token layer so evidence panels remain readable in the supported
+  themes.
+
+## Account authority and custody proofs (sharpened 2026-05-30)
+
+**Lineage: live.**
+
 - **Broker Account Authority** — the account-scoped safety and audit boundary
   for one broker-reported paper or live trading account. It governs every bot
   bound to that account; it is a domain seam, not another runtime service. Its
@@ -350,35 +432,23 @@ never branch on those strings. This retires `recovery-flatten-*`,
   order attributable to a known retired bot but lacking an active manager. It
   is known rather than foreign, yet blocks ordinary account trading until
   revived, resolved, or explicitly overridden.
-- **Strategy Lab portfolio account** — a research/simulation account in the
-  portfolio domain, distinct from a broker-reported trading account. It is not
-  a Broker Account Authority and the two account domains are not unified.
-- **Trader-readable instrument picker** — Deploy action plans use rich,
-  trader-friendly stock and option selectors instead of raw symbol/contract
-  entry rows. Stocks surface recognisable symbol/company/exchange context when
-  available. Options surface underlying, expiry, strike, call/put, multiplier,
-  and market quote context when available; raw contract identifiers remain
-  technical details.
-- **PrimeNG-first cockpit UI** — Bot Cockpit and Deploy UI should prefer PrimeNG
-  components for tables, accordions, badges, panels, forms, dropdowns, pickers,
-  and dialogs, with custom CSS limited to layout and theme glue. Apache ECharts
-  remains appropriate for charting. Existing bespoke controls should be replaced
-  with PrimeNG only inside the narrow surface owned by the current slice, when
-  the replacement is straightforward and preserves behavior.
-- **Theme-token evidence styling** — broker/audit evidence surfaces use the
-  app's theme tokens for contrast, severity, spacing, and emphasis. One-off
-  hard-coded colors are avoided; PrimeNG components should be styled through the
-  app theme/token layer so evidence panels remain readable in the supported
-  themes.
+
+## Instance console mechanics (sharpened 2026-05-30)
+
+**Lineage: retiring (ADR 0038).**
+
+The shape of the live-instances operator console. Its live successor surfaces are
+the Broker Desk, the bot panel, and the Bot Gallery.
+
+- **Bot Cockpit** — the trader-facing name for the live-instances
+  deployed-strategy operator console (`cockpit-v2` in implementation docs). The
+  surface where a trader monitored and controlled one `strategy_instance_id`
+  before the Alpaca **bot panel** took that role.
 - **Instance control room** — the operator console's correct shape. Its subject
   is the **strategy_instance**; the **current run** and its artifacts are
   attached as *evidence*, not as the object being operated. Contrast with the
   current implementation, which behaves like a *run artifact viewer with
   controls attached* — the thing we are correcting.
-- **Current run binding** — the mapping `strategy_instance_id → currently bound
-  run_id` (and its process). The console operates the instance and routes
-  commands to the bound run if one exists. A **stale run selection must never be
-  the operator's primary control surface**.
 - **Readiness gate** ("can this strategy act on the next bar?") — an
   **instance-scoped** composite verdict computed from: current run binding,
   desired state, process state, broker-observed state, safety flags, hydrate
@@ -388,6 +458,8 @@ never branch on those strings. This retires `recovery-flatten-*`,
   BROKER`. Reads as an instance being operated, not a run being viewed.
 
 ## Binding authority (resolved 2026-05-30)
+
+**Lineage: retiring (ADR 0038).**
 
 Four distinct sources, never conflated:
 
@@ -412,12 +484,31 @@ infer liveness.
 
 ## Operator intent — single knob (resolved 2026-05-30)
 
+**Lineage: live.**
+
 **Durable desired-state is the single operator intent knob**, with one
 liveness-independent semantic:
 
 - **PAUSED** — strategy should not make new decisions/orders.
 - **RUNNING** — strategy may act when readiness gates pass.
 - **STOPPED** — strategy must not restart without explicit operator change.
+
+**Invariant** — any live actuation of PAUSE/CONTINUE/STOP must leave the durable
+intent at the same semantic state as the action it executed. This makes
+"paused-but-still-trading" structurally hard: durable state changes first, live
+actuation is queued, the UI shows pending/acked actuation against the same
+intent.
+
+The knob is the same fact **Control intent** names under "Bot control plane"
+below, and it is deliberately not held by the custody authority: a stopped bot
+must refuse to restart itself even when that authority is unreachable.
+
+## Live-instances intent endpoint and command channel (resolved 2026-05-30)
+
+**Lineage: retiring (ADR 0038).**
+
+The transport the live-instances plane put in front of durable operator intent.
+The intent itself is live — see "Operator intent — single knob" above.
 
 The intent endpoint (`POST /api/live-instances/{id}/desired-state`): (1) writes
 durable intent first; (2) if a live binding exists, enqueues the matching live
@@ -431,11 +522,6 @@ will gate next start."
   controls. They persist intent as **reconciliation, not primary ownership**;
   same-value/idempotent writes are acceptable (version churn, not semantic
   drift).
-- **Invariant** — any live actuation of PAUSE/CONTINUE/STOP must leave
-  `desired_state.json` at the same semantic state as the action it executed.
-  This makes "paused-but-still-trading" structurally hard: durable state changes
-  first, live actuation is queued, the UI shows pending/acked actuation against
-  the same intent.
 
 **One-shot command channel** is reserved for true one-shot operations:
 `FLATTEN_NOW`, `RECONCILE_NOW`, `MARK_POISONED` (and maybe `DUMP_STATUS` later).
@@ -452,6 +538,8 @@ cannot yet be proved and may later reconcile to a terminal result. Staleness is
 judged against backend-authored freshness evidence, not a client-side constant.
 
 ## Readiness gate (resolved 2026-05-30)
+
+**Lineage: retiring (ADR 0038).**
 
 "Can this strategy act on the next bar?" is an **instance-scoped, structured
 verdict** — never a boolean, never recomputed from artifacts by the UI.
@@ -488,10 +576,12 @@ spec explicitly disallows fallback data.
 
 ## Strategy-agnostic console (resolved 2026-05-30)
 
+**Lineage: retiring (ADR 0038).**
+
 The console renders **no hardcoded indicator names**. The strategy-state panel is
 driven by **decision-column descriptors** (`name`, `label`, `type`, `format`)
-whose source of truth is the strategy spec (`resolve_decision_columns(spec)`,
-plan §16.4 Resolution 5: "spec declares types + nullability + semantics"). The
+whose source of truth is the strategy spec (`resolve_decision_columns(spec)` —
+the spec declares types, nullability, and semantics). The
 **delivery vehicle is the status payload** — `/api/live-instances/{id}/status`
 ships the resolved descriptors alongside `latest_decision` values, so the UI is
 one-fetch, never joins the spec client-side, and a missing descriptor is an
@@ -501,6 +591,8 @@ in `/status` from the latest decision row (engine-authored provenance, not a
 backend recompute).
 
 ## Broker-observed state & position ownership (resolved 2026-05-30)
+
+**Lineage: retiring (ADR 0038).**
 
 - **Expected position comes from the instance's `expected_position_by_symbol`
   (engine-authored live-state sidecar), never inferred from the latest trade
@@ -545,7 +637,9 @@ backend recompute).
   contamination, which can block valid starts or train operators to bypass a
   noisy gate. Making it namespace-aware is **in-scope P0** for this work.
 
-## Control-surface scoping (established — see plan §16.4 Resolution 7)
+## Control-surface scoping (established 2026-05-30)
+
+**Lineage: retiring (ADR 0038).**
 
 - **Durable desired state** — instance-scoped, survives crash/reboot:
   `artifacts/live_state/<strategy_instance_id>/desired_state.json`.
@@ -555,6 +649,8 @@ backend recompute).
   distinct from durable desired state.
 
 ## Sizing authority (resolved 2026-06-08)
+
+**Lineage: retiring (ADR 0038).**
 
 Where a live bot's position-*size* decision lives and what it claims. Separates
 *who decides quantity* from *who decides the signal*. Sizing the magnitude is a
@@ -734,6 +830,8 @@ different homes.
 
 ## Page-wide collapse rule (resolved 2026-06-17)
 
+**Lineage: retiring (ADR 0038).**
+
 A reactive layout principle for the operator console, generalized from the
 broker-instances page IA revision (see `docs/runbooks/broker-instance-operator-surface.md`
 § "IA revision 2026-06-17"). It is *the same single-source-of-truth principle*
@@ -786,6 +884,8 @@ the whole page's expand/collapse behavior.
 
 ## Operator-surface inclusion boundary (resolved 2026-06-20)
 
+**Lineage: retiring (ADR 0038).**
+
 `operator_surface` contains **verdicts, semantic classifications,
 capabilities, attention-routing inputs, notices, and remediation
 descriptors**.  Decisions, trades, incidents, sizing audit rows,
@@ -811,6 +911,8 @@ or remediation behavior from evidence.
 
 ## Destructive-action canonical render site (resolved 2026-06-20)
 
+**Lineage: retiring (ADR 0038).**
+
 Each destructive action (Stop, Mark Poisoned, Flatten-and-pause) has
 **exactly one** canonical render site in the cockpit (ADR 0010 §A2,
 PRD #617):
@@ -827,6 +929,8 @@ adds a second render site for any destructive action is rejected at
 review.
 
 ## Account identity vs position contamination (resolved 2026-06-20)
+
+**Lineage: retiring (ADR 0038).**
 
 The fleet altitude ships `FleetAccountSummary` (server-authored):
 
@@ -845,7 +949,34 @@ stable formula:
 impossible-with-clean so future policy semantics do not require an
 Angular change.
 
+## Continue vs Resume — the legacy `resume` naming (resolved 2026-06-20)
+
+**Lineage: live.**
+
+Two different operator acts that a legacy wire name conflates. The distinction is
+current and load-bearing; only the resolver that carried the legacy name retires.
+
+- **Continue** and **Resume** are defined in the Identity ladder above: Continue
+  lets an existing paused, still-live run proceed under the same `run_id`;
+  Resume creates and binds a **new** run of the same immutable strategy instance
+  after its prior run stopped.
+- **The legacy `resume` identifier means Continue.** `ResumeGuardState`,
+  `operator_surface.actions.resume`, the wire verb `resume`, and the CLI
+  `cmd_resume` are legacy code and wire names for *continuing an existing paused
+  live run*. They never mean creating a new run, and they do not define the
+  domain meaning of **Resume**.
+- **Renaming is gated on new-run admission.** Retiring or renaming those
+  identifiers requires separate new-run admission first — otherwise the rename
+  silently widens a Continue control into a Resume control.
+  _Avoid_: using "Resume" for the same-run Continue control in trader-facing
+  copy, and reading `actions.resume` as a new-run capability.
+
 ## Continue / Pause / Stop guards — shared resolver (legacy Resume naming)
+
+**Lineage: retiring (ADR 0038).**
+
+The guard resolver behind the live-instances capability projection. The
+Continue-vs-Resume distinction it was named after is **live** — see above.
 
 ADR 0010 §A3 and PRD #616 — the three Continue guards (broker safety
 verdict, reconciliation receipt, uncertain-intent WAL) are resolved
@@ -864,17 +995,14 @@ field renders that control disabled with its backend-authored reason. The
 `actions.resume` name means Continue during migration and never means creating
 a new run.
 
-`ResumeGuardState`, `actions.resume`, and `cmd_resume` are legacy code/wire
-names for continuing an existing paused live run. They do not define the domain
-meaning of **Resume**, which creates a new run and requires separate new-run
-admission before those identifiers may be retired or renamed.
-
 The closed reason-code vocabulary, the priority order for the
 single-line tooltip, and the structured `disabled_reasons` list are
 the only set of disabled-reason codes the cockpit's typed lookup
 covers.  Unknown codes fail closed.
 
 ## Broker session mirror — client-connection observability (resolved 2026-07-03)
+
+**Lineage: retiring (ADR 0038).**
 
 A read-only, session-level visualization of every IBKR API client socket — a
 faithful mirror of what IB Gateway itself sees. It is **not** an authority: it
@@ -1032,6 +1160,8 @@ there are never two halt-on-transition mechanisms.
 
 ## Daemon diagnostics — control-plane health (resolved 2026-07-04)
 
+**Lineage: retiring (ADR 0038).**
+
 A read-only, backend-authored self-test of the **host-daemon plumbing altitude**,
 the peer of `/api/broker/diagnose` (which self-tests the data-plane's *own* IBKR
 client). Its subject is the control plane, not the broker session.
@@ -1146,9 +1276,12 @@ client). Its subject is the control plane, not the broker session.
 
 ## Strategy validation & signal stream (sharpened 2026-07-05)
 
+**Lineage: neutral.**
+
 Sharpens the **Validated strategy package** entry above for the Deploy-a-strategy
 redesign. Draws the line between what the *validated strategy* carries and what
-the *deployment* binds.
+the *deployment* binds. A strategy is validated against a reference engine, not
+against a broker, so this vocabulary survives a broker change.
 
 - **Validated strategy** — a binary, **strategy-level** property (not per-symbol):
   our LEAN-engine port is proven numerically equivalent to a QuantConnect backtest.
@@ -1197,37 +1330,10 @@ the *deployment* binds.
   has `behavioral_equivalence.verdict == accepted_for_deploy`. The validation
   binding is **Python-owned and stored** (already present today as the
   `qc_cloud_backtest_id` + `qc_audit_copy_path`/`sha` + `strategy_spec_path`/`sha`
-  chain in each `run_ledger.json`, plus the qc-shadow attribution and the
+  chain in each `run_ledger.json` — a retiring artifact family; see "Deploy
+  binding and launch posture" below — plus the qc-shadow attribution and the
   `docs/references/reconciliations/` reports) — the surface consolidates it, it is
   not re-typed.
-- **Deployment binding surface** — the Deploy-a-strategy flow selects one validated,
-  deployable strategy (auto-populating its validation evidence: settings file, QC
-  backtest ID, audit copy, reconciliation verdict — none typed) and binds the
-  independent, per-deployment inputs: signal stream, position sizing, action-plan
-  legs, launch options, deployment name, and the read-only connected account.
-- **Actionable readiness gate** — a deploy readiness fact (Engine / Broker /
-  Account / Fleet) rendered at **trader altitude** (a backend-authored named
-  condition via `receiptLabel`, drill-down to its full page; never raw socket rows
-  inline). A blocking gate carries a **server-authored action envelope** (the same
-  `kind: recovery_mutation | navigation` model as daemon diagnostics). The strip
-  renders a **"clear this gate" button only when the backend attaches an actuatable
-  `recovery_mutation`** — reusing the **canonical existing mutation** (Account
-  `NOT_PROVEN` → `reconcileAccount` / `POST /api/accounts/{id}/reconciliation`;
-  daemon lease-stale → `renew_lease`), never a forked one. Non-actuatable, host-
-  level fixes (start the daemon, broker `HARD_DOWN`) stay **guidance / deep-link,
-  never buttons**. On success the gate **re-evaluates server-side**; a cleared gate
-  unblocks deploy/start. The strip surfaces only **pre-deploy gate-clearing**
-  actions; **bot lifecycle actions (RESUME/FLATTEN/STOP/PAUSE) keep their canonical
-  render site in the Bot Cockpit** and are not rendered here (see "Destructive-
-  action canonical render site").
-- **Launch-default posture (deploy)** — the deploy flow defaults to **paper orders
-  enabled**, **start-immediately on (rendered *loud*)**, and a **daily order limit
-  of 2000** (a practically-unthrottled ceiling). This inverts the earlier
-  read-only-first default and is safe **only** while three guardrails stay hard:
-  Safe-canary 1-share sizing remains the default, `UNSAFE`/live-identity is a hard
-  block, and account readiness gates the *start*. The standalone paper-confirm
-  modal is replaced by the loud start treatment; a hard confirm/block is reserved
-  for elevated conditions (live identity, account `NOT_PROVEN`).
 
 ### Revised 2026-07-05 — validation is a human flag; Deploy re-homes to Bots (see ADR 0023)
 
@@ -1269,7 +1375,46 @@ A `grill-me` session revised several points above. Where they conflict, **ADR 00
   symbol — relaxing the "does not default, constrain, or warn" rule above to
   "defaults, does not constrain." (Amends ADR 0020 §2.)
 
+## Deploy binding and launch posture (sharpened 2026-07-05)
+
+**Lineage: retiring (ADR 0038).**
+
+What the live-instances deploy flow bound at launch, and how its readiness strip
+behaved. The strategy-validation half of the same 2026-07-05 sharpening is
+**neutral** — see above. The live successor is the Alpaca deploy drawer.
+
+- **Deployment binding surface** — the Deploy-a-strategy flow selects one validated,
+  deployable strategy (auto-populating its validation evidence: settings file, QC
+  backtest ID, audit copy, reconciliation verdict — none typed) and binds the
+  independent, per-deployment inputs: signal stream, position sizing, action-plan
+  legs, launch options, deployment name, and the read-only connected account.
+- **Actionable readiness gate** — a deploy readiness fact (Engine / Broker /
+  Account / Fleet) rendered at **trader altitude** (a backend-authored named
+  condition via `receiptLabel`, drill-down to its full page; never raw socket rows
+  inline). A blocking gate carries a **server-authored action envelope** (the same
+  `kind: recovery_mutation | navigation` model as daemon diagnostics). The strip
+  renders a **"clear this gate" button only when the backend attaches an actuatable
+  `recovery_mutation`** — reusing the **canonical existing mutation** (Account
+  `NOT_PROVEN` → `reconcileAccount` / `POST /api/accounts/{id}/reconciliation`;
+  daemon lease-stale → `renew_lease`), never a forked one. Non-actuatable, host-
+  level fixes (start the daemon, broker `HARD_DOWN`) stay **guidance / deep-link,
+  never buttons**. On success the gate **re-evaluates server-side**; a cleared gate
+  unblocks deploy/start. The strip surfaces only **pre-deploy gate-clearing**
+  actions; **bot lifecycle actions (RESUME/FLATTEN/STOP/PAUSE) keep their canonical
+  render site in the Bot Cockpit** and are not rendered here (see "Destructive-
+  action canonical render site").
+- **Launch-default posture (deploy)** — the deploy flow defaults to **paper orders
+  enabled**, **start-immediately on (rendered *loud*)**, and a **daily order limit
+  of 2000** (a practically-unthrottled ceiling). This inverts the earlier
+  read-only-first default and is safe **only** while three guardrails stay hard:
+  Safe-canary 1-share sizing remains the default, `UNSAFE`/live-identity is a hard
+  block, and account readiness gates the *start*. The standalone paper-confirm
+  modal is replaced by the loud start treatment; a hard confirm/block is reserved
+  for elevated conditions (live identity, account `NOT_PROVEN`).
+
 ## Bot event stream — narrated gate pipeline (resolved 2026-07-06)
+
+**Lineage: retiring (ADR 0038).**
 
 A per-bot stream that narrates a strategy instance's live pipeline — bar
 evaluation → gates → order → broker outcome — so an operator can answer both
@@ -1354,6 +1499,8 @@ verdict stays the authority for "can it trade now" (see below).
 
 ## Operator notice actionability & resolution (resolved 2026-07-08)
 
+**Lineage: neutral.**
+
 Every operator notice (ADR-0015) declares two orthogonal truths — how
 much to distrust the bot, and what (if anything) can be done. Neither
 implies the other.
@@ -1398,6 +1545,8 @@ resolved by the single-dominant-headline rule below.
 
 ## Single dominant headline (resolved 2026-07-08)
 
+**Lineage: neutral.**
+
 Placement of every operator notice is a pure function of
 **tier × actionability** (ADR-0025). No surface opts out; no notice
 chooses its own placement.
@@ -1425,6 +1574,8 @@ Authority: ADR-0025.
 
 ## Rung receipt (resolved 2026-07-08)
 
+**Lineage: neutral.**
+
 Every mutation response (Resume, Start, Reconcile, Flatten-and-pause,
 crash-recovery override, Mark Poisoned) carries a backend-authored
 **rung receipt**: a notice-shaped statement naming the **next blocking
@@ -1447,6 +1598,8 @@ Authority: ADR-0015 § Amendment 2026-07-08 (b).
 
 ## Account custody language (resolved 2026-07-27)
 
+**Lineage: live.**
+
 - **Originator** — the immutable strategy instance, run, and namespace that
   authored an intent. It remains provenance after its process dies.
 - **Custodian** — the one durable account authority responsible for resolving
@@ -1463,7 +1616,212 @@ Authority: ADR-0015 § Amendment 2026-07-08 (b).
 - **Account epoch** — the accepting Clerk generation's bounded period of valid
   broker proof. Facts from an invalidated epoch cannot authorize a new entry.
 
+## Custody log and fold (resolved 2026-08-06)
+
+**Lineage: live.**
+
+Decision record: ADR 0035. How the Alpaca custody authority stores what it knows.
+
+- **Custody transition** — one appended, hash-chained record of something that
+  happened to an account's custody: a registration, a command, an order effect,
+  an execution, an uncertainty. The append-only sequence of them is the sole
+  canonical custody record.
+  _Avoid_: event, journal entry, audit row (each names a medium, not the fact).
+- **Transition kind** — the closed name that says which custody transition this
+  is, and which fold applies to it. An unrecognised kind is refused, never
+  skipped.
+- **Fold** — the materialized current-state view built by applying transitions in
+  order. It is **never authored directly**: every current-state row changes only
+  as the consequence of an appended transition, committed together with it, so
+  the view is always rebuildable from the log.
+  _Avoid_: projection cache, derived table, snapshot.
+- **Hash chain** — each transition carries the hash of its predecessor and of its
+  own payload, so a missing or altered transition is detectable rather than
+  merely improbable. The first link is a fixed genesis marker.
+- **Content-addressed idempotency** — request identity derived from what the
+  request *is* rather than from a caller-supplied nonce. The same natural key
+  with the same payload is a transport retry and returns the original outcome;
+  the same key with a different payload is a durable conflict, never an update.
+  A nonce is used only where re-issuing genuinely means something new.
+- **Payload hash** — the immutable-once-committed fingerprint of a request's
+  content, and the thing a conflict is detected against.
+- **Capture-before-contact** — the rule that the durable record of an intent is
+  fsynced *before* any broker call is made, so a lost response can never leave a
+  broker effect the authority has no record of. Write latency is measured, never
+  traded away.
+  _Avoid_: write-ahead (accurate but names the technique, not the guarantee).
+- **Authority generation** — which incarnation of an account's custody authority
+  a fact belongs to. It advances only on an explicit reset — flatten, obtain
+  fresh broker proof, retire the old authority, initialize a clean one — so facts
+  from one generation can never collide with, or be mistaken for, the next.
+  Every idempotency key and every hash payload carries it.
+  _Avoid_: epoch (reserved for the broker-proof window in "Account custody
+  language"), version, migration number.
+- **Control revision** — the account-wide monotonic token that advances on every
+  fold, and the concurrency token every economic read is bound to. It replaces
+  concurrency tokens computed by hashing derived state.
+- **Execution lease** — the durable, TTL-bounded claim naming the one process
+  currently permitted to make broker contact for an account. It is renewed while
+  held and expires on its own; an expired holder loses write authority
+  immediately and cannot silently reacquire it. The owner is a per-process
+  token, never a PID, which the OS can recycle.
+  _Avoid_: lock, mutex, connection ownership.
+- **Operation claim** — the narrower, per-work-item fencing token that admits one
+  actor to one pending broker operation. Distinct from the account-scoped
+  execution lease: the lease says *which process*, the claim says *which piece of
+  work*.
+- **Append mirror** — the separate write-ahead trail that records an intent
+  before the database commits it and marks it finalized after. Only a contiguous,
+  hash-verified, finalized stretch of it may rebuild a corrupted authority, and a
+  command is neither accepted nor broker-eligible until it is finalized.
+
+## Execution ledger (resolved 2026-08-10)
+
+**Lineage: live.**
+
+What the custody authority records about executions, and the units its numbers
+are counted in. The units differ deliberately and must not be summed together.
+
+- **Execution slice** — one broker execution fact, with its own side, quantity,
+  price, and broker-occurrence time, identified by the broker's own execution
+  identity. It is **not** an order's cumulative filled quantity and not an order
+  lifecycle update.
+  _Avoid_: fill (ambiguous — see **Fill count**), partial, execution report.
+- **Effective execution slice** — the currently applicable version of an
+  execution fact, after any correction has replaced it.
+- **Correction** — an append-only replacement for one prior execution slice. The
+  superseded slice stays auditable; the difference in quantity, price, and fee is
+  applied forward. A quantity that regresses with no matching superseded slice is
+  an exposure-blocking uncertainty, never a silently accepted fill.
+- **Execution-coverage quarantine** — the state of an exact execution that
+  arrives after a cumulative recovery already accounted for the same order. It is
+  recorded but deliberately kept out of exposure, position, and P&L until a
+  closed proof decides which account of the order is the covering one.
+- **Fill count** — the number of *effective execution slices*. Never the number
+  of filled orders, lifecycle updates, or closed lots.
+- **Closed lot** — one realized-P&L record: a FIFO lot closure with its entry and
+  exit prices, quantities, times, and fee. It is a P&L record, and is a different
+  question from **Lot exhaustion** under "Flatness boundary" below, which asks
+  whether a lot is used up. The `_Avoid_` there bans the phrase for *that*
+  question, not for this record.
+- **Realized P&L for a session** — the sum over closed lots whose *closing* time
+  falls inside the session window. A late correction never moves an
+  already-closed lot into the session the correction arrived in.
+- **Open P&L** — the mark-to-market value of the lots still open. It is
+  **unknown**, not zero, until a mark exists for every open symbol.
+- **Custody column** — a field of a custody transition that the hash chain
+  covers. The set is fixed: adding one would invalidate every existing row.
+- **Provenance column** — evidence about *where an execution fact came from* —
+  the broker execution identity, which capture path observed it, which slice it
+  supersedes, and whether a fee was reported at all. It lives on fold tables and
+  inside the hashed facts payload, never as a new custody column. This is why
+  execution evidence can grow without breaking verification of the existing log.
+- **Fee fidelity** — whether a fee was reported by the broker or simply not
+  reported. A fee that is unknown is rendered unknown; it is never rendered as
+  zero.
+
+## Broker Desk lenses (resolved 2026-08-12)
+
+**Lineage: live.**
+
+- **Lens** — a manual, per-surface view mode that decides which of two purpose-
+  built views of the same account or bot is rendered. It is a presentation
+  choice, never an identity, a role, or an authorization decision.
+  _Avoid_: role, mode, persona, permission.
+- **Trader lens** — the outcomes view: *how am I doing?* Verified account facts,
+  activity, positions, and equity history.
+- **Operator lens** — the mechanism-and-repair view: *why is the system working
+  or not, and what fixes it?* The dominant posture headline with its fix
+  attached, plus forensic evidence.
+- **Audience** — the backend-authored field on an operator blocker that routes it
+  to the trader lens, the operator lens, or both. `both` is reserved for guidance
+  that is genuinely identical in each lens; differing guidance is two blockers
+  sharing one condition identity. Presentational routing only — never an
+  authorization decision.
+- **Broker Desk** — the account-scoped surface for one broker account, carrying
+  both lenses. Distinct from the **bot panel**, the instance-scoped surface for
+  one bot, which carries its own lens pair.
+  _Avoid_: account monitor, account page, Bot Cockpit (the retiring
+  live-instances console).
+- **Evidence drawer** — the shared, on-demand reader for one immutable projected
+  Clerk receipt, led by that receipt's custody timeline. It reads a receipt; it
+  never re-derives one.
+  _Avoid_: evidence modal, receipt viewer.
+- **Deploy drawer** — the slide-over that hosts the deploy workflow over the
+  Broker Desk, so deploying is an action taken *at* an account rather than a
+  separate destination.
+- **Asset identity** — the canonical rendering of one tradeable instrument:
+  its symbol with the recognisable mark that goes with it. One renderer owns
+  symbol presentation; feature surfaces do not re-derive logos or fallbacks.
+
+## Market Scope shell (resolved 2026-08-13)
+
+**Lineage: neutral.**
+
+The application chrome every route is rendered inside. Broker-independent except
+for the two broker status zones it hosts.
+
+- **Market Scope** — the product name for this platform, used in the wordmark,
+  the window title, and any user-facing reference to the application itself.
+  _Avoid_: quant lab, quant/lab.
+- **App menu** — the single canonical statement of the application's information
+  architecture: ordered groups, each with ordered items, the first of which is
+  the group's default. Every navigation surface projects from it; there is no
+  second navigation structure.
+  _Avoid_: nav config, route list, sitemap.
+- **Rail** — the full-height left navigation strip. Slim by default with one
+  icon per group and a hover flyout; pinned, it expands and reserves layout
+  width. Distinct from the **transaction rail**, the per-transaction station
+  pipeline in the bot panel's operator lens — two different objects, one word.
+- **Active menu node** — the single app-menu node one URL resolves to, by longest
+  match. It is the sole resolver behind rail highlighting, page title, and
+  breadcrumbs, which is why those three can never disagree.
+- **Breadcrumb trail** — a pure projection of the active menu node. It is derived
+  from a URL and the app menu alone, never registered per route, and it stops at
+  the deepest menu node: entity identity belongs in the page header, never in a
+  crumb.
+- **Contextual account cluster** — the account-scoped status zone in the top bar:
+  which broker, paper or live, and how that account is doing right now. Present
+  only on account-scoped routes. The account number is never rendered.
+- **Global connection zone** — the always-present status zone for the market-data
+  connection, independent of which account is on screen. It reports feed health,
+  which is why it belongs on every route (see **Market-data bridge**).
+- **Full-bleed route** — a route that declares it owns its own edges, so the
+  shell adds no inner page padding. Declared by the route, never guessed by the
+  page.
+
+## Bot Gallery (resolved 2026-08-14)
+
+**Lineage: live.**
+
+- **Bot Gallery** — the live chart wall for one account: one tile per
+  non-retired bot, fed by a single aggregated stream. A stopped bot keeps its
+  tile; a retired bot has none, because an action offered on a retired tile
+  would be a lie.
+  _Avoid_: bot list, dashboard, Bot Sprite Gallery (an unrelated illustration
+  showcase).
+- **Tile** — one bot's place on the wall, keyed by strategy instance. Its chart
+  is per-symbol and shared, so many tiles watching one symbol cost one
+  subscription, not many.
+- **Stream epoch** — the identity of the current stream generation. A change
+  means the client's accumulated state is no longer continuous with the server's
+  and must be rebuilt from a fresh snapshot rather than patched.
+- **Fill event key** — the stable identity of one fill on a chart. It is
+  deliberately **not** `order_ref`: every partial fill of one order shares an
+  `order_ref`, so merging on that would let a later partial silently replace an
+  earlier one instead of the two coexisting.
+- **Session change** — a symbol's return measured from the first to the last bar
+  *of the current session*. It is computed once on the backend and never derived
+  on the client from the first bar in a buffer, which can belong to a prior
+  session.
+  _Avoid_: day change, Δ% as a client computation.
+- **Day P&L** — realized P&L for the session plus open P&L, computed once on the
+  backend. Adding the two already-fetched numbers on the client would be a second
+  P&L authority outside the one that owns it.
+
 ## Flatness boundary (resolved 2026-08-17)
+
+**Lineage: neutral.**
 
 Decision record: ADR 0036. Sharpened during a `grill-with-docs` session on
 wayfinder ticket #1597, after the numeric authority census found the word doing
@@ -1487,6 +1845,8 @@ load-bearing work with no definition behind it.
 
 ## Custody authority (resolved 2026-08-17)
 
+**Lineage: live.**
+
 Decision record: ADR 0037.
 
 - **Custody authority** — the single implementation that owns what an account
@@ -1509,6 +1869,8 @@ Decision record: ADR 0037.
 
 ## Bot control plane (resolved 2026-08-17)
 
+**Lineage: live.**
+
 Decision record: ADR 0038.
 
 - **Bot control plane** — the single command path that starts, stops, and retires
@@ -1530,3 +1892,20 @@ Decision record: ADR 0038.
   from it; a crash past it is a repair, never an ambiguity. A launch's commit
   point is the custody authority's run registration.
   _Avoid_: transaction, atomic launch (neither is what this is).
+- **Run registration** — the custody authority's durable record that a strategy
+  instance exists and that one specific run of it is order-capable. It is a
+  launch's commit point: the launch happened if and only if this exists, and it
+  is fenced so an instance can have at most one registered active run.
+  _Avoid_: deploy state, deployment record, binding, run ledger.
+- **Runner restoration record** — the runner's own on-disk record of which
+  instance configuration it launched and which run is current, so a restarted
+  host can restore its supervision without guessing. It is evidence, never
+  authority: where it disagrees with the run registration, the registration
+  wins and the record is repaired to match.
+  _Avoid_: deploy state, binding, deployment JSON, run ledger.
+
+**"Deploy state" is retired as a term.** It named four different artifact
+families at once. Two retire with the IBKR plane — `run_ledger.json` and the
+IBKR-lineage account-binding `DEPLOYED`/`ACTIVE`/`RETIRED` states. The two that
+survive are **Run registration** and **Runner restoration record** above, and
+they are never used interchangeably.

@@ -1,6 +1,7 @@
 # ADR 0039: An ADR's Status states the decision's standing, not the code's conformance
 
-- **Status:** Accepted
+**Status:** Accepted
+
 - **Date:** 2026-08-18
 - **Context:** Wayfinder map [#1588](https://github.com/tim1016/learn-ai/issues/1588),
   decision ticket [#1594](https://github.com/tim1016/learn-ai/issues/1594).
@@ -83,8 +84,8 @@ and every deprecated-by-deletion IBKR ADR would have had the same problem. What
 not be left blank.
 
 `Superseded` and `Retired` are genuinely distinct and both stay. `Shipped` is
-**not** a status: under Decision 1 it answers the conformance question, which
-Status does not ask.
+**not** a status: under Decision 1 it answers the conformance question,
+which Status does not ask.
 
 **6. Status becomes mechanically checkable, in this exact form.**
 

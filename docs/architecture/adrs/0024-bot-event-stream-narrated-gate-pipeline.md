@@ -1,6 +1,7 @@
 # ADR 0024 — Bot event stream: narrated gate pipeline over a generalized broker-activity stream
 
-**Status:** Accepted 2026-07-06. Drafted during a `grill-with-docs` design pass on order-path error surfacing.
+**Status:** Accepted 2026-07-06
+**Provenance:** Drafted during a `grill-with-docs` design pass on order-path error surfacing.
 **Extends:** ADR-0014 (broker-authored operator view — backend-rendered narratives), ADR-0015 (operator notice contract).
 **Related:** ADR-0008 (durable submit protocol — `order_ref` ownership, run-scoped WAL), ADR-0011 (broker safety verdict — reactive, fail-closed), ADR-0013 (operator-surface boundary: judgment vs evidence).
 **Decision driver:** Operator instruction — *"most of the places are gates and channels through which an order propagates, and errors emanate in these channels but are lost in the chain. At each gate, find the last threaded error, lift it, and propagate it back to the UI in a user-friendly way — all authored by the backend."*

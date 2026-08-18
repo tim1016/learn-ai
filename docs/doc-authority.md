@@ -44,6 +44,14 @@ ADR before changing the behavior it governs. Several shipped PRDs pruned on
 2026-07-04 (broker-session-mirror, daemon-diagnostics, trader-activity-deploy)
 have their decision preserved here.
 
+**Every newly accepted ADR carries a `Vocabulary:` line** in its header, naming
+the `CONTEXT.md` section it added or stating that none is owed (ADR 0040
+Decision 4). The obligation is **unconditional** — it is not "if the ADR
+introduces domain language", because no check can decide that predicate. The
+author decides whether vocabulary is owed; the line only has to be there, which
+is what makes it grep-checkable alongside ADR 0039's `Status` gate. Applies from
+the next accepted ADR forward; **existing ADRs are not back-filled**.
+
 | ADR | Decision |
 |---|---|
 | 0001 | Control-plane substrate: JSON + Parquet, files canonical |
@@ -73,18 +81,18 @@ have their decision preserved here.
 | 0025 | Single dominant headline notice placement |
 | 0026 | Daily bot lifecycle: three states and the single-writer evaluator (§4 and its 2026-07-21 amendment superseded for Alpaca by ADR 0038; §4's derived-projection design was never built — read the banner before implementing) |
 | 0027 | Operator blocker disposition taxonomy |
-| 0028 | Bot Cockpit channel contracts (proposed; Clerk authority is superseded by ADR-0030) |
+| 0028 | Bot Cockpit channel contracts (Clerk authority is superseded by ADR-0030) |
 | 0029 | Live-session authority and IBKR capability |
 | 0030 | Account Clerk authority is account-rooted and journal-canonical |
 | 0031 | Cross-stack boundary selection and generated contracts |
 | 0032 | Broker contract v2 and verbatim capture |
 | 0033 | Account custody clocks and safety composition |
-| 0035 | Alpaca Account Clerk event-sourced SQLite authority (supersedes JSONL-authority parts of 0001/0008/0030/0033 for Alpaca only; proposed) |
+| 0035 | Alpaca Account Clerk event-sourced SQLite authority (supersedes JSONL-authority parts of 0001/0008/0030/0033 for Alpaca only) |
 | 0036 | One flatness boundary (`abs(q) >= 1e-9`), owned by the backend; Angular holds no flatness verdict. Succeeds ADR 0013's no-frontend-derived-verdicts principle for numeric boundaries |
 | 0037 | SQLite is the sole Alpaca custody authority; legacy JSONL retired (no activation fence = no authority, never a fallback). Completes ADR 0035 |
 | 0038 | One bot control plane (Alpaca runner); the evaluator plane retires with IBKR bot-control. SQLite holds the duty facts it already fences; control intent stays file-backed so the stop latch outlives the Clerk. Supersedes ADR 0026 §4 for Alpaca |
 | 0039 | An ADR's Status states the decision's standing, not the code's conformance. The ADR file is the sole status authority; one closed value (`Accepted`/`Proposed`/`Superseded`/`Retired`) per ADR, narrative moved out, CI-checkable |
-| 0040 | `CONTEXT.md` is one glossary of the live trading/operator domain (not repo process); every section declares its lineage (live / retiring / neutral); the dangling §16.4 deferral is deleted; an ADR introducing domain language carries a `Vocabulary:` line |
+| 0040 | `CONTEXT.md` is one glossary of the live trading/operator domain (not repo process); every section declares its lineage (`live` / `retiring (ADR 0037)` / `retiring (ADR 0038)` / `neutral`); the dangling §16.4 deferral is deleted; every newly accepted ADR carries a `Vocabulary:` line |
 | 0041 | The operator manual's Button Reference (and Glossary tables) are generated from `OPERATOR_COPY`, not hand-written; "When available" prose is dropped in favour of the panel's runtime gate reasons; CI regenerate-and-diff, as for the OpenAPI/GraphQL snapshots |
 
 ---
