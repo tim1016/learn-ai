@@ -249,7 +249,11 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
         "Not applicable", "This broker or mode has no such station."
     ),
     # Action ids
-    "deploy": OperatorCopy("Deploy", "Create and start a new bot bound to this account."),
+    "deploy": OperatorCopy(
+        "Deploy",
+        "Create and start a new bot bound to this account. "
+        "The bot begins evaluating bars immediately after creation.",
+    ),
     "resume": OperatorCopy(
         "Resume",
         "Create a new run of this unchanged strategy instance after backend admission.",
@@ -269,12 +273,18 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
     ),
     "flatten_stop": OperatorCopy(
         "Flatten & stop",
-        "Cancel working orders, submit closing orders to flatten exposure, then stop.",
+        "Cancel working orders, submit closing orders to flatten exposure, then stop. "
+        "Use this to exit positions before stopping.",
     ),
     "retire": OperatorCopy(
-        "Retire", "Permanently decommission this bot. Its id is never reused."
+        "Retire",
+        "Permanently decommission this bot. Its id is never reused. This is irreversible.",
     ),
-    "cancel_order": OperatorCopy("Cancel order", "Cancel one working order at the broker."),
+    "cancel_order": OperatorCopy(
+        "Cancel order",
+        "Cancel one working order at the broker. "
+        "The broker may reject the request if the order has already filled.",
+    ),
     "clear_hold": OperatorCopy(
         "Clear hold",
         "Lift the account exposure hold once its root condition is healthy and "
@@ -287,7 +297,9 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
         "positions to a bot.",
     ),
     "reconcile_now": OperatorCopy(
-        "Reconcile now", "Run a reconciliation sweep against the broker immediately."
+        "Reconcile now",
+        "Run a reconciliation sweep against the broker immediately. "
+        "Useful after a hold is cleared or after a manual order intervention.",
     ),
     "recover_exact_execution_evidence": OperatorCopy(
         "Recover exact execution evidence",
