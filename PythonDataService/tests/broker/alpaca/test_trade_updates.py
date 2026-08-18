@@ -244,10 +244,12 @@ class _OpenFrameSource:
 
 async def _wait_for_execution_health(*, healthy: bool) -> None:
     gate = build_default_stream_health_gate()
-    for _ in range(100):
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 2.0
+    while loop.time() < deadline:
         if gate.execution().healthy is healthy:
             return
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.01)
     pytest.fail(f"execution health did not become healthy={healthy}")
 
 
