@@ -71,7 +71,7 @@ have their decision preserved here.
 | 0023 | Strategy-validation human flag and Deploy re-home |
 | 0024 | Bot event stream narrated-gate pipeline |
 | 0025 | Single dominant headline notice placement |
-| 0026 | Daily bot lifecycle: three states and the single-writer evaluator |
+| 0026 | Daily bot lifecycle: three states and the single-writer evaluator (§4 and its 2026-07-21 amendment superseded for Alpaca by ADR 0038; §4's derived-projection design was never built — read the banner before implementing) |
 | 0027 | Operator blocker disposition taxonomy |
 | 0028 | Bot Cockpit channel contracts (proposed; Clerk authority is superseded by ADR-0030) |
 | 0029 | Live-session authority and IBKR capability |
