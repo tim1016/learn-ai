@@ -9,21 +9,82 @@
     <p>No indicators added.</p>
   } @else {
     @for (indicator of activeIndicators(); track indicator.id) {
-      <button
-        type="button"
-        [attr.aria-label]="'Remove ' + indicator.label"
-        (click)="indicatorRemoved.emit(indicator.id)"
-      >
+      <div class="indicator-rail__active-item">
         <i [style.background]="indicator.color" aria-hidden="true"></i>
         <span>{{ indicator.label }}</span>
-        <b aria-hidden="true">×</b>
-      </button>
+        @if (allowColorChanges()) {
+          <input
+            type="color"
+            [value]="indicator.color"
+            [attr.aria-label]="'Change ' + indicator.label + ' color'"
+            (input)="updateIndicatorColor(indicator.id, $event)"
+          />
+        }
+        <button
+          type="button"
+          [attr.aria-label]="'Remove ' + indicator.label"
+          (click)="indicatorRemoved.emit(indicator.id)"
+        ><b aria-hidden="true">×</b></button>
+      </div>
     }
   }
   @if (error(); as message) {
     <p class="indicator-rail__error" role="alert">{{ message }}</p>
   }
 </section>
+
+@if (pendingIndicator(); as entry) {
+  @if (pendingInfo(); as info) {
+    <section class="indicator-rail__configuration" [attr.aria-label]="'Configure ' + info.name.toUpperCase()">
+      <div class="indicator-rail__configuration-heading">
+        <div>
+          <h3>Configure {{ info.name.toUpperCase() }}</h3>
+          <p>Choose its parameters before adding it to the chart.</p>
+        </div>
+        <button type="button" aria-label="Cancel indicator configuration" (click)="cancelPendingIndicator()">×</button>
+      </div>
+      <div class="indicator-rail__configuration-fields">
+        @for (param of info.configurable_params; track param.name) {
+          <label [attr.for]="'chart-indicator-' + info.name + '-' + param.name">
+            <span>{{ info.name.toUpperCase() }} {{ param.name }}</span>
+            <small>{{ param.min }}–{{ param.max }} · default {{ param.default }}</small>
+            <input
+              [id]="'chart-indicator-' + info.name + '-' + param.name"
+              type="number"
+              [min]="param.min"
+              [max]="param.max"
+              [step]="param.type === 'float' ? 0.1 : 1"
+              [value]="pendingParamValue(param)"
+              [attr.aria-invalid]="paramError(param) !== null"
+              [attr.aria-describedby]="
+                paramError(param) === null
+                  ? null
+                  : 'chart-indicator-' + info.name + '-' + param.name + '-error'
+              "
+              (input)="updatePendingParam(param, $event)"
+            />
+            @if (paramError(param); as message) {
+              <small
+                class="indicator-rail__param-error"
+                [id]="'chart-indicator-' + info.name + '-' + param.name + '-error'"
+                role="alert"
+                >{{ message }}</small
+              >
+            }
+          </label>
+        }
+      </div>
+      <button
+        type="button"
+        class="indicator-rail__confirm"
+        [disabled]="pendingHasInvalidParam()"
+        (click)="confirmPendingIndicator()"
+      >
+        Add {{ info.name.toUpperCase() }} to chart
+      </button>
+    </section>
+  }
+}
 
 <section class="indicator-rail__add">
   <h3>Add</h3>
@@ -33,7 +94,7 @@
     [presets]="[]"
     [loading]="catalogLoading()"
     [allowAdditionalInstances]="allowAdditionalInstances()"
-    (add)="indicatorAdded.emit($event)"
-    (addInstance)="indicatorAdded.emit($event)"
+    (add)="requestIndicator($event)"
+    (addInstance)="requestIndicator($event)"
   />
 </section>

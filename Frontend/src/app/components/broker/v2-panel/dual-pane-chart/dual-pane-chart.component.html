@@ -53,8 +53,7 @@
       >
         <span class="source-tab__signal" aria-hidden="true"></span>
         <span class="source-tab__copy">
-          <strong>IBKR live</strong>
-          <small>Direct market pulse</small>
+          <strong>Live</strong>
         </span>
       </button>
 
@@ -73,8 +72,7 @@
       >
         <span class="source-tab__glyph" aria-hidden="true">P</span>
         <span class="source-tab__copy">
-          <strong>Polygon</strong>
-          <small>15 min delayed</small>
+          <strong>15m Delayed</strong>
         </span>
       </button>
     </nav>
@@ -122,19 +120,19 @@
             Refreshes every 5s
           </div>
         } @else {
-          <div class="interval-group" role="group" aria-label="Polygon chart range">
-            <span class="toolbar-label">Range</span>
-            @for (preset of presets; track preset) {
+          <div class="interval-group" role="group" aria-label="Polygon chart timeframe">
+            <span class="toolbar-label">Timeframe</span>
+            @for (timeframe of polygonTimeframes; track timeframe.value) {
               <button
                 type="button"
                 class="interval-button"
-                [class.interval-button--active]="selectedPreset() === preset"
-                [attr.aria-pressed]="selectedPreset() === preset"
-                (click)="selectPreset(preset)"
-              >{{ preset }}</button>
+                [class.interval-button--active]="historyTimeframe() === timeframe.value"
+                [attr.aria-pressed]="historyTimeframe() === timeframe.value"
+                (click)="selectHistoryTimeframe(timeframe.value)"
+              >{{ timeframe.label }}</button>
             }
           </div>
-          <div class="delay-badge">15 min delay</div>
+          <div class="delay-badge">Polygon · 15 min delay</div>
         }
       </div>
 
@@ -148,6 +146,17 @@
 
       <div class="chart-stage">
         <div #chartContainer class="chart-container" aria-hidden="true"></div>
+        @if (activeIndicatorChips().length) {
+          <ul class="chart-indicator-legend" aria-label="Plotted indicators">
+            <li class="chart-indicator-legend__title">Indicators</li>
+            @for (indicator of activeIndicatorChips(); track indicator.id) {
+              <li>
+                <i [style.background]="indicator.color" aria-hidden="true"></i>
+                {{ indicator.label }}
+              </li>
+            }
+          </ul>
+        }
         @if (activeLoading() && activeBars().length === 0) {
           <div class="chart-state" role="status" aria-live="polite">
             <span class="chart-state__pulse" aria-hidden="true"></span>
@@ -164,12 +173,12 @@
       <footer class="tape-legend">
         <span><i class="legend-swatch legend-swatch--up"></i> Up candle</span>
         <span><i class="legend-swatch legend-swatch--down"></i> Down candle</span>
+        <span><i class="legend-arrow legend-arrow--buy">↑</i> Buy fill</span>
+        <span><i class="legend-arrow legend-arrow--sell">↓</i> Sell fill</span>
         @if (activePane() === 'live') {
-          <span><i class="legend-arrow legend-arrow--buy">↑</i> Buy fill</span>
-          <span><i class="legend-arrow legend-arrow--sell">↓</i> Sell fill</span>
           <span class="legend-note">Fills plot only on their exact containing candle.</span>
         } @else {
-          <span class="legend-note">Consolidated Polygon aggregates · delayed feed</span>
+          <span class="legend-note">Same-candle fills group by side · Polygon delayed feed</span>
         }
       </footer>
     </section>
@@ -183,9 +192,11 @@
         [catalogLoading]="indicatorCatalogLoading()"
         [calculationLoading]="indicatorCalculationLoading()"
         [error]="indicatorError()"
-        [allowAdditionalInstances]="false"
+        [allowAdditionalInstances]="true"
+        [allowColorChanges]="true"
         (indicatorAdded)="addIndicator($event)"
         (indicatorRemoved)="removeIndicator($event)"
+        (indicatorColorChanged)="changeIndicatorColor($event)"
       />
     }
   </div>

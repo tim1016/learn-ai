@@ -1,0 +1,434 @@
+@use '../../../../styles/tokens' as *;
+
+:host {
+  display: block;
+}
+
+.launch-config {
+  max-width: 70rem;
+  margin: 0 auto;
+}
+
+.launch-config__intro {
+  max-width: 42rem;
+  margin-bottom: var(--space-5);
+
+  h2 {
+    margin: 0 0 var(--space-2);
+    font-size: var(--fs-h2);
+    letter-spacing: var(--ls-tight);
+    color: $text-primary;
+  }
+
+  > p:last-child {
+    margin: 0;
+    color: $text-secondary;
+    font-size: var(--fs-base);
+  }
+}
+
+.launch-config__eyebrow {
+  margin: 0 0 var(--space-2);
+  color: $accent-text;
+  font-family: $font-mono;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semi);
+  letter-spacing: var(--ls-caps);
+  text-transform: uppercase;
+}
+
+.launch-config__steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin: 0 0 var(--space-5);
+  padding: 0 0 var(--space-3);
+  border-bottom: 1px solid $border;
+  list-style: none;
+}
+
+.launch-config__step {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: $text-muted;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+
+  span {
+    display: inline-grid;
+    width: 1.3rem;
+    height: 1.3rem;
+    place-items: center;
+    border-radius: 50%;
+    background: $bg-elevated;
+    color: $text-subtle;
+    font-family: $font-mono;
+    font-size: var(--fs-xs);
+  }
+
+}
+
+.launch-config__workbench {
+  overflow: hidden;
+  border: 1px solid $border-light;
+  border-radius: $radius-lg;
+  background: $bg-surface;
+  box-shadow: $shadow-card;
+}
+
+.launch-config__section {
+  padding: var(--space-5);
+  border-bottom: 1px solid $border;
+}
+
+.launch-config__section-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-3);
+
+  h3,
+  p {
+    margin: 0;
+  }
+
+  h3 {
+    color: $text-primary;
+    font-size: var(--fs-md);
+    font-weight: var(--fw-semi);
+  }
+
+  p {
+    color: $text-muted;
+    font-size: var(--fs-xs);
+  }
+}
+
+.symbol-entry {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  min-height: 2.6rem;
+  padding: 0.35rem 0.45rem;
+  border: 1px solid $border-light;
+  border-radius: $radius-md;
+  background: $bg-sunken;
+  transition: border-color $t-ui, box-shadow $t-ui;
+
+  &:focus-within {
+    border-color: $accent;
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+
+  &--invalid {
+    border-color: $bear;
+  }
+
+  input {
+    flex: 1 1 9rem;
+    min-width: 7rem;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: $text-primary;
+    font: inherit;
+    font-size: var(--fs-sm);
+  }
+}
+
+.symbol-entry__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.24rem 0.38rem 0.24rem 0.48rem;
+  border-radius: $radius;
+  background: var(--accent-soft);
+  color: $accent-text;
+  font-family: $font-mono;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semi);
+
+  button {
+    display: inline-grid;
+    width: 1rem;
+    height: 1rem;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+
+    &:hover {
+      background: rgba(122, 169, 255, 0.2);
+    }
+  }
+}
+
+.launch-config__helper {
+  margin: var(--space-2) 0 0;
+  color: $text-muted;
+  font-size: var(--fs-xs);
+}
+
+.launch-config__field-error {
+  margin: var(--space-2) 0 0;
+  color: $bear;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semi);
+}
+
+.strategy-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.strategy-option {
+  min-width: 0;
+  border: 1px solid $border;
+  border-radius: $radius-md;
+  background: $bg-sunken;
+  transition: border-color $t-ui, background $t-ui;
+
+  > label {
+    display: flex;
+    align-items: center;
+    min-height: 2.75rem;
+    gap: 0.55rem;
+    padding: 0.55rem 0.65rem;
+    color: $text-secondary;
+    font-size: var(--fs-sm);
+    cursor: pointer;
+
+    input {
+      width: 0.9rem;
+      height: 0.9rem;
+      margin: 0;
+      accent-color: $accent;
+      flex: 0 0 auto;
+    }
+  }
+
+  &:hover {
+    border-color: $border-strong;
+  }
+
+  &--selected {
+    border-color: rgba(41, 98, 255, 0.52);
+    background: var(--accent-faint);
+
+    > label {
+      color: $text-primary;
+    }
+  }
+}
+
+.strategy-parameters {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.strategy-parameters__strategy {
+  padding: var(--space-3);
+  border-top: 1px solid $border;
+
+  h4 {
+    margin: 0 0 var(--space-2);
+    color: $text-subtle;
+    font-size: var(--fs-xs);
+    font-weight: var(--fw-semi);
+  }
+}
+
+.strategy-parameters__ranges {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: var(--space-2);
+}
+
+.duration-options {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.duration-option {
+  position: relative;
+  display: grid;
+  min-height: 2.7rem;
+  place-items: center;
+  border: 1px solid $border;
+  border-radius: $radius-md;
+  background: $bg-sunken;
+  color: $text-secondary;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition: border-color $t-ui, background $t-ui, color $t-ui;
+
+  input {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    opacity: 0;
+  }
+
+  &:hover {
+    border-color: $border-strong;
+    color: $text-primary;
+  }
+
+  &:has(input:focus-visible) {
+    outline: 2px solid $accent;
+    outline-offset: 2px;
+  }
+
+  &--selected {
+    border-color: $accent;
+    background: var(--accent-soft);
+    color: $accent-text;
+    font-weight: var(--fw-semi);
+  }
+}
+
+.custom-duration {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  color: $text-secondary;
+  font-size: var(--fs-sm);
+
+  input {
+    width: 5rem;
+    padding: 0.4rem 0.5rem;
+    border: 1px solid $border-light;
+    border-radius: $radius;
+    outline: 0;
+    background: $bg-sunken;
+    color: $text-primary;
+    font: inherit;
+
+    &:focus {
+      border-color: $accent;
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+  }
+}
+
+.launch-config__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  background: $bg-elevated;
+
+  p {
+    margin: 0;
+  }
+
+  button {
+    min-height: 2.4rem;
+    padding: 0 0.9rem;
+    border: 1px solid $accent;
+    border-radius: $radius;
+    background: $accent;
+    color: var(--text-on-accent);
+    font: inherit;
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-semi);
+    cursor: pointer;
+    transition: background $t-ui;
+
+    &:hover {
+      background: $accent-hover;
+    }
+
+    &:focus-visible {
+      outline: 2px solid $accent-text;
+      outline-offset: 2px;
+    }
+  }
+}
+
+.launch-config__run-count {
+  color: $text-primary;
+  font-family: $font-mono;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semi);
+  font-variant-numeric: tabular-nums;
+}
+
+.launch-config__run-detail {
+  margin-top: 0.15rem !important;
+  color: $text-muted;
+  font-size: var(--fs-xs);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .strategy-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .duration-options {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 540px) {
+  .launch-config__steps {
+    gap: 0.25rem;
+  }
+
+  .launch-config__step {
+    gap: 0.35rem;
+    font-size: var(--fs-xs);
+  }
+
+  .launch-config__section,
+  .launch-config__footer {
+    padding-inline: var(--space-3);
+  }
+
+  .launch-config__section-heading,
+  .launch-config__footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .strategy-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .duration-options {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.launch-config__error {
+  display: block;
+  color: var(--bear);
+  font: 500 var(--fs-xxs)/1.3 var(--font-sans);
+}
+
+.launch-config__actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-1);
+}

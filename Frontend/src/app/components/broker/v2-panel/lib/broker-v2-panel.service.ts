@@ -12,7 +12,7 @@ import type {
   BotPanelLiveSnapshot,
   BotRunHistoryPage,
   BotRunView,
-  ChartHistoryPreset,
+  ChartHistoryTimeframe,
   ChartHistoryResponse,
   ChartLiveResolution,
   ChartLiveResponse,
@@ -318,9 +318,9 @@ export class BrokerV2PanelService {
     broker: string,
     accountId: string,
     sid: string,
-    preset: ChartHistoryPreset,
+    timeframe: ChartHistoryTimeframe,
   ): Promise<ChartHistoryResponse> {
-    const params = new HttpParams().set('preset', preset);
+    const params = new HttpParams().set('timeframe', timeframe);
     return firstValueFrom(
       this.http.get<ChartHistoryResponse>(
         `${this.base(broker, accountId)}/bots/${encodeURIComponent(sid)}/chart/history`,

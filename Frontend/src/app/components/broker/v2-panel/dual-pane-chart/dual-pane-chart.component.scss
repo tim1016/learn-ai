@@ -28,10 +28,12 @@
     .tape-workspace {
       flex: 1;
       min-height: 0;
-      grid-template-columns: minmax(0, 1fr) 20rem;
+      grid-template-columns: minmax(0, 1fr) minmax(18rem, 20rem);
+      overflow: hidden;
     }
-    .chart-deck { min-height: 0; }
+    .chart-deck { min-width: 0; min-height: 0; }
     .chart-stage { flex: 1; }
+    .market-tape__indicator-rail { min-width: 0; }
   }
 }
 
@@ -307,6 +309,32 @@
   inset: 0;
 }
 
+.chart-indicator-legend {
+  position: absolute;
+  z-index: 1;
+  top: var(--space-2);
+  left: var(--space-2);
+  display: flex;
+  max-width: calc(100% - var(--space-4));
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+  padding: 0.38rem 0.55rem;
+  border: 1px solid color-mix(in srgb, var(--border-light) 90%, transparent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--bg-surface) 88%, transparent);
+  color: var(--text-secondary);
+  font: 600 var(--fs-xxs)/1.2 var(--font-mono);
+  list-style: none;
+  pointer-events: none;
+  backdrop-filter: blur(5px);
+
+  li { display: inline-flex; align-items: center; gap: 0.32rem; white-space: nowrap; }
+  i { width: 0.5rem; height: 0.5rem; border-radius: 50%; box-shadow: 0 0 7px currentcolor; }
+}
+
+.chart-indicator-legend__title { color: var(--text-muted); letter-spacing: 0.06em; text-transform: uppercase; }
+
 .chart-state {
   position: absolute;
   z-index: 2;
@@ -396,7 +424,7 @@
   .tape-legend { flex-wrap: wrap; }
   .tape-legend .legend-note { width: 100%; margin-left: 0; }
   .market-tape--fullscreen .tape-workspace {
-    grid-template-columns: minmax(0, 1fr) min(18rem, 38vw);
+    grid-template-columns: minmax(0, 1fr) minmax(16rem, 38vw);
   }
 }
 
@@ -407,13 +435,17 @@
   .tape-tools { align-items: flex-start; flex-direction: column; }
   .deck-toolbar { align-items: flex-start; flex-direction: column; }
   .feed-clock, .delay-badge { align-self: flex-end; }
-  .market-tape--fullscreen .tape-workspace { grid-template-columns: minmax(0, 1fr); }
+  .market-tape--fullscreen .tape-workspace {
+    grid-template-rows: minmax(20rem, 1fr) minmax(16rem, 40vh);
+    grid-template-columns: minmax(0, 1fr);
+    overflow-y: auto;
+  }
   .market-tape__indicator-rail {
-    position: absolute;
-    z-index: 4;
-    inset: 0 0 0 auto;
-    width: min(20rem, 92vw);
-    box-shadow: var(--shadow-pop);
+    position: static;
+    width: auto;
+    border-top: 1px solid var(--border-light);
+    border-left: 0;
+    box-shadow: none;
   }
 }
 

@@ -2039,7 +2039,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** HISTORY chart pane: bounded preset ladder (§8) */
+        /** Polygon chart: bounded timeframe window (§8) */
         get: operations["get_history_chart_scoped_api_brokers__broker__accounts__account_id__bots__sid__chart_history_get"];
         put?: never;
         post?: never;
@@ -2261,7 +2261,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** HISTORY chart pane (single-account alias) (§8) */
+        /** Polygon chart (single-account alias) (§8) */
         get: operations["get_history_chart_unscoped_api_brokers__broker__bots__sid__chart_history_get"];
         put?: never;
         post?: never;
@@ -10725,17 +10725,13 @@ export interface components {
         };
         /**
          * ChartHistoryResponse
-         * @description Bounded HISTORY-pane response for a fixed preset (§8).
+         * @description Bounded Polygon chart response for one selected timeframe (§8).
          *
-         *     The preset → aggregation ladder and the response-size bound are enforced
-         *     server-side; the existing 7-day live resolver is not widened.
+         *     The server selects a calendar fetch window and returns only the most recent
+         *     useful display-bar count for that timeframe. The existing 7-day live
+         *     resolver is not widened.
          */
         ChartHistoryResponse: {
-            /**
-             * Aggregation
-             * @enum {string}
-             */
-            aggregation: "1m" | "5m" | "30m" | "1h" | "1d";
             /** As Of Ms */
             as_of_ms: number;
             /** Bars */
@@ -10744,15 +10740,15 @@ export interface components {
             fill_markers: components["schemas"]["ChartFillMarker"][];
             /** From Ms */
             from_ms: number;
-            /**
-             * Preset
-             * @enum {string}
-             */
-            preset: "1D" | "5D" | "1M" | "3M" | "1Y" | "All";
             /** Strategy Instance Id */
             strategy_instance_id: string;
             /** Symbol */
             symbol: string;
+            /**
+             * Timeframe
+             * @enum {string}
+             */
+            timeframe: "1m" | "15m" | "30m" | "1h" | "1d";
             /** To Ms */
             to_ms: number;
             /** Truncated */
@@ -29590,7 +29586,7 @@ export interface operations {
     get_history_chart_scoped_api_brokers__broker__accounts__account_id__bots__sid__chart_history_get: {
         parameters: {
             query: {
-                preset: string;
+                timeframe: "1m" | "15m" | "30m" | "1h" | "1d";
             };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;
@@ -30118,7 +30114,7 @@ export interface operations {
     get_history_chart_unscoped_api_brokers__broker__bots__sid__chart_history_get: {
         parameters: {
             query: {
-                preset: string;
+                timeframe: "1m" | "15m" | "30m" | "1h" | "1d";
             };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;

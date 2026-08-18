@@ -151,7 +151,7 @@ describe("RecencyChartPageComponent", () => {
   it("shows an empty-state message when no trades are returned", async () => {
     await renderPage([]);
 
-    expect(screen.getByText(/no recency trades/i)).not.toBeNull();
+    expect(screen.getByText(/no timeline data/i)).not.toBeNull();
   });
 
   it("toggling a symbol off removes its lane from the swimlane", async () => {
@@ -303,7 +303,12 @@ describe("RecencyChartPageComponent", () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole("checkbox", { name: /ema crossover \(2 bps\)/i }));
+    // The only catalog strategy is preselected, so this test must NOT toggle the
+    // checkbox: doing so deselected it and launched a zero-strategy job, which
+    // the launch guard now refuses.
+    expect(
+      (screen.getByRole("checkbox", { name: /ema crossover \(2 bps\)/i }) as HTMLInputElement).checked,
+    ).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: /launch/i }));
     await fixture.whenStable();
 

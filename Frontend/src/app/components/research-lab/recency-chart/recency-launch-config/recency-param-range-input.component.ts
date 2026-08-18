@@ -18,6 +18,7 @@ function parseValuesList(raw: string): number[] {
   selector: "app-recency-param-range-input",
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: "./recency-param-range-input.component.html",
+  styleUrl: "./recency-param-range-input.component.scss",
 })
 export class RecencyParamRangeInputComponent {
   readonly paramName = input.required<string>();

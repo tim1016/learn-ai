@@ -22,7 +22,7 @@ import type {
 import { SafeFlattenPlanComponent } from '../../shared/safe-flatten-plan/safe-flatten-plan.component';
 import { TypedHaltConfirmComponent } from '../../shared/typed-halt-confirm/typed-halt-confirm.component';
 import type {
-  ChartHistoryPreset,
+  ChartHistoryTimeframe,
   ChartLiveResolution,
   PanelAction,
   PanelActionResult,
@@ -117,7 +117,7 @@ export class BotPanelShellComponent {
 
   // ── Internal state ────────────────────────────────────────────────────────
 
-  protected readonly selectedPreset = signal<ChartHistoryPreset>('1D');
+  protected readonly selectedHistoryTimeframe = signal<ChartHistoryTimeframe>('1m');
   protected readonly liveResolution = signal<ChartLiveResolution>('5s');
   protected readonly selectedTransactionRef = signal<string | null>(null);
   protected readonly actionPending = signal(false);
@@ -167,14 +167,14 @@ export class BotPanelShellComponent {
   protected readonly histChart = resource({
     params: () =>
       this.activeLens() === 'trader'
-        ? { ...this.routeParams(), preset: this.selectedPreset() }
+        ? { ...this.routeParams(), timeframe: this.selectedHistoryTimeframe() }
         : undefined,
     loader: ({ params }) =>
       this.panelSvc.getHistoryChart(
         params.broker,
         params.accountId,
         params.sid,
-        params.preset,
+        params.timeframe,
       ),
   });
 
@@ -251,8 +251,8 @@ export class BotPanelShellComponent {
 
   // ── Template handlers ─────────────────────────────────────────────────────
 
-  protected onPresetChange(preset: ChartHistoryPreset): void {
-    this.selectedPreset.set(preset);
+  protected onHistoryTimeframeChange(timeframe: ChartHistoryTimeframe): void {
+    this.selectedHistoryTimeframe.set(timeframe);
   }
 
   protected onLiveResolutionChange(resolution: ChartLiveResolution): void {

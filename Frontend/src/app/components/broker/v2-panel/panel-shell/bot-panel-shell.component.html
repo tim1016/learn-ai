@@ -68,9 +68,9 @@
           [liveChartLoading]="liveChart() === null && liveStreamStatus() === 'connecting'"
           [histChartLoading]="histChart.isLoading()"
           [liveResolution]="liveResolution()"
-          [selectedPreset]="selectedPreset()"
+          [historyTimeframe]="selectedHistoryTimeframe()"
           [actionPending]="actionPending()"
-          (presetChange)="onPresetChange($event)"
+          (historyTimeframeChange)="onHistoryTimeframeChange($event)"
           (liveResolutionChange)="onLiveResolutionChange($event)"
           (actionRequested)="onActionRequested($event)"
         />

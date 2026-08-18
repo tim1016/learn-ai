@@ -573,7 +573,7 @@ async def test_action_identity_is_not_a_request_field(api) -> None:
     assert response.status_code == 422
 
 
-# ── §8 chart interval and history preset validation ─────────────────────────
+# ── §8 chart interval and Polygon timeframe validation ──────────────────────
 
 
 async def test_live_chart_accepts_five_second_resolution(
@@ -633,12 +633,12 @@ async def test_live_chart_rejects_unknown_resolution(
     assert response.status_code == 422
 
 
-async def test_history_unknown_preset_is_422(api) -> None:
+async def test_history_unknown_timeframe_is_422(api) -> None:
     app, _clerk, registry = api
     await _deploy_bot(registry)
     async with _client(app) as client:
         response = await client.get(
             f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/chart/history",
-            params={"preset": "7D"},
+            params={"timeframe": "5m"},
         )
     assert response.status_code == 422

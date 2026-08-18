@@ -1,4 +1,4 @@
-"""Chart projection — LIVE (today) + bounded HISTORY panes (spec §8).
+"""Chart projection — LIVE (today) + bounded Polygon timeframe panes (spec §8).
 
 Two contracts:
 
@@ -7,9 +7,10 @@ Two contracts:
   today's fill markers. Reuses the existing ``live_chart_window`` resolver
   (the 7-day cap is untouched).
 
-- **HISTORY** (``build_history_chart``): a NEW bounded contract with a fixed
-  preset → aggregation ladder (1D→1m, 5D→5m, 1M→30m, 3M→1h, 1Y→1d, All→1d) and
-  a response-size bound. Never a lifetime of 1-minute bars in one response.
+- **Polygon** (``build_history_chart``): a bounded contract with five explicit
+  timeframes. Each has a target display-bar count and a calendar fetch window
+  large enough to survive nights, weekends, and holidays. Never a lifetime of
+  one-minute bars in one response.
 
 Both panes decorate bars with truthful ``ibkr`` / ``polygon`` / ``mixed``
 source tags and project fill markers from SQLite-native ``FillRecord`` values.
@@ -30,8 +31,8 @@ from app.lean_sidecar.trading_calendar import current_trading_session_window
 from app.schemas.broker_v2_panel import (
     ChartBar,
     ChartFillMarker,
-    ChartHistoryPreset,
     ChartHistoryResponse,
+    ChartHistoryTimeframe,
     ChartLiveResponse,
     ChartOverlayNoticeView,
 )
@@ -39,27 +40,38 @@ from app.services.live_chart_window import ChartWindowResult
 
 MS_PER_DAY = 86_400_000
 
-# Preset → (aggregation label, Polygon multiplier, Polygon timespan, lookback ms).
-# ``All`` is bounded to a large-but-finite lookback so the response never grows
-# without limit; a genuinely older bot is truncated (``truncated=True``).
-_HISTORY_LADDER: dict[
-    ChartHistoryPreset, tuple[str, int, str, int]
-] = {
-    "1D": ("1m", 1, "minute", 1 * MS_PER_DAY),
-    "5D": ("5m", 5, "minute", 5 * MS_PER_DAY),
-    "1M": ("30m", 30, "minute", 31 * MS_PER_DAY),
-    "3M": ("1h", 1, "hour", 92 * MS_PER_DAY),
-    "1Y": ("1d", 1, "day", 366 * MS_PER_DAY),
-    "All": ("1d", 1, "day", 5 * 366 * MS_PER_DAY),
+@dataclass(frozen=True)
+class _HistoryTimeframeSpec:
+    multiplier: int
+    timespan: str
+    fetch_lookback_days: int
+    display_bars: int
+
+
+# Each selection fetches enough calendar time to provide the target number of
+# market-session bars, then returns only the most recent visual window. The
+# larger fetch window absorbs closed sessions without asking the client to
+# guess a date range.
+#
+# ``fetch_lookback_days`` is sized for the worst *scheduled* week, not the
+# average one. 300 one-minute bars is ~0.8 of a 390-minute session, but a
+# holiday week can strand that window behind a closed day and a half-day:
+# early on the Monday after Thanksgiving the four preceding calendar days
+# hold only Friday's 210-minute early close, so a 4-day lookback returned a
+# short chart exactly when it was being watched live. Nine days clears any
+# NYSE holiday cluster; the display cap below still trims to the visual
+# window, so the wider fetch costs pages, never extra candles.
+_HISTORY_TIMEFRAME_SPECS: dict[ChartHistoryTimeframe, _HistoryTimeframeSpec] = {
+    "1m": _HistoryTimeframeSpec(1, "minute", 9, 300),
+    "15m": _HistoryTimeframeSpec(15, "minute", 24, 300),
+    "30m": _HistoryTimeframeSpec(30, "minute", 48, 300),
+    "1h": _HistoryTimeframeSpec(1, "hour", 96, 300),
+    "1d": _HistoryTimeframeSpec(1, "day", 550, 260),
 }
 
-# Response-size bound per pane (§8). A preset that would return more bars is
-# truncated to the most recent ``_MAX_HISTORY_BARS`` and flagged.
-_MAX_HISTORY_BARS = 3_000
 
-
-class ChartPresetError(ValueError):
-    """Raised when a history preset is outside the closed ladder."""
+class ChartTimeframeError(ValueError):
+    """Raised when a Polygon timeframe is outside the closed selector set."""
 
 
 # A history bar source fetches aggregate bars for a symbol/date-range at a given
@@ -67,12 +79,12 @@ class ChartPresetError(ValueError):
 HistoryBarSource = Callable[[str, date, date, int, str], Awaitable[list[PolygonBar]]]
 
 
-def coerce_history_preset(raw: str) -> ChartHistoryPreset:
-    """Validate and return a history preset from raw query input."""
+def coerce_history_timeframe(raw: str) -> ChartHistoryTimeframe:
+    """Validate and return a Polygon timeframe from raw query input."""
     value = raw.strip()
-    if value not in _HISTORY_LADDER:
-        raise ChartPresetError(
-            "preset must be one of 1D, 5D, 1M, 3M, 1Y, All"
+    if value not in _HISTORY_TIMEFRAME_SPECS:
+        raise ChartTimeframeError(
+            "timeframe must be one of 1m, 15m, 30m, 1h, 1d"
         )
     return value  # type: ignore[return-value]
 
@@ -206,37 +218,37 @@ def build_live_chart(
 
 @dataclass(frozen=True)
 class _HistoryPlan:
-    aggregation: str
     multiplier: int
     timespan: str
     from_ms: int
     to_ms: int
     span_ms: int
+    display_bars: int
 
 
-def _plan_history(preset: ChartHistoryPreset, now_ms: int) -> _HistoryPlan:
-    aggregation, multiplier, timespan, lookback_ms = _HISTORY_LADDER[preset]
-    span_ms = {"minute": multiplier * 60_000, "hour": multiplier * 3_600_000, "day": multiplier * MS_PER_DAY}[
-        timespan
+def _plan_history(timeframe: ChartHistoryTimeframe, now_ms: int) -> _HistoryPlan:
+    spec = _HISTORY_TIMEFRAME_SPECS[timeframe]
+    span_ms = {"minute": spec.multiplier * 60_000, "hour": spec.multiplier * 3_600_000, "day": spec.multiplier * MS_PER_DAY}[
+        spec.timespan
     ]
     return _HistoryPlan(
-        aggregation=aggregation,
-        multiplier=multiplier,
-        timespan=timespan,
-        from_ms=max(0, now_ms - lookback_ms),
+        multiplier=spec.multiplier,
+        timespan=spec.timespan,
+        from_ms=max(0, now_ms - spec.fetch_lookback_days * MS_PER_DAY),
         to_ms=now_ms,
         span_ms=span_ms,
+        display_bars=spec.display_bars,
     )
 
 
-def history_fill_window(preset: ChartHistoryPreset, now_ms: int) -> tuple[int, int]:
-    """Return the exact half-open fill-marker interval for one history pane."""
-    plan = _plan_history(preset, now_ms)
+def history_fill_window(timeframe: ChartHistoryTimeframe, now_ms: int) -> tuple[int, int]:
+    """Return the candidate fill interval for one Polygon timeframe request."""
+    plan = _plan_history(timeframe, now_ms)
     return plan.from_ms, plan.to_ms
 
 
 async def build_history_chart(
-    preset: ChartHistoryPreset,
+    timeframe: ChartHistoryTimeframe,
     fills: Sequence[FillRecord],
     *,
     strategy_instance_id: str,
@@ -244,32 +256,39 @@ async def build_history_chart(
     bar_source: HistoryBarSource,
     now_ms: int,
 ) -> ChartHistoryResponse:
-    """Build the bounded HISTORY pane for a fixed preset (§8).
+    """Build the bounded Polygon series for a selected timeframe (§8).
 
-    Enforces the preset → aggregation ladder and the response-size bound. The
-    existing 7-day live resolver is not touched — this endpoint owns its own
-    bounded contract. ``bar_source`` is injected so tests stay hermetic.
+    The returned candles are the newest complete display window for the chosen
+    timeframe. Indicator clients therefore receive one coherent candle set per
+    selection, rather than resampling or reusing a prior timeframe locally.
     """
-    plan = _plan_history(preset, now_ms)
+    plan = _plan_history(timeframe, now_ms)
     start = datetime.fromtimestamp(plan.from_ms / 1000, tz=UTC).date()
     end = datetime.fromtimestamp(plan.to_ms / 1000, tz=UTC).date() + timedelta(days=1)
 
     polygon_bars = await bar_source(symbol, start, end, plan.multiplier, plan.timespan)
-    polygon_bars = [bar for bar in polygon_bars if plan.from_ms <= bar.t_ms < plan.to_ms]
+    # A bar is labelled by its close (temporal-rigor.md), so a bar whose span
+    # has not elapsed is still open and must not be drawn as a finished candle:
+    # at 10:30 the 1h bar starting 10:00 does not close until 11:00.
+    polygon_bars = [
+        bar
+        for bar in polygon_bars
+        if plan.from_ms <= bar.t_ms and bar.t_ms + plan.span_ms <= plan.to_ms
+    ]
     polygon_bars.sort(key=lambda bar: bar.t_ms)
 
-    truncated = len(polygon_bars) > _MAX_HISTORY_BARS
+    truncated = len(polygon_bars) > plan.display_bars
     if truncated:
-        polygon_bars = polygon_bars[-_MAX_HISTORY_BARS:]
+        polygon_bars = polygon_bars[-plan.display_bars:]
 
     bars = [_polygon_bar_to_chart_bar(bar, span_ms=plan.span_ms) for bar in polygon_bars]
-    markers = markers_in_window(fills, from_ms=plan.from_ms, to_ms=plan.to_ms)
+    display_from_ms = bars[0].start_ms if bars else plan.from_ms
+    markers = markers_in_window(fills, from_ms=display_from_ms, to_ms=plan.to_ms)
     return ChartHistoryResponse(
         strategy_instance_id=strategy_instance_id,
         symbol=symbol,
-        preset=preset,
-        aggregation=plan.aggregation,  # type: ignore[arg-type]
-        from_ms=plan.from_ms,
+        timeframe=timeframe,
+        from_ms=display_from_ms,
         to_ms=plan.to_ms,
         bars=bars,
         fill_markers=markers,

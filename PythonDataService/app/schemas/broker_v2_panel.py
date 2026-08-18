@@ -465,8 +465,7 @@ class PanelActionResult(BaseModel):
 # ── §8 Chart shapes ──────────────────────────────────────────────────────────
 
 ChartSource = Literal["ibkr", "polygon", "mixed"]
-ChartHistoryPreset = Literal["1D", "5D", "1M", "3M", "1Y", "All"]
-ChartAggregation = Literal["1m", "5m", "30m", "1h", "1d"]
+ChartHistoryTimeframe = Literal["1m", "15m", "30m", "1h", "1d"]
 
 
 class ChartBar(BaseModel):
@@ -574,18 +573,18 @@ class LiveSnapshotUnavailableResponse(BaseModel):
 
 
 class ChartHistoryResponse(BaseModel):
-    """Bounded HISTORY-pane response for a fixed preset (§8).
+    """Bounded Polygon chart response for one selected timeframe (§8).
 
-    The preset → aggregation ladder and the response-size bound are enforced
-    server-side; the existing 7-day live resolver is not widened.
+    The server selects a calendar fetch window and returns only the most recent
+    useful display-bar count for that timeframe. The existing 7-day live
+    resolver is not widened.
     """
 
     model_config = ConfigDict(frozen=True)
 
     strategy_instance_id: str
     symbol: str
-    preset: ChartHistoryPreset
-    aggregation: ChartAggregation
+    timeframe: ChartHistoryTimeframe
     from_ms: int
     to_ms: int
     bars: list[ChartBar]
