@@ -117,6 +117,52 @@ run whose file projection is stale, which is a repair, not an ambiguity.
 These are **not implemented**. This ADR is a decision; the corrections belong to
 separate work.
 
+**Correction 2026-08-18.** The consequences below were re-verified line-by-line
+while landing them in `docs/known-gaps.md` (register ticket
+[#1610](https://github.com/tim1016/learn-ai/issues/1610)). The **decision above
+is unchanged**; two consequence statements were factually wrong and are corrected
+here rather than rewritten in place, so the record of what was believed on
+2026-08-17 survives:
+
+- **Consequence 2 mis-cites two of its four call sites.** `bot_boot_recovery.py:125`
+  and `bot_run_terminal.py:52` are `desired_state.json` writers, not
+  `lifecycle_state.json` writers; those files' lifecycle writes are at
+  `bot_boot_recovery.py:153` and `bot_run_terminal.py:69`. The two artifacts fall
+  under different decisions — Decision 2 (projection of SQLite) versus Decision 3
+  (deliberately file-backed, must survive a Clerk outage) — so the mis-citation
+  would have subordinated the stop latch to the authority it exists to outlive.
+  Correcting the citations also changes the count: there are **three** direct
+  `lifecycle_state.json` projection writers — `bot_runner.py:471`,
+  `bot_run_evidence.py:72`, `bot_boot_recovery.py:153` — and boot recovery must be
+  inside the write-what-SQLite-committed rule, since Decision 4 gives it the job
+  of making the files agree with SQLite.
+  See [#1634](https://github.com/tim1016/learn-ai/issues/1634).
+- **Consequence 3's "never read" is wrong.** `BotLifecycleStateRecord.version` is
+  read three times, all in `bot_lifecycle_evaluator.py`: `:672` as a receipt
+  `sequence`, `:673` to synthesize a `receipt_id`, `:731` as the `state_version`
+  on every terminal disposition receipt. The defect stands in corrected form: it
+  is *receipt metadata*, never *compared*, and there is no `expected_version`
+  parameter or compare-and-swap anywhere. See
+  [#1631](https://github.com/tim1016/learn-ai/issues/1631).
+
+Consequence 4 is narrower than it reads. The silent refusal is deliberate and
+pinned by `test_stale_terminal_fact_cannot_supersede_a_newer_on_duty_run` — the
+receipt records that *the old run* ended while the file correctly stays `ON_DUTY`
+on *the new run*, which is not a contradiction. What survives is an observability
+defect, and `bot_boot_recovery` reporting success unconditionally. Consequence 8's
+AST hole is confirmed by the contract test passing green against
+`services/bot_runner.py:468`, but that call is *allowed* under Decision 3 — the
+defect is that the test cannot distinguish it from an unauthorised writer using
+the same idiom.
+
+Each consequence now has an issue: [#1630](https://github.com/tim1016/learn-ai/issues/1630),
+[#1631](https://github.com/tim1016/learn-ai/issues/1631),
+[#1632](https://github.com/tim1016/learn-ai/issues/1632),
+[#1633](https://github.com/tim1016/learn-ai/issues/1633),
+[#1634](https://github.com/tim1016/learn-ai/issues/1634),
+[#1635](https://github.com/tim1016/learn-ai/issues/1635),
+[#1636](https://github.com/tim1016/learn-ai/issues/1636).
+
 1. **Transitional rule while the IBKR surface still exists.** A bot identity
    belongs to exactly one plane, decided by its broker binding. The discriminator
    currently lives in `bot_runner.py:1025` `_manages_boot_recovery` and applies

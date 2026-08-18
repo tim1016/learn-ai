@@ -189,6 +189,147 @@ supersedes it** — the module is reachable only from the legacy JSONL path that
 ADR 0037 retires, so it resolves by deletion. Do not write a regression test
 against it.
 
+### Bot control-plane boundary (ADR 0038, verified 2026-08-18)
+
+Decision record: ADR 0038 — Alpaca is the only bot control plane; SQLite is the
+authority for the duty facts it already fences (`runs.state = 'ACTIVE'` under
+`ux_runs_one_active_per_instance`, `strategy_instances.retired_at_ms`); the
+evaluator plane retires with the IBKR bot-control surface. These are its open
+consequences, re-verified line-by-line against current code. **Two of ADR 0038's
+own consequence statements did not survive that re-verification and are corrected
+here**; a dated correction note is on the ADR itself.
+
+- **`update(expected_active_run_id=…)` refuses silently, and one caller reports
+  success anyway (medium).**
+  `engine/live/bot_lifecycle_state.py:281-287` returns the existing record on
+  mismatch instead of raising, and every caller discards the return value —
+  `engine/live/lifecycle_exit_finalizer.py:115`,
+  `services/bot_boot_recovery.py:153`, `services/bot_run_evidence.py:72`, and
+  `services/bot_run_terminal.py:69` through it.
+
+  **The refusal is deliberate and tested, and the two records it produces do not
+  contradict each other.** It fires when a newer run has already taken over the
+  instance; `tests/engine/live/test_bot_lifecycle_evaluator.py:232`
+  (`test_stale_terminal_fact_cannot_supersede_a_newer_on_duty_run`) pins exactly
+  that. The published receipt records that *the old run* ended, while
+  `lifecycle_state.json` correctly stays `ON_DUTY` on *the new run* — two facts
+  about two different runs. An earlier revision of this entry called that a
+  permanent contradiction and rated it high; that was wrong, and suppressing the
+  receipt would discard valid run-history evidence.
+
+  What remains is an observability defect. Nothing distinguishes *recorded* from
+  *superseded*, and `services/bot_boot_recovery.py:153-172` acts on the
+  assumption it was recorded: it appends the instance to `interrupted` and logs
+  `boot_sweep_interrupted` — "Boot sweep recorded interrupted bot" —
+  unconditionally. Its `record.active_run_id` is read at `:110` and used as the
+  expectation at `:162`, with no lock spanning the two, so the report can assert
+  a write that did not land. Preserve the invariant: **a refused write must be
+  observable to the caller that issued it**, and a caller may not report success
+  it did not verify. Do not "fix" this by withholding the terminal receipt. [#1630](https://github.com/tim1016/learn-ai/issues/1630)
+
+- **`BotLifecycleStateRecord.version` is receipt metadata, not a fence (medium).**
+  `engine/live/bot_lifecycle_state.py:82` (declared), `:364` (incremented on
+  every `update()`). **Correction to ADR 0038 consequence 3, which says it is
+  "never read" — it is read, three times, all in
+  `engine/live/bot_lifecycle_evaluator.py`:** `:672` as a receipt `sequence`,
+  `:673` to synthesize a `receipt_id`, and `:731` as the `state_version` stamped
+  into every terminal disposition receipt. What no reader does is *compare* it:
+  `update()` has no `expected_version` parameter and no compare-and-swap. Writes
+  are serialized by an advisory `flock` (`live_state_sidecar.py:267`), which
+  orders concurrent writers but cannot express "I intended to write on top of
+  version N". A second hazard rides on the same field: `:672` feeds a
+  lifecycle-state version into a receipt's `sequence`, which everywhere else
+  means the disposition log's own contiguous counter (`_next_sequence_locked`) —
+  two different counters rendered in one field. That receipt is returned, not
+  appended, so the log's contiguity check is not corrupted; a caller reading
+  `sequence` is nevertheless misled. Preserve the invariant: a field that reads
+  as a fence either fences or does not exist, and one field name means one
+  counter. [#1631](https://github.com/tim1016/learn-ai/issues/1631)
+
+- **The plane discriminator gates one sweep, not every duty-state write
+  (medium).** `services/bot_runner.py:1025` `_manages_boot_recovery` is the only
+  consumer of `_supported_broker_ids` (`:197`, `:1027`, `:1043`), and its only
+  consumer in turn is `BotBootRecovery(manages_instance=…)` at `:209`. Nothing
+  else in either plane consults it. `routers/live_instances.py` constructs
+  `BotLifecycleEvaluator` directly at `:1078`, `:1158`, `:1238`, `:1285` with no
+  broker check, so an operator invoking an evaluator-plane lifecycle action
+  against an Alpaca `strategy_instance_id` writes duty state under a fence the
+  runner does not hold. Preserve the invariant (ADR 0038 consequence 1): while
+  both surfaces exist, a bot identity belongs to exactly one plane, decided by
+  its broker binding, on **every** duty-state write. [#1632](https://github.com/tim1016/learn-ai/issues/1632)
+
+- **ADR 0038 consequence 2 mis-cites two of its four projection writers
+  (documentation defect).** It names `bot_runner.py:471`,
+  `bot_run_evidence.py:72`, `bot_boot_recovery.py:125`, and
+  `bot_run_terminal.py:52` as `lifecycle_state.json` writers. The first two are
+  correct — `set_phase(ON_DUTY)` and `record_terminal_outcome`. The last two are
+  **`desired_state.json`** writers — `desired_repo.set(...)` at
+  `bot_boot_recovery.py:125` and `bot_run_terminal.py:52`; those files' actual
+  lifecycle writes are at `bot_boot_recovery.py:153` and, indirectly,
+  `bot_run_terminal.py:69`. The distinction is not cosmetic: `lifecycle_state`
+  falls under Decision 2 (a projection of SQLite, which may only write what
+  SQLite already committed), while `desired_state` falls under Decision 3
+  (deliberately file-backed, runner is single writer, must work with no Clerk or
+  broker connection). Filing the two `desired_state` sites under the projection
+  rule would subordinate the stop latch to the authority it exists to outlive.
+  None of the four is a defect. Correcting the citations also changes the count
+  the missing rule must cover: there are **three** direct `lifecycle_state.json`
+  projection writers, not two — `bot_runner.py:471`, `bot_run_evidence.py:72`
+  (reached indirectly by `bot_run_terminal.py:69`), and `bot_boot_recovery.py:153`.
+  Boot recovery must be inside the write-what-SQLite-committed rule, not outside
+  it: ADR 0038 Decision 4 makes SQLite registration the commit point and gives
+  boot recovery the job of making the files agree with SQLite, which is precisely
+  the rule applied. [#1634](https://github.com/tim1016/learn-ai/issues/1634)
+
+- **The single-writer contract test has a hole and asks the wrong question
+  (medium).** `tests/engine/live/test_bot_lifecycle_evaluator.py:35-79`,
+  `:97-112`. `_DirectLifecycleWriterVisitor._repo_type` resolves a repository
+  only from an `ast.Name` bound by a direct constructor call, or a direct
+  `ast.Call` on a constructor name. `self._desired_repo(sid).set(...)` is an
+  `ast.Call` whose `func` is an `ast.Attribute`, so it returns `None` and no
+  violation is raised — verified: the test passes green while
+  `services/bot_runner.py:468` does exactly that. Injected repository callables
+  pass through for the same reason. **This does not mean the fix is to make the
+  visitor reject that call** — ADR 0038 Decision 3 makes the runner the
+  legitimate single writer of file-backed desired state, so `bot_runner.py:468`
+  is allowed. The defect is that the test cannot *tell*: an unauthorised second
+  writer using the same idiom passes just as silently. Under ADR 0038 Decision 2
+  the test is also asking the wrong question — writer *identity* is no longer the
+  contract; projection-write discipline is. Preserve the invariant: a contract
+  test must be able to fail on the idiom production code actually uses, and must
+  assert the contract currently in force rather than the superseded
+  evaluator-only one. [#1633](https://github.com/tim1016/learn-ai/issues/1633)
+
+- **`services/end_day_intent.py` is dead code (no action; retires with the
+  plane).** 241 lines; zero importers of `app.services.end_day_intent` anywhere
+  in the repo (`live_engine.py`'s `_end_day_intent_active` is an unrelated
+  instance attribute). Evaluator-plane, retires under ADR 0038 Decision 1.
+  Recorded so its deletion is not mistaken for a behaviour change. [#1635](https://github.com/tim1016/learn-ai/issues/1635)
+
+- **Evaluator-plane retirement inventory (no action here; sequence after the
+  discriminator lands).** `engine/live/bot_lifecycle_evaluator.py`, its
+  disposition receipt log, `engine/live/bot_lifecycle_fence.py`, the
+  `routers/live_instances.py` deploy/start path, `run_ledger.json`, and the
+  IBKR-lineage account-binding `DEPLOYED`/`ACTIVE`/`RETIRED` family. **The
+  evaluator's live callers must be migrated or deleted first** — a repo sweep for
+  `BotLifecycleEvaluator(` finds nine sites beyond the router:
+  `engine/live/run.py:1877`, `:1961`, `:3022`; `engine/live/host_daemon.py:1340`;
+  `engine/live/lifecycle_exit_finalizer.py:51`, `:115`;
+  `services/bot_deletion.py:480`; `services/risk_reducing_lifecycle_intent.py:77`;
+  and `services/end_day_intent.py:60` (dead, see above). The account-binding
+  family likewise has safety consumers beyond the two obvious ones:
+  `services/account_directory.py`, `routers/account_reconciliation.py`,
+  `engine/live/account_classifier.py:268`, `engine/live/account_safety.py:1315`,
+  `broker/ibkr/account_truth.py:857`. As with
+  `rollup_cache.py` under ADR 0036 and the legacy ENTER seam above: **do not
+  write a regression test against a module scheduled for removal** — verify the
+  retirement closes it. [#1636](https://github.com/tim1016/learn-ai/issues/1636)
+
+**Vocabulary hand-off.** "Deploy state" names four artifact families; two retire
+with this plane. Naming the two survivors — SQLite registration/run folds, and
+runner JSON instance/run records — is glossary work, tracked as item 6 of
+[#1623](https://github.com/tim1016/learn-ai/issues/1623), not a defect here.
+
 ### Resolved
 
 - **[RESOLVED 2026-07-17] Transient account freeze permanently halted healthy

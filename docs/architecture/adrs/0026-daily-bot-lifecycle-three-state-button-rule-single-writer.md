@@ -1,5 +1,48 @@
 # ADR-0026: Daily bot lifecycle — three durable states, the Button Rule, and the single-writer evaluator
 
+> **⚠️ Partially superseded 2026-08-18 — read this before implementing anything below.**
+>
+> **§4 "Single-writer evaluator; reads are pure", and the *evaluator-ownership
+> half* of the 2026-07-21 amendment, are superseded for Alpaca bots** by
+> [ADR 0038](0038-alpaca-sole-bot-control-plane.md). Alpaca is the only bot
+> control plane; SQLite is the authority for the duty facts it already fences,
+> and `lifecycle_state.json` is a projection of it. The evaluator plane described
+> in §4 is IBKR lineage and retires with the IBKR bot-control surface
+> ([#1636](https://github.com/tim1016/learn-ai/issues/1636)).
+>
+> **The rest of the 2026-07-21 amendment still binds — read this before deleting
+> anything.** That amendment does two things, and only the first is superseded.
+> Its second half overrides §§3 and 5: `PAUSED`, `RUNNING` (Resume), and
+> `STOPPED` **remain durable control-plane commands and must work without a Clerk
+> or broker connection**; Start may observe but never clear `STOPPED`. ADR 0038
+> Decision 3 preserves exactly that, and keeps `desired_state.json` and
+> `on_roster` file-backed for the same reason — the stop latch must outlive the
+> authority it protects against. Treating the whole amendment as superseded would
+> revive §5's original text deleting the `STOPPED` latch and Resume. Do not.
+>
+> **This ADR carries two incompatible designs for §4, and one of them was never
+> built.** As written, §4 specifies the evaluator as a pure function
+> `f(evidence) → (phase, offers, conditions)`, phase as a rebuildable projection,
+> and reads that return "a drift flag when it disagrees with the persisted
+> phase". **No drift flag exists anywhere in the repo**, and the evaluator has no
+> evidence-folding function — `bot_lifecycle_evaluator.py` is a command handler
+> with a write-ahead receipt log. The 2026-07-21 amendment at the top of this file
+> replaced the derived-projection design with a single-writer-command design
+> without removing the original text. Do not implement the half that does not
+> exist.
+>
+> **Unaffected by ADR 0038:** §3 (the Button Rule — every rendered state offers
+> exactly one action from the closed `cure_action` set), §6 (run identity), and
+> the three durable states of §2. §1, §7, §8, and §9 likewise. §5 is not touched
+> by ADR 0038 either, but note it is already overridden by the 2026-07-21
+> amendment above — read the two together, never §5 alone.
+>
+> Status stays `Accepted` deliberately: under
+> [ADR 0039](0039-adr-status-is-decision-standing.md) the Status field states the
+> decision's *standing*, not code conformance, and the parts listed above still
+> stand. The divergence itself is registered in `docs/known-gaps.md` §
+> "Bot control-plane boundary".
+
 **Status**: Accepted 2026-07-08. Decided in the PRD #974 rev 3
 simplification pass (operator direction: "use the human analogy; manage
 only states with a known cure; banish the rest as non-remediable;
