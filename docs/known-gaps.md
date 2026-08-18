@@ -9,32 +9,23 @@ items were lifted here. The closed findings live in git history and in the
 auto-research ledger (`docs/audits/auto-research/state.json`).
 
 **Status convention.** Each item carries a severity and a code pointer captured
-**as of 2026-07-04** — verify the `file:line` against current code before acting,
-since the tree moves. When an item is fixed, delete its bullet (git history is the
-record). When a new open defect is found, add it here rather than starting a new
-finding-file tree.
+on the verification date named with its section — verify the `file:line` against
+current code before acting, since the tree moves. When an item is fixed, delete
+its bullet (git history is the record). When a new open defect is found, add it
+here rather than starting a new finding-file tree.
 
 **Scope note.** Safety-critical and broker items below were verified open against
 current code on 2026-07-04. The architecture-investigation P1 tier and the
 run-log functional items were **not** re-verified in that pass — confirm before
-committing effort.
+committing effort. The account-registry, architecture P1, and IBKR B-05/B-06/
+B-09--B-13 clusters were rechecked on **2026-08-17**; their individual sections
+say which findings remain.
 
 ---
 
-## 1. Safety-critical (verified open against current code)
+## 1. Safety-critical (partially re-verified 2026-08-17)
 
-### Bot Control / Account Clerk reconciliation (verified 2026-07-29)
-
-- **Same-instance deploy-only staging can bypass a terminal restart block
-  (safety-critical).** A blocking retired binding (`process_crashed`,
-  `boot_liveness_unproven`, or `ended_without_status`) is checked on the direct
-  restart path, but a newer `start=false` deploy can become the latest binding before
-  a later Start. The next Start then does not see the unresolved retirement. Preserve
-  the invariant: no same-identity restart after an unproven terminal outcome without a
-  recovery proof or Retire & Replace. Qualification: regression coverage for each
-  terminal source through deploy-only then Start, plus persisted-binding compatibility
-  and recovery rollback coverage. Source: `docs/audits/bot-control-8bot-call-graph-audit-2026-07-28.md`
-  BUG-16.
+### Bot Control / Account Clerk reconciliation (verified 2026-07-29; BUG-16 fixed 2026-08-17)
 
 - **Eight-bot A0 admission latency has no recorded production-load qualification
   (high).** Normal paper entries return after the Clerk's fsynced A0 receipt while
@@ -97,7 +88,7 @@ committing effort.
   (e) regression test. See
   `docs/archive/reports/three-bot-concurrency-and-emergency-flatten-2026-07-17.md` §6.
 
-## 2. Architecture-investigation P1 tier (survives; not re-verified 2026-07-04)
+## 2. Architecture-investigation P1 tier (re-verified 2026-08-17)
 
 All five P0 safety issues from `architecture-investigation-2026-07-02.md` were
 verified **fixed** in current code (unauth data plane now binds `127.0.0.1` +
@@ -110,29 +101,25 @@ carried forward are:
   companion JSON/hash files non-atomically. Live run artifacts, live bar
   compaction, and broker tick partitions use atomic publication; the remaining
   report-bundle work is research-output integrity rather than control-plane
-  safety.
-- No R3 recovery daemon.
+  safety. [#1584](https://github.com/tim1016/learn-ai/issues/1584)
 - Residual: committed dev-default control secret `local-dev-control-secret`
   (fine for local; must not reach a shared/live host).
+  [#1585](https://github.com/tim1016/learn-ai/issues/1585)
 
-## 3. Broker subsystem (2026-06-07 bug-hunt — confirmed, never filed; not re-verified)
+The former R3 recovery-daemon item was retired from this backlog: it concerns
+the deprecated IBKR bot-control surface, while the accepted Alpaca Clerk
+cutover is complete (ADR-0035).
 
-Ten confirmed IBKR-adapter bugs surfaced by the 2026-06-07 hunt that were never
-converted into findings. The disconnect-blindness cluster (B-02/03/04/08) now
-appears addressed in `broker/ibkr/client.py` (~:335–655, codes 1100/1101/1102/504
-handled) — confirm closed, then drop. Remaining:
+## 3. Broker subsystem (re-verified 2026-08-17)
+
+The B-06 and B-09--B-13 items from the 2026-06-07 hunt are fixed in current
+code and their regressions pass. The disconnect-blindness cluster (B-02/03/04/08)
+still needs a separate reachability review. Remaining:
 
 - **B-05** `cancel_paper_order` / `_order_belongs_to_account` match by `orderId`
   only → can cancel a *foreign* order on the same DU account; ownership check
-  should be `account_id AND client_id` (`orders.py` ~:385–423). *(also VCR-P3-H)*
-- **B-06** `place_paper_order` awaits `qualifyContractsAsync` with no timeout on
-  the live submit hot path (`orders.py` ~:243–263).
-- **B-09** Partial-fill events mis-stamp running totals.
-- **B-10** `Ticker.time` → ms without a naive-datetime guard (timestamp-rigor
-  violation, `market_data.py` ~:137–141).
-- **B-11** Unguarded `cancelRealTimeBars` in a `finally` masks the real exception.
-- **B-12** `bid_size` / `ask_size` leak IBKR `-1` "no size" sentinel to callers.
-- **B-13** Option-chain endpoints accept non-positive `expiry_ms`.
+  should be `account_id AND client_id` (`orders.py` / `order_projection.py`).
+  *(also VCR-P3-H; [#1583](https://github.com/tim1016/learn-ai/issues/1583))*
 
 ## 4. Broker session mirror — deferred product/safety decisions
 

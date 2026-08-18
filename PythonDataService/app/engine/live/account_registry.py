@@ -409,34 +409,85 @@ def crash_retired_restart_blocking_binding(
     account_id: str,
     strategy_instance_id: str,
 ) -> AccountInstanceBinding | None:
-    """Return the unsafe terminal binding that blocks restart, if any.
+    """Return the newest unresolved terminal binding that blocks restart, if any.
 
     Covers every terminal source whose exposure is unproven at exit: a crash,
     a daemon-boot binding whose liveness is unproven, and an ``ended_without_status``
     exit (SIGKILL/OOM before a run-status receipt). Each requires an audited
     recovery override or a retire-and-replace before the same instance restarts.
+    A later deploy-only binding stages a successor run, but does not resolve an
+    earlier terminal outcome for the same immutable identity.
     """
 
     bindings = read_account_instance_registry(artifacts_root, account_id)
-    latest = latest_account_instance_binding(
-        bindings,
-        account_id=account_id,
-        strategy_instance_id=strategy_instance_id,
-    )
-    if latest is None:
-        return None
-    if (
-        latest.lifecycle_state != "RETIRED"
-        or latest.source not in TERMINAL_RESTART_BLOCKING_BINDING_SOURCES
-    ):
-        return None
-    if account_recovery_evidence_exists_after(
-        artifacts_root,
-        account_id=account_id,
-        recorded_at_ms=latest.recorded_at_ms,
-    ):
-        return None
-    return latest
+    if account_binding_ledger_read_enabled():
+        # Parity deliberately compares each identity's latest state. That makes
+        # the ledger flip safe for normal current-state consumers, but an older
+        # persisted terminal retirement can be absent from a clean ledger replay
+        # once a newer deploy-only decision exists. Restart safety needs that
+        # complete history until historic registry rows have been retired.
+        legacy_bindings = _read_legacy_account_instance_registry(artifacts_root, account_id)
+        binding_keys = {
+            (
+                binding.account_id,
+                binding.strategy_instance_id,
+                binding.run_id,
+                binding.bot_order_namespace,
+                binding.lifecycle_state,
+                binding.recorded_at_ms,
+                binding.source,
+            )
+            for binding in bindings
+        }
+        bindings.extend(
+            binding
+            for binding in legacy_bindings
+            if (
+                binding.account_id,
+                binding.strategy_instance_id,
+                binding.run_id,
+                binding.bot_order_namespace,
+                binding.lifecycle_state,
+                binding.recorded_at_ms,
+                binding.source,
+            )
+            not in binding_keys
+        )
+    recovery_clearance = read_or_migrate_account_recovery_clearance(artifacts_root, account_id)
+    latest_by_run: dict[str, AccountInstanceBinding] = {}
+    for binding in bindings:
+        if (
+            binding.account_id.upper() != account_id.upper()
+            or binding.strategy_instance_id != strategy_instance_id
+        ):
+            continue
+        latest = latest_by_run.get(binding.run_id)
+        if latest is None or binding.recorded_at_ms >= latest.recorded_at_ms:
+            # Backfill corrections append a nonblocking RETIRED row for the
+            # same run. A deploy-only successor has a different run ID and
+            # must not hide a real terminal retirement from an earlier run.
+            latest_by_run[binding.run_id] = binding
+
+    newest_unresolved: AccountInstanceBinding | None = None
+    for binding in latest_by_run.values():
+        if (
+            binding.lifecycle_state != "RETIRED"
+            or binding.source not in TERMINAL_RESTART_BLOCKING_BINDING_SOURCES
+        ):
+            continue
+        if (
+            recovery_clearance is not None
+            and recovery_clearance.cleared_at_ms > binding.recorded_at_ms
+        ):
+            continue
+        if (
+            newest_unresolved is None
+            or binding.recorded_at_ms >= newest_unresolved.recorded_at_ms
+        ):
+            # The append-only ledger defines later append as the tiebreaker for
+            # equal timestamps, matching ``index_account_instance_bindings``.
+            newest_unresolved = binding
+    return newest_unresolved
 
 
 def account_recovery_evidence_exists_after(

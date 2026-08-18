@@ -54,6 +54,11 @@ from app.engine.live.desired_state import (
     DesiredStateRepo,
     stable_desired_state_path,
 )
+from app.engine.live.exit_taxonomy import (
+    ENDED_WITHOUT_STATUS_REGISTRY_SOURCE,
+    LIVENESS_UNPROVEN_REGISTRY_SOURCE,
+    PROCESS_CRASHED_REGISTRY_SOURCE,
+)
 from app.engine.live.host_daemon import (
     HostRunnerError,
     RunnerProcessManager,
@@ -2849,6 +2854,66 @@ async def test_start_blocks_after_crash_retire_until_later_recovery_proof(
 
     assert response.accepted is True
     assert response.process.pid == second_process.pid
+
+
+@pytest.mark.parametrize(
+    "terminal_source",
+    (
+        PROCESS_CRASHED_REGISTRY_SOURCE,
+        LIVENESS_UNPROVEN_REGISTRY_SOURCE,
+        ENDED_WITHOUT_STATUS_REGISTRY_SOURCE,
+    ),
+)
+async def test_start_blocks_terminal_retirement_after_deploy_only_staging(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    terminal_source: str,
+) -> None:
+    """A start must not reach process launch after same-identity staging."""
+
+    manager, run_dir = daemon_context
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": RUN_ID,
+                "strategy_instance_id": "spy_ema_paper",
+                "account_id": "DU111",
+            }
+        ),
+        encoding="utf-8",
+    )
+    retired = AccountInstanceBinding(
+        account_id="DU111",
+        strategy_instance_id="spy_ema_paper",
+        run_id="run-terminal",
+        bot_order_namespace=bot_order_namespace_for_instance("spy_ema_paper"),
+        lifecycle_state="RETIRED",
+        recorded_at_ms=1_700_000_010_000,
+        source=terminal_source,
+    )
+    write_account_instance_binding(manager.artifacts_root, retired)
+    write_account_instance_binding(
+        manager.artifacts_root,
+        retired.model_copy(
+            update={
+                "run_id": RUN_ID,
+                "lifecycle_state": "DEPLOYED",
+                "recorded_at_ms": 1_700_000_020_000,
+                "source": "host_daemon.deploy",
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: pytest.fail("terminal restart block was bypassed before process launch"),
+    )
+
+    with pytest.raises(HostRunnerError) as exc_info:
+        manager.start(RUN_ID, request=HostRunnerStartRequest())
+
+    assert exc_info.value.status_code == 409
+    assert "without later account recovery proof" in exc_info.value.detail
 
 
 async def test_start_blocks_when_restart_intensity_freezes_account(
