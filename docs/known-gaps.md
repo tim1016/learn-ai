@@ -126,6 +126,50 @@ seam below is a specific conditional gap, not a general weakness.
   removal; verify the retirement closes it.
   [#1618](https://github.com/tim1016/learn-ai/issues/1618)
 
+### Panel-layer flatness boundary (verified 2026-08-18)
+
+Decision record: ADR 0036 (one flatness rule, `abs(q) >= 1e-9`, owned by
+`folds.py::position_quantity_is_nonzero`). PR #1627 enforced it across the
+backend fold, pre-flight, and IBKR position paths, and removed the Frontend's
+own verdict. These four sites were **not** in ADR 0036's consequence list —
+the numeric census counted computation sites and missed the presentation layer.
+
+All four use `abs(x) > 0` (any nonzero) where the canonical rule is
+`abs(x) >= 1e-9`. They agree everywhere except the open interval `(0, 1e-9)`,
+where these say *exposed* and the canonical authority says *flat*. Two of them
+are operator-visible.
+
+- **`flatten_stop` is gated by a non-canonical rule (high).**
+  `services/broker_v2_panel/presented_actions.py:61` —
+  `has_exposure = any(abs(qty) > 0 …)` decides whether `flatten_stop` is
+  presented. A sub-epsilon residue therefore offers a flatten action for a
+  position the custody authority calls flat. Preserve the invariant: an action
+  is offered iff the authority that would execute it agrees there is something
+  to act on. [#1628](https://github.com/tim1016/learn-ai/issues/1628)
+
+- **`account_expected_flat` uses the same non-canonical rule (medium).**
+  `services/broker_v2_panel/presented_actions.py:63`. Same file, same comparison,
+  separate decision. [#1628](https://github.com/tim1016/learn-ai/issues/1628)
+
+- **The roster's flatness sentence is non-canonical (medium).**
+  `services/broker_v2_panel/sqlite_panel_adapter.py:268` chooses between
+  *"Off duty with Clerk-attributed exposure."* and *"Off duty and flat."* — the
+  sentence rendered on every roster row (observed live on all 10 bots,
+  `docs/audits/live-operator-surface-inventory-2026-08-18.md`). Preserve the
+  invariant: the operator sentence and the custody verdict never disagree.
+  [#1628](https://github.com/tim1016/learn-ai/issues/1628)
+
+- **Resume labelling uses the same non-canonical rule (low).**
+  `services/broker_v2_panel/panel_projection_service.py:170`. Affects copy only.
+  [#1628](https://github.com/tim1016/learn-ai/issues/1628)
+
+**Not a defect to fix:** `broker/alpaca/clerk/rollup_cache.py:169` compares with
+the wrong tolerance *and* the wrong inclusivity (`abs(updated) <= _ZERO_ABS_TOL`,
+a lot-exhaustion constant). It was ADR 0036 consequence 1, but **ADR 0037
+supersedes it** — the module is reachable only from the legacy JSONL path that
+ADR 0037 retires, so it resolves by deletion. Do not write a regression test
+against it.
+
 ### Resolved
 
 - **[RESOLVED 2026-07-17] Transient account freeze permanently halted healthy
