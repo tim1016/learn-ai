@@ -144,13 +144,7 @@ class BotBootRecovery:
                 continue
 
             now_ms = self._now_ms()
-            desired_repo.set(
-                DesiredState.STOPPED,
-                updated_by="bot_runner_boot_sweep",
-                now_ms=now_ms,
-                reason="interrupted_by_restart",
-            )
-            repo.record_terminal_outcome(
+            update_result = repo.record_terminal_outcome(
                 BotDutyOutcome(
                     kind="EXITED_UNVERIFIED",
                     reason_code="INTERRUPTED_BY_RESTART",
@@ -160,6 +154,24 @@ class BotBootRecovery:
                 updated_by="bot_runner_boot_sweep",
                 reason="container_restart",
                 expected_active_run_id=record.active_run_id,
+                expected_version=record.version,
+            )
+            if update_result.status == "SUPERSEDED":
+                logger.info(
+                    "Boot sweep skipped superseded lifecycle state",
+                    extra={
+                        "action": "boot_sweep_superseded",
+                        "strategy_instance_id": strategy_instance_id,
+                        "run_id": record.active_run_id,
+                        "refusal_reason": update_result.refusal_reason,
+                    },
+                )
+                continue
+            desired_repo.set(
+                DesiredState.STOPPED,
+                updated_by="bot_runner_boot_sweep",
+                now_ms=now_ms,
+                reason="interrupted_by_restart",
             )
             interrupted.append(strategy_instance_id)
             logger.warning(

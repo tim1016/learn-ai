@@ -36,6 +36,26 @@ def test_lifecycle_state_repo_round_trips_roster_and_phase(tmp_path: Path) -> No
     assert repo.read() == on_duty
 
 
+def test_lifecycle_state_repo_refuses_a_stale_expected_version(tmp_path: Path) -> None:
+    repo = BotLifecycleStateRepo(
+        stable_bot_lifecycle_state_path(tmp_path, "paper-version-fence")
+    )
+    stale = repo.set_roster(False, now_ms=100, updated_by="operator")
+    current = repo.set_roster(True, now_ms=200, updated_by="operator")
+
+    result = repo.update(
+        now_ms=300,
+        updated_by="stale-writer",
+        on_roster=False,
+        expected_version=stale.version,
+    )
+
+    assert result.status == "SUPERSEDED"
+    assert result.refusal_reason == "VERSION_MISMATCH"
+    assert result.record == current
+    assert repo.read() == current
+
+
 def test_lifecycle_state_repo_clears_active_run_on_off_duty_and_retire(tmp_path: Path) -> None:
     repo = BotLifecycleStateRepo(stable_bot_lifecycle_state_path(tmp_path, "paper-vwap"))
     repo.set_phase(

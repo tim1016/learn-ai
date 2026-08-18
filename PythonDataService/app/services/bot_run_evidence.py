@@ -8,6 +8,7 @@ from app.engine.live.bot_lifecycle_state import (
     BotDutyOutcome,
     BotLifecycleStateRecord,
     BotLifecycleStateRepo,
+    BotLifecycleStateUpdateResult,
 )
 from app.schemas.broker_bots import (
     BotDutyOutcomeView,
@@ -65,11 +66,11 @@ class BotRunEvidenceService:
         reason: str,
         expected_active_run_id: str | None = None,
         persist_receipt: bool = True,
-    ) -> None:
+    ) -> BotLifecycleStateUpdateResult:
         """Publish immutable evidence before mutating the lifecycle projection."""
         if persist_receipt:
             self._record_terminal_receipt(strategy_instance_id, outcome)
-        self._lifecycle_repo_for(strategy_instance_id).record_terminal_outcome(
+        return self._lifecycle_repo_for(strategy_instance_id).record_terminal_outcome(
             outcome,
             updated_by=updated_by,
             reason=reason,

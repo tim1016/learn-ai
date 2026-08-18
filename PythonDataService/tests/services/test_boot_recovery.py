@@ -32,8 +32,20 @@ from app.broker.alpaca.clerk.models import ClerkEntryKind
 from app.broker.alpaca.clerk.recovery import UNCERTAIN_SUBMIT_GRACE_MS
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerOrderLeg
-from app.engine.live.desired_state import DesiredState
+from app.engine.live.bot_lifecycle_state import (
+    BotDutyOutcome,
+    BotLifecyclePhase,
+    BotLifecycleStateRepo,
+    BotLifecycleStateUpdateResult,
+    stable_bot_lifecycle_state_path,
+)
+from app.engine.live.desired_state import (
+    DesiredState,
+    DesiredStateRepo,
+    stable_desired_state_path,
+)
 from app.engine.live.order_identity import build_bot_order_namespace
+from app.services.bot_boot_recovery import BotBootRecovery
 from app.services.bot_runner import (
     BootRecoveryIncompleteError,
     BotTaskRegistry,
@@ -154,6 +166,74 @@ async def test_boot_sweep_records_interrupted_evidence_and_never_restarts(
     assert view.running is False  # never rendered healthy, never auto-restarted
     assert view.phase == "OFF_DUTY"
     assert view.desired_state == "STOPPED"
+
+
+async def test_boot_sweep_does_not_report_a_superseded_interruption(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    artifacts_root = _artifacts_root(tmp_path)
+    lifecycle_path = stable_bot_lifecycle_state_path(artifacts_root, _SID)
+
+    class SupersedingLifecycleRepo(BotLifecycleStateRepo):
+        def record_terminal_outcome(
+            self,
+            outcome: BotDutyOutcome,
+            *,
+            updated_by: str,
+            reason: str,
+            expected_active_run_id: str | None = None,
+            expected_version: int | None = None,
+            disposition_id: str | None = None,
+            disposition_action: str | None = None,
+        ) -> BotLifecycleStateUpdateResult:
+            self.set_phase(
+                BotLifecyclePhase.ON_DUTY,
+                now_ms=_T0 + 1,
+                updated_by="newer-run",
+                active_run_id="run-new",
+            )
+            return super().record_terminal_outcome(
+                outcome,
+                updated_by=updated_by,
+                reason=reason,
+                expected_active_run_id=expected_active_run_id,
+                expected_version=expected_version,
+                disposition_id=disposition_id,
+                disposition_action=disposition_action,
+            )
+
+    lifecycle_repo = SupersedingLifecycleRepo(lifecycle_path)
+    lifecycle_repo.set_phase(
+        BotLifecyclePhase.ON_DUTY,
+        now_ms=_T0,
+        updated_by="old-run",
+        active_run_id="run-old",
+    )
+    desired_repo = DesiredStateRepo(
+        stable_desired_state_path(artifacts_root, _SID),
+        trusted_root=artifacts_root / "live_state",
+    )
+    caplog.set_level("WARNING", logger="app.services.bot_boot_recovery")
+
+    report = await BotBootRecovery(
+        artifacts_root,
+        lifecycle_repo_for=lambda _strategy_instance_id: lifecycle_repo,
+        desired_repo_for=lambda _strategy_instance_id: desired_repo,
+        manages_instance=lambda _strategy_instance_id: True,
+        is_running=lambda _strategy_instance_id: False,
+        now_ms=lambda: _T0 + 2,
+    ).run()
+
+    assert report.interrupted_instances == ()
+    current = lifecycle_repo.read()
+    assert current is not None
+    assert current.active_run_id == "run-new"
+    assert desired_repo.read() is None
+    assert all(
+        getattr(record, "action", None) != "boot_sweep_interrupted"
+        for record in caplog.records
+    )
 
 
 async def test_boot_sweep_repairs_interrupted_bot_stranded_as_running(
