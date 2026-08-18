@@ -18,12 +18,21 @@ page and its backend)"*, and every `broker/paper-run` route now redirects to
 `brokers/alpaca/bots`. That is true of the header. It is **not** true of the
 content, and the real problem is worse.
 
-Searching for the word `IBKR` finds it in only 2 of 26 sections. Searching for
-the **artifacts ADR 0038 retires** — `run_ledger`, `cmd_resume`,
-`operator_surface`, `host_daemon`, `account_binding`, `bot_lifecycle_evaluator` —
-finds them in **13 sections spanning 1032 of 1533 lines**.
+Searching for the word `IBKR` finds it in 8 of 26 sections. Searching for the
+**artifacts ADR 0038 retires** — the ten identifiers `run_ledger`, `cmd_resume`,
+`cmd_start`, `operator_surface`, `host_daemon`, `account_binding`,
+`lifecycle_dispositions`, `bot_lifecycle_evaluator`, `desired_state.json`,
+`process registry` — finds them in **13 sections spanning 1032 of 1532 lines**.
 
-The gap between those two numbers is the finding. "Sizing authority" is 178 lines
+*(Method, so this is reproducible: split `CONTEXT.md` on its 26 `^## ` headings;
+a section counts as a hit if any identifier appears anywhere in its body. An
+earlier draft reported "2 of 26" for `IBKR` and a 1533-line file; both were
+wrong. The 13-section / 1032-line figure reproduces exactly — a review that
+re-ran it against only six of the ten identifiers got 8, which is what dropping
+four terms costs.)*
+
+The gap between those two numbers is the finding: keyword search misses five
+sections outright and understates the affected span by hundreds of lines. "Sizing authority" is 178 lines
 and reads as broker-neutral; its canonical term is
 `run_ledger.live_config.sizing`, and `run_ledger.json` is one of the four deploy
 artifact families ADR 0038 retires. Nothing in the section says so.
@@ -57,13 +66,21 @@ Market Scope shell all landed after it and contributed no vocabulary.
 describe:
 
 - **live** — the current Alpaca Broker V2 ecosystem.
-- **retiring** — machinery ADR 0037 or ADR 0038 removes. The terms remain
-  accurate until the code goes; the label is the warning.
+- **retiring (ADR 0038)** — machinery the IBKR bot-control retirement removes.
+- **retiring (ADR 0037)** — machinery the Alpaca legacy-JSONL custody cutover
+  removes.
 - **neutral** — operator/trading vocabulary that survives a broker change.
 
+**The two retirements are independent and must not share a label.** ADR 0037
+governs an Alpaca custody cutover; ADR 0038 governs the IBKR bot-control surface.
+Neither is implemented, and either may land first. A single `retiring` label plus
+Consequence 8's "when the IBKR lineage is deleted, everything labelled retiring
+goes with it" would archive the glossary for still-running Alpaca custody code if
+the IBKR removal happened first. The label names its trigger, and a section
+archives only when *its own* trigger fires.
+
 A reader looking up *"live sizing policy"* must see immediately that it is rooted
-in a retiring artifact. This is also what makes the eventual cleanup mechanical:
-when the IBKR lineage is deleted, everything labelled **retiring** goes with it.
+in a retiring artifact.
 
 **2. The glossary's scope is the live trading and operator domain — not repo process.**
 
@@ -71,16 +88,33 @@ The header's "Paper Run page and its backend" is replaced. Repo-process
 vocabulary (ADR status values, lint rules, CI gates) stays out; ADR 0039's
 deliberate abstention from a `CONTEXT.md` entry was correct and is confirmed here.
 
-**3. The §16.4 deferral is deleted, not re-homed.**
+**3. The §16.4 deferral is deleted — but §16.3 next door is audited first.**
 
-There is no lost term list to recover — §16.4 is a PR-queue cross-reference table.
-`CONTEXT.md`'s own Identity ladder is the identity term list, and always was. All
-four §16.4 citations go, and the header stops deferring authority it never
-successfully delegated.
+§16.4 really is a PR-queue cross-reference table, so the four citations go and the
+header stops deferring authority it never successfully delegated.
 
-**4. An accepted ADR that introduces domain language carries a `Vocabulary:` line.**
+**The pointer was off by one section, not simply wrong.** `docs/archive/plans/
+ibkr-paper-deployment-plan.md` § "16.3. Term Lock (deployment-specific glossary)"
+sits immediately above §16.4 and *is* a 12-term table. Seven of those terms appear
+nowhere in `CONTEXT.md`: `submit_mode`, `execution_source`, `Layer A divergence`,
+`Layer B divergence`, `shadow_sim`, `NoSubmitBrokerAdapter`, and `(T3) topology`.
+An earlier draft of this ADR asserted there was no term list to recover; that was
+false, and deleting the deferral without looking would have discarded the pointer
+to a glossary the header was one section away from naming correctly.
 
-Naming the `CONTEXT.md` section it added, or stating why none is owed. This is not
+So: audit §16.3 against `CONTEXT.md` before the deletion lands. The likely outcome
+is that most of the seven are shadow-mode / IBKR-divergence vocabulary and migrate
+as **retiring (ADR 0038)** or not at all — but that has to be *concluded*, not
+assumed. `CONTEXT.md`'s Identity ladder remains the identity term list.
+
+**4. Every newly accepted ADR carries a `Vocabulary:` line.**
+
+Unconditionally — naming the `CONTEXT.md` section it added, or stating that none
+is owed. The condition is *not* "if it introduces domain language": no grep can
+decide that predicate, and Decision 4 is only worth making if ADR 0039's gate can
+check it. The author decides whether vocabulary is owed; the gate checks only that
+the line exists. Existing ADRs are **not** back-filled — the rule applies from the
+next accepted ADR forward, so the corpus is not rejected wholesale. This is not
 a new invention — ADRs 0036, 0037, and 0038 each carry one, and ADR 0039 states
 why it owes none. It is the observed working practice made into a rule, and it is
 the obligation that was missing: for three weeks the glossary went unupdated
@@ -114,9 +148,12 @@ It is also grep-checkable, so ADR 0039's CI gate can carry it.
 These are **not implemented**. This ADR is a decision; the corrections are
 follow-up work.
 
-1. **26 sections to classify.** Some are genuinely mixed — "Broker-facing
-   identity" (155 lines) carries both lineages — and need splitting or a
-   judgement call recorded in place.
+1. **26 sections to classify, and mixed sections are split, not judged.** One
+   label per section is the whole mechanism; a section carrying both lineages
+   under a single label forces one of them to be mislabelled, and the reader is
+   back to guessing — which is what this ADR exists to end. "Broker-facing
+   identity" (155 lines) carries both and is split. An earlier draft allowed "a
+   judgement call recorded in place"; that loophole is closed.
 2. **One mixed section is load-bearing for other open work.** "Continue / Pause /
    Stop guards — shared resolver (legacy Resume naming)" is rooted in `cmd_resume`
    and `operator_surface` (**retiring**), but it also carries the **Continue vs
@@ -138,6 +175,8 @@ follow-up work.
    consequence 6 handed this decision to #1595; it is now owed as vocabulary.
 7. **The `Vocabulary:` line becomes checkable** by ADR 0039's gate. Until that
    gate exists, Decision 4 is as unenforced as the practice it formalises.
-8. **Archival is a follow-up, not a non-decision.** When the IBKR lineage is
-   deleted, everything labelled **retiring** moves to the historical record in one
-   mechanical pass. Decision 1 exists partly to make that pass safe.
+8. **Archival is a follow-up, not a non-decision — and it is per-trigger.** When
+   the IBKR bot-control surface is deleted, sections labelled **retiring (ADR
+   0038)** move to the historical record; when the legacy-JSONL custody cutover
+   completes, **retiring (ADR 0037)** sections do. Neither pass touches the other's
+   label. Decision 1 exists partly to make each pass safe.
