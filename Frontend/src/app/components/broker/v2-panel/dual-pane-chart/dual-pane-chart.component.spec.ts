@@ -104,13 +104,13 @@ describe('DualPaneChartComponent', () => {
             categories: signal([{
               name: 'trend',
               indicators: [{
-                name: 'sma',
+                name: 'ema',
                 category: 'trend',
-                description: 'Simple moving average',
+                description: 'Exponential moving average',
                 configurable_params: [{
                   name: 'length',
                   type: 'int',
-                  default: 2,
+                  default: 10,
                   min: 1,
                   max: 200,
                   description: 'Lookback length',
@@ -138,17 +138,17 @@ describe('DualPaneChartComponent', () => {
     chartMocks.calculateIndicators.mockReset();
     chartMocks.calculateIndicators.mockReturnValue(of({ symbol: 'SPY', indicators: [] }));
     chartMocks.supportedIndicators.mockReset();
-    chartMocks.supportedIndicators.mockReturnValue(of({ names: ['sma'] }));
+    chartMocks.supportedIndicators.mockReturnValue(of({ names: ['ema'] }));
     localStorage.removeItem('broker-v2.chart-timezone.v1');
   });
 
-  it('renders source tabs for IBKR live and Polygon', async () => {
+  it('renders the concise Live and 15m Delayed source tabs', async () => {
     await render(DualPaneChartComponent, {
       inputs: { symbol: 'SPY', liveBars: [], histBars: [] },
     });
 
-    expect(screen.getByRole('tab', { name: /IBKR live/i })).toBeTruthy();
-    expect(screen.getByRole('tab', { name: /Polygon/i })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Live' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: '15m Delayed' })).toBeTruthy();
   });
 
   it('uses the shared asset identity for the chart symbol', async () => {
@@ -188,31 +188,84 @@ describe('DualPaneChartComponent', () => {
     ).toBeTruthy();
   });
 
-  it('renders all 6 Polygon range buttons after switching source', async () => {
+  it('renders all Polygon timeframe buttons after switching source', async () => {
     const { fixture } = await render(DualPaneChartComponent, {
       inputs: { symbol: 'SPY', liveBars: [], histBars: [] },
     });
 
-    screen.getByRole('tab', { name: /Polygon/i }).click();
+    screen.getByRole('tab', { name: '15m Delayed' }).click();
     fixture.detectChanges();
 
-    for (const preset of ['1D', '5D', '1M', '3M', '1Y', 'All']) {
-      expect(screen.getByRole('button', { name: preset })).toBeTruthy();
+    for (const timeframe of ['1m', '15m', '30m', '1h', '1D']) {
+      expect(screen.getByRole('button', { name: timeframe })).toBeTruthy();
     }
   });
 
-  it('emits presetChange when a history preset is clicked', async () => {
-    const onPresetChange = vi.fn();
+  it('emits historyTimeframeChange when a Polygon timeframe is clicked', async () => {
+    const onHistoryTimeframeChange = vi.fn();
 
     const { fixture } = await render(DualPaneChartComponent, {
-      inputs: { symbol: 'SPY', liveBars: [], histBars: [], selectedPreset: '1D' },
-      on: { presetChange: onPresetChange },
+      inputs: { symbol: 'SPY', liveBars: [], histBars: [], historyTimeframe: '1m' },
+      on: { historyTimeframeChange: onHistoryTimeframeChange },
     });
 
-    screen.getByRole('tab', { name: /Polygon/i }).click();
+    screen.getByRole('tab', { name: '15m Delayed' }).click();
     fixture.detectChanges();
-    screen.getByRole('button', { name: '1M' }).click();
-    expect(onPresetChange).toHaveBeenCalledWith('1M');
+    screen.getByRole('button', { name: '15m' }).click();
+    expect(onHistoryTimeframeChange).toHaveBeenCalledWith('15m');
+  });
+
+  it('recalculates active indicators from the newly selected Polygon candle set', async () => {
+    const user = userEvent.setup();
+    const liveBars = [liveBar(1_700_000_000_000, 1_700_000_060_000)];
+    const oneMinuteBars = [liveBar(1_699_999_940_000, 1_700_000_000_000)];
+    const fifteenMinuteBars = [liveBar(1_699_999_100_000, 1_700_000_000_000)];
+    chartMocks.calculateIndicators.mockImplementation((_symbol, bars: readonly ChartBar[]) => of({
+      symbol: 'SPY',
+      indicators: [{
+        id: 'ema_10',
+        panel: 'main',
+        type: 'line',
+        color: '#FF9800',
+        data: [{ t: bars[0].end_ms, value: 101 }],
+        refs: [],
+      }],
+    }));
+    const { fixture } = await render(DualPaneChartComponent, {
+      inputs: {
+        symbol: 'SPY',
+        liveBars,
+        histBars: oneMinuteBars,
+        historyDataTimeframe: '1m',
+        historyTimeframe: '1m',
+      },
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Expand market chart' }));
+    const rail = screen.getByRole('complementary', { name: 'Indicator picker rail' });
+    const trendButtons = within(rail).getAllByRole('button', { name: /trend/i });
+    await user.click(trendButtons[trendButtons.length - 1]);
+    await user.click(within(rail).getByRole('button', { name: 'Add', hidden: true }));
+    await user.click(within(rail).getByRole('button', { name: /add ema to chart/i }));
+    await waitFor(() => expect(chartMocks.calculateIndicators).toHaveBeenCalledWith(
+      'SPY', liveBars, [expect.objectContaining({ name: 'ema', params: { length: 10 } })],
+    ));
+
+    await user.click(screen.getByRole('tab', { name: '15m Delayed' }));
+    await waitFor(() => expect(chartMocks.calculateIndicators).toHaveBeenCalledWith(
+      'SPY', oneMinuteBars, [expect.objectContaining({ name: 'ema', params: { length: 10 } })],
+    ));
+
+    fixture.componentRef.setInput('historyTimeframe', '15m');
+    fixture.detectChanges();
+    expect(screen.getByText('No candles in this window')).toBeTruthy();
+
+    fixture.componentRef.setInput('histBars', fifteenMinuteBars);
+    fixture.componentRef.setInput('historyDataTimeframe', '15m');
+    fixture.detectChanges();
+    await waitFor(() => expect(chartMocks.calculateIndicators).toHaveBeenCalledWith(
+      'SPY', fifteenMinuteBars, [expect.objectContaining({ name: 'ema', params: { length: 10 } })],
+    ));
   });
 
   it('emits a live resolution change when 1m is selected', async () => {
@@ -252,13 +305,13 @@ describe('DualPaneChartComponent', () => {
     expect(within(rail).getByText('Indicators')).toBeTruthy();
   });
 
-  it('adds an indicator from the restored rail using the visible candle set', async () => {
+  it('requires a selected EMA length before adding it to the expanded bot chart', async () => {
     const user = userEvent.setup();
     const bars = [liveBar(1_700_000_000_000, 1_700_000_060_000)];
     chartMocks.calculateIndicators.mockReturnValue(of({
       symbol: 'SPY',
       indicators: [{
-        id: 'sma_2',
+        id: 'ema_21',
         panel: 'main',
         type: 'line',
         color: '#FF9800',
@@ -278,21 +331,36 @@ describe('DualPaneChartComponent', () => {
     await user.click(within(rail).getByRole('button', { name: 'Add', hidden: true }));
     fixture.detectChanges();
 
+    expect(within(rail).getByRole('spinbutton', { name: /ema length/i })).toBeTruthy();
+    expect(chartMocks.calculateIndicators).not.toHaveBeenCalled();
+
+    await user.clear(within(rail).getByRole('spinbutton', { name: /ema length/i }));
+    await user.type(within(rail).getByRole('spinbutton', { name: /ema length/i }), '21');
+    await user.click(within(rail).getByRole('button', { name: /add ema to chart/i }));
+
     await waitFor(() => expect(chartMocks.calculateIndicators).toHaveBeenCalledWith(
       'SPY',
       bars,
-      [expect.objectContaining({ name: 'sma', params: { length: 2 } })],
+      [expect.objectContaining({ name: 'ema', params: { length: 21 } })],
     ));
-    expect(within(rail).getByRole('button', { name: 'Remove SMA 2' })).toBeTruthy();
+    expect(within(rail).getByRole('button', { name: 'Remove EMA 21' })).toBeTruthy();
+    expect(screen.getByRole('list', { name: 'Plotted indicators' }).textContent).toContain('EMA 21');
+    const colorInput = within(rail).getByLabelText('Change EMA 21 color') as HTMLInputElement;
+    expect(colorInput).toBeTruthy();
     await waitFor(() => expect(chartMocks.addSeries).toHaveBeenCalledWith(
       'LineSeries',
       expect.objectContaining({ color: '#FF9800' }),
       0,
     ));
-    expect(within(rail).getByRole<HTMLButtonElement>(
-      'button',
-      { name: 'Added', hidden: true },
-    ).disabled).toBe(true);
+
+    colorInput.value = '#2dd4bf';
+    colorInput.dispatchEvent(new Event('input', { bubbles: true }));
+    fixture.detectChanges();
+    await waitFor(() => expect(chartMocks.addSeries).toHaveBeenCalledWith(
+      'LineSeries',
+      expect.objectContaining({ color: '#2dd4bf' }),
+      0,
+    ));
   });
 
   it('keeps the last indicator series visible while refreshed candles are recalculated', async () => {
@@ -311,10 +379,11 @@ describe('DualPaneChartComponent', () => {
     const trendButtons = within(rail).getAllByRole('button', { name: /trend/i });
     await user.click(trendButtons[trendButtons.length - 1]);
     await user.click(within(rail).getByRole('button', { name: 'Add', hidden: true }));
+    await user.click(within(rail).getByRole('button', { name: /add ema to chart/i }));
     firstResponse.next({
       symbol: 'SPY',
       indicators: [{
-        id: 'sma_2', panel: 'main', type: 'line', color: '#FF9800',
+        id: 'ema_10', panel: 'main', type: 'line', color: '#FF9800',
         data: [{ t: 1_700_000_060_000, value: 101 }], refs: [],
       }],
     });
@@ -547,6 +616,59 @@ describe('DualPaneChartComponent', () => {
         position: 'belowBar',
         shape: 'arrowUp',
         text: 'BUY 2 @ 101',
+      }),
+    ]);
+  });
+
+  it('condenses same-side fills that share a delayed candle into one readable marker', () => {
+    const startMs = 1_700_000_000_000;
+    const markers = toSeriesMarkers(
+      [
+        {
+          filled_at_ms: startMs + 60_000,
+          side: 'sell',
+          quantity: 1,
+          price: 101,
+          order_ref: 'order-1',
+          event_key: 'exec-1',
+        },
+        {
+          filled_at_ms: startMs + 120_000,
+          side: 'sell',
+          quantity: 2,
+          price: 101.5,
+          order_ref: 'order-2',
+          event_key: 'exec-2',
+        },
+        {
+          filled_at_ms: startMs + 180_000,
+          side: 'sell',
+          quantity: 1,
+          price: 102,
+          order_ref: 'order-3',
+          event_key: 'exec-3',
+        },
+      ],
+      [
+        {
+          start_ms: startMs,
+          end_ms: startMs + 15 * 60_000,
+          open: '100',
+          high: '103',
+          low: '99',
+          close: '102',
+          volume: 1_000,
+          source: 'polygon',
+        },
+      ],
+    );
+
+    expect(markers).toEqual([
+      expect.objectContaining({
+        time: startMs / 1_000,
+        position: 'aboveBar',
+        shape: 'arrowDown',
+        text: 'SELL · 3 fills',
       }),
     ]);
   });

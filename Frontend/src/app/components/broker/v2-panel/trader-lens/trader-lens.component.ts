@@ -7,7 +7,7 @@ import {
 } from '@angular/core';
 import type {
   BotPanelView,
-  ChartHistoryPreset,
+  ChartHistoryTimeframe,
   ChartLiveResolution,
   ChartLiveResponse,
   PanelActionTrigger,
@@ -55,13 +55,13 @@ export class TraderLensComponent {
   readonly liveChartLoading = input(false);
   readonly histChartLoading = input(false);
   readonly liveResolution = input<ChartLiveResolution>('5s');
-  readonly selectedPreset = input<ChartHistoryPreset>('1D');
+  readonly historyTimeframe = input<ChartHistoryTimeframe>('1m');
   readonly actionPending = input(false);
 
   // ── Outputs ───────────────────────────────────────────────────────────────
 
-  /** User selected a history preset. */
-  readonly presetChange = output<ChartHistoryPreset>();
+  /** User selected a Polygon candle timeframe. */
+  readonly historyTimeframeChange = output<ChartHistoryTimeframe>();
   readonly liveResolutionChange = output<ChartLiveResolution>();
   readonly actionRequested = output<PanelActionTrigger>();
 
@@ -91,7 +91,7 @@ export class TraderLensComponent {
 
   // ── Template handlers ─────────────────────────────────────────────────────
 
-  protected onPresetChange(preset: ChartHistoryPreset): void {
-    this.presetChange.emit(preset);
+  protected onHistoryTimeframeChange(timeframe: ChartHistoryTimeframe): void {
+    this.historyTimeframeChange.emit(timeframe);
   }
 }

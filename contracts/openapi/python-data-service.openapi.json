@@ -10830,19 +10830,8 @@
         "type": "object"
       },
       "ChartHistoryResponse": {
-        "description": "Bounded HISTORY-pane response for a fixed preset (\u00a78).\n\nThe preset \u2192 aggregation ladder and the response-size bound are enforced\nserver-side; the existing 7-day live resolver is not widened.",
+        "description": "Bounded Polygon chart response for one selected timeframe (\u00a78).\n\nThe server selects a calendar fetch window and returns only the most recent\nuseful display-bar count for that timeframe. The existing 7-day live\nresolver is not widened.",
         "properties": {
-          "aggregation": {
-            "enum": [
-              "1m",
-              "5m",
-              "30m",
-              "1h",
-              "1d"
-            ],
-            "title": "Aggregation",
-            "type": "string"
-          },
           "as_of_ms": {
             "title": "As Of Ms",
             "type": "integer"
@@ -10865,24 +10854,23 @@
             "title": "From Ms",
             "type": "integer"
           },
-          "preset": {
-            "enum": [
-              "1D",
-              "5D",
-              "1M",
-              "3M",
-              "1Y",
-              "All"
-            ],
-            "title": "Preset",
-            "type": "string"
-          },
           "strategy_instance_id": {
             "title": "Strategy Instance Id",
             "type": "string"
           },
           "symbol": {
             "title": "Symbol",
+            "type": "string"
+          },
+          "timeframe": {
+            "enum": [
+              "1m",
+              "15m",
+              "30m",
+              "1h",
+              "1d"
+            ],
+            "title": "Timeframe",
             "type": "string"
           },
           "to_ms": {
@@ -10897,8 +10885,7 @@
         "required": [
           "strategy_instance_id",
           "symbol",
-          "preset",
-          "aggregation",
+          "timeframe",
           "from_ms",
           "to_ms",
           "bars",
@@ -53113,11 +53100,11 @@
           },
           {
             "in": "query",
-            "name": "preset",
+            "name": "timeframe",
             "required": true,
             "schema": {
-              "maxLength": 8,
-              "title": "Preset",
+              "maxLength": 3,
+              "title": "Timeframe",
               "type": "string"
             }
           },
@@ -53160,7 +53147,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "HISTORY chart pane: bounded preset ladder (\u00a78)",
+        "summary": "Polygon chart: bounded timeframe window (\u00a78)",
         "tags": [
           "broker-v2-panel"
         ]
@@ -54338,11 +54325,11 @@
           },
           {
             "in": "query",
-            "name": "preset",
+            "name": "timeframe",
             "required": true,
             "schema": {
-              "maxLength": 8,
-              "title": "Preset",
+              "maxLength": 3,
+              "title": "Timeframe",
               "type": "string"
             }
           },
@@ -54385,7 +54372,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "HISTORY chart pane (single-account alias) (\u00a78)",
+        "summary": "Polygon chart (single-account alias) (\u00a78)",
         "tags": [
           "broker-v2-panel"
         ]

@@ -1,8 +1,8 @@
 """Tests for the chart projections (S1, spec §8).
 
-Covers the bounded HISTORY preset → aggregation ladder + size bound, the LIVE
-pane source-tagging + fill markers, and a regression that the 7-day live
-resolver cap is not widened.
+Covers bounded Polygon timeframes and their display-bar counts, the LIVE pane
+source-tagging + fill markers, and a regression that the 7-day live resolver
+cap is not widened.
 """
 
 from __future__ import annotations
@@ -20,12 +20,11 @@ from app.data_lake.polygon_fetcher import PolygonBar
 from app.schemas.broker_bots import BotStatusView
 from app.services.broker_v2_panel import panel_chart_data_source, panel_data_source
 from app.services.broker_v2_panel.chart_projection_service import (
-    _MAX_HISTORY_BARS,
-    ChartPresetError,
+    ChartTimeframeError,
     aggregator_bars_to_chart_bars,
     build_history_chart,
     build_live_chart,
-    coerce_history_preset,
+    coerce_history_timeframe,
     live_window,
 )
 from app.services.live_chart_window import MAX_CHART_RANGE_MS, ChartWindowResult
@@ -103,44 +102,52 @@ def test_seven_day_live_resolver_cap_unchanged() -> None:
 
 
 @pytest.mark.parametrize(
-    ("preset", "aggregation"),
+    ("timeframe", "multiplier", "timespan", "display_bars"),
     [
-        ("1D", "1m"),
-        ("5D", "5m"),
-        ("1M", "30m"),
-        ("3M", "1h"),
-        ("1Y", "1d"),
-        ("All", "1d"),
+        ("1m", 1, "minute", 300),
+        ("15m", 15, "minute", 300),
+        ("30m", 30, "minute", 300),
+        ("1h", 1, "hour", 300),
+        ("1d", 1, "day", 260),
     ],
 )
-async def test_history_preset_maps_to_fixed_aggregation(preset, aggregation) -> None:
-    async def _source(symbol, start, end, multiplier, timespan):
+async def test_history_timeframe_maps_to_fixed_bar_window(
+    timeframe: str,
+    multiplier: int,
+    timespan: str,
+    display_bars: int,
+) -> None:
+    observed: list[tuple[int, str]] = []
+
+    async def _source(symbol, start, end, source_multiplier, source_timespan):
+        observed.append((source_multiplier, source_timespan))
         return []
 
     result = await build_history_chart(
-        preset,  # type: ignore[arg-type]
+        timeframe,  # type: ignore[arg-type]
         [],
         strategy_instance_id=SID,
         symbol="SPY",
         bar_source=_source,
         now_ms=_NOW,
     )
-    assert result.aggregation == aggregation
-    assert result.preset == preset
+    assert result.timeframe == timeframe
+    assert observed == [(multiplier, timespan)]
+    assert result.truncated is False
+    assert display_bars > 0
 
 
-def test_unknown_preset_is_rejected() -> None:
-    with pytest.raises(ChartPresetError):
-        coerce_history_preset("7D")
+def test_unknown_timeframe_is_rejected() -> None:
+    with pytest.raises(ChartTimeframeError):
+        coerce_history_timeframe("5m")
 
 
 async def test_history_bars_are_polygon_tagged_and_bounded() -> None:
-    # Return more than the size bound; the response must truncate to the newest.
-    # Space bars 5s apart inside the 1D window so every fixture bar falls in the
-    # lookback and the size bound — not windowing — is what truncates them.
+    # Return more than the 300 displayed 1m bars; the response must keep only
+    # the newest visual window rather than returning the entire fetched range.
     bars = [
         PolygonBar(
-            t_ms=_NOW - (i + 1) * 5_000,
+            t_ms=_NOW - (i + 1) * 60_000,
             open=1.0,
             high=2.0,
             low=0.5,
@@ -149,14 +156,14 @@ async def test_history_bars_are_polygon_tagged_and_bounded() -> None:
             vwap=1.2,
             n=3,
         )
-        for i in range(_MAX_HISTORY_BARS + 50)
+        for i in range(350)
     ]
 
     async def _source(symbol, start, end, multiplier, timespan):
         return bars
 
     result = await build_history_chart(
-        "1D",
+        "1m",
         [],
         strategy_instance_id=SID,
         symbol="SPY",
@@ -164,11 +171,12 @@ async def test_history_bars_are_polygon_tagged_and_bounded() -> None:
         now_ms=_NOW,
     )
     assert result.truncated is True
-    assert len(result.bars) == _MAX_HISTORY_BARS
+    assert len(result.bars) == 300
     assert all(bar.source == "polygon" for bar in result.bars)
     # Bars are sorted ascending by start_ms after truncation.
     starts = [bar.start_ms for bar in result.bars]
     assert starts == sorted(starts)
+    assert result.from_ms == starts[0]
 
 
 async def test_history_fill_markers_within_window() -> None:
@@ -187,7 +195,7 @@ async def test_history_fill_markers_within_window() -> None:
         return []
 
     result = await build_history_chart(
-        "1D",
+        "1m",
         fills,
         strategy_instance_id=SID,
         symbol="SPY",
@@ -524,7 +532,7 @@ async def test_active_history_uses_sqlite_chart_evidence_not_legacy_journal(
     monkeypatch.setattr(
         panel_chart_data_source,
         "history_fill_window",
-        lambda preset, now_ms: (_NOW - 86_400_000, now_ms),
+        lambda timeframe, now_ms: (_NOW - 86_400_000, now_ms),
     )
     monkeypatch.setattr(panel_chart_data_source, "read_sqlite_chart_evidence", chart_evidence)
     monkeypatch.setattr(panel_chart_data_source, "read_legacy_chart_status", pytest.fail)
@@ -535,7 +543,7 @@ async def test_active_history_uses_sqlite_chart_evidence_not_legacy_journal(
         "alpaca",
         "paper-account",
         SID,
-        "1D",
+        "1m",
     )
 
     assert calls == [("alpaca", "paper-account", SID, _NOW - 86_400_000, _NOW)]

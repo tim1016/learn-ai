@@ -73,4 +73,22 @@ describe('dual-pane chart indicators', () => {
       data: [],
     }])).toEqual([{ id: 'sma|length:20', label: 'SMA 20', color: '#FF9800' }]);
   });
+
+  it('uses a user-selected color for both the chart series and its legend chip', () => {
+    const selected = selectChartIndicator([], { name: 'ema', params: { length: 5 } });
+    const results = [{
+      id: 'ema_5',
+      panel: 'main' as const,
+      type: 'line' as const,
+      color: '#FF9800',
+      data: [{ t: 1_700_000_060_000, value: 100 }],
+      refs: [],
+    }];
+    const colors = { 'ema|length:5': '#2DD4BF' };
+
+    expect(toActiveIndicatorChips(selected, results, colors)).toEqual([
+      { id: 'ema|length:5', label: 'EMA 5', color: '#2DD4BF' },
+    ]);
+    expect(toIndicatorSeriesPlans(results, BARS, selected, colors)[0].color).toBe('#2DD4BF');
+  });
 });

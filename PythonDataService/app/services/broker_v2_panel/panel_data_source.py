@@ -40,8 +40,8 @@ from app.schemas.broker_bots import (
 from app.schemas.broker_v2_panel import (
     BotCatalogView,
     BotPanelView,
-    ChartHistoryPreset,
     ChartHistoryResponse,
+    ChartHistoryTimeframe,
     ChartLiveResponse,
     PanelActionRequest,
     PanelActionResult,
@@ -780,13 +780,18 @@ async def get_live_snapshot_parts(
     return panel, chart
 
 
-async def get_history_chart(broker: str, account_id: str, sid: str, preset: ChartHistoryPreset) -> ChartHistoryResponse:
+async def get_history_chart(
+    broker: str,
+    account_id: str,
+    sid: str,
+    timeframe: ChartHistoryTimeframe,
+) -> ChartHistoryResponse:
     """Build the bounded HISTORY chart pane for one bot (§8)."""
     from app.services.broker_v2_panel.panel_chart_data_source import (
         get_history_chart as build_history_chart_response,
     )
 
-    return await build_history_chart_response(broker, account_id, sid, preset)
+    return await build_history_chart_response(broker, account_id, sid, timeframe)
 
 
 def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[str, ActionPerformer]:

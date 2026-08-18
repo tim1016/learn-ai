@@ -17,8 +17,9 @@
       [liveResolution]="liveResolution()"
       [histBars]="histBars()"
       [histFillMarkers]="histFillMarkers()"
-      [selectedPreset]="selectedPreset()"
-      (presetChange)="onPresetChange($event)"
+      [historyDataTimeframe]="histChart()?.timeframe ?? null"
+      [historyTimeframe]="historyTimeframe()"
+      (historyTimeframeChange)="onHistoryTimeframeChange($event)"
       (liveResolutionChange)="liveResolutionChange.emit($event)"
     />
   </section>

@@ -72,11 +72,13 @@ export function resultBelongsToIndicator(
 export function toActiveIndicatorChips(
   selected: readonly SelectedChartIndicator[],
   results: readonly ChartIndicatorResult[],
+  colorOverrides: Readonly<Record<string, string>> = {},
 ): TradingIndicatorChip[] {
   return selected.map((indicator) => ({
     id: indicator.id,
     label: indicator.label,
-    color: results.find((result) => resultBelongsToIndicator(result, indicator))?.color
+    color: colorOverrides[indicator.id]
+      ?? results.find((result) => resultBelongsToIndicator(result, indicator))?.color
       ?? CHART_INDICATOR_FALLBACK_COLOR,
   }));
 }
@@ -97,11 +99,22 @@ export function toChartIndicatorRequestBars(
 export function toIndicatorSeriesPlans(
   results: readonly ChartIndicatorResult[],
   bars: readonly ChartBar[],
+  selected: readonly SelectedChartIndicator[] = [],
+  colorOverrides: Readonly<Record<string, string>> = {},
 ): IndicatorSeriesPlan[] {
   const chartTimes = new Map(bars.map((bar) => [bar.end_ms, toCandle(bar).time]));
   return results.flatMap((result) => {
+    const overrideColor = colorOverrideForResult(result, selected, colorOverrides);
     if (Array.isArray(result.data)) {
-      return [seriesPlan(result, result.id, result.data, result.type === 'histogram', chartTimes, result.refs ?? [])];
+      return [seriesPlan(
+        result,
+        result.id,
+        result.data,
+        result.type === 'histogram',
+        chartTimes,
+        result.refs ?? [],
+        overrideColor ?? result.color,
+      )];
     }
     return Object.entries(result.data).map(([name, points], index) =>
       seriesPlan(
@@ -111,12 +124,22 @@ export function toIndicatorSeriesPlans(
         name.toLowerCase().includes('histogram'),
         chartTimes,
         index === 0 ? result.refs ?? [] : [],
-        index === 0
-          ? result.color
-          : CHART_INDICATOR_SERIES_COLORS[index % CHART_INDICATOR_SERIES_COLORS.length],
+        overrideColor
+          ?? (index === 0
+            ? result.color
+            : CHART_INDICATOR_SERIES_COLORS[index % CHART_INDICATOR_SERIES_COLORS.length]),
       ),
     );
   });
+}
+
+function colorOverrideForResult(
+  result: ChartIndicatorResult,
+  selected: readonly SelectedChartIndicator[],
+  colorOverrides: Readonly<Record<string, string>>,
+): string | undefined {
+  const indicator = selected.find((entry) => resultBelongsToIndicator(result, entry));
+  return indicator ? colorOverrides[indicator.id] : undefined;
 }
 
 function seriesPlan(

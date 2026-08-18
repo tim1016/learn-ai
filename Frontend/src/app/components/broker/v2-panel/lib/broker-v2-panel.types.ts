@@ -124,8 +124,7 @@ export type PanelActionResult = components['schemas']['PanelActionResult'];
 
 export type ChartSource = 'ibkr' | 'polygon' | 'mixed';
 export type ChartLiveResolution = '5s' | '1m';
-export type ChartHistoryPreset = '1D' | '5D' | '1M' | '3M' | '1Y' | 'All';
-export type ChartAggregation = '1m' | '5m' | '30m' | '1h' | '1d';
+export type ChartHistoryTimeframe = '1m' | '15m' | '30m' | '1h' | '1d';
 
 export interface ChartBar {
   readonly start_ms: number;
@@ -169,8 +168,7 @@ export interface ChartLiveResponse {
 export interface ChartHistoryResponse {
   readonly strategy_instance_id: string;
   readonly symbol: string;
-  readonly preset: ChartHistoryPreset;
-  readonly aggregation: ChartAggregation;
+  readonly timeframe: ChartHistoryTimeframe;
   readonly from_ms: number;
   readonly to_ms: number;
   readonly bars: readonly ChartBar[];

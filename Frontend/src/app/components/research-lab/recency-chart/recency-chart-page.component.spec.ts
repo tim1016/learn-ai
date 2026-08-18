@@ -151,7 +151,7 @@ describe("RecencyChartPageComponent", () => {
   it("shows an empty-state message when no trades are returned", async () => {
     await renderPage([]);
 
-    expect(screen.getByText(/no recency trades/i)).not.toBeNull();
+    expect(screen.getByText(/no timeline data/i)).not.toBeNull();
   });
 
   it("toggling a symbol off removes its lane from the swimlane", async () => {

@@ -52,11 +52,36 @@ describe("RecencyLaunchConfigComponent", () => {
     expect(screen.queryByText("EMA Options Spread")).toBeNull();
   });
 
-  it("shows a range input per numeric param (excluding symbol) once a strategy is selected", async () => {
+  it("prepopulates a ready-to-run timeline configuration", async () => {
     const { view } = await renderConfig([makeStrategy()]);
-
-    fireEvent.click(screen.getByRole("checkbox", { name: /ema crossover \(2 bps\)/i }));
     await view.fixture.whenStable();
+
+    expect(screen.getByText("SPY")).not.toBeNull();
+    expect((screen.getByRole("checkbox", { name: /ema crossover \(2 bps\)/i }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByText("Crossover gap (bps)")).not.toBeNull();
+    expect(screen.getByText("RSI lower gate")).not.toBeNull();
+    expect((screen.getByRole("radio", { name: "6 months" }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByText("1 run")).not.toBeNull();
+  });
+
+  it("turns entered symbols into removable timeline lanes", async () => {
+    const { view } = await renderConfig([makeStrategy()]);
+    const symbols = screen.getByRole("textbox", { name: "Symbols" });
+
+    fireEvent.input(symbols, { target: { value: "spy" } });
+    fireEvent.keyDown(symbols, { key: "Enter" });
+    await view.fixture.whenStable();
+
+    expect(screen.getByText("SPY")).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove SPY" }));
+    await view.fixture.whenStable();
+
+    expect(screen.queryByRole("button", { name: "Remove SPY" })).toBeNull();
+  });
+
+  it("shows a range input per numeric param for the preselected strategy", async () => {
+    await renderConfig([makeStrategy()]);
 
     expect(screen.getByText("Crossover gap (bps)")).not.toBeNull();
     expect(screen.getByText("RSI lower gate")).not.toBeNull();
@@ -67,18 +92,28 @@ describe("RecencyLaunchConfigComponent", () => {
     const { view } = await renderConfig([makeStrategy()]);
 
     fireEvent.input(screen.getByLabelText(/symbols/i), { target: { value: "SPY, AAPL" } });
-    fireEvent.click(screen.getByRole("checkbox", { name: /ema crossover \(2 bps\)/i }));
     await view.fixture.whenStable();
 
     // default seeding: each numeric param starts as a single-value list -> 1 combo per symbol
     expect(screen.getByText(/2 runs?/i)).not.toBeNull();
   });
 
+  it("blocks launch when no symbols have been selected", async () => {
+    const startJob = vi.fn(async () => "job-1");
+    const { view } = await renderConfig([makeStrategy()], startJob);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove SPY" }));
+    fireEvent.click(screen.getByRole("button", { name: /launch timeline/i }));
+    await view.fixture.whenStable();
+
+    expect(startJob).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toMatch(/add at least one symbol/i);
+  });
+
   it("launches a recency_chart job with the selected symbols and strategy ranges", async () => {
     const { view, startJob } = await renderConfig([makeStrategy()]);
 
     fireEvent.input(screen.getByLabelText(/symbols/i), { target: { value: "SPY" } });
-    fireEvent.click(screen.getByRole("checkbox", { name: /ema crossover \(2 bps\)/i }));
     fireEvent.click(screen.getByRole("button", { name: /launch/i }));
     await view.fixture.whenStable();
 
@@ -103,7 +138,6 @@ describe("RecencyLaunchConfigComponent", () => {
     view.fixture.componentInstance.launchCompleted.subscribe(onCompleted);
 
     fireEvent.input(screen.getByLabelText(/symbols/i), { target: { value: "SPY" } });
-    fireEvent.click(screen.getByRole("checkbox", { name: /ema crossover \(2 bps\)/i }));
     fireEvent.click(screen.getByRole("button", { name: /launch/i }));
     await view.fixture.whenStable();
 

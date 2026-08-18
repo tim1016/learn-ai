@@ -120,8 +120,7 @@ describe('BotPanelShellComponent #1413 correlation campaign', () => {
       getHistoryChart: vi.fn().mockResolvedValue({
         strategy_instance_id: STRATEGY_INSTANCE_ID,
         symbol: UI_CORRELATION_CAMPAIGN.symbol,
-        preset: '1D',
-        aggregation: '1m',
+        timeframe: '1m',
         from_ms: 1_753_800_000_000,
         to_ms: 1_753_823_400_000,
         bars: [],

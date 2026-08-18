@@ -16,8 +16,8 @@ from app.config import settings
 from app.data_lake.polygon_fetcher import fetch_aggregate_bars
 from app.schemas.broker_v2_panel import (
     BotPanelView,
-    ChartHistoryPreset,
     ChartHistoryResponse,
+    ChartHistoryTimeframe,
     ChartLiveResponse,
 )
 from app.services.broker_v2_panel.chart_projection_service import (
@@ -200,7 +200,7 @@ async def get_history_chart(
     broker: str,
     account_id: str,
     sid: str,
-    preset: ChartHistoryPreset,
+    timeframe: ChartHistoryTimeframe,
 ) -> ChartHistoryResponse:
     """Build bounded history from SQLite facts or legacy compatibility fills."""
     resolved = await validate_panel_account_scope(broker, account_id)
@@ -211,7 +211,7 @@ async def get_history_chart(
             detail="Repair the selected SQLite authority; legacy chart fills are not used.",
         )
     if sqlite_authority_active(broker):
-        from_ms, to_ms = history_fill_window(preset, observed_at_ms)
+        from_ms, to_ms = history_fill_window(timeframe, observed_at_ms)
         try:
             evidence = await read_sqlite_chart_evidence(
                 broker,
@@ -244,7 +244,7 @@ async def get_history_chart(
         )
 
     return await build_history_chart(
-        preset,
+        timeframe,
         fills,
         strategy_instance_id=sid,
         symbol=status.symbol,

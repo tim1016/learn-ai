@@ -408,8 +408,7 @@ const mockService = {
   getHistoryChart: vi.fn().mockResolvedValue({
     strategy_instance_id: 'sid-001',
     symbol: 'QQQ',
-    preset: '1D',
-    aggregation: '1m',
+    timeframe: '1m',
     from_ms: 1_753_800_000_000,
     to_ms: 1_753_823_400_000,
     bars: [],

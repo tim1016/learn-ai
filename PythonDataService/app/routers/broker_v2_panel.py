@@ -55,8 +55,8 @@ from app.services.broker_v2_panel.action_execution_service import (
     StaleRevisionError,
 )
 from app.services.broker_v2_panel.chart_projection_service import (
-    ChartPresetError,
-    coerce_history_preset,
+    ChartTimeframeError,
+    coerce_history_timeframe,
 )
 from app.services.broker_v2_panel.evidence_service import (
     PAGE_SIZE_DEFAULT,
@@ -503,10 +503,15 @@ async def get_live_chart_unscoped(
     return await _live_chart(broker, account_id, sid, resolution)
 
 
-async def _history_chart(broker: str, account_id: str, sid: str, preset: str) -> ChartHistoryResponse:
+async def _history_chart(
+    broker: str,
+    account_id: str,
+    sid: str,
+    timeframe: str,
+) -> ChartHistoryResponse:
     try:
-        coerced = coerce_history_preset(preset)
-    except ChartPresetError as exc:
+        coerced = coerce_history_timeframe(timeframe)
+    except ChartTimeframeError as exc:
         raise HTTPException(status_code=422, detail={"message": str(exc), "why": None}) from None
     try:
         return await ds.get_history_chart(broker, account_id, sid, coerced)
@@ -517,29 +522,29 @@ async def _history_chart(broker: str, account_id: str, sid: str, preset: str) ->
 @router.get(
     "/{broker}/accounts/{account_id}/bots/{sid}/chart/history",
     response_model=ChartHistoryResponse,
-    summary="HISTORY chart pane: bounded preset ladder (§8)",
+    summary="Polygon chart: bounded timeframe window (§8)",
 )
 async def get_history_chart_scoped(
     broker: str,
     account_id: str,
     sid: str,
-    preset: str = Query(..., max_length=8),
+    timeframe: str = Query(..., max_length=3),
 ) -> ChartHistoryResponse:
-    return await _history_chart(broker, account_id, sid, preset)
+    return await _history_chart(broker, account_id, sid, timeframe)
 
 
 @router.get(
     "/{broker}/bots/{sid}/chart/history",
     response_model=ChartHistoryResponse,
-    summary="HISTORY chart pane (single-account alias) (§8)",
+    summary="Polygon chart (single-account alias) (§8)",
 )
 async def get_history_chart_unscoped(
     broker: str,
     sid: str,
-    preset: str = Query(..., max_length=8),
+    timeframe: str = Query(..., max_length=3),
 ) -> ChartHistoryResponse:
     account_id = await _resolve_default_account(broker)
-    return await _history_chart(broker, account_id, sid, preset)
+    return await _history_chart(broker, account_id, sid, timeframe)
 
 
 # ── §14 Operator-gated evidence (account-scoped + unscoped alias) ─────────────

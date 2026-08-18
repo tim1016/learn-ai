@@ -1,81 +1,127 @@
-<div class="launch-config">
-  <section class="symbols">
-    <label for="recency-symbols">Symbols (comma-separated)</label>
-    <input
-      id="recency-symbols"
-      type="text"
-      placeholder="SPY, AAPL, QQQ"
-      (input)="setSymbolsText($any($event.target).value)"
-    />
-  </section>
+<section class="launch-config" aria-labelledby="recency-launch-title">
+  <header class="launch-config__intro">
+    <p class="launch-config__eyebrow">Recent-trades timeline</p>
+    <h2 id="recency-launch-title">Build a timeline</h2>
+    <p>Choose the symbols, strategies, and lookback period to compare completed trades over time.</p>
+  </header>
 
-  <section class="strategies">
-    <h3>Strategies</h3>
-    @for (strategy of eligibleStrategies(); track strategy.name) {
-      <div class="strategy-row">
-        <label>
-          <input
-            type="checkbox"
-            [checked]="isSelected(strategy)"
-            (change)="toggleStrategy(strategy)"
-          />
-          {{ strategy.display_name }}
-        </label>
+  <ol class="launch-config__steps" aria-label="Timeline configuration steps">
+    <li class="launch-config__step"><span>1</span>Set scope</li>
+    <li class="launch-config__step"><span>2</span>Choose strategies</li>
+    <li class="launch-config__step"><span>3</span>Set lookback</li>
+  </ol>
 
-        @if (isSelected(strategy)) {
-          <div class="param-ranges">
-            @for (entry of numericParams(strategy); track entry[0]) {
-              <app-recency-param-range-input
-                [paramName]="entry[0]"
-                [title]="entry[1].title || entry[0]"
-                [defaultValue]="$any(entry[1].default) ?? 0"
-                [range]="rangeFor(strategy.name, entry[0])"
-                (rangeChange)="updateRange(strategy.name, entry[0], $event)"
-              ></app-recency-param-range-input>
-            }
-          </div>
+  <div class="launch-config__workbench">
+    <section class="launch-config__section">
+      <div class="launch-config__section-heading">
+        <h3 id="recency-symbols-heading">Symbols</h3>
+        <p>Use a comma or Enter to add another.</p>
+      </div>
+      <div class="symbol-entry" [class.symbol-entry--invalid]="symbolValidationMessage() !== null">
+        @for (symbol of committedSymbols(); track symbol) {
+          <span class="symbol-entry__chip">
+            {{ symbol }}
+            <button type="button" [attr.aria-label]="'Remove ' + symbol" (click)="removeSymbol(symbol)">×</button>
+          </span>
+        }
+        <label class="sr-only" for="recency-symbols">Symbols</label>
+        <input
+          id="recency-symbols"
+          type="text"
+          placeholder="SPY, AAPL, QQQ"
+          [value]="symbolDraft()"
+          [attr.aria-describedby]="symbolValidationMessage() ? 'recency-symbols-helper recency-symbols-error' : 'recency-symbols-helper'"
+          [attr.aria-invalid]="symbolValidationMessage() ? 'true' : null"
+          (input)="onSymbolsInput($event)"
+          (keydown)="onSymbolsKeydown($event)"
+          (blur)="commitSymbolDraft()"
+        />
+      </div>
+      <p id="recency-symbols-helper" class="launch-config__helper">Each selected symbol becomes one timeline lane.</p>
+      @if (symbolValidationMessage(); as message) {
+        <p id="recency-symbols-error" class="launch-config__field-error" role="alert">{{ message }}</p>
+      }
+    </section>
+
+    <section class="launch-config__section" aria-labelledby="recency-strategies-heading">
+      <div class="launch-config__section-heading">
+        <h3 id="recency-strategies-heading">Strategies</h3>
+        <p>{{ selectedStrategyKeys().length }} selected</p>
+      </div>
+      <div class="strategy-grid">
+        @for (strategy of eligibleStrategies(); track strategy.name) {
+          @let selected = isSelected(strategy);
+          <article class="strategy-option" [class.strategy-option--selected]="selected">
+            <label>
+              <input type="checkbox" [checked]="selected" (change)="toggleStrategy(strategy)" />
+              <span>{{ strategy.display_name }}</span>
+            </label>
+          </article>
         }
       </div>
-    }
-  </section>
+      @if (selectedStrategies().length > 0) {
+        <div class="strategy-parameters">
+          @for (strategy of selectedStrategies(); track strategy.name) {
+            @if (numericParams(strategy).length > 0) {
+              <section class="strategy-parameters__strategy" [attr.aria-label]="strategy.display_name + ' parameters'">
+                <h4>{{ strategy.display_name }} parameters</h4>
+                <div class="strategy-parameters__ranges">
+                  @for (entry of numericParams(strategy); track entry[0]) {
+                    <app-recency-param-range-input
+                      [paramName]="entry[0]"
+                      [title]="entry[1].title || entry[0]"
+                      [defaultValue]="defaultNumericValue(entry[1])"
+                      [range]="rangeFor(strategy.name, entry[0])"
+                      (rangeChange)="updateRange(strategy.name, entry[0], $event)"
+                    ></app-recency-param-range-input>
+                  }
+                </div>
+              </section>
+            }
+          }
+        </div>
+      }
+    </section>
 
-  <section class="duration">
-    <h3>Duration</h3>
-    <div role="radiogroup" aria-label="Lookback duration">
-      <label>
-        <input type="radio" name="duration" [checked]="durationPreset() === '3m'" (change)="setDurationPreset('3m')" />
-        3 months
-      </label>
-      <label>
-        <input type="radio" name="duration" [checked]="durationPreset() === '6m'" (change)="setDurationPreset('6m')" />
-        6 months
-      </label>
-      <label>
-        <input type="radio" name="duration" [checked]="durationPreset() === '12m'" (change)="setDurationPreset('12m')" />
-        12 months
-      </label>
-      <label>
-        <input type="radio" name="duration" [checked]="durationPreset() === '24m'" (change)="setDurationPreset('24m')" />
-        24 months
-      </label>
-      <label>
-        <input type="radio" name="duration" [checked]="durationPreset() === 'custom'" (change)="setDurationPreset('custom')" />
-        Custom
-      </label>
-    </div>
-    @if (durationPreset() === 'custom') {
-      <label for="recency-custom-months">Custom months</label>
-      <input
-        id="recency-custom-months"
-        type="number"
-        [value]="customMonths()"
-        (input)="setCustomMonths($any($event.target).value)"
-      />
-    }
-  </section>
+    <section class="launch-config__section" aria-labelledby="recency-duration-heading">
+      <div class="launch-config__section-heading">
+        <h3 id="recency-duration-heading">Lookback</h3>
+        <p>How far back to include completed trades.</p>
+      </div>
+      <div class="duration-options" role="radiogroup" aria-label="Lookback duration">
+        @for (option of durationOptions; track option.preset) {
+          <label class="duration-option" [class.duration-option--selected]="durationPreset() === option.preset">
+            <input
+              type="radio"
+              name="duration"
+              [checked]="durationPreset() === option.preset"
+              (change)="setDurationPreset(option.preset)"
+            />
+            <span>{{ option.label }}</span>
+          </label>
+        }
+      </div>
+      @if (durationPreset() === 'custom') {
+        <label class="custom-duration" for="recency-custom-months">
+          <span>Custom months</span>
+          <input
+            id="recency-custom-months"
+            type="number"
+            min="1"
+            max="24"
+            [value]="customMonths()"
+            (input)="onCustomMonthsInput($event)"
+          />
+        </label>
+      }
+    </section>
 
-  <section class="launch-bar">
-    <p class="run-count">{{ runCount() }} run{{ runCount() === 1 ? '' : 's' }}</p>
-    <button type="button" (click)="launch()">Launch</button>
-  </section>
-</div>
+    <footer class="launch-config__footer">
+      <div>
+        <p class="launch-config__run-count">{{ runCountLabel() }}</p>
+        <p class="launch-config__run-detail">The count includes selected strategies, parameter variations, and symbols.</p>
+      </div>
+      <button type="button" (click)="launch()">Launch timeline</button>
+    </footer>
+  </div>
+</section>
