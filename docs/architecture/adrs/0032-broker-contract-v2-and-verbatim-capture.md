@@ -1,7 +1,8 @@
 # ADR 0032: Broker Contract v2 and Verbatim Capture
 
+**Status:** Accepted
+
 - **Date:** 2026-07-22
-- **Status:** Accepted
 - **Context:** Issue #1169 (Alpaca broker integration, phase 1). Design spec:
   `docs/superpowers/specs/2026-07-21-alpaca-broker-integration-design.md`.
 
@@ -107,7 +108,6 @@ one-line rationale. V2 is greenfield, audited against v1 — not a copy-prune fo
 ## Amendment 1 — IBKR as a time-boxed signal-feed bridge for broker-v2 bots
 
 - **Date:** 2026-07-29
-- **Status:** Accepted
 - **Context:** Issue #1297 (broker-v2 bot control panel, S1). Design spec:
   `docs/superpowers/specs/2026-07-29-broker-v2-bot-control-panel-design.md` §8.
   Decision register #2.

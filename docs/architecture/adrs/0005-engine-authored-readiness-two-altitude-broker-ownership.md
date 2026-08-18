@@ -88,7 +88,7 @@ Fleet contamination is surfaced on the instance page as an **inherited banner**,
 
 ## Amendment 2026-06-20 — PRD #616 operator-surface projection layer
 
-**Status:** Amended 2026-06-20 alongside PRD #616 Bot Control redesign work. The original ADR established the engine readiness sidecar (`ReadinessVector` / `ReadinessGate`) and the two altitudes (instance + fleet). It did not name the *projection layer* the bot control page consumes. This amendment records that layer and the cross-altitude separation of account identity from position contamination.
+**Provenance:** Amended 2026-06-20 alongside PRD #616 Bot Control redesign work. The original ADR established the engine readiness sidecar (`ReadinessVector` / `ReadinessGate`) and the two altitudes (instance + fleet). It did not name the *projection layer* the bot control page consumes. This amendment records that layer and the cross-altitude separation of account identity from position contamination.
 
 ### B1. `operator_surface` is the Python-authored projection layer
 

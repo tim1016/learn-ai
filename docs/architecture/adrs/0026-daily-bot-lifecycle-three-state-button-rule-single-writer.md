@@ -43,7 +43,8 @@
 > stand. The divergence itself is registered in `docs/known-gaps.md` §
 > "Bot control-plane boundary".
 
-**Status**: Accepted 2026-07-08. Decided in the PRD #974 rev 3
+**Status:** Accepted 2026-07-08
+**Provenance:** Decided in the PRD #974 rev 3
 simplification pass (operator direction: "use the human analogy; manage
 only states with a known cure; banish the rest as non-remediable;
 operate everything from the UI, never the CLI") and its rev 3.1

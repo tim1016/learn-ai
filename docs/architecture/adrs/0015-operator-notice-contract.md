@@ -1,6 +1,6 @@
 # ADR-0015: Operator Notice Contract
 
-**Status**: Accepted
+**Status:** Accepted
 **Date**: 2026-06-23
 **Supersedes**: extends ADR-0014
 **PRD**: `docs/architecture/operator-notice-prd.md`

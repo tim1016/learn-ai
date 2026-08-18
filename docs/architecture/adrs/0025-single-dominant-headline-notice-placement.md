@@ -1,6 +1,7 @@
 # ADR-0025: Single dominant headline — notice placement as a function of tier × actionability
 
-**Status**: Accepted 2026-07-08. Decided in the 2026-07-08 grilling session ("if the operator can take no corrective measure from the cockpit, what use is the message?").
+**Status:** Accepted 2026-07-08
+**Provenance:** Decided in the 2026-07-08 grilling session ("if the operator can take no corrective measure from the cockpit, what use is the message?").
 **Related:** ADR-0015 § Amendment 2026-07-08 (honest actionability and mandatory resolution — the axes this ADR's placement function consumes), ADR-0013 (operator-surface boundary), operator-observability taxonomy memo 2026-07-04 (this ADR closes its open placement/severity question), PRD #951 (stream-primary layout — lower documentation section).
 
 ## Context

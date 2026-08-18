@@ -1,7 +1,8 @@
 # ADR 0030: Account Clerk Authority Is Account-Rooted and Journal-Canonical
 
+**Status:** Accepted
+
 - **Date:** 2026-07-14
-- **Status:** Accepted
 - **Context:** PRD #1015, issue #1016
 
 This is PRD #1015's documentation authority for decisions 2 (account-rooted

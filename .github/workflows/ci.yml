@@ -24,6 +24,20 @@ jobs:
           python-version: "3.12"
       - run: python scripts/check_temporal_authority.py
 
+  adr-status-guard:
+    name: ADR Status Guard
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python scripts/check_adr_status.py
+
   frontend-lint:
     name: Frontend Lint
     runs-on: ubuntu-latest

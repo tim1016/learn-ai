@@ -73,13 +73,13 @@ have their decision preserved here.
 | 0025 | Single dominant headline notice placement |
 | 0026 | Daily bot lifecycle: three states and the single-writer evaluator (§4 and its 2026-07-21 amendment superseded for Alpaca by ADR 0038; §4's derived-projection design was never built — read the banner before implementing) |
 | 0027 | Operator blocker disposition taxonomy |
-| 0028 | Bot Cockpit channel contracts (proposed; Clerk authority is superseded by ADR-0030) |
+| 0028 | Bot Cockpit channel contracts (Clerk authority is superseded by ADR-0030) |
 | 0029 | Live-session authority and IBKR capability |
 | 0030 | Account Clerk authority is account-rooted and journal-canonical |
 | 0031 | Cross-stack boundary selection and generated contracts |
 | 0032 | Broker contract v2 and verbatim capture |
 | 0033 | Account custody clocks and safety composition |
-| 0035 | Alpaca Account Clerk event-sourced SQLite authority (supersedes JSONL-authority parts of 0001/0008/0030/0033 for Alpaca only; proposed) |
+| 0035 | Alpaca Account Clerk event-sourced SQLite authority (supersedes JSONL-authority parts of 0001/0008/0030/0033 for Alpaca only) |
 | 0036 | One flatness boundary (`abs(q) >= 1e-9`), owned by the backend; Angular holds no flatness verdict. Succeeds ADR 0013's no-frontend-derived-verdicts principle for numeric boundaries |
 | 0037 | SQLite is the sole Alpaca custody authority; legacy JSONL retired (no activation fence = no authority, never a fallback). Completes ADR 0035 |
 | 0038 | One bot control plane (Alpaca runner); the evaluator plane retires with IBKR bot-control. SQLite holds the duty facts it already fences; control intent stays file-backed so the stop latch outlives the Clerk. Supersedes ADR 0026 §4 for Alpaca |

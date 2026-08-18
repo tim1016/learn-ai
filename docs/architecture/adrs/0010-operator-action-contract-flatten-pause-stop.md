@@ -1,6 +1,7 @@
 # ADR 0010 — Operator-action contract: "Flatten and pause" composes durable intent + one-shot, Resume is a guarded write, Stop is instance retirement
 
-**Status:** Proposed 2026-06-14. Vocabulary recorded in `CONTEXT.md` § "Operator-action contract". Grilling session: `grill-with-docs` 2026-06-14 against the vibe-coded-app remediation PRD (pruned 2026-07-04; git history). Load-bearing code claims (FLATTEN aliases STOP in `live_engine.py`; durable desired-state is the single intent knob per ADR 0004 / CONTEXT.md) verified before the session.
+**Status:** Accepted 2026-08-18
+**Provenance:** Promoted from `Proposed` to `Accepted` on 2026-08-18 under [ADR 0039](0039-adr-status-is-decision-standing.md) Decision 1 — a read-through confirming the decision still stands. No code conformance was checked, and none is implied. Original Status line: Proposed 2026-06-14. Vocabulary recorded in `CONTEXT.md` § "Operator-action contract". Grilling session: `grill-with-docs` 2026-06-14 against the vibe-coded-app remediation PRD (pruned 2026-07-04; git history). Load-bearing code claims (FLATTEN aliases STOP in `live_engine.py`; durable desired-state is the single intent knob per ADR 0004 / CONTEXT.md) verified before the session.
 **Decision drivers:** VCR-0007 (a vibe-coded-app audit finding — pruned 2026-07-04; git history) found the bot control page's FLATTEN button labelled "Close all open positions immediately" but the runtime semantics today are *FLATTEN = STOP + close positions*: durable desired-state transitions to `STOPPED`, the bot refuses to restart without redeploy, and there is no FLATTEN-without-STOP primitive. The label is the highest-stakes affordance in the bot control page (the panic button). Independently, CONTEXT.md § "Operator intent — single knob" had already established that durable desired-state (`RUNNING` / `PAUSED` / `STOPPED`) is the operator's single intent knob and that one-shots (`FLATTEN_NOW`, `RECONCILE_NOW`, `MARK_POISONED`) are reserved for true one-shot operations. The current FLATTEN fuses a one-shot with a durable-intent change, which violates the orthogonality CONTEXT.md established. ADR 0009 / `BROKER_SAFETY_VERDICT_TRANSITION_HALT` semantics (ADR 0011) introduce halt paths that themselves set `desired_state=PAUSED` and require operator action to leave; making the Resume action *guarded* (verdict-aware) is the seam where these halt contracts compose with operator intent.
 **Related:** ADR 0004 (instance-addressed operator control plane — defines durable desired-state as the operator's single intent surface), ADR 0008 (durable submit / order identity — the SUBMIT_UNCERTAIN_HALT path sets `desired_state=PAUSED` and requires guarded Resume), ADR 0011 (broker safety verdict — defines the halt-on-transition path that also lands in `desired_state=PAUSED` and feeds the guarded Resume), `CONTEXT.md` § "Operator-action contract", `CONTEXT.md` § "Operator intent — single knob", the vibe-coded-app remediation PRD Phase 6 (pruned 2026-07-04; git history).
 
@@ -121,7 +122,7 @@ Future revisions to this ADR may revisit either if a concrete use case appears.
 
 ## Amendment 2026-06-20 — PRD #616 reconciliation of contract with implementation
 
-**Status:** Amended 2026-06-20 alongside the PRD #616 Bot Control redesign work. The original ADR named "five canonical actions" but the shipped capability surface and code carried only four. The shipped guard contract on Resume was also incomplete relative to Decision 3. This amendment records the resolution.
+**Provenance:** Amended 2026-06-20 alongside the PRD #616 Bot Control redesign work. The original ADR named "five canonical actions" but the shipped capability surface and code carried only four. The shipped guard contract on Resume was also incomplete relative to Decision 3. This amendment records the resolution.
 
 ### A1. Five canonical actions on `operator_surface.actions`
 
@@ -178,7 +179,7 @@ These rules apply at the capability projection only; the artifact guards apply t
 
 ## Amendment 2026-06-22 — PRD #619-D mutation uncertainty + recovery
 
-Status: shipping with PRs #637 (D1), #638 (D2), #639 (D3), #640 (D4) and this PR (D5). Scope is the mutation-uncertainty + recovery layer named in PRD #619 §6 619-D and rejects ADR-0008 changes — order-submit identity remains 0008's concern, not this one.
+**Provenance:** shipping with PRs #637 (D1), #638 (D2), #639 (D3), #640 (D4) and this PR (D5). Scope is the mutation-uncertainty + recovery layer named in PRD #619 §6 619-D and rejects ADR-0008 changes — order-submit identity remains 0008's concern, not this one.
 
 ### B1. Durable `mutation_attempt` record (D1)
 
