@@ -20,6 +20,7 @@ from app.broker.alpaca.clerk.decision_journal import DecisionReceipt
 from app.broker.alpaca.clerk.exposure import project_expected_account_exposure
 from app.broker.alpaca.clerk.fills import project_instance_fills
 from app.broker.alpaca.clerk.models import ClerkEntryKind, ClerkStatus, OrderJournalEntry
+from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.v2panel.vocabulary import (
     HOLD_REASONS,
     ChannelState,
@@ -167,7 +168,7 @@ def _build_health_card(
     desired_state = status.desired_state
     decision_stale = last_decision_at_ms is not None and now_ms - last_decision_at_ms > STALE_THRESHOLD_MS
     can_resume = resume_admission is not None and resume_admission.allowed
-    has_exposure = any(abs(quantity) > 0 for quantity in exposure.values())
+    has_exposure = any(position_quantity_is_nonzero(quantity) for quantity in exposure.values())
     if can_resume and has_exposure:
         resume_label = "Resume custody proof ready"
         resume_explanation = (

@@ -148,30 +148,6 @@ frozenset({"resume"})`) and replaces the rest with `projection.recovery_actions`
 survives adaptation on an activated account. The three **live** sites are below;
 the two `presented_actions.py` sites follow them, scoped as legacy-only.
 
-- **The live exposure map is built with a non-canonical rule (medium).**
-  `services/broker_v2_panel/sqlite_panel_adapter.py:110-114` filters
-  `projection.positions` by `abs(position.attributed_qty) > 0` when constructing
-  `BotPanelView.exposure`. This is the activated-SQLite path, and the resulting
-  map is both what the Frontend reads to decide "Flat" and the `exposure`
-  argument the two live sites below consume — so it is upstream of them.
-  Preserve the invariant: the exposure map an operator surface reads is built
-  with the canonical predicate.
-  [#1628](https://github.com/tim1016/learn-ai/issues/1628)
-
-- **The roster's flatness sentence is non-canonical (medium).**
-  `services/broker_v2_panel/sqlite_panel_adapter.py:268` chooses between
-  *"Off duty with Clerk-attributed exposure."* and *"Off duty and flat."* — the
-  sentence rendered on every roster row (observed live on all 10 bots,
-  `docs/audits/live-operator-surface-inventory-2026-08-18.md`). Preserve the
-  invariant: the operator sentence and the custody verdict never disagree.
-  [#1628](https://github.com/tim1016/learn-ai/issues/1628)
-
-- **Resume labelling uses the same non-canonical rule (low).**
-  `services/broker_v2_panel/panel_projection_service.py:170` chooses between
-  *"Resume custody proof ready"* and *"Flat Resume ready"*. `adapt_sqlite_panel`
-  does not replace the health card, so this copy survives on the live path.
-  Affects copy only. [#1628](https://github.com/tim1016/learn-ai/issues/1628)
-
 - **[Legacy path only] `presented_actions.py:61` and `:63`.** `has_exposure`
   (gating `flatten_stop`) and `account_expected_flat`, both `abs(x) > 0`. The
   first sweep filed these as live, and the `flatten_stop` one as high severity,
