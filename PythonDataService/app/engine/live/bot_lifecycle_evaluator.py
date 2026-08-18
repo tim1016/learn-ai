@@ -710,6 +710,30 @@ class BotLifecycleEvaluator:
                         lifecycle_state=record,
                         replayed=True,
                     )
+            fallback_receipt = (
+                next(
+                    (
+                        receipt
+                        for receipt in reversed(receipts)
+                        if receipt.action is action
+                        and receipt.status == "COMMITTED"
+                        and receipt.state_version == record.version
+                        and receipt.phase is record.phase
+                        and receipt.on_roster is record.on_roster
+                        and receipt.active_run_id == record.active_run_id
+                        and receipt.duty_outcome == record.duty_outcome
+                    ),
+                    None,
+                )
+                if record.last_disposition_id is None
+                else None
+            )
+            if fallback_receipt is not None:
+                return LifecycleDisposition(
+                    receipt=fallback_receipt,
+                    lifecycle_state=record,
+                    replayed=True,
+                )
 
             pending = self._append_pending_locked(
                 action=action,

@@ -458,6 +458,58 @@ async def test_absence_past_the_grace_window_resolves_failed(tmp_path: Path) -> 
     r.close()
 
 
+async def test_lookup_error_does_not_restart_the_original_uncertainty_grace(
+    tmp_path: Path,
+) -> None:
+    clock = _clock_at(1_700_000_000_000)
+    r = ClerkSqliteRepository.initialize(
+        account_id="PA-GRACE-LOOKUP",
+        artifacts_root=tmp_path,
+        clock=clock,
+        lease_ttl_ms=300_000,
+    )
+    r.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
+    submit_start_run(
+        r,
+        account_id="PA-GRACE-LOOKUP",
+        strategy_instance_id=SID,
+        lifecycle_run_id=RUN_ID,
+    )
+    accepted = accept_enter(
+        r,
+        account_id="PA-GRACE-LOOKUP",
+        strategy_instance_id=SID,
+        decision_id="dec-1",
+        lifecycle_run_id=RUN_ID,
+        leg=_leg(),
+    )
+    assert accepted.effect_operation_id is not None
+    assert accepted.order_ref is not None
+    fold_uncertain(
+        r,
+        effect_operation_id=accepted.effect_operation_id,
+        order_ref=accepted.order_ref,
+        why="submit response was lost",
+    )
+
+    clock.advance(29_000)
+    await resolve_enter_submission(
+        r,
+        order_ref=accepted.order_ref,
+        trade=_FakeTrade(lookup_error=BrokerUnavailable("lookup unavailable")),
+    )
+    clock.advance(1_001)
+    await resolve_enter_submission(
+        r,
+        order_ref=accepted.order_ref,
+        trade=_FakeTrade(lookup_absent=True),
+    )
+
+    effect = r.effect_operation(accepted.effect_operation_id)
+    assert effect is not None and effect.state == "failed"
+    r.close()
+
+
 async def test_same_owner_concurrent_resolves_fold_the_terminal_outcome_once(
     tmp_path: Path,
 ) -> None:
@@ -582,6 +634,44 @@ async def test_resolve_lookup_broker_error_folds_admission_blocking_unknown(
             leg=_leg(),
         )
     assert exc_info.value.decision.reason_code == "ORDER_OUTCOME_UNKNOWN"
+
+
+async def test_exact_duplicate_ack_clears_lookup_error_uncertainty(
+    repo: ClerkSqliteRepository,
+) -> None:
+    submission = await submit_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="dec-1",
+        lifecycle_run_id=RUN_ID,
+        leg=_leg(),
+        trade=_FakeTrade(),
+    )
+    await resolve_enter_submission(
+        repo,
+        order_ref=submission.order_ref,
+        trade=_FakeTrade(lookup_error=BrokerUnavailable("lookup unavailable")),
+    )
+    effect = repo.effect_operation(submission.effect_operation_id)
+    assert effect is not None and effect.state == "unknown"
+
+    await resolve_enter_submission(
+        repo,
+        order_ref=submission.order_ref,
+        trade=_FakeTrade(),
+    )
+
+    recovered = repo.effect_operation(submission.effect_operation_id)
+    assert recovered is not None and recovered.state == "in_progress"
+    assert accept_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="dec-after-exact-proof",
+        lifecycle_run_id=RUN_ID,
+        leg=_leg(),
+    ).created
 
 
 async def test_resolve_stays_unknown_on_a_mismatched_client_order_id(

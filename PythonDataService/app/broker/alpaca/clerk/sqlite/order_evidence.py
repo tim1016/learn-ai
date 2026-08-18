@@ -182,7 +182,9 @@ def fold_order_acknowledgement(
         incoming_state=order.status,
         incoming_source_time=order.updated_at_ms,
     )
-    if ack_changed and (append_stale_ack or ack_advances):
+    if (ack_changed or effect.state == "unknown") and (
+        append_stale_ack or ack_advances
+    ):
         repo.append_transition(
             TransitionInput(
                 strategy_instance_id=effect.strategy_instance_id,
@@ -421,9 +423,6 @@ async def resolve_order_submission(
 
 
 def _uncertain_since_ms(repo: ClerkSqliteRepository, order_ref: str) -> int:
-    """Find the first unproven-outcome boundary for the exact order."""
+    """Find the durable accept boundary for the exact order's outcome."""
     transitions = repo.transitions_for_order(order_ref)
-    for transition in reversed(transitions):
-        if transition["transition_kind"] == "ORDER_SUBMIT_UNCERTAIN":
-            return transition["recorded_at_ms"]
     return transitions[0]["recorded_at_ms"]

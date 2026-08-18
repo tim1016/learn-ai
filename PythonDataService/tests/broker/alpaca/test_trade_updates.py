@@ -623,6 +623,63 @@ async def test_clerk_append_failure_leaves_event_retryable(tmp_path: Path) -> No
     assert consumer.counters.events_applied == 1
 
 
+async def test_valid_frame_restores_health_only_after_durable_clerk_append(
+    tmp_path: Path,
+) -> None:
+    class _BlockingClerk(AlpacaClerk):
+        def __init__(self, **kwargs: Any) -> None:
+            super().__init__(**kwargs)
+            self.append_started = asyncio.Event()
+            self.allow_append = asyncio.Event()
+
+        async def record_lifecycle_event(self, **kwargs: Any) -> ClerkEntryKind:  # type: ignore[override]
+            self.append_started.set()
+            await self.allow_append.wait()
+            return await super().record_lifecycle_event(**kwargs)
+
+    broker = _FakeBroker()
+    clerk = _BlockingClerk(read=broker, trade=broker)
+    await _warm(clerk)
+    consumer = TradeUpdatesConsumer(
+        clerk=clerk,
+        read=broker,
+        frame_source=_frame_source([]),
+        journal=_capture_journal(tmp_path),
+        clock=lambda: _FIXED_MS,
+        backoff=_no_backoff,
+        max_reconnects=0,
+    )
+    consumer._mark_evidence_health(False)
+
+    handling = asyncio.create_task(
+        consumer._handle_trade_update(_load_frames()[0]["data"])
+    )
+    await clerk.append_started.wait()
+    assert consumer.evidence_health.healthy is False
+
+    clerk.allow_append.set()
+    await handling
+    assert consumer.evidence_health.healthy is True
+
+
+async def test_already_durable_duplicate_restores_degraded_evidence_health(
+    tmp_path: Path,
+) -> None:
+    frame = _load_frames()[0]
+    consumer, clerk, _ = await _consumer(tmp_path, [])
+    await _warm(clerk)
+    await consumer._handle_trade_update(frame["data"])
+    consumer._mark_evidence_health(False)
+
+    await consumer._handle_trade_update(frame["data"])
+
+    assert consumer.evidence_health.healthy is True
+    assert consumer.counters.skipped_duplicate == 1
+    entries = clerk._journal.read_entries()  # type: ignore[union-attr]
+    order_events = [entry for entry in entries if entry.kind is ClerkEntryKind.ORDER_EVENT]
+    assert len(order_events) == 1
+
+
 async def test_malformed_embedded_order_is_parse_error_not_stream_abort(tmp_path: Path) -> None:
     # A frame whose event/timestamp map cleanly but whose embedded ``order`` is
     # malformed (missing required fields) must be a parse error — captured,

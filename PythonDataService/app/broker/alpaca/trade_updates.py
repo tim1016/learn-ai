@@ -539,9 +539,6 @@ class TradeUpdatesConsumer:
             )
             return
 
-        if not from_gap_reconcile:
-            self._mark_evidence_health(True)
-
         order_id = str(order.get("id") or "")
         fingerprint = _event_fingerprint(event, order, broker_order)
         terminal_state = _terminal_state_fingerprint(event, broker_order)
@@ -574,6 +571,8 @@ class TradeUpdatesConsumer:
                 variant_seen = self._seen.get(key)
                 if variant_seen is not None:
                     self._counters.skipped_duplicate += 1
+                    if not from_gap_reconcile:
+                        self._mark_evidence_health(True)
                     return
                 logger.warning(
                     "alpaca trade_updates reused an event key with a changed payload",
@@ -608,6 +607,8 @@ class TradeUpdatesConsumer:
                             "event_key": key,
                         },
                     )
+                if not from_gap_reconcile:
+                    self._mark_evidence_health(True)
                 return
 
         client_order_id = adapter.opt_str(order.get("client_order_id"))
@@ -619,6 +620,8 @@ class TradeUpdatesConsumer:
             recovery_source="closed_orders_window" if from_gap_reconcile else None,
             recovery_window_limit=_GAP_RECONCILE_LIMIT if from_gap_reconcile else None,
         )
+        if not from_gap_reconcile:
+            self._mark_evidence_health(True)
         # Only a durable Clerk append earns idempotency state. If the Clerk
         # raises, the reconnect loop can retry the still-unseen frame.
         self._seen[key] = _SeenEvent(

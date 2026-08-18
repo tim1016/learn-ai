@@ -148,8 +148,13 @@ def adapt_sqlite_catalog(
                 f"Bot '{row.strategy_instance_id}' has no SQLite economic snapshot."
             )
         projection = projections.get(row.strategy_instance_id)
+        exposure = {
+            symbol: quantity
+            for symbol, quantity in economics.exposure.items()
+            if position_quantity_is_nonzero(quantity)
+        }
         economic_updates: dict[str, object] = {
-            "exposure": dict(economics.exposure),
+            "exposure": exposure,
             "fills_today": economics.fills_today,
             "realized_pnl_today": economics.realized_pnl_today,
             "open_pnl": economics.open_pnl,
@@ -170,7 +175,7 @@ def adapt_sqlite_catalog(
                     "status_explanation": _sqlite_catalog_explanation(
                         row,
                         projection,
-                        exposure=economics.exposure,
+                        exposure=exposure,
                     ),
                     # Recovery mutations require the bot panel's typed
                     # confirmation flow; the compact fleet row links there.

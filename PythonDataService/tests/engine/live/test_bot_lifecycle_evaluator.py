@@ -455,6 +455,24 @@ def test_idempotent_retire_reuses_the_disposition_sequence_not_state_version(
     ]
 
 
+def test_legacy_retired_state_reuses_its_fallback_disposition_receipt(
+    tmp_path: Path,
+) -> None:
+    state_repo = BotLifecycleStateRepo(stable_bot_lifecycle_state_path(tmp_path, _SID))
+    state_repo.retire(now_ms=1, updated_by="legacy", reason="replacement")
+    evaluator = BotLifecycleEvaluator(tmp_path, _SID)
+
+    first = evaluator.retire(now_ms=2, updated_by="operator", reason="replacement")
+    replay = evaluator.retire(now_ms=3, updated_by="operator", reason="replacement")
+
+    assert replay.receipt.receipt_id == first.receipt.receipt_id
+    assert replay.replayed is True
+    assert [(receipt.sequence, receipt.status) for receipt in _receipts(tmp_path)] == [
+        (1, "PENDING"),
+        (1, "COMMITTED"),
+    ]
+
+
 def test_corrupt_duplicate_receipt_completion_fails_closed(tmp_path: Path) -> None:
     evaluator = BotLifecycleEvaluator(tmp_path, _SID)
     evaluator.set_roster(False, now_ms=10, updated_by="operator")
