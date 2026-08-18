@@ -24,6 +24,8 @@ import pandas as pd
 
 from app.engine.live.divergence.common import Severity
 from app.engine.live.reconcile import file_sha256
+from app.utils.atomic_file import atomic_write_bytes
+from app.utils.atomic_parquet import atomic_parquet_write
 
 
 class DivergenceLike(Protocol):
@@ -84,11 +86,18 @@ def write_report_bundle(
         "tolerances": metadata.tolerances,
     }
 
-    _write_parquet(divergences, paths.parquet)
-    paths.json.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
-    paths.markdown.write_text(_render_markdown(metadata, summary), encoding="utf-8")
-    paths.hashes.write_text(
-        json.dumps(_manifest(paths), indent=2, sort_keys=True), encoding="utf-8"
+    atomic_parquet_write(
+        paths.parquet,
+        lambda candidate: _write_parquet(divergences, candidate),
+    )
+    atomic_write_bytes(
+        paths.json,
+        json.dumps(summary, indent=2, sort_keys=True).encode("utf-8"),
+    )
+    atomic_write_bytes(paths.markdown, _render_markdown(metadata, summary).encode("utf-8"))
+    atomic_write_bytes(
+        paths.hashes,
+        json.dumps(_manifest(paths), indent=2, sort_keys=True).encode("utf-8"),
     )
     return paths
 

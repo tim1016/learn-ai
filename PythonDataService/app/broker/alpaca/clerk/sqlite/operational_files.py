@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import tempfile
 from pathlib import Path
 from typing import Any
 
-from app.broker.alpaca.paths import fsync_directory, resolve_contained_path
+from app.broker.alpaca.paths import resolve_contained_path
+from app.utils.atomic_file import atomic_write_bytes
 
 
 def canonical_json_bytes(payload: dict[str, Any]) -> bytes:
@@ -28,24 +27,6 @@ def atomic_write_json(path: Path, payload: dict[str, Any]) -> str:
 
 def atomic_write_text(path: Path, value: str) -> None:
     atomic_write_bytes(path, value.encode())
-
-
-def atomic_write_bytes(path: Path, encoded: bytes) -> None:
-    """Fsync a same-directory candidate, replace the target, then fsync its directory."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, candidate_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".candidate", dir=path.parent
-    )
-    candidate = Path(candidate_name)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(encoded)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(candidate, path)
-        fsync_directory(path.parent)
-    finally:
-        candidate.unlink(missing_ok=True)
 
 
 def confined_relative_path(root: Path, reference: str) -> Path:

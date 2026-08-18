@@ -9,8 +9,11 @@ category set and tolerance set are inputs, never hard-coded.
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from app.engine.live.divergence.common import Severity
 from app.engine.live.divergence.execution_divergence import (
@@ -103,6 +106,37 @@ def test_manifest_hashes_cover_sibling_files(tmp_path) -> None:
     assert manifest["parquet_sha256"]
     # A 64-char hex SHA-256 digest.
     assert len(manifest["parquet_sha256"]) == 64
+
+
+def test_failed_sibling_replacement_preserves_readable_report_and_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = write_report_bundle([], metadata=_metadata(), reports_dir=tmp_path)
+    prior_json = paths.json.read_bytes()
+    prior_markdown = paths.markdown.read_bytes()
+    prior_manifest = paths.hashes.read_bytes()
+    real_replace = os.replace
+
+    def fail_json_replacement(source: str | Path, destination: str | Path) -> None:
+        if Path(destination) == paths.json:
+            raise OSError("injected report JSON replacement failure")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", fail_json_replacement)
+
+    with pytest.raises(OSError, match="injected report JSON replacement failure"):
+        write_report_bundle(
+            [_slippage(Severity.GATING)],
+            metadata=_metadata(),
+            reports_dir=tmp_path,
+        )
+
+    assert json.loads(paths.json.read_bytes()) == json.loads(prior_json)
+    assert paths.markdown.read_bytes() == prior_markdown
+    assert paths.hashes.read_bytes() == prior_manifest
+    pd.read_parquet(paths.parquet)
+    assert not list(tmp_path.glob(".*.tmp"))
 
 
 def _slippage(severity: Severity) -> ExecutionDivergence:

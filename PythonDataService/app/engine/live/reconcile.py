@@ -100,6 +100,8 @@ from pathlib import Path
 import pandas as pd
 
 from app.engine.live.live_artifact_io import artifact_sha256
+from app.utils.atomic_file import atomic_write_bytes
+from app.utils.atomic_parquet import atomic_parquet_write
 
 logger = logging.getLogger(__name__)
 
@@ -708,15 +710,23 @@ def write_day_report(
     hashes_path = reconcile_dir / f"day-{day_n}.hashes.json"
     md_path = docs_dir / f"day-{day_n}.md"
 
-    table.to_parquet(parquet_path, index=False)
+    atomic_parquet_write(
+        parquet_path,
+        lambda candidate: table.to_parquet(candidate, index=False),
+    )
 
     json_payload = {
         "summary": asdict(summary),
         "rows": table.to_dict(orient="records"),
     }
-    json_path.write_text(
-        json.dumps(json_payload, indent=2, default=_json_default, sort_keys=True),
-        encoding="utf-8",
+    atomic_write_bytes(
+        json_path,
+        json.dumps(
+            json_payload,
+            indent=2,
+            default=_json_default,
+            sort_keys=True,
+        ).encode("utf-8"),
     )
 
     hash_manifest = build_hash_manifest(
@@ -731,8 +741,6 @@ def write_day_report(
         input_bars_path=run_dir / "input_bars.parquet",
         equity_curve_path=run_dir / "equity_curve.parquet",
     )
-    hashes_path.write_text(json.dumps(hash_manifest, indent=2, sort_keys=True), encoding="utf-8")
-
     md_text = render_day_md(
         summary=summary,
         table=table,
@@ -741,10 +749,11 @@ def write_day_report(
         cross_tols=cross_tols,
         fill_tols=fill_tols,
     )
-    md_path.write_text(md_text, encoding="utf-8")
+    atomic_write_bytes(md_path, md_text.encode("utf-8"))
 
     if summary.halt_triggered:
-        (run_dir / "halt.flag").write_text(
+        atomic_write_bytes(
+            run_dir / "halt.flag",
             json.dumps(
                 {
                     "day_n": day_n,
@@ -752,9 +761,13 @@ def write_day_report(
                     "reasons": list(summary.halt_reasons),
                 },
                 indent=2,
-            ),
-            encoding="utf-8",
+            ).encode("utf-8"),
         )
+
+    atomic_write_bytes(
+        hashes_path,
+        json.dumps(hash_manifest, indent=2, sort_keys=True).encode("utf-8"),
+    )
 
     return DayPaths(parquet=parquet_path, json=json_path, hashes=hashes_path, md=md_path)
 
