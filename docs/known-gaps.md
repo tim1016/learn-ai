@@ -126,6 +126,69 @@ seam below is a specific conditional gap, not a general weakness.
   removal; verify the retirement closes it.
   [#1618](https://github.com/tim1016/learn-ai/issues/1618)
 
+### Panel-layer flatness boundary (verified 2026-08-18)
+
+Decision record: ADR 0036 (one flatness rule, `abs(q) >= 1e-9`, owned by
+`folds.py::position_quantity_is_nonzero`). PR #1627 enforced it across the
+backend fold, pre-flight, and IBKR position paths, and removed the Frontend's
+own verdict. These sites were **not** in ADR 0036's consequence list — the
+numeric census counted computation sites and missed the presentation layer.
+
+All use `abs(x) > 0` (any nonzero) where the canonical rule is `abs(x) >= 1e-9`.
+They agree everywhere except the open interval `(0, 1e-9)`, where these say
+*exposed* and the canonical authority says *flat*.
+
+**Reachability matters here, and the first sweep got it wrong.** On an activated
+SQLite account — the live path — `panel_data_source.py:706` runs every panel
+through `adapt_sqlite_panel`, which keeps only `resume` from the generic action
+set (`sqlite_panel_adapter.py:56`, `SQLITE_PANEL_LIFECYCLE_ACTION_IDS =
+frozenset({"resume"})`) and replaces the rest with `projection.recovery_actions`.
+`_guard_resume` (`broker/v2panel/action_policy.py:146-172`) consults only
+`ctx.resume_admission`. So nothing `presented_actions.py` derives from flatness
+survives adaptation on an activated account. The three **live** sites are below;
+the two `presented_actions.py` sites follow them, scoped as legacy-only.
+
+- **The live exposure map is built with a non-canonical rule (medium).**
+  `services/broker_v2_panel/sqlite_panel_adapter.py:110-114` filters
+  `projection.positions` by `abs(position.attributed_qty) > 0` when constructing
+  `BotPanelView.exposure`. This is the activated-SQLite path, and the resulting
+  map is both what the Frontend reads to decide "Flat" and the `exposure`
+  argument the two live sites below consume — so it is upstream of them.
+  Preserve the invariant: the exposure map an operator surface reads is built
+  with the canonical predicate.
+  [#1628](https://github.com/tim1016/learn-ai/issues/1628)
+
+- **The roster's flatness sentence is non-canonical (medium).**
+  `services/broker_v2_panel/sqlite_panel_adapter.py:268` chooses between
+  *"Off duty with Clerk-attributed exposure."* and *"Off duty and flat."* — the
+  sentence rendered on every roster row (observed live on all 10 bots,
+  `docs/audits/live-operator-surface-inventory-2026-08-18.md`). Preserve the
+  invariant: the operator sentence and the custody verdict never disagree.
+  [#1628](https://github.com/tim1016/learn-ai/issues/1628)
+
+- **Resume labelling uses the same non-canonical rule (low).**
+  `services/broker_v2_panel/panel_projection_service.py:170` chooses between
+  *"Resume custody proof ready"* and *"Flat Resume ready"*. `adapt_sqlite_panel`
+  does not replace the health card, so this copy survives on the live path.
+  Affects copy only. [#1628](https://github.com/tim1016/learn-ai/issues/1628)
+
+- **[Legacy path only] `presented_actions.py:61` and `:63`.** `has_exposure`
+  (gating `flatten_stop`) and `account_expected_flat`, both `abs(x) > 0`. The
+  first sweep filed these as live, and the `flatten_stop` one as high severity,
+  on the assumption that the generic action set reaches an activated panel. It
+  does not — see the reachability note above. They are therefore reachable only
+  on the unactivated legacy path that **ADR 0037 retires**, and resolve by
+  deletion, exactly like `rollup_cache.py` below. Do not pin a regression test
+  to them; verify the retirement closes them.
+  [#1628](https://github.com/tim1016/learn-ai/issues/1628)
+
+**Not a defect to fix:** `broker/alpaca/clerk/rollup_cache.py:169` compares with
+the wrong tolerance *and* the wrong inclusivity (`abs(updated) <= _ZERO_ABS_TOL`,
+a lot-exhaustion constant). It was ADR 0036 consequence 1, but **ADR 0037
+supersedes it** — the module is reachable only from the legacy JSONL path that
+ADR 0037 retires, so it resolves by deletion. Do not write a regression test
+against it.
+
 ### Resolved
 
 - **[RESOLVED 2026-07-17] Transient account freeze permanently halted healthy
