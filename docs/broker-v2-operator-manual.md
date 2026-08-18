@@ -12,10 +12,12 @@ not activate SQLite. A malformed fence or failed activated startup installs no
 broker-mutation capability and never falls back to JSONL.
 
 For activated SQLite accounts, the available actions are exactly `reconcile_now`,
+`recover_exact_execution_evidence`, `resolve_execution_coverage`,
 `cancel_verified_working_orders`, `prepare_safe_flatten`, `stop_bot_decisions`,
 `open_custody_timeline`, and—only during typed authority failure—
 `rebuild_from_mirror` or `reset_authority`. There is no generic Clear, blind Retry, or
-unproven Flatten. See
+unproven Flatten. Historical exact-execution recovery is paper-only and never enables
+manual SQLite trading. See
 `docs/references/alpaca-sqlite-clerk-recovery-language.md` for the wording matrix and
 `docs/runbooks/alpaca-sqlite-clerk-recovery-and-cutover.md` for the offline subprocedure.
 
@@ -195,55 +197,63 @@ Each station has a **station state** (what happened there) and may carry **evide
 
 ## Bot Lifecycle {#bot-lifecycle}
 
-A bot has three durable states:
+Three separate vocabularies describe a bot, and confusing them is the most common
+reading error:
 
-| State | Meaning |
-|---|---|
-| `OFF_DUTY` | Not running. Evaluates no bars, places no orders. |
-| `ON_DUTY` | Running. Evaluates bars as they close. |
-| `RETIRED` | Permanently decommissioned. The bot ID is never reused. |
+- **Phase** — the bot's durable state: `OFF_DUTY`, `ON_DUTY`, `RETIRED`.
+- **Desired state** — what the operator asked for: `RUNNING`, `PAUSED`, `STOPPED`.
+  `PAUSED` holds one live run; **Continue** releases that same run without changing
+  its run ID, which is what makes it different from **Resume**.
+- **Duty outcome** — what actually happened on exit: `ON_DUTY` (has not exited),
+  `STOPPED`, `CRASHED`, `EXITED_UNVERIFIED`.
 
-Desired state (`RUNNING` or `STOPPED`) is separate from duty outcome (`ON_DUTY`, `CRASHED`, `EXITED_UNVERIFIED`, `STOPPED_OUTCOME`, `RETIRED`).
+Every code in all three is defined in the [Glossary](#glossary).
 
 ---
 
+<!-- BEGIN GENERATED: button-reference -->
+
 ## Button Reference {#button-reference}
 
-### `deploy` {#action-deploy}
-**When available:** On the account desk, to add a new bot.
-**What it does:** Creates and starts a new bot bound to this account. The bot begins evaluating bars immediately after creation.
+Every action the panel can present, with the label and explanation the backend
+authors. This table is generated from `OPERATOR_COPY`, so it is exactly the
+closed `ActionId` enum — no more, no less.
 
-### `start` {#action-start}
-**When available:** When the bot's desired state is `STOPPED` and it is `OFF_DUTY`.
-**What it does:** Signals the evaluator to begin evaluating bars for this bot. The bot transitions to `ON_DUTY`.
+**Where did "when available" go?** It was dropped by decision (ADR 0041). The
+backend does not author availability: enablement is gate logic evaluated per
+request. The panel renders each action's live condition beside the action itself,
+under **Active command gates**, with its own reason — *"No attributed exposure
+requires a flatten plan."* A condition computed at the moment of asking cannot
+rot; a prose condition can, and did. Read the panel for "can I use this now";
+read this table for "what does it do". Losing the browsable conditions list is a
+real cost, accepted knowingly.
 
-### `stop` {#action-stop}
-**When available:** When the bot is `ON_DUTY`.
-**What it does:** Stops bar evaluation and cancels any working entry orders. Existing exposure (open positions) is left untouched.
+**Surface** is the static broker scope declared in the action registry. It
+answers "can this ever appear for me", not "is it enabled right now".
 
-### `flatten_stop` {#action-flatten-stop}
-**When available:** When the bot is `ON_DUTY` and holds open positions.
-**What it does:** Cancels working orders, submits closing orders to flatten all exposure, then stops. Use when you need to exit positions before stopping.
+| Code | Button | What it does | Surface |
+|---|---|---|---|
+| `deploy` | Deploy | Create and start a new bot bound to this account. The bot begins evaluating bars immediately after creation. | Bots list page (`alpaca`) |
+| `resume` | Resume | Create a new run of this unchanged strategy instance after backend admission. | Bot panel (`alpaca`) |
+| `pause` | Pause | Hold bar evaluation while keeping the current process and run identity alive. | Bot panel (`alpaca`) |
+| `continue` | Continue | Let this paused live run evaluate bars again without changing its run ID. | Bot panel (`alpaca`) |
+| `stop` | Stop | Stop evaluating bars and cancel this bot's working entry orders. Exposure is left untouched. | Bot panel (`alpaca`) |
+| `flatten_stop` | Flatten & stop | Cancel working orders, submit closing orders to flatten exposure, then stop. Use this to exit positions before stopping. | Bot panel (`alpaca`) |
+| `retire` | Retire | Permanently decommission this bot. Its id is never reused. This is irreversible. | **Nothing — no broker exposes this action.** |
+| `cancel_order` | Cancel order | Cancel one working order at the broker. The broker may reject the request if the order has already filled. | **Nothing — no broker exposes this action.** |
+| `clear_hold` | Clear hold | Lift the account exposure hold once its root condition is healthy and freshly observed. | Bot panel (`alpaca`) |
+| `record_inventory_baseline` | Recover inventory baseline | Record the freshly observed broker positions as the account accounting cutover, retiring prior bot attribution without deleting history or assigning current positions to a bot. | Bot panel (`alpaca`) |
+| `reconcile_now` | Reconcile now | Run a reconciliation sweep against the broker immediately. Useful after a hold is cleared or after a manual order intervention. | Bot panel (`alpaca`) and SQLite Clerk recovery catalog |
+| `recover_exact_execution_evidence` | Recover exact execution evidence | Read one retained Alpaca paper execution and prepare the Clerk's no-delta coverage proof. | SQLite Clerk recovery catalog |
+| `resolve_execution_coverage` | Resolve execution coverage | Replace one matching cumulative recovery record with verified exact execution evidence. | SQLite Clerk recovery catalog |
+| `cancel_verified_working_orders` | Cancel verified working orders | Cancel only working orders whose exact Clerk and broker identities are proven. | SQLite Clerk recovery catalog |
+| `prepare_safe_flatten` | Prepare safe flatten | Prepare a fresh reduction plan without submitting an order. | SQLite Clerk recovery catalog |
+| `stop_bot_decisions` | Stop bot decisions | Stop new decisions while existing exposure remains under Clerk custody. | SQLite Clerk recovery catalog |
+| `open_custody_timeline` | Open custody timeline | Inspect the immutable operation-first evidence timeline. | SQLite Clerk recovery catalog |
+| `rebuild_from_mirror` | Rebuild from mirror | Rebuild a failed authority only from a contiguous verified mirror. | SQLite Clerk recovery catalog |
+| `reset_authority` | Reset authority | Create a new authority generation only after fresh flat and order-free proof. | SQLite Clerk recovery catalog |
 
-### `retire` {#action-retire}
-**When available:** When the bot is `OFF_DUTY` and not `RETIRED`.
-**What it does:** Permanently decommissions the bot. The bot ID is never reused. This is irreversible.
-
-### `cancel_order` {#action-cancel-order}
-**When available:** When a working order exists at the broker.
-**What it does:** Sends a cancellation request for one working order. The broker may reject if the order has already filled.
-
-### `clear_hold` {#action-clear-hold}
-**When available:** Legacy/unactivated JSONL accounts only, when an exposure hold (`STREAM_HEALTH_HOLD` or `UNEXPLAINED_ORDER_HOLD`) is active and its root condition has been freshly observed as healthy.
-**What it does:** Lifts the legacy account-wide hold. Activated SQLite accounts never present this action; they resolve evidence through a typed capability from the matrix above.
-
-### `record_inventory_baseline` {#action-record-inventory-baseline}
-**When available:** When the latest verdict is `missing_intent`, or when a stopped bot retains stale attributed exposure while the reconciled account is flat; no unresolved intents or working orders may exist.
-**What it does:** After typed `BASELINE` confirmation, records the freshly observed broker positions as an account accounting cutover and immediately reconciles. It does not delete prior trades. It retires all pre-cutover bot attribution as current custody and leaves current broker positions unassigned.
-
-### `reconcile_now` {#action-reconcile-now}
-**When available:** Always, when the reconciliation station is visible.
-**What it does:** Runs an immediate reconciliation sweep against the broker. Useful after a hold is cleared or after a manual order intervention.
+<!-- END GENERATED: button-reference -->
 
 ---
 
@@ -269,11 +279,64 @@ Holds are account-wide. When a hold is active, **no bot on the account** can sub
 
 ---
 
+<!-- BEGIN GENERATED: glossary -->
+
 ## Glossary {#glossary}
 
-The panel uses a closed vocabulary. Every code the system emits is defined below.
+The panel uses a closed vocabulary. Every code the system emits is defined below,
+generated from the same backend copy map the panel itself renders.
 
-### Station IDs (pipeline stages)
+### Phases
+
+| Code | Label | Meaning |
+|---|---|---|
+| `OFF_DUTY` | Off duty | The bot is not running. It evaluates no bars and places no orders. |
+| `ON_DUTY` | On duty | The bot is running and evaluating bars as they close. |
+| `RETIRED` | Retired | The bot is permanently decommissioned. Its id is never reused. |
+
+### Desired State
+
+| Code | Label | Meaning |
+|---|---|---|
+| `RUNNING` | Running | The operator wants this bot evaluating bars. |
+| `PAUSED` | Paused | The current run remains alive but bar evaluation is held until Continue. |
+| `STOPPED` | Stopped | The operator wants this bot idle. Exposure is left untouched. |
+
+### Duty Outcomes
+
+| Code | Label | Meaning |
+|---|---|---|
+| `ON_DUTY` | On duty | The bot is running and evaluating bars as they close. |
+| `STOPPED` | Stopped cleanly | The bot exited on an operator stop or a service shutdown. |
+| `CRASHED` | Crashed | The bot exited on an unhandled error. Check the duty reason. |
+| `EXITED_UNVERIFIED` | Exited unverified | The bot's task ended without a clean stop. Its final state is not confirmed. |
+
+### Hold States
+
+| Code | Label | Meaning |
+|---|---|---|
+| `NO_HOLD` | No hold | No exposure hold is active. Order submission is allowed. |
+| `UNEXPLAINED_ORDER_HOLD` | Unexplained-order hold | An order this account did not submit was seen in the journal. New submits are paused account-wide. |
+| `STREAM_HEALTH_HOLD` | Stream-health hold | A market-data or execution channel is unhealthy. New submits are paused account-wide. |
+
+### Reconciliation Verdicts
+
+| Code | Label | Meaning |
+|---|---|---|
+| `clean` | Clean | The last sweep found the journal and the broker in agreement. |
+| `unexplained_order` | Unexplained order | The last sweep found a broker order the journal cannot explain. |
+| `missing_intent` | Missing intent | The last sweep found broker inventory or an owned order that does not match the durable journal exposure. |
+| `stale` | Stale | The last sweep could not reach the broker; the verdict is out of date. |
+
+### Channel Health
+
+| Code | Label | Meaning |
+|---|---|---|
+| `healthy` | Healthy | The channel is connected and current. |
+| `unhealthy` | Unhealthy | The channel is down or lagging. Trading is gated until it recovers. |
+| `unknown` | Unknown | The channel's health has not been observed yet. |
+
+### Station IDs
 
 | Code | Label | Meaning |
 |---|---|---|
@@ -288,64 +351,16 @@ The panel uses a closed vocabulary. Every code the system emits is defined below
 
 | Code | Label | Meaning |
 |---|---|---|
-| `waiting` | Waiting | This station is expected to progress. Nothing is wrong. |
 | `satisfied` | Satisfied | This station completed with recorded evidence. |
+| `waiting` | Waiting | This station is expected to progress. Nothing is wrong. |
 | `blocked` | Blocked | An identified condition is preventing this station from progressing. |
-| `not_applicable` | Not applicable | This broker or mode has no such station. |
 | `unknown_stale` | Unknown (stale) | Evidence for this station exists but is too old to trust. |
-
-### Desired State
-
-| Code | Label | Meaning |
-|---|---|---|
-| `RUNNING` | Running | The operator wants this bot evaluating bars. |
-| `STOPPED` | Stopped | The operator wants this bot idle. Exposure is left untouched. |
-
-### Duty Outcomes (what actually happened)
-
-| Code | Label | Meaning |
-|---|---|---|
-| `ON_DUTY` | On duty | The bot is running and evaluating bars as they close. |
-| `OFF_DUTY` | Off duty | The bot is not running. It evaluates no bars and places no orders. |
-| `STOPPED_OUTCOME` | Stopped cleanly | The bot exited on an operator stop or a service shutdown. |
-| `CRASHED` | Crashed | The bot exited on an unhandled error. Check the duty reason. |
-| `EXITED_UNVERIFIED` | Exited unverified | The bot's task ended without a clean stop. Its final state is not confirmed. |
-| `RETIRED` | Retired | The bot is permanently decommissioned. Its id is never reused. |
-
-### Hold States
-
-| Code | Label | Meaning |
-|---|---|---|
-| `NO_HOLD` | No hold | No exposure hold is active. Order submission is allowed. |
-| `STREAM_HEALTH_HOLD` | Stream-health hold | A market-data or execution channel is unhealthy. New submits are paused account-wide. |
-| `UNEXPLAINED_ORDER_HOLD` | Unexplained-order hold | An order this account did not submit was seen in the journal. New submits are paused account-wide. |
-
-### Reconciliation Verdicts
-
-| Code | Label | Meaning |
-|---|---|---|
-| `clean` | Clean | The last sweep found the journal and the broker in agreement. |
-| `missing_intent` | Missing intent | The last sweep found a recorded intent with no matching broker order. |
-| `unexplained_order` | Unexplained order | The last sweep found a broker order the journal cannot explain. |
-| `stale` | Stale | The last sweep could not reach the broker; the verdict is out of date. |
-
-### Channel Health
-
-| Code | Label | Meaning |
-|---|---|---|
-| `healthy` | Healthy | The channel is connected and current. |
-| `unhealthy` | Unhealthy | The channel is down or lagging. Trading is gated until it recovers. |
-| `unknown` | Unknown | The channel's health has not been observed yet. |
+| `not_applicable` | Not applicable | This broker or mode has no such station. |
 
 ### Action IDs
 
-| Code | Label | Meaning |
-|---|---|---|
-| `deploy` | Deploy | Create and start a new bot bound to this account. |
-| `start` | Start | Begin evaluating bars for this off-duty bot. |
-| `stop` | Stop | Stop evaluating bars and cancel this bot's working entry orders. Exposure is left untouched. |
-| `flatten_stop` | Flatten & stop | Cancel working orders, submit closing orders to flatten exposure, then stop. |
-| `retire` | Retire | Permanently decommission this bot. Its id is never reused. |
-| `cancel_order` | Cancel order | Cancel one working order at the broker. |
-| `clear_hold` | Clear hold | Lift the account exposure hold once its root condition is healthy and freshly observed. |
-| `reconcile_now` | Reconcile now | Run a reconciliation sweep against the broker immediately. |
+The ninth closed vocabulary is `ActionId`. Every one of its codes is documented —
+with the surface that can present it — in the
+[Button Reference](#button-reference) above, and is not repeated here.
+
+<!-- END GENERATED: glossary -->

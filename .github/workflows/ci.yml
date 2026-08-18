@@ -180,6 +180,30 @@ jobs:
       - run: pip install ruff
       - run: ruff check app/ tests/
 
+  broker-v2-operator-manual-contract:
+    name: Broker V2 Operator Manual Contract
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: PythonDataService
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: PythonDataService/requirements*.txt
+      - run: pip install -r requirements-heavy.txt -r requirements-light.txt -r requirements-dev.txt
+      - name: Regenerate the manual and require it to match both committed copies
+        run: |
+          python -m scripts.regenerate_broker_v2_operator_manual
+          cd ..
+          git diff --exit-code -- \
+            docs/broker-v2-operator-manual.md \
+            Frontend/src/assets/docs/broker-v2-operator-manual.md
+
   python-test:
     name: Python Tests
     runs-on: ubuntu-latest

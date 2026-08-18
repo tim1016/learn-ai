@@ -134,7 +134,7 @@
     },
     "cancel_order": {
       "label": "Cancel order",
-      "explanation": "Cancel one working order at the broker."
+      "explanation": "Cancel one working order at the broker. The broker may reject the request if the order has already filled."
     },
     "cancel_verified_working_orders": {
       "label": "Cancel verified working orders",
@@ -154,11 +154,11 @@
     },
     "deploy": {
       "label": "Deploy",
-      "explanation": "Create and start a new bot bound to this account."
+      "explanation": "Create and start a new bot bound to this account. The bot begins evaluating bars immediately after creation."
     },
     "flatten_stop": {
       "label": "Flatten & stop",
-      "explanation": "Cancel working orders, submit closing orders to flatten exposure, then stop."
+      "explanation": "Cancel working orders, submit closing orders to flatten exposure, then stop. Use this to exit positions before stopping."
     },
     "healthy": {
       "label": "Healthy",
@@ -190,7 +190,7 @@
     },
     "reconcile_now": {
       "label": "Reconcile now",
-      "explanation": "Run a reconciliation sweep against the broker immediately."
+      "explanation": "Run a reconciliation sweep against the broker immediately. Useful after a hold is cleared or after a manual order intervention."
     },
     "record_inventory_baseline": {
       "label": "Recover inventory baseline",
@@ -214,7 +214,7 @@
     },
     "retire": {
       "label": "Retire",
-      "explanation": "Permanently decommission this bot. Its id is never reused."
+      "explanation": "Permanently decommission this bot. Its id is never reused. This is irreversible."
     },
     "satisfied": {
       "label": "Satisfied",

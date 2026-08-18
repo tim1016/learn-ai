@@ -9,14 +9,32 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
 from app.broker.alpaca.clerk.models import ReconciliationVerdict as ClerkVerdict
 from app.broker.v2panel.vocabulary import (
+    ACTION_IDS,
     ALL_VOCABULARY_CODES,
+    CHANNEL_STATES,
+    DESIRED_STATES,
+    DUTY_OUTCOME_KINDS,
+    HOLD_REASONS,
     OPERATOR_COPY,
+    PHASES,
     RECONCILIATION_VERDICTS,
+    STATION_IDS,
+    STATION_STATES,
+    ActionId,
+    ChannelState,
+    DesiredState,
+    DutyOutcomeKind,
+    HoldReason,
+    Phase,
+    ReconciliationVerdict,
+    StationId,
+    StationState,
     copy_for,
 )
 
@@ -90,3 +108,53 @@ def test_missing_copy_raises_keyerror() -> None:
     """copy_for surfaces a missing code immediately (never a silent passthrough)."""
     with pytest.raises(KeyError):
         copy_for("NOT_A_REAL_CODE")
+
+
+# ── Literal ↔ collection parity (ADR 0041 decision 6) ────────────────────────
+# Every closed vocabulary in this module is declared twice: once as a
+# ``Literal`` (for static type-checking on request/response schemas) and once
+# as a runtime ``frozenset``/``tuple`` (for iteration — including by the
+# operator-manual generator, ``scripts/regenerate_broker_v2_operator_manual.py``,
+# and by ``ALL_VOCABULARY_CODES`` below). Nothing enforces the two stay equal.
+#
+# ``ActionId`` (a ``Literal``) and ``ACTION_IDS`` (a tuple) drifting apart is
+# the exact failure this ADR names: a member added to the ``Literal`` alone
+# makes the request schema accept it while the copy-coverage test above stays
+# green and every generated artifact (snapshot, manual) silently omits it. The
+# same drift is possible for any of the other eight pairs, so all nine are
+# swept here, not just the one the ADR calls out by name.
+_LITERAL_COLLECTION_PAIRS = (
+    ("Phase", Phase, PHASES),
+    ("DesiredState", DesiredState, DESIRED_STATES),
+    ("DutyOutcomeKind", DutyOutcomeKind, DUTY_OUTCOME_KINDS),
+    ("HoldReason", HoldReason, HOLD_REASONS),
+    ("ReconciliationVerdict", ReconciliationVerdict, RECONCILIATION_VERDICTS),
+    ("ChannelState", ChannelState, CHANNEL_STATES),
+    ("StationId", StationId, STATION_IDS),
+    ("StationState", StationState, STATION_STATES),
+    ("ActionId", ActionId, ACTION_IDS),
+)
+
+
+@pytest.mark.parametrize(
+    "name, literal, collection", _LITERAL_COLLECTION_PAIRS, ids=[p[0] for p in _LITERAL_COLLECTION_PAIRS]
+)
+def test_literal_matches_runtime_collection(name: str, literal: object, collection: object) -> None:
+    """A ``Literal`` alias and its runtime collection must name the same codes.
+
+    Regression test for ADR 0041 decision 6: ``ActionId`` gained nine members
+    over time that ``ACTION_IDS`` never received, and nothing failed. Asserting
+    ``set(get_args(...)) == set(collection)`` for every pair closes the gap so a
+    future addition to one side without the other fails here, not by shipping an
+    undocumented action.
+    """
+    literal_members = set(get_args(literal))
+    collection_members = set(collection)
+    missing_from_collection = sorted(literal_members - collection_members)
+    missing_from_literal = sorted(collection_members - literal_members)
+    assert not missing_from_collection, (
+        f"{name}: in the Literal but not the runtime collection: {missing_from_collection}"
+    )
+    assert not missing_from_literal, (
+        f"{name}: in the runtime collection but not the Literal: {missing_from_literal}"
+    )
