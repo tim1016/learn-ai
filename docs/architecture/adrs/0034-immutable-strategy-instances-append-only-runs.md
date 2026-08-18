@@ -1,7 +1,8 @@
 # ADR 0034: Immutable strategy instances and append-only runs
 
+**Status:** Accepted
+
 - **Date:** 2026-08-02
-- **Status:** Accepted
 - **Context:** Alpaca Bot Control safety and reliability remediation PRD, Slice 2
 - **Amends:** ADR 0004
 

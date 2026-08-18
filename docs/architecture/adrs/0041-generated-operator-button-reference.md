@@ -1,6 +1,7 @@
 # ADR 0041: The operator manual's Button Reference is generated from the backend copy map
 
-- **Status:** Accepted
+**Status:** Accepted
+
 - **Date:** 2026-08-18
 - **Context:** Wayfinder map [#1588](https://github.com/tim1016/learn-ai/issues/1588),
   decision ticket [#1599](https://github.com/tim1016/learn-ai/issues/1599); the

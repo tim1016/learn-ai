@@ -1,6 +1,6 @@
 # ADR 0007 — The host live-run daemon authenticates with a shared-secret token, which lets it bind a non-loopback interface so the containerized data plane can reach it on Linux podman
 
-**Status:** Accepted 2026-05-31.
+**Status:** Accepted 2026-05-31
 **Decision drivers:** On Linux rootless podman the entire daemon-backed live-instances UI (deploy, Start/Stop, the "engine up" check) is dead in-container: the daemon enforced a loopback-only bind (it was unauthenticated), and `host.containers.internal` does not reach host loopback on Linux. The previous attempt to "just bind 0.0.0.0" is rejected by the daemon's own validator and would expose an unauthenticated deploy/trading control plane on the LAN.
 **Related:** ADR 0003 (host-venv topology), ADR 0004 (instance-addressed control plane), ADR 0006 (deploy control-plane host-daemon), `app/lean_sidecar/launcher_auth.py` (the precedent this mirrors), the deploy-form picker (`broker-deploy-form`).
 

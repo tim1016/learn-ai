@@ -1,7 +1,8 @@
 # ADR 0037: SQLite is the sole Alpaca custody authority; legacy JSONL is retired
 
+**Status:** Accepted
+
 - **Date:** 2026-08-17
-- **Status:** Accepted
 - **Context:** Wayfinder map [#1588](https://github.com/tim1016/learn-ai/issues/1588),
   decision ticket [#1596](https://github.com/tim1016/learn-ai/issues/1596); the
   reachability audit in `docs/audits/clerk-lineage-reachability-2026-08-17.md`.
