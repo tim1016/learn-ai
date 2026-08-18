@@ -10,7 +10,10 @@ const dataPlaneControlSurfaces = require('../contracts/data-plane-control-surfac
 const backendProxyTarget = process.env.BACKEND_PROXY_TARGET ?? 'http://127.0.0.1:5000';
 const DEFAULT_DATA_PLANE_PROXY_TARGET = 'http://127.0.0.1:8000';
 const TRUSTED_DATA_PLANE_PROXY_HOSTS = new Set(['127.0.0.1', 'localhost', 'python-service']);
-const dataPlaneControlSecret = process.env.DATA_PLANE_CONTROL_SECRET ?? 'local-dev-control-secret';
+const dataPlaneControlSecret = process.env.DATA_PLANE_CONTROL_SECRET?.trim();
+if (!dataPlaneControlSecret) {
+  throw new Error('DATA_PLANE_CONTROL_SECRET must be configured before the frontend proxy starts.');
+}
 const UNSAFE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const SAFE_READ_METHODS = new Set(['GET', 'HEAD']);
 const CONTROL_PREFIXES = dataPlaneControlSurfaces.control_prefixes;

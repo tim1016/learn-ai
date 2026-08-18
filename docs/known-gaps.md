@@ -267,9 +267,6 @@ carried forward are:
   compaction, and broker tick partitions use atomic publication; the remaining
   report-bundle work is research-output integrity rather than control-plane
   safety. [#1584](https://github.com/tim1016/learn-ai/issues/1584)
-- Residual: committed dev-default control secret `local-dev-control-secret`
-  (fine for local; must not reach a shared/live host).
-  [#1585](https://github.com/tim1016/learn-ai/issues/1585)
 
 The former R3 recovery-daemon item was retired from this backlog: it concerns
 the deprecated IBKR bot-control surface, while the accepted Alpaca Clerk

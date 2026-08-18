@@ -23,6 +23,19 @@ const {
   shouldAttachDataPlaneSecret,
 } = proxyConfig.__test;
 
+for (const [label, configureSecret] of [
+  ['missing', 'delete process.env.DATA_PLANE_CONTROL_SECRET;'],
+  ['blank', "process.env.DATA_PLANE_CONTROL_SECRET = '   ';"],
+]) {
+  const result = spawnSync(
+    process.execPath,
+    ['-e', `${configureSecret} require(${JSON.stringify(path.resolve(__dirname, '../proxy.conf.js'))});`],
+    { encoding: 'utf8' },
+  );
+  assert.notEqual(result.status, 0, `must reject a ${label} data-plane control secret`);
+  assert.match(result.stderr, /DATA_PLANE_CONTROL_SECRET must be configured/);
+}
+
 function request({
   method = 'POST',
   url = '/api/broker/connect',

@@ -345,12 +345,18 @@ git clone <repo-url>
 cd learn-ai
 ```
 
-Create a `.env` file in the project root:
+Copy the environment template, then generate the required local data-plane
+control secret:
 
-```env
-POLYGON_API_KEY=your_polygon_api_key_here
-FRED_API_KEY=your_fred_api_key       # optional
+```bash
+cp .env.example .env
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
+
+Paste the generated value into `DATA_PLANE_CONTROL_SECRET` in the untracked
+`.env` file, then replace the API-key placeholders you use. Compose refuses to
+start the data plane and frontend proxy when the control secret is missing or
+blank; there is no checked-in development credential.
 
 ### 2. Start the backend services
 
