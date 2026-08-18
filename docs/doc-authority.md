@@ -84,6 +84,7 @@ have their decision preserved here.
 | 0037 | SQLite is the sole Alpaca custody authority; legacy JSONL retired (no activation fence = no authority, never a fallback). Completes ADR 0035 |
 | 0038 | One bot control plane (Alpaca runner); the evaluator plane retires with IBKR bot-control. SQLite holds the duty facts it already fences; control intent stays file-backed so the stop latch outlives the Clerk. Supersedes ADR 0026 §4 for Alpaca |
 | 0039 | An ADR's Status states the decision's standing, not the code's conformance. The ADR file is the sole status authority; one closed value (`Accepted`/`Proposed`/`Superseded`/`Retired`) per ADR, narrative moved out, CI-checkable |
+| 0040 | `CONTEXT.md` is one glossary of the live trading/operator domain (not repo process); every section declares its lineage (live / retiring / neutral); the dangling §16.4 deferral is deleted; an ADR introducing domain language carries a `Vocabulary:` line |
 
 ---
 
