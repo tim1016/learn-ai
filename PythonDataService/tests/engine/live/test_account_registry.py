@@ -714,6 +714,46 @@ def test_crash_recovery_override_clears_terminal_retirement_after_deploy_only(
     ) is None
 
 
+def test_crash_retired_restart_blocking_binding_honors_false_crash_correction_after_deploy_only(
+    tmp_path: Path,
+) -> None:
+    """A correction supersedes its crash row even after successor staging."""
+
+    retired = _binding(run_id="run-halt", recorded_at_ms=1_700_000_010_000).model_copy(
+        update={
+            "lifecycle_state": "RETIRED",
+            "source": PROCESS_CRASHED_REGISTRY_SOURCE,
+        }
+    )
+    write_account_instance_binding(tmp_path, retired)
+    _write_run_status(tmp_path, "run-halt", exit_reason="fatal_halt", exit_code=1)
+    backfill_false_crash_registry_rows(
+        tmp_path,
+        account_id="DU123456",
+        now_ms=1_700_000_010_001,
+    )
+    write_account_instance_binding(
+        tmp_path,
+        retired.model_copy(
+            update={
+                "run_id": "run-staged",
+                "lifecycle_state": "DEPLOYED",
+                "recorded_at_ms": 1_700_000_020_000,
+                "source": "host_daemon.deploy",
+            }
+        ),
+    )
+
+    assert (
+        crash_retired_restart_blocking_binding(
+            tmp_path,
+            account_id="DU123456",
+            strategy_instance_id="spy-ema-paper-1",
+        )
+        is None
+    )
+
+
 def test_backfill_false_crash_registry_rows_repairs_disproven_latest_crash(tmp_path: Path) -> None:
     active = _binding(run_id="run-halt", recorded_at_ms=1_700_000_000_000)
     retired = active.model_copy(

@@ -454,12 +454,24 @@ def crash_retired_restart_blocking_binding(
             not in binding_keys
         )
     recovery_clearance = read_or_migrate_account_recovery_clearance(artifacts_root, account_id)
-    newest_unresolved: AccountInstanceBinding | None = None
+    latest_by_run: dict[str, AccountInstanceBinding] = {}
     for binding in bindings:
         if (
             binding.account_id.upper() != account_id.upper()
             or binding.strategy_instance_id != strategy_instance_id
-            or binding.lifecycle_state != "RETIRED"
+        ):
+            continue
+        latest = latest_by_run.get(binding.run_id)
+        if latest is None or binding.recorded_at_ms >= latest.recorded_at_ms:
+            # Backfill corrections append a nonblocking RETIRED row for the
+            # same run. A deploy-only successor has a different run ID and
+            # must not hide a real terminal retirement from an earlier run.
+            latest_by_run[binding.run_id] = binding
+
+    newest_unresolved: AccountInstanceBinding | None = None
+    for binding in latest_by_run.values():
+        if (
+            binding.lifecycle_state != "RETIRED"
             or binding.source not in TERMINAL_RESTART_BLOCKING_BINDING_SOURCES
         ):
             continue
