@@ -25,10 +25,12 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXIT_NOT_FLAT_REASON_CODE,
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
     POSITION_DRIFT_REASON_CODE,
+    RECONCILIATION_INCOMPLETE_REASON_CODE,
     ExecutionCoverageConflictCause,
     ExitNotFlatCause,
     PositionDriftCause,
     broker_snapshot_stale_cause_is_valid,
+    reconciliation_incomplete_cause_is_valid,
 )
 
 DRIFT_REDUCTION_EVIDENCE_MAX_AGE_MS = 30_000
@@ -93,6 +95,12 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         blocks_new_exposure=True,
         allows_reduction=False,
         cause_is_valid=broker_snapshot_stale_cause_is_valid,
+    ),
+    RECONCILIATION_INCOMPLETE_REASON_CODE: ReasonPolicy(
+        scope="ACCOUNT_CLERK",
+        blocks_new_exposure=True,
+        allows_reduction=False,
+        cause_is_valid=reconciliation_incomplete_cause_is_valid,
     ),
     ORDER_OUTCOME_UNKNOWN_REASON_CODE: ReasonPolicy(
         scope="CUSTODY_SUBJECT",
@@ -185,7 +193,41 @@ def raise_uncertainty(
     return outcome != "unchanged"
 
 
-_RECONCILIATION_RESOLVABLE_REASONS = frozenset({POSITION_DRIFT_REASON_CODE, BROKER_SNAPSHOT_STALE_REASON_CODE})
+_CLEAN_BROKER_RESOLVABLE_REASONS = frozenset(
+    {POSITION_DRIFT_REASON_CODE, BROKER_SNAPSHOT_STALE_REASON_CODE}
+)
+
+
+def _resolve_account_uncertainty(
+    repo: ClerkSqliteRepository,
+    *,
+    reason_code: str,
+    resolution_kind: str,
+    summary_code: str,
+    evidence_refs: tuple[str, ...],
+) -> bool:
+    def build_transition(uncertainty_id: str) -> TransitionInput:
+        facts = UncertaintyResolvedFacts(
+            uncertainty_id=uncertainty_id,
+            resolution_kind=resolution_kind,
+            evidence_refs=list(evidence_refs),
+        )
+        return TransitionInput(
+            transition_kind="UNCERTAINTY_RESOLVED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="succeeded",
+            clerk_observed_at_ms=repo.clock(),
+            summary_code=summary_code,
+            facts_json=facts.to_facts_json(),
+        )
+
+    return repo.resolve_uncertainty_if_active(
+        scope="ACCOUNT_CLERK",
+        reason_code=reason_code,
+        strategy_instance_id=None,
+        build_transition=build_transition,
+    )
 
 
 def resolve_reconciliation_uncertainty(
@@ -195,30 +237,29 @@ def resolve_reconciliation_uncertainty(
     evidence_refs: tuple[str, ...],
 ) -> bool:
     """Resolve only a cause whose clean broker prerequisite was just proven."""
-    if reason_code not in _RECONCILIATION_RESOLVABLE_REASONS:
+    if reason_code not in _CLEAN_BROKER_RESOLVABLE_REASONS:
         raise ValueError(f"{reason_code!r} has no reconciliation-backed recovery policy")
-
-    def build_transition(uncertainty_id: str) -> TransitionInput:
-        facts = UncertaintyResolvedFacts(
-            uncertainty_id=uncertainty_id,
-            resolution_kind="CLEAN_BROKER_RECONCILIATION",
-            evidence_refs=list(evidence_refs),
-        )
-        return TransitionInput(
-            transition_kind="UNCERTAINTY_RESOLVED",
-            custody_owner="ACCOUNT_CLERK",
-            execution_authority="ACCOUNT_CLERK",
-            operation_state="succeeded",
-            clerk_observed_at_ms=repo.clock(),
-            summary_code="UNCERTAINTY_RESOLVED_BY_RECONCILIATION",
-            facts_json=facts.to_facts_json(),
-        )
-
-    return repo.resolve_uncertainty_if_active(
-        scope="ACCOUNT_CLERK",
+    return _resolve_account_uncertainty(
+        repo,
         reason_code=reason_code,
-        strategy_instance_id=None,
-        build_transition=build_transition,
+        resolution_kind="CLEAN_BROKER_RECONCILIATION",
+        summary_code="UNCERTAINTY_RESOLVED_BY_RECONCILIATION",
+        evidence_refs=evidence_refs,
+    )
+
+
+def resolve_incomplete_reconciliation_uncertainty(
+    repo: ClerkSqliteRepository,
+    *,
+    evidence_refs: tuple[str, ...],
+) -> bool:
+    """Resolve an aborted pass only after a later pass reached finalization."""
+    return _resolve_account_uncertainty(
+        repo,
+        reason_code=RECONCILIATION_INCOMPLETE_REASON_CODE,
+        resolution_kind="COMPLETE_ACCOUNT_RECONCILIATION",
+        summary_code="INCOMPLETE_RECONCILIATION_RESOLVED",
+        evidence_refs=evidence_refs,
     )
 
 
@@ -563,6 +604,7 @@ __all__ = [
     "EXIT_NOT_FLAT_REASON_CODE",
     "ORDER_OUTCOME_UNKNOWN_REASON_CODE",
     "POSITION_DRIFT_REASON_CODE",
+    "RECONCILIATION_INCOMPLETE_REASON_CODE",
     "AdmissionBlockedError",
     "Capability",
     "CapabilityDecision",
@@ -575,5 +617,6 @@ __all__ = [
     "require_manual_admission",
     "require_manual_reduction",
     "resolve_exit_not_flat_uncertainty",
+    "resolve_incomplete_reconciliation_uncertainty",
     "resolve_reconciliation_uncertainty",
 ]

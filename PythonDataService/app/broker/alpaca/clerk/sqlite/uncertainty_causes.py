@@ -13,6 +13,7 @@ from typing import Any
 
 POSITION_DRIFT_REASON_CODE = "POSITION_DRIFT"
 BROKER_SNAPSHOT_STALE_REASON_CODE = "BROKER_SNAPSHOT_STALE"
+RECONCILIATION_INCOMPLETE_REASON_CODE = "RECONCILIATION_INCOMPLETE"
 ORDER_OUTCOME_UNKNOWN_REASON_CODE = "ORDER_OUTCOME_UNKNOWN"
 EXIT_NOT_FLAT_REASON_CODE = "EXIT_NOT_FLAT"
 EXECUTION_COVERAGE_CONFLICT_REASON_CODE = "EXECUTION_COVERAGE_CONFLICT"
@@ -187,12 +188,17 @@ def broker_snapshot_stale_cause_is_valid(value: Any) -> bool:
     return value == {"snapshot": "open_orders_and_positions"}
 
 
+def reconciliation_incomplete_cause_is_valid(value: Any) -> bool:
+    return value == {"pass": "account_reconciliation"}
+
+
 __all__ = [
     "BROKER_SNAPSHOT_STALE_REASON_CODE",
     "EXECUTION_COVERAGE_CONFLICT_REASON_CODE",
     "EXIT_NOT_FLAT_REASON_CODE",
     "ORDER_OUTCOME_UNKNOWN_REASON_CODE",
     "POSITION_DRIFT_REASON_CODE",
+    "RECONCILIATION_INCOMPLETE_REASON_CODE",
     "ExecutionCoverageConflictCause",
     "ExitNotFlatCause",
     "OrderOutcomeUnknownCause",
@@ -200,4 +206,5 @@ __all__ = [
     "PositionDriftObservation",
     "UnknownOrderIdentity",
     "broker_snapshot_stale_cause_is_valid",
+    "reconciliation_incomplete_cause_is_valid",
 ]

@@ -45,9 +45,11 @@ from app.broker.alpaca.clerk.sqlite.repository import (
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     BROKER_SNAPSHOT_STALE_REASON_CODE,
     POSITION_DRIFT_REASON_CODE,
+    RECONCILIATION_INCOMPLETE_REASON_CODE,
     AdmissionBlockedError,
     raise_uncertainty,
     resolve_exit_not_flat_uncertainty,
+    resolve_incomplete_reconciliation_uncertainty,
     resolve_reconciliation_uncertainty,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
@@ -92,6 +94,17 @@ class ReconciliationInvariantError(ClerkSqliteError):
 
 class ReconciliationLockOrderError(ClerkSqliteError):
     """Reconciliation was entered while owning intake, which would invert locks."""
+
+
+def _invariant_failure_outcome(effect_kind: str) -> ReconciliationOutcome:
+    """Classify malformed nonterminal effects without pretending they resolved."""
+    if effect_kind == "EXIT":
+        return "RESOLVED_FAILURE"
+    if effect_kind in {"ENTER", "MANUAL_ORDER", "CANCEL"}:
+        return "STILL_UNKNOWN"
+    raise ReconciliationInvariantError(
+        f"effect kind {effect_kind!r} has no invariant-failure recovery policy"
+    )
 
 
 async def _under_intake[LocalResult](
@@ -419,6 +432,38 @@ def _raise_stale_snapshot_uncertainty(repo: ClerkSqliteRepository, why: str) -> 
     )
 
 
+def _raise_incomplete_reconciliation_uncertainty(repo: ClerkSqliteRepository) -> None:
+    raise_uncertainty(
+        repo,
+        strategy_instance_id=None,
+        reason_code=RECONCILIATION_INCOMPLETE_REASON_CODE,
+        headline="Account reconciliation did not complete",
+        explanation=(
+            "The latest reconciliation pass ended before final broker truth and local custody "
+            "could be proven consistent."
+        ),
+        operator_impact=(
+            "New exposure and unproven reduction are paused account-wide until a complete "
+            "reconciliation succeeds. Cancellation and reconciliation remain available."
+        ),
+        next_step="Inspect the reconciliation failure, correct it, and reconcile again.",
+        evidence_refs=(),
+        cause_facts={"pass": "account_reconciliation"},
+        severity="error",
+        refresh_unchanged=True,
+    )
+
+
+async def _commit_incomplete_reconciliation_and_release(
+    repo: ClerkSqliteRepository,
+    *,
+    intake: ReentrantAsyncLock,
+) -> None:
+    """Release the process fence only after its durable replacement exists."""
+    await _under_intake(intake, _raise_incomplete_reconciliation_uncertainty, repo)
+    await _under_intake(intake, repo.end_reconciliation)
+
+
 def _resolve_flat_exit_fences(
     repo: ClerkSqliteRepository, instances: list[dict]
 ) -> None:
@@ -495,6 +540,7 @@ async def _recover_operations(
             linked_orders = await asyncio.to_thread(
                 repo.orders_for_effect_operation, effect.effect_operation_id
             )
+            outcome = _invariant_failure_outcome(effect.kind)
             await _under_intake(
                 intake,
                 _record_reconciliation_attempt,
@@ -502,7 +548,7 @@ async def _recover_operations(
                 effect=effect,
                 order_ref=linked_orders[0].order_ref if linked_orders else None,
                 trigger=trigger,
-                outcome="RESOLVED_FAILURE",
+                outcome=outcome,
             )
             logger.error(
                 "alpaca sqlite reconciliation found incomplete local custody state",
@@ -513,6 +559,8 @@ async def _recover_operations(
                     "reason": str(exc),
                 },
             )
+            if outcome == "STILL_UNKNOWN":
+                raise
             resolved_count += 1
             continue
         except (OperationClaimError, AdmissionBlockedError):
@@ -579,9 +627,16 @@ async def reconcile_account(
                 trigger=trigger,
                 intake=intake,
             )
-            return result
-        finally:
-            await _under_intake(intake, repo.end_reconciliation)
+        except asyncio.CancelledError:
+            await asyncio.shield(
+                _commit_incomplete_reconciliation_and_release(repo, intake=intake)
+            )
+            raise
+        except Exception:
+            await _commit_incomplete_reconciliation_and_release(repo, intake=intake)
+            raise
+        await _under_intake(intake, repo.end_reconciliation)
+        return result
 
 
 def _record_operator_reconciliation_receipt(
@@ -754,6 +809,10 @@ def _finalize_reconciliation_verdict(
     )
     if plan.verdict == "clean" and not plan.indeterminate_symbols:
         _resolve_flat_exit_fences(repo, instances)
+    resolve_incomplete_reconciliation_uncertainty(
+        repo,
+        evidence_refs=("complete_account_reconciliation",),
+    )
     result = AccountReconciliationResult(
         verdict=plan.verdict,
         resolved_count=resolved_count,
