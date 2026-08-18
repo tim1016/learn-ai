@@ -52,7 +52,7 @@ from app.broker.contract.models import (
 )
 from app.engine.execution.portfolio import Portfolio
 from app.engine.live.account_artifacts import RestartIntensityPolicy
-from app.engine.live.bot_lifecycle_state import BotDutyOutcome
+from app.engine.live.bot_lifecycle_state import BotDutyOutcome, BotLifecyclePhase
 from app.engine.live.desired_state import DesiredState
 from app.engine.strategy.base import StrategyContext
 from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeedError
@@ -1442,6 +1442,44 @@ async def test_resume_does_not_preserve_provisional_stop_outcome(tmp_path: Path)
         tmp_path / "live_state" / _SID / "run_outcomes" / f"{binding.run_id}.json"
     ).exists()
     await registry.stop("alpaca", _SID)
+
+
+@pytest.mark.asyncio
+async def test_superseded_terminal_projection_keeps_the_run_receipt(tmp_path: Path) -> None:
+    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
+    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    binding = registry.binding_for_control("alpaca", _SID)
+    registry._lifecycle_repo(_SID).set_phase(
+        BotLifecyclePhase.ON_DUTY,
+        now_ms=_T0 + 1,
+        updated_by="newer-run",
+        active_run_id="run-new",
+    )
+    outcome = BotDutyOutcome(
+        kind="CRASHED",
+        reason_code="PROCESS_CRASHED",
+        recorded_at_ms=_T0 + 2,
+        run_id=binding.run_id,
+    )
+
+    result = registry._run_evidence.record_terminal(
+        _SID,
+        outcome,
+        updated_by="test",
+        reason="process.crashed",
+        expected_active_run_id=binding.run_id,
+    )
+
+    assert result.status == "SUPERSEDED"
+    assert registry._bindings.read_outcome(_SID, binding.run_id) is not None
+    lifecycle = registry._lifecycle_repo(_SID).read()
+    assert lifecycle is not None
+    assert lifecycle.phase is BotLifecyclePhase.ON_DUTY
+    assert lifecycle.active_run_id == "run-new"
+    managed = registry._bots[_SID]
+    managed.finalized = True
+    managed.task.cancel()
+    await asyncio.wait({managed.task})
 
 
 @pytest.mark.asyncio

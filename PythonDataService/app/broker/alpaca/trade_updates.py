@@ -41,6 +41,15 @@ Reconnect: ``trade_updates`` has no replay-from-cursor, so on any disconnect the
 consumer reconnects with bounded backoff, re-subscribes, and then performs a
 **REST gap-reconcile** — ``GET /v2/orders`` for recently closed orders — feeding
 each through the same idempotent attribution path so a re-observed event dedups.
+
+Execution-health freshness is event-ordered rather than wall-clock-expiring.
+Alpaca supplies no custody heartbeat and a legitimately quiet account can have
+no trade updates for hours, so elapsed silence cannot distinguish health from a
+broken stream. The failure budget is therefore zero *received unusable frames*:
+any capture, JSON, or event-mapping failure immediately supersedes prior usable
+evidence and fails the submit gate closed. A later successfully mapped live
+trade-update frame restores health. Control-frame silence changes neither state,
+and frame failures stay inside the socket cycle to avoid reconnect thrash.
 """
 
 from __future__ import annotations
@@ -57,6 +66,7 @@ from typing import Any
 
 from app.broker.alpaca import adapter
 from app.broker.alpaca.clerk.models import ClerkEntryKind
+from app.broker.alpaca.clerk.stream_health import ExecutionEvidenceHealth
 from app.broker.alpaca.clerk.trade_evidence import (
     LegacyLifecycleRecorder,
     LegacyTradeUpdateEvidenceSink,
@@ -321,6 +331,13 @@ class TradeUpdatesConsumer:
         # channel's health fact.
         self._connected = False
         self._connection_changed_at_ms = clock()
+        # Quiet-after-connect is healthy because Alpaca supplies no lifecycle
+        # heartbeat. A received unusable frame flips this false until a later
+        # live trade update maps successfully.
+        self._evidence_health = ExecutionEvidenceHealth(
+            healthy=True,
+            observed_at_ms=clock(),
+        )
 
     @property
     def counters(self) -> TradeUpdateCounters:
@@ -337,10 +354,21 @@ class TradeUpdatesConsumer:
         """When the connection state last flipped, int64 ms UTC (P7 age)."""
         return self._connection_changed_at_ms
 
+    @property
+    def evidence_health(self) -> ExecutionEvidenceHealth:
+        """Latest evidence-bearing frame outcome and int64-ms observation."""
+        return self._evidence_health
+
     def _mark_connection(self, connected: bool) -> None:
         if self._connected != connected:
             self._connected = connected
             self._connection_changed_at_ms = self._clock()
+
+    def _mark_evidence_health(self, healthy: bool) -> None:
+        self._evidence_health = ExecutionEvidenceHealth(
+            healthy=healthy,
+            observed_at_ms=self._clock(),
+        )
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -436,6 +464,7 @@ class TradeUpdatesConsumer:
         )
         if not captured:
             self._counters.capture_failures += 1
+            self._mark_evidence_health(False)
             logger.error(
                 "alpaca trade_updates frame could not be captured; refusing to derive lifecycle state",
                 extra={"action": "trade_updates_capture_failed"},
@@ -446,6 +475,7 @@ class TradeUpdatesConsumer:
             message = json.loads(raw)
         except (ValueError, TypeError):
             self._counters.parse_errors += 1
+            self._mark_evidence_health(False)
             logger.warning(
                 "alpaca trade_updates frame is not valid JSON",
                 extra={"action": "trade_updates_parse_error"},
@@ -453,6 +483,7 @@ class TradeUpdatesConsumer:
             return
         if not isinstance(message, dict):
             self._counters.parse_errors += 1
+            self._mark_evidence_health(False)
             return
 
         stream = message.get("stream")
@@ -500,6 +531,8 @@ class TradeUpdatesConsumer:
             broker_order = adapter.from_alpaca_order(order) if order else None
         except (KeyError, ValueError):
             self._counters.parse_errors += 1
+            if not from_gap_reconcile:
+                self._mark_evidence_health(False)
             logger.warning(
                 "alpaca trade_updates event would not map",
                 extra={"action": "trade_updates_map_error"},
@@ -538,6 +571,8 @@ class TradeUpdatesConsumer:
                 variant_seen = self._seen.get(key)
                 if variant_seen is not None:
                     self._counters.skipped_duplicate += 1
+                    if not from_gap_reconcile:
+                        self._mark_evidence_health(True)
                     return
                 logger.warning(
                     "alpaca trade_updates reused an event key with a changed payload",
@@ -572,6 +607,8 @@ class TradeUpdatesConsumer:
                             "event_key": key,
                         },
                     )
+                if not from_gap_reconcile:
+                    self._mark_evidence_health(True)
                 return
 
         client_order_id = adapter.opt_str(order.get("client_order_id"))
@@ -583,6 +620,8 @@ class TradeUpdatesConsumer:
             recovery_source="closed_orders_window" if from_gap_reconcile else None,
             recovery_window_limit=_GAP_RECONCILE_LIMIT if from_gap_reconcile else None,
         )
+        if not from_gap_reconcile:
+            self._mark_evidence_health(True)
         # Only a durable Clerk append earns idempotency state. If the Clerk
         # raises, the reconnect loop can retry the still-unseen frame.
         self._seen[key] = _SeenEvent(

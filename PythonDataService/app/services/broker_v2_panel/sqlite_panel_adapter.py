@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicSnapshot
+from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     ClerkProjection,
     ProjectedOperation,
@@ -110,7 +111,7 @@ def adapt_sqlite_panel(
             "exposure": {
                 position.symbol: position.attributed_qty
                 for position in projection.positions
-                if abs(position.attributed_qty) > 0
+                if position_quantity_is_nonzero(position.attributed_qty)
             },
             "working_orders": _working_orders(
                 panel,
@@ -147,8 +148,13 @@ def adapt_sqlite_catalog(
                 f"Bot '{row.strategy_instance_id}' has no SQLite economic snapshot."
             )
         projection = projections.get(row.strategy_instance_id)
+        exposure = {
+            symbol: quantity
+            for symbol, quantity in economics.exposure.items()
+            if position_quantity_is_nonzero(quantity)
+        }
         economic_updates: dict[str, object] = {
-            "exposure": dict(economics.exposure),
+            "exposure": exposure,
             "fills_today": economics.fills_today,
             "realized_pnl_today": economics.realized_pnl_today,
             "open_pnl": economics.open_pnl,
@@ -169,7 +175,7 @@ def adapt_sqlite_catalog(
                     "status_explanation": _sqlite_catalog_explanation(
                         row,
                         projection,
-                        exposure=economics.exposure,
+                        exposure=exposure,
                     ),
                     # Recovery mutations require the bot panel's typed
                     # confirmation flow; the compact fleet row links there.
@@ -265,7 +271,7 @@ def _sqlite_catalog_explanation(
         return "Retired; no further runs can start."
     if row.running:
         return "Running under SQLite Account Clerk custody."
-    if any(abs(quantity) > 0 for quantity in exposure.values()):
+    if any(position_quantity_is_nonzero(quantity) for quantity in exposure.values()):
         return "Off duty with Clerk-attributed exposure."
     return "Off duty and flat."
 

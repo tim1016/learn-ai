@@ -11,9 +11,9 @@ import contextlib
 import os
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.engine.live.identity import strategy_instance_artifact_dir
 from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
@@ -80,6 +80,45 @@ class BotLifecycleStateRecord(BaseModel):
     last_disposition_id: str | None = None
     last_disposition_action: str | None = None
     version: int = 1
+
+
+class BotLifecycleStateUpdateResult(BaseModel):
+    """Observable outcome of one version- or run-fenced state update."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    status: Literal["RECORDED", "SUPERSEDED"]
+    record: BotLifecycleStateRecord | None
+    refusal_reason: Literal["ACTIVE_RUN_MISMATCH", "VERSION_MISMATCH"] | None = None
+
+    @model_validator(mode="after")
+    def validate_outcome(self) -> Self:
+        if self.status == "RECORDED":
+            if self.record is None or self.refusal_reason is not None:
+                raise ValueError("a recorded lifecycle update requires its record and no refusal")
+        elif self.refusal_reason is None:
+            raise ValueError("a superseded lifecycle update requires a refusal reason")
+        return self
+
+    @classmethod
+    def recorded(cls, record: BotLifecycleStateRecord) -> BotLifecycleStateUpdateResult:
+        return cls(status="RECORDED", record=record)
+
+    @classmethod
+    def superseded(
+        cls,
+        record: BotLifecycleStateRecord | None,
+        *,
+        reason: Literal["ACTIVE_RUN_MISMATCH", "VERSION_MISMATCH"],
+    ) -> BotLifecycleStateUpdateResult:
+        return cls(status="SUPERSEDED", record=record, refusal_reason=reason)
+
+    def require_recorded(self) -> BotLifecycleStateRecord:
+        """Return the written record for an update with no conditional fence."""
+
+        if self.status != "RECORDED" or self.record is None:
+            raise RuntimeError("an unconditional lifecycle update was unexpectedly refused")
+        return self.record
 
 
 class BotRollCallOfferRecord(BaseModel):
@@ -154,7 +193,7 @@ class BotLifecycleStateRepo:
             reason=reason,
             disposition_id=disposition_id,
             disposition_action=disposition_action,
-        )
+        ).require_recorded()
 
     def set_phase(
         self,
@@ -178,7 +217,7 @@ class BotLifecycleStateRepo:
             clear_duty_outcome=phase is BotLifecyclePhase.ON_DUTY,
             disposition_id=disposition_id,
             disposition_action=disposition_action,
-        )
+        ).require_recorded()
 
     def retire(
         self,
@@ -207,7 +246,7 @@ class BotLifecycleStateRepo:
             ),
             disposition_id=disposition_id,
             disposition_action=disposition_action,
-        )
+        ).require_recorded()
 
     def record_terminal_outcome(
         self,
@@ -216,9 +255,10 @@ class BotLifecycleStateRepo:
         updated_by: str,
         reason: str,
         expected_active_run_id: str | None = None,
+        expected_version: int | None = None,
         disposition_id: str | None = None,
         disposition_action: str | None = None,
-    ) -> BotLifecycleStateRecord:
+    ) -> BotLifecycleStateUpdateResult:
         """Record a dead process honestly without leaving it ON_DUTY."""
 
         return self.update(
@@ -229,6 +269,7 @@ class BotLifecycleStateRepo:
             reason=reason,
             duty_outcome=outcome,
             expected_active_run_id=expected_active_run_id,
+            expected_version=expected_version,
             disposition_id=disposition_id,
             disposition_action=disposition_action,
         )
@@ -253,7 +294,7 @@ class BotLifecycleStateRepo:
             clear_duty_outcome=True,
             disposition_id=disposition_id,
             disposition_action=disposition_action,
-        )
+        ).require_recorded()
 
     def update(
         self,
@@ -272,19 +313,30 @@ class BotLifecycleStateRepo:
         clear_retirement: bool = False,
         clear_duty_outcome: bool = False,
         expected_active_run_id: str | None = None,
+        expected_version: int | None = None,
         disposition_id: str | None = None,
         disposition_action: str | None = None,
-    ) -> BotLifecycleStateRecord:
+    ) -> BotLifecycleStateUpdateResult:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with _file_lock(self._path):
             existing = self.read()
+            if expected_version is not None and (
+                existing is None or existing.version != expected_version
+            ):
+                return BotLifecycleStateUpdateResult.superseded(
+                    existing,
+                    reason="VERSION_MISMATCH",
+                )
             if (
                 expected_active_run_id is not None
                 and existing is not None
                 and existing.active_run_id is not None
                 and existing.active_run_id != expected_active_run_id
             ):
-                return existing
+                return BotLifecycleStateUpdateResult.superseded(
+                    existing,
+                    reason="ACTIVE_RUN_MISMATCH",
+                )
             next_phase = (
                 phase
                 if phase is not None
@@ -364,7 +416,7 @@ class BotLifecycleStateRepo:
                 version=(existing.version + 1) if existing is not None else 1,
             )
             self._write_locked(record)
-            return record
+            return BotLifecycleStateUpdateResult.recorded(record)
 
     def _write_locked(self, record: BotLifecycleStateRecord) -> None:
         tmp_path = self._path.with_suffix(self._path.suffix + ".tmp")
@@ -474,6 +526,7 @@ __all__ = [
     "BotLifecycleStateCorruptError",
     "BotLifecycleStateRecord",
     "BotLifecycleStateRepo",
+    "BotLifecycleStateUpdateResult",
     "BotRollCallOfferRecord",
     "BotRollCallOfferRepo",
     "stable_bot_lifecycle_state_path",

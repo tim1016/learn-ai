@@ -71,28 +71,6 @@ are recorded in the audit doc's candidate table and should not be
 re-investigated; activated SQLite is fail-closed for ordinary faults, and each
 seam below is a specific conditional gap, not a general weakness.
 
-- **Accepted ENTER survives lookup failure without becoming admission-blocking
-  (high).** `sqlite/order_evidence.py:343-414` — exact lookup catches every
-  `BrokerError` and returns without folding uncertainty, so a
-  crash-after-accept/before-contact operation stays `operation_state=accepted`.
-  Recovery does record `RECONCILIATION_ATTEMPTED` with `STILL_UNKNOWN`
-  (`sqlite/reconcile.py:229-287`) but preserves that state and raises no
-  admission-authoritative uncertainty or hold; admission checks
-  reconciliation-in-progress, EXIT, holds, uncertainties, and manual work, but
-  **not a nonterminal ENTER** (`sqlite/uncertainty.py:347-468`). Preserve the
-  invariant: an operation whose broker outcome is unknown must block new
-  exposure, not merely be annotated. [#1614](https://github.com/tim1016/learn-ai/issues/1614)
-
-- **Capture or parse failure leaves execution health green (high).**
-  `broker/alpaca/trade_updates.py:424-507` — a failed verbatim capture, invalid
-  JSON, or unmappable fill returns from the frame handler and continues the same
-  socket cycle. The evidence sink is never called, and health is socket-connected
-  state only, with no last-valid-frame freshness budget
-  (`trade_updates.py:318-343`). A later periodic REST pass may repair custody, but
-  until then the submit gate sees execution as healthy. Preserve the invariant:
-  a stream that is connected but not delivering usable evidence is not healthy.
-  [#1615](https://github.com/tim1016/learn-ai/issues/1615)
-
 - **A non-`BrokerError` sweep failure reopens admission without authoring
   uncertainty (medium).** `sqlite/reconciliation_sweep.py:128-146` — an unexpected
   periodic-pass exception is logged and converted to `False`, and the reconciler's
@@ -148,30 +126,6 @@ frozenset({"resume"})`) and replaces the rest with `projection.recovery_actions`
 survives adaptation on an activated account. The three **live** sites are below;
 the two `presented_actions.py` sites follow them, scoped as legacy-only.
 
-- **The live exposure map is built with a non-canonical rule (medium).**
-  `services/broker_v2_panel/sqlite_panel_adapter.py:110-114` filters
-  `projection.positions` by `abs(position.attributed_qty) > 0` when constructing
-  `BotPanelView.exposure`. This is the activated-SQLite path, and the resulting
-  map is both what the Frontend reads to decide "Flat" and the `exposure`
-  argument the two live sites below consume — so it is upstream of them.
-  Preserve the invariant: the exposure map an operator surface reads is built
-  with the canonical predicate.
-  [#1628](https://github.com/tim1016/learn-ai/issues/1628)
-
-- **The roster's flatness sentence is non-canonical (medium).**
-  `services/broker_v2_panel/sqlite_panel_adapter.py:268` chooses between
-  *"Off duty with Clerk-attributed exposure."* and *"Off duty and flat."* — the
-  sentence rendered on every roster row (observed live on all 10 bots,
-  `docs/audits/live-operator-surface-inventory-2026-08-18.md`). Preserve the
-  invariant: the operator sentence and the custody verdict never disagree.
-  [#1628](https://github.com/tim1016/learn-ai/issues/1628)
-
-- **Resume labelling uses the same non-canonical rule (low).**
-  `services/broker_v2_panel/panel_projection_service.py:170` chooses between
-  *"Resume custody proof ready"* and *"Flat Resume ready"*. `adapt_sqlite_panel`
-  does not replace the health card, so this copy survives on the live path.
-  Affects copy only. [#1628](https://github.com/tim1016/learn-ai/issues/1628)
-
 - **[Legacy path only] `presented_actions.py:61` and `:63`.** `has_exposure`
   (gating `flatten_stop`) and `account_expected_flat`, both `abs(x) > 0`. The
   first sweep filed these as live, and the `flatten_stop` one as high severity,
@@ -198,53 +152,6 @@ evaluator plane retires with the IBKR bot-control surface. These are its open
 consequences, re-verified line-by-line against current code. **Two of ADR 0038's
 own consequence statements did not survive that re-verification and are corrected
 here**; a dated correction note is on the ADR itself.
-
-- **`update(expected_active_run_id=…)` refuses silently, and one caller reports
-  success anyway (medium).**
-  `engine/live/bot_lifecycle_state.py:281-287` returns the existing record on
-  mismatch instead of raising, and every caller discards the return value —
-  `engine/live/lifecycle_exit_finalizer.py:115`,
-  `services/bot_boot_recovery.py:153`, `services/bot_run_evidence.py:72`, and
-  `services/bot_run_terminal.py:69` through it.
-
-  **The refusal is deliberate and tested, and the two records it produces do not
-  contradict each other.** It fires when a newer run has already taken over the
-  instance; `tests/engine/live/test_bot_lifecycle_evaluator.py:232`
-  (`test_stale_terminal_fact_cannot_supersede_a_newer_on_duty_run`) pins exactly
-  that. The published receipt records that *the old run* ended, while
-  `lifecycle_state.json` correctly stays `ON_DUTY` on *the new run* — two facts
-  about two different runs. An earlier revision of this entry called that a
-  permanent contradiction and rated it high; that was wrong, and suppressing the
-  receipt would discard valid run-history evidence.
-
-  What remains is an observability defect. Nothing distinguishes *recorded* from
-  *superseded*, and `services/bot_boot_recovery.py:153-172` acts on the
-  assumption it was recorded: it appends the instance to `interrupted` and logs
-  `boot_sweep_interrupted` — "Boot sweep recorded interrupted bot" —
-  unconditionally. Its `record.active_run_id` is read at `:110` and used as the
-  expectation at `:162`, with no lock spanning the two, so the report can assert
-  a write that did not land. Preserve the invariant: **a refused write must be
-  observable to the caller that issued it**, and a caller may not report success
-  it did not verify. Do not "fix" this by withholding the terminal receipt. [#1630](https://github.com/tim1016/learn-ai/issues/1630)
-
-- **`BotLifecycleStateRecord.version` is receipt metadata, not a fence (medium).**
-  `engine/live/bot_lifecycle_state.py:82` (declared), `:364` (incremented on
-  every `update()`). **Correction to ADR 0038 consequence 3, which says it is
-  "never read" — it is read, three times, all in
-  `engine/live/bot_lifecycle_evaluator.py`:** `:672` as a receipt `sequence`,
-  `:673` to synthesize a `receipt_id`, and `:731` as the `state_version` stamped
-  into every terminal disposition receipt. What no reader does is *compare* it:
-  `update()` has no `expected_version` parameter and no compare-and-swap. Writes
-  are serialized by an advisory `flock` (`live_state_sidecar.py:267`), which
-  orders concurrent writers but cannot express "I intended to write on top of
-  version N". A second hazard rides on the same field: `:672` feeds a
-  lifecycle-state version into a receipt's `sequence`, which everywhere else
-  means the disposition log's own contiguous counter (`_next_sequence_locked`) —
-  two different counters rendered in one field. That receipt is returned, not
-  appended, so the log's contiguity check is not corrupted; a caller reading
-  `sequence` is nevertheless misled. Preserve the invariant: a field that reads
-  as a fence either fences or does not exist, and one field name means one
-  counter. [#1631](https://github.com/tim1016/learn-ai/issues/1631)
 
 - **The plane discriminator gates one sweep, not every duty-state write
   (medium).** `services/bot_runner.py:1025` `_manages_boot_recovery` is the only

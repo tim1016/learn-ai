@@ -244,7 +244,7 @@ def test_stale_terminal_fact_cannot_supersede_a_newer_on_duty_run(tmp_path: Path
         admission=_admission("run-new"),
     )
 
-    evaluator.record_terminal_outcome(
+    disposition = evaluator.record_terminal_outcome(
         BotDutyOutcome(
             kind="CRASHED",
             reason_code="PROCESS_CRASHED",
@@ -256,6 +256,11 @@ def test_stale_terminal_fact_cannot_supersede_a_newer_on_duty_run(tmp_path: Path
         expected_active_run_id="run-old",
     )
 
+    assert disposition is not None
+    assert disposition.receipt.status == "COMMITTED"
+    assert disposition.receipt.state_update_status == "SUPERSEDED"
+    assert disposition.receipt.duty_outcome is not None
+    assert disposition.receipt.duty_outcome.run_id == "run-old"
     record = BotLifecycleStateRepo(stable_bot_lifecycle_state_path(tmp_path, _SID)).read()
     assert record is not None
     assert record.phase is BotLifecyclePhase.ON_DUTY
@@ -421,6 +426,47 @@ def test_idempotent_retire_repairs_its_interrupted_receipt_before_returning(tmp_
 
     evaluator.retire(now_ms=20, updated_by="operator", reason="replacement")
 
+    assert [(receipt.sequence, receipt.status) for receipt in _receipts(tmp_path)] == [
+        (1, "PENDING"),
+        (1, "COMMITTED"),
+    ]
+
+
+def test_idempotent_retire_reuses_the_disposition_sequence_not_state_version(
+    tmp_path: Path,
+) -> None:
+    state_repo = BotLifecycleStateRepo(stable_bot_lifecycle_state_path(tmp_path, _SID))
+    state_repo.set_roster(False, now_ms=1, updated_by="operator")
+    state_repo.set_roster(True, now_ms=2, updated_by="operator")
+    evaluator = BotLifecycleEvaluator(tmp_path, _SID)
+
+    first = evaluator.retire(now_ms=3, updated_by="operator", reason="replacement")
+    replay = evaluator.retire(now_ms=4, updated_by="operator", reason="replacement")
+
+    assert first.receipt.sequence == 1
+    assert first.receipt.state_version == 3
+    assert replay.receipt.sequence == first.receipt.sequence
+    assert replay.receipt.receipt_id == first.receipt.receipt_id
+    assert replay.receipt.state_version == first.receipt.state_version
+    assert replay.replayed is True
+    assert [(receipt.sequence, receipt.status) for receipt in _receipts(tmp_path)] == [
+        (1, "PENDING"),
+        (1, "COMMITTED"),
+    ]
+
+
+def test_legacy_retired_state_reuses_its_fallback_disposition_receipt(
+    tmp_path: Path,
+) -> None:
+    state_repo = BotLifecycleStateRepo(stable_bot_lifecycle_state_path(tmp_path, _SID))
+    state_repo.retire(now_ms=1, updated_by="legacy", reason="replacement")
+    evaluator = BotLifecycleEvaluator(tmp_path, _SID)
+
+    first = evaluator.retire(now_ms=2, updated_by="operator", reason="replacement")
+    replay = evaluator.retire(now_ms=3, updated_by="operator", reason="replacement")
+
+    assert replay.receipt.receipt_id == first.receipt.receipt_id
+    assert replay.replayed is True
     assert [(receipt.sequence, receipt.status) for receipt in _receipts(tmp_path)] == [
         (1, "PENDING"),
         (1, "COMMITTED"),

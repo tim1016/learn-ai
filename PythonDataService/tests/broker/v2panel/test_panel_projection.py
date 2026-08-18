@@ -40,7 +40,10 @@ from app.services.broker_v2_panel.panel_projection_service import (
     build_panel,
     compute_revision,
 )
-from app.services.broker_v2_panel.sqlite_panel_adapter import adapt_sqlite_panel
+from app.services.broker_v2_panel.sqlite_panel_adapter import (
+    adapt_sqlite_panel,
+    build_sqlite_catalog,
+)
 from app.services.sqlite_clerk_compat import sqlite_clerk_status
 from tests.broker.v2panel.fixtures import (
     ACCT,
@@ -424,6 +427,74 @@ def test_sqlite_adapter_projects_execution_economics_and_durable_working_order_d
             "observed_at_ms": _NOW - 300,
         }
     ]
+
+
+def test_adapt_sqlite_panel_omits_sub_epsilon_exposure() -> None:
+    projection = replace(
+        _rail_projection(orders=()),
+        positions=(
+            ProjectedPosition(
+                strategy_instance_id=SID,
+                symbol="SPY",
+                attributed_qty=1e-12,
+                updated_at_ms=_NOW - 200,
+            ),
+        ),
+    )
+
+    adapted = adapt_sqlite_panel(
+        _panel(_status(running=False), _clerk_status(), [], exposure={"SPY": 1e-12}),
+        projection,
+    )
+
+    assert adapted.exposure == {}
+
+
+def test_build_sqlite_catalog_omits_sub_epsilon_exposure_and_reports_flat() -> None:
+    status = _status(running=False).model_copy(
+        update={"strategy_label": "Deployment Validation"}
+    )
+    projection = replace(_rail_projection(orders=()), runs=(), commands=(), operations=())
+    economics = EconomicSnapshot(
+        account_id=ACCT,
+        strategy_instance_id=SID,
+        authority_generation=4,
+        control_revision=projection.control_revision,
+        session_open_ms=_NOW - 3_600_000,
+        session_close_ms=_NOW + 3_600_000,
+        recent_fills=(),
+        fills_today=0,
+        exposure={"SPY": 1e-12},
+        realized_pnl_today=0.0,
+        open_pnl=0.0,
+        marks_complete=True,
+        mark_observed_at_ms={"SPY": _NOW},
+        fee_fidelity="reported",
+        execution_coverage="complete",
+        last_activity_at_ms=_NOW,
+    )
+
+    catalog = build_sqlite_catalog(
+        [status],
+        projections={SID: projection},
+        economic_rollups={SID: economics},
+        account_id=ACCT,
+    )
+
+    assert catalog[0].exposure == {}
+    assert catalog[0].status_explanation == "Off duty and flat."
+
+
+def test_build_panel_uses_flat_resume_copy_for_sub_epsilon_exposure() -> None:
+    panel = _panel(
+        _status(running=False),
+        _clerk_status(),
+        [],
+        exposure={"SPY": 1e-12},
+        resume_allowed=True,
+    )
+
+    assert panel.health.resume_label == "Flat Resume ready"
 
 
 def _rail_projection(

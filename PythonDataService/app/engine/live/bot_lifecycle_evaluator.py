@@ -22,6 +22,7 @@ from app.engine.live.bot_lifecycle_state import (
     BotLifecyclePhase,
     BotLifecycleStateRecord,
     BotLifecycleStateRepo,
+    BotLifecycleStateUpdateResult,
     stable_bot_lifecycle_state_path,
 )
 from app.engine.live.desired_state import (
@@ -84,6 +85,7 @@ class LifecycleDispositionReceipt(BaseModel):
     active_run_id: str | None = None
     desired_state: DesiredState | None = None
     duty_outcome: BotDutyOutcome | None = None
+    state_update_status: Literal["RECORDED", "SUPERSEDED"] | None = None
     admission: LifecycleStartAdmissionEvidence | None = None
     failure: str | None = Field(default=None, max_length=500)
 
@@ -284,20 +286,22 @@ class BotLifecycleEvaluator:
         """Compatibility implementation for historical direct evaluator callers."""
 
         with self._operation_fence(operation_fence_held):
-            def mutate(receipt_id: str) -> BotLifecycleStateRecord:
+            def mutate(receipt_id: str) -> BotLifecycleStateUpdateResult:
                 current = self._state_repo.read()
                 if current is not None and current.phase is BotLifecyclePhase.RETIRED:
                     raise LifecycleTransitionRefusedError(
                         "a retired bot cannot return to duty without a replacement deploy"
                     )
-                return self._state_repo.set_phase(
-                    BotLifecyclePhase.ON_DUTY,
-                    now_ms=now_ms,
-                    updated_by=updated_by,
-                    active_run_id=run_id,
-                    reason=reason,
-                    disposition_id=receipt_id,
-                    disposition_action=LifecycleDispositionAction.START_ACCEPTED.value,
+                return BotLifecycleStateUpdateResult.recorded(
+                    self._state_repo.set_phase(
+                        BotLifecyclePhase.ON_DUTY,
+                        now_ms=now_ms,
+                        updated_by=updated_by,
+                        active_run_id=run_id,
+                        reason=reason,
+                        disposition_id=receipt_id,
+                        disposition_action=LifecycleDispositionAction.START_ACCEPTED.value,
+                    )
                 )
             return self._record_lifecycle(
                 action=LifecycleDispositionAction.START_ACCEPTED,
@@ -379,17 +383,19 @@ class BotLifecycleEvaluator:
         operation_fence_held: bool = False,
     ) -> LifecycleDisposition:
         with self._operation_fence(operation_fence_held):
-            def mutate(receipt_id: str) -> BotLifecycleStateRecord:
+            def mutate(receipt_id: str) -> BotLifecycleStateUpdateResult:
                 current = self._state_repo.read()
                 if current is not None and current.phase is BotLifecyclePhase.RETIRED:
                     raise LifecycleTransitionRefusedError("a retired bot cannot be added to the duty roster")
-                return self._state_repo.set_roster(
-                    on_roster,
-                    now_ms=now_ms,
-                    updated_by=updated_by,
-                    reason=reason,
-                    disposition_id=receipt_id,
-                    disposition_action=LifecycleDispositionAction.ROSTER_CHANGED.value,
+                return BotLifecycleStateUpdateResult.recorded(
+                    self._state_repo.set_roster(
+                        on_roster,
+                        now_ms=now_ms,
+                        updated_by=updated_by,
+                        reason=reason,
+                        disposition_id=receipt_id,
+                        disposition_action=LifecycleDispositionAction.ROSTER_CHANGED.value,
+                    )
                 )
             return self._record_lifecycle(
                 action=LifecycleDispositionAction.ROSTER_CHANGED,
@@ -416,7 +422,7 @@ class BotLifecycleEvaluator:
             if current is not None and current.phase is BotLifecyclePhase.RETIRED:
                 return None
 
-            def mutate(receipt_id: str) -> BotLifecycleStateRecord:
+            def mutate(receipt_id: str) -> BotLifecycleStateUpdateResult:
                 return self._state_repo.record_terminal_outcome(
                     outcome,
                     updated_by=updated_by,
@@ -431,6 +437,7 @@ class BotLifecycleEvaluator:
                 updated_by=updated_by,
                 reason=reason,
                 mutate=mutate,
+                receipt_duty_outcome=outcome,
             )
 
     def retire(
@@ -454,14 +461,16 @@ class BotLifecycleEvaluator:
                     record=current,
                 )
 
-            def mutate(receipt_id: str) -> BotLifecycleStateRecord:
-                return self._state_repo.retire(
-                    now_ms=now_ms,
-                    updated_by=updated_by,
-                    reason=reason,
-                    replacement_strategy_instance_id=replacement_strategy_instance_id,
-                    disposition_id=receipt_id,
-                    disposition_action=LifecycleDispositionAction.RETIRED.value,
+            def mutate(receipt_id: str) -> BotLifecycleStateUpdateResult:
+                return BotLifecycleStateUpdateResult.recorded(
+                    self._state_repo.retire(
+                        now_ms=now_ms,
+                        updated_by=updated_by,
+                        reason=reason,
+                        replacement_strategy_instance_id=replacement_strategy_instance_id,
+                        disposition_id=receipt_id,
+                        disposition_action=LifecycleDispositionAction.RETIRED.value,
+                    )
                 )
             return self._record_lifecycle(
                 action=LifecycleDispositionAction.RETIRED,
@@ -485,13 +494,15 @@ class BotLifecycleEvaluator:
             if current is None or current.phase is not BotLifecyclePhase.RETIRED:
                 return None
 
-            def mutate(receipt_id: str) -> BotLifecycleStateRecord:
-                return self._state_repo.reopen_for_deploy(
-                    now_ms=now_ms,
-                    updated_by=updated_by,
-                    reason=reason,
-                    disposition_id=receipt_id,
-                    disposition_action=LifecycleDispositionAction.REOPENED_FOR_DEPLOY.value,
+            def mutate(receipt_id: str) -> BotLifecycleStateUpdateResult:
+                return BotLifecycleStateUpdateResult.recorded(
+                    self._state_repo.reopen_for_deploy(
+                        now_ms=now_ms,
+                        updated_by=updated_by,
+                        reason=reason,
+                        disposition_id=receipt_id,
+                        disposition_action=LifecycleDispositionAction.REOPENED_FOR_DEPLOY.value,
+                    )
                 )
             return self._record_lifecycle(
                 action=LifecycleDispositionAction.REOPENED_FOR_DEPLOY,
@@ -635,8 +646,9 @@ class BotLifecycleEvaluator:
         now_ms: int,
         updated_by: str,
         reason: str | None,
-        mutate: Callable[[str], BotLifecycleStateRecord],
+        mutate: Callable[[str], BotLifecycleStateUpdateResult],
         admission: LifecycleStartAdmissionEvidence | None = None,
+        receipt_duty_outcome: BotDutyOutcome | None = None,
     ) -> LifecycleDisposition:
         with _file_lock(self._receipt_path):
             self._recover_pending_receipts_locked()
@@ -650,11 +662,22 @@ class BotLifecycleEvaluator:
                 admission=admission,
             )
             try:
-                record = mutate(pending.receipt_id)
+                update_result = mutate(pending.receipt_id)
             except BaseException as exc:
                 self._append_terminal_locked(pending, status="ABORTED", failure=str(exc))
                 raise
-            receipt = self._append_terminal_locked(pending, status="COMMITTED", lifecycle_state=record)
+            record = update_result.record
+            if record is None:
+                failure = "lifecycle state changed before the conditional update could be recorded"
+                self._append_terminal_locked(pending, status="ABORTED", failure=failure)
+                raise LifecycleTransitionRefusedError(failure)
+            receipt = self._append_terminal_locked(
+                pending,
+                status="COMMITTED",
+                lifecycle_state=record,
+                state_update_status=update_result.status,
+                receipt_duty_outcome=receipt_duty_outcome,
+            )
             return LifecycleDisposition(receipt=receipt, lifecycle_state=record)
 
     def _existing_lifecycle_disposition(
@@ -666,24 +689,64 @@ class BotLifecycleEvaluator:
         reason: str,
         record: BotLifecycleStateRecord,
     ) -> LifecycleDisposition:
-        """Return a durable-state receipt for an idempotent already-retired command."""
+        """Return the receipt-log sequence for an idempotent lifecycle command."""
 
-        receipt = LifecycleDispositionReceipt(
-            sequence=record.version,
-            receipt_id=record.last_disposition_id or f"{self._strategy_instance_id}:state:{record.version}",
-            strategy_instance_id=self._strategy_instance_id,
-            action=action,
-            status="COMMITTED",
-            recorded_at_ms=now_ms,
-            updated_by=updated_by,
-            reason=reason,
-            state_version=record.version,
-            phase=record.phase,
-            on_roster=record.on_roster,
-            active_run_id=record.active_run_id,
-            duty_outcome=record.duty_outcome,
-        )
-        return LifecycleDisposition(receipt=receipt, lifecycle_state=record)
+        with _file_lock(self._receipt_path):
+            receipts = self._read_receipts_locked()
+            if record.last_disposition_id is not None:
+                matching_receipt = next(
+                    (
+                        receipt
+                        for receipt in reversed(receipts)
+                        if receipt.receipt_id == record.last_disposition_id
+                        and receipt.action is action
+                        and receipt.status == "COMMITTED"
+                    ),
+                    None,
+                )
+                if matching_receipt is not None:
+                    return LifecycleDisposition(
+                        receipt=matching_receipt,
+                        lifecycle_state=record,
+                        replayed=True,
+                    )
+            fallback_receipt = (
+                next(
+                    (
+                        receipt
+                        for receipt in reversed(receipts)
+                        if receipt.action is action
+                        and receipt.status == "COMMITTED"
+                        and receipt.state_version == record.version
+                        and receipt.phase is record.phase
+                        and receipt.on_roster is record.on_roster
+                        and receipt.active_run_id == record.active_run_id
+                        and receipt.duty_outcome == record.duty_outcome
+                    ),
+                    None,
+                )
+                if record.last_disposition_id is None
+                else None
+            )
+            if fallback_receipt is not None:
+                return LifecycleDisposition(
+                    receipt=fallback_receipt,
+                    lifecycle_state=record,
+                    replayed=True,
+                )
+
+            pending = self._append_pending_locked(
+                action=action,
+                now_ms=now_ms,
+                updated_by=updated_by,
+                reason=reason,
+            )
+            receipt = self._append_terminal_locked(
+                pending,
+                status="COMMITTED",
+                lifecycle_state=record,
+            )
+            return LifecycleDisposition(receipt=receipt, lifecycle_state=record)
 
     def _append_pending_locked(
         self,
@@ -723,7 +786,12 @@ class BotLifecycleEvaluator:
         lifecycle_state: BotLifecycleStateRecord | None = None,
         desired_state: DesiredStateRecord | None = None,
         failure: str | None = None,
+        state_update_status: Literal["RECORDED", "SUPERSEDED"] | None = None,
+        receipt_duty_outcome: BotDutyOutcome | None = None,
     ) -> LifecycleDispositionReceipt:
+        effective_update_status = state_update_status
+        if effective_update_status is None and lifecycle_state is not None:
+            effective_update_status = "RECORDED"
         receipt = pending.model_copy(
             update={
                 "status": status,
@@ -736,7 +804,12 @@ class BotLifecycleEvaluator:
                 "on_roster": lifecycle_state.on_roster if lifecycle_state is not None else None,
                 "active_run_id": lifecycle_state.active_run_id if lifecycle_state is not None else None,
                 "desired_state": desired_state.desired_state if desired_state is not None else None,
-                "duty_outcome": lifecycle_state.duty_outcome if lifecycle_state is not None else None,
+                "duty_outcome": (
+                    receipt_duty_outcome
+                    if receipt_duty_outcome is not None
+                    else (lifecycle_state.duty_outcome if lifecycle_state is not None else None)
+                ),
+                "state_update_status": effective_update_status,
                 "failure": failure,
             }
         )
@@ -824,6 +897,7 @@ class BotLifecycleEvaluator:
                         receipt.active_run_id,
                         receipt.desired_state,
                         receipt.duty_outcome,
+                        receipt.state_update_status,
                         receipt.failure,
                     )
                 ):
@@ -875,6 +949,7 @@ class BotLifecycleEvaluator:
                         receipt.active_run_id,
                         receipt.desired_state,
                         receipt.duty_outcome,
+                        receipt.state_update_status,
                     )
                 )
             ):
