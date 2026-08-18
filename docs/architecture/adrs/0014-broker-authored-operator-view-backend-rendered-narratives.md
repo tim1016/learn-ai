@@ -1,6 +1,7 @@
 # ADR 0014 — Broker-authored operator view, backend-rendered narratives
 
-**Status:** Accepted 2026-06-22. Drafted during the 2026-06-22 broker-activity reconciliation design pass (Codex second-opinion round).
+**Status:** Accepted 2026-06-22
+**Provenance:** Drafted during the 2026-06-22 broker-activity reconciliation design pass (Codex second-opinion round).
 **Decision drivers:** Operator instruction during the design pass: *"we want to show the user what he will see in the client portal and if he sees a divergence he should see an explanation why to expect that divergence … all the authoring has to be done by the back end and front end will simply render those things."* The existing engine-side Activity tab (`BotTradesTableComponent` + `SizingAuditTableComponent`) shows what the *engine* believes happened; it cannot answer the operator question *"does what I see here match what IBKR sees?"* — there is no broker-side authority on the surface at all. Layering a divergence chip on top of engine-derived rows would invert the trust direction and re-import the synthetic-verdict pattern ADR 0013 forbids.
 **Related:** ADR 0008 (durable submit protocol — `order_ref` ownership, run-scoped WAL), ADR 0011 (broker safety verdict — reactive, fail-closed), ADR 0013 (operator-surface boundary: judgment vs evidence, no frontend-derived verdicts).
 
@@ -87,7 +88,7 @@ If the authored projection is corrupt or intentionally rebuilt, the safe rebuild
 
 ## Historical note 2026-06-25 — Host-runner-owned raw callback WAL
 
-**Status:** Folded into §4 and §5 above. Supersedes the original ADR 0014 §4 design where the data-plane publisher consumed live IBKR events directly and was the first durable capture point. The backend-rendered narrative rule, the closed verdict enum, and the template truthfulness contract remain unchanged.
+**Provenance:** Folded into §4 and §5 above. Supersedes the original ADR 0014 §4 design where the data-plane publisher consumed live IBKR events directly and was the first durable capture point. The backend-rendered narrative rule, the closed verdict enum, and the template truthfulness contract remain unchanged.
 
 The June25 incident showed that the data-plane publisher is the wrong owner for first-capture durability: the host runner can submit and fill orders while the long-lived data-plane process is stale, detached, or crashed. The current contract is therefore the two-stage model in §4: host-runner raw callback capture first, data-plane authored projection second.
 

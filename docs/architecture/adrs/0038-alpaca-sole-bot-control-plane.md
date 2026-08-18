@@ -1,7 +1,8 @@
 # ADR 0038: One bot control plane; SQLite holds the duty facts it already fences
 
+**Status:** Accepted
+
 - **Date:** 2026-08-17
-- **Status:** Accepted
 - **Context:** Wayfinder map [#1588](https://github.com/tim1016/learn-ai/issues/1588),
   decision ticket [#1598](https://github.com/tim1016/learn-ai/issues/1598); the
   census in `docs/audits/state-writer-census-2026-08-17.md`.

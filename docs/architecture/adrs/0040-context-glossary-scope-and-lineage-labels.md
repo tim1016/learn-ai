@@ -1,6 +1,7 @@
 # ADR 0040: `CONTEXT.md` is one glossary of the live trading domain, and every entry declares its lineage
 
-- **Status:** Accepted
+**Status:** Accepted
+
 - **Date:** 2026-08-18
 - **Context:** Wayfinder map [#1588](https://github.com/tim1016/learn-ai/issues/1588),
   decision ticket [#1595](https://github.com/tim1016/learn-ai/issues/1595).

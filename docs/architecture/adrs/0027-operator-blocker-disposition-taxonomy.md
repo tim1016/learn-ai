@@ -1,6 +1,6 @@
 # ADR-0027: Operator blocker disposition taxonomy
 
-**Status**: Accepted 2026-07-09.
+**Status:** Accepted 2026-07-09
 **Related**: ADR-0013 (operator-surface judgment vs evidence), ADR-0015
 (operator notice contract), ADR-0025 (single dominant headline),
 ADR-0026 (daily bot lifecycle), deploy-preflight operator-blocker PRD

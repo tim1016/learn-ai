@@ -1,6 +1,7 @@
 # ADR-0028: Bot Cockpit operator-plane authority and channel contracts
 
-**Status**: Retired 2026-08-06 without adoption. The IBKR Bot Cockpit/operator-surface implementation was removed; new bot-control work targets Alpaca Broker V2.
+**Status:** Retired 2026-08-06
+**Provenance:** Retired without adoption. The IBKR Bot Cockpit/operator-surface implementation was removed; new bot-control work targets Alpaca Broker V2.
 **Supersession note (2026-07-22):** Account Clerk, lifecycle, and operator procedure
 authority is ADR-0030, ADR-0026, and `docs/bot-control-operator-manual.md`. References
 to AccountOwner, its takeover, the former lifecycle snapshot, or the roadmap below are

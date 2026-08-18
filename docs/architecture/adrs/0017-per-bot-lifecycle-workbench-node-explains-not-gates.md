@@ -1,6 +1,7 @@
 # ADR 0017 — Per-bot lifecycle workbench: nodes explain, they don't gate
 
-**Status:** Proposed 2026-06-30. Drafted during the 2026-06-30 bot lifecycle control-panel grilling session.
+**Status:** Accepted 2026-08-18
+**Provenance:** Promoted from `Proposed` to `Accepted` on 2026-08-18 under [ADR 0039](0039-adr-status-is-decision-standing.md) Decision 1 — a read-through confirming the decision still stands. No code conformance was checked, and none is implied. Original Status line: Proposed 2026-06-30. Drafted during the 2026-06-30 bot lifecycle control-panel grilling session.
 **Decision drivers:** The per-bot workbench (`broker/bots/:id`) was organized around implementation tabs (Status & Risk / Activity / Audit / Configuration) that no longer match the product as the lifecycle chart accrues numerical receipts and new variables; the tab layout no longer fits the page; trader-facing surfaces were at risk of leaking raw enum codes as primary copy; "posture" was used as an overloaded, sometimes frontend-derived label; and there was no clear home for "what field or proof needs action" guidance.
 **Related:** ADR 0013 (operator-surface boundary: judgment vs evidence — amended by Slice 3), ADR 0014 (broker-authored operator view, backend-rendered narratives), ADR 0015 (operator notice contract), ADR 0016 (Bot Control trader-authored activity and deploy packages), `CONTEXT.md` (Live operator console glossary), PRD #718, `docs/bot-lifecycle-workbench-redesign.md` (implementation spec).
 

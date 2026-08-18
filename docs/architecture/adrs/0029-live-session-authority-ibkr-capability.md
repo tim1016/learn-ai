@@ -1,7 +1,8 @@
 # ADR 0029: Live Session Authority Extends Calendar With IBKR Capability
 
+**Status:** Accepted
+
 - **Date:** 2026-07-12
-- **Status:** Accepted
 - **Context:** Issue #1005 Slice 1
 
 ## Decision

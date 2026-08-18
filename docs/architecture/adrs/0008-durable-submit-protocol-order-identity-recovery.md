@@ -75,7 +75,7 @@ At the activation point, flatten + cancel + archive old `live_state.json` for ev
 
 ## Amendment 2026-06-22 — `broker_activity.jsonl` as a sibling WAL
 
-**Status:** Shipped alongside ADR 0014 (broker-authored operator view).
+**Provenance:** Shipped alongside ADR 0014 (broker-authored operator view).
 
 The broker-activity reconciliation surface (ADR 0014) introduced a second append-only WAL inside the per-run directory: `broker_activity.jsonl`. It registered here as a sibling of `intent_events.jsonl` because it follows the identical durability contract — same atomic-append + fsync-before-return pattern, same per-run single-writer ownership, same trailing-unterminated-line tolerance, same per-run monotonic `seq` cursor folded by `LiveStateEnvelope.last_broker_activity_wal_seq`. The 2026-06-25 amendment below supersedes this WAL as the first durable broker-callback capture point; `broker_activity.jsonl` remains the authored operator-view projection.
 
@@ -90,7 +90,7 @@ The two WALs do not write to each other's surfaces. The publisher reads `LiveSta
 
 ## Amendment 2026-06-25 — `broker_callbacks.jsonl` as the broker-capture WAL
 
-**Status:** Accepted for issue #684 PR 2. Supersedes only the 2026-06-22 statement that the data-plane publisher is the single writer responsible for live broker-activity capture.
+**Provenance:** Accepted for issue #684 PR 2. Supersedes only the 2026-06-22 statement that the data-plane publisher is the single writer responsible for live broker-activity capture.
 
 The June25 incident exposed a gap in the sibling-WAL model above: a submit-enabled host runner can place and fill orders while the data-plane publisher is stale or detached. The durable record of broker callbacks must therefore be written by the same process that owns the order lifecycle.
 

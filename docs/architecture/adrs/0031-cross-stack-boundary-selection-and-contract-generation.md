@@ -1,7 +1,8 @@
 # ADR 0031: Cross-Stack Boundary Selection and Generated Contracts
 
+**Status:** Accepted
+
 - **Date:** 2026-07-20
-- **Status:** Accepted
 - **Context:** Issue #1126
 
 ## Decision
