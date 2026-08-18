@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicSnapshot
+from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     ClerkProjection,
     ProjectedOperation,
@@ -110,7 +111,7 @@ def adapt_sqlite_panel(
             "exposure": {
                 position.symbol: position.attributed_qty
                 for position in projection.positions
-                if abs(position.attributed_qty) > 0
+                if position_quantity_is_nonzero(position.attributed_qty)
             },
             "working_orders": _working_orders(
                 panel,
@@ -265,7 +266,7 @@ def _sqlite_catalog_explanation(
         return "Retired; no further runs can start."
     if row.running:
         return "Running under SQLite Account Clerk custody."
-    if any(abs(quantity) > 0 for quantity in exposure.values()):
+    if any(position_quantity_is_nonzero(quantity) for quantity in exposure.values()):
         return "Off duty with Clerk-attributed exposure."
     return "Off duty and flat."
 
