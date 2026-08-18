@@ -13,6 +13,7 @@ import app.services.fleet_contamination as fleet_contamination
 from app.engine.live.account_clerk import AccountClerkJournalEntry
 from app.engine.live.account_clerk_journal_models import (
     AccountClerkBrokerEvidenceBaseline,
+    AccountClerkOperatorAdjustment,
     AccountClerkPositionEvidence,
 )
 from app.engine.live.account_clerk_reconciler import namespace_expected_exposure
@@ -83,6 +84,15 @@ def test_fold_execution_exposure_normalizes_and_deduplicates() -> None:
     }
 
 
+def test_fold_execution_exposure_prunes_sub_epsilon_residue() -> None:
+    effects = [
+        ExecutionExposureEffect("DUA", "ns-a", "SPY", "exec-1", 0.5e-9),
+        ExecutionExposureEffect("DUA", "ns-a", "SPY", "exec-2", 0.25e-9),
+    ]
+
+    assert fold_execution_exposure(effects) == {}
+
+
 def test_project_journal_exposure_redelivery_does_not_change_exposure() -> None:
     entries = _fixture_entries()
     without_redelivery = [
@@ -95,6 +105,27 @@ def test_project_journal_exposure_redelivery_does_not_change_exposure() -> None:
         without_redelivery,
         group_by="namespace",
     )
+
+
+def test_project_journal_exposure_prunes_sub_epsilon_operator_adjustment() -> None:
+    entry = AccountClerkJournalEntry(
+        seq=1,
+        entry_kind="operator_adjustment",
+        recorded_at_ms=1_780_000_000_000,
+        operator_adjustment=AccountClerkOperatorAdjustment(
+            account_id="DUA",
+            bot_order_namespace="learn-ai/ns-a/v1",
+            symbol="SPY",
+            signed_quantity=0.75e-9,
+            request_provenance="test",
+            reason="exercise the canonical flatness boundary",
+            evidence_refs=("test:sub-epsilon-residue",),
+            idempotency_key="sub-epsilon-residue",
+            recorded_at_ms=1_780_000_000_000,
+        ),
+    )
+
+    assert project_journal_exposure([entry], group_by="namespace") == ()
 
 
 def test_project_journal_exposure_does_not_deduplicate_matching_exec_ids_across_accounts() -> None:
@@ -159,6 +190,27 @@ def test_broker_evidence_baseline_is_account_visible_but_never_given_a_bot_names
 
     assert [(row.account_id, row.symbol, row.quantity) for row in account_rows] == [("DUA", "SPY", 2.0)]
     assert project_journal_exposure([baseline], group_by="namespace") == ()
+
+
+def test_project_journal_account_exposure_prunes_sub_epsilon_baseline() -> None:
+    baseline = AccountClerkJournalEntry(
+        seq=1,
+        entry_kind="broker_evidence_baseline",
+        recorded_at_ms=1_780_000_000_000,
+        broker_evidence_baseline=AccountClerkBrokerEvidenceBaseline(
+            account_id="DUA",
+            observed_at_ms=1_780_000_000_000,
+            positions=(
+                AccountClerkPositionEvidence(
+                    symbol="SPY",
+                    signed_quantity=0.75e-9,
+                    evidence_observed_at_ms=1_780_000_000_000,
+                ),
+            ),
+        ),
+    )
+
+    assert project_journal_account_exposure([baseline], account_id="DUA") == ()
 
 
 def test_reconciler_and_contamination_share_the_journal_projection(

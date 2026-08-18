@@ -321,6 +321,33 @@ async def test_fetch_positions_filters_by_account_and_skips_zero_quantity() -> N
 
 
 @pytest.mark.asyncio
+async def test_fetch_positions_authors_canonical_exposure_verdict() -> None:
+    positions = [
+        SimpleNamespace(
+            account="DU1234567",
+            contract=_stock_contract("SPY", 756733),
+            position=0.75e-9,
+            avgCost=590.0,
+        ),
+        SimpleNamespace(
+            account="DU1234567",
+            contract=_stock_contract("AAPL", 12345),
+            position=1e-9,
+            avgCost=180.0,
+        ),
+    ]
+    client = _fake_client("DU1234567", positions=positions)
+
+    snap = await fetch_positions(client)
+    serialized_positions = snap.model_dump(mode="json")["positions"]
+
+    assert {position["symbol"]: position["has_exposure"] for position in serialized_positions} == {
+        "AAPL": True,
+        "SPY": False,
+    }
+
+
+@pytest.mark.asyncio
 async def test_fetch_positions_continues_on_unparseable_row() -> None:
     """One bad row must not poison the rest of the snapshot."""
     bad_contract = SimpleNamespace(

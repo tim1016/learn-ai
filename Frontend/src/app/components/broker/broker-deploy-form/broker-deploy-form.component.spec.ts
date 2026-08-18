@@ -136,7 +136,7 @@ function setup(
       expected_rule: unknown;
       actual_rule: unknown;
     };
-    positions?: { symbol: string; quantity: number }[];
+    positions?: { symbol: string; quantity: number; has_exposure: boolean }[];
     queryParams?: Record<string, string>;
     strategies?: {
       name: string;
@@ -887,7 +887,7 @@ describe('BrokerDeployFormComponent', () => {
         expected_rule: { kind: 'SetHoldings', fraction: '1.0' },
         actual_rule: null,
       },
-      positions: [{ symbol: 'SPY', quantity: 37 }],
+      positions: [{ symbol: 'SPY', quantity: 37, has_exposure: true }],
     });
     component.qcAuditCopyPath.set('references/qc-shadow/A.py');
     fillRequired(component);
@@ -898,6 +898,27 @@ describe('BrokerDeployFormComponent', () => {
     fixture.detectChanges();
 
     expect(blockerText(component)).toMatch(/already holds 37/);
+  });
+
+  it('allows Reference parity when the backend classifies a fractional residue as flat', async () => {
+    const { fixture, component } = setup({
+      parityGate: {
+        verdict: 'proven_match',
+        detail: 'audit copy proves SetHoldings(1.0)',
+        expected_rule: { kind: 'SetHoldings', fraction: '1.0' },
+        actual_rule: null,
+      },
+      positions: [{ symbol: 'SPY', quantity: 0.75e-9, has_exposure: false }],
+    });
+    component.qcAuditCopyPath.set('references/qc-shadow/A.py');
+    fillRequired(component);
+    await flush();
+    await flush();
+    await flush();
+    component.sizingPreset.set('reference_parity');
+    fixture.detectChanges();
+
+    expect(blockerText(component)).toBeNull();
   });
 
   it('refuses to switch to Reference parity when the gate is cannot_prove', async () => {

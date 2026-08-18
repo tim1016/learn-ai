@@ -1,8 +1,8 @@
 """Canonical Account Clerk journal-to-exposure projection.
 
 Formula: exposure[account, group, symbol] = Σ (+fill_quantity for BUY,
-  -fill_quantity for SELL), once per (account, non-empty exec_id); zero
-  balances are omitted.
+  -fill_quantity for SELL), once per (account, non-empty exec_id); balances
+  with abs(quantity) < POSITION_QTY_EPSILON are omitted.
 Reference: learn-ai issue #1038, locked decision 30; issue #1039.
 Canonical implementation: this file.
 Validated against: tests/engine/live/test_journal_exposure.py::test_project_journal_exposure_matches_golden_fixture.
@@ -44,20 +44,23 @@ def fold_execution_exposure(
 
     Formula: exposure[account, group, symbol] =
       Σ signed_quantity once per (account, non-empty execution_id);
-      exact zero balances are omitted.
-    Reference: learn-ai issue #1038 locked decision 30 and issue #1261
-      Alpaca Clerk ownership invariants.
+      balances are emitted iff abs(quantity) >= POSITION_QTY_EPSILON.
+    Reference: learn-ai issue #1038 locked decision 30, issue #1261
+      Alpaca Clerk ownership invariants, and ADR 0036.
     Canonical implementation: this file.
     Validated against:
       tests/engine/live/test_journal_exposure.py::
-        test_fold_execution_exposure_normalizes_and_deduplicates;
+        test_fold_execution_exposure_normalizes_and_deduplicates and
+        test_fold_execution_exposure_prunes_sub_epsilon_residue;
       tests/broker/alpaca/clerk/test_instance_orders.py::
         test_alpaca_projection_uses_canonical_execution_fold.
 
     Vendor adapters own only normalization into this shape. Deduplication,
-    finite-number validation, symbol normalization, signing, and zero pruning
+    finite-number validation, symbol normalization, signing, and flatness pruning
     live here so IBKR and Alpaca cannot silently evolve different arithmetic.
     """
+    from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
+
     quantities: dict[tuple[str, str, str], float] = defaultdict(float)
     seen_execution_effects: set[tuple[str, str]] = set()
     for effect in effects:
@@ -73,7 +76,7 @@ def fold_execution_exposure(
     return {
         key: quantity
         for key, quantity in sorted(quantities.items())
-        if quantity != 0.0
+        if position_quantity_is_nonzero(quantity)
     }
 
 
@@ -132,10 +135,19 @@ def project_journal_exposure(
 ) -> tuple[JournalExposure, ...]:
     """Project journaled fill effects into non-zero account-scoped exposure.
 
+    Formula: exposure[account, group, symbol] is emitted iff
+      abs(quantity) >= POSITION_QTY_EPSILON.
+    Reference: ADR 0036.
+    Canonical implementation: this file; flatness delegates to
+      app/broker/alpaca/clerk/sqlite/folds.py::position_quantity_is_nonzero.
+    Validated against: tests/engine/live/test_journal_exposure.py::
+      test_project_journal_exposure_prunes_sub_epsilon_operator_adjustment.
+
     ``account_id`` narrows a multi-account input without changing the grouping
     key. Without it, account remains part of every output key, so rows from
     different account journals can never net against one another.
     """
+    from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 
     if group_by not in {"namespace", "strategy_instance"}:
         raise ValueError(f"unsupported journal exposure grouping: {group_by!r}")
@@ -200,7 +212,7 @@ def project_journal_exposure(
             quantity=quantity,
         )
         for (projected_account_id, group_id, symbol), quantity in sorted(quantities.items())
-        if quantity != 0.0
+        if position_quantity_is_nonzero(quantity)
     )
 
 
@@ -226,15 +238,22 @@ def project_journal_account_exposure(
     """Project all journaled fill effects into account truth.
 
     Formula: exposure[account, symbol] = Σ (+fill_quantity for BUY,
-      -fill_quantity for SELL), once per (account, non-empty exec_id).
-    Reference: learn-ai issue #1038, locked decision 22 and 30; issue #1044.
+      -fill_quantity for SELL), once per (account, non-empty exec_id), emitted
+      iff abs(quantity) >= POSITION_QTY_EPSILON.
+    Reference: learn-ai issue #1038, locked decision 22 and 30; issue #1044;
+      ADR 0036.
     Canonical implementation: this file.
-    Validated against: tests/engine/live/test_journal_exposure.py::test_account_projection_includes_unattributed_callbacks.
+      Flatness delegates to app/broker/alpaca/clerk/sqlite/folds.py::
+      position_quantity_is_nonzero.
+    Validated against: tests/engine/live/test_journal_exposure.py::
+      test_account_projection_includes_unattributed_callbacks and
+      test_project_journal_account_exposure_prunes_sub_epsilon_baseline.
 
     Unlike ``project_journal_exposure``, this fold includes a callback with no
     Clerk intent. That makes manual/foreign account flow observable without
     assigning a fabricated namespace or strategy owner.
     """
+    from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 
     quantities: dict[tuple[str, str], float] = defaultdict(float)
     execution_effects: list[ExecutionExposureEffect] = []
@@ -274,7 +293,7 @@ def project_journal_account_exposure(
     return tuple(
         AccountJournalExposure(account_id=projected_account_id, symbol=symbol, quantity=quantity)
         for (projected_account_id, symbol), quantity in sorted(quantities.items())
-        if quantity != 0.0
+        if position_quantity_is_nonzero(quantity)
     )
 
 
