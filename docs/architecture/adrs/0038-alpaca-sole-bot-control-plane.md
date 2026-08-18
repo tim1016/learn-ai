@@ -131,6 +131,11 @@ here rather than rewritten in place, so the record of what was believed on
   under different decisions — Decision 2 (projection of SQLite) versus Decision 3
   (deliberately file-backed, must survive a Clerk outage) — so the mis-citation
   would have subordinated the stop latch to the authority it exists to outlive.
+  Correcting the citations also changes the count: there are **three** direct
+  `lifecycle_state.json` projection writers — `bot_runner.py:471`,
+  `bot_run_evidence.py:72`, `bot_boot_recovery.py:153` — and boot recovery must be
+  inside the write-what-SQLite-committed rule, since Decision 4 gives it the job
+  of making the files agree with SQLite.
   See [#1634](https://github.com/tim1016/learn-ai/issues/1634).
 - **Consequence 3's "never read" is wrong.** `BotLifecycleStateRecord.version` is
   read three times, all in `bot_lifecycle_evaluator.py`: `:672` as a receipt
@@ -140,11 +145,15 @@ here rather than rewritten in place, so the record of what was believed on
   parameter or compare-and-swap anywhere. See
   [#1631](https://github.com/tim1016/learn-ai/issues/1631).
 
-Consequences 4 and 8 gained supporting detail rather than corrections:
-consequence 4's silent refusal is preceded by an already-published receipt in
-`bot_run_evidence.record_terminal`, and consequence 8's AST hole is confirmed by
-the contract test passing green against
-`services/bot_runner.py:468`'s `self._desired_repo(...).set(...)`.
+Consequence 4 is narrower than it reads. The silent refusal is deliberate and
+pinned by `test_stale_terminal_fact_cannot_supersede_a_newer_on_duty_run` — the
+receipt records that *the old run* ended while the file correctly stays `ON_DUTY`
+on *the new run*, which is not a contradiction. What survives is an observability
+defect, and `bot_boot_recovery` reporting success unconditionally. Consequence 8's
+AST hole is confirmed by the contract test passing green against
+`services/bot_runner.py:468`, but that call is *allowed* under Decision 3 — the
+defect is that the test cannot distinguish it from an unauthorised writer using
+the same idiom.
 
 Each consequence now has an issue: [#1630](https://github.com/tim1016/learn-ai/issues/1630),
 [#1631](https://github.com/tim1016/learn-ai/issues/1631),
