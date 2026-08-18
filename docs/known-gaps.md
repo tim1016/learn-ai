@@ -83,16 +83,6 @@ seam below is a specific conditional gap, not a general weakness.
   invariant: an operation whose broker outcome is unknown must block new
   exposure, not merely be annotated. [#1614](https://github.com/tim1016/learn-ai/issues/1614)
 
-- **Capture or parse failure leaves execution health green (high).**
-  `broker/alpaca/trade_updates.py:424-507` — a failed verbatim capture, invalid
-  JSON, or unmappable fill returns from the frame handler and continues the same
-  socket cycle. The evidence sink is never called, and health is socket-connected
-  state only, with no last-valid-frame freshness budget
-  (`trade_updates.py:318-343`). A later periodic REST pass may repair custody, but
-  until then the submit gate sees execution as healthy. Preserve the invariant:
-  a stream that is connected but not delivering usable evidence is not healthy.
-  [#1615](https://github.com/tim1016/learn-ai/issues/1615)
-
 - **A non-`BrokerError` sweep failure reopens admission without authoring
   uncertainty (medium).** `sqlite/reconciliation_sweep.py:128-146` — an unexpected
   periodic-pass exception is logged and converted to `False`, and the reconciler's

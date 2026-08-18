@@ -10,11 +10,13 @@ on-disk records, not mocks.
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 import math
 import sys
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -26,6 +28,7 @@ from app.broker.alpaca.broker import AlpacaBroker
 from app.broker.alpaca.clerk import journal as journal_module
 from app.broker.alpaca.clerk.clerk import AlpacaClerk
 from app.broker.alpaca.clerk.models import ClerkEntryKind
+from app.broker.alpaca.clerk.stream_health import build_default_stream_health_gate
 from app.broker.alpaca.client import AlpacaTradingClient
 from app.broker.alpaca.config import AlpacaSettings
 from app.broker.alpaca.trade_updates import (
@@ -35,6 +38,8 @@ from app.broker.alpaca.trade_updates import (
     _order_to_event_payload,
     _stream_url,
     alpaca_socket_frames,
+    reset_trade_updates_consumer_for_testing,
+    set_trade_updates_consumer,
 )
 from app.broker.capture.journal import CaptureJournal
 from app.broker.contract.models import (
@@ -219,6 +224,64 @@ def _frame_source(frames: list[Any]):
             yield frame if isinstance(frame, (bytes, str)) else json.dumps(frame)
 
     return _source
+
+
+class _OpenFrameSource:
+    """A connected source that stays open while tests inspect live health."""
+
+    def __init__(self) -> None:
+        self._frames: asyncio.Queue[bytes | str | None] = asyncio.Queue()
+
+    async def __call__(self) -> AsyncIterator[bytes | str]:
+        while (frame := await self._frames.get()) is not None:
+            yield frame
+
+    async def send(self, frame: bytes | str | dict[str, Any]) -> None:
+        await self._frames.put(
+            frame if isinstance(frame, (bytes, str)) else json.dumps(frame)
+        )
+
+
+async def _wait_for_execution_health(*, healthy: bool) -> None:
+    gate = build_default_stream_health_gate()
+    for _ in range(100):
+        if gate.execution().healthy is healthy:
+            return
+        await asyncio.sleep(0)
+    pytest.fail(f"execution health did not become healthy={healthy}")
+
+
+@asynccontextmanager
+async def _running_consumer(
+    tmp_path: Path,
+    *,
+    journal: CaptureJournal | None = None,
+) -> AsyncIterator[tuple[_OpenFrameSource, TradeUpdatesConsumer]]:
+    """Run a singleton-wired consumer on an open, authorized socket cycle."""
+    source = _OpenFrameSource()
+    broker = _FakeBroker()
+    clerk = AlpacaClerk(read=broker, trade=broker)
+    await _warm(clerk)
+    consumer = TradeUpdatesConsumer(
+        clerk=clerk,
+        read=broker,
+        frame_source=source,
+        journal=journal or _capture_journal(tmp_path),
+        clock=lambda: _FIXED_MS,
+        backoff=_no_backoff,
+        max_reconnects=0,
+    )
+    set_trade_updates_consumer(consumer)
+    consumer.start()
+    try:
+        await source.send(
+            {"stream": "authorization", "data": {"status": "authorized"}}
+        )
+        await _wait_for_execution_health(healthy=True)
+        yield source, consumer
+    finally:
+        await consumer.stop()
+        reset_trade_updates_consumer_for_testing()
 
 
 async def _no_backoff(attempt: int) -> None:
@@ -460,6 +523,29 @@ async def test_unparseable_frame_is_captured_counted_not_fatal(tmp_path: Path) -
     assert consumer.counters.events_applied == 1
 
 
+async def test_unparseable_frame_degrades_gate_health_until_valid_frame(
+    tmp_path: Path,
+) -> None:
+    async with _running_consumer(tmp_path) as (source, consumer):
+        await source.send(b"{ not json")
+        await _wait_for_execution_health(healthy=False)
+        assert consumer.connected is True
+
+        await source.send(_load_frames()[0])
+        await _wait_for_execution_health(healthy=True)
+        assert consumer.connected is True
+
+
+async def test_quiet_connected_stream_without_trade_updates_stays_healthy(
+    tmp_path: Path,
+) -> None:
+    # Authorization in the helper establishes a real connected socket cycle,
+    # but it is a control frame rather than custody evidence. No update follows.
+    async with _running_consumer(tmp_path) as (_source, consumer):
+        assert consumer.connected is True
+        assert build_default_stream_health_gate().execution().healthy is True
+
+
 async def test_capture_failure_refuses_to_derive_lifecycle_state(tmp_path: Path) -> None:
     class _FailingCaptureJournal(CaptureJournal):
         def record(self, **_: Any) -> bool:  # type: ignore[override]
@@ -484,6 +570,28 @@ async def test_capture_failure_refuses_to_derive_lifecycle_state(tmp_path: Path)
     assert consumer.counters.events_applied == 0
     entries = clerk._journal.read_entries()  # type: ignore[union-attr]
     assert not [entry for entry in entries if entry.kind is ClerkEntryKind.ORDER_EVENT]
+
+
+async def test_capture_failure_degrades_gate_health_until_valid_frame(
+    tmp_path: Path,
+) -> None:
+    rejected_frame = json.dumps(_load_frames()[0])
+
+    class _FailingOnceCaptureJournal(CaptureJournal):
+        def record(self, *, raw_body: bytes, **kwargs: Any) -> bool:  # type: ignore[override]
+            if raw_body == rejected_frame.encode("utf-8"):
+                return False
+            return super().record(raw_body=raw_body, **kwargs)
+
+    journal = _FailingOnceCaptureJournal(capture_dir=tmp_path / "capture")
+    async with _running_consumer(tmp_path, journal=journal) as (source, consumer):
+        await source.send(rejected_frame)
+        await _wait_for_execution_health(healthy=False)
+        assert consumer.connected is True
+
+        await source.send(_load_frames()[1])
+        await _wait_for_execution_health(healthy=True)
+        assert consumer.connected is True
 
 
 async def test_clerk_append_failure_leaves_event_retryable(tmp_path: Path) -> None:
@@ -538,6 +646,21 @@ async def test_malformed_embedded_order_is_parse_error_not_stream_abort(tmp_path
     entries = clerk._journal.read_entries()  # type: ignore[union-attr]
     events = [e for e in entries if e.kind is ClerkEntryKind.ORDER_EVENT]
     assert len(events) == 1
+
+
+async def test_unmappable_frame_degrades_gate_health_until_valid_frame(
+    tmp_path: Path,
+) -> None:
+    malformed = _load_frames()[0]
+    malformed["data"]["order"] = {"id": "malformed-1"}
+    async with _running_consumer(tmp_path) as (source, consumer):
+        await source.send(malformed)
+        await _wait_for_execution_health(healthy=False)
+        assert consumer.connected is True
+
+        await source.send(_load_frames()[0])
+        await _wait_for_execution_health(healthy=True)
+        assert consumer.connected is True
 
 
 # ── (d) attribution: owned vs unexplained (NO hold — that is S6) ─────────────
