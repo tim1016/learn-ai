@@ -39,6 +39,7 @@ from app.broker.alpaca.clerk.models import (
 from app.broker.alpaca.clerk.stream_health import market_data_channel_health
 from app.marketdata.feed import FeedHealth
 from app.marketdata.ibkr_feed import IbkrMarketDataFeed
+from app.schemas.broker_capability import SessionCapability, SessionDataCapability
 from app.schemas.run_admission import (
     MarketDataAdmissionFact,
     RunProcessAdmissionFact,
@@ -85,7 +86,11 @@ def _session(monkeypatch: pytest.MonkeyPatch, phase: str) -> None:
     monkeypatch.setattr(
         bot_start_admission,
         "session_state_at_ms",
-        lambda **_kwargs: SimpleNamespace(phase=phase),
+        lambda **_kwargs: SimpleNamespace(
+            phase=phase,
+            source="nyse_calendar",
+            extended_phase_proven=False,
+        ),
     )
 
 
@@ -114,6 +119,32 @@ def _clerk(observed_at_ms: int = _NOW - 500) -> ClerkCustodySnapshot:
         reason_code="CLERK_CUSTODY_PROVEN",
         evidence_refs=("clerk:paper-account:7",),
         observed_at_ms=observed_at_ms,
+    )
+
+
+def _capability(*, account_id: str = "paper-account") -> SessionDataCapability:
+    def session(open_ms: int, close_ms: int) -> SessionCapability:
+        return SessionCapability(
+            window_today_open_ms=open_ms,
+            window_today_close_ms=close_ms,
+            data="live",
+            tradeable="yes",
+            order_eligible_outside_rth=True,
+        )
+
+    return SessionDataCapability(
+        symbol="SPY",
+        con_id=1,
+        account_mode="paper",
+        account_id=account_id,
+        probed_at_ms=_NOW - 1_000,
+        time_zone_id="America/New_York",
+        sessions={
+            "PRE": session(_NOW - 60_000, _NOW + 60_000),
+            "RTH": session(_NOW + 60_000, _NOW + 120_000),
+            "POST": session(_NOW + 120_000, _NOW + 180_000),
+            "OVERNIGHT": session(_NOW + 180_000, _NOW + 240_000),
+        },
     )
 
 
@@ -233,6 +264,53 @@ def test_market_data_admission_fact_available_when_advancing(
     fact = market_data_admission_fact(feed, _NOW - 1_000, use_rth=True)
 
     assert fact.state == "AVAILABLE"
+
+
+def test_market_data_admission_carries_matching_capability_phase() -> None:
+    health = FeedHealth(
+        connected=True,
+        stale=False,
+        last_bar_ms=_NOW - 5_000,
+        reason="",
+        active_subscription_count=1,
+        observed_at_ms=_NOW,
+    )
+
+    fact = market_data_admission_fact(
+        _Feed(health),
+        _NOW,
+        symbol="SPY",
+        account_id="paper-account",
+        capability=_capability(),
+        use_rth=False,
+    )
+
+    assert fact.scheduled_phase == "PRE"
+    assert fact.session_authority_source == "ibkr_capability"
+    assert fact.extended_phase_proven is True
+
+
+def test_market_data_admission_marks_extended_phase_unproved_without_matching_capability() -> None:
+    health = FeedHealth(
+        connected=True,
+        stale=False,
+        last_bar_ms=_NOW - 5_000,
+        reason="",
+        active_subscription_count=1,
+        observed_at_ms=_NOW,
+    )
+
+    fact = market_data_admission_fact(
+        _Feed(health),
+        _NOW,
+        symbol="SPY",
+        account_id="other-account",
+        capability=_capability(),
+        use_rth=False,
+    )
+
+    assert fact.session_authority_source == "nyse_calendar"
+    assert fact.extended_phase_proven is False
 
 
 # ── bounded liveness regressions plus the one remaining candidate policy ──

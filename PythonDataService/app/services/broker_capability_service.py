@@ -36,6 +36,15 @@ class BrokerCapabilityService:
                 snapshots.append(SessionDataCapability.model_validate_json(fh.read()))
         return snapshots
 
+    def read_latest_for(self, symbol: str, account_id: str) -> SessionDataCapability | None:
+        """Return the newest snapshot scoped to one instrument and account."""
+        matching = [
+            snapshot
+            for snapshot in self.read_latest()
+            if snapshot.symbol == symbol.upper() and snapshot.account_id == account_id
+        ]
+        return max(matching, key=lambda snapshot: snapshot.probed_at_ms, default=None)
+
     def persist(self, snapshot: SessionDataCapability) -> None:
         directory = self._safe_snapshot_dir(snapshot.account_id, snapshot.symbol)
         directory.mkdir(parents=True, exist_ok=True)

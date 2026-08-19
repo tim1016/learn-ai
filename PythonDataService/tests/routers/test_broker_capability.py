@@ -101,3 +101,17 @@ def test_capability_service_persists_latest_and_timestamped_snapshot(tmp_path: P
     assert latest.exists()
     assert timestamped.exists()
     assert service.read_latest()[0].symbol == "QQQ"
+
+
+def test_capability_service_reads_only_the_newest_matching_scope(tmp_path: Path) -> None:
+    service = BrokerCapabilityService(root=tmp_path)
+    older = _snapshot("SPY")
+    newer = older.model_copy(update={"probed_at_ms": older.probed_at_ms + 1})
+    service.persist(older)
+    service.persist(newer)
+    service.persist(_snapshot("QQQ"))
+
+    selected = service.read_latest_for(symbol="spy", account_id="U1234567")
+
+    assert selected == newer
+    assert service.read_latest_for(symbol="SPY", account_id="other-account") is None

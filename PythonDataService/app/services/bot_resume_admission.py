@@ -21,6 +21,7 @@ from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_carryover import configuration_hash
 from app.services.bot_start_admission import (
     CustodyBoundActivator,
+    SessionCapabilityResolver,
     StartAdmissionDenied,
     StartAdmissionEvidenceChanged,
     StartRequest,
@@ -58,6 +59,7 @@ class BotResumeAdmission:
         checkpoint: CheckpointResolver,
         activate: CustodyBoundActivator,
         carryover_account_policy_enabled: bool,
+        session_capability: SessionCapabilityResolver,
     ) -> None:
         self._now_ms = now_ms
         self._feed_resolver = feed_resolver
@@ -67,6 +69,7 @@ class BotResumeAdmission:
         self._checkpoint = checkpoint
         self._activate = activate
         self._carryover_account_policy_enabled = carryover_account_policy_enabled
+        self._session_capability = session_capability
 
     async def preview(
         self,
@@ -120,6 +123,8 @@ class BotResumeAdmission:
                         observed_at_ms,
                         symbol=prior.symbol,
                         use_rth=prior.use_rth,
+                        capability=self._session_capability(prior.symbol, custody.account_id),
+                        account_id=custody.account_id,
                     ),
                     desired_state=status.desired_state,
                     phase=status.phase,

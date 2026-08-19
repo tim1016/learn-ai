@@ -47,6 +47,9 @@ class MarketDataAdmissionFact(BaseModel):
     connected: bool | None = None
     stale: bool | None = None
     active_subscription_count: int | None = Field(default=None, ge=0)
+    scheduled_phase: Literal["PRE", "RTH", "POST", "OVERNIGHT", "CLOSED", "UNKNOWN"] = "UNKNOWN"
+    session_authority_source: Literal["ibkr_capability", "nyse_calendar"] | None = None
+    extended_phase_proven: bool = False
 
 
 class StartRuntimeAdmissionFact(BaseModel):

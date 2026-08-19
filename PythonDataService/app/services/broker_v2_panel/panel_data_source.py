@@ -46,6 +46,7 @@ from app.schemas.broker_v2_panel import (
 from app.schemas.run_admission import RunAdmissionDecision
 from app.services.bot_runner import BotRunnerError, get_bot_task_registry
 from app.services.broker_account_snapshot import resolve_broker_account_snapshot
+from app.services.broker_capability_service import get_broker_capability_service
 from app.services.broker_v2_panel.action_execution_service import (
     ActionNotAvailableError,
     ActionPerformer,
@@ -565,6 +566,11 @@ async def _get_panel_with_entries(
             get_market_data_feed(),
             now_ms=captured_now_ms,
             symbol=binding.symbol,
+            account_id=resolved,
+            capability=get_broker_capability_service().read_latest_for(
+                symbol=binding.symbol,
+                account_id=resolved,
+            ),
             use_rth=binding.use_rth,
             bot_running=status.running,
         ),

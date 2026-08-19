@@ -22,7 +22,12 @@ def _session(monkeypatch: pytest.MonkeyPatch, phase: str) -> None:
     monkeypatch.setattr(
         market_pulse,
         "session_state_at_ms",
-        lambda **_kwargs: SimpleNamespace(phase=phase),
+        lambda **_kwargs: SimpleNamespace(
+            phase=phase,
+            source="nyse_calendar",
+            extended_phase_proven=False,
+        ),
+        raising=False,
     )
 
 
@@ -35,10 +40,9 @@ def _admission_fact(
     stale: bool = False,
     active_subscription_count: int = 1,
 ) -> None:
-    monkeypatch.setattr(
-        market_pulse,
-        "market_data_admission_fact",
-        lambda *_args, **_kwargs: SimpleNamespace(
+    def fact(*args: object, **_kwargs: object) -> SimpleNamespace:
+        session = market_pulse.session_state_at_ms(now_ms=args[1])
+        return SimpleNamespace(
             state=state,
             feed_id="test-feed" if state != "UNAVAILABLE" else None,
             last_bar_ms=last_bar_ms,
@@ -46,8 +50,12 @@ def _admission_fact(
             reason=reason,
             stale=stale,
             active_subscription_count=active_subscription_count,
-        ),
-    )
+            scheduled_phase=session.phase,
+            session_authority_source=session.source,
+            extended_phase_proven=session.extended_phase_proven,
+        )
+
+    monkeypatch.setattr(market_pulse, "market_data_admission_fact", fact)
 
 
 def test_open_session_stale_feed_requires_attention(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -159,6 +167,24 @@ def test_extended_hours_bot_expects_premarket_bars(
     assert pulse.session == "PRE_MARKET"
     assert pulse.feed_state == "STALE"
     assert pulse.attention_required is True
+
+
+def test_extended_hours_without_capability_states_that_phase_is_unproved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _session(monkeypatch, "CLOSED")
+    _admission_fact(monkeypatch, state="AVAILABLE", last_bar_ms=None)
+
+    pulse = market_pulse.build_market_pulse(
+        None,
+        now_ms=121_000,
+        use_rth=False,
+        bot_running=False,
+    )
+
+    assert pulse.session == "CLOSED"
+    assert pulse.headline == "Extended-session phase unproved"
+    assert "capability" in pulse.explanation.lower()
 
 
 def test_idle_feed_does_not_claim_to_be_live(

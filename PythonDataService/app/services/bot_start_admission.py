@@ -14,6 +14,7 @@ from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.marketdata.feed import MarketDataFeed
 from app.schemas.action_plan import ActionPlan
 from app.schemas.broker_bots import BotStatusView
+from app.schemas.broker_capability import SessionDataCapability
 from app.schemas.run_admission import (
     MarketDataAdmissionFact,
     RunAdmissionDecision,
@@ -34,6 +35,7 @@ RuntimeFactResolver = Callable[[str, int], Awaitable[StartRuntimeAdmissionFact]]
 CustodyBoundActivator = Callable[
     [BrokerBotBinding, MarketDataFeed, int, ClerkCustodySnapshot], Awaitable[BotStatusView]
 ]
+SessionCapabilityResolver = Callable[[str, str], SessionDataCapability | None]
 
 
 @dataclass(frozen=True)
@@ -229,6 +231,7 @@ class BotStartAdmission:
         process_fact: ProcessFactResolver,
         runtime_fact: RuntimeFactResolver,
         activate: CustodyBoundActivator,
+        session_capability: SessionCapabilityResolver,
     ) -> None:
         self._now_ms = now_ms
         self._feed_resolver = feed_resolver
@@ -236,6 +239,7 @@ class BotStartAdmission:
         self._process_fact = process_fact
         self._runtime_fact = runtime_fact
         self._activate = activate
+        self._session_capability = session_capability
 
     async def preview(self, request: StartRequest) -> RunAdmissionDecision:
         """Evaluate without mutation while holding the same Clerk fence."""
@@ -276,6 +280,8 @@ class BotStartAdmission:
                         observed_at_ms,
                         symbol=binding.symbol,
                         use_rth=binding.use_rth,
+                        capability=self._session_capability(binding.symbol, custody.account_id),
+                        account_id=custody.account_id,
                     ),
                 )
                 yield (
@@ -297,12 +303,26 @@ def market_data_admission_fact(
     *,
     symbol: str | None = None,
     use_rth: bool,
+    capability: SessionDataCapability | None = None,
+    account_id: str | None = None,
 ) -> MarketDataAdmissionFact:
+    session = session_state_at_ms(
+        now_ms=observed_at_ms,
+        capability=capability,
+        symbol=symbol,
+        account_id=account_id,
+    )
+    session_fields = {
+        "scheduled_phase": session.phase,
+        "session_authority_source": session.source,
+        "extended_phase_proven": session.extended_phase_proven,
+    }
     if feed is None:
         return MarketDataAdmissionFact(
             state="UNAVAILABLE",
             observed_at_ms=observed_at_ms,
             reason="The process-level market-data feed is not installed.",
+            **session_fields,
         )
     try:
         health = feed.health(symbol)
@@ -320,8 +340,14 @@ def market_data_admission_fact(
             feed_id=feed.feed_id,
             observed_at_ms=observed_at_ms,
             reason="The market-data health probe failed.",
+            **session_fields,
         )
-    session = session_state_at_ms(now_ms=health.observed_at_ms)
+    session = session_state_at_ms(
+        now_ms=health.observed_at_ms,
+        capability=capability,
+        symbol=symbol,
+        account_id=account_id,
+    )
     bars_expected = session.phase == "RTH" if use_rth else session.phase in {"PRE", "RTH", "POST", "OVERNIGHT"}
     stalled_subscription = health.stale and health.active_subscription_count > 0 and bars_expected
     state: Literal["AVAILABLE", "STALE", "UNAVAILABLE"] = (
@@ -343,4 +369,7 @@ def market_data_admission_fact(
         connected=health.connected,
         stale=health.stale,
         active_subscription_count=health.active_subscription_count,
+        scheduled_phase=session.phase,
+        session_authority_source=session.source,
+        extended_phase_proven=session.extended_phase_proven,
     )
