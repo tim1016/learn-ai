@@ -126,6 +126,52 @@ Source: `docs/audits/execution-path-fail-open-2026-08-18.md`, read at commit
   resolves this through no-authority fallback and deletion.
   [#1660](https://github.com/tim1016/learn-ai/issues/1660)
 
+### Temporal authority and liveness (verified 2026-08-18)
+
+Source: `docs/audits/temporal-compliance-2026-08-18.md`, read at commit
+`deb9764f9`. Scheduled session structure and real-time market liveness are
+separate authorities under ADRs 0022 and 0029.
+
+- **Live Alpaca engine bars carry native datetimes across strategy boundaries
+  (high).** `services/bot_trade_strategy.py:80-90,139-146` converts numeric feed
+  timestamps into `TradeBar.time` / `end_time`, returns the object, stores its
+  end time on `StrategyContext`, and passes it through strategy/consolidator
+  objects. `engine/data/trade_bar.py:17-40` makes both fields `datetime`. Migrate
+  the one canonical engine bar/context contract to numeric start/end ms and
+  preserve EMA/LEAN parity; do not add a live-only duplicate model.
+  [#1674](https://github.com/tim1016/learn-ai/issues/1674)
+- **Live Alpaca conflates scheduled phase with real-time market liveness
+  (high).** `services/bot_start_admission.py:324-335` and
+  `services/broker_v2_panel/market_pulse.py:24-61` use scheduled phase to decide
+  whether bars are expected and to render `OPEN`, while the automated strategy
+  can reach the Alpaca Clerk without a live market-status fact. Channel health
+  is not market-wide open evidence or proof against a symbol halt. Preserve the
+  authority split: calendar/capability owns scheduled phase; fresh market-wide
+  and symbol-scoped evidence wins at Start, operator projection, and the
+  automated new-exposure effect gate.
+  [#1671](https://github.com/tim1016/learn-ai/issues/1671)
+- **Alpaca V2 invents extended-session phase without capability evidence
+  (high).** `services/session_authority.py:15-16,109-153` labels fixed
+  04:00-09:30 and close-to-20:00 windows as PRE/POST when no matching capability
+  exists, contrary to ADR 0029. Start and market pulse call this production path
+  without capability evidence. Remove the constants; missing/stale capability
+  must degrade to calendar RTH/CLOSED and an explicitly unproved extended phase.
+  [#1673](https://github.com/tim1016/learn-ai/issues/1673)
+- **Live deployment validation misses early-close flattening (high).**
+  `engine/strategy/algorithms/deployment_validation.py:31-32,92-108` hardcodes
+  09:45 detection and 15:45 stop/flatten. A 13:00 half-day never reaches the
+  stop. The QC reference explicitly defines absolute clocks, so first decide
+  absolute-with-calendar-clamp versus calendar-relative cutoffs; then update the
+  reference and pin Python/LEAN parity on regular and early-close days.
+  [#1672](https://github.com/tim1016/learn-ai/issues/1672)
+- **Alpaca V2 chart crosshair bypasses the shared timestamp formatter
+  (medium).** `dual-pane-chart/dual-pane-chart.component.ts:77-89` constructs
+  `Intl.DateTimeFormat` inside the feature. The numeric input is unambiguous, but
+  formatting ownership still violates the temporal display rule. Delegate the
+  numeric-ms readout to the shared timestamp core and preserve local/ET/DST
+  behavior without retaining the rendered string.
+  [#1677](https://github.com/tim1016/learn-ai/issues/1677)
+
 ### Panel-layer flatness boundary (verified 2026-08-18)
 
 Decision record: ADR 0036 (one flatness rule, `abs(q) >= 1e-9`, owned by
@@ -229,10 +275,15 @@ here**; a dated correction note is on the ADR itself.
   family likewise has safety consumers beyond the two obvious ones:
   `services/account_directory.py`, `routers/account_reconciliation.py`,
   `engine/live/account_classifier.py:268`, `engine/live/account_safety.py:1315`,
-  `broker/ibkr/account_truth.py:857`. As with
+  `broker/ibkr/account_truth.py:857`. As with the temporal
+  `LivePortfolio.liquidate(datetime) → Order.time → pending_orders` boundary
+  (`engine/live/live_portfolio.py:1158-1196,1342-1351`;
+  `engine/execution/order.py:48-55`),
   `rollup_cache.py` under ADR 0036 and the legacy ENTER seam above: **do not
   write a regression test against a module scheduled for removal** — verify the
-  retirement closes it. [#1636](https://github.com/tim1016/learn-ai/issues/1636)
+  retirement closes it. #1636 acceptance must explicitly prove the native-time
+  queued-order boundary is unreachable/deleted, not preserved through a
+  compatibility adapter. [#1636](https://github.com/tim1016/learn-ai/issues/1636)
 
 **Vocabulary hand-off.** "Deploy state" names four artifact families; two retire
 with this plane. Naming the two survivors — SQLite registration/run folds, and
@@ -335,9 +386,28 @@ Shipped (ADR-0019, PR #910). Deferred, non-safety:
 - **Golden-fixture coverage gap** — most canonical math still lacks a registered
   golden fixture; the `iv30/` snapshot sits outside manifest governance.
   *(was F-0026; deferred in `auto-research/state.json`)*
-- **Frontend naive `new Date(string)` — Tier 2** — date-only params are still
-  parsed browser-locally. The data-integrity Tier-1 case was fixed producer-side;
-  Tier-2 is cosmetic-display risk. *(was F-0034)*
+- **Temporal wire/storage contracts outside Alpaca V2 remain non-numeric
+  (medium).** The 2026-08-18 census confirmed 4 Pydantic, 29 C#, and 22 real
+  TypeScript temporal field declarations using strings or native date types
+  across golden fixtures, Data Lab, portfolio, market-data, validation, and
+  research surfaces. The fourth Pydantic field is the active
+  `EngineBacktestRequest.force_flat_at: datetime.time` boundary whose OpenAPI
+  and generated TypeScript representation is a time string. Group migrations
+  by one source contract at a time; do not create another cross-stack duplicate.
+  The live Alpaca V2 wire/storage path is not in this cluster.
+- **Frontend naive `new Date(string)` — Tier 2 (medium).** Eighteen production
+  calls still parse date-only or local-wall strings across validation,
+  option-expiry, Options Lab, Strategy Builder, ticker ranges, Data Lab, Past
+  Chain, Indicator Report, Market Calendar, and Research Feature Report; five
+  tests repeat the pattern. Migrate the owning wire fields to numeric ms and the
+  shared display boundary rather than appending guessed offsets. *(was F-0034)*
+- **Active non-live session structure still embeds clock constants (medium).**
+  Fifteen occurrences remain across canonical-calendar/LEAN adapters, Data
+  Lab/chart coverage, data quality, research features, and deployment-validation
+  parity copies. Replace exchange/session assumptions with the canonical
+  calendar; update reference/parity copies atomically with their canonical
+  strategy. The retiring evaluator run-ledger `force_flat_at` resolves by
+  deletion under ADR 0038, not migration.
 - **`FailureRow.ts_ms` mislabel** — a host-local time string is typed/named as
   `ms-UTC`; rename to `ts_local` and convert at ingestion. *(was VCR-P3-K)*
 
