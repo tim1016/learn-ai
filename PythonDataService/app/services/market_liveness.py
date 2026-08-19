@@ -19,6 +19,8 @@ been superseded by a resume) or by the stream being disconnected outright.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from app.broker.contract.models import BrokerClockEvidence
 from app.schemas.market_liveness import (
     MarketClockLivenessEvidence,
@@ -187,6 +189,33 @@ def compose_market_liveness(
             "and no negative evidence prove this symbol tradable."
         ),
     )
+
+
+def liveness_blocks_entry(
+    liveness: MarketLivenessFact,
+    *,
+    use_rth: bool,
+    extended_phase_proven: Callable[[], bool],
+) -> bool:
+    """Decide whether a live liveness fact should block one ENTER (#1671).
+
+    HALTED and UNKNOWN always block — the foundational safety signal this
+    module exists to provide. CLOSED is different: the broker clock behind
+    it is RTH-only (see :func:`clock_liveness_evidence`), so for a non-RTH
+    caller it cannot distinguish a genuinely closed market from an ordinary
+    extended-hours session — only in that specific case is
+    ``extended_phase_proven`` consulted, and lazily: every other branch
+    resolves without paying for a capability-service lookup.
+
+    The single shared predicate for both the ENTER gate
+    (``bot_trade_strategy.py``) and its Clerk submission-boundary recheck
+    (``runtime.py``), so the two can never silently diverge.
+    """
+    if liveness.state != "CLOSED":
+        return liveness.state != "TRADABLE"
+    if use_rth:
+        return True
+    return not extended_phase_proven()
 
 
 def clock_liveness_evidence(clock: BrokerClockEvidence) -> MarketClockLivenessEvidence:

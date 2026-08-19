@@ -31,8 +31,8 @@ from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
 from app.marketdata.feed import MarketDataBar, MarketDataFeed
 from app.schemas.broker_bots import AlpacaPaperStrategyKey
 from app.schemas.market_liveness import MarketLivenessFact
-from app.services.market_liveness import market_liveness_fact
-from app.services.session_authority import extended_phase_proven_at_ms
+from app.services.broker_capability_service import extended_phase_proven_at_ms
+from app.services.market_liveness import liveness_blocks_entry, market_liveness_fact
 from app.utils.timestamps import now_ms_utc
 
 if TYPE_CHECKING:
@@ -97,21 +97,18 @@ def _liveness_blocks_entry(
 ) -> bool:
     """Decide whether the live liveness fact should block this ENTER.
 
-    HALTED and UNKNOWN are always blocking — they are the foundational
-    safety signal this gate exists for. CLOSED is different: the broker
-    clock backing it is RTH-only (see ``clock_liveness_evidence``), so for a
-    non-RTH binding it does not distinguish a genuinely closed market from
-    an ordinary extended-hours session. Only in that specific case is the
-    calendar-authority ``extended_phase_proven`` fact — the same one
-    ``market_pulse.py`` already reconciles against — consulted; this module
-    stays otherwise free of session/calendar logic, per
-    ``app.services.market_liveness``'s own module boundary.
+    Thin binding-aware wrapper around the shared
+    ``market_liveness.liveness_blocks_entry`` predicate — also used by the
+    Clerk's own submission-boundary recheck in ``runtime.py`` — so the two
+    can never silently diverge (#1671).
     """
-    if liveness.state != "CLOSED":
-        return liveness.state != "TRADABLE"
-    if binding.use_rth:
-        return True
-    return not extended_phase_proven_at_ms(now_ms=now_ms_utc(), symbol=binding.symbol, account_id=account_id)
+    return liveness_blocks_entry(
+        liveness,
+        use_rth=binding.use_rth,
+        extended_phase_proven=lambda: extended_phase_proven_at_ms(
+            now_ms=now_ms_utc(), symbol=binding.symbol, account_id=account_id
+        ),
+    )
 
 
 def _engine_bar(bar: MarketDataBar) -> TradeBar:
