@@ -30,4 +30,4 @@ assert.match(
   'dual-pane-chart.component.ts must import the shared timestamp display core',
 );
 
-console.log('chart timestamp guard ok');
+process.stdout.write('chart timestamp guard ok\n');

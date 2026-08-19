@@ -62,6 +62,7 @@ from app.schemas.action_plan import ActionPlan
 from app.schemas.broker_bots import AlpacaPaperStrategyKey, BotProcessFact
 from app.schemas.market_liveness import (
     MarketClockLivenessEvidence,
+    MarketLivenessFact,
     SymbolTradingStatusEvidence,
 )
 from app.services.bot_binding_repository import (
@@ -338,8 +339,9 @@ class _CustodyClerk:
         action_plan: ActionPlan,
         quantity: int,
         use_rth: bool = True,
+        capability_account_id: str | None = None,
     ) -> EffectOperationReceipt:
-        del strategy_instance_id, run_id, decision_id, purpose, action_plan, quantity, use_rth
+        del strategy_instance_id, run_id, decision_id, purpose, action_plan, quantity, use_rth, capability_account_id
         raise AssertionError("custody-only test Clerk cannot execute effects")
 
     async def stop_strategy_run(
@@ -2362,8 +2364,9 @@ class _FakeClerk:
         action_plan,
         quantity: int,
         use_rth: bool = True,
+        capability_account_id: str | None = None,
     ) -> _FakeEffectResult:
-        del use_rth
+        del use_rth, capability_account_id
         if self._should_raise is not None:
             raise self._should_raise
 
@@ -2785,6 +2788,81 @@ def test_closed_liveness_always_blocks_entry_for_an_rth_only_binding(
     binding = SimpleNamespace(use_rth=True, symbol="SPY")
 
     assert bot_trade_strategy._liveness_blocks_entry(binding, "PA-TEST", liveness) is True
+
+
+@pytest.mark.asyncio
+async def test_extended_hours_entry_uses_the_feeds_capability_account_not_the_alpaca_account(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: the Alpaca execution account can never scope an IBKR
+    market-data capability snapshot — passing it into the capability lookup
+    means the snapshot is never found and every extended-hours entry is
+    silently rejected. ``run_trade_bot`` must resolve and pass the market
+    data feed's own ``capability_account_id`` instead.
+
+    Calls ``run_trade_bot`` directly rather than through
+    ``BotTaskRegistry.deploy()``: Start admission is a separate gate with
+    its own market-data-readiness requirements unrelated to what this test
+    targets (the per-bar ENTER liveness gate's account-scoping)."""
+    repo = ClerkSqliteRepository.initialize(account_id="PA-ALPACA-EXEC", artifacts_root=tmp_path / "clerk")
+    repo.register_strategy_instance(strategy_instance_id=_SID, symbol="SPY", config_hash="config-1")
+    clerk = _FakeClerk(repository=repo)
+    clerk.authority_kind = "sqlite"
+    clerk.account_id = "PA-ALPACA-EXEC"
+
+    def liveness(symbol: str, observed_at_ms: int) -> MarketLivenessFact:
+        return compose_market_liveness(
+            symbol,
+            now_ms=observed_at_ms,
+            market_clock=MarketClockLivenessEvidence(
+                state="CLOSED",
+                source="test.clock",
+                observed_at_ms=observed_at_ms,
+                vendor_timestamp_ms=observed_at_ms,
+            ),
+            connected=True,
+            connection_changed_at_ms=observed_at_ms,
+            symbol_status=None,
+        )
+
+    monkeypatch.setattr(bot_trade_strategy, "market_liveness_fact", liveness)
+    seen_account_ids: list[str] = []
+
+    def fake_extended_phase_proven_at_ms(*, now_ms: int, symbol: str, account_id: str) -> bool:
+        seen_account_ids.append(account_id)
+        return True
+
+    monkeypatch.setattr(bot_trade_strategy, "extended_phase_proven_at_ms", fake_extended_phase_proven_at_ms)
+
+    bars = [
+        _green_bar(_WIN_START_MS + 60_000),
+        _green_bar(_WIN_START_MS + 120_000),
+    ]
+    feed = _FakeFeed(bars, mode="finite")
+    feed.capability_account_id = "IBKR-MKTDATA-ACCT"  # distinct from clerk.account_id above
+    binding = BrokerBotBinding(
+        strategy_instance_id=_SID,
+        strategy_key="deployment_validation",
+        broker="alpaca",
+        symbol="SPY",
+        use_rth=False,
+        mode="trade",
+        quantity=1,
+        carryover_policy="FORBID",
+        action_plan=alpaca_v1_action_plan("SPY"),
+        run_id="run-current",
+        created_at_ms=_T0,
+    )
+    set_alpaca_clerk(clerk)
+    try:
+        await bot_trade_strategy.run_trade_bot(binding, feed)
+
+        assert [call["purpose"] for call in clerk.calls] == ["ENTER"]
+        assert seen_account_ids and all(acct == "IBKR-MKTDATA-ACCT" for acct in seen_account_ids)
+    finally:
+        set_alpaca_clerk(None)
+        repo.close()
 
 
 @pytest.mark.asyncio

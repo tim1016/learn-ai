@@ -24,6 +24,7 @@ from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode
 from app.engine.strategy.algorithms.spy_ema_crossover import SpyEmaCrossoverAlgorithm
 from app.lean_sidecar.trading_calendar import is_regular_session_ms_utc
+from app.utils.timestamps import ny_datetime
 
 EASTERN = ZoneInfo("America/New_York")
 
@@ -43,7 +44,7 @@ class RTHFilteredReader:
 
     def iter_bars(self, symbol, start, end):  # noqa: ANN001
         for bar in self._inner.iter_bars(symbol, start, end):
-            if is_regular_session_ms_utc(int(bar.time.timestamp() * 1000)):
+            if is_regular_session_ms_utc(bar.start_ms):
                 yield bar
 HERE = Path(__file__).resolve().parent
 CACHE_ROOT = HERE / "lean-cache"
@@ -109,7 +110,7 @@ def main() -> None:
         fixture_all = list(csv.DictReader(f))
     fixture_in = [r for r in fixture_all if r["entry"] >= COMPARE_FROM]
     actual_in = [
-        t for t in strategy.trade_log if t.entry_time.strftime("%Y-%m-%d %H:%M") >= COMPARE_FROM
+        t for t in strategy.trade_log if ny_datetime(t.entry_time_ms).strftime("%Y-%m-%d %H:%M") >= COMPARE_FROM
     ]
     print(f"Fixture trades in window: {len(fixture_in)}")
     print(f"Actual  trades in window: {len(actual_in)}")
@@ -129,10 +130,12 @@ def main() -> None:
             if actual_str != expected_str:
                 diffs.append(f"{name}: got {actual_str!r}, expected {expected_str!r}")
 
-        if act.entry_time != exp_entry:
-            diffs.append(f"entry_time: got {act.entry_time}, expected {exp_entry}")
-        if act.exit_time != exp_exit:
-            diffs.append(f"exit_time: got {act.exit_time}, expected {exp_exit}")
+        act_entry = ny_datetime(act.entry_time_ms)
+        act_exit = ny_datetime(act.exit_time_ms)
+        if act_entry != exp_entry:
+            diffs.append(f"entry_time: got {act_entry}, expected {exp_entry}")
+        if act_exit != exp_exit:
+            diffs.append(f"exit_time: got {act_exit}, expected {exp_exit}")
         check("entry_price", _fmt(act.entry_price, 2), exp["entry_price"])
         check("exit_price", _fmt(act.exit_price, 2), exp["exit_price"])
         try:
@@ -150,7 +153,7 @@ def main() -> None:
                 {
                     "row_in_window": i + 1,
                     "expected_entry": exp["entry"],
-                    "actual_entry": act.entry_time.strftime("%Y-%m-%d %H:%M"),
+                    "actual_entry": act_entry.strftime("%Y-%m-%d %H:%M"),
                     "diffs": diffs,
                 }
             )

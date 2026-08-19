@@ -432,6 +432,7 @@ class SqliteAlpacaClerkFacade:
         action_plan: ActionPlan,
         quantity: int,
         use_rth: bool = True,
+        capability_account_id: str | None = None,
     ) -> EffectOperationReceipt:
         """Route one semantic decision through SQLite ENTER/EXIT custody.
 
@@ -452,6 +453,7 @@ class SqliteAlpacaClerkFacade:
                     action_plan=action_plan,
                     quantity=quantity,
                     use_rth=use_rth,
+                    capability_account_id=capability_account_id,
                 ),
                 name=f"alpaca-sqlite-effect:{strategy_instance_id}:{decision_id}",
             )
@@ -496,6 +498,7 @@ class SqliteAlpacaClerkFacade:
         action_plan: ActionPlan,
         quantity: int,
         use_rth: bool = True,
+        capability_account_id: str | None = None,
     ) -> EffectOperationReceipt:
         def rejected() -> EffectOperationReceipt:
             return _effect_receipt(
@@ -543,10 +546,14 @@ class SqliteAlpacaClerkFacade:
                 if liveness_blocks_entry(
                     liveness,
                     use_rth=use_rth,
+                    # Must be the feed's capability account, not
+                    # ``self.account_id`` (Alpaca execution custody) — that
+                    # can never scope an IBKR market-data entitlement, so
+                    # every extended-hours entry would be rejected here.
                     extended_phase_proven=lambda: extended_phase_proven_at_ms(
                         now_ms=self._repo.clock(),
                         symbol=entry.instrument.underlying,
-                        account_id=self.account_id,
+                        account_id=capability_account_id,
                     ),
                 ):
                     return rejected()

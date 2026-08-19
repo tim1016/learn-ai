@@ -50,6 +50,7 @@ from app.engine.execution.order import FillMode
 from app.engine.strategy.algorithms.sma_crossover import (
     SmaCrossoverAlgorithm,
 )
+from app.utils.timestamps import ny_datetime
 
 LEAN_DATA_ROOT = Path("/sessions/ecstatic-hopeful-volta/mnt/Lean/Data")
 
@@ -120,8 +121,8 @@ def run_end_to_end() -> None:
     print(f"trades: {len(trades)}")
     for i, t in enumerate(trades, 1):
         print(
-            f"  {i:>2}. {t.entry_time.date()} @ {t.entry_price:>8.2f}  ->  "
-            f"{t.exit_time.date()} @ {t.exit_price:>8.2f}  "
+            f"  {i:>2}. {ny_datetime(t.entry_time_ms).date()} @ {t.entry_price:>8.2f}  ->  "
+            f"{ny_datetime(t.exit_time_ms).date()} @ {t.exit_price:>8.2f}  "
             f"PnL={t.pnl_pts:>8.2f}  {t.result}"
         )
     print(f"final equity: ${float(result.final_equity):,.2f}  net profit: ${float(result.net_profit):,.2f}")
@@ -140,7 +141,7 @@ def run_end_to_end() -> None:
         print(f"  actual:   {actual_results}")
         sys.exit(1)
 
-    actual_entry_dates = [t.entry_time.date() for t in trades]
+    actual_entry_dates = [ny_datetime(t.entry_time_ms).date() for t in trades]
     if actual_entry_dates != EXPECTED_ENTRY_DATES:
         print("FAIL: entry date sequence mismatch")
         print(f"  expected: {EXPECTED_ENTRY_DATES}")

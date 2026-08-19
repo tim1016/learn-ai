@@ -122,6 +122,41 @@ def compose_market_liveness(
             reason_code=reason_code,
             reason=reason,
         )
+    # Checked before the market-clock CLOSED branch below: a symbol can be
+    # individually halted at any time, independent of the broker-wide clock
+    # (which is RTH-only and reports CLOSED through every extended session
+    # regardless — see clock_liveness_evidence), and that record is latched
+    # across reconnects specifically so it survives independent of the
+    # stream's current connection state (see
+    # MarketLivenessStore.clear_symbol_statuses). If the CLOSED branch
+    # returned first, a proven extended-hours override at the
+    # liveness_blocks_entry call site would see only "CLOSED" and never
+    # learn the symbol was actually halted.
+    blocking_status = (
+        symbol_status
+        if symbol_status is not None and symbol_status.symbol.upper() == normalized_symbol
+        else None
+    )
+    if blocking_status is not None and blocking_status.state == "HALTED":
+        return MarketLivenessFact(
+            symbol=normalized_symbol,
+            state="HALTED",
+            observed_at_ms=min(market_clock.observed_at_ms, blocking_status.observed_at_ms),
+            market_clock=market_clock,
+            symbol_status=symbol_status,
+            reason_code="SYMBOL_HALTED",
+            reason=blocking_status.reason or "Live vendor evidence reports this symbol halted.",
+        )
+    if blocking_status is not None and blocking_status.state != "TRADABLE":
+        return _unknown(
+            normalized_symbol,
+            now_ms=now_ms,
+            market_clock=market_clock,
+            connection_changed_at_ms=connection_changed_at_ms,
+            symbol_status=symbol_status,
+            reason_code="SYMBOL_STATUS_UNKNOWN",
+            reason="Live vendor evidence cannot prove this symbol is tradable.",
+        )
     if market_clock.state == "CLOSED":
         return MarketLivenessFact(
             symbol=normalized_symbol,
@@ -152,35 +187,19 @@ def compose_market_liveness(
             reason_code="STATUS_STREAM_DISCONNECTED",
             reason="The live Alpaca trading-status stream is not connected.",
         )
-    blocking_status = (
-        symbol_status
-        if symbol_status is not None and symbol_status.symbol.upper() == normalized_symbol
-        else None
-    )
-    if blocking_status is not None and blocking_status.state == "HALTED":
-        return MarketLivenessFact(
-            symbol=normalized_symbol,
-            state="HALTED",
-            observed_at_ms=min(market_clock.observed_at_ms, blocking_status.observed_at_ms),
-            market_clock=market_clock,
-            symbol_status=symbol_status,
-            reason_code="SYMBOL_HALTED",
-            reason=blocking_status.reason or "Live vendor evidence reports this symbol halted.",
-        )
-    if blocking_status is not None and blocking_status.state != "TRADABLE":
-        return _unknown(
-            normalized_symbol,
-            now_ms=now_ms,
-            market_clock=market_clock,
-            connection_changed_at_ms=connection_changed_at_ms,
-            symbol_status=symbol_status,
-            reason_code="SYMBOL_STATUS_UNKNOWN",
-            reason="Live vendor evidence cannot prove this symbol is tradable.",
-        )
     return MarketLivenessFact(
         symbol=normalized_symbol,
         state="TRADABLE",
-        observed_at_ms=min(market_clock.observed_at_ms, connection_changed_at_ms),
+        # Not min(market_clock.observed_at_ms, connection_changed_at_ms):
+        # the connection watermark stays fixed at the original connect
+        # instant for the life of a long-lived healthy connection, so that
+        # min() would make every TRADABLE fact look older by the second
+        # long after the underlying evidence (the clock, re-polled and
+        # re-validated fresh above every ~1s) stayed current — aging a
+        # freshness-gated caller like ``evaluate_run_admission`` out of its
+        # window a few seconds after every reconnect. Every input that
+        # feeds this conclusion was just reconfirmed fresh as of ``now_ms``.
+        observed_at_ms=now_ms,
         market_clock=market_clock,
         symbol_status=symbol_status,
         reason_code="MARKET_TRADABLE",
@@ -303,7 +322,16 @@ class MarketLivenessStore:
             self._symbol_statuses[symbol] = evidence.model_copy(update={"symbol": symbol})
 
     def clear_symbol_statuses(self) -> None:
-        """Invalidate pre-disconnect status evidence before a reconnect begins."""
+        """Invalidate all per-symbol status evidence.
+
+        Called only at consumer start/stop (full lifecycle boundaries), never
+        on an ordinary stream reconnect: Alpaca's status stream has no
+        snapshot-on-subscribe and no REST fallback for current halt state, so
+        a HALTED record is the only proof of a still-halted symbol once the
+        socket reconnects. Wiping it on every reconnect would silently report
+        that symbol TRADABLE the moment any frame arrives on the new
+        connection, before a fresh transition ever confirms a resume.
+        """
         self._symbol_statuses.clear()
 
     def fact(self, symbol: str, *, now_ms: int) -> MarketLivenessFact:

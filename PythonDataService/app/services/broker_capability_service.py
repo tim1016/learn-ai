@@ -110,9 +110,18 @@ def get_broker_capability_service() -> BrokerCapabilityService:
     return _SERVICE
 
 
-def extended_phase_proven_at_ms(*, now_ms: int, symbol: str, account_id: str) -> bool:
+_EXTENDED_PHASES = frozenset({"PRE", "POST", "OVERNIGHT"})
+
+
+def extended_phase_proven_at_ms(*, now_ms: int, symbol: str, account_id: str | None) -> bool:
     """Whether extended-session (PRE/POST/OVERNIGHT) capability is proven
     for this instrument/account right now.
+
+    ``account_id`` is ``str | None`` because every caller resolves it from
+    something that can legitimately come up empty (a market-data feed with
+    no capability identity, a panel rendered before an account is known) —
+    each one would otherwise have to repeat the same "no account, no proof"
+    guard before calling in. ``None`` fails closed here instead.
 
     Resolves the capability snapshot this service owns, then defers the
     actual session decision to the pure, injection-only
@@ -124,11 +133,26 @@ def extended_phase_proven_at_ms(*, now_ms: int, symbol: str, account_id: str) ->
     authority: the ENTER gate in ``bot_trade_strategy.py`` and its
     Clerk-boundary recheck in ``runtime.py`` (#1671), via
     ``market_liveness.liveness_blocks_entry``.
+
+    ``session.extended_phase_proven`` is a *provenance* flag — it only says
+    the answer came from a fresh, matching capability snapshot rather than
+    the bare NYSE calendar. It is also true when that snapshot resolves to
+    ``RTH`` or ``CLOSED``, so checking it alone would let a running
+    ``use_rth=False`` bot override fresh, correct Alpaca ``CLOSED``
+    evidence during e.g. an emergency RTH closure. Only a *resolved phase*
+    of PRE, POST, or OVERNIGHT counts as "proven extended" — not
+    ``session.permits_strategy_activity``, which answers a different
+    question (whether the *caller's own* allowed-sessions policy, defaulted
+    here to RTH-only since none is supplied, permits the resolved phase)
+    and would be false for every extended phase by construction.
     """
+    if account_id is None:
+        return False
     capability = get_broker_capability_service().read_latest_for(symbol=symbol, account_id=account_id)
-    return session_state_at_ms(
+    session = session_state_at_ms(
         now_ms=now_ms,
         capability=capability,
         symbol=symbol,
         account_id=account_id,
-    ).extended_phase_proven
+    )
+    return session.extended_phase_proven and session.phase in _EXTENDED_PHASES
