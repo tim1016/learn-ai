@@ -27,6 +27,8 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+import app.services.bot_runner as bot_runner
+import app.services.bot_trade_strategy as bot_trade_strategy
 from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.active_protocol import ClerkAdmissionSnapshotStaleError
 from app.broker.alpaca.clerk.models import (
@@ -57,6 +59,10 @@ from app.engine.strategy.base import StrategyContext
 from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeedError
 from app.schemas.action_plan import ActionPlan
 from app.schemas.broker_bots import AlpacaPaperStrategyKey, BotProcessFact
+from app.schemas.market_liveness import (
+    MarketClockLivenessEvidence,
+    SymbolTradingStatusEvidence,
+)
 from app.services.bot_binding_repository import (
     BrokerBotBinding,
     RunOutcomeConflictError,
@@ -82,12 +88,43 @@ from app.services.bot_runner import (
 from app.services.bot_runner_errors import InvalidRunHistoryCursorError
 from app.services.bot_runtime import PauseAwareFeed
 from app.services.bot_trade_strategy import supported_alpaca_paper_strategy_keys
+from app.services.market_liveness import compose_market_liveness, unknown_market_liveness
 from app.utils.timestamps import now_ms_utc
 
 _SID = "alpaca-skeleton-1"
 _T0 = 1_700_000_000_000
 _RTH_MS = 1_700_060_400_000
 _CLOSED_MS = 1_700_096_400_000
+
+
+def _tradable_market_liveness(symbol: str, observed_at_ms: int):
+    return compose_market_liveness(
+        symbol,
+        now_ms=observed_at_ms,
+        market_clock=MarketClockLivenessEvidence(
+            state="OPEN",
+            source="test.clock",
+            observed_at_ms=observed_at_ms,
+            vendor_timestamp_ms=observed_at_ms,
+        ),
+        symbol_status=SymbolTradingStatusEvidence(
+            symbol=symbol,
+            state="TRADABLE",
+            source="test.symbol-status",
+            observed_at_ms=observed_at_ms,
+            source_timestamp_ms=observed_at_ms,
+        ),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _fresh_live_market_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bot_runner, "market_liveness_fact", _tradable_market_liveness)
+    monkeypatch.setattr(
+        bot_trade_strategy,
+        "market_liveness_fact",
+        _tradable_market_liveness,
+    )
 
 
 def test_every_admitted_alpaca_paper_strategy_has_a_runtime() -> None:
@@ -597,6 +634,7 @@ def _registry(
         carryover_allowed=carryover_allowed,
         start_custody_guard=start_custody_guard or _flat_start_guard,
         now_ms=now_ms,
+        market_liveness=_tradable_market_liveness,
     )
 
 
@@ -2451,6 +2489,124 @@ async def test_sqlite_trade_bot_records_every_evaluated_bar_for_panel_health(
             for row in repo.custody_transitions()[len(transitions_before_decisions) :]
         ]
         assert transition_kinds == ["RUN_STARTED", "RUN_STOPPED"]
+    finally:
+        set_alpaca_clerk(None)
+        repo.close()
+
+
+@pytest.mark.asyncio
+async def test_unknown_liveness_blocks_entry_but_never_blocks_exit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
+    repo.register_strategy_instance(strategy_instance_id=_SID, symbol="SPY", config_hash="config-1")
+    clerk = _FakeClerk(repository=repo)
+    clerk.authority_kind = "sqlite"
+    clerk.account_id = "PA-TEST"
+    monkeypatch.setattr(
+        bot_trade_strategy,
+        "market_liveness_fact",
+        lambda symbol, observed_at_ms: unknown_market_liveness(
+            symbol,
+            observed_at_ms=observed_at_ms,
+        ),
+    )
+    bars = [
+        _green_bar(_WIN_START_MS + 60_000),
+        _green_bar(_WIN_START_MS + 120_000),  # ENTER is refused by liveness.
+        _red_bar(_WIN_START_MS + 180_000),
+        _red_bar(_WIN_START_MS + 240_000),
+        _red_bar(_WIN_START_MS + 300_000),  # EXIT must remain executable.
+    ]
+    registry = _registry(tmp_path, _FakeFeed(bars, mode="hold"))
+    set_alpaca_clerk(clerk)
+    try:
+        await registry.deploy(
+            broker="alpaca",
+            strategy_instance_id=_SID,
+            strategy_key="deployment_validation",
+            symbol="SPY",
+            mode="trade",
+            quantity=1,
+        )
+        await _wait_for(lambda: len(clerk.calls) == 1)
+        await registry.stop("alpaca", _SID)
+
+        assert [call["purpose"] for call in clerk.calls] == ["EXIT"]
+        decisions = repo.decision_receipt_tail(strategy_instance_id=_SID, limit=5)
+        blocked = next(decision for decision in decisions if decision.outcome == "blocked")
+        blocked_facts = json.loads(blocked.facts_json)
+        assert blocked_facts["reason_code"] == "MARKET_LIVENESS_UNAVAILABLE"
+        assert blocked_facts["market_liveness"]["state"] == "UNKNOWN"
+        assert decisions[-1].outcome == "exit_intent"
+    finally:
+        set_alpaca_clerk(None)
+        repo.close()
+
+
+@pytest.mark.asyncio
+async def test_halted_liveness_blocks_entry_but_never_blocks_exit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1671 AC4: a market-wide OPEN clock with a HALTED symbol must never
+    claim tradability at the actual submit-blocking layer (not just at the
+    compose/display layers, which have their own dedicated tests)."""
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
+    repo.register_strategy_instance(strategy_instance_id=_SID, symbol="SPY", config_hash="config-1")
+    clerk = _FakeClerk(repository=repo)
+    clerk.authority_kind = "sqlite"
+    clerk.account_id = "PA-TEST"
+    monkeypatch.setattr(
+        bot_trade_strategy,
+        "market_liveness_fact",
+        lambda symbol, observed_at_ms: compose_market_liveness(
+            symbol,
+            now_ms=observed_at_ms,
+            market_clock=MarketClockLivenessEvidence(
+                state="OPEN",
+                source="test.clock",
+                observed_at_ms=observed_at_ms,
+                vendor_timestamp_ms=observed_at_ms,
+            ),
+            symbol_status=SymbolTradingStatusEvidence(
+                symbol=symbol,
+                state="HALTED",
+                source="test.symbol-status",
+                observed_at_ms=observed_at_ms,
+                source_timestamp_ms=observed_at_ms,
+            ),
+        ),
+    )
+    bars = [
+        _green_bar(_WIN_START_MS + 60_000),
+        _green_bar(_WIN_START_MS + 120_000),  # ENTER is refused by liveness.
+        _red_bar(_WIN_START_MS + 180_000),
+        _red_bar(_WIN_START_MS + 240_000),
+        _red_bar(_WIN_START_MS + 300_000),  # EXIT must remain executable.
+    ]
+    registry = _registry(tmp_path, _FakeFeed(bars, mode="hold"))
+    set_alpaca_clerk(clerk)
+    try:
+        await registry.deploy(
+            broker="alpaca",
+            strategy_instance_id=_SID,
+            strategy_key="deployment_validation",
+            symbol="SPY",
+            mode="trade",
+            quantity=1,
+        )
+        await _wait_for(lambda: len(clerk.calls) == 1)
+        await registry.stop("alpaca", _SID)
+
+        assert [call["purpose"] for call in clerk.calls] == ["EXIT"]
+        decisions = repo.decision_receipt_tail(strategy_instance_id=_SID, limit=5)
+        blocked = next(decision for decision in decisions if decision.outcome == "blocked")
+        blocked_facts = json.loads(blocked.facts_json)
+        assert blocked_facts["reason_code"] == "SYMBOL_HALTED"
+        assert blocked_facts["market_liveness"]["state"] == "HALTED"
+        assert decisions[-1].outcome == "exit_intent"
     finally:
         set_alpaca_clerk(None)
         repo.close()

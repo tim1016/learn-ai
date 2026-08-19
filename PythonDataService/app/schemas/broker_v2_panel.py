@@ -339,11 +339,14 @@ class RecentFillView(BaseModel):
 
 
 class MarketPulseView(BaseModel):
-    """Header-level market session and data recency authored by the backend."""
+    """Scheduled session, live tradability, and data recency authored by Python."""
 
     model_config = ConfigDict(frozen=True)
 
     session: Literal["PRE_MARKET", "OPEN", "AFTER_HOURS", "CLOSED", "UNKNOWN"]
+    market_state: Literal["TRADABLE", "HALTED", "CLOSED", "UNKNOWN"]
+    market_liveness_reason: str
+    market_liveness_observed_at_ms: int
     feed_state: Literal["LIVE", "IDLE", "STALE", "MISSING"]
     latest_bar_at_ms: int | None
     age_ms: int | None
@@ -419,6 +422,7 @@ class PanelActionRequest(BaseModel):
     concurrency_token: str = Field(min_length=1, max_length=128)
     idempotency_key: str = Field(min_length=1, max_length=128)
     reason: str | None = Field(default=None, max_length=512)
+
 
 class PanelActionResult(BaseModel):
     """The outcome of an executed action (§11).

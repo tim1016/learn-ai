@@ -31,6 +31,9 @@ function panel(overrides: Partial<BotPanelView> = {}): BotPanelView {
     revision: 1,
     market_pulse: {
       session: 'OPEN',
+      market_state: 'TRADABLE',
+      market_liveness_reason: 'Fresh test evidence proves tradability.',
+      market_liveness_observed_at_ms: 1_753_800_001_000,
       feed_state: 'LIVE',
       latest_bar_at_ms: 1_753_800_000_000,
       age_ms: 1_000,
@@ -155,6 +158,23 @@ describe('PanelHeaderComponent', () => {
     }));
 
     expect(screen.getByRole('status', { name: 'Stopped safely after the operator command.' })).toBeTruthy();
+  });
+
+  it('shows live halt evidence instead of the feed state as market status', async () => {
+    const value = panel();
+    await renderHeader(panel({
+      market_pulse: {
+        ...value.market_pulse,
+        market_state: 'HALTED',
+        market_liveness_reason: 'Fresh vendor evidence reports this symbol halted.',
+        headline: 'Trading halted for NVDA',
+        explanation: 'Fresh vendor evidence reports this symbol halted.',
+        attention_required: true,
+      },
+    }));
+
+    expect(screen.getByText('Trading halted for NVDA')).toBeTruthy();
+    expect(screen.getByText('Halted')).toBeTruthy();
   });
 
   it.each([

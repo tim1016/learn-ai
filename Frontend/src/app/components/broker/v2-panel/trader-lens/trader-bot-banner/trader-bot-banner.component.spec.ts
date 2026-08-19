@@ -16,7 +16,7 @@ const PANEL: BotPanelView = {
   updated_at_ms: 1_753_800_000_000,
   revision: 1,
   market_pulse: {
-    session: 'OPEN', feed_state: 'LIVE', latest_bar_at_ms: 1_753_800_000_000,
+    session: 'OPEN', market_state: 'TRADABLE', market_liveness_reason: 'Fresh test evidence proves tradability.', market_liveness_observed_at_ms: 1_753_800_001_000, feed_state: 'LIVE', latest_bar_at_ms: 1_753_800_000_000,
     age_ms: 1_000, source: 'polygon', expected_cadence_ms: 60_000,
     headline: 'Market data live', explanation: 'Current.', next_step: null,
     attention_required: false, observed_at_ms: 1_753_800_001_000,

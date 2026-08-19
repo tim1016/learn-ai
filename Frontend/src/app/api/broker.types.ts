@@ -8734,13 +8734,14 @@ export interface components {
         };
         /**
          * BrokerClockEvidence
-         * @description Vendor clock/calendar reading — **evidence only, never authority**.
+         * @description Market-wide broker-clock evidence — not scheduled-session authority.
          *
          *     The canonical calendar module (``.claude/rules/temporal-rigor.md``) remains
-         *     the sole source of scheduled session structure. This model records what the
-         *     broker *claims* about market state so it can be displayed and, later,
-         *     compared against the calendar in a parity diagnostic. Nothing in session or
-         *     calendar logic may read these fields as authoritative.
+         *     the sole source of scheduled session structure. This narrow live input may
+         *     prove that the broker currently says the market is open or closed, but it
+         *     cannot establish that any particular symbol is tradable or not halted. The
+         *     liveness composition therefore pairs it with symbol-scoped vendor status
+         *     evidence; no session/calendar logic may treat these fields as authority.
          */
         BrokerClockEvidence: {
             /** Broker */
@@ -16275,7 +16276,7 @@ export interface components {
         };
         /**
          * MarketPulseView
-         * @description Header-level market session and data recency authored by the backend.
+         * @description Scheduled session, live tradability, and data recency authored by Python.
          */
         MarketPulseView: {
             /** Age Ms */
@@ -16295,6 +16296,15 @@ export interface components {
             headline: string;
             /** Latest Bar At Ms */
             latest_bar_at_ms: number | null;
+            /** Market Liveness Observed At Ms */
+            market_liveness_observed_at_ms: number;
+            /** Market Liveness Reason */
+            market_liveness_reason: string;
+            /**
+             * Market State
+             * @enum {string}
+             */
+            market_state: "TRADABLE" | "HALTED" | "CLOSED" | "UNKNOWN";
             /** Next Step */
             next_step: string | null;
             /** Observed At Ms */
@@ -19331,6 +19341,8 @@ export interface components {
             clerk: number;
             /** Market Data */
             market_data: number;
+            /** Market Liveness */
+            market_liveness: number;
             /** Process */
             process: number;
             /** Runtime */

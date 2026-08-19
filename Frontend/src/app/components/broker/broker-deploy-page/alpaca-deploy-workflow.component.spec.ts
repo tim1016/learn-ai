@@ -113,7 +113,7 @@ const ADMISSION: RunAdmissionDecision = {
   configuration_hash: 'a'.repeat(64),
   account_id: 'PA9',
   evaluated_at_ms: 1_700_000_000_000,
-  fact_ages_ms: { runtime: 5, process: 10, market_data: 20, clerk: 30 },
+  fact_ages_ms: { runtime: 5, process: 10, market_data: 20, market_liveness: 20, clerk: 30 },
   evidence_refs: ['test-admission'],
 };
 

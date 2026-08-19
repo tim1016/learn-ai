@@ -66,8 +66,19 @@ def _decision(
     evidence_refs = [
         f"bot-process-registry:{bot.process.registry_generation}",
         f"market-data-feed:{bot.market_data.feed_id or 'unknown'}:{bot.market_data.observed_at_ms}",
+        (
+            "market-liveness-clock:"
+            f"{bot.market_liveness.market_clock.source}:"
+            f"{bot.market_liveness.market_clock.observed_at_ms}"
+        ),
         *clerk.evidence_refs,
     ]
+    if bot.market_liveness.symbol_status is not None:
+        evidence_refs.append(
+            "market-liveness-symbol:"
+            f"{bot.market_liveness.symbol_status.source}:"
+            f"{bot.market_liveness.symbol_status.observed_at_ms}"
+        )
     if isinstance(bot, ResumeRunFacts) and bot.checkpoint is not None:
         evidence_refs.append(bot.checkpoint.evidence_ref)
     return RunAdmissionDecision(
@@ -97,6 +108,7 @@ def evaluate_run_admission(
         runtime=evaluated_at_ms - bot.runtime.observed_at_ms,
         process=evaluated_at_ms - bot.process.observed_at_ms,
         market_data=evaluated_at_ms - bot.market_data.observed_at_ms,
+        market_liveness=evaluated_at_ms - bot.market_liveness.observed_at_ms,
         clerk=evaluated_at_ms - clerk.observed_at_ms,
     )
 
@@ -217,6 +229,20 @@ def evaluate_run_admission(
             reason_code=reason_codes[bot.market_data.state],
             explanation="The required market-data feed is not proven ready for this run.",
             next_step=f"Restore fresh market data before {bot.operation.title()}.",
+        )
+    if bot.market_liveness.state != "TRADABLE":
+        reason_codes = {
+            "HALTED": "MARKET_LIVENESS_HALTED",
+            "CLOSED": "MARKET_LIVENESS_CLOSED",
+            "UNKNOWN": "MARKET_LIVENESS_UNKNOWN",
+        }
+        return decide(
+            allowed=False,
+            reason_code=reason_codes[bot.market_liveness.state],
+            explanation=bot.market_liveness.reason,
+            next_step=(
+                f"Wait for fresh market-wide and symbol trading-status evidence before {bot.operation.title()}."
+            ),
         )
     if clerk.reconciliation_state != "clean" or not clerk.reconciliation_fresh:
         return decide(

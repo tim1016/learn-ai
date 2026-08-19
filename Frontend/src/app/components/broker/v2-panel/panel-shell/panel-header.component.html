@@ -70,7 +70,7 @@
       <div class="status-rail__copy">
         <div class="status-rail__label-line">
           <span class="status-kicker">Market</span>
-          <span class="status-badge">{{ panel().market_pulse.feed_state | receiptLabel }}</span>
+          <span class="status-badge">{{ panel().market_pulse.market_state | receiptLabel }}</span>
         </div>
         <strong
           role="status"
@@ -79,7 +79,7 @@
           [attr.aria-label]="panel().market_pulse.headline"
         >{{ panel().market_pulse.headline }}</strong>
         <details>
-          <summary>Feed details</summary>
+          <summary>Market details</summary>
           <p>{{ panel().market_pulse.explanation }} {{ panel().market_pulse.next_step }}</p>
         </details>
       </div>
@@ -89,6 +89,10 @@
           <dd><app-timestamp-display [value]="panel().market_pulse.latest_bar_at_ms" mode="et" granularity="time" /></dd>
         </div>
         <div><dt>Age</dt><dd>{{ formatAge(panel().market_pulse.age_ms) }}</dd></div>
+        <div>
+          <dt>Live at</dt>
+          <dd><app-timestamp-display [value]="panel().market_pulse.market_liveness_observed_at_ms" mode="et" granularity="time" /></dd>
+        </div>
         <div><dt>Source</dt><dd>{{ panel().market_pulse.source ? (panel().market_pulse.source | receiptLabel) : 'Unavailable' }}</dd></div>
       </dl>
     </div>

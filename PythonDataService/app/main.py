@@ -163,6 +163,20 @@ async def lifespan(app: FastAPI):
 
         alpaca_broker = AlpacaBroker()
         alpaca_clerk_root = get_alpaca_settings().clerk_dir
+        # #1671: scheduled session structure remains calendar-owned; this
+        # source provides the separate real-time clock + per-symbol
+        # halt/resume evidence used to fail new exposure closed.
+        from app.broker.alpaca.market_liveness import (
+            AlpacaMarketLivenessConsumer,
+            set_market_liveness_consumer,
+        )
+
+        alpaca_market_liveness = AlpacaMarketLivenessConsumer.for_alpaca(
+            read=alpaca_broker,
+        )
+        alpaca_market_liveness.start()
+        set_market_liveness_consumer(alpaca_market_liveness)
+        logger.info("Alpaca market-liveness source started.")
         # S4 (#1262): the dual-health submission gate — market-data feed AND
         # trade_updates execution channel must both be healthy. Shared by
         # both authorities so the cutover never silently drops this
@@ -404,6 +418,10 @@ async def lifespan(app: FastAPI):
         # cancel their background tasks (and the consumer's socket) cleanly,
         # independent of the IBKR teardown.
         from app.broker.alpaca.clerk.active_authority import set_active_clerk_runtime
+        from app.broker.alpaca.market_liveness import (
+            get_market_liveness_consumer,
+            set_market_liveness_consumer,
+        )
         from app.broker.alpaca.trade_updates import (
             get_trade_updates_consumer,
             set_trade_updates_consumer,
@@ -413,6 +431,10 @@ async def lifespan(app: FastAPI):
         if alpaca_trade_updates is not None:
             await alpaca_trade_updates.stop()
             set_trade_updates_consumer(None)
+        alpaca_market_liveness = get_market_liveness_consumer()
+        if alpaca_market_liveness is not None:
+            await alpaca_market_liveness.stop()
+            set_market_liveness_consumer(None)
         set_active_clerk_runtime(None)
         if alpaca_clerk_runtime is not None:
             await alpaca_clerk_runtime.close()
