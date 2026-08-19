@@ -350,3 +350,29 @@ Shipped (ADR-0019, PR #910). Deferred, non-safety:
   `docs/math-sources-of-truth.md`. **ML-V-002** — provenance blocks missing on
   `research/parity/qc_reconciler.py` and the prediction-set `artifact.py`.
   *(2026-05-12 ML-predictions run)*
+
+## 8. Contract-surface drift gates (verified 2026-08-18)
+
+Source: `docs/audits/contract-surface-drift-2026-08-18.md`, read at commit
+`a16571c2`. OpenAPI, GraphQL, both Frontend generated clients, and the
+broker-v2 operator manual regenerated clean; deliberate drift proved those
+regenerate-and-diff gates can turn red.
+
+- **Broker-v2 vocabulary snapshot prose is not source-pinned (medium).** CI
+  does not run `regenerate_broker_v2_vocabulary_snapshot`, the Python contract
+  test compares only code membership, and the Frontend test checks only
+  nonempty copy/fallback coverage. Both committed snapshots can carry the same
+  wrong label or explanation while every current contract test remains green.
+  [#1666](https://github.com/tim1016/learn-ai/issues/1666)
+- **Eleven live Broker V2 REST types bypass generated OpenAPI aliases
+  (medium).** Chart, evidence, and gallery consumers hand-copy schemas already
+  present in `broker.types.ts`; the gallery snapshot is also a REST bootstrap,
+  not solely an SSE exception. Generated clients can be current while these
+  live consumers compile against stale mirrors. Keep true stream-only update/
+  reset envelopes handwritten and fixture-pinned.
+  [#1667](https://github.com/tim1016/learn-ai/issues/1667)
+- **Accepted-ADR `Vocabulary:` metadata is not gated (low/medium).** The ADR
+  status guard correctly enforces status syntax and value but accepts a
+  governed accepted ADR after its ADR 0040 declaration is removed. Enforce the
+  forward-only rule without backfilling pre-0040 ADRs.
+  [#1668](https://github.com/tim1016/learn-ai/issues/1668)
