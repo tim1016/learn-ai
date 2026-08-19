@@ -18,6 +18,7 @@ from app.security.data_plane_control import (
     CONTROL_ALLOW_UNAUTHENTICATED_ENV_VAR,
     CONTROL_SECRET_ENV_VAR,
     CONTROL_SECRET_HEADER,
+    RETIRED_DATA_PLANE_CONTROL_SECRET,
     UNSAFE_HTTP_METHODS,
     require_data_plane_control_secret,
     require_data_plane_control_secret_always,
@@ -415,6 +416,25 @@ async def test_control_mutation_fails_closed_when_secret_is_not_configured(monke
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post(_MUTATION_PATH)
+
+    assert response.status_code == 503
+    assert CONTROL_SECRET_ENV_VAR in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_control_mutation_fails_closed_for_retired_public_secret(monkeypatch) -> None:
+    monkeypatch.setattr(
+        settings,
+        "DATA_PLANE_CONTROL_SECRET",
+        RETIRED_DATA_PLANE_CONTROL_SECRET,
+    )
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            _MUTATION_PATH,
+            headers={CONTROL_SECRET_HEADER: RETIRED_DATA_PLANE_CONTROL_SECRET},
+        )
 
     assert response.status_code == 503
     assert CONTROL_SECRET_ENV_VAR in response.json()["detail"]

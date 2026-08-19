@@ -106,10 +106,8 @@ compose port — it's a host process the container reaches via
 ### 2.1 Two secrets guard two seams
 - **`X-Data-Plane-Control-Secret`** (env `DATA_PLANE_CONTROL_SECRET`) — guards every
   mutating data-plane route (and some sensitive reads). **503** if unset (fail-closed),
-  **403** on mismatch. `data_plane_control.py:44-57`. There is no default: generate
-  a distinct value as documented in `.env.example` and store it only in the untracked
-  `.env` file. Compose supplies that one value to both the service and proxy and
-  refuses startup when it is missing or blank.
+  **403** on mismatch. `data_plane_control.py:44-57`. Dev fallback
+  `local-dev-control-secret` (`compose.yaml:135`) — must never reach a shared host.
 - **`X-Live-Runner-Token`** (env `LIVE_RUNNER_DAEMON_TOKEN`) — guards every daemon
   route. If env is unset, the daemon generates one at startup and writes it to
   `<artifacts_root>/.host-daemon-token` (mode `0600`), a sibling of `live_runs/` that

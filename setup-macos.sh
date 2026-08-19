@@ -190,6 +190,11 @@ copy_env_if_missing() {
 copy_env_if_missing "$ROOT_DIR/.env.example" "$ROOT_DIR/.env"
 copy_env_if_missing "$ROOT_DIR/PythonDataService/.env.example" "$ROOT_DIR/PythonDataService/.env"
 
+# Fresh checkouts receive a random local credential before Compose evaluates
+# its required interpolation. Upgrades carrying the retired public default are
+# rotated in place; an existing operator-owned value is never overwritten.
+node "$ROOT_DIR/Frontend/scripts/data-plane-control-secret.cjs" "$ROOT_DIR/.env"
+
 # Loud warning if the Polygon key is still the placeholder — the stack will
 # boot, but no market data will flow until it's set.
 if grep -q "POLYGON_API_KEY=your_polygon_api_key_here" "$ROOT_DIR/.env" 2>/dev/null; then

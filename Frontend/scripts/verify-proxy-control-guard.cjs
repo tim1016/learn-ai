@@ -1,6 +1,13 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
 const { spawnSync } = require('node:child_process');
 const path = require('node:path');
+const {
+  ensureControlSecretFile,
+  resolveDataPlaneControlSecret,
+  RETIRED_DATA_PLANE_CONTROL_SECRET,
+} = require('./data-plane-control-secret.cjs');
 
 const TEST_DATA_PLANE_CONTROL_SECRET = 'proxy-control-guard-test-secret';
 process.env.DATA_PLANE_CONTROL_SECRET = TEST_DATA_PLANE_CONTROL_SECRET;
@@ -26,6 +33,7 @@ const {
 for (const [label, configureSecret] of [
   ['missing', 'delete process.env.DATA_PLANE_CONTROL_SECRET;'],
   ['blank', "process.env.DATA_PLANE_CONTROL_SECRET = '   ';"],
+  ['retired', `process.env.DATA_PLANE_CONTROL_SECRET = ${JSON.stringify(RETIRED_DATA_PLANE_CONTROL_SECRET)};`],
 ]) {
   const result = spawnSync(
     process.execPath,
@@ -34,6 +42,35 @@ for (const [label, configureSecret] of [
   );
   assert.notEqual(result.status, 0, `must reject a ${label} data-plane control secret`);
   assert.match(result.stderr, /DATA_PLANE_CONTROL_SECRET must be configured/);
+}
+
+const secretFixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'learn-ai-control-secret-'));
+try {
+  const envFile = path.join(secretFixtureRoot, '.env');
+  fs.writeFileSync(envFile, 'DATA_PLANE_CONTROL_SECRET=host-env-secret\n', { mode: 0o640 });
+  assert.equal(resolveDataPlaneControlSecret({}, envFile), 'host-env-secret');
+
+  for (const initial of [
+    'DATA_PLANE_CONTROL_SECRET=\n',
+    `DATA_PLANE_CONTROL_SECRET=${RETIRED_DATA_PLANE_CONTROL_SECRET}\n`,
+    'POLYGON_API_KEY=placeholder\n',
+  ]) {
+    fs.writeFileSync(envFile, initial, { mode: 0o640 });
+    const outcome = ensureControlSecretFile(envFile);
+    const configured = resolveDataPlaneControlSecret({}, envFile);
+    assert.equal(outcome, initial.includes(RETIRED_DATA_PLANE_CONTROL_SECRET) ? 'rotated' : 'generated');
+    assert.match(configured, /^[A-Za-z0-9_-]{43}$/);
+    assert.notEqual(configured, RETIRED_DATA_PLANE_CONTROL_SECRET);
+    assert.equal(fs.statSync(envFile).mode & 0o777, 0o640);
+  }
+
+  const existing = 'operator-owned-secret';
+  fs.writeFileSync(envFile, `DATA_PLANE_CONTROL_SECRET=${existing}\n`, { mode: 0o600 });
+  const before = fs.readFileSync(envFile);
+  assert.equal(ensureControlSecretFile(envFile), 'preserved');
+  assert.deepEqual(fs.readFileSync(envFile), before);
+} finally {
+  fs.rmSync(secretFixtureRoot, { recursive: true, force: true });
 }
 
 function request({

@@ -358,6 +358,10 @@ Paste the generated value into `DATA_PLANE_CONTROL_SECRET` in the untracked
 start the data plane and frontend proxy when the control secret is missing or
 blank; there is no checked-in development credential.
 
+`setup-macos.sh` performs this step automatically on a fresh checkout and
+rotates the retired `local-dev-control-secret` value during an upgrade without
+overwriting an operator-provided secret.
+
 ### 2. Start the backend services
 
 ```bash
@@ -387,6 +391,8 @@ npx ng serve
 Open [http://localhost:4200](http://localhost:4200) in your browser.
 
 The repository proxy configuration is required for protected broker actions.
+For host development it reads `DATA_PLANE_CONTROL_SECRET` from the repository
+root `.env`; an exported shell value takes precedence.
 For a non-default service location, set `BACKEND_PROXY_TARGET` or
 `DATA_PLANE_PROXY_TARGET`; do not replace `proxy.conf.js` with a target-only
 proxy configuration.

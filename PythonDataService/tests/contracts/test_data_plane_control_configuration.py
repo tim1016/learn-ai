@@ -29,3 +29,18 @@ def test_compose_requires_one_shared_control_secret_for_service_and_proxy() -> N
 
     assert configured_values[0] == configured_values[1]
     assert CONTROL_SECRET_REQUIRED_INTERPOLATION.fullmatch(configured_values[0])
+
+
+def test_macos_bootstrap_repairs_control_secret_before_compose_startup() -> None:
+    bootstrap = (REPOSITORY_ROOT / "setup-macos.sh").read_text(encoding="utf-8")
+
+    copy_environment = bootstrap.index(
+        'copy_env_if_missing "$ROOT_DIR/.env.example" "$ROOT_DIR/.env"'
+    )
+    ensure_secret = bootstrap.index(
+        'node "$ROOT_DIR/Frontend/scripts/data-plane-control-secret.cjs" '
+        '"$ROOT_DIR/.env"'
+    )
+    compose_build = bootstrap.index("podman compose build")
+
+    assert copy_environment < ensure_secret < compose_build
