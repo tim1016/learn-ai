@@ -121,6 +121,14 @@ class DeploymentValidationDecisionKernel:
             return DeploymentDecision.ENTER
         return DeploymentDecision.HOLD
 
+    def rollback_blocked_entry(self) -> None:
+        """Undo the ENTER-time state committed by ``on_closed_bar`` when the
+        caller refuses to act on this signal (e.g. a liveness gate). Without
+        this, ``_cycle_active`` stays set and a later bar emits EXIT for a
+        cycle that was never actually entered."""
+        self._cycle_active = False
+        self._bars_since_enter = 0
+
 
 class DeploymentValidationConsecutiveGreen(Strategy):
     """Deterministic minute-bar strategy for validating deployment plumbing."""

@@ -357,6 +357,17 @@ class EmaCrossoverSignalAlgorithm(Strategy):
                 ]
             )
 
+    def rollback_blocked_entry(self) -> None:
+        """Undo the ENTER-time state committed by ``_on_fifteen_minute_bar``
+        when the caller refuses to act on this signal (e.g. a liveness
+        gate). Without this, ``_in_position`` stays set and a later bar's
+        exit countdown emits EXIT for a position that was never actually
+        entered; the stale ``_pending_entry`` snapshot would also
+        misattribute to whatever real entry fills next."""
+        self._in_position = False
+        self._bars_until_exit = 0
+        self._pending_entry = None
+
     # ------------------------------------------------------------------
     # Fill-driven trade bookkeeping.
     # ------------------------------------------------------------------

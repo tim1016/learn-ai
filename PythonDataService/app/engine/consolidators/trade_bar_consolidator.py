@@ -6,9 +6,12 @@ LEAN so consolidated bar boundaries match exactly.
 
 Key behaviors reproduced from LEAN:
   * ``bar.start_ms`` is floor-rounded to the period (``dateTime.Ticks % interval.Ticks``).
-    With a 15-minute period, bars align to wall-clock :00 :15 :30 :45 — this
-    happens to coincide with US equity market open at 09:30 but the alignment
-    is purely based on the absolute time, not session start.
+    LEAN's reference consolidator floors a naive, exchange-local ``DateTime``
+    — its inputs already carry ET wall time with no UTC conversion in the
+    loop. This port floors the equivalent America/New_York wall-clock
+    reading instead of the raw UTC ms (see ``_floor_to_period_ms``), so a
+    15-minute period aligns to wall-clock :00 :15 :30 :45 ET and a
+    one-day-or-longer period aligns to ET midnight, not UTC midnight.
   * A consolidated bar fires when a new input bar arrives that belongs to a
     later rounded bar start (``GetRoundedBarTime(input) > working_bar.start_ms``).
   * Bars are closed on the left: ``[start, start + period)``. A minute bar
@@ -23,17 +26,39 @@ Key behaviors reproduced from LEAN:
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import timedelta
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from app.engine.data.trade_bar import TradeBar
+from app.utils.timestamps import ny_datetime, to_ms_utc
+
+_EASTERN = ZoneInfo("America/New_York")
+_EPOCH_NAIVE = datetime(1970, 1, 1)
 
 
 def _floor_to_period_ms(timestamp_ms: int, period: timedelta) -> int:
-    """Floor-round a Unix-millisecond timestamp to a whole-millisecond period."""
+    """Floor-round a Unix-millisecond timestamp to a whole-millisecond period,
+    aligned to the America/New_York wall clock rather than raw UTC ms.
+
+    Read the ET wall-clock reading for ``timestamp_ms``, floor it as if it
+    were itself an epoch offset, then convert the floored wall-clock
+    reading back to ``int64 ms UTC`` — this is what LEAN's floor of a
+    naive, already-exchange-local ``DateTime`` amounts to. For any period
+    under one day this is numerically identical to flooring the absolute
+    UTC ms directly (the ET-UTC offset is always a whole number of hours,
+    hence always a whole multiple of any period that evenly divides an
+    hour). For a period of one day or longer it is not: flooring raw UTC ms
+    lands on UTC midnight, mislabeling a session's bars with the previous
+    ET trading date.
+    """
     period_ms = int(period.total_seconds() * 1000)
     if period_ms <= 0:
         raise ValueError("period must contain at least one millisecond")
-    return (timestamp_ms // period_ms) * period_ms
+    naive_et = ny_datetime(timestamp_ms).replace(tzinfo=None)
+    naive_et_ms = int((naive_et - _EPOCH_NAIVE).total_seconds() * 1000)
+    floored_naive_et_ms = (naive_et_ms // period_ms) * period_ms
+    floored_naive_et = _EPOCH_NAIVE + timedelta(milliseconds=floored_naive_et_ms)
+    return to_ms_utc(floored_naive_et.replace(tzinfo=_EASTERN))
 
 
 class TradeBarConsolidator:

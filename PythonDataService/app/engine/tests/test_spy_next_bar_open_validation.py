@@ -42,6 +42,7 @@ from app.engine.results.statistics import summarize
 from app.engine.strategy.algorithms.spy_ema_crossover import (
     SpyEmaCrossoverAlgorithm,
 )
+from app.utils.timestamps import ny_datetime
 
 LEAN_DATA_ROOT = Path("/sessions/ecstatic-hopeful-volta/mnt/Lean/Data")
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -104,7 +105,7 @@ def compare_to_baseline(trades: list) -> list[str]:
         checks = [
             (
                 "entry_time",
-                engine_trade.entry_time.strftime("%Y-%m-%d %H:%M:%S%z"),
+                ny_datetime(engine_trade.entry_time_ms).strftime("%Y-%m-%d %H:%M:%S%z"),
                 baseline_row["entry"],
                 lambda e, b: e.startswith(b.replace(" ", "T")) or e[:16] == b[:16],
             ),
@@ -289,9 +290,9 @@ if __name__ == "__main__":
                 w.writerow(
                     [
                         i,
-                        t.entry_time.strftime("%Y-%m-%d %H:%M"),
+                        ny_datetime(t.entry_time_ms).strftime("%Y-%m-%d %H:%M"),
                         _fmt(t.entry_price, 4),
-                        t.exit_time.strftime("%Y-%m-%d %H:%M"),
+                        ny_datetime(t.exit_time_ms).strftime("%Y-%m-%d %H:%M"),
                         _fmt(t.exit_price, 4),
                         _fmt(t.ema5, 6),
                         _fmt(t.ema10, 6),

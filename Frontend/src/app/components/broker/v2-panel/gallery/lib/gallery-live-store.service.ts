@@ -37,8 +37,9 @@ function isGalleryLiveSnapshot(value: unknown): value is GalleryLiveSnapshot {
     && isGalleryResolution(candidate.resolution)
     && Array.isArray(candidate.bots)
     && Array.isArray(candidate.symbols)
-    && typeof candidate.markers === 'object'
-    && candidate.markers !== null;
+    // `markers` is documented-optional (backend default: {}) — a snapshot
+    // that omits it entirely is valid and must not be dropped.
+    && (candidate.markers === undefined || (typeof candidate.markers === 'object' && candidate.markers !== null));
 }
 
 function isGalleryLiveUpdate(value: unknown): value is GalleryLiveUpdate {

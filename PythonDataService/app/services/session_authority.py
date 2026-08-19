@@ -71,6 +71,27 @@ def session_state_at_ms(
     )
 
 
+def extended_phase_proven_at_ms(*, now_ms: int, symbol: str, account_id: str) -> bool:
+    """Whether extended-session (PRE/POST/OVERNIGHT) capability is proven
+    for this instrument/account right now.
+
+    Shared by every caller that must reconcile a broker's RTH-only live
+    clock (which reports CLOSED outside regular hours regardless of actual
+    extended-session availability) against the canonical session authority:
+    the ENTER gate in ``bot_trade_strategy.py`` and its Clerk-boundary
+    recheck in ``runtime.py`` (#1671).
+    """
+    from app.services.broker_capability_service import get_broker_capability_service
+
+    capability = get_broker_capability_service().read_latest_for(symbol=symbol, account_id=account_id)
+    return session_state_at_ms(
+        now_ms=now_ms,
+        capability=capability,
+        symbol=symbol,
+        account_id=account_id,
+    ).extended_phase_proven
+
+
 def _session_from_capability(
     *,
     now_ms: int,

@@ -60,7 +60,10 @@ def build_market_pulse(
     # governs whether new exposure may be created at all, per #1671),
     # regardless of whether extended-hours capability happens to be proven.
     if liveness.state == "HALTED":
-        headline = f"Trading halted for {liveness.symbol}"
+        # The symbol is never interpolated into this prose — it renders
+        # separately as structured data (``halted_symbol`` below) through
+        # the canonical app-asset-identity component.
+        headline = "Trading halted for"
         explanation = liveness.reason
         next_step = "Keep new exposure blocked until a fresh trading-status resume arrives."
         attention_required = True
@@ -129,6 +132,7 @@ def build_market_pulse(
         market_state=liveness.state,
         market_liveness_reason=liveness.reason,
         market_liveness_observed_at_ms=liveness.observed_at_ms,
+        halted_symbol=liveness.symbol if liveness.state == "HALTED" else None,
         feed_state=feed_state,
         latest_bar_at_ms=fact.last_bar_ms,
         age_ms=age_ms,

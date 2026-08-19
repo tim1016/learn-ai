@@ -126,6 +126,8 @@ def _liveness(state: str = "TRADABLE", *, observed_at_ms: int) -> MarketLiveness
             observed_at_ms=observed_at_ms,
             vendor_timestamp_ms=observed_at_ms,
         ),
+        connected=True,
+        connection_changed_at_ms=observed_at_ms,
         symbol_status=symbol_status,
     )
 

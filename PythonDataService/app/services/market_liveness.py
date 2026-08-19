@@ -4,6 +4,17 @@ This module intentionally has no calendar dependency. Calendar-backed session
 structure and real-time liveness answer different questions (ADR 0022): callers
 receive the scheduled phase separately, while this module owns only the live
 operational answer used by Start/Resume, V2 pulse, and new-exposure effects.
+
+Symbol-status freshness is event-ordered rather than wall-clock-expiring, the
+same principle ``app.broker.alpaca.trade_updates`` uses for the execution
+stream: Alpaca's trading-status stream sends halt/resume *transitions*, not a
+per-symbol heartbeat, so a symbol that simply never halts has no event to stay
+"fresh" against. What actually proves a quiet symbol is still tradable is the
+status *stream's connection*, not a 5-second-old positive record for that one
+symbol — treating silence as missing proof blocked essentially all new
+exposure within seconds of every reconnect. A symbol is blocked only by
+*negative* evidence (a HALTED or unrecognized-status record that hasn't since
+been superseded by a resume) or by the stream being disconnected outright.
 """
 
 from __future__ import annotations
@@ -15,7 +26,9 @@ from app.schemas.market_liveness import (
     SymbolTradingStatusEvidence,
 )
 
-MARKET_LIVENESS_MAX_AGE_MS = 5_000
+# The broker clock is polled on a fixed interval (unlike the transition-only
+# status stream), so wall-clock freshness is still the right check for it.
+MARKET_CLOCK_MAX_AGE_MS = 5_000
 _UNKNOWN_CLOCK_SOURCE = "market_liveness.unavailable"
 
 
@@ -29,13 +42,11 @@ def _freshness_violation(
     stale_reason: str,
 ) -> tuple[str, str] | None:
     """Return ``(reason_code, reason)`` if ``observed_at_ms`` fails the shared
-    freshness bound (future-dated, or older than the liveness boundary), else
-    ``None``. Shared by the market-clock and symbol-status freshness checks
-    in :func:`compose_market_liveness` — the bound is identical, only the
-    reason codes/text differ per evidence kind."""
+    freshness bound (future-dated, or older than the clock's liveness
+    boundary), else ``None``."""
     if now_ms < observed_at_ms:
         return invalid_code, invalid_reason
-    if now_ms - observed_at_ms > MARKET_LIVENESS_MAX_AGE_MS:
+    if now_ms - observed_at_ms > MARKET_CLOCK_MAX_AGE_MS:
         return stale_code, stale_reason
     return None
 
@@ -69,9 +80,19 @@ def compose_market_liveness(
     *,
     now_ms: int,
     market_clock: MarketClockLivenessEvidence | None,
+    connected: bool,
+    connection_changed_at_ms: int,
     symbol_status: SymbolTradingStatusEvidence | None,
 ) -> MarketLivenessFact:
-    """Compose fresh market-wide and symbol-scoped evidence fail-closed."""
+    """Compose the market-wide clock and the status stream's connection and
+    per-symbol evidence into one fail-closed fact.
+
+    A symbol is blocked only by *negative* evidence: a HALTED or
+    unrecognized-status record not yet superseded by a resume, or the status
+    stream being disconnected outright. A symbol with no record at all is
+    exactly the common case — one that has simply never halted — and
+    proceeds toward TRADABLE; see the module docstring.
+    """
     normalized_symbol = symbol.upper()
     if market_clock is None:
         return unknown_market_liveness(
@@ -94,6 +115,7 @@ def compose_market_liveness(
             normalized_symbol,
             now_ms=now_ms,
             market_clock=market_clock,
+            connection_changed_at_ms=connection_changed_at_ms,
             symbol_status=symbol_status,
             reason_code=reason_code,
             reason=reason,
@@ -113,52 +135,42 @@ def compose_market_liveness(
             normalized_symbol,
             now_ms=now_ms,
             market_clock=market_clock,
+            connection_changed_at_ms=connection_changed_at_ms,
             symbol_status=symbol_status,
             reason_code="MARKET_CLOCK_UNKNOWN",
             reason="The live broker clock cannot prove whether the market is open.",
         )
-    if symbol_status is None or symbol_status.symbol.upper() != normalized_symbol:
+    if not connected:
         return _unknown(
             normalized_symbol,
             now_ms=now_ms,
             market_clock=market_clock,
+            connection_changed_at_ms=connection_changed_at_ms,
             symbol_status=symbol_status,
-            reason_code="SYMBOL_STATUS_UNAVAILABLE",
-            reason="No live trading-status evidence is available for this symbol.",
+            reason_code="STATUS_STREAM_DISCONNECTED",
+            reason="The live Alpaca trading-status stream is not connected.",
         )
-    status_violation = _freshness_violation(
-        now_ms,
-        symbol_status.observed_at_ms,
-        invalid_code="SYMBOL_STATUS_INVALID",
-        invalid_reason="Symbol trading-status evidence is dated after the evaluation time.",
-        stale_code="SYMBOL_STATUS_STALE",
-        stale_reason="Symbol trading-status evidence is older than the 5-second liveness boundary.",
+    blocking_status = (
+        symbol_status
+        if symbol_status is not None and symbol_status.symbol.upper() == normalized_symbol
+        else None
     )
-    if status_violation is not None:
-        reason_code, reason = status_violation
-        return _unknown(
-            normalized_symbol,
-            now_ms=now_ms,
-            market_clock=market_clock,
-            symbol_status=symbol_status,
-            reason_code=reason_code,
-            reason=reason,
-        )
-    if symbol_status.state == "HALTED":
+    if blocking_status is not None and blocking_status.state == "HALTED":
         return MarketLivenessFact(
             symbol=normalized_symbol,
             state="HALTED",
-            observed_at_ms=min(market_clock.observed_at_ms, symbol_status.observed_at_ms),
+            observed_at_ms=min(market_clock.observed_at_ms, blocking_status.observed_at_ms),
             market_clock=market_clock,
             symbol_status=symbol_status,
             reason_code="SYMBOL_HALTED",
-            reason=symbol_status.reason or "Fresh vendor evidence reports this symbol halted.",
+            reason=blocking_status.reason or "Live vendor evidence reports this symbol halted.",
         )
-    if symbol_status.state != "TRADABLE":
+    if blocking_status is not None and blocking_status.state != "TRADABLE":
         return _unknown(
             normalized_symbol,
             now_ms=now_ms,
             market_clock=market_clock,
+            connection_changed_at_ms=connection_changed_at_ms,
             symbol_status=symbol_status,
             reason_code="SYMBOL_STATUS_UNKNOWN",
             reason="Live vendor evidence cannot prove this symbol is tradable.",
@@ -166,11 +178,14 @@ def compose_market_liveness(
     return MarketLivenessFact(
         symbol=normalized_symbol,
         state="TRADABLE",
-        observed_at_ms=min(market_clock.observed_at_ms, symbol_status.observed_at_ms),
+        observed_at_ms=min(market_clock.observed_at_ms, connection_changed_at_ms),
         market_clock=market_clock,
         symbol_status=symbol_status,
         reason_code="MARKET_TRADABLE",
-        reason="Fresh market-wide and symbol-scoped evidence proves this symbol tradable.",
+        reason=(
+            "Fresh market-wide evidence, a connected trading-status stream, "
+            "and no negative evidence prove this symbol tradable."
+        ),
     )
 
 
@@ -189,6 +204,7 @@ def _unknown(
     *,
     now_ms: int,
     market_clock: MarketClockLivenessEvidence,
+    connection_changed_at_ms: int,
     symbol_status: SymbolTradingStatusEvidence | None,
     reason_code: str,
     reason: str,
@@ -198,6 +214,7 @@ def _unknown(
         state="UNKNOWN",
         observed_at_ms=min(
             market_clock.observed_at_ms,
+            connection_changed_at_ms,
             symbol_status.observed_at_ms if symbol_status is not None else now_ms,
         ),
         market_clock=market_clock,
@@ -213,6 +230,14 @@ class MarketLivenessStore:
     def __init__(self) -> None:
         self._market_clock: MarketClockLivenessEvidence | None = None
         self._symbol_statuses: dict[str, SymbolTradingStatusEvidence] = {}
+        # Status-stream socket-cycle watermark (mirrors
+        # app.broker.alpaca.trade_updates's ``_connected``): True from the
+        # first accepted frame of a connection cycle until that source is
+        # exhausted or errors. Proves a quiet, never-halted symbol is still
+        # tradable — the per-symbol map alone cannot, since silence there is
+        # the expected, common case.
+        self._connected = False
+        self._connection_changed_at_ms = 0
 
     def observe_clock(self, clock: BrokerClockEvidence) -> None:
         """Record one fresh market-wide broker-clock observation."""
@@ -229,6 +254,17 @@ class MarketLivenessStore:
             observed_at_ms=observed_at_ms,
             reason=reason,
         )
+
+    def mark_stream_connected(self, *, observed_at_ms: int) -> None:
+        """Record the status stream's connection watermark going healthy."""
+        if not self._connected:
+            self._connected = True
+            self._connection_changed_at_ms = observed_at_ms
+
+    def mark_stream_disconnected(self, *, observed_at_ms: int) -> None:
+        """Flip the connection watermark unhealthy on disconnect/shutdown."""
+        self._connected = False
+        self._connection_changed_at_ms = observed_at_ms
 
     def observe_symbol_status(self, evidence: SymbolTradingStatusEvidence) -> None:
         """Keep the newest vendor event for one normalized symbol."""
@@ -248,6 +284,8 @@ class MarketLivenessStore:
             normalized_symbol,
             now_ms=now_ms,
             market_clock=self._market_clock,
+            connected=self._connected,
+            connection_changed_at_ms=self._connection_changed_at_ms,
             symbol_status=self._symbol_statuses.get(normalized_symbol),
         )
 

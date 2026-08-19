@@ -47,7 +47,7 @@ from app.engine.options.pricer import (
     price_contract,
 )
 from app.engine.strategy.base import LoggedTrade, Strategy
-from app.utils.timestamps import datetime_at_ms, now_ms_utc
+from app.utils.timestamps import display_time, now_ms_utc, ny_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -290,7 +290,7 @@ class SpyEmaCrossoverOptionsAlgorithm(Strategy):
                     # Signal fired but chain resolution failed — nothing
                     # to close, just release the position lock.
                     self.ctx.log(
-                        f"POSITION RELEASED (no spread): {datetime_at_ms(bar.end_ms).strftime('%Y-%m-%d %H:%M')}"
+                        f"POSITION RELEASED (no spread): {display_time(bar.end_ms)}"
                     )
                 self._in_position = False
         else:
@@ -325,7 +325,7 @@ class SpyEmaCrossoverOptionsAlgorithm(Strategy):
         """Attempt to enter a spread on the entry signal."""
         assert self.ctx is not None
         underlying_price = float(bar.close)
-        bar_end = datetime_at_ms(bar.end_ms)
+        bar_end = ny_datetime(bar.end_ms)
         eval_date = bar_end.date()
 
         self.ctx.log(
@@ -465,7 +465,7 @@ class SpyEmaCrossoverOptionsAlgorithm(Strategy):
 
         spread = self._open_spread
         underlying_price = float(bar.close)
-        bar_end = datetime_at_ms(bar.end_ms)
+        bar_end = ny_datetime(bar.end_ms)
         eval_date = bar_end.date()
 
         # Re-price both legs at exit
@@ -549,7 +549,7 @@ class SpyEmaCrossoverOptionsAlgorithm(Strategy):
                     # Spread metadata
                     "spread_type": Decimal(1 if spread.spread_type == SpreadType.BULL_CALL else 2),
                     "expiration_dte": Decimal(
-                        str((spread.expiration - datetime_at_ms(spread.entry_time_ms).date()).days)
+                        str((spread.expiration - ny_datetime(spread.entry_time_ms).date()).days)
                     ),
                     "spread_width": Decimal(str(spread.spread_width)),
                     # Long leg

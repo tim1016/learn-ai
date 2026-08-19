@@ -27,7 +27,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Protocol, TypedDict
 
-from app.utils.timestamps import datetime_at_ms
+from app.utils.timestamps import ny_datetime
 
 TRADING_DAYS_PER_YEAR = 252
 
@@ -344,6 +344,8 @@ def _drawdown_recovery_days(initial_equity: float, trades: Sequence[_TradeLike])
     equity = peak = initial_equity
     peak_time_ms = first_entry_ms
     longest_ms = 0
+    longest_start_ms: int | None = None
+    longest_end_ms: int | None = None
     in_drawdown = False
     final_exit_ms: int | None = None
     for trade in trades:
@@ -353,16 +355,27 @@ def _drawdown_recovery_days(initial_equity: float, trades: Sequence[_TradeLike])
         final_exit_ms = exit_time_ms
         equity *= 1.0 + float(trade.pnl_pct)
         if equity >= peak:
-            if in_drawdown:
-                longest_ms = max(longest_ms, exit_time_ms - peak_time_ms)
+            if in_drawdown and exit_time_ms - peak_time_ms > longest_ms:
+                longest_ms = exit_time_ms - peak_time_ms
+                longest_start_ms, longest_end_ms = peak_time_ms, exit_time_ms
             peak = equity
             peak_time_ms = exit_time_ms
             in_drawdown = False
         else:
             in_drawdown = True
-    if in_drawdown and final_exit_ms is not None:
-        longest_ms = max(longest_ms, final_exit_ms - peak_time_ms)
-    return max(0, longest_ms // 86_400_000)
+    if (
+        in_drawdown
+        and final_exit_ms is not None
+        and final_exit_ms - peak_time_ms > longest_ms
+    ):
+        longest_start_ms, longest_end_ms = peak_time_ms, final_exit_ms
+    if longest_start_ms is None or longest_end_ms is None:
+        return 0
+    # Calendar-day count in America/New_York, not a fixed-length UTC-ms
+    # division: a drawdown spanning a DST transition has the same number of
+    # ET calendar days regardless of the 23/25-hour elapsed-time wobble.
+    days = (ny_datetime(longest_end_ms).date() - ny_datetime(longest_start_ms).date()).days
+    return max(0, days)
 
 
 def _resample_to_daily(points: Sequence[EquityPoint]) -> list[float]:
@@ -370,7 +383,7 @@ def _resample_to_daily(points: Sequence[EquityPoint]) -> list[float]:
         return []
     daily_values: dict[date, float] = {}
     for point in points:
-        date_key = datetime_at_ms(point.timestamp_ms).date()
+        date_key = ny_datetime(point.timestamp_ms).date()
         daily_values[date_key] = point.equity
     return list(daily_values.values())
 

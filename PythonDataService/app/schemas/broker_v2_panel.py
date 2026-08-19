@@ -347,6 +347,10 @@ class MarketPulseView(BaseModel):
     market_state: Literal["TRADABLE", "HALTED", "CLOSED", "UNKNOWN"]
     market_liveness_reason: str
     market_liveness_observed_at_ms: int
+    # Structured symbol for the HALTED headline — never interpolated into
+    # ``headline`` prose. The frontend renders it through the canonical
+    # ``app-asset-identity`` component rather than a raw ticker string.
+    halted_symbol: str | None
     feed_state: Literal["LIVE", "IDLE", "STALE", "MISSING"]
     latest_bar_at_ms: int | None
     age_ms: int | None

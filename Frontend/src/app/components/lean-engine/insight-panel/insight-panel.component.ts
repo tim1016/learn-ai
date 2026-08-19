@@ -7,6 +7,7 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
+import { TimestampDisplayPipe } from '../../../shared/timestamp';
 import { ReliabilityDiagramComponent } from './reliability-diagram/reliability-diagram.component';
 import { AccuracyHeatmapComponent } from './accuracy-heatmap/accuracy-heatmap.component';
 
@@ -32,8 +33,8 @@ export interface InsightRecord {
   confidence: number | null;
   source_model: string;
   tag: string;
-  generated_time: string;
-  close_time: string;
+  generated_at_ms: number;
+  close_at_ms: number;
   reference_value: number;
   reference_value_final: number;
   score: {
@@ -65,7 +66,13 @@ export interface InsightSummaryData {
 @Component({
   selector: 'app-insight-panel',
   standalone: true,
-  imports: [CommonModule, AssetIdentityComponent, ReliabilityDiagramComponent, AccuracyHeatmapComponent],
+  imports: [
+    CommonModule,
+    AssetIdentityComponent,
+    TimestampDisplayPipe,
+    ReliabilityDiagramComponent,
+    AccuracyHeatmapComponent,
+  ],
   templateUrl: './insight-panel.component.html',
   styleUrls: ['./insight-panel.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -160,13 +167,6 @@ export class InsightPanelComponent {
   pct(val: number | undefined): string {
     if (val === undefined || val === null) return '—';
     return (val * 100).toFixed(1) + '%';
-  }
-
-  formatTime(iso: string): string {
-    if (!iso) return '';
-    const d = new Date(iso);
-    if (isNaN(d.getTime())) return iso;
-    return d.toISOString().replace('T', ' ').replace(/\.\d+Z$/, '');
   }
 
   toggleCollapse(): void {

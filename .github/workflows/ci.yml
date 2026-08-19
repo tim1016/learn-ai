@@ -228,6 +228,17 @@ jobs:
           git diff --exit-code -- \
             PythonDataService/app/broker/v2panel/vocabulary.snapshot.json \
             Frontend/src/app/components/broker/v2-panel/lib/broker-v2-vocabulary.snapshot.json
+          # `git diff` ignores untracked files, so a snapshot that got deleted
+          # and regenerated as a new, never-committed file would pass the
+          # check above unnoticed. `git status --porcelain` catches that.
+          status=$(git status --porcelain -- \
+            PythonDataService/app/broker/v2panel/vocabulary.snapshot.json \
+            Frontend/src/app/components/broker/v2-panel/lib/broker-v2-vocabulary.snapshot.json)
+          if [ -n "$status" ]; then
+            echo "Regenerated vocabulary snapshot is untracked or otherwise dirty:"
+            echo "$status"
+            exit 1
+          fi
 
   python-test:
     name: Python Tests

@@ -16292,6 +16292,8 @@ export interface components {
              * @enum {string}
              */
             feed_state: "LIVE" | "IDLE" | "STALE" | "MISSING";
+            /** Halted Symbol */
+            halted_symbol: string | null;
             /** Headline */
             headline: string;
             /** Latest Bar At Ms */

@@ -32,6 +32,7 @@ from app.marketdata.feed import MarketDataBar, MarketDataFeed
 from app.schemas.broker_bots import AlpacaPaperStrategyKey
 from app.schemas.market_liveness import MarketLivenessFact
 from app.services.market_liveness import market_liveness_fact
+from app.services.session_authority import extended_phase_proven_at_ms
 from app.utils.timestamps import now_ms_utc
 
 if TYPE_CHECKING:
@@ -63,6 +64,15 @@ class StrategyEvaluation:
 
     bar: MarketDataBar
     intents: tuple[SignalIntent, ...]
+    # Undoes the strategy's own ENTER-time state mutation when the caller
+    # blocks this evaluation's ENTER intent after signal emission (#1671
+    # AC6). Both signal generators commit lifecycle state (an active
+    # cycle / an open position) unconditionally at emission time, before
+    # the liveness gate has a chance to veto — without this, a blocked
+    # ENTER still leaves the strategy believing it holds a position, and
+    # the later EXIT it emits has no real custody to close, crashing the
+    # run with ``MissingEntryCustodyError``.
+    rollback_blocked_entry: Callable[[], None]
 
 
 class _EffectReceipt(Protocol):
@@ -78,6 +88,30 @@ class _RecordingSignalIntentExecutor:
         _intent: SignalIntent,
     ) -> None:
         return
+
+
+def _liveness_blocks_entry(
+    binding: BrokerBotBinding,
+    account_id: str,
+    liveness: MarketLivenessFact,
+) -> bool:
+    """Decide whether the live liveness fact should block this ENTER.
+
+    HALTED and UNKNOWN are always blocking — they are the foundational
+    safety signal this gate exists for. CLOSED is different: the broker
+    clock backing it is RTH-only (see ``clock_liveness_evidence``), so for a
+    non-RTH binding it does not distinguish a genuinely closed market from
+    an ordinary extended-hours session. Only in that specific case is the
+    calendar-authority ``extended_phase_proven`` fact — the same one
+    ``market_pulse.py`` already reconciles against — consulted; this module
+    stays otherwise free of session/calendar logic, per
+    ``app.services.market_liveness``'s own module boundary.
+    """
+    if liveness.state != "CLOSED":
+        return liveness.state != "TRADABLE"
+    if binding.use_rth:
+        return True
+    return not extended_phase_proven_at_ms(now_ms=now_ms_utc(), symbol=binding.symbol, account_id=account_id)
 
 
 def _engine_bar(bar: MarketDataBar) -> TradeBar:
@@ -117,7 +151,7 @@ async def _deployment_validation_evaluations(
                 ),
             )
         )
-        yield StrategyEvaluation(bar=bar, intents=intents)
+        yield StrategyEvaluation(bar=bar, intents=intents, rollback_blocked_entry=kernel.rollback_blocked_entry)
 
 
 async def _ema_crossover_evaluations(
@@ -149,7 +183,11 @@ async def _ema_crossover_evaluations(
         # charting. This adapter is long-lived and has no chart consumer, so
         # release each emitted bar after the strategy has processed it.
         context.consolidated_bars.clear()
-        yield StrategyEvaluation(bar=market_bar, intents=intents)
+        yield StrategyEvaluation(
+            bar=market_bar,
+            intents=intents,
+            rollback_blocked_entry=strategy.rollback_blocked_entry,
+        )
 
 
 async def strategy_evaluations(
@@ -228,7 +266,12 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
         # same way for the same reason.
         if intent.kind is SignalIntentKind.ENTER:
             liveness = market_liveness_fact(binding.symbol, now_ms_utc())
-            if liveness.state != "TRADABLE":
+            if _liveness_blocks_entry(binding, account_id, liveness):
+                # Undo the ENTER-time state mutation the strategy already
+                # committed at signal emission — otherwise it believes it
+                # holds a position it was never actually granted, and its
+                # later EXIT has no real custody to close (#1671 AC6).
+                evaluation.rollback_blocked_entry()
                 _append_decision_receipt(
                     decision_receipts,
                     binding=binding,
@@ -276,6 +319,7 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
             purpose=_EFFECT_PURPOSE_BY_INTENT[intent.kind],
             action_plan=binding.action_plan,
             quantity=binding.quantity,
+            use_rth=binding.use_rth,
         )
         if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
             _record_blocked_decision(

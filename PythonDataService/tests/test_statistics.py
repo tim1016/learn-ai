@@ -272,6 +272,20 @@ class TestResampleToDaily:
     def test_empty(self) -> None:
         assert _resample_to_daily([]) == []
 
+    def test_buckets_by_et_calendar_date_not_utc_calendar_date(self) -> None:
+        """2024-01-05 03:00 UTC is 2024-01-04 22:00 ET — still the prior ET
+        trading date. Bucketing by the raw UTC date (the pre-fix behavior)
+        would merge it into the same bucket as a same-UTC-date point that
+        is actually a different ET trading date."""
+        points = [
+            EquityPoint(timestamp_ms=to_ms_utc(datetime(2024, 1, 5, 3, 0, tzinfo=UTC)), equity=100.0),
+            EquityPoint(timestamp_ms=to_ms_utc(datetime(2024, 1, 5, 20, 0, tzinfo=UTC)), equity=101.0),
+        ]
+
+        daily = _resample_to_daily(points)
+
+        assert daily == [100.0, 101.0]
+
 
 class TestDailyReturns:
     def test_basic(self) -> None:
@@ -390,6 +404,30 @@ class TestSummarizeSnapshot:
         assert stats["max_consecutive_losing_trades"] == 1
         assert stats["probabilistic_sharpe_ratio"] is not None
         assert stats["trade_sharpe_ratio"] == pytest.approx(4.9350815176447504)
+
+    def test_drawdown_recovery_counts_et_calendar_days_not_utc_ms_division(self) -> None:
+        """A drawdown from 2024-01-04 23:00 ET to 2024-01-05 01:00 ET spans
+        only 2 elapsed hours but touches two different ET trading dates.
+        Dividing elapsed UTC ms by 86_400_000 (the pre-fix behavior) reports
+        0 days; the correct ET-calendar-date count is 1."""
+        peak_ms = to_ms_utc(datetime(2024, 1, 5, 4, 0, tzinfo=UTC))  # 2024-01-04 23:00 ET
+        trough_exit_ms = to_ms_utc(datetime(2024, 1, 5, 4, 30, tzinfo=UTC))
+        recovery_ms = to_ms_utc(datetime(2024, 1, 5, 6, 0, tzinfo=UTC))  # 2024-01-05 01:00 ET
+        trades = [
+            FakeTrade(Decimal("10"), Decimal("0.10"), "WIN", to_ms_utc(datetime(2024, 1, 4, 20, 0, tzinfo=UTC)), peak_ms),
+            FakeTrade(Decimal("-22"), Decimal("-0.20"), "LOSS", peak_ms, trough_exit_ms),
+            FakeTrade(Decimal("33"), Decimal("0.30"), "WIN", trough_exit_ms, recovery_ms),
+        ]
+
+        stats = summarize(
+            initial_cash=100_000,
+            final_equity=114_400,
+            trades=trades,
+            trading_days=252,
+            equity_curve=None,
+        )
+
+        assert stats["drawdown_recovery"] == 1
 
     def test_trade_level_metrics_frozen(self) -> None:
         """Assert trade-level metrics match frozen expected values.

@@ -88,6 +88,7 @@ export function panelAtRevision(revision: number): BotPanelView {
       market_state: 'TRADABLE',
       market_liveness_reason: 'Fresh fixture evidence proves tradability.',
       market_liveness_observed_at_ms: BASE_TIMESTAMP_MS,
+      halted_symbol: null,
       feed_state: 'LIVE',
       latest_bar_at_ms: BASE_TIMESTAMP_MS,
       age_ms: 1_000,

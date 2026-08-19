@@ -255,10 +255,10 @@ def assert_trade_logs_match(
 
     for i, (sp, rf) in enumerate(zip(spec_trades, ref_trades, strict=True)):
         problems: list[str] = []
-        if sp.entry_time != rf.entry_time:
-            problems.append(f"entry_time {sp.entry_time} != {rf.entry_time}")
-        if sp.exit_time != rf.exit_time:
-            problems.append(f"exit_time {sp.exit_time} != {rf.exit_time}")
+        if sp.entry_time_ms != rf.entry_time_ms:
+            problems.append(f"entry_time_ms {sp.entry_time_ms} != {rf.entry_time_ms}")
+        if sp.exit_time_ms != rf.exit_time_ms:
+            problems.append(f"exit_time_ms {sp.exit_time_ms} != {rf.exit_time_ms}")
         if sp.entry_price != rf.entry_price:
             problems.append(f"entry_price {sp.entry_price} != {rf.entry_price}")
         if sp.exit_price != rf.exit_price:

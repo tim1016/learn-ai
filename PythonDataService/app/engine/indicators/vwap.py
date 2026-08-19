@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from app.utils.timestamps import datetime_at_ms
+from app.utils.timestamps import ny_datetime
 
 
 class SessionAnchoredVwap:
@@ -40,7 +40,7 @@ class SessionAnchoredVwap:
         """Accumulate one bar. Resets the session on a new calendar date."""
         if not isinstance(timestamp_ms, int):
             raise TypeError("timestamp_ms must be int64 milliseconds UTC")
-        d: date = datetime_at_ms(timestamp_ms).date()
+        d: date = ny_datetime(timestamp_ms).date()
         if self._session_date != d:
             self._session_date = d
             self._cum_pv = 0.0

@@ -69,6 +69,7 @@ const BASE_PANEL: BotPanelView = {
     market_state: 'TRADABLE',
     market_liveness_reason: 'Fresh test evidence proves tradability.',
     market_liveness_observed_at_ms: 1_700_000_001_000,
+    halted_symbol: null,
     feed_state: 'LIVE',
     latest_bar_at_ms: 1_700_000_000_000,
     age_ms: 1_000,

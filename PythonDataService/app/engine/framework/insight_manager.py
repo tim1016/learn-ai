@@ -22,7 +22,7 @@ from app.engine.framework.insight_scorer import (
     DefaultInsightScoreFunction,
     InsightScoreFunction,
 )
-from app.utils.timestamps import datetime_at_ms
+from app.utils.timestamps import ny_datetime
 
 
 @dataclass
@@ -181,7 +181,7 @@ class InsightManager:
         # ── Accuracy by hour of day ──
         hour_stats: dict[int, dict] = {}
         for insight in scored:
-            generated_at = datetime_at_ms(insight.generated_at_ms)
+            generated_at = ny_datetime(insight.generated_at_ms)
             hour = generated_at.hour
             if hour not in hour_stats:
                 hour_stats[hour] = {"count": 0, "correct": 0}
@@ -195,7 +195,7 @@ class InsightManager:
         # ── Accuracy by quarter ──
         quarter_stats: dict[str, dict] = {}
         for insight in scored:
-            generated_at = datetime_at_ms(insight.generated_at_ms)
+            generated_at = ny_datetime(insight.generated_at_ms)
             q = f"{generated_at.year}-Q{(generated_at.month - 1) // 3 + 1}"
             if q not in quarter_stats:
                 quarter_stats[q] = {"count": 0, "correct": 0}

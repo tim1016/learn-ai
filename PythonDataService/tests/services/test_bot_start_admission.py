@@ -185,6 +185,8 @@ def _start_facts(
                 observed_at_ms=observed_at_ms,
                 vendor_timestamp_ms=observed_at_ms,
             ),
+            connected=True,
+            connection_changed_at_ms=observed_at_ms,
             symbol_status=SymbolTradingStatusEvidence(
                 symbol="SPY",
                 state="TRADABLE",

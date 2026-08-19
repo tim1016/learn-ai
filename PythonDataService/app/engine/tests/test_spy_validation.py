@@ -55,6 +55,7 @@ from app.engine.execution.order import FillMode
 from app.engine.strategy.algorithms.spy_ema_crossover import (
     SpyEmaCrossoverAlgorithm,
 )
+from app.utils.timestamps import ny_datetime, to_ms_utc
 
 EASTERN = ZoneInfo("America/New_York")
 FIXTURE_CSV = Path(__file__).parent / "fixtures" / "spy_lean_trades.csv"
@@ -117,10 +118,12 @@ def _compare_trades(
         exp_entry = _parse_time(exp["entry"])
         exp_exit = _parse_time(exp["exit"])
 
-        if act.entry_time != exp_entry:
-            diffs.append(f"entry_time: {act.entry_time} != {exp_entry}")
-        if act.exit_time != exp_exit:
-            diffs.append(f"exit_time: {act.exit_time} != {exp_exit}")
+        exp_entry_ms = to_ms_utc(exp_entry)
+        exp_exit_ms = to_ms_utc(exp_exit)
+        if act.entry_time_ms != exp_entry_ms:
+            diffs.append(f"entry_time_ms: {act.entry_time_ms} != {exp_entry_ms}")
+        if act.exit_time_ms != exp_exit_ms:
+            diffs.append(f"exit_time_ms: {act.exit_time_ms} != {exp_exit_ms}")
 
         if _fmt(act.entry_price, 2) != exp["entry_price"]:
             diffs.append(f"entry_price: {_fmt(act.entry_price, 2)} != {exp['entry_price']}")
@@ -243,7 +246,7 @@ def run_validation() -> None:
         e = fixture[0]
         print()
         print("First engine trade:")
-        print(f"  entry={a.entry_time} price={a.entry_price} ema5={a.ema5} ema10={a.ema10} rsi={a.rsi}")
+        print(f"  entry={ny_datetime(a.entry_time_ms)} price={a.entry_price} ema5={a.ema5} ema10={a.ema10} rsi={a.rsi}")
         print("First fixture trade:")
         print(f"  entry={e['entry']} price={e['entry_price']} ema5={e['ema5']} ema10={e['ema10']} rsi={e['rsi']}")
 

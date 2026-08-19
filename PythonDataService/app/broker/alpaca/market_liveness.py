@@ -81,6 +81,7 @@ class AlpacaMarketLivenessConsumer:
             observed_at_ms=self._clock(),
             reason="Live Alpaca market-liveness source is starting.",
         )
+        self._store.mark_stream_disconnected(observed_at_ms=self._clock())
         self._store.clear_symbol_statuses()
         self._task = asyncio.create_task(self.run(), name="alpaca-market-liveness")
 
@@ -99,6 +100,7 @@ class AlpacaMarketLivenessConsumer:
             observed_at_ms=self._clock(),
             reason="Live Alpaca market-liveness source stopped.",
         )
+        self._store.mark_stream_disconnected(observed_at_ms=self._clock())
         self._store.clear_symbol_statuses()
 
     async def run(self) -> None:
@@ -154,6 +156,7 @@ class AlpacaMarketLivenessConsumer:
                 # A stream connection only proves events received during its own
                 # epoch. Never carry a status across disconnect/reconnect.
                 self._store.clear_symbol_statuses()
+                self._store.mark_stream_disconnected(observed_at_ms=self._clock())
 
             attempt += 1
             if self._max_reconnects is not None and attempt > self._max_reconnects:
@@ -161,7 +164,19 @@ class AlpacaMarketLivenessConsumer:
             await self._backoff(attempt)
 
     def handle_frame(self, frame: bytes | str) -> None:
-        """Capture and map one raw status frame, failing closed when malformed."""
+        """Capture and map one raw status frame, ignoring it when malformed.
+
+        A malformed frame is refused evidence for itself only — it does not
+        wipe previously-established evidence for other symbols. Under the
+        connection-watermark model (see the module docstring), absence of
+        per-symbol evidence already means "not blocked", so treating a
+        single bad frame as grounds to wipe the halted-symbol map would
+        silently un-halt every symbol this connection cycle had legitimately
+        proven halted. Only a genuine reconnect invalidates that map (see
+        ``_consume_statuses``); receiving a frame at all — good or bad —
+        still proves the socket itself is alive.
+        """
+        self._store.mark_stream_connected(observed_at_ms=self._clock())
         raw = frame.encode("utf-8") if isinstance(frame, str) else frame
         captured = self._journal.record(
             broker="alpaca",
@@ -172,7 +187,6 @@ class AlpacaMarketLivenessConsumer:
             raw_body=raw,
         )
         if not captured:
-            self._store.clear_symbol_statuses()
             logger.error(
                 "alpaca market-status frame could not be captured; refusing its evidence",
                 extra={"action": "market_liveness_status_capture_failed"},
@@ -181,7 +195,6 @@ class AlpacaMarketLivenessConsumer:
         try:
             payload = json.loads(raw)
         except (TypeError, ValueError):
-            self._store.clear_symbol_statuses()
             logger.warning(
                 "alpaca market-status frame is not valid JSON",
                 extra={"action": "market_liveness_status_parse_error"},
@@ -189,7 +202,6 @@ class AlpacaMarketLivenessConsumer:
             return
         messages = payload if isinstance(payload, list) else [payload]
         if not all(isinstance(message, dict) for message in messages):
-            self._store.clear_symbol_statuses()
             logger.warning(
                 "alpaca market-status frame has an invalid message shape",
                 extra={"action": "market_liveness_status_shape_error"},
@@ -203,10 +215,21 @@ class AlpacaMarketLivenessConsumer:
             return
         symbol = str(message.get("S") or "").strip().upper()
         if not symbol:
-            self._store.clear_symbol_statuses()
             logger.warning(
                 "alpaca market-status message omitted its symbol",
                 extra={"action": "market_liveness_status_symbol_missing"},
+            )
+            return
+        source_timestamp_ms = _message_timestamp_ms(message)
+        if source_timestamp_ms is None:
+            # A missing or unparsable source time is unverifiable external
+            # evidence — never accept the state transition. The symbol keeps
+            # whatever state its last verified evidence proved (unaffected
+            # by this message either way), so a corrupted resume cannot
+            # lift a genuine halt.
+            logger.warning(
+                "alpaca market-status message has no verifiable source time; the transition was not applied",
+                extra={"action": "market_liveness_status_timestamp_missing", "symbol": symbol},
             )
             return
         status_code = str(message.get("sc") or "").upper()
@@ -222,7 +245,6 @@ class AlpacaMarketLivenessConsumer:
             state = "UNKNOWN"
             reason_code = "ALPACA_STATUS_UNKNOWN"
             reason = f"Alpaca reported unrecognized trading status {status_code or 'missing'} for {symbol}."
-        source_timestamp_ms = _message_timestamp_ms(message)
         self._store.observe_symbol_status(
             SymbolTradingStatusEvidence(
                 symbol=symbol,

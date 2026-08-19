@@ -62,6 +62,7 @@ _MARKET_PULSE = MarketPulseView(
     market_state="TRADABLE",
     market_liveness_reason="Fresh test evidence proves tradability.",
     market_liveness_observed_at_ms=_NOW,
+    halted_symbol=None,
     feed_state="LIVE",
     latest_bar_at_ms=_NOW - 60_000,
     age_ms=60_000,

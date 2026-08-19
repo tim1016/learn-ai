@@ -73,8 +73,15 @@ def test_python_and_frontend_snapshots_are_byte_identical() -> None:
     (see test_snapshot_copy_matches_live_operator_copy_exactly for the test
     that does), but it does catch the more common case of only one file being
     hand-edited.
+
+    Skipped when ``Frontend/`` isn't part of this checkout (e.g. the
+    Python-only qualification container, whose image context is
+    ``PythonDataService`` — see ``compose.yaml``): cross-tree parity is
+    proven byte-for-byte there instead by the ``broker-v2-vocabulary-contract``
+    CI job, which runs against a full checkout.
     """
-    assert _FRONTEND_SNAPSHOT_PATH.exists(), f"snapshot not found at {_FRONTEND_SNAPSHOT_PATH}"
+    if not _FRONTEND_SNAPSHOT_PATH.exists():
+        pytest.skip(f"Frontend/ not present in this checkout ({_FRONTEND_SNAPSHOT_PATH})")
     assert _SNAPSHOT_PATH.read_text(encoding="utf-8") == _FRONTEND_SNAPSHOT_PATH.read_text(encoding="utf-8")
 
 
@@ -82,12 +89,19 @@ def test_committed_snapshots_match_freshly_generated_output() -> None:
     """Regression for #1666: committed bytes must equal what the generator
     produces from live source right now — the same check CI's
     ``broker-v2-vocabulary-contract`` job performs via `git diff --exit-code`
-    after regeneration, exercised here in-process."""
+    after regeneration, exercised here in-process.
+
+    Only the Python-local snapshot is checked here — see
+    ``test_python_and_frontend_snapshots_are_byte_identical`` for why the
+    Frontend copy isn't compared directly from this module, and for the
+    ``Python == Frontend`` half of the byte-identity that, combined with
+    this test's ``Python == fresh``, transitively proves ``Frontend ==
+    fresh`` whenever both tests run together in a full checkout.
+    """
     from scripts.regenerate_broker_v2_vocabulary_snapshot import build_snapshot
 
     fresh = json.dumps(build_snapshot(), indent=2, sort_keys=False) + "\n"
     assert _SNAPSHOT_PATH.read_text(encoding="utf-8") == fresh
-    assert _FRONTEND_SNAPSHOT_PATH.read_text(encoding="utf-8") == fresh
 
 
 def test_snapshot_copy_matches_live_operator_copy_exactly() -> None:

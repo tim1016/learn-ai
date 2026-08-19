@@ -35,6 +35,8 @@ def _fresh_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
                 observed_at_ms=now_ms,
                 vendor_timestamp_ms=now_ms,
             ),
+            connected=True,
+            connection_changed_at_ms=now_ms,
             symbol_status=SymbolTradingStatusEvidence(
                 symbol=symbol or "SPY",
                 state="TRADABLE",
@@ -275,6 +277,8 @@ def test_open_scheduled_phase_shows_fresh_symbol_halt(
             observed_at_ms=121_000,
             vendor_timestamp_ms=121_000,
         ),
+        connected=True,
+        connection_changed_at_ms=121_000,
         symbol_status=SymbolTradingStatusEvidence(
             symbol="SPY",
             state="HALTED",
@@ -295,5 +299,6 @@ def test_open_scheduled_phase_shows_fresh_symbol_halt(
 
     assert pulse.session == "OPEN"
     assert pulse.market_state == "HALTED"
-    assert pulse.headline == "Trading halted for SPY"
+    assert pulse.headline == "Trading halted for"
+    assert pulse.halted_symbol == "SPY"
     assert pulse.attention_required is True

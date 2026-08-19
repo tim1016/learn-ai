@@ -68,7 +68,14 @@ async def test_clock_poll_and_status_transition_compose_the_shared_fact(tmp_path
     assert resumed.symbol_status.reason_code == "ALPACA_STATUS_RESUME"
 
 
-def test_bad_status_frame_clears_prior_symbol_evidence(tmp_path: Path) -> None:
+def test_bad_status_frame_does_not_clear_prior_symbol_evidence(tmp_path: Path) -> None:
+    """A single malformed frame refuses evidence for itself only — it must
+    not wipe previously-established evidence for other symbols. Only a
+    genuine reconnect invalidates the halted-symbol map (#1671): the status
+    stream sends transitions, not a heartbeat, so treating every bad frame
+    as connection-wide corruption would let one unrelated garbled message
+    silently un-halt a symbol that was legitimately proven halted earlier in
+    the same connection cycle."""
     store = MarketLivenessStore()
     store.observe_clock(
         BrokerClockEvidence(
@@ -83,7 +90,7 @@ def test_bad_status_frame_clears_prior_symbol_evidence(tmp_path: Path) -> None:
     store.observe_symbol_status(
         SymbolTradingStatusEvidence(
             symbol="SPY",
-            state="TRADABLE",
+            state="HALTED",
             source="test.status",
             observed_at_ms=_NOW,
             source_timestamp_ms=_NOW,
@@ -94,5 +101,61 @@ def test_bad_status_frame_clears_prior_symbol_evidence(tmp_path: Path) -> None:
     consumer.handle_frame("not-json")
 
     fact = store.fact("SPY", now_ms=_NOW)
-    assert fact.state == "UNKNOWN"
-    assert fact.reason_code == "SYMBOL_STATUS_UNAVAILABLE"
+    assert fact.state == "HALTED"
+    assert fact.reason_code == "SYMBOL_HALTED"
+
+
+def test_receiving_any_frame_marks_the_stream_connected(tmp_path: Path) -> None:
+    """A quiet symbol needs the stream's connection — not a per-symbol
+    event — to prove it's still tradable (#1671's core fix); receiving a
+    frame at all, even a malformed one, is what proves that connection."""
+    store = MarketLivenessStore()
+    store.observe_clock(
+        BrokerClockEvidence(
+            broker="alpaca",
+            is_open=True,
+            vendor_timestamp_ms=_NOW,
+            next_open_ms=None,
+            next_close_ms=None,
+            observed_at_ms=_NOW,
+        )
+    )
+    consumer = _consumer(tmp_path, store)
+
+    consumer.handle_frame("not-json")
+
+    fact = store.fact("SPY", now_ms=_NOW)
+    assert fact.state == "TRADABLE"
+    assert fact.reason_code == "MARKET_TRADABLE"
+
+
+def test_status_message_without_source_time_is_not_applied(tmp_path: Path) -> None:
+    """A missing/unparsable ``t`` is unverifiable evidence and must not lift
+    (or impose) a state transition (#1671)."""
+    store = MarketLivenessStore()
+    store.observe_clock(
+        BrokerClockEvidence(
+            broker="alpaca",
+            is_open=True,
+            vendor_timestamp_ms=_NOW,
+            next_open_ms=None,
+            next_close_ms=None,
+            observed_at_ms=_NOW,
+        )
+    )
+    store.observe_symbol_status(
+        SymbolTradingStatusEvidence(
+            symbol="SPY",
+            state="HALTED",
+            source="test.status",
+            observed_at_ms=_NOW,
+            source_timestamp_ms=_NOW,
+        )
+    )
+    consumer = _consumer(tmp_path, store)
+
+    consumer.handle_frame(json.dumps([{"T": "s", "S": "SPY", "sc": "T"}]))  # no "t"
+
+    fact = store.fact("SPY", now_ms=_NOW)
+    assert fact.state == "HALTED"
+    assert fact.reason_code == "SYMBOL_HALTED"
