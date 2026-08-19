@@ -21,7 +21,7 @@ import os
 from enum import StrEnum
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
 # Reuse the atomic-write primitives instead of duplicating them. The
 # reviewer-flagged extraction of these into a shared util is the
@@ -91,17 +91,23 @@ class DesiredStateRecord(BaseModel):
     updated_at_ms: int
     updated_by: str
     reason: str | None = None
-    # Mirrors the lifecycle projection's witness. The evaluator uses this to
-    # finish a receipt if a crash lands after the atomic intent write but
-    # before the append-only disposition commit.
-    last_disposition_id: str | None = None
-    last_disposition_action: str | None = None
     # End-day is stronger than an ordinary pause: the running engine must
     # eventually queue an audited CLOCK_OUT after a control-plane outage.
     # This explicit marker is intentionally not inferred from ``reason``;
     # reasons are operator prose, not durable execution semantics.
     end_day_requested: bool = False
     version: int = 1
+
+    @model_validator(mode="before")
+    @classmethod
+    def discard_retired_evaluator_witness(cls, value: object) -> object:
+        """Read legacy files without retaining the retired receipt witness."""
+
+        if isinstance(value, dict):
+            value = dict(value)
+            value.pop("last_disposition_id", None)
+            value.pop("last_disposition_action", None)
+        return value
 
 
 class DesiredStateRepo:
@@ -178,8 +184,6 @@ class DesiredStateRepo:
         now_ms: int,
         reason: str | None = None,
         end_day_requested: bool = False,
-        disposition_id: str | None = None,
-        disposition_action: str | None = None,
     ) -> DesiredStateRecord:
         """Read-modify-write the desired state under a single lock,
         bumping ``version`` from the prior record (or starting at 1).
@@ -203,16 +207,6 @@ class DesiredStateRepo:
                 updated_at_ms=now_ms,
                 updated_by=updated_by,
                 reason=reason,
-                last_disposition_id=(
-                    disposition_id
-                    if disposition_id is not None
-                    else (existing.last_disposition_id if existing is not None else None)
-                ),
-                last_disposition_action=(
-                    disposition_action
-                    if disposition_action is not None
-                    else (existing.last_disposition_action if existing is not None else None)
-                ),
                 end_day_requested=end_day_requested,
                 version=next_version,
             )

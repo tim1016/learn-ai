@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -407,41 +406,6 @@ async def lifespan(app: FastAPI):
             "IBKR broker disabled (IBKR_BROKER_ENABLED=false). Broker endpoints disabled. Live-runs router available."
         )
 
-    # ── PRD #619-C2 — daemon connectivity monitor ──────────────────
-    # The host live-runner daemon is independent of the IBKR broker:
-    # start the connectivity monitor regardless of broker_enabled, so
-    # fleet and diagnostic consumers always have a typed connectivity
-    # state to read.
-    from app.engine.live.daemon_connectivity_monitor import (
-        DaemonConnectivityMonitor,
-    )
-    from app.engine.live.daemon_connectivity_monitor import (
-        set_monitor as set_daemon_monitor,
-    )
-    from app.engine.live.host_daemon_client import fetch_health
-
-    daemon_monitor: DaemonConnectivityMonitor | None = None
-    daemon_url = (ibkr_settings.live_runner_daemon_url or "").strip()
-    if daemon_url:
-        def _now_ms() -> int:
-            return int(time.time() * 1000)
-
-        async def _probe():
-            # Monitor discards the full envelope — it only needs the typed
-            # result, which already carries ``observed_daemon_boot_id``.
-            result, _health = await fetch_health(daemon_url)
-            return result
-
-        daemon_monitor = DaemonConnectivityMonitor(probe=_probe, now_ms=_now_ms)
-        await daemon_monitor.start()
-        set_daemon_monitor(daemon_monitor)
-    else:
-        set_daemon_monitor(None)
-        logger.info(
-            "Host daemon URL not configured (live_runner_daemon_url is empty); "
-            "daemon connectivity monitor not started."
-        )
-
     # ── Alpaca Bot Control v2, S2 (#1260) — in-container bot runner ────
     # The task registry is installed regardless of broker_enabled so the
     # /api/brokers/{broker}/bots routes answer honestly: without the shared
@@ -493,7 +457,6 @@ async def lifespan(app: FastAPI):
 
     # Start the shared fleet snapshot before serving its REST/SSE readers.
     # Per-bot state is owned by the Alpaca Broker V2 projection runtime above.
-    await live_instances_router.start_surface_hubs()
 
     try:
         yield
@@ -531,13 +494,7 @@ async def lifespan(app: FastAPI):
         from app.services.broker_v2_panel.live_projection import stop_live_projection_hubs
 
         await stop_live_projection_hubs()
-        await live_instances_router.stop_surface_hubs()
         await bot_events.get_bot_event_stream_service().stop_all()
-        # Stop the daemon monitor first — its probe traffic stops cleanly
-        # before any other shutdown step can race it.
-        if daemon_monitor is not None:
-            await daemon_monitor.stop()
-            set_daemon_monitor(None)
         if account_truth_refresh_loop is not None:
             await account_truth_refresh_loop.stop()
         # ADR 0014 — stop every broker-activity publisher before tearing

@@ -245,44 +245,30 @@ while ADR 0027 owns blocker disposition and moves.
   inconsistent.
   [#1665](https://github.com/tim1016/learn-ai/issues/1665)
 
-### Bot control-plane boundary (ADR 0038, verified 2026-08-18)
+### Bot control-plane boundary (ADR 0038, retired 2026-08-18)
 
-Decision record: ADR 0038 — Alpaca is the only bot control plane; SQLite is the
-authority for the duty facts it already fences (`runs.state = 'ACTIVE'` under
-`ux_runs_one_active_per_instance`, `strategy_instances.retired_at_ms`); the
-evaluator plane retires with the IBKR bot-control surface. These are its open
-consequences, re-verified line-by-line against current code. **Two of ADR 0038's
-own consequence statements did not survive that re-verification and are corrected
-here**; a dated correction note is on the ADR itself.
+[#1636](https://github.com/tim1016/learn-ai/issues/1636) closed the evaluator
+plane. The evaluator, disposition receipt/fence, run-ledger creation and writes,
+IBKR deploy/start/resume/stop/retire routes, host child-process actuation, and
+their Angular deploy/diagnostic/fleet clients are absent. The host surface now
+offers only authenticated account-Clerk capability operations and browser-safe
+health; registered `/api/live-instances` routes are capability reads/lease
+renewal plus read-only broker-activity evidence. Structural tests prove the
+retired live-runner entrypoint and imports/routes are absent, and that the host
+has neither a bot-launch route nor a direct `LiveEngine`, `LivePortfolio`, or
+native-time pending-order-queue import.
 
-- **Evaluator-plane retirement inventory (no action here; sequence after the
-  discriminator lands).** `engine/live/bot_lifecycle_evaluator.py`, its
-  disposition receipt log, `engine/live/bot_lifecycle_fence.py`, the
-  `routers/live_instances.py` deploy/start path, `run_ledger.json`, and the
-  IBKR-lineage account-binding `DEPLOYED`/`ACTIVE`/`RETIRED` family. **The
-  evaluator's live callers must be migrated or deleted first** — a repo sweep for
-  `BotLifecycleEvaluator(` finds eight sites beyond the router:
-  `engine/live/run.py:1877`, `:1961`, `:3022`; `engine/live/host_daemon.py:1340`;
-  `engine/live/lifecycle_exit_finalizer.py:51`, `:115`;
-  `services/bot_deletion.py:480`; and
-  `services/risk_reducing_lifecycle_intent.py:77`. The account-binding
-  family likewise has safety consumers beyond the two obvious ones:
-  `services/account_directory.py`, `routers/account_reconciliation.py`,
-  `engine/live/account_classifier.py:268`, `engine/live/account_safety.py:1315`,
-  `broker/ibkr/account_truth.py:857`. As with the temporal
-  `LivePortfolio.liquidate(datetime) → Order.time → pending_orders` boundary
-  (`engine/live/live_portfolio.py:1158-1196,1342-1351`;
-  `engine/execution/order.py:48-55`),
-  `rollup_cache.py` under ADR 0036 and the legacy ENTER seam above: **do not
-  write a regression test against a module scheduled for removal** — verify the
-  retirement closes it. #1636 acceptance must explicitly prove the native-time
-  queued-order boundary is unreachable/deleted, not preserved through a
-  compatibility adapter. [#1636](https://github.com/tim1016/learn-ai/issues/1636)
+The remaining names are explicit: SQLite registration/run folds are **run
+registrations** and runner JSON instance/run records are **runner restoration
+records**. A narrow `run_ledger.py` parser remains only for ADR 0037 step-5
+historical evidence; it cannot create or mutate a ledger and is unreachable from
+bot control.
 
-**Vocabulary hand-off.** "Deploy state" names four artifact families; two retire
-with this plane. Naming the two survivors — SQLite registration/run folds, and
-runner JSON instance/run records — is glossary work, tracked as item 6 of
-[#1623](https://github.com/tim1016/learn-ai/issues/1623), not a defect here.
+This retirement does **not** close the shared IBKR paper-order primitive work in
+[#1583](https://github.com/tim1016/learn-ai/issues/1583) or the legacy Clerk
+binding-writer retirement in
+[#1618](https://github.com/tim1016/learn-ai/issues/1618). Those surfaces remain
+parked and are not a second registered bot-control plane.
 
 ### Resolved
 
@@ -327,7 +313,7 @@ runner JSON instance/run records — is glossary work, tracked as item 6 of
 All five P0 safety issues from `architecture-investigation-2026-07-02.md` were
 verified **fixed** in current code (unauth data plane now binds `127.0.0.1` +
 HMAC control secret; panic-flatten stamps `order_ref`; recovery-flatten re-fetches
-positions; freeze is clearable via `account_recovery_cli.py clear-freeze`;
+positions; freeze is clearable via the authenticated account recovery endpoint;
 IntentWal truncates its tolerated tail before append). The remaining P1s
 carried forward are:
 

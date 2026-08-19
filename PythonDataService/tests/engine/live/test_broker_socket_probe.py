@@ -67,7 +67,7 @@ def test_enumerator_filters_gateway_side_endpoint(
         return subprocess.CompletedProcess(
             args,
             0,
-            stdout="python -m app.engine.live.run start --run-dir /runs/run-a\n",
+            stdout="python worker.py --run-dir /runs/run-a\n",
             stderr="",
         )
 

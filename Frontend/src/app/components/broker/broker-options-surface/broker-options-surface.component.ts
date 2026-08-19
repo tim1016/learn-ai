@@ -12,7 +12,6 @@ import {
   viewChild,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { RouterLink } from '@angular/router';
 import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
 import { PageGuideComponent } from '../../../shared/page-guide/page-guide.component';
 import { SectionErrorComponent } from '../../../shared/errors/section-error.component';
@@ -86,7 +85,6 @@ const Z_METRICS: readonly ZMetricOption[] = [
     PageHeaderComponent,
     PageGuideComponent,
     SectionErrorComponent,
-    RouterLink,
   ],
   styleUrl: './broker-options-surface.component.scss',
   templateUrl: './broker-options-surface.component.html',

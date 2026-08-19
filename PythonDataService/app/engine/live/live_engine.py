@@ -112,7 +112,6 @@ from app.engine.live.runtime_producer import (
 from app.engine.strategy.base import LoggedTrade, Strategy
 from app.engine.strategy.spec.schema import SUPPORTED_LIVE_RUNTIME_BAR_SOURCE
 from app.operator.incidents.safety_halt_notices import poison_and_record_incident
-from app.operator.incidents.store import IncidentStore
 from app.schemas.bot_events import GateStep, GateStepResult, SourceAuthority
 from app.utils.timestamps import now_ms_utc
 
@@ -426,52 +425,6 @@ def _emit_drop_events_for_pending(
     )
 
 
-# ---------------------------------------------------------------------------
-# Watchdog flatten helper — extracted for testability
-# ---------------------------------------------------------------------------
-
-
-class _WatchdogEngineRef(Protocol):
-    """Minimal engine surface the watchdog adapter's flatten_now needs."""
-
-    _flatten_now_requested: bool
-
-    def _has_open_positions(self) -> bool: ...
-
-
-async def _watchdog_flatten_now(engine_ref: _WatchdogEngineRef) -> str:
-    """Implement flatten_now for the watchdog's _ControllerAdapter.
-
-    Sets the engine's ``_flatten_now_requested`` flag and polls (100ms
-    cadence) until the bar loop clears it.  The executor wraps this
-    coroutine in ``asyncio.wait_for``; when the timeout expires the
-    executor cancels the coroutine and records ``"timed_out"`` itself.
-
-    Returns a ``FlattenOutcome`` literal:
-    - ``not_needed``  — portfolio has no open positions.
-    - ``completed``   — bar loop cleared the flag AND positions are zero.
-    - ``failed``      — flag cleared but positions remain (partial fill).
-    """
-    if not engine_ref._has_open_positions():
-        logger.info("[WATCHDOG] flatten_now: no open positions — not_needed")
-        return "not_needed"
-
-    engine_ref._flatten_now_requested = True
-    logger.info("[WATCHDOG] flatten_now: set _flatten_now_requested; polling for bar-loop confirmation (100ms cadence)")
-
-    while engine_ref._flatten_now_requested:
-        await asyncio.sleep(0.1)
-
-    if engine_ref._has_open_positions():
-        logger.critical(
-            "[WATCHDOG] flatten_now: bar loop cleared flag but positions remain — possible partial fill or rejection"
-        )
-        return "failed"
-
-    logger.info("[WATCHDOG] flatten_now: positions confirmed zero — completed")
-    return "completed"
-
-
 class LiveEngine:
     """Async runtime for Strategy subclasses against a broker boundary."""
 
@@ -570,18 +523,7 @@ class LiveEngine:
         # PRD #619-B B3 — for the control-plane block bootstrap. When
         # set, the engine reads ``<artifacts_root>/control_plane/daemon_lease.json``
         # at startup to seed ``ControlPlaneBlock.observed_daemon_boot_id``.
-        # When ``watchdog_factory`` is also wired (B5 follow-up below)
-        # this single read becomes a periodic producer.
         artifacts_root_for_lease: object = None,
-        # PRD #619-B B5 follow-up — child watchdog factory. When set,
-        # the engine constructs a ``ChildWatchdog`` from this callable
-        # before the bar loop starts and stops it in the outer
-        # ``finally``. The factory receives the four engine-side
-        # callbacks (block_submissions, persist_paused, disconnect_broker,
-        # request_engine_exit) and returns a configured watchdog. The
-        # engine owns the lifecycle; the factory owns the configuration
-        # (cadence, threshold, expected_daemon_boot_id from env).
-        watchdog_factory: object = None,
         # AccountOwner submit mode. When wired, the portfolio emits
         # AccountOwnerSubmitIntent objects to this callable instead of calling
         # the broker adapter directly.
@@ -747,7 +689,6 @@ class LiveEngine:
         self._bar_source_state_lock = asyncio.Lock()
         self._broker_monitor = broker_monitor
         self._artifacts_root_for_lease = artifacts_root_for_lease
-        self._watchdog_factory = watchdog_factory
         self._account_owner_submitter = account_owner_submitter
         self._account_clerk_namespace_canceller = account_clerk_namespace_canceller
         self._account_registry_gate_enabled = account_registry_gate_enabled
@@ -766,19 +707,9 @@ class LiveEngine:
         require_owner_write_fence = getattr(self._broker, "require_account_owner_write_fence", None)
         if self._current_owner_generation_provider is not None and callable(require_owner_write_fence):
             require_owner_write_fence(self._current_owner_generation_provider)
-        # PRD #619-B B5 follow-up — submissions-blocked flag set by the
-        # watchdog's step 1 ``block_submissions`` callback. The bar loop
-        # checks this alongside ``self._paused`` and clears any pending
-        # orders without sending them when set. The flag is sticky: once
-        # the watchdog has decided to fail-close, the engine never
-        # un-blocks itself (the operator restart starts a fresh process).
-        self._submissions_blocked = False
-        # Holds the watchdog instance for the duration of ``run()``; set
-        # in the startup block, awaited in the outer finally.
-        self._watchdog: object | None = None
         # Weak reference to the LivePortfolio created in ``run()``. Set
-        # for the active run so recovery/watchdog adapters can clear pending
-        # orders or read live position state. Cleared in the finally block.
+        # for the active run so recovery adapters can clear pending orders or
+        # read live position state. Cleared in the finally block.
         self._run_portfolio: object | None = None
         # Phase 5C / VCR-0002 — managed cancel-confirm timeout.
         self._cancel_confirm_timeout_s = cancel_confirm_timeout_s
@@ -1384,15 +1315,6 @@ class LiveEngine:
 
         self._run_portfolio = portfolio
 
-        # PRD #619-B B5 follow-up — child watchdog. The factory builds
-        # a configured ``ChildWatchdog`` from the engine's four side-
-        # effect callbacks; the engine owns the lifecycle. When the
-        # watchdog fires its 5-step contract, ``_submissions_blocked``
-        # flips True (step 1), durable PAUSED + incident lands (step 2),
-        # then disconnect + shutdown_event.set() drain the bar loop.
-        if self._watchdog_factory is not None and self._runtime_aggregator is not None and shutdown_event is not None:
-            self._watchdog = await self._start_child_watchdog(shutdown_event)
-
         # Operator command-channel poll task. Spawned only when a
         # channel is configured; cancelled in the finally block. The
         # task needs a shutdown_event to honor STOP / MARK_POISONED,
@@ -1692,13 +1614,12 @@ class LiveEngine:
                 # strategy still consumes the bar (indicators advance),
                 # but nothing new reaches the broker. RESUME flips the
                 # flag and the next bar's queue gets submitted normally.
-                if self._paused or self._submissions_blocked:
+                if self._paused:
                     # PR 3 / operator-notice — emit before clear so the
                     # append → fsync → clear ordering is satisfied.
-                    _drop_reason = "control_plane_lease_lost" if self._submissions_blocked else "operator_paused"
                     _emit_drop_events_for_pending(
                         portfolio,
-                        drop_reason=_drop_reason,
+                        drop_reason="operator_paused",
                         ts_ms=int(minute_bar.end_time.timestamp() * 1000),
                     )
                 # Predictive cap check: refuse to submit the pending batch if
@@ -1821,17 +1742,6 @@ class LiveEngine:
             # callers can see that settlement did not complete.
             _replay_pending_cancelled = await self._settle_replay_pending_at_feed_end()
         finally:
-            # PRD #619-B B5 follow-up — stop the child watchdog FIRST so
-            # its periodic lease-reading task is settled before we touch
-            # the broker session or the command poll. The watchdog's own
-            # ``stop()`` is bounded; if it has already fired its 5-step
-            # contract (state == EXITED) the call is a no-op.
-            if self._watchdog is not None:
-                try:
-                    await self._watchdog.stop()
-                except Exception:
-                    logger.exception("child watchdog stop failed")
-                self._watchdog = None
             self._run_portfolio = None
             # Stop the command-channel poller before any other cleanup
             # so a late-arriving operator command doesn't race with
@@ -2715,13 +2625,13 @@ class LiveEngine:
             executions_for_reconnect_recovery,
             list_open_orders,
         )
-        from app.engine.live.run import _build_broker_snapshot_from_ibkr
+        from app.engine.live.reconciliation_classifier import broker_snapshot_from_ibkr
 
         if self._client is None:
             raise RuntimeError("runtime reconcile requires a real IbkrClient to probe the broker")
         open_orders = await list_open_orders(self._client)
         executions = await executions_for_reconnect_recovery(self._client)
-        return _build_broker_snapshot_from_ibkr(open_orders, executions)
+        return broker_snapshot_from_ibkr(open_orders, executions)
 
     async def _run_runtime_reconcile(
         self,
@@ -3314,22 +3224,6 @@ class LiveEngine:
             if latest.used_cache_fallback:
                 raise RuntimeError("CLOCK_OUT_BROKER_EVIDENCE_NOT_FRESH")
         return latest
-
-    # ──────────────────── Watchdog position helpers ──────────────────
-
-    def _has_open_positions(self) -> bool:
-        """Return True if the current run's portfolio has any non-zero position.
-
-        Reads ``_run_portfolio`` which is set just before the child watchdog
-        starts and cleared in the run() finally block.  Returns False when
-        called outside of an active run (portfolio not set).
-        """
-        from app.engine.live.live_portfolio import LivePortfolio
-
-        portfolio = self._run_portfolio
-        if not isinstance(portfolio, LivePortfolio):
-            return False
-        return any(pos.quantity != 0 for pos in portfolio.positions.values())
 
     # ──────────────────── § 7 fatal-halt helpers ─────────────────────
 
@@ -4047,98 +3941,6 @@ class LiveEngine:
                 source=self._bar_source,
             )
         )
-
-    async def _start_child_watchdog(self, shutdown_event: asyncio.Event) -> object:
-        """PRD #619-B B5 follow-up — construct and start the watchdog.
-
-        Builds the four engine-side side-effect callbacks (block
-        submissions, persist durable PAUSED + incident, disconnect
-        broker, request engine exit) and hands them to the caller's
-        factory. The factory is the seam that lets ``cmd_start`` read
-        the daemon lease path + the expected ``boot_id`` from env
-        without coupling the engine to either.
-
-        PR 2 (operator-notice) wires a ``WatchdogHaltExecutor`` as the
-        handler: it orchestrates the 5 steps with per-step timeouts and
-        writes a typed ``OperatorIncident`` via the ``IncidentStore``.
-        The callbacks below implement the ``WatchdogShutdownController``
-        protocol that the executor calls.
-        """
-
-        def _block_submissions() -> None:
-            self._submissions_blocked = True
-
-        def _persist_paused(reason: str) -> None:
-            from app.engine.live.desired_state import DesiredState
-
-            self._persist_desired_state(
-                DesiredState.PAUSED,
-                f"control_plane_lease_lost:{reason}",
-            )
-
-        async def _disconnect_broker() -> None:  # type: ignore[return]
-            if self._client is not None:
-                try:
-                    await self._client.disconnect()
-                    return "completed"
-                except Exception:
-                    logger.exception(
-                        "child watchdog: broker disconnect failed",
-                    )
-                    return "failed"
-            return "completed"
-
-        def _request_engine_exit() -> None:
-            shutdown_event.set()
-
-        # Build the typed executor (PR 2) when the run_dir is available.
-        executor = None
-        if self._output_dir is not None:
-            from app.engine.live.watchdog_controller import (
-                WatchdogHaltExecutor,
-                WatchdogTimeouts,
-            )
-            _engine_ref = self
-
-            class _ControllerAdapter:
-                """Adapts the engine's sync/async callbacks to the
-                WatchdogShutdownController protocol."""
-
-                async def block_submissions(self) -> None:
-                    _block_submissions()
-
-                async def persist_paused(self, reason: str) -> None:
-                    _persist_paused(reason)
-
-                async def flatten_now(self, reason: str) -> str:
-                    """Delegate to the module-level ``_watchdog_flatten_now``."""
-                    return await _watchdog_flatten_now(_engine_ref)
-
-                async def disconnect_broker(self) -> str:
-                    return await _disconnect_broker() or "completed"
-
-                async def request_engine_exit(self) -> None:
-                    _request_engine_exit()
-
-            incident_store = IncidentStore(self._output_dir)
-            executor = WatchdogHaltExecutor(
-                _ControllerAdapter(),
-                incident_store,
-                timeouts=WatchdogTimeouts(),
-                artifacts_root=self._artifacts_root,
-                account_id=self._account_id,
-            )
-
-        watchdog = self._watchdog_factory(  # type: ignore[misc]
-            block_submissions=_block_submissions,
-            persist_paused=_persist_paused,
-            disconnect_broker=_disconnect_broker,
-            request_engine_exit=_request_engine_exit,
-            aggregator=self._runtime_aggregator,
-            executor=executor,
-        )
-        await watchdog.start()
-        return watchdog
 
     def _write_verdict_snapshot(self, verdict_value: object) -> None:
         """Phase 7B Guard #1 — persist the latest verdict reading so

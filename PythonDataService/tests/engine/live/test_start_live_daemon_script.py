@@ -115,15 +115,24 @@ def test_bootstrap_daemon_match_accepts_optional_cli_arguments_before_repo_root(
     assert re.search(daemon_match, host_first_argv)
 
 
-def test_bootstrap_active_run_probe_authenticates_health_request() -> None:
+def test_bootstrap_stop_probe_uses_authenticated_health_not_retired_instances() -> None:
     repo_root = Path(__file__).resolve().parents[4]
     script = (repo_root / "bootstrap-host-daemon.sh").read_text(encoding="utf-8")
-    active_run_ids = script.split("active_run_ids() {", maxsplit=1)[1].split(
+    shutdown_probe = script.split("daemon_health_available() {", maxsplit=1)[1].split(
         "\n}", maxsplit=1
     )[0]
 
     health_request = next(
-        line for line in active_run_ids.splitlines() if '"$HEALTH_URL"' in line
+        line for line in shutdown_probe.splitlines() if '"$HEALTH_URL"' in line
     )
+    stop_daemon = script.split("stop_daemon() {", maxsplit=1)[1].split(
+        "\n}", maxsplit=1
+    )[0]
 
     assert 'X-Live-Runner-Token: $token' in health_request
+    assert '"$HEALTH_URL"' in health_request
+    assert "if ! daemon_health_available; then" in stop_daemon
+    assert "if ! $FORCE; then" in stop_daemon
+    assert stop_daemon.index("daemon_health_available") < stop_daemon.index("pkill -f")
+    assert "/instances" not in script
+    assert "active_run_ids" not in script

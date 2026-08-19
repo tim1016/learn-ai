@@ -59,15 +59,9 @@ from app.schemas.account_reconciliation import (
     AccountSessionPolicyUpdateResponse,
     AccountTriageResponse,
     BindingLedgerBaselineReceipt,
-    LegacyStaleClaimCandidatesResponse,
-    LegacyStaleClaimRetirementReceipt,
-    LegacyStaleClaimRetireRequest,
-    StaleBindingRetirementReceipt,
-    StaleBindingRetirementRequest,
 )
 from app.schemas.account_safety_snapshot import (
     AccountSafetySnapshot,
-    PresentedOperatorAction,
     PresentedOperatorActionRejection,
     PresentedOperatorActionRejectionResponse,
     PresentedOperatorActionResult,
@@ -82,7 +76,6 @@ from app.schemas.journal_recovery import JournalRecoveryReceipt, JournalRecovery
 from app.schemas.live_runs import EmergencyFlattenRequest
 from app.schemas.presented_operator_action import (
     PresentedOperatorActionInvocation,
-    PresentedOperatorActionTarget,
 )
 from app.services.account_cockpit import AccountCockpitService
 from app.services.account_directory import (
@@ -100,19 +93,10 @@ from app.services.account_safety_snapshot import AccountSafetySnapshotService
 from app.services.account_truth_refresh import account_truth_artifacts_root, refresh_account_truth_now
 from app.services.journal_cures import JournalCureService
 from app.services.journal_recovery import JournalRecoveryError, JournalRecoveryService
-from app.services.legacy_stale_claim_retirement import (
-    LegacyStaleClaimRetirementError,
-    LegacyStaleClaimRetirementService,
-)
 from app.services.presented_account_actions import (
     PresentedAccountActionService,
     PresentedActionOutcomeUnknownError,
     PresentedActionRejectedError,
-)
-from app.services.presented_lifecycle_actions import (
-    LifecyclePresentedActionId,
-    PresentedLifecycleActionRejectedError,
-    PresentedLifecycleActionService,
 )
 from app.services.presented_recovery_action_dispatch import (
     dispatch_presented_recovery_action,
@@ -210,10 +194,6 @@ def get_presented_recovery_action_service(
     return PresentedRecoveryActionService(artifacts_root=artifacts_root)
 
 
-def get_legacy_stale_claim_retirement_service() -> LegacyStaleClaimRetirementService:
-    return LegacyStaleClaimRetirementService(artifacts_root=get_account_artifacts_root())
-
-
 def get_journal_cure_service(artifacts_root: AccountArtifactsRoot) -> JournalCureService:
     """Build cure projection from the overridable account-artifact root."""
 
@@ -297,50 +277,6 @@ async def account_safety_snapshot_endpoint(
 
     try:
         return service.snapshot(account_id=_canonical_account_id(account_id))
-    except UnknownAccountError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"reason_code": "ACCOUNT_UNKNOWN"}) from exc
-    except AccountDirectoryError as exc:
-        raise _account_directory_http_error(exc) from exc
-
-
-@router.get(
-    "/{account_id}/presented-lifecycle-actions/{action_id}",
-    response_model=PresentedOperatorAction,
-    responses={
-        status.HTTP_409_CONFLICT: {
-            "model": PresentedOperatorActionRejectionResponse,
-            "description": "Current account safety proof does not permit this action.",
-        },
-    },
-)
-async def present_lifecycle_action_endpoint(
-    account_id: str,
-    action_id: LifecyclePresentedActionId,
-    snapshot_service: Annotated[AccountSafetySnapshotService, Depends(get_account_safety_snapshot_service)],
-    strategy_instance_id: str = Query(min_length=1, max_length=128),
-    run_id: str | None = Query(default=None, min_length=1, max_length=160),
-) -> PresentedOperatorAction:
-    """Present one exact lifecycle action; it is not an executable command."""
-
-    canonical_account_id = _canonical_account_id(account_id)
-    try:
-        snapshot = snapshot_service.snapshot(account_id=canonical_account_id)
-        target = PresentedOperatorActionTarget(
-            account_id=canonical_account_id,
-            strategy_instance_id=strategy_instance_id,
-            run_id=run_id,
-        )
-        return PresentedLifecycleActionService().present(
-            action_id=action_id,
-            snapshot=snapshot,
-            target=target,
-        )
-    except PresentedLifecycleActionRejectedError as exc:
-        raise _presented_action_rejection_http_error(
-            reason_code=exc.reason_code,
-            message=exc.message,
-            snapshot=snapshot,
-        ) from exc
     except UnknownAccountError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"reason_code": "ACCOUNT_UNKNOWN"}) from exc
     except AccountDirectoryError as exc:
@@ -574,37 +510,6 @@ async def repair_account_event_sequence_endpoint(
         rewritten_rows=result.rewritten_rows,
         backup_path=str(result.backup_path) if result.backup_path is not None else None,
     )
-
-
-@router.post(
-    "/{account_id}/bindings/retire",
-    response_model=StaleBindingRetirementReceipt,
-    status_code=status.HTTP_201_CREATED,
-)
-async def retire_stale_binding_endpoint(
-    account_id: str,
-    request: StaleBindingRetirementRequest,
-) -> StaleBindingRetirementReceipt:
-    """Retire one inactive (DEPLOYED) binding via the host lifecycle authority.
-
-    Binding retirement is a host-authority mutation the Clerk records, so the
-    container delegates to the daemon rather than writing the RETIRED decision
-    itself. The daemon guards that the binding is currently DEPLOYED.
-    """
-
-    canonical_account_id = _canonical_account_id(account_id)
-    settings = get_settings()
-    try:
-        body = await host_daemon_client.retire_stale_binding(
-            settings.live_runner_daemon_url,
-            canonical_account_id,
-            request.model_dump(mode="json"),
-        )
-        return StaleBindingRetirementReceipt.model_validate(body)
-    except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
-        raise _outcome_unknown_http_error(exc) from exc
-    except host_daemon_client.HostDaemonError as exc:
-        raise HTTPException(exc.status_code, detail=exc.detail) from exc
 
 
 class _AccountClerkRestoreUnconfirmedError(RuntimeError):
@@ -917,93 +822,6 @@ async def execute_presented_recovery_action_endpoint(
         ) from exc
     except PresentedActionOutcomeUnknownError as exc:
         return _presented_action_response(exc.result)
-
-
-@router.get(
-    "/{account_id}/legacy-stale-claims/candidates",
-    response_model=LegacyStaleClaimCandidatesResponse,
-)
-async def legacy_stale_claim_candidates_endpoint(
-    account_id: str,
-    client: ConnectedIbkrClient,
-    service: Annotated[
-        LegacyStaleClaimRetirementService,
-        Depends(get_legacy_stale_claim_retirement_service),
-    ],
-) -> LegacyStaleClaimCandidatesResponse:
-    """Return only legacy sidecar claims whose retirement is proven safe now."""
-
-    canonical_account_id = _canonical_account_id(account_id)
-    try:
-        account_truth = await refresh_account_truth_now(
-            client,
-            account_id=canonical_account_id,
-            context="legacy stale-claim candidate proof",
-        )
-        settings = get_settings()
-        candidates = await service.candidates(
-            account_id=canonical_account_id,
-            account_truth=account_truth,
-            fetch_run_process=lambda run_id: host_daemon_client.fetch_run_process(
-                settings.live_runner_daemon_url,
-                run_id,
-            ),
-        )
-        return LegacyStaleClaimCandidatesResponse(
-            account_id=canonical_account_id,
-            generated_at_ms=account_truth.generated_at_ms,
-            candidates=candidates,
-        )
-    except BrokerError as exc:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
-    except AccountArtifactError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
-
-
-@router.post(
-    "/{account_id}/legacy-stale-claims/retire",
-    response_model=LegacyStaleClaimRetirementReceipt,
-)
-async def retire_legacy_stale_claim_endpoint(
-    account_id: str,
-    request: LegacyStaleClaimRetireRequest,
-    client: ConnectedIbkrClient,
-    service: Annotated[
-        LegacyStaleClaimRetirementService,
-        Depends(get_legacy_stale_claim_retirement_service),
-    ],
-) -> LegacyStaleClaimRetirementReceipt:
-    """Retire one pre-Clerk claim only after re-proving every safety fact."""
-
-    canonical_account_id = _canonical_account_id(account_id)
-    try:
-        account_truth = await refresh_account_truth_now(
-            client,
-            account_id=canonical_account_id,
-            context="legacy stale-claim retirement",
-        )
-        settings = get_settings()
-        return await service.retire(
-            account_id=canonical_account_id,
-            strategy_instance_id=request.strategy_instance_id,
-            run_id=request.run_id,
-            symbol=request.symbol,
-            requested_by=request.requested_by,
-            account_truth=account_truth,
-            fetch_run_process=lambda run_id: host_daemon_client.fetch_run_process(
-                settings.live_runner_daemon_url,
-                run_id,
-            ),
-        )
-    except BrokerError as exc:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
-    except LegacyStaleClaimRetirementError as exc:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={"reason_code": exc.reason_code, "message": exc.detail},
-        ) from exc
-    except AccountArtifactError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
 
 @router.post("/{account_id}/journal-cures", response_model=JournalCureReceipt, status_code=status.HTTP_201_CREATED)

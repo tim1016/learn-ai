@@ -5,11 +5,10 @@
 
 <app-broker-order-feed-status [status]="orderFeedStatus()" />
 
-@if (bannerState() === 'disabled-host-runner-active') {
+@if (bannerState() === 'disabled') {
   <div class="disabled-banner" role="status">
     <i class="pi pi-info-circle" aria-hidden="true"></i>
-    The host runner owns IBKR for this paper window. IBKR broker features are disabled.
-    <a routerLink="/brokers/alpaca/bots">Open Bots</a> to monitor the active session.
+    IBKR market-data access is disabled. Bot control remains available through Alpaca.
   </div>
 }
 

@@ -34,9 +34,7 @@ from app.engine.live.exit_taxonomy import (
     LIVENESS_UNPROVEN_REGISTRY_SOURCE,
     PROCESS_CRASHED_REGISTRY_SOURCE,
 )
-from app.schemas.account_recovery import CrashRecoveryOverrideRequest
 from app.schemas.live_runs import GateResult
-from app.services.account_crash_recovery import record_crash_recovery_override_evidence
 
 
 def _binding(
@@ -663,55 +661,6 @@ def test_crash_retired_restart_blocking_binding_reads_historic_persisted_termina
     assert blocking_binding is not None
     assert blocking_binding.run_id == "run-terminal"
     assert blocking_binding.cohort_id == "historic-cohort"
-
-
-@pytest.mark.parametrize(
-    "terminal_source",
-    (
-        PROCESS_CRASHED_REGISTRY_SOURCE,
-        LIVENESS_UNPROVEN_REGISTRY_SOURCE,
-        ENDED_WITHOUT_STATUS_REGISTRY_SOURCE,
-    ),
-)
-def test_crash_recovery_override_clears_terminal_retirement_after_deploy_only(
-    tmp_path: Path,
-    terminal_source: str,
-) -> None:
-    """Staging must not turn a required recovery override into a no-op."""
-
-    retired = _binding(run_id="run-terminal", recorded_at_ms=1_700_000_010_000).model_copy(
-        update={
-            "lifecycle_state": "RETIRED",
-            "source": terminal_source,
-        }
-    )
-    write_account_instance_binding(tmp_path, retired)
-    write_account_instance_binding(
-        tmp_path,
-        retired.model_copy(
-            update={
-                "run_id": "run-staged",
-                "lifecycle_state": "DEPLOYED",
-                "recorded_at_ms": 1_700_000_020_000,
-                "source": "host_daemon.deploy",
-            }
-        ),
-    )
-
-    receipt = record_crash_recovery_override_evidence(
-        tmp_path,
-        account_id="DU123456",
-        strategy_instance_id="spy-ema-paper-1",
-        request=CrashRecoveryOverrideRequest(confirm_account_flat=True),
-        now_ms=1_700_000_030_000,
-    )
-
-    assert receipt.run_id == "run-terminal"
-    assert crash_retired_restart_blocking_binding(
-        tmp_path,
-        account_id="DU123456",
-        strategy_instance_id="spy-ema-paper-1",
-    ) is None
 
 
 def test_crash_retired_restart_blocking_binding_honors_false_crash_correction_after_deploy_only(

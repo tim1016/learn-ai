@@ -18,7 +18,7 @@ from app.engine.live.account_registry import AccountInstanceBinding, write_accou
 from app.engine.live.daemon_transport import DaemonResult
 from app.engine.live.fleet import compute_fleet_contamination
 from app.engine.live.live_state_sidecar import LiveStateEnvelope, LiveStateSidecarRepo, stable_live_state_path
-from app.engine.live.run_ledger import LiveRunLedger, write_ledger
+from app.engine.live.run_ledger import LiveRunLedger
 from app.schemas.account_reconciliation import LegacyStaleClaimRetirementReceipt
 from app.schemas.live_runs import HostRunnerProcessStatus
 from app.services.fleet_contamination import collect_fleet_position_explanations
@@ -81,8 +81,9 @@ def _seed_claim(
     binding_state: str | None = "RETIRED",
 ) -> None:
     namespace = f"learn-ai/{strategy_instance_id}/v1"
-    write_ledger(
-        root / "live_runs" / run_id / "run_ledger.json",
+    ledger_path = root / "live_runs" / run_id / "run_ledger.json"
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text(
         LiveRunLedger(
             run_id=run_id,
             code_sha="a" * 40,
@@ -96,7 +97,8 @@ def _seed_claim(
             start_date_ms=_NOW_MS - 10_000,
             live_config={},
             created_at_ms=_NOW_MS - 10_000,
-        ),
+        ).model_dump_json(),
+        encoding="utf-8",
     )
     LiveStateSidecarRepo(
         stable_live_state_path(root, strategy_instance_id), trusted_root=root / "live_state"

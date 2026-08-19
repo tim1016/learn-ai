@@ -115,8 +115,18 @@ run whose file projection is stale, which is a repair, not an ambiguity.
 
 ## Consequences
 
-These are **not implemented**. This ADR is a decision; the corrections belong to
-separate work.
+**Implementation update 2026-08-18.** Issue #1636 implemented Decision 1. The
+evaluator, disposition receipt/fence, deploy/start/resume/stop/retire HTTP and
+host-process paths, and their Angular clients are gone. The former host daemon
+is now an account-Clerk capability bridge with no bot-launch route or direct
+live-engine, portfolio, or order-queue import. `run_ledger.py` is a read-only parser retained only
+for ADR 0037 step-5 evidence; it has no production builder or writer. Alpaca
+Broker V2 remains the sole bot-control product. Shared IBKR paper-order
+primitives and legacy Clerk binding writers are deliberately unchanged for
+their separately sequenced retirements (#1583 and #1618).
+
+The numbered list below is the original consequence inventory. It remains as
+the historical rationale for the independently tracked implementation tickets.
 
 **Correction 2026-08-18.** The consequences below were re-verified line-by-line
 while landing them in `docs/known-gaps.md` (register ticket

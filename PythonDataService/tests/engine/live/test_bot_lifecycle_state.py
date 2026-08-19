@@ -8,10 +8,7 @@ from app.engine.live.bot_lifecycle_state import (
     BotDutyOutcome,
     BotLifecyclePhase,
     BotLifecycleStateRepo,
-    BotRollCallOfferRecord,
-    BotRollCallOfferRepo,
     stable_bot_lifecycle_state_path,
-    stable_bot_roll_call_offers_path,
 )
 
 
@@ -136,29 +133,6 @@ def test_lifecycle_state_repo_clears_terminal_outcome_for_new_duty_and_redeploy(
     assert reopened.duty_outcome is None
 
 
-def test_roll_call_offer_repo_round_trips_active_and_consumed_offers(tmp_path: Path) -> None:
-    repo = BotRollCallOfferRepo(stable_bot_roll_call_offers_path(tmp_path, "paper-roll"))
-    offer = BotRollCallOfferRecord(
-        offer_id="offer-1",
-        strategy_instance_id="paper-roll",
-        run_id="run-1",
-        session_date="2026-07-08",
-        issued_at_ms=100,
-        expires_at_ms=200,
-        evidence_snapshot={"readiness_verdict": "READY"},
-    )
-
-    repo.append(offer)
-
-    assert repo.active_offer(now_ms=150) == offer
-    assert repo.active_offer(now_ms=200) is None
-    consumed = repo.consume("offer-1")
-
-    assert consumed is not None
-    assert consumed.status == "consumed"
-    assert repo.active_offer(now_ms=150) is None
-
-
 def test_lifecycle_sidecar_paths_reject_symlink_escape(tmp_path: Path) -> None:
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -168,5 +142,3 @@ def test_lifecycle_sidecar_paths_reject_symlink_escape(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError):
         stable_bot_lifecycle_state_path(tmp_path, "paper-escape")
-    with pytest.raises(ValueError):
-        stable_bot_roll_call_offers_path(tmp_path, "paper-escape")

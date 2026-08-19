@@ -25,7 +25,7 @@ import os
 import signal
 import tempfile
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
-from contextlib import AsyncExitStack, asynccontextmanager, contextmanager, nullcontext, suppress
+from contextlib import AsyncExitStack, asynccontextmanager, contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -139,11 +139,6 @@ from app.engine.live.order_identity import (
     build_manual_order_namespace,
     emergency_flatten_strategy_instance_id,
 )
-from app.services.bot_deletion import (
-    BotDeletionCorruptError,
-    bot_lifecycle_operation_fence,
-    bot_retirement_is_pending,
-)
 from app.services.clerk_transaction_projection import project_account_journal_best_effort
 from app.utils.advisory_lock import advisory_file_lock
 
@@ -223,36 +218,6 @@ def _intent_requires_entry_admission(intent: AccountOwnerSubmitIntent) -> bool:
         "CANCEL_NAMESPACE",
         "EMERGENCY_FLATTEN",
     }
-
-
-def _intent_lifecycle_fence(artifacts_root: Path, intent: AccountOwnerSubmitIntent):
-    """Return the one per-bot retirement fence for an ordinary intent."""
-
-    return (
-        nullcontext()
-        if intent.intent_kind == MANUAL_ORDER_INTENT_KIND
-        else bot_lifecycle_operation_fence(artifacts_root, intent.strategy_instance_id)
-    )
-
-
-@asynccontextmanager
-async def _intent_lifecycle_admission_lock(
-    artifacts_root: Path,
-    intent: AccountOwnerSubmitIntent,
-    *,
-    required: bool,
-) -> AsyncIterator[None]:
-    """Hold a lifecycle fence without blocking the Clerk event loop."""
-
-    if not required:
-        yield
-        return
-    fence = _intent_lifecycle_fence(artifacts_root, intent)
-    await asyncio.to_thread(fence.__enter__)
-    try:
-        yield
-    finally:
-        await asyncio.to_thread(fence.__exit__, None, None, None)
 
 
 class AccountClerk:
@@ -623,105 +588,88 @@ class AccountClerk:
         # A risk-reducing write is not entry risk, but it still takes the
         # shared reader permit: repair must never reclaim cross-runtime
         # admission state while *any* Clerk broker write can still be in
-        # flight. Entry additionally takes its per-bot lifecycle fence.
-        async with AsyncExitStack() as safety_admission:
-            if lane == "entry":
-                await safety_admission.enter_async_context(
-                    _intent_lifecycle_admission_lock(
-                        self._artifacts_root,
-                        intent,
-                        required=True,
-                    )
-                )
-            await safety_admission.enter_async_context(
-                _account_safety_entry_admission_lock(
-                    self._artifacts_root,
-                    self._account_id,
-                )
+        # flight.
+        async with _account_safety_entry_admission_lock(
+            self._artifacts_root,
+            self._account_id,
+        ), self._async_custody_admission_lock, self._intake_lock:
+            await self._require_normal_submit_intake(intent)
+            existing_identity = await asyncio.to_thread(
+                self._journal.intent_for_id,
+                intent.intent_id,
             )
-            async with self._async_custody_admission_lock, self._intake_lock:
-                await self._require_normal_submit_intake(intent)
-                existing_identity = await asyncio.to_thread(
-                    self._journal.intent_for_id,
-                    intent.intent_id,
-                )
-                if existing_identity is not None and existing_identity != intent:
-                    self._reject(intent, "CLERK_INTENT_ID_COLLISION")
-                existing = await asyncio.to_thread(self._journal.custody_status_for_intent, intent)
-                if existing is None and existing_identity is not None:
-                    # An ordinary synchronous receipt cannot be retroactively
-                    # converted into async custody: its original A0 did not carry
-                    # a lane or the corresponding restart policy.
-                    self._reject(intent, "CLERK_ASYNC_CUSTODY_REQUIRES_NEW_INTENT")
-                is_existing_queued = existing is not None and existing.lifecycle_state == "queued"
-                if existing is None:
-                    if lane == "entry":
-                        pending_entry = await asyncio.to_thread(
-                            self._journal.nonterminal_async_entry_for_strategy_instance,
-                            strategy_instance_id=intent.strategy_instance_id,
-                            excluding_intent_id=intent.intent_id,
-                        )
-                        if pending_entry is not None:
-                            self._reject(
-                                intent,
-                                "CLERK_ASYNC_ENTRY_PENDING",
-                                pending_intent_id=pending_entry.intent_id,
-                                pending_order_ref=pending_entry.order_ref,
-                            )
-                    async with _intent_lifecycle_admission_lock(
-                        self._artifacts_root,
-                        intent,
-                        required=False,
-                    ):
-                        if lane == "entry":
-                            await self._require_epoch_entry_admission(intent)
-                            pending_entry = await asyncio.to_thread(
-                                self._journal.nonterminal_async_entry_for_strategy_instance,
-                                strategy_instance_id=intent.strategy_instance_id,
-                                excluding_intent_id=intent.intent_id,
-                            )
-                            if pending_entry is not None:
-                                self._reject(
-                                    intent,
-                                    "CLERK_ASYNC_ENTRY_PENDING",
-                                    pending_intent_id=pending_entry.intent_id,
-                                    pending_order_ref=pending_entry.order_ref,
-                                )
-                        elif intent.effect_request is not None:
-                            effect_evidence = await self._require_risk_reducing_effect(intent)
-                        else:
-                            # Pre-S7 Clerk-owned callers can still use the
-                            # separate queue while the account is clean, but
-                            # they never receive a suspension exception: the
-                            # ordinary epoch/safety entry gate remains in
-                            # force. The socket API cannot choose this path.
-                            await self._require_epoch_entry_admission(intent)
-                        await self._require_async_custody_capacity(intent, lane)
-                        await self._run_before_a0_admission_hook(intent)
-                        intake_admitted_at_ms = self._now_ms()
-                        recorded = await asyncio.to_thread(
-                            self._record_intent_locked,
+            if existing_identity is not None and existing_identity != intent:
+                self._reject(intent, "CLERK_INTENT_ID_COLLISION")
+            existing = await asyncio.to_thread(self._journal.custody_status_for_intent, intent)
+            if existing is None and existing_identity is not None:
+                # An ordinary synchronous receipt cannot be retroactively
+                # converted into async custody: its original A0 did not carry
+                # a lane or the corresponding restart policy.
+                self._reject(intent, "CLERK_ASYNC_CUSTODY_REQUIRES_NEW_INTENT")
+            is_existing_queued = existing is not None and existing.lifecycle_state == "queued"
+            if existing is None:
+                if lane == "entry":
+                    pending_entry = await asyncio.to_thread(
+                        self._journal.nonterminal_async_entry_for_strategy_instance,
+                        strategy_instance_id=intent.strategy_instance_id,
+                        excluding_intent_id=intent.intent_id,
+                    )
+                    if pending_entry is not None:
+                        self._reject(
                             intent,
-                            clerk_request_received_at_ms=clerk_request_received_at_ms,
-                            clerk_intake_admitted_at_ms=intake_admitted_at_ms,
-                            async_custody_lane=lane,
-                            effect_evidence=effect_evidence,
+                            "CLERK_ASYNC_ENTRY_PENDING",
+                            pending_intent_id=pending_entry.intent_id,
+                            pending_order_ref=pending_entry.order_ref,
                         )
+                if lane == "entry":
+                    await self._require_epoch_entry_admission(intent)
+                    pending_entry = await asyncio.to_thread(
+                        self._journal.nonterminal_async_entry_for_strategy_instance,
+                        strategy_instance_id=intent.strategy_instance_id,
+                        excluding_intent_id=intent.intent_id,
+                    )
+                    if pending_entry is not None:
+                        self._reject(
+                            intent,
+                            "CLERK_ASYNC_ENTRY_PENDING",
+                            pending_intent_id=pending_entry.intent_id,
+                            pending_order_ref=pending_entry.order_ref,
+                        )
+                elif intent.effect_request is not None:
+                    effect_evidence = await self._require_risk_reducing_effect(intent)
                 else:
-                    recorded = existing.recorded
-                    if existing.lifecycle_state == "recorded":
-                        self._reject(intent, "CLERK_ASYNC_CUSTODY_REQUIRES_NEW_INTENT")
-                    elif existing.lifecycle_state != "queued":
-                        return recorded, existing
-                    else:
-                        assert existing.lane is not None
-                        lane = existing.lane
+                    # Pre-S7 Clerk-owned callers can still use the
+                    # separate queue while the account is clean, but
+                    # they never receive a suspension exception: the
+                    # ordinary epoch/safety entry gate remains in
+                    # force. The socket API cannot choose this path.
+                    await self._require_epoch_entry_admission(intent)
+                await self._require_async_custody_capacity(intent, lane)
+                await self._run_before_a0_admission_hook(intent)
+                intake_admitted_at_ms = self._now_ms()
+                recorded = await asyncio.to_thread(
+                    self._record_intent_locked,
+                    intent,
+                    clerk_request_received_at_ms=clerk_request_received_at_ms,
+                    clerk_intake_admitted_at_ms=intake_admitted_at_ms,
+                    async_custody_lane=lane,
+                    effect_evidence=effect_evidence,
+                )
+            else:
+                recorded = existing.recorded
+                if existing.lifecycle_state == "recorded":
+                    self._reject(intent, "CLERK_ASYNC_CUSTODY_REQUIRES_NEW_INTENT")
+                elif existing.lifecycle_state != "queued":
+                    return recorded, existing
+                else:
+                    assert existing.lane is not None
+                    lane = existing.lane
 
-                status = await asyncio.to_thread(self._journal.custody_status_for_intent, intent)
-                if status is None:
-                    raise RuntimeError("CLERK_ASYNC_CUSTODY_STATUS_MISSING")
-                if status.lifecycle_state == "queued":
-                    self._enqueue_async_custody(intent, lane, reject_if_full=not is_existing_queued)
+            status = await asyncio.to_thread(self._journal.custody_status_for_intent, intent)
+            if status is None:
+                raise RuntimeError("CLERK_ASYNC_CUSTODY_STATUS_MISSING")
+            if status.lifecycle_state == "queued":
+                self._enqueue_async_custody(intent, lane, reject_if_full=not is_existing_queued)
         self._schedule_custody_notification(intent)
         return recorded, status
 
@@ -821,11 +769,7 @@ class AccountClerk:
     async def _advance_async_custody_intent(self, intent: AccountOwnerSubmitIntent) -> None:
         """Cross A1 under the Clerk grant, then retain uncertainty durably."""
 
-        async with self._broker_write_lock, AsyncExitStack() as admission, _intent_lifecycle_admission_lock(
-            self._artifacts_root,
-            intent,
-            required=True,
-        ), _account_safety_entry_admission_lock(
+        async with self._broker_write_lock, AsyncExitStack() as admission, _account_safety_entry_admission_lock(
             self._artifacts_root,
             self._account_id,
         ):
@@ -1021,11 +965,7 @@ class AccountClerk:
         # Never wait on the shared cross-runtime permit while owning Clerk
         # intake: a writer can be waiting on a broker call whose callback must
         # acquire intake before it can release its pre-existing reader permit.
-        async with _intent_lifecycle_admission_lock(
-            self._artifacts_root,
-            intent,
-            required=True,
-        ), _account_safety_entry_admission_lock(
+        async with _account_safety_entry_admission_lock(
             self._artifacts_root,
             self._account_id,
         ), self._intake_lock:
@@ -1195,11 +1135,7 @@ class AccountClerk:
             # Acquire the cross-runtime reader before Clerk intake. A safety
             # writer may be waiting for a fill-before-ack callback, and that
             # callback needs intake to release the reader it already holds.
-            async with _intent_lifecycle_admission_lock(
-                self._artifacts_root,
-                intent,
-                required=True,
-            ), _account_safety_entry_admission_lock(
+            async with _account_safety_entry_admission_lock(
                 self._artifacts_root,
                 self._account_id,
             ), self._intake_lock:
@@ -1310,11 +1246,7 @@ class AccountClerk:
         if not callable(cancel_exact):
             raise RuntimeError("ACCOUNT_CLERK_CANCEL_EXACT_ORDER_UNSUPPORTED")
 
-        async with self._broker_write_lock, self._cancel_operation_lock, _intent_lifecycle_admission_lock(
-            self._artifacts_root,
-            intent,
-            required=True,
-        ), _account_safety_entry_admission_lock(
+        async with self._broker_write_lock, self._cancel_operation_lock, _account_safety_entry_admission_lock(
             self._artifacts_root,
             self._account_id,
         ):
@@ -1951,11 +1883,7 @@ class AccountClerk:
             raise RuntimeError("ACCOUNT_CLERK_BROKER_UNAVAILABLE")
         await self._require_normal_submit_intake(intent)
         self._require_paper_broker()
-        async with _intent_lifecycle_admission_lock(
-            self._artifacts_root,
-            intent,
-            required=True,
-        ), _account_safety_entry_admission_lock(
+        async with _account_safety_entry_admission_lock(
             self._artifacts_root,
             self._account_id,
         ), self._intake_lock:
@@ -2156,8 +2084,6 @@ class AccountClerk:
         binding = self._binding_for_intent(intent)
         if binding is not None and binding.lifecycle_state == "RETIRED":
             return True
-        if bot_retirement_is_pending(self._artifacts_root, intent.strategy_instance_id):
-            return True
         return any(
             proposal.strategy_instance_id == intent.strategy_instance_id
             for proposal in pending_account_binding_retirements(
@@ -2239,14 +2165,6 @@ class AccountClerk:
             ):
                 self._reject(intent, "CLERK_EMERGENCY_IDENTITY_MISMATCH")
             return
-        try:
-            if bot_retirement_is_pending(
-                self._artifacts_root,
-                intent.strategy_instance_id,
-            ):
-                self._reject(intent, "CLERK_RETIREMENT_PENDING")
-        except (BotDeletionCorruptError, ValueError):
-            self._reject(intent, "CLERK_RETIREMENT_TRANSITION_UNREADABLE")
         try:
             if pending_account_binding_retirements(
                 self._artifacts_root,

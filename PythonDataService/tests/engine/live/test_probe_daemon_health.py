@@ -21,7 +21,7 @@ import httpx
 import pytest
 import respx
 
-from app.engine.live.host_daemon_client import fetch_health, fetch_run_process
+from app.engine.live.host_daemon_client import fetch_health
 
 BASE = "http://daemon-host:8765"
 
@@ -133,30 +133,3 @@ async def test_probe_classifies_connect_error_as_unreachable() -> None:
     assert result.kind == "UNREACHABLE"
     assert result.outcome_ambiguous is False
     assert health is None
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_run_process_probe_requires_the_host_process_contract() -> None:
-    respx.get(f"{BASE}/runs/run-a/process").mock(
-        return_value=httpx.Response(200, json={"state": "exited", "run_id": "run-a"})
-    )
-
-    result, process = await fetch_run_process(BASE, "run-a")
-
-    assert result.kind == "CONNECTED"
-    assert process is not None
-    assert process.state == "exited"
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_run_process_probe_rejects_an_invalid_host_process_contract() -> None:
-    respx.get(f"{BASE}/runs/run-a/process").mock(
-        return_value=httpx.Response(200, json={"state": "unrecognised"})
-    )
-
-    result, process = await fetch_run_process(BASE, "run-a")
-
-    assert result.kind == "INCOMPATIBLE_CONTRACT"
-    assert process is None

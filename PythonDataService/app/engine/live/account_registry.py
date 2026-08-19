@@ -196,12 +196,11 @@ def write_fenced_lifecycle_retirement_binding(
 ) -> Path:
     """Write a lifecycle retirement only when its durable transaction permits it.
 
-    The lifecycle evaluator, rather than the daemon, owns a bot's retirement
-    intent.  This compatibility writer is deliberately narrower than the
-    generic binding decision seam: a durable, still-``PENDING`` retirement
-    transaction must name the exact account/run being retired.  It then takes
-    a second per-instance authority lock before joining the account-ledger
-    serialization.  Clerk/daemon paths must use their dedicated RPC/proposal
+    This compatibility-only writer validates a previously recorded durable
+    transaction; no active bot-control route reaches it. A still-``PENDING``
+    retirement transaction must name the exact account/run being retired. It
+    then takes a second per-instance authority lock before joining the
+    account-ledger serialization. Clerk paths use their dedicated RPC/proposal
     seams instead.
     """
 

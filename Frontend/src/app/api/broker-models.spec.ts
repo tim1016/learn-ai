@@ -36,13 +36,13 @@ describe('DiagnosticReport discriminated union', () => {
   it('disabled=true branch carries reason and since_ms', () => {
     const report: DiagnosticReport = {
       disabled: true,
-      reason: 'host runner owns IBKR',
+      reason: 'IBKR market-data access is disabled',
       since_ms: 1_700_000_000_000,
     };
 
     if (report.disabled === true) {
       const disabled: DiagnosticReportDisabled = report;
-      expect(disabled.reason).toBe('host runner owns IBKR');
+      expect(disabled.reason).toBe('IBKR market-data access is disabled');
       expect(disabled.since_ms).toBe(1_700_000_000_000);
     } else {
       throw new Error('should have taken the disabled branch');
@@ -52,7 +52,7 @@ describe('DiagnosticReport discriminated union', () => {
   it('disabled branch does not carry overall_status', () => {
     const report: DiagnosticReport = {
       disabled: true,
-      reason: 'host runner active',
+      reason: 'IBKR market-data access disabled',
       since_ms: 0,
     };
     expect('overall_status' in report).toBe(false);

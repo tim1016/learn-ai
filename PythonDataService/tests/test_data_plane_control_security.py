@@ -38,7 +38,7 @@ _READ_PATH = "/api/broker/health"
 _ORDER_STREAM_READ_PATH = "/api/broker/orders/stream"
 _MIRROR_READ_PATH = "/api/broker/session-mirror"
 _BROKERS_READ_PATH = "/api/brokers/alpaca/account"
-_LIVE_INSTANCES_READ_PATH = "/api/live-instances/fleet/stream"
+_LIVE_INSTANCES_READ_PATH = "/api/live-instances/daemon-health"
 _ACCOUNT_TRANSACTIONS_READ_PATH = "/api/accounts/DU1234567/transactions"
 _ALPACA_CLERK_SQLITE_READ_PATH = "/api/alpaca-clerk-sqlite/accounts/PA-TEST/snapshot"
 
@@ -103,7 +103,6 @@ def test_unsafe_control_routes_declare_data_plane_guard_dependency() -> None:
 
     assert unsafe_routes
     assert ("/api/broker/connect", ["POST"], True) in unsafe_routes
-    assert ("/api/live-instances/runs/{run_id}/start", ["POST"], True) in unsafe_routes
     assert ("/api/accounts/{account_id}/reconciliation", ["POST"], True) in unsafe_routes
     assert all(has_guard for _path, _methods, has_guard in unsafe_routes)
 

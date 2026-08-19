@@ -1,30 +1,19 @@
-"""PRD #619-B B4 — daemon control-plane lease.
+"""Compatibility lease for the host account-capability daemon.
 
-The host daemon (``host_daemon.py``) is now the explicit owner of the
-live-runner control plane. Each daemon process generates a
-``boot_id`` at startup and renews a lease file at
-``artifacts/control_plane/daemon_lease.json`` on a 1Hz cadence. The
-child watchdog (619-B B5) reads the lease to detect daemon restart
-(``boot_id`` change) and daemon death (lease age > threshold).
+Each host daemon process generates a ``boot_id`` at startup and renews
+``artifacts/control_plane/daemon_lease.json`` on a 1Hz cadence. Legacy runtime
+evidence may still read this file; no bot-control mutation depends on it.
 
-Module split:
-
-- **This file** — the lease wire schema, the atomic writer/reader,
-  and the ``DaemonLeaseWriter`` async task that owns periodic
-  renewal. Daemon integration (calling ``writer.start()`` at app
-  startup, switching status to ``DRAINING`` on shutdown signal) is
-  in ``host_daemon.py``.
-- **``engine_runtime_publisher.py``** — separate per-run artifact;
-  the lease is daemon-wide, the runtime snapshot is per-run.
+This file owns the lease wire schema, atomic writer/reader, and the
+``DaemonLeaseWriter`` task used by ``host_daemon.py``. The former per-run
+runtime publisher is absent.
 
 The lease semantics (PRD §B):
 
 - Cadence: 1Hz writes by default.
-- Threshold: 5s. If a reader sees ``now - written_at_ms > 5_000`` the
-  lease is **expired** and the child watchdog fail-closes.
-- Status ``CONNECTED`` is the steady-state. ``DRAINING`` signals that
-  the daemon is in graceful shutdown — children pause + flush evidence
-  + disconnect + exit without flattening.
+- Threshold: 5s. Readers classify older evidence as expired.
+- Status ``CONNECTED`` is the steady-state. ``DRAINING`` signals graceful
+  host-capability shutdown.
 
 All timestamps are ``int64`` ms UTC at the artifact boundary.
 """

@@ -7,7 +7,6 @@ import { vi } from 'vitest';
 import axe from 'axe-core';
 import { AppComponent } from './app.component';
 import { BrokerHealthService } from './services/broker-health.service';
-import { LiveRunsService } from './services/live-runs.service';
 
 class FakeBrokerHealthService {
   readonly health = signal(null);
@@ -16,10 +15,6 @@ class FakeBrokerHealthService {
   start = vi.fn();
   connect = vi.fn().mockResolvedValue(undefined);
   disconnect = vi.fn().mockResolvedValue(undefined);
-}
-
-class FakeLiveRunsService {
-  startHostRunner = vi.fn().mockResolvedValue(undefined);
 }
 
 @Component({ template: '<p>Route body</p>', changeDetection: ChangeDetectionStrategy.OnPush })
@@ -46,7 +41,6 @@ describe('AppComponent', () => {
       providers: [
         MessageService,
         { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
-        { provide: LiveRunsService, useClass: FakeLiveRunsService },
       ],
     }).compileComponents();
     fixture = TestBed.createComponent(AppComponent);

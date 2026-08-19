@@ -8,13 +8,14 @@ live in `docs/architecture/adrs/`.
 Repo-process vocabulary — ADR status values, lint rules, CI gates, branch and
 review conventions — is **out of scope** and does not belong here.
 
-**Lineage labels.** Two retirements are in flight and neither is implemented, so
-every section declares which system its terms describe. A reader looking a term
-up can tell at a glance whether the definition describes running machinery or
-machinery on its way out (decision record: ADR 0040).
+**Lineage labels.** The ADR 0038 control-plane retirement is complete; the ADR
+0037 custody retirement remains in flight. Every section declares which system
+its terms describe (decision record: ADR 0040).
 
 - **live** — the current Alpaca Broker V2 ecosystem.
-- **retiring (ADR 0038)** — machinery the IBKR bot-control retirement removes.
+- **historical (ADR 0038)** — removed IBKR bot-control machinery.
+- **compatibility evidence (ADR 0038)** — read-only IBKR evidence or shared
+  paper primitives deliberately preserved for #1583/#1618; never bot control.
 - **retiring (ADR 0037)** — machinery the Alpaca legacy-JSONL custody cutover
   removes.
 - **neutral** — operator/trading vocabulary that survives a broker change.
@@ -129,7 +130,7 @@ ephemeral session id:
   outcome suitable for action.
 ## IBKR order-attribution ladder (sharpened 2026-06-04)
 
-**Lineage: retiring (ADR 0038).**
+**Lineage: compatibility evidence (ADR 0038).**
 
 The IBKR-side half of broker-facing identity: the broker's own order handles, the
 run-scoped write-ahead log that backed them, and the reconciler rules built on
@@ -435,7 +436,7 @@ so they survive a broker change.
 
 ## Instance console mechanics (sharpened 2026-05-30)
 
-**Lineage: retiring (ADR 0038).**
+**Lineage: historical (ADR 0038; retired 2026-08-18).**
 
 The shape of the live-instances operator console. Its live successor surfaces are
 the Broker Desk, the bot panel, and the Bot Gallery.
@@ -459,7 +460,7 @@ the Broker Desk, the bot panel, and the Bot Gallery.
 
 ## Binding authority (resolved 2026-05-30)
 
-**Lineage: retiring (ADR 0038).**
+**Lineage: historical (ADR 0038; retired 2026-08-18).**
 
 Four distinct sources, never conflated:
 
@@ -505,7 +506,7 @@ must refuse to restart itself even when that authority is unreachable.
 
 ## Live-instances intent endpoint and command channel (resolved 2026-05-30)
 
-**Lineage: retiring (ADR 0038).**
+**Lineage: historical (ADR 0038; retired 2026-08-18).**
 
 The transport the live-instances plane put in front of durable operator intent.
 The intent itself is live — see "Operator intent — single knob" above.
@@ -539,7 +540,7 @@ judged against backend-authored freshness evidence, not a client-side constant.
 
 ## Readiness gate (resolved 2026-05-30)
 
-**Lineage: retiring (ADR 0038).**
+**Lineage: historical (ADR 0038; retired 2026-08-18).**
 
 "Can this strategy act on the next bar?" is an **instance-scoped, structured
 verdict** — never a boolean, never recomputed from artifacts by the UI.
@@ -576,7 +577,7 @@ spec explicitly disallows fallback data.
 
 ## Strategy-agnostic console (resolved 2026-05-30)
 
-**Lineage: retiring (ADR 0038).**
+**Lineage: historical (ADR 0038; retired 2026-08-18).**
 
 The console renders **no hardcoded indicator names**. The strategy-state panel is
 driven by **decision-column descriptors** (`name`, `label`, `type`, `format`)
@@ -592,7 +593,7 @@ backend recompute).
 
 ## Broker-observed state & position ownership (resolved 2026-05-30)
 
-**Lineage: retiring (ADR 0038).**
+**Lineage: compatibility evidence (ADR 0038).**
 
 - **Expected position comes from the instance's `expected_position_by_symbol`
   (engine-authored live-state sidecar), never inferred from the latest trade
@@ -639,7 +640,7 @@ backend recompute).
 
 ## Control-surface scoping (established 2026-05-30)
 
-**Lineage: retiring (ADR 0038).**
+**Lineage: historical (ADR 0038; retired 2026-08-18).**
 
 - **Durable desired state** — instance-scoped, survives crash/reboot:
   `artifacts/live_state/<strategy_instance_id>/desired_state.json`.
@@ -650,7 +651,7 @@ backend recompute).
 
 ## Sizing authority (resolved 2026-06-08)
 
-**Lineage: retiring (ADR 0038).**
+**Lineage: compatibility evidence (ADR 0038; no registered bot caller).**
 
 Where a live bot's position-*size* decision lives and what it claims. Separates
 *who decides quantity* from *who decides the signal*. Sizing the magnitude is a
@@ -830,7 +831,7 @@ different homes.
 
 ## Page-wide collapse rule (resolved 2026-06-17)
 
-**Lineage: retiring (ADR 0038).**
+**Lineage: historical (ADR 0038; retired 2026-08-18).**
 
 A reactive layout principle for the operator console, generalized from the
 broker-instances page IA revision (see `docs/runbooks/broker-instance-operator-surface.md`
@@ -884,7 +885,7 @@ the whole page's expand/collapse behavior.
 
 ## Operator-surface inclusion boundary (resolved 2026-06-20)
 
-**Lineage: retiring (ADR 0038).**
+**Lineage: historical (ADR 0038; retired 2026-08-18).**
 
 `operator_surface` contains **verdicts, semantic classifications,
 capabilities, attention-routing inputs, notices, and remediation
@@ -911,7 +912,7 @@ or remediation behavior from evidence.
 
 ## Destructive-action canonical render site (resolved 2026-06-20)
 
-**Lineage: retiring (ADR 0038).**
+**Lineage: historical (ADR 0038; retired 2026-08-18).**
 
 Each destructive action (Stop, Mark Poisoned, Flatten-and-pause) has
 **exactly one** canonical render site in the cockpit (ADR 0010 §A2,
@@ -930,7 +931,7 @@ review.
 
 ## Account identity vs position contamination (resolved 2026-06-20)
 
-**Lineage: retiring (ADR 0038).**
+**Lineage: compatibility evidence (ADR 0038; #1618).**
 
 The fleet altitude ships `FleetAccountSummary` (server-authored):
 
@@ -973,7 +974,7 @@ current and load-bearing; only the resolver that carried the legacy name retires
 
 ## Continue / Pause / Stop guards — shared resolver (legacy Resume naming)
 
-**Lineage: retiring (ADR 0038).**
+**Lineage: historical (ADR 0038; retired 2026-08-18).**
 
 The guard resolver behind the live-instances capability projection. The
 Continue-vs-Resume distinction it was named after is **live** — see above.
@@ -1002,7 +1003,7 @@ covers.  Unknown codes fail closed.
 
 ## Broker session mirror — client-connection observability (resolved 2026-07-03)
 
-**Lineage: retiring (ADR 0038).**
+**Lineage: compatibility evidence (ADR 0038).**
 
 A read-only, session-level visualization of every IBKR API client socket — a
 faithful mirror of what IB Gateway itself sees. It is **not** an authority: it
@@ -1158,9 +1159,17 @@ there are never two halt-on-transition mechanisms.
   and gate-cleared events (and may deep-link to the Bot Cockpit) but carries **no
   Continue control** — the action's render site remains the Bot Cockpit.
 
-## Daemon diagnostics — control-plane health (resolved 2026-07-04)
+## Daemon diagnostics — historical evaluator plane (retired 2026-08-18)
 
-**Lineage: retiring (ADR 0038).**
+**Retired vocabulary.** This section records the former IBKR evaluator/host-runner
+diagnostics design for provenance only. Issue #1636 removed its diagnostic routes,
+builders, fleet/process registry, connectivity monitor, lifecycle producers, and
+browser projection. Current daemon authority is limited to account capability,
+Account Clerk compatibility, lease renewal, and read-only broker-activity evidence;
+Alpaca Broker V2 owns bot lifecycle and operator control. Do not use the terms or
+flows below to design current control-plane behavior.
+
+**Lineage: historical (ADR 0038; retired 2026-08-18).**
 
 A read-only, backend-authored self-test of the **host-daemon plumbing altitude**,
 the peer of `/api/broker/diagnose` (which self-tests the data-plane's *own* IBKR
@@ -1377,7 +1386,7 @@ A `grill-me` session revised several points above. Where they conflict, **ADR 00
 
 ## Deploy binding and launch posture (sharpened 2026-07-05)
 
-**Lineage: retiring (ADR 0038).**
+**Lineage: historical (ADR 0038; retired 2026-08-18).**
 
 What the live-instances deploy flow bound at launch, and how its readiness strip
 behaved. The strategy-validation half of the same 2026-07-05 sharpening is
@@ -1414,7 +1423,7 @@ behaved. The strategy-validation half of the same 2026-07-05 sharpening is
 
 ## Bot event stream — narrated gate pipeline (resolved 2026-07-06)
 
-**Lineage: retiring (ADR 0038).**
+**Lineage: compatibility evidence (ADR 0038).**
 
 A per-bot stream that narrates a strategy instance's live pipeline — bar
 evaluation → gates → order → broker outcome — so an operator can answer both
@@ -1875,8 +1884,8 @@ Decision record: ADR 0038.
 
 - **Bot control plane** — the single command path that starts, stops, and retires
   a bot, and the writers it owns. A bot identity belongs to exactly one. Alpaca's
-  is the in-process runner reached through `routers/broker_bots.py`; the
-  evaluator path is IBKR lineage and retires with that surface.
+  is the in-process runner reached through `routers/broker_bots.py`; the former
+  IBKR evaluator path retired on 2026-08-18.
   _Avoid_: lifecycle authority, the evaluator, bot manager.
 - **Duty fact** — a fact about whether a bot is on duty, under which run, and
   whether it is retired. For an Alpaca bot these are held and fenced by the
@@ -1905,7 +1914,8 @@ Decision record: ADR 0038.
   _Avoid_: deploy state, binding, deployment JSON, run ledger.
 
 **"Deploy state" is retired as a term.** It named four different artifact
-families at once. Two retire with the IBKR plane — `run_ledger.json` and the
-IBKR-lineage account-binding `DEPLOYED`/`ACTIVE`/`RETIRED` states. The two that
-survive are **Run registration** and **Runner restoration record** above, and
-they are never used interchangeably.
+families at once. The IBKR evaluator's mutable `run_ledger.json` family retired;
+a narrow read-only parser remains for ADR 0037 step-5 historical evidence. The
+legacy account-binding `DEPLOYED`/`ACTIVE`/`RETIRED` compatibility writers are
+parked for #1618. The two live Alpaca families are **Run registration** and
+**Runner restoration record** above, and they are never used interchangeably.

@@ -1,8 +1,7 @@
-// Live-runs control contract (PRD-A: UI-1 status additions, UI-3, UI-4).
+// Read-only legacy live-run state contract.
 //
 // Mirrors PythonDataService/app/schemas/live_runs.py. The Angular consumer
-// (UI-2/UI-3/UI-4) is a sibling PR; these types are the shared contract —
-// keep names in lockstep with the Python schemas.
+// Keep names in lockstep with the retained Python read models.
 //
 // All timestamps are int64 ms UTC on the wire and typed `number` here.
 // Never a string. Render to America/New_York display-side only.
@@ -38,26 +37,6 @@ export interface LiveRunStatusControlsExtension {
   command_summary: CommandSummary | null;
 }
 
-// --- UI-3: durable desired-state write API ---
-
-export type DesiredStateAction = 'pause' | 'resume' | 'stop';
-
-export interface SetDesiredStateRequest {
-  action: DesiredStateAction;
-  reason?: string;
-  updated_by?: string;
-}
-
-export interface DesiredStateRecordResponse {
-  state: DesiredStateValue;
-  updated_at_ms: number;
-  updated_by: string;
-  reason: string | null;
-  version: number;
-}
-
-// --- UI-4: per-run command-channel API ---
-
 export type CommandVerb =
   | 'PAUSE'
   | 'RESUME'
@@ -65,23 +44,3 @@ export type CommandVerb =
   | 'FLATTEN'
   | 'MARK_POISONED'
   | 'RECONCILE';
-
-export interface EnqueueCommandRequest {
-  verb: CommandVerb;
-}
-
-export interface CommandView {
-  seq: number;
-  verb: CommandVerb;
-}
-
-export interface CommandAckView {
-  seq: number;
-  verb: CommandVerb;
-  outcome: Record<string, unknown>;
-}
-
-export interface CommandTimelineResponse {
-  pending: CommandView[];
-  acks: CommandAckView[];
-}

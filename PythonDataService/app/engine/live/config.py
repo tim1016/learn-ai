@@ -14,33 +14,6 @@ from app.engine.execution.order_sizer import SizingPolicy
 from app.engine.live.order_identity import DEFAULT_ORDER_REF_MAX_LENGTH
 from app.schemas.broker_capability import SessionKind
 
-# Single source of truth for the operator-supplied ``live_config`` dict keys.
-# The deploy boundary (``HostRunnerDeployRequest._validate_sizing``) rejects
-# unknown siblings; ``_live_config_from_ledger`` rejects them when reading a
-# legacy ledger. Adding a field here is a deliberate two-sided change.
-LIVE_CONFIG_LEDGER_KEYS: frozenset[str] = frozenset(
-    {
-        "symbol",
-        "force_flat_at",
-        "consolidator_period_min",
-        "run_dir",
-        "max_submit_latency_ms",
-        "sizing",
-        "allowed_sessions",
-        # PRD #593 Slice 1A — operator-declared instrument plan.
-        # Hashed into ``run_id`` like every other key here. The current
-        # deployment-validation live path consumes exactly one long stock leg;
-        # unsupported shapes remain declarative until their resolver ships.
-        "action",
-        # ADR 0014 §6 — per-instance lag thresholds for the broker-activity
-        # reconciliation verdict ladder. Optional block; absence ⇒ engine
-        # uses ``ReconciliationTimingPolicy`` defaults. Hashed into
-        # ``run_id`` so a threshold change forces a redeploy (cross-run
-        # comparability of reconciliation verdicts is preserved).
-        "reconciliation_timing_policy",
-    }
-)
-
 DEFAULT_ALLOWED_SESSIONS: tuple[SessionKind, ...] = ("RTH",)
 _SESSION_ORDER: tuple[SessionKind, ...] = ("PRE", "RTH", "POST", "OVERNIGHT")
 

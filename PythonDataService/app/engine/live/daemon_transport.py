@@ -1,15 +1,12 @@
 """PRD #619-C foundation — typed daemon transport outcomes.
 
 Replaces ``dict | None`` daemon reads with a closed ADT describing every
-HTTP exchange between the data plane and the host live-runner daemon.
+HTTP exchange between the data plane and the host account-capability daemon.
 
 The kinds are:
 
 - ``CONNECTED`` — daemon answered with a valid, schema-compatible body.
-- ``RETRYING`` — derived monitor state (consecutive failures within
-  budget). Never produced here per call; the connectivity monitor
-  (619-C2) is the only thing that may fold ``UNREACHABLE`` into
-  ``RETRYING``.
+- ``RETRYING`` — reserved compatibility value; never produced per call.
 - ``UNREACHABLE`` — connection refused, DNS failure, or timeout. Whether
   bytes left the wire is recorded in ``outcome_ambiguous``.
 - ``AUTH_FAILED`` — daemon answered 401/403.
@@ -129,10 +126,8 @@ class DaemonResult(BaseModel):
     """Per-call typed outcome of one daemon HTTP exchange.
 
     The union is closed by ``kind``. Per-call factories never produce
-    ``RETRYING`` — that label belongs to the connectivity monitor in
-    619-C2, which folds repeated ``UNREACHABLE`` outcomes into
-    ``RETRYING`` while attempts remain under budget. The model still
-    accepts the kind so monitor-folded values round-trip cleanly.
+    ``RETRYING``. The model still accepts that historical value so persisted
+    evidence round-trips cleanly.
 
     Field semantics:
 

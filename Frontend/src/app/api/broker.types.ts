@@ -70,30 +70,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/accounts/{account_id}/bindings/retire": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Retire Stale Binding Endpoint
-         * @description Retire one inactive (DEPLOYED) binding via the host lifecycle authority.
-         *
-         *     Binding retirement is a host-authority mutation the Clerk records, so the
-         *     container delegates to the daemon rather than writing the RETIRED decision
-         *     itself. The daemon guards that the binding is currently DEPLOYED.
-         */
-        post: operations["retire_stale_binding_endpoint_api_accounts__account_id__bindings_retire_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/accounts/{account_id}/clerk": {
         parameters: {
             query?: never;
@@ -385,46 +361,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/accounts/{account_id}/legacy-stale-claims/candidates": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Legacy Stale Claim Candidates Endpoint
-         * @description Return only legacy sidecar claims whose retirement is proven safe now.
-         */
-        get: operations["legacy_stale_claim_candidates_endpoint_api_accounts__account_id__legacy_stale_claims_candidates_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/accounts/{account_id}/legacy-stale-claims/retire": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Retire Legacy Stale Claim Endpoint
-         * @description Retire one pre-Clerk claim only after re-proving every safety fact.
-         */
-        post: operations["retire_legacy_stale_claim_endpoint_api_accounts__account_id__legacy_stale_claims_retire_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/accounts/{account_id}/operator-recovery-flatten": {
         parameters: {
             query?: never;
@@ -500,26 +436,6 @@ export interface paths {
          * @description Run one signed Cancel or Flatten action through the existing Clerk lanes.
          */
         post: operations["execute_presented_recovery_action_endpoint_api_accounts__account_id__presented_actions_recovery_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/accounts/{account_id}/presented-lifecycle-actions/{action_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Present Lifecycle Action Endpoint
-         * @description Present one exact lifecycle action; it is not an executable command.
-         */
-        get: operations["present_lifecycle_action_endpoint_api_accounts__account_id__presented_lifecycle_actions__action_id__get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4132,146 +4048,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/live-instances": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Live Instances
-         * @description Account fleet overview: every known strategy instance, live or not.
-         */
-        get: operations["list_live_instances_api_live_instances_get"];
-        put?: never;
-        /**
-         * Deploy Instance
-         * @description Create a run (deploy a strategy) by forwarding to the host daemon (ADR 0006).
-         *
-         *     Deploy is a host-daemon operation: ``init-ledger`` runs a git clean-tree
-         *     check and hashes ``git HEAD`` into the content-addressed ``run_id``, and only
-         *     the host has the working tree. This endpoint forwards (mirroring how
-         *     Start/Stop forward) and propagates the daemon's structured precondition
-         *     statuses: dirty tree / collision -> 409, missing spec or audit file -> 400,
-         *     git unavailable / daemon unreachable -> 503.
-         *
-         *     Idempotent on the ``run_id``: an identical re-deploy returns 200 with
-         *     ``created=false`` rather than erroring (the run already exists).
-         */
-        post: operations["deploy_instance_api_live_instances_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/live-instances/account": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Account Fleet
-         * @description Account/fleet contamination: net account position vs the sum of every
-         *     managed instance's namespace-attributed expected position (ADR 0005, #399).
-         *
-         *     Retained as the legacy contamination-only endpoint.  PRD #616
-         *     introduced ``GET /api/live-instances/account-summary`` which
-         *     composes contamination with account identity into a single DTO.
-         */
-        get: operations["get_account_fleet_api_live_instances_account_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/live-instances/account-summary": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Account Summary
-         * @description PRD #616 — server-authored account row.
-         *
-         *     Composes position contamination with account-identity verification
-         *     so the cockpit renders the account block from one DTO.  Account
-         *     identity is separate from contamination: a CONFLICTING identity
-         *     does not imply contamination, and vice versa.
-         */
-        get: operations["get_account_summary_api_live_instances_account_summary_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/live-instances/audit-copy-sizing-lookup": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Audit Copy Sizing Lookup
-         * @description ADR 0009 § 3 — proxy the daemon's Reference parity gate to the cockpit.
-         *
-         *     The deploy form calls this on (1) initial audit-copy pick (no
-         *     ``proposed_sizing``, to learn the registered rule) and (2) on the
-         *     Reference parity preset click (with ``proposed_sizing``). The daemon
-         *     returns one of three verdicts (proven_match / proven_mismatch /
-         *     cannot_prove); we propagate it verbatim.
-         *
-         *     Fails closed when the daemon is unreachable — the response carries
-         *     ``cannot_prove`` so the deploy form's gate banner reads "Reference
-         *     parity unavailable" rather than silently enabling a preset that the
-         *     operator believes is gated.
-         */
-        get: operations["get_audit_copy_sizing_lookup_api_live_instances_audit_copy_sizing_lookup_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/live-instances/daemon-diagnose": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Daemon Diagnostics
-         * @description Backend-authored daemon diagnostics report.
-         *
-         *     Unlike ``/daemon-health``, this endpoint always returns HTTP 200 with the
-         *     failure explained inside the report body. It composes a fresh daemon probe,
-         *     the process registry, the broker session mirror, and the folded connectivity
-         *     monitor state.
-         */
-        get: operations["get_daemon_diagnostics_api_live_instances_daemon_diagnose_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/live-instances/daemon-health": {
         parameters: {
             query?: never;
@@ -4281,23 +4057,7 @@ export interface paths {
         };
         /**
          * Get Daemon Health
-         * @description Authenticated /health probe forwarded from the daemon (PRD #619-C P2).
-         *
-         *     The browser cannot hit the daemon's /health directly any more because
-         *     every daemon route now requires ``X-Live-Runner-Token`` (host_daemon.py
-         *     docstring; ADR 0007: "the browser must never hold that shared secret").
-         *     The data plane holds the token via the artifacts bind mount, so this
-         *     route is the cockpit / deploy form's path to "is the daemon up?".
-         *
-         *     Maps the typed daemon result to HTTP status so the frontend's existing
-         *     resource error/value handling does the right thing without learning a
-         *     new envelope:
-         *
-         *     - CONNECTED   → 200 + HostRunnerHealth body (the deploy form reads
-         *                     ``ok``, ``git_sha``, ``commits_behind``, …)
-         *     - AUTH_FAILED → 502 ("daemon rejected our token")
-         *     - UNREACHABLE → 503 (daemon process down or network error)
-         *     - any other   → 502 (protocol / contract mismatch)
+         * @description Forward authenticated host/Clerk capability health.
          */
         get: operations["get_daemon_health_api_live_instances_daemon_health_get"];
         put?: never;
@@ -4319,146 +4079,9 @@ export interface paths {
         put?: never;
         /**
          * Renew Daemon Lease
-         * @description Ask the host daemon to write a fresh control-plane lease now.
-         *
-         *     This is the cockpit recovery action for
-         *     ``runtime.control_plane_lease_stale``. The data plane forwards the
-         *     authenticated request so the browser never holds the daemon token.
+         * @description Ask the host capability daemon to refresh its liveness lease.
          */
         post: operations["renew_daemon_lease_api_live_instances_daemon_health_renew_lease_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/live-instances/deploy-preflight": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Deploy Preflight
-         * @description Return backend-authored blockers standing between deploy and a running bot.
-         */
-        get: operations["deploy_preflight_api_live_instances_deploy_preflight_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/live-instances/fleet/stream": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Latest-wins SSE stream of complete fleet roster snapshots
-         * @description Emit the current full fleet roster and every later semantic version.
-         */
-        get: operations["stream_fleet_roster_api_live_instances_fleet_stream_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/live-instances/preview-action-plan": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Preview Action Plan
-         * @description PRD #593 Slice 1D (#597) — non-blocking parity preview.
-         *
-         *     Stateless, side-effect-free. Pydantic rejects malformed plans (422)
-         *     at the body-validation step; semantically valid plans pass through
-         *     to ``parity_diagnostics``. Always 200 OK regardless of warning
-         *     count — submit-time gating is the operator's call (the deploy
-         *     boundary enforces only the schema). ADR 0012 §"Architectural
-         *     decisions" pins that this endpoint MUST NOT consult
-         *     ``live_config.symbol``, the instance roster, or any other session
-         *     context; the plan is the only input.
-         */
-        post: operations["preview_action_plan_api_live_instances_preview_action_plan_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/live-instances/qc-audit-copies": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Qc Audit Copies
-         * @description List committed QC audit copies for the deploy form's picker (ADR 0006).
-         *
-         *     Passthrough to the daemon (only the host sees ``references/qc-shadow``).
-         *     Fails closed: an unreachable daemon yields an empty listing — the deploy
-         *     form's connectivity strip is what surfaces "daemon down", not this endpoint.
-         */
-        get: operations["get_qc_audit_copies_api_live_instances_qc_audit_copies_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/live-instances/runs/{run_id}/start": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Start Run
-         * @description Launch the host runner for ``run_id`` by forwarding to the daemon.
-         */
-        post: operations["start_run_api_live_instances_runs__run_id__start_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/live-instances/runs/{run_id}/stop": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Stop Run
-         * @description Retire direct daemon Stop in favour of durable, instance-scoped intent.
-         */
-        post: operations["stop_run_api_live_instances_runs__run_id__stop_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4494,26 +4117,6 @@ export interface paths {
         };
         /** SSE stream of broker-activity rows (backfill + live) */
         get: operations["broker_activity_stream_api_live_instances__strategy_instance_id__broker_activity_stream_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/live-instances/{strategy_instance_id}/daemon-diagnose": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Instance Daemon Diagnostics
-         * @description Project the daemon diagnostics report to one strategy instance.
-         */
-        get: operations["get_instance_daemon_diagnostics_api_live_instances__strategy_instance_id__daemon_diagnose_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -8063,37 +7666,11 @@ export interface components {
          *     Parity *warnings* (asymmetric structures, etc.) are computed
          *     separately by ``parity_diagnostics`` in Slice 1D (#597).
          */
-        "ActionPlan-Input": {
+        ActionPlan: {
             /** On Enter */
             on_enter?: (components["schemas"]["StockEntryLeg"] | components["schemas"]["OptionEntryLeg"])[];
             /** On Exit */
             on_exit?: components["schemas"]["CloseLegExit"][];
-        };
-        /**
-         * ActionPlan
-         * @description Operator-declared instrument plan, hashed into ``run_id``.
-         *
-         *     Slice 1A shipped the empty-plan envelope; Slice 1B added stock entry
-         *     legs + ``close_leg`` exits; Slice 1C adds option entry legs and the
-         *     strike / expiry selector unions. Hard schema rejections live here.
-         *     Parity *warnings* (asymmetric structures, etc.) are computed
-         *     separately by ``parity_diagnostics`` in Slice 1D (#597).
-         */
-        "ActionPlan-Output": {
-            /** On Enter */
-            on_enter?: (components["schemas"]["StockEntryLeg"] | components["schemas"]["OptionEntryLeg"])[];
-            /** On Exit */
-            on_exit?: components["schemas"]["CloseLegExit"][];
-        };
-        /**
-         * ActionPlanPreviewResponse
-         * @description Response envelope for the preview endpoint. Stable shape: the
-         *     response is always ``{warnings: [...]}`` so adding warning kinds
-         *     never requires the client to re-discriminate on top-level keys.
-         */
-        ActionPlanPreviewResponse: {
-            /** Warnings */
-            warnings: components["schemas"]["ParityWarning"][];
         };
         /**
          * AggregateBar
@@ -8262,7 +7839,7 @@ export interface components {
         AlpacaPaperDeployReceipt: {
             /** Account Id */
             account_id: string;
-            action_plan: components["schemas"]["ActionPlan-Output"];
+            action_plan: components["schemas"]["ActionPlan"];
             admission: components["schemas"]["RunAdmissionDecision"];
             bot: components["schemas"]["BotStatusView"];
             /**
@@ -8576,34 +8153,6 @@ export interface components {
              * @enum {string}
              */
             selector: "atm";
-        };
-        /**
-         * AuditCopySizingLookup
-         * @description ADR 0009 § 3 — deploy-form gate status for the Reference parity preset.
-         *
-         *     Returned by the daemon's audit-copy-sizing lookup endpoint and surfaced to
-         *     the deploy form's inline gate banner. Three verdicts:
-         *
-         *     * ``proven_match`` — registered + sha re-verifies + proposed policy
-         *       matches the registered rule (or no proposed policy was supplied, which
-         *       is the deploy-form's pre-select case).
-         *     * ``proven_mismatch`` — registered + sha re-verifies, but the proposed
-         *       policy differs from the registered rule.
-         *     * ``cannot_prove`` — entry absent, file missing, sha drift, or allow-list
-         *       unavailable.
-         */
-        AuditCopySizingLookup: {
-            /** Actual Rule */
-            actual_rule?: Record<string, never> | null;
-            /** Detail */
-            detail: string;
-            /** Expected Rule */
-            expected_rule?: Record<string, never> | null;
-            /**
-             * Verdict
-             * @enum {string}
-             */
-            verdict: "proven_match" | "proven_mismatch" | "cannot_prove";
         };
         /**
          * AuthoredValue
@@ -12098,117 +11647,6 @@ export interface components {
             tone: "neutral" | "verified" | "active" | "caution" | "blocked";
         };
         /**
-         * DaemonDiagnosticAction
-         * @description Optional check action.
-         *
-         *     ``recovery_mutation`` is allowed only for data-plane-actuatable fixes. Host
-         *     actions such as daemon restart stay in remediation copy, not buttons.
-         */
-        DaemonDiagnosticAction: {
-            /** Action Id */
-            action_id: string;
-            /**
-             * Confirm
-             * @default false
-             */
-            confirm?: boolean;
-            /** Deep Link */
-            deep_link?: string | null;
-            /** Endpoint */
-            endpoint?: string | null;
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "recovery_mutation" | "navigation";
-            /** Label */
-            label: string;
-        };
-        /**
-         * DaemonDiagnosticCategory
-         * @enum {string}
-         */
-        DaemonDiagnosticCategory: "reachability" | "auth" | "contract" | "code_freshness" | "lease" | "boot" | "process_registry" | "orphans" | "socket_probe" | "process" | "sockets" | "runtime_freshness" | "artifacts";
-        /** DaemonDiagnosticCheck */
-        DaemonDiagnosticCheck: {
-            action?: components["schemas"]["DaemonDiagnosticAction"] | null;
-            category: components["schemas"]["DaemonDiagnosticCategory"];
-            /** Check Id */
-            check_id: string;
-            evidence?: components["schemas"]["DiagnosticEvidence"] | null;
-            /** Remediation */
-            remediation?: string | null;
-            /**
-             * Scope
-             * @enum {string}
-             */
-            scope: "global" | "account" | "instance" | "run";
-            /** Scope Ref */
-            scope_ref?: string | null;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "pass" | "warn" | "fail" | "skip";
-            /** Summary */
-            summary: string;
-            /** Technical Detail */
-            technical_detail?: string | null;
-            /** Title */
-            title: string;
-        };
-        /** DaemonDiagnosticHeadline */
-        DaemonDiagnosticHeadline: {
-            /** Remediation */
-            remediation?: string | null;
-            /** Summary */
-            summary: string;
-            /** Title */
-            title: string;
-        };
-        /** DaemonDiagnosticReport */
-        DaemonDiagnosticReport: {
-            /** Checks */
-            checks?: components["schemas"]["DaemonDiagnosticCheck"][];
-            /** Daemon Boot Id */
-            daemon_boot_id?: string | null;
-            dominant_condition: components["schemas"]["DaemonDominantCondition"];
-            /** Fetched At Ms */
-            fetched_at_ms: number;
-            headline: components["schemas"]["DaemonDiagnosticHeadline"];
-            /**
-             * Overall Status
-             * @enum {string}
-             */
-            overall_status: "pass" | "warn" | "fail";
-            /** Per Instance */
-            per_instance?: components["schemas"]["DaemonInstanceDiagnostic"][];
-            /**
-             * Transport
-             * @enum {string}
-             */
-            transport: "CONNECTED" | "RETRYING" | "UNREACHABLE" | "AUTH_FAILED" | "PROTOCOL_ERROR" | "INCOMPATIBLE_CONTRACT";
-        };
-        /**
-         * DaemonDominantCondition
-         * @enum {string}
-         */
-        DaemonDominantCondition: "healthy" | "instance_healthy" | "unreachable" | "retrying" | "auth_failed" | "malformed_response" | "build_mismatch" | "stale_code" | "lease_stale" | "lease_unwritable" | "boot_changed" | "registry_snapshot_unavailable" | "orphans_present" | "socket_probe_unavailable" | "not_started" | "process_exited" | "registry_amnesia" | "no_socket" | "orphaned_socket" | "runtime_stale" | "run_dir_invisible" | "account_frozen" | "crash_retired_blocked";
-        /** DaemonInstanceDiagnostic */
-        DaemonInstanceDiagnostic: {
-            /** Checks */
-            checks?: components["schemas"]["DaemonDiagnosticCheck"][];
-            dominant_condition: components["schemas"]["DaemonDominantCondition"];
-            headline: components["schemas"]["DaemonDiagnosticHeadline"];
-            /**
-             * Overall Status
-             * @enum {string}
-             */
-            overall_status: "pass" | "warn" | "fail";
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-        };
-        /**
          * DailySummary
          * @description Summary of a single day's IV surface.
          */
@@ -12723,35 +12161,12 @@ export interface components {
              */
             use_rth?: boolean;
         };
-        /** DeployPreflightResponse */
-        DeployPreflightResponse: {
-            /** Blockers */
-            blockers: components["schemas"]["OperatorBlocker"][];
-            /** Ready */
-            ready: boolean;
-        };
         /**
          * DesiredStatePathStatus
          * @description How the desired-state sidecar resolved for a run (UI-1).
          * @enum {string}
          */
         DesiredStatePathStatus: "ok" | "absent" | "corrupt" | "unknown_no_ledger_binding";
-        /**
-         * DesiredStateRecordResponse
-         * @description Persisted lifecycle intent returned by retained mutation receipts.
-         */
-        DesiredStateRecordResponse: {
-            /** Reason */
-            reason?: string | null;
-            /** State */
-            state: string;
-            /** Updated At Ms */
-            updated_at_ms: number;
-            /** Updated By */
-            updated_by: string;
-            /** Version */
-            version: number;
-        };
         /**
          * DesiredStateValue
          * @description Canonical durable desired-state values stored on disk.
@@ -12807,21 +12222,6 @@ export interface components {
              * @enum {string}
              */
             status: "pass" | "warn" | "fail" | "skip";
-        };
-        /**
-         * DiagnosticEvidence
-         * @description Structured, already-redacted facts for technical expanders.
-         */
-        DiagnosticEvidence: {
-            /** Facts */
-            facts?: {
-                [key: string]: components["schemas"]["JsonValue"];
-            };
-            /**
-             * Redacted
-             * @default false
-             */
-            redacted?: boolean;
         };
         /**
          * DiagnosticReportActive
@@ -13782,31 +13182,6 @@ export interface components {
             logic: "AND" | "OR";
         };
         /**
-         * ExposureCoherenceConfirmation
-         * @description Operator confirmation for starting despite inherited exposure evidence.
-         *
-         *     This is unhashed deploy-admission evidence, not run identity. The public
-         *     deploy endpoint compares it with the current instance exposure facts before
-         *     allowing ``Deploy & start`` through a non-flat or unknown exposure state.
-         */
-        ExposureCoherenceConfirmation: {
-            /** Owned Positions */
-            owned_positions?: {
-                [key: string]: number;
-            };
-            /** Pending Order Count */
-            pending_order_count?: number | null;
-            /**
-             * Posture
-             * @enum {string}
-             */
-            posture: "FLAT" | "LONG" | "SHORT" | "MIXED" | "UNKNOWN";
-            /** Run Id */
-            run_id?: string | null;
-            /** Strategy Instance Id */
-            strategy_instance_id?: string | null;
-        };
-        /**
          * ExposureSlice
          * @description One attribution bucket, including known Clerk manual activity.
          */
@@ -14247,82 +13622,6 @@ export interface components {
             halt_flag?: Record<string, never> | null;
             /** Poisoned Flag */
             poisoned_flag?: Record<string, never> | null;
-        };
-        /**
-         * FleetAccountSummary
-         * @description Account/fleet altitude DTO (PRD #616).
-         *
-         *     Server-authored single source of truth for the account row: it
-         *     separates account identity from position contamination so the
-         *     client renders one DTO without an Angular-side merge.
-         *
-         *     ``account_identity == 'CONSISTENT'`` iff every managed instance
-         *     agrees on ``account_id`` AND (when known) that id matches the
-         *     broker-connected account.  ``account_identity_reason_codes`` is a
-         *     closed ``ALL_CAPS_SNAKE`` vocabulary (``ACCOUNT_ID_MISSING``,
-         *     ``INSTANCE_ACCOUNT_MISMATCH``, ``BROKER_ACCOUNT_UNAVAILABLE``,
-         *     ``BROKER_ACCOUNT_MISMATCH``).
-         *
-         *     Position contamination semantics are unchanged: ``verdict ==
-         *     'contaminated'`` iff ``net_broker_positions − Σ managed instance
-         *     positions ≠ 0``.  Configuration / identity disagreement is reported
-         *     via ``account_identity``, never overloaded onto ``contamination``.
-         */
-        FleetAccountSummary: {
-            /** Account Id */
-            account_id?: string | null;
-            /**
-             * Account Identity
-             * @enum {string}
-             */
-            account_identity: "CONSISTENT" | "CONFLICTING" | "UNKNOWN";
-            /** Account Identity Reason Codes */
-            account_identity_reason_codes?: string[];
-            contamination: components["schemas"]["FleetContamination"];
-        };
-        /**
-         * FleetContamination
-         * @description Account-level contamination — the one readiness signal authored by the
-         *     backend (ADR 0005, #399). ``residual = net - Σ explained``; a non-zero
-         *     residual is a position no managed instance created. ``verdict`` is
-         *     clean|contaminated|unknown (unknown when the net snapshot is unavailable).
-         */
-        FleetContamination: {
-            /** Explained By Instance */
-            explained_by_instance?: components["schemas"]["FleetExplainedBucket"][];
-            /** Explained Total */
-            explained_total?: {
-                [key: string]: number;
-            };
-            /** Net Positions */
-            net_positions?: {
-                [key: string]: number;
-            } | null;
-            /**
-             * Policy Blocks Starts
-             * @default false
-             */
-            policy_blocks_starts?: boolean;
-            /** Residual */
-            residual?: {
-                [key: string]: number;
-            };
-            /** Summary */
-            summary: string;
-            /** Verdict */
-            verdict: string;
-        };
-        /**
-         * FleetExplainedBucket
-         * @description One instance's contribution to the account's explained position (#399).
-         */
-        FleetExplainedBucket: {
-            /** Positions */
-            positions: {
-                [key: string]: number;
-            };
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
         };
         /**
          * FoldCandidateSelection
@@ -15023,63 +14322,6 @@ export interface components {
             strength_label?: "Noise" | "Weak" | "Moderate" | "Strong";
         };
         /**
-         * HostRunnerActionResponse
-         * @description Response for daemon start/stop actions.
-         *
-         *     VCR-0018-B / Phase 6B — ``accepted`` historically conflated
-         *     "signal accepted by the OS" with "process actually exited". The Stop
-         *     path now distinguishes the two so clients can render them as
-         *     separate stages:
-         *
-         *     - ``command_id`` is a stable per-stop identifier returned immediately
-         *       on signal acceptance.
-         *     - ``stop_outcome`` is the deferred outcome carried in the same
-         *       response. Values: ``"signal_accepted"``, ``"exited"``,
-         *       ``"still_running_after_2s"``. None for non-stop actions.
-         *     - ``exit_reason`` carries the run's documented exit reason when the
-         *       process actually exits.
-         */
-        HostRunnerActionResponse: {
-            /** Accepted */
-            accepted: boolean;
-            /** Command Id */
-            command_id?: string | null;
-            /** Exit Reason */
-            exit_reason?: string | null;
-            /** Idempotency Key */
-            idempotency_key?: string | null;
-            /**
-             * Idempotency Replayed
-             * @default false
-             */
-            idempotency_replayed?: boolean;
-            /** Mutation Attempt Id */
-            mutation_attempt_id?: string | null;
-            /** Mutation Dispatch State */
-            mutation_dispatch_state?: ("PREPARED" | "DISPATCHING" | "RESPONSE_CONFIRMED" | "OUTCOME_UNKNOWN" | "EFFECT_CONFIRMED" | "EFFECT_NOT_OBSERVED" | "NOT_PROVABLE" | "EVIDENCE_CONFLICT") | null;
-            process: components["schemas"]["HostRunnerProcessStatus"];
-            rung_receipt?: components["schemas"]["MutationRungReceipt"] | null;
-            /** Rung Receipt Warnings */
-            rung_receipt_warnings?: components["schemas"]["MutationRungReceipt"][];
-            /** Stop Outcome */
-            stop_outcome?: string | null;
-        };
-        /**
-         * HostRunnerDeployResponse
-         * @description Result of a deploy: the content-addressed run plus an optional chained
-         *     start. ``created`` is ``False`` for an idempotent no-op (the run already
-         *     existed with a matching ledger).
-         */
-        HostRunnerDeployResponse: {
-            /** Created */
-            created: boolean;
-            /** Run Dir */
-            run_dir: string;
-            /** Run Id */
-            run_id: string;
-            start?: components["schemas"]["HostRunnerActionResponse"] | null;
-        };
-        /**
          * HostRunnerHealth
          * @description Health envelope returned by the host-side runner daemon.
          */
@@ -15166,57 +14408,6 @@ export interface components {
             state: components["schemas"]["HostRunnerProcessState"];
             /** Strategy Instance Id */
             strategy_instance_id?: string | null;
-        };
-        /**
-         * HostRunnerStartRequest
-         * @description Request body for starting one existing run from the host daemon.
-         */
-        HostRunnerStartRequest: {
-            /**
-             * Hydrate Policy
-             * @default require
-             * @enum {string}
-             */
-            hydrate_policy?: "require" | "optional" | "disabled";
-            /**
-             * Ibkr Host
-             * @default 127.0.0.1
-             */
-            ibkr_host?: string;
-            /** Idempotency Key */
-            idempotency_key?: string | null;
-            /**
-             * Max Orders Per Day
-             * @default 2000
-             */
-            max_orders_per_day?: number;
-            presented_action?: components["schemas"]["PresentedOperatorActionInvocation"] | null;
-            /**
-             * Readonly
-             * @default true
-             */
-            readonly?: boolean;
-            /** Roll Call Offer Id */
-            roll_call_offer_id?: string | null;
-            /**
-             * Strategy
-             * @default spy_ema_crossover
-             */
-            strategy?: string;
-        };
-        /**
-         * HostRunnerStopRequest
-         * @description Request body for stopping the active host runner subprocess.
-         */
-        HostRunnerStopRequest: {
-            /**
-             * Force
-             * @default false
-             */
-            force?: boolean;
-            /** Idempotency Key */
-            idempotency_key?: string | null;
-            presented_action?: components["schemas"]["PresentedOperatorActionInvocation"] | null;
         };
         /**
          * IbkrAccountSummary
@@ -15967,22 +15158,6 @@ export interface components {
             valid?: boolean;
         };
         /**
-         * IdentityCoherenceConfirmation
-         * @description Operator confirmation for a Fresh-run symbol identity change.
-         *
-         *     Unhashed deploy-admission evidence: the backend compares these symbols to
-         *     the current request and the inherited instance symbol before allowing an
-         *     immediate start through an incoherent redeploy.
-         */
-        IdentityCoherenceConfirmation: {
-            /** Action Plan Symbol */
-            action_plan_symbol?: string | null;
-            /** Inherited Symbol */
-            inherited_symbol: string;
-            /** Signal Stream */
-            signal_stream?: string | null;
-        };
-        /**
          * IncidentRecord
          * @description One WARNING/ERROR/CRITICAL block parsed from live.log, with a
          *     backend-classified ``incident_category`` the frontend keys its copy
@@ -16536,32 +15711,6 @@ export interface components {
             success: boolean;
             /** Ticker */
             ticker: string;
-        };
-        /**
-         * IntentActuation
-         * @description Result of actuating durable intent against the live binding (ADR 0004).
-         *
-         *     ``actuated`` is true only when a command was queued on a live run. With no
-         *     live binding the durable write still gates the next start. ``effect_state``
-         *     keeps accepted intent distinct from its observed runtime effect: a durable
-         *     request remains ``PENDING`` until the engine can observe it, while a queued
-         *     command is only queued, not proof that the engine has applied it.
-         */
-        IntentActuation: {
-            /** Actuated */
-            actuated: boolean;
-            /** Command Seq */
-            command_seq?: number | null;
-            /** Detail */
-            detail: string;
-            /**
-             * Effect State
-             * @default PENDING
-             * @enum {string}
-             */
-            effect_state?: "QUEUED" | "PENDING";
-            /** Run Id */
-            run_id?: string | null;
         };
         /** Iv30LiveRequest */
         Iv30LiveRequest: {
@@ -17507,92 +16656,6 @@ export interface components {
             vega?: number;
         };
         /**
-         * LegacyStaleClaimCandidate
-         * @description A legacy sidecar claim the backend has freshly proved safe to retire.
-         */
-        LegacyStaleClaimCandidate: {
-            /** Bot Order Namespace */
-            bot_order_namespace: string;
-            /** Claim Id */
-            claim_id: string;
-            /** Claimed Quantity */
-            claimed_quantity: number;
-            confirmation: components["schemas"]["OperatorConfirmationCopy"];
-            /** Proof Summary */
-            proof_summary: string;
-            /** Proved At Ms */
-            proved_at_ms: number;
-            /** Run Id */
-            run_id: string;
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-            /** Symbol */
-            symbol: string;
-        };
-        /**
-         * LegacyStaleClaimCandidatesResponse
-         * @description Backend-authored, currently safe legacy-retirement affordances.
-         */
-        LegacyStaleClaimCandidatesResponse: {
-            /** Account Id */
-            account_id: string;
-            /** Candidates */
-            candidates?: components["schemas"]["LegacyStaleClaimCandidate"][];
-            /** Generated At Ms */
-            generated_at_ms: number;
-            /**
-             * Schema Version
-             * @default 1
-             */
-            schema_version?: number;
-        };
-        /**
-         * LegacyStaleClaimRetireRequest
-         * @description Operator request to retire one specifically identified legacy claim.
-         */
-        LegacyStaleClaimRetireRequest: {
-            /**
-             * Requested By
-             * @default account-monitor.operator
-             */
-            requested_by?: string;
-            /** Run Id */
-            run_id: string;
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-            /** Symbol */
-            symbol: string;
-        };
-        /**
-         * LegacyStaleClaimRetirementReceipt
-         * @description Durable proof that one legacy per-run claim is no longer active.
-         */
-        LegacyStaleClaimRetirementReceipt: {
-            /** Account Id */
-            account_id: string;
-            /** Bot Order Namespace */
-            bot_order_namespace: string;
-            /** Claimed Quantity */
-            claimed_quantity: number;
-            /** Receipt Id */
-            receipt_id: string;
-            /** Requested By */
-            requested_by: string;
-            /** Retired At Ms */
-            retired_at_ms: number;
-            /** Run Id */
-            run_id: string;
-            /**
-             * Schema Version
-             * @default 1
-             */
-            schema_version?: number;
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-            /** Symbol */
-            symbol: string;
-        };
-        /**
          * LiveGreeksRequest
          * @description Convenience request for the common 'live Greeks at current state' case.
          *
@@ -17615,104 +16678,6 @@ export interface components {
             risk_free_rate?: number;
             /** Spot Price */
             spot_price: number;
-        };
-        /**
-         * LiveInstanceDeployRequest
-         * @description Public deploy request accepted by ``/api/live-instances``.
-         *
-         *     Legacy clients may still send ``account_id``. The data-plane route treats
-         *     it only as an optional consistency check and never forwards it as authority;
-         *     the connected broker session authors the daemon payload.
-         */
-        LiveInstanceDeployRequest: {
-            exposure_coherence_confirmation?: components["schemas"]["ExposureCoherenceConfirmation"] | null;
-            /**
-             * Force
-             * @default false
-             */
-            force?: boolean;
-            identity_coherence_confirmation?: components["schemas"]["IdentityCoherenceConfirmation"] | null;
-            /** Inherited Exposure Pending Order Count */
-            inherited_exposure_pending_order_count?: number | null;
-            /** Inherited Exposure Positions */
-            inherited_exposure_positions?: {
-                [key: string]: number;
-            };
-            /** Inherited Exposure Posture */
-            inherited_exposure_posture?: ("FLAT" | "LONG" | "SHORT" | "MIXED" | "UNKNOWN") | null;
-            /** Inherited Exposure Source */
-            inherited_exposure_source?: string | null;
-            /** Inherited Symbol */
-            inherited_symbol?: string | null;
-            /** Inherited Symbol Source */
-            inherited_symbol_source?: string | null;
-            /** Live Config */
-            live_config?: Record<string, never>;
-            /** Parent Run Id */
-            parent_run_id?: string | null;
-            presented_action?: components["schemas"]["PresentedOperatorActionInvocation"] | null;
-            /** Qc Audit Copy Path */
-            qc_audit_copy_path: string;
-            /** Qc Cloud Backtest Id */
-            qc_cloud_backtest_id: string;
-            /** Redeploy Reason */
-            redeploy_reason?: string | null;
-            /**
-             * Start
-             * @default false
-             */
-            start?: boolean;
-            /** Start Date Ms */
-            start_date_ms: number;
-            start_options?: components["schemas"]["HostRunnerStartRequest"];
-            /**
-             * Strategy Instance Id
-             * @default
-             */
-            strategy_instance_id?: string;
-            /**
-             * Strategy Key
-             * @default
-             */
-            strategy_key?: string;
-            /** Strategy Spec Path */
-            strategy_spec_path: string;
-        } & {
-            [key: string]: unknown;
-        };
-        /**
-         * LiveInstanceSummary
-         * @description One row in the account fleet overview.
-         *
-         *     PRD #616 added ``readiness_verdict`` and ``readiness_as_of_ms`` so
-         *     the fleet roster can render an honest status badge
-         *     (``dep_val_smoke_001 · IDLE · BLOCKED``) for background instances
-         *     without an N+1 fetch of every instance's full status.  Backend
-         *     authors these from the same readiness source as the per-instance
-         *     status endpoint.  ``UNKNOWN`` is the honest answer when readiness
-         *     cannot be resolved (no run, no engine).
-         */
-        LiveInstanceSummary: {
-            /** Blockers */
-            blockers?: components["schemas"]["OperatorBlocker"][];
-            /** Bound Run Id */
-            bound_run_id?: string | null;
-            /** Desired State */
-            desired_state?: string | null;
-            /** Latest Run Id */
-            latest_run_id?: string | null;
-            /** Process State */
-            process_state: string;
-            /** Readiness As Of Ms */
-            readiness_as_of_ms?: number | null;
-            /**
-             * Readiness Verdict
-             * @default UNKNOWN
-             * @enum {string}
-             */
-            readiness_verdict?: "READY" | "BLOCKED" | "DEGRADED" | "UNKNOWN";
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
         };
         /**
          * LiveRunStatus
@@ -18582,50 +17547,6 @@ export interface components {
              * @default 1
              */
             raw_nw_p_value?: number;
-        };
-        /**
-         * MutationRungReceipt
-         * @description Notice-shaped post-mutation receipt authored from the fresh ladder.
-         *
-         *     These receipts are not persisted operator incidents, so their ``code`` values
-         *     intentionally live outside the closed ``OperatorNoticeCode`` union. They
-         *     still obey the notice actionability vocabulary and action-pairing contract.
-         */
-        MutationRungReceipt: {
-            action: components["schemas"]["OperatorNoticeAction"];
-            /**
-             * Actionability
-             * @enum {string}
-             */
-            actionability: "actuatable" | "routed" | "self_resolving" | "no_remedy";
-            /**
-             * Code
-             * @enum {string}
-             */
-            code: "mutation.next_blocking_rung" | "mutation.scoped_all_clear" | "mutation.observational_warning";
-            /** Forensic Facts */
-            forensic_facts?: {
-                [key: string]: string | number | boolean | null;
-            };
-            /** Message */
-            message: string;
-            /** Occurred At Ms */
-            occurred_at_ms: number;
-            /** Remedy Status */
-            remedy_status?: ("inherent" | "unbuilt") | null;
-            /** Resolution */
-            resolution: string;
-            /** Rung Id */
-            rung_id?: ("control_plane" | "host_process" | "broker" | "account_safety" | "account_clerk" | "reconciliation" | "preflight" | "trading_session" | "runtime_freshness") | null;
-            /** Source Codes */
-            source_codes?: string[];
-            /**
-             * Tier
-             * @enum {string}
-             */
-            tier: "info" | "warning" | "critical";
-            /** Title */
-            title: string;
         };
         /**
          * NavigateAction
@@ -19872,26 +18793,6 @@ export interface components {
             stability_score?: number;
         };
         /**
-         * ParityWarning
-         * @description Wire shape for a single parity warning — Slice 1D (#597).
-         *
-         *     Produced by ``app.engine.action_plan.parity.parity_diagnostics`` and
-         *     exposed via ``POST /api/live-instances/preview-action-plan``. Codes
-         *     extend as new diagnostic kinds land (e.g. asymmetric position
-         *     direction). The picker keys its inline-error renderer off ``code``.
-         */
-        ParityWarning: {
-            /**
-             * Code
-             * @constant
-             */
-            code: "orphan_entry";
-            /** Leg Id */
-            leg_id?: string | null;
-            /** Message */
-            message: string;
-        };
-        /**
          * PayoffPoint
          * @description Single point on the payoff curve.
          */
@@ -20574,20 +19475,6 @@ export interface components {
              * @enum {string}
              */
             scope: "CUSTODY_SUBJECT" | "ACCOUNT_CLERK";
-        };
-        /**
-         * QcAuditCopyListing
-         * @description Committed QC audit copies under ``references/qc-shadow`` (ADR 0006).
-         *
-         *     ``entries`` are repo-relative POSIX paths suitable to pass straight back as
-         *     a deploy's ``qc_audit_copy_path``. Empty when the directory is absent or the
-         *     daemon is unreachable.
-         */
-        QcAuditCopyListing: {
-            /** Entries */
-            entries?: string[];
-            /** Scope Root */
-            scope_root: string;
         };
         /**
          * QuantLibGreeksResponse
@@ -22666,24 +21553,6 @@ export interface components {
             kind: "SetHoldings";
         };
         /**
-         * SetInstanceDesiredStateResponse
-         * @description Single intent knob: durable write first, then live actuation if bound.
-         */
-        SetInstanceDesiredStateResponse: {
-            actuation: components["schemas"]["IntentActuation"];
-            durable: components["schemas"]["DesiredStateRecordResponse"];
-            /** Mutation Attempt Id */
-            mutation_attempt_id: string;
-            /**
-             * Mutation Dispatch State
-             * @enum {string}
-             */
-            mutation_dispatch_state: "PREPARED" | "DISPATCHING" | "RESPONSE_CONFIRMED" | "OUTCOME_UNKNOWN" | "EFFECT_CONFIRMED" | "EFFECT_NOT_OBSERVED" | "NOT_PROVABLE" | "EVIDENCE_CONFLICT";
-            rung_receipt: components["schemas"]["MutationRungReceipt"];
-            /** Rung Receipt Warnings */
-            rung_receipt_warnings?: components["schemas"]["MutationRungReceipt"][];
-        };
-        /**
          * SharpeCiResponse
          * @description Lo (2002) confidence interval for the annualised Sharpe ratio.
          */
@@ -23315,43 +22184,6 @@ export interface components {
              * @default
              */
             required_repr?: string;
-        };
-        /**
-         * StaleBindingRetirementReceipt
-         * @description Durable proof that a stale DEPLOYED binding was moved to RETIRED.
-         */
-        StaleBindingRetirementReceipt: {
-            /** Account Id */
-            account_id: string;
-            /** Bot Order Namespace */
-            bot_order_namespace: string;
-            /**
-             * Lifecycle State
-             * @default RETIRED
-             * @constant
-             */
-            lifecycle_state?: "RETIRED";
-            /** Recorded At Ms */
-            recorded_at_ms: number;
-            /** Run Id */
-            run_id: string;
-            /**
-             * Schema Version
-             * @default 1
-             */
-            schema_version?: number;
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-        };
-        /**
-         * StaleBindingRetirementRequest
-         * @description Operator request to retire one inactive (DEPLOYED) account binding.
-         */
-        StaleBindingRetirementRequest: {
-            /** Run Id */
-            run_id: string;
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
         };
         /** StartRunRequest */
         StartRunRequest: {
@@ -26100,43 +24932,6 @@ export interface operations {
             };
         };
     };
-    retire_stale_binding_endpoint_api_accounts__account_id__bindings_retire_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["StaleBindingRetirementRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StaleBindingRetirementReceipt"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     account_service_status_endpoint_api_accounts__account_id__clerk_get: {
         parameters: {
             query?: never;
@@ -26642,76 +25437,6 @@ export interface operations {
             };
         };
     };
-    legacy_stale_claim_candidates_endpoint_api_accounts__account_id__legacy_stale_claims_candidates_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LegacyStaleClaimCandidatesResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    retire_legacy_stale_claim_endpoint_api_accounts__account_id__legacy_stale_claims_retire_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["LegacyStaleClaimRetireRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LegacyStaleClaimRetirementReceipt"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     operator_recovery_flatten_endpoint_api_accounts__account_id__operator_recovery_flatten_post: {
         parameters: {
             query?: never;
@@ -26876,52 +25601,6 @@ export interface operations {
                 };
             };
             /** @description The action is stale, unavailable, or no longer targets current evidence. */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PresentedOperatorActionRejectionResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    present_lifecycle_action_endpoint_api_accounts__account_id__presented_lifecycle_actions__action_id__get: {
-        parameters: {
-            query: {
-                strategy_instance_id: string;
-                run_id?: string | null;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-                action_id: "pause" | "stop" | "end_day" | "resume" | "start" | "deploy";
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PresentedOperatorAction"];
-                };
-            };
-            /** @description Current account safety proof does not permit this action. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -32829,201 +31508,6 @@ export interface operations {
             };
         };
     };
-    list_live_instances_api_live_instances_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LiveInstanceSummary"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    deploy_instance_api_live_instances_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["LiveInstanceDeployRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HostRunnerDeployResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_account_fleet_api_live_instances_account_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["FleetContamination"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_account_summary_api_live_instances_account_summary_get: {
-        parameters: {
-            query?: {
-                account_id?: string | null;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["FleetAccountSummary"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_audit_copy_sizing_lookup_api_live_instances_audit_copy_sizing_lookup_get: {
-        parameters: {
-            query: {
-                audit_copy_path: string;
-                proposed_sizing?: string | null;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AuditCopySizingLookup"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_daemon_diagnostics_api_live_instances_daemon_diagnose_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DaemonDiagnosticReport"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_daemon_health_api_live_instances_daemon_health_get: {
         parameters: {
             query?: never;
@@ -33073,213 +31557,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HostRunnerHealth"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    deploy_preflight_api_live_instances_deploy_preflight_get: {
-        parameters: {
-            query: {
-                strategy_key: string;
-                account_id: string;
-                instance_id: string;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DeployPreflightResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    stream_fleet_roster_api_live_instances_fleet_stream_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "Last-Event-ID"?: string | null;
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    preview_action_plan_api_live_instances_preview_action_plan_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ActionPlan-Input"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ActionPlanPreviewResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_qc_audit_copies_api_live_instances_qc_audit_copies_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["QcAuditCopyListing"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    start_run_api_live_instances_runs__run_id__start_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["HostRunnerStartRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HostRunnerActionResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    stop_run_api_live_instances_runs__run_id__stop_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["HostRunnerStopRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SetInstanceDesiredStateResponse"];
                 };
             };
             /** @description Validation Error */
@@ -33357,39 +31634,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_instance_daemon_diagnostics_api_live_instances__strategy_instance_id__daemon_diagnose_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DaemonDiagnosticReport"];
                 };
             };
             /** @description Validation Error */

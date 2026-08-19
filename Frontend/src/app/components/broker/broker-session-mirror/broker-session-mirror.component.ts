@@ -35,10 +35,8 @@ import {
 } from '../../../api/broker-session-mirror.types';
 import { brokerSse, type SseStream } from '../../../services/broker-sse';
 import { BrokerSessionMirrorService } from '../../../services/broker-session-mirror.service';
-import { DaemonDiagnosticsStore } from '../../../services/daemon-diagnostics-store.service';
 import { fmtInteger, fmtTimestampNy } from '../format';
 import { operatorTagSeverity, type PrimeTagSeverity } from '../operator-severity';
-import { DaemonDiagnosticsPanelComponent } from '../daemon-diagnostics/daemon-diagnostics-panel.component';
 import { BrokerSessionEventsPanelComponent } from './broker-session-events-panel.component';
 
 type AccordionValue =
@@ -66,7 +64,6 @@ type PurgeTarget = 'events' | 'history';
     AccordionPanel,
     ButtonModule,
     BrokerSessionEventsPanelComponent,
-    DaemonDiagnosticsPanelComponent,
     TableModule,
     TagModule,
   ],
@@ -77,7 +74,6 @@ type PurgeTarget = 'events' | 'history';
 export class BrokerSessionMirrorComponent {
   private readonly injector = inject(Injector);
   private readonly mirror = inject(BrokerSessionMirrorService);
-  protected readonly daemonDiagnostics = inject(DaemonDiagnosticsStore);
   private readonly router = inject(Router);
   private readonly snapshotStream: SseStream<BrokerSessionMirrorSnapshot> =
     runInInjectionContext(this.injector, () =>
@@ -163,33 +159,6 @@ export class BrokerSessionMirrorComponent {
     } finally {
       this.isRefreshingHistory.set(false);
     }
-  }
-
-  async refreshDaemonDiagnostics(): Promise<void> {
-    await this.daemonDiagnostics.refresh();
-  }
-
-  async renewDaemonLeaseFromDiagnostics(): Promise<void> {
-    await this.daemonDiagnostics.renewLease();
-  }
-
-  exportDaemonDiagnostics(): void {
-    const report = this.daemonDiagnostics.report();
-    if (report === null || typeof document === 'undefined') return;
-    const blob = new Blob(
-      [JSON.stringify({ note: 'Paths and sensitive fields were redacted before export.', report }, null, 2)],
-      { type: 'application/json' },
-    );
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `daemon-diagnostics-${report.fetched_at_ms}.json`;
-    anchor.click();
-    URL.revokeObjectURL(url);
-  }
-
-  async navigateFromDaemonDiagnostics(path: string): Promise<void> {
-    await this.router.navigateByUrl(path);
   }
 
   async openBot(row: BrokerSessionRosterRow): Promise<void> {

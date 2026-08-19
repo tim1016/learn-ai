@@ -1,5 +1,3 @@
-import type { PresentedOperatorActionInvocation } from './broker-models';
-
 export type RunState =
   | 'idle'
   | 'waiting_for_bars'
@@ -77,21 +75,17 @@ export interface ReconcileSummary {
  * Durable operator intent (desired state).
  *
  * Sourced from `artifacts/live_state/<strategy_instance_id>/desired_state.json`
- * via the sibling backend PR `prd-a/ui-1-status-and-controls-api`. The
- * `path_status` discriminates how the desired-state sidecar was resolved:
+ * from historical run artifacts. The `path_status` discriminates how the
+ * desired-state sidecar was resolved:
  *
  * - `ok`        — sidecar read successfully; `state` is authoritative.
  * - `absent`    — no sidecar file yet; engine default is RUNNING.
- * - `corrupt`   — sidecar exists but could not be parsed; controls block.
+ * - `corrupt`   — sidecar exists but could not be parsed.
  * - `unknown_no_ledger_binding` — the run ledger carries no
  *   `strategy_instance_id`, so the sidecar cannot be located at all.
  *   Never guessed — surfaced explicitly.
  */
-// Canonical control-plane primitives live in `live-runs-controls.types.ts`,
-// which is owned by the sibling backend PR (`prd-a/ui-1-status-and-controls-api`,
-// #390). They are imported here and re-exported so existing imports from this
-// module keep working while the single source of truth for the control-plane
-// contract stays in one file.
+// Canonical read-only artifact primitives live in `live-runs-controls.types.ts`.
 import type {
   CommandVerb,
   DesiredStateView,
@@ -99,7 +93,6 @@ import type {
 
 export type {
   CommandVerb,
-  DesiredStateAction,
   DesiredStatePathStatus,
   DesiredStateValue,
 } from './live-runs-controls.types';
@@ -136,20 +129,6 @@ export interface CommandsSummary {
   poll_interval_ms: number;
 }
 
-export interface CommandWriteRequest {
-  verb: CommandVerb;
-  reason?: string;
-}
-
-export interface CommandWriteResponse {
-  accepted: boolean;
-  command: CommandEntry;
-  rung_receipt?: MutationRungReceipt | null;
-  rung_receipt_warnings?: MutationRungReceipt[];
-  mutation_attempt_id?: string | null;
-  mutation_dispatch_state?: import('./live-instances.types').MutationAttemptDispatchState | null;
-}
-
 export interface LiveRunStatus {
   run_id: string;
   account_id: string;
@@ -168,20 +147,6 @@ export interface LiveRunStatus {
   reconcile: ReconcileSummary;
   commands: CommandsSummary;
   fetched_at_ms: number;
-}
-
-/**
- * Reconciliation PR 2 — ack envelope returned by
- * ``POST /api/live-instances/{sid}/reconcile``. ``request_id`` is opaque
- * (a uuid4-derived 22-char base64url token); the cockpit polls
- * ``operator_surface.reconciliation`` to observe IN_PROGRESS →
- * CLEAN/ADOPTED/FAILED transitions, not this envelope.
- */
-export interface ReconcileAckResponse {
-  request_id: string;
-  accepted_at_ms: number;
-  rung_receipt: MutationRungReceipt;
-  rung_receipt_warnings: MutationRungReceipt[];
 }
 
 export type MutationRungReceiptCode =
@@ -346,240 +311,4 @@ export interface BotEventPage {
   durable_stream_id: string;
   high_water_cursor: string;
   next_cursor: string | null;
-}
-
-export type HydratePolicy = 'require' | 'optional' | 'disabled';
-
-export type HostRunnerProcessState = 'idle' | 'running' | 'exited' | 'stopping';
-
-export interface HostRunnerProcessStatus {
-  state: HostRunnerProcessState;
-  run_id: string | null;
-  pid: number | null;
-  started_at_ms: number | null;
-  ended_at_ms: number | null;
-  exit_code: number | null;
-  exit_reason?: string | null;
-  command: string[];
-  log_path: string | null;
-  message: string | null;
-}
-
-export interface AccountClerkHealth {
-  account_id: string;
-  generation: number;
-  pid: number | null;
-  status: string;
-  started_at_ms: number;
-  renewed_at_ms: number | null;
-  valid_until_ms: number | null;
-  lease_valid: boolean;
-}
-
-export interface HostRunnerHealth {
-  ok: boolean;
-  repo_root: string;
-  live_runs_root: string;
-  fetched_at_ms: number;
-  process: HostRunnerProcessStatus;
-  clerks?: AccountClerkHealth[];
-  /** The SHA the daemon process is actually RUNNING (captured at launch; null if
-   * git unavailable). The daemon does not reload on `git pull`. */
-  git_sha?: string | null;
-  /** The live on-disk HEAD — what a restart would run. */
-  repo_head_sha?: string | null;
-  /** True when the running code differs from the working tree (restart to apply). */
-  code_stale?: boolean;
-  /** Best-effort count of how many commits behind the working tree the running
-   * code is (null when equal/unknown). */
-  commits_behind?: number | null;
-  /** Daemon control-plane identity and lease diagnostics. */
-  daemon_boot_id?: string | null;
-  lease_status?: string | null;
-  last_lease_written_at_ms?: number | null;
-  lease_threshold_ms?: number | null;
-  lease_write_error?: string | null;
-  orphan_candidates_count?: number;
-  orphan_candidates?: Record<string, unknown>[];
-  platform?: string | null;
-  supervisor?: string | null;
-}
-
-export interface HostRunnerStartRequest {
-  readonly: boolean;
-  hydrate_policy: HydratePolicy;
-  strategy: string;
-  max_orders_per_day: number;
-  ibkr_host: string;
-  roll_call_offer_id?: string | null;
-  presented_action?: PresentedOperatorActionInvocation | null;
-}
-
-export const DEFAULT_MAX_ORDERS_PER_DAY = 2000;
-
-export interface HostRunnerStopRequest {
-  force: boolean;
-  presented_action?: PresentedOperatorActionInvocation | null;
-}
-
-export interface HostRunnerActionResponse {
-  accepted: boolean;
-  process: HostRunnerProcessStatus;
-  rung_receipt?: MutationRungReceipt | null;
-  rung_receipt_warnings?: MutationRungReceipt[];
-  mutation_attempt_id?: string | null;
-  mutation_dispatch_state?: import('./live-instances.types').MutationAttemptDispatchState | null;
-}
-
-// ─────────────────────────── ADR 0009 sizing policy ───────────────────────────
-//
-// `live_config.sizing` is the operator-selected policy that governs `set_holdings`
-// at the engine boundary. The discriminated union mirrors Python's
-// `app.engine.execution.order_sizer.SizingPolicy` 1:1.
-//
-// PR1 ships only `FixedShares` at runtime; the other kinds validate but are
-// disabled in the deploy form UI:
-//   * `SetHoldings` (Reference parity)  — wired in PR3
-//   * `FixedNotional` (Custom: notional) — wired in PR4
-//   * `StrategyExplicit`                 — surfaced in PR7
-
-export type SizingKind = 'FixedShares' | 'SetHoldings' | 'FixedNotional' | 'StrategyExplicit';
-
-export interface SizingFixedShares {
-  kind: 'FixedShares';
-  value: number;
-}
-
-export interface SizingSetHoldings {
-  kind: 'SetHoldings';
-  /** Decimal string on the wire (never a float) — preserves run_id hash stability. */
-  fraction: string;
-}
-
-export interface SizingFixedNotional {
-  kind: 'FixedNotional';
-  /** Decimal string on the wire (never a float) — preserves run_id hash stability. */
-  value: string;
-}
-
-export interface SizingStrategyExplicit {
-  kind: 'StrategyExplicit';
-}
-
-export type SizingPolicy =
-  | SizingFixedShares
-  | SizingSetHoldings
-  | SizingFixedNotional
-  | SizingStrategyExplicit;
-
-/** Deploy-form preset (ADR 0009 § 7). Each maps to one or two `SizingPolicy`
- * shapes. Reference parity is gated by the audit-copy allow-list (PR3). */
-export type SizingPreset = 'safe_canary' | 'reference_parity' | 'custom';
-
-/** Engine-derived sizing stamps on the run ledger (ADR 0009 § 3). Never operator
- * input; the engine derives both at deploy/start. */
-export type GovernedBy = 'live_config' | 'strategy_explicit';
-export type SizingProvenance = 'reference_native' | 'live_override' | 'spec_default';
-
-/** Deploy (create-a-run) request — accepted by the data plane, which derives
- * broker account identity from the connected broker session before forwarding
- * to the daemon (ADR 0006). The QC anchor (`qc_cloud_backtest_id` +
- * `qc_audit_copy_path`) is mandatory by design. `start: true` chains a launch
- * using `start_options`. */
-export interface IdentityCoherenceConfirmation {
-  inherited_symbol: string;
-  signal_stream?: string | null;
-  action_plan_symbol?: string | null;
-}
-
-export type ExposureCoherencePosture = 'FLAT' | 'LONG' | 'SHORT' | 'MIXED' | 'UNKNOWN';
-
-export interface ExposureCoherenceConfirmation {
-  posture: ExposureCoherencePosture;
-  pending_order_count?: number | null;
-  owned_positions: Record<string, number>;
-  strategy_instance_id?: string | null;
-  run_id?: string | null;
-}
-
-export interface HostRunnerDeployRequest {
-  strategy_spec_path: string;
-  qc_audit_copy_path: string;
-  qc_cloud_backtest_id: string;
-  start_date_ms: number;
-  strategy_instance_id: string;
-  /** Algorithm module the run is reconciled to (#416); pins the Start guard. */
-  strategy_key: string;
-  live_config?: Record<string, unknown>;
-  force?: boolean;
-  start?: boolean;
-  start_options?: HostRunnerStartRequest;
-  /** PRD #593 Slice 1E (#598) / ADR 0012 §7 — unhashed redeploy lineage.
-   * Top-level (NOT inside ``live_config``) so the ledger persists it
-   * outside the content hash that produces ``run_id``. Same plan
-   * redeployed from two different parents collapses to the same
-   * ``run_id``. */
-  parent_run_id?: string;
-  redeploy_reason?: string;
-  inherited_symbol?: string;
-  inherited_symbol_source?: string;
-  identity_coherence_confirmation?: IdentityCoherenceConfirmation;
-  inherited_exposure_posture?: ExposureCoherencePosture;
-  inherited_exposure_pending_order_count?: number | null;
-  inherited_exposure_positions?: Record<string, number>;
-  inherited_exposure_source?: string;
-  exposure_coherence_confirmation?: ExposureCoherenceConfirmation;
-  presented_action?: PresentedOperatorActionInvocation | null;
-}
-
-export interface HostRunnerDeployResponse {
-  run_id: string;
-  run_dir: string;
-  /** False for an idempotent no-op (the run already existed with a matching ledger). */
-  created: boolean;
-  start: HostRunnerActionResponse | null;
-}
-
-/** Committed QC audit copies under `references/qc-shadow` (the deploy picker). */
-export interface QcAuditCopyListing {
-  scope_root: string;
-  entries: string[];
-}
-
-/** ADR 0009 § 3 — Reference parity gate verdict for the deploy form. */
-export type AuditCopySizingVerdict = 'proven_match' | 'proven_mismatch' | 'cannot_prove';
-
-export interface AuditCopySizingLookup {
-  verdict: AuditCopySizingVerdict;
-  /** Operator-facing one-liner; safe to render verbatim. */
-  detail: string;
-  /** The registered rule from the allow-list (when known), as a `SizingPolicy` dict. */
-  expected_rule: SizingPolicy | null;
-  /** The proposed live rule (when the form sent one), as a `SizingPolicy` dict. */
-  actual_rule: SizingPolicy | null;
-}
-
-/** Minimal strategy descriptor from `GET /api/engine/strategies`. `name` is the
- * algorithm module (the `strategy_key`); the full payload also carries a params
- * schema the deploy form does not need.
- *
- * `sizing_surface` (ADR 0009 § 6) drives whether the deploy form's sizing
- * selector is enabled (`"policy"`) or disabled + labelled "self-sized"
- * (`"explicit"`). */
-export interface EngineStrategyInfo {
-  name: string;
-  display_name: string;
-  description: string;
-  sizing_surface: 'policy' | 'explicit';
-}
-
-/** Canonical strategy-spec fixture from `GET /api/spec-strategy/fixtures`.
- * `path` is repo-relative and can be passed back to deploy as
- * `strategy_spec_path`. */
-export interface SpecStrategyFixture {
-  name: string;
-  spec_name: string;
-  path: string;
-  symbols: string[];
-  description: string | null;
 }

@@ -45,16 +45,16 @@ describe('BrokerHealthService — bannerState', () => {
     expect(svc.bannerState()).toBeNull();
   });
 
-  it('returns disabled-host-runner-active when disabled is true (takes priority)', () => {
+  it('returns disabled when health is disabled (takes priority)', () => {
     const { svc } = setup();
     svc.health.set(makeHealth({ disabled: true, connected: false }));
-    expect(svc.bannerState()).toBe('disabled-host-runner-active');
+    expect(svc.bannerState()).toBe('disabled');
   });
 
-  it('disabled-host-runner-active even when broker reports connected', () => {
+  it('remains disabled even when broker reports connected', () => {
     const { svc } = setup();
     svc.health.set(makeHealth({ disabled: true, connected: true, is_paper: true }));
-    expect(svc.bannerState()).toBe('disabled-host-runner-active');
+    expect(svc.bannerState()).toBe('disabled');
   });
 
   it('returns disconnected when connected is false and not disabled', () => {
@@ -186,6 +186,6 @@ describe('BrokerHealthService — refresh()', () => {
     broker.health.mockResolvedValue(makeHealth({ disabled: true }));
     await svc.refresh();
 
-    expect(svc.bannerState()).toBe('disabled-host-runner-active');
+    expect(svc.bannerState()).toBe('disabled');
   });
 });

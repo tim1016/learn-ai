@@ -14,8 +14,8 @@ Asserts:
 - The serialized form pins ``int64 ms UTC`` for every timestamp
   (no ISO strings, no ``datetime`` objects on the wire).
 
-The publisher's monotonic-``snapshot_seq`` + serialized-write contract
-is exercised in ``test_engine_runtime_publisher.py`` (619-B B2).
+The writer remains a compatibility parser/serializer for historical evidence;
+the retired host-run publisher is intentionally absent.
 """
 
 from __future__ import annotations
