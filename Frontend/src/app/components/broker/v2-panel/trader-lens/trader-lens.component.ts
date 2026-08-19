@@ -83,6 +83,12 @@ export class TraderLensComponent {
   protected readonly histIndicatorBars = computed(
     () => this.histChart()?.indicator_bars ?? [],
   );
+  protected readonly histIndicatorBarBudget = computed(
+    () => this.histChart()?.indicator_bar_budget ?? 0,
+  );
+  protected readonly histIndicatorBarBudgetSatisfied = computed(
+    () => this.histChart()?.indicator_bar_budget_satisfied ?? true,
+  );
   protected readonly histFillMarkers = computed(
     () => this.histChart()?.fill_markers ?? [],
   );

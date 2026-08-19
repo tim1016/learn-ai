@@ -252,6 +252,8 @@ export class DualPaneChartComponent implements AfterViewInit {
   readonly histFillMarkers = input<readonly ChartFillMarker[]>([]);
   readonly historyDataTimeframe = input<ChartHistoryTimeframe | null>(null);
   readonly historyTimeframe = input<ChartHistoryTimeframe>('1m');
+  readonly histIndicatorBarBudget = input(0);
+  readonly histIndicatorBarBudgetSatisfied = input(true);
 
   readonly historyTimeframeChange = output<ChartHistoryTimeframe>();
   readonly liveResolutionChange = output<ChartLiveResolution>();

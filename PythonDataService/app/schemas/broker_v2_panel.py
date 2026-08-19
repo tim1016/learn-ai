@@ -575,9 +575,11 @@ class LiveSnapshotUnavailableResponse(BaseModel):
 class ChartHistoryResponse(BaseModel):
     """Bounded Polygon chart response for one selected timeframe (§8).
 
-    ``bars`` is the bounded display window. ``indicator_bars`` includes the
-    preceding warmup candles required by every catalog-valid indicator recipe.
-    The existing 7-day live resolver is not widened.
+    ``bars`` is the bounded display window. ``indicator_bars`` includes every
+    available preceding warmup candle, capped by the configured Polygon history
+    entitlement. The explicit budget fields distinguish a complete calculation
+    window from entitlement- or liquidity-limited history. The existing 7-day
+    live resolver is not widened.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -589,6 +591,8 @@ class ChartHistoryResponse(BaseModel):
     to_ms: int
     bars: list[ChartBar]
     indicator_bars: list[ChartBar]
+    indicator_bar_budget: int
+    indicator_bar_budget_satisfied: bool
     fill_markers: list[ChartFillMarker]
     truncated: bool
     as_of_ms: int

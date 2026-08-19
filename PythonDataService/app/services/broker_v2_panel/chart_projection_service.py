@@ -22,6 +22,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.contract.models import OrderSide
@@ -29,6 +30,7 @@ from app.broker.ibkr.models import IbkrMinuteBar
 from app.data_lake.polygon_fetcher import PolygonBar
 from app.lean_sidecar.trading_calendar import (
     current_trading_session_window,
+    session_close_ms_utc,
     session_open_ms_utc,
     session_start_for_bar_count,
 )
@@ -45,6 +47,8 @@ from app.services.indicator_warmup_policy import configured_indicator_warmup_bar
 from app.services.live_chart_window import ChartWindowResult
 
 MS_PER_DAY = 86_400_000
+_POLYGON_HISTORY_YEARS = 2
+_ET = ZoneInfo("America/New_York")
 
 @dataclass(frozen=True)
 class _HistoryTimeframeSpec:
@@ -107,11 +111,11 @@ def aggregator_bars_to_chart_bars(bars: Sequence[IbkrMinuteBar]) -> list[ChartBa
     return [_ibkr_bar_to_chart_bar(bar) for bar in bars]
 
 
-def _polygon_bar_to_chart_bar(bar: PolygonBar, *, span_ms: int) -> ChartBar:
+def _polygon_bar_to_chart_bar(bar: PolygonBar, *, end_ms: int) -> ChartBar:
     # Polygon-sourced history bars are truthfully tagged ``polygon`` (§8).
     return ChartBar(
         start_ms=bar.t_ms,
-        end_ms=bar.t_ms + span_ms,
+        end_ms=end_ms,
         open=str(bar.open),
         high=str(bar.high),
         low=str(bar.low),
@@ -222,6 +226,66 @@ class _HistoryPlan:
     fetch_start: date
 
 
+def _subtract_years(value: date, years: int) -> date:
+    try:
+        return value.replace(year=value.year - years)
+    except ValueError:
+        return value.replace(year=value.year - years, day=28)
+
+
+def _polygon_history_floor(now_ms: int) -> date:
+    today = datetime.fromtimestamp(now_ms / 1000, tz=UTC).date()
+    return _subtract_years(today, _POLYGON_HISTORY_YEARS)
+
+
+def _history_bar_end_ms(bar: PolygonBar, plan: _HistoryPlan) -> int:
+    if plan.timespan != "day":
+        return bar.t_ms + plan.span_ms
+    session_date = datetime.fromtimestamp(bar.t_ms / 1000, tz=UTC).astimezone(_ET).date()
+    return session_close_ms_utc(session_date)
+
+
+def _history_bar_is_complete(bar: PolygonBar, plan: _HistoryPlan) -> bool:
+    try:
+        return _history_bar_end_ms(bar, plan) <= plan.to_ms
+    except LookupError:
+        return False
+
+
+async def _fetch_history_bars(
+    *,
+    symbol: str,
+    plan: _HistoryPlan,
+    bar_source: HistoryBarSource,
+) -> list[PolygonBar]:
+    """Fetch backward until the bar budget or Polygon entitlement is exhausted."""
+
+    floor = _polygon_history_floor(plan.to_ms)
+    range_start = max(plan.fetch_start, floor)
+    entitlement_end = datetime.fromtimestamp(plan.to_ms / 1000, tz=UTC).date() + timedelta(days=1)
+    range_end = entitlement_end
+    bars_by_start: dict[int, PolygonBar] = {}
+    while True:
+        batch = await bar_source(
+            symbol,
+            range_start,
+            range_end,
+            plan.multiplier,
+            plan.timespan,
+        )
+        bars_by_start.update(
+            (bar.t_ms, bar)
+            for bar in batch
+            if _history_bar_is_complete(bar, plan)
+        )
+        if len(bars_by_start) >= plan.indicator_bars or range_start <= floor:
+            break
+        requested_days = max(1, (entitlement_end - range_start).days)
+        range_end = range_start
+        range_start = max(floor, range_start - timedelta(days=requested_days))
+    return sorted(bars_by_start.values(), key=lambda bar: bar.t_ms)
+
+
 def _plan_history(timeframe: ChartHistoryTimeframe, now_ms: int) -> _HistoryPlan:
     spec = _HISTORY_TIMEFRAME_SPECS[timeframe]
     span_ms = {"minute": spec.multiplier * 60_000, "hour": spec.multiplier * 3_600_000, "day": spec.multiplier * MS_PER_DAY}[
@@ -272,24 +336,16 @@ async def build_history_chart(
     selection, rather than resampling or reusing a prior timeframe locally.
     """
     plan = _plan_history(timeframe, now_ms)
-    start = plan.fetch_start
-    end = datetime.fromtimestamp(plan.to_ms / 1000, tz=UTC).date() + timedelta(days=1)
-
-    polygon_bars = await bar_source(symbol, start, end, plan.multiplier, plan.timespan)
-    # A bar is labelled by its close (temporal-rigor.md), so a bar whose span
-    # has not elapsed is still open and must not be drawn as a finished candle:
-    # at 10:30 the 1h bar starting 10:00 does not close until 11:00.
-    polygon_bars = [
-        bar
-        for bar in polygon_bars
-        if bar.t_ms + plan.span_ms <= plan.to_ms
-    ]
-    polygon_bars.sort(key=lambda bar: bar.t_ms)
+    polygon_bars = await _fetch_history_bars(
+        symbol=symbol,
+        plan=plan,
+        bar_source=bar_source,
+    )
 
     truncated = len(polygon_bars) > plan.display_bars
     polygon_bars = polygon_bars[-plan.indicator_bars :]
     indicator_bars = [
-        _polygon_bar_to_chart_bar(bar, span_ms=plan.span_ms)
+        _polygon_bar_to_chart_bar(bar, end_ms=_history_bar_end_ms(bar, plan))
         for bar in polygon_bars
     ]
     bars = indicator_bars[-plan.display_bars :]
@@ -303,6 +359,8 @@ async def build_history_chart(
         to_ms=plan.to_ms,
         bars=bars,
         indicator_bars=indicator_bars,
+        indicator_bar_budget=plan.indicator_bars,
+        indicator_bar_budget_satisfied=len(indicator_bars) >= plan.indicator_bars,
         fill_markers=markers,
         truncated=truncated,
         as_of_ms=now_ms,

@@ -173,6 +173,8 @@ export interface ChartHistoryResponse {
   readonly to_ms: number;
   readonly bars: readonly ChartBar[];
   readonly indicator_bars: readonly ChartBar[];
+  readonly indicator_bar_budget: number;
+  readonly indicator_bar_budget_satisfied: boolean;
   readonly fill_markers: readonly ChartFillMarker[];
   readonly truncated: boolean;
   readonly as_of_ms: number;

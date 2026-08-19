@@ -202,6 +202,25 @@ describe('DualPaneChartComponent', () => {
     }
   });
 
+  it('shows when Polygon cannot satisfy the indicator calculation budget', async () => {
+    const { fixture } = await render(DualPaneChartComponent, {
+      inputs: {
+        symbol: 'SPY',
+        liveBars: [],
+        histBars: [],
+        histIndicatorBars: [liveBar(1_700_000_000_000)],
+        histIndicatorBarBudget: 2_800,
+        histIndicatorBarBudgetSatisfied: false,
+      },
+    });
+
+    screen.getByRole('tab', { name: '15m Delayed' }).click();
+    fixture.detectChanges();
+
+    expect(screen.getByText(/Polygon returned 1 of 2800 requested calculation candles/))
+      .toBeTruthy();
+  });
+
   it('emits historyTimeframeChange when a Polygon timeframe is clicked', async () => {
     const onHistoryTimeframeChange = vi.fn();
 

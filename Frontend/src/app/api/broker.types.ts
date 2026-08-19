@@ -10727,9 +10727,11 @@ export interface components {
          * ChartHistoryResponse
          * @description Bounded Polygon chart response for one selected timeframe (§8).
          *
-         *     ``bars`` is the bounded display window. ``indicator_bars`` includes the
-         *     preceding warmup candles required by every catalog-valid indicator recipe.
-         *     The existing 7-day live resolver is not widened.
+         *     ``bars`` is the bounded display window. ``indicator_bars`` includes every
+         *     available preceding warmup candle, capped by the configured Polygon history
+         *     entitlement. The explicit budget fields distinguish a complete calculation
+         *     window from entitlement- or liquidity-limited history. The existing 7-day
+         *     live resolver is not widened.
          */
         ChartHistoryResponse: {
             /** As Of Ms */
@@ -10740,6 +10742,10 @@ export interface components {
             fill_markers: components["schemas"]["ChartFillMarker"][];
             /** From Ms */
             from_ms: number;
+            /** Indicator Bar Budget */
+            indicator_bar_budget: number;
+            /** Indicator Bar Budget Satisfied */
+            indicator_bar_budget_satisfied: boolean;
             /** Indicator Bars */
             indicator_bars: components["schemas"]["ChartBar"][];
             /** Strategy Instance Id */
