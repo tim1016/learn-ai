@@ -81,6 +81,19 @@ class StartAdmissionUnavailable(Exception):
         self.detail = detail
 
 
+def market_data_capability_account_id(feed: MarketDataFeed | None) -> str | None:
+    """Return the account that owns the feed's capability evidence.
+
+    Alpaca custody identifies the execution account; it cannot scope an IBKR
+    market-data entitlement.  Only a feed-provided source account may select
+    the capability snapshot that authorizes an extended session phase.
+    """
+    if feed is None:
+        return None
+    account_id = getattr(feed, "capability_account_id", None)
+    return account_id if isinstance(account_id, str) and account_id else None
+
+
 def make_start_request(
     *,
     broker: str,
@@ -269,6 +282,7 @@ class BotStartAdmission:
                 runtime = await self._runtime_fact(binding.strategy_instance_id, observed_at_ms)
                 process = self._process_fact(binding, observed_at_ms)
                 feed = self._feed_resolver()
+                capability_account_id = market_data_capability_account_id(feed)
                 facts = StartRunFacts(
                     strategy_instance_id=binding.strategy_instance_id,
                     proposed_run_id=binding.run_id,
@@ -280,8 +294,12 @@ class BotStartAdmission:
                         observed_at_ms,
                         symbol=binding.symbol,
                         use_rth=binding.use_rth,
-                        capability=self._session_capability(binding.symbol, custody.account_id),
-                        account_id=custody.account_id,
+                        capability=(
+                            self._session_capability(binding.symbol, capability_account_id)
+                            if capability_account_id is not None
+                            else None
+                        ),
+                        account_id=capability_account_id,
                     ),
                 )
                 yield (
@@ -348,6 +366,23 @@ def market_data_admission_fact(
         symbol=symbol,
         account_id=account_id,
     )
+    session_fields = {
+        "scheduled_phase": session.phase,
+        "session_authority_source": session.source,
+        "extended_phase_proven": session.extended_phase_proven,
+    }
+    if not use_rth and session.phase == "CLOSED" and not session.extended_phase_proven:
+        return MarketDataAdmissionFact(
+            state="UNKNOWN",
+            feed_id=feed.feed_id,
+            last_bar_ms=health.last_bar_ms,
+            observed_at_ms=health.observed_at_ms,
+            reason=("The extended-session phase cannot be proven by a fresh market-data capability snapshot."),
+            connected=health.connected,
+            stale=health.stale,
+            active_subscription_count=health.active_subscription_count,
+            **session_fields,
+        )
     bars_expected = session.phase == "RTH" if use_rth else session.phase in {"PRE", "RTH", "POST", "OVERNIGHT"}
     stalled_subscription = health.stale and health.active_subscription_count > 0 and bars_expected
     state: Literal["AVAILABLE", "STALE", "UNAVAILABLE"] = (

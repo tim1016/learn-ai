@@ -26,6 +26,7 @@ from app.services.bot_start_admission import (
     StartAdmissionEvidenceChanged,
     StartRequest,
     market_data_admission_fact,
+    market_data_capability_account_id,
     new_run_binding,
 )
 from app.services.bot_trade_strategy import EXPOSURE_CARRYOVER_STRATEGY_KEYS
@@ -108,6 +109,7 @@ class BotResumeAdmission:
             async with self._custody_guard(prior.strategy_instance_id) as custody:
                 observed_at_ms = self._now_ms()
                 feed = self._feed_resolver()
+                capability_account_id = market_data_capability_account_id(feed)
                 facts = ResumeRunFacts(
                     strategy_instance_id=prior.strategy_instance_id,
                     proposed_run_id=proposed.run_id,
@@ -123,8 +125,12 @@ class BotResumeAdmission:
                         observed_at_ms,
                         symbol=prior.symbol,
                         use_rth=prior.use_rth,
-                        capability=self._session_capability(prior.symbol, custody.account_id),
-                        account_id=custody.account_id,
+                        capability=(
+                            self._session_capability(prior.symbol, capability_account_id)
+                            if capability_account_id is not None
+                            else None
+                        ),
+                        account_id=capability_account_id,
                     ),
                     desired_state=status.desired_state,
                     phase=status.phase,

@@ -173,6 +173,44 @@ def test_extended_phase_requires_fresh_well_formed_capability() -> None:
     assert stale.extended_phase_proven is invalid.extended_phase_proven is False
 
 
+@pytest.mark.parametrize(
+    ("kind", "open_ms", "close_ms"),
+    [
+        ("PRE", _ny_ms(2026, 6, 23, 4, 0), _ny_ms(2026, 6, 23, 9, 31)),
+        ("POST", _ny_ms(2026, 6, 23, 15, 59), _ny_ms(2026, 6, 23, 20, 0)),
+    ],
+)
+def test_extended_phase_rejects_overlapping_day_capability_windows(
+    kind: str,
+    open_ms: int,
+    close_ms: int,
+) -> None:
+    capability = _capability()
+    malformed = capability.model_copy(
+        update={
+            "sessions": {
+                **capability.sessions,
+                kind: capability.sessions[kind].model_copy(
+                    update={
+                        "window_today_open_ms": open_ms,
+                        "window_today_close_ms": close_ms,
+                    }
+                ),
+            }
+        }
+    )
+
+    state = session_state_at_ms(
+        now_ms=_ny_ms(2026, 6, 23, 18, 0),
+        capability=malformed,
+        symbol=malformed.symbol,
+        account_id=malformed.account_id,
+    )
+
+    assert state.source == "nyse_calendar"
+    assert state.extended_phase_proven is False
+
+
 def test_calendar_fallback_honors_early_close_and_next_rth_open() -> None:
     window = session_window_for_date(date(2026, 11, 27))
 

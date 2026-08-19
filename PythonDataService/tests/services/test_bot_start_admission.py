@@ -46,7 +46,10 @@ from app.schemas.run_admission import (
     StartRunFacts,
     StartRuntimeAdmissionFact,
 )
-from app.services.bot_start_admission import market_data_admission_fact
+from app.services.bot_start_admission import (
+    market_data_admission_fact,
+    market_data_capability_account_id,
+)
 from app.services.run_admission import evaluate_run_admission
 from tests._helpers.ibkr_feed_adversarial import (
     NeverFirstBarFeedFixture,
@@ -311,6 +314,45 @@ def test_market_data_admission_marks_extended_phase_unproved_without_matching_ca
 
     assert fact.session_authority_source == "nyse_calendar"
     assert fact.extended_phase_proven is False
+
+
+def test_unproved_extended_phase_blocks_connected_stale_feed_admission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A calendar CLOSED fallback cannot silently admit an extended run."""
+    _session(monkeypatch, "CLOSED")
+    health = FeedHealth(
+        connected=True,
+        stale=True,
+        last_bar_ms=_NOW - 400_000,
+        reason="No source bar in 400s",
+        active_subscription_count=1,
+        observed_at_ms=_NOW,
+    )
+
+    fact = market_data_admission_fact(_Feed(health), _NOW, use_rth=False)
+    decision = evaluate_run_admission(_start_facts(fact), _clerk(), evaluated_at_ms=_NOW)
+
+    assert fact.state == "UNKNOWN"
+    assert fact.extended_phase_proven is False
+    assert decision.allowed is False
+    assert decision.reason_code == "MARKET_DATA_UNKNOWN"
+
+
+def test_market_data_capability_account_uses_the_feed_source_identity() -> None:
+    feed = _Feed(
+        FeedHealth(
+            connected=True,
+            stale=False,
+            last_bar_ms=None,
+            reason="",
+            active_subscription_count=0,
+            observed_at_ms=_NOW,
+        )
+    )
+    feed.capability_account_id = "DU1234567"  # type: ignore[attr-defined]
+
+    assert market_data_capability_account_id(feed) == "DU1234567"
 
 
 # ── bounded liveness regressions plus the one remaining candidate policy ──

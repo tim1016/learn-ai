@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from itertools import pairwise
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -13,6 +14,7 @@ SessionAuthoritySource = Literal["ibkr_capability", "nyse_calendar"]
 
 _NY = ZoneInfo("America/New_York")
 _SESSION_PRIORITY: tuple[SessionKind, ...] = ("RTH", "PRE", "POST", "OVERNIGHT")
+_DAY_SESSION_SEQUENCE: tuple[SessionKind, ...] = ("PRE", "RTH", "POST")
 # A snapshot publishes one day's per-instrument windows plus an overnight
 # boundary.  Retaining it beyond a day could project yesterday's entitlement
 # onto a new session, so it cannot author an extended phase after this bound.
@@ -228,7 +230,9 @@ def _is_fresh_matching_capability(
     age_ms = now_ms - capability.probed_at_ms
     if age_ms < 0 or age_ms > CAPABILITY_MAX_AGE_MS:
         return False
-    return all(_is_valid_window(capability, kind) for kind in _SESSION_PRIORITY)
+    if not all(_is_valid_window(capability, kind) for kind in _SESSION_PRIORITY):
+        return False
+    return _has_ordered_day_sessions(capability)
 
 
 def _is_valid_window(capability: SessionDataCapability, kind: SessionKind) -> bool:
@@ -240,6 +244,21 @@ def _is_valid_window(capability: SessionDataCapability, kind: SessionKind) -> bo
     if open_ms is None or close_ms is None:
         return open_ms is None and close_ms is None
     return open_ms < close_ms
+
+
+def _has_ordered_day_sessions(capability: SessionDataCapability) -> bool:
+    """Reject overlapping or out-of-order PRE/RTH/POST evidence windows."""
+    windows = [
+        window
+        for kind in _DAY_SESSION_SEQUENCE
+        if (window := _window_tuple(capability, kind)) is not None
+    ]
+    return all(
+        earlier_close_ms <= later_open_ms
+        for (_earlier_open_ms, earlier_close_ms), (later_open_ms, _later_close_ms) in pairwise(
+            windows
+        )
+    )
 
 
 def _ny_dt(ms: int) -> datetime:

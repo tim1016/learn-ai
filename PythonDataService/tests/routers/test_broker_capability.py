@@ -107,11 +107,25 @@ def test_capability_service_reads_only_the_newest_matching_scope(tmp_path: Path)
     service = BrokerCapabilityService(root=tmp_path)
     older = _snapshot("SPY")
     newer = older.model_copy(update={"probed_at_ms": older.probed_at_ms + 1})
-    service.persist(older)
     service.persist(newer)
+    service.persist(older)
     service.persist(_snapshot("QQQ"))
 
     selected = service.read_latest_for(symbol="spy", account_id="U1234567")
 
     assert selected == newer
+    latest = (tmp_path / "U1234567" / "SPY" / "latest.json").read_text(encoding="utf-8")
+    assert SessionDataCapability.model_validate_json(latest) == newer
     assert service.read_latest_for(symbol="SPY", account_id="other-account") is None
+
+
+def test_capability_lookup_isolated_from_unrelated_corrupt_snapshot(tmp_path: Path) -> None:
+    service = BrokerCapabilityService(root=tmp_path)
+    expected = _snapshot("SPY")
+    service.persist(expected)
+    corrupt = tmp_path / "unrelated-account" / "QQQ" / "latest.json"
+    corrupt.parent.mkdir(parents=True)
+    corrupt.write_text("not json", encoding="utf-8")
+
+    assert service.read_latest_for(symbol="SPY", account_id="U1234567") == expected
+    assert service.read_latest() == [expected]

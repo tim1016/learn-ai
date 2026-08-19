@@ -76,6 +76,13 @@ def _fake_connected_client(*, connected: bool = True, connection_lost: bool = Fa
     return client
 
 
+def test_ibkr_feed_exposes_its_capability_account_identity() -> None:
+    client = _fake_connected_client()
+    client.connected_account = "DU1234567"
+
+    assert IbkrMarketDataFeed(client).capability_account_id == "DU1234567"
+
+
 class _FakeBarSource:
     """Injects a fixed sequence of IbkrMinuteBar-shaped objects into the feed.
 

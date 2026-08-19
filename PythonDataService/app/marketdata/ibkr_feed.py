@@ -91,6 +91,11 @@ class IbkrMarketDataFeed:
         self._stale_threshold_ms = stale_threshold_ms
         self._symbol_liveness: dict[str, _SymbolLiveness] = {}
 
+    @property
+    def capability_account_id(self) -> str | None:
+        """Expose the IBKR account that owns this feed's session evidence."""
+        return self._client.connected_account
+
     async def stream_bars(
         self,
         symbol: str,
