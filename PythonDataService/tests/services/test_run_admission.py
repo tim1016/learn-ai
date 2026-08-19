@@ -11,6 +11,11 @@ from app.broker.alpaca.clerk.models import (
     CustodyExposureFact,
     HoldState,
 )
+from app.schemas.market_liveness import (
+    MarketClockLivenessEvidence,
+    MarketLivenessFact,
+    SymbolTradingStatusEvidence,
+)
 from app.schemas.run_admission import (
     MarketDataAdmissionFact,
     ResumeCheckpointAdmissionFact,
@@ -19,6 +24,7 @@ from app.schemas.run_admission import (
     StartRunFacts,
     StartRuntimeAdmissionFact,
 )
+from app.services.market_liveness import compose_market_liveness
 from app.services.run_admission import evaluate_run_admission
 
 _NOW = 1_700_000_010_000
@@ -30,6 +36,8 @@ def _bot(
     process_state: str = "ABSENT",
     market_state: str = "AVAILABLE",
     runtime_state: str = "READY",
+    liveness_state: str = "TRADABLE",
+    scheduled_phase: str = "UNKNOWN",
     observed_at_ms: int = _NOW - 1_000,
 ) -> StartRunFacts:
     return StartRunFacts(
@@ -54,7 +62,9 @@ def _bot(
             last_bar_ms=None,
             observed_at_ms=observed_at_ms,
             reason=None,
+            scheduled_phase=scheduled_phase,
         ),
+        market_liveness=_liveness(liveness_state, observed_at_ms=observed_at_ms),
     )
 
 
@@ -94,6 +104,34 @@ def _clerk(
     )
 
 
+def _liveness(state: str = "TRADABLE", *, observed_at_ms: int) -> MarketLivenessFact:
+    clock_state = "CLOSED" if state == "CLOSED" else "OPEN"
+    symbol_status = (
+        None
+        if state == "CLOSED"
+        else SymbolTradingStatusEvidence(
+            symbol="SPY",
+            state=state,
+            source="test.symbol-status",
+            observed_at_ms=observed_at_ms,
+            source_timestamp_ms=observed_at_ms,
+        )
+    )
+    return compose_market_liveness(
+        "SPY",
+        now_ms=observed_at_ms,
+        market_clock=MarketClockLivenessEvidence(
+            state=clock_state,
+            source="test.clock",
+            observed_at_ms=observed_at_ms,
+            vendor_timestamp_ms=observed_at_ms,
+        ),
+        connected=True,
+        connection_changed_at_ms=observed_at_ms,
+        symbol_status=symbol_status,
+    )
+
+
 def _resume_bot(
     *,
     process_state: str = "EXITED",
@@ -124,6 +162,7 @@ def _resume_bot(
             feed_id="alpaca-feed",
             observed_at_ms=_NOW - 1_000,
         ),
+        market_liveness=_liveness(observed_at_ms=_NOW - 1_000),
         desired_state=desired_state,
         phase=phase,
         carryover_policy="ALLOW",
@@ -145,9 +184,36 @@ def test_start_admission_allows_only_proven_absence_and_flat_custody() -> None:
         "runtime": 1_000,
         "process": 1_000,
         "market_data": 1_000,
+        "market_liveness": 1_000,
         "clerk": 500,
     }
     assert "clerk:paper-account:7" in decision.evidence_refs
+
+
+def test_start_admission_blocks_fresh_market_wide_closed_evidence() -> None:
+    decision = evaluate_run_admission(
+        _bot(liveness_state="CLOSED"),
+        _clerk(),
+        evaluated_at_ms=_NOW,
+    )
+
+    assert decision.allowed is False
+    assert decision.reason_code == "MARKET_LIVENESS_CLOSED"
+
+
+def test_start_admission_blocks_market_wide_closed_even_during_scheduled_rth() -> None:
+    """#1671 AC4: scheduled RTH must never override fresh live evidence that
+    the market is actually closed (e.g. an emergency early close) — the
+    calendar and the broker's live clock can disagree, and live evidence
+    wins for the admission decision."""
+    decision = evaluate_run_admission(
+        _bot(liveness_state="CLOSED", scheduled_phase="RTH"),
+        _clerk(),
+        evaluated_at_ms=_NOW,
+    )
+
+    assert decision.allowed is False
+    assert decision.reason_code == "MARKET_LIVENESS_CLOSED"
 
 
 def test_start_admission_blocks_unknown_process_state() -> None:

@@ -182,7 +182,7 @@
               <tbody>
                 @for (ins of insightRecords; track ins.id) {
                   <tr>
-                    <td class="mono">{{ formatTime(ins.generated_time) }}</td>
+                    <td class="mono">{{ ins.generated_at_ms | timestampDisplay: 'local':'datetime' }}</td>
                     <td><app-asset-identity [symbol]="ins.symbol" size="sm" /></td>
                     <td [class]="ins.direction">{{ directionLabel(ins.direction) }}</td>
                     <td>{{ ins.confidence !== null ? pct(ins.confidence) : '—' }}</td>

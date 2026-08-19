@@ -28,6 +28,7 @@ from app.services.dataset_service import (
     fetch_bars_chunks_raw,
 )
 from app.services.polygon_client import PolygonClientService
+from app.utils.timestamps import datetime_at_ms
 
 __all__ = [
     "CanonicalBarsError",
@@ -342,7 +343,7 @@ def _assert_window_complete(
         bars = grouped[d]
         bar_minutes: set[int] = set()
         for tb in bars:
-            et_dt = tb.time.astimezone(_ET)
+            et_dt = datetime_at_ms(tb.start_ms, tz=_ET)
             bar_minutes.add(et_dt.hour * 60 + et_dt.minute)
 
         window = session_window_for_date(d)

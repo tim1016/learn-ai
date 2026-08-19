@@ -10,10 +10,8 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
-from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Protocol
-from zoneinfo import ZoneInfo
 
 from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
@@ -32,6 +30,9 @@ from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
 from app.marketdata.feed import MarketDataBar, MarketDataFeed
 from app.schemas.broker_bots import AlpacaPaperStrategyKey
+from app.schemas.market_liveness import MarketLivenessFact
+from app.services.broker_capability_service import extended_phase_proven_at_ms
+from app.services.market_liveness import liveness_blocks_entry, market_liveness_fact
 from app.utils.timestamps import now_ms_utc
 
 if TYPE_CHECKING:
@@ -40,7 +41,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_NY = ZoneInfo("America/New_York")
 _EFFECT_PURPOSE_BY_INTENT = {
     SignalIntentKind.ENTER: EffectPurpose.ENTER,
     SignalIntentKind.EXIT: EffectPurpose.EXIT,
@@ -64,6 +64,15 @@ class StrategyEvaluation:
 
     bar: MarketDataBar
     intents: tuple[SignalIntent, ...]
+    # Undoes the strategy's own ENTER-time state mutation when the caller
+    # blocks this evaluation's ENTER intent after signal emission (#1671
+    # AC6). Both signal generators commit lifecycle state (an active
+    # cycle / an open position) unconditionally at emission time, before
+    # the liveness gate has a chance to veto — without this, a blocked
+    # ENTER still leaves the strategy believing it holds a position, and
+    # the later EXIT it emits has no real custody to close, crashing the
+    # run with ``MissingEntryCustodyError``.
+    rollback_blocked_entry: Callable[[], None]
 
 
 class _EffectReceipt(Protocol):
@@ -81,12 +90,33 @@ class _RecordingSignalIntentExecutor:
         return
 
 
+def _liveness_blocks_entry(
+    binding: BrokerBotBinding,
+    account_id: str,
+    liveness: MarketLivenessFact,
+) -> bool:
+    """Decide whether the live liveness fact should block this ENTER.
+
+    Thin binding-aware wrapper around the shared
+    ``market_liveness.liveness_blocks_entry`` predicate — also used by the
+    Clerk's own submission-boundary recheck in ``runtime.py`` — so the two
+    can never silently diverge (#1671).
+    """
+    return liveness_blocks_entry(
+        liveness,
+        use_rth=binding.use_rth,
+        extended_phase_proven=lambda: extended_phase_proven_at_ms(
+            now_ms=now_ms_utc(), symbol=binding.symbol, account_id=account_id
+        ),
+    )
+
+
 def _engine_bar(bar: MarketDataBar) -> TradeBar:
     """Translate the broker-neutral wire bar into the canonical engine bar."""
     return TradeBar(
         symbol=bar.symbol,
-        time=datetime.fromtimestamp(bar.start_ms / 1000, tz=_NY),
-        end_time=datetime.fromtimestamp(bar.end_ms / 1000, tz=_NY),
+        start_ms=bar.start_ms,
+        end_ms=bar.end_ms,
         open=bar.open,
         high=bar.high,
         low=bar.low,
@@ -118,7 +148,7 @@ async def _deployment_validation_evaluations(
                 ),
             )
         )
-        yield StrategyEvaluation(bar=bar, intents=intents)
+        yield StrategyEvaluation(bar=bar, intents=intents, rollback_blocked_entry=kernel.rollback_blocked_entry)
 
 
 async def _ema_crossover_evaluations(
@@ -140,7 +170,7 @@ async def _ema_crossover_evaluations(
 
     async for market_bar in feed.stream_bars(binding.symbol, use_rth=binding.use_rth):
         bar = _engine_bar(market_bar)
-        context.current_time = bar.end_time
+        context.current_time_ms = bar.end_ms
         strategy.on_minute_bar(bar)
         for consolidator in context.get_consolidators(bar.symbol):
             consolidator.update(bar)
@@ -150,7 +180,11 @@ async def _ema_crossover_evaluations(
         # charting. This adapter is long-lived and has no chart consumer, so
         # release each emitted bar after the strategy has processed it.
         context.consolidated_bars.clear()
-        yield StrategyEvaluation(bar=market_bar, intents=intents)
+        yield StrategyEvaluation(
+            bar=market_bar,
+            intents=intents,
+            rollback_blocked_entry=strategy.rollback_blocked_entry,
+        )
 
 
 async def strategy_evaluations(
@@ -179,9 +213,7 @@ _StrategyEvaluationStream = Callable[
     ["BrokerBotBinding", MarketDataFeed],
     AsyncIterator[StrategyEvaluation],
 ]
-_STRATEGY_EVALUATION_STREAMS: dict[
-    AlpacaPaperStrategyKey, _StrategyEvaluationStream
-] = {
+_STRATEGY_EVALUATION_STREAMS: dict[AlpacaPaperStrategyKey, _StrategyEvaluationStream] = {
     AlpacaPaperStrategyKey.DEPLOYMENT_VALIDATION: _deployment_validation_evaluations,
     AlpacaPaperStrategyKey.EMA_CROSSOVER_SIGNAL: _ema_crossover_evaluations,
 }
@@ -223,15 +255,46 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
             continue
         intent = evaluation.intents[0]
         intent_id = f"{intent.bar_close_ms}:{intent.kind.value}"
+        # The liveness gate applies only to ENTER — creating new exposure.
+        # EXIT is deliberately exempt and always reaches the Clerk unblocked:
+        # an emergency risk-reduction close must never be held hostage by
+        # missing/stale liveness evidence (#1671 AC3). If a distinct
+        # cancellation primitive is ever added, it must be exempted the
+        # same way for the same reason.
+        if intent.kind is SignalIntentKind.ENTER:
+            liveness = market_liveness_fact(binding.symbol, now_ms_utc())
+            if _liveness_blocks_entry(binding, account_id, liveness):
+                # Undo the ENTER-time state mutation the strategy already
+                # committed at signal emission — otherwise it believes it
+                # holds a position it was never actually granted, and its
+                # later EXIT has no real custody to close (#1671 AC6).
+                evaluation.rollback_blocked_entry()
+                _append_decision_receipt(
+                    decision_receipts,
+                    binding=binding,
+                    evaluation=evaluation,
+                    outcome="blocked",
+                    reason_code=liveness.reason_code,
+                    intent_id=intent_id,
+                    liveness=liveness,
+                )
+                logger.warning(
+                    "Trade bot blocked new exposure on live market-liveness evidence",
+                    extra={
+                        "action": "bot_market_liveness_blocked",
+                        "strategy_instance_id": binding.strategy_instance_id,
+                        "strategy_key": binding.strategy_key,
+                        "symbol": binding.symbol,
+                        "market_liveness_state": liveness.state,
+                        "reason_code": liveness.reason_code,
+                    },
+                )
+                continue
         _append_decision_receipt(
             decision_receipts,
             binding=binding,
             evaluation=evaluation,
-            outcome=(
-                "enter_intent"
-                if intent.kind is SignalIntentKind.ENTER
-                else "exit_intent"
-            ),
+            outcome=("enter_intent" if intent.kind is SignalIntentKind.ENTER else "exit_intent"),
             reason_code=f"STRATEGY_{intent.kind.value}",
             intent_id=intent_id,
         )
@@ -253,6 +316,7 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
             purpose=_EFFECT_PURPOSE_BY_INTENT[intent.kind],
             action_plan=binding.action_plan,
             quantity=binding.quantity,
+            use_rth=binding.use_rth,
         )
         if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
             _record_blocked_decision(
@@ -284,12 +348,19 @@ def _append_decision_receipt(
     reason_code: str,
     intent_id: str = "",
     order_ref: str = "",
+    liveness: MarketLivenessFact | None = None,
 ) -> None:
+    facts: dict[str, object] = {
+        "bar_ref": f"{binding.symbol}@{evaluation.bar.end_ms}",
+        "reason_code": reason_code,
+    }
+    if liveness is not None:
+        facts["market_liveness"] = liveness.model_dump(mode="json")
     receipts.append(
         outcome=outcome,
         symbol=binding.symbol,
         observed_at_ms=now_ms_utc(),
-        facts={"bar_ref": f"{binding.symbol}@{evaluation.bar.end_ms}", "reason_code": reason_code},
+        facts=facts,
         intent_id=intent_id or None,
         order_ref=order_ref or None,
     )

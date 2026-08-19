@@ -31,6 +31,7 @@ import zipfile
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -38,7 +39,9 @@ from app.engine.data.lean_format import (
     PRICE_SCALE,
     LeanDailyDataReader,
 )
+from app.utils.timestamps import datetime_at_ms
 
+EASTERN = ZoneInfo("America/New_York")
 LEAN_DATA_ROOT = Path("/sessions/ecstatic-hopeful-volta/mnt/Lean/Data")
 SYMBOL = "aapl"
 
@@ -89,8 +92,9 @@ def run_parity_test() -> None:
     mismatches: list[str] = []
     for bar, raw in zip(history, raw_rows, strict=False):
         raw_date, raw_o, raw_h, raw_l, raw_c, raw_v = raw
-        if bar.time.date() != raw_date:
-            mismatches.append(f"date: reader={bar.time.date()} raw={raw_date}")
+        bar_date = datetime_at_ms(bar.start_ms, tz=EASTERN).date()
+        if bar_date != raw_date:
+            mismatches.append(f"date: reader={bar_date} raw={raw_date}")
             continue
         # Round-trip through the scale factor. Because we parse via
         # ``Decimal(o) / PRICE_SCALE`` the reverse multiplication is exact.
@@ -120,11 +124,13 @@ def run_parity_test() -> None:
     if len(narrow) != 3:
         print(f"FAIL: expected 3 bars in 2021-03-29..2021-03-31, got {len(narrow)}")
         sys.exit(1)
-    if narrow[0].time.date() != date(2021, 3, 29):
-        print(f"FAIL: narrow range start {narrow[0].time.date()} != 2021-03-29")
+    narrow_start_date = datetime_at_ms(narrow[0].start_ms, tz=EASTERN).date()
+    narrow_end_date = datetime_at_ms(narrow[-1].start_ms, tz=EASTERN).date()
+    if narrow_start_date != date(2021, 3, 29):
+        print(f"FAIL: narrow range start {narrow_start_date} != 2021-03-29")
         sys.exit(1)
-    if narrow[-1].time.date() != date(2021, 3, 31):
-        print(f"FAIL: narrow range end {narrow[-1].time.date()} != 2021-03-31")
+    if narrow_end_date != date(2021, 3, 31):
+        print(f"FAIL: narrow range end {narrow_end_date} != 2021-03-31")
         sys.exit(1)
 
     # -------------------------------------------------------------------- #
@@ -135,8 +141,8 @@ def run_parity_test() -> None:
     if len(dst_window) != 2:  # 03-12 Fri, 03-15 Mon (13/14 are weekend)
         print(f"FAIL: expected 2 bars across DST boundary (Fri+Mon), got {len(dst_window)}")
         sys.exit(1)
-    pre_offset = dst_window[0].time.utcoffset()
-    post_offset = dst_window[-1].time.utcoffset()
+    pre_offset = datetime_at_ms(dst_window[0].start_ms, tz=EASTERN).utcoffset()
+    post_offset = datetime_at_ms(dst_window[-1].start_ms, tz=EASTERN).utcoffset()
     if pre_offset is None or post_offset is None:
         print("FAIL: DST boundary bars have naive datetimes")
         sys.exit(1)
@@ -151,9 +157,9 @@ def run_parity_test() -> None:
     # 4. End-time should mark the following midnight (period = 1 day).
     # -------------------------------------------------------------------- #
     first = history[0]
-    period = first.end_time - first.time
-    if period.total_seconds() != 86400:
-        print(f"FAIL: daily bar period is {period.total_seconds()}s, expected 86400")
+    period_ms = first.end_ms - first.start_ms
+    if period_ms != 86_400_000:
+        print(f"FAIL: daily bar period is {period_ms / 1000}s, expected 86400")
         sys.exit(1)
 
     # -------------------------------------------------------------------- #

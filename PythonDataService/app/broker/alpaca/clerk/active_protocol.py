@@ -71,6 +71,7 @@ class ActiveAlpacaClerk(Protocol):
         purpose: EffectPurpose,
         action_plan: ActionPlan,
         quantity: int,
+        use_rth: bool = True,
     ) -> EffectOperationReceipt: ...
 
     async def reconcile_once(self) -> ReconciliationVerdict: ...

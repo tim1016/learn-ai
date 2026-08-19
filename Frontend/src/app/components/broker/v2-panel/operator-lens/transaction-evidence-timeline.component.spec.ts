@@ -31,7 +31,7 @@ function entry(seq: number, summary: string): EvidenceEntry {
 
 function page(
   transactionRef: string,
-  entries: readonly EvidenceEntry[],
+  entries: EvidenceEntry[],
   nextCursor: string | number | null = null,
   totalEntries = nextCursor === null ? entries.length : entries.length + 1,
 ): EvidencePage {

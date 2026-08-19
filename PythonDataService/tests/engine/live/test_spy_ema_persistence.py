@@ -16,6 +16,7 @@ from decimal import Decimal
 from unittest.mock import MagicMock
 
 from app.engine.strategy.algorithms.spy_ema_crossover import SpyEmaCrossoverAlgorithm
+from app.utils.timestamps import to_ms_utc
 
 
 def _build_warmed_strategy() -> SpyEmaCrossoverAlgorithm:
@@ -32,9 +33,10 @@ def _build_warmed_strategy() -> SpyEmaCrossoverAlgorithm:
     for i in range(20):
         bar_time = t0 + timedelta(minutes=15 * i)
         close = Decimal(400 + i)
-        strat._ema5.update(bar_time, close)
-        strat._ema10.update(bar_time, close)
-        strat._rsi14.update(bar_time, close)
+        bar_time_ms = to_ms_utc(bar_time)
+        strat._ema5.update(bar_time_ms, close)
+        strat._ema10.update(bar_time_ms, close)
+        strat._rsi14.update(bar_time_ms, close)
     return strat
 
 
@@ -67,7 +69,7 @@ def test_report_state_returns_none_when_open_trade() -> None:
 
     strat = _build_warmed_strategy()
     strat._open_trade = _OpenTrade(
-        entry_time=datetime(2026, 5, 18, 14, 0, tzinfo=UTC),
+        entry_time_ms=to_ms_utc(datetime(2026, 5, 18, 14, 0, tzinfo=UTC)),
         entry_price=Decimal("410"),
         quantity=140,
         ema5=Decimal("410"),
@@ -100,9 +102,10 @@ def test_restore_state_round_trip_produces_bit_identical_next_value() -> None:
     # Path A: continue src directly.
     next_time = datetime(2026, 5, 18, 14, 0, tzinfo=UTC) + timedelta(minutes=15 * 20)
     next_close = Decimal("420")
-    src._ema5.update(next_time, next_close)
-    src._ema10.update(next_time, next_close)
-    src._rsi14.update(next_time, next_close)
+    next_time_ms = to_ms_utc(next_time)
+    src._ema5.update(next_time_ms, next_close)
+    src._ema10.update(next_time_ms, next_close)
+    src._rsi14.update(next_time_ms, next_close)
     expected = (src._ema5.current_value, src._ema10.current_value, src._rsi14.current_value)
 
     # Path B: fresh strategy + restore + feed the same bar.
@@ -111,9 +114,9 @@ def test_restore_state_round_trip_produces_bit_identical_next_value() -> None:
     dst.ctx.add_equity.return_value = "SPY"
     dst.initialize()
     dst.restore_state_from_persistence(payload)
-    dst._ema5.update(next_time, next_close)
-    dst._ema10.update(next_time, next_close)
-    dst._rsi14.update(next_time, next_close)
+    dst._ema5.update(next_time_ms, next_close)
+    dst._ema10.update(next_time_ms, next_close)
+    dst._rsi14.update(next_time_ms, next_close)
     actual = (dst._ema5.current_value, dst._ema10.current_value, dst._rsi14.current_value)
 
     assert actual == expected, f"bit-identical equivalence broken: {actual} != {expected}"

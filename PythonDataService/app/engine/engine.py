@@ -12,7 +12,7 @@ for the reproducibility details this engine guarantees.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 
 from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
@@ -28,11 +28,12 @@ from app.engine.execution.portfolio import Portfolio
 from app.engine.execution.signal_intent_executor import SignalSymbolExecutor
 from app.engine.execution.sizing import SimpleFloorSizing, SizingModel
 from app.engine.strategy.base import Strategy, StrategyContext
+from app.utils.timestamps import ny_datetime
 
 
 @dataclass
 class EquitySnapshot:
-    timestamp: datetime
+    timestamp_ms: int
     equity: Decimal
     cash: Decimal
     holdings_value: Decimal
@@ -48,7 +49,7 @@ class _ActiveBracket:
     quantity: int  # signed — matches the entry fill_quantity
     take_profit_price: Decimal | None
     stop_loss_price: Decimal | None
-    fill_time: datetime
+    fill_time_ms: int
 
 
 @dataclass
@@ -133,7 +134,7 @@ class BacktestEngine:
             for bracket in active_brackets:
                 # Skip bars at or before the fill — those belong to the
                 # entry's own period, not the monitoring window.
-                if fired_bar.end_time <= bracket.fill_time:
+                if fired_bar.end_ms <= bracket.fill_time_ms:
                     still_active.append(bracket)
                     continue
                 if fired_bar.symbol != bracket.symbol:
@@ -156,7 +157,7 @@ class BacktestEngine:
                 exit_event = OrderEvent(
                     order_id=portfolio._next_id(),
                     symbol=bracket.symbol,
-                    time=fired_bar.end_time,
+                    filled_at_ms=fired_bar.end_ms,
                     fill_price=resolution.fill_price,
                     fill_quantity=exit_quantity,
                     direction=exit_direction,
@@ -181,7 +182,7 @@ class BacktestEngine:
                     quantity=event.fill_quantity,
                     take_profit_price=order.take_profit_price,
                     stop_loss_price=order.stop_loss_price,
-                    fill_time=event.time,
+                    fill_time_ms=event.filled_at_ms,
                 )
             )
 
@@ -234,7 +235,7 @@ class BacktestEngine:
             return OrderEvent(
                 order_id=portfolio._next_id(),
                 symbol=symbol,
-                time=bar.end_time,
+                filled_at_ms=bar.end_ms,
                 fill_price=fill_price,
                 fill_quantity=close_qty,
                 direction=direction,
@@ -259,8 +260,8 @@ class BacktestEngine:
             # defeat the whole cutoff.
             if (
                 self.execution_config.force_flat_at is not None
-                and minute_bar.time.time() >= self.execution_config.force_flat_at
-                and minute_bar.time.date() != last_force_flat_date
+                and ny_datetime(minute_bar.start_ms).time() >= self.execution_config.force_flat_at
+                and ny_datetime(minute_bar.start_ms).date() != last_force_flat_date
             ):
                 portfolio.clear_pending()
                 pending_fills.clear()
@@ -274,7 +275,7 @@ class BacktestEngine:
                     order_events.append(event)
                     strategy.on_order_event(event)
                 strategy.on_force_flat()
-                last_force_flat_date = minute_bar.time.date()
+                last_force_flat_date = ny_datetime(minute_bar.start_ms).date()
 
             # ----- Fill any deferred orders (NEXT_BAR_OPEN / NEXT_SESSION_OPEN)
             # with this bar as next_bar. DEFERRED_FILL_MODES is the single
@@ -299,7 +300,7 @@ class BacktestEngine:
             #       current_time is set first so a strategy that places orders
             #       from this hook (before the first consolidated bar) does not
             #       hit the None-time guard in StrategyContext.set_holdings.
-            ctx.current_time = minute_bar.end_time
+            ctx.current_time_ms = minute_bar.end_ms
             strategy.on_minute_bar(minute_bar)
 
             # ----- Feed consolidators. Consolidators will invoke strategy handlers
@@ -317,14 +318,14 @@ class BacktestEngine:
             # against opening new exposure late, not against closing.
             if self.execution_config.session_entry_cutoff is not None and portfolio.pending_orders:
                 cutoff = self.execution_config.session_entry_cutoff
-                if minute_bar.time.time() >= cutoff:
+                if ny_datetime(minute_bar.start_ms).time() >= cutoff:
                     kept: list[Order] = []
                     for order in portfolio.pending_orders:
                         if _is_entry_order(order):
                             ctx.log(
                                 f"[SESSION CUTOFF] Dropped entry order "
                                 f"{order.order_id} for {order.symbol} qty={order.quantity} "
-                                f"at {minute_bar.time.time()} >= {cutoff}"
+                                f"at {ny_datetime(minute_bar.start_ms).time()} >= {cutoff}"
                             )
                             continue
                         kept.append(order)
@@ -408,7 +409,7 @@ class BacktestEngine:
                     event = OrderEvent(
                         order_id=order.order_id,
                         symbol=order.symbol,
-                        time=minute_bar.end_time,
+                        filled_at_ms=minute_bar.end_ms,
                         fill_price=order.limit_price,
                         fill_quantity=order.quantity,
                         direction=order.direction,
@@ -423,11 +424,11 @@ class BacktestEngine:
 
             # ----- Score any expired insights against current prices.
             current_prices = {sym: portfolio.reference_price.get(sym, Decimal(0)) for sym in ctx.symbols}
-            ctx.insight_manager.step(minute_bar.end_time, current_prices)
+            ctx.insight_manager.step(minute_bar.end_ms, current_prices)
 
             equity_curve.append(
                 EquitySnapshot(
-                    timestamp=minute_bar.end_time,
+                    timestamp_ms=minute_bar.end_ms,
                     equity=portfolio.total_value(),
                     cash=portfolio.cash,
                     holdings_value=portfolio.total_value() - portfolio.cash,
@@ -449,7 +450,7 @@ class BacktestEngine:
         # still dropped — matching LEAN, which does not emit partial bars.
         if previous_minute_bar is not None:
             for consolidator in ctx.get_consolidators(symbol):
-                consolidator.scan(previous_minute_bar.end_time)
+                consolidator.scan(previous_minute_bar.end_ms)
             # A market order submitted from the final consolidated bar's
             # handler fills immediately against that bar in SIGNAL_BAR_CLOSE
             # mode — the same as any in-loop bar, mirroring LEAN's
@@ -505,13 +506,13 @@ class BacktestEngine:
         if previous_minute_bar is not None:
             final_prices = {sym: portfolio.reference_price.get(sym, Decimal(0)) for sym in ctx.symbols}
             # Force-expire active insights so they all get scored.
-            for insight in ctx.insight_manager.get_active_insights(previous_minute_bar.end_time):
+            for insight in ctx.insight_manager.get_active_insights(previous_minute_bar.end_ms):
                 if not insight.score.is_final_score:
                     insight.reference_value_final = final_prices.get(insight.symbol, Decimal(0))
                     from app.engine.framework.insight_scorer import DefaultInsightScoreFunction
 
                     DefaultInsightScoreFunction().score(insight)
-                    insight.score.finalize(previous_minute_bar.end_time)
+                    insight.score.finalize(previous_minute_bar.end_ms)
 
         # Build insight summary.
         insight_summary = ctx.insight_manager.get_summary()

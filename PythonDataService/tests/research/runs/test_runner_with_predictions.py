@@ -166,7 +166,7 @@ def _harvest_consolidated_end_times_ms(
             resolution_minutes=resolution_minutes,
         )
     )
-    return [int(b.end_time.timestamp() * 1000) for b in bars]
+    return [b.end_ms for b in bars]
 
 
 @pytest.fixture

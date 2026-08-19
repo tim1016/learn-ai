@@ -1,5 +1,5 @@
 export type TimestampDisplayMode = 'local' | 'et' | 'date-et' | 'date-utc';
-export type TimestampGranularity = 'date' | 'time' | 'datetime';
+export type TimestampGranularity = 'date' | 'time' | 'datetime' | 'chart';
 
 export interface TimestampDisplayOptions {
   mode?: TimestampDisplayMode;
@@ -29,23 +29,42 @@ const PARTS_OPTIONS: Intl.DateTimeFormatOptions = {
   second: '2-digit',
   hourCycle: 'h23',
 };
+// Chart-readout shape (e.g. a candlestick crosshair): no year, short month
+// name, seconds precision — distinct enough from PARTS_OPTIONS's zero-padded
+// numeric month that it needs its own formatter options.
+const CHART_PARTS_OPTIONS: Intl.DateTimeFormatOptions = {
+  month: 'short',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hourCycle: 'h23',
+};
 
 function isFiniteMs(value: number | null | undefined): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
-function getParts(ms: number, timeZone?: string): WallClockParts {
+function formatParts(
+  ms: number,
+  formatOptions: Intl.DateTimeFormatOptions,
+  timeZone?: string,
+): Partial<Record<Intl.DateTimeFormatPartTypes, string>> {
   const formatter = new Intl.DateTimeFormat(
     'en-US',
-    timeZone ? { ...PARTS_OPTIONS, timeZone } : PARTS_OPTIONS,
+    timeZone ? { ...formatOptions, timeZone } : formatOptions,
   );
-  const out: Partial<WallClockParts> = {};
+  const out: Partial<Record<Intl.DateTimeFormatPartTypes, string>> = {};
   for (const part of formatter.formatToParts(new Date(ms))) {
     if (part.type !== 'literal') {
-      out[part.type as keyof WallClockParts] = part.value;
+      out[part.type] = part.value;
     }
   }
-  return out as WallClockParts;
+  return out;
+}
+
+function getParts(ms: number, timeZone?: string): WallClockParts {
+  return formatParts(ms, PARTS_OPTIONS, timeZone) as WallClockParts;
 }
 
 function joinParts(parts: WallClockParts, granularity: TimestampGranularity): string {
@@ -56,6 +75,10 @@ function joinParts(parts: WallClockParts, granularity: TimestampGranularity): st
     return `${parts.hour}:${parts.minute}:${parts.second}`;
   }
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
+}
+
+function joinChartParts(parts: Partial<Record<Intl.DateTimeFormatPartTypes, string>>): string {
+  return `${parts.month} ${parts.day}, ${parts.hour}:${parts.minute}:${parts.second}`;
 }
 
 export function formatTimestampDisplay(
@@ -74,7 +97,9 @@ export function formatTimestampDisplay(
     : mode === 'date-utc'
       ? UTC_ZONE
       : ET_ZONE;
-  const text = joinParts(getParts(value, timeZone), granularity);
+  const text = granularity === 'chart'
+    ? joinChartParts(formatParts(value, CHART_PARTS_OPTIONS, timeZone))
+    : joinParts(getParts(value, timeZone), granularity);
   return mode === 'et' ? `${text} ET` : text;
 }
 

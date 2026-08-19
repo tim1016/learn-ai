@@ -19,6 +19,7 @@ import csv
 import json
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,9 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+import app.broker.alpaca.clerk.sqlite.runtime as clerk_runtime
+import app.services.bot_runner as bot_runner
+import app.services.bot_trade_strategy as bot_trade_strategy
 from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.active_protocol import ClerkAdmissionSnapshotStaleError
 from app.broker.alpaca.clerk.models import (
@@ -56,6 +60,10 @@ from app.engine.strategy.base import StrategyContext
 from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeedError
 from app.schemas.action_plan import ActionPlan
 from app.schemas.broker_bots import AlpacaPaperStrategyKey, BotProcessFact
+from app.schemas.market_liveness import (
+    MarketClockLivenessEvidence,
+    SymbolTradingStatusEvidence,
+)
 from app.services.bot_binding_repository import (
     BrokerBotBinding,
     RunOutcomeConflictError,
@@ -81,12 +89,50 @@ from app.services.bot_runner import (
 from app.services.bot_runner_errors import InvalidRunHistoryCursorError
 from app.services.bot_runtime import PauseAwareFeed
 from app.services.bot_trade_strategy import supported_alpaca_paper_strategy_keys
+from app.services.market_liveness import compose_market_liveness, unknown_market_liveness
 from app.utils.timestamps import now_ms_utc
 
 _SID = "alpaca-skeleton-1"
 _T0 = 1_700_000_000_000
 _RTH_MS = 1_700_060_400_000
 _CLOSED_MS = 1_700_096_400_000
+
+
+def _tradable_market_liveness(symbol: str, observed_at_ms: int):
+    return compose_market_liveness(
+        symbol,
+        now_ms=observed_at_ms,
+        market_clock=MarketClockLivenessEvidence(
+            state="OPEN",
+            source="test.clock",
+            observed_at_ms=observed_at_ms,
+            vendor_timestamp_ms=observed_at_ms,
+        ),
+        connected=True,
+        connection_changed_at_ms=observed_at_ms,
+        symbol_status=SymbolTradingStatusEvidence(
+            symbol=symbol,
+            state="TRADABLE",
+            source="test.symbol-status",
+            observed_at_ms=observed_at_ms,
+            source_timestamp_ms=observed_at_ms,
+        ),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _fresh_live_market_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bot_runner, "market_liveness_fact", _tradable_market_liveness)
+    monkeypatch.setattr(
+        bot_trade_strategy,
+        "market_liveness_fact",
+        _tradable_market_liveness,
+    )
+    # #1671: the Clerk's own submission-boundary recheck (runtime.py) reads
+    # this module's import of the same name — a separate binding from
+    # bot_trade_strategy's, so it needs its own patch or it falls through to
+    # the real (unconfigured, fail-closed) store and every ENTER is rejected.
+    monkeypatch.setattr(clerk_runtime, "market_liveness_fact", _tradable_market_liveness)
 
 
 def test_every_admitted_alpaca_paper_strategy_has_a_runtime() -> None:
@@ -107,6 +153,16 @@ def _bar(start_ms: int, symbol: str = "SPY") -> MarketDataBar:
         feed_id="ibkr",
         session_phase="RTH",
     )
+
+
+def test_live_market_bar_translates_to_numeric_engine_timestamps() -> None:
+    from app.services.bot_trade_strategy import _engine_bar
+
+    source = _bar(_RTH_MS)
+    engine_bar = _engine_bar(source)
+
+    assert (engine_bar.start_ms, engine_bar.end_ms) == (source.start_ms, source.end_ms)
+    assert not any(isinstance(value, datetime) for value in vars(engine_bar).values())
 
 
 class _FakeFeed:
@@ -281,8 +337,9 @@ class _CustodyClerk:
         purpose: EffectPurpose,
         action_plan: ActionPlan,
         quantity: int,
+        use_rth: bool = True,
     ) -> EffectOperationReceipt:
-        del strategy_instance_id, run_id, decision_id, purpose, action_plan, quantity
+        del strategy_instance_id, run_id, decision_id, purpose, action_plan, quantity, use_rth
         raise AssertionError("custody-only test Clerk cannot execute effects")
 
     async def stop_strategy_run(
@@ -586,6 +643,7 @@ def _registry(
         carryover_allowed=carryover_allowed,
         start_custody_guard=start_custody_guard or _flat_start_guard,
         now_ms=now_ms,
+        market_liveness=_tradable_market_liveness,
     )
 
 
@@ -2303,7 +2361,9 @@ class _FakeClerk:
         purpose,
         action_plan,
         quantity: int,
+        use_rth: bool = True,
     ) -> _FakeEffectResult:
+        del use_rth
         if self._should_raise is not None:
             raise self._should_raise
 
@@ -2443,6 +2503,288 @@ async def test_sqlite_trade_bot_records_every_evaluated_bar_for_panel_health(
     finally:
         set_alpaca_clerk(None)
         repo.close()
+
+
+@pytest.mark.asyncio
+async def test_unknown_liveness_blocks_entry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
+    repo.register_strategy_instance(strategy_instance_id=_SID, symbol="SPY", config_hash="config-1")
+    clerk = _FakeClerk(repository=repo)
+    clerk.authority_kind = "sqlite"
+    clerk.account_id = "PA-TEST"
+    monkeypatch.setattr(
+        bot_trade_strategy,
+        "market_liveness_fact",
+        lambda symbol, observed_at_ms: unknown_market_liveness(
+            symbol,
+            observed_at_ms=observed_at_ms,
+        ),
+    )
+    bars = [
+        _green_bar(_WIN_START_MS + 60_000),
+        _green_bar(_WIN_START_MS + 120_000),  # ENTER is refused by liveness.
+        _red_bar(_WIN_START_MS + 180_000),
+        _red_bar(_WIN_START_MS + 240_000),
+        _red_bar(_WIN_START_MS + 300_000),
+    ]
+    registry = _registry(tmp_path, _FakeFeed(bars, mode="hold"))
+    set_alpaca_clerk(clerk)
+    try:
+        await registry.deploy(
+            broker="alpaca",
+            strategy_instance_id=_SID,
+            strategy_key="deployment_validation",
+            symbol="SPY",
+            mode="trade",
+            quantity=1,
+        )
+        await _wait_for(lambda: len(repo.decision_receipt_tail(strategy_instance_id=_SID, limit=10)) >= 5)
+        await registry.stop("alpaca", _SID)
+
+        # Rolled back (#1671 AC6): no real entry means no phantom EXIT either.
+        assert clerk.calls == []
+        decisions = repo.decision_receipt_tail(strategy_instance_id=_SID, limit=5)
+        blocked = next(decision for decision in decisions if decision.outcome == "blocked")
+        blocked_facts = json.loads(blocked.facts_json)
+        assert blocked_facts["reason_code"] == "MARKET_LIVENESS_UNAVAILABLE"
+        assert blocked_facts["market_liveness"]["state"] == "UNKNOWN"
+        assert all(decision.outcome in {"blocked", "no_action"} for decision in decisions)
+    finally:
+        set_alpaca_clerk(None)
+        repo.close()
+
+
+@pytest.mark.asyncio
+async def test_halted_liveness_blocks_entry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1671 AC4: a market-wide OPEN clock with a HALTED symbol must never
+    claim tradability at the actual submit-blocking layer (not just at the
+    compose/display layers, which have their own dedicated tests)."""
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
+    repo.register_strategy_instance(strategy_instance_id=_SID, symbol="SPY", config_hash="config-1")
+    clerk = _FakeClerk(repository=repo)
+    clerk.authority_kind = "sqlite"
+    clerk.account_id = "PA-TEST"
+    monkeypatch.setattr(
+        bot_trade_strategy,
+        "market_liveness_fact",
+        lambda symbol, observed_at_ms: compose_market_liveness(
+            symbol,
+            now_ms=observed_at_ms,
+            market_clock=MarketClockLivenessEvidence(
+                state="OPEN",
+                source="test.clock",
+                observed_at_ms=observed_at_ms,
+                vendor_timestamp_ms=observed_at_ms,
+            ),
+            connected=True,
+            connection_changed_at_ms=observed_at_ms,
+            symbol_status=SymbolTradingStatusEvidence(
+                symbol=symbol,
+                state="HALTED",
+                source="test.symbol-status",
+                observed_at_ms=observed_at_ms,
+                source_timestamp_ms=observed_at_ms,
+            ),
+        ),
+    )
+    bars = [
+        _green_bar(_WIN_START_MS + 60_000),
+        _green_bar(_WIN_START_MS + 120_000),  # ENTER is refused by liveness.
+        _red_bar(_WIN_START_MS + 180_000),
+        _red_bar(_WIN_START_MS + 240_000),
+        _red_bar(_WIN_START_MS + 300_000),
+    ]
+    registry = _registry(tmp_path, _FakeFeed(bars, mode="hold"))
+    set_alpaca_clerk(clerk)
+    try:
+        await registry.deploy(
+            broker="alpaca",
+            strategy_instance_id=_SID,
+            strategy_key="deployment_validation",
+            symbol="SPY",
+            mode="trade",
+            quantity=1,
+        )
+        await _wait_for(lambda: len(repo.decision_receipt_tail(strategy_instance_id=_SID, limit=10)) >= 5)
+        await registry.stop("alpaca", _SID)
+
+        # No real entry was ever accepted, so no phantom EXIT reaches the
+        # Clerk either — the blocked ENTER's state was rolled back (#1671
+        # AC6); see test_blocked_entry_is_rolled_back_and_can_re_enter for
+        # the regression this rollback specifically targets.
+        assert clerk.calls == []
+        decisions = repo.decision_receipt_tail(strategy_instance_id=_SID, limit=5)
+        blocked = next(decision for decision in decisions if decision.outcome == "blocked")
+        blocked_facts = json.loads(blocked.facts_json)
+        assert blocked_facts["reason_code"] == "SYMBOL_HALTED"
+        assert blocked_facts["market_liveness"]["state"] == "HALTED"
+        assert all(decision.outcome in {"blocked", "no_action"} for decision in decisions)
+    finally:
+        set_alpaca_clerk(None)
+        repo.close()
+
+
+@pytest.mark.asyncio
+async def test_blocked_entry_is_rolled_back_and_can_re_enter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1671 AC6 regression: before the rollback fix, a blocked ENTER left
+    ``DeploymentValidationDecisionKernel._cycle_active`` set, so the *next*
+    green-bar pair was consumed by the stale exit countdown instead of
+    starting a fresh entry attempt — and the phantom EXIT it eventually
+    emitted had no real custody to close, crashing the bot run with
+    ``MissingEntryCustodyError``. With the rollback, the blocked bar leaves
+    no trace: the following two green bars start a clean entry, and the
+    three red bars after that close it out normally."""
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
+    repo.register_strategy_instance(strategy_instance_id=_SID, symbol="SPY", config_hash="config-1")
+    clerk = _FakeClerk(repository=repo)
+    clerk.authority_kind = "sqlite"
+    clerk.account_id = "PA-TEST"
+    # market_liveness_fact is only ever queried on an ENTER intent (#1671
+    # AC3), so the Nth call corresponds exactly to the Nth ENTER attempt —
+    # a reliable way to block just the first one. Bar-relative fixture
+    # constants can't be compared against `observed_at_ms`: the real gate
+    # passes it `now_ms_utc()`, actual wall-clock time, not the bar's.
+    entry_attempts = {"count": 0}
+
+    def liveness(symbol: str, observed_at_ms: int):
+        entry_attempts["count"] += 1
+        if entry_attempts["count"] == 1:
+            return compose_market_liveness(
+                symbol,
+                now_ms=observed_at_ms,
+                market_clock=MarketClockLivenessEvidence(
+                    state="OPEN",
+                    source="test.clock",
+                    observed_at_ms=observed_at_ms,
+                    vendor_timestamp_ms=observed_at_ms,
+                ),
+                connected=True,
+                connection_changed_at_ms=observed_at_ms,
+                symbol_status=SymbolTradingStatusEvidence(
+                    symbol=symbol,
+                    state="HALTED",
+                    source="test.symbol-status",
+                    observed_at_ms=observed_at_ms,
+                    source_timestamp_ms=observed_at_ms,
+                ),
+            )
+        return _tradable_market_liveness(symbol, observed_at_ms)
+
+    monkeypatch.setattr(bot_trade_strategy, "market_liveness_fact", liveness)
+    bars = [
+        _green_bar(_WIN_START_MS + 60_000),
+        _green_bar(_WIN_START_MS + 120_000),  # ENTER attempt #1 — blocked, rolled back.
+        _green_bar(_WIN_START_MS + 180_000),
+        _green_bar(_WIN_START_MS + 240_000),  # ENTER attempt #2 — fresh streak, TRADABLE.
+        _red_bar(_WIN_START_MS + 300_000),
+        _red_bar(_WIN_START_MS + 360_000),
+        _red_bar(_WIN_START_MS + 420_000),  # EXIT for the real entry.
+    ]
+    registry = _registry(tmp_path, _FakeFeed(bars, mode="hold"))
+    set_alpaca_clerk(clerk)
+    try:
+        await registry.deploy(
+            broker="alpaca",
+            strategy_instance_id=_SID,
+            strategy_key="deployment_validation",
+            symbol="SPY",
+            mode="trade",
+            quantity=1,
+        )
+        await _wait_for(lambda: len(clerk.calls) == 2)
+        await registry.stop("alpaca", _SID)
+
+        assert [call["purpose"] for call in clerk.calls] == ["ENTER", "EXIT"]
+    finally:
+        set_alpaca_clerk(None)
+        repo.close()
+
+
+def test_closed_liveness_with_extended_phase_proven_does_not_block_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Alpaca's clock is RTH-only (#1671): a non-RTH binding whose account
+    and instrument have a fresh, proven extended-session capability must not
+    be blocked just because the RTH-only clock reports CLOSED."""
+    from types import SimpleNamespace
+
+    liveness = compose_market_liveness(
+        "SPY",
+        now_ms=1_700_000_000_000,
+        market_clock=MarketClockLivenessEvidence(
+            state="CLOSED",
+            source="test.clock",
+            observed_at_ms=1_700_000_000_000,
+            vendor_timestamp_ms=1_700_000_000_000,
+        ),
+        connected=True,
+        connection_changed_at_ms=1_700_000_000_000,
+        symbol_status=None,
+    )
+    monkeypatch.setattr(bot_trade_strategy, "extended_phase_proven_at_ms", lambda **_kwargs: True)
+    binding = SimpleNamespace(use_rth=False, symbol="SPY")
+
+    assert bot_trade_strategy._liveness_blocks_entry(binding, "PA-TEST", liveness) is False
+
+
+def test_closed_liveness_without_extended_phase_proven_still_blocks_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without a fresh, matching capability the calendar can prove only
+    RTH/CLOSED — CLOSED must still block a non-RTH binding's entry."""
+    from types import SimpleNamespace
+
+    liveness = compose_market_liveness(
+        "SPY",
+        now_ms=1_700_000_000_000,
+        market_clock=MarketClockLivenessEvidence(
+            state="CLOSED",
+            source="test.clock",
+            observed_at_ms=1_700_000_000_000,
+            vendor_timestamp_ms=1_700_000_000_000,
+        ),
+        connected=True,
+        connection_changed_at_ms=1_700_000_000_000,
+        symbol_status=None,
+    )
+    monkeypatch.setattr(bot_trade_strategy, "extended_phase_proven_at_ms", lambda **_kwargs: False)
+    binding = SimpleNamespace(use_rth=False, symbol="SPY")
+
+    assert bot_trade_strategy._liveness_blocks_entry(binding, "PA-TEST", liveness) is True
+
+
+def test_closed_liveness_always_blocks_entry_for_an_rth_only_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An RTH-only binding never consults extended-phase capability — CLOSED
+    blocks unconditionally, matching the previous, unambiguous behavior."""
+    from types import SimpleNamespace
+
+    liveness = compose_market_liveness(
+        "SPY",
+        now_ms=1_700_000_000_000,
+        market_clock=MarketClockLivenessEvidence(
+            state="CLOSED",
+            source="test.clock",
+            observed_at_ms=1_700_000_000_000,
+            vendor_timestamp_ms=1_700_000_000_000,
+        ),
+        connected=True,
+        connection_changed_at_ms=1_700_000_000_000,
+        symbol_status=None,
+    )
+    binding = SimpleNamespace(use_rth=True, symbol="SPY")
+
+    assert bot_trade_strategy._liveness_blocks_entry(binding, "PA-TEST", liveness) is True
 
 
 @pytest.mark.asyncio
@@ -2631,6 +2973,8 @@ async def test_ema_trade_bot_releases_backtest_chart_bars(
 
     assert len(contexts) == 1
     assert contexts[0].consolidated_bars == []
+    assert isinstance(contexts[0].current_time_ms, int)
+    assert not any(isinstance(value, datetime) for value in vars(contexts[0]).values())
 
 
 # ── entry after exactly 2 green bars in-window ────────────────────────────────

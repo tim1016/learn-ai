@@ -9,7 +9,7 @@ statistics dict matches expected values.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -29,6 +29,7 @@ from app.engine.results.statistics import (
     validate_statistics,
     validate_trade_log,
 )
+from app.utils.timestamps import to_ms_utc
 
 
 # ---------------------------------------------------------------------------
@@ -39,47 +40,47 @@ class FakeTrade:
     pnl_pts: Decimal
     pnl_pct: Decimal
     result: str
-    entry_time: datetime | None = None
-    exit_time: datetime | None = None
+    entry_time_ms: int | None = None
+    exit_time_ms: int | None = None
     indicators: dict | None = None
 
 
 def _make_trades() -> list[FakeTrade]:
     """Frozen set of 10 trades with known outcomes."""
-    base = datetime(2024, 1, 2, 10, 0)
+    base = datetime(2024, 1, 2, 10, 0, tzinfo=UTC)
     return [
-        FakeTrade(Decimal("2.50"), Decimal("0.0125"), "WIN", base, base + timedelta(hours=2)),
+        FakeTrade(Decimal("2.50"), Decimal("0.0125"), "WIN", to_ms_utc(base), to_ms_utc(base + timedelta(hours=2))),
         FakeTrade(
-            Decimal("-1.00"), Decimal("-0.005"), "LOSS", base + timedelta(days=1), base + timedelta(days=1, hours=1)
+            Decimal("-1.00"), Decimal("-0.005"), "LOSS", to_ms_utc(base + timedelta(days=1)), to_ms_utc(base + timedelta(days=1, hours=1))
         ),
         FakeTrade(
-            Decimal("3.00"), Decimal("0.015"), "WIN", base + timedelta(days=2), base + timedelta(days=2, hours=3)
+            Decimal("3.00"), Decimal("0.015"), "WIN", to_ms_utc(base + timedelta(days=2)), to_ms_utc(base + timedelta(days=2, hours=3))
         ),
         FakeTrade(
-            Decimal("1.50"), Decimal("0.0075"), "WIN", base + timedelta(days=3), base + timedelta(days=3, hours=1)
+            Decimal("1.50"), Decimal("0.0075"), "WIN", to_ms_utc(base + timedelta(days=3)), to_ms_utc(base + timedelta(days=3, hours=1))
         ),
         FakeTrade(
-            Decimal("-2.00"), Decimal("-0.01"), "LOSS", base + timedelta(days=4), base + timedelta(days=4, hours=2)
+            Decimal("-2.00"), Decimal("-0.01"), "LOSS", to_ms_utc(base + timedelta(days=4)), to_ms_utc(base + timedelta(days=4, hours=2))
         ),
-        FakeTrade(Decimal("4.00"), Decimal("0.02"), "WIN", base + timedelta(days=7), base + timedelta(days=7, hours=1)),
+        FakeTrade(Decimal("4.00"), Decimal("0.02"), "WIN", to_ms_utc(base + timedelta(days=7)), to_ms_utc(base + timedelta(days=7, hours=1))),
         FakeTrade(
-            Decimal("-0.50"), Decimal("-0.0025"), "LOSS", base + timedelta(days=8), base + timedelta(days=8, hours=2)
-        ),
-        FakeTrade(
-            Decimal("1.00"), Decimal("0.005"), "WIN", base + timedelta(days=9), base + timedelta(days=9, hours=1)
+            Decimal("-0.50"), Decimal("-0.0025"), "LOSS", to_ms_utc(base + timedelta(days=8)), to_ms_utc(base + timedelta(days=8, hours=2))
         ),
         FakeTrade(
-            Decimal("2.00"), Decimal("0.01"), "WIN", base + timedelta(days=10), base + timedelta(days=10, hours=3)
+            Decimal("1.00"), Decimal("0.005"), "WIN", to_ms_utc(base + timedelta(days=9)), to_ms_utc(base + timedelta(days=9, hours=1))
         ),
         FakeTrade(
-            Decimal("-1.50"), Decimal("-0.0075"), "LOSS", base + timedelta(days=11), base + timedelta(days=11, hours=1)
+            Decimal("2.00"), Decimal("0.01"), "WIN", to_ms_utc(base + timedelta(days=10)), to_ms_utc(base + timedelta(days=10, hours=3))
+        ),
+        FakeTrade(
+            Decimal("-1.50"), Decimal("-0.0075"), "LOSS", to_ms_utc(base + timedelta(days=11)), to_ms_utc(base + timedelta(days=11, hours=1))
         ),
     ]
 
 
 def _make_equity_curve(initial: float = 100_000.0) -> list[EquityPoint]:
     """Synthetic daily equity curve over ~12 trading days."""
-    base = datetime(2024, 1, 2, 16, 0)
+    base = datetime(2024, 1, 2, 16, 0, tzinfo=UTC)
     values = [
         100_000.0,
         100_500.0,
@@ -94,7 +95,7 @@ def _make_equity_curve(initial: float = 100_000.0) -> list[EquityPoint]:
         102_800.0,
         102_300.0,
     ]
-    return [EquityPoint(timestamp=base + timedelta(days=i), equity=v) for i, v in enumerate(values)]
+    return [EquityPoint(timestamp_ms=to_ms_utc(base + timedelta(days=i)), equity=v) for i, v in enumerate(values)]
 
 
 # ---------------------------------------------------------------------------
@@ -255,13 +256,13 @@ class TestSortino:
 # ---------------------------------------------------------------------------
 class TestResampleToDaily:
     def test_multiple_points_per_day(self) -> None:
-        base = datetime(2024, 1, 2, 10, 0)
+        base = datetime(2024, 1, 2, 10, 0, tzinfo=UTC)
         points = [
-            EquityPoint(timestamp=base, equity=100.0),
-            EquityPoint(timestamp=base + timedelta(hours=2), equity=101.0),
-            EquityPoint(timestamp=base + timedelta(hours=4), equity=102.0),
-            EquityPoint(timestamp=base + timedelta(days=1), equity=103.0),
-            EquityPoint(timestamp=base + timedelta(days=1, hours=2), equity=104.0),
+            EquityPoint(timestamp_ms=to_ms_utc(base), equity=100.0),
+            EquityPoint(timestamp_ms=to_ms_utc(base + timedelta(hours=2)), equity=101.0),
+            EquityPoint(timestamp_ms=to_ms_utc(base + timedelta(hours=4)), equity=102.0),
+            EquityPoint(timestamp_ms=to_ms_utc(base + timedelta(days=1)), equity=103.0),
+            EquityPoint(timestamp_ms=to_ms_utc(base + timedelta(days=1, hours=2)), equity=104.0),
         ]
         daily = _resample_to_daily(points)
         assert len(daily) == 2
@@ -270,6 +271,20 @@ class TestResampleToDaily:
 
     def test_empty(self) -> None:
         assert _resample_to_daily([]) == []
+
+    def test_buckets_by_et_calendar_date_not_utc_calendar_date(self) -> None:
+        """2024-01-05 03:00 UTC is 2024-01-04 22:00 ET — still the prior ET
+        trading date. Bucketing by the raw UTC date (the pre-fix behavior)
+        would merge it into the same bucket as a same-UTC-date point that
+        is actually a different ET trading date."""
+        points = [
+            EquityPoint(timestamp_ms=to_ms_utc(datetime(2024, 1, 5, 3, 0, tzinfo=UTC)), equity=100.0),
+            EquityPoint(timestamp_ms=to_ms_utc(datetime(2024, 1, 5, 20, 0, tzinfo=UTC)), equity=101.0),
+        ]
+
+        daily = _resample_to_daily(points)
+
+        assert daily == [100.0, 101.0]
 
 
 class TestDailyReturns:
@@ -357,22 +372,22 @@ EXPECTED_SNAPSHOT = {
 class TestSummarizeSnapshot:
     def test_closed_trade_ledger_authors_all_readiness_inputs(self) -> None:
         """A compatibility ledger must be complete without a display curve."""
-        base = datetime(2024, 1, 2, 10, 0)
+        base = datetime(2024, 1, 2, 10, 0, tzinfo=UTC)
         trades = [
-            FakeTrade(Decimal("10"), Decimal("0.10"), "WIN", base, base + timedelta(days=1)),
+            FakeTrade(Decimal("10"), Decimal("0.10"), "WIN", to_ms_utc(base), to_ms_utc(base + timedelta(days=1))),
             FakeTrade(
                 Decimal("-5"),
                 Decimal("-0.05"),
                 "LOSS",
-                base + timedelta(days=2),
-                base + timedelta(days=3),
+                to_ms_utc(base + timedelta(days=2)),
+                to_ms_utc(base + timedelta(days=3)),
             ),
             FakeTrade(
                 Decimal("2"),
                 Decimal("0.02"),
                 "WIN",
-                base + timedelta(days=4),
-                base + timedelta(days=5),
+                to_ms_utc(base + timedelta(days=4)),
+                to_ms_utc(base + timedelta(days=5)),
             ),
         ]
 
@@ -389,6 +404,30 @@ class TestSummarizeSnapshot:
         assert stats["max_consecutive_losing_trades"] == 1
         assert stats["probabilistic_sharpe_ratio"] is not None
         assert stats["trade_sharpe_ratio"] == pytest.approx(4.9350815176447504)
+
+    def test_drawdown_recovery_counts_et_calendar_days_not_utc_ms_division(self) -> None:
+        """A drawdown from 2024-01-04 23:00 ET to 2024-01-05 01:00 ET spans
+        only 2 elapsed hours but touches two different ET trading dates.
+        Dividing elapsed UTC ms by 86_400_000 (the pre-fix behavior) reports
+        0 days; the correct ET-calendar-date count is 1."""
+        peak_ms = to_ms_utc(datetime(2024, 1, 5, 4, 0, tzinfo=UTC))  # 2024-01-04 23:00 ET
+        trough_exit_ms = to_ms_utc(datetime(2024, 1, 5, 4, 30, tzinfo=UTC))
+        recovery_ms = to_ms_utc(datetime(2024, 1, 5, 6, 0, tzinfo=UTC))  # 2024-01-05 01:00 ET
+        trades = [
+            FakeTrade(Decimal("10"), Decimal("0.10"), "WIN", to_ms_utc(datetime(2024, 1, 4, 20, 0, tzinfo=UTC)), peak_ms),
+            FakeTrade(Decimal("-22"), Decimal("-0.20"), "LOSS", peak_ms, trough_exit_ms),
+            FakeTrade(Decimal("33"), Decimal("0.30"), "WIN", trough_exit_ms, recovery_ms),
+        ]
+
+        stats = summarize(
+            initial_cash=100_000,
+            final_equity=114_400,
+            trades=trades,
+            trading_days=252,
+            equity_curve=None,
+        )
+
+        assert stats["drawdown_recovery"] == 1
 
     def test_trade_level_metrics_frozen(self) -> None:
         """Assert trade-level metrics match frozen expected values.
@@ -456,8 +495,8 @@ class TestValidateTradeLog:
             Decimal("1"),
             Decimal("0.01"),
             "WIN",
-            entry_time=datetime(2024, 1, 2, 12, 0),
-            exit_time=datetime(2024, 1, 2, 10, 0),  # before entry
+            entry_time_ms=to_ms_utc(datetime(2024, 1, 2, 12, 0, tzinfo=UTC)),
+            exit_time_ms=to_ms_utc(datetime(2024, 1, 2, 10, 0, tzinfo=UTC)),  # before entry
         )
         errors = validate_trade_log([t])
         assert len(errors) == 1

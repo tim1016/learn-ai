@@ -25,7 +25,11 @@ from app.services.bot_lifecycle_projection import (
 )
 from app.services.bot_runner import BotTaskRegistry
 from app.utils.timestamps import now_ms_utc
-from tests.services.test_bot_runner import _FakeFeed, _SqliteRuntimeBroker
+from tests.services.test_bot_runner import (  # noqa: F401 -- _fresh_live_market_liveness is an autouse fixture, registered by import
+    _FakeFeed,
+    _fresh_live_market_liveness,
+    _SqliteRuntimeBroker,
+)
 
 
 def _registered_repo(tmp_path: Path) -> ClerkSqliteRepository:

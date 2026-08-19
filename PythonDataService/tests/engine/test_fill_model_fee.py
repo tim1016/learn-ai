@@ -53,7 +53,7 @@ def test_fill_market_order_uses_compute_fee_with_fee_model() -> None:
         order_id=1,
         symbol="AAPL",
         order_type=OrderType.MARKET,
-        time=bar.time,
+        submitted_at_ms=bar.start_ms,
         direction=Direction.LONG,
         quantity=365,
         tag="ENTER",

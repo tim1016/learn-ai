@@ -15,7 +15,6 @@ have a dedicated implementation.
 
 from __future__ import annotations
 
-from datetime import datetime
 from decimal import Decimal
 
 import numpy as np
@@ -24,6 +23,7 @@ import pandas as pd
 from app.engine.indicators.ema import ExponentialMovingAverage
 from app.engine.indicators.rsi import RelativeStrengthIndex
 from app.engine.indicators.sma import SimpleMovingAverage
+from app.utils.timestamps import to_ms_utc
 
 
 def _drive_indicator(
@@ -35,10 +35,11 @@ def _drive_indicator(
     n = len(values)
     out = np.full(n, np.nan, dtype=float)
     # Convert to Python-native types once to avoid per-iteration overhead.
-    times_list: list[datetime] = times.tolist()
+    # The engine's Indicator.update requires int64 ms UTC, not a datetime.
+    times_ms_list: list[int] = [to_ms_utc(t) for t in times.tolist()]
     values_list: list[float] = values.astype(float).tolist()
     for i in range(n):
-        indicator.update(times_list[i], Decimal(str(values_list[i])))
+        indicator.update(times_ms_list[i], Decimal(str(values_list[i])))
         cv = indicator.current_value
         if cv is not None:
             out[i] = float(cv)

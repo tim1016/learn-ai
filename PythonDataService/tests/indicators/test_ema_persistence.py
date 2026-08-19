@@ -11,11 +11,12 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from app.engine.indicators.ema import ExponentialMovingAverage
+from app.utils.timestamps import to_ms_utc
 
 
 def _feed(ind: ExponentialMovingAverage, values: list[Decimal], t0: datetime) -> None:
     for i, v in enumerate(values):
-        ind.update(t0 + timedelta(minutes=15 * i), v)
+        ind.update(to_ms_utc(t0 + timedelta(minutes=15 * i)), v)
 
 
 def test_round_trip_post_warmup() -> None:
@@ -45,12 +46,12 @@ def test_bit_identical_outputs_after_restore_post_warmup() -> None:
     state = src.to_state_dict()
 
     next_t = t0 + timedelta(minutes=15 * 8)
-    src.update(next_t, Decimal("108"))
+    src.update(to_ms_utc(next_t), Decimal("108"))
     expected = src.current_value
 
     dst = ExponentialMovingAverage("EMA5", 5)
     dst.restore_state(state)
-    dst.update(next_t, Decimal("108"))
+    dst.update(to_ms_utc(next_t), Decimal("108"))
 
     assert dst.current_value == expected
 
@@ -71,6 +72,6 @@ def test_bit_identical_for_five_more_bars_after_restore() -> None:
     for i in range(5):
         t = t0 + timedelta(minutes=15 * (8 + i))
         v = Decimal(108 + i)
-        src.update(t, v)
-        dst.update(t, v)
+        src.update(to_ms_utc(t), v)
+        dst.update(to_ms_utc(t), v)
         assert dst.current_value == src.current_value, f"bar {i}: {dst.current_value} != {src.current_value}"

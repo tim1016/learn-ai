@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 
 from app.engine.data.trade_bar import TradeBar
@@ -47,6 +47,7 @@ from app.engine.options.pricer import (
     price_contract,
 )
 from app.engine.strategy.base import LoggedTrade, Strategy
+from app.utils.timestamps import display_time, now_ms_utc, ny_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,7 @@ logger = logging.getLogger(__name__)
 class OpenSpread:
     """State of an active spread position."""
 
-    entry_time: datetime
+    entry_time_ms: int
     spread_type: SpreadType
     expiration: date
 
@@ -254,9 +255,9 @@ class SpyEmaCrossoverOptionsAlgorithm(Strategy):
         assert self.ctx is not None
 
         # Update indicators
-        self._ema_fast.update(bar.end_time, bar.close)
-        self._ema_slow.update(bar.end_time, bar.close)
-        self._rsi.update(bar.end_time, bar.close)
+        self._ema_fast.update(bar.end_ms, bar.close)
+        self._ema_slow.update(bar.end_ms, bar.close)
+        self._rsi.update(bar.end_ms, bar.close)
 
         # Warmup guard
         if not (self._ema_fast.is_ready and self._ema_slow.is_ready and self._rsi.is_ready):
@@ -288,7 +289,9 @@ class SpyEmaCrossoverOptionsAlgorithm(Strategy):
                 else:
                     # Signal fired but chain resolution failed — nothing
                     # to close, just release the position lock.
-                    self.ctx.log(f"POSITION RELEASED (no spread): {bar.end_time.strftime('%Y-%m-%d %H:%M')}")
+                    self.ctx.log(
+                        f"POSITION RELEASED (no spread): {display_time(bar.end_ms)}"
+                    )
                 self._in_position = False
         else:
             # Entry check — same logic as equity strategy
@@ -322,11 +325,12 @@ class SpyEmaCrossoverOptionsAlgorithm(Strategy):
         """Attempt to enter a spread on the entry signal."""
         assert self.ctx is not None
         underlying_price = float(bar.close)
-        eval_date = bar.end_time.date()
+        bar_end = ny_datetime(bar.end_ms)
+        eval_date = bar_end.date()
 
         self.ctx.log(
             f"ENTRY SIGNAL #{self._signal_count}: "
-            f"{bar.end_time.strftime('%Y-%m-%d %H:%M')} "
+            f"{bar_end.strftime('%Y-%m-%d %H:%M')} "
             f"Close={bar.close:.2f} EMA_fast={ema_fast:.4f} "
             f"EMA_slow={ema_slow:.4f} RSI={rsi:.2f}"
         )
@@ -419,7 +423,7 @@ class SpyEmaCrossoverOptionsAlgorithm(Strategy):
 
         # Create the open spread
         self._open_spread = OpenSpread(
-            entry_time=bar.end_time,
+            entry_time_ms=bar.end_ms,
             spread_type=self._spread_type,
             expiration=expiration,
             long_leg=long_leg,
@@ -461,7 +465,8 @@ class SpyEmaCrossoverOptionsAlgorithm(Strategy):
 
         spread = self._open_spread
         underlying_price = float(bar.close)
-        eval_date = bar.end_time.date()
+        bar_end = ny_datetime(bar.end_ms)
+        eval_date = bar_end.date()
 
         # Re-price both legs at exit
         dte = (spread.expiration - eval_date).days
@@ -528,9 +533,9 @@ class SpyEmaCrossoverOptionsAlgorithm(Strategy):
         # Log the trade
         self.trade_log.append(
             LoggedTrade(
-                entry_time=spread.entry_time,
+                entry_time_ms=spread.entry_time_ms,
                 entry_price=Decimal(str(round(spread.entry_net, 4))),
-                exit_time=bar.end_time,
+                exit_time_ms=bar.end_ms,
                 exit_price=Decimal(str(round(exit_net, 4))),
                 quantity=int(self._contracts_per_trade),
                 pnl_pts=Decimal(str(round(pnl_per_contract, 4))),
@@ -543,7 +548,9 @@ class SpyEmaCrossoverOptionsAlgorithm(Strategy):
                     "rsi": spread.rsi,
                     # Spread metadata
                     "spread_type": Decimal(1 if spread.spread_type == SpreadType.BULL_CALL else 2),
-                    "expiration_dte": Decimal(str((spread.expiration - spread.entry_time.date()).days)),
+                    "expiration_dte": Decimal(
+                        str((spread.expiration - ny_datetime(spread.entry_time_ms).date()).days)
+                    ),
                     "spread_width": Decimal(str(spread.spread_width)),
                     # Long leg
                     "long_strike": spread.long_leg.strike,
@@ -580,7 +587,7 @@ class SpyEmaCrossoverOptionsAlgorithm(Strategy):
         )
 
         self.ctx.log(
-            f"EXIT SPREAD: {bar.end_time.strftime('%Y-%m-%d %H:%M')} "
+            f"EXIT SPREAD: {bar_end.strftime('%Y-%m-%d %H:%M')} "
             f"underlying={underlying_price:.2f} "
             f"long_exit={long_exit:.2f} short_exit={short_exit:.2f} "
             f"net_exit={exit_net:.2f} "
@@ -616,13 +623,15 @@ class SpyEmaCrossoverOptionsAlgorithm(Strategy):
             if last_price > 0:
                 from app.engine.data.trade_bar import TradeBar as TB
 
+                final_time_ms = self.ctx.current_time_ms or now_ms_utc()
                 synthetic_bar = TB(
                     symbol=self._symbol_name,
-                    time=self.ctx.current_time or datetime.now(UTC),
+                    start_ms=final_time_ms,
+                    end_ms=final_time_ms,
                     open=last_price,
                     high=last_price,
                     low=last_price,
                     close=last_price,
-                    volume=Decimal(0),
+                    volume=0,
                 )
                 self._exit_spread(synthetic_bar)

@@ -39,6 +39,7 @@ from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode
 from app.engine.strategy.base import LoggedTrade, Strategy
 from app.engine.strategy.spec import SpecAlgorithm, load_spec_from_path
+from app.utils.timestamps import datetime_at_ms, to_ms_utc
 
 EASTERN = ZoneInfo("America/New_York")
 SYMBOL = "TEST"
@@ -140,8 +141,8 @@ def build_minute_bars(closes: list[float], start: datetime = START_TIME) -> list
         bars.append(
             TradeBar(
                 symbol=SYMBOL,
-                time=t,
-                end_time=t + timedelta(minutes=1),
+                start_ms=to_ms_utc(t),
+                end_ms=to_ms_utc(t + timedelta(minutes=1)),
                 open=price,
                 high=price,
                 low=price,
@@ -154,8 +155,8 @@ def build_minute_bars(closes: list[float], start: datetime = START_TIME) -> list
     bars.append(
         TradeBar(
             symbol=SYMBOL,
-            time=last_t,
-            end_time=last_t + timedelta(minutes=1),
+            start_ms=to_ms_utc(last_t),
+            end_ms=to_ms_utc(last_t + timedelta(minutes=1)),
             open=sentinel_price,
             high=sentinel_price,
             low=sentinel_price,
@@ -178,7 +179,7 @@ class FakeDataReader:
         for b in self.bars:
             if b.symbol.upper() != target:
                 continue
-            if start <= b.time.date() <= end:
+            if start <= datetime_at_ms(b.start_ms, tz=EASTERN).date() <= end:
                 yield b
 
 
@@ -254,10 +255,10 @@ def assert_trade_logs_match(
 
     for i, (sp, rf) in enumerate(zip(spec_trades, ref_trades, strict=True)):
         problems: list[str] = []
-        if sp.entry_time != rf.entry_time:
-            problems.append(f"entry_time {sp.entry_time} != {rf.entry_time}")
-        if sp.exit_time != rf.exit_time:
-            problems.append(f"exit_time {sp.exit_time} != {rf.exit_time}")
+        if sp.entry_time_ms != rf.entry_time_ms:
+            problems.append(f"entry_time_ms {sp.entry_time_ms} != {rf.entry_time_ms}")
+        if sp.exit_time_ms != rf.exit_time_ms:
+            problems.append(f"exit_time_ms {sp.exit_time_ms} != {rf.exit_time_ms}")
         if sp.entry_price != rf.entry_price:
             problems.append(f"entry_price {sp.entry_price} != {rf.entry_price}")
         if sp.exit_price != rf.exit_price:

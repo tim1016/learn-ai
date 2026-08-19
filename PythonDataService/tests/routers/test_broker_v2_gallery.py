@@ -299,6 +299,12 @@ async def test_gallery_stream_stale_cursor_emits_reset_first() -> None:
     payload = _frame_payload(frame)
     assert payload["reason"] == "epoch_changed"
     assert payload["cursor"] == f"{hub._epoch}:1"
+    # No Pydantic model backs this payload (see broker_v2_gallery.py's inline
+    # json.dumps) — this router is the sole authority for the shape, and
+    # `Frontend/.../gallery/lib/gallery.types.ts`'s `GalleryResetEvent` is
+    # pinned to exactly `{reason, cursor}` (#1667). A field added, removed, or
+    # renamed here must fail this assertion and update both sides together.
+    assert set(payload.keys()) == {"reason", "cursor"}
 
 
 async def test_gallery_stream_matching_cursor_skips_reset() -> None:

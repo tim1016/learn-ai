@@ -7820,7 +7820,7 @@
       },
       "BrokerClockEvidence": {
         "additionalProperties": false,
-        "description": "Vendor clock/calendar reading \u2014 **evidence only, never authority**.\n\nThe canonical calendar module (``.claude/rules/temporal-rigor.md``) remains\nthe sole source of scheduled session structure. This model records what the\nbroker *claims* about market state so it can be displayed and, later,\ncompared against the calendar in a parity diagnostic. Nothing in session or\ncalendar logic may read these fields as authoritative.",
+        "description": "Market-wide broker-clock evidence \u2014 not scheduled-session authority.\n\nThe canonical calendar module (``.claude/rules/temporal-rigor.md``) remains\nthe sole source of scheduled session structure. This narrow live input may\nprove that the broker currently says the market is open or closed, but it\ncannot establish that any particular symbol is tradable or not halted. The\nliveness composition therefore pairs it with symbol-scoped vendor status\nevidence; no session/calendar logic may treat these fields as authority.",
         "properties": {
           "broker": {
             "title": "Broker",
@@ -25115,7 +25115,7 @@
         "type": "object"
       },
       "MarketPulseView": {
-        "description": "Header-level market session and data recency authored by the backend.",
+        "description": "Scheduled session, live tradability, and data recency authored by Python.",
         "properties": {
           "age_ms": {
             "anyOf": [
@@ -25150,6 +25150,17 @@
             "title": "Feed State",
             "type": "string"
           },
+          "halted_symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Halted Symbol"
+          },
           "headline": {
             "title": "Headline",
             "type": "string"
@@ -25164,6 +25175,24 @@
               }
             ],
             "title": "Latest Bar At Ms"
+          },
+          "market_liveness_observed_at_ms": {
+            "title": "Market Liveness Observed At Ms",
+            "type": "integer"
+          },
+          "market_liveness_reason": {
+            "title": "Market Liveness Reason",
+            "type": "string"
+          },
+          "market_state": {
+            "enum": [
+              "TRADABLE",
+              "HALTED",
+              "CLOSED",
+              "UNKNOWN"
+            ],
+            "title": "Market State",
+            "type": "string"
           },
           "next_step": {
             "anyOf": [
@@ -25205,6 +25234,10 @@
         },
         "required": [
           "session",
+          "market_state",
+          "market_liveness_reason",
+          "market_liveness_observed_at_ms",
+          "halted_symbol",
           "feed_state",
           "latest_bar_at_ms",
           "age_ms",
@@ -32176,6 +32209,10 @@
             "title": "Market Data",
             "type": "integer"
           },
+          "market_liveness": {
+            "title": "Market Liveness",
+            "type": "integer"
+          },
           "process": {
             "title": "Process",
             "type": "integer"
@@ -32189,6 +32226,7 @@
           "runtime",
           "process",
           "market_data",
+          "market_liveness",
           "clerk"
         ],
         "title": "RunAdmissionFactAges",

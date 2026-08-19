@@ -36,6 +36,7 @@ from zoneinfo import ZoneInfo
 
 from app.engine.data.path_safety import ensure_within_root
 from app.engine.data.trade_bar import TradeBar
+from app.utils.timestamps import datetime_at_ms, to_ms_utc
 
 # LEAN's price scale factor: prices on disk are multiplied by 10000.
 PRICE_SCALE = Decimal(10000)
@@ -129,7 +130,7 @@ def _parse_csv_bytes(
         trading_date: The date the bars belong to (from the filename).
 
     Returns:
-        List of TradeBar objects, one per row, timezone-aware in ET.
+        List of TradeBar objects, one per row, timestamped in Unix ms UTC.
     """
     bars: list[TradeBar] = []
     # Midnight ET on the trading date.
@@ -150,13 +151,12 @@ def _parse_csv_bytes(
         ms, o, h, l, c, v = parts
         # Bar start time: midnight + ms
         start = midnight + timedelta(milliseconds=int(ms))
-        # LEAN minute bars have a 1-minute period.
-        end = start + timedelta(minutes=1)
+        start_ms = to_ms_utc(start)
         bars.append(
             TradeBar(
                 symbol=symbol,
-                time=start,
-                end_time=end,
+                start_ms=start_ms,
+                end_ms=start_ms + 60_000,
                 open=Decimal(o) / PRICE_SCALE,
                 high=Decimal(h) / PRICE_SCALE,
                 low=Decimal(l) / PRICE_SCALE,
@@ -175,7 +175,7 @@ def _filter_to_rth(bars: list[TradeBar], trading_date: date) -> list[TradeBar]:
     not a NYSE session at all (shouldn't happen — ``iter_dates`` only yields
     dates with zips, but defend anyway), every bar is dropped.
 
-    Bar ``time`` is the bar start in ET, and the comparison is
+    Bar ``start_ms`` is the bar start in canonical UTC, and the comparison is
     ``[scheduled_open, scheduled_close)`` in canonical ms UTC.
     """
     # Lazy import to keep app.lean_sidecar internal to its own boundary at
@@ -187,7 +187,7 @@ def _filter_to_rth(bars: list[TradeBar], trading_date: date) -> list[TradeBar]:
         window = session_window_for_date(trading_date)
     except LookupError:
         return []
-    return [b for b in bars if window.open_ms_utc <= int(b.time.timestamp() * 1000) < window.close_ms_utc]
+    return [b for b in bars if window.open_ms_utc <= b.start_ms < window.close_ms_utc]
 
 
 class LeanMinuteDataReader:
@@ -311,8 +311,8 @@ def _parse_daily_csv_bytes(
         YYYYMMDD HH:MM,open,high,low,close,volume
 
     The timestamp column is always ``YYYYMMDD 00:00`` — session start midnight
-    in exchange time (ET). We emit a bar with ``time`` at session start and
-    ``end_time`` exactly 24 hours later so that ``end_time`` marks session
+    in exchange time (ET). We emit a bar with ``start_ms`` at session start and
+    ``end_ms`` exactly 24 hours later so that ``end_ms`` marks session
     rollover — consistent with how LEAN surfaces daily bars to algorithms.
     Prices are decoded from the same deci-cent scale used for minute bars.
     """
@@ -333,12 +333,12 @@ def _parse_daily_csv_bytes(
         month = int(date_str[4:6])
         day = int(date_str[6:8])
         start = datetime(year, month, day, tzinfo=EASTERN)
-        end = start + timedelta(days=1)
+        start_ms = to_ms_utc(start)
         bars.append(
             TradeBar(
                 symbol=symbol_upper,
-                time=start,
-                end_time=end,
+                start_ms=start_ms,
+                end_ms=to_ms_utc(start + timedelta(days=1)),
                 open=Decimal(o) / PRICE_SCALE,
                 high=Decimal(h) / PRICE_SCALE,
                 low=Decimal(l) / PRICE_SCALE,
@@ -419,7 +419,7 @@ class LeanDailyDataReader:
         for root in self.data_roots:
             zip_path = self._zip_path(root, symbol)
             for bar in self._read_zip(zip_path, symbol):
-                bar_date = bar.time.date()
+                bar_date = datetime_at_ms(bar.start_ms, tz=EASTERN).date()
                 # Earlier roots win — only insert if not already present.
                 if bar_date not in merged:
                     merged[bar_date] = bar
@@ -429,7 +429,7 @@ class LeanDailyDataReader:
 
     def available_dates(self, symbol: str) -> list[date]:
         """Return the sorted list of trading dates present for ``symbol``."""
-        return [bar.time.date() for bar in self._load_history(symbol)]
+        return [datetime_at_ms(bar.start_ms, tz=EASTERN).date() for bar in self._load_history(symbol)]
 
     def iter_bars(
         self,
@@ -443,7 +443,7 @@ class LeanDailyDataReader:
         the minute reader's "absent file → empty" behavior.
         """
         for bar in self._load_history(symbol):
-            bar_date = bar.time.date()
+            bar_date = datetime_at_ms(bar.start_ms, tz=EASTERN).date()
             if bar_date < start:
                 continue
             if bar_date > end:
@@ -464,7 +464,7 @@ def write_lean_daily_zip(
         output_root: Root directory (will create ``equity/usa/daily/``).
         symbol: Ticker symbol (case-insensitive; lowercased in the path).
         bars: Daily TradeBars to write. Must all be daily-resolution bars
-            in ET; ``time`` is expected at 00:00 ET for each trading date.
+            in ET; ``start_ms`` is expected at 00:00 ET for each trading date.
         merge_existing: If ``True`` (the default) and a zip already exists
             at the target path, existing rows are read first and then
             unioned with ``bars`` by date. Newer (``bars``-provided) values
@@ -498,10 +498,10 @@ def write_lean_daily_zip(
             name = csv_name if csv_name in names else names[0]
             with zf.open(name) as f:
                 for existing in _parse_daily_csv_bytes(f.read(), symbol):
-                    merged[existing.time.date()] = existing
+                    merged[datetime_at_ms(existing.start_ms, tz=EASTERN).date()] = existing
     # New bars overwrite existing rows for the same date.
     for bar in bars:
-        merged[bar.time.date()] = bar
+        merged[datetime_at_ms(bar.start_ms, tz=EASTERN).date()] = bar
 
     lines: list[str] = []
     for bar_date in sorted(merged.keys()):
@@ -560,7 +560,7 @@ def write_lean_quote_day_zip(
     )
     lines: list[str] = []
     for bar in bars:
-        bar_time_et = bar.time.astimezone(EASTERN)
+        bar_time_et = datetime_at_ms(bar.start_ms, tz=EASTERN)
         ms = int((bar_time_et - midnight).total_seconds() * 1000)
         # Bid = ask = trade close. The zero-spread synthesis is the
         # smallest data shape that satisfies LEAN's quote subscription
@@ -608,7 +608,7 @@ def write_lean_day_zip(
     )
     lines: list[str] = []
     for bar in bars:
-        bar_time_et = bar.time.astimezone(EASTERN)
+        bar_time_et = datetime_at_ms(bar.start_ms, tz=EASTERN)
         ms = int((bar_time_et - midnight).total_seconds() * 1000)
         lines.append(
             f"{ms},"

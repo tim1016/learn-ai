@@ -73,9 +73,9 @@ class SpyStrategyAAlgorithm(RsiRangeStrategy):
         assert self._ema_fast is not None
         assert self._ema_slow is not None
         assert self._macd is not None
-        self._ema_fast.update(bar.end_time, bar.close)
-        self._ema_slow.update(bar.end_time, bar.close)
-        self._macd.update(bar.end_time, bar.close)
+        self._ema_fast.update(bar.end_ms, bar.close)
+        self._ema_slow.update(bar.end_ms, bar.close)
+        self._macd.update(bar.end_ms, bar.close)
 
     def _extra_indicators_ready(self) -> bool:
         assert self._ema_fast is not None

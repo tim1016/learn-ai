@@ -162,24 +162,12 @@ def _parse_fill_mode(s: str) -> FillMode:
     )
 
 
-def _to_ms_utc(dt: datetime) -> int:
-    """Convert a tz-aware ``datetime`` to ``int64 ms`` since Unix epoch UTC.
-
-    LoggedTrade timestamps are tz-aware (the engine builds them from
-    ``TradeBar.end_time`` which carries an ``America/New_York`` zoneinfo).
-    ``datetime.timestamp()`` returns POSIX seconds independent of the
-    zone, so ``int(dt.timestamp() * 1000)`` is the canonical conversion
-    to int64 ms UTC at the wire boundary.
-    """
-    return int(dt.timestamp() * 1000)
-
-
 def _trade_to_response(i: int, t: LoggedTrade) -> SpecTradeResponse:
     return SpecTradeResponse(
         trade_number=i + 1,
-        entry_time=_to_ms_utc(t.entry_time),
+        entry_time=t.entry_time_ms,
         entry_price=float(t.entry_price),
-        exit_time=_to_ms_utc(t.exit_time),
+        exit_time=t.exit_time_ms,
         exit_price=float(t.exit_price),
         indicators={k: float(v) for k, v in t.indicators.items()},
         pnl_pts=float(t.pnl_pts),

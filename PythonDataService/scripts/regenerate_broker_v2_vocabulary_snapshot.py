@@ -16,9 +16,13 @@ a working tree) each lock against their own copy:
   snapshot and assert its emergency copy-fallback map covers exactly the same
   code set.
 
-If a developer hand-edits one snapshot to "fix" a failing test, the other
-side's test still fails against its own source-of-truth. Drift surfaces from
-either direction.
+A CI job (``broker-v2-vocabulary-contract``) regenerates both files from live
+source on every PR and diffs them against the committed copies, so a hand-edit
+to either file — even one applied identically to both, which neither file's
+own drift alone would catch — fails CI. ``test_vocabulary_snapshot.py``
+additionally asserts the two committed copies are byte-identical to each other
+and that every code's committed ``copy`` matches live ``OPERATOR_COPY``
+exactly, not merely non-trivially.
 
 Usage::
 

@@ -170,7 +170,7 @@ def test_base_strategy_exits_when_adx_below_threshold():
     ctx.portfolio.update_reference_price("SPY", Decimal(100))
     for i in range(40):
         b = _bar(t + timedelta(minutes=15 * i), str(100 + i * 0.1))
-        ctx.current_time = b.end_time
+        ctx.current_time_ms = b.end_ms
         s._on_bar(b)
     assert not s._in_position
     assert any(o.quantity == -100 for o in ctx.portfolio.pending_orders)

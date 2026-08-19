@@ -85,6 +85,8 @@ from app.broker.contract.models import BrokerOrderLeg, OrderSide
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.config import settings
 from app.schemas.action_plan import ActionPlan, StockEntryLeg
+from app.services.broker_capability_service import extended_phase_proven_at_ms
+from app.services.market_liveness import liveness_blocks_entry, market_liveness_fact
 
 if TYPE_CHECKING:
     from app.services.bot_binding_repository import BrokerBotBinding
@@ -429,6 +431,7 @@ class SqliteAlpacaClerkFacade:
         purpose: EffectPurpose,
         action_plan: ActionPlan,
         quantity: int,
+        use_rth: bool = True,
     ) -> EffectOperationReceipt:
         """Route one semantic decision through SQLite ENTER/EXIT custody.
 
@@ -448,6 +451,7 @@ class SqliteAlpacaClerkFacade:
                     purpose=purpose,
                     action_plan=action_plan,
                     quantity=quantity,
+                    use_rth=use_rth,
                 ),
                 name=f"alpaca-sqlite-effect:{strategy_instance_id}:{decision_id}",
             )
@@ -491,7 +495,20 @@ class SqliteAlpacaClerkFacade:
         purpose: EffectPurpose,
         action_plan: ActionPlan,
         quantity: int,
+        use_rth: bool = True,
     ) -> EffectOperationReceipt:
+        def rejected() -> EffectOperationReceipt:
+            return _effect_receipt(
+                strategy_instance_id=strategy_instance_id,
+                run_id=run_id,
+                decision_id=decision_id,
+                purpose=purpose,
+                action_plan=action_plan,
+                quantity=quantity,
+                state="rejected",
+                order_refs=(),
+            )
+
         async with self._intake:
             entry = _entry_leg(action_plan)
             durable_decision_id = _durable_decision_id(decision_id)
@@ -513,16 +530,26 @@ class SqliteAlpacaClerkFacade:
                     # ACCOUNT_CLERK hold + rejected receipt, no broker
                     # contact. EXIT/cancel remain unaffected: exit.py never
                     # consults `active_holds_for_admission`.
-                    return _effect_receipt(
-                        strategy_instance_id=strategy_instance_id,
-                        run_id=run_id,
-                        decision_id=decision_id,
-                        purpose=purpose,
-                        action_plan=action_plan,
-                        quantity=quantity,
-                        state="rejected",
-                        order_refs=(),
-                    )
+                    return rejected()
+                # #1671: the caller's own liveness check happens before this
+                # sole-writer boundary is even reached, racing whatever
+                # queues ahead of it under `self._intake`. Recheck here,
+                # immediately before the entry is accepted, so evidence that
+                # went stale or turned HALTED while queued cannot still
+                # reach the broker — the same shared predicate
+                # bot_trade_strategy.py's own gate uses, so the two can
+                # never silently diverge.
+                liveness = market_liveness_fact(entry.instrument.underlying, self._repo.clock())
+                if liveness_blocks_entry(
+                    liveness,
+                    use_rth=use_rth,
+                    extended_phase_proven=lambda: extended_phase_proven_at_ms(
+                        now_ms=self._repo.clock(),
+                        symbol=entry.instrument.underlying,
+                        account_id=self.account_id,
+                    ),
+                ):
+                    return rejected()
                 accepted_enter = accept_enter(
                     self._repo,
                     account_id=self.account_id,

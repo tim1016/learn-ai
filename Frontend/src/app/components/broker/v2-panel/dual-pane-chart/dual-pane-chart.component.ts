@@ -38,6 +38,7 @@ import type {
 } from '../lib/broker-v2-panel.types';
 import { toCandle } from '../lib/chart-bar-mapping';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
+import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
 import type { TickerQuoteView } from '../../../../shared/ticker-quote/ticker-quote.component';
 import { createAppChart, formatChartAxisTick } from '../../../../shared/charts/chart-utils';
 import { IndicatorCatalogService } from '../../../../shared/indicator-catalog/indicator-catalog.service';
@@ -77,15 +78,10 @@ function persistedChartTimeZone(): ChartTimeZone {
 /** Formats the chart-library's seconds-UTC boundary for the crosshair readout. */
 export function formatChartCrosshairTime(time: Time | number, timeZone: ChartTimeZone): string {
   if (typeof time !== 'number') return String(time);
-  return new Intl.DateTimeFormat(undefined, {
-    month: 'short',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-    timeZone: timeZone === 'et' ? 'America/New_York' : undefined,
-  }).format(new Date(time * 1_000));
+  return formatTimestampDisplay(time * 1_000, {
+    mode: timeZone === 'et' ? 'et' : 'local',
+    granularity: 'chart',
+  });
 }
 
 function sameBar(left: ChartBar, right: ChartBar): boolean {

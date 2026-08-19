@@ -45,6 +45,17 @@ _SNAPSHOT_PATH = (
     / "v2panel"
     / "vocabulary.snapshot.json"
 )
+_FRONTEND_SNAPSHOT_PATH = (
+    Path(__file__).resolve().parents[4]
+    / "Frontend"
+    / "src"
+    / "app"
+    / "components"
+    / "broker"
+    / "v2-panel"
+    / "lib"
+    / "broker-v2-vocabulary.snapshot.json"
+)
 
 
 def test_snapshot_file_exists() -> None:
@@ -52,6 +63,57 @@ def test_snapshot_file_exists() -> None:
         f"snapshot not found at {_SNAPSHOT_PATH} — regenerate via "
         "scripts/regenerate_broker_v2_vocabulary_snapshot.py"
     )
+
+
+def test_python_and_frontend_snapshots_are_byte_identical() -> None:
+    """The two committed copies must never diverge from each other.
+
+    Regression for #1666: at commit a16571c2, both files were hand-edited to
+    carry the *same* wrong copy — this test alone would not have caught that
+    (see test_snapshot_copy_matches_live_operator_copy_exactly for the test
+    that does), but it does catch the more common case of only one file being
+    hand-edited.
+
+    Skipped when ``Frontend/`` isn't part of this checkout (e.g. the
+    Python-only qualification container, whose image context is
+    ``PythonDataService`` — see ``compose.yaml``): cross-tree parity is
+    proven byte-for-byte there instead by the ``broker-v2-vocabulary-contract``
+    CI job, which runs against a full checkout.
+    """
+    if not _FRONTEND_SNAPSHOT_PATH.exists():
+        pytest.skip(f"Frontend/ not present in this checkout ({_FRONTEND_SNAPSHOT_PATH})")
+    assert _SNAPSHOT_PATH.read_text(encoding="utf-8") == _FRONTEND_SNAPSHOT_PATH.read_text(encoding="utf-8")
+
+
+def test_committed_snapshots_match_freshly_generated_output() -> None:
+    """Regression for #1666: committed bytes must equal what the generator
+    produces from live source right now — the same check CI's
+    ``broker-v2-vocabulary-contract`` job performs via `git diff --exit-code`
+    after regeneration, exercised here in-process.
+
+    Only the Python-local snapshot is checked here — see
+    ``test_python_and_frontend_snapshots_are_byte_identical`` for why the
+    Frontend copy isn't compared directly from this module, and for the
+    ``Python == Frontend`` half of the byte-identity that, combined with
+    this test's ``Python == fresh``, transitively proves ``Frontend ==
+    fresh`` whenever both tests run together in a full checkout.
+    """
+    from scripts.regenerate_broker_v2_vocabulary_snapshot import build_snapshot
+
+    fresh = json.dumps(build_snapshot(), indent=2, sort_keys=False) + "\n"
+    assert _SNAPSHOT_PATH.read_text(encoding="utf-8") == fresh
+
+
+def test_snapshot_copy_matches_live_operator_copy_exactly() -> None:
+    """Regression for #1666: the committed `copy` must equal live label/explanation
+    exactly, not merely be non-trivial. This is the test that would have caught
+    the a16571c2 incident (both snapshots carrying the same wrong `resume.label`)."""
+    snapshot = json.loads(_SNAPSHOT_PATH.read_text(encoding="utf-8"))
+    for code in ALL_VOCABULARY_CODES:
+        live = copy_for(code)
+        assert snapshot["copy"][code] == {"label": live.label, "explanation": live.explanation}, (
+            f"{code}: committed snapshot copy diverges from live OPERATOR_COPY"
+        )
 
 
 def test_snapshot_matches_live_vocabulary() -> None:

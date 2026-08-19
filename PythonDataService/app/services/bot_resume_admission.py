@@ -21,6 +21,7 @@ from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_carryover import configuration_hash
 from app.services.bot_start_admission import (
     CustodyBoundActivator,
+    MarketLivenessFactResolver,
     SessionCapabilityResolver,
     StartAdmissionDenied,
     StartAdmissionEvidenceChanged,
@@ -30,6 +31,7 @@ from app.services.bot_start_admission import (
     new_run_binding,
 )
 from app.services.bot_trade_strategy import EXPOSURE_CARRYOVER_STRATEGY_KEYS
+from app.services.market_liveness import market_liveness_fact
 from app.services.run_admission import evaluate_run_admission
 
 CustodyGuard = Callable[[str], AbstractAsyncContextManager[ClerkCustodySnapshot]]
@@ -61,6 +63,7 @@ class BotResumeAdmission:
         activate: CustodyBoundActivator,
         carryover_account_policy_enabled: bool,
         session_capability: SessionCapabilityResolver,
+        market_liveness: MarketLivenessFactResolver = market_liveness_fact,
     ) -> None:
         self._now_ms = now_ms
         self._feed_resolver = feed_resolver
@@ -71,6 +74,7 @@ class BotResumeAdmission:
         self._activate = activate
         self._carryover_account_policy_enabled = carryover_account_policy_enabled
         self._session_capability = session_capability
+        self._market_liveness = market_liveness
 
     async def preview(
         self,
@@ -131,6 +135,10 @@ class BotResumeAdmission:
                             else None
                         ),
                         account_id=capability_account_id,
+                    ),
+                    market_liveness=self._market_liveness(
+                        prior.symbol,
+                        observed_at_ms,
                     ),
                     desired_state=status.desired_state,
                     phase=status.phase,

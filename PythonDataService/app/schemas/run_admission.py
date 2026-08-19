@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.schemas.market_liveness import MarketLivenessFact
+
 
 class RunProcessAdmissionFact(BaseModel):
     """Registry-owned process evidence, including proven candidate absence."""
@@ -80,6 +82,7 @@ class StartRunFacts(BaseModel):
     runtime: StartRuntimeAdmissionFact
     process: RunProcessAdmissionFact
     market_data: MarketDataAdmissionFact
+    market_liveness: MarketLivenessFact
 
 
 class ResumeCheckpointAdmissionFact(BaseModel):
@@ -108,6 +111,7 @@ class ResumeRunFacts(BaseModel):
     runtime: StartRuntimeAdmissionFact
     process: RunProcessAdmissionFact
     market_data: MarketDataAdmissionFact
+    market_liveness: MarketLivenessFact
     desired_state: Literal["RUNNING", "PAUSED", "STOPPED"]
     phase: Literal["OFF_DUTY", "ON_DUTY", "RETIRED"]
     carryover_policy: Literal["FORBID", "ALLOW"]
@@ -127,6 +131,7 @@ class RunAdmissionFactAges(BaseModel):
     runtime: int
     process: int
     market_data: int
+    market_liveness: int
     clerk: int
 
 

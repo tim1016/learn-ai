@@ -148,7 +148,6 @@ def _build_our_fills(tmp_path: Path) -> list[OurFill]:
     from app.engine.execution.order import Direction, FillMode
     from app.research.ml.loader import PredictionSet
     from app.research.parity.fixture_data_reader import FixtureDataReader
-    from app.utils.timestamps import to_ms_utc
 
     # Load the prediction set directly.
     prediction_set = PredictionSet.load(artifacts_root / _PREDICTION_SET_ID)
@@ -195,7 +194,7 @@ def _build_our_fills(tmp_path: Path) -> list[OurFill]:
                 side=side,
                 fill_qty=event.fill_quantity,
                 fill_price=event.fill_price,
-                fill_time_ms=to_ms_utc(event.time),
+                fill_time_ms=event.filled_at_ms,
                 fee=fee,
             )
         )

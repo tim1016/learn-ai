@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -12,6 +13,7 @@ from app.research.parity.fixture_data_reader import (
     FixtureDataReader,
     fixture_data_source_factory,
 )
+from app.utils.timestamps import datetime_at_ms
 
 CSV_CONTENT = (
     "time,open,high,low,close,volume\n"
@@ -45,12 +47,15 @@ def test_iter_bars_anchors_time_to_ny_session_open(csv_path: Path) -> None:
     reader = FixtureDataReader(csv_path)
     [first, *_] = list(reader.iter_bars("AAPL"))
 
-    assert first.time.tzinfo is not None
-    assert first.time.hour == 9
-    assert first.time.minute == 30
-    assert first.end_time.hour == 16
-    assert first.end_time.minute == 0
-    assert first.time.date() == date(2026, 2, 10)
+    eastern = ZoneInfo("America/New_York")
+    start = datetime_at_ms(first.start_ms, tz=eastern)
+    end = datetime_at_ms(first.end_ms, tz=eastern)
+    assert start.tzinfo is not None
+    assert start.hour == 9
+    assert start.minute == 30
+    assert end.hour == 16
+    assert end.minute == 0
+    assert start.date() == date(2026, 2, 10)
 
 
 def test_iter_bars_filters_by_date_range(csv_path: Path) -> None:

@@ -71,7 +71,7 @@ def _run_engine_fills() -> list[OurFill]:
                 side="buy" if qty > 0 else "sell",
                 fill_qty=qty,
                 fill_price=Decimal(str(e.fill_price)),
-                fill_time_ms=int(e.time.timestamp() * 1000),
+                fill_time_ms=e.filled_at_ms,
                 fee=Decimal("0"),
             )
         )

@@ -40,6 +40,10 @@ from app.broker.alpaca.clerk.stream_health import market_data_channel_health
 from app.marketdata.feed import FeedHealth
 from app.marketdata.ibkr_feed import IbkrMarketDataFeed
 from app.schemas.broker_capability import SessionCapability, SessionDataCapability
+from app.schemas.market_liveness import (
+    MarketClockLivenessEvidence,
+    SymbolTradingStatusEvidence,
+)
 from app.schemas.run_admission import (
     MarketDataAdmissionFact,
     RunProcessAdmissionFact,
@@ -50,6 +54,7 @@ from app.services.bot_start_admission import (
     market_data_admission_fact,
     market_data_capability_account_id,
 )
+from app.services.market_liveness import compose_market_liveness
 from app.services.run_admission import evaluate_run_admission
 from tests._helpers.ibkr_feed_adversarial import (
     NeverFirstBarFeedFixture,
@@ -171,6 +176,25 @@ def _start_facts(
             observed_at_ms=observed_at_ms,
         ),
         market_data=market_data,
+        market_liveness=compose_market_liveness(
+            "SPY",
+            now_ms=observed_at_ms,
+            market_clock=MarketClockLivenessEvidence(
+                state="OPEN",
+                source="test.clock",
+                observed_at_ms=observed_at_ms,
+                vendor_timestamp_ms=observed_at_ms,
+            ),
+            connected=True,
+            connection_changed_at_ms=observed_at_ms,
+            symbol_status=SymbolTradingStatusEvidence(
+                symbol="SPY",
+                state="TRADABLE",
+                source="test.symbol-status",
+                observed_at_ms=observed_at_ms,
+                source_timestamp_ms=observed_at_ms,
+            ),
+        ),
     )
 
 

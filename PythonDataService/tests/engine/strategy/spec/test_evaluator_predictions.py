@@ -134,7 +134,7 @@ def _run_one_bar(algo: SpecAlgorithm, bar_end_time: datetime) -> None:
     reads, then invokes _on_consolidated_bar directly, bypassing the
     engine's full event loop.
 
-    ``ctx.current_time`` must be set before calling _on_consolidated_bar so
+    ``ctx.current_time_ms`` must be set before calling _on_consolidated_bar so
     that any set_holdings / liquidate call (triggered by entry/exit) passes
     the ``assert self.current_time is not None`` guard in StrategyContext.
     """
@@ -144,7 +144,7 @@ def _run_one_bar(algo: SpecAlgorithm, bar_end_time: datetime) -> None:
     ctx = StrategyContext(portfolio=portfolio)
     algo.ctx = ctx
     algo.initialize()
-    ctx.current_time = bar_end_time
+    ctx.current_time_ms = _ts_ms(bar_end_time)
     algo._on_consolidated_bar(_make_bar(bar_end_time))
 
 

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import datetime
 from decimal import Decimal
 
 from app.engine.execution.order import (
@@ -90,7 +89,7 @@ class Portfolio:
         self,
         symbol: str,
         quantity: int,
-        time: datetime,
+        submitted_at_ms: int,
         tag: str = "",
         take_profit_price: Decimal | None = None,
         stop_loss_price: Decimal | None = None,
@@ -103,7 +102,7 @@ class Portfolio:
             symbol=symbol,
             quantity=quantity,
             order_type=OrderType.MARKET,
-            time=time,
+            submitted_at_ms=submitted_at_ms,
             direction=direction,
             tag=tag,
             take_profit_price=take_profit_price,
@@ -116,7 +115,7 @@ class Portfolio:
         self,
         symbol: str,
         quantity: int,
-        time: datetime,
+        submitted_at_ms: int,
         limit_price: Decimal,
         tag: str = "",
         take_profit_price: Decimal | None = None,
@@ -137,7 +136,7 @@ class Portfolio:
             symbol=symbol,
             quantity=quantity,
             order_type=OrderType.LIMIT,
-            time=time,
+            submitted_at_ms=submitted_at_ms,
             direction=direction,
             tag=tag,
             limit_price=limit_price,
@@ -151,7 +150,7 @@ class Portfolio:
         self,
         symbol: str,
         target_fraction: Decimal | float,
-        time: datetime,
+        submitted_at_ms: int,
         tag: str = "",
     ) -> Order | None:
         """Rebalance to a target portfolio fraction for ``symbol``.
@@ -179,13 +178,13 @@ class Portfolio:
         delta = target_quantity - current_pos.quantity
         if delta == 0:
             return None
-        return self.submit_market_order(symbol, delta, time, tag=tag or "SetHoldings")
+        return self.submit_market_order(symbol, delta, submitted_at_ms, tag=tag or "SetHoldings")
 
-    def liquidate(self, symbol: str, time: datetime) -> Order | None:
+    def liquidate(self, symbol: str, submitted_at_ms: int) -> Order | None:
         pos = self.get_position(symbol)
         if pos.quantity == 0:
             return None
-        return self.submit_market_order(symbol, -pos.quantity, time, tag="Liquidate")
+        return self.submit_market_order(symbol, -pos.quantity, submitted_at_ms, tag="Liquidate")
 
     # ------------------------------------------------------------------
     # Fill application

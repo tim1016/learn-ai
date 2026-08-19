@@ -76,9 +76,9 @@ class LoggedTrade:
     other fields are populated identically by every strategy.
     """
 
-    entry_time: datetime
+    entry_time_ms: int
     entry_price: Decimal
-    exit_time: datetime
+    exit_time_ms: int
     exit_price: Decimal
     quantity: int
     pnl_pts: Decimal
@@ -122,7 +122,7 @@ class StrategyContext:
     symbols: list[str] = field(default_factory=list)
     # Logged messages for debugging / trade logs.
     log_lines: list[str] = field(default_factory=list)
-    current_time: datetime | None = None
+    current_time_ms: int | None = None
     # Consolidated bars captured for charting (one list per consolidator).
     consolidated_bars: list[TradeBar] = field(default_factory=list)
     # Insight manager — tracks structured predictions and scores them.
@@ -154,10 +154,10 @@ class StrategyContext:
         consolidator = TradeBarConsolidator(period)
 
         # Wrap handler so the consolidator's emission also records the
-        # strategy's ``current_time`` for convenience and stashes the last
+        # strategy's ``current_time_ms`` for convenience and stashes the last
         # fired bar on the consolidator (used by the engine for fills).
         def _on_emit(bar: TradeBar, ctx: StrategyContext = self) -> None:
-            ctx.current_time = bar.end_time
+            ctx.current_time_ms = bar.end_ms
             ctx.portfolio.update_reference_price(bar.symbol, bar.close)
             consolidator._last_fired_bar = bar  # type: ignore[attr-defined]
             ctx.consolidated_bars.append(bar)
@@ -178,12 +178,12 @@ class StrategyContext:
 
     # Convenience proxies to portfolio
     def set_holdings(self, symbol: str, fraction: Decimal | float) -> None:
-        assert self.current_time is not None
-        self.portfolio.set_holdings(symbol.upper(), fraction, self.current_time)
+        assert self.current_time_ms is not None
+        self.portfolio.set_holdings(symbol.upper(), fraction, self.current_time_ms)
 
     def liquidate(self, symbol: str) -> None:
-        assert self.current_time is not None
-        self.portfolio.liquidate(symbol.upper(), self.current_time)
+        assert self.current_time_ms is not None
+        self.portfolio.liquidate(symbol.upper(), self.current_time_ms)
 
     def market_order(self, symbol: str, quantity: int, tag: str = "") -> None:
         """Submit a fixed-quantity market order (signed: + buy, − sell).
@@ -197,11 +197,11 @@ class StrategyContext:
         order-surface guard. The offline portfolio has no such guard and
         accepts only the pure backtest order shape.
         """
-        assert self.current_time is not None
+        assert self.current_time_ms is not None
         self.portfolio.submit_market_order(
             symbol.upper(),
             quantity,
-            self.current_time,
+            self.current_time_ms,
             tag,
         )
 
@@ -223,14 +223,14 @@ class StrategyContext:
     def emit_insight(self, insight: Insight) -> None:
         """Register a structured prediction.
 
-        Sets the insight's generated_time to the current bar time and
+        Sets the insight's generated timestamp to the current bar time and
         records the current reference price. Strategies that don't emit
         insights continue to work exactly as before — this is purely
         additive.
         """
-        if self.current_time is not None:
-            insight.generated_time = self.current_time
-            insight.close_time = self.current_time + insight.period
+        if self.current_time_ms is not None:
+            insight.generated_at_ms = self.current_time_ms
+            insight.close_at_ms = self.current_time_ms + int(insight.period.total_seconds() * 1000)
         price = self.portfolio.reference_price.get(insight.symbol, Decimal(0))
         self.insight_manager.add(insight, price)
 

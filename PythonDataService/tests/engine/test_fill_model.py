@@ -53,7 +53,7 @@ def test_signal_bar_close_fills_at_close_with_no_slippage():
 
     assert event is not None
     assert event.fill_price == Decimal("100.3")
-    assert event.fill_time if False else event.time == signal.end_time
+    assert event.filled_at_ms == signal.end_ms
     assert event.fee == Decimal("1.00")
 
 
@@ -82,7 +82,7 @@ def test_signal_bar_close_stale_signal_uses_current_open_when_enabled() -> None:
 
     assert event is not None
     assert event.fill_price == Decimal("619.32")
-    assert event.time == datetime(2026, 1, 5, 9, 31, tzinfo=NY)
+    assert event.filled_at_ms == int(datetime(2026, 1, 5, 9, 31, tzinfo=NY).timestamp() * 1000)
 
 
 def test_signal_bar_close_stale_signal_policy_preserves_same_boundary_fill() -> None:
@@ -103,7 +103,7 @@ def test_signal_bar_close_stale_signal_policy_preserves_same_boundary_fill() -> 
 
     assert event is not None
     assert event.fill_price == Decimal("100.3")
-    assert event.time == datetime(2026, 1, 2, 10, 0, tzinfo=NY)
+    assert event.filled_at_ms == int(datetime(2026, 1, 2, 10, 0, tzinfo=NY).timestamp() * 1000)
 
 
 def test_next_bar_open_defers_when_next_bar_missing():
@@ -124,7 +124,7 @@ def test_next_bar_open_fills_at_next_bar_open():
 
     assert event is not None
     assert event.fill_price == Decimal("100.4")
-    assert event.time == next_bar.time
+    assert event.filled_at_ms == next_bar.start_ms
 
 
 def test_long_slippage_adds_to_fill_price():
@@ -165,7 +165,7 @@ def test_non_market_orders_rejected():
         symbol="SPY",
         quantity=100,
         order_type=OrderType.LIMIT,
-        time=signal.time,
+        submitted_at_ms=signal.start_ms,
         direction=Direction.LONG,
         limit_price=Decimal("99.0"),
     )
@@ -212,7 +212,7 @@ def test_next_session_open_fills_at_later_trading_date_open() -> None:
 
     assert event is not None
     assert event.fill_price == Decimal("102.0")  # next_day_open.open
-    assert event.time == datetime(2026, 2, 10, 9, 30, tzinfo=NY)  # next_day_open.time (start)
+    assert event.filled_at_ms == int(datetime(2026, 2, 10, 9, 30, tzinfo=NY).timestamp() * 1000)
 
 
 def test_next_session_open_returns_none_when_next_bar_missing() -> None:

@@ -22,6 +22,7 @@ import pandas_ta as ta
 import pytest
 
 from app.engine.indicators.macd import MovingAverageConvergenceDivergence
+from app.utils.timestamps import to_ms_utc
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "golden" / "macd_12_26_9"
 
@@ -52,7 +53,7 @@ def _run_macd(
     s: list[float | None] = []
     h: list[float | None] = []
     for ts, v in closes.items():
-        macd.update(ts.to_pydatetime(), Decimal(str(v)))
+        macd.update(to_ms_utc(ts.to_pydatetime()), Decimal(str(v)))
         m.append(float(macd.macd) if macd.macd is not None else None)
         s.append(float(macd.signal) if macd.signal is not None else None)
         h.append(float(macd.histogram) if macd.histogram is not None else None)
@@ -71,21 +72,21 @@ def test_warmup_emits_macd_after_slow_signal_after_slow_plus_signal_minus_1():
     macd = MovingAverageConvergenceDivergence("MACD", fast_period=3, slow_period=5, signal_period=3)
     t = datetime(2024, 1, 2, 14, 30, tzinfo=UTC)
     for i in range(4):
-        macd.update(t + timedelta(minutes=15 * i), Decimal(100 + i))
+        macd.update(to_ms_utc(t + timedelta(minutes=15 * i)), Decimal(100 + i))
         assert macd.macd is None, f"macd ready too early at sample {i + 1}"
         assert not macd.is_ready
     # Sample 5: macd line emitted; signal EMA receives its 1st sample.
-    macd.update(t + timedelta(minutes=15 * 4), Decimal(104))
+    macd.update(to_ms_utc(t + timedelta(minutes=15 * 4)), Decimal(104))
     assert macd.macd is not None
     assert macd.signal is None
     assert not macd.is_ready
     # Sample 6: signal EMA receives its 2nd sample — still warming.
-    macd.update(t + timedelta(minutes=15 * 5), Decimal(105))
+    macd.update(to_ms_utc(t + timedelta(minutes=15 * 5)), Decimal(105))
     assert macd.signal is None
     assert not macd.is_ready
     # Sample 7 = slow + signal - 1: signal EMA receives its 3rd sample
     # and becomes ready.
-    macd.update(t + timedelta(minutes=15 * 6), Decimal(106))
+    macd.update(to_ms_utc(t + timedelta(minutes=15 * 6)), Decimal(106))
     assert macd.is_ready
     assert macd.signal is not None
     assert macd.histogram is not None
@@ -96,7 +97,7 @@ def test_current_value_is_macd_line():
     macd = MovingAverageConvergenceDivergence("MACD", 3, 5, 3)
     t = datetime(2024, 1, 2, 14, 30, tzinfo=UTC)
     for i in range(10):
-        macd.update(t + timedelta(minutes=15 * i), Decimal(100 + i))
+        macd.update(to_ms_utc(t + timedelta(minutes=15 * i)), Decimal(100 + i))
     assert macd.current_value is not None
     assert macd.macd is not None
     assert macd.current_value == macd.macd

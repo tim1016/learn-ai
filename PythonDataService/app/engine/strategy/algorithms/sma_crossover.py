@@ -38,6 +38,7 @@ from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
 from app.engine.indicators.sma import SimpleMovingAverage
 from app.engine.strategy.base import LoggedTrade, Strategy
+from app.utils.timestamps import display_time
 
 
 @dataclass
@@ -48,16 +49,11 @@ class _PendingEntry:
 
 @dataclass
 class _OpenTrade:
-    entry_time: datetime  # type: ignore[name-defined]
+    entry_time_ms: int
     entry_price: Decimal
     quantity: int
     sma_short: Decimal
     sma_long: Decimal
-
-
-# Avoid a runtime import loop — datetime is only needed for the annotation
-# above when type-checking, but we also use it at runtime in some places.
-from datetime import datetime  # noqa: E402
 
 
 class SmaCrossoverAlgorithm(Strategy):
@@ -146,8 +142,8 @@ class SmaCrossoverAlgorithm(Strategy):
         assert self._sma_long is not None
         assert self.ctx is not None
 
-        self._sma_short.update(bar.end_time, bar.close)
-        self._sma_long.update(bar.end_time, bar.close)
+        self._sma_short.update(bar.end_ms, bar.close)
+        self._sma_long.update(bar.end_ms, bar.close)
 
         # Until both SMAs have enough samples, we can't make a decision. Once
         # they become ready we *seed* the previous-state on the first eligible
@@ -175,7 +171,7 @@ class SmaCrossoverAlgorithm(Strategy):
             if fresh_death_cross:
                 self.ctx.liquidate(self._symbol)
                 self.ctx.log(
-                    f"EXIT SIGNAL: {bar.end_time.strftime('%Y-%m-%d %H:%M')} "
+                    f"EXIT SIGNAL: {display_time(bar.end_ms)} "
                     f"Close={bar.close:.2f} "
                     f"SMA{self._short_window}={short_val:.4f} "
                     f"SMA{self._long_window}={long_val:.4f}"
@@ -187,7 +183,7 @@ class SmaCrossoverAlgorithm(Strategy):
                 self.ctx.set_holdings(self._symbol, Decimal(1))
                 self._in_position = True
                 self.ctx.log(
-                    f"ENTRY SIGNAL: {bar.end_time.strftime('%Y-%m-%d %H:%M')} "
+                    f"ENTRY SIGNAL: {display_time(bar.end_ms)} "
                     f"Close={bar.close:.2f} "
                     f"SMA{self._short_window}={short_val:.4f} "
                     f"SMA{self._long_window}={long_val:.4f}"
@@ -202,10 +198,10 @@ class SmaCrossoverAlgorithm(Strategy):
         if event.direction == Direction.LONG:
             if self._pending_entry is None:
                 if self.ctx is not None:
-                    self.ctx.log(f"WARN: LONG fill at {event.time} with no pending entry")
+                    self.ctx.log(f"WARN: LONG fill at {display_time(event.filled_at_ms)} with no pending entry")
                 return
             self._open_trade = _OpenTrade(
-                entry_time=event.time,
+                entry_time_ms=event.filled_at_ms,
                 entry_price=event.fill_price,
                 quantity=event.fill_quantity,
                 sma_short=self._pending_entry.sma_short,
@@ -214,7 +210,7 @@ class SmaCrossoverAlgorithm(Strategy):
             self._pending_entry = None
             if self.ctx is not None:
                 self.ctx.log(
-                    f"ENTRY: {event.time.strftime('%Y-%m-%d %H:%M')} "
+                    f"ENTRY: {display_time(event.filled_at_ms)} "
                     f"Price={event.fill_price:.2f} "
                     f"SMA{self._short_window}={self._open_trade.sma_short:.4f} "
                     f"SMA{self._long_window}={self._open_trade.sma_long:.4f}"
@@ -228,9 +224,9 @@ class SmaCrossoverAlgorithm(Strategy):
             result = "WIN" if pnl_pts >= 0 else "LOSS"
             self.trade_log.append(
                 LoggedTrade(
-                    entry_time=entry.entry_time,
+                    entry_time_ms=entry.entry_time_ms,
                     entry_price=entry.entry_price,
-                    exit_time=event.time,
+                    exit_time_ms=event.filled_at_ms,
                     exit_price=event.fill_price,
                     quantity=entry.quantity,
                     pnl_pts=pnl_pts,
@@ -245,7 +241,7 @@ class SmaCrossoverAlgorithm(Strategy):
             )
             if self.ctx is not None:
                 self.ctx.log(
-                    f"EXIT: {event.time.strftime('%Y-%m-%d %H:%M')} "
+                    f"EXIT: {display_time(event.filled_at_ms)} "
                     f"Price={event.fill_price:.2f} PnL={pnl_pts:.2f} "
                     f"({pnl_pct * 100:.2f}%) {result}"
                 )
@@ -256,3 +252,4 @@ class SmaCrossoverAlgorithm(Strategy):
             assert self.ctx is not None
             self.ctx.liquidate(self._symbol)
             self._in_position = False
+

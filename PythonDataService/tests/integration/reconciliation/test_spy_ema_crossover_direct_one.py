@@ -145,7 +145,7 @@ def test_python_and_lean_templates_exit_after_five_consolidated_bars() -> None:
     entry_end_time = datetime(2026, 1, 6, 15, 0, tzinfo=UTC)
     for bar_number in range(6):
         bar = _consolidated_bar(entry_end_time + timedelta(minutes=15 * bar_number))
-        context.current_time = bar.end_time
+        context.current_time_ms = bar.end_ms
         strategy._on_fifteen_minute_bar(bar)
         if bar_number < 5:
             assert [intent.kind for intent in recorder.intents] == [SignalIntentKind.ENTER]

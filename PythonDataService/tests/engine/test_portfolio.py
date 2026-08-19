@@ -18,8 +18,9 @@ from app.engine.execution.order import (
     OrderType,
 )
 from app.engine.execution.portfolio import Portfolio, Position
+from app.utils.timestamps import to_ms_utc
 
-NOW = datetime(2024, 1, 1, 14, 30, tzinfo=UTC)
+NOW = to_ms_utc(datetime(2024, 1, 1, 14, 30, tzinfo=UTC))
 
 
 def _fill(quantity: int, price: str, fee: str = "0") -> OrderEvent:
@@ -27,7 +28,7 @@ def _fill(quantity: int, price: str, fee: str = "0") -> OrderEvent:
     return OrderEvent(
         order_id=1,
         symbol="SPY",
-        time=NOW,
+        filled_at_ms=NOW,
         fill_price=Decimal(price),
         fill_quantity=quantity,
         direction=direction,
@@ -57,7 +58,7 @@ def test_submit_market_order_raises_on_zero_quantity():
     portfolio = Portfolio(initial_cash=Decimal("10000"))
 
     with pytest.raises(ValueError):
-        portfolio.submit_market_order("SPY", quantity=0, time=NOW)
+        portfolio.submit_market_order("SPY", quantity=0, submitted_at_ms=NOW)
 
 
 def test_submit_market_order_generates_incrementing_ids():
@@ -156,7 +157,7 @@ def test_set_holdings_raises_without_reference_price():
     portfolio = Portfolio(initial_cash=Decimal("10000"))
 
     with pytest.raises(RuntimeError):
-        portfolio.set_holdings("SPY", target_fraction=0.5, time=NOW)
+        portfolio.set_holdings("SPY", target_fraction=0.5, submitted_at_ms=NOW)
 
 
 def test_set_holdings_submits_order_to_reach_target_fraction():
@@ -164,7 +165,7 @@ def test_set_holdings_submits_order_to_reach_target_fraction():
     portfolio.update_reference_price("SPY", Decimal("100"))
 
     # Target 50% of 10000 = 5000 → 50 shares at $100.
-    order = portfolio.set_holdings("SPY", target_fraction=0.5, time=NOW)
+    order = portfolio.set_holdings("SPY", target_fraction=0.5, submitted_at_ms=NOW)
 
     assert order is not None
     assert order.quantity == 50
@@ -178,7 +179,7 @@ def test_set_holdings_noop_when_already_at_target():
     portfolio.update_reference_price("SPY", Decimal("100"))
     portfolio.apply_fill(_fill(100, "100"))
 
-    order = portfolio.set_holdings("SPY", target_fraction=Decimal("1.0"), time=NOW)
+    order = portfolio.set_holdings("SPY", target_fraction=Decimal("1.0"), submitted_at_ms=NOW)
 
     assert order is None
 

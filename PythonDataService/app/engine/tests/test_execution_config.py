@@ -45,7 +45,7 @@ def _market_order(direction: Direction, quantity: int = 100) -> Order:
         symbol="SPY",
         quantity=quantity,
         order_type=OrderType.MARKET,
-        time=datetime(2024, 1, 2, 15, 0, tzinfo=UTC),
+        submitted_at_ms=int(datetime(2024, 1, 2, 15, 0, tzinfo=UTC).timestamp() * 1000),
         direction=direction,
     )
 

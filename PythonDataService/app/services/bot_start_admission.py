@@ -15,6 +15,7 @@ from app.marketdata.feed import MarketDataFeed
 from app.schemas.action_plan import ActionPlan
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_capability import SessionDataCapability
+from app.schemas.market_liveness import MarketLivenessFact
 from app.schemas.run_admission import (
     MarketDataAdmissionFact,
     RunAdmissionDecision,
@@ -24,6 +25,7 @@ from app.schemas.run_admission import (
 )
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_carryover import configuration_hash
+from app.services.market_liveness import market_liveness_fact
 from app.services.run_admission import evaluate_run_admission
 from app.services.session_authority import session_state_at_ms
 
@@ -32,6 +34,7 @@ logger = logging.getLogger(__name__)
 CustodyGuard = Callable[[str], AbstractAsyncContextManager[ClerkCustodySnapshot]]
 ProcessFactResolver = Callable[[BrokerBotBinding, int], RunProcessAdmissionFact]
 RuntimeFactResolver = Callable[[str, int], Awaitable[StartRuntimeAdmissionFact]]
+MarketLivenessFactResolver = Callable[[str, int], MarketLivenessFact]
 CustodyBoundActivator = Callable[
     [BrokerBotBinding, MarketDataFeed, int, ClerkCustodySnapshot], Awaitable[BotStatusView]
 ]
@@ -245,6 +248,7 @@ class BotStartAdmission:
         runtime_fact: RuntimeFactResolver,
         activate: CustodyBoundActivator,
         session_capability: SessionCapabilityResolver,
+        market_liveness: MarketLivenessFactResolver = market_liveness_fact,
     ) -> None:
         self._now_ms = now_ms
         self._feed_resolver = feed_resolver
@@ -253,6 +257,7 @@ class BotStartAdmission:
         self._runtime_fact = runtime_fact
         self._activate = activate
         self._session_capability = session_capability
+        self._market_liveness = market_liveness
 
     async def preview(self, request: StartRequest) -> RunAdmissionDecision:
         """Evaluate without mutation while holding the same Clerk fence."""
@@ -300,6 +305,10 @@ class BotStartAdmission:
                             else None
                         ),
                         account_id=capability_account_id,
+                    ),
+                    market_liveness=self._market_liveness(
+                        binding.symbol,
+                        observed_at_ms,
                     ),
                 )
                 yield (

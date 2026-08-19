@@ -10,6 +10,7 @@ from app.broker.ibkr.capability import probe_session_data_capability
 from app.broker.ibkr.client import IbkrClient
 from app.broker.ibkr.config import get_settings
 from app.schemas.broker_capability import SessionDataCapability
+from app.services.session_authority import session_state_at_ms
 
 logger = logging.getLogger(__name__)
 
@@ -107,3 +108,27 @@ _SERVICE = BrokerCapabilityService()
 
 def get_broker_capability_service() -> BrokerCapabilityService:
     return _SERVICE
+
+
+def extended_phase_proven_at_ms(*, now_ms: int, symbol: str, account_id: str) -> bool:
+    """Whether extended-session (PRE/POST/OVERNIGHT) capability is proven
+    for this instrument/account right now.
+
+    Resolves the capability snapshot this service owns, then defers the
+    actual session decision to the pure, injection-only
+    ``session_authority.session_state_at_ms`` — that module has no service
+    dependencies of its own, so the I/O lookup lives here instead. Shared
+    by every caller that must reconcile a broker's RTH-only live clock
+    (which reports CLOSED outside regular hours regardless of actual
+    extended-session availability) against the canonical session
+    authority: the ENTER gate in ``bot_trade_strategy.py`` and its
+    Clerk-boundary recheck in ``runtime.py`` (#1671), via
+    ``market_liveness.liveness_blocks_entry``.
+    """
+    capability = get_broker_capability_service().read_latest_for(symbol=symbol, account_id=account_id)
+    return session_state_at_ms(
+        now_ms=now_ms,
+        capability=capability,
+        symbol=symbol,
+        account_id=account_id,
+    ).extended_phase_proven

@@ -33,6 +33,7 @@ from app.engine.data.lean_format import (
 from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.staging import list_metadata_databases, stage_lean_metadata_from_image, stage_minute_bars
 from app.lean_sidecar.workspace import resolve_workspace
+from app.utils.timestamps import datetime_at_ms, to_ms_utc
 
 
 def _make_minute_bars(
@@ -100,7 +101,7 @@ class TestDataFolderRoundTrip:
             # the integer stored on disk; read-back must equal the
             # truncated-to-deci-cent original.
             assert int(got.close * PRICE_SCALE) == int(original.close * PRICE_SCALE), (
-                f"deci-cent round-trip drift at {original.time}"
+                f"deci-cent round-trip drift at {original.start_ms}"
             )
             assert got.open == (Decimal(int(original.open * PRICE_SCALE)) / PRICE_SCALE)
             assert got.volume == original.volume
@@ -115,9 +116,8 @@ class TestDataFolderRoundTrip:
         round_tripped = reader.read_day(symbol, trading_date)
 
         for original, got in zip(bars, round_tripped, strict=True):
-            assert got.time.tzinfo is not None
-            assert got.time.utcoffset() == original.time.utcoffset()
-            assert got.time == original.time
+            assert datetime_at_ms(got.start_ms, tz=EASTERN).tzinfo is not None
+            assert got.start_ms == original.start_ms
 
     def test_staging_writes_in_expected_lean_layout(self, tmp_artifacts_root: Path) -> None:
         """Verify ``staging.stage_minute_bars`` lands files at the
@@ -246,7 +246,7 @@ class TestDataFolderRoundTrip:
         assert len(round_tripped) == 1
         got = round_tripped[0]
         # The read-back time is the same instant (in ET).
-        assert got.time == utc_open.astimezone(EASTERN)
+        assert got.start_ms == to_ms_utc(utc_open)
 
     @pytest.mark.parametrize(
         "open_price,expected_disk_value",

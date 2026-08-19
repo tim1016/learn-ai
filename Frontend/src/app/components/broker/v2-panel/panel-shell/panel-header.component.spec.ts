@@ -31,6 +31,10 @@ function panel(overrides: Partial<BotPanelView> = {}): BotPanelView {
     revision: 1,
     market_pulse: {
       session: 'OPEN',
+      market_state: 'TRADABLE',
+      market_liveness_reason: 'Fresh test evidence proves tradability.',
+      market_liveness_observed_at_ms: 1_753_800_001_000,
+      halted_symbol: null,
       feed_state: 'LIVE',
       latest_bar_at_ms: 1_753_800_000_000,
       age_ms: 1_000,
@@ -155,6 +159,27 @@ describe('PanelHeaderComponent', () => {
     }));
 
     expect(screen.getByRole('status', { name: 'Stopped safely after the operator command.' })).toBeTruthy();
+  });
+
+  it('shows live halt evidence instead of the feed state as market status', async () => {
+    const value = panel();
+    const { container } = await renderHeader(panel({
+      market_pulse: {
+        ...value.market_pulse,
+        market_state: 'HALTED',
+        market_liveness_reason: 'Fresh vendor evidence reports this symbol halted.',
+        headline: 'Trading halted for',
+        halted_symbol: 'NVDA',
+        explanation: 'Fresh vendor evidence reports this symbol halted.',
+        attention_required: true,
+      },
+    }));
+
+    const marketStatus = container.querySelector('.status-rail__market strong');
+    expect(marketStatus?.textContent).toContain('Trading halted for');
+    // The symbol renders through app-asset-identity, not interpolated into the headline string.
+    expect(marketStatus?.querySelector('.asset-identity__symbol')?.textContent).toBe('NVDA');
+    expect(screen.getByText('Halted')).toBeTruthy();
   });
 
   it.each([
