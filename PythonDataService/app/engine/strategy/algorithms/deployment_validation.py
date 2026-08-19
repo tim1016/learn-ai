@@ -1,13 +1,21 @@
 """DeploymentValidationConsecutiveGreen — minute-bar lifecycle validation strategy.
 
 Formula: Long-only deployment-validation strategy on 1-minute signal bars.
-Starting at 09:45 ET, detect two consecutive green minute bars (close > open).
-After the second green bar, submit an entry order for the configured trade
-symbol intended to fill with Engine Lab's ``next_bar_open`` mode on the third
-bar. Hold through the third, fourth, and fifth signal-bar closes, then submit
+Detection starts 15 minutes after the session's scheduled open and the
+stop/flatten barrier sits 15 minutes before the session's scheduled close —
+09:45/15:45 ET on a regular session, both shifted on an NYSE early close so
+the barrier is always reachable (see #1672; a fixed 15:45 ET literal is never
+reached on a 13:00 ET half-day close, so the flatten safety net silently
+never fires). Detect two consecutive green minute bars (close > open). After
+the second green bar, submit an entry order for the configured trade symbol
+intended to fill with Engine Lab's ``next_bar_open`` mode on the third bar.
+Hold through the third, fourth, and fifth signal-bar closes, then submit
 ``Liquidate`` on the fifth bar. Reset detection state after each exit cycle.
-Stop detecting new entries at 15:45 ET and liquidate any open position.
-Reference: Internal strategy specification from user session 2026-06-02.
+At the stop/flatten barrier, stop detecting new entries and liquidate any
+open position.
+Reference: Internal strategy specification from user session 2026-06-02;
+half-day cutoff contract decided in #1672 — see
+``docs/references/deployment-validation-consecutive-green.md``.
 Canonical implementation: this file. LEAN companion:
 ``app/lean_sidecar/trusted_samples/deployment_validation.py``.
 Validated against: ``tests/engine/test_deployment_validation_strategy.py`` and
@@ -19,18 +27,33 @@ an alpha port.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import time, timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 from enum import StrEnum
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
 from app.engine.strategy.base import LoggedTrade, Strategy
+from app.lean_sidecar.trading_calendar import session_close_ms_utc, session_open_ms_utc
 from app.utils.timestamps import ny_datetime
 
-_DETECTION_START = time(9, 45)
-_STOP_AND_FLATTEN = time(15, 45)
+_DETECTION_START_OFFSET_MS = 15 * 60 * 1000
+_STOP_AND_FLATTEN_OFFSET_MS = 15 * 60 * 1000
 _BARS_FROM_ENTRY_FILL_TO_EXIT_SIGNAL = 3
+
+
+def _session_decision_window_ms(session_date: date) -> tuple[int, int]:
+    """Return ``(detection_start_ms, stop_and_flatten_ms)`` for ``session_date``.
+
+    Anchored to the day's actual scheduled open/close via the canonical NYSE
+    calendar (``app.lean_sidecar.trading_calendar``), not a fixed wall-clock
+    literal — so an early-close session gets a real, reachable stop/flatten
+    barrier instead of one that can silently never fire (#1672).
+    """
+    return (
+        session_open_ms_utc(session_date) + _DETECTION_START_OFFSET_MS,
+        session_close_ms_utc(session_date) - _STOP_AND_FLATTEN_OFFSET_MS,
+    )
 
 
 class DeploymentDecision(StrEnum):
@@ -79,6 +102,8 @@ class DeploymentValidationDecisionKernel:
         self._cycle_active = False
         self._bars_since_enter = 0
         self._stopped_for_day = False
+        self._detection_start_ms: int | None = None
+        self._stop_and_flatten_ms: int | None = None
 
     def on_closed_bar(
         self,
@@ -94,7 +119,8 @@ class DeploymentValidationDecisionKernel:
             self._cycle_active = False
             self._bars_since_enter = 0
             self._stopped_for_day = False
-        if end_time.time() >= _STOP_AND_FLATTEN:
+            self._detection_start_ms, self._stop_and_flatten_ms = _session_decision_window_ms(self._current_date)
+        if end_ms >= self._stop_and_flatten_ms:
             self._stopped_for_day = True
             self._green_streak = 0
             if self._cycle_active:
@@ -102,7 +128,7 @@ class DeploymentValidationDecisionKernel:
                 self._bars_since_enter = 0
                 return DeploymentDecision.EXIT
             return DeploymentDecision.HOLD
-        if self._stopped_for_day or end_time.time() < _DETECTION_START:
+        if self._stopped_for_day or end_ms < self._detection_start_ms:
             self._green_streak = 0
             return DeploymentDecision.HOLD
         if self._cycle_active:
@@ -151,6 +177,8 @@ class DeploymentValidationConsecutiveGreen(Strategy):
         self._bars_until_exit_signal = 0
         self._pending_signal_time_ms: int | None = None
         self._open_trade: _OpenTrade | None = None
+        self._detection_start_ms: int | None = None
+        self._stop_and_flatten_ms: int | None = None
 
         self.trade_log: list[LoggedTrade] = []
 
@@ -198,8 +226,9 @@ class DeploymentValidationConsecutiveGreen(Strategy):
         if self._current_date is None or bar_date != self._current_date:
             self._current_date = bar_date
             self._reset_day()
+            self._detection_start_ms, self._stop_and_flatten_ms = _session_decision_window_ms(bar_date)
 
-        if end_time.time() >= _STOP_AND_FLATTEN:
+        if bar.end_ms >= self._stop_and_flatten_ms:
             self._stopped_for_day = True
             self._reset_detection()
             signal = "HOLD"
@@ -213,7 +242,7 @@ class DeploymentValidationConsecutiveGreen(Strategy):
             self._publish_decision(bar, signal)
             return
 
-        if self._stopped_for_day or end_time.time() < _DETECTION_START:
+        if self._stopped_for_day or bar.end_ms < self._detection_start_ms:
             self._reset_detection()
             self._publish_decision(bar, "HOLD")
             return

@@ -6,11 +6,15 @@ backtest id to the live deployment form.
 
 The canonical Python implementation is
 ``PythonDataService/app/engine/strategy/algorithms/deployment_validation.py``.
-This QC copy mirrors the deployment-validation intent: start detecting at the
-09:45 ET minute close, require two consecutive green minute bars
-(``close > open``), enter on the next bar, submit liquidation on the fifth bar,
-reset detection after exits, allow multiple trades per day, and stop/flatten at
-15:45 ET.
+This QC copy mirrors the deployment-validation intent: start detecting 15
+minutes after the session's scheduled open, require two consecutive green
+minute bars (``close > open``), enter on the next bar, submit liquidation on
+the fifth bar, reset detection after exits, allow multiple trades per day,
+and stop/flatten 15 minutes before the session's scheduled close. On a
+regular session that resolves to 09:45/15:45 ET; on an NYSE half day (13:00
+ET close) both cutoffs shift so the stop/flatten barrier stays reachable
+within the session (#1672) — derived from ``Securities[symbol].Exchange.Hours``
+rather than a fixed wall-clock literal.
 
 LEAN note: this audit copy submits entries with ``SetHoldings`` from ``OnData``
 after the two-bar confirmation. It is the committed source artifact bound to the
@@ -20,12 +24,12 @@ engine, whose deployment run uses ``fill_mode=next_bar_open``.
 
 # ruff: noqa: F403, F405
 from AlgorithmImports import *  # noqa: F401
-from datetime import time
+from datetime import datetime, timedelta
 
 
 class DeploymentValidationAlgorithm(QCAlgorithm):  # type: ignore[name-defined]
-    START_AFTER = time(9, 45)
-    STOP_AND_FLATTEN = time(15, 45)
+    DETECTION_START_OFFSET = timedelta(minutes=15)
+    STOP_AND_FLATTEN_OFFSET = timedelta(minutes=15)
     EXIT_BAR_COUNT = 3
 
     def Initialize(self) -> None:
@@ -41,6 +45,8 @@ class DeploymentValidationAlgorithm(QCAlgorithm):  # type: ignore[name-defined]
         self._in_position = False
         self._stopped_for_day = False
         self._bars_until_exit = 0
+        self._detection_start = None
+        self._stop_and_flatten = None
 
     def _reset_detection(self) -> None:
         self._green_streak = 0
@@ -49,6 +55,19 @@ class DeploymentValidationAlgorithm(QCAlgorithm):  # type: ignore[name-defined]
     def _reset_day(self) -> None:
         self._reset_detection()
         self._stopped_for_day = False
+
+    def _session_window(self, bar_date):
+        """Return ``(detection_start, stop_and_flatten)`` for ``bar_date``.
+
+        Derived from the exchange's own scheduled session hours, not a fixed
+        wall-clock literal, so an NYSE half day gets a real, reachable
+        stop/flatten barrier (#1672).
+        """
+        midnight = datetime(bar_date.year, bar_date.month, bar_date.day)
+        hours = self.Securities[self.spy].Exchange.Hours
+        session_open = hours.GetNextMarketOpen(midnight, False)
+        session_close = hours.GetNextMarketClose(midnight, False)
+        return session_open + self.DETECTION_START_OFFSET, session_close - self.STOP_AND_FLATTEN_OFFSET
 
     def OnData(self, slice) -> None:
         bar = slice.Bars.get(self.spy)
@@ -59,9 +78,9 @@ class DeploymentValidationAlgorithm(QCAlgorithm):  # type: ignore[name-defined]
         if self._current_date is None or bar_date != self._current_date:
             self._current_date = bar_date
             self._reset_day()
+            self._detection_start, self._stop_and_flatten = self._session_window(bar_date)
 
-        bar_time = bar.EndTime.time()
-        if bar_time >= self.STOP_AND_FLATTEN:
+        if bar.EndTime >= self._stop_and_flatten:
             self._stopped_for_day = True
             self._reset_detection()
             if self._in_position or self._entry_pending or self.Portfolio[self.spy].Invested:
@@ -70,7 +89,7 @@ class DeploymentValidationAlgorithm(QCAlgorithm):  # type: ignore[name-defined]
                 self._bars_until_exit = 0
             return
 
-        if self._stopped_for_day or bar_time < self.START_AFTER:
+        if self._stopped_for_day or bar.EndTime < self._detection_start:
             self._reset_detection()
             return
 

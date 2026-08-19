@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -606,7 +607,12 @@ def test_reference_code_uses_service_fallback_when_repo_reference_absent(tmp_pat
         validation_state="validated",
         deployable=True,
         audit_copy_ref="references/qc-shadow/DeploymentValidationAlgorithm.py",
-        audit_copy_sha256="3dbb1c0f54254951828f3c74e4dc6e2f7c1bcc0784465c8532f109ea191c3af0",
+        # #1672 changed the audit copy's session-boundary literals (see
+        # docs/references/deployment-validation-consecutive-green.md); this
+        # pins the current file's hash, not the manifest's — the manifest's
+        # pinned hash is deliberately left stale until a fresh QC Cloud
+        # reconciliation is run (see tests/routers/test_strategy_validation.py).
+        audit_copy_sha256="55a07f83f4643119dbe2302acc8b94c7b17e704874dd052b8b6617f4478d8041",
     )
 
     code = reference_code_for_entry(entry, repo_root=tmp_path)
@@ -614,6 +620,27 @@ def test_reference_code_uses_service_fallback_when_repo_reference_absent(tmp_pat
     assert code is not None
     assert code.path == "references/qc-shadow/DeploymentValidationAlgorithm.py"
     assert "class DeploymentValidationAlgorithm" in code.source
+
+
+def test_qc_shadow_container_fallback_copies_are_byte_identical_to_references() -> None:
+    """The containerized data plane can't mount references/ (see
+    docs/archive/plans/live-control-data-plane-topology-investigation-prd.md),
+    so reference_code_for_entry falls back to app/data/qc-shadow/ whenever
+    references/qc-shadow/ is absent. ruff.toml documents the intent that the
+    two stay byte-identical ("Reference artifacts must stay byte-identical to
+    the uploaded QC source") but nothing previously enforced it — a future
+    edit to one copy without the other would silently drift and only surface
+    as a container-only production bug."""
+    repo_root = Path(__file__).resolve().parents[3]
+    references_dir = repo_root / "references" / "qc-shadow"
+    fallback_dir = repo_root / "PythonDataService" / "app" / "data" / "qc-shadow"
+
+    reference_files = sorted(p.name for p in references_dir.glob("*.py"))
+    assert reference_files, "expected at least one committed QC audit copy"
+    for name in reference_files:
+        assert (fallback_dir / name).read_bytes() == (references_dir / name).read_bytes(), (
+            f"{name} has drifted between references/qc-shadow and the container fallback copy"
+        )
 
 
 def test_ema_reference_code_uses_service_fallback_when_repo_reference_absent(tmp_path) -> None:

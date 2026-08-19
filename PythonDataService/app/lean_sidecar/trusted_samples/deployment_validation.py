@@ -2,16 +2,19 @@
 
 Companion to
 ``PythonDataService/app/engine/strategy/algorithms/deployment_validation.py``.
-The rule is intentionally fixed: start at 09:45 ET, require two consecutive
-green minute bars (close > open), enter on the following bar, submit the exit
-on the fifth bar, reset detection state, and stop/re-flatten at 15:45 ET.
+The rule: detection starts 15 minutes after the session's scheduled open and
+stops/re-flattens 15 minutes before the session's scheduled close — 09:45 ET
+/ 15:45 ET on a regular session, shifted on an NYSE half day so the barrier
+stays reachable within the session (#1672) — require two consecutive green
+minute bars (close > open), enter on the following bar, submit the exit on
+the fifth bar, reset detection state.
 """
 
 from __future__ import annotations
 
 DEPLOYMENT_VALIDATION_SOURCE = '''\
 from AlgorithmImports import *
-from datetime import time
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 
@@ -27,8 +30,8 @@ def _to_ms_utc(dt):
 class MyAlgorithm(QCAlgorithm):
     """Two-green-minute deployment validation strategy."""
 
-    START_AFTER = time(9, 45)
-    STOP_AND_FLATTEN = time(15, 45)
+    DETECTION_START_OFFSET = timedelta(minutes=15)
+    STOP_AND_FLATTEN_OFFSET = timedelta(minutes=15)
     EXIT_BAR_COUNT = 3
 
     def Initialize(self):
@@ -64,6 +67,8 @@ class MyAlgorithm(QCAlgorithm):
         self.in_trade = False
         self.stopped_for_day = False
         self.bars_until_exit = 0
+        self.detection_start = None
+        self.stop_and_flatten = None
 
         self.SetBenchmark(lambda dt: 100)
 
@@ -85,6 +90,19 @@ class MyAlgorithm(QCAlgorithm):
         self._reset_detection()
         self.stopped_for_day = False
 
+    def _session_window(self, bar_date):
+        """Return (detection_start, stop_and_flatten) for bar_date.
+
+        Derived from the exchange's own scheduled session hours, not a fixed
+        wall-clock literal, so an NYSE half day gets a real, reachable
+        stop/flatten barrier (#1672).
+        """
+        midnight = datetime(bar_date.year, bar_date.month, bar_date.day)
+        hours = self.Securities[self.symbol].Exchange.Hours
+        session_open = hours.GetNextMarketOpen(midnight, False)
+        session_close = hours.GetNextMarketClose(midnight, False)
+        return session_open + self.DETECTION_START_OFFSET, session_close - self.STOP_AND_FLATTEN_OFFSET
+
     def OnData(self, slice):
         bar = slice.Bars.get(self.symbol)
         if bar is None:
@@ -104,11 +122,11 @@ class MyAlgorithm(QCAlgorithm):
         if self.current_date is None or bar_date != self.current_date:
             self.current_date = bar_date
             self._reset_day()
+            self.detection_start, self.stop_and_flatten = self._session_window(bar_date)
 
         signal = "HOLD"
-        bar_time = bar.EndTime.time()
 
-        if bar_time >= self.STOP_AND_FLATTEN:
+        if bar.EndTime >= self.stop_and_flatten:
             self.stopped_for_day = True
             self._reset_detection()
             if self.in_trade or self.entry_pending or self.Portfolio[self.symbol].Invested:
@@ -119,7 +137,7 @@ class MyAlgorithm(QCAlgorithm):
             self._write_state(bar, signal)
             return
 
-        if self.stopped_for_day or bar_time < self.START_AFTER:
+        if self.stopped_for_day or bar.EndTime < self.detection_start:
             self._reset_detection()
             self._write_state(bar, signal)
             return
