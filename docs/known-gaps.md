@@ -87,39 +87,44 @@ seam below is a specific conditional gap, not a general weakness.
 Source: `docs/audits/execution-path-fail-open-2026-08-18.md`, read at commit
 `a7771477`. This sweep excluded #1614–#1618 and #1592's nine refuted candidates.
 
-- **Activated SQLite: first in-flight position mismatch is admission-clean.**
+- **Activated SQLite: first in-flight position mismatch is admission-clean
+  (high).**
   `sqlite/reconcile.py:121-184,363-381,777-825` classifies a mismatch on a
   captured working-order symbol as indeterminate, returns `clean`, and authors no
   blocker unless a prior POSITION_DRIFT already exists. Ordinary working bot
   ENTRY orders are not an independent new-exposure fence.
   [#1655](https://github.com/tim1016/learn-ai/issues/1655)
 - **Retiring legacy JSONL: incomplete reconciliation facts do not fence submit
-  admission.** `stale`/`missing_intent` project a freeze but legacy manual and bot
-  ENTER read only holds; in-flight-suppressed position drift can return clean with
-  `broker_facts_complete=False`, which protects Start but not existing effects or
-  manual submission. ADR 0037 resolves this by deletion. Do not add legacy
-  regression tests; verify retirement closes reachability.
+  admission (high).** `stale`/`missing_intent` project a freeze but legacy
+  manual and bot ENTER read only holds; in-flight-suppressed position drift can
+  return clean with `broker_facts_complete=False`, which protects Start but not
+  existing effects or manual submission. ADR 0037 resolves this by deletion. Do
+  not add legacy regression tests; verify retirement closes reachability.
   [#1656](https://github.com/tim1016/learn-ai/issues/1656)
 - **Retiring legacy JSONL: unowned activity replay advances its cursor without a
-  submit fence.** An unowned fill is durably accepted without a hold, while the
-  bounded closed-order pass can omit its old-submitted order. ADR 0037 resolves
-  this by deletion. [#1657](https://github.com/tim1016/learn-ai/issues/1657)
+  submit fence (high).** An unowned fill is durably accepted without a hold,
+  while the bounded closed-order pass can omit its old-submitted order. ADR 0037
+  resolves this by deletion.
+  [#1657](https://github.com/tim1016/learn-ai/issues/1657)
 - **Retiring legacy JSONL: direct hold clear has a same-millisecond evidence
-  race.** `clerk.py:600-666` uses `since_ms > proof_observed_at_ms`; equal-time
-  later unexplained evidence can be followed by `HOLD_CLEARED`. ADR 0037 resolves
-  this by deletion. Do not fix or regression-test the retiring module; verify the
-  route is unreachable. [#1658](https://github.com/tim1016/learn-ai/issues/1658)
+  race (high).** `clerk.py:600-666` uses
+  `since_ms > proof_observed_at_ms`; equal-time later unexplained evidence can be
+  followed by `HOLD_CLEARED`. ADR 0037 resolves this by deletion. Do not fix or
+  regression-test the retiring module; verify the route is unreachable.
+  [#1658](https://github.com/tim1016/learn-ai/issues/1658)
 - **Retiring legacy JSONL: reconciliation accepts a full 500-order page as
-  complete.** An older working foreign order can be omitted from the descending
-  page, allowing a false-clean proof to clear a hold while the order persists.
-  ADR 0037 resolves this by deletion; do not add legacy pagination behavior or
-  regression tests. [#1659](https://github.com/tim1016/learn-ai/issues/1659)
+  complete (high).** An older working foreign order can be omitted from the
+  descending page, allowing a false-clean proof to clear a hold while the order
+  persists. ADR 0037 resolves this by deletion; do not add legacy pagination
+  behavior or regression tests.
+  [#1659](https://github.com/tim1016/learn-ai/issues/1659)
 - **Retiring legacy JSONL: developer reset can erase unactivated authority and
-  reinstall an empty writer.** The paper reset intentionally omits broker-flat and
-  runner-roll-call proof, checks no legacy process when SQLite is absent, and
-  records no startup reset fence without an established generation. Selection then
-  reconstructs empty legacy authority. ADR 0037 resolves this through no-authority
-  fallback and deletion. [#1660](https://github.com/tim1016/learn-ai/issues/1660)
+  reinstall an empty writer (high).** The paper reset intentionally omits
+  broker-flat and runner-roll-call proof, checks no legacy process when SQLite
+  is absent, and records no startup reset fence without an established
+  generation. Selection then reconstructs empty legacy authority. ADR 0037
+  resolves this through no-authority fallback and deletion.
+  [#1660](https://github.com/tim1016/learn-ai/issues/1660)
 
 ### Panel-layer flatness boundary (verified 2026-08-18)
 
