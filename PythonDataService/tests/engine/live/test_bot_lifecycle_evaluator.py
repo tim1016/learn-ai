@@ -173,7 +173,6 @@ def test_legacy_evaluator_construction_stays_behind_capability_boundary() -> Non
     evaluator_module = "app.engine.live.bot_lifecycle_evaluator"
     capability_path = Path("services/ibkr_lifecycle_guard.py")
     intent_methods = {
-        Path("services/end_day_intent.py"): {"set_desired_state"},
         Path("services/risk_reducing_lifecycle_intent.py"): {"set_desired_state"},
         Path("engine/live/run.py"): {
             "seed_default_desired_state_if_absent",
