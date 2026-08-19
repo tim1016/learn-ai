@@ -22,6 +22,7 @@ from app.engine.live.bot_lifecycle_state import (
 )
 from app.engine.live.desired_state import DesiredState, DesiredStateRepo
 from app.services.bot_lifecycle_projection import (
+    AlpacaLifecycleProjectionResult,
     AlpacaLifecycleProjector,
     ProjectionStatus,
 )
@@ -138,11 +139,16 @@ class BotBootRecovery:
             if not self._manages_instance(strategy_instance_id):
                 continue
             if self._is_running(strategy_instance_id):
-                self._lifecycle_projector.refresh(
+                projection = self._lifecycle_projector.refresh(
                     strategy_instance_id=strategy_instance_id,
                     now_ms=self._now_ms(),
                     updated_by="bot_runner_boot_sweep",
                     reason="refresh_running_projection",
+                )
+                self._require_settled_projection(
+                    projection,
+                    strategy_instance_id=strategy_instance_id,
+                    run_id=run_id,
                 )
                 continue
             if candidate.sqlite_active:
@@ -170,12 +176,18 @@ class BotBootRecovery:
                 and record.duty_outcome is not None
                 and desired_state in {DesiredState.RUNNING, DesiredState.PAUSED}
             ):
-                self._lifecycle_projector.refresh(
+                projection = self._lifecycle_projector.refresh(
                     strategy_instance_id=strategy_instance_id,
                     now_ms=self._now_ms(),
                     updated_by="bot_runner_boot_sweep",
                     reason="repair_terminal_projection",
                 )
+                if not self._require_settled_projection(
+                    projection,
+                    strategy_instance_id=strategy_instance_id,
+                    run_id=run_id,
+                ):
+                    continue
                 desired_repo.set(
                     DesiredState.STOPPED,
                     updated_by="bot_runner_boot_sweep",
@@ -205,11 +217,16 @@ class BotBootRecovery:
                 )
             )
             if not needs_interrupted_evidence:
-                self._lifecycle_projector.refresh(
+                projection = self._lifecycle_projector.refresh(
                     strategy_instance_id=strategy_instance_id,
                     now_ms=self._now_ms(),
                     updated_by="bot_runner_boot_sweep",
                     reason="refresh_boot_projection",
+                )
+                self._require_settled_projection(
+                    projection,
+                    strategy_instance_id=strategy_instance_id,
+                    run_id=run_id,
                 )
                 continue
 
@@ -227,18 +244,11 @@ class BotBootRecovery:
                 updated_by="bot_runner_boot_sweep",
                 reason="container_restart",
             )
-            if update_result.status is not ProjectionStatus.RECORDED:
-                logger.info(
-                    "Boot sweep skipped superseded lifecycle state",
-                    extra={
-                        "action": "boot_sweep_superseded",
-                        "strategy_instance_id": strategy_instance_id,
-                        "run_id": run_id,
-                        "refusal_reason": (
-                            update_result.refusal_reason or update_result.status
-                        ),
-                    },
-                )
+            if not self._require_settled_projection(
+                update_result,
+                strategy_instance_id=strategy_instance_id,
+                run_id=run_id,
+            ):
                 continue
             desired_repo.set(
                 DesiredState.STOPPED,
@@ -256,3 +266,30 @@ class BotBootRecovery:
                 },
             )
         return interrupted
+
+    @staticmethod
+    def _require_settled_projection(
+        result: AlpacaLifecycleProjectionResult,
+        *,
+        strategy_instance_id: str,
+        run_id: str,
+    ) -> bool:
+        if result.status is ProjectionStatus.RECORDED:
+            return True
+        if result.status is ProjectionStatus.AUTHORITY_EXPECTATION_SUPERSEDED:
+            logger.info(
+                "Boot sweep skipped authority-superseded lifecycle expectation",
+                extra={
+                    "action": "boot_sweep_superseded",
+                    "strategy_instance_id": strategy_instance_id,
+                    "run_id": run_id,
+                },
+            )
+            return False
+        detail = result.status.value
+        if result.refusal_reason is not None:
+            detail = f"{detail}:{result.refusal_reason}"
+        raise BootAuthorityPreparationError(
+            f"Lifecycle projection repair remained unresolved for "
+            f"{strategy_instance_id!r}: {detail}"
+        )

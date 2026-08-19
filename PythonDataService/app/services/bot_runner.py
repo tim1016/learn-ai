@@ -38,6 +38,7 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
+from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.config import settings
 from app.engine.live.account_artifacts import RestartIntensityPolicy
@@ -1094,6 +1095,15 @@ class BotTaskRegistry:
             )
             for binding in self._bindings.list_for_broker("alpaca")
         }
+        clerk = get_alpaca_clerk()
+        has_sqlite_candidate_capability = callable(
+            getattr(clerk, "lifecycle_recovery_candidates", None)
+        )
+        if (
+            getattr(clerk, "authority_kind", None) != "sqlite"
+            and not has_sqlite_candidate_capability
+        ):
+            return tuple(candidates.values())
         for strategy_instance_id, run_id in self._lifecycle_authority.recovery_candidates():
             self._plane.require(
                 strategy_instance_id,
