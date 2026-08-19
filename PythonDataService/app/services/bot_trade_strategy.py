@@ -31,6 +31,7 @@ from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
 from app.marketdata.feed import MarketDataBar, MarketDataFeed
 from app.schemas.broker_bots import AlpacaPaperStrategyKey
 from app.schemas.market_liveness import MarketLivenessFact
+from app.services.bot_start_admission import market_data_capability_account_id
 from app.services.broker_capability_service import extended_phase_proven_at_ms
 from app.services.market_liveness import liveness_blocks_entry, market_liveness_fact
 from app.utils.timestamps import now_ms_utc
@@ -92,7 +93,7 @@ class _RecordingSignalIntentExecutor:
 
 def _liveness_blocks_entry(
     binding: BrokerBotBinding,
-    account_id: str,
+    capability_account_id: str | None,
     liveness: MarketLivenessFact,
 ) -> bool:
     """Decide whether the live liveness fact should block this ENTER.
@@ -101,12 +102,20 @@ def _liveness_blocks_entry(
     ``market_liveness.liveness_blocks_entry`` predicate — also used by the
     Clerk's own submission-boundary recheck in ``runtime.py`` — so the two
     can never silently diverge (#1671).
+
+    ``capability_account_id`` must be the market-data feed's own capability
+    account (``bot_start_admission.market_data_capability_account_id``), NOT
+    the Alpaca execution account: Alpaca custody identifies the execution
+    account, which cannot scope an IBKR market-data entitlement. Passing the
+    wrong one means the capability lookup never finds a match and every
+    extended-hours entry is rejected. ``None`` (no capability account
+    resolvable) fails closed — never proven.
     """
     return liveness_blocks_entry(
         liveness,
         use_rth=binding.use_rth,
         extended_phase_proven=lambda: extended_phase_proven_at_ms(
-            now_ms=now_ms_utc(), symbol=binding.symbol, account_id=account_id
+            now_ms=now_ms_utc(), symbol=binding.symbol, account_id=capability_account_id
         ),
     )
 
@@ -234,6 +243,11 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
     account_id = getattr(clerk, "account_id", None)
     if not isinstance(account_id, str) or not account_id:
         raise RuntimeError("The active SQLite Clerk has no account identity for decision receipts.")
+    # Distinct from `account_id` above: this is the market-data feed's own
+    # capability-scoping identity, not the Alpaca execution account — see
+    # `_liveness_blocks_entry`'s docstring for why the two must never be
+    # conflated.
+    capability_account_id = market_data_capability_account_id(feed)
     repository = getattr(clerk, "repository", None)
     if repository is None:
         raise RuntimeError("The active SQLite Clerk has no repository for decision receipts.")
@@ -263,7 +277,7 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
         # same way for the same reason.
         if intent.kind is SignalIntentKind.ENTER:
             liveness = market_liveness_fact(binding.symbol, now_ms_utc())
-            if _liveness_blocks_entry(binding, account_id, liveness):
+            if _liveness_blocks_entry(binding, capability_account_id, liveness):
                 # Undo the ENTER-time state mutation the strategy already
                 # committed at signal emission — otherwise it believes it
                 # holds a position it was never actually granted, and its
@@ -317,8 +331,19 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
             action_plan=binding.action_plan,
             quantity=binding.quantity,
             use_rth=binding.use_rth,
+            capability_account_id=capability_account_id,
         )
         if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
+            if intent.kind is SignalIntentKind.ENTER:
+                # #1671 AC6: the strategy already committed its ENTER-time
+                # state before this call — the outer gate above only
+                # catches evidence that was already stale/blocking *before*
+                # the Clerk was reached. This Clerk-boundary rejection is
+                # the same failure mode from evidence that changed *while*
+                # the ENTER awaited the Clerk's sole-writer intake lock; it
+                # needs the identical rollback or a later EXIT still has no
+                # real custody to close.
+                evaluation.rollback_blocked_entry()
             _record_blocked_decision(
                 decision_receipts,
                 binding=binding,

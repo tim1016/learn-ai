@@ -38,6 +38,10 @@ _STATUS_STREAM = "market_statuses"
 _STATUS_WS_URL = "wss://stream.data.alpaca.markets/v2/iex"
 _CLOCK_POLL_INTERVAL_S = 1.0
 _MAX_RECONNECT_BACKOFF_S = 30.0
+# Tolerance for a status event's source_timestamp_ms reading ahead of our
+# own receipt clock (ordinary vendor/network clock skew) before it is
+# refused as unverifiable rather than merely stale.
+_MAX_FUTURE_SKEW_MS = 5_000
 
 _HALT_CODES = frozenset({"H", "2", "P"})
 _RESUME_CODES = frozenset({"T", "3"})
@@ -140,7 +144,6 @@ class AlpacaMarketLivenessConsumer:
     async def _consume_statuses(self) -> None:
         attempt = 0
         while True:
-            self._store.clear_symbol_statuses()
             try:
                 async for frame in self._frame_source():
                     self.handle_frame(frame)
@@ -153,9 +156,18 @@ class AlpacaMarketLivenessConsumer:
                     exc_info=True,
                 )
             finally:
-                # A stream connection only proves events received during its own
-                # epoch. Never carry a status across disconnect/reconnect.
-                self._store.clear_symbol_statuses()
+                # Disconnection alone already fails every symbol closed via
+                # MarketLivenessStore.fact's `connected` check, so clearing
+                # per-symbol evidence here would only ever discard it, never
+                # protect anything. Alpaca's status stream has no
+                # snapshot-on-subscribe and no REST fallback for current halt
+                # state, so a HALTED record is the only proof a still-halted
+                # symbol has once the socket reconnects; wiping it here would
+                # silently report that symbol TRADABLE the instant any frame
+                # (for any symbol) arrives on the new connection, before a
+                # fresh transition ever confirms a resume. Evidence is
+                # invalidated only at full consumer start/stop (see
+                # ``start``/``stop``), never on an ordinary reconnect cycle.
                 self._store.mark_stream_disconnected(observed_at_ms=self._clock())
 
             attempt += 1
@@ -172,9 +184,10 @@ class AlpacaMarketLivenessConsumer:
         per-symbol evidence already means "not blocked", so treating a
         single bad frame as grounds to wipe the halted-symbol map would
         silently un-halt every symbol this connection cycle had legitimately
-        proven halted. Only a genuine reconnect invalidates that map (see
-        ``_consume_statuses``); receiving a frame at all — good or bad —
-        still proves the socket itself is alive.
+        proven halted. Nor does a reconnect invalidate that map (see
+        ``_consume_statuses``) — only a genuine resume transition for that
+        symbol does. Receiving a frame at all — good or bad — still proves
+        the socket itself is alive.
         """
         self._store.mark_stream_connected(observed_at_ms=self._clock())
         raw = frame.encode("utf-8") if isinstance(frame, str) else frame
@@ -230,6 +243,25 @@ class AlpacaMarketLivenessConsumer:
             logger.warning(
                 "alpaca market-status message has no verifiable source time; the transition was not applied",
                 extra={"action": "market_liveness_status_timestamp_missing", "symbol": symbol},
+            )
+            return
+        receipt_ms = self._clock()
+        if source_timestamp_ms > receipt_ms + _MAX_FUTURE_SKEW_MS:
+            # source_timestamp_ms becomes the primary ordering key in
+            # observe_symbol_status's freshness-ordering guard — accepting
+            # one dated far in the future would make every subsequent
+            # legitimate event for this symbol look "older" and be silently
+            # discarded forever, pinning whatever this corrupted or
+            # clock-skewed message claimed (e.g. a bogus resume masking a
+            # real, later halt). Refuse it before it can order anything.
+            logger.warning(
+                "alpaca market-status message is dated in the future beyond tolerance; the transition was not applied",
+                extra={
+                    "action": "market_liveness_status_timestamp_future",
+                    "symbol": symbol,
+                    "source_timestamp_ms": source_timestamp_ms,
+                    "receipt_ms": receipt_ms,
+                },
             )
             return
         status_code = str(message.get("sc") or "").upper()

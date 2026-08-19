@@ -11,6 +11,7 @@ from pathlib import Path
 import pyarrow as pa
 
 from app.engine.data.lean_format import LeanMinuteDataReader
+from app.utils.timestamps import ny_datetime
 
 SOURCE_RUN_ID = "companion-pg-e4edc7a8afa84d9ea55a"
 SOURCE_ALGORITHM_SHA256 = "1a85f9d4cc0ca2607077615c78582191a11ec06c1b40b8edf59de3f52d64360b"
@@ -92,7 +93,7 @@ def _validate_source(manifest: dict) -> None:
 
 def _validate_bar_archives(manifest: dict, data_root: Path, bars: list) -> None:
     expected_hashes = manifest.get("staged_zip_sha256", {})
-    trading_dates = sorted({bar.time.date() for bar in bars})
+    trading_dates = sorted({ny_datetime(bar.start_ms).date() for bar in bars})
     for trading_date in trading_dates:
         relative = Path("equity/usa/minute/spy") / f"{trading_date:%Y%m%d}_trade.zip"
         archive = data_root / relative
@@ -120,11 +121,11 @@ def _write_bars(path: Path, bars: list) -> None:
         {
             "symbol": pa.array([bar.symbol for bar in bars], type=pa.string()),
             "time_ms_utc": pa.array(
-                [int(bar.time.timestamp() * 1_000) for bar in bars],
+                [bar.start_ms for bar in bars],
                 type=pa.int64(),
             ),
             "end_time_ms_utc": pa.array(
-                [int(bar.end_time.timestamp() * 1_000) for bar in bars],
+                [bar.end_ms for bar in bars],
                 type=pa.int64(),
             ),
             "open": pa.array([bar.open for bar in bars], type=price_type),

@@ -7,6 +7,7 @@ from app.schemas.broker_capability import SessionDataCapability
 from app.schemas.broker_v2_panel import MarketPulseView
 from app.schemas.market_liveness import MarketLivenessFact
 from app.services.bot_start_admission import market_data_admission_fact
+from app.services.broker_capability_service import extended_phase_proven_at_ms
 from app.services.market_liveness import market_liveness_fact
 
 # The admission feed emits closed one-minute bars. This is the contracted source
@@ -54,11 +55,26 @@ def build_market_pulse(
         else None
     )
 
+    # Alpaca's live clock is RTH-only (see clock_liveness_evidence), so a
+    # CLOSED liveness fact does not by itself distinguish a genuinely
+    # closed market from an ordinary extended-hours session for a non-RTH
+    # bot. This must resolve identically to liveness_blocks_entry's own
+    # reconciliation — the same function, not a re-derived approximation —
+    # or the panel contradicts the execution gate it is describing.
+    live_closed_is_actually_extended_hours = (
+        liveness.state == "CLOSED"
+        and not use_rth
+        and symbol is not None
+        and extended_phase_proven_at_ms(now_ms=now_ms, symbol=symbol, account_id=account_id)
+    )
+
     # Live broker-reported liveness takes priority over the narrower
-    # extended-session-capability check below: a HALTED/UNKNOWN/CLOSED
-    # liveness fact is the stronger, more foundational safety signal (it
-    # governs whether new exposure may be created at all, per #1671),
-    # regardless of whether extended-hours capability happens to be proven.
+    # extended-session-capability check below: a HALTED/UNKNOWN liveness
+    # fact is the stronger, more foundational safety signal (it governs
+    # whether new exposure may be created at all, per #1671), regardless of
+    # whether extended-hours capability happens to be proven. A CLOSED fact
+    # that extended hours actually cover is exempted (above) and falls
+    # through to the feed-state branches below instead.
     if liveness.state == "HALTED":
         # The symbol is never interpolated into this prose — it renders
         # separately as structured data (``halted_symbol`` below) through
@@ -72,7 +88,7 @@ def build_market_pulse(
         explanation = liveness.reason
         next_step = "Restore fresh market-wide and symbol trading-status evidence."
         attention_required = True
-    elif liveness.state == "CLOSED":
+    elif liveness.state == "CLOSED" and not live_closed_is_actually_extended_hours:
         headline = "Market closed by live broker evidence"
         explanation = liveness.reason
         next_step = (

@@ -285,6 +285,13 @@ class BotStartAdmission:
             async with self._custody_guard(binding.strategy_instance_id) as custody:
                 observed_at_ms = self._now_ms()
                 runtime = await self._runtime_fact(binding.strategy_instance_id, observed_at_ms)
+                # Re-captured after the await: the market clock refreshes on
+                # its own cadence (~1s) independent of this coroutine, so the
+                # pre-await instant can already be older than freshly-arrived
+                # evidence by the time we reach here — compose_market_liveness's
+                # own freshness check would then see `now_ms < observed_at_ms`
+                # and refuse Start outright.
+                observed_at_ms = self._now_ms()
                 process = self._process_fact(binding, observed_at_ms)
                 feed = self._feed_resolver()
                 capability_account_id = market_data_capability_account_id(feed)

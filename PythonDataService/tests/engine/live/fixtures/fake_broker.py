@@ -88,7 +88,7 @@ class FakeBroker:
             event = OrderEvent(
                 order_id=item.order_id,
                 symbol=spec.symbol,
-                time=bar.time,
+                filled_at_ms=bar.start_ms,
                 fill_price=bar.open,
                 fill_quantity=signed_qty,
                 direction=direction,

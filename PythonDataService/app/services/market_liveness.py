@@ -180,7 +180,16 @@ def compose_market_liveness(
     return MarketLivenessFact(
         symbol=normalized_symbol,
         state="TRADABLE",
-        observed_at_ms=min(market_clock.observed_at_ms, connection_changed_at_ms),
+        # Not min(market_clock.observed_at_ms, connection_changed_at_ms):
+        # the connection watermark stays fixed at the original connect
+        # instant for the life of a long-lived healthy connection, so that
+        # min() would make every TRADABLE fact look older by the second
+        # long after the underlying evidence (the clock, re-polled and
+        # re-validated fresh above every ~1s) stayed current — aging a
+        # freshness-gated caller like ``evaluate_run_admission`` out of its
+        # window a few seconds after every reconnect. Every input that
+        # feeds this conclusion was just reconfirmed fresh as of ``now_ms``.
+        observed_at_ms=now_ms,
         market_clock=market_clock,
         symbol_status=symbol_status,
         reason_code="MARKET_TRADABLE",
@@ -303,7 +312,16 @@ class MarketLivenessStore:
             self._symbol_statuses[symbol] = evidence.model_copy(update={"symbol": symbol})
 
     def clear_symbol_statuses(self) -> None:
-        """Invalidate pre-disconnect status evidence before a reconnect begins."""
+        """Invalidate all per-symbol status evidence.
+
+        Called only at consumer start/stop (full lifecycle boundaries), never
+        on an ordinary stream reconnect: Alpaca's status stream has no
+        snapshot-on-subscribe and no REST fallback for current halt state, so
+        a HALTED record is the only proof of a still-halted symbol once the
+        socket reconnects. Wiping it on every reconnect would silently report
+        that symbol TRADABLE the moment any frame arrives on the new
+        connection, before a fresh transition ever confirms a resume.
+        """
         self._symbol_statuses.clear()
 
     def fact(self, symbol: str, *, now_ms: int) -> MarketLivenessFact:

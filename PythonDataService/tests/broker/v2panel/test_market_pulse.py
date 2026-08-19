@@ -302,3 +302,80 @@ def test_open_scheduled_phase_shows_fresh_symbol_halt(
     assert pulse.headline == "Trading halted for"
     assert pulse.halted_symbol == "SPY"
     assert pulse.attention_required is True
+
+
+def test_closed_liveness_during_a_proven_extended_phase_does_not_show_market_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: liveness_blocks_entry allows a non-RTH bot to trade
+    through a live-clock CLOSED reading once extended-hours capability is
+    proven (Alpaca's clock is RTH-only). The panel must not contradict that
+    by showing "Market closed" anyway — it should fall through to the
+    ordinary feed-state read, exactly like the execution gate does."""
+    _session(monkeypatch, "PRE")
+    _admission_fact(monkeypatch, state="AVAILABLE", last_bar_ms=120_000)
+    monkeypatch.setattr(market_pulse, "extended_phase_proven_at_ms", lambda **_kwargs: True)
+    liveness = compose_market_liveness(
+        "SPY",
+        now_ms=121_000,
+        market_clock=MarketClockLivenessEvidence(
+            state="CLOSED",
+            source="test.clock",
+            observed_at_ms=121_000,
+            vendor_timestamp_ms=121_000,
+        ),
+        connected=True,
+        connection_changed_at_ms=121_000,
+        symbol_status=None,
+    )
+
+    pulse = market_pulse.build_market_pulse(
+        None,
+        now_ms=121_000,
+        symbol="SPY",
+        account_id="ibkr-acct",
+        use_rth=False,
+        bot_running=True,
+        liveness=liveness,
+    )
+
+    assert pulse.market_state == "CLOSED"  # the raw liveness fact is preserved
+    assert pulse.headline != "Market closed by live broker evidence"
+    assert pulse.headline == "Market data live"
+
+
+def test_closed_liveness_without_proven_extended_phase_still_shows_market_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without proof, a CLOSED liveness fact for a non-RTH bot must still
+    surface as blocking — matching liveness_blocks_entry's own fail-closed
+    default when extended hours are not proven."""
+    _session(monkeypatch, "PRE")
+    _admission_fact(monkeypatch, state="AVAILABLE", last_bar_ms=120_000)
+    monkeypatch.setattr(market_pulse, "extended_phase_proven_at_ms", lambda **_kwargs: False)
+    liveness = compose_market_liveness(
+        "SPY",
+        now_ms=121_000,
+        market_clock=MarketClockLivenessEvidence(
+            state="CLOSED",
+            source="test.clock",
+            observed_at_ms=121_000,
+            vendor_timestamp_ms=121_000,
+        ),
+        connected=True,
+        connection_changed_at_ms=121_000,
+        symbol_status=None,
+    )
+
+    pulse = market_pulse.build_market_pulse(
+        None,
+        now_ms=121_000,
+        symbol="SPY",
+        account_id="ibkr-acct",
+        use_rth=False,
+        bot_running=True,
+        liveness=liveness,
+    )
+
+    assert pulse.headline == "Market closed by live broker evidence"
+    assert pulse.attention_required is True

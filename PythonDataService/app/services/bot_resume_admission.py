@@ -114,15 +114,23 @@ class BotResumeAdmission:
                 observed_at_ms = self._now_ms()
                 feed = self._feed_resolver()
                 capability_account_id = market_data_capability_account_id(feed)
+                runtime = await self._runtime_fact(
+                    prior.strategy_instance_id,
+                    observed_at_ms,
+                )
+                # Re-captured after the await: the market clock refreshes on
+                # its own cadence (~1s) independent of this coroutine, so the
+                # pre-await instant can already be older than freshly-arrived
+                # evidence by the time we reach here — compose_market_liveness's
+                # own freshness check would then see `now_ms < observed_at_ms`
+                # and refuse Resume outright.
+                observed_at_ms = self._now_ms()
                 facts = ResumeRunFacts(
                     strategy_instance_id=prior.strategy_instance_id,
                     proposed_run_id=proposed.run_id,
                     prior_run_id=prior.run_id,
                     configuration_hash=configuration_hash(prior),
-                    runtime=await self._runtime_fact(
-                        prior.strategy_instance_id,
-                        observed_at_ms,
-                    ),
+                    runtime=runtime,
                     process=self._process_fact(prior, observed_at_ms),
                     market_data=market_data_admission_fact(
                         feed,

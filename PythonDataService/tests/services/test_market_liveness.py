@@ -48,6 +48,29 @@ def test_open_clock_and_tradable_symbol_prove_tradability() -> None:
     assert fact.reason_code == "MARKET_TRADABLE"
 
 
+def test_tradable_fact_stays_fresh_on_a_long_lived_connection() -> None:
+    """Regression: the connection watermark stays fixed at the original
+    connect instant for a long-lived healthy connection. A TRADABLE fact's
+    ``observed_at_ms`` must not be pinned to that stale instant — a
+    freshness-gated caller (e.g. ``evaluate_run_admission``, 5s bound)
+    would treat every TRADABLE fact as stale a few seconds after each
+    reconnect even though the underlying clock evidence is re-polled and
+    re-validated fresh every ~1s."""
+    long_lived_connection_ms = _NOW - 60 * 60 * 1_000  # connected an hour ago
+
+    fact = compose_market_liveness(
+        "SPY",
+        now_ms=_NOW,
+        market_clock=_clock(observed_at_ms=_NOW),
+        connected=True,
+        connection_changed_at_ms=long_lived_connection_ms,
+        symbol_status=None,
+    )
+
+    assert fact.state == "TRADABLE"
+    assert fact.observed_at_ms == _NOW
+
+
 def test_open_clock_and_halted_symbol_never_claim_tradability() -> None:
     fact = compose_market_liveness(
         "SPY",
