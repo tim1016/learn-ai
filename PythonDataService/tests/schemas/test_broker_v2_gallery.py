@@ -7,6 +7,7 @@ from app.schemas.broker_v2_gallery import (
     GalleryBotDelta,
     GalleryBotView,
     GalleryLiveSnapshot,
+    GalleryLiveUpdate,
     GalleryPrimaryAction,
     GallerySymbolBars,
 )
@@ -94,3 +95,19 @@ def test_bot_delta_is_self_contained_with_symbol_and_label() -> None:
     )
     assert delta.symbol == "SPY"
     assert delta.label == "ORB"
+
+
+def test_live_update_fields_match_the_pinned_frontend_type() -> None:
+    """``GalleryLiveUpdate`` is SSE-only — it has no OpenAPI REST schema, so
+    ``Frontend/src/app/components/broker/v2-panel/gallery/lib/gallery.types.ts``
+    hand-declares it and pins to this model's field set instead of a
+    generated alias (#1667). Keep both edits in the same commit."""
+    frontend_fields = {
+        "surface_version",
+        "as_of_ms",
+        "symbols",
+        "markers_delta",
+        "bots_delta",
+        "removed_sids",
+    }
+    assert set(GalleryLiveUpdate.model_fields.keys()) == frontend_fields

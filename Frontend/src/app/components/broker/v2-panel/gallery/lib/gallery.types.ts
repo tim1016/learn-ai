@@ -1,65 +1,51 @@
 /**
  * Contract types for the broker-v2 bot gallery aggregated stream.
  *
- * Mirrors the backend Pydantic schemas in
- * `PythonDataService/app/schemas/broker_v2_gallery.py` field-for-field
- * (snake_case is correct here — it is the wire shape). `ChartBar` and
- * `ChartFillMarker` are reused from the sibling panel types rather than
- * redefined, per the single-canonical-implementation rule.
+ * `GalleryPrimaryAction`, `GalleryBotView`, `GallerySymbolBars`, and
+ * `GalleryLiveSnapshot` alias the generated OpenAPI schemas below — the
+ * snapshot doubles as the REST bootstrap response and the SSE `snapshot`
+ * event payload, so it is not an OpenAPI exception. `GalleryLiveUpdate` and
+ * `GalleryResetEvent` are genuinely stream-only (no REST response uses
+ * them) and stay hand-declared, each pinned to its backend authority — see
+ * the comment on each. `ChartBar` and `ChartFillMarker` are reused from the
+ * sibling panel types rather than redefined, per the
+ * single-canonical-implementation rule.
  *
  * Temporal fields are `int64 ms UTC` per `.claude/rules/temporal-rigor.md`.
  */
+import type { components } from '../../../../../api/broker.types';
 import type { ChartBar, ChartFillMarker } from '../../lib/broker-v2-panel.types';
 
 export type { ChartBar, ChartFillMarker };
 
-export type GalleryResolution = '5s' | '1m';
+export type GalleryResolution = components['schemas']['GalleryLiveSnapshot']['resolution'];
 
-export interface GalleryPrimaryAction {
-  readonly action_id: string;
-  readonly label: string;
-  readonly enabled: boolean;
-  readonly disabled_reason: string | null;
-}
+// Fields the backend gives a Pydantic default (`= None` /
+// `Field(default_factory=...)`) come through as optional (`?:`) in the
+// generated schema even though every response serializes them — treat
+// absence the same as the backend's own default (`?? null` / `?? []` /
+// `?? {}`) at the few call sites that read these keys, rather than
+// asserting a stronger type than the wire contract actually promises.
+export type GalleryPrimaryAction = components['schemas']['GalleryPrimaryAction'];
 
 /** One bot's tile state in the gallery wall. */
-export interface GalleryBotView {
-  readonly sid: string;
-  readonly symbol: string;
-  readonly label: string;
-  readonly running: boolean;
-  readonly phase: string;
-  readonly desired_state: string;
-  readonly needs_attention: boolean;
-  readonly realized_pnl_today: number | null;
-  readonly open_pnl: number | null;
-  /** Null-safe `realized_pnl_today + open_pnl`, computed once server-side — the tile formats this, it never re-derives it (single P&L authority). */
-  readonly day_pnl: number | null;
-  /** Session return scoped to TODAY's session, computed server-side — never derive this from `bars[0]`, which can be a prior session's tail bar (the shared buffer retains more than one session's worth). */
-  readonly session_change_pct: number | null;
-  readonly fills_today: number | null;
-  readonly last_bar_at_ms: number | null;
-  readonly primary_action: GalleryPrimaryAction;
-}
+export type GalleryBotView = components['schemas']['GalleryBotView'];
 
 /** Bars for one symbol, shared across every tile that charts it. */
-export interface GallerySymbolBars {
-  readonly symbol: string;
-  readonly bars: readonly ChartBar[];
-}
+export type GallerySymbolBars = components['schemas']['GallerySymbolBars'];
 
 /** Versioned complete state document — the REST bootstrap/poll-fallback body and the SSE `snapshot` event payload. */
-export interface GalleryLiveSnapshot {
-  readonly stream_epoch: string;
-  readonly surface_version: number;
-  readonly as_of_ms: number;
-  readonly resolution: GalleryResolution;
-  readonly bots: readonly GalleryBotView[];
-  readonly symbols: readonly GallerySymbolBars[];
-  readonly markers: Readonly<Record<string, readonly ChartFillMarker[]>>;
-}
+export type GalleryLiveSnapshot = components['schemas']['GalleryLiveSnapshot'];
 
-/** Incremental gallery update carried over the SSE `update` event. */
+/**
+ * Incremental gallery update carried over the SSE `update` event.
+ *
+ * SSE-only — no REST response returns this shape, so there is no generated
+ * OpenAPI schema to alias. Pinned instead to its backend owner,
+ * `app.schemas.broker_v2_gallery.GalleryLiveUpdate`
+ * (`tests/schemas/test_broker_v2_gallery.py::test_live_update_fields_match_the_pinned_frontend_type`
+ * fails if the two field sets diverge).
+ */
 export interface GalleryLiveUpdate {
   readonly surface_version: number;
   readonly as_of_ms: number;
@@ -69,7 +55,15 @@ export interface GalleryLiveUpdate {
   readonly removed_sids: readonly string[];
 }
 
-/** The SSE `reset` event payload — the epoch changed; re-bootstrap. */
+/**
+ * The SSE `reset` event payload — the epoch changed; re-bootstrap.
+ *
+ * No Pydantic model backs this payload; `broker_v2_gallery.py`'s router
+ * constructs it inline (`json.dumps({"reason": ..., "cursor": ...})`) and is
+ * the sole authority for its shape. Pinned by
+ * `tests/routers/test_broker_v2_gallery.py::test_gallery_stream_stale_cursor_emits_reset_first`,
+ * which asserts the emitted payload's key set is exactly `{reason, cursor}`.
+ */
 export interface GalleryResetEvent {
   readonly reason: string;
   readonly cursor: string;

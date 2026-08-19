@@ -179,9 +179,11 @@ export class GalleryLiveStore {
     this.surfaceVersion = snapshot.surface_version;
     this.resolutionState.set(snapshot.resolution);
     this.botsState.set([...snapshot.bots]);
-    this.barsState.set(new Map(snapshot.symbols.map((entry) => [entry.symbol, [...entry.bars]])));
+    this.barsState.set(
+      new Map(snapshot.symbols.map((entry) => [entry.symbol, [...(entry.bars ?? [])]])),
+    );
     this.markersState.set(
-      new Map(Object.entries(snapshot.markers).map(([sid, markers]) => [sid, [...markers]])),
+      new Map(Object.entries(snapshot.markers ?? {}).map(([sid, markers]) => [sid, [...markers]])),
     );
   }
 
@@ -196,7 +198,7 @@ export class GalleryLiveStore {
       this.barsState.update((current) => {
         const next = new Map(current);
         for (const entry of update.symbols) {
-          next.set(entry.symbol, mergeBarsBySymbol(current.get(entry.symbol) ?? [], entry.bars));
+          next.set(entry.symbol, mergeBarsBySymbol(current.get(entry.symbol) ?? [], entry.bars ?? []));
         }
         return next;
       });

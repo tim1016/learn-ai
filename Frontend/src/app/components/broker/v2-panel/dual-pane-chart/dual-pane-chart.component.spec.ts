@@ -15,6 +15,7 @@ import type { ChartBar } from '../lib/broker-v2-panel.types';
 import { IndicatorCatalogService } from '../../../../shared/indicator-catalog/indicator-catalog.service';
 import { BotChartIndicatorService } from './bot-chart-indicator.service';
 import type { ChartIndicatorBatchResponse } from './dual-pane-chart-indicators';
+import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
 
 const chartMocks = vi.hoisted(() => ({
   createChart: vi.fn(),
@@ -502,14 +503,26 @@ describe('DualPaneChartComponent', () => {
     expect(localStorage.getItem('broker-v2.chart-timezone.v1')).toBe('et');
   });
 
-  it('formats exchange-time labels with America/New_York rather than a fixed offset', () => {
+  it('formats exchange-time labels with America/New_York and the shared ET marker', () => {
     const seconds = 1_741_524_000;
-    const expected = new Intl.DateTimeFormat(undefined, {
-      month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
-      hour12: false, timeZone: 'America/New_York',
-    }).format(new Date(seconds * 1_000));
+    const expected = formatTimestampDisplay(seconds * 1_000, {
+      mode: 'et',
+      granularity: 'chart',
+    });
 
     expect(formatChartCrosshairTime(seconds, 'et')).toBe(expected);
+    expect(formatChartCrosshairTime(seconds, 'et')).toMatch(/ ET$/);
+  });
+
+  it('formats local labels via the shared display core without an ET marker', () => {
+    const seconds = 1_741_524_000;
+    const expected = formatTimestampDisplay(seconds * 1_000, {
+      mode: 'local',
+      granularity: 'chart',
+    });
+
+    expect(formatChartCrosshairTime(seconds, 'local')).toBe(expected);
+    expect(formatChartCrosshairTime(seconds, 'local')).not.toMatch(/ ET$/);
   });
 
   it('keeps consecutive five-second candles distinguishable in the time readout', () => {
