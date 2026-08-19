@@ -61,13 +61,6 @@ separate authorities under ADRs 0022 and 0029.
   and symbol-scoped evidence wins at Start, operator projection, and the
   automated new-exposure effect gate.
   [#1671](https://github.com/tim1016/learn-ai/issues/1671)
-- **Alpaca V2 invents extended-session phase without capability evidence
-  (high).** `services/session_authority.py:15-16,109-153` labels fixed
-  04:00-09:30 and close-to-20:00 windows as PRE/POST when no matching capability
-  exists, contrary to ADR 0029. Start and market pulse call this production path
-  without capability evidence. Remove the constants; missing/stale capability
-  must degrade to calendar RTH/CLOSED and an explicitly unproved extended phase.
-  [#1673](https://github.com/tim1016/learn-ai/issues/1673)
 - **Live deployment validation misses early-close flattening (high).**
   `engine/strategy/algorithms/deployment_validation.py:31-32,92-108` hardcodes
   09:45 detection and 15:45 stop/flatten. A 13:00 half-day never reaches the

@@ -39,13 +39,17 @@ from app.broker.alpaca.clerk.models import (
 from app.broker.alpaca.clerk.stream_health import market_data_channel_health
 from app.marketdata.feed import FeedHealth
 from app.marketdata.ibkr_feed import IbkrMarketDataFeed
+from app.schemas.broker_capability import SessionCapability, SessionDataCapability
 from app.schemas.run_admission import (
     MarketDataAdmissionFact,
     RunProcessAdmissionFact,
     StartRunFacts,
     StartRuntimeAdmissionFact,
 )
-from app.services.bot_start_admission import market_data_admission_fact
+from app.services.bot_start_admission import (
+    market_data_admission_fact,
+    market_data_capability_account_id,
+)
 from app.services.run_admission import evaluate_run_admission
 from tests._helpers.ibkr_feed_adversarial import (
     NeverFirstBarFeedFixture,
@@ -85,7 +89,11 @@ def _session(monkeypatch: pytest.MonkeyPatch, phase: str) -> None:
     monkeypatch.setattr(
         bot_start_admission,
         "session_state_at_ms",
-        lambda **_kwargs: SimpleNamespace(phase=phase),
+        lambda **_kwargs: SimpleNamespace(
+            phase=phase,
+            source="nyse_calendar",
+            extended_phase_proven=False,
+        ),
     )
 
 
@@ -114,6 +122,32 @@ def _clerk(observed_at_ms: int = _NOW - 500) -> ClerkCustodySnapshot:
         reason_code="CLERK_CUSTODY_PROVEN",
         evidence_refs=("clerk:paper-account:7",),
         observed_at_ms=observed_at_ms,
+    )
+
+
+def _capability(*, account_id: str = "paper-account") -> SessionDataCapability:
+    def session(open_ms: int, close_ms: int) -> SessionCapability:
+        return SessionCapability(
+            window_today_open_ms=open_ms,
+            window_today_close_ms=close_ms,
+            data="live",
+            tradeable="yes",
+            order_eligible_outside_rth=True,
+        )
+
+    return SessionDataCapability(
+        symbol="SPY",
+        con_id=1,
+        account_mode="paper",
+        account_id=account_id,
+        probed_at_ms=_NOW - 1_000,
+        time_zone_id="America/New_York",
+        sessions={
+            "PRE": session(_NOW - 60_000, _NOW + 60_000),
+            "RTH": session(_NOW + 60_000, _NOW + 120_000),
+            "POST": session(_NOW + 120_000, _NOW + 180_000),
+            "OVERNIGHT": session(_NOW + 180_000, _NOW + 240_000),
+        },
     )
 
 
@@ -233,6 +267,92 @@ def test_market_data_admission_fact_available_when_advancing(
     fact = market_data_admission_fact(feed, _NOW - 1_000, use_rth=True)
 
     assert fact.state == "AVAILABLE"
+
+
+def test_market_data_admission_carries_matching_capability_phase() -> None:
+    health = FeedHealth(
+        connected=True,
+        stale=False,
+        last_bar_ms=_NOW - 5_000,
+        reason="",
+        active_subscription_count=1,
+        observed_at_ms=_NOW,
+    )
+
+    fact = market_data_admission_fact(
+        _Feed(health),
+        _NOW,
+        symbol="SPY",
+        account_id="paper-account",
+        capability=_capability(),
+        use_rth=False,
+    )
+
+    assert fact.scheduled_phase == "PRE"
+    assert fact.session_authority_source == "ibkr_capability"
+    assert fact.extended_phase_proven is True
+
+
+def test_market_data_admission_marks_extended_phase_unproved_without_matching_capability() -> None:
+    health = FeedHealth(
+        connected=True,
+        stale=False,
+        last_bar_ms=_NOW - 5_000,
+        reason="",
+        active_subscription_count=1,
+        observed_at_ms=_NOW,
+    )
+
+    fact = market_data_admission_fact(
+        _Feed(health),
+        _NOW,
+        symbol="SPY",
+        account_id="other-account",
+        capability=_capability(),
+        use_rth=False,
+    )
+
+    assert fact.session_authority_source == "nyse_calendar"
+    assert fact.extended_phase_proven is False
+
+
+def test_unproved_extended_phase_blocks_connected_stale_feed_admission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A calendar CLOSED fallback cannot silently admit an extended run."""
+    _session(monkeypatch, "CLOSED")
+    health = FeedHealth(
+        connected=True,
+        stale=True,
+        last_bar_ms=_NOW - 400_000,
+        reason="No source bar in 400s",
+        active_subscription_count=1,
+        observed_at_ms=_NOW,
+    )
+
+    fact = market_data_admission_fact(_Feed(health), _NOW, use_rth=False)
+    decision = evaluate_run_admission(_start_facts(fact), _clerk(), evaluated_at_ms=_NOW)
+
+    assert fact.state == "UNKNOWN"
+    assert fact.extended_phase_proven is False
+    assert decision.allowed is False
+    assert decision.reason_code == "MARKET_DATA_UNKNOWN"
+
+
+def test_market_data_capability_account_uses_the_feed_source_identity() -> None:
+    feed = _Feed(
+        FeedHealth(
+            connected=True,
+            stale=False,
+            last_bar_ms=None,
+            reason="",
+            active_subscription_count=0,
+            observed_at_ms=_NOW,
+        )
+    )
+    feed.capability_account_id = "DU1234567"  # type: ignore[attr-defined]
+
+    assert market_data_capability_account_id(feed) == "DU1234567"
 
 
 # ── bounded liveness regressions plus the one remaining candidate policy ──

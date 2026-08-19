@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, time
+from datetime import UTC, datetime
+from itertools import pairwise
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -12,9 +13,12 @@ TradingSessionPhase = Literal["PRE", "RTH", "POST", "OVERNIGHT", "CLOSED", "UNKN
 SessionAuthoritySource = Literal["ibkr_capability", "nyse_calendar"]
 
 _NY = ZoneInfo("America/New_York")
-_PRE_OPEN = time(4, 0)
-_POST_CLOSE = time(20, 0)
 _SESSION_PRIORITY: tuple[SessionKind, ...] = ("RTH", "PRE", "POST", "OVERNIGHT")
+_DAY_SESSION_SEQUENCE: tuple[SessionKind, ...] = ("PRE", "RTH", "POST")
+# A snapshot publishes one day's per-instrument windows plus an overnight
+# boundary.  Retaining it beyond a day could project yesterday's entitlement
+# onto a new session, so it cannot author an extended phase after this bound.
+CAPABILITY_MAX_AGE_MS = 24 * 60 * 60 * 1_000
 
 
 @dataclass(frozen=True)
@@ -25,19 +29,33 @@ class SessionAuthorityState:
     timezone: str
     as_of_ms: int
     source: SessionAuthoritySource
+    extended_phase_proven: bool
 
 
 def session_state_at_ms(
     *,
     now_ms: int,
     capability: SessionDataCapability | None = None,
+    symbol: str | None = None,
+    account_id: str | None = None,
     strategy_session_policy: Literal["rth_only"] | None = None,
     allowed_sessions: tuple[SessionKind, ...] | None = None,
 ) -> SessionAuthorityState:
-    """Return the authoritative live-session state for one instrument instant."""
+    """Return the scheduled session state for one instrument and account.
+
+    The canonical NYSE calendar can prove only RTH/CLOSED.  PRE, POST, and
+    OVERNIGHT require a current capability snapshot matched to both the target
+    instrument and account; no caller may infer them from a local clock.
+    """
     if now_ms < 0:
         raise ValueError("now_ms must be non-negative int64 ms UTC")
-    if capability is not None:
+    if _is_fresh_matching_capability(
+        capability,
+        now_ms=now_ms,
+        symbol=symbol,
+        account_id=account_id,
+    ):
+        assert capability is not None
         state = _session_from_capability(
             now_ms=now_ms,
             capability=capability,
@@ -79,6 +97,7 @@ def _session_from_capability(
             next_transition_ms=next_transition,
             timezone=capability.time_zone_id,
             source="ibkr_capability",
+            extended_phase_proven=True,
             strategy_session_policy=strategy_session_policy,
             allowed_sessions=allowed_sessions,
         )
@@ -98,6 +117,7 @@ def _session_from_capability(
         next_transition_ms=_next_capability_transition(now_ms, windows),
         timezone=capability.time_zone_id,
         source="ibkr_capability",
+        extended_phase_proven=True,
         strategy_session_policy=strategy_session_policy,
         allowed_sessions=allowed_sessions,
     )
@@ -116,33 +136,23 @@ def _session_from_nyse_calendar(
         return _state(
             phase="CLOSED",
             now_ms=now_ms,
-            next_transition_ms=_next_session_pre_open(now_ny),
+            next_transition_ms=_next_session_open(now_ny),
             timezone="America/New_York",
             source="nyse_calendar",
+            extended_phase_proven=False,
             strategy_session_policy=strategy_session_policy,
             allowed_sessions=allowed_sessions,
         )
 
-    session_open_ny = _ny_dt(session_window.open_ms_utc)
-    session_close_ny = _ny_dt(session_window.close_ms_utc)
-    pre_open_ny = _at(now_ny, _PRE_OPEN)
-    post_close_ny = _at(now_ny, _POST_CLOSE)
-
-    if now_ny < pre_open_ny:
+    if now_ms < session_window.open_ms_utc:
         phase: TradingSessionPhase = "CLOSED"
-        next_transition_ms = _ms_utc(pre_open_ny)
-    elif now_ny < session_open_ny:
-        phase = "PRE"
         next_transition_ms = session_window.open_ms_utc
-    elif now_ny < session_close_ny:
+    elif now_ms < session_window.close_ms_utc:
         phase = "RTH"
         next_transition_ms = session_window.close_ms_utc
-    elif now_ny < post_close_ny:
-        phase = "POST"
-        next_transition_ms = _ms_utc(post_close_ny)
     else:
         phase = "CLOSED"
-        next_transition_ms = _next_session_pre_open(now_ny)
+        next_transition_ms = _next_session_open(now_ny)
 
     return _state(
         phase=phase,
@@ -150,6 +160,7 @@ def _session_from_nyse_calendar(
         next_transition_ms=next_transition_ms,
         timezone="America/New_York",
         source="nyse_calendar",
+        extended_phase_proven=False,
         strategy_session_policy=strategy_session_policy,
         allowed_sessions=allowed_sessions,
     )
@@ -162,6 +173,7 @@ def _state(
     next_transition_ms: int | None,
     timezone: str,
     source: SessionAuthoritySource,
+    extended_phase_proven: bool,
     strategy_session_policy: Literal["rth_only"] | None,
     allowed_sessions: tuple[SessionKind, ...] | None,
 ) -> SessionAuthorityState:
@@ -174,6 +186,7 @@ def _state(
         timezone=timezone,
         as_of_ms=now_ms,
         source=source,
+        extended_phase_proven=extended_phase_proven,
     )
 
 
@@ -202,22 +215,59 @@ def _next_capability_transition(
     return transitions[0] if transitions else None
 
 
+def _is_fresh_matching_capability(
+    capability: SessionDataCapability | None,
+    *,
+    now_ms: int,
+    symbol: str | None,
+    account_id: str | None,
+) -> bool:
+    """Accept only a current, scoped, structurally valid capability snapshot."""
+    if capability is None or symbol is None or account_id is None:
+        return False
+    if capability.symbol != symbol.upper() or capability.account_id != account_id:
+        return False
+    age_ms = now_ms - capability.probed_at_ms
+    if age_ms < 0 or age_ms > CAPABILITY_MAX_AGE_MS:
+        return False
+    if not all(_is_valid_window(capability, kind) for kind in _SESSION_PRIORITY):
+        return False
+    return _has_ordered_day_sessions(capability)
+
+
+def _is_valid_window(capability: SessionDataCapability, kind: SessionKind) -> bool:
+    session = capability.sessions.get(kind)
+    if session is None:
+        return False
+    open_ms = session.window_today_open_ms
+    close_ms = session.window_today_close_ms
+    if open_ms is None or close_ms is None:
+        return open_ms is None and close_ms is None
+    return open_ms < close_ms
+
+
+def _has_ordered_day_sessions(capability: SessionDataCapability) -> bool:
+    """Reject overlapping or out-of-order PRE/RTH/POST evidence windows."""
+    windows = [
+        window
+        for kind in _DAY_SESSION_SEQUENCE
+        if (window := _window_tuple(capability, kind)) is not None
+    ]
+    return all(
+        earlier_close_ms <= later_open_ms
+        for (_earlier_open_ms, earlier_close_ms), (later_open_ms, _later_close_ms) in pairwise(
+            windows
+        )
+    )
+
+
 def _ny_dt(ms: int) -> datetime:
     return datetime.fromtimestamp(ms / 1000.0, tz=UTC).astimezone(_NY)
 
 
-def _at(ny_day: datetime, t: time) -> datetime:
-    return datetime.combine(ny_day.date(), t, tzinfo=_NY)
-
-
-def _ms_utc(dt: datetime) -> int:
-    return int(dt.astimezone(UTC).timestamp() * 1000)
-
-
-def _next_session_pre_open(now_ny: datetime) -> int:
+def _next_session_open(now_ny: datetime) -> int:
     candidate = next_trading_day(now_ny.date())
-    target = datetime.combine(candidate, _PRE_OPEN, tzinfo=_NY)
-    return _ms_utc(target)
+    return session_window_for_date(candidate).open_ms_utc
 
 
 SessionSubmitBlockReason = Literal[

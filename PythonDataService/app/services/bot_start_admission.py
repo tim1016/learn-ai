@@ -14,6 +14,7 @@ from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.marketdata.feed import MarketDataFeed
 from app.schemas.action_plan import ActionPlan
 from app.schemas.broker_bots import BotStatusView
+from app.schemas.broker_capability import SessionDataCapability
 from app.schemas.run_admission import (
     MarketDataAdmissionFact,
     RunAdmissionDecision,
@@ -34,6 +35,7 @@ RuntimeFactResolver = Callable[[str, int], Awaitable[StartRuntimeAdmissionFact]]
 CustodyBoundActivator = Callable[
     [BrokerBotBinding, MarketDataFeed, int, ClerkCustodySnapshot], Awaitable[BotStatusView]
 ]
+SessionCapabilityResolver = Callable[[str, str], SessionDataCapability | None]
 
 
 @dataclass(frozen=True)
@@ -77,6 +79,19 @@ class StartAdmissionUnavailable(Exception):
     def __init__(self, message: str, *, detail: str) -> None:
         super().__init__(message)
         self.detail = detail
+
+
+def market_data_capability_account_id(feed: MarketDataFeed | None) -> str | None:
+    """Return the account that owns the feed's capability evidence.
+
+    Alpaca custody identifies the execution account; it cannot scope an IBKR
+    market-data entitlement.  Only a feed-provided source account may select
+    the capability snapshot that authorizes an extended session phase.
+    """
+    if feed is None:
+        return None
+    account_id = getattr(feed, "capability_account_id", None)
+    return account_id if isinstance(account_id, str) and account_id else None
 
 
 def make_start_request(
@@ -229,6 +244,7 @@ class BotStartAdmission:
         process_fact: ProcessFactResolver,
         runtime_fact: RuntimeFactResolver,
         activate: CustodyBoundActivator,
+        session_capability: SessionCapabilityResolver,
     ) -> None:
         self._now_ms = now_ms
         self._feed_resolver = feed_resolver
@@ -236,6 +252,7 @@ class BotStartAdmission:
         self._process_fact = process_fact
         self._runtime_fact = runtime_fact
         self._activate = activate
+        self._session_capability = session_capability
 
     async def preview(self, request: StartRequest) -> RunAdmissionDecision:
         """Evaluate without mutation while holding the same Clerk fence."""
@@ -265,6 +282,7 @@ class BotStartAdmission:
                 runtime = await self._runtime_fact(binding.strategy_instance_id, observed_at_ms)
                 process = self._process_fact(binding, observed_at_ms)
                 feed = self._feed_resolver()
+                capability_account_id = market_data_capability_account_id(feed)
                 facts = StartRunFacts(
                     strategy_instance_id=binding.strategy_instance_id,
                     proposed_run_id=binding.run_id,
@@ -276,6 +294,12 @@ class BotStartAdmission:
                         observed_at_ms,
                         symbol=binding.symbol,
                         use_rth=binding.use_rth,
+                        capability=(
+                            self._session_capability(binding.symbol, capability_account_id)
+                            if capability_account_id is not None
+                            else None
+                        ),
+                        account_id=capability_account_id,
                     ),
                 )
                 yield (
@@ -297,12 +321,26 @@ def market_data_admission_fact(
     *,
     symbol: str | None = None,
     use_rth: bool,
+    capability: SessionDataCapability | None = None,
+    account_id: str | None = None,
 ) -> MarketDataAdmissionFact:
+    session = session_state_at_ms(
+        now_ms=observed_at_ms,
+        capability=capability,
+        symbol=symbol,
+        account_id=account_id,
+    )
+    session_fields = {
+        "scheduled_phase": session.phase,
+        "session_authority_source": session.source,
+        "extended_phase_proven": session.extended_phase_proven,
+    }
     if feed is None:
         return MarketDataAdmissionFact(
             state="UNAVAILABLE",
             observed_at_ms=observed_at_ms,
             reason="The process-level market-data feed is not installed.",
+            **session_fields,
         )
     try:
         health = feed.health(symbol)
@@ -320,8 +358,31 @@ def market_data_admission_fact(
             feed_id=feed.feed_id,
             observed_at_ms=observed_at_ms,
             reason="The market-data health probe failed.",
+            **session_fields,
         )
-    session = session_state_at_ms(now_ms=health.observed_at_ms)
+    session = session_state_at_ms(
+        now_ms=health.observed_at_ms,
+        capability=capability,
+        symbol=symbol,
+        account_id=account_id,
+    )
+    session_fields = {
+        "scheduled_phase": session.phase,
+        "session_authority_source": session.source,
+        "extended_phase_proven": session.extended_phase_proven,
+    }
+    if not use_rth and session.phase == "CLOSED" and not session.extended_phase_proven:
+        return MarketDataAdmissionFact(
+            state="UNKNOWN",
+            feed_id=feed.feed_id,
+            last_bar_ms=health.last_bar_ms,
+            observed_at_ms=health.observed_at_ms,
+            reason=("The extended-session phase cannot be proven by a fresh market-data capability snapshot."),
+            connected=health.connected,
+            stale=health.stale,
+            active_subscription_count=health.active_subscription_count,
+            **session_fields,
+        )
     bars_expected = session.phase == "RTH" if use_rth else session.phase in {"PRE", "RTH", "POST", "OVERNIGHT"}
     stalled_subscription = health.stale and health.active_subscription_count > 0 and bars_expected
     state: Literal["AVAILABLE", "STALE", "UNAVAILABLE"] = (
@@ -343,4 +404,7 @@ def market_data_admission_fact(
         connected=health.connected,
         stale=health.stale,
         active_subscription_count=health.active_subscription_count,
+        scheduled_phase=session.phase,
+        session_authority_source=session.source,
+        extended_phase_proven=session.extended_phase_proven,
     )

@@ -98,10 +98,7 @@ from app.services.bot_registry_projection import (
     project_process_fact,
     read_dry_run_activity,
 )
-from app.services.bot_resume_admission import (
-    AdmittedBotResume,
-    BotResumeAdmission,
-)
+from app.services.bot_resume_admission import AdmittedBotResume, BotResumeAdmission
 from app.services.bot_run_evidence import (
     PROVISIONAL_STOP_REASON_CODE,
     BotRunEvidenceService,
@@ -140,6 +137,7 @@ from app.services.bot_start_admission import (
     make_start_request,
     resolve_start_runtime_fact,
 )
+from app.services.broker_capability_service import get_broker_capability_service
 from app.utils.timestamps import now_ms_utc
 
 __all__ = [
@@ -245,6 +243,7 @@ class BotTaskRegistry:
             process_fact=self._start_process_fact,
             runtime_fact=self._start_runtime_fact,
             activate=self._activate_start_binding,
+            session_capability=get_broker_capability_service().read_latest_for,
         )
         self._resume_admission = BotResumeAdmission(
             now_ms=self._now_ms,
@@ -255,6 +254,7 @@ class BotTaskRegistry:
             checkpoint=self._resume_checkpoint_fact,
             activate=self._activate_resume_binding,
             carryover_account_policy_enabled=self._carryover_allowed,
+            session_capability=get_broker_capability_service().read_latest_for,
         )
         self._run_evidence = BotRunEvidenceService(
             self._bindings,

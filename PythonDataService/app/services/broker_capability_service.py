@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
+
+from pydantic import ValidationError
 
 from app.broker.ibkr.capability import probe_session_data_capability
 from app.broker.ibkr.client import IbkrClient
 from app.broker.ibkr.config import get_settings
 from app.schemas.broker_capability import SessionDataCapability
+
+logger = logging.getLogger(__name__)
 
 
 class BrokerCapabilityService:
@@ -32,9 +37,26 @@ class BrokerCapabilityService:
         if not self._root.exists():
             return snapshots
         for path in sorted(self._root.glob("*/*/latest.json")):
-            with path.open(encoding="utf-8") as fh:
-                snapshots.append(SessionDataCapability.model_validate_json(fh.read()))
+            snapshot = self._read_snapshot(path)
+            if snapshot is not None:
+                snapshots.append(snapshot)
         return snapshots
+
+    def read_latest_for(self, symbol: str, account_id: str) -> SessionDataCapability | None:
+        """Return the newest snapshot scoped to one instrument and account."""
+        directory = self._safe_snapshot_dir(account_id, symbol)
+        if not directory.exists():
+            return None
+        timestamped = sorted(path for path in directory.glob("*.json") if path.name != "latest.json")
+        candidates = timestamped or [directory / "latest.json"]
+        matching = [
+            snapshot
+            for path in candidates
+            if (snapshot := self._read_snapshot(path)) is not None
+            and snapshot.symbol == symbol.upper()
+            and snapshot.account_id == account_id
+        ]
+        return max(matching, key=lambda snapshot: snapshot.probed_at_ms, default=None)
 
     def persist(self, snapshot: SessionDataCapability) -> None:
         directory = self._safe_snapshot_dir(snapshot.account_id, snapshot.symbol)
@@ -43,7 +65,26 @@ class BrokerCapabilityService:
         latest = directory / "latest.json"
         timestamped = directory / f"{snapshot.probed_at_ms}.json"
         timestamped.write_text(payload + "\n", encoding="utf-8")
-        latest.write_text(payload + "\n", encoding="utf-8")
+        current_latest = self._read_snapshot(latest)
+        if current_latest is None or current_latest.probed_at_ms <= snapshot.probed_at_ms:
+            latest.write_text(payload + "\n", encoding="utf-8")
+
+    def _read_snapshot(self, path: Path) -> SessionDataCapability | None:
+        if not path.exists():
+            return None
+        try:
+            with path.open(encoding="utf-8") as fh:
+                return SessionDataCapability.model_validate_json(fh.read())
+        except (OSError, ValidationError, json.JSONDecodeError) as exc:
+            logger.warning(
+                "Ignoring unreadable broker capability snapshot",
+                extra={
+                    "action": "broker_capability_snapshot_ignored",
+                    "path": str(path),
+                    "error": str(exc),
+                },
+            )
+            return None
 
     def _safe_snapshot_dir(self, account_id: str, symbol: str) -> Path:
         root = self._root.resolve()

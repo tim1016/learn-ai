@@ -45,7 +45,9 @@ from app.schemas.broker_v2_panel import (
 )
 from app.schemas.run_admission import RunAdmissionDecision
 from app.services.bot_runner import BotRunnerError, get_bot_task_registry
+from app.services.bot_start_admission import market_data_capability_account_id
 from app.services.broker_account_snapshot import resolve_broker_account_snapshot
+from app.services.broker_capability_service import get_broker_capability_service
 from app.services.broker_v2_panel.action_execution_service import (
     ActionNotAvailableError,
     ActionPerformer,
@@ -542,6 +544,8 @@ async def _get_panel_with_entries(
     flatten_supported = profile.flatten_supported if profile is not None else False
     from app.marketdata.ibkr_feed import get_market_data_feed
 
+    market_data_feed = get_market_data_feed()
+    capability_account_id = market_data_capability_account_id(market_data_feed)
     panel = build_panel(
         status,
         clerk_status,
@@ -562,9 +566,18 @@ async def _get_panel_with_entries(
         resume_admission=resume_admission,
         dry_run_activity=registry.dry_run_activity(broker, sid),
         market_pulse=build_market_pulse(
-            get_market_data_feed(),
+            market_data_feed,
             now_ms=captured_now_ms,
             symbol=binding.symbol,
+            account_id=capability_account_id,
+            capability=(
+                get_broker_capability_service().read_latest_for(
+                    symbol=binding.symbol,
+                    account_id=capability_account_id,
+                )
+                if capability_account_id is not None
+                else None
+            ),
             use_rth=binding.use_rth,
             bot_running=status.running,
         ),

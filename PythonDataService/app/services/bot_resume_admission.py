@@ -21,10 +21,12 @@ from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_carryover import configuration_hash
 from app.services.bot_start_admission import (
     CustodyBoundActivator,
+    SessionCapabilityResolver,
     StartAdmissionDenied,
     StartAdmissionEvidenceChanged,
     StartRequest,
     market_data_admission_fact,
+    market_data_capability_account_id,
     new_run_binding,
 )
 from app.services.bot_trade_strategy import EXPOSURE_CARRYOVER_STRATEGY_KEYS
@@ -58,6 +60,7 @@ class BotResumeAdmission:
         checkpoint: CheckpointResolver,
         activate: CustodyBoundActivator,
         carryover_account_policy_enabled: bool,
+        session_capability: SessionCapabilityResolver,
     ) -> None:
         self._now_ms = now_ms
         self._feed_resolver = feed_resolver
@@ -67,6 +70,7 @@ class BotResumeAdmission:
         self._checkpoint = checkpoint
         self._activate = activate
         self._carryover_account_policy_enabled = carryover_account_policy_enabled
+        self._session_capability = session_capability
 
     async def preview(
         self,
@@ -105,6 +109,7 @@ class BotResumeAdmission:
             async with self._custody_guard(prior.strategy_instance_id) as custody:
                 observed_at_ms = self._now_ms()
                 feed = self._feed_resolver()
+                capability_account_id = market_data_capability_account_id(feed)
                 facts = ResumeRunFacts(
                     strategy_instance_id=prior.strategy_instance_id,
                     proposed_run_id=proposed.run_id,
@@ -120,6 +125,12 @@ class BotResumeAdmission:
                         observed_at_ms,
                         symbol=prior.symbol,
                         use_rth=prior.use_rth,
+                        capability=(
+                            self._session_capability(prior.symbol, capability_account_id)
+                            if capability_account_id is not None
+                            else None
+                        ),
+                        account_id=capability_account_id,
                     ),
                     desired_state=status.desired_state,
                     phase=status.phase,

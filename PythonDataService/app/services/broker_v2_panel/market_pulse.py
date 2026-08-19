@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from app.marketdata.feed import MarketDataFeed
+from app.schemas.broker_capability import SessionDataCapability
 from app.schemas.broker_v2_panel import MarketPulseView
 from app.services.bot_start_admission import market_data_admission_fact
-from app.services.session_authority import session_state_at_ms
 
 # The admission feed emits closed one-minute bars. This is the contracted source
 # cadence shown to operators, not the feed implementation's longer stale cutoff.
@@ -17,30 +17,26 @@ def build_market_pulse(
     *,
     now_ms: int,
     symbol: str | None = None,
+    account_id: str | None = None,
+    capability: SessionDataCapability | None = None,
     use_rth: bool,
     bot_running: bool,
 ) -> MarketPulseView:
     """Present the same typed market-data fact Start admission consumes."""
-    session = session_state_at_ms(now_ms=now_ms)
     session_label = {
-        "PRE": "PRE_MARKET",
-        "RTH": "OPEN",
-        "POST": "AFTER_HOURS",
-        "OVERNIGHT": "AFTER_HOURS",
-        "CLOSED": "CLOSED",
-        "UNKNOWN": "UNKNOWN",
-    }[session.phase]
-    bars_expected = (
-        session.phase == "RTH"
-        if use_rth
-        else session.phase in {"PRE", "RTH", "POST", "OVERNIGHT"}
-    )
+        "PRE": "PRE_MARKET", "RTH": "OPEN", "POST": "AFTER_HOURS",
+        "OVERNIGHT": "AFTER_HOURS", "CLOSED": "CLOSED", "UNKNOWN": "UNKNOWN",
+    }
     fact = market_data_admission_fact(
         feed,
         now_ms,
         symbol=symbol,
         use_rth=use_rth,
+        capability=capability,
+        account_id=account_id,
     )
+    session = fact.scheduled_phase
+    bars_expected = session == "RTH" if use_rth else session in {"PRE", "RTH", "POST", "OVERNIGHT"}
     feed_state = {
         "AVAILABLE": "IDLE" if fact.stale else "LIVE",
         "STALE": "STALE",
@@ -53,7 +49,15 @@ def build_market_pulse(
         else None
     )
 
-    if not bars_expected:
+    if not use_rth and not fact.extended_phase_proven and session == "CLOSED":
+        headline = "Extended-session phase unproved"
+        explanation = (
+            "No fresh capability matches this account and instrument, so the "
+            "canonical NYSE calendar can prove only regular hours or closed."
+        )
+        next_step = "Refresh the instrument's account-scoped session capability before relying on extended hours."
+        attention_required = bot_running
+    elif not bars_expected:
         headline = "Market closed — no live bar expected"
         explanation = (
             "The session calendar does not expect a new regular-session bar now."
@@ -92,7 +96,7 @@ def build_market_pulse(
         attention_required = True
 
     return MarketPulseView(
-        session=session_label,
+        session=session_label[session],
         feed_state=feed_state,
         latest_bar_at_ms=fact.last_bar_ms,
         age_ms=age_ms,
