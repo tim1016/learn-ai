@@ -17,7 +17,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from app.broker.alpaca.clerk.journal import INBOX_FILENAME, JOURNAL_FILENAME
 from app.broker.alpaca.clerk.sqlite import writes
 from app.broker.alpaca.clerk.sqlite.activation import ActivationRecord, ActivationStore
 from app.broker.alpaca.clerk.sqlite.cutover_initialization import (
@@ -78,8 +77,8 @@ from app.utils.timestamps import Clock, now_ms_utc
 DEFAULT_CONFIRMATION_TTL_MS = 120_000
 MAX_CONFIRMATION_TTL_MS = 300_000
 LEGACY_ARTIFACT_NAMES: tuple[str, ...] = (
-    INBOX_FILENAME,
-    JOURNAL_FILENAME,
+    "order_inbox.jsonl",
+    "order_journal.jsonl",
     "custody_resolution_receipts.json",
     "bots",
 )

@@ -220,7 +220,7 @@ async def test_unknown_broker_returns_404() -> None:
     assert "Unknown broker" in detail["message"]
 
 
-async def test_known_read_only_broker_cannot_use_alpaca_trade_clerk() -> None:
+async def test_generic_order_cancel_route_is_retired_for_every_broker() -> None:
     port = _FakePort()
     port.broker_id = "ibkr"
     get_broker_registry().register(port)
@@ -230,8 +230,7 @@ async def test_known_read_only_broker_cannot_use_alpaca_trade_clerk() -> None:
     )
 
     assert response.status_code == 404
-    assert response.json()["detail"]["broker"] == "ibkr"
-    assert "not supported" in response.json()["detail"]["message"]
+    assert response.json() == {"detail": "Not Found"}
 
 
 async def test_auth_error_translates_to_502() -> None:

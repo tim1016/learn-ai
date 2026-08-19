@@ -12,13 +12,12 @@ from app.broker.ibkr.account_recovery import AccountRecoveryState
 from app.broker.ibkr.account_truth import compose_account_truth
 from app.broker.ibkr.models import IbkrAccountSummary, IbkrConnectionHealth, IbkrPositionsSnapshot
 from app.engine.live.account_artifacts import ACCOUNT_EVENTS_FILENAME, read_account_events
-from app.engine.live.account_clerk_journal import AccountClerkJournal
+from app.engine.live.account_clerk_journal_models import AccountClerkJournalEntry
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
-from app.engine.live.account_registry import AccountInstanceBinding, write_account_instance_binding
+from app.engine.live.account_registry import AccountInstanceBinding
 from app.engine.live.daemon_transport import DaemonResult
 from app.engine.live.fleet import compute_fleet_contamination
 from app.engine.live.live_state_sidecar import LiveStateEnvelope, LiveStateSidecarRepo, stable_live_state_path
-from app.engine.live.run_ledger import LiveRunLedger
 from app.schemas.account_reconciliation import LegacyStaleClaimRetirementReceipt
 from app.schemas.live_runs import HostRunnerProcessStatus
 from app.services.fleet_contamination import collect_fleet_position_explanations
@@ -28,6 +27,10 @@ from app.services.legacy_stale_claim_retirement import (
     LegacyStaleClaimRetirementService,
     _record_retired_claim_receipt,
     retired_legacy_claim_keys,
+)
+from tests._helpers.legacy_ibkr_artifacts import (
+    write_historical_account_binding,
+    write_historical_clerk_journal,
 )
 
 _ACCOUNT_ID = "DUM284968"
@@ -84,25 +87,17 @@ def _seed_claim(
     ledger_path = root / "live_runs" / run_id / "run_ledger.json"
     ledger_path.parent.mkdir(parents=True, exist_ok=True)
     ledger_path.write_text(
-        LiveRunLedger(
-            run_id=run_id,
-            code_sha="a" * 40,
-            strategy_instance_id=strategy_instance_id,
-            strategy_spec_path="spec.json",
-            strategy_spec_sha256="b" * 64,
-            qc_audit_copy_path="audit.py",
-            qc_audit_copy_sha256="c" * 64,
-            qc_cloud_backtest_id="qc-1",
-            account_id=_ACCOUNT_ID,
-            start_date_ms=_NOW_MS - 10_000,
-            live_config={},
-            created_at_ms=_NOW_MS - 10_000,
-        ).model_dump_json(),
+        json.dumps(
+            {
+                "run_id": run_id,
+                "strategy_instance_id": strategy_instance_id,
+                "account_id": _ACCOUNT_ID,
+                "created_at_ms": _NOW_MS - 10_000,
+            }
+        ),
         encoding="utf-8",
     )
-    LiveStateSidecarRepo(
-        stable_live_state_path(root, strategy_instance_id), trusted_root=root / "live_state"
-    ).write(
+    LiveStateSidecarRepo(stable_live_state_path(root, strategy_instance_id), trusted_root=root / "live_state").write(
         LiveStateEnvelope(
             strategy_instance_id=strategy_instance_id,
             run_id=run_id,
@@ -114,7 +109,7 @@ def _seed_claim(
         )
     )
     if binding_state is not None:
-        write_account_instance_binding(
+        write_historical_account_binding(
             root,
             AccountInstanceBinding(
                 account_id=_ACCOUNT_ID,
@@ -164,26 +159,30 @@ async def test_post_clerk_retired_sidecar_claim_still_has_a_retirement_remedy(
     tmp_path: Path,
 ) -> None:
     journal_started_at_ms = _NOW_MS - 20_000
-    journal = AccountClerkJournal(
-        artifacts_root=tmp_path,
+    intent = AccountOwnerSubmitIntent(
+        trace_id="journal-before-sidecar",
         account_id=_ACCOUNT_ID,
-        now_ms=lambda: journal_started_at_ms,
+        strategy_instance_id="earlier-bot",
+        run_id="earlier-run",
+        bot_order_namespace="learn-ai/earlier-bot/v1",
+        intent_id="journal-before-sidecar",
+        order_ref="learn-ai/earlier-bot/v1:journal-before-sidecar",
+        intent_kind="ORDER",
+        order_spec={},
+        owner_generation=1,
+        created_at_ms=journal_started_at_ms,
     )
-    journal.record_intent(
-        AccountOwnerSubmitIntent(
-            trace_id="journal-before-sidecar",
-            account_id=_ACCOUNT_ID,
-            strategy_instance_id="earlier-bot",
-            run_id="earlier-run",
-            bot_order_namespace="learn-ai/earlier-bot/v1",
-            intent_id="journal-before-sidecar",
-            order_ref="learn-ai/earlier-bot/v1:journal-before-sidecar",
-            intent_kind="ORDER",
-            order_spec={},
-            owner_generation=1,
-            created_at_ms=journal_started_at_ms,
-        ),
-        validate_intent=lambda _intent: None,
+    write_historical_clerk_journal(
+        tmp_path,
+        _ACCOUNT_ID,
+        [
+            AccountClerkJournalEntry(
+                seq=1,
+                entry_kind="recorded",
+                recorded_at_ms=journal_started_at_ms,
+                intent=intent,
+            )
+        ],
     )
     _seed_claim(tmp_path)
     service = LegacyStaleClaimRetirementService(
@@ -197,9 +196,7 @@ async def test_post_clerk_retired_sidecar_claim_still_has_a_retirement_remedy(
         fetch_run_process=_dead_process,
     )
 
-    assert [(candidate.strategy_instance_id, candidate.symbol) for candidate in candidates] == [
-        (_SID, "SPY")
-    ]
+    assert [(candidate.strategy_instance_id, candidate.symbol) for candidate in candidates] == [(_SID, "SPY")]
 
 
 @pytest.mark.parametrize(

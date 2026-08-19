@@ -12,7 +12,6 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Literal
 
-from app.broker.alpaca.clerk.journal import INBOX_FILENAME, JOURNAL_FILENAME
 from app.broker.alpaca.clerk.sqlite.developer_reset_registry import (
     DeveloperCleanSlateReset,
     DeveloperCleanSlateResetRegistry,
@@ -49,12 +48,6 @@ _SQLITE_ARTIFACT_NAMES = (
     f"{DB_FILENAME}-wal",
     f"{DB_FILENAME}-shm",
     MIRROR_FILENAME,
-)
-_LEGACY_ARTIFACT_NAMES = (
-    INBOX_FILENAME,
-    JOURNAL_FILENAME,
-    "custody_resolution_receipts.json",
-    "bots",
 )
 _RUNNER_ACCOUNT_ARTIFACT_NAMES = (
     ACCOUNT_INSTANCE_REGISTRY_FILENAME,
@@ -154,6 +147,10 @@ def _reset_fenced(
     _require_directory_or_absent(runner_account_dir, "runner account directory")
     now = clock()
     established = EstablishedAccountsRegistry(accounts_root).latest(account_id)
+    if established is None:
+        raise DeveloperCleanSlateResetRefused(
+            "developer reset requires an established SQLite authority"
+        )
     _assert_stopped_sqlite_authority(account_dir, now_ms=now)
     planned = _collect_artifacts(
         account_dir=account_dir,
@@ -161,7 +158,7 @@ def _reset_fenced(
         runner_account_dir=runner_account_dir,
         account_id=account_id,
     )
-    if not planned and established is not None:
+    if not planned:
         resumed = _resume_completed_reset(
             account_id=account_id,
             artifacts_root=artifacts_root,
@@ -173,17 +170,8 @@ def _reset_fenced(
         )
         if resumed is not None:
             return resumed
-    if not planned:
-        return DevResetReceipt(
-            operation="DEV_CLEAN_SLATE_RESET",
-            account_id=account_id,
-            account_mode=account_mode,
-            recorded_at_ms=now,
-            moved_artifacts=(),
-            quarantine_reference=None,
-            runner_quarantine_reference=None,
-            manifest_reference=None,
-            manifest_sha256=None,
+        raise DeveloperCleanSlateResetRefused(
+            "established SQLite authority artifacts are unavailable"
         )
 
     assert_wal_filesystem_supported(account_dir)
@@ -302,13 +290,6 @@ def _collect_artifacts(
             names=_SQLITE_ARTIFACT_NAMES,
             destination_prefix=Path("sqlite-authority"),
             allowed_directories=frozenset(),
-        ),
-        *_plan_named_artifacts(
-            source_scope="clerk",
-            source_root=account_dir,
-            names=_LEGACY_ARTIFACT_NAMES,
-            destination_prefix=Path("legacy-authority"),
-            allowed_directories=frozenset({"bots"}),
         ),
         *_plan_named_artifacts(
             source_scope="runner",

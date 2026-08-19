@@ -28,19 +28,16 @@ from app.engine.live.account_artifacts import (
     AccountOwnerGeneration,
     AccountRecoveryProof,
     account_artifacts_root,
-    advance_account_clerk_generation,
     clear_account_freeze,
     read_account_events,
     read_account_freeze,
-    write_account_clerk_lease,
     write_account_freeze,
-    write_account_instance_binding,
-    write_account_owner_generation,
 )
-from app.engine.live.account_clerk_journal import AccountClerkJournal
+from app.engine.live.account_clerk_journal_models import AccountClerkJournalEntry
 from app.engine.live.account_observation_lease import assess_account_observation_lease
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.account_safety import AccountSafetyAuthority, AccountSafetyVerdict
+from app.engine.live.broker_callbacks import broker_callback_idempotency_key
 from app.engine.live.producer_operational_log import read_producer_operational_events
 from app.schemas.account_reconciliation import AccountConditionType, AccountCureAction
 from app.schemas.account_truth import (
@@ -52,6 +49,13 @@ from app.schemas.account_truth import (
 from app.schemas.live_runs import GateResult
 from app.services import account_reconciliation as account_reconciliation_module
 from app.services.account_reconciliation import AccountReconciliationService
+from tests._helpers.legacy_ibkr_artifacts import (
+    write_historical_account_binding,
+    write_historical_clerk_generation,
+    write_historical_clerk_journal,
+    write_historical_clerk_lease,
+    write_historical_owner_generation,
+)
 
 
 def _health(*, account_id: str = "DU1234567", connected: bool = True) -> IbkrConnectionHealth:
@@ -139,14 +143,14 @@ def _binding() -> AccountInstanceBinding:
 
 def _write_accepting_clerk_generation(root: Path, *, generation: int) -> None:
     for offset in range(generation):
-        advance_account_clerk_generation(
+        write_historical_clerk_generation(
             root,
             "DU1234567",
             phase="accepting",
             recorded_at_ms=1_780_000_002_000 + offset,
             source="test",
         )
-    write_account_clerk_lease(
+    write_historical_clerk_lease(
         root,
         AccountClerkLease(
             account_id="DU1234567",
@@ -344,9 +348,7 @@ def test_account_truth_observer_renews_observation_lease(tmp_path: Path) -> None
         for event in read_account_events(tmp_path, "DU1234567")
         if event["event_type"].startswith("account_observation_lease_")
     ]
-    assert [event["event_type"] for event in lease_events] == [
-        "account_observation_lease_verified"
-    ]
+    assert [event["event_type"] for event in lease_events] == ["account_observation_lease_verified"]
 
 
 def test_account_truth_observer_refuses_clean_truth_without_active_clerk(
@@ -452,11 +454,14 @@ def test_account_observation_triage_bounds_long_reason_lines(tmp_path: Path) -> 
     assert triage.account_observation.reason_line.endswith("...")
     assert len(triage.account_observation.history[-1].reason_line) == 512
     assert triage.account_observation.history[-1].reason_line.endswith("...")
-    assert assess_account_observation_lease(
-        tmp_path,
-        "DU1234567",
-        now_ms=1_780_000_003_001,
-    ).reason == long_detail
+    assert (
+        assess_account_observation_lease(
+            tmp_path,
+            "DU1234567",
+            now_ms=1_780_000_003_001,
+        ).reason
+        == long_detail
+    )
 
 
 def test_account_truth_observer_revokes_when_clerk_generation_changes_during_sweep(
@@ -472,14 +477,14 @@ def test_account_truth_observer_revokes_when_clerk_generation_changes_during_swe
         clerk = original_read(*args, **kwargs)
         read_count += 1
         if read_count == 1:
-            advanced = advance_account_clerk_generation(
+            advanced = write_historical_clerk_generation(
                 tmp_path,
                 "DU1234567",
                 phase="accepting",
                 recorded_at_ms=1_780_000_002_001,
                 source="test",
             )
-            write_account_clerk_lease(
+            write_historical_clerk_lease(
                 tmp_path,
                 AccountClerkLease(
                     account_id="DU1234567",
@@ -670,10 +675,7 @@ def test_account_service_enables_and_silently_renews_quiet_flat_account_proof(
     assert renewed is not None and renewed.state == "CLEAN"
     assert renewed.expires_at_ms == 1_780_000_100_000
     events = read_account_events(tmp_path, "DU1234567")
-    assert sum(
-        event["event_type"] == "account_reconciliation_receipt_recorded"
-        for event in events
-    ) == 1
+    assert sum(event["event_type"] == "account_reconciliation_receipt_recorded" for event in events) == 1
 
 
 def test_reconciliation_receipt_retry_is_exactly_once_across_producer_boots(
@@ -753,10 +755,13 @@ def test_auto_reconcile_does_not_bless_unclaimed_execution(tmp_path: Path) -> No
 
     assert service.observe_account_truth(updated_truth, now_ms=1_780_000_003_000) is None
     assert service.read_latest_receipt("DU1234567") == original
-    assert service.triage(
-        account_id="DU1234567",
-        now_ms=1_780_000_003_500,
-    ).overall_gate_result.status == "unknown"
+    assert (
+        service.triage(
+            account_id="DU1234567",
+            now_ms=1_780_000_003_500,
+        ).overall_gate_result.status
+        == "unknown"
+    )
 
 
 def test_enabling_auto_reconcile_retries_an_invalidated_bot_execution(tmp_path: Path) -> None:
@@ -784,10 +789,13 @@ def test_enabling_auto_reconcile_retries_an_invalidated_bot_execution(tmp_path: 
 
     assert replacement is not None
     assert replacement.generated_at_ms == 1_780_000_004_000
-    assert service.triage(
-        account_id="DU1234567",
-        now_ms=1_780_000_004_500,
-    ).overall_gate_result.status == "pass"
+    assert (
+        service.triage(
+            account_id="DU1234567",
+            now_ms=1_780_000_004_500,
+        ).overall_gate_result.status
+        == "pass"
+    )
 
 
 def test_wrong_account_invalidation_fails_closed_without_changing_reconciliation(tmp_path: Path) -> None:
@@ -877,9 +885,7 @@ def test_wrong_account_receipt_cannot_clear_a_frozen_account(tmp_path: Path) -> 
         ),
     )
     service.receipt_path("DU1234567").write_text(
-        receipt.model_copy(
-            update={"account_id": "DU7654321", "requested_account_id": "DU7654321"}
-        ).model_dump_json(),
+        receipt.model_copy(update={"account_id": "DU7654321", "requested_account_id": "DU7654321"}).model_dump_json(),
         encoding="utf-8",
     )
 
@@ -1056,15 +1062,15 @@ def test_triage_without_receipt_is_unknown(tmp_path: Path) -> None:
     assert triage.verdict.primary_move is not None
     assert triage.gate_rows[0].gate_id == "account.reconciliation"
     assert triage.gate_rows[0].status == "unknown"
-    assert [(row.condition_type, row.cure_action) for row in triage.conditions] == [
-        ("evidence_stale", "reconcile_now")
-    ]
+    assert [(row.condition_type, row.cure_action) for row in triage.conditions] == [("evidence_stale", "reconcile_now")]
 
 
-def test_triage_authors_only_an_exact_single_instrument_recovery_flatten_move(tmp_path: Path) -> None:
+def test_triage_does_not_author_an_exact_single_instrument_recovery_flatten_move(
+    tmp_path: Path,
+) -> None:
     binding = _retired_binding()
-    write_account_instance_binding(tmp_path, binding)
-    write_account_owner_generation(
+    write_historical_account_binding(tmp_path, binding)
+    write_historical_owner_generation(
         tmp_path,
         AccountOwnerGeneration(
             account_id="DU1234567",
@@ -1099,20 +1105,34 @@ def test_triage_authors_only_an_exact_single_instrument_recovery_flatten_move(tm
         owner_generation=7,
         created_at_ms=1_780_000_002_000,
     )
-    journal = AccountClerkJournal(artifacts_root=tmp_path, account_id="DU1234567", now_ms=lambda: 1_780_000_002_000)
-    journal.record_intent(source_intent, validate_intent=lambda _: None)
-    journal.record_broker_event(
-        IbkrOrderEvent(
-            account_id="DU1234567",
-            order_id=1,
-            event_type="fill",
-            order_ref=order_ref,
-            symbol="SPY",
-            side="BUY",
-            fill_quantity=2,
-            exec_id="recovery-candidate-fill",
-            ts_ms=1_780_000_002_001,
-        )
+    broker_event = IbkrOrderEvent(
+        account_id="DU1234567",
+        order_id=1,
+        event_type="fill",
+        order_ref=order_ref,
+        symbol="SPY",
+        side="BUY",
+        fill_quantity=2,
+        exec_id="recovery-candidate-fill",
+        ts_ms=1_780_000_002_001,
+    )
+    write_historical_clerk_journal(
+        tmp_path,
+        "DU1234567",
+        [
+            AccountClerkJournalEntry(
+                seq=1, entry_kind="recorded", recorded_at_ms=1_780_000_002_000, intent=source_intent
+            ),
+            AccountClerkJournalEntry(
+                seq=2,
+                entry_kind="broker_event",
+                recorded_at_ms=1_780_000_002_001,
+                intent=source_intent,
+                broker_event=broker_event.model_dump(mode="json"),
+                event_account_id=broker_event.account_id,
+                broker_callback_idempotency_key=broker_callback_idempotency_key(broker_event),
+            ),
+        ],
     )
 
     service = AccountReconciliationService(artifacts_root=tmp_path)
@@ -1126,22 +1146,13 @@ def test_triage_authors_only_an_exact_single_instrument_recovery_flatten_move(tm
         now_ms=1_780_000_003_100,
     )
 
-    [candidate] = triage.recovery_flatten_candidates
-    assert candidate.intent.intent_kind == "RECOVERY_FLATTEN"
-    assert candidate.intent.owner_generation == 7
-    assert candidate.intent.order_spec["action"] == "SELL"
-    assert candidate.intent.order_spec["quantity"] == 2
-    assert candidate.confirmation.confirm_label == "Submit recovery flatten"
-    assert triage.emergency_flatten_confirmation is None
-    [blocker] = [
-        value
+    assert not hasattr(triage, "recovery_flatten_candidates")
+    assert not hasattr(triage, "emergency_flatten_confirmation")
+    assert all(
+        value.primary_move is None
+        or getattr(value.primary_move.action, "anchor", None) != "account-recovery-flatten-action"
         for value in triage.operator_blockers
-        if value.primary_move is not None
-        and value.primary_move.action.kind == "confirm_in_form"
-        and value.primary_move.action.anchor == "account-recovery-flatten-action"
-    ]
-    assert blocker.primary_move is not None
-    assert blocker.primary_move.target == candidate.intent.intent_id
+    )
 
 
 def test_triage_never_authors_recovery_flatten_from_symbol_only_position_matching(
@@ -1150,8 +1161,8 @@ def test_triage_never_authors_recovery_flatten_from_symbol_only_position_matchin
     """A duplicate symbol cannot silently turn a stale aggregate into an order."""
 
     binding = _retired_binding()
-    write_account_instance_binding(tmp_path, binding)
-    write_account_owner_generation(
+    write_historical_account_binding(tmp_path, binding)
+    write_historical_owner_generation(
         tmp_path,
         AccountOwnerGeneration(
             account_id="DU1234567",
@@ -1185,20 +1196,32 @@ def test_triage_never_authors_recovery_flatten_from_symbol_only_position_matchin
         owner_generation=7,
         created_at_ms=1_780_000_002_000,
     )
-    journal = AccountClerkJournal(artifacts_root=tmp_path, account_id="DU1234567")
-    journal.record_intent(source_intent, validate_intent=lambda _: None)
-    journal.record_broker_event(
-        IbkrOrderEvent(
-            account_id="DU1234567",
-            order_id=1,
-            event_type="fill",
-            order_ref=order_ref,
-            symbol="SPY",
-            side="BUY",
-            fill_quantity=2,
-            exec_id="symbol-only-fill",
-            ts_ms=1_780_000_002_001,
-        )
+    broker_event = IbkrOrderEvent(
+        account_id="DU1234567",
+        order_id=1,
+        event_type="fill",
+        order_ref=order_ref,
+        symbol="SPY",
+        side="BUY",
+        fill_quantity=2,
+        exec_id="symbol-only-fill",
+        ts_ms=1_780_000_002_001,
+    )
+    write_historical_clerk_journal(
+        tmp_path,
+        "DU1234567",
+        [
+            AccountClerkJournalEntry(seq=1, entry_kind="recorded", recorded_at_ms=0, intent=source_intent),
+            AccountClerkJournalEntry(
+                seq=2,
+                entry_kind="broker_event",
+                recorded_at_ms=0,
+                intent=source_intent,
+                broker_event=broker_event.model_dump(mode="json"),
+                event_account_id=broker_event.account_id,
+                broker_callback_idempotency_key=broker_callback_idempotency_key(broker_event),
+            ),
+        ],
     )
 
     service = AccountReconciliationService(artifacts_root=tmp_path)
@@ -1208,12 +1231,11 @@ def test_triage_never_authors_recovery_flatten_from_symbol_only_position_matchin
         now_ms=1_780_000_003_000,
     )
 
-    assert service.triage(
-        account_id="DU1234567", now_ms=1_780_000_003_100
-    ).recovery_flatten_candidates == []
+    triage = service.triage(account_id="DU1234567", now_ms=1_780_000_003_100)
+    assert not hasattr(triage, "recovery_flatten_candidates")
 
 
-def test_triage_declares_emergency_flatten_only_without_exact_recovery_candidate(
+def test_triage_never_declares_emergency_flatten_without_exact_recovery_candidate(
     tmp_path: Path,
 ) -> None:
     service = AccountReconciliationService(artifacts_root=tmp_path)
@@ -1228,10 +1250,8 @@ def test_triage_declares_emergency_flatten_only_without_exact_recovery_candidate
         now_ms=1_780_000_003_100,
     )
 
-    assert triage.recovery_flatten_candidates == []
-    assert triage.emergency_flatten_confirmation is not None
-    assert triage.emergency_flatten_confirmation.required_token == "FLATTEN"
-    assert triage.emergency_flatten_confirmation.confirm_label == "Emergency flatten account"
+    assert not hasattr(triage, "recovery_flatten_candidates")
+    assert not hasattr(triage, "emergency_flatten_confirmation")
 
 
 def test_triage_verdict_freeze_precedes_missing_proof(tmp_path: Path) -> None:
@@ -1285,9 +1305,7 @@ def test_triage_marks_expired_receipt_unknown(tmp_path: Path) -> None:
 
     assert triage.overall_gate_result.status == "unknown"
     assert triage.gate_rows[0].title == "Account reconciliation receipt stale"
-    assert [(row.condition_type, row.cure_action) for row in triage.conditions] == [
-        ("evidence_stale", "reconcile_now")
-    ]
+    assert [(row.condition_type, row.cure_action) for row in triage.conditions] == [("evidence_stale", "reconcile_now")]
 
 
 def test_triage_freeze_dominates_clean_receipt(tmp_path: Path) -> None:
@@ -1297,7 +1315,7 @@ def test_triage_freeze_dominates_clean_receipt(tmp_path: Path) -> None:
         account_truth=_truth(),
         now_ms=1_780_000_002_000,
     )
-    write_account_instance_binding(tmp_path, _binding())
+    write_historical_account_binding(tmp_path, _binding())
     write_account_freeze(
         tmp_path,
         AccountFreezeEvidence(
@@ -1347,9 +1365,7 @@ def test_triage_marks_non_exposure_freeze_with_clear_action(tmp_path: Path) -> N
     triage = service.triage(account_id="DU1234567", now_ms=1_780_000_003_100)
 
     assert triage.clear_freeze_actionable is True
-    assert [(row.condition_type, row.cure_action) for row in triage.conditions] == [
-        ("account_freeze", "clear_freeze")
-    ]
+    assert [(row.condition_type, row.cure_action) for row in triage.conditions] == [("account_freeze", "clear_freeze")]
 
 
 def test_triage_defaults_untyped_freeze_to_clearable_account_freeze(tmp_path: Path) -> None:
@@ -1373,9 +1389,7 @@ def test_triage_defaults_untyped_freeze_to_clearable_account_freeze(tmp_path: Pa
     triage = service.triage(account_id="DU1234567", now_ms=1_780_000_003_100)
 
     assert triage.clear_freeze_actionable is True
-    assert [(row.condition_type, row.cure_action) for row in triage.conditions] == [
-        ("account_freeze", "clear_freeze")
-    ]
+    assert [(row.condition_type, row.cure_action) for row in triage.conditions] == [("account_freeze", "clear_freeze")]
     with pytest.raises(AccountArtifactError, match="only clear an exposure freeze"):
         service.accept_exposure_override(
             account_id="DU1234567",
@@ -1394,7 +1408,7 @@ def test_triage_marks_crashed_and_no_status_retired_bots_for_retire_replace(
         account_truth=_truth(),
         now_ms=1_780_000_003_000,
     )
-    write_account_instance_binding(
+    write_historical_account_binding(
         tmp_path,
         _retired_binding(
             sid="crashed-bot",
@@ -1403,7 +1417,7 @@ def test_triage_marks_crashed_and_no_status_retired_bots_for_retire_replace(
             recorded_at_ms=1_780_000_002_500,
         ),
     )
-    write_account_instance_binding(
+    write_historical_account_binding(
         tmp_path,
         _retired_binding(
             sid="nostatus-bot",
@@ -1412,7 +1426,7 @@ def test_triage_marks_crashed_and_no_status_retired_bots_for_retire_replace(
             recorded_at_ms=1_780_000_002_600,
         ),
     )
-    write_account_instance_binding(
+    write_historical_account_binding(
         tmp_path,
         _retired_binding(
             sid="unproven-bot",
@@ -1466,7 +1480,7 @@ def test_triage_closes_terminal_retired_conditions_after_recovery_evidence(
         account_truth=_truth(),
         now_ms=1_780_000_003_000,
     )
-    write_account_instance_binding(
+    write_historical_account_binding(
         tmp_path,
         _retired_binding(
             sid="crashed-bot",
@@ -1475,7 +1489,7 @@ def test_triage_closes_terminal_retired_conditions_after_recovery_evidence(
             recorded_at_ms=1_780_000_002_500,
         ),
     )
-    write_account_instance_binding(
+    write_historical_account_binding(
         tmp_path,
         _retired_binding(
             sid="nostatus-bot",
@@ -1539,7 +1553,7 @@ def test_triage_exposure_freeze_names_retired_owner_when_unambiguous(
             operator_next_step="CHECK_IBKR",
         ),
     )
-    write_account_instance_binding(
+    write_historical_account_binding(
         tmp_path,
         _retired_binding(
             sid="retired-freezer",
@@ -1695,7 +1709,7 @@ def test_accept_exposure_override_clears_exposure_freeze_with_audit_event(
             operator_next_step="CHECK_IBKR",
         ),
     )
-    write_account_instance_binding(
+    write_historical_account_binding(
         tmp_path,
         _retired_binding(
             sid="retired-freezer",

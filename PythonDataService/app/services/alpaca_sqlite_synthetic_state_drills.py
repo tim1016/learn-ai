@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Never
 
 from app.broker.alpaca.clerk.active_authority import select_active_clerk_runtime
 from app.broker.alpaca.clerk.sqlite.activation import ActivationRecord
@@ -83,10 +82,6 @@ class _SyntheticActivationResolver:
         ):
             return None
         return self.record
-
-
-def _legacy_factory_must_not_run() -> Never:
-    raise AssertionError("activated SQLite boot must not construct legacy Clerk")
 
 
 async def bot_isolation(artifacts_root: Path) -> SyntheticScenarioObservation:
@@ -243,7 +238,6 @@ async def restart_in_flight(artifacts_root: Path) -> SyntheticScenarioObservatio
         trade=broker,
         artifacts_root=artifacts_root,
         activation_store=_SyntheticActivationResolver(activation),
-        legacy_factory=_legacy_factory_must_not_run,
         repository_opener=lambda opened_account_id, opened_root: ClerkSqliteRepository.open(
             account_id=opened_account_id,
             artifacts_root=opened_root,

@@ -19,20 +19,13 @@ ours — a working order legitimately explains a temporary mismatch (the fill
 hasn't landed/folded yet), so it is suppressed for that pass rather than
 flagged as drift.
 
-This is the same epsilon and the same in-flight-suppression policy as the
-pre-SQLite Alpaca clerk's `exposure.py::account_exposure_deltas` (documented in
-`docs/references/clerk-custody-exposure-deltas.md`) — a deliberate re-statement
-of an already-proven policy on the new SQLite `positions` fold, not an
-independent invention. The duplication is a migration artifact, not a
-permanent one: `exposure.py`'s JSONL-journal implementation is retired at the
-SQLite cutover (#1382), at which point this is the sole implementation.
-
-Both paths now call
-`sqlite/folds.py::position_quantity_is_nonzero` for the tolerance boundary.
-Parity is pinned by
-`test_legacy_exposure_delta_uses_canonical_sqlite_nonzero_boundary`; the JSONL
-and SQLite inputs remain different projections, but they can no longer drift on
-the shared exposure/flat threshold during migration.
+This re-stated the proven pre-SQLite exposure policy on the SQLite `positions`
+fold rather than inventing another threshold. ADR 0037 / #1618 completed that
+migration: the JSONL `exposure.py` implementation is deleted and
+`sqlite/folds.py::position_quantity_is_nonzero` is now the sole Alpaca
+exposure/flat boundary. The former migration parity test retired with the
+legacy projection; the SQLite boundary and reconciliation cases below remain
+the direct proof.
 
 An absolute tolerance, not relative: share quantities are compared directly, so
 scaling the accepted error with position size would hide real drift on small

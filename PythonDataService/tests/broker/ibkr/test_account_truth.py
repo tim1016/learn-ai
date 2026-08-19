@@ -28,10 +28,12 @@ from app.broker.ibkr.models import (
 )
 from app.engine.live.account_artifacts import (
     AccountArtifactError,
-    AccountFreezeEvidence,
 )
-from app.engine.live.account_registry import AccountInstanceBinding, write_account_instance_binding
+from app.engine.live.account_registry import AccountInstanceBinding
 from app.schemas.account_truth import AccountTruthEvidenceGap
+from tests._helpers.legacy_ibkr_artifacts import (
+    write_historical_account_binding,
+)
 
 
 def _health() -> IbkrConnectionHealth:
@@ -84,8 +86,7 @@ def _collection_context(
     return AccountTruthCollectionContext(
         account_instance_bindings=tuple(bindings or []),
         evidence_gaps=tuple(evidence_gaps or []),
-        account_recovery_state=recovery_state
-        or AccountRecoveryState.clear("DU1234567"),
+        account_recovery_state=recovery_state or AccountRecoveryState.clear("DU1234567"),
     )
 
 
@@ -102,8 +103,7 @@ def _binding(
         account_id=account_id,
         strategy_instance_id=strategy_instance_id,
         run_id=f"run-{strategy_instance_id}",
-        bot_order_namespace=bot_order_namespace
-        or f"learn-ai/{strategy_instance_id}/v1",
+        bot_order_namespace=bot_order_namespace or f"learn-ai/{strategy_instance_id}/v1",
         lifecycle_state=lifecycle_state,
         recorded_at_ms=recorded_at_ms,
         source=source,
@@ -205,9 +205,7 @@ def test_account_truth_passes_when_bot_execution_explains_position() -> None:
     assert truth.positions[0].owner.owner_class == "bot"
     assert truth.positions[0].owner.owner_key == "bot-a"
     assert truth.executions[0].uncertainty_codes == []
-    assert {row.key: row.status for row in truth.invariants}[
-        "positions_match_known_ownership"
-    ] == "pass"
+    assert {row.key: row.status for row in truth.invariants}["positions_match_known_ownership"] == "pass"
 
 
 def test_account_truth_reports_per_source_freshness_for_successful_empty_sweeps() -> None:
@@ -312,9 +310,7 @@ def test_account_truth_cache_fallback_positions_force_not_proven() -> None:
     assert truth.final_verdict == "not_proven"
     assert truth.final_severity == "critical"
     assert {row.code for row in truth.blockers} == {"source_freshness_positions_stale"}
-    assert truth.blockers[0].forensic_facts["reason_code"] == (
-        "ACCOUNT_TRUTH_SOURCE_STALE_POSITIONS"
-    )
+    assert truth.blockers[0].forensic_facts["reason_code"] == ("ACCOUNT_TRUTH_SOURCE_STALE_POSITIONS")
 
 
 def test_account_truth_defaults_unstamped_open_order_to_foreign_and_blocks() -> None:
@@ -333,8 +329,6 @@ def test_account_truth_defaults_unstamped_open_order_to_foreign_and_blocks() -> 
     assert truth.final_severity == "critical"
     assert truth.orders[0].owner.owner_class == "foreign_or_unclaimed"
     assert truth.orders[0].owner.severity == "critical"
-    assert truth.orders[0].cancel_action.enabled is False
-    assert truth.orders[0].cancel_action.reason_code == "FOREIGN_OR_UNCLAIMED"
     assert truth.blockers[0].code == "unknown_open_orders"
     assert truth.operator_blockers[0].host == "account_monitor"
     assert truth.operator_blockers[0].anchor.kind == "surface"
@@ -360,9 +354,7 @@ def test_account_truth_anchors_unattributed_holding_guidance_for_account_desk() 
     )
 
     blocker = next(
-        row
-        for row in truth.operator_blockers
-        if row.host == "account_desk" and row.anchor.kind == "holdings_row"
+        row for row in truth.operator_blockers if row.host == "account_desk" and row.anchor.kind == "holdings_row"
     )
 
     assert blocker.anchor.subject_key == "12345"
@@ -396,81 +388,8 @@ def test_account_truth_active_known_live_order_stays_clean(
     assert truth.orders[0].owner.owner_class == "bot"
     assert truth.orders[0].owner.owner_binding_state == lifecycle_state
     assert truth.orders[0].owner.severity == "ok"
-    assert truth.orders[0].cancel_action.visible is True
-    assert truth.orders[0].cancel_action.enabled is True
-    assert truth.orders[0].cancel_action.reason_code is None
-    assert truth.orders[0].cancel_action.label == "Cancel"
     assert truth.blockers == []
-    assert {row.key: row.status for row in truth.invariants}[
-        "open_orders_known"
-    ] == "pass"
-
-
-def test_account_truth_authors_order_cancel_action_reasons() -> None:
-    non_paper = compose_account_truth(
-        health=_health().model_copy(update={"mode": "live", "is_paper": False}),
-        account_instance_bindings=[_binding()],
-        account=None,
-        positions_snapshot=_positions_snapshot(),
-        open_orders=[_open_order()],
-        completed_orders=[],
-        executions=[],
-        generated_at_ms=1_780_000_001_000,
-    )
-    assert non_paper.orders[0].cancel_action.visible is True
-    assert non_paper.orders[0].cancel_action.enabled is False
-    assert non_paper.orders[0].cancel_action.reason_code == "BROKER_NOT_PAPER_CONNECTED"
-
-    frozen = compose_account_truth(
-        health=_health(),
-        account_instance_bindings=[_binding()],
-        account_recovery_state=AccountRecoveryState.frozen(
-            AccountFreezeEvidence(
-                account_id="DU1234567",
-                reason="restart_intensity.threshold_breached",
-                source="account_restart_intensity",
-                recorded_at_ms=1_780_000_002_000,
-                operator_next_step="STOP_RESTARTING_AND_RECOVER_ACCOUNT",
-            )
-        ),
-        account=None,
-        positions_snapshot=_positions_snapshot(),
-        open_orders=[_open_order()],
-        completed_orders=[],
-        executions=[],
-        generated_at_ms=1_780_000_001_000,
-    )
-    assert frozen.orders[0].cancel_action.visible is True
-    assert frozen.orders[0].cancel_action.enabled is False
-    assert frozen.orders[0].cancel_action.reason_code == "ACCOUNT_FROZEN"
-
-    terminal = compose_account_truth(
-        health=_health(),
-        account_instance_bindings=[_binding()],
-        account=None,
-        positions_snapshot=_positions_snapshot(),
-        open_orders=[_open_order(status="Filled", remaining=0.0)],
-        completed_orders=[],
-        executions=[],
-        generated_at_ms=1_780_000_001_000,
-    )
-    assert terminal.orders[0].cancel_action.visible is True
-    assert terminal.orders[0].cancel_action.enabled is False
-    assert terminal.orders[0].cancel_action.reason_code == "ORDER_TERMINAL"
-
-    completed = compose_account_truth(
-        health=_health(),
-        account_instance_bindings=[_binding()],
-        account=None,
-        positions_snapshot=_positions_snapshot(),
-        open_orders=[],
-        completed_orders=[_open_order(status="Cancelled", remaining=0.0)],
-        executions=[],
-        generated_at_ms=1_780_000_001_000,
-    )
-    assert completed.orders[0].cancel_action.visible is False
-    assert completed.orders[0].cancel_action.enabled is False
-    assert completed.orders[0].cancel_action.reason_code == "NOT_OPEN_ORDER"
+    assert {row.key: row.status for row in truth.invariants}["open_orders_known"] == "pass"
 
 
 def test_account_truth_authors_execution_uncertainty_codes() -> None:
@@ -571,9 +490,7 @@ def test_account_truth_registry_gap_preserves_bot_stamped_live_order() -> None:
     assert truth.orders[0].owner.severity == "critical"
     assert "evidence_gap_instance_registry" in {row.code for row in truth.blockers}
     assert "unknown_open_orders" not in {row.code for row in truth.blockers}
-    assert {row.key: row.status for row in truth.invariants}[
-        "open_orders_known"
-    ] == "pass"
+    assert {row.key: row.status for row in truth.invariants}["open_orders_known"] == "pass"
 
 
 def test_account_truth_mixed_active_and_retired_position_is_not_retired_live_exposure() -> None:
@@ -604,9 +521,7 @@ def test_account_truth_mixed_active_and_retired_position_is_not_retired_live_exp
     assert truth.positions[0].owner.owner_binding_state == "ACTIVE"
     assert truth.positions[0].owner.severity == "warning"
     assert "retired_owner_live_exposure" not in {row.code for row in truth.blockers}
-    assert {row.key: row.status for row in truth.invariants}[
-        "positions_match_known_ownership"
-    ] == "pass"
+    assert {row.key: row.status for row in truth.invariants}["positions_match_known_ownership"] == "pass"
 
 
 def test_account_truth_all_retired_mixed_position_is_retired_live_exposure() -> None:
@@ -730,12 +645,8 @@ def test_account_truth_retired_terminal_evidence_stays_attributed_and_clean() ->
     assert truth.orders[0].owner.severity == "ok"
     assert truth.executions[0].owner.owner_binding_state == "RETIRED"
     assert truth.owner_summaries[0].owner_binding_state == "RETIRED"
-    assert {row.key: row.status for row in truth.invariants}[
-        "completed_orders_known"
-    ] == "pass"
-    assert {row.key: row.status for row in truth.invariants}[
-        "all_executions_assigned"
-    ] == "pass"
+    assert {row.key: row.status for row in truth.invariants}["completed_orders_known"] == "pass"
+    assert {row.key: row.status for row in truth.invariants}["all_executions_assigned"] == "pass"
 
 
 def test_account_truth_retired_live_order_is_distinct_critical_anomaly() -> None:
@@ -757,9 +668,7 @@ def test_account_truth_retired_live_order_is_distinct_critical_anomaly() -> None
     assert truth.orders[0].owner.owner_binding_state == "RETIRED"
     assert truth.orders[0].owner.severity == "critical"
     assert {row.code for row in truth.blockers} == {"retired_owner_live_exposure"}
-    assert {row.key: row.status for row in truth.invariants}[
-        "open_orders_known"
-    ] == "fail"
+    assert {row.key: row.status for row in truth.invariants}["open_orders_known"] == "fail"
 
 
 def test_account_truth_retired_current_position_is_distinct_critical_anomaly() -> None:
@@ -781,9 +690,7 @@ def test_account_truth_retired_current_position_is_distinct_critical_anomaly() -
     assert truth.positions[0].owner.owner_binding_state == "RETIRED"
     assert truth.positions[0].owner.severity == "critical"
     assert {row.code for row in truth.blockers} == {"retired_owner_live_exposure"}
-    assert {row.key: row.status for row in truth.invariants}[
-        "positions_match_known_ownership"
-    ] == "fail"
+    assert {row.key: row.status for row in truth.invariants}["positions_match_known_ownership"] == "fail"
 
 
 def test_account_truth_crash_retired_position_is_not_active_owner() -> None:
@@ -877,9 +784,7 @@ def test_account_truth_dedupes_exec_id_and_warns_on_missing_commission() -> None
         "missing_commission",
         "duplicate_exec_id_suppressed",
     }
-    assert {row.key: row.status for row in truth.invariants}[
-        "commission_complete"
-    ] == "warn"
+    assert {row.key: row.status for row in truth.invariants}["commission_complete"] == "warn"
 
 
 def test_account_truth_duplicate_exec_backfills_later_commission() -> None:
@@ -901,9 +806,7 @@ def test_account_truth_duplicate_exec_backfills_later_commission() -> None:
     assert truth.executions[0].fee == 1.25
     assert truth.executions[0].uncertainty_codes == []
     assert {row.code for row in truth.caveats} == {"duplicate_exec_id_suppressed"}
-    assert {row.key: row.status for row in truth.invariants}[
-        "commission_complete"
-    ] == "pass"
+    assert {row.key: row.status for row in truth.invariants}["commission_complete"] == "pass"
 
 
 def test_account_truth_open_and_completed_evidence_counts_are_separate() -> None:
@@ -984,9 +887,7 @@ def test_account_truth_recovering_connection_fails_liveness() -> None:
 
     assert truth.final_verdict == "not_proven"
     assert truth.final_severity == "critical"
-    assert {row.key: row.status for row in truth.invariants}[
-        "broker_liveness_proven"
-    ] == "fail"
+    assert {row.key: row.status for row in truth.invariants}["broker_liveness_proven"] == "fail"
 
 
 def test_account_truth_critical_account_summary_gap_forces_not_proven() -> None:
@@ -1019,9 +920,7 @@ def test_account_truth_unclaimed_position_blocks_bot_submits() -> None:
         health=_health(),
         account_instance_bindings=[_binding()],
         account=None,
-        positions_snapshot=_positions_snapshot(
-            _position(con_id=54321, symbol="QQQ", quantity=2.0)
-        ),
+        positions_snapshot=_positions_snapshot(_position(con_id=54321, symbol="QQQ", quantity=2.0)),
         open_orders=[],
         completed_orders=[],
         executions=[],
@@ -1033,9 +932,7 @@ def test_account_truth_unclaimed_position_blocks_bot_submits() -> None:
     assert truth.positions[0].owner.owner_class == "foreign_or_unclaimed"
     assert truth.positions[0].owner.severity == "critical"
     assert {row.code for row in truth.blockers} == {"unknown_positions"}
-    assert {row.key: row.status for row in truth.invariants}[
-        "positions_match_known_ownership"
-    ] == "fail"
+    assert {row.key: row.status for row in truth.invariants}["positions_match_known_ownership"] == "fail"
 
 
 @pytest.mark.asyncio
@@ -1087,7 +984,7 @@ def test_account_truth_router_reads_durable_instance_registry(
     from app.broker.ibkr.account_truth import load_account_instance_registry_evidence
 
     binding = _binding()
-    write_account_instance_binding(tmp_path, binding)
+    write_historical_account_binding(tmp_path, binding)
     evidence = load_account_instance_registry_evidence(
         artifacts_root=tmp_path,
         account_id="DU1234567",

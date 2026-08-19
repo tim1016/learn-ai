@@ -11,7 +11,6 @@ if TYPE_CHECKING:
         EffectOperationReceipt,
         EffectPurpose,
         InstanceCustodyProof,
-        OrderCancelResult,
         ReconciliationVerdict,
     )
     from app.broker.alpaca.clerk.sqlite.commands import CommandSubmission
@@ -39,16 +38,21 @@ class RevisionBoundRunRegistrar(Protocol):
 
 
 class ActiveAlpacaClerk(Protocol):
-    """Safety-critical surface shared by legacy and SQLite authorities."""
+    """Safety-critical surface exposed by the activated SQLite authority."""
 
-    authority_kind: str
+    authority_kind: Literal["sqlite"]
     broker_id: str
 
     async def recover(self) -> None: ...
 
     async def unresolved_effect_count(self) -> int: ...
 
-    async def register_strategy_run(self, binding: BrokerBotBinding) -> None: ...
+    async def register_strategy_run(
+        self,
+        binding: BrokerBotBinding,
+        *,
+        admission_snapshot: ClerkCustodySnapshot | None = None,
+    ) -> None: ...
 
     async def stop_strategy_run(
         self,
@@ -89,7 +93,7 @@ class ActiveAlpacaClerk(Protocol):
     async def cancel_working_entries_for_instance(
         self,
         strategy_instance_id: str,
-    ) -> tuple[OrderCancelResult | OrderResource, ...]: ...
+    ) -> tuple[OrderResource, ...]: ...
 
 
 __all__ = [

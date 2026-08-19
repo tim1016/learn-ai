@@ -9,19 +9,15 @@ from decimal import Decimal
 import pytest
 
 from app.engine.data.trade_bar import TradeBar
-from app.engine.execution.order_sizer import FixedShares
 from app.engine.execution.portfolio import Portfolio
 from app.engine.execution.signal_intent_executor import (
     SignalIntentExecutionContext,
 )
 from app.engine.live.action_plan_signal_executor import StockActionPlanSignalExecutor
-from app.engine.live.config import LiveConfig
-from app.engine.live.live_engine import LiveEngine
 from app.engine.strategy.algorithms.ema_crossover_2_bps import EmaCrossover2BpsAlgorithm
 from app.engine.strategy.algorithms.ema_crossover_signal import EmaCrossoverSignalAlgorithm
-from app.engine.strategy.base import Strategy, StrategyContext
+from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
-from tests.engine.live.fixtures.fake_broker import FakeBroker, iter_bars
 
 
 @dataclass
@@ -50,32 +46,6 @@ class _RecordingSignalIntentExecutor:
 
     def execute(self, _context: SignalIntentExecutionContext, intent: SignalIntent) -> None:
         self.intents.append(intent)
-
-
-class _SingleEnterSignalStrategy(Strategy):
-    """Small live-runtime probe for the policy-executor binding."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._emitted = False
-
-    def initialize(self) -> None:
-        assert self.ctx is not None
-        self.ctx.add_equity("SPY")
-        self.ctx.register_consolidator("SPY", timedelta(minutes=1), self._on_bar)
-
-    def _on_bar(self, bar: TradeBar) -> None:
-        assert self.ctx is not None
-        if self._emitted:
-            return
-        self._emitted = True
-        self.ctx.emit_signal_intent(
-            SignalIntent(
-                kind=SignalIntentKind.ENTER,
-                bar_close_ms=int(bar.end_time.timestamp() * 1000),
-                intended_price=bar.close,
-            )
-        )
 
 
 def _signal_bar() -> TradeBar:
@@ -225,63 +195,3 @@ def test_stock_action_plan_executor_selects_the_trade_asset() -> None:
         ("set_holdings", "NVDA", Decimal(1)),
         ("liquidate", "NVDA", None),
     ]
-
-
-def _live_probe_bars() -> list[TradeBar]:
-    start = datetime(2026, 7, 17, 14, 30, tzinfo=UTC)
-    return [
-        TradeBar(
-            symbol="SPY",
-            time=start + timedelta(minutes=index),
-            end_time=start + timedelta(minutes=index + 1),
-            open=Decimal("500"),
-            high=Decimal("500"),
-            low=Decimal("500"),
-            close=Decimal("500"),
-            volume=100,
-        )
-        for index in range(4)
-    ]
-
-
-def _nvda_action_plan() -> dict[str, object]:
-    return {
-        "on_enter": [
-            {
-                "leg_id": "nvda_long",
-                "instrument": {"kind": "stock", "underlying": "NVDA"},
-                "position": "long",
-                "qty_ratio": 1,
-            }
-        ],
-        "on_exit": [{"kind": "close_leg", "entry_leg_id": "nvda_long"}],
-    }
-
-
-async def test_live_engine_routes_policy_signal_to_action_plan_stock() -> None:
-    broker = FakeBroker()
-    engine = LiveEngine(
-        None,
-        LiveConfig(force_flat_at=None, sizing=FixedShares(value=1)),
-        broker=broker,
-        signal_intent_executor=StockActionPlanSignalExecutor.from_action_plan(_nvda_action_plan()),
-    )
-
-    result = await engine.run(_SingleEnterSignalStrategy(), iter_bars(_live_probe_bars()))
-
-    assert [order.symbol for order in broker.orders] == ["NVDA"]
-    assert result.open_positions == {"NVDA": 1}
-
-
-async def test_live_engine_rejects_signal_without_execution_policy() -> None:
-    broker = FakeBroker()
-    engine = LiveEngine(
-        None,
-        LiveConfig(force_flat_at=None, sizing=FixedShares(value=1)),
-        broker=broker,
-    )
-
-    with pytest.raises(RuntimeError, match="SignalIntent requires a bound SignalIntentExecutor"):
-        await engine.run(_SingleEnterSignalStrategy(), iter_bars(_live_probe_bars()))
-
-    assert broker.orders == []

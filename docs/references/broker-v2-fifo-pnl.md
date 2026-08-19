@@ -20,8 +20,8 @@ mathematically specified in the module docstring of `fifo_pnl.py`.
 
 **Distinct from** `Backend/Services/Implementation/PositionEngine.cs`, which accounts
 over EF/Postgres lots for the portfolio engine.  The two instances are parallel,
-not duplicates: they operate on different data stores (Alpaca order journal vs.
-Postgres) with different consumers (bot-panel P&L vs. portfolio-engine lot
+not duplicates: they operate on different data stores (Alpaca SQLite effective
+fills vs. Postgres lots) with different consumers (bot-panel P&L vs. portfolio-engine lot
 accounting) and are not expected to produce the same numbers (different scope,
 different fill sources).
 

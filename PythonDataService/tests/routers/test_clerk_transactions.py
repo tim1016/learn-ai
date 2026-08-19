@@ -97,7 +97,9 @@ async def test_history_endpoint_is_bounded_projection_read_only(
         "app.routers.clerk_transactions.get_clerk_transaction_store", lambda: _NoIoStore()
     )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/accounts/DU1219/transactions?limit=25")
+        response = await client.get(
+            "/api/accounts/DU1219/transactions?broker=ibkr&limit=25"
+        )
     assert response.status_code == 200
     assert response.json() == {
         "projection_available": True, "canonical_fallback_required": False,
@@ -148,6 +150,7 @@ async def test_history_endpoint_passes_typed_filters_to_the_projection_only(
         response = await client.get(
             "/api/accounts/DU1219/transactions",
             params={
+                "broker": "ibkr",
                 "limit": 25,
                 "origin": "strategy",
                 "lifecycle_state": "submitted",
@@ -190,7 +193,12 @@ async def test_history_endpoint_passes_an_inclusive_ms_window_to_the_projection(
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get(
             "/api/accounts/DU1219/transactions",
-            params={"limit": 25, "from_ms": 1_700_000_000_000, "to_ms": 1_700_086_400_000},
+            params={
+                "broker": "ibkr",
+                "limit": 25,
+                "from_ms": 1_700_000_000_000,
+                "to_ms": 1_700_086_400_000,
+            },
         )
     assert response.status_code == 200
 
@@ -267,10 +275,35 @@ async def test_history_endpoint_reports_unavailable_without_fallback_scan(
         "app.routers.clerk_transactions.get_clerk_transaction_store", lambda: _UnavailableStore()
     )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/accounts/DU1219/transactions")
+        response = await client.get(
+            "/api/accounts/DU1219/transactions", params={"broker": "ibkr"}
+        )
     assert response.status_code == 200
     assert response.json()["feed_state"] == "projection_unavailable"
     assert response.json()["canonical_fallback_required"] is True
+
+
+async def test_missing_alpaca_activation_never_reads_ibkr_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _PoisonedIbkrStore:
+        async def history_page(self, **_kwargs: object) -> None:
+            raise AssertionError("default Alpaca history must not read IBKR projection rows")
+
+    monkeypatch.setattr(
+        "app.routers.clerk_transactions.get_clerk_transaction_store",
+        lambda: _PoisonedIbkrStore(),
+    )
+    set_active_clerk_runtime(None)
+    app = FastAPI()
+    app.include_router(router)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/accounts/PA-NO-ACTIVATION/transactions")
+
+    assert response.status_code == 200
+    assert response.json()["feed_state"] == "projection_unavailable"
+    assert response.json()["rows"] == []
 
 
 @pytest.mark.parametrize(
@@ -292,7 +325,10 @@ async def test_history_endpoint_rejects_non_postgres_cursor_coordinates(
         "app.routers.clerk_transactions.get_clerk_transaction_store", lambda: _NoIoStore()
     )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/accounts/DU1219/transactions", params={"cursor": cursor})
+        response = await client.get(
+            "/api/accounts/DU1219/transactions",
+            params={"broker": "ibkr", "cursor": cursor},
+        )
 
     assert response.status_code == 422
     assert response.json()["detail"] == "invalid transaction history cursor"
@@ -307,9 +343,36 @@ async def test_selected_transaction_endpoint_reads_only_the_requested_projection
         "app.routers.clerk_transactions.get_clerk_transaction_store", lambda: _NoIoStore()
     )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/accounts/DU1219/transactions/ctxn_opaque")
+        response = await client.get(
+            "/api/accounts/DU1219/transactions/ctxn_opaque",
+            params={"broker": "ibkr"},
+        )
     assert response.status_code == 200
     assert response.json()["receipt"] == {"order_ref": "manual/v1:opaque"}
+
+
+async def test_missing_alpaca_activation_never_reads_ibkr_transaction_detail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _PoisonedIbkrStore:
+        async def transaction_detail(self, **_kwargs: object) -> None:
+            raise AssertionError("default Alpaca detail must not read an IBKR projection row")
+
+    monkeypatch.setattr(
+        "app.routers.clerk_transactions.get_clerk_transaction_store",
+        lambda: _PoisonedIbkrStore(),
+    )
+    set_active_clerk_runtime(None)
+    app = FastAPI()
+    app.include_router(router)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/accounts/PA-NO-ACTIVATION/transactions/legacy-row"
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Clerk transaction projection unavailable."
 
 
 async def test_external_order_acknowledgement_endpoint_delegates_only_to_active_sqlite(

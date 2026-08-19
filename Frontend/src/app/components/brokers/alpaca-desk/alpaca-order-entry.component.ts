@@ -20,7 +20,6 @@ import type {
   ManualOrderCapability,
   ManualOrderPreview,
   ManualOrderTicket,
-  OrderLegResult,
 } from '../../../api/alpaca.types';
 import { BrokersService } from '../../../services/brokers.service';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
@@ -29,7 +28,6 @@ import { TimestampDisplayComponent } from '../../../shared/timestamp';
 import type { AlpacaOrderDraftLeg } from './alpaca-order-entry.types';
 import { AlpacaOrderLegRowComponent } from './alpaca-order-leg-row.component';
 import { AlpacaOrderPreviewComponent } from './alpaca-order-preview.component';
-import { AlpacaOrderResultsComponent } from './alpaca-order-results.component';
 
 /**
  * Alpaca order-entry panel (phase-2). Leg-based paradigm: the operator adds
@@ -47,7 +45,6 @@ import { AlpacaOrderResultsComponent } from './alpaca-order-results.component';
     MessageModule,
     AlpacaOrderLegRowComponent,
     AlpacaOrderPreviewComponent,
-    AlpacaOrderResultsComponent,
     AssetIdentityComponent,
     ReceiptLabelPipe,
     TimestampDisplayComponent,
@@ -60,15 +57,9 @@ export class AlpacaOrderEntryComponent {
   private readonly brokers = inject(BrokersService);
   readonly initialSymbol = input('');
   readonly expectedAccountId = input.required<string>();
-  /** True only when the active Account Clerk is SQLite-backed. */
-  readonly sqliteManualAuthority = input(false);
   readonly manualTicketId = input<string | null>(null);
   readonly manualLegId = input<string | null>(null);
   readonly manualCapability = input<ManualOrderCapability | null>(null);
-
-  // S1 has no operator-identity plumbing yet; the manual namespace uses a fixed
-  // desk operator. Later slices thread the signed-in operator through here.
-  private readonly operator = 'desk';
 
   protected readonly legs = linkedSignal<AlpacaOrderDraftLeg[]>(() => [
     this.newLeg(0, this.initialSymbol()),
@@ -76,7 +67,6 @@ export class AlpacaOrderEntryComponent {
   protected readonly legsForm = form(this.legs);
   protected readonly previewOpen = signal(false);
   protected readonly submitting = signal(false);
-  protected readonly results = signal<OrderLegResult[] | null>(null);
   protected readonly manualTicket = signal<ManualOrderTicket | null>(null);
   protected readonly manualCancellation = signal<ManualOrderCancellation | null>(null);
   private readonly manualPreview = signal<ManualOrderPreview | null>(null);
@@ -97,11 +87,9 @@ export class AlpacaOrderEntryComponent {
       && this.legs().every((leg) => this.legValid(leg)),
   );
 
-  protected readonly manualTicketMode = computed(() => this.sqliteManualAuthority());
   protected readonly manualSubmissionAvailable = computed(
     () =>
-      !this.sqliteManualAuthority()
-      || this.manualCapability()?.available === true
+      this.manualCapability()?.available === true
       || this.legs().every((leg) => leg.side === 'sell'),
   );
   protected readonly activeManualLeg = computed(() =>
@@ -126,7 +114,7 @@ export class AlpacaOrderEntryComponent {
     () =>
       this.canSubmit()
       && this.manualSubmissionAvailable()
-      && (!this.sqliteManualAuthority() || this.manualTicketId() !== null),
+      && this.manualTicketId() !== null,
   );
   protected readonly canContinueTicket = computed(() => {
     const ticket = this.manualTicket();
@@ -150,7 +138,6 @@ export class AlpacaOrderEntryComponent {
     });
     effect(() => {
       const accountId = this.expectedAccountId();
-      if (!this.sqliteManualAuthority()) return;
       const ticketId = this.manualTicketId();
       this.manualTicket.set(null);
       if (ticketId === null) return;
@@ -158,7 +145,7 @@ export class AlpacaOrderEntryComponent {
     });
     effect((onCleanup) => {
       const ticket = this.manualTicket();
-      if (!this.sqliteManualAuthority() || ticket === null || !this.ticketNeedsRefresh(ticket)) return;
+      if (ticket === null || !this.ticketNeedsRefresh(ticket)) return;
       const refresh = globalThis.setInterval(
         () => void this.restoreManualTicket(ticket.ticket_id, this.expectedAccountId()),
         5_000,
@@ -188,7 +175,6 @@ export class AlpacaOrderEntryComponent {
   protected addEquityLeg(): void {
     this.legs.update((legs) => [...legs, this.newLeg(this.nextId++, '')]);
     // A new draft invalidates the last submit's results view.
-    this.results.set(null);
     this.submitError.set(null);
   }
 
@@ -196,17 +182,12 @@ export class AlpacaOrderEntryComponent {
     this.legs.update((legs) => legs.filter((leg) => leg.id !== id));
     // Editing the draft (removing a leg) invalidates the last submit's results
     // view, so a stale results table isn't left rendered against an empty draft.
-    this.results.set(null);
     this.submitError.set(null);
   }
 
   protected async openPreview(): Promise<void> {
     if (!this.canConfirm() || this.submitting()) return;
     this.submitError.set(null);
-    if (!this.sqliteManualAuthority()) {
-      this.previewOpen.set(true);
-      return;
-    }
     const ticketId = this.manualTicketId();
     if (ticketId === null) return;
     this.submitting.set(true);
@@ -237,18 +218,7 @@ export class AlpacaOrderEntryComponent {
     this.submitting.set(true);
     this.submitError.set(null);
     try {
-      if (this.sqliteManualAuthority()) {
-        await this.confirmSqliteManualOrder();
-      } else {
-        const request = {
-          operator: this.operator,
-          expected_account_id: this.expectedAccountId(),
-          legs: this.legs().map((leg) => this.toRequestLeg(leg)),
-        };
-        const result = await this.brokers.submitOrder('alpaca', request);
-        this.results.set(result.results);
-        this.legs.set([]);
-      }
+      await this.confirmSqliteManualOrder();
       this.previewOpen.set(false);
     } catch (err) {
       this.submitError.set(this.submissionErrorMessage(err));

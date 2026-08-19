@@ -13,9 +13,9 @@ server-authored ``label`` / ``explanation`` copy so no raw enum reaches the UI.
 
 from __future__ import annotations
 
-from typing import Final, Literal
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.broker.v2panel.vocabulary import (
     ActionId,
@@ -405,15 +405,6 @@ class BotPanelView(BaseModel):
 # ── §11 Presented-actions execution request/response ─────────────────────────
 
 
-# Mutating verbs that require a permanently-journaled operator comment,
-# mirroring the account-level `CustodyResolutionRequest.reason` discipline
-# (`app/broker/alpaca/clerk/diagnosis.py`). Every other action_id leaves
-# `reason` optional.
-_COMMENT_REQUIRED_ACTION_IDS: Final[frozenset[str]] = frozenset(
-    {"clear_hold", "record_inventory_baseline"}
-)
-
-
 class PanelActionRequest(BaseModel):
     """Execute one presented action (§11).
 
@@ -428,19 +419,6 @@ class PanelActionRequest(BaseModel):
     concurrency_token: str = Field(min_length=1, max_length=128)
     idempotency_key: str = Field(min_length=1, max_length=128)
     reason: str | None = Field(default=None, max_length=512)
-
-    @model_validator(mode="after")
-    def _reason_required_for_comment_actions(self) -> PanelActionRequest:
-        if self.action_id not in _COMMENT_REQUIRED_ACTION_IDS:
-            return self
-        normalized = (self.reason or "").strip()
-        if not normalized:
-            raise ValueError(
-                f"reason must not be blank for action_id={self.action_id!r}"
-            )
-        self.reason = normalized
-        return self
-
 
 class PanelActionResult(BaseModel):
     """The outcome of an executed action (§11).

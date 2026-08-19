@@ -1,25 +1,25 @@
-# Clerk custody exposure deltas
+# Clerk custody exposure deltas (retired JSONL provenance)
 
 This is an internal custody invariant, not a port from external trading
 software. The authority is ADR 0030's account-rooted, journal-canonical custody
 model plus the repository's strict-float policy in
 `.claude/rules/numerical-rigor.md`.
 
-The canonical fold is
+The original JSONL fold was
 `PythonDataService/app/broker/alpaca/clerk/exposure.py::account_exposure_deltas`:
 
 `delta(symbol) = broker_observed_quantity - clerk_expected_quantity`
 
-A symbol is divergent when `abs(delta) >= 1e-9`, delegated to
-`sqlite/folds.py::position_quantity_is_nonzero`. The boundary is an
-absolute tolerance with `rtol=0`: position quantities are compared in shares,
-so scaling the accepted error with position size would hide real custody drift.
-Symbols with an in-flight order are suppressed for one observation because the
-broker position can legitimately lead the asynchronous fill callback; a later
-snapshot decides once the order becomes terminal.
+A symbol was divergent when `abs(delta) >= 1e-9`; symbols with an in-flight
+order were suppressed for one observation because broker position could lead
+the asynchronous fill callback.
 
-Validation lives in
-`PythonDataService/tests/broker/alpaca/clerk/test_custody_diagnosis.py::test_exposure_delta_golden_cases_pin_aggregation_inflight_and_tolerance`.
-The synthetic golden cases pin duplicate-symbol aggregation, in-flight
-suppression, values immediately below and above `1e-9`, and exact-boundary
-parity with the canonical SQLite predicate.
+ADR 0037 / #1618 deleted that implementation and its product path. The canonical
+Alpaca authority is now
+`PythonDataService/app/broker/alpaca/clerk/sqlite/reconcile.py::plan_account_reconciliation`,
+which delegates every exposure/flat boundary to
+`sqlite/folds.py::position_quantity_is_nonzero`. Its formula, absolute
+`1e-9`/`rtol=0` boundary, in-flight suppression, and direct validation are
+documented in `docs/references/clerk-position-drift-tolerance.md`. This file is
+retained only as provenance for why the SQLite policy did not invent a new
+tolerance.

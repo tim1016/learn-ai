@@ -112,11 +112,6 @@ export const BROKER_V2_EMERGENCY_COPY: Readonly<Record<string, VocabularyCopy>> 
     label: 'Clean',
     explanation: 'The last sweep found the journal and the broker in agreement.',
   },
-  clear_hold: {
-    label: 'Clear hold',
-    explanation:
-      'Lift the account exposure hold once its root condition is healthy and freshly observed.',
-  },
   deploy: {
     label: 'Deploy',
     explanation: 'Create and start a new bot bound to this account.',
@@ -163,11 +158,6 @@ export const BROKER_V2_EMERGENCY_COPY: Readonly<Record<string, VocabularyCopy>> 
   rebuild_from_mirror: {
     label: 'Rebuild from mirror',
     explanation: 'Rebuild a failed authority only from a contiguous verified mirror.',
-  },
-  record_inventory_baseline: {
-    label: 'Recover inventory baseline',
-    explanation:
-      'Record the freshly observed broker positions as the account accounting cutover, without deleting history or assigning those positions to a bot.',
   },
   retire: {
     label: 'Retire',

@@ -7,7 +7,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
-from app.broker.alpaca.clerk.models import ClerkEntryKind
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.manual_orders import accept_manual_order
@@ -27,15 +26,6 @@ from app.broker.contract.ports import BrokerReadPort
 ACCOUNT_ID = "PA-TEST"
 STRATEGY_INSTANCE_ID = "spy-bot"
 RUN_ID = "run-1"
-
-
-class _ReadWithoutLegacyActivities:
-    def __init__(self) -> None:
-        self.activity_reads = 0
-
-    async def list_activities(self, **_kwargs: Any) -> list:
-        self.activity_reads += 1
-        raise AssertionError("activated SQLite must not write legacy activity evidence")
 
 
 class _NoBrokerMutation:
@@ -58,19 +48,14 @@ class _EvidenceSink:
     def __init__(self) -> None:
         self.consumer: TradeUpdatesConsumer | None = None
         self.gap_connection_states: list[bool] = []
-        self.activity_recoveries = 0
         self.reconnect_read_guarded = False
 
     def guard_reconnect_read(self, read: BrokerReadPort) -> BrokerReadPort:
         self.reconnect_read_guarded = True
         return read
 
-    async def record_lifecycle_event(self, **_kwargs: Any) -> ClerkEntryKind:
-        return ClerkEntryKind.ORDER_EVENT
-
-    async def recover_activity_window(self, **_kwargs: Any) -> int:
-        self.activity_recoveries += 1
-        return 0
+    async def record_lifecycle_event(self, **_kwargs: Any) -> str:
+        return "order_event"
 
     async def reconcile_gap(self) -> None:
         assert self.consumer is not None
@@ -154,28 +139,6 @@ def _authorization_source() -> AsyncIterator[bytes | str]:
         yield '{"stream":"authorization","data":{"status":"authorized"}}'
 
     return _frames()
-
-
-async def test_sqlite_activity_recovery_never_reads_or_writes_legacy_window(
-    tmp_path: Path,
-) -> None:
-    repo = ClerkSqliteRepository.initialize(
-        account_id="PA-TEST",
-        artifacts_root=tmp_path,
-    )
-    read = _ReadWithoutLegacyActivities()
-    read_port = cast(BrokerReadPort, read)
-    sink = SqliteTradeUpdateEvidenceSink(
-        repo=repo,
-        intake=ReentrantAsyncLock(),
-        reconciler=_NoReconciler(),
-    )
-
-    recorded = await sink.recover_activity_window(read=read_port, limit=100)
-
-    assert recorded == 0
-    assert read.activity_reads == 0
-    repo.close()
 
 
 async def test_reconcile_gap_uses_authority_facade(tmp_path: Path) -> None:
@@ -338,7 +301,7 @@ async def test_sqlite_unexplained_trade_update_records_external_order_without_a_
             recovery_window_limit=None,
         )
 
-        assert kind is ClerkEntryKind.UNEXPLAINED_ORDER
+        assert kind == "unexplained_order"
         assert repo.external_orders()[0]["broker_order_id"] == "external-order-1"
         assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER") is not None
         assert repo.attributed_positions_by_symbol() == {}
@@ -427,7 +390,7 @@ async def test_sqlite_rest_recovery_folds_cumulative_fill_without_fabricating_an
             recovery_window_limit=50,
         )
 
-        assert kind is ClerkEntryKind.ORDER_EVENT
+        assert kind == "order_event"
         fills = repo.fills_for_order(order_ref)
         assert len(fills) == 1
         assert fills[0]["execution_id"] is None
@@ -702,7 +665,6 @@ async def test_reconnect_reconciles_selected_sink_before_connection_reopens() ->
     await consumer.run()
 
     assert sink.gap_connection_states == [False]
-    assert sink.activity_recoveries == 1
     assert sink.reconnect_read_guarded is True
 
 

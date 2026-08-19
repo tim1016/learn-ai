@@ -796,7 +796,7 @@ async def test_primary_action_fails_closed_when_catalog_action_is_not_resume() -
     """A catalog action for another command is not Resume eligibility."""
     row = _Cat2(
         "Aug11-02", "SPY", False, None, None, None,
-        row_action=_row_action("clear_hold", enabled=False, explanation="A hold is active."),
+        row_action=_row_action("stop", enabled=False, explanation="The bot is already stopped."),
     )
     snap = await _hub_with_rows([row]).build_snapshot()
 

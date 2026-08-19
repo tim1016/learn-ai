@@ -19,7 +19,6 @@ from typing import Annotated, Literal, TypeAlias
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.broker.contract.models import BrokerActivity, BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
-from app.engine.live.account_clerk_journal_models import AccountClerkBrokerEvidenceBaseline
 from app.schemas.action_plan import ActionPlan, StockEntryLeg
 
 MAX_EPOCH_MS = 9_223_372_036_854_775_807
@@ -140,10 +139,6 @@ class ClerkEntryKind(StrEnum):
     RECONCILIATION = "reconciliation"
     HOLD_SET = "hold_set"
     HOLD_CLEARED = "hold_cleared"
-    # An operator-confirmed cutover from pre-Clerk broker inventory to
-    # journal-derived exposure. The snapshot is account truth only: it never
-    # fabricates a bot/manual namespace owner and never rewrites older rows.
-    BROKER_EVIDENCE_BASELINE = "broker_evidence_baseline"
     # S7 Clerk-owned strategy effects.  These are journal rows, not a second
     # execution store: one operation can link to zero or more child intents.
     EFFECT_ACCEPTED = "effect_accepted"
@@ -266,9 +261,6 @@ class OrderJournalEntry(BaseModel):
     # prose (backend-authored, rendered unpiped).
     reason_code: str | None = None
     reason: str | None = None
-    # Present only on BROKER_EVIDENCE_BASELINE. Reuse the broker-neutral Clerk
-    # evidence contract so IBKR and Alpaca retain the same snapshot meaning.
-    broker_evidence_baseline: AccountClerkBrokerEvidenceBaseline | None = None
     # Present on EFFECT_* rows.  Child submit rows carry only the stable
     # decision id below, preserving their existing order identity shape.
     effect_receipt: EffectOperationReceipt | None = None
@@ -365,41 +357,9 @@ class OrderJournalEntry(BaseModel):
                 raise ValueError("activity_recovery requires activity")
         elif self.kind in (ClerkEntryKind.HOLD_SET, ClerkEntryKind.HOLD_CLEARED):
             self._require("reason_code", "reason")
-        elif self.kind is ClerkEntryKind.BROKER_EVIDENCE_BASELINE:
-            self._require("operator", "reason")
-            if self.broker_evidence_baseline is None:
-                raise ValueError("broker_evidence_baseline requires broker_evidence_baseline")
-            if self.broker_evidence_baseline.account_id != self.account_id:
-                raise ValueError("broker_evidence_baseline account must match journal account")
-            if any(
-                (
-                    self.intent_id,
-                    self.order_ref,
-                    self.client_order_id,
-                    self.leg,
-                    self.broker_order_id,
-                    self.order,
-                    self.event,
-                    self.activity,
-                    self.verdict,
-                    self.reason_code,
-                    self.effect_receipt,
-                    self.effect_operation_id,
-                )
-            ):
-                raise ValueError(
-                    "broker_evidence_baseline cannot carry order, lifecycle, or effect data"
-                )
         elif self.kind in (ClerkEntryKind.EFFECT_ACCEPTED, ClerkEntryKind.EFFECT_RECEIPT):
             if self.effect_receipt is None:
                 raise ValueError(f"{self.kind.value} requires effect_receipt")
-        if (
-            self.kind is not ClerkEntryKind.BROKER_EVIDENCE_BASELINE
-            and self.broker_evidence_baseline is not None
-        ):
-            raise ValueError(
-                "broker_evidence_baseline is valid only on broker_evidence_baseline rows"
-            )
         return self
 
     def _require(self, *fields: str) -> None:
@@ -407,63 +367,6 @@ class OrderJournalEntry(BaseModel):
         for field in fields:
             if not getattr(self, field):
                 raise ValueError(f"{self.kind.value} requires {field}")
-
-
-class OrderLegError(BaseModel):
-    """A typed leg failure: a what/why the UI renders, never a raw 500."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    message: str
-    why: str | None = None
-
-
-class OrderLegResult(BaseModel):
-    """The per-leg outcome the router shapes into its response.
-
-    Keyed by ``status``:
-
-    - ``acked`` — the broker accepted the order; ``order`` is set.
-    - ``failed`` — the order definitively did not land; ``error`` is set.
-    - ``uncertain`` — the submit's HTTP outcome was unknown. Neither ``order``
-      nor ``error`` is authoritative yet; the intent is durably journaled as
-      ``submit_uncertain`` and a later replay / sweep will finish it. The
-      operator must not assume the order failed — it may still have landed.
-
-    ``order_ref`` is always present — an operator can find the intent in the
-    journal in every case, including uncertain.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    status: Literal["acked", "failed", "uncertain"]
-    order_ref: str
-    intent_id: str
-    order: BrokerOrder | None = None
-    error: OrderLegError | None = None
-
-    @model_validator(mode="after")
-    def _status_matches_payload(self) -> OrderLegResult:
-        """Reject contradictory result shapes before they reach the wire."""
-        if self.status == "acked":
-            if self.order is None or self.error is not None:
-                raise ValueError("acked results require order and forbid error")
-        elif self.status == "failed":
-            if self.error is None or self.order is not None:
-                raise ValueError("failed results require error and forbid order")
-        elif self.error is None or self.order is not None:
-            raise ValueError("uncertain results require error and forbid order")
-        return self
-
-
-class OrderSubmitResult(BaseModel):
-    """The whole request's outcome: one result per submitted leg, in order."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    broker: str
-    account_id: str
-    results: list[OrderLegResult]
 
 
 class HoldState(BaseModel):
@@ -541,9 +444,7 @@ class ClerkStatus(BaseModel):
     # observation time. ``None`` = the stream-health gate is not installed
     # (distinct from "installed and healthy").
     channel_healths: list[ChannelHealth] | None = None
-    authority_kind: Literal["legacy", "sqlite"] = "legacy"
-    generic_hold_clear_available: bool = True
-    generic_hold_clear_explanation: str | None = None
+    authority_kind: Literal["sqlite"] = "sqlite"
 
 
 class CustodyCountFact(BaseModel):
@@ -632,27 +533,3 @@ class InstanceCustodyProof(BaseModel):
     working_order_refs: tuple[str, ...] = ()
     unresolved_intent_refs: tuple[str, ...] = ()
     observed_at_ms: EpochMs
-
-
-class OrderCancelResult(BaseModel):
-    """The outcome of a cancel request the router shapes into its response.
-
-    ``status`` is ``acked`` when the broker accepted the cancel (HTTP 204) or
-    ``failed`` when it rejected it (a typed what/why, never a raw 500).
-    ``order_id`` always echoes the broker-assigned id the operator targeted, so
-    the ledger line is findable. ``owned`` reports whether this Clerk submitted
-    the canceled order — a foreign order still cancels (reducing exposure is the
-    safe direction), but the fact is surfaced honestly, not hidden.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    broker: str
-    account_id: str
-    order_id: str
-    status: Literal["acked", "failed"]
-    owned: bool
-    # ``order_ref`` present only when the canceled order was owned (resolved from
-    # the journal); the operator can then find the originating intent.
-    order_ref: str | None = None
-    error: OrderLegError | None = None

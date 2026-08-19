@@ -159,7 +159,7 @@ async function renderCustody(
 }
 
 describe('AlpacaSqliteCustodyComponent', () => {
-  it('renders nothing when the account still has legacy authority', async () => {
+  it('fails closed when the SQLite authority is unavailable', async () => {
     const getSqliteClerkProjection = vi.fn().mockRejectedValue(
       new HttpErrorResponse({ status: 409 }),
     );
@@ -168,7 +168,9 @@ describe('AlpacaSqliteCustodyComponent', () => {
 
     await waitFor(() => expect(getSqliteClerkProjection).toHaveBeenCalledOnce());
     expect(screen.queryByRole('heading', { name: 'Custody and recovery' })).toBeNull();
-    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('alert').textContent).toContain(
+      'New broker actions remain blocked',
+    );
   });
 
   it('renders backend-authored guidance and all three custody clocks', async () => {

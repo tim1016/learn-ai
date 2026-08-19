@@ -1,9 +1,8 @@
 """Control and read endpoints for the activation-selected SQLite Alpaca Clerk.
 
 Every handler resolves only the boot-selected, activation-verified authority.
-Legacy accounts receive a typed conflict; activated authorities that failed
-startup expose fail-closed account recovery state without installing a broker
-mutation capability.
+Accounts without a usable activation fail unavailable without installing a
+broker mutation capability.
 
 Every repository call is dispatched via ``asyncio.to_thread`` — the
 repository is synchronous blocking I/O (SQLite + fsync), and calling it
@@ -113,14 +112,6 @@ def _active_sqlite_facade(account_id: str) -> SqliteAlpacaClerkFacade:
             detail={
                 "reason": "active_clerk_not_started",
                 "message": "The active Alpaca Clerk has not completed boot selection.",
-            },
-        )
-    if runtime.authority_kind == "legacy":
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "reason": "sqlite_authority_inactive",
-                "message": "This account is still governed by the legacy Clerk authority.",
             },
         )
     if runtime.authority_kind != "sqlite" or not isinstance(

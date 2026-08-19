@@ -26,10 +26,8 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from app.broker.alpaca.clerk import (
-    ClerkAdmissionSnapshotChangedError,
-    set_alpaca_clerk,
-)
+from app.broker.alpaca.clerk import set_alpaca_clerk
+from app.broker.alpaca.clerk.active_protocol import ClerkAdmissionSnapshotStaleError
 from app.broker.alpaca.clerk.models import (
     AccountFreezeState,
     ClerkCustodySnapshot,
@@ -47,7 +45,6 @@ from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.models import (
-    BrokerAccountSnapshot,
     BrokerOrder,
     BrokerOrderLeg,
 )
@@ -57,7 +54,7 @@ from app.engine.live.bot_lifecycle_state import BotDutyOutcome, BotLifecyclePhas
 from app.engine.live.desired_state import DesiredState
 from app.engine.strategy.base import StrategyContext
 from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeedError
-from app.schemas.action_plan import ActionPlan, CloseLegExit, StockEntryLeg, StockInstrument
+from app.schemas.action_plan import ActionPlan
 from app.schemas.broker_bots import AlpacaPaperStrategyKey, BotProcessFact
 from app.services.bot_binding_repository import (
     BrokerBotBinding,
@@ -194,12 +191,67 @@ class _CancellationSuppressingFeed(_FakeFeed):
                 self.cancellation_suppressed = True
 
 
+class _TestDecisionReceiptRepository:
+    """Minimal receipt store for active-SQLite Clerk doubles in runner tests."""
+
+    def __init__(self) -> None:
+        self._rows: dict[tuple[str, str], DecisionReceiptResource] = {}
+
+    def append_decision_receipt(
+        self,
+        *,
+        strategy_instance_id: str,
+        outcome: str,
+        symbol: str | None,
+        intent_id: str | None,
+        order_ref: str | None,
+        observed_at_ms: int,
+        facts_json: str,
+    ) -> DecisionReceiptResource:
+        facts = json.loads(facts_json)
+        bar_ref = facts["bar_ref"]
+        row = DecisionReceiptResource(
+            strategy_instance_id=strategy_instance_id,
+            seq=len(self._rows) + 1,
+            outcome=outcome,
+            symbol=symbol,
+            intent_id=intent_id,
+            order_ref=order_ref,
+            observed_at_ms=observed_at_ms,
+            facts_json=facts_json,
+        )
+        self._rows[(strategy_instance_id, bar_ref)] = row
+        return row
+
+    def update_decision_receipt_for_bar(
+        self,
+        *,
+        strategy_instance_id: str,
+        bar_ref: str,
+        outcome: str,
+        order_ref: str | None,
+        facts_json: str,
+    ) -> DecisionReceiptResource:
+        key = (strategy_instance_id, bar_ref)
+        updated = self._rows[key].model_copy(
+            update={
+                "outcome": outcome,
+                "order_ref": order_ref,
+                "facts_json": facts_json,
+            }
+        )
+        self._rows[key] = updated
+        return updated
+
+
 class _CustodyClerk:
-    authority_kind = "test"
+    authority_kind = "sqlite"
     broker_id = "alpaca"
+    account_id = "PA-TEST"
 
     def __init__(self, proof: InstanceCustodyProof) -> None:
         self.proof = proof
+        self.repository = _TestDecisionReceiptRepository()
         self.cancel_calls: list[str] = []
         self.registered_runs: list[str] = []
         self.stopped_runs: list[str] = []
@@ -510,7 +562,7 @@ async def _closed_start_guard(sid: str):
 
 @asynccontextmanager
 async def _changing_start_guard(_sid: str):
-    raise ClerkAdmissionSnapshotChangedError("test evidence race")
+    raise ClerkAdmissionSnapshotStaleError("test evidence race")
     yield  # pragma: no cover - required to type this as an async context manager
 
 
@@ -1012,158 +1064,6 @@ async def test_stop_does_not_finalize_or_reap_a_task_that_survives_cancellation(
     # task is still alive; desired_state carries the STOPPED intent.
     assert status.running is True
     assert registry.desired_state(_SID) is DesiredState.STOPPED
-
-
-@pytest.fixture
-def _isolated_clerk_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Point the Alpaca clerk journal at this test's tmp dir, not the shared default.
-
-    ``ClerkSettings`` is a process-wide cached singleton
-    (``get_clerk_settings``) — without this, a Clerk instantiated here would
-    journal into the real ``artifacts/alpaca_clerk`` tree, order-dependent on
-    whichever other test last reset the cache.
-    """
-    from app.broker.alpaca.clerk import journal as journal_module
-
-    monkeypatch.setenv("ALPACA_CLERK_DIR", str(tmp_path))
-    journal_module.reset_clerk_settings_for_testing()
-    yield tmp_path
-    journal_module.reset_clerk_settings_for_testing()
-
-
-class _FenceProbeBroker:
-    """Minimal read+trade double for proving the desired-state ENTER fence.
-
-    Shared by the two stop-x-fence composition tests below. Only
-    ``get_account`` is exercised: ``_resolve_enter`` rejects a fenced ENTER
-    before any submit/list_positions call is reached.
-    """
-
-    async def get_account(self) -> BrokerAccountSnapshot:
-        return BrokerAccountSnapshot(
-            broker="alpaca",
-            account_id="paper-account",
-            account_mode="paper",
-            account_status="ACTIVE",
-            currency="USD",
-            cash=1000.0,
-            equity=1000.0,
-            buying_power=2000.0,
-            portfolio_value=1000.0,
-            long_market_value=0.0,
-            short_market_value=0.0,
-            pattern_day_trader=False,
-            trading_blocked=False,
-            account_blocked=False,
-            created_at_ms=0,
-            observed_at_ms=0,
-        )
-
-
-def _fence_probe_action_plan() -> ActionPlan:
-    return ActionPlan(
-        on_enter=[
-            StockEntryLeg(
-                leg_id="primary",
-                instrument=StockInstrument(kind="stock", underlying="SPY"),
-                position="long",
-                qty_ratio=1,
-            )
-        ],
-        on_exit=[CloseLegExit(kind="close_leg", entry_leg_id="primary")],
-    )
-
-
-@pytest.mark.asyncio
-async def test_surviving_task_after_stop_timeout_cannot_place_new_orders(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _isolated_clerk_dir: Path
-) -> None:
-    """Task 5's fence and Task 6's honest-stop fix compose end to end.
-
-    A task that survives Stop's cancellation timeout is exactly the scenario
-    Task 5's ENTER fence exists to neutralize: its next decision must be
-    REJECTED by the real Clerk, not merely "still tracked" by the registry.
-    """
-    from app.broker.alpaca.clerk.clerk import AlpacaClerk
-    from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
-
-    monkeypatch.setattr("app.services.bot_runner._STOP_TIMEOUT_S", 0.05)
-    feed = _CancellationSuppressingFeed(bars=[])
-    registry = _registry(tmp_path, feed=feed)
-    await registry.deploy_with_admission(
-        broker="alpaca",
-        strategy_instance_id=_SID,
-        strategy_key="deployment_validation",
-        symbol="SPY",
-        mode="log_only",
-    )
-    await registry.stop(broker="alpaca", strategy_instance_id=_SID)
-    assert feed.cancellation_suppressed is True
-
-    broker = _FenceProbeBroker()
-    clerk = AlpacaClerk(
-        read=broker,
-        trade=broker,
-        desired_state_probe=lambda sid: registry.desired_state(sid),
-    )
-
-    # The survivor's coroutine "decided" to ENTER after Stop was called.
-    receipt = await clerk.execute_for_instance(
-        strategy_instance_id=_SID,
-        run_id="run-1",
-        decision_id="bar-late-enter",
-        purpose=EffectPurpose.ENTER,
-        action_plan=_fence_probe_action_plan(),
-        quantity=1,
-    )
-
-    assert receipt.state is EffectOperationState.REJECTED
-
-
-@pytest.mark.asyncio
-async def test_stop_intent_and_fence_survive_process_restart(
-    tmp_path: Path, _isolated_clerk_dir: Path
-) -> None:
-    """The fence's correctness after a restart rests only on desired_state.json.
-
-    A brand-new registry instance (no shared in-memory state) reading the
-    same tmp_path must see the same STOPPED intent a first-process registry
-    wrote, and a fresh Clerk wired to it must still reject a post-restart
-    ENTER for that instance.
-    """
-    from app.broker.alpaca.clerk.clerk import AlpacaClerk
-    from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
-
-    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
-    await registry.deploy_with_admission(
-        broker="alpaca",
-        strategy_instance_id=_SID,
-        strategy_key="deployment_validation",
-        symbol="SPY",
-        mode="log_only",
-    )
-    await registry.stop(broker="alpaca", strategy_instance_id=_SID)
-
-    # Simulate a process restart: a brand-new registry instance, no shared
-    # in-memory state, reading the same on-disk artifacts.
-    restarted_registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
-    assert restarted_registry.desired_state(_SID) is DesiredState.STOPPED
-
-    broker = _FenceProbeBroker()
-    clerk = AlpacaClerk(
-        read=broker,
-        trade=broker,
-        desired_state_probe=lambda sid: restarted_registry.desired_state(sid),
-    )
-    receipt = await clerk.execute_for_instance(
-        strategy_instance_id=_SID,
-        run_id="run-1",
-        decision_id="bar-post-restart-enter",
-        purpose=EffectPurpose.ENTER,
-        action_plan=_fence_probe_action_plan(),
-        quantity=1,
-    )
-    assert receipt.state is EffectOperationState.REJECTED
 
 
 # ── desired_state: public accessor for durable operator intent ────────
@@ -2247,7 +2147,6 @@ def _green_bar(end_ms: int, symbol: str = "SPY") -> MarketDataBar:
 @pytest.mark.asyncio
 async def test_real_trade_runner_routes_enter_and_exit_through_sqlite_facade(
     tmp_path: Path,
-    _isolated_clerk_dir: Path,
 ) -> None:
     repo = ClerkSqliteRepository.initialize(
         account_id="PA-TEST",
@@ -2305,7 +2204,10 @@ class _FakeEffectResult:
 
 
 class _FakeClerk:
-    """Minimal AlpacaClerk double that captures semantic effect operations."""
+    """Minimal active-SQLite Clerk double capturing semantic operations."""
+
+    authority_kind = "sqlite"
+    account_id = "PA-TEST"
 
     def __init__(
         self,
@@ -2320,7 +2222,7 @@ class _FakeClerk:
         self.stopped_runs: list[str] = []
         self._should_raise = should_raise
         self._effect_state = effect_state
-        self.repository = repository
+        self.repository = repository or _TestDecisionReceiptRepository()
         self.active_runs: dict[str, str] = {}
         self.known_runs: set[tuple[str, str]] = set()
 
@@ -2328,7 +2230,7 @@ class _FakeClerk:
         self.registered_runs.append(binding.run_id)
         self.active_runs[binding.strategy_instance_id] = binding.run_id
         self.known_runs.add((binding.strategy_instance_id, binding.run_id))
-        if self.repository is not None:
+        if isinstance(self.repository, ClerkSqliteRepository):
             submit_start_run(
                 self.repository,
                 account_id="PA-TEST",
@@ -2347,7 +2249,7 @@ class _FakeClerk:
         self.stopped_runs.append(run_id)
         if self.active_runs.get(strategy_instance_id) == run_id:
             self.active_runs.pop(strategy_instance_id)
-        if self.repository is not None:
+        if isinstance(self.repository, ClerkSqliteRepository):
             submit_stop_run(
                 self.repository,
                 account_id="PA-TEST",
@@ -2422,9 +2324,8 @@ class _FakeClerk:
 
 def _install_fake_clerk(monkeypatch: pytest.MonkeyPatch, clerk: _FakeClerk) -> None:
     """Patch the process-level Alpaca clerk for the duration of a test."""
-    import app.broker.alpaca.clerk.clerk as clerk_mod
-
-    monkeypatch.setattr(clerk_mod, "_clerk", clerk)
+    del monkeypatch
+    set_alpaca_clerk(clerk)
 
 
 _EMA_FIRST_ENTER_MS = 1_770_389_100_000

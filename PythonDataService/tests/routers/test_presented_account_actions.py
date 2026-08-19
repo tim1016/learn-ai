@@ -93,21 +93,12 @@ async def test_presented_reconcile_claims_once_and_returns_an_explicit_replay(
     snapshot_service = SimpleNamespace(snapshot=snapshot)
     refresh_calls = 0
 
-    async def ensure_account_clerk(*_args: object, **_kwargs: object) -> None:
-        return None
-
     async def refresh_account_truth(*_args: object, **_kwargs: object):
         nonlocal refresh_calls
         refresh_calls += 1
         return _truth()
 
-    monkeypatch.setattr(account_reconciliation.host_daemon_client, "ensure_account_clerk", ensure_account_clerk)
     monkeypatch.setattr(account_reconciliation, "refresh_account_truth_now", refresh_account_truth)
-    monkeypatch.setattr(
-        account_reconciliation,
-        "get_settings",
-        lambda: SimpleNamespace(live_runner_daemon_url="http://daemon"),
-    )
     app.dependency_overrides[account_reconciliation.require_connected_client] = lambda: object()
     app.dependency_overrides[account_reconciliation.get_account_reconciliation_service] = lambda: reconciliation
     app.dependency_overrides[account_reconciliation.get_account_safety_snapshot_service] = lambda: snapshot_service

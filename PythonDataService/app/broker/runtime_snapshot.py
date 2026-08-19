@@ -95,38 +95,6 @@ def build_broker_runtime_snapshot(client: IbkrClient | None) -> BrokerRuntimeSna
     )
 
 
-def make_live_engine_verdict_provider(client: IbkrClient):
-    """PRD #619-A §A3 — build a ``verdict_provider`` closure for ``LiveEngine``.
-
-    ``cmd_start`` constructs the child's own ``IbkrClient``; this
-    closure reads the live snapshot via public API and returns the
-    ADR-0011 identity verdict literal that
-    ``LiveEngine._check_verdict_transition_halt`` consumes. The engine
-    writes the result to ``verdict_snapshot.json`` on every check — no
-    new transport, no behaviour change in the engine itself.
-
-    Authority: the closure reads the *child's own* ``IbkrClient`` — the
-    process that actually places (or refuses to place) orders. The
-    data-plane FastAPI singleton's observation never feeds this path.
-
-    ADR-0011 amendment: ``readonly`` is passed through to the per-gate
-    breakdown but no longer participates in identity derivation;
-    capability is composed separately at the Resume gate.
-    """
-    from app.broker.safety_verdict import derive_broker_safety_verdict
-
-    def _provider() -> str:
-        s = build_broker_runtime_snapshot(client)
-        return derive_broker_safety_verdict(
-            configured_mode=s.configured_mode,
-            readonly_flag=s.readonly,
-            port=s.port,
-            connected_account=s.connected_account,
-        ).final_verdict
-
-    return _provider
-
-
 def snapshot_data_plane_broker() -> BrokerRuntimeSnapshot:
     """Snapshot the FastAPI data-plane singleton, if any.
 
@@ -136,9 +104,9 @@ def snapshot_data_plane_broker() -> BrokerRuntimeSnapshot:
     propagate — the historical broad ``except Exception`` is what hid
     the regression PRD #619-A is fixing.
 
-    PRD #619-A note: the singleton snapshot is the *fleet/data-plane*
-    observation — it is advisory only for live runs. Per-run safety
-    authority lives in the live-engine child via ``verdict_snapshot.json``.
+    PRD #619-A note: the singleton snapshot is the data plane's read-only
+    observation. The retired IBKR engine child no longer consumes it as an
+    execution verdict.
     """
     from app.broker.ibkr.client import get_client
     from app.broker.ibkr.config import get_settings

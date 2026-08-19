@@ -16,6 +16,18 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.sqlite.projection_models import ProjectedOrder
+from app.broker.contract.models import BrokerPosition
+
+ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES = frozenset(
+    {"filled", "canceled", "expired", "rejected", "replaced"}
+)
+
+
+def signed_broker_position_quantity(position: BrokerPosition) -> float:
+    """Normalize Alpaca's absolute quantity and side to a signed quantity."""
+
+    quantity = abs(position.quantity)
+    return -quantity if position.side.lower() == "short" else quantity
 
 
 class OrderProjectionReadError(RuntimeError):

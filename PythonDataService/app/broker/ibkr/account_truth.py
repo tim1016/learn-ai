@@ -37,7 +37,6 @@ from app.broker.ibkr.models import (
     IbkrPosition,
     IbkrPositionsSnapshot,
 )
-from app.broker.ibkr.order_cancel_capability import evaluate_order_cancel_capability
 from app.broker.ibkr.order_history import list_completed_orders
 from app.broker.ibkr.orders import executions_for_reconnect_recovery, list_open_orders
 from app.engine.live.account_artifacts import AccountArtifactError
@@ -61,7 +60,6 @@ from app.schemas.account_truth import (
     AccountTruthFinalVerdict,
     AccountTruthInvariant,
     AccountTruthMessage,
-    AccountTruthOrderCancelAction,
     AccountTruthOrderRow,
     AccountTruthOwnerBindingState,
     AccountTruthOwnerSummary,
@@ -437,8 +435,6 @@ def compose_account_truth(
             order,
             fact_kind="open_order",
             namespace_views=namespace_views,
-            health=health,
-            account_recovery_state=account_recovery_state,
         )
         for order in open_orders
     ]
@@ -447,8 +443,6 @@ def compose_account_truth(
             order,
             fact_kind="completed_order",
             namespace_views=namespace_views,
-            health=health,
-            account_recovery_state=account_recovery_state,
         )
         for order in completed_orders
     ]
@@ -617,41 +611,11 @@ def _namespace_owner(binding: AccountInstanceBinding) -> _NamespaceOwner:
     )
 
 
-def cancel_action_for_open_order(
-    order: IbkrOpenOrder,
-    *,
-    health: IbkrConnectionHealth,
-    collection_context: AccountTruthCollectionContext,
-) -> AccountTruthOrderCancelAction:
-    """Project the canonical cancel action for one current open-order fact."""
-
-    registry_unavailable = any(
-        gap.source == "instance_registry" for gap in collection_context.evidence_gaps
-    )
-    namespace_views = _namespace_views(
-        collection_context.account_instance_bindings,
-        account_id=health.account_id or order.account_id,
-        registry_unavailable=registry_unavailable,
-    )
-    owner = _live_risk_owner(_owner_for_order_ref(order.order_ref, namespace_views))
-    lifecycle = _order_lifecycle(order.status, order.remaining)
-    return evaluate_order_cancel_capability(
-        health=health,
-        fact_kind="open_order",
-        owner=owner,
-        lifecycle=lifecycle,
-        remaining=order.remaining,
-        account_recovery_state=collection_context.account_recovery_state,
-    )
-
-
 def _order_row(
     order: IbkrOpenOrder,
     *,
     fact_kind: str,
     namespace_views: _NamespaceViews,
-    health: IbkrConnectionHealth,
-    account_recovery_state: AccountRecoveryState,
 ) -> AccountTruthOrderRow:
     owner = _owner_for_order_ref(order.order_ref, namespace_views)
     lifecycle = _order_lifecycle(order.status, order.remaining)
@@ -685,14 +649,6 @@ def _order_row(
         avg_fill_price=order.avg_fill_price,
         order_ref=order.order_ref,
         owner=owner,
-        cancel_action=evaluate_order_cancel_capability(
-            health=health,
-            fact_kind=fact_kind,
-            owner=owner,
-            lifecycle=lifecycle,
-            remaining=order.remaining,
-            account_recovery_state=account_recovery_state,
-        ),
         headline=_fact_headline(owner, fact_kind.replace("_", " ")),
         detail=_order_detail(order, owner),
         fetched_at_ms=order.fetched_at_ms,

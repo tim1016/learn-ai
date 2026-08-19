@@ -83,16 +83,6 @@ class _Broker:
         return None
 
 
-class _Legacy:
-    authority_kind = "legacy"
-
-    def __init__(self) -> None:
-        self.recovered = False
-
-    async def recover(self) -> None:
-        self.recovered = True
-
-
 class _ActivationStore:
     def __init__(
         self,
@@ -130,9 +120,8 @@ class _ActivationStore:
         return self.record
 
 
-async def test_no_activation_selects_only_legacy_authority(tmp_path: Path) -> None:
+async def test_no_activation_installs_no_custody_authority(tmp_path: Path) -> None:
     broker = _Broker()
-    legacy = _Legacy()
     opened = False
 
     def _open(_account_id: str, _root: Path) -> ClerkSqliteRepository:
@@ -145,38 +134,31 @@ async def test_no_activation_selects_only_legacy_authority(tmp_path: Path) -> No
         trade=broker,
         artifacts_root=tmp_path,
         activation_store=_ActivationStore(None),
-        legacy_factory=lambda: legacy,
         repository_opener=_open,
     )
 
-    assert runtime.authority_kind == "legacy"
-    assert runtime.clerk is legacy
-    assert legacy.recovered
+    assert runtime.authority_kind == "unavailable"
+    assert runtime.clerk is None
+    assert runtime.startup_failure is not None
+    assert runtime.startup_failure.reason_code == "ACTIVATION_REQUIRED"
+    assert runtime.startup_failure.activation_detected is False
     assert not opened
 
 
 async def test_invalid_activation_installs_no_mutating_clerk(tmp_path: Path) -> None:
     broker = _Broker()
-    legacy_constructed = False
-
-    def _legacy() -> _Legacy:
-        nonlocal legacy_constructed
-        legacy_constructed = True
-        return _Legacy()
 
     runtime = await select_active_clerk_runtime(
         read=broker,
         trade=broker,
         artifacts_root=tmp_path,
         activation_store=_ActivationStore(None, invalid=True),
-        legacy_factory=_legacy,
     )
 
     assert runtime.authority_kind == "unavailable"
     assert runtime.clerk is None
     assert runtime.startup_failure is not None
     assert runtime.startup_failure.reason_code == "ACTIVATION_RECORD_INVALID"
-    assert not legacy_constructed
 
 
 async def test_valid_activation_opens_and_recovers_only_sqlite(
@@ -190,19 +172,12 @@ async def test_valid_activation_opens_and_recovers_only_sqlite(
     meta = repo.control_meta_snapshot()
     activation = _activation()
     store = _ActivationStore(activation)
-    legacy_constructed = False
-
-    def _legacy() -> _Legacy:
-        nonlocal legacy_constructed
-        legacy_constructed = True
-        return _Legacy()
 
     runtime = await select_active_clerk_runtime(
         read=broker,
         trade=broker,
         artifacts_root=tmp_path,
         activation_store=store,
-        legacy_factory=_legacy,
         repository_opener=lambda _account_id, _root: repo,
     )
 
@@ -216,7 +191,6 @@ async def test_valid_activation_opens_and_recovers_only_sqlite(
         meta.db_identity_token,
         tmp_path,
     )
-    assert not legacy_constructed
     assert runtime.sqlite_repository is repo
     assert isinstance(runtime.clerk._read, GuardedBrokerReadPort)
     assert isinstance(runtime.clerk._trade, GuardedBrokerTradePort)
@@ -264,7 +238,6 @@ async def test_lease_heartbeat_runs_before_startup_recovery(
         trade=broker,
         artifacts_root=tmp_path,
         activation_store=_ActivationStore(_activation()),
-        legacy_factory=_Legacy,
         repository_opener=lambda _account_id, _root: repo,
     )
 
@@ -273,16 +246,10 @@ async def test_lease_heartbeat_runs_before_startup_recovery(
     await runtime.close()
 
 
-async def test_activated_database_open_failure_never_constructs_legacy(
+async def test_activated_database_open_failure_installs_no_authority(
     tmp_path: Path,
 ) -> None:
     broker = _Broker()
-    legacy_constructed = False
-
-    def _legacy() -> _Legacy:
-        nonlocal legacy_constructed
-        legacy_constructed = True
-        return _Legacy()
 
     def _fail_open(_account_id: str, _root: Path) -> ClerkSqliteRepository:
         raise OSError("SQLite unavailable")
@@ -292,7 +259,6 @@ async def test_activated_database_open_failure_never_constructs_legacy(
         trade=broker,
         artifacts_root=tmp_path,
         activation_store=_ActivationStore(_activation()),
-        legacy_factory=_legacy,
         repository_opener=_fail_open,
     )
 
@@ -304,7 +270,6 @@ async def test_activated_database_open_failure_never_constructs_legacy(
     assert runtime.startup_failure.activation_detected is True
     assert runtime.startup_failure.authority_generation == 1
     assert runtime.startup_failure.db_identity_token == "db-token"
-    assert not legacy_constructed
 
 
 async def test_activated_startup_waits_for_a_crashed_writers_lease(
@@ -342,7 +307,6 @@ async def test_activated_startup_waits_for_a_crashed_writers_lease(
         trade=broker,
         artifacts_root=tmp_path,
         activation_store=_ActivationStore(_activation()),
-        legacy_factory=_Legacy,
         repository_opener=_open_after_expiry,
         execution_lease_wait_timeout_s=0.1,
         execution_lease_retry_interval_s=0.01,
@@ -369,7 +333,6 @@ async def test_activated_startup_fails_closed_when_execution_lease_never_expires
         trade=broker,
         artifacts_root=tmp_path,
         activation_store=_ActivationStore(_activation()),
-        legacy_factory=_Legacy,
         repository_opener=_lease_held,
         execution_lease_wait_timeout_s=0.003,
         execution_lease_retry_interval_s=0.001,
@@ -381,7 +344,7 @@ async def test_activated_startup_fails_closed_when_execution_lease_never_expires
     assert runtime.startup_failure.reason_code == "SQLITE_CLERK_STARTUP_FAILED"
 
 
-async def test_activation_identity_mismatch_never_constructs_legacy(
+async def test_activation_identity_mismatch_installs_no_authority(
     tmp_path: Path,
 ) -> None:
     broker = _Broker()
@@ -389,13 +352,6 @@ async def test_activation_identity_mismatch_never_constructs_legacy(
         account_id="PA-TEST",
         artifacts_root=tmp_path,
     )
-    legacy_constructed = False
-
-    def _legacy() -> _Legacy:
-        nonlocal legacy_constructed
-        legacy_constructed = True
-        return _Legacy()
-
     runtime = await select_active_clerk_runtime(
         read=broker,
         trade=broker,
@@ -404,7 +360,6 @@ async def test_activation_identity_mismatch_never_constructs_legacy(
             _activation(),
             resolve_invalid=True,
         ),
-        legacy_factory=_legacy,
         repository_opener=lambda _account_id, _root: repo,
     )
 
@@ -415,10 +370,9 @@ async def test_activation_identity_mismatch_never_constructs_legacy(
     assert runtime.startup_failure.activation_detected is True
     assert runtime.startup_failure.authority_generation == 1
     assert runtime.startup_failure.db_identity_token == "db-token"
-    assert not legacy_constructed
 
 
-async def test_activated_recovery_timeout_fails_closed_without_legacy(
+async def test_activated_recovery_timeout_installs_no_authority(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -427,8 +381,6 @@ async def test_activated_recovery_timeout_fails_closed_without_legacy(
         account_id="PA-TEST",
         artifacts_root=tmp_path,
     )
-    legacy_constructed = False
-
     async def _never_recovers(_self: object) -> None:
         await asyncio.Event().wait()
 
@@ -437,17 +389,11 @@ async def test_activated_recovery_timeout_fails_closed_without_legacy(
         _never_recovers,
     )
 
-    def _legacy() -> _Legacy:
-        nonlocal legacy_constructed
-        legacy_constructed = True
-        return _Legacy()
-
     runtime = await select_active_clerk_runtime(
         read=broker,
         trade=broker,
         artifacts_root=tmp_path,
         activation_store=_ActivationStore(_activation()),
-        legacy_factory=_legacy,
         repository_opener=lambda _account_id, _root: repo,
         startup_recovery_timeout_s=0.001,
     )
@@ -456,4 +402,3 @@ async def test_activated_recovery_timeout_fails_closed_without_legacy(
     assert runtime.clerk is None
     assert runtime.startup_failure is not None
     assert runtime.startup_failure.reason_code == "SQLITE_CLERK_STARTUP_FAILED"
-    assert not legacy_constructed

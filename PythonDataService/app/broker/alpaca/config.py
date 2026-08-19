@@ -17,6 +17,7 @@ Credentials come from ``.env`` (never committed): ``ALPACA_API_KEY_ID``,
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, ValidationError, model_validator
@@ -24,6 +25,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # The registry key and ``{broker}`` path segment for this vendor.
 BROKER_ID = "alpaca"
+_SERVICE_ROOT = Path(__file__).resolve().parents[3]
 
 # Base URL per mode. Derived, never independently configurable (spec §7).
 _BASE_URL_BY_MODE: dict[str, str] = {
@@ -56,6 +58,7 @@ class AlpacaSettings(BaseSettings):
     # paper | live. Phase 1 refuses live; live enablement is a deliberate
     # future change (H3 in the HITL closeout), never a config accident.
     mode: Literal["paper", "live"] = "paper"
+    clerk_dir: Path = _SERVICE_ROOT / "artifacts" / "alpaca_clerk"
 
     @model_validator(mode="after")
     def _enforce_paper_only(self) -> AlpacaSettings:

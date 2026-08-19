@@ -15,10 +15,9 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Protocol
 from zoneinfo import ZoneInfo
 
-from app.broker.alpaca.clerk.clerk import get_alpaca_clerk
-from app.broker.alpaca.clerk.decision_journal import DecisionOutcome
+from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
-from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
+from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionOutcome, SqliteDecisionReceipts
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.portfolio import Portfolio
 from app.engine.execution.signal_intent_executor import SignalIntentExecutionContext
@@ -197,19 +196,19 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
     """Execute one admitted strategy; the Clerk owns all execution truth."""
     clerk = get_alpaca_clerk()
     if clerk is None:
-        raise RuntimeError("AlpacaClerk is not installed; cannot execute trade-mode decisions.")
-    decision_receipts: SqliteDecisionReceipts | None = None
-    if getattr(clerk, "authority_kind", "legacy") == "sqlite":
-        account_id = getattr(clerk, "account_id", None)
-        if not isinstance(account_id, str) or not account_id:
-            raise RuntimeError("The active SQLite Clerk has no account identity for decision receipts.")
-        repository = getattr(clerk, "repository", None)
-        if repository is None:
-            raise RuntimeError("The active SQLite Clerk has no repository for decision receipts.")
-        decision_receipts = SqliteDecisionReceipts(
-            repository,
-            strategy_instance_id=binding.strategy_instance_id,
-        )
+        raise RuntimeError("The SQLite Alpaca Clerk is unavailable; trade-mode decisions are blocked.")
+    if getattr(clerk, "authority_kind", None) != "sqlite":
+        raise RuntimeError("Trade-mode decisions require the active SQLite Alpaca Clerk.")
+    account_id = getattr(clerk, "account_id", None)
+    if not isinstance(account_id, str) or not account_id:
+        raise RuntimeError("The active SQLite Clerk has no account identity for decision receipts.")
+    repository = getattr(clerk, "repository", None)
+    if repository is None:
+        raise RuntimeError("The active SQLite Clerk has no repository for decision receipts.")
+    decision_receipts = SqliteDecisionReceipts(
+        repository,
+        strategy_instance_id=binding.strategy_instance_id,
+    )
     async for evaluation in strategy_evaluations(binding, feed):
         if len(evaluation.intents) > 1:
             raise RuntimeError("A supported trade strategy emitted multiple intents for one closed bar.")
@@ -277,7 +276,7 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
 
 
 def _append_decision_receipt(
-    receipts: SqliteDecisionReceipts | None,
+    receipts: SqliteDecisionReceipts,
     *,
     binding: BrokerBotBinding,
     evaluation: StrategyEvaluation,
@@ -286,8 +285,6 @@ def _append_decision_receipt(
     intent_id: str = "",
     order_ref: str = "",
 ) -> None:
-    if receipts is None:
-        return
     receipts.append(
         outcome=outcome,
         symbol=binding.symbol,
@@ -299,7 +296,7 @@ def _append_decision_receipt(
 
 
 def _record_blocked_decision(
-    receipts: SqliteDecisionReceipts | None,
+    receipts: SqliteDecisionReceipts,
     *,
     binding: BrokerBotBinding,
     evaluation: StrategyEvaluation,
@@ -307,8 +304,6 @@ def _record_blocked_decision(
     receipt: _EffectReceipt,
 ) -> None:
     """Replace a provisional intent with the Clerk's final admission refusal."""
-    if receipts is None:
-        return
     refusal_reason = str(
         getattr(receipt, "next_step", None)
         or getattr(receipt, "explanation", None)

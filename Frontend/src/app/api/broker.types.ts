@@ -44,32 +44,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/accounts/{account_id}/binding-ledger/baseline": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Baseline Account Binding Ledger Endpoint
-         * @description Seed the command ledger from the legacy registry to clear dirty parity.
-         *
-         *     An account whose registry rows predate the binding-command ledger stays
-         *     fail-closed on 'binding ledger parity is dirty' with no forward writer to
-         *     close the legacy-only bindings. This idempotent, non-destructive recovery
-         *     action folds the current registry into the ledger; it never removes rows and
-         *     leaves any genuine ledger-only anomaly visible.
-         */
-        post: operations["baseline_account_binding_ledger_endpoint_api_accounts__account_id__binding_ledger_baseline_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/accounts/{account_id}/clerk": {
         parameters: {
             query?: never;
@@ -90,26 +64,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/accounts/{account_id}/clerk/restore": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Restore Account Clerk Endpoint
-         * @description Restore the sole Clerk through the daemon and leave a durable receipt.
-         */
-        post: operations["restore_account_clerk_endpoint_api_accounts__account_id__clerk_restore_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/accounts/{account_id}/cockpit": {
         parameters: {
             query?: never;
@@ -124,27 +78,6 @@ export interface paths {
         get: operations["account_cockpit_endpoint_api_accounts__account_id__cockpit_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/accounts/{account_id}/emergency-flatten": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Emergency Flatten Account Endpoint
-         * @deprecated
-         * @description Retire raw emergency writes in favor of the signed safety action envelope.
-         */
-        post: operations["emergency_flatten_account_endpoint_api_accounts__account_id__emergency_flatten_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -256,71 +189,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/accounts/{account_id}/gate-promotion/restart-smoke": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Record Account Clerk Restart Smoke Endpoint
-         * @description Record the typed restart smoke for the current accepting Clerk.
-         */
-        post: operations["record_account_clerk_restart_smoke_endpoint_api_accounts__account_id__gate_promotion_restart_smoke_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/accounts/{account_id}/journal-cures": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Apply Journal Cure Endpoint
-         * @description Append a claim-reducing cure through the host daemon's host-local Clerk RPC.
-         *
-         *     The Clerk's Unix socket lives on the host and cannot be reached from this
-         *     container across the podman VM boundary, so the cure RPC is delegated to the
-         *     daemon rather than opened here. The daemon authors the Clerk-rejection status
-         *     and reason_code, which propagate back verbatim.
-         */
-        post: operations["apply_journal_cure_endpoint_api_accounts__account_id__journal_cures_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/accounts/{account_id}/journal-cures/preview": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Journal Cure Preview Endpoint
-         * @description Read the server-owned claim state before an operator creates a cure.
-         */
-        get: operations["journal_cure_preview_endpoint_api_accounts__account_id__journal_cures_preview_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/accounts/{account_id}/journal-recovery/quarantine": {
         parameters: {
             query?: never;
@@ -361,27 +229,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/accounts/{account_id}/operator-recovery-flatten": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Operator Recovery Flatten Endpoint
-         * @deprecated
-         * @description Retire raw recovery writes in favor of the signed safety action envelope.
-         */
-        post: operations["operator_recovery_flatten_endpoint_api_accounts__account_id__operator_recovery_flatten_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/accounts/{account_id}/pnl-attribution": {
         parameters: {
             query?: never;
@@ -416,26 +263,6 @@ export interface paths {
          * @description Execute only the currently presented Reconcile Now envelope.
          */
         post: operations["execute_presented_reconcile_action_endpoint_api_accounts__account_id__presented_actions_reconcile_now_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/accounts/{account_id}/presented-actions/recovery": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Execute Presented Recovery Action Endpoint
-         * @description Run one signed Cancel or Flatten action through the existing Clerk lanes.
-         */
-        post: operations["execute_presented_recovery_action_endpoint_api_accounts__account_id__presented_actions_recovery_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -496,26 +323,6 @@ export interface paths {
         get: operations["latest_account_reconciliation_endpoint_api_accounts__account_id__reconciliation_latest_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/accounts/{account_id}/registry/backfill-false-crashes": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Backfill False Crash Registry Rows Endpoint
-         * @description Repair latest crash-retired registry rows disproven by durable run status.
-         */
-        post: operations["backfill_false_crash_registry_rows_endpoint_api_accounts__account_id__registry_backfill_false_crashes_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1307,26 +1114,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/broker/orders": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Place Order Endpoint
-         * @description Place one paper order. Four safety layers run before any IBKR call.
-         */
-        post: operations["place_order_endpoint_api_broker_orders_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/broker/orders/completed": {
         parameters: {
             query?: never;
@@ -1356,7 +1143,7 @@ export interface paths {
         };
         /**
          * List Open Orders Endpoint
-         * @description All open orders the connected paper-client has placed.
+         * @description All open orders IBKR currently reports for the connected account.
          */
         get: operations["list_open_orders_endpoint_api_broker_orders_open_get"];
         put?: never;
@@ -1402,26 +1189,6 @@ export interface paths {
          */
         post: operations["order_what_if_endpoint_api_broker_orders_what_if_post"];
         delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/broker/orders/{order_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /**
-         * Cancel Order Endpoint
-         * @description Cancel one paper order by ``order_id``.
-         */
-        delete: operations["cancel_order_endpoint_api_broker_orders__order_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2306,31 +2073,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/brokers/{broker}/clerk/clear-hold": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Clear Clerk Hold
-         * @description Clear the account exposure hold (operator exit); return the updated status.
-         *
-         *     A control mutation (the control secret gates it). Transport only: resolve the
-         *     Clerk and delegate. The Clerk journals HOLD_CLEARED (idempotent — a clear
-         *     against no active hold is a benign NO-OP) and returns the post-clear status so
-         *     the desk re-renders in one round-trip.
-         */
-        post: operations["clear_clerk_hold_api_brokers__broker__clerk_clear_hold_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/brokers/{broker}/clerk/custody-diagnosis": {
         parameters: {
             query?: never;
@@ -2349,30 +2091,6 @@ export interface paths {
         get: operations["get_custody_diagnosis_api_brokers__broker__clerk_custody_diagnosis_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerk/resolve": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Resolve Custody
-         * @description Resolve Clerk↔broker divergence: run the diagnosed plan, journal the reason.
-         *
-         *     A control mutation. The typed token is a UI friction gate; the operator
-         *     identity is injected server-side. A stale snapshot is a 409; a blocked
-         *     prerequisite is a 409 with the blocker's what/why.
-         */
-        post: operations["resolve_custody_api_brokers__broker__clerk_resolve_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2450,47 +2168,8 @@ export interface paths {
         /** List Orders */
         get: operations["list_orders_api_brokers__broker__orders_get"];
         put?: never;
-        /**
-         * Submit Orders
-         * @description Submit one or more equity market/limit legs (phase-2 write path).
-         *
-         *     Transport only: FastAPI validates the body — an inconsistent leg (a limit
-         *     order with no ``limit_price``, a market order carrying one) is a Pydantic
-         *     ``422`` here, never a ``500`` — this resolves the account-scoped Clerk
-         *     facade, and the Clerk owns identity minting, fail-closed journaling, the
-         *     broker call, and per-leg result shaping. A per-leg broker rejection is a
-         *     *failed* leg in a ``200`` response (the request itself succeeded), never a
-         *     ``500``.
-         */
-        post: operations["submit_orders_api_brokers__broker__orders_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/orders/{order_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
         post?: never;
-        /**
-         * Cancel Order
-         * @description Cancel one working order by its broker-assigned id (phase-2 S3 write path).
-         *
-         *     Transport only: resolve the account-scoped Clerk facade and delegate. The
-         *     Clerk owns ownership resolution, fail-closed journaling, the broker call, and
-         *     result shaping. A non-cancelable order is a *failed* result in a ``200``
-         *     response with a typed what/why (never a ``500``). Cancel is intentionally a
-         *     first-class Clerk path, independent of the submit gate, so a future exposure
-         *     hold (S6) that blocks new submission never blocks reducing exposure.
-         */
-        delete: operations["cancel_order_api_brokers__broker__orders__order_id__delete"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -4493,75 +4172,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/offline-replay/catalog": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List recent completed NYSE sessions available for replay */
-        get: operations["catalog_api_offline_replay_catalog_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/offline-replay/sessions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List active and archived offline replay sessions */
-        get: operations["list_sessions_api_offline_replay_sessions_get"];
-        put?: never;
-        /** Launch synchronized one-bot-per-symbol offline replay */
-        post: operations["create_session_api_offline_replay_sessions_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/offline-replay/sessions/{session_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read the latest durable replay projection */
-        get: operations["get_session_api_offline_replay_sessions__session_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/offline-replay/sessions/{session_id}/commands": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Pause, resume, step, change speed, or stop a replay */
-        post: operations["command_api_offline_replay_sessions__session_id__commands_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/options/contracts": {
         parameters: {
             query?: never;
@@ -6065,62 +5675,6 @@ export interface components {
             valid_until_ms?: number | null;
         };
         /**
-         * AccountClerkRestartSmokeRequest
-         * @description Typed acknowledgement that the current Clerk passed its restart smoke.
-         */
-        AccountClerkRestartSmokeRequest: {
-            /**
-             * Confirmation
-             * @constant
-             */
-            confirmation: "CLERK_RESTART_SMOKE";
-        };
-        /**
-         * AccountClerkRestartSmokeResponse
-         * @description Durable Clerk-restart smoke receipt used by gate promotion.
-         */
-        AccountClerkRestartSmokeResponse: {
-            /** Account Id */
-            account_id: string;
-            /** Clerk Generation */
-            clerk_generation: number;
-            /** Recorded At Ms */
-            recorded_at_ms: number;
-        };
-        /**
-         * AccountClerkRestoreReceipt
-         * @description Durable account-event receipt for a completed Clerk restore.
-         */
-        AccountClerkRestoreReceipt: {
-            /** Account Id */
-            account_id: string;
-            /** Clerk Generation */
-            clerk_generation: number;
-            /** Receipt Id */
-            receipt_id: string;
-            /** Recorded At Ms */
-            recorded_at_ms: number;
-            /**
-             * Schema Version
-             * @default 1
-             * @constant
-             */
-            schema_version?: 1;
-        };
-        /**
-         * AccountClerkRestoreRequest
-         * @description Typed confirmation for the daemon-supervised Clerk restore operation.
-         */
-        AccountClerkRestoreRequest: {
-            /**
-             * Confirmation Token
-             * @constant
-             */
-            confirmation_token: "RESTORE";
-            /** Idempotency Key */
-            idempotency_key: string;
-        };
-        /**
          * AccountCockpitDaemon
          * @description Host-daemon observation used only for honest cockpit guidance.
          */
@@ -6223,27 +5777,6 @@ export interface components {
             source: string;
             /** Title */
             title: string;
-        };
-        /**
-         * AccountEffectPurpose
-         * @description The limited target shapes a caller may ask the server to verify.
-         * @enum {string}
-         */
-        AccountEffectPurpose: "EXACT_CANCEL" | "EXACT_CLOSE";
-        /**
-         * AccountEffectRequest
-         * @description Untrusted requested target; never itself proves a safe effect.
-         */
-        AccountEffectRequest: {
-            /** Expected Signed Quantity */
-            expected_signed_quantity?: number | null;
-            purpose: components["schemas"]["AccountEffectPurpose"];
-            /** Target Con Id */
-            target_con_id?: number | null;
-            /** Target Order Id */
-            target_order_id?: number | null;
-            /** Target Order Ref */
-            target_order_ref?: string | null;
         };
         /**
          * AccountEpoch
@@ -6408,29 +5941,6 @@ export interface components {
             view: "operations";
         };
         /**
-         * AccountFalseCrashBackfillResponse
-         * @description Summary of the append-only false-crash registry repair.
-         */
-        AccountFalseCrashBackfillResponse: {
-            /** Accounts Scanned */
-            accounts_scanned: number;
-            /** Candidate Rows */
-            candidate_rows: number;
-            /** Invalid Account Dirs */
-            invalid_account_dirs: number;
-            /** Repaired Run Ids */
-            repaired_run_ids?: string[];
-            /** Rows Repaired */
-            rows_repaired: number;
-            /** Rows Skipped No Disproof */
-            rows_skipped_no_disproof: number;
-            /**
-             * Schema Version
-             * @default 1
-             */
-            schema_version?: number;
-        };
-        /**
          * AccountFreezeBanner
          * @description Backend-authored banner copy for active account freezes.
          */
@@ -6492,64 +6002,6 @@ export interface components {
             state: "VERIFIED" | "REVOKED" | "EXPIRED" | "ABSENT";
             /** Valid Until Ms */
             valid_until_ms?: number | null;
-        };
-        /**
-         * AccountOwnerSubmitIntent
-         * @description Durable runner intent accepted by AccountOwner intake.
-         */
-        "AccountOwnerSubmitIntent-Input": {
-            /** Account Id */
-            account_id: string;
-            /** Bot Order Namespace */
-            bot_order_namespace: string;
-            /** Created At Ms */
-            created_at_ms: number;
-            effect_request?: components["schemas"]["AccountEffectRequest"] | null;
-            /** Intent Id */
-            intent_id: string;
-            /** Intent Kind */
-            intent_kind: string;
-            /** Order Ref */
-            order_ref: string;
-            /** Order Spec */
-            order_spec: Record<string, never>;
-            /** Owner Generation */
-            owner_generation: number;
-            /** Run Id */
-            run_id: string;
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-            /** Trace Id */
-            trace_id: string;
-        };
-        /**
-         * AccountOwnerSubmitIntent
-         * @description Durable runner intent accepted by AccountOwner intake.
-         */
-        "AccountOwnerSubmitIntent-Output": {
-            /** Account Id */
-            account_id: string;
-            /** Bot Order Namespace */
-            bot_order_namespace: string;
-            /** Created At Ms */
-            created_at_ms: number;
-            effect_request?: components["schemas"]["AccountEffectRequest"] | null;
-            /** Intent Id */
-            intent_id: string;
-            /** Intent Kind */
-            intent_kind: string;
-            /** Order Ref */
-            order_ref: string;
-            /** Order Spec */
-            order_spec: Record<string, never>;
-            /** Owner Generation */
-            owner_generation: number;
-            /** Run Id */
-            run_id: string;
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-            /** Trace Id */
-            trace_id: string;
         };
         /**
          * AccountPnlAttributionResponse
@@ -6724,14 +6176,6 @@ export interface components {
             state: "CLEAN" | "NOT_PROVEN";
             /** Ttl Ms */
             ttl_ms: number;
-        };
-        /**
-         * AccountRecoveryFlattenCandidate
-         * @description One server-authored, exact Clerk recovery request safe to confirm.
-         */
-        AccountRecoveryFlattenCandidate: {
-            confirmation: components["schemas"]["OperatorConfirmationCopy"];
-            intent: components["schemas"]["AccountOwnerSubmitIntent-Output"];
         };
         /**
          * AccountRosterRow
@@ -7172,7 +6616,6 @@ export interface components {
             clear_freeze_actionable?: boolean;
             /** Conditions */
             conditions?: components["schemas"]["AccountConditionRow"][];
-            emergency_flatten_confirmation?: components["schemas"]["OperatorConfirmationCopy"] | null;
             freeze_banner?: components["schemas"]["AccountFreezeBanner"] | null;
             /** Gate Rows */
             gate_rows?: components["schemas"]["AccountTriageGateRow"][];
@@ -7182,8 +6625,6 @@ export interface components {
             operator_blockers?: components["schemas"]["OperatorBlocker"][];
             overall_gate_result: components["schemas"]["GateResult"];
             reconciliation_automation_policy: components["schemas"]["AccountReconciliationAutomationPolicy"];
-            /** Recovery Flatten Candidates */
-            recovery_flatten_candidates?: components["schemas"]["AccountRecoveryFlattenCandidate"][];
             /**
              * Schema Version
              * @default 1
@@ -7375,22 +6816,6 @@ export interface components {
             title: string;
         };
         /**
-         * AccountTruthOrderCancelAction
-         * @description Backend-authored cancel affordance for one broker order row.
-         */
-        AccountTruthOrderCancelAction: {
-            /** Detail */
-            detail: string;
-            /** Enabled */
-            enabled: boolean;
-            /** Label */
-            label: string;
-            /** Reason Code */
-            reason_code?: ("BROKER_NOT_PAPER_CONNECTED" | "NOT_OPEN_ORDER" | "FOREIGN_OR_UNCLAIMED" | "ORDER_TERMINAL" | "ACCOUNT_FROZEN" | "ACCOUNT_FREEZE_UNREADABLE") | null;
-            /** Visible */
-            visible: boolean;
-        };
-        /**
          * AccountTruthOrderRow
          * @description Open or terminal broker order row grouped by broker lifecycle identity.
          */
@@ -7404,7 +6829,6 @@ export interface components {
             action: "BUY" | "SELL";
             /** Avg Fill Price */
             avg_fill_price?: number | null;
-            cancel_action: components["schemas"]["AccountTruthOrderCancelAction"];
             /** Client Id */
             client_id: number;
             /** Con Id */
@@ -8576,30 +8000,6 @@ export interface components {
              */
             ticker: string;
         };
-        /**
-         * BindingLedgerBaselineReceipt
-         * @description Result of seeding the binding-command ledger from the legacy registry.
-         *
-         *     Completes the reversible migration for an account whose registry predates
-         *     the ledger, clearing the fail-closed 'binding ledger parity is dirty'
-         *     posture. ``unresolved_ledger_only_instances`` stays non-empty only when a
-         *     genuine dual-write anomaly remains that baseline must not mask.
-         */
-        BindingLedgerBaselineReceipt: {
-            /** Account Id */
-            account_id: string;
-            /** Baselined Instances */
-            baselined_instances?: string[];
-            /** Parity Clean */
-            parity_clean: boolean;
-            /**
-             * Schema Version
-             * @default 1
-             */
-            schema_version?: number;
-            /** Unresolved Ledger Only Instances */
-            unresolved_ledger_only_instances?: string[];
-        };
         /** Body_download_validation_report_api_dataset_validation_report_download_post */
         Body_download_validation_report_api_dataset_validation_report_download_post: {
             /**
@@ -9502,23 +8902,6 @@ export interface components {
             symbol: string;
             /** @default day */
             time_in_force?: components["schemas"]["TimeInForce"];
-        };
-        /**
-         * BrokerOrderRequest
-         * @description An operator-authored order request: one or more legs to submit.
-         *
-         *     Each leg is journaled independently. A definitive per-leg failure does not
-         *     block later legs, but an uncertain outcome stops the batch before it can
-         *     create contradictory new exposure. The clerk mints a distinct ``order_ref``
-         *     identity per submitted leg.
-         */
-        BrokerOrderRequest: {
-            /** Expected Account Id */
-            expected_account_id: string;
-            /** Legs */
-            legs: components["schemas"]["BrokerOrderLeg"][];
-            /** Operator */
-            operator: string;
         };
         /**
          * BrokerPortfolioHistory
@@ -10459,26 +9842,6 @@ export interface components {
             train_pct: number;
         };
         /**
-         * ClearHoldRequest
-         * @description Operator's clear-hold request body (phase-2 S6).
-         *
-         *     ``operator`` attributes the HOLD_CLEARED line (who lifted the hold);
-         *     ``reason`` is the operator's what/why the ledger records. Both are optional —
-         *     a clear with no attribution still lifts the hold, journaled with defaults.
-         */
-        ClearHoldRequest: {
-            /**
-             * Operator
-             * @default operator
-             */
-            operator?: string;
-            /**
-             * Reason
-             * @default Operator cleared the exposure hold.
-             */
-            reason?: string;
-        };
-        /**
          * ClerkCard
          * @description Account/clerk card beside the rail (§7.3).
          */
@@ -10722,22 +10085,15 @@ export interface components {
             account_id: string;
             /**
              * Authority Kind
-             * @default legacy
-             * @enum {string}
+             * @default sqlite
+             * @constant
              */
-            authority_kind?: "legacy" | "sqlite";
+            authority_kind?: "sqlite";
             /** Broker */
             broker: string;
             /** Channel Healths */
             channel_healths?: components["schemas"]["ChannelHealth"][] | null;
             freeze?: components["schemas"]["AccountFreezeState"];
-            /**
-             * Generic Hold Clear Available
-             * @default true
-             */
-            generic_hold_clear_available?: boolean;
-            /** Generic Hold Clear Explanation */
-            generic_hold_clear_explanation?: string | null;
             hold: components["schemas"]["HoldState"];
             latest_reconciliation?: components["schemas"]["ReconciliationSummary"] | null;
             /** Observed At Ms */
@@ -11441,17 +10797,6 @@ export interface components {
              */
             theoretical_value: number;
         };
-        /** CustodyConflictDetail */
-        CustodyConflictDetail: {
-            /** Message */
-            message: string;
-            /** Why */
-            why?: string | null;
-        };
-        /** CustodyConflictResponse */
-        CustodyConflictResponse: {
-            detail: components["schemas"]["CustodyConflictDetail"];
-        };
         /**
          * CustodyCountFact
          * @description Count whose zero/non-zero/unknown meaning is explicit.
@@ -11471,14 +10816,18 @@ export interface components {
             account_id: string;
             /**
              * Authority Kind
-             * @default legacy
-             * @enum {string}
+             * @default sqlite
+             * @constant
              */
-            authority_kind?: "legacy" | "sqlite";
+            authority_kind?: "sqlite";
             /** Blocked Reason */
             blocked_reason?: string | null;
-            /** Broker */
-            broker: string;
+            /**
+             * Broker
+             * @default alpaca
+             * @constant
+             */
+            broker?: "alpaca";
             /**
              * Divergences
              * @default []
@@ -11534,9 +10883,9 @@ export interface components {
             /** Prerequisite Detail */
             prerequisite_detail?: string | null;
             /** Prerequisite Step */
-            prerequisite_step?: ("reconcile_now" | "record_inventory_baseline" | "clear_hold") | null;
+            prerequisite_step?: "reconcile_now" | null;
             /** Resolution Step */
-            resolution_step?: ("reconcile_now" | "record_inventory_baseline" | "clear_hold") | null;
+            resolution_step?: "reconcile_now" | null;
             /**
              * State
              * @enum {string}
@@ -11567,55 +10916,13 @@ export interface components {
             /** Symbol */
             symbol: string;
         };
-        /** CustodyResolutionReceipt */
-        CustodyResolutionReceipt: {
-            /** Account Id */
-            account_id: string;
-            /** Broker */
-            broker: string;
-            /**
-             * In Sync
-             * @default false
-             */
-            in_sync?: boolean;
-            /** Receipt Id */
-            receipt_id: string;
-            /**
-             * Recorded At Ms
-             * Format: int64
-             */
-            recorded_at_ms: number;
-            /**
-             * Remaining Divergences
-             * @default []
-             */
-            remaining_divergences?: components["schemas"]["CustodyDivergence"][];
-            /** Resolved */
-            resolved: boolean;
-            /**
-             * Steps Executed
-             * @default []
-             */
-            steps_executed?: components["schemas"]["CustodyResolutionStepResult"][];
-        };
-        /** CustodyResolutionRequest */
-        CustodyResolutionRequest: {
-            /** Confirmation Token */
-            confirmation_token: string;
-            /** Idempotency Key */
-            idempotency_key: string;
-            /** Reason */
-            reason: string;
-            /** Snapshot Version */
-            snapshot_version: string;
-        };
         /** CustodyResolutionStep */
         CustodyResolutionStep: {
             /**
              * Action Id
-             * @enum {string}
+             * @constant
              */
-            action_id: "reconcile_now" | "record_inventory_baseline" | "clear_hold";
+            action_id: "reconcile_now";
             /** Mutates */
             mutates: boolean;
             /**
@@ -11623,13 +10930,6 @@ export interface components {
              * @enum {string}
              */
             scope: "account" | "bot" | "broker";
-        };
-        /** CustodyResolutionStepResult */
-        CustodyResolutionStepResult: {
-            /** Action Id */
-            action_id: string;
-            /** Message */
-            message: string;
         };
         /**
          * CustodySpineStep
@@ -12467,30 +11767,6 @@ export interface components {
              * @default 50
              */
             rsi_min?: number;
-        };
-        /**
-         * EmergencyFlattenRequest
-         * @description Body for the account-wide emergency flatten (§ 7.2 #6).
-         *
-         *     Reaches the held Account Clerk independent of any live binding, so an
-         *     operator can flatten after a halt/poison. The Clerk closes intake, records
-         *     cancellation uncertainty, writes any liquidations under its own broker
-         *     session, and only completes after a fresh paper-account snapshot is flat.
-         */
-        EmergencyFlattenRequest: {
-            /** Account */
-            account: string;
-            /**
-             * Confirmation Token
-             * @description Exact typed confirmation required for the destructive account action.
-             * @constant
-             */
-            confirmation_token: "FLATTEN";
-            /**
-             * Idempotency Key
-             * @description Public emergency operation identity.
-             */
-            idempotency_key: string;
         };
         /**
          * EngineBacktestJobRequest
@@ -14781,64 +14057,12 @@ export interface components {
             time_in_force: "DAY" | "GTC" | "IOC" | "OPG";
         };
         /**
-         * IbkrOrderAck
-         * @description Synchronous acknowledgement of a placed order.
-         *
-         *     The handler returns this immediately after ``IB.placeOrder`` returns
-         *     a Trade. Status updates after this point arrive on Phase 3b's order
-         *     event stream.
-         */
-        IbkrOrderAck: {
-            /** Account Id */
-            account_id: string;
-            /**
-             * Action
-             * @enum {string}
-             */
-            action: "BUY" | "SELL";
-            /** Client Id */
-            client_id: number;
-            /** Con Id */
-            con_id: number;
-            ibkr_evidence?: components["schemas"]["IbkrTradeEvidence"] | null;
-            /** Is Paper */
-            is_paper: boolean;
-            /** Limit Price */
-            limit_price?: number | null;
-            /** Order Id */
-            order_id: number;
-            /** Order Ref */
-            order_ref?: string | null;
-            /**
-             * Order Type
-             * @enum {string}
-             */
-            order_type: "MKT" | "LMT";
-            /** Perm Id */
-            perm_id?: number | null;
-            /** Placed At Ms */
-            placed_at_ms: number;
-            /** Quantity */
-            quantity: number;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "PendingSubmit" | "PendingCancel" | "PreSubmitted" | "Submitted" | "ApiPending" | "ApiCancelled" | "Cancelled" | "Filled" | "Inactive" | "Unknown";
-            /** Symbol */
-            symbol: string;
-        };
-        /**
          * IbkrOrderSpec
-         * @description Inbound order request from the API.
+         * @description Non-transmitting what-if order specification.
          *
-         *     Phase 3a supports MKT and LMT only on stocks and US equity options.
-         *     Brackets, OCO, trailing stops are Phase 3b. The
-         *     ``confirm_paper`` field is a defense-in-depth gate: even when
-         *     ``IBKR_MODE=paper`` and the connected account begins with ``DU``,
-         *     the request body must explicitly set ``confirm_paper=true`` for the
-         *     handler to dispatch ``placeOrder``. Phase 4 (live) will require
-         *     ``confirm_live=true`` symmetrically.
+         *     MKT and LMT previews are supported for stocks and US equity options.
+         *     The historical confirmation and client-order fields remain wire-compatible
+         *     with stored evidence but do not authorize IBKR order actuation.
          *
          *     Option fields (``expiry_ms``, ``strike``, ``right``) are required
          *     when ``sec_type="OPT"`` and ignored when ``sec_type="STK"``.
@@ -14851,12 +14075,12 @@ export interface components {
             action: "BUY" | "SELL";
             /**
              * Client Order Id
-             * @description Optional caller-supplied UUID for idempotent retries. If a POST arrives with a client_order_id we've already seen, the original ack is returned and no second order is placed. Phase 3b feature; set None on Phase 3a callers.
+             * @description Historical submit identifier retained for journal compatibility. Ignored as authorization by the non-transmitting what-if route.
              */
             client_order_id?: string | null;
             /**
              * Con Id
-             * @description Optional IBKR contract identifier. Clerk exact-close recovery requires this to match the server-proved current position so the broker execution cannot resolve a same-symbol contract.
+             * @description Optional IBKR contract identifier used to qualify an exact contract for the non-transmitting what-if request.
              */
             con_id?: number | null;
             /**
@@ -14873,7 +14097,7 @@ export interface components {
             limit_price?: number | null;
             /**
              * Manual Order
-             * @description True only for the operator-facing manual paper-order endpoint path. The router server-mints a reserved manual/{operator}/v1 order_ref for this path; bots must provide their own learn-ai namespace.
+             * @description Historical manual-order marker retained for journal compatibility. The current IBKR API exposes no manual submit route.
              * @default false
              */
             manual_order?: boolean;
@@ -14884,7 +14108,7 @@ export interface components {
             multiplier?: number;
             /**
              * Order Ref
-             * @description ADR 0008 / Phase 5A. Deterministic ``{bot_order_namespace}:{intent_id}`` stamped on every managed broker order. The IBKR Gateway echoes it back on order callbacks; the runtime joins fills / cancels by it. ``None`` only on legacy / pre-Phase-5A callers; future durable-submit activation refuses requests without it.
+             * @description Optional historical ``{bot_order_namespace}:{intent_id}`` used to correlate what-if evidence with retained order history.
              */
             order_ref?: string | null;
             /**
@@ -15862,85 +15086,6 @@ export interface components {
             strike_coverage_score: number;
             /** Variance Contribution Synthetic */
             variance_contribution_synthetic: number;
-        };
-        /**
-         * JournalCurePreview
-         * @description Server-derived claim state shown before an operator creates a cure.
-         */
-        JournalCurePreview: {
-            /** Account Id */
-            account_id: string;
-            /** Bot Order Namespace */
-            bot_order_namespace: string;
-            /** Can Cure */
-            can_cure: boolean;
-            confirmation?: components["schemas"]["OperatorConfirmationCopy"] | null;
-            /** Journal Quantity */
-            journal_quantity: number;
-            /** Reason Code */
-            reason_code: string;
-            /** Required Adjustment Sign */
-            required_adjustment_sign?: ("positive" | "negative") | null;
-            /** Symbol */
-            symbol: string;
-        };
-        /**
-         * JournalCureReceipt
-         * @description The immutable adjustment row accepted by the Clerk journal.
-         */
-        JournalCureReceipt: {
-            /** Account Id */
-            account_id: string;
-            /** Bot Order Namespace */
-            bot_order_namespace: string;
-            /** Evidence Refs */
-            evidence_refs: string[];
-            /** Idempotency Key */
-            idempotency_key: string;
-            /** Journal Seq */
-            journal_seq: number;
-            /**
-             * Operator Attribution
-             * @default local-operator
-             * @constant
-             */
-            operator_attribution?: "local-operator";
-            /** Reason */
-            reason: string;
-            /** Recorded At Ms */
-            recorded_at_ms: number;
-            /** Request Provenance */
-            request_provenance: string;
-            /**
-             * Schema Version
-             * @default 1
-             * @constant
-             */
-            schema_version?: 1;
-            /** Signed Quantity */
-            signed_quantity: number;
-            /** Symbol */
-            symbol: string;
-        };
-        /**
-         * JournalCureRequest
-         * @description One operator request to reduce an already-attributed journal claim.
-         */
-        JournalCureRequest: {
-            /** Bot Order Namespace */
-            bot_order_namespace: string;
-            /** Evidence Refs */
-            evidence_refs: string[];
-            /** Idempotency Key */
-            idempotency_key: string;
-            /** Reason */
-            reason: string;
-            /** Request Provenance */
-            request_provenance: string;
-            /** Signed Quantity */
-            signed_quantity: number;
-            /** Symbol */
-            symbol: string;
         };
         /**
          * JournalRecoveryPosition
@@ -17625,175 +16770,6 @@ export interface components {
             volume: number;
         };
         /**
-         * OfflineReplayBotResult
-         * @description Current or terminal result for one isolated simulated bot account.
-         */
-        OfflineReplayBotResult: {
-            /** Bars Processed */
-            bars_processed: number;
-            /** Data Sha256 */
-            data_sha256: string;
-            /** Decisions Emitted */
-            decisions_emitted: number;
-            /** Failure Code */
-            failure_code?: string | null;
-            /** Failure Message */
-            failure_message?: string | null;
-            /** Fills Observed */
-            fills_observed: number;
-            /** Final Equity Usd */
-            final_equity_usd: string;
-            /** Open Position Quantity */
-            open_position_quantity: number;
-            /** Orders Submitted */
-            orders_submitted: number;
-            /** Run Id */
-            run_id: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "pending" | "running" | "completed" | "failed" | "stopped";
-            /**
-             * Symbol
-             * @enum {string}
-             */
-            symbol: "SPY" | "TSLA";
-        };
-        /**
-         * OfflineReplayCatalogResponse
-         * @description Recent completed sessions and the recommended launch date.
-         */
-        OfflineReplayCatalogResponse: {
-            /** Recommended Session Date Ms */
-            recommended_session_date_ms: number | null;
-            /** Sessions */
-            sessions: components["schemas"]["OfflineReplayCatalogSession"][];
-        };
-        /**
-         * OfflineReplayCatalogSession
-         * @description One selectable historical NYSE session.
-         */
-        OfflineReplayCatalogSession: {
-            /** Cached Symbols */
-            cached_symbols: ("SPY" | "TSLA")[];
-            /** Eligible */
-            eligible: boolean;
-            /** Session Close Ms */
-            session_close_ms: number;
-            /** Session Date Ms */
-            session_date_ms: number;
-            /** Session Open Ms */
-            session_open_ms: number;
-        };
-        /**
-         * OfflineReplayCommandRequest
-         * @description Media-style command for an active replay.
-         */
-        OfflineReplayCommandRequest: {
-            /**
-             * Action
-             * @enum {string}
-             */
-            action: "pause" | "resume" | "step" | "set_speed" | "stop";
-            /** Speed */
-            speed?: (1 | 10 | 60) | null;
-        };
-        /**
-         * OfflineReplayCreateRequest
-         * @description Launch one synchronized SPY/TSLA offline replay session.
-         */
-        OfflineReplayCreateRequest: {
-            /**
-             * Auto Fetch
-             * @default true
-             */
-            auto_fetch?: boolean;
-            /**
-             * Initial Cash Usd
-             * @default 100000
-             */
-            initial_cash_usd?: number | string;
-            /**
-             * Playback Minutes
-             * @default 60
-             * @enum {integer}
-             */
-            playback_minutes?: 30 | 60;
-            /** Session Date Ms */
-            session_date_ms: number;
-            /**
-             * Speed
-             * @default 60
-             * @enum {integer}
-             */
-            speed?: 1 | 10 | 60;
-            /** Symbols */
-            symbols?: ("SPY" | "TSLA")[];
-        };
-        /**
-         * OfflineReplaySessionListResponse
-         * @description Newest-first replay session listing.
-         */
-        OfflineReplaySessionListResponse: {
-            /** Sessions */
-            sessions: components["schemas"]["OfflineReplaySessionResponse"][];
-        };
-        /**
-         * OfflineReplaySessionResponse
-         * @description Durable replay-session projection consumed by the control panel.
-         */
-        OfflineReplaySessionResponse: {
-            /** Bots */
-            bots: components["schemas"]["OfflineReplayBotResult"][];
-            /** Completed At Ms */
-            completed_at_ms: number | null;
-            /** Created At Ms */
-            created_at_ms: number;
-            /** Failure Code */
-            failure_code?: string | null;
-            /** Failure Message */
-            failure_message?: string | null;
-            /** Playback End Ms */
-            playback_end_ms: number;
-            /**
-             * Playback Minutes
-             * @enum {integer}
-             */
-            playback_minutes: 30 | 60;
-            /** Playhead Ms */
-            playhead_ms: number | null;
-            /** Session Close Ms */
-            session_close_ms: number;
-            /** Session Date Ms */
-            session_date_ms: number;
-            /** Session Id */
-            session_id: string;
-            /** Session Open Ms */
-            session_open_ms: number;
-            /**
-             * Speed
-             * @enum {integer}
-             */
-            speed: 1 | 10 | 60;
-            /** Started At Ms */
-            started_at_ms: number | null;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "preparing" | "warming_up" | "running" | "paused" | "stopping" | "completed" | "stopped" | "failed" | "interrupted";
-            /**
-             * Strategy Key
-             * @constant
-             */
-            strategy_key: "ema_crossover_signal";
-            /** Symbols */
-            symbols: ("SPY" | "TSLA")[];
-            /** Warmup End Ms */
-            warmup_end_ms: number;
-        };
-        /**
          * OhlcvBar
          * @description Single OHLCV bar for indicator calculation
          */
@@ -18034,15 +17010,6 @@ export interface components {
             label?: string | null;
             /** Target */
             target?: string | null;
-        };
-        /**
-         * OperatorRecoveryFlattenRequest
-         * @description Provenance-bearing request for the Clerk's existing operator flatten lane.
-         */
-        OperatorRecoveryFlattenRequest: {
-            intent: components["schemas"]["AccountOwnerSubmitIntent-Input"];
-            /** Request Provenance */
-            request_provenance: string;
         };
         /**
          * OptionEntryLeg
@@ -18544,91 +17511,11 @@ export interface components {
             success: boolean;
         };
         /**
-         * OrderCancelResult
-         * @description The outcome of a cancel request the router shapes into its response.
-         *
-         *     ``status`` is ``acked`` when the broker accepted the cancel (HTTP 204) or
-         *     ``failed`` when it rejected it (a typed what/why, never a raw 500).
-         *     ``order_id`` always echoes the broker-assigned id the operator targeted, so
-         *     the ledger line is findable. ``owned`` reports whether this Clerk submitted
-         *     the canceled order — a foreign order still cancels (reducing exposure is the
-         *     safe direction), but the fact is surfaced honestly, not hidden.
-         */
-        OrderCancelResult: {
-            /** Account Id */
-            account_id: string;
-            /** Broker */
-            broker: string;
-            error?: components["schemas"]["OrderLegError"] | null;
-            /** Order Id */
-            order_id: string;
-            /** Order Ref */
-            order_ref?: string | null;
-            /** Owned */
-            owned: boolean;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "acked" | "failed";
-        };
-        /**
-         * OrderLegError
-         * @description A typed leg failure: a what/why the UI renders, never a raw 500.
-         */
-        OrderLegError: {
-            /** Message */
-            message: string;
-            /** Why */
-            why?: string | null;
-        };
-        /**
-         * OrderLegResult
-         * @description The per-leg outcome the router shapes into its response.
-         *
-         *     Keyed by ``status``:
-         *
-         *     - ``acked`` — the broker accepted the order; ``order`` is set.
-         *     - ``failed`` — the order definitively did not land; ``error`` is set.
-         *     - ``uncertain`` — the submit's HTTP outcome was unknown. Neither ``order``
-         *       nor ``error`` is authoritative yet; the intent is durably journaled as
-         *       ``submit_uncertain`` and a later replay / sweep will finish it. The
-         *       operator must not assume the order failed — it may still have landed.
-         *
-         *     ``order_ref`` is always present — an operator can find the intent in the
-         *     journal in every case, including uncertain.
-         */
-        OrderLegResult: {
-            error?: components["schemas"]["OrderLegError"] | null;
-            /** Intent Id */
-            intent_id: string;
-            order?: components["schemas"]["BrokerOrder"] | null;
-            /** Order Ref */
-            order_ref: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "acked" | "failed" | "uncertain";
-        };
-        /**
          * OrderSide
          * @description The two order sides (broker-neutral).
          * @enum {string}
          */
         OrderSide: "buy" | "sell";
-        /**
-         * OrderSubmitResult
-         * @description The whole request's outcome: one result per submitted leg, in order.
-         */
-        OrderSubmitResult: {
-            /** Account Id */
-            account_id: string;
-            /** Broker */
-            broker: string;
-            /** Results */
-            results: components["schemas"]["OrderLegResult"][];
-        };
         /**
          * PanelAction
          * @description One backend-presented action (§11).
@@ -18642,7 +17529,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
+            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
             /** Blockers */
             blockers: components["schemas"]["OperatorBlocker"][];
             /** Concurrency Token */
@@ -18671,7 +17558,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
+            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
             /** Concurrency Token */
             concurrency_token: string;
             /** Idempotency Key */
@@ -18694,7 +17581,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
+            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
             /** Applied */
             applied: boolean;
             /** Concurrency Token */
@@ -18737,7 +17624,7 @@ export interface components {
             /** Stations */
             stations: components["schemas"]["StationApplicability"][];
             /** Supported Action Ids */
-            supported_action_ids: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority")[];
+            supported_action_ids: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority")[];
         };
         /**
          * ParameterCandidateConfig
@@ -18956,9 +17843,9 @@ export interface components {
         PresentedOperatorAction: {
             /**
              * Action Id
-             * @enum {string}
+             * @constant
              */
-            action_id: "reconcile_now" | "cancel_exact" | "cancel_pending" | "flatten" | "pause" | "stop" | "end_day" | "resume" | "start" | "deploy";
+            action_id: "reconcile_now";
             /**
              * Availability
              * @enum {string}
@@ -18972,9 +17859,9 @@ export interface components {
             disposition: "fix_here" | "wait";
             /**
              * Effect Class
-             * @enum {string}
+             * @constant
              */
-            effect_class: "EVIDENCE_REFRESH" | "RISK_REDUCING_BROKER" | "RISK_REDUCING_LIFECYCLE" | "RISK_INCREASING_LIFECYCLE";
+            effect_class: "EVIDENCE_REFRESH";
             /**
              * Evidence Refs
              * @default []
@@ -19002,45 +17889,15 @@ export interface components {
             target: components["schemas"]["PresentedOperatorActionTarget"];
         };
         /**
-         * PresentedOperatorActionEffectReceipt
-         * @description Typed evidence returned by a broker-affecting presented action.
-         *
-         *     This is intentionally a compact cross-process receipt reference rather
-         *     than a second mutable broker model. The full Clerk journal receipt remains
-         *     canonical; these immutable identifiers let every UI host link the action
-         *     attempt, Clerk custody row, and any post-action reconciliation receipt.
-         */
-        PresentedOperatorActionEffectReceipt: {
-            /** Account Id */
-            account_id: string;
-            /** Clerk Journal Seq */
-            clerk_journal_seq?: number | null;
-            /** Intent Id */
-            intent_id?: string | null;
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "A0_CANCELLED" | "EXACT_CANCEL_CONFIRMED" | "RECOVERY_FLATTEN_SUBMITTED" | "ACCOUNT_FLATTEN_OBSERVED" | "FLATTEN_INTENTION_RECORDED";
-            /** Operation Id */
-            operation_id?: string | null;
-            /** Order Ref */
-            order_ref?: string | null;
-            /** Recorded At Ms */
-            recorded_at_ms: number;
-        };
-        /**
          * PresentedOperatorActionInvocation
          * @description The browser may return only this closed, signed-by-snapshot envelope.
          */
         PresentedOperatorActionInvocation: {
             /**
              * Action Id
-             * @enum {string}
+             * @constant
              */
-            action_id: "reconcile_now" | "cancel_exact" | "cancel_pending" | "flatten" | "pause" | "stop" | "end_day" | "resume" | "start" | "deploy";
-            /** Confirmation Token */
-            confirmation_token?: string | null;
+            action_id: "reconcile_now";
             /** Expires At Ms */
             expires_at_ms: number;
             /** Idempotency Key */
@@ -19095,10 +17952,9 @@ export interface components {
             action_attempt_id: string;
             /**
              * Action Id
-             * @enum {string}
+             * @constant
              */
-            action_id: "reconcile_now" | "cancel_exact" | "cancel_pending" | "flatten" | "pause" | "stop" | "end_day" | "resume" | "start" | "deploy";
-            effect_receipt?: components["schemas"]["PresentedOperatorActionEffectReceipt"] | null;
+            action_id: "reconcile_now";
             /** Finished Copy */
             finished_copy: string;
             reconciliation_receipt?: components["schemas"]["AccountReconciliationReceipt"] | null;
@@ -19110,47 +17966,15 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "ACCEPTED" | "IN_PROGRESS" | "PENDING_PROOF" | "OUTCOME_UNKNOWN";
+            state: "ACCEPTED" | "IN_PROGRESS" | "OUTCOME_UNKNOWN";
         };
         /**
          * PresentedOperatorActionTarget
-         * @description Closed account/intent/order identity bound into one action.
-         *
-         *     The browser may echo these fields only as part of the signed envelope. A
-         *     target kind makes the broker-affecting variants unambiguous: an exact
-         *     cancel cannot drift to a reused broker id, an A0 cancel cannot pretend a
-         *     broker write occurred, and a recovery flatten retains the exact server
-         *     authored namespace/position identity that must be re-proven at dispatch.
+         * @description The account identity bound into a reconciliation presentation.
          */
         PresentedOperatorActionTarget: {
             /** Account Id */
             account_id: string;
-            /** Expected Signed Quantity */
-            expected_signed_quantity?: number | null;
-            /**
-             * Kind
-             * @default ACCOUNT
-             * @enum {string}
-             */
-            kind?: "ACCOUNT" | "EXACT_ORDER" | "A0_INTENT" | "RECOVERY_NAMESPACE" | "ACCOUNT_EMERGENCY";
-            /** Recovery Intent Id */
-            recovery_intent_id?: string | null;
-            /** Recovery Order Ref */
-            recovery_order_ref?: string | null;
-            /** Run Id */
-            run_id?: string | null;
-            /** Strategy Instance Id */
-            strategy_instance_id?: string | null;
-            /** Target Con Id */
-            target_con_id?: number | null;
-            /** Target Intent Id */
-            target_intent_id?: string | null;
-            /** Target Intent Order Ref */
-            target_intent_order_ref?: string | null;
-            /** Target Order Id */
-            target_order_id?: number | null;
-            /** Target Order Ref */
-            target_order_ref?: string | null;
         };
         /**
          * PricePoint
@@ -19656,7 +18480,7 @@ export interface components {
              * Operation
              * @enum {string}
              */
-            operation: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
+            operation: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
             /** Ready */
             ready: boolean;
             /**
@@ -24899,39 +23723,6 @@ export interface operations {
             };
         };
     };
-    baseline_account_binding_ledger_endpoint_api_accounts__account_id__binding_ledger_baseline_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BindingLedgerBaselineReceipt"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     account_service_status_endpoint_api_accounts__account_id__clerk_get: {
         parameters: {
             query?: never;
@@ -24965,43 +23756,6 @@ export interface operations {
             };
         };
     };
-    restore_account_clerk_endpoint_api_accounts__account_id__clerk_restore_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AccountClerkRestoreRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AccountClerkRestoreReceipt"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     account_cockpit_endpoint_api_accounts__account_id__cockpit_get: {
         parameters: {
             query?: never;
@@ -25022,43 +23776,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountCockpitResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    emergency_flatten_account_endpoint_api_accounts__account_id__emergency_flatten_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["EmergencyFlattenRequest"];
-            };
-        };
-        responses: {
-            /** @description Raw emergency writes are retired; use a presented action. */
-            410: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PresentedOperatorActionRejectionResponse"];
                 };
             };
             /** @description Validation Error */
@@ -25253,116 +23970,6 @@ export interface operations {
             };
         };
     };
-    record_account_clerk_restart_smoke_endpoint_api_accounts__account_id__gate_promotion_restart_smoke_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AccountClerkRestartSmokeRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AccountClerkRestartSmokeResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    apply_journal_cure_endpoint_api_accounts__account_id__journal_cures_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["JournalCureRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["JournalCureReceipt"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    journal_cure_preview_endpoint_api_accounts__account_id__journal_cures_preview_get: {
-        parameters: {
-            query: {
-                bot_order_namespace: string;
-                symbol: string;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["JournalCurePreview"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     quarantine_account_clerk_journal_endpoint_api_accounts__account_id__journal_recovery_quarantine_post: {
         parameters: {
             query?: never;
@@ -25424,43 +24031,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JournalRecoveryReceipt"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    operator_recovery_flatten_endpoint_api_accounts__account_id__operator_recovery_flatten_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["OperatorRecoveryFlattenRequest"];
-            };
-        };
-        responses: {
-            /** @description Raw recovery writes are retired; use a presented action. */
-            410: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PresentedOperatorActionRejectionResponse"];
                 };
             };
             /** @description Validation Error */
@@ -25546,61 +24116,6 @@ export interface operations {
                 };
             };
             /** @description The presented action is stale, unavailable, or does not match its target. */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PresentedOperatorActionRejectionResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    execute_presented_recovery_action_endpoint_api_accounts__account_id__presented_actions_recovery_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PresentedOperatorActionInvocation"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PresentedOperatorActionResult"];
-                };
-            };
-            /** @description Action is durable, but current broker proof is still required. */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PresentedOperatorActionResult"];
-                };
-            };
-            /** @description The action is stale, unavailable, or no longer targets current evidence. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -25723,39 +24238,6 @@ export interface operations {
             };
         };
     };
-    backfill_false_crash_registry_rows_endpoint_api_accounts__account_id__registry_backfill_false_crashes_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AccountFalseCrashBackfillResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     account_safety_snapshot_endpoint_api_accounts__account_id__safety_snapshot_get: {
         parameters: {
             query?: never;
@@ -25829,6 +24311,7 @@ export interface operations {
     get_clerk_transaction_history_api_accounts__account_id__transactions_get: {
         parameters: {
             query?: {
+                broker?: "alpaca" | "ibkr";
                 limit?: number;
                 cursor?: string | null;
                 origin?: ("manual" | "strategy" | "external" | "unknown" | "recovery" | "emergency" | "shutdown" | "force_flat" | "other") | null;
@@ -25908,7 +24391,9 @@ export interface operations {
     };
     get_clerk_transaction_detail_api_accounts__account_id__transactions__transaction_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                broker?: "alpaca" | "ibkr";
+            };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;
             };
@@ -27139,41 +25624,6 @@ export interface operations {
             };
         };
     };
-    place_order_endpoint_api_broker_orders_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["IbkrOrderSpec"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["IbkrOrderAck"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_completed_orders_endpoint_api_broker_orders_completed_get: {
         parameters: {
             query?: never;
@@ -27291,39 +25741,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IbkrOrderWhatIfPreview"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    cancel_order_endpoint_api_broker_orders__order_id__delete: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                order_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["IbkrOpenOrder"];
                 };
             };
             /** @description Validation Error */
@@ -29118,43 +27535,6 @@ export interface operations {
             };
         };
     };
-    clear_clerk_hold_api_brokers__broker__clerk_clear_hold_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ClearHoldRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ClerkStatus"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_custody_diagnosis_api_brokers__broker__clerk_custody_diagnosis_get: {
         parameters: {
             query?: never;
@@ -29175,52 +27555,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CustodyDiagnosis"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    resolve_custody_api_brokers__broker__clerk_resolve_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CustodyResolutionRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CustodyResolutionReceipt"];
-                };
-            };
-            /** @description Conflict */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CustodyConflictResponse"];
                 };
             };
             /** @description Validation Error */
@@ -29361,77 +27695,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BrokerOrder"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    submit_orders_api_brokers__broker__orders_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BrokerOrderRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OrderSubmitResult"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    cancel_order_api_brokers__broker__orders__order_id__delete: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                order_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OrderCancelResult"];
                 };
             };
             /** @description Validation Error */
@@ -32142,145 +30405,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MarketStatusResponse"];
-                };
-            };
-        };
-    };
-    catalog_api_offline_replay_catalog_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OfflineReplayCatalogResponse"];
-                };
-            };
-        };
-    };
-    list_sessions_api_offline_replay_sessions_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OfflineReplaySessionListResponse"];
-                };
-            };
-        };
-    };
-    create_session_api_offline_replay_sessions_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["OfflineReplayCreateRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OfflineReplaySessionResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_session_api_offline_replay_sessions__session_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                session_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OfflineReplaySessionResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    command_api_offline_replay_sessions__session_id__commands_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                session_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["OfflineReplayCommandRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OfflineReplaySessionResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

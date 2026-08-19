@@ -3,11 +3,7 @@
     <div>
       <strong>Order ticket</strong>
       <p>
-        @if (manualTicketMode()) {
-          This SQLite ticket journals each ordered equity leg before it reaches Alpaca. A later leg always needs a new confirmation.
-        } @else {
-          Each leg is journaled separately before submission.
-        }
+        This SQLite ticket journals each ordered equity leg before it reaches Alpaca. A later leg always needs a new confirmation.
       </p>
     </div>
     <p-button
@@ -60,11 +56,10 @@
     <p-message severity="error">{{ error }}</p-message>
   }
 
-  @if (manualTicketMode()) {
-    @if (manualCapability()?.available === false) {
-      <p-message severity="warn">{{ manualCapability()?.unavailable?.message }}</p-message>
-    }
-    @if (manualTicket(); as ticket) {
+  @if (manualCapability()?.available === false) {
+    <p-message severity="warn">{{ manualCapability()?.unavailable?.message }}</p-message>
+  }
+  @if (manualTicket(); as ticket) {
       <section aria-live="polite" aria-label="Manual ticket status">
         <p-message severity="info">
           Ticket <code>{{ ticket.ticket_id }}</code> is {{ ticket.state | receiptLabel }}.
@@ -122,9 +117,6 @@
           </p-message>
         }
       </section>
-    }
-  } @else {
-    <app-alpaca-order-results [results]="results()" />
   }
 </div>
 

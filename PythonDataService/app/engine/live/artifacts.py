@@ -24,9 +24,9 @@ mid-write cannot corrupt previously durable rows. Pandas/pyarrow reads
 dataset directories, preserving the public artifact paths while avoiding
 whole-file in-place rewrites.
 
-The writers are wired into ``LiveEngine``. Native broker bars are published
-before conversion into engine bars; the remaining artifacts flush at each
-completed minute-bar state checkpoint.
+The former IBKR runtime wrote these formats. The writers remain because current
+read-side reconstruction and divergence tooling consume the durable artifact
+schemas; no registered IBKR execution path creates them.
 """
 
 from __future__ import annotations
@@ -670,9 +670,9 @@ def _write_segment_into_existing_dataset(
 
 @dataclass
 class LiveArtifactWriters:
-    """Convenience bundle — open all five writers under one ``run_dir``.
+    """Historical convenience bundle for all five writers under one ``run_dir``.
 
-    LiveEngine wire-in pattern:
+    Retired IBKR runtime wire-in pattern (kept as artifact-format provenance):
         writers = LiveArtifactWriters.open(run_dir)
         try:
             ...drive the live engine, calling

@@ -27,7 +27,6 @@
     "cancel_order",
     "cancel_verified_working_orders",
     "clean",
-    "clear_hold",
     "continue",
     "deploy",
     "flatten_stop",
@@ -39,7 +38,6 @@
     "prepare_safe_flatten",
     "rebuild_from_mirror",
     "reconcile_now",
-    "record_inventory_baseline",
     "recover_exact_execution_evidence",
     "reset_authority",
     "resolve_execution_coverage",
@@ -144,10 +142,6 @@
       "label": "Clean",
       "explanation": "The last sweep found the journal and the broker in agreement."
     },
-    "clear_hold": {
-      "label": "Clear hold",
-      "explanation": "Lift the account exposure hold once its root condition is healthy and freshly observed."
-    },
     "continue": {
       "label": "Continue",
       "explanation": "Let this paused live run evaluate bars again without changing its run ID."
@@ -191,10 +185,6 @@
     "reconcile_now": {
       "label": "Reconcile now",
       "explanation": "Run a reconciliation sweep against the broker immediately. Useful after a hold is cleared or after a manual order intervention."
-    },
-    "record_inventory_baseline": {
-      "label": "Recover inventory baseline",
-      "explanation": "Record the freshly observed broker positions as the account accounting cutover, retiring prior bot attribution without deleting history or assigning current positions to a bot."
     },
     "recover_exact_execution_evidence": {
       "label": "Recover exact execution evidence",

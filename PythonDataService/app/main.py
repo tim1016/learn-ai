@@ -18,7 +18,6 @@ from app.broker.ibkr.client import (
     set_client,
 )
 from app.config import settings
-from app.engine.live.desired_state import DesiredState
 from app.routers import (
     account_pnl_attribution,
     account_reconciliation,
@@ -52,7 +51,6 @@ from app.routers import (
     market_data_feed,
     market_monitor,
     monte_carlo,
-    offline_replay,
     options,
     portfolio,
     quantlib_options,
@@ -98,14 +96,12 @@ def _alpaca_clerk_configuration_is_valid() -> bool:
     """Clear stale runtime state, validate settings, and log only safe detail."""
     from pydantic import ValidationError
 
-    from app.broker.alpaca.clerk import set_alpaca_clerk
     from app.broker.alpaca.clerk.active_authority import set_active_clerk_runtime
     from app.broker.alpaca.config import (
         alpaca_configuration_error_detail,
         get_alpaca_settings,
     )
 
-    set_alpaca_clerk(None)
     set_active_clerk_runtime(None)
     try:
         get_alpaca_settings()
@@ -153,83 +149,44 @@ async def lifespan(app: FastAPI):
     # the IBKR gateway lifecycle). No keys → no clerk → the write endpoint
     # honestly reports "not configured".
     from app.broker.alpaca.broker import AlpacaBroker
-    from app.broker.alpaca.clerk import AlpacaClerk, get_clerk_settings, set_alpaca_clerk
     from app.broker.alpaca.clerk.active_authority import (
         ActiveClerkRuntime,
         select_active_clerk_runtime,
         set_active_clerk_runtime,
     )
+    from app.broker.alpaca.config import get_alpaca_settings
 
     alpaca_clerk_runtime: ActiveClerkRuntime | None = None
     sovereign_equity_snapshot_scheduler = None
     if _alpaca_clerk_configuration_is_valid():
         from app.broker.alpaca.clerk.stream_health import build_default_stream_health_gate
 
-        def _alpaca_bot_running() -> bool:
-            from app.services.bot_runner import get_bot_task_registry
-
-            registry = get_bot_task_registry()
-            return registry is not None and registry.any_running()
-
-        def _alpaca_desired_state(strategy_instance_id: str) -> DesiredState:
-            from app.services.bot_runner import get_bot_task_registry
-
-            registry = get_bot_task_registry()
-            if registry is None:
-                return DesiredState.STOPPED
-            return registry.desired_state(strategy_instance_id)
-
         alpaca_broker = AlpacaBroker()
+        alpaca_clerk_root = get_alpaca_settings().clerk_dir
         # S4 (#1262): the dual-health submission gate — market-data feed AND
         # trade_updates execution channel must both be healthy. Shared by
         # both authorities so the cutover never silently drops this
         # fail-closed check.
         alpaca_stream_health_gate = build_default_stream_health_gate()
 
-        def _legacy_clerk() -> AlpacaClerk:
-            return AlpacaClerk(
-                read=alpaca_broker,
-                trade=alpaca_broker,
-                stream_health=alpaca_stream_health_gate,
-                bot_running_probe=_alpaca_bot_running,
-                desired_state_probe=_alpaca_desired_state,
-            )
-
-        # Resolve the broker account before constructing either writer. The
-        # append-only activation fence then selects exactly one authority; an
-        # invalid activated authority installs no broker-mutation capability.
+        # Resolve the broker account before constructing the sole writer. The
+        # append-only activation fence must select SQLite; a missing or invalid
+        # activation installs no broker-mutation capability.
         alpaca_clerk_runtime = await select_active_clerk_runtime(
             read=alpaca_broker,
             trade=alpaca_broker,
-            artifacts_root=get_clerk_settings().dir,
-            legacy_factory=_legacy_clerk,
+            artifacts_root=alpaca_clerk_root,
             stream_health_gate=alpaca_stream_health_gate,
         )
         set_active_clerk_runtime(alpaca_clerk_runtime)
         if alpaca_clerk_runtime.clerk is not None:
-            set_alpaca_clerk(alpaca_clerk_runtime.clerk)
             logger.info(
                 "Alpaca Clerk ready (authority=%s).",
                 alpaca_clerk_runtime.authority_kind,
             )
 
-            # The rebuildable Postgres transaction view is a legacy projection.
-            # An activated SQLite account must not construct or drain it.
-            if alpaca_clerk_runtime.authority_kind == "legacy":
-                from app.services.clerk_transaction_projection import (
-                    project_alpaca_journal_best_effort,
-                )
-
-                if not isinstance(alpaca_clerk_runtime.clerk, AlpacaClerk):
-                    raise RuntimeError("Legacy authority did not install the legacy Clerk")
-                account_id, _journal = await alpaca_clerk_runtime.clerk._ensure_journal()
-                await project_alpaca_journal_best_effort(
-                    artifacts_root=get_clerk_settings().dir,
-                    account_id=account_id,
-                )
-
             # Capture/parsing stays shared, but durable lifecycle evidence is
-            # folded only into the sink selected with the active authority.
+            # folded only into the SQLite authority.
             from app.broker.alpaca.trade_updates import (
                 TradeUpdatesConsumer,
                 set_trade_updates_consumer,
@@ -261,7 +218,7 @@ async def lifespan(app: FastAPI):
         sovereign_equity_snapshot_scheduler = DailySovereignEquitySnapshotScheduler(
             writer=DailySovereignEquitySnapshotWriter(
                 store=DailySovereignEquitySnapshotStore(
-                    sovereign_equity_snapshot_database_path(get_clerk_settings().dir)
+                    sovereign_equity_snapshot_database_path(alpaca_clerk_root)
                 ),
                 account_snapshot_provider=alpaca_broker.get_account,
             )
@@ -326,20 +283,10 @@ async def lifespan(app: FastAPI):
         # Slice 3 / ADR 0011 amendment — the broker-activity publisher
         # registry's reconnect-recovery sweep rides the same chain as
         # the bar aggregator's resubscribe-all. Order inside the wrapped
-        # chain: bar aggregator first (restore market-data subscriptions
-        # so the engine sees prices again ASAP), then the broker-activity
-        # sweep (replay the day's executions to catch anything missed
-        # mid-drop).
+        # chain: bar aggregator first (restore read-side market-data
+        # subscriptions), then the broker-activity sweep (replay the day's
+        # executions to catch evidence missed mid-drop).
         #
-        # Slice 3 follow-up — ``run_recovery_chain`` wraps the whole
-        # chain in a process-wide submission halt
-        # (``any_recovery_active()`` returns True for the entire
-        # window). The per-publisher sweep flag alone only covers the
-        # sweep slice, so a slow bar resubscribe used to leave
-        # ``place_paper_order`` enabled and a submission landing
-        # mid-resubscribe could be picked up by the subsequent sweep and
-        # mis-authored as a ``reconnect_recovery`` row — the wrapper
-        # closes that hole.
         from app.services.broker_activity_publisher_registry import (
             get_publisher_registry as get_broker_activity_publisher_registry,
         )
@@ -348,17 +295,12 @@ async def lifespan(app: FastAPI):
         async def _sweep_broker_activity_after_reconnect() -> None:
             await get_broker_activity_publisher_registry().sweep_all_for_recovery()
 
-        async def _run_post_reconnect_recovery_chain() -> None:
-            await get_broker_activity_publisher_registry().run_recovery_chain(
-                [
-                    LIVE_BAR_AGGREGATOR.resubscribe_all,
-                    _sweep_broker_activity_after_reconnect,
-                ]
-            )
-
         monitor = AutoReconnectMonitor(
             ibkr_client,
-            recovery_callbacks=[_run_post_reconnect_recovery_chain],
+            recovery_callbacks=[
+                LIVE_BAR_AGGREGATOR.resubscribe_all,
+                _sweep_broker_activity_after_reconnect,
+            ],
         )
         monitor.start()
         set_monitor(monitor)
@@ -366,17 +308,6 @@ async def lifespan(app: FastAPI):
         artifacts_root = account_truth_artifacts_root(ibkr_settings)
         live_runs_root = Path(ibkr_settings.live_runs_root)
         reconciliation_service = AccountReconciliationService(artifacts_root=artifacts_root)
-
-        async def _ensure_connected_account_service(account_id: str) -> object:
-            from app.engine.live import host_daemon_client
-
-            health = await host_daemon_client.ensure_account_clerk(
-                ibkr_settings.live_runner_daemon_url,
-                account_id,
-                ibkr_host=ibkr_settings.host,
-            )
-            reconciliation_service.ensure_automatic_reconciliation(account_id=account_id)
-            return health
 
         account_truth_refresh_loop = AccountTruthRefreshLoop(
             client=ibkr_client,
@@ -387,7 +318,6 @@ async def lifespan(app: FastAPI):
                 live_runs_root,
                 account_id=account_id,
             ),
-            account_service_ensurer=_ensure_connected_account_service,
         )
         account_truth_refresh_loop.start()
 
@@ -426,9 +356,11 @@ async def lifespan(app: FastAPI):
     # closed): the Clerk recovers and reconciles SQLite authority first; runner
     # restoration candidates are then projected into typed interrupted evidence.
     # Starts stay refused while any intent remains uncertain.
-    from app.broker.alpaca.clerk import get_alpaca_clerk
-
-    _boot_clerk = get_alpaca_clerk()
+    _boot_clerk = (
+        alpaca_clerk_runtime.clerk
+        if alpaca_clerk_runtime is not None
+        else None
+    )
     if _boot_clerk is not None:
         async def _unresolved_intents() -> int:
             return await _boot_clerk.unresolved_effect_count()
@@ -471,7 +403,6 @@ async def lifespan(app: FastAPI):
         # Stop the Alpaca reconciliation sweep + live-lifecycle consumer first —
         # cancel their background tasks (and the consumer's socket) cleanly,
         # independent of the IBKR teardown.
-        from app.broker.alpaca.clerk import set_alpaca_clerk
         from app.broker.alpaca.clerk.active_authority import set_active_clerk_runtime
         from app.broker.alpaca.trade_updates import (
             get_trade_updates_consumer,
@@ -482,7 +413,6 @@ async def lifespan(app: FastAPI):
         if alpaca_trade_updates is not None:
             await alpaca_trade_updates.stop()
             set_trade_updates_consumer(None)
-        set_alpaca_clerk(None)
         set_active_clerk_runtime(None)
         if alpaca_clerk_runtime is not None:
             await alpaca_clerk_runtime.close()
@@ -601,11 +531,6 @@ app.include_router(dataset.router, prefix="/api/dataset", tags=["dataset"])
 app.include_router(data_quality.router, prefix="/api/data-quality", tags=["data-quality"])
 app.include_router(volatility.router, prefix="/api/volatility", tags=["volatility"])
 app.include_router(engine.router, prefix="/api/engine", tags=["engine"])
-app.include_router(
-    offline_replay.router,
-    prefix="/api/offline-replay",
-    tags=["offline-replay"],
-)
 # LEAN Sidecar Lab — data-plane API in front of the launcher service.
 # Phase 2a exposes only the trusted sample; Phase 3+ unlocks user
 # algorithm source. See docs/architecture/lean-sidecar-lab.md.

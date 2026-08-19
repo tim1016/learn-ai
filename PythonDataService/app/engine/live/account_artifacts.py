@@ -77,7 +77,7 @@ class AccountEventSequenceRepair:
 
 
 class AccountClerkLeaseUnavailableError(RuntimeError):
-    """Raised when no current clerk lease can authorize an account write."""
+    """Raised when no historical clerk lease satisfies a read-side evidence gate."""
 
     def __init__(self, *, account_id: str, reason: str) -> None:
         super().__init__(f"account clerk lease unavailable for {account_id}: {reason}")
@@ -159,7 +159,7 @@ class AccountFreezeEvidence(BaseModel):
 
 
 class AccountOwnerGeneration(BaseModel):
-    """Current AccountOwner fencing generation for one account."""
+    """Persisted generation evidence from the retired AccountOwner writer."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -172,7 +172,7 @@ class AccountOwnerGeneration(BaseModel):
 
 
 class AccountClerkGeneration(BaseModel):
-    """Current Account Clerk fencing generation for one account."""
+    """Persisted generation evidence from the retired account-Clerk writer."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -185,13 +185,10 @@ class AccountClerkGeneration(BaseModel):
 
 
 class AccountClerkLease(BaseModel):
-    """A daemon-supervised clerk's renewable account-scoped lease.
+    """A historical daemon-supervised account-Clerk lease.
 
-    ``ibkr_client_id`` is written by the Clerk that owns the broker session.
-    It lets a restarted daemon reserve the real session identity while it
-    adopts the Clerk instead of guessing from its current configured pool.
-    ``None`` is retained only to parse pre-field leases; callers must not
-    adopt a live Clerk without the durable identity.
+    ``ibkr_client_id`` identifies the broker session that authored the
+    evidence. ``None`` remains accepted only for pre-field artifacts.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -316,9 +313,7 @@ def account_artifact_file_path(
 def list_account_artifact_ids(artifacts_root: Path) -> tuple[str, ...]:
     """Return the strict durable-account directory inventory without repairing it."""
 
-    accounts_root = Path(
-        os.path.realpath(os.path.join(os.fspath(artifacts_root), "accounts"))
-    )
+    accounts_root = Path(os.path.realpath(os.path.join(os.fspath(artifacts_root), "accounts")))
     try:
         children = tuple(sorted(accounts_root.iterdir(), key=lambda path: path.name))
     except FileNotFoundError:
@@ -368,9 +363,7 @@ def _existing_account_artifact_file_path(
     safe_account_id = _safe_account_path_segment(account_id)
     if filename != os.path.basename(filename):
         raise AccountArtifactError(f"invalid account artifact filename: {filename!r}")
-    accounts_root = Path(
-        os.path.realpath(os.path.join(os.fspath(artifacts_root), "accounts"))
-    )
+    accounts_root = Path(os.path.realpath(os.path.join(os.fspath(artifacts_root), "accounts")))
     try:
         account_root = next(
             child
@@ -384,9 +377,7 @@ def _existing_account_artifact_file_path(
     for artifact_path in account_root.iterdir():
         if artifact_path.name == filename:
             if artifact_path.is_symlink():
-                raise AccountArtifactError(
-                    f"artifact path traversal detected for account_id: {account_id!r}"
-                )
+                raise AccountArtifactError(f"artifact path traversal detected for account_id: {account_id!r}")
             return artifact_path if artifact_path.is_file() else None
     return None
 
@@ -605,9 +596,7 @@ def record_account_recovery_clearance(
         )
     else:
         assert audited_override is not None
-        candidate_cleared_at_ms = (
-            audited_override.approved_at_ms if cleared_at_ms is None else cleared_at_ms
-        )
+        candidate_cleared_at_ms = audited_override.approved_at_ms if cleared_at_ms is None else cleared_at_ms
         if audited_override.valid_until_ms < candidate_cleared_at_ms:
             raise AccountArtifactError("audited override is stale")
         if audited_override.approved_decision == "freeze":
@@ -759,9 +748,7 @@ def read_account_events_with_snapshot(
     """
 
     events = read_account_events(artifacts_root, account_id)
-    raw = b"".join(
-        json.dumps(event, separators=(",", ":"), sort_keys=True).encode() + b"\n" for event in events
-    )
+    raw = b"".join(json.dumps(event, separators=(",", ":"), sort_keys=True).encode() + b"\n" for event in events)
     return events, raw
 
 
@@ -847,9 +834,7 @@ def read_account_events_tolerant_with_hash(artifacts_root: Path, account_id: str
     """Read tolerant account events and hash the same byte snapshot."""
 
     events = _read_legacy_account_events(artifacts_root, account_id, tolerant=True)
-    raw = b"".join(
-        json.dumps(event, separators=(",", ":"), sort_keys=True).encode() + b"\n" for event in events
-    )
+    raw = b"".join(json.dumps(event, separators=(",", ":"), sort_keys=True).encode() + b"\n" for event in events)
     return events, _sha256_bytes(raw) if raw else None
 
 
@@ -885,12 +870,17 @@ def _parse_account_event_bytes(path: Path, raw: bytes, *, tolerant: bool) -> lis
         except json.JSONDecodeError as exc:
             if not tolerant:
                 raise AccountArtifactError(f"malformed account event row {line_no} in {path}: {exc}") from exc
-            logger.warning("Skipping malformed account event row", extra={"path": str(path), "line_no": line_no, "error": str(exc)})
+            logger.warning(
+                "Skipping malformed account event row", extra={"path": str(path), "line_no": line_no, "error": str(exc)}
+            )
             continue
         if not isinstance(row, dict):
             if not tolerant:
                 raise AccountArtifactError(f"non-object account event row {line_no} in {path}: {type(row).__name__}")
-            logger.warning("Skipping non-object account event row", extra={"path": str(path), "line_no": line_no, "row_type": type(row).__name__})
+            logger.warning(
+                "Skipping non-object account event row",
+                extra={"path": str(path), "line_no": line_no, "row_type": type(row).__name__},
+            )
             continue
         events.append(row)
     return events
@@ -944,32 +934,6 @@ def append_account_event(
     )
 
 
-def write_account_owner_generation(
-    artifacts_root: Path,
-    generation: AccountOwnerGeneration,
-) -> Path:
-    path = _account_artifact_file_path(
-        artifacts_root,
-        generation.account_id,
-        ACCOUNT_OWNER_GENERATION_FILENAME,
-    )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    _atomic_write_json(path, generation.model_dump())
-    _append_account_event(
-        artifacts_root,
-        generation.account_id,
-        {
-            "event_type": "account_owner_generation_recorded",
-            "account_id": generation.account_id,
-            "generation": generation.generation,
-            "phase": generation.phase,
-            "recorded_at_ms": generation.recorded_at_ms,
-            "source": generation.source,
-        },
-    )
-    return path
-
-
 def read_account_owner_generation(
     artifacts_root: Path,
     account_id: str,
@@ -987,53 +951,6 @@ def read_account_owner_generation(
     return generation
 
 
-def advance_account_clerk_generation(
-    artifacts_root: Path,
-    account_id: str,
-    *,
-    phase: Literal["accepting", "reconnecting", "draining", "frozen"],
-    recorded_at_ms: int,
-    source: str,
-) -> AccountClerkGeneration:
-    """Advance the clerk fence only when clerk authority is (re)acquired."""
-
-    path = _account_artifact_file_path(
-        artifacts_root,
-        account_id,
-        ACCOUNT_CLERK_GENERATION_FILENAME,
-    )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with _file_lock(path):
-        existing = (
-            AccountClerkGeneration.model_validate_json(path.read_text(encoding="utf-8"))
-            if path.is_file()
-            else None
-        )
-        if existing is not None and existing.account_id != account_id:
-            raise AccountArtifactError("account clerk generation belongs to another account")
-        generation = AccountClerkGeneration(
-            account_id=account_id,
-            generation=(existing.generation + 1 if existing is not None else 1),
-            phase=phase,
-            recorded_at_ms=recorded_at_ms,
-            source=source,
-        )
-        _atomic_write_json_locked(path, generation.model_dump())
-    _append_account_event(
-        artifacts_root,
-        account_id,
-        {
-            "event_type": "account_clerk_generation_recorded",
-            "account_id": account_id,
-            "generation": generation.generation,
-            "phase": generation.phase,
-            "recorded_at_ms": generation.recorded_at_ms,
-            "source": generation.source,
-        },
-    )
-    return generation
-
-
 def read_account_clerk_generation(artifacts_root: Path, account_id: str) -> AccountClerkGeneration | None:
     path = _existing_account_artifact_file_path(
         artifacts_root,
@@ -1046,17 +963,6 @@ def read_account_clerk_generation(artifacts_root: Path, account_id: str) -> Acco
     if generation.account_id != account_id:
         raise AccountArtifactError("account clerk generation belongs to another account")
     return generation
-
-
-def write_account_clerk_lease(artifacts_root: Path, lease: AccountClerkLease) -> Path:
-    path = _account_artifact_file_path(
-        artifacts_root,
-        lease.account_id,
-        ACCOUNT_CLERK_LEASE_FILENAME,
-    )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    _atomic_write_json(path, lease.model_dump())
-    return path
 
 
 def read_account_clerk_lease(artifacts_root: Path, account_id: str) -> AccountClerkLease | None:
@@ -1079,11 +985,11 @@ def require_active_account_clerk_generation(
     *,
     now_ms: int,
 ) -> int:
-    """Return the sole write-authorizing clerk generation for ``account_id``.
+    """Return a clerk generation backed by matching, unexpired lease evidence.
 
     A generation file alone is deliberately insufficient: a crashed or reaped
-    clerk leaves it behind.  The broker boundary therefore requires a matching,
-    unexpired RUNNING lease as well as the durable generation record.
+    clerk leaves it behind. Surviving evidence readers therefore require a
+    matching, unexpired RUNNING lease as well as the generation record.
     """
 
     generation = read_account_clerk_generation(artifacts_root, account_id)
@@ -1122,7 +1028,7 @@ def read_active_accepting_account_clerk_generation(
     *,
     now_ms: int,
 ) -> AccountClerkGeneration | None:
-    """Return the active Clerk generation only while it is accepting work.
+    """Return generation evidence only for a Clerk recorded as accepting.
 
     Lease/artifact failures intentionally propagate so each boundary can
     preserve its existing fail-closed logging or unreadable-evidence mapping.
@@ -1340,8 +1246,7 @@ def _restart_intensity_binding_events(
             "recorded_at_ms": binding.recorded_at_ms,
         }
         for binding in read_account_instance_registry(artifacts_root, account_id)
-        if binding.lifecycle_state == "ACTIVE"
-        and window_start_ms <= binding.recorded_at_ms <= now_ms
+        if binding.lifecycle_state == "ACTIVE" and window_start_ms <= binding.recorded_at_ms <= now_ms
     ]
 
 
@@ -1493,9 +1398,7 @@ def _append_account_event(
     return True
 
 
-def _producer_for_account_event(event_type: str) -> Literal[
-    "bot", "clerk_supervisor", "daemon", "data_plane"
-]:
+def _producer_for_account_event(event_type: str) -> Literal["bot", "clerk_supervisor", "daemon", "data_plane"]:
     """Route former shared events to the process that owns their operation."""
 
     if event_type.startswith(("account_instance_binding", "account_binding_retirement")):
@@ -1718,7 +1621,6 @@ _REGISTRY_COMPAT_EXPORTS = frozenset(
         "index_account_instance_bindings",
         "latest_account_instance_binding",
         "read_account_instance_registry",
-        "write_account_instance_binding",
     }
 )
 
@@ -1757,7 +1659,6 @@ _LOCAL_EXPORTS = [
     "RestartIntensityPolicy",
     "account_artifacts_root",
     "list_account_artifact_ids",
-    "advance_account_clerk_generation",
     "append_account_event",
     "clear_account_freeze",
     "evaluate_restart_intensity",
@@ -1780,8 +1681,6 @@ _LOCAL_EXPORTS = [
     "resolve_account_event_ts_ms",
     "record_account_recovery_clearance",
     "write_account_freeze",
-    "write_account_clerk_lease",
-    "write_account_owner_generation",
 ]
 
 __all__ = [*_LOCAL_EXPORTS, *_REGISTRY_COMPAT_EXPORTS]

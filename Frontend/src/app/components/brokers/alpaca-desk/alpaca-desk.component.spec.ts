@@ -201,7 +201,7 @@ describe('AlpacaDeskComponent', () => {
     expect(await screen.findByRole('heading', { name: 'Deploy a bot' })).toBeTruthy();
   });
 
-  it('opens a matching manual-order deep link under legacy authority', async () => {
+  it('blocks a matching manual-order deep link when SQLite authority is unavailable', async () => {
     const brokers = brokerService();
     brokers.getSqliteManualOrderCapability.mockRejectedValue(
       new HttpErrorResponse({ status: 409 }),
@@ -209,8 +209,8 @@ describe('AlpacaDeskComponent', () => {
 
     await renderDesk(manualTicketQuery({ symbol: 'spy' }), brokers);
 
-    expect(await screen.findByText('Create Alpaca order')).toBeTruthy();
-    expect(await screen.findByDisplayValue('SPY')).toBeTruthy();
+    expect(await screen.findByText(/SQLite order authority is unavailable/)).toBeTruthy();
+    expect(screen.queryByText('Create Alpaca order')).toBeNull();
   });
 
   it('refuses a manual-order link for a different account', async () => {

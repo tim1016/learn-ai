@@ -83,14 +83,8 @@ class IbkrSettings(BaseSettings):
     # failure. Each attempt is a 5-second timeout inside ib_async.
     connect_attempts: int = Field(default=3, ge=1, le=10)
 
-    # Operator-controlled lockdown for order placement. Enforced in
-    # ``orders._enforce_paper_safety`` (Layer 0) — when True, every call
-    # to ``place_paper_order`` raises ``OrderRefusedError`` before any
-    # contract is built. Also passed to ``ib_async.IB.connectAsync`` for
-    # its startup-fetch optimization, but note that flag does NOT block
-    # placeOrder server-side; the real gate is in our Python code.
-    # Default True — operators must explicitly set ``IBKR_READONLY=false``
-    # in .env to enable Phase 3 order-placement endpoints.
+    # Passed to ``ib_async.IB.connectAsync`` so the retained IBKR session is
+    # read-only at the upstream client as well as at the application surface.
     readonly: bool = True
 
     # Tick stream → Parquet archive. Default OFF; flip to True once the
@@ -112,15 +106,12 @@ class IbkrSettings(BaseSettings):
     # Created lazily under ``{persist_dir}/{date}/{topic}.parquet``.
     persist_dir: str = "/data/ibkr-ticks"
 
-    # Enable/disable the IBKR client entirely. Set False when a host-venv
-    # cmd_start process owns the IBKR session (client_id=42); the container
-    # stays up to serve the live-runs artifact router but does not connect.
+    # Enable/disable the read-only IBKR data-plane client entirely.
     broker_enabled: bool = True
 
     # Auto-connect during FastAPI startup. When False, the lifespan
-    # instantiates the IbkrClient but does NOT call connect(); the operator
-    # is expected to drive the lifecycle from the Status page via
-    # ``POST /api/broker/connect``. ``broker_enabled=false`` takes precedence —
+    # instantiates the IbkrClient but does NOT call connect().
+    # ``broker_enabled=false`` takes precedence —
     # this flag has no effect when the broker subsystem is disabled.
     connect_on_startup: bool = True
 

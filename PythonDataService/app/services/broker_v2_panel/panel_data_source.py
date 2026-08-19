@@ -16,10 +16,7 @@ import logging
 from typing import Literal
 
 from app.broker.alpaca.clerk import get_alpaca_clerk
-from app.broker.alpaca.clerk.clerk import InventoryBaselineRefusedError
-from app.broker.alpaca.clerk.decision_journal import DecisionJournal, DecisionReceipt
-from app.broker.alpaca.clerk.fills import FillRecord, project_instance_fills
-from app.broker.alpaca.clerk.journal import OrderJournal, get_clerk_settings
+from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.models import (
     ClerkStatus,
     EffectOperationState,
@@ -49,7 +46,6 @@ from app.schemas.broker_v2_panel import (
 from app.schemas.run_admission import RunAdmissionDecision
 from app.services.bot_runner import BotRunnerError, get_bot_task_registry
 from app.services.broker_account_snapshot import resolve_broker_account_snapshot
-from app.services.broker_v2_panel.account_projection_owner import get_or_create_owner
 from app.services.broker_v2_panel.action_execution_service import (
     ActionNotAvailableError,
     ActionPerformer,
@@ -62,16 +58,12 @@ from app.services.broker_v2_panel.catalog_projection_service import (
 from app.services.broker_v2_panel.market_pulse import build_market_pulse
 from app.services.broker_v2_panel.panel_profile_service import panel_profile_for
 from app.services.broker_v2_panel.panel_projection_service import (
-    build_clerk_card,
     build_panel,
-    channel_health_fresh,
-    compute_revision,
 )
 from app.services.broker_v2_panel.paper_deploy_service import (
     build_alpaca_paper_deploy_receipt,
     build_alpaca_paper_deploy_view,
 )
-from app.services.broker_v2_panel.presented_actions import build_roster_action
 from app.services.broker_v2_panel.sqlite_panel_adapter import (
     adapt_sqlite_panel,
 )
@@ -84,8 +76,6 @@ from app.services.broker_v2_panel.sqlite_panel_source import (
     read_sqlite_clerk_status,
     read_sqlite_decision_receipts,
     read_sqlite_panel_evidence,
-    sqlite_authority_active,
-    sqlite_authority_selected_but_unavailable,
 )
 from app.services.strategy_validation_manifest import (
     StrategyValidationManifestError,
@@ -187,38 +177,6 @@ async def validate_account_scope(broker: str, account_id: str, sid: str) -> None
     _bot_status(broker, sid)
 
 
-def _read_order_journal(broker: str, account_id: str) -> list[OrderJournalEntry]:
-    if sqlite_authority_active(broker) or sqlite_authority_selected_but_unavailable(broker):
-        return []
-    journal = OrderJournal(account_id=account_id, root=get_clerk_settings().dir)
-    owner = get_or_create_owner(account_id, broker)
-    return owner.refresh_journal(journal)
-
-
-def _latest_decision(account_id: str, sid: str) -> DecisionReceipt | None:
-    journal = DecisionJournal(account_id=account_id, sid=sid, root=get_clerk_settings().dir)
-    tail = journal.tail(1)
-    return tail[-1] if tail else None
-
-
-def _recent_decisions(account_id: str, sid: str, limit: int = 8) -> list[DecisionReceipt]:
-    journal = DecisionJournal(account_id=account_id, sid=sid, root=get_clerk_settings().dir)
-    return journal.tail(limit)
-
-
-def _bot_statuses(broker: str) -> list[BotStatusView]:
-    registry = get_bot_task_registry()
-    if registry is None:
-        raise PanelUnavailableError(
-            "The bot runner is not available.",
-            detail="The service is still starting or has shut down.",
-        )
-    try:
-        return registry.list_bots(broker)
-    except BotRunnerError as exc:
-        raise PanelUnavailableError(str(exc), detail=exc.detail) from exc
-
-
 def _bot_status(broker: str, sid: str) -> BotStatusView:
     registry = get_bot_task_registry()
     if registry is None:
@@ -253,18 +211,12 @@ async def _clerk_status(*, symbol: str | None = None) -> ClerkStatus:
         sqlite_status = await read_sqlite_clerk_status(symbol=symbol)
     except (RuntimeError, ValueError) as exc:
         raise PanelUnavailableError(str(exc)) from exc
-    if sqlite_status is not None:
-        return sqlite_status
-    clerk = get_alpaca_clerk()
-    if clerk is None:
+    if sqlite_status is None:
         raise PanelUnavailableError(
-            "Alpaca order management is not configured.",
-            detail="Set Alpaca paper credentials in .env and restart the service.",
+            "The activated SQLite Clerk is unavailable.",
+            detail="Restore or reactivate the account-scoped SQLite authority.",
         )
-    try:
-        return await clerk.status()
-    except BrokerError as exc:
-        raise PanelUnavailableError("The clerk status could not be read.", detail=exc.detail) from exc
+    return sqlite_status
 
 
 async def _validate_account(broker: str, account_id: str) -> str:
@@ -279,19 +231,6 @@ async def _validate_account(broker: str, account_id: str) -> str:
 
 async def validate_panel_account_scope(broker: str, account_id: str) -> str:
     return await _validate_account(broker, account_id)
-
-
-def read_legacy_chart_fills(
-    broker: str,
-    account_id: str,
-    strategy_instance_id: str,
-) -> tuple[FillRecord, ...]:
-    return project_instance_fills(strategy_instance_id, _read_order_journal(broker, account_id))
-
-
-def read_legacy_chart_status(broker: str, strategy_instance_id: str) -> BotStatusView:
-    """Read inactive-legacy identity only for the compatibility chart path."""
-    return _bot_status(broker, strategy_instance_id)
 
 
 async def get_authority_facts(
@@ -499,60 +438,12 @@ async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:
             "The activated SQLite bot roster could not be projected.",
             detail=str(exc),
         ) from exc
-    if sqlite_catalog is not None:
-        return sqlite_catalog
-
-    statuses = _bot_statuses(broker)
-    entries = _read_order_journal(broker, resolved)
-    sids = [status.strategy_instance_id for status in statuses]
-    decisions = {sid: _latest_decision(resolved, sid) for sid in sids}
-    owner = get_or_create_owner(resolved, broker)
-    owner.sync(entries, sids, decisions=decisions)
-    rows = owner.snapshot_catalog(statuses)
-    now_ms = now_ms_utc()
-    try:
-        clerk_status = await _clerk_status()
-    except PanelUnavailableError as exc:
-        logger.warning(
-            "broker panel roster actions are failing closed because Clerk posture is unavailable",
-            extra={"broker": broker, "account_id": account_id, "detail": exc.detail},
+    if sqlite_catalog is None:
+        raise PanelUnavailableError(
+            "The activated SQLite bot roster is unavailable.",
+            detail="Restore or reactivate the account-scoped SQLite authority.",
         )
-        clerk_status = None
-    clerk = (
-        build_clerk_card(clerk_status, now_ms)
-        if clerk_status is not None
-        else None
-    )
-    profile = panel_profile_for(broker)
-    flatten_supported = profile.flatten_supported if profile is not None else False
-    clerk_channel_fresh = (
-        channel_health_fresh(clerk_status, now_ms)
-        if clerk_status is not None
-        else False
-    )
-    status_by_sid = {status.strategy_instance_id: status for status in statuses}
-    row_actions: list[BotCatalogView] = []
-    for row in rows:
-        status = status_by_sid[row.strategy_instance_id]
-        decision = decisions[row.strategy_instance_id]
-        revision = compute_revision(
-            journal_len=len(entries),
-            last_transition_at_ms=status.last_transition_at_ms,
-            desired_state=status.desired_state,
-            hold_active=clerk_status.hold.active if clerk_status is not None else False,
-            last_decision_at_ms=decision.ts_ms if decision is not None else None,
-        )
-        action = build_roster_action(
-            status,
-            clerk,
-            revision=revision,
-            flatten_supported=flatten_supported,
-            channel_fresh=clerk_channel_fresh,
-            exposure=dict(row.exposure),
-            account_id=resolved,
-        )
-        row_actions.append(row.model_copy(update={"row_action": action}))
-    return row_actions
+    return sqlite_catalog
 
 
 async def _get_panel_with_entries(
@@ -563,34 +454,27 @@ async def _get_panel_with_entries(
     transaction_ref: str | None = None,
     now_ms: int | None = None,
 ) -> tuple[BotPanelView, list[OrderJournalEntry], tuple[FillRecord, ...] | None]:
-    """Build one panel and return the exact fill set used by its chart."""
+    """Build one SQLite-backed panel and return its exact chart fill set."""
     resolved = await _validate_account(broker, account_id)
-    if sqlite_authority_selected_but_unavailable(broker):
+    captured_now_ms = now_ms if now_ms is not None else now_ms_utc()
+    try:
+        evidence = await read_sqlite_panel_evidence(
+            broker,
+            resolved,
+            sid,
+            now_ms=captured_now_ms,
+        )
+    except (SqlitePanelBotNotFound, SqlitePanelEconomicUnavailable) as exc:
+        raise PanelUnavailableError(
+            "The activated SQLite panel evidence is unavailable.",
+            detail=str(exc),
+        ) from exc
+    if evidence is None:
         raise PanelUnavailableError(
             "The activated SQLite panel authority is unavailable.",
-            detail="Repair the selected SQLite authority; legacy journal projections are not used.",
+            detail="Restore or reactivate the account-scoped SQLite authority.",
         )
-    sqlite_active = sqlite_authority_active(broker)
-    captured_now_ms = now_ms if now_ms is not None else now_ms_utc()
-    if sqlite_active:
-        try:
-            evidence = await read_sqlite_panel_evidence(
-                broker,
-                resolved,
-                sid,
-                now_ms=captured_now_ms,
-            )
-        except (SqlitePanelBotNotFound, SqlitePanelEconomicUnavailable) as exc:
-            raise PanelUnavailableError(
-                "The activated SQLite panel evidence is unavailable.",
-                detail=str(exc),
-            ) from exc
-        if evidence is None:
-            raise UnknownBotError(f"No SQLite custody projection exists for bot '{sid}'.")
-        status = evidence.status
-    else:
-        evidence = None
-        status = _bot_status(broker, sid)
+    status = evidence.status
     registry = get_bot_task_registry()
     if registry is None:
         raise PanelUnavailableError(
@@ -613,63 +497,42 @@ async def _get_panel_with_entries(
                 )
         # Preview can reconcile and advance Clerk evidence. Read all projection
         # inputs afterwards so this response is one post-admission evidence cut.
-        if sqlite_active:
-            try:
-                evidence = await read_sqlite_panel_evidence(
-                    broker,
-                    resolved,
-                    sid,
-                    now_ms=captured_now_ms,
-                )
-            except (SqlitePanelBotNotFound, SqlitePanelEconomicUnavailable) as exc:
-                raise PanelUnavailableError(
-                    "The activated SQLite panel evidence is unavailable.",
-                    detail=str(exc),
-                ) from exc
-            if evidence is None:
-                raise UnknownBotError(f"No SQLite custody projection exists for bot '{sid}'.")
-            status = evidence.status
-        else:
-            status = _bot_status(broker, sid)
-    projection = evidence.projection if evidence is not None else None
-    session_fills = evidence.economics.session_fills if evidence is not None else None
-    # Active SQLite panels must not even construct legacy journal evidence.
-    entries = [] if sqlite_active else _read_order_journal(broker, resolved)
-    binding = registry.binding_for_control(broker, sid)
-    clerk_status = await _clerk_status(symbol=binding.symbol)
-    if sqlite_active:
         try:
-            decisions = read_sqlite_decision_receipts(broker, sid)
-        except SqlitePanelDecisionUnavailable as exc:
+            evidence = await read_sqlite_panel_evidence(
+                broker,
+                resolved,
+                sid,
+                now_ms=captured_now_ms,
+            )
+        except (SqlitePanelBotNotFound, SqlitePanelEconomicUnavailable) as exc:
             raise PanelUnavailableError(
-                "The activated SQLite decision evidence is unavailable.",
+                "The activated SQLite panel evidence is unavailable.",
                 detail=str(exc),
             ) from exc
-        if decisions is None:
+        if evidence is None:
             raise PanelUnavailableError(
-                "The activated SQLite decision evidence is unavailable.",
-                detail="The SQLite authority became unavailable during panel projection.",
+                "The activated SQLite panel authority became unavailable.",
             )
-    else:
-        decisions = _recent_decisions(resolved, sid)
+        status = evidence.status
+    projection = evidence.projection
+    session_fills = evidence.economics.session_fills
+    entries: list[OrderJournalEntry] = []
+    binding = registry.binding_for_control(broker, sid)
+    clerk_status = await _clerk_status(symbol=binding.symbol)
+    try:
+        decisions = read_sqlite_decision_receipts(broker, sid)
+    except SqlitePanelDecisionUnavailable as exc:
+        raise PanelUnavailableError(
+            "The activated SQLite decision evidence is unavailable.",
+            detail=str(exc),
+        ) from exc
+    if decisions is None:
+        raise PanelUnavailableError(
+            "The activated SQLite decision evidence is unavailable.",
+            detail="The SQLite authority became unavailable during panel projection.",
+        )
     decision = decisions[-1] if decisions else None
-
-    if projection is None:
-        owner = get_or_create_owner(resolved, broker)
-        owner.sync(entries, [sid], decisions={sid: decision})
-        rollup = owner.get_rollup(sid)
-        exposure = dict(rollup.exposure)
-        fills_today = rollup.fills_today
-        realized_pnl_today = rollup.realized_pnl_today
-        open_pnl = rollup.open_pnl
-        last_bar_at_ms = rollup.last_activity_at_ms
-    else:
-        economics = evidence.economics.snapshot
-        exposure = dict(economics.exposure)
-        fills_today = economics.fills_today
-        realized_pnl_today = economics.realized_pnl_today
-        open_pnl = economics.open_pnl
-        last_bar_at_ms = economics.last_activity_at_ms
+    economics = evidence.economics.snapshot
 
     profile = panel_profile_for(broker)
     flatten_supported = profile.flatten_supported if profile is not None else False
@@ -680,12 +543,12 @@ async def _get_panel_with_entries(
         clerk_status,
         entries,
         account_id=resolved,
-        exposure=exposure,
-        fills_today=fills_today,
-        realized_pnl_today=realized_pnl_today,
-        open_pnl=open_pnl,
+        exposure=dict(economics.exposure),
+        fills_today=economics.fills_today,
+        realized_pnl_today=economics.realized_pnl_today,
+        open_pnl=economics.open_pnl,
         latest_decision=decision,
-        last_bar_at_ms=last_bar_at_ms,
+        last_bar_at_ms=economics.last_activity_at_ms,
         journal_tail_ref=f"/api/brokers/{broker}/accounts/{resolved}/bots/{sid}/decisions",
         journal_tail_seq=(decision.seq if decision is not None else None),
         flatten_supported=flatten_supported,
@@ -702,12 +565,7 @@ async def _get_panel_with_entries(
             bot_running=status.running,
         ),
     )
-    if projection is not None:
-        panel = adapt_sqlite_panel(
-            panel,
-            projection,
-            economics=evidence.economics.snapshot,
-        )
+    panel = adapt_sqlite_panel(panel, projection, economics=economics)
     return panel, entries, session_fills
 
 
@@ -895,42 +753,6 @@ def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[s
             "await its durable fill receipt before treating exposure as flat."
         )
 
-    async def _clear_hold(operator: str, reason: str | None) -> str:
-        clerk = get_alpaca_clerk()
-        if clerk is None:
-            raise PanelUnavailableError("Alpaca order management is not configured.")
-        try:
-            await clerk.clear_hold(operator=operator, reason=reason or "Panel clear-hold")
-        except InventoryBaselineRefusedError as exc:
-            raise ActionNotAvailableError(str(exc), detail=exc.detail) from exc
-        return "Exposure hold cleared."
-
-    async def _record_inventory_baseline(operator: str, reason: str | None) -> str:
-        clerk = get_alpaca_clerk()
-        if clerk is None:
-            raise PanelUnavailableError("Alpaca order management is not configured.")
-        try:
-            baseline = await clerk.record_inventory_baseline(
-                operator=operator,
-                reason=reason or "Operator confirmed current Alpaca inventory from the bot panel.",
-                strategy_instance_id=sid,
-            )
-        except InventoryBaselineRefusedError as exc:
-            raise ActionNotAvailableError(str(exc), detail=exc.detail) from exc
-        except BrokerError as exc:
-            raise ActionNotAvailableError(
-                "Alpaca inventory could not be read for recovery.",
-                detail=exc.detail or str(exc),
-            ) from exc
-        positions = ", ".join(
-            f"{position.symbol} {position.signed_quantity:g}"
-            for position in baseline.positions
-        )
-        return (
-            "Inventory baseline recorded and reconciliation is clean. "
-            f"Broker positions at the cutover: {positions or 'flat'}."
-        )
-
     return {
         "resume": _resume,
         "pause": _pause,
@@ -938,8 +760,6 @@ def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[s
         "stop": _stop,
         "flatten_stop": _flatten_stop,
         "reconcile_now": _reconcile,
-        "clear_hold": _clear_hold,
-        "record_inventory_baseline": _record_inventory_baseline,
     }
 
 

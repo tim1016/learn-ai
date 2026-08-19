@@ -8,16 +8,15 @@ live in `docs/architecture/adrs/`.
 Repo-process vocabulary — ADR status values, lint rules, CI gates, branch and
 review conventions — is **out of scope** and does not belong here.
 
-**Lineage labels.** The ADR 0038 control-plane retirement is complete; the ADR
-0037 custody retirement remains in flight. Every section declares which system
-its terms describe (decision record: ADR 0040).
+**Lineage labels.** The ADR 0038 control-plane and ADR 0037 custody retirements
+are complete. Every section declares which system its terms describe (decision
+record: ADR 0040).
 
 - **live** — the current Alpaca Broker V2 ecosystem.
 - **historical (ADR 0038)** — removed IBKR bot-control machinery.
-- **compatibility evidence (ADR 0038)** — read-only IBKR evidence or shared
-  paper primitives deliberately preserved for #1583/#1618; never bot control.
-- **retiring (ADR 0037)** — machinery the Alpaca legacy-JSONL custody cutover
-  removes.
+- **compatibility evidence (ADR 0038)** — read-only IBKR evidence and durable
+  historical schemas preserved after #1583; never broker actuation or bot control.
+- **historical (ADR 0037)** — removed Alpaca legacy-JSONL custody machinery.
 - **neutral** — operator/trading vocabulary that survives a broker change.
 
 The two retirements are **independent** and either may land first, so they never
@@ -130,11 +129,13 @@ ephemeral session id:
   outcome suitable for action.
 ## IBKR order-attribution ladder (sharpened 2026-06-04)
 
-**Lineage: compatibility evidence (ADR 0038).**
+**Lineage: historical (ADR 0038; actuation retired by #1583 on 2026-08-19).**
 
-The IBKR-side half of broker-facing identity: the broker's own order handles, the
-run-scoped write-ahead log that backed them, and the reconciler rules built on
-top. The live half is **Broker-facing identity** above.
+The former IBKR-side half of broker-facing identity: the broker's own order
+handles, the run-scoped write-ahead log that backed them, and the reconciler
+rules built on top. The executable submit/cancel runtime is absent; these terms
+remain only for interpreting durable historical evidence. The live Alpaca half
+is **Broker-facing identity** above.
 
 - **intent ledger** — a *reconstructed logical view*, **not a stored artifact**.
   Its system of record is the run-scoped WAL (`intent_events.jsonl`) folded over
@@ -593,7 +594,13 @@ backend recompute).
 
 ## Broker-observed state & position ownership (resolved 2026-05-30)
 
-**Lineage: compatibility evidence (ADR 0038).**
+**Lineage: historical (ADR 0038; executable runtime retired by #1583).**
+
+The per-instance ownership and readiness design below describes the retired
+IBKR `LiveEngine` path. Current IBKR surfaces expose broker/account evidence
+only; none constructs an engine-owned expected position or gates an executable
+IBKR order path. The account-level truth and contamination projectors survive
+as read-only evidence.
 
 - **Expected position comes from the instance's `expected_position_by_symbol`
   (engine-authored live-state sidecar), never inferred from the latest trade
@@ -633,11 +640,6 @@ backend recompute).
     self-consistency BLOCK.
   - dead-instance start-readiness with unknown broker state →
     **UNKNOWN/DEGRADED**, unless start would submit orders immediately.
-- **P0 bug:** `check_unexpected_position` (`pre_flight.py:210`) is account-net
-  and **not namespace-aware** — sibling managed instances are flagged as false
-  contamination, which can block valid starts or train operators to bypass a
-  noisy gate. Making it namespace-aware is **in-scope P0** for this work.
-
 ## Control-surface scoping (established 2026-05-30)
 
 **Lineage: historical (ADR 0038; retired 2026-08-18).**
@@ -649,14 +651,15 @@ backend recompute).
 - **Safety flags** (`halt.flag`, `poisoned.flag`) — run-scoped artifacts,
   distinct from durable desired state.
 
-## Sizing authority (resolved 2026-06-08)
+## Historical IBKR sizing authority (retired 2026-08-19)
 
-**Lineage: compatibility evidence (ADR 0038; no registered bot caller).**
+**Lineage: historical (ADR 0038; broker consumer retired by #1583).**
 
-Where a live bot's position-*size* decision lives and what it claims. Separates
-*who decides quantity* from *who decides the signal*. Sizing the magnitude is a
-distinct concern from the alpha/entry logic, and for a **live** bot the two have
-different homes.
+The bullets below record the former IBKR live-sizing design for provenance; they
+are not current product authority. `LivePortfolio`, its pending-order boundary,
+and every registered IBKR submit path are gone. The broker-neutral sizing math
+that remains is available to research/backtest consumers only and cannot produce
+an IBKR order.
 
 - **live sizing policy** — the **canonical** sizing authority for a *live* bot:
   `run_ledger.live_config.sizing`. Because `live_config` is hashed into `run_id`,
@@ -931,7 +934,12 @@ review.
 
 ## Account identity vs position contamination (resolved 2026-06-20)
 
-**Lineage: compatibility evidence (ADR 0038; #1618).**
+**Lineage: historical/read-only evidence (ADR 0038; IBKR runtime retired by #1583).**
+
+The former fleet composition below is retained as terminology for historical
+evidence. It no longer feeds an IBKR start, resume, submit, or cancel decision;
+ADR 0037 removed the separate Alpaca legacy-custody family and did not adopt
+this IBKR evidence as an Alpaca fallback.
 
 The fleet altitude ships `FleetAccountSummary` (server-authored):
 
@@ -1005,167 +1013,27 @@ covers.  Unknown codes fail closed.
 
 **Lineage: compatibility evidence (ADR 0038).**
 
-A read-only, session-level visualization of every IBKR API client socket — a
-faithful mirror of what IB Gateway itself sees. It is **not** an authority: it
-gates nothing (contrast the per-instance readiness/safety verdicts); it is a
-better *view*. It sits at the backend-authored **fleet/session altitude** (see
-"Broker-observed state & position ownership → two altitudes, two authors"),
-distinct from the per-`strategy_instance` Bot Cockpit.
+The surviving surface reports connection and recovery evidence from the single
+read-only FastAPI IBKR data-plane client. Historical captures from retired bot
+clients remain readable, but they are never promoted to current bot/process
+state. Current, past, and unknown evidence remain distinct; stale history is
+never rendered as a live connection.
 
-- **Broker client** — one IBKR API socket to the Gateway, identified by its live
-  `client_id`. There is **no single "broker connection"**: there are N clients
-  (the FastAPI data-plane singleton + one per live bot child + any others), each
-  with its own independent connection state. The Gateway logs each separately, so
-  the sidebar and Bot Cockpit "disagreeing" is often two *different clients* each
-  reporting correctly — not one truth shown inconsistently. **Verified empirically
-  2026-07-03** via `lsof -iTCP:4002` against a live system: 4 real sockets (1
-  data-plane on client_id 42 + 3 host `cmd_start` children), each a distinct TCP
-  connection — the per-child model, **not** ADR-0011's "one shared connection
-  serves every instance" (that line conflicts with observed reality and the ADR
-  must record the gap). The same probe caught the control plane reporting all three
-  live children as `offline`/`STOPPED` while they held live sockets — the divergence
-  this mirror exists to expose.
-- **Socket-enumeration spine (the referee).** The authoritative roster, liveness,
-  and attribution come from **`lsof` on the Gateway port, run by the host daemon** —
-  every real TCP connection, PID-attributed, needing **no log decryption and no
-  child self-report**. `PID → process args → --run-dir → strategy_instance_id` is
-  the enrichment join available **today** (every `engine_runtime.json` carries
-  `client_id: null` — the client_id is never published). Ghost/orphan detection
-  falls out for free: a Gateway-side socket with **no matching live client PID** is
-  orphaned/half-open; a live client PID the **registry calls `offline`** is a stale
-  control plane. This spine complements the live API-event spine below: `lsof` owns
-  *who is connected*, the API callbacks own *what each is saying* (the 9 categories).
-- **Primary job — answer "did my bot actually start and connect?"** The mirror's
-  north star (and acceptance test) is reconciling **three altitudes** that drift
-  apart silently today: operator *intent* (what was started), the process
-  *registry's claim* (`live`/`offline`), and *OS/Gateway reality* (`lsof` sockets).
-  The registry is **in-memory only** (`ProcessRegistry._managed = {}`, no
-  rehydration), so a host-daemon restart makes it forget live children — they keep
-  running and holding sockets but report `offline` (observed 2026-07-03: three live
-  children the registry called `offline`; the operator started bots and could not
-  confirm they were running). The `lsof` spine reads OS truth independent of that
-  memory, so it cannot be fooled the same way; disagreement across the three
-  altitudes is itself the surfaced alert, naming which altitude is lying. Fixing the
-  registry's amnesia (a durable/rehydrating registry) is an **adjacent** concern the
-  mirror *exposes* but does not own.
-- **Client identity type** — every observed `client_id` is classified as exactly
-  one of:
-  - **bot client** — opened by a live child; enriched with its
-    `strategy_instance_id`, account, and posture.
-  - **system client** — infrastructure, not a strategy (the data-plane
-    singleton, a host-runner-owned session). Labeled as infrastructure, never
-    dressed up as a bot.
-  - **orphaned bot socket** — a `client_id` **attributable** to a known bot (its
-    last-published id) whose owning process has died while the socket lingers at
-    the Gateway. **Not a ghost** — a named, crashed bot whose connection IBKR still
-    holds. Treated as a **safety hazard** (can hold open orders/positions, collides
-    with the bot's clientId on restart): raises an **operator notice** (ADR-0015)
-    with remediation, never a passive row.
-  - **ghost client** — a `client_id` at the Gateway that is **neither live nor
-    attributable** to any bot we opened (a manual TWS login, an external/foreign
-    session). Detected and surfaced honestly; distinct from an orphaned bot socket.
-- **Connection recency axis (orthogonal to identity type).** Independent of *who*
-  owns a socket (bot/system/ghost), every row carries *how sure we are it is live
-  right now*:
-  - **CURRENT** — confirmed connected now (a fresh event/probe within the
-    freshness threshold). Rendered active.
-  - **PAST** — recorded history exists but a current connection cannot be
-    confirmed. Two honest flavors: **closed** (a disconnect was recorded —
-    definitively gone) and **last-known** (the observer was lost — data-plane/SSE
-    down or stale; last seen connected at T, current state indeterminate).
-    Rendered clearly demarcated (muted, "as of T", historical badge).
-  - **UNKNOWN** — no basis at all (no history; observer down from the start).
-  **Invariant: PAST is never rendered as CURRENT.** When the observer goes down the
-  page does not blank or collapse to a bare UNKNOWN — it demotes rows to
-  PAST/last-known with recorded history fully browsable, demarcated so an operator
-  can never mistake last-known history for live truth. The honest-empty rule
-  applied to *time*, not just to verdicts.
-- **Orphaned-socket remediation is detect-alert-guide, not one-click close.** IBKR
-  exposes **no surgical "kick client N" API**, and a cleanly-exited process's socket
-  is already closed by the OS — so a *lingering* socket means half-open or a hung
-  process IBKR hasn't noticed. The mirror therefore **detects**, **alerts** (operator
-  notice deep-linked to the owning bot's cockpit), and **guides**: a clientId-reclaim
-  probe to confirm IBKR still holds it, then the heavier operator remediations
-  (Gateway reset/restart via the host daemon/IBC — all-clients — or waiting out
-  IBKR's timeout). No button promises a surgical close the broker API cannot deliver;
-  the heavier Gateway-reset action lives at a session/host admin site, not the mirror.
-- **Live API-event spine** — the event stream is the API callbacks each of our
-  own clients already receives from the Gateway (`errorEvent`, connect/disconnect),
-  **not** the Gateway log files. On-disk logs are encrypted at rest (TWS Build
-  977+) and readable only through the Gateway GUI; the same events are broadcast
-  live and in plaintext to every connected API client, so the mirror listens to
-  the broadcast rather than decrypting the vault.
-- **1:1 fidelity ceiling (accepted 2026-07-03)** — full event detail for **our**
-  clients (data-plane + bot children), since we receive their broadcasts and
-  own-lifecycle directly. **Identity-only** for ghost clients: existence is
-  detectable (via `client_id`-in-use collisions and host-daemon filename metadata
-  of the encrypted `api.<id>.<day>.log` set) but private event *content* is not —
-  it is neither broadcast to us nor decryptable outside the Gateway. A documented,
-  accepted limit, not a defect to engineer around.
-- **Client enrichment join** — `actual connected client_id → strategy_instance_id`.
-  "Actual" because a child may reconnect under a different id after an
-  `IbkrClientIdInUseError` collision, and the Gateway's truth is the id it
-  actually holds. This join key is **not recorded durably today** (neither the
-  process registry nor `engine_runtime.json` carries `client_id`); publishing it
-  is the enrichment's prerequisite.
-- **Categorized broker events, not a text stream** — raw log lines are never the
-  primary surface. Each event is classified into a closed backend vocabulary
-  (extending the **Event narrative registry** pattern); raw fields live only in an
-  expandable technical-details area. The classifier **shares** the single
-  code→meaning table already in `client.py` (`_CONNECTIVITY_LOST_CODES`, etc.) — it
-  does not fork a second broker-event vocabulary.
-- **Bounded durable history with operator purge.** The mirror backfills from the
-  durable per-client `connection_events.jsonl` (plus a session-level store for the
-  data-plane and ghost clients) and tails live SSE; retention is a bounded rolling
-  window. The operator may **manually purge** historical entries (by time range
-  and/or per client). **Purge is scoped to diagnostic broker-session logs only —
-  it never touches the trading audit trail** (`intent_events.jsonl` WAL, intent
-  ledger, reconciliation receipts, fill/execution records), which stay immutable
-  as ownership/attribution proof. Purging history never disconnects a client, never
-  removes its live roster row, and — because diagnostic logs are **never** an input
-  to a safety/ownership/resume decision — can never alter a verdict. Purge is the
-  mirror's only mutating capability; it is otherwise read-only.
-
-The robust recovery state machine (folded into Phase 1) is the **single**
-authority for connectivity-driven halt/resume — it **subsumes** the ADR-0011
-reactive-halt-on-transition path (`live_engine.py` connectivity-count snapshot);
-there are never two halt-on-transition mechanisms.
-
-- **Recovery reconciles, it does not resume.** On reconnect the machine
-  distinguishes IBKR's real failure modes (1100/2110 link-interrupt → *wait* for
-  1101/1102, not a socket teardown; 1101 → re-request market data **+ open orders
-  + executions + positions** and bump `connection_epoch`; socket-dead → backoff
-  reconnect; exhausted → terminal `HARD_DOWN`). It then runs the owned-orphan /
-  outside-mutation ladder. A **provably-clean** reconcile (broker exposure ==
-  `expected_position_by_symbol`, no owned-orphan ambiguity, no outside-mutation,
-  no in-flight `ACK_FAILED_UNCERTAIN` at the drop) produces a passing
-  reconciliation receipt; **any** ambiguity stays hard-blocked.
-- **Continue is operator-only, from the Bot Cockpit.** A clean reconcile *clears
-  the connectivity/reconciliation gate* but **never auto-continues trading**. The
-  existing paused run continues only when the operator clicks Continue on the
-  bot control panel (sets `desired_state = RUNNING`). During migration this
-  wires into the legacy **ResumeGuardState**
-  (ADR-0010 §A3, PRD #616): recovery feeds its reconciliation-receipt guard; the
-  safety-verdict and uncertain-intent-WAL guards stay independent, so a mid-submit
-  drop stays blocked even after a clean reconnect.
-- **Pause and Stop are also first-class Bot Cockpit controls.** Their rendered
-  enabled/disabled state comes from `operator_surface.actions.pause / stop`;
-  they do not enter the one-shot command channel.
-- **Gate state is server-authored and reflected in the UI.** `BLOCKED →
-  CLEARABLE (clean reconcile) → CLEARED/RUNNING (after the click)` via
-  `operator_surface.actions.resume` wire field. The Bot Cockpit renders the
-  verdict; it never re-derives it.
-- **The broker session mirror stays read-only.** It *visualizes* the reconnect
-  and gate-cleared events (and may deep-link to the Bot Cockpit) but carries **no
-  Continue control** — the action's render site remains the Bot Cockpit.
+This surface is diagnostic only. It cannot start, pause, resume, stop, flatten,
+disconnect, or otherwise control a bot or broker session, and its evidence is
+never an input to Alpaca custody or execution authority. The former per-bot
+socket enumeration, process-registry joins, orphaned-bot remediation, Bot
+Cockpit controls, ResumeGuard, and connectivity gate state machine retired with
+the IBKR execution runtime in #1583. ADR 0038 preserves their historical design
+record; they are not a model for current product work.
 
 ## Daemon diagnostics — historical evaluator plane (retired 2026-08-18)
 
 **Retired vocabulary.** This section records the former IBKR evaluator/host-runner
 diagnostics design for provenance only. Issue #1636 removed its diagnostic routes,
 builders, fleet/process registry, connectivity monitor, lifecycle producers, and
-browser projection. Current daemon authority is limited to account capability,
-Account Clerk compatibility, lease renewal, and read-only broker-activity evidence;
+browser projection. Current daemon authority is limited to authenticated health,
+Gateway-socket evidence, and capability-lease renewal;
 Alpaca Broker V2 owns bot lifecycle and operator control. Do not use the terms or
 flows below to design current control-plane behavior.
 
@@ -1421,17 +1289,17 @@ behaved. The strategy-validation half of the same 2026-07-05 sharpening is
   modal is replaced by the loud start treatment; a hard confirm/block is reserved
   for elevated conditions (live identity, account `NOT_PROVEN`).
 
-## Bot event stream — narrated gate pipeline (resolved 2026-07-06)
+## Historical bot event stream — narrated gate pipeline (retired 2026-08-19)
 
-**Lineage: compatibility evidence (ADR 0038).**
+**Lineage: historical (ADR 0038; producer and control surface removed by #1583).**
 
-A per-bot stream that narrates a strategy instance's live pipeline — bar
+The deleted per-bot stream narrated a strategy instance's live pipeline — bar
 evaluation → gates → order → broker outcome — so an operator can answer both
 "why isn't my bot trading?" and "where exactly did that order die, and what was
-the most granular error we had?" It **generalizes** the ADR-0014 broker-activity
-stream *upstream*: broker executions become its terminal event-type, not a
-separate channel. It carries evidence, not verdicts — the cockpit's readiness
-verdict stays the authority for "can it trade now" (see below).
+the most granular error we had?" The detailed vocabulary below is retained for
+historical receipts only. `bot_event_spine.py`, its engine producers, and its
+operator control surface are gone; the surviving broker-activity stream is
+read-only evidence and does not imply a running bot pipeline.
 
 - **Bot event stream** — the canonical name for the per-bot narrated pipeline
   stream. _Avoid_: "event service", "activity feed" (the ADR-0014 broker-activity
@@ -1915,7 +1783,9 @@ Decision record: ADR 0038.
 
 **"Deploy state" is retired as a term.** It named four different artifact
 families at once. The IBKR evaluator's mutable `run_ledger.json` family retired;
-a narrow read-only parser remains for ADR 0037 step-5 historical evidence. The
-legacy account-binding `DEPLOYED`/`ACTIVE`/`RETIRED` compatibility writers are
-parked for #1618. The two live Alpaca families are **Run registration** and
-**Runner restoration record** above, and they are never used interchangeably.
+the temporary parser retired with ADR 0037. A strict historical-identity reader
+remains only to deny collisions against IBKR evidence and cannot write a ledger.
+The legacy IBKR account-binding `DEPLOYED`/`ACTIVE`/`RETIRED` executable writers
+retired with #1583; durable rows remain readable as historical evidence.
+The two live Alpaca families are **Run registration** and **Runner restoration
+record** above, and they are never used interchangeably.

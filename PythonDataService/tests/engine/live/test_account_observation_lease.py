@@ -6,13 +6,15 @@ from pathlib import Path
 
 from app.engine.live.account_artifacts import (
     AccountClerkLease,
-    advance_account_clerk_generation,
-    write_account_clerk_lease,
 )
 from app.engine.live.account_observation_lease import (
     AccountObservationLeaseRepo,
     account_observation_lease_gate_result,
     assess_account_observation_lease,
+)
+from tests._helpers.legacy_ibkr_artifacts import (
+    write_historical_clerk_generation,
+    write_historical_clerk_lease,
 )
 
 ACCOUNT_ID = "DU1234567"
@@ -21,14 +23,14 @@ OBSERVED_AT_MS = 1_780_000_000_000
 
 def _write_accepting_clerk(root: Path, *, generation: int = 3) -> None:
     for offset in range(generation):
-        advance_account_clerk_generation(
+        write_historical_clerk_generation(
             root,
             ACCOUNT_ID,
             phase="accepting",
             recorded_at_ms=OBSERVED_AT_MS + offset,
             source="test",
         )
-    write_account_clerk_lease(
+    write_historical_clerk_lease(
         root,
         AccountClerkLease(
             account_id=ACCOUNT_ID,
@@ -134,7 +136,7 @@ def test_observation_lease_revocation_wins_before_expiry(tmp_path: Path) -> None
 def test_observation_lease_rejects_generation_change(tmp_path: Path) -> None:
     _write_accepting_clerk(tmp_path, generation=3)
     _renew(tmp_path)
-    advance_account_clerk_generation(
+    write_historical_clerk_generation(
         tmp_path,
         ACCOUNT_ID,
         phase="accepting",
@@ -170,7 +172,7 @@ def test_observation_lease_without_current_clerk_cannot_authorize(
 def test_observation_lease_rejects_expired_clerk_lease(tmp_path: Path) -> None:
     _write_accepting_clerk(tmp_path, generation=3)
     _renew(tmp_path, clerk_generation=3)
-    write_account_clerk_lease(
+    write_historical_clerk_lease(
         tmp_path,
         AccountClerkLease(
             account_id=ACCOUNT_ID,

@@ -6,8 +6,10 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from app.engine.live.historical_run_identity import (
+    read_historical_strategy_instance_id,
+)
 from app.engine.live.identity import strategy_instance_artifact_dir
-from app.engine.live.run_ledger import read_ledger
 from app.services.bot_binding_repository import BotBindingRepository
 
 
@@ -22,20 +24,21 @@ def _legacy_ibkr_run_dir(
     """Return matching retired IBKR identity, refusing ambiguous ledgers."""
 
     live_runs_root = artifacts_root / "live_runs"
+    if live_runs_root.is_symlink():
+        raise OSError("legacy live_runs root must not be a symbolic link")
     if not live_runs_root.exists():
         return None
-    if live_runs_root.is_symlink() or not live_runs_root.is_dir():
+    if not live_runs_root.is_dir():
         raise OSError("legacy live_runs root is not a readable directory")
     for run_dir in live_runs_root.iterdir():
-        if run_dir.is_symlink() or not run_dir.is_dir():
+        if run_dir.is_symlink():
+            raise OSError("legacy run directory must not be a symbolic link")
+        if not run_dir.is_dir():
             continue
         ledger_path = run_dir / "run_ledger.json"
-        if not ledger_path.exists():
+        if not ledger_path.exists() and not ledger_path.is_symlink():
             continue
-        if ledger_path.is_symlink():
-            raise OSError("legacy run ledger must not be a symbolic link")
-        ledger = read_ledger(ledger_path)
-        if ledger.strategy_instance_id == strategy_instance_id:
+        if read_historical_strategy_instance_id(ledger_path) == strategy_instance_id:
             return run_dir
     return None
 

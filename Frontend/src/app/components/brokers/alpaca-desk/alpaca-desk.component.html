@@ -76,7 +76,6 @@
   <app-alpaca-order-entry
     [initialSymbol]="orderPrefill()?.symbol ?? ''"
     [expectedAccountId]="ticketAccountId() ?? ''"
-    [sqliteManualAuthority]="sqliteManualAuthority()"
     [manualTicketId]="orderPrefill()?.ticketId ?? null"
     [manualLegId]="orderPrefill()?.legId ?? null"
     [manualCapability]="manualTicketCapability()"

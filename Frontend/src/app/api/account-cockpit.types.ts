@@ -1,4 +1,4 @@
-/** Backend-authored account cockpit posture and daemon-supervised restore contract. */
+/** Backend-authored account cockpit posture and retained journal recovery contract. */
 
 import type { AccountServiceStatusResponse } from './account-directory.types';
 import type { OperatorBlocker } from './operator-blocker.types';
@@ -21,19 +21,6 @@ export interface AccountCockpitResponse {
   readonly clerk: AccountServiceStatusResponse;
   readonly daemon: AccountCockpitDaemon;
   readonly blockers: readonly OperatorBlocker[];
-}
-
-export interface AccountClerkRestoreRequest {
-  readonly confirmation_token: 'RESTORE';
-  readonly idempotency_key: string;
-}
-
-export interface AccountClerkRestoreReceipt {
-  readonly schema_version: 1;
-  readonly receipt_id: string;
-  readonly account_id: string;
-  readonly clerk_generation: number;
-  readonly recorded_at_ms: number;
 }
 
 export interface JournalRecoveryRequest {

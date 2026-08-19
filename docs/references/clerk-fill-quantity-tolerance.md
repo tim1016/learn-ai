@@ -19,8 +19,8 @@ Quantities are floats (fractional shares are legal), so a repeated
 observation of the same cumulative state can differ from the recorded sum
 by float64 accumulation residue rather than exactly zero. The gate is
 `FILL_QTY_EPSILON = 1e-9` with `rtol=0`: an absolute tolerance, not scaled
-to the position size, matching the precedent in
-`docs/references/clerk-custody-exposure-deltas.md` for the same reason —
+to the position size, matching the canonical position boundary in
+`docs/references/clerk-position-drift-tolerance.md` for the same reason —
 share quantities are absolute, so a relative tolerance would hide real
 drift on small positions. `1e-9` sits several orders of magnitude above the
 residue a handful of `SUM`/subtraction operations on float64 doubles can

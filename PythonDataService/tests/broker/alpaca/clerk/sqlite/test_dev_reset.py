@@ -24,7 +24,9 @@ from app.broker.alpaca.clerk.sqlite.repository import (
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
     bot_order_namespace_for_instance,
-    write_account_instance_binding,
+)
+from tests._helpers.legacy_ibkr_artifacts import (
+    write_historical_account_binding,
 )
 
 ACCOUNT_ID = "PADEVRESET"
@@ -36,7 +38,7 @@ def _clock() -> int:
 
 
 def _register_runner_catalog(runner_root: Path, strategy_instance_id: str) -> Path:
-    write_account_instance_binding(
+    write_historical_account_binding(
         runner_root,
         AccountInstanceBinding(
             account_id=ACCOUNT_ID,
@@ -122,7 +124,7 @@ def test_reset_moves_sqlite_authority_and_runner_catalog_then_allows_reinitializ
     regenerated.close()
 
 
-def test_reset_moves_legacy_jsonl_authority_and_is_a_safe_noop_when_clean(
+def test_reset_refuses_unactivated_legacy_authority_without_moving_it(
     tmp_path: Path,
 ) -> None:
     clerk_root = tmp_path / "clerk"
@@ -138,17 +140,17 @@ def test_reset_moves_legacy_jsonl_authority_and_is_a_safe_noop_when_clean(
     (account_dir / "bots").mkdir()
     _register_runner_catalog(runner_root, "legacy-dev")
 
-    receipt = _reset(clerk_root=clerk_root, runner_root=runner_root)
+    with pytest.raises(
+        DeveloperCleanSlateResetRefused,
+        match="requires an established SQLite authority",
+    ):
+        _reset(clerk_root=clerk_root, runner_root=runner_root)
 
-    assert receipt.quarantine_reference is not None
-    quarantine = clerk_root / receipt.quarantine_reference
-    assert not (account_dir / "order_journal.jsonl").exists()
-    assert (quarantine / "legacy-authority" / "order_journal.jsonl").is_file()
-    assert (quarantine / "legacy-authority" / "bots").is_dir()
-
-    repeated = _reset(clerk_root=clerk_root, runner_root=runner_root)
-    assert repeated.moved_artifacts == ()
-    assert repeated.quarantine_reference is None
+    assert (account_dir / "order_inbox.jsonl").is_file()
+    assert (account_dir / "order_journal.jsonl").is_file()
+    assert (account_dir / "custody_resolution_receipts.json").is_file()
+    assert (account_dir / "bots").is_dir()
+    assert (runner_root / "live_state" / "legacy-dev").is_dir()
 
 
 def test_reinitialize_refuses_a_tampered_developer_reset_manifest(tmp_path: Path) -> None:
@@ -263,10 +265,12 @@ def test_reset_refuses_unsafe_runner_catalog_ids_before_constructing_paths(
 ) -> None:
     clerk_root = tmp_path / "clerk"
     runner_root = tmp_path / "runner"
-    account_dir = clerk_root / "accounts" / "alpaca" / ACCOUNT_ID
-    account_dir.mkdir(parents=True)
-    journal = account_dir / "order_journal.jsonl"
-    journal.write_text("{}\n", encoding="utf-8")
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID,
+        artifacts_root=clerk_root,
+        clock=_clock,
+    )
+    repo.close()
     monkeypatch.setattr(
         dev_reset_module,
         "_runner_strategy_instance_ids",
@@ -276,7 +280,7 @@ def test_reset_refuses_unsafe_runner_catalog_ids_before_constructing_paths(
     with pytest.raises(DeveloperCleanSlateResetRefused, match="unsafe strategy instance ID"):
         _reset(clerk_root=clerk_root, runner_root=runner_root)
 
-    assert journal.is_file()
+    assert repo.db_path.is_file()
 
 
 def test_cleanup_keeps_nonempty_quarantine_for_inspection(tmp_path: Path) -> None:
@@ -328,7 +332,9 @@ def test_reset_refuses_live_execution_lease_without_moving_authority(tmp_path: P
     assert repo.db_path.is_file()
 
 
-def test_reset_refuses_unclean_wal_or_symbolic_linked_artifacts(tmp_path: Path) -> None:
+def test_reset_refuses_unclean_wal_or_symbolic_linked_sqlite_artifacts(
+    tmp_path: Path,
+) -> None:
     clerk_root = tmp_path / "clerk"
     runner_root = tmp_path / "runner"
     repo = ClerkSqliteRepository.initialize(
@@ -346,10 +352,11 @@ def test_reset_refuses_unclean_wal_or_symbolic_linked_artifacts(tmp_path: Path) 
     assert repo.db_path.is_file()
 
     wal.unlink()
-    journal = account_dir / "order_journal.jsonl"
-    outside = tmp_path / "outside-journal.jsonl"
+    mirror = account_dir / "custody_transitions.mirror"
+    mirror.unlink()
+    outside = tmp_path / "outside-mirror"
     outside.write_text("outside", encoding="utf-8")
-    journal.symlink_to(outside)
+    mirror.symlink_to(outside)
     with pytest.raises(DeveloperCleanSlateResetRefused, match="symbolic-link"):
         _reset(clerk_root=clerk_root, runner_root=runner_root)
     assert repo.db_path.is_file()

@@ -45,14 +45,6 @@ AccountTruthSourceName = Literal[
     "executions",
 ]
 AccountTruthSourceFreshnessStatus = Literal["fresh", "stale", "missing"]
-AccountTruthOrderCancelReasonCode = Literal[
-    "BROKER_NOT_PAPER_CONNECTED",
-    "NOT_OPEN_ORDER",
-    "FOREIGN_OR_UNCLAIMED",
-    "ORDER_TERMINAL",
-    "ACCOUNT_FROZEN",
-    "ACCOUNT_FREEZE_UNREADABLE",
-]
 AccountTruthExecutionUncertaintyCode = Literal[
     "missing_order_ref",
     "observed_time_only",
@@ -133,18 +125,6 @@ class AccountTruthFactOwner(BaseModel):
     severity: AccountTruthSeverity
 
 
-class AccountTruthOrderCancelAction(BaseModel):
-    """Backend-authored cancel affordance for one broker order row."""
-
-    model_config = ConfigDict(frozen=True)
-
-    visible: bool
-    enabled: bool
-    reason_code: AccountTruthOrderCancelReasonCode | None = None
-    label: str
-    detail: str
-
-
 class AccountTruthOrderRow(BaseModel):
     """Open or terminal broker order row grouped by broker lifecycle identity."""
 
@@ -170,7 +150,6 @@ class AccountTruthOrderRow(BaseModel):
     avg_fill_price: float | None = None
     order_ref: str | None = None
     owner: AccountTruthFactOwner
-    cancel_action: AccountTruthOrderCancelAction
     headline: str
     detail: str
     fetched_at_ms: int

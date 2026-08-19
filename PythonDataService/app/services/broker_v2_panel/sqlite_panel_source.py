@@ -6,9 +6,8 @@ import asyncio
 import json
 from dataclasses import dataclass
 
-from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
-from app.broker.alpaca.clerk.decision_journal import DecisionReceipt
 from app.broker.alpaca.clerk.models import ClerkStatus
+from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionReceipt
 from app.broker.alpaca.clerk.sqlite.economic_projection import (
     EconomicProjectionError,
     EconomicSnapshot,
@@ -96,19 +95,6 @@ class SqliteChartEvidence:
 
 def sqlite_authority_active(broker: str) -> bool:
     return active_sqlite_facade(broker) is not None
-
-
-def sqlite_authority_selected_but_unavailable(broker: str) -> bool:
-    """Whether an activated SQLite authority failed startup for this broker."""
-    if broker != "alpaca":
-        return False
-    runtime = get_active_clerk_runtime()
-    return bool(
-        runtime is not None
-        and runtime.authority_kind == "unavailable"
-        and runtime.startup_failure is not None
-        and runtime.startup_failure.activation_detected
-    )
 
 
 def read_sqlite_roster_statuses(broker: str) -> list[BotStatusView] | None:

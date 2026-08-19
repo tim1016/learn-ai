@@ -4,12 +4,11 @@ This manual covers the broker-v2 control panel — the six-station order pipelin
 
 ## Account authority selection
 
-The service resolves the Alpaca account before constructing a Clerk. An account with no
-activation fence uses the legacy JSONL authority described by the legacy actions below.
-An account with a valid account/generation/database-bound activation fence uses the
-SQLite Clerk and its backend-authored recovery catalog. Database existence alone does
-not activate SQLite. A malformed fence or failed activated startup installs no
-broker-mutation capability and never falls back to JSONL.
+The service resolves the Alpaca account before constructing a Clerk. Only an account
+with a valid account/generation/database-bound activation fence uses the SQLite Clerk
+and its backend-authored recovery catalog. Database existence alone does not activate
+SQLite. A missing, `OFF_DUTY`, malformed, conflicting, or failed activation installs no
+broker-mutation capability. Legacy JSONL is not a selectable authority or fallback.
 
 For activated SQLite accounts, the available actions are exactly `reconcile_now`,
 `recover_exact_execution_evidence`, `resolve_execution_coverage`,
@@ -28,8 +27,9 @@ authority is SQLite. Manual trading is paper-only and remains unavailable until
 the server enables `ALPACA_SQLITE_MANUAL_TRADING_ENABLED` after qualification.
 The browser supplies stable ticket and leg UUIDs, but Python supplies the trusted
 operator identity, validates the preview again at confirmation, and records the
-SQLite intent before it contacts Alpaca. Do not use the generic `/orders` route,
-the broker console, or a bot action to work around a disabled manual capability.
+SQLite intent before it contacts Alpaca. The former generic `/orders` mutation is
+absent. Do not use the broker console or a bot action to work around a disabled
+manual capability.
 
 - A ticket may contain one to eight immutable market or limit legs with `DAY` or
   `GTC` time in force. Legs are serial, not atomic: the next leg requires its
@@ -140,14 +140,12 @@ Each station has a **station state** (what happened there) and may carry **evide
 
 **What the operator sees.**
 - Station state: `waiting`, `satisfied`, or `blocked`.
-- If `blocked`: which condition is blocking (`STREAM_HEALTH_HOLD` or `UNEXPLAINED_ORDER_HOLD`) and the `clear_hold` action when conditions are met.
+- If `blocked`: which condition is blocking (`STREAM_HEALTH_HOLD` or `UNEXPLAINED_ORDER_HOLD`) and the exact evidence-backed recovery capability when one is safe.
 - Channel health chip: `healthy`, `unhealthy`, or `unknown`.
 - Hold state chip: `NO_HOLD` (submission allowed) or a hold code.
 
-**Actions available here.**
-
-- Legacy/unactivated account: `clear_hold` may lift a legacy account hold after the root condition is healthy and freshly observed.
-- Activated SQLite account: no generic clear is presented. Use the exact backend-authored evidence-backed capability.
+**Actions available here.** There is no direct clear. Use only the exact
+backend-authored SQLite recovery capability; an unactivated account is unavailable.
 
 ---
 
@@ -191,7 +189,6 @@ Each station has a **station state** (what happened there) and may carry **evide
 
 **Actions available here.**
 - `reconcile_now` — run a reconciliation sweep against the broker immediately, without waiting for the next scheduled sweep.
-- `record_inventory_baseline` — recover a verified `missing_intent` mismatch or retire stale bot attribution on a reconciled flat account, then reconcile the accounting cutover.
 
 ---
 
@@ -241,8 +238,6 @@ answers "can this ever appear for me", not "is it enabled right now".
 | `flatten_stop` | Flatten & stop | Cancel working orders, submit closing orders to flatten exposure, then stop. Use this to exit positions before stopping. | Bot panel (`alpaca`) |
 | `retire` | Retire | Permanently decommission this bot. Its id is never reused. This is irreversible. | **Nothing — no broker exposes this action.** |
 | `cancel_order` | Cancel order | Cancel one working order at the broker. The broker may reject the request if the order has already filled. | **Nothing — no broker exposes this action.** |
-| `clear_hold` | Clear hold | Lift the account exposure hold once its root condition is healthy and freshly observed. | Bot panel (`alpaca`) |
-| `record_inventory_baseline` | Recover inventory baseline | Record the freshly observed broker positions as the account accounting cutover, retiring prior bot attribution without deleting history or assigning current positions to a bot. | Bot panel (`alpaca`) |
 | `reconcile_now` | Reconcile now | Run a reconciliation sweep against the broker immediately. Useful after a hold is cleared or after a manual order intervention. | Bot panel (`alpaca`) and SQLite Clerk recovery catalog |
 | `recover_exact_execution_evidence` | Recover exact execution evidence | Read one retained Alpaca paper execution and prepare the Clerk's no-delta coverage proof. | SQLite Clerk recovery catalog |
 | `resolve_execution_coverage` | Resolve execution coverage | Replace one matching cumulative recovery record with verified exact execution evidence. | SQLite Clerk recovery catalog |
@@ -263,8 +258,8 @@ Holds are account-wide. When a hold is active, **no bot on the account** can sub
 
 | Hold | Trigger | Clear with |
 |---|---|---|
-| `STREAM_HEALTH_HOLD` | A market-data or execution channel becomes `unhealthy`. | Wait for channel to recover to `healthy`, then `clear_hold`. |
-| `UNEXPLAINED_ORDER_HOLD` | The reconciliation sweep finds a broker order the journal cannot explain. | Investigate the unexplained order, resolve it out-of-band, then `clear_hold`. |
+| `STREAM_HEALTH_HOLD` | A market-data or execution channel becomes `unhealthy`. | Wait for channel health, reconcile, and use only a backend-presented exact recovery capability. There is no direct clear. |
+| `UNEXPLAINED_ORDER_HOLD` | Reconciliation finds a broker order the SQLite authority cannot explain. | Investigate the exact order and use the evidence-bound recovery catalog; never clear the hold blindly. |
 
 ---
 
@@ -273,7 +268,7 @@ Holds are account-wide. When a hold is active, **no bot on the account** can sub
 | Verdict | Meaning | Next step |
 |---|---|---|
 | `clean` | Journal and broker agree. | None. |
-| `missing_intent` | Broker inventory or an owned order does not match the durable journal exposure. | Resolve uncertain/working orders; if the mismatch is verified pre-journal inventory, use `record_inventory_baseline`. |
+| `missing_intent` | Broker inventory or an owned order does not match the durable SQLite exposure. | Resolve uncertain or working orders through the evidence-bound recovery catalog. No inventory-baseline adoption action exists. |
 | `unexplained_order` | A broker order exists that the journal cannot explain. | Investigate the source of the unexplained order. This triggers an `UNEXPLAINED_ORDER_HOLD`. |
 | `stale` | The last sweep could not reach the broker. | Wait for broker connectivity to restore; run `reconcile_now` when available. |
 

@@ -22,13 +22,11 @@ from pathlib import Path
 from typing import Final
 
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
-from app.broker.alpaca.clerk.journal import OrderJournal, get_clerk_settings
-from app.broker.alpaca.clerk.models import ClerkEntryKind, OrderJournalEntry
 from app.broker.alpaca.clerk.sqlite.projection_models import TimelineEntry
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.alpaca.config import get_alpaca_settings
 from app.schemas.broker_v2_evidence import EvidenceAuditEntry, EvidenceEntry, EvidencePage
-from app.services.broker_v2_panel.account_projection_owner import get_or_create_owner
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -37,21 +35,6 @@ logger = logging.getLogger(__name__)
 
 PAGE_SIZE_DEFAULT = 20
 PAGE_SIZE_MAX = 50
-
-# Human-readable labels for the closed ClerkEntryKind vocabulary.
-_KIND_LABELS: dict[str, str] = {
-    ClerkEntryKind.INTENT_RECORDED: "Intent recorded",
-    ClerkEntryKind.SUBMIT_ACKED: "Submit acknowledged",
-    ClerkEntryKind.SUBMIT_FAILED: "Submit failed",
-    ClerkEntryKind.CANCEL_RECORDED: "Cancel recorded",
-    ClerkEntryKind.CANCEL_ACKED: "Cancel acknowledged",
-    ClerkEntryKind.CANCEL_FAILED: "Cancel failed",
-    ClerkEntryKind.ORDER_EVENT: "Order event",
-    ClerkEntryKind.ACTIVITY_RECOVERY: "Activity recovery",
-    ClerkEntryKind.RECONCILIATION: "Reconciliation sweep",
-    ClerkEntryKind.HOLD_SET: "Hold set",
-    ClerkEntryKind.HOLD_CLEARED: "Hold cleared",
-}
 
 _SQLITE_TRANSITION_COPY: Final[dict[str, tuple[str, str]]] = {
     "STRATEGY_INSTANCE_REGISTERED": (
@@ -226,13 +209,12 @@ _SQLITE_CUSTODY_COPY: Final[dict[str, str]] = {
     "ACCOUNT_CLERK": "Account Clerk",
 }
 
-# A single process-wide lock for audit log appends (same discipline as
-# OrderJournal's own _JOURNAL_LOCK).
+# A single process-wide lock for operator-evidence audit appends.
 _AUDIT_LOCK = threading.Lock()
 
 
 def _audit_log_path(account_id: str) -> Path:
-    root = get_clerk_settings().dir
+    root = get_alpaca_settings().clerk_dir
     safe_account = "".join(c for c in account_id if c.isalnum() or c in "-_.")
     return root / "accounts" / safe_account / "evidence_audit.jsonl"
 
@@ -250,70 +232,6 @@ def _append_audit_entry(entry: EvidenceAuditEntry) -> None:
             "Evidence audit log write failed",
             extra={"account_id": entry.account_id, "sid": entry.strategy_instance_id},
         )
-
-
-def _redact_summary(entry: OrderJournalEntry) -> tuple[str, bool]:
-    """Build a redacted summary string for one journal entry.
-
-    Returns (summary_text, has_more_detail). ``has_more_detail`` is True when
-    the raw entry contains fields beyond what the summary exposes — operators
-    who need the full row must retrieve it through an authenticated channel.
-
-    Redaction rules:
-    - ``order_id`` (broker-assigned) is never included.
-    - Raw error stacks are truncated to a single line.
-    - Broker credentials embedded in any field are stripped (none expected here
-      since the clerk journal strips them at capture time, but this layer
-      re-verifies by never forwarding raw broker response bodies).
-    """
-    kind = entry.kind
-    parts: list[str] = [f"kind={kind}"]
-    has_more = False  # default; overridden per-branch below
-
-    if entry.intent_id:
-        parts.append(f"intent={entry.intent_id[:32]}")
-
-    if kind is ClerkEntryKind.INTENT_RECORDED:
-        if entry.leg:
-            parts.append(
-                f"{entry.leg.side.value} {entry.leg.quantity} {entry.leg.symbol}"
-            )
-        has_more = bool(entry.leg)
-
-    elif kind is ClerkEntryKind.SUBMIT_ACKED:
-        if entry.order:
-            parts.append(f"status={entry.order.status}")
-        has_more = bool(entry.order)
-
-    elif kind is ClerkEntryKind.SUBMIT_FAILED:
-        # Truncate error to one line; never expose a stack trace.
-        msg = (entry.error_message or "")[:120]
-        parts.append(f"error={msg}")
-        has_more = bool(entry.error_detail)
-
-    elif kind is ClerkEntryKind.ORDER_EVENT:
-        if entry.event:
-            parts.append(f"event={entry.event.event_type}")
-            # BrokerOrderEvent carries per-event quantity/price (not the
-            # order-level filled_quantity/filled_avg_price field names).
-            if entry.event.quantity:
-                parts.append(f"filled={entry.event.quantity}@{entry.event.price}")
-        has_more = bool(entry.event)
-
-    elif kind is ClerkEntryKind.RECONCILIATION:
-        if entry.verdict:
-            parts.append(f"verdict={entry.verdict}")
-        has_more = False
-
-    elif kind in (ClerkEntryKind.HOLD_SET, ClerkEntryKind.HOLD_CLEARED):
-        if entry.reason_code:
-            parts.append(f"reason={entry.reason_code}")
-        has_more = bool(entry.reason)
-
-    else:
-        has_more = False
-
-    return " | ".join(parts), has_more
 
 
 def _sqlite_evidence_entry(entry: TimelineEntry) -> EvidenceEntry:
@@ -351,11 +269,11 @@ def _read_active_sqlite_evidence(
     transaction_ref: str | None,
     cursor: str | int | None,
     page_size: int,
-) -> tuple[list[EvidenceEntry], str | None, int, bool] | None:
+) -> tuple[list[EvidenceEntry], str | None, int, bool]:
     """Read the selected SQLite authority, never a latent database by path."""
     runtime = get_active_clerk_runtime()
     if runtime is None or runtime.authority_kind != "sqlite":
-        return None
+        raise RuntimeError("The activated SQLite Clerk evidence authority is unavailable")
     clerk = runtime.clerk
     if not isinstance(clerk, SqliteAlpacaClerkFacade):
         raise RuntimeError("Active SQLite Clerk does not expose its verified read authority")
@@ -398,10 +316,8 @@ def read_evidence_page(
     Args:
         account_id: The account whose journal to read.
         sid: Filter to this bot's namespace only.
-        transaction_ref: If given, filter further to the selected SQLite
-            effect operation or legacy order identity.
-        cursor: Sequence position to start from (0-based); ``None`` = from end
-            (newest-first, default for operator lens journal tail).
+        transaction_ref: If given, filter to the selected SQLite effect operation.
+        cursor: Opaque SQLite timeline cursor; ``None`` starts at the newest page.
         page_size: Capped at ``PAGE_SIZE_MAX``.
         operator_identity: The configured server-side operator identity (§14).
         client_hint: Optional client-provided label for audit tracing.
@@ -422,78 +338,7 @@ def read_evidence_page(
         cursor=cursor,
         page_size=page_size,
     )
-    if sqlite_page is not None:
-        evidence_entries, next_cursor, total, truncated = sqlite_page
-        audit = EvidenceAuditEntry(
-            account_id=account_id,
-            strategy_instance_id=sid,
-            transaction_ref=transaction_ref,
-            operator_identity=operator_identity,
-            read_at_ms=read_at,
-            page_cursor=cursor,
-            page_size=page_size,
-            entries_returned=len(evidence_entries),
-            client_hint=client_hint,
-        )
-        _append_audit_entry(audit)
-        return EvidencePage(
-            strategy_instance_id=sid,
-            account_id=account_id,
-            transaction_ref=transaction_ref,
-            entries=evidence_entries,
-            next_cursor=next_cursor,
-            total_entries=total,
-            truncated=truncated,
-            read_by=operator_identity,
-            read_at_ms=read_at,
-        )
-
-    journal = OrderJournal(account_id=account_id, root=get_clerk_settings().dir)
-    owner = get_or_create_owner(account_id, "alpaca")
-    owner.refresh_journal(journal)
-
-    # The account projection owner maintains this namespace index while tailing
-    # appended records, so an evidence request never scans the full journal.
-    bot_entries = owner.entries_for_sid(sid)
-    if transaction_ref:
-        bot_entries = [
-            e for e in bot_entries if e.order_ref == transaction_ref
-        ]
-
-    total = len(bot_entries)
-
-    # Newest-first: reverse so cursor=0 is the most recent entry.
-    bot_entries_desc = list(reversed(bot_entries))
-
-    if cursor is not None and not isinstance(cursor, int):
-        try:
-            start = int(cursor)
-        except ValueError as exc:
-            raise ValueError("Legacy evidence cursor must be an integer") from exc
-    else:
-        start = cursor if cursor is not None else 0
-    end = start + page_size
-    page_slice = bot_entries_desc[start:end]
-
-    evidence_entries: list[EvidenceEntry] = []
-    for seq_in_page, entry in enumerate(page_slice):
-        summary, has_more = _redact_summary(entry)
-        kind_label = _KIND_LABELS.get(entry.kind, entry.kind)
-        evidence_entries.append(
-            EvidenceEntry(
-                seq=start + seq_in_page,
-                kind=entry.kind,
-                kind_label=kind_label,
-                recorded_at_ms=entry.recorded_at_ms,
-                order_ref=entry.order_ref,
-                intent_id=entry.intent_id,
-                summary=summary,
-                has_more_detail=has_more,
-            )
-        )
-
-    next_cursor = end if end < total else None
-    truncated = end < total
+    evidence_entries, next_cursor, total, truncated = sqlite_page
 
     audit = EvidenceAuditEntry(
         account_id=account_id,

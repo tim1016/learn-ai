@@ -1,8 +1,8 @@
 """Tests for the read-only live-runs evidence surface.
 
 Uses httpx.AsyncClient + ASGITransport(app=app) per repo testing rules.
-Covers desired-state resolution (absent/PAUSED/STOPPED/corrupt/unknown)
-and command-channel evidence.
+Covers desired-state resolution (absent/PAUSED/STOPPED/corrupt), strict
+historical identity rejection, and command-channel evidence.
 """
 
 from __future__ import annotations
@@ -136,13 +136,12 @@ async def test_desired_state_corrupt(live_runs_root):
     assert body["state"] is None
 
 
-async def test_desired_state_unknown_no_ledger_binding(live_runs_root):
+async def test_desired_state_rejects_historical_run_without_strict_identity(live_runs_root):
     _make_run(live_runs_root, _RID, sid="")
     async with _client() as client:
         resp = await client.get(f"/api/live-runs/{_RID}/desired-state")
-    body = resp.json()
-    assert body["path_status"] == "unknown_no_ledger_binding"
-    assert body["state"] is None
+    assert resp.status_code == 404
+    assert resp.json() == {"detail": f"Run {_RID!r} ledger unreadable"}
 
 
 async def test_status_includes_controls_fields(live_runs_root):

@@ -10,13 +10,12 @@ from pathlib import Path
 import pytest
 
 import app.services.fleet_contamination as fleet_contamination
-from app.engine.live.account_clerk import AccountClerkJournalEntry
 from app.engine.live.account_clerk_journal_models import (
     AccountClerkBrokerEvidenceBaseline,
+    AccountClerkJournalEntry,
     AccountClerkOperatorAdjustment,
     AccountClerkPositionEvidence,
 )
-from app.engine.live.account_clerk_reconciler import namespace_expected_exposure
 from app.engine.live.journal_exposure import (
     ExecutionExposureEffect,
     fold_execution_exposure,
@@ -213,7 +212,7 @@ def test_project_journal_account_exposure_prunes_sub_epsilon_baseline() -> None:
     assert project_journal_account_exposure([baseline], account_id="DUA") == ()
 
 
-def test_reconciler_and_contamination_share_the_journal_projection(
+def test_contamination_uses_the_canonical_journal_projection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -233,15 +232,16 @@ def test_reconciler_and_contamination_share_the_journal_projection(
     for _ in range(3):
         contamination_view = collect_fleet_position_explanations(root, account_id="DUA")
 
-    reconciler_view = namespace_expected_exposure(
-        [entry for entry in entries if entry.intent.account_id == "DUA"]
+    projection_view = project_journal_exposure(
+        [entry for entry in entries if entry.intent.account_id == "DUA"],
+        group_by="namespace",
     )
-    reconciler_by_symbol: dict[str, float] = defaultdict(float)
-    for exposure in reconciler_view:
-        reconciler_by_symbol[exposure.symbol] += exposure.quantity
+    projection_by_symbol: dict[str, float] = defaultdict(float)
+    for exposure in projection_view:
+        projection_by_symbol[exposure.symbol] += exposure.quantity
 
     assert contamination_view == expected
-    assert dict(reconciler_by_symbol) == {"SPY": 3.0}
+    assert dict(projection_by_symbol) == {"SPY": 3.0}
     assert collect_fleet_position_explanations(root, account_id="DUB") == {"bot-alpha": {"SPY": 2}}
     with pytest.raises(AccountJournalScopeRequiredError, match="ACCOUNT_JOURNAL_SCOPE_REQUIRED"):
         collect_fleet_position_explanations(root)

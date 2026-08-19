@@ -1306,24 +1306,15 @@ async def test_successful_fixture_cutover_restarts_with_only_sqlite_authority(
         max_broker_evidence_age_ms=1_000,
         clock=clock,
     )
-    legacy_constructed = False
-
-    def _legacy_factory() -> Any:
-        nonlocal legacy_constructed
-        legacy_constructed = True
-        raise AssertionError("activated restart must not construct the legacy Clerk")
-
     broker = _StartupBroker()
     runtime = await select_active_clerk_runtime(
         read=broker,
         trade=broker,
         artifacts_root=clerk_root,
-        legacy_factory=_legacy_factory,
     )
 
     assert runtime.authority_kind == "sqlite"
     assert runtime.sqlite_repository is not None
-    assert not legacy_constructed
     await runtime.close()
 
 

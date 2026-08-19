@@ -833,8 +833,6 @@ def test_panel_composes_cards_rail_and_actions() -> None:
         "continue",
         "stop",
         "flatten_stop",
-        "clear_hold",
-        "record_inventory_baseline",
         "reconcile_now",
     }
     assert panel.mission_verdict.state == "working"
@@ -842,9 +840,6 @@ def test_panel_composes_cards_rail_and_actions() -> None:
     assert panel.exposure == {"SPY": 100.0}
     assert panel.recent_decisions[0].reason_code == "CROSS_UP"
     assert {check.operation for check in panel.readiness_checks} == action_ids
-    # Golden gate fixture: the eight presented lifecycle actions split evenly.
-    assert panel.readiness_ready_count == 4
-    assert panel.readiness_blocked_count == 4
     assert panel.readiness_ready_count == sum(
         check.ready for check in panel.readiness_checks
     )
@@ -872,7 +867,7 @@ def test_unperformed_actions_are_not_advertised_and_flatten_has_blast_radius() -
     )
 
 
-def test_missing_intent_presents_confirmed_inventory_baseline_recovery() -> None:
+def test_missing_intent_does_not_present_retired_inventory_baseline_recovery() -> None:
     panel = _panel(
         _status(running=False),
         _clerk_status(
@@ -889,14 +884,12 @@ def test_missing_intent_presents_confirmed_inventory_baseline_recovery() -> None
         exposure={},
     )
 
-    action = _action(panel, "record_inventory_baseline")
-    assert action.enabled is True
-    assert action.confirmation is not None
-    assert action.confirmation.required_token == "BASELINE"
-    assert "Earlier trades remain in history" in action.confirmation.consequence
+    assert "record_inventory_baseline" not in {
+        action.action_id for action in panel.actions
+    }
 
 
-def test_clean_flat_account_presents_stale_bot_attribution_recovery() -> None:
+def test_stale_bot_attribution_does_not_restore_retired_baseline_recovery() -> None:
     panel = _panel(
         _status(running=False),
         _clerk_status(reconciliation_verdict="clean"),
@@ -904,28 +897,19 @@ def test_clean_flat_account_presents_stale_bot_attribution_recovery() -> None:
         exposure={"SPY": 1.0},
     )
 
-    action = _action(panel, "record_inventory_baseline")
-    assert action.enabled is True
-    assert action.confirmation is not None
-    assert action.confirmation.required_token == "BASELINE"
-    assert "All pre-cutover bot attribution is retired" in (
-        action.confirmation.consequence
-    )
+    assert "record_inventory_baseline" not in {
+        action.action_id for action in panel.actions
+    }
 
 
-def test_active_hold_presents_confirmed_clear_hold_recovery() -> None:
+def test_active_hold_does_not_present_retired_direct_clear() -> None:
     panel = _panel(
         _status(),
         _clerk_status(hold=True, hold_code="UNEXPLAINED_ORDER_HOLD", healthy=True),
         [],
     )
 
-    action = _action(panel, "clear_hold")
-    assert action.enabled is True
-    assert action.confirmation is not None
-    assert action.confirmation.required_token == "CLEARHOLD"
-    assert ACCT in action.confirmation.body
-    assert "resumes immediately" in action.confirmation.consequence
+    assert "clear_hold" not in {action.action_id for action in panel.actions}
 
 
 def test_disabled_action_explains_backend_blocker_and_safe_next_step() -> None:
@@ -1242,19 +1226,17 @@ def test_resume_token_changes_when_clerk_journal_advances() -> None:
     assert _action(before, "resume").concurrency_token != _action(after, "resume").concurrency_token
 
 
-def test_clear_hold_gated_on_healthy_and_fresh() -> None:
-    # Hold active + channels healthy & fresh → clear_hold enabled.
+def test_clear_hold_remains_absent_regardless_of_channel_health() -> None:
     healthy = _panel(_status(), _clerk_status(hold=True, hold_code="STREAM_HEALTH_HOLD"), [])
     assert healthy.clerk.hold_active is True
-    assert _action(healthy, "clear_hold").enabled is True
+    assert "clear_hold" not in {action.action_id for action in healthy.actions}
 
-    # Hold active but channels unhealthy → clear_hold stays disabled.
     unhealthy = _panel(
         _status(),
         _clerk_status(hold=True, hold_code="STREAM_HEALTH_HOLD", healthy=False),
         [],
     )
-    assert _action(unhealthy, "clear_hold").enabled is False
+    assert "clear_hold" not in {action.action_id for action in unhealthy.actions}
 
 
 def test_account_freeze_blocks_start_and_flatten_with_authored_copy() -> None:

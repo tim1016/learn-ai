@@ -1,29 +1,9 @@
-"""§ 7 intra-day fatal-halt infrastructure.
+"""Historical poisoned-run evidence and pure divergence classifiers.
 
-This module owns the *fatal* halt machinery — distinct from the
-next-session morning gate in ``pre_flight.py`` (§ 6.4). The two
-differ in semantics:
-
-  - ``pre_flight.check_no_halt_flag`` reads ``halt.flag``, written by
-    the daily reconciler when the prior day produced an engine-class
-    divergence or fill breach. The current run *paused for one
-    session* and may resume on a later day after the operator
-    investigates.
-
-  - ``halt.write_poisoned_flag`` writes ``poisoned.flag``, written
-    intra-day by the LiveEngine when broker-state divergence is
-    detected (foreign execId/permId, lost fill, etc.). The current
-    run *will never resume on the same run_id* — the receipt is
-    contaminated and a fresh ``run_id`` is required after the
-    operator manually reconciles the account (§ 7.2 #4–5).
-
-Phase C-2c-a (this PR) ships only the on-disk flag I/O, so the
-``cmd_start`` and LiveEngine integrations that read/write it can
-arrive in their own focused PRs without conflicting on file-level
-edits to ``run.py`` or ``live_engine.py``. The detection logic
-(outside-mutation, lost-fill) and the operator-facing
-``emergency-flatten`` subcommand follow in C-2c-b and C-2c-c
-respectively.
+The retired IBKR execution runtime wrote ``poisoned.flag`` when it detected
+broker-state divergence. Current incident and live-run read models still parse
+those durable artifacts, so their schema and pure classification helpers remain.
+This module has no registered execution, cancel, flatten, or recovery consumer.
 """
 
 from __future__ import annotations
@@ -40,14 +20,10 @@ POISONED_FLAG_FILENAME = "poisoned.flag"
 
 
 class FatalHaltError(RuntimeError):
-    """Raised when an intra-day fatal halt fires (§ 7).
+    """Historical typed error preserved for durable halt evidence.
 
-    Carries the ``PoisonedHaltReason`` so the top-level CLI handler
-    can surface the trigger and timestamp in its exit message. The
-    exception is the signal that the LiveEngine has already done its
-    fatal-halt cleanup (cancelled Python-owned orders, flushed
-    writers, written ``poisoned.flag``); the runner just needs to
-    propagate the failure with an appropriate exit code.
+    Carries the ``PoisonedHaltReason`` so artifact readers can preserve the
+    original trigger and timestamp.
     """
 
     def __init__(self, reason: PoisonedHaltReason) -> None:
@@ -73,13 +49,9 @@ class PoisonedHaltTrigger(enum.StrEnum):
     divergence the other direction — we placed an order, the broker
     doesn't show its lifecycle.
 
-    ``COLD_START_DIVERGENCE`` fires when the cold-start orchestrator
-    (Resolution 2, ``reconciliation_orchestrator.py``) refuses to resume
-    a run at boot — corrupt sidecar, unreachable broker, foreign
-    perm_id, unparseable order_ref, etc. The granular reason string is
-    carried in ``details["reason"]``; the trigger is shared so the same
-    ``poisoned.flag`` JSON shape is read by ``read_poisoned_flag`` and
-    the live-runs status endpoint.
+    ``COLD_START_DIVERGENCE`` records a historical cold-start refusal such as
+    corrupt sidecar, unreachable broker, foreign perm_id, or unparseable
+    order_ref. The granular reason string is carried in ``details["reason"]``.
 
     ``OPERATOR_DECLARED`` fires when an operator issues the
     ``MARK_POISONED`` command (Resolution 7) — e.g. they observed a
@@ -324,8 +296,8 @@ def check_lost_fill(
     order, the broker doesn't show its lifecycle.
 
     Each ``order`` row carries ``client_order_id`` and ``submitted_at_ms``;
-    each ``execution`` carries ``client_order_id`` (matching what the
-    LivePortfolio sets at place_order time) PLUS ``remaining`` — the
+    each ``execution`` carries the historical ``client_order_id`` correlation
+    plus ``remaining`` — the
     order's leftover quantity after this execution. An order is
     "complete" iff some execution sharing its ``client_order_id`` has
     ``remaining == 0``. A partial fill (``remaining > 0``) does NOT
@@ -333,10 +305,8 @@ def check_lost_fill(
     leaves 199 unfilled, and the lost-fill halt must still fire when
     the order ages past its window.
 
-    ``fill_window_ms`` is how long we wait before declaring a fill
-    lost — typically the bar period + a few seconds of broker-clock
-    slack. ``current_time_ms`` is the wall-clock time of the check
-    (the LiveEngine passes the most-recent bar's end_time).
+    ``fill_window_ms`` is how long the historical runtime waited before
+    declaring a fill lost. ``current_time_ms`` is the observation time.
 
     Returns ``None`` when every submitted order is either complete or
     still within its window; otherwise a ``PoisonedHaltReason`` for

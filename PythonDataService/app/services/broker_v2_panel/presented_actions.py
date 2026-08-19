@@ -17,9 +17,6 @@ Lifecycle semantics (§12) drive the enablement:
 - ``retire`` — non-retired bot; terminal, carries ``replaces_sid`` lineage on
                the replacement deploy (not this action).
 - ``cancel_order`` — a working order exists.
-- ``clear_hold`` — an active hold whose root condition is healthy + fresh.
-- ``record_inventory_baseline`` — missing-intent or stale-attribution recovery
-  with no unresolved or working orders.
 - ``reconcile_now`` — always available (triggers a sweep).
 
 Enablement logic lives in ``app.broker.v2panel.action_policy.ACTION_REGISTRY``
@@ -52,22 +49,12 @@ def build_actions(
 ) -> list[PanelAction]:
     """Build the closed presented-action set for one bot (§11, §12).
 
-    ``channel_fresh`` reflects whether the hold's root condition (channel
-    health) has been freshly observed — the clear_hold gate (§7.3).
     ``exposure`` is the bot's attributed net exposure per symbol (from the S0
     rollup) — it gates ``flatten_stop`` when the bot is stopped but still holds
     a position.
     """
     has_exposure = any(abs(qty) > 0 for qty in exposure.values())
-    account_expected_flat = not any(
-        abs(quantity) > 0 for quantity in account_expected_exposure.values()
-    )
-    inventory_recovery_needed = clerk.reconciliation_verdict == "missing_intent" or (
-        clerk.reconciliation_verdict == "clean"
-        and not status.running
-        and has_exposure
-        and account_expected_flat
-    )
+    del channel_fresh, account_working_order_count, account_expected_exposure
     ctx = ActionGuardContext(
         running=status.running,
         phase=status.phase,
@@ -76,7 +63,6 @@ def build_actions(
         freeze_active=clerk.freeze_active,
         reconciliation_verdict=clerk.reconciliation_verdict,
         outstanding_intents=clerk.outstanding_intents,
-        channel_fresh=channel_fresh,
         has_exposure=has_exposure,
         resume_admission=resume_admission,
         flatten_supported=flatten_supported,
@@ -84,8 +70,6 @@ def build_actions(
         strategy_instance_id=status.strategy_instance_id,
         exposure=exposure,
         working_order_count=working_order_count,
-        account_working_order_count=account_working_order_count,
-        inventory_recovery_needed=inventory_recovery_needed,
     )
     return build_actions_from_registry(ctx, revision=revision, broker="alpaca")
 
@@ -120,7 +104,6 @@ def build_roster_action(
             freeze_active=True,
             reconciliation_verdict=None,
             outstanding_intents=0,
-            channel_fresh=False,
             has_exposure=False,
             resume_admission=None,
             flatten_supported=flatten_supported,
@@ -128,8 +111,6 @@ def build_roster_action(
             strategy_instance_id=status.strategy_instance_id,
             exposure=exposure,
             working_order_count=0,
-            account_working_order_count=0,
-            inventory_recovery_needed=False,
         )
         actions = build_actions_from_registry(
             ctx,

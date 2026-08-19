@@ -351,7 +351,7 @@ async def test_manual_ticket_preview_submit_replay_and_read_are_durable(
     assert len(port.submit_calls) == 1
     assert conflict.status_code == 409
     assert conflict.json()["detail"]["reason"] == "manual_ticket_conflict"
-    assert generic.status_code == 409
+    assert generic.status_code == 405
     assert cancelled.status_code == cancel_replay.status_code == 202
     assert cancelled.json()["state"] == "SUCCEEDED"
     assert cancelled.json()["effect"]["kind"] == "CANCEL"

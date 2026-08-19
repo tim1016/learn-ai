@@ -42,10 +42,8 @@ class ExecutionDivergenceCategory(StrEnum):
     # REJECTED is currently UNREACHABLE — a documented stub, not classified.
     # A broker rejection produces no fill, so from decisions.parquet +
     # executions.parquet alone it is indistinguishable from MISSED. The
-    # rejection evidence (broker status / error events) exists at the adapter
-    # layer (broker/ibkr/orders.py + models.py error events) but is filtered
-    # to fills-only before it reaches an artifact (live_portfolio.py) and the
-    # execution artifact is one-row-per-fill (artifacts.py). Distinguishing
+    # retained historical artifacts contain fills but no order-lifecycle
+    # rejection rows; the execution artifact is one-row-per-fill. Distinguishing
     # REJECTED from MISSED requires a future order-lifecycle artifact
     # (order_events.parquet: ts_ms, client_order_id, order_id, perm_id,
     # event_type, status, error_code, error_message). Do NOT synthesise
@@ -133,11 +131,7 @@ def classify_execution_divergences(
         )
 
     if decision is not None and execution is not None:
-        slippage_bps = (
-            abs(execution.fill_price - decision.intended_price)
-            / decision.intended_price
-            * 10_000
-        )
+        slippage_bps = abs(execution.fill_price - decision.intended_price) / decision.intended_price * 10_000
         if slippage_bps > tolerances.slippage_bps:
             divergences.append(
                 _divergence(
@@ -151,10 +145,7 @@ def classify_execution_divergences(
 
         # Submit latency is the decision's own compute-to-submit time, gated
         # by the engine's max_submit_latency_ms.
-        if (
-            decision.decision_latency_ms is not None
-            and decision.decision_latency_ms > tolerances.latency_submit_ms
-        ):
+        if decision.decision_latency_ms is not None and decision.decision_latency_ms > tolerances.latency_submit_ms:
             divergences.append(
                 _divergence(
                     ExecutionDivergenceCategory.LATENCY_SUBMIT,

@@ -18,7 +18,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.engine.live.account_artifacts import (
     AccountClerkLeaseUnavailableError,
     account_artifact_file_path,
-    append_account_event,
     read_active_accepting_account_clerk_generation,
     read_legacy_account_events,
 )
@@ -43,7 +42,6 @@ AccountGatePromotionState = Literal[
 
 ACCOUNT_CLERK_RESTART_SMOKE_EVENT = "account_clerk_restart_smoke_confirmed"
 ACCOUNT_CLERK_RESTART_SMOKE_SCHEMA_VERSION = 1
-CLERK_RESTART_SMOKE_CONFIRMATION = "CLERK_RESTART_SMOKE"
 ACCOUNT_CLERK_RESTART_SMOKE_FILENAME = "account_clerk_restart_smoke.json"
 
 
@@ -91,10 +89,6 @@ class AccountActionGateResolution:
     authority: AccountGateAuthority
     gate: GateResult | None
     current_clerk_proof_is_weaker: bool
-
-
-class AccountGatePromotionError(ValueError):
-    """The requested evidence cannot safely record a Clerk promotion fact."""
 
 
 def resolve_account_gate_authority(
@@ -239,48 +233,6 @@ def resolve_action_gate(
     )
 
 
-def record_clerk_restart_smoke(
-    artifacts_root: Path,
-    *,
-    account_id: str,
-    confirmation: str,
-    recorded_at_ms: int,
-) -> ClerkRestartSmokeEvidence:
-    """Durably record the typed smoke for the current accepting Clerk only."""
-
-    if confirmation != CLERK_RESTART_SMOKE_CONFIRMATION:
-        raise AccountGatePromotionError("CLERK_RESTART_SMOKE_CONFIRMATION_REQUIRED")
-    canonical_account_id = normalize_account_id(account_id)
-    generation = _active_generation(artifacts_root, canonical_account_id, now_ms=recorded_at_ms)
-    if generation is None:
-        raise AccountGatePromotionError("ACCOUNT_CLERK_RESTART_SMOKE_REQUIRES_ACCEPTING_CLERK")
-    evidence = ClerkRestartSmokeEvidence(
-        recorded_at_ms=recorded_at_ms,
-        clerk_generation=generation,
-    )
-    path = _restart_smoke_path(artifacts_root, canonical_account_id)
-    with _file_lock(path):
-        atomic_write_pydantic_artifact(
-            path,
-            _ClerkRestartSmokeArtifact(
-                account_id=canonical_account_id,
-                recorded_at_ms=evidence.recorded_at_ms,
-                clerk_generation=evidence.clerk_generation,
-            ),
-        )
-    append_account_event(
-        artifacts_root,
-        canonical_account_id,
-        {
-            "event_type": ACCOUNT_CLERK_RESTART_SMOKE_EVENT,
-            "schema_version": ACCOUNT_CLERK_RESTART_SMOKE_SCHEMA_VERSION,
-            "recorded_at_ms": evidence.recorded_at_ms,
-            "clerk_generation": evidence.clerk_generation,
-        },
-    )
-    return evidence
-
-
 def _active_generation(artifacts_root: Path, account_id: str, *, now_ms: int) -> int | None:
     try:
         active = read_active_accepting_account_clerk_generation(
@@ -396,15 +348,12 @@ def _resolution(
 
 __all__ = [
     "ACCOUNT_CLERK_RESTART_SMOKE_EVENT",
-    "CLERK_RESTART_SMOKE_CONFIRMATION",
     "AccountActionGateResolution",
     "AccountGateAuthority",
-    "AccountGatePromotionError",
     "AccountGatePromotionResolution",
     "ClerkRestartSmokeEvidence",
     "clerk_proof_is_active",
     "effective_account_gate_authority_for_current_evidence",
-    "record_clerk_restart_smoke",
     "resolve_account_gate_authority",
     "resolve_action_gate",
 ]

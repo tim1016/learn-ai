@@ -6,10 +6,9 @@ Two proofs:
    product surface (the ``sqlite/`` package plus the two product-facing
    modules that adapt it to HTTP) statically import a JSONL custody reader,
    the Postgres Clerk projection store, or an in-memory rollup-of-JSONL
-   reader. A module that needs one of these for a *legacy* (non-SQLite)
-   authority code path must do so via a function-local import, which this
-   test cannot see — that is the escape hatch, not a loophole: it means the
-   symbol is unreachable unless the function actually runs.
+   reader. The retained IBKR history lineage loads its Postgres reader through
+   a function-local import and is reachable only through explicit
+   ``broker=ibkr`` requests; the default Alpaca path cannot select it.
 2. **Runtime** — killing the SQLite read (simulating a corrupt/unavailable
    authority) surfaces as ``projection_unavailable``/503, never a silent
    read of the legacy Postgres store.
@@ -69,9 +68,9 @@ def _module_scope_imports(path: Path) -> tuple[set[str], set[str]]:
     """Return (imported symbol names, imported module dotted paths) at module scope.
 
     Only ``ast.Module.body`` top-level import statements count — a
-    function-local ``import`` (used deliberately to defer a legacy-path
-    dependency, e.g. ``get_clerk_transaction_store``) is invisible here by
-    design.
+    function-local ``import`` (used deliberately to isolate the explicit IBKR
+    compatibility lineage, e.g. ``get_clerk_transaction_store``) is invisible
+    here by design.
     """
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     symbols: set[str] = set()
@@ -96,7 +95,7 @@ def test_sole_authority_module_never_imports_a_legacy_reader_at_module_scope(
     }
     assert not banned_symbols_found, (
         f"{module_path} imports legacy reader symbol(s) {banned_symbols_found} at module scope; "
-        "use a function-local import if this is genuinely a legacy-authority fallback."
+        "the sole-authority surface must not statically depend on a retired reader."
     )
     assert not banned_modules_found, (
         f"{module_path} imports legacy reader module(s) {banned_modules_found} at module scope."

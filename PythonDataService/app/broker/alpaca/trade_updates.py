@@ -65,11 +65,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.broker.alpaca import adapter
-from app.broker.alpaca.clerk.models import ClerkEntryKind
 from app.broker.alpaca.clerk.stream_health import ExecutionEvidenceHealth
 from app.broker.alpaca.clerk.trade_evidence import (
-    LegacyLifecycleRecorder,
-    LegacyTradeUpdateEvidenceSink,
     TradeUpdateEvidenceSink,
 )
 from app.broker.alpaca.config import BROKER_ID, AlpacaSettings, get_alpaca_settings
@@ -112,7 +109,6 @@ _DEFAULT_BASE_BACKOFF_S = 1.0
 # terminal transitions missed while disconnected. Alpaca's order-list max is 500;
 # a wider historical sweep is S6's reconciliation job.
 _GAP_RECONCILE_LIMIT = 500
-_ACTIVITY_RECOVERY_LIMIT = 100
 
 
 _now_ms = now_ms_utc
@@ -295,20 +291,13 @@ class TradeUpdatesConsumer:
         *,
         read: BrokerReadPort,
         frame_source: FrameSource,
-        evidence_sink: TradeUpdateEvidenceSink | None = None,
-        clerk: LegacyLifecycleRecorder | None = None,
+        evidence_sink: TradeUpdateEvidenceSink,
         journal: CaptureJournal | None = None,
         clock: Clock = _now_ms,
         backoff: Backoff = _default_backoff,
         max_reconnects: int | None = None,
     ) -> None:
-        if (evidence_sink is None) == (clerk is None):
-            raise ValueError("provide exactly one of evidence_sink or clerk")
-        self._evidence_sink = (
-            evidence_sink
-            if evidence_sink is not None
-            else LegacyTradeUpdateEvidenceSink(clerk)
-        )
+        self._evidence_sink = evidence_sink
         self._read = self._evidence_sink.guard_reconnect_read(read)
         self._frame_source = frame_source
         self._journal = journal or get_capture_journal()
@@ -627,7 +616,7 @@ class TradeUpdatesConsumer:
         self._seen[key] = _SeenEvent(
             fingerprint=fingerprint, terminal=_is_terminal(order)
         )
-        if kind is ClerkEntryKind.UNEXPLAINED_ORDER:
+        if kind == "unexplained_order":
             self._counters.unexplained += 1
         else:
             self._counters.events_applied += 1
@@ -655,11 +644,9 @@ class TradeUpdatesConsumer:
         whose synthetic timestamp differs from the socket's. A full historical
         sweep beyond the bounded page is S6's reconciliation job.
         """
-        # SQLite performs its authoritative order/position reconciliation here;
-        # legacy implements this hook as a no-op and keeps the bounded recovery
-        # below. A failure propagates so ``connected`` and admission stay closed.
+        # SQLite performs its authoritative order/position reconciliation here.
+        # A failure propagates so ``connected`` and admission stay closed.
         await self._evidence_sink.reconcile_gap()
-        await self._reconcile_activity_window()
         try:
             orders = await self._read.list_orders(
                 status="closed", limit=_GAP_RECONCILE_LIMIT
@@ -681,29 +668,6 @@ class TradeUpdatesConsumer:
             self._counters.gap_reconciled += 1
             await self._handle_trade_update(synthetic, from_gap_reconcile=True)
 
-    async def _reconcile_activity_window(self) -> None:
-        """Persist a bounded, cursor-derived Alpaca account-activity recovery receipt.
-
-        This is intentionally separate from the synthetic order lifecycle event:
-        Alpaca activities are account evidence and do not claim IBKR callback
-        equivalence.  The cursor is reconstructed from the durable Clerk ledger
-        on every reconnect, so a process restart cannot forget the gap boundary.
-        """
-
-        try:
-            self._counters.gap_reconciled += (
-                await self._evidence_sink.recover_activity_window(
-                    read=self._read,
-                    limit=_ACTIVITY_RECOVERY_LIMIT,
-                )
-            )
-        except Exception:
-            logger.warning(
-                "alpaca trade_updates account-activity recovery failed",
-                extra={"action": "trade_updates_activity_recovery_error"},
-                exc_info=True,
-            )
-
     # ── Real-socket adapter ──────────────────────────────────────────────────
 
     @classmethod
@@ -711,8 +675,7 @@ class TradeUpdatesConsumer:
         cls,
         *,
         read: BrokerReadPort,
-        evidence_sink: TradeUpdateEvidenceSink | None = None,
-        clerk: LegacyLifecycleRecorder | None = None,
+        evidence_sink: TradeUpdateEvidenceSink,
         settings: AlpacaSettings | None = None,
         journal: CaptureJournal | None = None,
     ) -> TradeUpdatesConsumer:
@@ -742,7 +705,6 @@ class TradeUpdatesConsumer:
             read=read,
             frame_source=frame_source,
             evidence_sink=evidence_sink,
-            clerk=clerk,
             journal=journal,
         )
 

@@ -20,7 +20,6 @@ from app.broker.alpaca.clerk.active_authority import (
     get_active_clerk_runtime,
     set_active_clerk_runtime,
 )
-from app.broker.alpaca.clerk.journal import reset_clerk_settings_for_testing
 from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import (
     HistoricalExecutionRecoveryPlan,
 )
@@ -119,9 +118,7 @@ class FakeRegistry:
 
 
 @pytest.fixture
-def api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("ALPACA_CLERK_DIR", str(tmp_path))
-    reset_clerk_settings_for_testing()
+def api(tmp_path: Path):
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
     repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
     port = FakeAlpacaPort()
@@ -137,7 +134,6 @@ def api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     finally:
         set_active_clerk_runtime(None)
         repo.close()
-        reset_clerk_settings_for_testing()
 
 
 def _client(app: FastAPI) -> httpx.AsyncClient:
@@ -751,10 +747,9 @@ async def test_get_unknown_command_returns_typed_404(api: FastAPI) -> None:
 
 @pytest.mark.asyncio
 async def test_missing_active_runtime_returns_typed_503(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("ALPACA_CLERK_DIR", str(tmp_path))
-    reset_clerk_settings_for_testing()
+    del tmp_path
     set_active_clerk_runtime(None)
     app = FastAPI()
     app.include_router(router)
@@ -767,7 +762,6 @@ async def test_missing_active_runtime_returns_typed_503(
         assert response.json()["detail"]["reason"] == "active_clerk_not_started"
     finally:
         set_active_clerk_runtime(None)
-        reset_clerk_settings_for_testing()
 
 
 @pytest.mark.asyncio

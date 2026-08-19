@@ -19,13 +19,13 @@ from app.engine.live.account_artifacts import (
     read_account_freeze,
     write_account_freeze,
 )
-from app.engine.live.account_clerk import AccountClerk
+from app.engine.live.account_clerk_journal_models import AccountClerkJournalEntry
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
     bot_order_namespace_for_instance,
-    write_account_instance_binding,
 )
+from app.engine.live.broker_callbacks import broker_callback_idempotency_key
 from app.engine.live.fleet import compute_fleet_contamination
 from app.engine.live.order_identity import build_order_ref
 from app.services.account_journal_authority import (
@@ -42,6 +42,10 @@ from app.services.fleet_contamination import (
     collect_fleet_position_explanations,
     instance_broker,
     record_account_journal_parity_observation,
+)
+from tests._helpers.legacy_ibkr_artifacts import (
+    write_historical_account_binding,
+    write_historical_clerk_journal,
 )
 
 
@@ -148,7 +152,7 @@ def test_journal_exposure_is_canonical(tmp_path: Path, monkeypatch) -> None:
     account = "DU123456"
     sid = "bot-a"
     namespace = bot_order_namespace_for_instance(sid)
-    write_account_instance_binding(
+    write_historical_account_binding(
         tmp_path,
         AccountInstanceBinding(
             account_id=account,
@@ -170,22 +174,49 @@ def test_journal_exposure_is_canonical(tmp_path: Path, monkeypatch) -> None:
         order_ref=build_order_ref(namespace, "intent-a"),
         intent_kind="STRATEGY",
         order_spec=IbkrOrderSpec(
-            symbol="SPY", sec_type="STK", action="BUY", quantity=2,
-            order_type="MKT", confirm_paper=True,
+            symbol="SPY",
+            sec_type="STK",
+            action="BUY",
+            quantity=2,
+            order_type="MKT",
+            confirm_paper=True,
             order_ref=build_order_ref(namespace, "intent-a"),
         ).model_dump(),
         owner_generation=1,
         created_at_ms=1,
     )
-    clerk = AccountClerk(artifacts_root=tmp_path, account_id=account)
-    asyncio.run(clerk.record_intent(intent))
+    recorded = AccountClerkJournalEntry(seq=1, entry_kind="recorded", recorded_at_ms=0, intent=intent)
+    write_historical_clerk_journal(tmp_path, account, [recorded])
     monkeypatch.setattr(fleet_contamination, "_collect_legacy_fleet_position_explanations", lambda _root: {})
     assert collect_fleet_position_explanations(tmp_path / "live_runs") == {}
 
-    clerk.append_broker_event(intent, IbkrOrderEvent(
-        account_id=account, order_id=1, event_type="fill", order_ref=intent.order_ref,
-        symbol="SPY", side="BUY", fill_quantity=2, exec_id="exec-a", ts_ms=2,
-    ))
+    broker_event = IbkrOrderEvent(
+        account_id=account,
+        order_id=1,
+        event_type="fill",
+        order_ref=intent.order_ref,
+        symbol="SPY",
+        side="BUY",
+        fill_quantity=2,
+        exec_id="exec-a",
+        ts_ms=2,
+    )
+    write_historical_clerk_journal(
+        tmp_path,
+        account,
+        [
+            recorded,
+            AccountClerkJournalEntry(
+                seq=2,
+                entry_kind="broker_event",
+                recorded_at_ms=2,
+                intent=intent,
+                broker_event=broker_event.model_dump(mode="json"),
+                event_account_id=broker_event.account_id,
+                broker_callback_idempotency_key=broker_callback_idempotency_key(broker_event),
+            ),
+        ],
+    )
 
     expected = {sid: {"SPY": 2}}
     legacy = {"positions": expected}
@@ -324,7 +355,9 @@ def test_shadow_drift_keeps_legacy_authoritative_and_emits_alarm(tmp_path: Path,
     account = "DU123456"
     (tmp_path / "accounts" / account).mkdir(parents=True)
     (tmp_path / "accounts" / account / "clerk_journal.jsonl").write_text("", encoding="utf-8")
-    monkeypatch.setattr(fleet_contamination, "_collect_journal_position_explanations", lambda _root: {"bot-a": {"SPY": 1}})
+    monkeypatch.setattr(
+        fleet_contamination, "_collect_journal_position_explanations", lambda _root: {"bot-a": {"SPY": 1}}
+    )
     monkeypatch.setattr(fleet_contamination, "_collect_legacy_fleet_position_explanations", lambda _root: {})
 
     assert collect_fleet_position_explanations(tmp_path / "live_runs") == {"bot-a": {"SPY": 1}}
@@ -424,9 +457,7 @@ def test_legacy_shadow_comparator_drops_zero_position_sidecars(
     monkeypatch.setattr(fleet_contamination, "read_instance_live_state", lambda _root, _sid: envelope)
     monkeypatch.setattr(fleet_contamination, "_retired_claim_keys_for_run", lambda **_kwargs: frozenset())
 
-    assert fleet_contamination._collect_legacy_fleet_position_explanations(
-        tmp_path / "live_runs"
-    ) == {}
+    assert fleet_contamination._collect_legacy_fleet_position_explanations(tmp_path / "live_runs") == {}
 
 
 def test_legacy_cutover_is_invalidated_once_before_new_shadow_observations(tmp_path: Path, monkeypatch) -> None:
@@ -472,13 +503,17 @@ def test_requalification_requires_fifteen_minutes_ten_observations_and_nonzero_t
     monkeypatch.setattr(fleet_contamination, "_collect_legacy_fleet_position_explanations", explained)
 
     for observation in range(16):
-        assert record_account_journal_parity_observation(tmp_path / "live_runs", account_id=account) is (observation == 15)
+        assert record_account_journal_parity_observation(tmp_path / "live_runs", account_id=account) is (
+            observation == 15
+        )
         clock["ms"] += 60_000
 
     events = read_account_events(tmp_path, account)
     qualified = [event for event in events if event["event_type"] == "account_clerk_journal_authority_requalified"]
     assert len(qualified) == 1
-    assert [event for event in events if event["event_type"] == "account_clerk_sidecar_journal_parity"][-1]["journal_nonzero"] is False
+    assert [event for event in events if event["event_type"] == "account_clerk_sidecar_journal_parity"][-1][
+        "journal_nonzero"
+    ] is False
 
 
 def test_parity_observer_throttles_per_account_and_alarm_resets_qualification_window(
@@ -490,8 +525,12 @@ def test_parity_observer_throttles_per_account_and_alarm_resets_qualification_wi
     (tmp_path / "accounts" / account / "clerk_journal.jsonl").write_text("", encoding="utf-8")
     clock = {"ms": 1_700_000_000_000}
     monkeypatch.setattr(fleet_contamination.time, "time_ns", lambda: clock["ms"] * 1_000_000)
-    monkeypatch.setattr(fleet_contamination, "_collect_journal_position_explanations", lambda _root, **_kw: {"bot-a": {"SPY": 1}})
-    monkeypatch.setattr(fleet_contamination, "_collect_legacy_fleet_position_explanations", lambda _root, **_kw: {"bot-a": {"SPY": 1}})
+    monkeypatch.setattr(
+        fleet_contamination, "_collect_journal_position_explanations", lambda _root, **_kw: {"bot-a": {"SPY": 1}}
+    )
+    monkeypatch.setattr(
+        fleet_contamination, "_collect_legacy_fleet_position_explanations", lambda _root, **_kw: {"bot-a": {"SPY": 1}}
+    )
 
     record_account_journal_parity_observation(tmp_path / "live_runs", account_id=account)
     record_account_journal_parity_observation(tmp_path / "live_runs", account_id=account)
@@ -509,7 +548,11 @@ def test_parity_observer_throttles_per_account_and_alarm_resets_qualification_wi
     )
     clock["ms"] += 60_000
     record_account_journal_parity_observation(tmp_path / "live_runs", account_id=account)
-    parity = [event for event in read_account_events(tmp_path, account) if event["event_type"] == "account_clerk_sidecar_journal_parity"]
+    parity = [
+        event
+        for event in read_account_events(tmp_path, account)
+        if event["event_type"] == "account_clerk_sidecar_journal_parity"
+    ]
     assert [event["status"] for event in parity] == ["clean", "drift"]
 
 
@@ -521,7 +564,9 @@ def test_post_cutover_drift_creates_an_account_operator_condition(tmp_path: Path
         tmp_path,
         _AccountJournalAuthorityState(account_id=account, qualified_at_ms=1),
     )
-    monkeypatch.setattr(fleet_contamination, "_collect_journal_position_explanations", lambda _root, **_kw: {"bot-a": {"SPY": 1}})
+    monkeypatch.setattr(
+        fleet_contamination, "_collect_journal_position_explanations", lambda _root, **_kw: {"bot-a": {"SPY": 1}}
+    )
     monkeypatch.setattr(fleet_contamination, "_collect_legacy_fleet_position_explanations", lambda _root, **_kw: {})
 
     assert record_account_journal_parity_observation(tmp_path / "live_runs", account_id=account) is False

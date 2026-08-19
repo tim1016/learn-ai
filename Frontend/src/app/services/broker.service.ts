@@ -8,10 +8,6 @@ import type {
   AccountClearFreezeRequest,
   AccountClearFreezeResponse,
   AccountEventSequenceRepairReceipt,
-  BindingLedgerBaselineReceipt,
-  JournalCurePreview,
-  JournalCureReceipt,
-  JournalCureRequest,
   LegacyStaleClaimCandidatesResponse,
   LegacyStaleClaimRetireRequest,
   LegacyStaleClaimRetirementReceipt,
@@ -22,8 +18,6 @@ import type {
 } from '../api/account-reconciliation.types';
 import type { AccountsRosterResponse, AccountServiceStatusResponse } from '../api/account-directory.types';
 import type {
-  AccountClerkRestoreReceipt,
-  AccountClerkRestoreRequest,
   AccountCockpitResponse,
   JournalRecoveryReceipt,
   JournalRecoveryRequest,
@@ -36,7 +30,6 @@ import type {
   ExternalOrderAcknowledgement,
 } from '../api/clerk-transaction-history.types';
 import type {
-  AccountTruthResponse,
   AccountSafetySnapshot,
   PresentedOperatorAction,
   PresentedOperatorActionResult,
@@ -47,10 +40,6 @@ import type {
   IbkrApiEvidenceEvent,
   IbkrAccountSummary,
   IbkrConnectionHealth,
-  IbkrOpenOrder,
-  IbkrOrderAck,
-  IbkrOrderSpec,
-  IbkrOrderWhatIfPreview,
   IbkrPositionsSnapshot,
   IbkrStrikeList,
   OptionContractsResponse,
@@ -146,12 +135,6 @@ export class BrokerService {
     return firstValueFrom(this.http.get<IbkrPositionsSnapshot>(`${this.base}/positions`));
   }
 
-  accountTruth(): Promise<AccountTruthResponse> {
-    return firstValueFrom(
-      this.http.get<AccountTruthResponse>(`${this.base}/account-truth`),
-    );
-  }
-
   accountSafetySnapshot(accountId: string): Promise<AccountSafetySnapshot> {
     return firstValueFrom(
       this.http.get<AccountSafetySnapshot>(
@@ -188,32 +171,10 @@ export class BrokerService {
     );
   }
 
-  executePresentedRecoveryAction(
-    accountId: string,
-    action: PresentedOperatorAction,
-    confirmationToken?: string,
-  ): Promise<PresentedOperatorActionResult> {
-    return firstValueFrom(
-      this.http.post<PresentedOperatorActionResult>(
-        `${this.accountsBase}/${encodeURIComponent(accountId)}/presented-actions/recovery`,
-        presentedActionInvocation(action, confirmationToken),
-      ),
-    );
-  }
-
   reconcileAccount(accountId: string): Promise<AccountReconciliationReceipt> {
     return firstValueFrom(
       this.http.post<AccountReconciliationReceipt>(
         `${this.accountsBase}/${encodeURIComponent(accountId)}/reconciliation`,
-        {},
-      ),
-    );
-  }
-
-  baselineBindingLedger(accountId: string): Promise<BindingLedgerBaselineReceipt> {
-    return firstValueFrom(
-      this.http.post<BindingLedgerBaselineReceipt>(
-        `${this.accountsBase}/${encodeURIComponent(accountId)}/binding-ledger/baseline`,
         {},
       ),
     );
@@ -283,6 +244,7 @@ export class BrokerService {
     filters: ClerkTransactionFilters = {},
   ): Promise<ClerkTransactionHistoryResponse> {
     const params: Record<string, string | number> = { limit };
+    if (filters.broker === 'ibkr') params['broker'] = 'ibkr';
     if (cursor !== null) params['cursor'] = cursor;
     if (filters.origin) params['origin'] = filters.origin;
     if (filters.lifecycleState) params['lifecycle_state'] = filters.lifecycleState;
@@ -318,18 +280,6 @@ export class BrokerService {
       this.http.post<ExternalOrderAcknowledgement>(
         `${this.accountsBase}/${encodeURIComponent(accountId)}/transactions/external-orders/${encodeURIComponent(externalOrderId)}/acknowledge`,
         { operator },
-      ),
-    );
-  }
-
-  restoreAccountClerk(
-    accountId: string,
-    payload: AccountClerkRestoreRequest,
-  ): Promise<AccountClerkRestoreReceipt> {
-    return firstValueFrom(
-      this.http.post<AccountClerkRestoreReceipt>(
-        `${this.accountsBase}/${encodeURIComponent(accountId)}/clerk/restore`,
-        payload,
       ),
     );
   }
@@ -387,28 +337,6 @@ export class BrokerService {
     return firstValueFrom(
       this.http.post<LegacyStaleClaimRetirementReceipt>(
         `${this.accountsBase}/${encodeURIComponent(accountId)}/legacy-stale-claims/retire`,
-        payload,
-      ),
-    );
-  }
-
-  previewJournalCure(
-    accountId: string,
-    botOrderNamespace: string,
-    symbol: string,
-  ): Promise<JournalCurePreview> {
-    return firstValueFrom(
-      this.http.get<JournalCurePreview>(
-        `${this.accountsBase}/${encodeURIComponent(accountId)}/journal-cures/preview`,
-        { params: { bot_order_namespace: botOrderNamespace, symbol } },
-      ),
-    );
-  }
-
-  applyJournalCure(accountId: string, payload: JournalCureRequest): Promise<JournalCureReceipt> {
-    return firstValueFrom(
-      this.http.post<JournalCureReceipt>(
-        `${this.accountsBase}/${encodeURIComponent(accountId)}/journal-cures`,
         payload,
       ),
     );
@@ -486,29 +414,4 @@ export class BrokerService {
     );
   }
 
-  openOrders(): Promise<IbkrOpenOrder[]> {
-    return firstValueFrom(this.http.get<IbkrOpenOrder[]>(`${this.base}/orders/open`));
-  }
-
-  completedOrders(): Promise<IbkrOpenOrder[]> {
-    return firstValueFrom(
-      this.http.get<IbkrOpenOrder[]>(`${this.base}/orders/completed`),
-    );
-  }
-
-  orderWhatIf(spec: IbkrOrderSpec): Promise<IbkrOrderWhatIfPreview> {
-    return firstValueFrom(
-      this.http.post<IbkrOrderWhatIfPreview>(`${this.base}/orders/what-if`, spec),
-    );
-  }
-
-  placeOrder(spec: IbkrOrderSpec): Promise<IbkrOrderAck> {
-    return firstValueFrom(this.http.post<IbkrOrderAck>(`${this.base}/orders`, spec));
-  }
-
-  cancelOrder(orderId: number): Promise<IbkrOpenOrder> {
-    return firstValueFrom(
-      this.http.delete<IbkrOpenOrder>(`${this.base}/orders/${orderId}`),
-    );
-  }
 }

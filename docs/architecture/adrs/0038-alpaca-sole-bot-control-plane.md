@@ -125,6 +125,13 @@ Broker V2 remains the sole bot-control product. Shared IBKR paper-order
 primitives and legacy Clerk binding writers are deliberately unchanged for
 their separately sequenced retirements (#1583 and #1618).
 
+**Implementation update 2026-08-19.** ADR 0037 / #1618 then removed the legacy
+Alpaca JSONL custody selector and writers and the temporary `run_ledger.py`
+parser. The only retained historical live-run identity seam is the strict,
+read-only `historical_run_identity.py` collision reader. IBKR Account Clerk
+compatibility evidence remains outside that Alpaca retirement; #1583 still
+owns the shared IBKR paper-order reachability.
+
 The numbered list below is the original consequence inventory. It remains as
 the historical rationale for the independently tracked implementation tickets.
 

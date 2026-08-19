@@ -15,23 +15,9 @@
           </span>
         </div>
 
-        @if (clearError(); as err) {
-          <span class="text-sm text-red-600" role="status">{{ err }}</span>
-        }
-
-        @if (clerk.generic_hold_clear_available !== false) {
-          <div class="flex" [attr.aria-label]="'Clear the exposure hold'">
-            <p-button
-              label="Clear hold"
-              severity="warn"
-              size="small"
-              [loading]="clearing()"
-              (onClick)="clearHold()"
-            />
-          </div>
-        } @else if (clerk.generic_hold_clear_explanation; as explanation) {
-          <span class="text-sm">{{ explanation }}</span>
-        }
+        <span class="text-sm">
+          Review the evidence-bound recovery actions in the Operator lens.
+        </span>
       </div>
     </p-message>
   }

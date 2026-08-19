@@ -12,7 +12,6 @@ import hashlib
 from dataclasses import dataclass
 from uuid import UUID, uuid5
 
-from app.broker.alpaca.clerk.exposure import ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
 from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
 from app.broker.alpaca.clerk.sqlite.custody_subjects import manual_operator_subject_id
 from app.broker.alpaca.clerk.sqlite.facts import (
@@ -34,6 +33,9 @@ from app.broker.alpaca.clerk.sqlite.models import (
     TransitionInput,
 )
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence, fold_uncertain
+from app.broker.alpaca.clerk.sqlite.order_projection import (
+    ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
+)
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.errors import BrokerError, BrokerUnavailable
 from app.broker.contract.ports import BrokerTradePort

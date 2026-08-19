@@ -25,6 +25,9 @@ from app.engine.live.broker_callbacks import (
     BrokerCallbackWalCorruptError,
     broker_callbacks_wal_path,
 )
+from app.engine.live.historical_run_identity import (
+    read_historical_strategy_instance_id,
+)
 from app.engine.live.intent_ledger import LedgerProjection
 from app.engine.live.intent_ledger import fold as fold_intent_events
 from app.engine.live.intent_wal import IntentWal, IntentWalCorruptError
@@ -34,7 +37,6 @@ from app.engine.live.live_state_sidecar import (
     LiveStateSidecarRepo,
     stable_live_state_path,
 )
-from app.engine.live.run_ledger import read_ledger
 from app.schemas.broker_activity import (
     BrokerActivityRow,
     ReconciliationTimingPolicy,
@@ -97,11 +99,7 @@ def reconstruct_broker_activity_for_run(
     treated as authoritative and are never overwritten.
     """
     run_dir = _resolve_run_dir(run_id, artifacts_root)
-    ledger = read_ledger(run_dir / "run_ledger.json")
-    if not ledger.strategy_instance_id:
-        raise ValueError(f"run {run_id!r} has no strategy_instance_id in run_ledger.json")
-
-    strategy_instance_id = ledger.strategy_instance_id
+    strategy_instance_id = _historical_strategy_instance_id(run_dir, run_id)
     envelope = _read_envelope(artifacts_root, strategy_instance_id)
     bot_order_namespace = _bot_order_namespace(strategy_instance_id, envelope)
     submitted_orders = _submitted_orders(run_dir, envelope)
@@ -166,11 +164,7 @@ def project_broker_activity_for_run(
     owned by the live publisher.
     """
     run_dir = _resolve_run_dir(run_id, artifacts_root)
-    ledger = read_ledger(run_dir / "run_ledger.json")
-    if not ledger.strategy_instance_id:
-        raise ValueError(f"run {run_id!r} has no strategy_instance_id in run_ledger.json")
-
-    strategy_instance_id = ledger.strategy_instance_id
+    strategy_instance_id = _historical_strategy_instance_id(run_dir, run_id)
     envelope = _read_envelope(artifacts_root, strategy_instance_id)
     bot_order_namespace = _bot_order_namespace(strategy_instance_id, envelope)
     submitted_orders = _submitted_orders(run_dir, envelope)
@@ -264,6 +258,16 @@ def _resolve_run_dir(run_id: str, artifacts_root: Path) -> Path:
     if not candidate.is_dir():
         raise FileNotFoundError(f"live run directory not found: {candidate}")
     return candidate
+
+
+def _historical_strategy_instance_id(run_dir: Path, run_id: str) -> str:
+    """Read the one historical ledger field reconstruction still needs."""
+
+    path = run_dir / "run_ledger.json"
+    try:
+        return read_historical_strategy_instance_id(path)
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"run {run_id!r} has unreadable historical identity") from exc
 
 
 def _read_envelope(

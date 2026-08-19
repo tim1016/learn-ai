@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 from app.engine.live.identity import strategy_instance_artifact_dir
-from app.engine.live.run_ledger import LiveRunLedger
 from app.services.alpaca_bot_identity import (
     AlpacaBotIdentityGuard,
     AlpacaBotIdentityRefusedError,
@@ -43,20 +43,13 @@ def _legacy_run_ledger(artifacts_root: Path, *, strategy_instance_id: str) -> No
     run_dir = artifacts_root / "live_runs" / f"legacy-{strategy_instance_id}"
     run_dir.mkdir(parents=True)
     (run_dir / "run_ledger.json").write_text(
-        LiveRunLedger(
-            run_id=run_dir.name,
-            code_sha="abc123",
-            strategy_instance_id=strategy_instance_id,
-            strategy_spec_path="strategy.json",
-            strategy_spec_sha256="strategy-sha",
-            qc_audit_copy_path="audit.py",
-            qc_audit_copy_sha256="audit-sha",
-            qc_cloud_backtest_id="qc-backtest",
-            account_id="DU123456",
-            start_date_ms=1,
-            live_config={},
-            created_at_ms=1,
-        ).model_dump_json(),
+        json.dumps(
+            {
+                "run_id": run_dir.name,
+                "strategy_instance_id": strategy_instance_id,
+                "account_id": "DU123456",
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -104,6 +97,80 @@ def test_unreadable_legacy_run_ledger_fails_closed(tmp_path: Path) -> None:
     run_dir = tmp_path / "live_runs" / "unreadable-legacy-run"
     run_dir.mkdir(parents=True)
     (run_dir / "run_ledger.json").write_text("not-json", encoding="utf-8")
+
+    with pytest.raises(AlpacaBotIdentityRefusedError, match="unreadable historical"):
+        AlpacaBotIdentityGuard(tmp_path).require("paper-guard", sqlite_claim=True)
+
+
+def test_non_string_historical_strategy_identity_fails_closed(tmp_path: Path) -> None:
+    run_dir = tmp_path / "live_runs" / "malformed-legacy-run"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps({"strategy_instance_id": 42}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AlpacaBotIdentityRefusedError, match="unreadable historical"):
+        AlpacaBotIdentityGuard(tmp_path).require("paper-guard", sqlite_claim=True)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        [],
+        {"strategy_instance_id": ""},
+        {"strategy_instance_id": "   "},
+    ],
+)
+def test_non_object_or_blank_historical_identity_fails_closed(
+    tmp_path: Path,
+    payload: object,
+) -> None:
+    run_dir = tmp_path / "live_runs" / "invalid-legacy-run"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run_ledger.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(AlpacaBotIdentityRefusedError, match="unreadable historical"):
+        AlpacaBotIdentityGuard(tmp_path).require("paper-guard", sqlite_claim=True)
+
+
+def test_symlinked_historical_run_ledger_fails_closed(tmp_path: Path) -> None:
+    run_dir = tmp_path / "live_runs" / "symlinked-legacy-run"
+    run_dir.mkdir(parents=True)
+    target = tmp_path / "historical-ledger-target.json"
+    target.write_text(json.dumps({"strategy_instance_id": "paper-guard"}), encoding="utf-8")
+    (run_dir / "run_ledger.json").symlink_to(target)
+
+    with pytest.raises(AlpacaBotIdentityRefusedError, match="unreadable historical"):
+        AlpacaBotIdentityGuard(tmp_path).require("paper-guard", sqlite_claim=True)
+
+
+def test_broken_symlinked_historical_run_ledger_fails_closed(tmp_path: Path) -> None:
+    run_dir = tmp_path / "live_runs" / "broken-symlink-legacy-run"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run_ledger.json").symlink_to(tmp_path / "missing-ledger.json")
+
+    with pytest.raises(AlpacaBotIdentityRefusedError, match="unreadable historical"):
+        AlpacaBotIdentityGuard(tmp_path).require("paper-guard", sqlite_claim=True)
+
+
+def test_broken_symlinked_live_runs_root_fails_closed(tmp_path: Path) -> None:
+    (tmp_path / "live_runs").symlink_to(tmp_path / "missing-live-runs", target_is_directory=True)
+
+    with pytest.raises(AlpacaBotIdentityRefusedError, match="unreadable historical"):
+        AlpacaBotIdentityGuard(tmp_path).require("paper-guard", sqlite_claim=True)
+
+
+def test_symlinked_historical_run_directory_fails_closed(tmp_path: Path) -> None:
+    target = tmp_path / "historical-run-target"
+    target.mkdir()
+    (target / "run_ledger.json").write_text(
+        json.dumps({"strategy_instance_id": "other-paper-bot"}),
+        encoding="utf-8",
+    )
+    live_runs_root = tmp_path / "live_runs"
+    live_runs_root.mkdir()
+    (live_runs_root / "symlinked-run").symlink_to(target, target_is_directory=True)
 
     with pytest.raises(AlpacaBotIdentityRefusedError, match="unreadable historical"):
         AlpacaBotIdentityGuard(tmp_path).require("paper-guard", sqlite_claim=True)

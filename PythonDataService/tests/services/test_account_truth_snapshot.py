@@ -25,8 +25,6 @@ from app.engine.live.account_artifacts import (
     AccountFreezeEvidence,
     AccountInstanceBinding,
     account_artifacts_root,
-    advance_account_clerk_generation,
-    write_account_clerk_lease,
     write_account_freeze,
 )
 from app.engine.live.account_observation_lease import assess_account_observation_lease
@@ -54,6 +52,10 @@ from app.services.account_truth_snapshot import (
     assess_account_truth,
 )
 from tests._helpers.account_truth import fresh_account_truth_source_freshness
+from tests._helpers.legacy_ibkr_artifacts import (
+    write_historical_clerk_generation,
+    write_historical_clerk_lease,
+)
 
 
 def _truth(
@@ -212,9 +214,7 @@ def _composed_truth_with_position(
         ("soft_lost", True),
     ],
 )
-def test_account_truth_refresh_unavailable_states(
-    connection_state: str, connected: bool
-) -> None:
+def test_account_truth_refresh_unavailable_states(connection_state: str, connected: bool) -> None:
     health = _health(connection_state=connection_state, connected=connected)
 
     assert account_truth_refresh.account_truth_refresh_session_unavailable(health) is True
@@ -345,10 +345,7 @@ async def test_refresh_service_notifies_keyword_only_failure_observer(
             account_truth_failure_observer=observe_failure,
         )
 
-    assert {
-        key: observed[key]
-        for key in ("account_id", "detail", "attempted_at_ms")
-    } == {
+    assert {key: observed[key] for key in ("account_id", "detail", "attempted_at_ms")} == {
         "account_id": "DU123",
         "detail": "broker sweep timed out",
         "attempted_at_ms": 2_000,
@@ -407,14 +404,14 @@ async def test_refresh_now_captures_clerk_generation_before_collection(
     truth = _truth(account_id="DU123")
     observed: dict[str, object] = {}
     for offset in range(3):
-        advance_account_clerk_generation(
+        write_historical_clerk_generation(
             tmp_path,
             "DU123",
             phase="accepting",
             recorded_at_ms=1_700_000_000_000 + offset,
             source="test",
         )
-    write_account_clerk_lease(
+    write_historical_clerk_lease(
         tmp_path,
         AccountClerkLease(
             account_id="DU123",
@@ -434,7 +431,7 @@ async def test_refresh_now_captures_clerk_generation_before_collection(
         account_id: str | None,
         context: str,
     ) -> AccountTruthCollectionContext:
-        advance_account_clerk_generation(
+        write_historical_clerk_generation(
             tmp_path,
             "DU123",
             phase="accepting",
@@ -602,31 +599,46 @@ def test_refresh_loop_validates_cadence_against_provider_ttl() -> None:
 
 
 def test_refresh_loop_sleep_uses_bounded_backoff_and_jitter() -> None:
-    assert _refresh_sleep_seconds(
-        1_000,
-        consecutive_failures=0,
-        random_fraction=0.5,
-    ) == 1.0
-    assert _refresh_sleep_seconds(
-        1_000,
-        consecutive_failures=2,
-        random_fraction=0.5,
-    ) == 4.0
-    assert _refresh_sleep_seconds(
-        1_000,
-        consecutive_failures=99,
-        random_fraction=0.5,
-    ) == 4.0
-    assert _refresh_sleep_seconds(
-        1_000,
-        consecutive_failures=0,
-        random_fraction=0.0,
-    ) == 0.85
-    assert _refresh_sleep_seconds(
-        1_000,
-        consecutive_failures=0,
-        random_fraction=1.0,
-    ) == 1.15
+    assert (
+        _refresh_sleep_seconds(
+            1_000,
+            consecutive_failures=0,
+            random_fraction=0.5,
+        )
+        == 1.0
+    )
+    assert (
+        _refresh_sleep_seconds(
+            1_000,
+            consecutive_failures=2,
+            random_fraction=0.5,
+        )
+        == 4.0
+    )
+    assert (
+        _refresh_sleep_seconds(
+            1_000,
+            consecutive_failures=99,
+            random_fraction=0.5,
+        )
+        == 4.0
+    )
+    assert (
+        _refresh_sleep_seconds(
+            1_000,
+            consecutive_failures=0,
+            random_fraction=0.0,
+        )
+        == 0.85
+    )
+    assert (
+        _refresh_sleep_seconds(
+            1_000,
+            consecutive_failures=0,
+            random_fraction=1.0,
+        )
+        == 1.15
+    )
 
 
 @pytest.mark.asyncio
@@ -720,60 +732,6 @@ async def test_refresh_loop_refreshes_during_data_farm_degradation(
     assert await loop.refresh_once() is not None
     assert refreshed is True
     assert assess_account_truth(provider.get("DU123"), now_ms=2_500).status == "pass"
-
-
-@pytest.mark.asyncio
-async def test_refresh_loop_ensures_account_service_before_observing_truth(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
-    order: list[str] = []
-    monkeypatch.setattr(account_truth_refresh, "get_monitor", lambda: None)
-
-    async def ensure(account_id: str) -> object:
-        order.append(f"ensure:{account_id}")
-        return object()
-
-    async def fake_refresh_now(_client, **_kwargs) -> AccountTruthResponse:
-        order.append("refresh")
-        return _truth(generated_at_ms=2_000)
-
-    loop = AccountTruthRefreshLoop(
-        client=_FakeClient(_health(account_id="DU123", fetched_at_ms=2_000)),  # type: ignore[arg-type]
-        snapshot_provider=provider,
-        refresh_now=fake_refresh_now,
-        account_service_ensurer=ensure,
-    )
-
-    assert await loop.refresh_once() is not None
-    assert order == ["ensure:DU123", "refresh"]
-
-
-@pytest.mark.asyncio
-async def test_refresh_loop_continues_truth_refresh_when_account_service_attach_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
-    order: list[str] = []
-    monkeypatch.setattr(account_truth_refresh, "get_monitor", lambda: None)
-
-    async def ensure(_account_id: str) -> object:
-        order.append("ensure")
-        raise OSError("daemon unavailable")
-
-    async def fake_refresh_now(_client, **_kwargs) -> AccountTruthResponse:
-        order.append("refresh")
-        return _truth(generated_at_ms=2_000)
-
-    loop = AccountTruthRefreshLoop(
-        client=_FakeClient(_health(account_id="DU123", fetched_at_ms=2_000)),  # type: ignore[arg-type]
-        snapshot_provider=provider,
-        refresh_now=fake_refresh_now,
-        account_service_ensurer=ensure,
-    )
-
-    assert await loop.refresh_once() is not None
-    assert order == ["ensure", "refresh"]
 
 
 @pytest.mark.asyncio
@@ -1216,7 +1174,10 @@ def test_submit_grace_never_bootstraps_from_refresh_failure_without_prior_truth(
 def test_submit_grace_fails_closed_on_clock_rollback() -> None:
     grace = AccountTruthSubmitGrace()
 
-    assert grace.gate(AccountTruthSnapshot(_truth(generated_at_ms=10_000), cached_at_ms=10_000), now_ms=10_000).status == "pass"
+    assert (
+        grace.gate(AccountTruthSnapshot(_truth(generated_at_ms=10_000), cached_at_ms=10_000), now_ms=10_000).status
+        == "pass"
+    )
     gate = grace.gate(None, now_ms=9_999)
 
     assert gate.status == "block"
@@ -1344,9 +1305,7 @@ def test_submit_grace_starts_mixed_source_outage_at_missing_evidence_time() -> N
     grace = AccountTruthSubmitGrace()
     grace.gate(AccountTruthSnapshot(_truth(generated_at_ms=1_000), cached_at_ms=1_000), now_ms=1_000)
     source_freshness = [
-        row
-        for row in fresh_account_truth_source_freshness(1_000)
-        if row.source not in {"account_summary", "positions"}
+        row for row in fresh_account_truth_source_freshness(1_000) if row.source not in {"account_summary", "positions"}
     ]
     source_freshness.extend(
         [

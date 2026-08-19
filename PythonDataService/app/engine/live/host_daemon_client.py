@@ -7,9 +7,8 @@ parsed body iff ``result.kind == "CONNECTED"``. Callers that only need
 fail-closed semantics keep checking ``payload is None`` — the typed result is
 additive context for log and operator-facing health surfacing.
 
-Write paths raise ``HostDaemonError``. Typed mutation classification ties
-``outcome_ambiguous=True`` to the
-``OUTCOME_UNKNOWN`` conflict response.
+The sole write is renewal of the host bridge's own capability lease. It raises
+``HostDaemonError`` and preserves typed ``OUTCOME_UNKNOWN`` classification.
 """
 
 from __future__ import annotations
@@ -33,20 +32,7 @@ _TIMEOUT = httpx.Timeout(2.0)
 # owning processes. Keep this read bounded, but do not force false degradation
 # with the generic low-latency health timeout.
 _SOCKET_PROBE_TIMEOUT = httpx.Timeout(10.0)
-# Ensuring a Clerk can wait behind host-side account reconciliation work.
-_START_ADMISSION_TIMEOUT = httpx.Timeout(10.0)
-# Clerk release can legitimately wait two seconds for TERM and another two
-# seconds after KILL. Let the daemon author the bounded-shutdown outcome.
-_CLERK_RELEASE_TIMEOUT = httpx.Timeout(6.0)
-# Emergency flatten round-trips to the broker synchronously (the daemon caps the
-# CLI at 120s); give the HTTP hop a little more so the daemon's own timeout wins.
-_FLATTEN_TIMEOUT = httpx.Timeout(130.0)
-# Operator cancels proxy to the daemon and then wait on the Clerk's broker-write
-# lock, whose inner RPC budget is the submit-sized 240s (up to eight serialized
-# 25s broker writes ahead of the caller). The outer HTTP read must cover that
-# inner budget plus transport margin, or it expires first and re-introduces the
-# OUTCOME_UNKNOWN timeout on the operator cancel path.
-_CANCEL_TIMEOUT = httpx.Timeout(260.0)
+_READINESS_TIMEOUT = httpx.Timeout(10.0)
 
 
 class HostDaemonCircuitBreaker:
@@ -155,8 +141,7 @@ class HostDaemonOutcomeUnknownError(Exception):
     endpoint surfaces this as a typed 409 with
     ``reason_code='OUTCOME_UNKNOWN'`` so the operator refreshes state
     before retrying (the mutation may or may not have executed). The
-    full durable mutation_attempt record + Reconcile action land in
-    619-D.
+    Callers must refresh the associated read model before retrying.
 
     Distinct from :class:`HostDaemonError` so account-capability mutation
     endpoints can branch with a typed ``except`` rather than inspect a
@@ -175,104 +160,13 @@ class HostDaemonOutcomeUnknownError(Exception):
 
 
 # ---------------------------------------------------------------------------
-# Account-capability write path.
+# Host capability-lease write path.
 # ---------------------------------------------------------------------------
-
-
-async def emergency_flatten_account(base_url: str, account_id: str, payload: dict) -> dict:
-    """POST an account-scoped emergency flatten with the broker timeout."""
-
-    return await _post_action(
-        f"{base_url.rstrip('/')}/accounts/{account_id}/emergency-flatten",
-        payload,
-        timeout=_FLATTEN_TIMEOUT,
-    )
 
 
 async def renew_control_plane_lease(base_url: str) -> dict:
     """POST /control-plane/renew-lease and return HostRunnerHealth as a dict."""
     return await _post_action(f"{base_url.rstrip('/')}/control-plane/renew-lease", {})
-
-
-async def ensure_account_clerk(
-    base_url: str,
-    account_id: str,
-    *,
-    ibkr_host: str = "127.0.0.1",
-) -> dict:
-    """Ensure one Clerk is live and generation-handshaken for an operator action."""
-
-    return await _post_action(
-        f"{base_url.rstrip('/')}/accounts/{account_id}/clerk/ensure",
-        {"ibkr_host": ibkr_host},
-        timeout=_START_ADMISSION_TIMEOUT,
-    )
-
-
-async def release_account_clerk(base_url: str, account_id: str) -> dict:
-    """Release the account-scoped Clerk after an explicit broker disconnect."""
-
-    return await _post_action(
-        f"{base_url.rstrip('/')}/accounts/{account_id}/clerk/release",
-        {},
-        timeout=_CLERK_RELEASE_TIMEOUT,
-    )
-
-
-async def apply_operator_adjustment(base_url: str, account_id: str, payload: dict) -> dict:
-    """POST an operator claim-cure to the daemon so the Clerk RPC stays host-local.
-
-    The Clerk's Unix socket is on the host and unreachable from the container
-    across the podman VM boundary; the daemon runs the cure RPC and returns the
-    JournalCureReceipt body verbatim.
-    """
-
-    return await _post_action(
-        f"{base_url.rstrip('/')}/accounts/{account_id}/clerk/operator-adjustment",
-        payload,
-        timeout=_START_ADMISSION_TIMEOUT,
-    )
-
-
-async def operator_recovery_flatten(base_url: str, account_id: str, payload: dict) -> dict:
-    """POST an exact recovery order through the daemon's host-local Clerk RPC."""
-
-    return await _post_action(
-        f"{base_url.rstrip('/')}/accounts/{account_id}/clerk/operator-recovery-flatten",
-        payload,
-        timeout=_FLATTEN_TIMEOUT,
-    )
-
-
-async def operator_exact_cancel(base_url: str, account_id: str, payload: dict) -> dict:
-    """POST one exact current-order cancel through the host-local Clerk."""
-
-    return await _post_action(
-        f"{base_url.rstrip('/')}/accounts/{account_id}/clerk/operator-exact-cancel",
-        payload,
-        timeout=_CANCEL_TIMEOUT,
-    )
-
-
-async def operator_pending_cancel(base_url: str, account_id: str, payload: dict) -> dict:
-    """POST one A0-only local cancellation through the host-local Clerk."""
-
-    return await _post_action(
-        f"{base_url.rstrip('/')}/accounts/{account_id}/clerk/operator-pending-cancel",
-        payload,
-        timeout=_CANCEL_TIMEOUT,
-    )
-
-
-async def authorize_emergency_flatten(base_url: str, account_id: str, payload: dict) -> dict:
-    """Ask the host-local Clerk to authorize one account emergency flatten."""
-
-    return await _post_action(
-        f"{base_url.rstrip('/')}/accounts/{account_id}/clerk/authorize-emergency-flatten",
-        payload,
-        timeout=_FLATTEN_TIMEOUT,
-    )
-
 
 async def _post_action(url: str, payload: dict, *, timeout: httpx.Timeout = _TIMEOUT) -> dict:
     """Typed POST core for account-capability forwards.
@@ -396,7 +290,7 @@ async def fetch_startability_health(
 ) -> tuple[DaemonResult, HostRunnerHealth | None]:
     """GET /health with the bounded deadline used for start admission."""
 
-    return await _fetch_health(base_url, timeout=_START_ADMISSION_TIMEOUT)
+    return await _fetch_health(base_url, timeout=_READINESS_TIMEOUT)
 
 
 async def _fetch_health(

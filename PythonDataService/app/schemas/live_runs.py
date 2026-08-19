@@ -435,8 +435,8 @@ class MutationOutcomeUnknownResponse(BaseModel):
     failure where retry is safe). 409 CONFLICT signals "eligibility is
     indeterminate" — the operator must refresh state before retrying.
 
-    The durable ``mutation_attempt`` record owns later reconciliation;
-    this model is the synchronous surfacing contract.
+    The caller must refresh read-side state before retrying; this model is the
+    synchronous surfacing contract.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -702,11 +702,11 @@ ReceiptOutcome = Literal["clean", "adopted"]
 
 
 class ReconciliationReceipt(BaseModel):
-    """Durable evidence of a single cold-start reconciliation attempt.
+    """Durable historical evidence of a cold-start reconciliation attempt.
 
-    Written once per run by ``reconciliation_orchestrator.reconcile`` (PR 1
-    of the cold-start gate) to ``<run_dir>/reconciliation_receipt.json``.
-    Resume guards consult it to decide whether evidence is fresh.
+    The retired IBKR runtime wrote this to
+    ``<run_dir>/reconciliation_receipt.json``. Read projections retain the
+    schema for existing artifacts; no current execution guard consumes it.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")

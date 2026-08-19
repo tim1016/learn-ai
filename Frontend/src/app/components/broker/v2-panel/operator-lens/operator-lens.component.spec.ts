@@ -646,51 +646,6 @@ describe('OperatorLensComponent', () => {
     expect(screen.getByText('This will close all open positions.')).toBeTruthy();
   });
 
-  it('shows the inventory recovery action with typed confirmation', async () => {
-    const fakeSvc = makeFakePanelService();
-    const recoveryAction: PanelAction = {
-      action_id: 'record_inventory_baseline',
-      label: 'Recover inventory baseline',
-      explanation: 'Record a verified accounting cutover.',
-      enabled: true,
-      blockers: [],
-      confirmation: {
-        title: 'Adopt current broker inventory?',
-        body: 'Reads the current Alpaca positions.',
-        consequence: 'Earlier trades remain in audit history.',
-        confirm_label: 'Recover inventory baseline',
-        required_token: 'BASELINE',
-      },
-      revision: 1,
-      concurrency_token: 'baseline-token',
-    };
-    const panel: BotPanelView = {
-      ...makePanel(),
-      actions: [recoveryAction],
-      readiness_checks: [makeReadinessCheck(recoveryAction)],
-      readiness_ready_count: 1,
-    };
-
-    await render(OperatorLensComponent, {
-      inputs: {
-        panel,
-        profile: makeProfile(),
-        actionPending: false,
-        broker: 'alpaca',
-        accountId: 'acc-1',
-        sid: 'sid-1',
-      },
-      providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
-    });
-
-    expandReadiness('Recover inventory baseline');
-    fireEvent.click(
-      await screen.findByRole('button', { name: 'Recover inventory baseline' }),
-    );
-    expect(screen.getByText('Reads the current Alpaca positions.')).toBeTruthy();
-    expect(screen.getByText('BASELINE')).toBeTruthy();
-  });
-
   it('keeps the backend-selected exact-evidence recovery control outside the accordion', async () => {
     const fakeSvc = makeFakePanelService();
     const actionRequested = vi.fn();

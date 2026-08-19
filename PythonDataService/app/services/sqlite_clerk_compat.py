@@ -5,11 +5,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
-from app.broker.alpaca.clerk.diagnosis import CustodyDiagnosis
-from app.broker.alpaca.clerk.exposure import (
+from app.broker.alpaca.clerk.models import ChannelHealth, ClerkStatus
+from app.broker.alpaca.clerk.sqlite.order_projection import (
     ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
 )
-from app.broker.alpaca.clerk.models import ChannelHealth, ClerkStatus
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     ClerkProjection,
     ProjectedOperation,
@@ -21,6 +20,7 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     build_recovery_catalog,
 )
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.schemas.clerk_custody import CustodyDiagnosis
 from app.utils.timestamps import now_ms_utc
 
 
@@ -167,11 +167,6 @@ def sqlite_clerk_status(
             list(channel_healths) if channel_healths is not None else None
         ),
         authority_kind="sqlite",
-        generic_hold_clear_available=False,
-        generic_hold_clear_explanation=(
-            "SQLite custody holds close only when fresh evidence satisfies their "
-            "typed resolution policy. Use the recovery actions shown by the Clerk."
-        ),
     )
 
 

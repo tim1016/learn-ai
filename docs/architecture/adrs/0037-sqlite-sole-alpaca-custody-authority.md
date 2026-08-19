@@ -50,8 +50,9 @@ duplication to pin — the coupling simply ceases.
 
 ## Consequences
 
-Not implemented by this ADR. Each needs a regression test that fails before and
-passes after, per `CLAUDE.md`.
+Implemented by #1618 and #1656–#1660 on 2026-08-19. Structural absence guards
+replace regression tests against the deleted legacy internals; surviving SQLite
+behavior and the inventory gate retain direct behavioral coverage.
 
 1. **`active_authority.py`'s `activation is None` branch returns unavailable**,
    with a recovery message naming the cutover workflow. The `legacy_factory`
@@ -86,6 +87,32 @@ passes after, per `CLAUDE.md`.
    it reads as *broker connection* when what it reports is *market-data health*,
    which on an Alpaca page invites exactly the wrong inference. This is a labelling
    defect for the register, not a reason to remove the banner.
+
+## Implementation completion and migration gate
+
+The selector now returns unavailable for a missing, `OFF_DUTY`, malformed,
+conflicting, or failed activation. The legacy factory, JSONL writers, effects,
+reconciliation, activity recovery, direct hold clear, unactivated reset,
+product projections, generic mutation routes, and generated contracts are
+removed. SQLite Start/Resume/Stop/retire, bot and manual-ticket custody,
+reconciliation/recovery, and read-only broker evidence remain.
+
+Consequence 5 is enforced by
+`scripts/qualify_alpaca_activation_inventory.py`. It accepts a fresh, explicit,
+nonempty operator export of every Alpaca account declared in use and emits a
+content-addressed receipt only after every account's SQLite database, activation
+record, database identity/generation, broker proof, and quarantine manifest
+verify. An absent, duplicated, stale, malformed, unactivated, or conflicting
+entry refuses the entire gate; no partial receipt is published.
+
+The committed evidence proves the known paper account `PA3KWXU1C4C3` has an
+accepted generation-2 activation. It does **not** prove that account is the
+complete external inventory at every deployment. A fresh inventory export and
+successful receipt remain an operational prerequisite for each deployment. Any
+account absent from that supplied inventory is outside the receipt; any account
+inside it that is absent or unqualified is refused. The implementation receipt
+and operator command are recorded in
+[`alpaca-sqlite-sole-authority-retirement-2026-08-19.md`](../../audits/alpaca-sqlite-sole-authority-retirement-2026-08-19.md).
 
 ## Why this was worth an ADR
 
