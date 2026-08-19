@@ -24,19 +24,20 @@ from pathlib import Path
 
 import pytest
 
-from app.broker.alpaca.clerk import derive
+from app.broker.alpaca.clerk import derive, set_alpaca_clerk
 from app.broker.alpaca.clerk import journal as journal_module
 from app.broker.alpaca.clerk.clerk import AlpacaClerk
 from app.broker.alpaca.clerk.exposure import project_instance_exposure
 from app.broker.alpaca.clerk.models import ClerkEntryKind
 from app.broker.alpaca.clerk.recovery import UNCERTAIN_SUBMIT_GRACE_MS
+from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerOrderLeg
 from app.engine.live.bot_lifecycle_state import (
-    BotDutyOutcome,
     BotLifecyclePhase,
     BotLifecycleStateRepo,
-    BotLifecycleStateUpdateResult,
     stable_bot_lifecycle_state_path,
 )
 from app.engine.live.desired_state import (
@@ -45,7 +46,17 @@ from app.engine.live.desired_state import (
     stable_desired_state_path,
 )
 from app.engine.live.order_identity import build_bot_order_namespace
-from app.services.bot_boot_recovery import BotBootRecovery
+from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
+from app.services.bot_boot_recovery import (
+    BootAuthorityPreparationError,
+    BotBootRecovery,
+    BotRecoveryCandidate,
+)
+from app.services.bot_lifecycle_projection import (
+    ActiveSqliteAlpacaLifecycleAuthority,
+    AlpacaLifecycleAuthoritySnapshot,
+    AlpacaLifecycleProjector,
+)
 from app.services.bot_runner import (
     BootRecoveryIncompleteError,
     BotTaskRegistry,
@@ -58,9 +69,12 @@ from tests.broker.alpaca.clerk.test_instance_orders import (
 )
 from tests.services.test_bot_runner import (
     _bar,
+    _custody_proof,
+    _CustodyClerk,
     _FakeFeed,
     _flat_start_guard,
     _lifecycle_json,
+    _SqliteRuntimeBroker,
     _wait_for,
 )
 
@@ -68,11 +82,17 @@ _SID = "alpaca-drill-bot"
 _T0 = 1_700_000_000_000
 
 
+class _LegacyBootClerk:
+    authority_kind = "legacy"
+
+
 @pytest.fixture(autouse=True)
 def _clerk_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("ALPACA_CLERK_DIR", str(tmp_path / "clerk"))
     journal_module.reset_clerk_settings_for_testing()
+    set_alpaca_clerk(_CustodyClerk(_custody_proof(exposure={})))
     yield tmp_path
+    set_alpaca_clerk(None)
     journal_module.reset_clerk_settings_for_testing()
 
 
@@ -92,7 +112,33 @@ async def _unresolved_probe(clerk: AlpacaClerk) -> int:
     return len(derive.unresolved_intents(await clerk.read_journal_entries()))
 
 
+async def _unexpected_authority_stop(
+    strategy_instance_id: str,
+    run_id: str,
+) -> None:
+    raise AssertionError(
+        f"unexpected authority stop for {strategy_instance_id}:{run_id}"
+    )
+
+
 # ── AC4: fail-closed start gate ────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "clerk",
+    [None, _LegacyBootClerk()],
+    ids=["no-clerk", "legacy-clerk"],
+)
+async def test_boot_without_sqlite_authority_uses_empty_candidates(
+    tmp_path: Path,
+    clerk: _LegacyBootClerk | None,
+) -> None:
+    set_alpaca_clerk(clerk)  # type: ignore[arg-type]
+    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
+
+    report = await registry.run_boot_recovery()
+
+    assert report.interrupted_instances == ()
 
 
 async def test_starts_refused_until_boot_sweep_completes(tmp_path: Path) -> None:
@@ -105,6 +151,306 @@ async def test_starts_refused_until_boot_sweep_completes(tmp_path: Path) -> None
     view = await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     assert view.running is True
     await registry.stop("alpaca", _SID)
+
+
+async def test_failed_authority_preparation_keeps_boot_gate_closed(tmp_path: Path) -> None:
+    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
+
+    async def fail_recovery() -> None:
+        raise RuntimeError("authority unavailable")
+
+    with pytest.raises(BootAuthorityPreparationError, match="recover"):
+        await registry.run_boot_recovery(recover=fail_recovery)
+
+    with pytest.raises(BootRecoveryIncompleteError):
+        await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+
+
+async def test_boot_recovers_sqlite_before_reading_file_projection(tmp_path: Path) -> None:
+    artifacts_root = _artifacts_root(tmp_path)
+    lifecycle_repo = BotLifecycleStateRepo(
+        stable_bot_lifecycle_state_path(artifacts_root, _SID)
+    )
+    lifecycle_repo.set_phase(
+        BotLifecyclePhase.ON_DUTY,
+        now_ms=_T0,
+        updated_by="pre-crash",
+        active_run_id="run-old",
+    )
+    desired_repo = DesiredStateRepo(
+        stable_desired_state_path(artifacts_root, _SID),
+        trusted_root=artifacts_root / "live_state",
+    )
+    events: list[str] = []
+
+    class _RecoveredAuthority:
+        def snapshot(
+            self,
+            strategy_instance_id: str,
+            expected_run_id: str | None,
+        ) -> AlpacaLifecycleAuthoritySnapshot:
+            del strategy_instance_id, expected_run_id
+            events.append("authority_projection")
+            return AlpacaLifecycleAuthoritySnapshot(
+                strategy_instance_exists=True,
+                active_run_id=None,
+                retired_at_ms=None,
+                expected_run_state="STOPPED",
+                control_revision=1,
+            )
+
+    async def recover() -> None:
+        events.append("recover")
+
+    async def reconcile() -> None:
+        events.append("reconcile")
+
+    projector = AlpacaLifecycleProjector(
+        authority=_RecoveredAuthority(),
+        lifecycle_repo_for=lambda _strategy_instance_id: lifecycle_repo,
+        require_alpaca_identity=lambda _strategy_instance_id, _sqlite_claim: None,
+    )
+    await BotBootRecovery(
+        artifacts_root,
+        lifecycle_repo_for=lambda _strategy_instance_id: lifecycle_repo,
+        lifecycle_projector=projector,
+        desired_repo_for=lambda _strategy_instance_id: desired_repo,
+        recovery_candidates=lambda: (
+            BotRecoveryCandidate(_SID, "run-old", sqlite_active=False),
+        ),
+        stop_authority_run=_unexpected_authority_stop,
+        manages_instance=lambda _strategy_instance_id: True,
+        is_running=lambda _strategy_instance_id: False,
+        now_ms=lambda: _T0 + 1,
+    ).run(recover=recover, reconcile=reconcile)
+
+    assert events == [
+        "recover",
+        "reconcile",
+        "authority_projection",
+        "authority_projection",
+    ]
+
+
+async def test_boot_reconstructs_missing_projection_from_binding_candidate(
+    tmp_path: Path,
+) -> None:
+    artifacts_root = _artifacts_root(tmp_path)
+    lifecycle_repo = BotLifecycleStateRepo(
+        stable_bot_lifecycle_state_path(artifacts_root, _SID)
+    )
+    desired_repo = DesiredStateRepo(
+        stable_desired_state_path(artifacts_root, _SID),
+        trusted_root=artifacts_root / "live_state",
+    )
+
+    class _StoppedAuthority:
+        def snapshot(
+            self,
+            strategy_instance_id: str,
+            expected_run_id: str | None,
+        ) -> AlpacaLifecycleAuthoritySnapshot:
+            assert strategy_instance_id == _SID
+            assert expected_run_id == "run-registered"
+            return AlpacaLifecycleAuthoritySnapshot(
+                strategy_instance_exists=True,
+                active_run_id=None,
+                retired_at_ms=None,
+                expected_run_state="STOPPED",
+                control_revision=1,
+            )
+
+    projector = AlpacaLifecycleProjector(
+        authority=_StoppedAuthority(),
+        lifecycle_repo_for=lambda _strategy_instance_id: lifecycle_repo,
+        require_alpaca_identity=lambda _strategy_instance_id, _sqlite_claim: None,
+    )
+    report = await BotBootRecovery(
+        artifacts_root,
+        lifecycle_repo_for=lambda _strategy_instance_id: lifecycle_repo,
+        lifecycle_projector=projector,
+        desired_repo_for=lambda _strategy_instance_id: desired_repo,
+        recovery_candidates=lambda: (
+            BotRecoveryCandidate(_SID, "run-registered", sqlite_active=False),
+        ),
+        stop_authority_run=_unexpected_authority_stop,
+        manages_instance=lambda _strategy_instance_id: True,
+        is_running=lambda _strategy_instance_id: False,
+        now_ms=lambda: _T0 + 1,
+    ).run()
+
+    record = lifecycle_repo.read()
+    assert record is not None
+    assert record.phase is BotLifecyclePhase.OFF_DUTY
+    assert record.duty_outcome is not None
+    assert record.duty_outcome.run_id == "run-registered"
+    assert desired_repo.read_state() is DesiredState.STOPPED
+    assert report.interrupted_instances == (_SID,)
+
+
+async def test_file_cas_refusal_fails_boot_recovery(tmp_path: Path) -> None:
+    artifacts_root = _artifacts_root(tmp_path)
+    lifecycle_repo = BotLifecycleStateRepo(
+        stable_bot_lifecycle_state_path(artifacts_root, _SID)
+    )
+    lifecycle_repo.set_phase(
+        BotLifecyclePhase.ON_DUTY,
+        now_ms=_T0,
+        updated_by="pre-crash",
+        active_run_id="run-raced",
+    )
+    desired_repo = DesiredStateRepo(
+        stable_desired_state_path(artifacts_root, _SID),
+        trusted_root=artifacts_root / "live_state",
+    )
+
+    class _StoppedAuthority:
+        def snapshot(
+            self,
+            strategy_instance_id: str,
+            expected_run_id: str | None,
+        ) -> AlpacaLifecycleAuthoritySnapshot:
+            assert strategy_instance_id == _SID
+            assert expected_run_id == "run-raced"
+            return AlpacaLifecycleAuthoritySnapshot(
+                strategy_instance_exists=True,
+                active_run_id=None,
+                retired_at_ms=None,
+                expected_run_state="STOPPED",
+                control_revision=1,
+            )
+
+    class _RacingLifecycleRepo:
+        def read(self):
+            return lifecycle_repo.read()
+
+        def update(self, **kwargs):
+            lifecycle_repo.set_roster(False, now_ms=_T0 + 1, updated_by="racer")
+            return lifecycle_repo.update(**kwargs)
+
+    projector = AlpacaLifecycleProjector(
+        authority=_StoppedAuthority(),
+        lifecycle_repo_for=lambda _strategy_instance_id: _RacingLifecycleRepo(),  # type: ignore[arg-type]
+        require_alpaca_identity=lambda _strategy_instance_id, _sqlite_claim: None,
+    )
+    recovery = BotBootRecovery(
+        artifacts_root,
+        lifecycle_repo_for=lambda _strategy_instance_id: lifecycle_repo,
+        lifecycle_projector=projector,
+        desired_repo_for=lambda _strategy_instance_id: desired_repo,
+        recovery_candidates=lambda: (
+            BotRecoveryCandidate(_SID, "run-raced", sqlite_active=False),
+        ),
+        stop_authority_run=_unexpected_authority_stop,
+        manages_instance=lambda _strategy_instance_id: True,
+        is_running=lambda _strategy_instance_id: False,
+        now_ms=lambda: _T0 + 2,
+    )
+
+    with pytest.raises(BootAuthorityPreparationError, match="FILE_CAS_REFUSED"):
+        await recovery.run()
+
+
+async def test_authority_retry_exhaustion_fails_boot_recovery(tmp_path: Path) -> None:
+    artifacts_root = _artifacts_root(tmp_path)
+    lifecycle_repo = BotLifecycleStateRepo(
+        stable_bot_lifecycle_state_path(artifacts_root, _SID)
+    )
+    lifecycle_repo.set_phase(
+        BotLifecyclePhase.ON_DUTY,
+        now_ms=_T0,
+        updated_by="pre-crash",
+        active_run_id="run-unstable",
+    )
+    desired_repo = DesiredStateRepo(
+        stable_desired_state_path(artifacts_root, _SID),
+        trusted_root=artifacts_root / "live_state",
+    )
+
+    class _AlwaysChangingAuthority:
+        def __init__(self) -> None:
+            self.revision = 0
+
+        def snapshot(
+            self,
+            strategy_instance_id: str,
+            expected_run_id: str | None,
+        ) -> AlpacaLifecycleAuthoritySnapshot:
+            assert strategy_instance_id == _SID
+            assert expected_run_id == "run-unstable"
+            self.revision += 1
+            return AlpacaLifecycleAuthoritySnapshot(
+                strategy_instance_exists=True,
+                active_run_id=None,
+                retired_at_ms=None,
+                expected_run_state="STOPPED",
+                control_revision=self.revision,
+            )
+
+    projector = AlpacaLifecycleProjector(
+        authority=_AlwaysChangingAuthority(),
+        lifecycle_repo_for=lambda _strategy_instance_id: lifecycle_repo,
+        require_alpaca_identity=lambda _strategy_instance_id, _sqlite_claim: None,
+    )
+    recovery = BotBootRecovery(
+        artifacts_root,
+        lifecycle_repo_for=lambda _strategy_instance_id: lifecycle_repo,
+        lifecycle_projector=projector,
+        desired_repo_for=lambda _strategy_instance_id: desired_repo,
+        recovery_candidates=lambda: (
+            BotRecoveryCandidate(_SID, "run-unstable", sqlite_active=False),
+        ),
+        stop_authority_run=_unexpected_authority_stop,
+        manages_instance=lambda _strategy_instance_id: True,
+        is_running=lambda _strategy_instance_id: False,
+        now_ms=lambda: _T0 + 2,
+    )
+
+    with pytest.raises(BootAuthorityPreparationError, match="AUTHORITY_CHANGED"):
+        await recovery.run()
+
+
+async def test_boot_reconstructs_sqlite_start_committed_before_binding(
+    tmp_path: Path,
+) -> None:
+    repo = ClerkSqliteRepository.initialize(
+        account_id="PA-TEST",
+        artifacts_root=tmp_path / "sqlite-clerk",
+    )
+    repo.register_strategy_instance(
+        strategy_instance_id=_SID,
+        symbol="SPY",
+        config_hash="config-1",
+    )
+    submit_start_run(
+        repo,
+        account_id="PA-TEST",
+        strategy_instance_id=_SID,
+        lifecycle_run_id="run-committed-before-binding",
+    )
+    broker = _SqliteRuntimeBroker()
+    set_alpaca_clerk(SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker))
+    registry = BotTaskRegistry(
+        _artifacts_root(tmp_path),
+        feed_resolver=lambda: _FakeFeed([], mode="hold"),
+        supported_broker_ids=frozenset({"alpaca"}),
+        start_custody_guard=_flat_start_guard,
+    )
+
+    try:
+        report = await registry.run_boot_recovery()
+
+        assert report.interrupted_instances == (_SID,)
+        assert repo.active_run(_SID) is None
+        record = registry._lifecycle_repo(_SID).read()
+        assert record is not None
+        assert record.phase is BotLifecyclePhase.OFF_DUTY
+        assert record.duty_outcome is not None
+        assert record.duty_outcome.run_id == "run-committed-before-binding"
+        assert registry._desired_repo(_SID).read_state() is DesiredState.STOPPED
+    finally:
+        set_alpaca_clerk(None)
+        repo.close()
 
 
 async def test_starts_refused_while_recovery_left_uncertain_outcome(tmp_path: Path) -> None:
@@ -175,35 +521,7 @@ async def test_boot_sweep_does_not_report_a_superseded_interruption(
     artifacts_root = _artifacts_root(tmp_path)
     lifecycle_path = stable_bot_lifecycle_state_path(artifacts_root, _SID)
 
-    class SupersedingLifecycleRepo(BotLifecycleStateRepo):
-        def record_terminal_outcome(
-            self,
-            outcome: BotDutyOutcome,
-            *,
-            updated_by: str,
-            reason: str,
-            expected_active_run_id: str | None = None,
-            expected_version: int | None = None,
-            disposition_id: str | None = None,
-            disposition_action: str | None = None,
-        ) -> BotLifecycleStateUpdateResult:
-            self.set_phase(
-                BotLifecyclePhase.ON_DUTY,
-                now_ms=_T0 + 1,
-                updated_by="newer-run",
-                active_run_id="run-new",
-            )
-            return super().record_terminal_outcome(
-                outcome,
-                updated_by=updated_by,
-                reason=reason,
-                expected_active_run_id=expected_active_run_id,
-                expected_version=expected_version,
-                disposition_id=disposition_id,
-                disposition_action=disposition_action,
-            )
-
-    lifecycle_repo = SupersedingLifecycleRepo(lifecycle_path)
+    lifecycle_repo = BotLifecycleStateRepo(lifecycle_path)
     lifecycle_repo.set_phase(
         BotLifecyclePhase.ON_DUTY,
         now_ms=_T0,
@@ -215,11 +533,25 @@ async def test_boot_sweep_does_not_report_a_superseded_interruption(
         trusted_root=artifacts_root / "live_state",
     )
     caplog.set_level("WARNING", logger="app.services.bot_boot_recovery")
+    clerk = _CustodyClerk(_custody_proof(exposure={}))
+    clerk.active_runs[_SID] = "run-new"
+    clerk.known_runs.add((_SID, "run-new"))
+    set_alpaca_clerk(clerk)
+    projector = AlpacaLifecycleProjector(
+        authority=ActiveSqliteAlpacaLifecycleAuthority(),
+        lifecycle_repo_for=lambda _strategy_instance_id: lifecycle_repo,
+        require_alpaca_identity=lambda _strategy_instance_id, _sqlite_claim: None,
+    )
 
     report = await BotBootRecovery(
         artifacts_root,
         lifecycle_repo_for=lambda _strategy_instance_id: lifecycle_repo,
+        lifecycle_projector=projector,
         desired_repo_for=lambda _strategy_instance_id: desired_repo,
+        recovery_candidates=lambda: (
+            BotRecoveryCandidate(_SID, "run-old", sqlite_active=False),
+        ),
+        stop_authority_run=_unexpected_authority_stop,
         manages_instance=lambda _strategy_instance_id: True,
         is_running=lambda _strategy_instance_id: False,
         now_ms=lambda: _T0 + 2,
@@ -316,19 +648,31 @@ async def test_boot_sweep_skips_bots_bound_to_unsupported_broker(
 ) -> None:
     """Registry with supported_broker_ids={"alpaca"} must not touch IBKR bots."""
     feed = _FakeFeed([], mode="hold")
-    # Deploy and kill an "alpaca" bot to seed ON_DUTY lifecycle state.
+    # Seed one retained IBKR binding without asking the Alpaca runner to own it.
     registry = BotTaskRegistry(
         _artifacts_root(tmp_path),
         feed_resolver=lambda: feed,
         supported_broker_ids=frozenset({"alpaca"}),
         start_custody_guard=_flat_start_guard,
     )
-    await registry.run_boot_recovery()
-    await registry.deploy(broker="ibkr", strategy_instance_id=_SID, symbol="SPY")
+    registry._bindings.record_launch(
+        BrokerBotBinding(
+            strategy_instance_id=_SID,
+            broker="ibkr",
+            symbol="SPY",
+            action_plan=alpaca_v1_action_plan("SPY"),
+            run_id="ibkr-run",
+            created_at_ms=_T0,
+        ),
+        launch_reason="deploy",
+    )
+    registry._lifecycle_repo(_SID).set_phase(
+        BotLifecyclePhase.ON_DUTY,
+        now_ms=_T0,
+        updated_by="ibkr-host-daemon",
+        active_run_id="ibkr-run",
+    )
     assert _lifecycle_json(_artifacts_root(tmp_path), _SID)["phase"] == "ON_DUTY"
-    registry._bots[_SID].finalized = True
-    registry._bots[_SID].task.cancel()
-    await asyncio.sleep(0)
 
     rebooted = BotTaskRegistry(
         _artifacts_root(tmp_path),
@@ -346,10 +690,10 @@ async def test_boot_sweep_skips_bots_bound_to_unsupported_broker(
     assert _lifecycle_json(_artifacts_root(tmp_path), _SID)["phase"] == "ON_DUTY"
 
 
-async def test_boot_sweep_skips_corrupt_binding_without_aborting(
+async def test_boot_sweep_refuses_corrupt_binding_for_sqlite_active_run(
     tmp_path: Path,
 ) -> None:
-    """A malformed foreign binding must not fence recovery of the whole fleet."""
+    """Conflicting unreadable plane evidence keeps authority recovery closed."""
     feed = _FakeFeed([], mode="hold")
     registry = BotTaskRegistry(
         _artifacts_root(tmp_path),
@@ -371,9 +715,8 @@ async def test_boot_sweep_skips_corrupt_binding_without_aborting(
         feed_resolver=lambda: feed,
         supported_broker_ids=frozenset({"alpaca"}),
     )
-    report = await rebooted.run_boot_recovery()
-
-    assert report.interrupted_instances == ()
+    with pytest.raises(BootAuthorityPreparationError, match="candidate enumeration"):
+        await rebooted.run_boot_recovery()
     assert _lifecycle_json(_artifacts_root(tmp_path), _SID)["phase"] == "ON_DUTY"
 
 

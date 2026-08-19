@@ -50,6 +50,7 @@ from app.engine.live.bot_lifecycle_state import (
     BotLifecycleStateRepo,
     stable_bot_lifecycle_state_path,
 )
+from app.engine.live.run_ledger import LiveRunLedger, write_ledger
 from app.services.bot_deletion import (
     BotRetirementBindingTarget,
     BotRetirementTransitionRecord,
@@ -818,9 +819,21 @@ def test_retirement_preserves_nonterminal_clerk_custody_before_terminal_lifecycl
     )
     run_dir = tmp_path / "live_runs" / run_id
     run_dir.mkdir(parents=True)
-    (run_dir / "run_ledger.json").write_text(
-        json.dumps({"account_id": ACCOUNT_ID, "run_id": run_id}),
-        encoding="utf-8",
+    write_ledger(
+        run_dir / "run_ledger.json",
+        LiveRunLedger(
+            run_id=run_id,
+            code_sha="abc123",
+            strategy_instance_id=strategy_instance_id,
+            strategy_spec_path="spec.json",
+            strategy_spec_sha256="spec-sha",
+            qc_audit_copy_path="qc.py",
+            qc_audit_copy_sha256="qc-sha",
+            qc_cloud_backtest_id="qc-1",
+            account_id=ACCOUNT_ID,
+            start_date_ms=NOW_MS,
+            live_config={},
+        ),
     )
 
     retired = retire_bot_lifecycle_and_bindings(

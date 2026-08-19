@@ -41,6 +41,7 @@ from app.broker.alpaca.clerk.models import (
     InstanceCustodyProof,
     ReconciliationVerdict,
 )
+from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
 from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -63,7 +64,9 @@ from app.services.bot_binding_repository import (
     RunOutcomeConflictError,
     alpaca_v1_action_plan,
 )
+from app.services.bot_clerk_lifecycle import commit_stop_before_task_cancel
 from app.services.bot_dry_run import DryRunActivity, DryRunActivityJournal
+from app.services.bot_lifecycle_projection import AlpacaLifecycleAuthoritySnapshot
 from app.services.bot_registry_projection import read_dry_run_activity
 from app.services.bot_run_evidence import PROVISIONAL_STOP_REASON_CODE
 from app.services.bot_runner import (
@@ -200,9 +203,13 @@ class _CustodyClerk:
         self.cancel_calls: list[str] = []
         self.registered_runs: list[str] = []
         self.stopped_runs: list[str] = []
+        self.active_runs: dict[str, str] = {}
+        self.known_runs: set[tuple[str, str]] = set()
 
     async def register_strategy_run(self, binding: BrokerBotBinding) -> None:
         self.registered_runs.append(binding.run_id)
+        self.active_runs[binding.strategy_instance_id] = binding.run_id
+        self.known_runs.add((binding.strategy_instance_id, binding.run_id))
 
     async def recover(self) -> None:
         return
@@ -233,8 +240,42 @@ class _CustodyClerk:
         run_id: str,
         reason: str | None = None,
     ) -> None:
-        del strategy_instance_id, reason
+        del reason
         self.stopped_runs.append(run_id)
+        if self.active_runs.get(strategy_instance_id) == run_id:
+            self.active_runs.pop(strategy_instance_id)
+
+    def lifecycle_snapshot(
+        self,
+        strategy_instance_id: str,
+        expected_run_id: str | None,
+    ) -> AlpacaLifecycleAuthoritySnapshot:
+        active_run_id = self.active_runs.get(strategy_instance_id)
+        return AlpacaLifecycleAuthoritySnapshot(
+            strategy_instance_exists=(
+                active_run_id is not None
+                or any(candidate[0] == strategy_instance_id for candidate in self.known_runs)
+            ),
+            active_run_id=active_run_id,
+            retired_at_ms=None,
+            expected_run_state=(
+                None
+                if expected_run_id is None
+                else (
+                    "ACTIVE"
+                    if active_run_id == expected_run_id
+                    else (
+                        "STOPPED"
+                        if (strategy_instance_id, expected_run_id) in self.known_runs
+                        else "MISSING"
+                    )
+                )
+            ),
+            control_revision=len(self.known_runs) + len(self.stopped_runs),
+        )
+
+    def lifecycle_recovery_candidates(self) -> tuple[tuple[str, str], ...]:
+        return tuple(sorted(self.active_runs.items()))
 
     async def cancel_working_entries_for_instance(self, sid: str) -> tuple:
         self.cancel_calls.append(sid)
@@ -407,6 +448,15 @@ def _custody_proof(
         exposure=exposure,
         observed_at_ms=_T0,
     )
+
+
+@pytest.fixture(autouse=True)
+def _default_lifecycle_clerk() -> None:
+    """Give runner unit tests a local duty-authority Adapter by default."""
+
+    set_alpaca_clerk(_CustodyClerk(_custody_proof(exposure={})))
+    yield
+    set_alpaca_clerk(None)
 
 
 def _flat_custody_snapshot(
@@ -1283,6 +1333,20 @@ async def test_list_bots_filters_by_broker_tag(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_runner_refuses_ibkr_binding_before_any_duty_artifact(tmp_path: Path) -> None:
+    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
+
+    with pytest.raises(RunAdmissionRefusedError, match="Alpaca"):
+        await registry.deploy(
+            broker="ibkr",
+            strategy_instance_id=_SID,
+            symbol="SPY",
+        )
+
+    assert not (tmp_path / "live_state" / _SID).exists()
+
+
+@pytest.mark.asyncio
 async def test_version_one_alpaca_binding_is_read_without_rewriting_audit_artifact(
     tmp_path: Path,
 ) -> None:
@@ -1419,6 +1483,7 @@ async def test_resume_does_not_preserve_provisional_stop_outcome(tmp_path: Path)
         now_ms=_T0,
         reason="operator_stop",
     )
+    await commit_stop_before_task_cancel(binding, reason="operator_stop")
     registry._run_evidence.record_terminal(
         _SID,
         BotDutyOutcome(
@@ -1446,15 +1511,13 @@ async def test_resume_does_not_preserve_provisional_stop_outcome(tmp_path: Path)
 
 @pytest.mark.asyncio
 async def test_superseded_terminal_projection_keeps_the_run_receipt(tmp_path: Path) -> None:
+    clerk = _CustodyClerk(_custody_proof(exposure={}))
+    set_alpaca_clerk(clerk)
     registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
     await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
     binding = registry.binding_for_control("alpaca", _SID)
-    registry._lifecycle_repo(_SID).set_phase(
-        BotLifecyclePhase.ON_DUTY,
-        now_ms=_T0 + 1,
-        updated_by="newer-run",
-        active_run_id="run-new",
-    )
+    clerk.active_runs[_SID] = "run-new"
+    clerk.known_runs.add((_SID, "run-new"))
     outcome = BotDutyOutcome(
         kind="CRASHED",
         reason_code="PROCESS_CRASHED",
@@ -1470,7 +1533,7 @@ async def test_superseded_terminal_projection_keeps_the_run_receipt(tmp_path: Pa
         expected_active_run_id=binding.run_id,
     )
 
-    assert result.status == "SUPERSEDED"
+    assert result.status == "AUTHORITY_EXPECTATION_SUPERSEDED"
     assert registry._bindings.read_outcome(_SID, binding.run_id) is not None
     lifecycle = registry._lifecycle_repo(_SID).read()
     assert lifecycle is not None
@@ -1480,6 +1543,7 @@ async def test_superseded_terminal_projection_keeps_the_run_receipt(tmp_path: Pa
     managed.finalized = True
     managed.task.cancel()
     await asyncio.wait({managed.task})
+    set_alpaca_clerk(None)
 
 
 @pytest.mark.asyncio
@@ -2257,9 +2321,20 @@ class _FakeClerk:
         self._should_raise = should_raise
         self._effect_state = effect_state
         self.repository = repository
+        self.active_runs: dict[str, str] = {}
+        self.known_runs: set[tuple[str, str]] = set()
 
     async def register_strategy_run(self, binding: BrokerBotBinding) -> None:
         self.registered_runs.append(binding.run_id)
+        self.active_runs[binding.strategy_instance_id] = binding.run_id
+        self.known_runs.add((binding.strategy_instance_id, binding.run_id))
+        if self.repository is not None:
+            submit_start_run(
+                self.repository,
+                account_id="PA-TEST",
+                strategy_instance_id=binding.strategy_instance_id,
+                lifecycle_run_id=binding.run_id,
+            )
 
     async def stop_strategy_run(
         self,
@@ -2268,8 +2343,49 @@ class _FakeClerk:
         run_id: str,
         reason: str | None = None,
     ) -> None:
-        del strategy_instance_id, reason
+        del reason
         self.stopped_runs.append(run_id)
+        if self.active_runs.get(strategy_instance_id) == run_id:
+            self.active_runs.pop(strategy_instance_id)
+        if self.repository is not None:
+            submit_stop_run(
+                self.repository,
+                account_id="PA-TEST",
+                strategy_instance_id=strategy_instance_id,
+                lifecycle_run_id=run_id,
+            )
+
+    def lifecycle_snapshot(
+        self,
+        strategy_instance_id: str,
+        expected_run_id: str | None,
+    ) -> AlpacaLifecycleAuthoritySnapshot:
+        active_run_id = self.active_runs.get(strategy_instance_id)
+        return AlpacaLifecycleAuthoritySnapshot(
+            strategy_instance_exists=(
+                active_run_id is not None
+                or any(candidate[0] == strategy_instance_id for candidate in self.known_runs)
+            ),
+            active_run_id=active_run_id,
+            retired_at_ms=None,
+            expected_run_state=(
+                None
+                if expected_run_id is None
+                else (
+                    "ACTIVE"
+                    if active_run_id == expected_run_id
+                    else (
+                        "STOPPED"
+                        if (strategy_instance_id, expected_run_id) in self.known_runs
+                        else "MISSING"
+                    )
+                )
+            ),
+            control_revision=len(self.known_runs) + len(self.stopped_runs),
+        )
+
+    def lifecycle_recovery_candidates(self) -> tuple[tuple[str, str], ...]:
+        return tuple(sorted(self.active_runs.items()))
 
     async def cancel_working_entries_for_instance(self, strategy_instance_id: str) -> tuple[()]:
         """Test-double boundary for Clerk-owned STOP custody."""
@@ -2416,10 +2532,13 @@ async def test_sqlite_trade_bot_records_every_evaluated_bar_for_panel_health(
         ]
         assert decisions[1].intent_id.endswith(":ENTER")
         assert decisions[1].order_ref is None
-        # Decision receipts are product evidence, not custody: recording
-        # three of them across the bot's decision loop must not advance the
-        # hash-chained transition log at all.
-        assert repo.custody_transitions() == transitions_before_decisions
+        # Decision receipts are product evidence, not custody. The only new
+        # authority transitions are the run's required duty boundaries.
+        transition_kinds = [
+            row["transition_kind"]
+            for row in repo.custody_transitions()[len(transitions_before_decisions) :]
+        ]
+        assert transition_kinds == ["RUN_STARTED", "RUN_STOPPED"]
     finally:
         set_alpaca_clerk(None)
         repo.close()

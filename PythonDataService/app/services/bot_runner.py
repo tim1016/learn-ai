@@ -38,11 +38,11 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
+from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.config import settings
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.live.bot_lifecycle_state import (
-    BotLifecyclePhase,
     BotLifecycleStateRepo,
     stable_bot_lifecycle_state_path,
 )
@@ -70,7 +70,11 @@ from app.services.bot_binding_repository import (
     BrokerBotBinding,
     alpaca_v1_action_plan,
 )
-from app.services.bot_boot_recovery import BootRecoveryReport, BotBootRecovery
+from app.services.bot_boot_recovery import (
+    BootRecoveryReport,
+    BotBootRecovery,
+    BotRecoveryCandidate,
+)
 from app.services.bot_carryover import (
     checkpoint_status,
     read_checkpoint,
@@ -79,9 +83,19 @@ from app.services.bot_clerk_lifecycle import (
     ActiveClerkUnavailableError,
     ClerkAdmissionTokenStaleError,
     commit_stop_before_task_cancel,
-    register_order_capable_run,
+    register_alpaca_duty_run,
+    stop_interrupted_alpaca_duty_run,
+)
+from app.services.bot_control_plane import (
+    BotControlPlane,
+    BotControlPlaneDiscriminator,
 )
 from app.services.bot_dry_run import DryRunActivity
+from app.services.bot_lifecycle_projection import (
+    ActiveSqliteAlpacaLifecycleAuthority,
+    AlpacaLifecycleProjector,
+    ProjectionStatus,
+)
 from app.services.bot_registry_projection import (
     project_bot_status,
     project_process_fact,
@@ -173,6 +187,7 @@ class BotTaskRegistry:
         supported_broker_ids: frozenset[str] | None = None,
         carryover_allowed: bool | None = None,
         start_custody_guard: Callable[[str], AbstractAsyncContextManager[ClerkCustodySnapshot]] | None = None,
+        lifecycle_projector: AlpacaLifecycleProjector | None = None,
     ) -> None:
         self._artifacts_root = Path(artifacts_root)
         self._feed_resolver = feed_resolver
@@ -202,10 +217,26 @@ class BotTaskRegistry:
             self._artifacts_root,
             instance_dir_for=self._confined_instance_dir,
         )
+        self._plane = BotControlPlaneDiscriminator(self._artifacts_root)
+        self._lifecycle_authority = ActiveSqliteAlpacaLifecycleAuthority()
+        self._lifecycle_projector = lifecycle_projector or AlpacaLifecycleProjector(
+            authority=self._lifecycle_authority,
+            lifecycle_repo_for=self._lifecycle_repo,
+            require_alpaca_identity=self._require_alpaca_plane,
+        )
         self._boot_recovery = BotBootRecovery(
             self._artifacts_root,
             lifecycle_repo_for=self._lifecycle_repo,
+            lifecycle_projector=self._lifecycle_projector,
             desired_repo_for=self._desired_repo,
+            recovery_candidates=self._recovery_candidates,
+            stop_authority_run=lambda strategy_instance_id, run_id: (
+                stop_interrupted_alpaca_duty_run(
+                    self._artifacts_root,
+                    strategy_instance_id=strategy_instance_id,
+                    run_id=run_id,
+                )
+            ),
             manages_instance=self._manages_boot_recovery,
             is_running=self._is_running,
             now_ms=self._now_ms,
@@ -231,6 +262,7 @@ class BotTaskRegistry:
         self._run_evidence = BotRunEvidenceService(
             self._bindings,
             lifecycle_repo_for=self._lifecycle_repo,
+            lifecycle_projector=self._lifecycle_projector,
         )
         self._terminal = BotRunTerminalRecorder(
             managed_bots=self._bots,
@@ -447,14 +479,18 @@ class BotTaskRegistry:
         admission_snapshot: ClerkCustodySnapshot | None = None,
     ) -> None:
         """Write run evidence and install supervision while caller holds its gate."""
+        if binding.broker != "alpaca":
+            raise RunAdmissionRefusedError(
+                "The in-container runner accepts only Alpaca bot bindings.",
+                detail="Use the legacy host boundary only for an existing IBKR run.",
+            )
         lifecycle_repo = self._lifecycle_repo(binding.strategy_instance_id)
-        registered = binding.broker == "alpaca" and binding.mode == "trade"
         try:
-            await register_order_capable_run(binding, admission_snapshot=admission_snapshot)
+            await register_alpaca_duty_run(binding, admission_snapshot=admission_snapshot)
         except (ActiveClerkUnavailableError, ClerkAdmissionTokenStaleError) as exc:
             raise RunAdmissionRefusedError(
                 str(exc),
-                detail="Refresh Clerk custody before starting a trade bot.",
+                detail="Refresh Clerk custody before starting an Alpaca bot.",
             ) from exc
         try:
             # Preserve the prior immutable outcome before record_launch advances
@@ -468,14 +504,19 @@ class BotTaskRegistry:
             self._desired_repo(binding.strategy_instance_id).set(
                 DesiredState.RUNNING, updated_by=_UPDATED_BY, now_ms=now, reason=reason
             )
-            lifecycle_repo.set_phase(
-                BotLifecyclePhase.ON_DUTY,
+            projection = self._lifecycle_projector.project_active(
+                strategy_instance_id=binding.strategy_instance_id,
+                run_id=binding.run_id,
                 now_ms=now,
                 updated_by=_UPDATED_BY,
-                active_run_id=binding.run_id,
                 carryover_policy=binding.carryover_policy,
                 reason=f"{reason}_{binding.mode}_bot",
             )
+            if projection.status is not ProjectionStatus.RECORDED:
+                raise RunAdmissionRefusedError(
+                    "SQLite lifecycle authority superseded bot activation.",
+                    detail="Refresh the bot after Clerk reconciliation settles.",
+                )
             run_gate = asyncio.Event()
             run_gate.set()
             task = asyncio.create_task(
@@ -496,19 +537,18 @@ class BotTaskRegistry:
             # Clerk intake. A first effect waits on that same fence.
             await asyncio.sleep(0)
         except BaseException:
-            if registered:
-                try:
-                    await commit_stop_before_task_cancel(binding, reason="activation_failed_after_registration")
-                except Exception:
-                    logger.error(
-                        "SQLite Clerk could not durably stop a failed activation",
-                        extra={
-                            "action": "sqlite_clerk_activation_stop_failed",
-                            "strategy_instance_id": binding.strategy_instance_id,
-                            "run_id": binding.run_id,
-                        },
-                        exc_info=True,
-                    )
+            try:
+                await commit_stop_before_task_cancel(binding, reason="activation_failed_after_registration")
+            except Exception:
+                logger.error(
+                    "SQLite Clerk could not durably stop a failed activation",
+                    extra={
+                        "action": "sqlite_clerk_activation_stop_failed",
+                        "strategy_instance_id": binding.strategy_instance_id,
+                        "run_id": binding.run_id,
+                    },
+                    exc_info=True,
+                )
             raise
 
     def _start_process_fact(
@@ -821,13 +861,11 @@ class BotTaskRegistry:
     ) -> BootRecoveryReport:
         """Reconcile durable ON_DUTY state against the (empty) task registry.
 
-        Every instance recorded on-duty with no live task gets typed durable
-        interrupted evidence (``EXITED_UNVERIFIED`` / ``INTERRUPTED_BY_RESTART``)
-        and is NEVER auto-restarted. Then the clerk's ``recover`` (identity
-        resolution — present/absent/uncertain, no blind retry) and a
-        reconciliation pass run; a failure in either is surfaced and leaves the
-        journal to speak for itself — the per-deploy uncertainty probe keeps
-        starts refused until the intents actually resolve.
+        The Clerk first recovers and reconciles SQLite authority. Each runner
+        restoration candidate with no live task is then projected from that
+        authority and, when interrupted, receives typed durable evidence
+        (``EXITED_UNVERIFIED`` / ``INTERRUPTED_BY_RESTART``). Nothing is
+        auto-restarted. A failed authority step leaves the boot gate closed.
         """
         report = await self._boot_recovery.run(
             recover=recover,
@@ -974,7 +1012,7 @@ class BotTaskRegistry:
                 self._terminal.finalize(binding, kind="STOPPED", reason_code=stop_reason)
             else:
                 # A cancellation nobody asked for is a kill, not a clean stop.
-                self._terminal.finalize(
+                await self._terminal.finalize_after_authority_stop(
                     binding,
                     kind="EXITED_UNVERIFIED",
                     reason_code="CANCELLED_WITHOUT_STOP_INTENT",
@@ -985,7 +1023,11 @@ class BotTaskRegistry:
                 "Bot crashed: market-data feed died",
                 extra={"action": "bot_crashed", "strategy_instance_id": sid, "error": str(exc)},
             )
-            self._terminal.finalize(binding, kind="CRASHED", reason_code="FEED_DEATH")
+            await self._terminal.finalize_after_authority_stop(
+                binding,
+                kind="CRASHED",
+                reason_code="FEED_DEATH",
+            )
         except Exception as exc:
             # Supervision boundary: every crash becomes typed durable evidence
             # plus a logged traceback — deliberately not re-raised, so the
@@ -994,13 +1036,13 @@ class BotTaskRegistry:
                 "Bot crashed",
                 extra={"action": "bot_crashed", "strategy_instance_id": sid},
             )
-            self._terminal.finalize(
+            await self._terminal.finalize_after_authority_stop(
                 binding,
                 kind="CRASHED",
                 reason_code=type(exc).__name__,
             )
         else:
-            self._terminal.finalize(
+            await self._terminal.finalize_after_authority_stop(
                 binding,
                 kind="EXITED_UNVERIFIED",
                 reason_code="BAR_STREAM_ENDED",
@@ -1023,9 +1065,11 @@ class BotTaskRegistry:
         return any(not managed.task.done() for managed in self._bots.values())
 
     def _manages_boot_recovery(self, strategy_instance_id: str) -> bool:
-        """Keep daemon-owned broker artifacts out of this runner's sweep."""
+        """Admit Alpaca bindings and SQLite-positive pre-binding candidates."""
         if self._supported_broker_ids is None:
             return True
+        if "alpaca" not in self._supported_broker_ids:
+            return False
         try:
             binding = self._read_binding(strategy_instance_id)
         except InvalidStrategyInstanceIdError:
@@ -1040,7 +1084,49 @@ class BotTaskRegistry:
                 },
             )
             return False
-        return binding is not None and binding.broker in self._supported_broker_ids
+        return binding is None or binding.broker in self._supported_broker_ids
+
+    def _recovery_candidates(self) -> tuple[BotRecoveryCandidate, ...]:
+        candidates = {
+            binding.strategy_instance_id: BotRecoveryCandidate(
+                strategy_instance_id=binding.strategy_instance_id,
+                run_id=binding.run_id,
+                sqlite_active=False,
+            )
+            for binding in self._bindings.list_for_broker("alpaca")
+        }
+        clerk = get_alpaca_clerk()
+        has_sqlite_candidate_capability = callable(
+            getattr(clerk, "lifecycle_recovery_candidates", None)
+        )
+        if (
+            getattr(clerk, "authority_kind", None) != "sqlite"
+            and not has_sqlite_candidate_capability
+        ):
+            return tuple(candidates.values())
+        for strategy_instance_id, run_id in self._lifecycle_authority.recovery_candidates():
+            self._plane.require(
+                strategy_instance_id,
+                BotControlPlane.ALPACA_RUNNER,
+                sqlite_alpaca_claim=True,
+            )
+            candidates[strategy_instance_id] = BotRecoveryCandidate(
+                strategy_instance_id=strategy_instance_id,
+                run_id=run_id,
+                sqlite_active=True,
+            )
+        return tuple(candidates.values())
+
+    def _require_alpaca_plane(
+        self,
+        strategy_instance_id: str,
+        sqlite_alpaca_claim: bool,
+    ) -> None:
+        self._plane.require(
+            strategy_instance_id,
+            BotControlPlane.ALPACA_RUNNER,
+            sqlite_alpaca_claim=sqlite_alpaca_claim,
+        )
 
     def _carryover_checkpoint_path(self, strategy_instance_id: str) -> Path:
         return self._confined_instance_dir(strategy_instance_id) / _CARRYOVER_CHECKPOINT_FILENAME

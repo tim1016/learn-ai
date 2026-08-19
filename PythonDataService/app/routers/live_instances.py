@@ -92,10 +92,7 @@ from app.services.bot_deletion import (
     bot_has_soft_deletion,
     bot_run_is_soft_deleted,
 )
-from app.services.bot_roll_call import (
-    bot_roll_call_offer_repo,
-    safe_active_roll_call_offer,
-)
+from app.services.bot_roll_call import bot_roll_call_offer_repo, safe_active_roll_call_offer
 from app.services.broker_free_fleet_reads import (
     BrokerFreeFleetReadDependencies,
     BrokerFreeFleetReadService,
@@ -126,6 +123,7 @@ from app.services.fleet_daemon_snapshot_provider import (
     FleetDaemonObservation,
     FleetDaemonSnapshotProvider,
 )
+from app.services.ibkr_lifecycle_guard import ibkr_lifecycle_capability
 from app.services.live_instance_config import live_config_for_run_dir
 from app.services.mutation_attempt import (
     MutationAttempt,
@@ -1155,7 +1153,7 @@ async def _recover_prepared_start_from_daemon_observation(
     daemon_state = process.get("state")
     if not isinstance(daemon_state, str):
         return
-    BotLifecycleEvaluator(artifacts_root, strategy_instance_id).recover_prepared_start_from_daemon_observation(
+    ibkr_lifecycle_capability(artifacts_root, strategy_instance_id).recover_prepared_start(
         run_id=run_id,
         daemon_state=daemon_state,
         observed_at_ms=_now_ms(),
@@ -1235,9 +1233,9 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
             roll_call_offer_id=body.roll_call_offer_id,
             admitted_at_ms=admitted_at_ms,
         )
-        lifecycle_evaluator = BotLifecycleEvaluator(root.parent, sid)
+        lifecycle_capability = ibkr_lifecycle_capability(root.parent, sid)
         scope.stage = "prepare_start_evaluator"
-        lifecycle_evaluator.prepare_start(
+        lifecycle_capability.prepare_start_actuation(
             run_id=run_id,
             now_ms=admitted_at_ms,
             updated_by="system",
@@ -1264,7 +1262,7 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
                 mutation_attempt_id=unknown.mutation_attempt_id,
             )
         except host_daemon_client.HostDaemonError as exc:
-            lifecycle_evaluator.abort_prepared_start(
+            lifecycle_capability.abort_start_actuation(
                 run_id=run_id,
                 failure="daemon_start_rejected",
             )
@@ -1282,7 +1280,7 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
         if response.accepted:
             if body.roll_call_offer_id is not None:
                 bot_roll_call_offer_repo(root, sid).consume(body.roll_call_offer_id)
-            lifecycle_evaluator.record_start_accepted(
+            lifecycle_capability.record_start(
                 run_id=run_id,
                 now_ms=admitted_at_ms,
                 updated_by="system",

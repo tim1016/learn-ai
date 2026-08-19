@@ -8,7 +8,6 @@ from app.engine.live.bot_lifecycle_state import (
     BotDutyOutcome,
     BotLifecycleStateRecord,
     BotLifecycleStateRepo,
-    BotLifecycleStateUpdateResult,
 )
 from app.schemas.broker_bots import (
     BotDutyOutcomeView,
@@ -22,12 +21,15 @@ from app.services.bot_binding_repository import (
     BotRunRecord,
     BrokerBotBinding,
 )
+from app.services.bot_lifecycle_projection import (
+    AlpacaLifecycleProjectionResult,
+    AlpacaLifecycleProjector,
+)
 from app.services.bot_runner_errors import (
     InvalidRunHistoryCursorError,
     UnknownBotError,
 )
 
-LifecycleRepoResolver = Callable[[str], BotLifecycleStateRepo]
 PROVISIONAL_STOP_REASON_CODE = "STOPPED_PENDING_CUSTODY_PROOF"
 
 
@@ -38,10 +40,12 @@ class BotRunEvidenceService:
         self,
         repository: BotBindingRepository,
         *,
-        lifecycle_repo_for: LifecycleRepoResolver,
+        lifecycle_repo_for: Callable[[str], BotLifecycleStateRepo],
+        lifecycle_projector: AlpacaLifecycleProjector,
     ) -> None:
         self._repository = repository
         self._lifecycle_repo_for = lifecycle_repo_for
+        self._lifecycle_projector = lifecycle_projector
 
     def preserve_terminal(
         self,
@@ -66,15 +70,24 @@ class BotRunEvidenceService:
         reason: str,
         expected_active_run_id: str | None = None,
         persist_receipt: bool = True,
-    ) -> BotLifecycleStateUpdateResult:
+    ) -> AlpacaLifecycleProjectionResult:
         """Publish immutable evidence before mutating the lifecycle projection."""
         if persist_receipt:
             self._record_terminal_receipt(strategy_instance_id, outcome)
-        return self._lifecycle_repo_for(strategy_instance_id).record_terminal_outcome(
-            outcome,
+        run_id = expected_active_run_id or outcome.run_id
+        if run_id is None:
+            return self._lifecycle_projector.refresh(
+                strategy_instance_id=strategy_instance_id,
+                now_ms=outcome.recorded_at_ms,
+                updated_by=updated_by,
+                reason=reason,
+            )
+        return self._lifecycle_projector.project_terminal(
+            strategy_instance_id=strategy_instance_id,
+            outcome=outcome,
+            now_ms=outcome.recorded_at_ms,
             updated_by=updated_by,
             reason=reason,
-            expected_active_run_id=expected_active_run_id,
         )
 
     def _record_terminal_receipt(

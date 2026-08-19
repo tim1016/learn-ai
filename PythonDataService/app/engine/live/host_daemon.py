@@ -1323,13 +1323,13 @@ class RunnerProcessManager:
     def _reopen_retired_lifecycle_for_deploy(self, strategy_instance_id: str, run_id: str) -> None:
         """Record the explicit deploy successor while its operation fence is held."""
 
-        from app.engine.live.bot_lifecycle_evaluator import BotLifecycleEvaluator
         from app.engine.live.bot_lifecycle_state import (
             BotLifecyclePhase,
             BotLifecycleStateCorruptError,
             BotLifecycleStateRepo,
             stable_bot_lifecycle_state_path,
         )
+        from app.services.ibkr_lifecycle_guard import ibkr_lifecycle_capability
 
         try:
             repo = BotLifecycleStateRepo(
@@ -1337,9 +1337,9 @@ class RunnerProcessManager:
             )
             current = repo.read()
             if current is not None and current.phase is BotLifecyclePhase.RETIRED:
-                BotLifecycleEvaluator(
+                ibkr_lifecycle_capability(
                     self.artifacts_root, strategy_instance_id
-                ).reopen_for_deploy_if_retired(
+                ).reopen_retired_for_deploy(
                     now_ms=self._clock_ms(),
                     updated_by="host_daemon",
                     reason="deploy.replacement",
