@@ -368,8 +368,11 @@ regenerate-and-diff gates can turn red.
   (medium).** Chart, evidence, and gallery consumers hand-copy schemas already
   present in `broker.types.ts`; the gallery snapshot is also a REST bootstrap,
   not solely an SSE exception. Generated clients can be current while these
-  live consumers compile against stale mirrors. Keep true stream-only update/
-  reset envelopes handwritten and fixture-pinned.
+  live consumers compile against stale mirrors. Keep true stream-only
+  envelopes handwritten: pin `GalleryLiveUpdate` to
+  `app.schemas.broker_v2_gallery.GalleryLiveUpdate`; for model-less
+  `GalleryResetEvent`, introduce a backend model or explicitly fixture-pin the
+  router-owned `{reason, cursor}` shape.
   [#1667](https://github.com/tim1016/learn-ai/issues/1667)
 - **Accepted-ADR `Vocabulary:` metadata is not gated (low/medium).** The ADR
   status guard correctly enforces status syntax and value but accepts a

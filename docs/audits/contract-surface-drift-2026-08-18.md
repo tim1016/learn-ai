@@ -15,11 +15,10 @@ generated client the gates protect?
 
 **Answer:** The committed generated artifacts are current, and the main
 regenerate-and-diff gates have teeth. The production FastAPI schema and committed
-OpenAPI document were exactly equal: 291 paths overall and the same 143 paths in
-the `/api/broker*`, `/api/accounts*`, `/api/live-instances*`, and `/api/live-runs*`
-families. Regenerating GraphQL, both vocabulary snapshots, both operator-manual
-copies, and both Frontend clients produced no tracked diff. The focused consumer
-checks passed.
+OpenAPI document were exactly equal across the canonical Alpaca Broker V2
+`/api/brokers/**` slice: 46 path templates and 49 HTTP operations. Regenerating
+GraphQL, both vocabulary snapshots, both operator-manual copies, and both
+Frontend clients produced no tracked diff. The focused consumer checks passed.
 
 Three holes remain:
 
@@ -35,11 +34,11 @@ Three holes remain:
    forward-only `Vocabulary:` declaration. An accepted, governed ADR can lose the
    declaration while the gate stays green.
 
-The charter's .NET premise needs correction rather than a defect: no broker
-control request travels through .NET, no C# OpenAPI client generator exists, and
-the GraphQL schema exposes no broker-control field. The current broker surfaces
-are browser-to-FastAPI direct. The handwritten C# clients serve non-broker Python
-routes and are outside this charter.
+The charter's .NET premise needs correction rather than a defect: no canonical
+Alpaca Broker V2 request travels through .NET, no C# OpenAPI client generator
+exists, and the GraphQL schema exposes no Broker V2 control field. The current
+`/api/brokers/**` surface is browser-to-FastAPI direct. The handwritten C# clients
+serve non-broker Python routes and are outside this charter.
 
 ## Scope and method
 
@@ -47,6 +46,12 @@ This audit used repository-owned primary evidence only: workflow definitions,
 generators, exported schemas, Pydantic/Hot Chocolate sources, generated TypeScript,
 and the consumers themselves. No production broker, account, credential, database,
 or live order path was contacted.
+
+Per the repository's deprecation rule, the audit scope is only the canonical
+Alpaca Broker V2 `/api/brokers/**` family. Deprecated compatibility families,
+including singular `/api/broker/**` and `/api/live-instances/**`, and their IBKR
+bot-control consumers were excluded from inventory and analysis. They are named
+here only to make that exclusion explicit.
 
 Each deliberate drift was minimal, local, and uncommitted. For every claimed
 gate, the audit changed the source or artifact the gate claims to protect, ran the
@@ -61,37 +66,44 @@ compare it. Streaming event bodies are outside OpenAPI by protocol. A REST
 bootstrap model reused as an SSE snapshot is still OpenAPI-owned for the REST
 half; a stream-only incremental event remains a named handwritten exception.
 
-## Boundary topology
+## Canonical boundary topology
 
-The browser routing makes the broker boundary unambiguous:
+Four FastAPI routers own the canonical route family under the same
+`/api/brokers` prefix: `brokers-v2`, `broker-bots`, `broker-v2-panel`, and
+`broker-v2-gallery`. The read router states that phase 1 registers only `alpaca`
+([`brokers.py:1-8,108`](https://github.com/tim1016/learn-ai/blob/a16571c2736bc3213e648ba6960aa951b6177b9b/PythonDataService/app/routers/brokers.py#L1-L108)),
+and application wiring identifies the latter three control surfaces as Alpaca
+Broker V2
+([`main.py:701-730`](https://github.com/tim1016/learn-ai/blob/a16571c2736bc3213e648ba6960aa951b6177b9b/PythonDataService/app/main.py#L701-L730)).
 
-- `/graphql` and `/api/jobs` go to .NET.
-- all other `/api` requests go directly to PythonDataService.
+The committed OpenAPI slice contains **46 path templates / 49 operations**:
+22 `brokers-v2`, 6 `broker-bots`, 19 `broker-v2-panel`, and 2
+`broker-v2-gallery` operations. The live schema produced the same paths and
+operations. Production Frontend source has exactly three direct HTTP consumers
+of this route family: `brokers.service.ts`, `broker-v2-panel.service.ts`, and
+`gallery-live-store.service.ts`. Their base URLs are visible at
+[`brokers.service.ts:49-57`](https://github.com/tim1016/learn-ai/blob/a16571c2736bc3213e648ba6960aa951b6177b9b/Frontend/src/app/services/brokers.service.ts#L49-L57),
+[`broker-v2-panel.service.ts:38-52`](https://github.com/tim1016/learn-ai/blob/a16571c2736bc3213e648ba6960aa951b6177b9b/Frontend/src/app/components/broker/v2-panel/lib/broker-v2-panel.service.ts#L38-L52),
+and
+[`gallery-live-store.service.ts:338`](https://github.com/tim1016/learn-ai/blob/a16571c2736bc3213e648ba6960aa951b6177b9b/Frontend/src/app/components/broker/v2-panel/gallery/lib/gallery-live-store.service.ts#L338).
+The proxy sends those `/api` requests directly to PythonDataService
+([`Frontend/proxy.conf.js:149-165`](https://github.com/tim1016/learn-ai/blob/a16571c2736bc3213e648ba6960aa951b6177b9b/Frontend/proxy.conf.js#L149-L165)).
 
-That is encoded in
-[`Frontend/proxy.conf.js:149-165`](https://github.com/tim1016/learn-ai/blob/a16571c2736bc3213e648ba6960aa951b6177b9b/Frontend/proxy.conf.js#L149-L165)
-and documented in the
-[`cross-stack-contract-inventory.md:8-18`](https://github.com/tim1016/learn-ai/blob/a16571c2736bc3213e648ba6960aa951b6177b9b/docs/architecture/cross-stack-contract-inventory.md#L8-L18).
-The inventory classifies `/api/broker/**`, `/api/accounts/**`,
-`/api/live-runs/**`, and `/api/live-instances/**` as direct FastAPI surfaces
-([`lines 28-39`](https://github.com/tim1016/learn-ai/blob/a16571c2736bc3213e648ba6960aa951b6177b9b/docs/architecture/cross-stack-contract-inventory.md#L28-L39)).
-
-The regenerated GraphQL snapshot contains four `brokeragePolicy` fields/filter
-members and no broker-control query or mutation. A repository search also found
-no C# call to `/api/broker`, `/api/brokers`, `/api/accounts`,
-`/api/live-instances`, or `/api/live-runs`. `Backend.csproj` has Hot Chocolate
-and ordinary `HttpClient` dependencies but no `OpenApiReference`, NSwag, Kiota,
-or other C# generator
+The regenerated GraphQL snapshot contains no Broker V2 control query or mutation,
+and a repository search found **zero** C# calls to `/api/brokers`. `Backend.csproj`
+has Hot Chocolate and ordinary `HttpClient` dependencies but no
+`OpenApiReference`, NSwag, Kiota, or other C# generator
 ([`Backend.csproj:13-27`](https://github.com/tim1016/learn-ai/blob/a16571c2736bc3213e648ba6960aa951b6177b9b/Backend/Backend.csproj#L13-L27)).
 The two existing C# cross-stack fixture tests cover aggregates and spec-strategy
-payloads, not broker control
+payloads, not Alpaca Broker V2
 ([`CrossStackContractFixtureTests.cs:16-45`](https://github.com/tim1016/learn-ai/blob/a16571c2736bc3213e648ba6960aa951b6177b9b/Backend.Tests/Contract/CrossStackContractFixtureTests.cs#L16-L45)).
 
 Therefore:
 
-- **Frontend generated clients are in scope and were checked.**
-- **A .NET broker client is not stale; it does not exist.** No issue is owed for
-  the broker boundary on that premise.
+- **The three direct Frontend consumers and their generated client are in scope
+  and were checked.**
+- **A .NET Alpaca Broker V2 client is not stale; it does not exist.** No issue is
+  owed for this boundary on that premise.
 - The broader question of generating every non-broker C# Python client is not
   silently promoted into this charter.
 
@@ -102,7 +114,7 @@ removed:
 
 | Artifact | Authoritative source | Regeneration / check | Result |
 |---|---|---|---|
-| FastAPI OpenAPI | `app.main.app.openapi()` | `python PythonDataService/scripts/export_openapi_contract.py` and `--check` | **Clean.** Parsed documents exactly equal; 291 paths overall. The scoped broker/control path set was 143 on both sides: 46 `/api/brokers/`, 34 `/api/accounts`, 16 `/api/live-instances`, 11 `/api/live-runs`, 36 `/api/broker/`. |
+| FastAPI OpenAPI | `app.main.app.openapi()` | `python PythonDataService/scripts/export_openapi_contract.py` and `--check` | **Clean.** The canonical `/api/brokers/**` slice was identical: 46 path templates / 49 operations on both sides (22 `brokers-v2`, 6 `broker-bots`, 19 `broker-v2-panel`, 2 `broker-v2-gallery`). |
 | Backend GraphQL | Hot Chocolate schema | `dotnet run --project Backend --configuration Release -- schema export --output ../contracts/graphql/backend.schema.graphql` | **Clean.** No diff. The relative output path is correctly resolved from the project directory; it was not changed. |
 | Broker-v2 vocabulary snapshots | `ALL_VOCABULARY_CODES` + `OPERATOR_COPY` | `(cd PythonDataService && python -m scripts.regenerate_broker_v2_vocabulary_snapshot)` | **Clean now.** Both copies regenerated byte-identically, but CI does not run this command; see F1. |
 | Broker-v2 operator manual | `OPERATOR_COPY`, action registry, recovery action vocabulary | `(cd PythonDataService && python -m scripts.regenerate_broker_v2_operator_manual)` | **Clean.** Canonical and served manuals are byte-identical. |
@@ -188,6 +200,11 @@ the REST bootstrap response and the SSE `snapshot` event
 The live store imports the handwritten mirror for both paths
 ([`gallery-live-store.service.ts:10-17,30-42`](https://github.com/tim1016/learn-ai/blob/a16571c2736bc3213e648ba6960aa951b6177b9b/Frontend/src/app/components/broker/v2-panel/gallery/lib/gallery-live-store.service.ts#L10-L42)).
 Only `GalleryLiveUpdate` and `GalleryResetEvent` are genuinely stream-only here.
+`GalleryLiveUpdate` already has a canonical Pydantic owner at
+[`broker_v2_gallery.py:99-109`](https://github.com/tim1016/learn-ai/blob/a16571c2736bc3213e648ba6960aa951b6177b9b/PythonDataService/app/schemas/broker_v2_gallery.py#L99-L109).
+`GalleryResetEvent` does **not** have a Pydantic model: the router currently owns
+its exact `{reason, cursor}` JSON shape inline
+([`broker_v2_gallery.py:197-205`](https://github.com/tim1016/learn-ai/blob/a16571c2736bc3213e648ba6960aa951b6177b9b/PythonDataService/app/routers/broker_v2_gallery.py#L197-L205)).
 
 The current mirrors match the produced wire fields on manual read-through, so
 this is not current contract drift. It is a gate hole: regenerating
@@ -231,10 +248,11 @@ accepted to stop.
   exists after that generation step, at the consumer-import choice.
 - **No current generated artifact drift was found.** Every generator was run
   after the probes and the repository returned to a clean tracked state.
-- **SSE is not declared fully protected by OpenAPI.** Stream-only update/reset
-  envelopes remain handwritten by design. The proposed F2 fix preserves that
-  exception and asks for its existing Pydantic ownership to be pinned by a
-  focused boundary fixture.
+- **SSE is not declared fully protected by OpenAPI.** The stream-only update and
+  reset envelopes remain handwritten in Frontend. The proposed F2 fix pins
+  `GalleryLiveUpdate` to its existing Pydantic owner; for `GalleryResetEvent`, it
+  either introduces a backend reset model or explicitly pins the router-owned
+  `{reason, cursor}` shape with a focused boundary fixture.
 
 ## Recommended tracker items
 
@@ -299,10 +317,13 @@ The following filed issue bodies are independently grabbable.
 >   needed, without restating wire keys or scalar types.
 > - Make chart, evidence, and gallery REST calls consume those generated-backed
 >   types, including the gallery REST bootstrap and its identical SSE snapshot.
-> - Keep only true stream-only shapes handwritten (`GalleryLiveUpdate`,
->   `GalleryResetEvent`, and any other event envelope OpenAPI cannot express),
->   name their owning Pydantic models, and add/retain a boundary fixture or
->   focused parity test for each.
+> - Keep only true stream-only shapes handwritten. Pin `GalleryLiveUpdate` to
+>   its existing backend owner,
+>   `app.schemas.broker_v2_gallery.GalleryLiveUpdate`, with a focused parity
+>   test. `GalleryResetEvent` has no existing Pydantic owner: either introduce a
+>   backend reset model and pin Frontend to it, or explicitly designate the
+>   router's exact `{reason, cursor}` JSON object as authority and add a focused
+>   boundary fixture for that shape.
 > - Add a regression demonstrating that a breaking field drift in one Pydantic
 >   REST model, followed by normal OpenAPI/client regeneration, makes the
 >   consuming Frontend check fail until the consumer is updated.
@@ -356,8 +377,11 @@ The registered section is reproduced here as the charter's point-in-time handoff
 >   (medium).** Chart, evidence, and gallery consumers hand-copy schemas already
 >   present in `broker.types.ts`; the gallery snapshot is also a REST bootstrap,
 >   not solely an SSE exception. Generated clients can be current while these
->   live consumers compile against stale mirrors. Keep true stream-only update/
->   reset envelopes handwritten and fixture-pinned.
+>   live consumers compile against stale mirrors. Keep true stream-only
+>   envelopes handwritten: pin `GalleryLiveUpdate` to
+>   `app.schemas.broker_v2_gallery.GalleryLiveUpdate`; for model-less
+>   `GalleryResetEvent`, introduce a backend model or explicitly fixture-pin the
+>   router-owned `{reason, cursor}` shape.
 >   [#1667](https://github.com/tim1016/learn-ai/issues/1667)
 > - **Accepted-ADR `Vocabulary:` metadata is not gated (low/medium).** The ADR
 >   status guard correctly enforces status syntax and value but accepts a
@@ -369,8 +393,9 @@ The registered section is reproduced here as the charter's point-in-time handoff
 
 Final clean-state checks after every deliberate mutation was removed:
 
-- FastAPI live/committed parsed equality: `True`; 291/291 paths, scoped
-  broker/control families 143/143.
+- FastAPI live/committed canonical Alpaca Broker V2 equality: **46/46 path
+  templates and 49/49 operations** under `/api/brokers/**`; three production
+  Frontend direct consumers and zero C# direct consumers.
 - OpenAPI exporter tests + vocabulary tests + manual-generator tests:
   **30 passed**.
 - Frontend `(cd Frontend && npm run codegen:check && npx tsc --noEmit)`:
