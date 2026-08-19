@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from threading import Event, Thread
 
 import pytest
 
 import app.engine.live.account_safety as account_safety_module
-from app.engine.live.account_artifacts import advance_account_clerk_generation
-from app.engine.live.account_clerk import AccountClerk
-from app.engine.live.account_clerk_journal_models import AccountClerkIntentRejected, AccountClerkJournalEntry
+from app.engine.live.account_clerk_journal_models import AccountClerkJournalEntry
 from app.engine.live.account_epoch import (
     AccountEpochAuthority,
     AccountEpochOutageChanges,
@@ -35,9 +32,11 @@ from app.engine.live.account_safety import (
     account_safety_admission_repair_path,
     account_safety_blocks_current_bot,
     account_safety_entry_admission_lock,
-    account_safety_suspension_reservation,
     repair_account_safety_admission,
     retired_owner_nonterminal_custody,
+)
+from tests._helpers.legacy_ibkr_artifacts import (
+    write_historical_clerk_generation,
 )
 
 ACCOUNT_ID = "DU1234567"
@@ -127,92 +126,6 @@ def test_retired_owner_suspension_never_lifts_while_nonterminal_custody_remains(
         safety.require_entry_admission()
 
 
-@pytest.mark.asyncio
-async def test_clerk_refuses_new_entry_a0_while_retired_owner_suspension_is_active(tmp_path: Path) -> None:
-    safety = AccountSafetyAuthority(
-        artifacts_root=tmp_path,
-        account_id=ACCOUNT_ID,
-        now_ms=lambda: NOW_MS,
-    )
-    safety.suspend_retired_owner_custody((_custody(),))
-    clerk = AccountClerk(
-        artifacts_root=tmp_path,
-        account_id=ACCOUNT_ID,
-        safety_authority=safety,
-    )
-    intent = AccountOwnerSubmitIntent(
-        trace_id="trace-s6",
-        account_id=ACCOUNT_ID,
-        strategy_instance_id="healthy-sibling",
-        run_id="run-healthy",
-        bot_order_namespace="learn-ai/healthy-sibling/v1",
-        intent_id="healthy-entry-1",
-        order_ref="learn-ai/healthy-sibling/v1:healthy-entry-1",
-        intent_kind="STRATEGY",
-        order_spec={"symbol": "AMD"},
-        owner_generation=1,
-        created_at_ms=NOW_MS,
-    )
-
-    with pytest.raises(AccountClerkIntentRejected) as exc:
-        await clerk.record_intent(intent)
-
-    assert exc.value.reason == "CLERK_ACCOUNT_SUSPENDED_RECONCILIATION_REQUIRED"
-    assert exc.value.diagnostics["safety_verdict"] == "SUSPENDED"
-    assert clerk._journal.snapshot() == []
-
-
-@pytest.mark.asyncio
-async def test_shared_account_safety_permit_serializes_retirement_before_sibling_a0(tmp_path: Path) -> None:
-    """A sibling cannot fsync A0 after retirement has acquired the account permit."""
-
-    safety = AccountSafetyAuthority(
-        artifacts_root=tmp_path,
-        account_id=ACCOUNT_ID,
-        now_ms=lambda: NOW_MS,
-    )
-    permit_held = Event()
-    release_retirement = Event()
-
-    def suspend_under_shared_permit() -> None:
-        with account_safety_admission_lock(tmp_path, ACCOUNT_ID):
-            permit_held.set()
-            assert release_retirement.wait(timeout=1)
-            safety.suspend_retired_owner_custody((_custody(),))
-
-    retirement = Thread(target=suspend_under_shared_permit)
-    retirement.start()
-    assert permit_held.wait(timeout=1)
-    clerk = AccountClerk(
-        artifacts_root=tmp_path,
-        account_id=ACCOUNT_ID,
-        safety_authority=safety,
-    )
-    sibling = AccountOwnerSubmitIntent(
-        trace_id="trace-concurrent-sibling",
-        account_id=ACCOUNT_ID,
-        strategy_instance_id="healthy-sibling",
-        run_id="run-healthy",
-        bot_order_namespace="learn-ai/healthy-sibling/v1",
-        intent_id="healthy-entry-race",
-        order_ref="learn-ai/healthy-sibling/v1:healthy-entry-race",
-        intent_kind="STRATEGY",
-        order_spec={"symbol": "AMD"},
-        owner_generation=1,
-        created_at_ms=NOW_MS,
-    )
-    entry = asyncio.create_task(clerk.record_intent(sibling))
-    await asyncio.sleep(0)
-    assert clerk._journal.snapshot() == []
-
-    release_retirement.set()
-    await asyncio.to_thread(retirement.join, 1)
-    assert not retirement.is_alive()
-    with pytest.raises(AccountClerkIntentRejected, match="CLERK_ACCOUNT_SUSPENDED"):
-        await entry
-    assert clerk._journal.snapshot() == []
-
-
 def test_shared_entry_permits_drain_before_exclusive_suspension(tmp_path: Path) -> None:
     """Healthy entries share admission; a suspension waits for both to finish."""
 
@@ -251,130 +164,12 @@ def test_shared_entry_permits_drain_before_exclusive_suspension(tmp_path: Path) 
     assert not suspension.is_alive()
 
 
-@pytest.mark.asyncio
-async def test_new_a0_waiting_on_safety_writer_never_blocks_a_fill_callback_intake(
-    tmp_path: Path,
-) -> None:
-    """The reader waits outside intake, so an old broker permit can drain."""
-
-    safety = AccountSafetyAuthority(
-        artifacts_root=tmp_path,
-        account_id=ACCOUNT_ID,
-        now_ms=lambda: NOW_MS,
-    )
-    reader_entered = Event()
-    release_reader = Event()
-    writer_reserved = Event()
-    writer_done = Event()
-    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT_ID, safety_authority=safety)
-    sibling = AccountOwnerSubmitIntent(
-        trace_id="trace-reader-writer-intake",
-        account_id=ACCOUNT_ID,
-        strategy_instance_id="healthy-sibling",
-        run_id="run-healthy",
-        bot_order_namespace="learn-ai/healthy-sibling/v1",
-        intent_id="healthy-entry-writer-race",
-        order_ref="learn-ai/healthy-sibling/v1:healthy-entry-writer-race",
-        intent_kind="STRATEGY",
-        order_spec={"symbol": "AMD"},
-        owner_generation=1,
-        created_at_ms=NOW_MS,
-    )
-
-    def hold_old_broker_reader() -> None:
-        with account_safety_entry_admission_lock(tmp_path, ACCOUNT_ID):
-            reader_entered.set()
-            assert release_reader.wait(timeout=1)
-
-    def reserve_retirement() -> None:
-        with account_safety_suspension_reservation(tmp_path, ACCOUNT_ID) as reservation:
-            writer_reserved.set()
-            reservation.wait_for_readers()
-            safety.suspend_retired_owner_custody((_custody(),))
-        writer_done.set()
-
-    reader = Thread(target=hold_old_broker_reader)
-    reader.start()
-    assert reader_entered.wait(timeout=1)
-    writer = Thread(target=reserve_retirement)
-    writer.start()
-    assert writer_reserved.wait(timeout=1)
-
-    pending_a0 = asyncio.create_task(clerk.record_intent(sibling))
-    await asyncio.sleep(0)
-    # This simulates the synchronous fill-before-ack callback needed by the
-    # existing broker reader. It must acquire intake despite the new A0 being
-    # queued behind the safety writer.
-    async with clerk._intake_lock:
-        callback_persisted = True
-    assert callback_persisted is True
-
-    release_reader.set()
-    await asyncio.to_thread(reader.join, 1)
-    await asyncio.to_thread(writer.join, 1)
-    assert not reader.is_alive()
-    assert writer_done.is_set()
-    with pytest.raises(AccountClerkIntentRejected, match="CLERK_ACCOUNT_SUSPENDED"):
-        await pending_a0
-
-
-@pytest.mark.asyncio
-async def test_clerk_host_repairs_stranded_admission_markers_only_after_intake_closes(
-    tmp_path: Path,
-) -> None:
-    """Crash recovery is explicit, capability-bound, and receipt-idempotent."""
-
-    anchor = account_safety_admission_path(tmp_path, ACCOUNT_ID)
-    coordinator = anchor.with_name(f".{anchor.name}")
-    readers = coordinator / "readers"
-    readers.mkdir(parents=True)
-    (coordinator / "gate").write_text("stale", encoding="utf-8")
-    (coordinator / "writer").write_text("stale", encoding="utf-8")
-    (readers / "reader-one").write_text("stale", encoding="utf-8")
-    clerk = AccountClerk(
-        artifacts_root=tmp_path,
-        account_id=ACCOUNT_ID,
-        host_binding_capability="s6-host-capability",
-        now_ms=lambda: NOW_MS,
-    )
-
-    with pytest.raises(
-        AccountClerkIntentRejected,
-        match="CLERK_ACCOUNT_SAFETY_REPAIR_REQUIRES_CLOSED_INTAKE",
-    ):
-        await clerk.repair_stranded_account_safety_admission(
-            operation_id="s6-admission-repair-001",
-            authorized_by="clerk-host",
-            host_capability="s6-host-capability",
-        )
-
-    clerk.close_normal_submit_intake()
-    receipt = await clerk.repair_stranded_account_safety_admission(
-        operation_id="s6-admission-repair-001",
-        authorized_by="clerk-host",
-        host_capability="s6-host-capability",
-    )
-
-    assert receipt.removed_markers == ("gate", "writer", "readers/reader-one")
-    assert receipt.maintenance_generation == 1
-    assert not (coordinator / "gate").exists()
-    assert not (coordinator / "writer").exists()
-    assert list(readers.iterdir()) == []
-    assert (
-        await clerk.repair_stranded_account_safety_admission(
-            operation_id="s6-admission-repair-001",
-            authorized_by="clerk-host",
-            host_capability="s6-host-capability",
-        )
-    ) == receipt
-
-
 def test_admission_repair_waits_for_cross_runtime_participants_before_removal(
     tmp_path: Path,
 ) -> None:
     """Maintenance fences new marker creation and drains a live remote reader."""
 
-    advance_account_clerk_generation(
+    write_historical_clerk_generation(
         tmp_path,
         ACCOUNT_ID,
         phase="accepting",
@@ -424,7 +219,7 @@ def test_repair_fails_closed_when_a_crashed_participant_cannot_be_proven_dead(
 ) -> None:
     """A generation alone cannot prove an old host stopped its critical section."""
 
-    first = advance_account_clerk_generation(
+    first = write_historical_clerk_generation(
         tmp_path,
         ACCOUNT_ID,
         phase="accepting",
@@ -448,7 +243,7 @@ def test_repair_fails_closed_when_a_crashed_participant_cannot_be_proven_dead(
         encoding="utf-8",
     )
     (readers / "crashed-reader").write_text("stale", encoding="utf-8")
-    fence = advance_account_clerk_generation(
+    fence = write_historical_clerk_generation(
         tmp_path,
         ACCOUNT_ID,
         phase="frozen",
@@ -595,6 +390,7 @@ def test_repair_rejects_a_same_operation_receipt_from_another_fence_or_account(
 # ---------------------------------------------------------------------------
 # account_safety_blocks_current_bot — sibling-exemption regression (BUG-11)
 # ---------------------------------------------------------------------------
+
 
 def test_account_safety_blocks_current_bot_blocks_own_sid(tmp_path: Path) -> None:
     """A bot whose own SID is in custody must be blocked."""

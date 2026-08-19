@@ -1,10 +1,10 @@
-"""Per-instance broker-activity publisher (ADR 0014 §4).
+"""Read-side projector for retained per-instance broker activity (ADR 0014 §4).
 
 The publisher is the stateful, data-plane-owned orchestrator. It:
 
 1. Consumes the existing ``stream_order_events`` from the IBKR client.
 2. Filters events by ``bot_order_namespace`` (the per-instance scope).
-3. Reads the engine's ``LiveStateEnvelope`` sidecar to assemble an
+3. Reads a historical ``LiveStateEnvelope`` sidecar to assemble an
    ``EngineIntent`` per matched event.
 4. Calls the pure reconciler (``author_row_from_event``) to produce a
    ``BrokerActivityRow``.
@@ -24,9 +24,8 @@ injected ``recovery_source_factory`` (production wiring runs
 ``_seen_exec_ids`` set, and authors any unseen execution with
 ``ReconciliationContext.reconnect_recovery_active=True`` so the
 ``reconnect_recovery`` template fires. While the sweep is active the
-registry surfaces ``any_recovery_active() == True`` and
-``place_paper_order`` refuses new submissions — the broker connection is
-busy replaying history and a new order would race the sweep.
+publisher marks the authored rows as reconnect-recovery evidence rather than
+normal live callbacks.
 
 PR 6 (operator-notice §11): a periodic sweep loop (``_periodic_sweep_loop``)
 runs immediately on start, then every ``_sweep_interval_ms`` milliseconds.
@@ -34,8 +33,8 @@ The sweep fetches via the same ``recovery_source_factory``, filters by
 ``_sweep_lookback_ms`` (client-side, keyed on ``exec_time_ms``), and emits
 a ``reconciliation.discovered_execution_not_in_engine_state`` critical
 ``OperatorIncident`` via ``IncidentStore`` when the sweep finds a fill that
-is (a) not in the dedupe set and (b) carries no engine intent.  The engine
-remains authoritative; the publisher never silently corrects cockpit state.
+is (a) not in the dedupe set and (b) carries no retained intent evidence. The
+publisher never silently corrects account or cockpit state.
 """
 
 from __future__ import annotations
@@ -111,7 +110,7 @@ EventSourceFactory = Callable[[], AsyncIterator[IbkrOrderEvent]]
 # each ``Fill`` into an ``IbkrOrderEvent``; tests inject a synthetic
 # coroutine returning a fixed list. The factory is invoked once per
 # successful reconnect and its result is processed to completion before
-# the submission halt lifts.
+# reconnect-recovery classification clears.
 RecoverySourceFactory = Callable[[], Awaitable[list[IbkrOrderEvent]]]
 
 # PR 6 — periodic sweep cadence and lookback window.
@@ -291,18 +290,14 @@ class BrokerActivityPublisher:
         # change, fold any legacy per-run WALs for this instance into the new
         # file; on every subsequent boot the file already exists and the
         # migration is a no-op.
-        instance_wal_path = instance_broker_activity_wal_path(
-            artifacts_root, strategy_instance_id
-        )
+        instance_wal_path = instance_broker_activity_wal_path(artifacts_root, strategy_instance_id)
         if not instance_wal_path.exists():
             _migrate_per_run_wals_to_instance_wal(
                 artifacts_root=artifacts_root,
                 strategy_instance_id=strategy_instance_id,
                 target_path=instance_wal_path,
             )
-        self._wal = BrokerActivityWal(
-            instance_wal_path, trusted_root=artifacts_root / "live_instances"
-        )
+        self._wal = BrokerActivityWal(instance_wal_path, trusted_root=artifacts_root / "live_instances")
         self._event_channel = DurableEventChannel(
             channel_key=f"broker-activity:{strategy_instance_id}",
             wal_path=instance_wal_path,
@@ -310,19 +305,17 @@ class BrokerActivityPublisher:
             load_rows=self._wal.read_all,
             seq_of=lambda row: row.seq,
         )
-        self._bot_event_wal = BotEventRawWal(
-            run_bot_event_wal_path(run_dir), trusted_root=run_dir
-        )
+        self._bot_event_wal = BotEventRawWal(run_bot_event_wal_path(run_dir), trusted_root=run_dir)
         self._sidecar = LiveStateSidecarRepo(
             stable_live_state_path(artifacts_root, strategy_instance_id),
             trusted_root=artifacts_root / "live_state",
         )
-        # Intent WAL — the durable record of every submit-lifecycle event.
+        # Historical intent WAL — the durable record of former submit-lifecycle
+        # events. It is read evidence only after #1583.
         # We fold it into the submitted-orders projection so a fresh fill
         # bearing this instance's own ``order_ref`` matches even when the
-        # sidecar's ``submitted_orders`` map is empty (the normal durable
-        # submit path writes the WAL but only updates the sidecar
-        # asynchronously via the engine's flush cycle).
+        # sidecar's ``submitted_orders`` map is empty (the former durable submit
+        # path wrote the WAL before updating the sidecar asynchronously).
         self._intent_wal = IntentWal(run_dir / "intent_events.jsonl")
         self._fold_cache: tuple[float, dict[str, dict]] | None = None
 
@@ -341,10 +334,8 @@ class BrokerActivityPublisher:
         self._child_tasks: list[asyncio.Task[None]] = []
         self._stopped = asyncio.Event()
         # Slice 3 (ADR 0011 amendment) — flipped True for the duration
-        # of ``sweep_reconnect_recovery``. While true, ``place_paper_order``
-        # refuses new submissions (the broker connection is replaying
-        # history and a new order would race the sweep) and every authored
-        # row carries ``reconnect_recovery_active=True`` so the
+        # of ``sweep_reconnect_recovery`` so every authored row carries
+        # ``reconnect_recovery_active=True`` and the
         # ``reconnect_recovery`` template fires instead of e.g. a raw
         # excessive-lag verdict on an exec the publisher missed mid-drop.
         self._reconnect_recovery_active: bool = False
@@ -421,9 +412,7 @@ class BrokerActivityPublisher:
 
     @property
     def is_running(self) -> bool:
-        return (
-            self._supervisor_task is not None and not self._supervisor_task.done()
-        )
+        return self._supervisor_task is not None and not self._supervisor_task.done()
 
     @property
     def latest_row_ms(self) -> int | None:
@@ -439,9 +428,7 @@ class BrokerActivityPublisher:
     def event_channel(self) -> DurableEventChannel[BrokerActivityRow]:
         return self._event_channel
 
-    def backfill(
-        self, *, after_seq: int = 0, limit: int | None = None
-    ) -> list[BrokerActivityRow]:
+    def backfill(self, *, after_seq: int = 0, limit: int | None = None) -> list[BrokerActivityRow]:
         """Synchronous WAL read for REST backfill — returns rows with
         ``seq > after_seq``, capped at ``limit``.
 
@@ -598,9 +585,9 @@ class BrokerActivityPublisher:
 
         ``INTENT_NOT_ACCEPTED`` is treated as resolved-terminal (not
         pending) because ``intent_ledger._UNRESOLVED_STATUSES`` excludes
-        it: ``live_portfolio`` writes it after a ``PROVABLY_ABSENT`` probe
-        before retrying, so authoring an "Awaiting broker ack" row for it
-        would be operator-misleading.
+        it. Historical WALs used this terminal marker after absence was proven,
+        so authoring an "Awaiting broker ack" row for it would be
+        operator-misleading.
 
         Dedup is keyed on ``intent_id``; the in-memory set is pruned to
         the currently-unacked set on every tick so an intent that
@@ -656,9 +643,7 @@ class BrokerActivityPublisher:
         # stale.
         self._authored_pending_intent_ids &= currently_pending
 
-    def _author_pending_row_for_view(
-        self, intent_id: str, order_view
-    ) -> None:
+    def _author_pending_row_for_view(self, intent_id: str, order_view) -> None:
         """Author one ``engine_only_pending`` row from a folded view.
 
         Splits out so the dedup bookkeeping above stays readable. The
@@ -731,10 +716,7 @@ class BrokerActivityPublisher:
         # Intermediate status events for OUR orders (Submitted,
         # PreSubmitted) are skipped further down.
         parsed_ref = parse_order_ref(event.order_ref)
-        if (
-            parsed_ref is not None
-            and parsed_ref[0] != self._bot_order_namespace
-        ):
+        if parsed_ref is not None and parsed_ref[0] != self._bot_order_namespace:
             return
         submitted_orders = self._read_submitted_orders()
         intent_id = match_identity(
@@ -839,23 +821,20 @@ class BrokerActivityPublisher:
         self._update_envelope_cursor(row.seq)
         self._event_channel.publish(row)
 
-    # ── helpers (engine state + envelope) ─────────────────────────
+    # ── helpers (historical engine evidence + envelope) ───────────
 
     def _read_submitted_orders(self) -> dict[str, dict]:
         """Return the union of (a) the sidecar's persisted ``submitted_orders``
         snapshot and (b) the intent WAL folded over that snapshot.
 
-        The sidecar snapshot is the engine's last-flushed projection — it
-        lags behind the WAL because the engine writes the WAL synchronously
-        before ``placeOrder`` and only updates the sidecar later on its
-        flush cycle. A fresh fill on this instance's own ``order_ref``
-        therefore arrives while the sidecar's map is still empty; folding
-        the WAL closes that window so ``match_identity`` recognises the
-        intent and the row gets the engine overlay.
+        The sidecar snapshot is the retired engine's last-flushed projection.
+        Historically it could lag the WAL because the engine wrote the WAL
+        before broker contact and updated the sidecar later. Folding both
+        sources preserves attribution for retained broker evidence.
 
         Reuses ``app.engine.live.intent_ledger.fold`` — the canonical
-        fold the rest of the system uses — so this view stays consistent
-        with the engine's own cold-start projection.
+        fold used by historical evidence readers, so this view stays
+        consistent with the retained cold-start projection.
 
         Caching: the fold is keyed on the WAL file's mtime. Each broker
         event triggers one stat; we re-fold only when the WAL has grown.
@@ -923,9 +902,7 @@ class BrokerActivityPublisher:
             if order_view.perm_id is not None:
                 entry["perm_id"] = order_view.perm_id
             if order_view.order_spec is not None:
-                entry.update(
-                    {k: v for k, v in order_view.order_spec.items() if k not in entry}
-                )
+                entry.update({k: v for k, v in order_view.order_spec.items() if k not in entry})
             out[intent_id] = entry
         return out
 
@@ -982,9 +959,7 @@ class BrokerActivityPublisher:
         # update; the publisher re-derives state from the WAL on
         # cold-start so no data is lost.
         try:
-            self._sidecar.write(
-                envelope.model_copy(update={"last_broker_activity_wal_seq": seq})
-            )
+            self._sidecar.write(envelope.model_copy(update={"last_broker_activity_wal_seq": seq}))
         except (FileNotFoundError, OSError):
             # Sidecar may be temporarily missing during engine restart;
             # cursor will catch up on the next event.
@@ -1029,15 +1004,13 @@ class BrokerActivityPublisher:
         Uses the same ``_recovery_source_factory`` and dedup path as
         ``sweep_reconnect_recovery``.  Differs in two ways:
 
-        1. **Does NOT set ``_reconnect_recovery_active``** — the
-           periodic sweep is background bookkeeping, not a post-reconnect
-           halt.  Submissions are not gated.
+        1. **Does NOT set ``_reconnect_recovery_active``** — the periodic
+           sweep is background bookkeeping, not post-reconnect evidence.
         2. **Emits a critical ``OperatorIncident``** when the sweep finds
            a fill that is (a) not in ``_seen_exec_ids`` and (b) carries
-           no engine intent.  The engine remains authoritative; the
-           publisher still authors the ``unmatched_execution`` row so the
-           operator can see forensic detail, but NEVER silently corrects
-           cockpit portfolio state.
+           no retained intent evidence. The publisher still authors the
+           ``unmatched_execution`` row for forensic detail, but never silently
+           corrects account or cockpit state.
 
         Returns the count of newly-authored rows (0 when the factory is
         not wired or every exec_id was already known).
@@ -1061,10 +1034,7 @@ class BrokerActivityPublisher:
                 # Namespace filter: skip fills owned by a different instance
                 # (same logic as sweep_reconnect_recovery).
                 parsed_ref = parse_order_ref(event.order_ref)
-                if (
-                    parsed_ref is not None
-                    and parsed_ref[0] != self._bot_order_namespace
-                ):
+                if parsed_ref is not None and parsed_ref[0] != self._bot_order_namespace:
                     continue
                 intent_id = match_identity(
                     event,
@@ -1096,9 +1066,7 @@ class BrokerActivityPublisher:
             )
             return authored
 
-    def _emit_cross_client_incident(
-        self, event: IbkrOrderEvent, *, now_ms: int
-    ) -> None:
+    def _emit_cross_client_incident(self, event: IbkrOrderEvent, *, now_ms: int) -> None:
         """Emit a critical ``OperatorIncident`` for a foreign execution.
 
         If no ``IncidentStore`` is wired (legacy callers, tests), logs a
@@ -1116,8 +1084,7 @@ class BrokerActivityPublisher:
 
         if self._incident_store is None:
             logger.warning(
-                "cross-client execution discovered but no IncidentStore wired; "
-                "incident not persisted",
+                "cross-client execution discovered but no IncidentStore wired; incident not persisted",
                 extra={
                     "strategy_instance_id": self._strategy_instance_id,
                     "exec_id": exec_id,
@@ -1184,8 +1151,7 @@ class BrokerActivityPublisher:
             )
         except Exception as exc:
             logger.critical(
-                "[publisher] failed to persist cross-client incident; "
-                "foreign execution will not surface in cockpit",
+                "[publisher] failed to persist cross-client incident; foreign execution will not surface in cockpit",
                 extra={
                     "strategy_instance_id": self._strategy_instance_id,
                     "incident_id": incident_id,
@@ -1199,13 +1165,8 @@ class BrokerActivityPublisher:
 
     @property
     def is_reconnect_recovery_active(self) -> bool:
-        """True while ``sweep_reconnect_recovery`` is running.
+        """Whether rows are currently authored as reconnect-recovery evidence."""
 
-        The registry's ``any_recovery_active`` ORs this across every
-        publisher; ``place_paper_order`` consults the registry on the
-        submit hot path so a new order placed mid-sweep is refused
-        instead of racing the broker's execution replay.
-        """
         return self._reconnect_recovery_active
 
     async def sweep_reconnect_recovery(self) -> int:
@@ -1215,10 +1176,8 @@ class BrokerActivityPublisher:
         so it fires exactly once per successful reconnect. The lifecycle
         contract:
 
-        1. Set ``_reconnect_recovery_active=True`` so the registry's
-           cross-instance ``any_recovery_active`` flips True. From here
-           until step 5, ``place_paper_order`` refuses new submissions
-           (the broker is replaying history and a new order would race).
+        1. Set ``_reconnect_recovery_active=True`` so authored rows carry
+           reconnect-recovery classification.
         2. Call the publisher's ``recovery_source_factory`` (the
            production wiring runs ``IB.reqExecutionsAsync`` and adapts
            each ``Fill`` into an ``IbkrOrderEvent``).
@@ -1235,8 +1194,8 @@ class BrokerActivityPublisher:
            publisher on the account if we did. The live event loop
            still picks them up as foreign rows when they arrive on
            ``stream_order_events``.
-        5. Lift the flag in a ``finally`` so a crashing factory never
-           pins the submission halt.
+        5. Lift the flag in a ``finally`` so a crashing factory never leaves
+           later rows misclassified as reconnect recovery.
 
         Returns the count of newly-authored recovery rows (zero when no
         factory is wired, the sweep was a no-op, or every returned
@@ -1248,8 +1207,7 @@ class BrokerActivityPublisher:
         """
         if self._recovery_source_factory is None:
             logger.debug(
-                "broker-activity publisher has no recovery_source_factory; "
-                "skipping reconnect sweep",
+                "broker-activity publisher has no recovery_source_factory; skipping reconnect sweep",
                 extra={"strategy_instance_id": self._strategy_instance_id},
             )
             return 0
@@ -1292,6 +1250,7 @@ class BrokerActivityPublisher:
                 return authored
             finally:
                 self._reconnect_recovery_active = False
+
 
 def _safe_int(value: object) -> int | None:
     if value is None:

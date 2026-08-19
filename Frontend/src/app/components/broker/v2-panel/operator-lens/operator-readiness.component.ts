@@ -51,8 +51,6 @@ const OPERATOR_ACTION_TONES: Partial<Record<ActionId, PanelActionTone>> = {
   cancel_verified_working_orders: 'danger',
   prepare_safe_flatten: 'neutral',
   open_custody_timeline: 'neutral',
-  clear_hold: 'warning',
-  record_inventory_baseline: 'warning',
   rebuild_from_mirror: 'warning',
   reset_authority: 'danger',
 };

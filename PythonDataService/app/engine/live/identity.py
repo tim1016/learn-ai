@@ -32,13 +32,9 @@ def validate_strategy_instance_id(value: str) -> str:
     closed at the path boundary rather than trust the caller. Returns the
     value unchanged when it is a single safe path segment.
 
-    On the empty string: UI-0 made ``strategy_instance_id`` default to
-    ``""`` on ``LiveEngine``, but that default never reaches a path
-    builder — the engine only persists desired-state through the
-    ``desired_state_writer`` callable wired up in ``run.py``, where the
-    id always comes from the (required) ``--strategy`` CLI argument. An
-    empty id WOULD yield ``live_state//<file>`` (an empty directory
-    segment), so we reject it here too.
+    Historical callers once defaulted this value to ``""``. An empty id would
+    yield ``live_state//<file>`` (an empty directory segment), so the shared
+    artifact/read-model boundary continues to reject it.
     """
     if value != value.strip():
         raise ValueError(

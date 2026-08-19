@@ -2,7 +2,6 @@ import { HttpErrorResponse } from '@angular/common/http';
 import {
   ChangeDetectionStrategy,
   Component,
-  computed,
   effect,
   inject,
   input,
@@ -93,7 +92,6 @@ export class AlpacaSqliteCustodyComponent {
   protected readonly operatorLensQuery = { lens: 'operator' } as const;
   readonly projectionRefreshVersion = input(0);
   readonly timelineQuery = input<SqliteTimelineQuery | null>(null);
-  readonly legacyAuthorityChanged = output<boolean>();
   readonly projectionInvalidated = output();
   private readonly brokers = inject(BrokersService);
 
@@ -120,11 +118,6 @@ export class AlpacaSqliteCustodyComponent {
   protected readonly reductionPlan = signal<SqliteSafeFlattenPlan | null>(null);
   protected readonly receipt = signal<ActionReceiptView | null>(null);
   protected readonly selectedTimelineEntry = signal<SqliteTimelineEntry | null>(null);
-  protected readonly isLegacyAuthority = computed(() => {
-    const error = this.projection.error();
-    return error instanceof HttpErrorResponse && error.status === 409;
-  });
-
   /**
    * Executes an exact capability already presented by the current Clerk
    * projection. The operator posture uses this to keep diagnosis and repair
@@ -135,13 +128,6 @@ export class AlpacaSqliteCustodyComponent {
   }
 
   constructor() {
-    effect(() => {
-      if (this.projection.hasValue()) {
-        this.legacyAuthorityChanged.emit(false);
-      } else if (this.projection.error() !== undefined) {
-        this.legacyAuthorityChanged.emit(this.isLegacyAuthority());
-      }
-    });
     effect(() => {
       const query = this.timelineQuery();
       if (query !== null) untracked(() => this.openTimeline(query));

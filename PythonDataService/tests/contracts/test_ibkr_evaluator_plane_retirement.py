@@ -165,9 +165,14 @@ def test_ibkr_bot_control_routes_are_unregistered() -> None:
     }
 
 
-def test_legacy_ledger_has_no_production_builder_or_writer() -> None:
-    source = (APPLICATION_ROOT / "engine/live/run_ledger.py").read_text(encoding="utf-8")
+def test_legacy_ledger_parser_is_replaced_by_a_read_only_identity_reader() -> None:
+    assert not (APPLICATION_ROOT / "engine/live/run_ledger.py").exists()
 
+    source = (APPLICATION_ROOT / "engine/live/historical_run_identity.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "def read_historical_strategy_instance_id" in source
     assert "def build_ledger" not in source
     assert "def write_ledger" not in source
     assert "def compute_run_id" not in source
@@ -175,9 +180,6 @@ def test_legacy_ledger_has_no_production_builder_or_writer() -> None:
 
 def test_account_capability_host_has_no_bot_runner_or_native_time_queue_reachability() -> None:
     source = (APPLICATION_ROOT / "engine/live/host_daemon.py").read_text(encoding="utf-8")
-    engine_source = (APPLICATION_ROOT / "engine/live/live_engine.py").read_text(
-        encoding="utf-8"
-    )
 
     assert "app.engine.live.live_engine" not in source
     assert "app.engine.live.live_portfolio" not in source
@@ -185,9 +187,8 @@ def test_account_capability_host_has_no_bot_runner_or_native_time_queue_reachabi
     assert '"/runs/' not in source
     assert '"/instances' not in source
     assert '"/deploy"' not in source
-    assert "watchdog_factory" not in engine_source
-    assert "_start_child_watchdog" not in engine_source
-    assert "_submissions_blocked" not in engine_source
+    assert not (APPLICATION_ROOT / "engine/live/live_engine.py").exists()
+    assert not (APPLICATION_ROOT / "engine/live/live_portfolio.py").exists()
 
 
 def test_alpaca_control_and_ibkr_read_evidence_routes_remain_registered() -> None:

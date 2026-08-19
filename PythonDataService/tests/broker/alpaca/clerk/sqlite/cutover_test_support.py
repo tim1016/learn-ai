@@ -7,7 +7,6 @@ from pathlib import Path
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
     bot_order_namespace_for_instance,
-    write_account_instance_binding,
 )
 from app.engine.live.bot_lifecycle_state import (
     BotDutyOutcome,
@@ -19,6 +18,9 @@ from app.services.bot_binding_repository import (
     BotBindingRepository,
     BrokerBotBinding,
     alpaca_v1_action_plan,
+)
+from tests._helpers.legacy_ibkr_artifacts import (
+    write_historical_account_binding,
 )
 
 PLAN_MS = 1_800_000_000_000
@@ -56,9 +58,7 @@ def write_stopped_runner_bot(
         created_at_ms=PLAN_MS - 10_000,
     )
     if legacy_binding:
-        (instance_dir / "broker_binding.json").write_text(
-            binding.model_dump_json(), encoding="utf-8"
-        )
+        (instance_dir / "broker_binding.json").write_text(binding.model_dump_json(), encoding="utf-8")
     else:
         BotBindingRepository(
             runner_root,
@@ -89,15 +89,13 @@ def write_stopped_runner_bot(
         encoding="utf-8",
     )
     if record_account_binding:
-        write_account_instance_binding(
+        write_historical_account_binding(
             runner_root,
             AccountInstanceBinding(
                 account_id=account_id,
                 strategy_instance_id=strategy_instance_id,
                 run_id=run_id,
-                bot_order_namespace=bot_order_namespace_for_instance(
-                    strategy_instance_id
-                ),
+                bot_order_namespace=bot_order_namespace_for_instance(strategy_instance_id),
                 lifecycle_state="ACTIVE",
                 recorded_at_ms=PLAN_MS - 3_000,
                 source="cutover.test",

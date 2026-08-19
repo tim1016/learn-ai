@@ -1,11 +1,9 @@
-"""Account-scoped instance registry for live-paper bots."""
+"""Read-compatible historical IBKR account-instance registry projections."""
 
 from __future__ import annotations
 
-import json
 import os
-import time
-from collections.abc import Callable, Mapping, Sequence, Set
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -16,42 +14,29 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.engine.live.account_artifacts import (
     ACCOUNT_RECOVERY_EVIDENCE_EVENT_TYPES,
     AccountArtifactError,
-    _append_account_event,
-    _safe_account_path_segment,
     account_artifacts_root,
     read_or_migrate_account_recovery_clearance,
 )
 from app.engine.live.account_binding_ledger import (
     AccountBindingCommand,
-    BindingLedgerBaselineResult,
     BindingLedgerParity,
-    BindingRetirementFoldResult,
     account_binding_ledger_read_enabled,
-    append_binding_decision,
-    append_binding_retirement_proposal,
-    baseline_binding_ledger_from_registry,
     binding_ledger_parity,
-    fold_binding_retirement_proposals,
     pending_binding_retirement_proposals,
     read_account_binding_commands,
 )
 from app.engine.live.exit_taxonomy import (
     CRASH_RETIRED_BINDING_SOURCES,
-    LIVENESS_UNPROVEN_REGISTRY_SOURCE,
     TERMINAL_RESTART_BLOCKING_BINDING_SOURCES,
-    false_crash_repair_source,
-    read_run_exit_evidence,
 )
-from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
 from app.schemas.live_runs import GateResult
 
 ACCOUNT_INSTANCE_REGISTRY_FILENAME = "instance_registry.jsonl"
 ACTIVE_INSTANCE_BINDING_STATES = frozenset({"DEPLOYED", "ACTIVE"})
-SOFT_DELETE_RETIRED_BINDING_SOURCE = "operator.bot_soft_delete"
 
 
 class AccountInstanceBinding(BaseModel):
-    """Append-only account registry binding for one runner identity."""
+    """One durable row authored by the retired IBKR runtime."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -61,7 +46,7 @@ class AccountInstanceBinding(BaseModel):
     run_id: str = Field(min_length=1, max_length=128)
     bot_order_namespace: str = Field(min_length=1, max_length=256)
     # Read-only compatibility for bindings written before cohort launches were
-    # removed. New registry rows deliberately never serialize this field.
+    # removed. The retained reader never serializes this field.
     cohort_id: str | None = Field(default=None, min_length=1, max_length=128, exclude=True)
     lifecycle_state: Literal["DEPLOYED", "ACTIVE", "RETIRED"] = "ACTIVE"
     recorded_at_ms: int = Field(ge=0)
@@ -85,193 +70,15 @@ class AccountInstanceBindingIndex:
         )
 
 
-@dataclass(frozen=True)
-class AccountRegistryFalseCrashBackfillResult:
-    """Summary of the append-only false-crash registry repair."""
-
-    accounts_scanned: int
-    candidate_rows: int
-    rows_repaired: int
-    rows_skipped_no_disproof: int
-    invalid_account_dirs: int
-    repaired_run_ids: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class AccountRegistryBootReconcileResult:
-    """Daemon liveness proposals recorded before a new daemon trusts siblings."""
-
-    accounts_scanned: int
-    active_bindings_found: int
-    retirement_proposals_recorded: int
-    preserved_managed_run_ids: tuple[str, ...]
-
-
 def bot_order_namespace_for_instance(strategy_instance_id: str) -> str:
     return f"learn-ai/{strategy_instance_id}/v1"
-
-
-def write_account_instance_binding(
-    artifacts_root: Path,
-    binding: AccountInstanceBinding,
-) -> Path:
-    """Serialize one binding decision into the Clerk ledger and legacy registry.
-
-    The registry is intentionally still the read authority during this
-    reversible migration.  Every forward write first obtains the binding-ledger
-    lock, which gives concurrent lifecycle writers one deterministic order.
-    """
-
-    legacy_path: Path | None = None
-
-    def write_legacy_row() -> None:
-        nonlocal legacy_path
-        legacy_path = _write_account_instance_binding_legacy(artifacts_root, binding)
-
-    append_binding_decision(
-        artifacts_root,
-        binding=binding.model_dump(mode="json"),
-        write_legacy_row=write_legacy_row,
-    )
-    if legacy_path is None:
-        raise RuntimeError(
-            "binding ledger reported a completed decision without invoking the "
-            "legacy registry writer "
-            f"(account_id={binding.account_id}, strategy_instance_id={binding.strategy_instance_id}, "
-            f"run_id={binding.run_id})"
-        )
-    _append_account_event(
-        artifacts_root,
-        binding.account_id,
-        {
-            "event_type": "account_instance_binding_recorded",
-            "account_id": binding.account_id,
-            "strategy_instance_id": binding.strategy_instance_id,
-            "run_id": binding.run_id,
-            "bot_order_namespace": binding.bot_order_namespace,
-            "lifecycle_state": binding.lifecycle_state,
-            "recorded_at_ms": binding.recorded_at_ms,
-            "source": binding.source,
-        },
-    )
-    return legacy_path
-
-
-def write_fenced_direct_cli_start_binding(
-    artifacts_root: Path,
-    binding: AccountInstanceBinding,
-) -> Path:
-    """Record the legacy direct-CLI start transition behind an identity fence.
-
-    Normal production starts are daemon-launched and record their binding via
-    the host-authorized Clerk RPC.  The ``run.py start`` compatibility command
-    remains temporarily for existing operator scripts, but may record only its
-    own ``ACTIVE`` ``run.start`` transition.  Its per-instance file lock and
-    the shared account binding-ledger lock prevent it from interleaving a
-    second direct start with Clerk decisions.  No other lifecycle transition
-    may use this exceptional authority.
-    """
-
-    if binding.lifecycle_state != "ACTIVE" or binding.source != "run.start":
-        raise ValueError("direct CLI binding authority permits only ACTIVE run.start transitions")
-    from app.engine.live.identity import validate_strategy_instance_id
-
-    validate_strategy_instance_id(binding.strategy_instance_id)
-    fence_path = (
-        artifacts_root
-        / "live_state"
-        / binding.strategy_instance_id
-        / "direct_cli_binding_authority.lock"
-    )
-    fence_path.parent.mkdir(parents=True, exist_ok=True)
-    with _file_lock(fence_path):
-        return write_account_instance_binding(artifacts_root, binding)
-
-
-def write_fenced_lifecycle_retirement_binding(
-    artifacts_root: Path,
-    binding: AccountInstanceBinding,
-    *,
-    transition_path: Path,
-) -> Path:
-    """Write a lifecycle retirement only when its durable transaction permits it.
-
-    This compatibility-only writer validates a previously recorded durable
-    transaction; no active bot-control route reaches it. A still-``PENDING``
-    retirement transaction must name the exact account/run being retired. It
-    then takes a second per-instance authority lock before joining the
-    account-ledger serialization. Clerk paths use their dedicated RPC/proposal
-    seams instead.
-    """
-
-    if binding.lifecycle_state != "RETIRED" or binding.source != "lifecycle.retire":
-        raise ValueError("lifecycle retirement authority permits only RETIRED lifecycle.retire transitions")
-    from app.engine.live.identity import validate_strategy_instance_id
-
-    validate_strategy_instance_id(binding.strategy_instance_id)
-    expected_transition_path = (
-        artifacts_root
-        / "live_state"
-        / binding.strategy_instance_id
-        / "retirement_transition.json"
-    )
-    if transition_path != expected_transition_path:
-        raise ValueError("lifecycle retirement transition path does not match the binding identity")
-    authority_lock = expected_transition_path.with_name("retirement_binding_authority.lock")
-    authority_lock.parent.mkdir(parents=True, exist_ok=True)
-    with _file_lock(authority_lock):
-        try:
-            payload = json.loads(expected_transition_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
-            raise OSError("lifecycle retirement transition evidence is unreadable") from exc
-        targets = payload.get("targets") if isinstance(payload, dict) else None
-        if (
-            not isinstance(payload, dict)
-            or payload.get("state") != "PENDING"
-            or payload.get("strategy_instance_id") != binding.strategy_instance_id
-            or not isinstance(targets, list)
-            or not any(
-                isinstance(target, dict)
-                and target.get("account_id") == binding.account_id
-                and target.get("run_id") == binding.run_id
-                for target in targets
-            )
-        ):
-            raise OSError("lifecycle retirement transition does not authorize this binding")
-        return write_account_instance_binding(artifacts_root, binding)
-
-
-def _write_account_instance_binding_legacy(
-    artifacts_root: Path,
-    binding: AccountInstanceBinding,
-) -> Path:
-    """Append only the compatibility registry row while the ledger lock is held."""
-
-    safe_account_id = _safe_account_path_segment(binding.account_id)
-    accounts_root = os.path.realpath(os.path.join(os.fspath(artifacts_root), "accounts"))
-    root_real = os.path.realpath(os.path.join(accounts_root, safe_account_id))
-    registry_filename = os.path.basename(ACCOUNT_INSTANCE_REGISTRY_FILENAME)
-    registry_real = os.path.realpath(os.path.join(root_real, registry_filename))
-    root_prefix = root_real if root_real.endswith(os.sep) else f"{root_real}{os.sep}"
-    if not registry_real.startswith(root_prefix):
-        raise AccountArtifactError(f"registry path traversal detected for account_id: {binding.account_id!r}")
-    path = Path(registry_real)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    line = binding.model_dump_json() + "\n"
-    with _file_lock(path):
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(line)
-            fh.flush()
-            os.fsync(fh.fileno())
-        _fsync_parent_dir(path)
-    return path
 
 
 def read_account_instance_registry(
     artifacts_root: Path,
     account_id: str,
 ) -> list[AccountInstanceBinding]:
-    """Read legacy rows by default, with an explicit reversible Clerk-ledger flip."""
+    """Read historical rows, optionally preferring a parity-clean ledger."""
 
     if account_binding_ledger_read_enabled():
         decisions = [
@@ -313,9 +120,7 @@ def _read_legacy_account_instance_registry(
     try:
         common = os.path.commonpath([path, root])
     except ValueError as exc:
-        raise AccountArtifactError(
-            f"account instance registry path {path} cannot share a root with {root}"
-        ) from exc
+        raise AccountArtifactError(f"account instance registry path {path} cannot share a root with {root}") from exc
     if common != root:
         raise AccountArtifactError(f"path traversal detected for account_id: {account_id!r}")
     root_prefix = root if root.endswith(os.sep) else f"{root}{os.sep}"
@@ -455,10 +260,7 @@ def crash_retired_restart_blocking_binding(
     recovery_clearance = read_or_migrate_account_recovery_clearance(artifacts_root, account_id)
     latest_by_run: dict[str, AccountInstanceBinding] = {}
     for binding in bindings:
-        if (
-            binding.account_id.upper() != account_id.upper()
-            or binding.strategy_instance_id != strategy_instance_id
-        ):
+        if binding.account_id.upper() != account_id.upper() or binding.strategy_instance_id != strategy_instance_id:
             continue
         latest = latest_by_run.get(binding.run_id)
         if latest is None or binding.recorded_at_ms >= latest.recorded_at_ms:
@@ -469,20 +271,11 @@ def crash_retired_restart_blocking_binding(
 
     newest_unresolved: AccountInstanceBinding | None = None
     for binding in latest_by_run.values():
-        if (
-            binding.lifecycle_state != "RETIRED"
-            or binding.source not in TERMINAL_RESTART_BLOCKING_BINDING_SOURCES
-        ):
+        if binding.lifecycle_state != "RETIRED" or binding.source not in TERMINAL_RESTART_BLOCKING_BINDING_SOURCES:
             continue
-        if (
-            recovery_clearance is not None
-            and recovery_clearance.cleared_at_ms > binding.recorded_at_ms
-        ):
+        if recovery_clearance is not None and recovery_clearance.cleared_at_ms > binding.recorded_at_ms:
             continue
-        if (
-            newest_unresolved is None
-            or binding.recorded_at_ms >= newest_unresolved.recorded_at_ms
-        ):
+        if newest_unresolved is None or binding.recorded_at_ms >= newest_unresolved.recorded_at_ms:
             # The append-only ledger defines later append as the tiebreaker for
             # equal timestamps, matching ``index_account_instance_bindings``.
             newest_unresolved = binding
@@ -504,90 +297,7 @@ def account_recovery_evidence_exists_after(
     """
 
     evidence = read_or_migrate_account_recovery_clearance(artifacts_root, account_id)
-    return (
-        evidence is not None
-        and evidence.cleared_at_ms > recorded_at_ms
-    )
-
-
-def retire_unmanaged_active_bindings_on_daemon_boot(
-    artifacts_root: Path,
-    *,
-    managed_run_ids: Set[str],
-    now_ms: int,
-) -> AccountRegistryBootReconcileResult:
-    """Propose retirement for prior ``ACTIVE`` rows not process-owned by this daemon.
-
-    A newly booted daemon does not adopt children from an earlier boot. Its
-    in-memory process registry is the liveness authority; a runtime sidecar is
-    useful diagnostic evidence but cannot prove process identity. The daemon is
-    not allowed to decide the resulting binding state: it records a durable
-    proposal. Pending proposals fail admission closed until the Clerk folds
-    them under its account-scoped serialized command ledger.
-    """
-
-    accounts_root = Path(artifacts_root) / "accounts"
-    if not accounts_root.exists():
-        return AccountRegistryBootReconcileResult(0, 0, 0, ())
-
-    accounts_scanned = 0
-    active_bindings_found = 0
-    retirement_proposals_recorded = 0
-    preserved: list[str] = []
-    next_recorded_at_ms = now_ms
-
-    for account_dir in sorted(path for path in accounts_root.iterdir() if path.is_dir()):
-        account_id = account_dir.name
-        bindings = read_account_instance_registry(artifacts_root, account_id)
-        accounts_scanned += 1
-        latest_bindings = index_account_instance_bindings(
-            bindings,
-            account_id=account_id,
-        ).latest_by_instance.values()
-        for binding in latest_bindings:
-            if binding.lifecycle_state != "ACTIVE":
-                continue
-            active_bindings_found += 1
-            if binding.run_id in managed_run_ids:
-                preserved.append(binding.run_id)
-                continue
-            next_recorded_at_ms = max(
-                next_recorded_at_ms,
-                binding.recorded_at_ms + 1,
-            )
-            proposal = binding.model_copy(
-                update={
-                    "lifecycle_state": "RETIRED",
-                    "recorded_at_ms": next_recorded_at_ms,
-                    "source": LIVENESS_UNPROVEN_REGISTRY_SOURCE,
-                }
-            )
-            append_binding_retirement_proposal(
-                artifacts_root,
-                binding=proposal.model_dump(mode="json"),
-            )
-            _append_account_event(
-                artifacts_root,
-                proposal.account_id,
-                {
-                    "event_type": "account_binding_retirement_proposed",
-                    "account_id": proposal.account_id,
-                    "strategy_instance_id": proposal.strategy_instance_id,
-                    "run_id": proposal.run_id,
-                    "bot_order_namespace": proposal.bot_order_namespace,
-                    "recorded_at_ms": proposal.recorded_at_ms,
-                    "source": proposal.source,
-                },
-            )
-            retirement_proposals_recorded += 1
-            next_recorded_at_ms += 1
-
-    return AccountRegistryBootReconcileResult(
-        accounts_scanned=accounts_scanned,
-        active_bindings_found=active_bindings_found,
-        retirement_proposals_recorded=retirement_proposals_recorded,
-        preserved_managed_run_ids=tuple(sorted(preserved)),
-    )
+    return evidence is not None and evidence.cleared_at_ms > recorded_at_ms
 
 
 def pending_account_binding_retirements(
@@ -596,7 +306,7 @@ def pending_account_binding_retirements(
     account_id: str,
     strategy_instance_id: str | None = None,
 ) -> tuple[AccountBindingCommand, ...]:
-    """Read daemon retirement proposals that the Clerk has not folded yet."""
+    """Read historical retirement proposals that were never folded."""
 
     return pending_binding_retirement_proposals(
         artifacts_root,
@@ -605,59 +315,12 @@ def pending_account_binding_retirements(
     )
 
 
-def fold_account_binding_retirements(
-    artifacts_root: Path,
-    *,
-    account_id: str,
-    before_legacy_retirement: Callable[[AccountInstanceBinding], None] | None = None,
-) -> BindingRetirementFoldResult:
-    """Let the Clerk fold all outstanding retirement proposals in ledger order."""
-
-    def read_current(strategy_instance_id: str) -> dict[str, object] | None:
-        binding = latest_account_instance_binding(
-            read_account_instance_registry(artifacts_root, account_id),
-            account_id=account_id,
-            strategy_instance_id=strategy_instance_id,
-        )
-        return None if binding is None else binding.model_dump(mode="json")
-
-    def write_legacy(retirement: dict[str, object]) -> None:
-        retired = AccountInstanceBinding.model_validate(retirement)
-        _write_account_instance_binding_legacy(artifacts_root, retired)
-        _append_account_event(
-            artifacts_root,
-            retired.account_id,
-            {
-                "event_type": "account_instance_binding_recorded",
-                "account_id": retired.account_id,
-                "strategy_instance_id": retired.strategy_instance_id,
-                "run_id": retired.run_id,
-                "bot_order_namespace": retired.bot_order_namespace,
-                "lifecycle_state": retired.lifecycle_state,
-                "recorded_at_ms": retired.recorded_at_ms,
-                "source": retired.source,
-            },
-        )
-
-    def before_retirement(retirement: dict[str, object]) -> None:
-        if before_legacy_retirement is not None:
-            before_legacy_retirement(AccountInstanceBinding.model_validate(retirement))
-
-    return fold_binding_retirement_proposals(
-        artifacts_root,
-        account_id=account_id,
-        read_current_binding=read_current,
-        before_legacy_retirement=before_retirement,
-        write_legacy_retirement=write_legacy,
-    )
-
-
 def account_binding_ledger_parity(
     artifacts_root: Path,
     *,
     account_id: str,
 ) -> BindingLedgerParity:
-    """Return the migration parity signal without repairing either ledger."""
+    """Compare the two retained historical ledgers without repairing either."""
 
     return binding_ledger_parity(
         artifacts_root,
@@ -667,141 +330,6 @@ def account_binding_ledger_parity(
             for binding in _read_legacy_account_instance_registry(artifacts_root, account_id)
         ),
     )
-
-
-def baseline_account_binding_ledger(
-    artifacts_root: Path,
-    *,
-    account_id: str,
-) -> BindingLedgerBaselineResult:
-    """Complete the binding-ledger migration for a pre-existing account.
-
-    Fold the current legacy registry (the migration read authority) into the
-    command ledger so parity is clean and admission is no longer fail-closed on
-    a ledger that was never seeded.  This is an operator recovery action, not a
-    forward binding decision: it mirrors bindings the registry already records.
-    """
-
-    return baseline_binding_ledger_from_registry(
-        artifacts_root,
-        account_id=account_id,
-        legacy_bindings=(
-            binding.model_dump(mode="json")
-            for binding in _read_legacy_account_instance_registry(artifacts_root, account_id)
-        ),
-    )
-
-
-def backfill_false_crash_registry_rows(
-    artifacts_root: Path,
-    *,
-    account_id: str | None = None,
-    now_ms: int | None = None,
-) -> AccountRegistryFalseCrashBackfillResult:
-    """Append corrected registry rows for latest crash labels disproven by status.
-
-    Historical registry rows are append-only. The repair therefore writes a
-    later ``RETIRED`` row with the corrected source only when the latest row for
-    an instance is still ``host_daemon.process_crashed`` and that run's own
-    ``run_status.json`` carries a non-crash exit reason. Rows without status
-    evidence are left untouched.
-    """
-
-    accounts = _account_ids_for_registry_scan(artifacts_root, account_id=account_id)
-    accounts_scanned = 0
-    candidate_rows = 0
-    rows_repaired = 0
-    rows_skipped_no_disproof = 0
-    invalid_account_dirs = 0
-    repaired_run_ids: list[str] = []
-    next_recorded_at_ms = now_ms if now_ms is not None else int(time.time() * 1000)
-
-    for account in accounts:
-        try:
-            bindings = read_account_instance_registry(artifacts_root, account)
-        except AccountArtifactError:
-            invalid_account_dirs += 1
-            continue
-        accounts_scanned += 1
-        binding_index = index_account_instance_bindings(bindings, account_id=account)
-        for latest in binding_index.latest_by_instance.values():
-            if latest.lifecycle_state != "RETIRED" or latest.source not in CRASH_RETIRED_BINDING_SOURCES:
-                continue
-            candidate_rows += 1
-            evidence = read_run_exit_evidence(artifacts_root / "live_runs" / latest.run_id)
-            repaired_source = false_crash_repair_source(evidence)
-            if repaired_source is None:
-                rows_skipped_no_disproof += 1
-                continue
-            next_recorded_at_ms = max(next_recorded_at_ms, latest.recorded_at_ms + 1)
-            write_account_instance_binding(
-                artifacts_root,
-                latest.model_copy(
-                    update={
-                        "recorded_at_ms": next_recorded_at_ms,
-                        "source": repaired_source,
-                    }
-                ),
-            )
-            rows_repaired += 1
-            repaired_run_ids.append(latest.run_id)
-            next_recorded_at_ms += 1
-
-    return AccountRegistryFalseCrashBackfillResult(
-        accounts_scanned=accounts_scanned,
-        candidate_rows=candidate_rows,
-        rows_repaired=rows_repaired,
-        rows_skipped_no_disproof=rows_skipped_no_disproof,
-        invalid_account_dirs=invalid_account_dirs,
-        repaired_run_ids=tuple(repaired_run_ids),
-    )
-
-
-def retire_soft_deleted_instance_bindings(
-    artifacts_root: Path,
-    *,
-    strategy_instance_id: str,
-    run_ids: Sequence[str],
-    now_ms: int,
-) -> tuple[AccountInstanceBinding, ...]:
-    """Append RETIRED rows for the active bindings hidden by a soft delete.
-
-    The catalog's soft-delete marker is run-scoped, so retirement must be
-    equally precise. Only the latest row for the named instance is eligible,
-    and only when it names one of the runs that deletion just hid. Historical
-    rows remain untouched and a later redeploy with a distinct run id is not
-    affected.
-    """
-
-    deleted_run_ids = frozenset(run_ids)
-    if not deleted_run_ids:
-        return ()
-    retired: list[AccountInstanceBinding] = []
-    next_recorded_at_ms = now_ms
-    for account_id in _account_ids_for_registry_scan(artifacts_root, account_id=None):
-        bindings = read_account_instance_registry(artifacts_root, account_id)
-        latest = index_account_instance_bindings(
-            bindings,
-            account_id=account_id,
-        ).latest_by_instance.get(strategy_instance_id)
-        if (
-            latest is None
-            or latest.lifecycle_state not in ACTIVE_INSTANCE_BINDING_STATES
-            or latest.run_id not in deleted_run_ids
-        ):
-            continue
-        next_recorded_at_ms = max(next_recorded_at_ms, latest.recorded_at_ms + 1)
-        retired_binding = latest.model_copy(
-            update={
-                "lifecycle_state": "RETIRED",
-                "recorded_at_ms": next_recorded_at_ms,
-                "source": SOFT_DELETE_RETIRED_BINDING_SOURCE,
-            }
-        )
-        write_account_instance_binding(artifacts_root, retired_binding)
-        retired.append(retired_binding)
-        next_recorded_at_ms += 1
-    return tuple(retired)
 
 
 def _account_ids_for_registry_scan(artifacts_root: Path, *, account_id: str | None) -> tuple[str, ...]:
@@ -938,29 +466,18 @@ __all__ = [
     "ACCOUNT_INSTANCE_REGISTRY_FILENAME",
     "ACTIVE_INSTANCE_BINDING_STATES",
     "CRASH_RETIRED_BINDING_SOURCES",
-    "SOFT_DELETE_RETIRED_BINDING_SOURCE",
     "AccountInstanceBinding",
     "AccountInstanceBindingIndex",
-    "AccountRegistryBootReconcileResult",
-    "AccountRegistryFalseCrashBackfillResult",
-    "BindingLedgerBaselineResult",
     "BindingLedgerParity",
-    "BindingRetirementFoldResult",
     "account_binding_ledger_parity",
     "account_recovery_evidence_exists_after",
-    "backfill_false_crash_registry_rows",
-    "baseline_account_binding_ledger",
     "bot_order_namespace_for_instance",
     "compute_reconcile_namespaces",
     "crash_retired_restart_blocking_binding",
     "evaluate_account_instance_binding",
-    "fold_account_binding_retirements",
     "has_account_recovery_evidence_after",
     "index_account_instance_bindings",
     "latest_account_instance_binding",
     "pending_account_binding_retirements",
     "read_account_instance_registry",
-    "retire_soft_deleted_instance_bindings",
-    "retire_unmanaged_active_bindings_on_daemon_boot",
-    "write_account_instance_binding",
 ]

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 from collections.abc import Callable
 from pathlib import Path
 
@@ -54,10 +53,6 @@ from app.services.account_truth_snapshot import (
     AccountTruthUnavailable,
     get_account_truth_snapshot_provider,
 )
-from app.services.presented_recovery_action_presentation import (
-    present_recovery_actions,
-    recovery_action_semantic_material,
-)
 from app.utils.timestamps import now_ms_utc
 
 _CUSTODY_STAGES = (
@@ -67,7 +62,6 @@ _CUSTODY_STAGES = (
     "A3_ECONOMIC_TERMINAL",
 )
 _PRESENTED_ACTION_TTL_MS = 60_000
-logger = logging.getLogger(__name__)
 _VERDICT_REASONS = {
     "ACCOUNT_SAFETY_CLEAN": "Current critical evidence proves the managed account state.",
     "ACCOUNT_SAFETY_CONTAMINATED": "Exposure or order attribution is foreign or cannot be safely proven.",
@@ -102,19 +96,8 @@ class AccountSafetySnapshotService:
         account_id = normalize_account_id(account_id)
         clerk = self._directory.service_status(account_id=account_id)
         posture = self._directory.effective_posture(account_id=account_id)
-        custody, custody_read_failure, custody_statuses = self._custody_summary(account_id, clerk)
+        custody, custody_read_failure, _ = self._custody_summary(account_id, clerk)
         observed_receipt = self._reconciliation.observe_latest_receipt(account_id)
-        try:
-            triage = self._reconciliation.triage(account_id=account_id, now_ms=now_ms)
-        except (AccountClerkJournalCorruptError, OSError, ValueError) as exc:
-            # The snapshot remains a read-only safety surface even when the
-            # optional recovery presentation cannot prove a target. It simply
-            # offers no derived broker action from that unreadable evidence.
-            logger.warning(
-                "recovery triage unavailable; presenting no derived broker action",
-                extra={"account_id": account_id, "error": str(exc)},
-            )
-            triage = None
         truth_evidence = get_account_truth_snapshot_provider().get(account_id)
         safety, safety_source = self._safety(account_id, now_ms)
         epoch = read_pydantic_artifact(
@@ -233,15 +216,6 @@ class AccountSafetySnapshotService:
             "blockers": [blocker.model_dump(mode="json") for blocker in (truth.operator_blockers if truth else [])],
             "outage_diff": None if epoch is None else epoch.outage_diff,
             "evidence_refs": [ref.model_dump(mode="json") for ref in evidence_refs],
-            "recovery_actions": recovery_action_semantic_material(
-                custody_statuses=custody_statuses,
-                recovery_candidates=(
-                    () if triage is None else tuple(triage.recovery_flatten_candidates)
-                ),
-                emergency_confirmation=(
-                    None if triage is None else triage.emergency_flatten_confirmation
-                ),
-            ),
         }
         fingerprint = hashlib.sha256(json.dumps(semantic, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         actions = self._presented_actions(
@@ -251,16 +225,6 @@ class AccountSafetySnapshotService:
             verdict=verdict,
             reason_code=reason_code,
             evidence_refs=evidence_refs,
-        ) + present_recovery_actions(
-            account_id=account_id,
-            snapshot_id=fingerprint,
-            generated_at_ms=now_ms,
-            verdict=verdict,
-            evidence_refs=evidence_refs,
-            reconciliation_receipt=receipt,
-            custody_statuses=custody_statuses,
-            recovery_candidates=() if triage is None else triage.recovery_flatten_candidates,
-            emergency_confirmation=None if triage is None else triage.emergency_flatten_confirmation,
         )
         return AccountSafetySnapshot(
             snapshot_version=fingerprint,

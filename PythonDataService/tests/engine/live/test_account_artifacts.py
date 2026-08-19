@@ -1,6 +1,5 @@
 """Tests for account-scoped live lifecycle artifacts."""
 
-
 from __future__ import annotations
 
 import contextlib
@@ -20,7 +19,6 @@ from app.engine.live.account_artifacts import (
     AccountRecoveryProof,
     RestartIntensityPolicy,
     account_artifacts_root,
-    advance_account_clerk_generation,
     clear_account_freeze,
     evaluate_restart_intensity,
     read_account_clerk_generation,
@@ -32,15 +30,18 @@ from app.engine.live.account_artifacts import (
     read_legacy_account_events,
     repair_account_event_sequence,
     require_active_account_clerk_generation,
-    write_account_clerk_lease,
     write_account_freeze,
 )
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
-    write_account_instance_binding,
 )
 from app.engine.live.producer_operational_log import read_producer_operational_events
 from app.schemas.live_runs import GateResult
+from tests._helpers.legacy_ibkr_artifacts import (
+    write_historical_account_binding,
+    write_historical_clerk_generation,
+    write_historical_clerk_lease,
+)
 
 
 def test_account_freeze_round_trips_with_gate_result_and_audit_event(tmp_path: Path) -> None:
@@ -72,7 +73,7 @@ def test_account_freeze_round_trips_with_gate_result_and_audit_event(tmp_path: P
 
 
 def test_account_clerk_generation_and_lease_are_account_rooted(tmp_path: Path) -> None:
-    generation = advance_account_clerk_generation(
+    generation = write_historical_clerk_generation(
         tmp_path,
         "DU123456",
         phase="accepting",
@@ -89,19 +90,22 @@ def test_account_clerk_generation_and_lease_are_account_rooted(tmp_path: Path) -
         valid_until_ms=1_700_000_060_100,
     )
 
-    path = write_account_clerk_lease(tmp_path, lease)
+    path = write_historical_clerk_lease(tmp_path, lease)
 
     assert generation.generation == 1
     assert read_account_clerk_generation(tmp_path, "DU123456") == generation
     assert path == tmp_path / "accounts" / "DU123456" / "clerk_lease.json"
     assert read_account_clerk_lease(tmp_path, "DU123456") == lease
-    assert require_active_account_clerk_generation(
-        tmp_path,
-        "DU123456",
-        now_ms=1_700_000_000_200,
-    ) == generation.generation
+    assert (
+        require_active_account_clerk_generation(
+            tmp_path,
+            "DU123456",
+            now_ms=1_700_000_000_200,
+        )
+        == generation.generation
+    )
 
-    stale_generation = advance_account_clerk_generation(
+    stale_generation = write_historical_clerk_generation(
         tmp_path,
         "DU123456",
         phase="accepting",
@@ -120,7 +124,7 @@ def test_account_clerk_generation_and_lease_are_account_rooted(tmp_path: Path) -
 def test_control_artifact_account_identity_mismatches_fail_closed(tmp_path: Path) -> None:
     account_id = "DU123456"
     foreign_account_id = "DU765432"
-    generation = advance_account_clerk_generation(
+    generation = write_historical_clerk_generation(
         tmp_path,
         account_id,
         phase="accepting",
@@ -136,7 +140,7 @@ def test_control_artifact_account_identity_mismatches_fail_closed(tmp_path: Path
         renewed_at_ms=1_700_000_000_000,
         valid_until_ms=1_700_000_060_000,
     )
-    write_account_clerk_lease(tmp_path, lease)
+    write_historical_clerk_lease(tmp_path, lease)
     root = account_artifacts_root(tmp_path, account_id)
 
     (root / account_artifacts.ACCOUNT_CLERK_GENERATION_FILENAME).write_text(
@@ -213,10 +217,11 @@ def test_account_artifacts_root_rejects_path_like_account_id(
         account_artifacts_root(tmp_path, account_id)
 
 
-def test_account_artifacts_registry_compatibility_exports_delegate_to_account_registry() -> None:
+def test_account_artifacts_registry_compatibility_exports_are_read_only() -> None:
     assert account_artifacts.AccountInstanceBinding is account_registry.AccountInstanceBinding
     assert account_artifacts.read_account_instance_registry is account_registry.read_account_instance_registry
-    assert account_artifacts.write_account_instance_binding is account_registry.write_account_instance_binding
+    assert not hasattr(account_artifacts, "write_account_instance_binding")
+    assert not hasattr(account_registry, "write_account_instance_binding")
 
 
 def test_account_artifacts_root_rejects_symlink_escape(tmp_path: Path) -> None:
@@ -877,11 +882,11 @@ def _binding(
 def test_restart_intensity_passes_below_threshold_from_durable_account_events(tmp_path: Path) -> None:
     # One bot restarted twice is below the threshold of three activations.
     policy = RestartIntensityPolicy(threshold=3, window_ms=60_000)
-    write_account_instance_binding(
+    write_historical_account_binding(
         tmp_path,
         _binding(sid="spy-a", run_id="run-a", namespace="learn-ai/spy-a/v1", recorded_at_ms=1_700_000_000_000),
     )
-    write_account_instance_binding(
+    write_historical_account_binding(
         tmp_path,
         _binding(sid="spy-a", run_id="run-b", namespace="learn-ai/spy-a/v1", recorded_at_ms=1_700_000_010_000),
     )
@@ -904,7 +909,7 @@ def test_restart_intensity_ignores_distinct_bot_first_starts(tmp_path: Path) -> 
     # deployment, not restart-intensity churn; it must not freeze the account.
     policy = RestartIntensityPolicy(threshold=3, window_ms=300_000)
     for index, sid in enumerate(("aapl", "msft", "nvda", "qqq", "spy"), start=1):
-        write_account_instance_binding(
+        write_historical_account_binding(
             tmp_path,
             _binding(
                 sid=f"cohort5-{sid}",
@@ -926,20 +931,6 @@ def test_restart_intensity_ignores_distinct_bot_first_starts(tmp_path: Path) -> 
     assert read_account_freeze(tmp_path, "DU123456") is None
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def test_restart_intensity_breach_records_account_freeze_with_threshold_details(tmp_path: Path) -> None:
     # One bot restarted three times in the window breaches restart intensity.
     policy = RestartIntensityPolicy(threshold=3, window_ms=60_000)
@@ -947,7 +938,7 @@ def test_restart_intensity_breach_records_account_freeze_with_threshold_details(
         (1_700_000_000_000, 1_700_000_010_000, 1_700_000_020_000),
         start=1,
     ):
-        write_account_instance_binding(
+        write_historical_account_binding(
             tmp_path,
             _binding(
                 sid="spy-1",
@@ -985,7 +976,7 @@ def test_restart_intensity_refolds_after_process_restart_without_reset(tmp_path:
         (1_700_000_000_000, 1_700_000_010_000, 1_700_000_020_000),
         start=1,
     ):
-        write_account_instance_binding(
+        write_historical_account_binding(
             tmp_path,
             _binding(
                 sid="spy-1",
@@ -1020,7 +1011,7 @@ def test_restart_intensity_recovery_clear_starts_a_new_window(tmp_path: Path) ->
         (1_700_000_000_000, 1_700_000_010_000, 1_700_000_020_000),
         start=1,
     ):
-        write_account_instance_binding(
+        write_historical_account_binding(
             tmp_path,
             _binding(
                 sid="spy-1",
@@ -1075,7 +1066,7 @@ def test_restart_intensity_clear_cutoff_survives_a_later_unrelated_freeze(tmp_pa
         (1_700_000_000_000, 1_700_000_010_000, 1_700_000_020_000),
         start=1,
     ):
-        write_account_instance_binding(
+        write_historical_account_binding(
             tmp_path,
             _binding(
                 sid="spy-1",

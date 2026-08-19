@@ -99,7 +99,7 @@ class AccountCockpitService:
                 mode="CLERK_DOWN",
                 clerk=clerk,
                 daemon=daemon,
-                blockers=[_restore_clerk_blocker()],
+                blockers=[_retired_clerk_blocker()],
             )
         return AccountCockpitResponse(
             account_id=clerk.account_id,
@@ -143,28 +143,20 @@ def _daemon_surface(
     )
 
 
-def _restore_clerk_blocker() -> OperatorBlocker:
+def _retired_clerk_blocker() -> OperatorBlocker:
     return OperatorBlocker.for_host(
         condition_id="ACCOUNT_CLERK_UNAVAILABLE",
         scope="account",
         host="account_desk",
         anchor=SURFACE_ANCHOR,
         audience="both",
-        disposition="fix_here",
-        headline="Account Clerk is unavailable",
-        detail="Restore the Clerk through the host daemon. No bypass broker writer is available.",
-        applies_to="both",
-        primary_move=OperatorMove(
-            label="Restore Clerk",
-            action=ConfirmInFormAction(kind="confirm_in_form", anchor="account-clerk-restore-action"),
-            confirmation=OperatorConfirmationCopy(
-                title="Restore Account Clerk",
-                body="Ask the host daemon to restore the sole Account Clerk for this account.",
-                consequence="The daemon records a new Clerk generation if it must replace the process. The cockpit will re-observe account evidence after the restore.",
-                confirm_label="Restore Clerk",
-                required_token="RESTORE",
-            ),
+        disposition="wait",
+        headline="Legacy Account Clerk is retired",
+        detail=(
+            "Historical Clerk evidence remains available, but its broker-order runtime has been "
+            "decommissioned. No restore or bypass broker writer is available."
         ),
+        applies_to="both",
     )
 
 

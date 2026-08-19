@@ -45,6 +45,7 @@ from typing import Final
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from app.broker.alpaca.paths import resolve_contained_path, safe_path_component
 from app.broker.ibkr.models import IbkrMinuteBar
 from app.utils.advisory_lock import advisory_file_lock
 from app.utils.atomic_parquet import atomic_parquet_write
@@ -419,7 +420,18 @@ class BarPersistence:
 
     @staticmethod
     def _key(symbol: str, resolution: str) -> tuple[str, str]:
-        return (symbol.strip().upper(), resolution.strip())
+        """Normalise and validate the pair that names a persistence directory.
+
+        ``symbol`` and ``resolution`` reach this store from public query
+        parameters and become path components, so a hostile value such as
+        ``../..`` would otherwise read and write outside the artifacts root.
+        Validating here — the one choke point every path helper funnels
+        through — keeps the guarantee from depending on each caller.
+        """
+        return (
+            safe_path_component(symbol.strip().upper(), "symbol"),
+            safe_path_component(resolution.strip(), "resolution"),
+        )
 
     def _get_or_load_cursor(self, symbol: str, resolution: str) -> _Cursor:
         """Return the cursor for ``(symbol, resolution)``; load from disk if
@@ -447,7 +459,8 @@ class BarPersistence:
 
     def _dir(self, symbol: str, resolution: str) -> Path:
         sym, res = self._key(symbol, resolution)
-        return self._root / sym / res
+        # Canonical containment helper: app/broker/alpaca/paths.py.
+        return resolve_contained_path(self._root, sym, res)
 
     def _jsonl_path(self, symbol: str, resolution: str, day: date) -> Path:
         return self._dir(symbol, resolution) / f"{day.isoformat()}{_JSONL_SUFFIX}"

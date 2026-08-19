@@ -57,6 +57,7 @@ from app.services.durable_event_channel import (
     EventRecord,
     EventReset,
 )
+from tests._helpers.legacy_ibkr_artifacts import write_historical_intent_wal
 
 pytestmark = pytest.mark.asyncio
 
@@ -209,9 +210,7 @@ def _build_publisher(
     return publisher, run_dir, artifacts
 
 
-async def _wait_for_rows(
-    wal_path: Path, *, want: int, timeout: float = 1.0
-) -> list[BrokerActivityRow]:
+async def _wait_for_rows(wal_path: Path, *, want: int, timeout: float = 1.0) -> list[BrokerActivityRow]:
     """Poll the WAL until ``want`` rows are persisted or timeout."""
     deadline = asyncio.get_event_loop().time() + timeout
     wal = BrokerActivityWal(wal_path)
@@ -221,14 +220,10 @@ async def _wait_for_rows(
             return rows
         await asyncio.sleep(0.01)
     rows = wal.read_all()
-    raise AssertionError(
-        f"WAL has {len(rows)} row(s), wanted {want} within {timeout}s"
-    )
+    raise AssertionError(f"WAL has {len(rows)} row(s), wanted {want} within {timeout}s")
 
 
-async def _wait_for_bot_events(
-    wal_path: Path, *, want: int, timeout: float = 1.0
-) -> list[BotEventRaw]:
+async def _wait_for_bot_events(wal_path: Path, *, want: int, timeout: float = 1.0) -> list[BotEventRaw]:
     deadline = asyncio.get_event_loop().time() + timeout
     wal = BotEventRawWal(wal_path)
     while asyncio.get_event_loop().time() < deadline:
@@ -237,14 +232,10 @@ async def _wait_for_bot_events(
             return rows
         await asyncio.sleep(0.01)
     rows = wal.read_all()
-    raise AssertionError(
-        f"bot-event WAL has {len(rows)} row(s), wanted {want} within {timeout}s"
-    )
+    raise AssertionError(f"bot-event WAL has {len(rows)} row(s), wanted {want} within {timeout}s")
 
 
-async def _wait_for_incidents(
-    store: IncidentStore, *, want: int, timeout: float = 1.0
-) -> list[OperatorIncident]:
+async def _wait_for_incidents(store: IncidentStore, *, want: int, timeout: float = 1.0) -> list[OperatorIncident]:
     deadline = asyncio.get_event_loop().time() + timeout
     while asyncio.get_event_loop().time() < deadline:
         incidents = store.list_unresolved()
@@ -252,9 +243,7 @@ async def _wait_for_incidents(
             return incidents
         await asyncio.sleep(0.01)
     incidents = store.list_unresolved()
-    raise AssertionError(
-        f"incident store has {len(incidents)} row(s), wanted {want} within {timeout}s"
-    )
+    raise AssertionError(f"incident store has {len(incidents)} row(s), wanted {want} within {timeout}s")
 
 
 # ── Tests ───────────────────────────────────────────────────────────
@@ -267,9 +256,7 @@ async def test_fill_event_is_authored_persisted_and_published(
     publisher.start()
     subscription = publisher.event_channel.subscribe(None)
     try:
-        rows = await _wait_for_rows(
-            instance_broker_activity_wal_path(artifacts, SID), want=1
-        )
+        rows = await _wait_for_rows(instance_broker_activity_wal_path(artifacts, SID), want=1)
         assert rows[0].verdict == Verdict.EXPECTED
         assert rows[0].template_key == "normal_fill"
         assert rows[0].exec_id == "exec-pub-1"
@@ -278,9 +265,7 @@ async def test_fill_event_is_authored_persisted_and_published(
         message = await asyncio.wait_for(subscription.queue.get(), timeout=0.5)
         if isinstance(message, EventReset):
             publisher.event_channel.unsubscribe(subscription)
-            subscription = publisher.event_channel.subscribe(
-                EventCursor(message.stream_id, 0)
-            )
+            subscription = publisher.event_channel.subscribe(EventCursor(message.stream_id, 0))
             message = await asyncio.wait_for(subscription.queue.get(), timeout=0.5)
         assert isinstance(message, EventRecord)
         assert message.row.exec_id == "exec-pub-1"
@@ -298,9 +283,7 @@ async def test_intermediate_status_events_are_skipped(tmp_path: Path) -> None:
     )
     publisher.start()
     try:
-        rows = await _wait_for_rows(
-            instance_broker_activity_wal_path(artifacts, SID), want=1
-        )
+        rows = await _wait_for_rows(instance_broker_activity_wal_path(artifacts, SID), want=1)
         # Only the fill became a row; the Submitted transition did not.
         assert len(rows) == 1
         assert rows[0].exec_id == "exec-pub-1"
@@ -325,9 +308,7 @@ async def test_rejection_event_writes_bot_event_and_incident(tmp_path: Path) -> 
 
     publisher.start()
     try:
-        raw_events = await _wait_for_bot_events(
-            run_bot_event_wal_path(run_dir), want=1
-        )
+        raw_events = await _wait_for_bot_events(run_bot_event_wal_path(run_dir), want=1)
         raw = raw_events[0]
         assert raw.event_type is BotEventRawType.ORDER_REJECTED
         assert raw.source_authority is SourceAuthority.BROKER_SESSION
@@ -391,9 +372,7 @@ async def test_rejection_event_matches_req_id_and_enriches_order_facts(tmp_path:
 
     publisher.start()
     try:
-        raw_events = await _wait_for_bot_events(
-            run_bot_event_wal_path(run_dir), want=1
-        )
+        raw_events = await _wait_for_bot_events(run_bot_event_wal_path(run_dir), want=1)
         raw = raw_events[0]
         assert raw.identity.intent_id == INTENT_ID
         assert raw.identity.order_ref is None
@@ -413,14 +392,10 @@ async def test_foreign_fill_authored_as_unmatched_execution(
     """A fill arriving with no order_ref (or a non-matching namespace)
     is authored as UNMATCHED_EXECUTION so the operator sees it
     immediately."""
-    publisher, _run_dir, artifacts = _build_publisher(
-        tmp_path, [_fill_event(order_ref=None, exec_id="foreign-1")]
-    )
+    publisher, _run_dir, artifacts = _build_publisher(tmp_path, [_fill_event(order_ref=None, exec_id="foreign-1")])
     publisher.start()
     try:
-        rows = await _wait_for_rows(
-            instance_broker_activity_wal_path(artifacts, SID), want=1
-        )
+        rows = await _wait_for_rows(instance_broker_activity_wal_path(artifacts, SID), want=1)
         assert rows[0].verdict == Verdict.UNEXPECTED
         assert rows[0].template_key == "unmatched_execution"
         assert rows[0].engine_overlay is None
@@ -467,9 +442,7 @@ async def test_duplicate_exec_id_from_replay_is_deduped(tmp_path: Path) -> None:
     )
     publisher.start()
     try:
-        rows = await _wait_for_rows(
-            instance_broker_activity_wal_path(artifacts, SID), want=2
-        )
+        rows = await _wait_for_rows(instance_broker_activity_wal_path(artifacts, SID), want=2)
         assert rows[0].headline == "pre-existing"
         assert rows[1].verdict == Verdict.UNEXPECTED
         assert rows[1].template_key == "duplicate_execution"
@@ -501,9 +474,7 @@ async def test_unauthorable_event_is_skipped_not_persisted(
     publisher, _run_dir, artifacts = _build_publisher(tmp_path, [bad_event, _fill_event()])
     publisher.start()
     try:
-        rows = await _wait_for_rows(
-            instance_broker_activity_wal_path(artifacts, SID), want=1
-        )
+        rows = await _wait_for_rows(instance_broker_activity_wal_path(artifacts, SID), want=1)
         # Only the good event landed; the bad one was skipped.
         assert len(rows) == 1
         assert rows[0].exec_id == "exec-pub-1"
@@ -551,9 +522,7 @@ async def test_periodic_sweep_does_not_emit_cross_client_incident_without_row(
     authored = await publisher._run_periodic_sweep()
 
     assert authored == 0
-    assert BrokerActivityWal(
-        instance_broker_activity_wal_path(artifacts, SID)
-    ).read_all() == []
+    assert BrokerActivityWal(instance_broker_activity_wal_path(artifacts, SID)).read_all() == []
     assert incident_store.list_unresolved() == []
 
 
@@ -561,9 +530,7 @@ async def test_envelope_cursor_advances_per_row(tmp_path: Path) -> None:
     publisher, _run_dir, artifacts = _build_publisher(tmp_path, [_fill_event()])
     publisher.start()
     try:
-        await _wait_for_rows(
-            instance_broker_activity_wal_path(artifacts, SID), want=1
-        )
+        await _wait_for_rows(instance_broker_activity_wal_path(artifacts, SID), want=1)
         repo = LiveStateSidecarRepo(stable_live_state_path(artifacts, SID))
         envelope = repo.read()
         assert envelope is not None
@@ -585,9 +552,7 @@ async def test_backfill_returns_rows_after_cursor(tmp_path: Path) -> None:
     )
     publisher.start()
     try:
-        await _wait_for_rows(
-            instance_broker_activity_wal_path(artifacts, SID), want=3
-        )
+        await _wait_for_rows(instance_broker_activity_wal_path(artifacts, SID), want=3)
         page = publisher.backfill(after_seq=1)
         assert [r.exec_id for r in page] == ["e2", "e3"]
     finally:
@@ -700,8 +665,7 @@ async def test_fill_matches_via_intent_wal_when_sidecar_empty(
     would be authored as ``unmatched_execution`` with no engine
     overlay.
     """
-    from app.engine.live.intent_events import IntentEventType
-    from app.engine.live.intent_wal import IntentWal
+    from app.engine.live.intent_events import IntentEvent, IntentEventType
 
     artifacts = tmp_path / "artifacts"
     run_dir = tmp_path / "run-dir"
@@ -709,20 +673,26 @@ async def test_fill_matches_via_intent_wal_when_sidecar_empty(
     # flushed yet.
     _seed_envelope(artifacts, submitted_orders={})
     # Intent WAL carries the SUBMITTED event for this intent.
-    wal = IntentWal(run_dir / "intent_events.jsonl")
-    wal.append(
-        event_type=IntentEventType.PENDING_INTENT,
-        intent_id=INTENT_ID,
-        bot_order_namespace=NS,
-        order_ref=ORDER_REF,
-    )
-    wal.append(
-        event_type=IntentEventType.SUBMITTED,
-        intent_id=INTENT_ID,
-        bot_order_namespace=NS,
-        order_ref=ORDER_REF,
-        order_id=42,
-        perm_id=999,
+    write_historical_intent_wal(
+        run_dir / "intent_events.jsonl",
+        [
+            IntentEvent(
+                seq=1,
+                event_type=IntentEventType.PENDING_INTENT,
+                intent_id=INTENT_ID,
+                bot_order_namespace=NS,
+                order_ref=ORDER_REF,
+            ),
+            IntentEvent(
+                seq=2,
+                event_type=IntentEventType.SUBMITTED,
+                intent_id=INTENT_ID,
+                bot_order_namespace=NS,
+                order_ref=ORDER_REF,
+                order_id=42,
+                perm_id=999,
+            ),
+        ],
     )
 
     publisher = BrokerActivityPublisher(
@@ -735,9 +705,7 @@ async def test_fill_matches_via_intent_wal_when_sidecar_empty(
     )
     publisher.start()
     try:
-        rows = await _wait_for_rows(
-            instance_broker_activity_wal_path(artifacts, SID), want=1
-        )
+        rows = await _wait_for_rows(instance_broker_activity_wal_path(artifacts, SID), want=1)
         # The fill matched the WAL-folded intent — NOT unmatched.
         assert rows[0].verdict == Verdict.EXPECTED
         assert rows[0].template_key == "normal_fill"
@@ -775,9 +743,7 @@ async def test_event_for_foreign_namespace_is_silently_skipped(
     )
     publisher.start()
     try:
-        rows = await _wait_for_rows(
-            instance_broker_activity_wal_path(artifacts, SID), want=1
-        )
+        rows = await _wait_for_rows(instance_broker_activity_wal_path(artifacts, SID), want=1)
         # Only our fill landed; the other namespace's event was dropped
         # before authoring.
         assert len(rows) == 1
@@ -832,9 +798,7 @@ async def test_reconnect_sweep_authors_missed_execs_as_caveats(
     WAL with the ``reconnect_recovery`` template (verdict
     ``expected_with_caveat``)."""
     recovered = _fill_event(exec_id="recovered-1")
-    publisher, _run_dir, artifacts = _build_publisher_with_recovery(
-        tmp_path, recovery_events=[recovered]
-    )
+    publisher, _run_dir, artifacts = _build_publisher_with_recovery(tmp_path, recovery_events=[recovered])
     # No live events — purely test the sweep path.
     count = await publisher.sweep_reconnect_recovery()
     assert count == 1
@@ -913,9 +877,7 @@ async def test_reconnect_sweep_skips_foreign_namespace(tmp_path: Path) -> None:
         order_ref="learn-ai/some-other-instance/v1:other-intent",
         exec_id="foreign-recover-1",
     )
-    publisher, _run_dir, artifacts = _build_publisher_with_recovery(
-        tmp_path, recovery_events=[foreign]
-    )
+    publisher, _run_dir, artifacts = _build_publisher_with_recovery(tmp_path, recovery_events=[foreign])
     count = await publisher.sweep_reconnect_recovery()
     assert count == 0
     wal = BrokerActivityWal(instance_broker_activity_wal_path(artifacts, SID))
@@ -968,9 +930,7 @@ async def test_excessive_lag_during_reconnect_window_renders_as_caveat_not_unexp
             excessive_lag_ms=10_000,
         ),
         event_source_factory=_make_event_source([]),
-        recovery_source_factory=_recovery_factory(
-            [_fill_event(exec_id="lag-recover-1")]
-        ),
+        recovery_source_factory=_recovery_factory([_fill_event(exec_id="lag-recover-1")]),
     )
 
     count = await publisher.sweep_reconnect_recovery()
@@ -986,9 +946,7 @@ async def test_excessive_lag_during_reconnect_window_renders_as_caveat_not_unexp
 async def test_reconnect_sweep_sets_active_flag_during_sweep(
     tmp_path: Path,
 ) -> None:
-    """While the sweep is in flight, ``is_reconnect_recovery_active`` is
-    True so the registry surfaces it; the flag clears on completion (and
-    on a factory raise, via the finally clause)."""
+    """Reconnect rows carry their recovery classification only during a sweep."""
     seen_during_sweep: list[bool] = []
 
     async def _observing_factory() -> list[IbkrOrderEvent]:
@@ -1018,8 +976,7 @@ async def test_reconnect_sweep_sets_active_flag_during_sweep(
 async def test_reconnect_sweep_clears_flag_on_factory_raise(
     tmp_path: Path,
 ) -> None:
-    """A crashing factory must lift the submission halt — otherwise a
-    single bad sweep would pin the halt forever."""
+    """A crashing factory must clear reconnect-recovery classification."""
 
     async def _bad_factory() -> list[IbkrOrderEvent]:
         raise RuntimeError("simulated reqExecutions failure")
@@ -1053,48 +1010,6 @@ async def test_reconnect_sweep_no_op_without_factory(tmp_path: Path) -> None:
     assert wal.read_all() == []
 
 
-async def test_registry_any_recovery_active_reflects_publisher_state(
-    tmp_path: Path,
-) -> None:
-    """The registry's ``any_recovery_active`` ORs the flag across every
-    registered publisher — the gate ``place_paper_order`` reads."""
-    artifacts = tmp_path / "artifacts"
-    run_dir = tmp_path / "run-dir"
-    _seed_envelope(artifacts)
-    registry = BrokerActivityPublisherRegistry()
-    assert registry.any_recovery_active() is False
-
-    # Build a publisher whose factory blocks on an event so we can
-    # observe the flag mid-sweep.
-    block = asyncio.Event()
-    release_observed = asyncio.Event()
-
-    async def _slow_factory() -> list[IbkrOrderEvent]:
-        release_observed.set()
-        await block.wait()
-        return []
-
-    publisher = BrokerActivityPublisher(
-        strategy_instance_id=SID,
-        bot_order_namespace=NS,
-        run_dir=run_dir,
-        artifacts_root=artifacts,
-        timing_policy=ReconciliationTimingPolicy(),
-        event_source_factory=_make_event_source([]),
-        recovery_source_factory=_slow_factory,
-    )
-    await registry.register(publisher, strategy_instance_id=SID)
-    try:
-        sweep_task = asyncio.create_task(publisher.sweep_reconnect_recovery())
-        await asyncio.wait_for(release_observed.wait(), timeout=0.5)
-        assert registry.any_recovery_active() is True
-        block.set()
-        await asyncio.wait_for(sweep_task, timeout=0.5)
-        assert registry.any_recovery_active() is False
-    finally:
-        await registry.unregister(SID)
-
-
 async def test_registry_sweep_all_isolates_per_publisher_failures(
     tmp_path: Path,
 ) -> None:
@@ -1117,9 +1032,7 @@ async def test_registry_sweep_all_isolates_per_publisher_failures(
         last_processed_bar_ms=1,
         last_artifact_flush_ms=1,
     )
-    LiveStateSidecarRepo(stable_live_state_path(artifacts_a, sid_a))._path.parent.mkdir(
-        parents=True, exist_ok=True
-    )
+    LiveStateSidecarRepo(stable_live_state_path(artifacts_a, sid_a))._path.parent.mkdir(parents=True, exist_ok=True)
     LiveStateSidecarRepo(stable_live_state_path(artifacts_a, sid_a)).write(env_a)
 
     sid_b = "sid-multi-b"
@@ -1132,9 +1045,7 @@ async def test_registry_sweep_all_isolates_per_publisher_failures(
         last_processed_bar_ms=1,
         last_artifact_flush_ms=1,
     )
-    LiveStateSidecarRepo(stable_live_state_path(artifacts_b, sid_b))._path.parent.mkdir(
-        parents=True, exist_ok=True
-    )
+    LiveStateSidecarRepo(stable_live_state_path(artifacts_b, sid_b))._path.parent.mkdir(parents=True, exist_ok=True)
     LiveStateSidecarRepo(stable_live_state_path(artifacts_b, sid_b)).write(env_b)
 
     async def _crashing() -> list[IbkrOrderEvent]:
@@ -1227,9 +1138,7 @@ async def test_normal_consumer_completion_exits_supervisor(tmp_path: Path) -> No
     # All child tasks must be done or cancelled.
     children = publisher._snapshot_children_for_tests()
     for task in children:
-        assert task.done() or task.cancelled(), (
-            f"child task {task.get_name()!r} is still running after supervisor exit"
-        )
+        assert task.done() or task.cancelled(), f"child task {task.get_name()!r} is still running after supervisor exit"
 
 
 async def test_is_running_false_after_consumer_ends_registry_can_reuse(
@@ -1258,101 +1167,17 @@ async def test_is_running_false_after_consumer_ends_registry_can_reuse(
         if not publisher.is_running:
             break
         await asyncio.sleep(0.02)
-    assert not publisher.is_running, (
-        "is_running must be False after the event source is exhausted"
-    )
+    assert not publisher.is_running, "is_running must be False after the event source is exhausted"
     # A registry caller that checks liveness would not reuse this publisher.
     # Confirm the property holds without raising.
     assert publisher.is_running is False
 
 
-async def test_run_recovery_chain_halts_submissions_before_first_callback(
-    tmp_path: Path,
-) -> None:
-    """Slice 3 follow-up: the registry-wide halt must be active for the
-    *entire* recovery window — including any callback that runs before
-    the executions sweep. Without this, a slow bar resubscribe would
-    leave submissions enabled and a new order placed during that window
-    could be picked up by the subsequent sweep and mis-authored as a
-    ``reconnect_recovery`` row.
-
-    The test observes ``any_recovery_active`` from inside the first
-    callback: it must already be True when that callback's body runs,
-    not only after the sweep flips its per-publisher flag.
-    """
-    registry = BrokerActivityPublisherRegistry()
-    seen_halt_inside_first: list[bool] = []
-    seen_halt_inside_second: list[bool] = []
-
-    async def _first_callback() -> None:
-        seen_halt_inside_first.append(registry.any_recovery_active())
-
-    async def _second_callback() -> None:
-        seen_halt_inside_second.append(registry.any_recovery_active())
-
-    assert registry.any_recovery_active() is False
-    await registry.run_recovery_chain([_first_callback, _second_callback])
-    assert seen_halt_inside_first == [True]
-    assert seen_halt_inside_second == [True]
-    # Halt lifts after the chain completes.
-    assert registry.any_recovery_active() is False
-
-
-async def test_run_recovery_chain_clears_halt_on_callback_exception(
-    tmp_path: Path,
-) -> None:
-    """The halt must lift even when a callback raises — otherwise a
-    single bad callback would pin every instance's submissions until
-    process restart. The exception still propagates so the monitor can
-    log + retry."""
-    registry = BrokerActivityPublisherRegistry()
-
-    async def _good_callback() -> None:
-        return None
-
-    async def _bad_callback() -> None:
-        raise RuntimeError("simulated bar resubscribe failure")
-
-    with pytest.raises(RuntimeError, match="simulated bar resubscribe failure"):
-        await registry.run_recovery_chain([_good_callback, _bad_callback])
-    assert registry.any_recovery_active() is False
-
-
-async def test_run_recovery_chain_runs_callbacks_in_order(
-    tmp_path: Path,
-) -> None:
-    """The chain runs callbacks sequentially in the order provided so
-    callers can rely on bar-resubscribe-then-sweep ordering (or any
-    other dependency order they want)."""
-    registry = BrokerActivityPublisherRegistry()
-    order: list[str] = []
-
-    async def _first() -> None:
-        order.append("first")
-
-    async def _second() -> None:
-        order.append("second")
-
-    async def _third() -> None:
-        order.append("third")
-
-    await registry.run_recovery_chain([_first, _second, _third])
-    assert order == ["first", "second", "third"]
-
-
 async def test_executions_for_reconnect_recovery_times_out_on_hang(
     tmp_path: Path,
 ) -> None:
-    """Slice 3 follow-up: a hung ``reqExecutionsAsync`` (half-open
-    Gateway after reconnect) must surface as ``BrokerError`` so the
-    publisher's ``finally`` clears the submission halt. Without the
-    timeout the await would hang forever, pinning every instance's
-    ``place_paper_order`` until process restart.
+    """A hung recovery fetch must clear reconnect classification on failure."""
 
-    Uses the publisher's ``recovery_source_factory`` hook to confirm the
-    halt is properly cleared after the timeout-as-BrokerError surfaces
-    — the same lifecycle the production wiring guarantees.
-    """
     async def _hanging_factory() -> list[IbkrOrderEvent]:
         # Simulate a hung reqExecutionsAsync that resolves after the
         # production timeout. The publisher should not wait for this;
@@ -1373,8 +1198,6 @@ async def test_executions_for_reconnect_recovery_times_out_on_hang(
     )
     with pytest.raises(TimeoutError, match="simulated reqExecutionsAsync hang"):
         await publisher.sweep_reconnect_recovery()
-    # The submission halt must have cleared, so subsequent
-    # place_paper_order calls succeed instead of staying refused forever.
     assert publisher.is_reconnect_recovery_active is False
 
 
@@ -1394,8 +1217,7 @@ def _append_intent_wal_event(
 ) -> None:
     """Append one IntentEvent line directly to the WAL.
 
-    Bypasses ``IntentWal.append`` (which would manage seq itself) so
-    tests can craft the exact WAL shape they want — including bare
+    Tests can craft the exact historical WAL shape they want — including bare
     PENDING_INTENT events with no following SUBMITTED.
     """
     from app.engine.live.intent_events import IntentEvent
@@ -1462,9 +1284,7 @@ async def test_pending_intent_tick_authors_engine_only_pending_row(
     )
     publisher.start()
     try:
-        rows = await _wait_for_rows(
-            instance_broker_activity_wal_path(artifacts, SID), want=1, timeout=1.0
-        )
+        rows = await _wait_for_rows(instance_broker_activity_wal_path(artifacts, SID), want=1, timeout=1.0)
     finally:
         await publisher.stop()
 
@@ -1497,9 +1317,7 @@ async def test_pending_intent_tick_does_not_duplicate_on_repeat(
     )
     publisher.start()
     try:
-        await _wait_for_rows(
-            instance_broker_activity_wal_path(artifacts, SID), want=1, timeout=1.0
-        )
+        await _wait_for_rows(instance_broker_activity_wal_path(artifacts, SID), want=1, timeout=1.0)
         # Let several more ticks fire — dedup must hold across them.
         await asyncio.sleep(0.2)
         rows = BrokerActivityWal(instance_broker_activity_wal_path(artifacts, SID)).read_all()
@@ -1599,9 +1417,7 @@ async def test_pending_intent_tick_re_authors_after_dedup_pruned(
     )
     publisher.start()
     try:
-        await _wait_for_rows(
-            instance_broker_activity_wal_path(artifacts, SID), want=1, timeout=1.0
-        )
+        await _wait_for_rows(instance_broker_activity_wal_path(artifacts, SID), want=1, timeout=1.0)
         # Simulate the intent moving to SUBMITTED (broker acked) — dedup
         # set prunes, no new pending row authored.
         _append_intent_wal_event(
@@ -1611,9 +1427,7 @@ async def test_pending_intent_tick_re_authors_after_dedup_pruned(
             intent_id=intent_id,
         )
         await asyncio.sleep(0.15)
-        rows_after_ack = BrokerActivityWal(
-            instance_broker_activity_wal_path(artifacts, SID)
-        ).read_all()
+        rows_after_ack = BrokerActivityWal(instance_broker_activity_wal_path(artifacts, SID)).read_all()
         # Still only one pending row (the dedup pruning is internal,
         # not observable on the WAL — but no new pending row appeared).
         pending = [r for r in rows_after_ack if r.verdict == Verdict.ENGINE_ONLY_PENDING]
@@ -1646,9 +1460,7 @@ async def test_pending_intent_tick_skips_non_strategy_intent_kind(
         },
     )
     run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "intent_events.jsonl").write_text(
-        event.model_dump_json() + "\n", encoding="utf-8"
-    )
+    (run_dir / "intent_events.jsonl").write_text(event.model_dump_json() + "\n", encoding="utf-8")
 
     publisher.start()
     try:
@@ -1684,9 +1496,7 @@ async def test_pending_intent_tick_publishes_to_event_channel(
         message = await asyncio.wait_for(subscription.queue.get(), timeout=1.0)
         if isinstance(message, EventReset):
             publisher.event_channel.unsubscribe(subscription)
-            subscription = publisher.event_channel.subscribe(
-                EventCursor(message.stream_id, 0)
-            )
+            subscription = publisher.event_channel.subscribe(EventCursor(message.stream_id, 0))
             message = await asyncio.wait_for(subscription.queue.get(), timeout=1.0)
     finally:
         publisher.event_channel.unsubscribe(subscription)
@@ -1764,9 +1574,7 @@ async def test_pending_intent_dedup_seeded_from_wal_on_restart(
     )
     publisher_a.start()
     try:
-        await _wait_for_rows(
-            instance_broker_activity_wal_path(artifacts, SID), want=1, timeout=1.0
-        )
+        await _wait_for_rows(instance_broker_activity_wal_path(artifacts, SID), want=1, timeout=1.0)
     finally:
         await publisher_a.stop()
 
@@ -1829,9 +1637,7 @@ async def test_unauthorable_event_does_not_consume_seq(tmp_path: Path) -> None:
     publisher, _run_dir, artifacts = _build_publisher(tmp_path, [bad_event, _fill_event()])
     publisher.start()
     try:
-        rows = await _wait_for_rows(
-            instance_broker_activity_wal_path(artifacts, SID), want=1
-        )
+        rows = await _wait_for_rows(instance_broker_activity_wal_path(artifacts, SID), want=1)
         assert rows[0].seq == 1
     finally:
         await publisher.stop()
@@ -1967,13 +1773,11 @@ async def test_supervisor_logs_critical_on_unhandled_child_exception(
         while publisher.is_running and asyncio.get_event_loop().time() < deadline:
             await asyncio.sleep(0.02)
 
-    critical_records = [
-        r for r in caplog.records if r.levelno == logging.CRITICAL
-    ]
+    critical_records = [r for r in caplog.records if r.levelno == logging.CRITICAL]
     assert critical_records, "expected at least one CRITICAL log from supervisor"
-    assert any(
-        "supervisor exiting" in r.message for r in critical_records
-    ), f"expected 'supervisor exiting' in CRITICAL log; got {[r.message for r in critical_records]}"
+    assert any("supervisor exiting" in r.message for r in critical_records), (
+        f"expected 'supervisor exiting' in CRITICAL log; got {[r.message for r in critical_records]}"
+    )
 
 
 # ── Finding 1: latest_row_ms cold-start behaviour (PR reviewer P2) ─────────
@@ -2097,9 +1901,7 @@ def _seed_legacy_run_wal(
 
     run_dir = artifacts_root / "live_runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "run_ledger.json").write_text(
-        _json.dumps({"strategy_instance_id": SID}), encoding="utf-8"
-    )
+    (run_dir / "run_ledger.json").write_text(_json.dumps({"strategy_instance_id": SID}), encoding="utf-8")
     legacy_wal = BrokerActivityWal(legacy_per_run_broker_activity_wal_path(run_dir))
     for row in rows:
         legacy_wal.allocate_seq()
@@ -2142,9 +1944,7 @@ async def test_init_migrates_legacy_per_run_wals_on_cold_start(
         event_source_factory=_make_event_source([]),
     )
 
-    instance_wal = BrokerActivityWal(
-        instance_broker_activity_wal_path(artifacts, SID)
-    )
+    instance_wal = BrokerActivityWal(instance_broker_activity_wal_path(artifacts, SID))
     rows = instance_wal.read_all()
     assert [r.exec_id for r in rows] == ["legacy-fill-1"]
     assert rows[0].source_run_id == "run-legacy"
@@ -2226,6 +2026,4 @@ async def test_init_skips_migration_when_per_instance_wal_already_exists(
 
     rows = BrokerActivityWal(instance_path).read_all()
     exec_ids = [r.exec_id for r in rows]
-    assert exec_ids == ["legacy-fill", "post-migration"], (
-        "second bootstrap re-ran migration and clobbered the live row"
-    )
+    assert exec_ids == ["legacy-fill", "post-migration"], "second bootstrap re-ran migration and clobbered the live row"

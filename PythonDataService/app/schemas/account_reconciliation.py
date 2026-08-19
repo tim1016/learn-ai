@@ -12,7 +12,6 @@ from app.schemas.account_truth import (
     AccountTruthResponse,
     AccountTruthSeverity,
 )
-from app.schemas.journal_cures import AccountRecoveryFlattenCandidate
 from app.schemas.live_runs import GateResult
 from app.schemas.operator_blocker import OperatorBlocker, OperatorConfirmationCopy
 
@@ -224,9 +223,7 @@ class AccountTriageResponse(BaseModel):
     conditions: list[AccountConditionRow] = Field(default_factory=list)
     freeze_banner: AccountFreezeBanner | None = None
     clear_freeze_actionable: bool = False
-    emergency_flatten_confirmation: OperatorConfirmationCopy | None = None
     affected_bots: list[AccountTriageBotRef] = Field(default_factory=list)
-    recovery_flatten_candidates: list[AccountRecoveryFlattenCandidate] = Field(default_factory=list)
     operator_blockers: list[OperatorBlocker] = Field(default_factory=list)
 
 
@@ -285,24 +282,6 @@ class LegacyStaleClaimRetirementReceipt(BaseModel):
     retired_at_ms: int = Field(ge=0)
 
 
-class BindingLedgerBaselineReceipt(BaseModel):
-    """Result of seeding the binding-command ledger from the legacy registry.
-
-    Completes the reversible migration for an account whose registry predates
-    the ledger, clearing the fail-closed 'binding ledger parity is dirty'
-    posture. ``unresolved_ledger_only_instances`` stays non-empty only when a
-    genuine dual-write anomaly remains that baseline must not mask.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    schema_version: int = 1
-    account_id: str = Field(min_length=1, max_length=64)
-    baselined_instances: list[str] = Field(default_factory=list)
-    parity_clean: bool
-    unresolved_ledger_only_instances: list[str] = Field(default_factory=list)
-
-
 class AccountClearFreezeRequest(BaseModel):
     """Operator request to clear an active freeze using the latest clean receipt."""
 
@@ -346,24 +325,6 @@ class AccountSessionPolicyUpdateResponse(BaseModel):
     updated_at_ms: int = Field(ge=0)
 
 
-class AccountClerkRestartSmokeRequest(BaseModel):
-    """Typed acknowledgement that the current Clerk passed its restart smoke."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    confirmation: Literal["CLERK_RESTART_SMOKE"]
-
-
-class AccountClerkRestartSmokeResponse(BaseModel):
-    """Durable Clerk-restart smoke receipt used by gate promotion."""
-
-    model_config = ConfigDict(frozen=True)
-
-    account_id: str = Field(min_length=1, max_length=64)
-    clerk_generation: int = Field(ge=1)
-    recorded_at_ms: int = Field(ge=0)
-
-
 class AccountAcceptExposureOverrideRequest(BaseModel):
     """Operator request to accept exposure and clear an exposure freeze."""
 
@@ -387,20 +348,6 @@ class AccountAcceptExposureOverrideResponse(BaseModel):
     cleared_source: Literal["account_audited_override"] = "account_audited_override"
     override_id: str = Field(min_length=1, max_length=128)
     triage: AccountTriageResponse
-
-
-class AccountFalseCrashBackfillResponse(BaseModel):
-    """Summary of the append-only false-crash registry repair."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    schema_version: int = 1
-    accounts_scanned: int = Field(ge=0)
-    candidate_rows: int = Field(ge=0)
-    rows_repaired: int = Field(ge=0)
-    rows_skipped_no_disproof: int = Field(ge=0)
-    invalid_account_dirs: int = Field(ge=0)
-    repaired_run_ids: list[str] = Field(default_factory=list)
 
 
 class AccountEventSequenceRepairReceipt(BaseModel):

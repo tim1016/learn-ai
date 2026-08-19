@@ -20,26 +20,7 @@ export type StationState =
 
 // ── Action ids (closed vocabulary, spec §11) ─────────────────────────────────
 
-export type ActionId =
-  | 'deploy'
-  | 'resume'
-  | 'pause'
-  | 'continue'
-  | 'stop'
-  | 'flatten_stop'
-  | 'retire'
-  | 'cancel_order'
-  | 'clear_hold'
-  | 'record_inventory_baseline'
-  | 'reconcile_now'
-  | 'recover_exact_execution_evidence'
-  | 'resolve_execution_coverage'
-  | 'cancel_verified_working_orders'
-  | 'prepare_safe_flatten'
-  | 'stop_bot_decisions'
-  | 'open_custody_timeline'
-  | 'rebuild_from_mirror'
-  | 'reset_authority';
+export type ActionId = components['schemas']['PanelAction']['action_id'];
 
 // ── Operator-blocker reuse (OperatorBlocker contract) ────────────────────────
 
@@ -68,11 +49,8 @@ export type TransactionRail = components['schemas']['TransactionRail'];
 export type PanelAction = components['schemas']['PanelAction'];
 
 /**
- * One `PanelActionButtonComponent` trigger event: the presented action plus
- * the operator-typed comment (required for `clear_hold` /
- * `record_inventory_baseline`, `null` for every other action). Carried
- * unchanged through every fan-out hop back to the shell so `reason` reaches
- * `PanelActionRequest` regardless of which lens/card the button lives in.
+ * One `PanelActionButtonComponent` trigger event. The reason remains nullable
+ * in the transport contract; current presented actions do not collect one.
  */
 export interface PanelActionTrigger {
   readonly action: PanelAction;

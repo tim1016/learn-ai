@@ -6,8 +6,7 @@ import respx
 
 from app.engine.live.host_daemon_client import (
     HostDaemonOutcomeUnknownError,
-    ensure_account_clerk,
-    operator_recovery_flatten,
+    renew_control_plane_lease,
 )
 
 BASE = "http://daemon-host:8765"
@@ -15,23 +14,23 @@ BASE = "http://daemon-host:8765"
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_account_clerk_ensure_posts_only_account_capability() -> None:
-    route = respx.post(f"{BASE}/accounts/DU123/clerk/ensure").mock(
-        return_value=httpx.Response(200, json={"clerks": []})
+async def test_host_capability_lease_renewal_posts_no_account_command() -> None:
+    route = respx.post(f"{BASE}/control-plane/renew-lease").mock(
+        return_value=httpx.Response(200, json={"ok": True})
     )
 
-    result = await ensure_account_clerk(BASE, "DU123", ibkr_host="127.0.0.1")
+    result = await renew_control_plane_lease(BASE)
 
-    assert result == {"clerks": []}
-    assert route.calls.last.request.content == b'{"ibkr_host":"127.0.0.1"}'
+    assert result == {"ok": True}
+    assert route.calls.last.request.content == b"{}"
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_ambiguous_account_recovery_transport_stays_outcome_unknown() -> None:
-    respx.post(f"{BASE}/accounts/DU123/clerk/operator-recovery-flatten").mock(
+async def test_ambiguous_lease_renewal_transport_stays_outcome_unknown() -> None:
+    respx.post(f"{BASE}/control-plane/renew-lease").mock(
         side_effect=httpx.ReadTimeout("lost response")
     )
 
     with pytest.raises(HostDaemonOutcomeUnknownError):
-        await operator_recovery_flatten(BASE, "DU123", {})
+        await renew_control_plane_lease(BASE)

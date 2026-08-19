@@ -5,8 +5,6 @@ from __future__ import annotations
 import base64
 import hashlib
 
-from app.broker.alpaca.clerk.exposure import ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
-from app.broker.alpaca.clerk.recovery import UNCERTAIN_SUBMIT_GRACE_MS
 from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
 from app.broker.alpaca.clerk.sqlite.facts import (
     ExitAcceptedFacts,
@@ -20,11 +18,15 @@ from app.broker.alpaca.clerk.sqlite.models import (
     TransitionInput,
 )
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
+    UNCERTAIN_SUBMIT_GRACE_MS,
     entry_order_symbol,
     fold_failed,
     fold_order_evidence,
     fold_order_submission_acknowledgement,
     fold_uncertain,
+)
+from app.broker.alpaca.clerk.sqlite.order_projection import (
+    ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (

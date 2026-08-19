@@ -4,8 +4,8 @@ The consumer is driven by an **injected frame source** (an async-iterator
 factory) plus an injected clock and backoff, so every concern — capture,
 parse, live_idempotent dedup, attribution, and the post-reconnect REST
 gap-reconcile — is exercised with no network. A REAL ``CaptureJournal`` and a
-REAL ``OrderJournal``-backed ``AlpacaClerk`` on tmp dirs assert the actual
-on-disk records, not mocks.
+an injected authority sink assert durable-dispatch ordering independently of
+the SQLite repository's own fold tests.
 """
 
 from __future__ import annotations
@@ -25,8 +25,6 @@ import pytest
 import responses
 
 from app.broker.alpaca.broker import AlpacaBroker
-from app.broker.alpaca.clerk import journal as journal_module
-from app.broker.alpaca.clerk.clerk import AlpacaClerk
 from app.broker.alpaca.clerk.models import ClerkEntryKind
 from app.broker.alpaca.clerk.stream_health import build_default_stream_health_gate
 from app.broker.alpaca.client import AlpacaTradingClient
@@ -216,6 +214,68 @@ class _FakeBroker:
         return list(self.activities)
 
 
+class _EvidenceSink:
+    """Small active-authority sink double for transport-focused tests."""
+
+    def __init__(self, **_: object) -> None:
+        self.entries: list[SimpleNamespace] = []
+        self.owned_refs = {_OWNED_COID}
+        self.unexplained_order_count = 0
+        self._on_hold = False
+        self._journal = self
+
+    def guard_reconnect_read(self, read: object):
+        return read
+
+    def read_entries(self) -> list[SimpleNamespace]:
+        return list(self.entries)
+
+    async def record_lifecycle_event(
+        self,
+        *,
+        client_order_id: str | None,
+        event: object,
+        event_key: str,
+        order: BrokerOrder | None,
+        **_: object,
+    ) -> ClerkEntryKind:
+        owned = client_order_id in self.owned_refs
+        kind = ClerkEntryKind.ORDER_EVENT if owned else ClerkEntryKind.UNEXPLAINED_ORDER
+        if not owned:
+            self.unexplained_order_count += 1
+            self._on_hold = True
+        self.entries.append(
+            SimpleNamespace(
+                kind=kind,
+                owned=owned,
+                event=event,
+                event_key=event_key,
+                client_order_id=client_order_id or "",
+                order_ref=client_order_id if owned and client_order_id is not None else "",
+                broker_order=order,
+            )
+        )
+        return kind
+
+    async def reconcile_gap(self) -> None:
+        return None
+
+    async def submit(self, request: BrokerOrderRequest) -> SimpleNamespace:
+        from app.broker.contract.errors import BrokerSubmissionHeld
+
+        if self._on_hold:
+            raise BrokerSubmissionHeld(
+                "unexplained order",
+                reason_code="UNEXPLAINED_ORDER_HOLD",
+            )
+        order_ref = _OWNED_COID
+        self.owned_refs.add(order_ref)
+        return SimpleNamespace(results=[SimpleNamespace(order_ref=order_ref)])
+
+    def is_on_hold(self) -> bool:
+        return self._on_hold
+
+
 def _frame_source(frames: list[Any]):
     """Build a FrameSource that yields the given frames once, then ends."""
 
@@ -262,10 +322,10 @@ async def _running_consumer(
     """Run a singleton-wired consumer on an open, authorized socket cycle."""
     source = _OpenFrameSource()
     broker = _FakeBroker()
-    clerk = AlpacaClerk(read=broker, trade=broker)
+    clerk = _EvidenceSink(read=broker, trade=broker)
     await _warm(clerk)
     consumer = TradeUpdatesConsumer(
-        clerk=clerk,
+        evidence_sink=clerk,
         read=broker,
         frame_source=source,
         journal=journal or _capture_journal(tmp_path),
@@ -290,7 +350,7 @@ async def _no_backoff(attempt: int) -> None:
     return None
 
 
-async def _warm(clerk: AlpacaClerk, operator: str = "inkant") -> None:
+async def _warm(clerk: _EvidenceSink, operator: str = "inkant") -> None:
     """Warm the clerk's namespace allowlist so ``manual/{operator}/v1`` events
     attribute as OWNED.
 
@@ -306,14 +366,6 @@ async def _warm(clerk: AlpacaClerk, operator: str = "inkant") -> None:
             legs=[BrokerOrderLeg(symbol="AAPL", side="buy", quantity=10)],
         )
     )
-
-
-@pytest.fixture(autouse=True)
-def _clerk_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("ALPACA_CLERK_DIR", str(tmp_path / "clerk"))
-    journal_module.reset_clerk_settings_for_testing()
-    yield
-    journal_module.reset_clerk_settings_for_testing()
 
 
 def _capture_journal(tmp_path: Path) -> CaptureJournal:
@@ -335,14 +387,14 @@ async def _consumer(
     frames: list[Any],
     *,
     broker: _FakeBroker | None = None,
-    clerk: AlpacaClerk | None = None,
+    clerk: _EvidenceSink | None = None,
     max_reconnects: int = 0,
-) -> tuple[TradeUpdatesConsumer, AlpacaClerk, CaptureJournal]:
+) -> tuple[TradeUpdatesConsumer, _EvidenceSink, CaptureJournal]:
     broker = broker or _FakeBroker()
-    clerk = clerk or AlpacaClerk(read=broker, trade=broker)
+    clerk = clerk or _EvidenceSink(read=broker, trade=broker)
     journal = _capture_journal(tmp_path)
     consumer = TradeUpdatesConsumer(
-        clerk=clerk,
+        evidence_sink=clerk,
         read=broker,
         frame_source=_frame_source(frames),
         journal=journal,
@@ -394,7 +446,7 @@ async def test_each_frame_captured_verbatim_before_handler_runs(tmp_path: Path) 
             captured_bytes.append(raw_body)
             return super().record(raw_body=raw_body, **kwargs)
 
-    class _SpyClerk(AlpacaClerk):
+    class _SpyClerk(_EvidenceSink):
         async def record_lifecycle_event(self, **kwargs: Any) -> ClerkEntryKind:  # type: ignore[override]
             order_of_calls.append("handle")
             return await super().record_lifecycle_event(**kwargs)
@@ -404,7 +456,7 @@ async def test_each_frame_captured_verbatim_before_handler_runs(tmp_path: Path) 
     frame = json.dumps(_load_frames()[0])
     journal = _SpyJournal(capture_dir=tmp_path / "capture", clock=lambda: _FIXED_MS)
     consumer = TradeUpdatesConsumer(
-        clerk=clerk,
+        evidence_sink=clerk,
         read=broker,
         frame_source=_frame_source([frame]),
         journal=journal,
@@ -554,9 +606,9 @@ async def test_capture_failure_refuses_to_derive_lifecycle_state(tmp_path: Path)
             return False
 
     broker = _FakeBroker()
-    clerk = AlpacaClerk(read=broker, trade=broker)
+    clerk = _EvidenceSink(read=broker, trade=broker)
     consumer = TradeUpdatesConsumer(
-        clerk=clerk,
+        evidence_sink=clerk,
         read=broker,
         frame_source=_frame_source([_load_frames()[0]]),
         journal=_FailingCaptureJournal(capture_dir=tmp_path / "capture"),
@@ -597,7 +649,7 @@ async def test_capture_failure_degrades_gate_health_until_valid_frame(
 
 
 async def test_clerk_append_failure_leaves_event_retryable(tmp_path: Path) -> None:
-    class _FailingOnceClerk(AlpacaClerk):
+    class _FailingOnceClerk(_EvidenceSink):
         calls = 0
 
         async def record_lifecycle_event(self, **kwargs: Any) -> ClerkEntryKind:  # type: ignore[override]
@@ -610,7 +662,7 @@ async def test_clerk_append_failure_leaves_event_retryable(tmp_path: Path) -> No
     clerk = _FailingOnceClerk(read=broker, trade=broker)
     await _warm(clerk)
     consumer = TradeUpdatesConsumer(
-        clerk=clerk,
+        evidence_sink=clerk,
         read=broker,
         frame_source=_frame_source([_load_frames()[1]]),
         journal=_capture_journal(tmp_path),
@@ -628,7 +680,7 @@ async def test_clerk_append_failure_leaves_event_retryable(tmp_path: Path) -> No
 async def test_valid_frame_restores_health_only_after_durable_clerk_append(
     tmp_path: Path,
 ) -> None:
-    class _BlockingClerk(AlpacaClerk):
+    class _BlockingClerk(_EvidenceSink):
         def __init__(self, **kwargs: Any) -> None:
             super().__init__(**kwargs)
             self.append_started = asyncio.Event()
@@ -643,7 +695,7 @@ async def test_valid_frame_restores_health_only_after_durable_clerk_append(
     clerk = _BlockingClerk(read=broker, trade=broker)
     await _warm(clerk)
     consumer = TradeUpdatesConsumer(
-        clerk=clerk,
+        evidence_sink=clerk,
         read=broker,
         frame_source=_frame_source([]),
         journal=_capture_journal(tmp_path),
@@ -729,7 +781,7 @@ async def test_owned_client_order_id_journals_order_event(tmp_path: Path) -> Non
     # Warm the clerk with a real submit so ``manual/inkant/v1`` is a known
     # namespace, then feed an event with that owned client_order_id.
     broker = _FakeBroker()
-    clerk = AlpacaClerk(read=broker, trade=broker)
+    clerk = _EvidenceSink(read=broker, trade=broker)
     submit = await clerk.submit(
         BrokerOrderRequest(
             operator="inkant",
@@ -873,7 +925,7 @@ async def test_reconnect_gap_reconcile_pulls_missed_orders(tmp_path: Path) -> No
     responses.add(responses.GET, f"{_BASE}/v2/orders", json=[filled_order], status=200)
 
     broker = _real_broker_with_responses([filled_order])
-    clerk = AlpacaClerk(read=broker, trade=broker)
+    clerk = _EvidenceSink(read=broker, trade=broker)
     # Warm the clerk namespace so the reconciled order attributes as OWNED.
     await _warm(clerk)
     # Make the warmed order_ref match the reconciled client_order_id so the
@@ -883,7 +935,7 @@ async def test_reconnect_gap_reconcile_pulls_missed_orders(tmp_path: Path) -> No
 
     journal = _capture_journal(tmp_path)
     consumer = TradeUpdatesConsumer(
-        clerk=clerk,
+        evidence_sink=clerk,
         read=broker,
         frame_source=_frame_source([partial]),
         journal=journal,
@@ -944,12 +996,12 @@ async def test_gap_reconcile_dedups_already_seen_event(tmp_path: Path) -> None:
     responses.add(responses.GET, f"{_BASE}/v2/orders", json=[filled_order], status=200)
 
     broker = _real_broker_with_responses([filled_order])
-    clerk = AlpacaClerk(read=broker, trade=broker)
+    clerk = _EvidenceSink(read=broker, trade=broker)
     await _warm(clerk)
 
     journal = _capture_journal(tmp_path)
     consumer = TradeUpdatesConsumer(
-        clerk=clerk,
+        evidence_sink=clerk,
         read=broker,
         frame_source=_frame_source([fill]),
         journal=journal,
@@ -1006,12 +1058,12 @@ async def test_gap_reconcile_dedups_socket_fill_by_terminal_order(tmp_path: Path
     responses.add(responses.GET, f"{_BASE}/v2/orders", json=[filled_order], status=200)
 
     broker = _real_broker_with_responses([filled_order])
-    clerk = AlpacaClerk(read=broker, trade=broker)
+    clerk = _EvidenceSink(read=broker, trade=broker)
     await _warm(clerk)
 
     journal = _capture_journal(tmp_path)
     consumer = TradeUpdatesConsumer(
-        clerk=clerk,
+        evidence_sink=clerk,
         read=broker,
         frame_source=_frame_source([fill]),
         journal=journal,
@@ -1045,7 +1097,7 @@ async def test_gap_reconcile_pulls_closed_orders_no_submission_time_filter(
     # the reconcile once passed last_event_ms as ``after`` and queried "all",
     # silently missing exactly this order.)
     broker = _FakeBroker()
-    clerk = AlpacaClerk(read=broker, trade=broker)
+    clerk = _EvidenceSink(read=broker, trade=broker)
     await _warm(clerk)
     new_frame = _load_frames()[0]  # event=new, owned coid
     order_id = new_frame["data"]["order"]["id"]
@@ -1054,7 +1106,7 @@ async def test_gap_reconcile_pulls_closed_orders_no_submission_time_filter(
 
     journal = _capture_journal(tmp_path)
     consumer = TradeUpdatesConsumer(
-        clerk=clerk,
+        evidence_sink=clerk,
         read=broker,
         frame_source=_frame_source([new_frame]),
         journal=journal,
@@ -1081,64 +1133,6 @@ async def test_gap_reconcile_pulls_closed_orders_no_submission_time_filter(
     assert consumer.counters.gap_reconciled >= 1
 
 
-async def test_activity_recovery_is_bounded_durable_and_idempotent(tmp_path: Path) -> None:
-    broker = _FakeBroker()
-    clerk = AlpacaClerk(read=broker, trade=broker)
-    await _warm(clerk)
-    owned_order_id = _accepted_order(_OWNED_COID).order_id
-    broker.activities = [
-        BrokerActivity(
-            broker="alpaca",
-            activity_id="owned-fill",
-            native_order_id=owned_order_id,
-            activity_type="FILL",
-            category="trade_activity",
-            symbol="AAPL",
-            side="buy",
-            quantity=10.0,
-            price=135.8,
-            net_amount=None,
-            occurred_at_ms=_FIXED_MS + 1,
-            observed_at_ms=_FIXED_MS + 2,
-        ),
-        BrokerActivity(
-            broker="alpaca",
-            activity_id="foreign-fill",
-            native_order_id="foreign-order",
-            activity_type="FILL",
-            category="trade_activity",
-            symbol="SPY",
-            side="buy",
-            quantity=1.0,
-            price=500.0,
-            net_amount=None,
-            occurred_at_ms=_FIXED_MS + 3,
-            observed_at_ms=_FIXED_MS + 4,
-        ),
-    ]
-    consumer = TradeUpdatesConsumer(
-        clerk=clerk,
-        read=broker,
-        frame_source=_frame_source([]),
-        journal=_capture_journal(tmp_path),
-        clock=lambda: _FIXED_MS,
-        backoff=_no_backoff,
-        max_reconnects=0,
-    )
-
-    await consumer._reconcile_activity_window()
-    await consumer._reconcile_activity_window()
-
-    entries = clerk._journal.read_entries()  # type: ignore[union-attr]
-    activities = [entry for entry in entries if entry.kind is ClerkEntryKind.ACTIVITY_RECOVERY]
-    assert [entry.activity.activity_id for entry in activities] == ["owned-fill", "foreign-fill"]  # type: ignore[union-attr]
-    assert activities[0].owned is True
-    assert activities[1].owned is False
-    assert [call["limit"] for call in broker.list_activities_calls] == [100, 100]
-    assert broker.list_activities_calls[0]["after_ms"] is None
-    assert broker.list_activities_calls[1]["after_ms"] == _FIXED_MS + 3
-
-
 async def test_reconnect_opens_the_next_source_before_gap_reconcile(tmp_path: Path) -> None:
     order: list[str] = []
     authorization = {"stream": "authorization", "data": {"status": "authorized"}}
@@ -1148,9 +1142,9 @@ async def test_reconnect_opens_the_next_source_before_gap_reconcile(tmp_path: Pa
         return _frame_source([authorization])()
 
     broker = _FakeBroker()
-    clerk = AlpacaClerk(read=broker, trade=broker)
+    clerk = _EvidenceSink(read=broker, trade=broker)
     consumer = TradeUpdatesConsumer(
-        clerk=clerk,
+        evidence_sink=clerk,
         read=broker,
         frame_source=frame_source,
         journal=_capture_journal(tmp_path),
@@ -1390,12 +1384,12 @@ async def test_injected_frame_threads_through_the_real_consumer(tmp_path: Path, 
 
     permit_frame_injection.get_fault_injection_registry().arm(FrameFaultKind.HALT_SUSPENDED, target=_OWNED_COID)
     broker = _FakeBroker()
-    clerk = AlpacaClerk(read=broker, trade=broker)
+    clerk = _EvidenceSink(read=broker, trade=broker)
     await _warm(clerk)
     journal = _capture_journal(tmp_path)
     real = json.dumps(_load_frames()[0])  # a real 'new' event for _OWNED_COID
     consumer = TradeUpdatesConsumer(
-        clerk=clerk,
+        evidence_sink=clerk,
         read=broker,
         frame_source=lambda: _inject_frame_faults(_frame_source([real])()),
         journal=journal,

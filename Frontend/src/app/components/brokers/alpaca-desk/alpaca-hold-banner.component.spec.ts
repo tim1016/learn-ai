@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
+import { render, screen, waitFor } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ClerkStatus } from '../../../api/alpaca.types';
@@ -50,6 +50,8 @@ describe('AlpacaHoldBannerComponent', () => {
     expect(
       screen.getByText(/An order this account did not submit was observed at Alpaca\./),
     ).toBeTruthy();
+    expect(screen.getByText(/evidence-bound recovery actions/i)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Clear hold/ })).toBeNull();
   });
 
   it('renders no banner when there is no active hold', async () => {
@@ -83,34 +85,4 @@ describe('AlpacaHoldBannerComponent', () => {
     }
   });
 
-  it('invokes BrokersService.clearHold when the clear-hold button is clicked', async () => {
-    const clearHold = vi.fn().mockResolvedValue(clearStatus());
-    await renderBanner({
-      getClerkStatus: () => Promise.resolve(heldStatus()),
-      clearHold,
-    });
-
-    const button = await screen.findByRole('button', { name: /Clear hold/ });
-    fireEvent.click(button);
-
-    await waitFor(() => {
-      expect(clearHold).toHaveBeenCalledWith(
-        'alpaca',
-        expect.objectContaining({ reason: expect.any(String) }),
-      );
-    });
-  });
-
-  it('removes generic clear-hold when SQLite custody is active', async () => {
-    await renderBanner({
-      getClerkStatus: () => Promise.resolve(heldStatus({
-        authority_kind: 'sqlite',
-        generic_hold_clear_available: false,
-        generic_hold_clear_explanation: 'Use the evidence-bound recovery catalog.',
-      })),
-    });
-
-    expect(await screen.findByText('Use the evidence-bound recovery catalog.')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /Clear hold/ })).toBeNull();
-  });
 });

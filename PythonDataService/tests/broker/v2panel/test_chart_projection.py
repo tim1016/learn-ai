@@ -635,36 +635,13 @@ async def test_live_chart_before_session_open_is_empty(
     open_ms = _NOW + 60_000
     close_ms = open_ms + 6 * 60 * 60_000
 
-    async def validate_account(broker: str, account_id: str) -> str:
-        return account_id
+    async def symbol_and_fills(*_args, **_kwargs):
+        return "SPY", ()
 
     async def unexpected_resolver(**kwargs) -> ChartWindowResult:
         pytest.fail("the range resolver must not run before the session opens")
 
-    monkeypatch.setattr(
-        panel_chart_data_source,
-        "validate_panel_account_scope",
-        validate_account,
-    )
-    monkeypatch.setattr(
-        panel_chart_data_source,
-        "read_legacy_chart_status",
-        lambda broker, sid: BotStatusView(
-            strategy_instance_id=sid,
-            broker=broker,
-            symbol="SPY",
-            mode="trade",
-            quantity=1,
-            running=True,
-            phase="ON_DUTY",
-            desired_state="RUNNING",
-            active_run_id="run-1",
-            duty_outcome=None,
-            binding_created_at_ms=_NOW - 60_000,
-            last_transition_at_ms=_NOW - 60_000,
-        ),
-    )
-    monkeypatch.setattr(panel_chart_data_source, "read_legacy_chart_fills", lambda *_args: ())
+    monkeypatch.setattr(panel_chart_data_source, "resolve_symbol_and_fills", symbol_and_fills)
     monkeypatch.setattr(panel_chart_data_source, "now_ms_utc", lambda: _NOW)
     monkeypatch.setattr(
         panel_chart_data_source,
@@ -698,8 +675,8 @@ async def test_live_chart_forwards_selected_resolution(
     close_ms = _NOW + 60_000
     captured_request: list[tuple[str, bool]] = []
 
-    async def validate_account(broker: str, account_id: str) -> str:
-        return account_id
+    async def symbol_and_fills(*_args, **_kwargs):
+        return "SPY", ()
 
     async def resolver(**kwargs) -> ChartWindowResult:
         captured_request.append(
@@ -714,30 +691,7 @@ async def test_live_chart_forwards_selected_resolution(
     async def subscribe(symbol: str) -> None:
         subscribed.append(symbol)
 
-    monkeypatch.setattr(
-        panel_chart_data_source,
-        "validate_panel_account_scope",
-        validate_account,
-    )
-    monkeypatch.setattr(
-        panel_chart_data_source,
-        "read_legacy_chart_status",
-        lambda broker, sid: BotStatusView(
-            strategy_instance_id=sid,
-            broker=broker,
-            symbol="SPY",
-            mode="trade",
-            quantity=1,
-            running=True,
-            phase="ON_DUTY",
-            desired_state="RUNNING",
-            active_run_id="run-1",
-            duty_outcome=None,
-            binding_created_at_ms=_NOW - 60_000,
-            last_transition_at_ms=_NOW - 60_000,
-        ),
-    )
-    monkeypatch.setattr(panel_chart_data_source, "read_legacy_chart_fills", lambda *_args: ())
+    monkeypatch.setattr(panel_chart_data_source, "resolve_symbol_and_fills", symbol_and_fills)
     monkeypatch.setattr(panel_chart_data_source, "now_ms_utc", lambda: _NOW)
     monkeypatch.setattr(
         panel_chart_data_source,
@@ -756,15 +710,14 @@ async def test_live_chart_forwards_selected_resolution(
     assert result.resolution == "5s"
 
 
-async def test_live_snapshot_normalizes_its_captured_legacy_entries(
+async def test_live_snapshot_uses_its_captured_sqlite_fills(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    entries = [object()]
-    expected_fills = (_sqlite_fill(event_key="legacy-captured"),)
+    expected_fills = (_sqlite_fill(event_key="sqlite-captured"),)
     captured: list[tuple[FillRecord, ...]] = []
 
     async def panel_with_entries(*_args: object, **_kwargs: object):
-        return SimpleNamespace(symbol="SPY"), entries, None
+        return SimpleNamespace(symbol="SPY"), [], expected_fills
 
     async def build_from_fills(
         _sid: str,
@@ -779,16 +732,6 @@ async def test_live_snapshot_normalizes_its_captured_legacy_entries(
         panel_chart_data_source,
         "get_panel_with_chart_fills",
         panel_with_entries,
-    )
-    monkeypatch.setattr(panel_chart_data_source, "sqlite_authority_active", lambda _broker: False)
-    monkeypatch.setattr(
-        panel_chart_data_source,
-        "project_instance_fills",
-        lambda received_sid, received_entries: (
-            expected_fills
-            if received_sid == SID and received_entries is entries
-            else pytest.fail("legacy snapshot normalized a different journal cut")
-        ),
     )
     monkeypatch.setattr(panel_chart_data_source, "_build_live_chart_from_fills", build_from_fills)
 
@@ -845,7 +788,6 @@ async def test_active_history_uses_sqlite_chart_evidence_not_legacy_journal(
         "validate_panel_account_scope",
         validate_account,
     )
-    monkeypatch.setattr(panel_chart_data_source, "sqlite_authority_active", lambda _broker: True)
     monkeypatch.setattr(panel_chart_data_source, "now_ms_utc", lambda: _NOW)
     monkeypatch.setattr(
         panel_chart_data_source,
@@ -853,8 +795,6 @@ async def test_active_history_uses_sqlite_chart_evidence_not_legacy_journal(
         lambda timeframe, now_ms: (_NOW - 86_400_000, now_ms),
     )
     monkeypatch.setattr(panel_chart_data_source, "read_sqlite_chart_evidence", chart_evidence)
-    monkeypatch.setattr(panel_chart_data_source, "read_legacy_chart_status", pytest.fail)
-    monkeypatch.setattr(panel_chart_data_source, "read_legacy_chart_fills", pytest.fail)
     monkeypatch.setattr(panel_chart_data_source, "fetch_aggregate_bars", empty_bars)
 
     result = await panel_chart_data_source.get_history_chart(

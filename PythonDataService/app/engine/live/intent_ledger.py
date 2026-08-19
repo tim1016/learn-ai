@@ -57,9 +57,8 @@ class SubmittedOrderView:
     ``order_spec`` is the order's IbkrOrderSpec.model_dump() captured at
     PENDING_INTENT emit time (Phase 5A). Phase 5E reads ``order_spec["symbol"]``
     and ``order_spec["action"]`` / ``order_spec["quantity"]`` to reconstruct
-    a fill's ``_OrderMeta`` when only the broker's ``perm_id`` survives a
-    restart (the in-memory ``LiveEngine._order_meta`` is empty on cold
-    start). ``None`` for events that pre-date Phase 5A or that fold
+    historical fill evidence when only the broker's ``perm_id`` survives a
+    restart. ``None`` for events that pre-date Phase 5A or that fold
     SIZING_RESOLVED before the PENDING_INTENT lands.
     """
 

@@ -8,9 +8,8 @@ misconfigured ``IBKR_HOST`` / ``client_id`` could route orders to a different
 ``DU*`` account than the operator typed; every downstream artifact then
 attested the wrong account.
 
-This module owns the pure logic — normalization and comparison — so the rules
-are testable in isolation. The engine integration lives in
-``LiveEngine._validate_paper_client``.
+This module owns the pure normalization/comparison logic retained for durable
+identity evidence. Its former IBKR engine integration retired in #1583.
 
 Final contract (per PRD §11):
 
@@ -33,9 +32,8 @@ _ACCOUNT_ID_PATTERN = re.compile(r"^[A-Z][A-Z0-9]+$")
 class InvalidAccountIdError(ValueError):
     """A raw account_id cannot be normalized to the canonical form.
 
-    Subclass of ``ValueError`` so existing code that catches ``ValueError``
-    keeps working. Callers in the engine map it to a fatal-halt with the
-    raw value preserved for forensic reconstruction.
+    Subclass of ``ValueError`` so existing read-model callers that catch
+    ``ValueError`` keep working.
     """
 
 
@@ -44,9 +42,8 @@ class AccountIdentityMismatchError(RuntimeError):
     ``connected_account`` after normalization.
 
     Carries both raw values so the operator's next step is unambiguous.
-    Distinct from the future ``BROKER_SAFETY_VERDICT_TRANSITION_HALT``:
-    that one fires when the verdict (mode/port/readonly/prefix) degrades;
-    this one fires when the broker account identity itself changed.
+    The exception preserves both raw values for forensic reconstruction; the
+    retired IBKR engine no longer maps it to an execution halt.
     """
 
     def __init__(self, *, ledger_account_id: str, connected_account: str | None) -> None:

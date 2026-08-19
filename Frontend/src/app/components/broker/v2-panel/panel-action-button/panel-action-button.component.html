@@ -29,20 +29,8 @@
 
 @if (confirmationOpen()) {
   @if (action().confirmation; as confirmation) {
-    @if (requiresComment()) {
-      <app-panel-action-comment-confirm
-        [open]="true"
-        [heading]="confirmation.title"
-        [message]="confirmation.body"
-        [consequence]="confirmation.consequence"
-        [requiredToken]="confirmation.required_token ?? ''"
-        [confirmLabel]="confirmation.confirm_label"
-        (confirmed)="confirmWithReason($event)"
-        (cancelled)="confirmationOpen.set(false)"
-      />
-    } @else {
-      <app-typed-halt-confirm
-        [open]="true"
+    <app-typed-halt-confirm
+      [open]="true"
         [heading]="confirmation.title"
         [message]="confirmation.body"
         [consequence]="confirmation.consequence"
@@ -50,7 +38,6 @@
         [confirmLabel]="confirmation.confirm_label"
         (confirmed)="confirm()"
         (cancelled)="confirmationOpen.set(false)"
-      />
-    }
+    />
   }
 }

@@ -18,15 +18,12 @@ from app.config import settings
 from app.engine.live.account_artifacts import (
     AccountClerkLease,
     account_artifact_file_path,
-    advance_account_clerk_generation,
-    write_account_clerk_lease,
 )
 from app.engine.live.account_clerk_journal import (
-    AccountClerkJournal,
     account_clerk_inbox_path,
     account_clerk_journal_path,
 )
-from app.engine.live.account_clerk_journal_models import AccountClerkInboxEntry
+from app.engine.live.account_clerk_journal_models import AccountClerkInboxEntry, AccountClerkJournalEntry
 from app.engine.live.account_epoch import ACCOUNT_EPOCH_FILENAME, AccountEpochAuthority, AccountEpochState
 from app.engine.live.account_observation_lease import AccountObservationLeaseRepo
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
@@ -35,7 +32,6 @@ from app.schemas.account_safety_snapshot import AccountSafetySnapshotSource
 from app.schemas.account_truth import (
     AccountTruthEvidenceTier,
     AccountTruthFactOwner,
-    AccountTruthOrderCancelAction,
     AccountTruthOrderRow,
     AccountTruthOwnerBindingState,
     AccountTruthOwnerClass,
@@ -48,6 +44,11 @@ from app.services.account_reconciliation import AccountReconciliationService
 from app.services.account_safety_snapshot import AccountSafetySnapshotService
 from app.services.account_truth_snapshot import get_account_truth_snapshot_provider
 from app.services.journal_recovery import JournalRecoveryService
+from tests._helpers.legacy_ibkr_artifacts import (
+    write_historical_clerk_generation,
+    write_historical_clerk_journal,
+    write_historical_clerk_lease,
+)
 
 _ACCOUNT_ID = "DU1234567"
 
@@ -74,37 +75,63 @@ def _service(tmp_path: Path, *, now_ms: int) -> AccountSafetySnapshotService:
 def _truth(now_ms: int) -> AccountTruthResponse:
     return compose_account_truth(
         health=IbkrConnectionHealth(
-            mode="paper", host="127.0.0.1", port=4002, client_id=7, connected=True,
-            account_id=_ACCOUNT_ID, is_paper=True, fetched_at_ms=now_ms - 10,
-            connection_state="connected", last_transition_ms=now_ms - 10,
+            mode="paper",
+            host="127.0.0.1",
+            port=4002,
+            client_id=7,
+            connected=True,
+            account_id=_ACCOUNT_ID,
+            is_paper=True,
+            fetched_at_ms=now_ms - 10,
+            connection_state="connected",
+            last_transition_ms=now_ms - 10,
         ),
         account_instance_bindings=[],
         account_recovery_state=AccountRecoveryState.clear(_ACCOUNT_ID),
         account=IbkrAccountSummary(
-            account_id=_ACCOUNT_ID, is_paper=True, base_currency="USD",
-            net_liquidation=100_000.0, buying_power=50_000.0, fetched_at_ms=now_ms - 10,
+            account_id=_ACCOUNT_ID,
+            is_paper=True,
+            base_currency="USD",
+            net_liquidation=100_000.0,
+            buying_power=50_000.0,
+            fetched_at_ms=now_ms - 10,
         ),
         positions_snapshot=IbkrPositionsSnapshot(
-            account_id=_ACCOUNT_ID, is_paper=True, positions=[], fetched_at_ms=now_ms - 10,
+            account_id=_ACCOUNT_ID,
+            is_paper=True,
+            positions=[],
+            fetched_at_ms=now_ms - 10,
         ),
-        open_orders=[], completed_orders=[], executions=[], evidence_gaps=[], generated_at_ms=now_ms - 10,
+        open_orders=[],
+        completed_orders=[],
+        executions=[],
+        evidence_gaps=[],
+        generated_at_ms=now_ms - 10,
     )
 
 
 def _write_clean_authorities(tmp_path: Path, *, now_ms: int) -> None:
-    generation = advance_account_clerk_generation(
+    generation = write_historical_clerk_generation(
         tmp_path, _ACCOUNT_ID, phase="accepting", recorded_at_ms=now_ms - 100, source="test"
     )
-    write_account_clerk_lease(
+    write_historical_clerk_lease(
         tmp_path,
         AccountClerkLease(
-            account_id=_ACCOUNT_ID, generation=generation.generation, pid=123, ibkr_client_id=7,
-            started_at_ms=now_ms - 100, renewed_at_ms=now_ms - 10, valid_until_ms=now_ms + 600_000,
+            account_id=_ACCOUNT_ID,
+            generation=generation.generation,
+            pid=123,
+            ibkr_client_id=7,
+            started_at_ms=now_ms - 100,
+            renewed_at_ms=now_ms - 10,
+            valid_until_ms=now_ms + 600_000,
         ),
     )
     AccountEpochAuthority(
-        artifacts_root=tmp_path, account_id=_ACCOUNT_ID, clerk_generation=generation.generation,
-        clerk_boot_id="test-boot", now_ms=lambda: now_ms - 100,
+        artifacts_root=tmp_path,
+        account_id=_ACCOUNT_ID,
+        clerk_generation=generation.generation,
+        clerk_boot_id="test-boot",
+        now_ms=lambda: now_ms - 100,
     ).initialize()
     AccountSafetyAuthority(
         artifacts_root=tmp_path,
@@ -112,12 +139,16 @@ def _write_clean_authorities(tmp_path: Path, *, now_ms: int) -> None:
         now_ms=lambda: now_ms - 10,
     ).observe_broker_retired_owner_custody((), observed_at_ms=now_ms - 10)
     AccountObservationLeaseRepo(tmp_path).renew(
-        account_id=_ACCOUNT_ID, observed_at_ms=now_ms - 10, now_ms=now_ms,
+        account_id=_ACCOUNT_ID,
+        observed_at_ms=now_ms - 10,
+        now_ms=now_ms,
         clerk_generation=generation.generation,
     )
     truth = _truth(now_ms)
     AccountReconciliationService(artifacts_root=tmp_path).write_receipt(
-        requested_account_id=_ACCOUNT_ID, account_truth=truth, now_ms=now_ms,
+        requested_account_id=_ACCOUNT_ID,
+        account_truth=truth,
+        now_ms=now_ms,
     )
     get_account_truth_snapshot_provider().remember(truth, cached_at_ms=now_ms)
 
@@ -135,7 +166,7 @@ def test_snapshot_unavailable_critical_evidence_is_never_clean_and_has_stable_se
     assert first.generated_at_ms != later.generated_at_ms
     assert first.snapshot_version == later.snapshot_version
     assert first.snapshot_id == later.snapshot_id
-    assert len(first.actions) == 2
+    assert len(first.actions) == 1
     unavailable_action = first.actions[0]
     assert unavailable_action.action_id == "reconcile_now"
     assert unavailable_action.availability == "UNAVAILABLE"
@@ -144,11 +175,6 @@ def test_snapshot_unavailable_critical_evidence_is_never_clean_and_has_stable_se
     assert unavailable_action.expires_at_ms - unavailable_action.issued_at_ms == 60_000
     assert later.actions[0].issued_at_ms == later.generated_at_ms
     assert later.actions[0].expires_at_ms - later.actions[0].issued_at_ms == 60_000
-    flatten_intention = first.actions[1]
-    assert flatten_intention.action_id == "flatten"
-    assert flatten_intention.target.kind == "ACCOUNT"
-    assert flatten_intention.confirmation.required_token == "FLATTEN"
-    assert flatten_intention.availability == "AVAILABLE"
     assert {
         "account_truth",
         "reconciliation",
@@ -199,8 +225,11 @@ def test_snapshot_clean_then_epoch_invalid_and_truth_stale_advance_semantic_vers
     clean = _service(tmp_path, now_ms=now_ms).snapshot(account_id=_ACCOUNT_ID)
     stale = _service(tmp_path, now_ms=now_ms + 60_001).snapshot(account_id=_ACCOUNT_ID)
     authority = AccountEpochAuthority(
-        artifacts_root=tmp_path, account_id=_ACCOUNT_ID, clerk_generation=1,
-        clerk_boot_id="test-boot", now_ms=lambda: now_ms + 60_002,
+        artifacts_root=tmp_path,
+        account_id=_ACCOUNT_ID,
+        clerk_generation=1,
+        clerk_boot_id="test-boot",
+        now_ms=lambda: now_ms + 60_002,
     )
     authority.invalidate("SOCKET_LOSS")
     reconciling = _service(tmp_path, now_ms=now_ms + 60_002).snapshot(account_id=_ACCOUNT_ID)
@@ -210,9 +239,10 @@ def test_snapshot_clean_then_epoch_invalid_and_truth_stale_advance_semantic_vers
     assert reconciling.verdict == "RECONCILING"
     assert reconciling.actions[0].availability == "AVAILABLE"
     assert reconciling.actions[0].snapshot_version == reconciling.snapshot_version
-    assert reconciling.actions[0].idempotency_key == _service(
-        tmp_path, now_ms=now_ms + 60_002
-    ).snapshot(account_id=_ACCOUNT_ID).actions[0].idempotency_key
+    assert (
+        reconciling.actions[0].idempotency_key
+        == _service(tmp_path, now_ms=now_ms + 60_002).snapshot(account_id=_ACCOUNT_ID).actions[0].idempotency_key
+    )
     clean_truth = next(source for source in clean.sources if source.source == "account_truth")
     stale_truth = next(source for source in stale.sources if source.source == "account_truth")
     clean_positions = next(source for source in clean.sources if source.source == "account_truth.positions")
@@ -258,6 +288,7 @@ def test_snapshot_exposure_counts_only_current_bot_custody_as_managed(tmp_path: 
     provider = get_account_truth_snapshot_provider()
     provider.clear()
     _write_clean_authorities(tmp_path, now_ms=now_ms)
+
     def owner(
         owner_class: AccountTruthOwnerClass,
         binding_state: AccountTruthOwnerBindingState,
@@ -280,20 +311,40 @@ def test_snapshot_exposure_counts_only_current_bot_custody_as_managed(tmp_path: 
 
     def position(con_id: int, fact_owner: AccountTruthFactOwner) -> AccountTruthPositionRow:
         return AccountTruthPositionRow(
-            account_id=_ACCOUNT_ID, con_id=con_id, symbol="AMD", sec_type="STK", quantity=1.0,
-            avg_cost=100.0, owner=fact_owner, headline="Position", detail="Current position.", fetched_at_ms=now_ms,
+            account_id=_ACCOUNT_ID,
+            con_id=con_id,
+            symbol="AMD",
+            sec_type="STK",
+            quantity=1.0,
+            avg_cost=100.0,
+            owner=fact_owner,
+            headline="Position",
+            detail="Current position.",
+            fetched_at_ms=now_ms,
         )
 
     def open_order(order_id: int, fact_owner: AccountTruthFactOwner) -> AccountTruthOrderRow:
         return AccountTruthOrderRow(
-            fact_kind="open_order", lifecycle_id=f"order:{order_id}", lifecycle="submitted",
-            account_id=_ACCOUNT_ID, order_id=order_id, client_id=7, con_id=order_id, symbol="AMD",
-            sec_type="STK", action="BUY", quantity=1.0, order_type="LMT", limit_price=100.0,
-            status="Submitted", cumulative_filled=0.0, remaining=1.0, owner=fact_owner,
-            cancel_action=AccountTruthOrderCancelAction(
-                visible=False, enabled=False, label="Cancel unavailable", detail="Not relevant to count.",
-            ),
-            headline="Open order", detail="Current order.", fetched_at_ms=now_ms,
+            fact_kind="open_order",
+            lifecycle_id=f"order:{order_id}",
+            lifecycle="submitted",
+            account_id=_ACCOUNT_ID,
+            order_id=order_id,
+            client_id=7,
+            con_id=order_id,
+            symbol="AMD",
+            sec_type="STK",
+            action="BUY",
+            quantity=1.0,
+            order_type="LMT",
+            limit_price=100.0,
+            status="Submitted",
+            cumulative_filled=0.0,
+            remaining=1.0,
+            owner=fact_owner,
+            headline="Open order",
+            detail="Current order.",
+            fetched_at_ms=now_ms,
         )
 
     truth = _truth(now_ms).model_copy(
@@ -468,17 +519,11 @@ def test_snapshot_empty_journal_read_does_not_create_a_clerk_artifact(tmp_path: 
     now_ms = 1_780_000_000_000
     get_account_truth_snapshot_provider().clear()
     _write_clean_authorities(tmp_path, now_ms=now_ms)
-    before = {
-        path.relative_to(tmp_path)
-        for path in tmp_path.rglob("*")
-    }
+    before = {path.relative_to(tmp_path) for path in tmp_path.rglob("*")}
 
     _service(tmp_path, now_ms=now_ms).snapshot(account_id=_ACCOUNT_ID)
 
-    after = {
-        path.relative_to(tmp_path)
-        for path in tmp_path.rglob("*")
-    }
+    after = {path.relative_to(tmp_path) for path in tmp_path.rglob("*")}
     assert after == before
 
 
@@ -500,17 +545,18 @@ def test_snapshot_counts_asynchronous_clerk_custody_by_durable_stage(tmp_path: P
         created_at_ms=now_ms,
     )
 
-    def accept_intent(_received: AccountOwnerSubmitIntent) -> None:
-        return None
-
-    AccountClerkJournal(
-        artifacts_root=tmp_path,
-        account_id=_ACCOUNT_ID,
-        now_ms=lambda: now_ms,
-    ).record_intent(
-        intent,
-        validate_intent=accept_intent,
-        async_custody_lane="entry",
+    write_historical_clerk_journal(
+        tmp_path,
+        _ACCOUNT_ID,
+        [
+            AccountClerkJournalEntry(
+                seq=1,
+                entry_kind="recorded",
+                recorded_at_ms=now_ms,
+                intent=intent,
+                async_custody_lane="entry",
+            )
+        ],
     )
 
     snapshot = _service(tmp_path, now_ms=now_ms).snapshot(account_id=_ACCOUNT_ID)

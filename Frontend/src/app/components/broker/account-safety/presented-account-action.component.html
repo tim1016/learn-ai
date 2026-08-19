@@ -3,24 +3,10 @@
   <p>{{ action().confirmation.body }}</p>
   <p class="presented-action__consequence">{{ action().confirmation.consequence }}</p>
 
-  @if (confirmationRequired()) {
-    <label [attr.for]="'confirmation-' + action().idempotency_key">
-      Type <strong>{{ requiredConfirmationToken() }}</strong> to confirm
-    </label>
-    <input
-      pInputText
-      [id]="'confirmation-' + action().idempotency_key"
-      [value]="confirmationToken()"
-      [disabled]="busy()"
-      autocomplete="off"
-      (input)="setConfirmationInput($event)"
-    />
-  }
-
   <button
     pButton
     type="button"
-    [disabled]="action().availability !== 'AVAILABLE' || busy() || !canExecute()"
+    [disabled]="action().availability !== 'AVAILABLE' || busy()"
     (click)="execute()"
   >{{ busy() ? 'Working…' : action().confirmation.confirm_label }}</button>
 
@@ -28,13 +14,6 @@
     <p class="presented-action__result" aria-live="polite">
       {{ result.state | receiptLabel }} · {{ result.finished_copy }}
     </p>
-    @if (result.effect_receipt; as receipt) {
-      <p class="presented-action__receipt" aria-live="polite">
-        Receipt: {{ receipt.kind | receiptLabel }}
-        @if (receipt.intent_id) { · <span class="audit-token">{{ receipt.intent_id }}</span> }
-        @if (receipt.order_ref) { · <span class="audit-token">{{ receipt.order_ref }}</span> }
-      </p>
-    }
   }
   @if (rejection(); as rejection) {
     <p class="presented-action__result" aria-live="polite">

@@ -520,15 +520,11 @@ OrderStatus = Literal[
 
 
 class IbkrOrderSpec(BaseModel):
-    """Inbound order request from the API.
+    """Non-transmitting what-if order specification.
 
-    Phase 3a supports MKT and LMT only on stocks and US equity options.
-    Brackets, OCO, trailing stops are Phase 3b. The
-    ``confirm_paper`` field is a defense-in-depth gate: even when
-    ``IBKR_MODE=paper`` and the connected account begins with ``DU``,
-    the request body must explicitly set ``confirm_paper=true`` for the
-    handler to dispatch ``placeOrder``. Phase 4 (live) will require
-    ``confirm_live=true`` symmetrically.
+    MKT and LMT previews are supported for stocks and US equity options.
+    The historical confirmation and client-order fields remain wire-compatible
+    with stored evidence but do not authorize IBKR order actuation.
 
     Option fields (``expiry_ms``, ``strike``, ``right``) are required
     when ``sec_type="OPT"`` and ignored when ``sec_type="STK"``.
@@ -542,9 +538,8 @@ class IbkrOrderSpec(BaseModel):
         default=None,
         ge=1,
         description=(
-            "Optional IBKR contract identifier. Clerk exact-close recovery "
-            "requires this to match the server-proved current position so "
-            "the broker execution cannot resolve a same-symbol contract."
+            "Optional IBKR contract identifier used to qualify an exact "
+            "contract for the non-transmitting what-if request."
         ),
     )
     action: OrderAction
@@ -575,37 +570,27 @@ class IbkrOrderSpec(BaseModel):
     client_order_id: str | None = Field(
         default=None,
         description=(
-            "Optional caller-supplied UUID for idempotent retries. If a POST "
-            "arrives with a client_order_id we've already seen, the original "
-            "ack is returned and no second order is placed. Phase 3b feature; "
-            "set None on Phase 3a callers."
+            "Historical submit identifier retained for journal compatibility. "
+            "Ignored as authorization by the non-transmitting what-if route."
         ),
         max_length=64,
     )
 
-    # ADR 0008 / Phase 5A — deterministic ``{namespace}:{intent_id}`` token
-    # the broker echoes back on every order callback. Lets the WAL and the
-    # IBKR audit be joined unambiguously even after a restart. ``None`` for
-    # legacy callers (replay / explicit-surface tests) so the surface stays
-    # backwards-compatible while the production submit path is rewired.
+    # Historical ``{namespace}:{intent_id}`` token retained so what-if evidence
+    # and durable journal rows use the same shape. It cannot reach a submit path.
     order_ref: str | None = Field(
         default=None,
         description=(
-            "ADR 0008 / Phase 5A. Deterministic ``{bot_order_namespace}:"
-            "{intent_id}`` stamped on every managed broker order. The IBKR "
-            "Gateway echoes it back on order callbacks; the runtime joins "
-            "fills / cancels by it. ``None`` only on legacy / pre-Phase-5A "
-            "callers; future durable-submit activation refuses requests "
-            "without it."
+            "Optional historical ``{bot_order_namespace}:{intent_id}`` used "
+            "to correlate what-if evidence with retained order history."
         ),
         max_length=120,
     )
     manual_order: bool = Field(
         default=False,
         description=(
-            "True only for the operator-facing manual paper-order endpoint path. "
-            "The router server-mints a reserved manual/{operator}/v1 order_ref "
-            "for this path; bots must provide their own learn-ai namespace."
+            "Historical manual-order marker retained for journal compatibility. "
+            "The current IBKR API exposes no manual submit route."
         ),
     )
 
@@ -616,16 +601,14 @@ OrderEventType = Literal["status", "fill", "cancel", "error"]
 class IbkrOrderEvent(BaseModel):
     """One transition on an order's lifecycle.
 
-    Emitted by the order event SSE stream (Phase 3b). The fill case
+    Emitted by the read-only order-event SSE stream. The fill case
     carries non-null ``fill_quantity`` and ``avg_fill_price``; the
     error case carries non-null ``error_code`` / ``error_message``.
 
-    ``exec_id`` and ``client_id`` are populated on fill events so the
-    live runtime's § 7 fatal-halt check can index by broker primary
-    keys (``execId`` is IBKR's globally unique execution identifier,
-    ``clientId`` lets the runtime see when a fill was placed by some
-    other client — including a manual TWS click — under the same DU
-    account). Both are ``None`` for non-fill events.
+    ``exec_id`` and ``client_id`` are populated on fill events for durable
+    evidence attribution (``execId`` is IBKR's globally unique execution
+    identifier; ``clientId`` distinguishes the client that originated the
+    order, including a manual TWS click). Both are ``None`` for non-fill events.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -735,12 +718,7 @@ class IbkrOpenOrder(BaseModel):
 
 
 class IbkrOrderAck(BaseModel):
-    """Synchronous acknowledgement of a placed order.
-
-    The handler returns this immediately after ``IB.placeOrder`` returns
-    a Trade. Status updates after this point arrive on Phase 3b's order
-    event stream.
-    """
+    """Historical acknowledgement schema retained for durable journal rows."""
 
     model_config = ConfigDict(frozen=True)
 

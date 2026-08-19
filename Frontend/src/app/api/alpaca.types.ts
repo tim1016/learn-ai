@@ -23,19 +23,13 @@ export type AccountPnlDivergence = components['schemas']['AccountPnlDivergenceRe
 export type AccountPnlReconciliation = components['schemas']['AccountPnlReconciliationResponse'];
 export type PortfolioHistoryProof = components['schemas']['PortfolioHistoryProofResponse'];
 
-// Phase-2 order submission (write path). S2 adds limit orders + time-in-force.
-export type BrokerOrderRequest = components['schemas']['BrokerOrderRequest'];
+// SQLite manual-ticket instructions reuse the broker-neutral leg vocabulary.
 export type BrokerOrderLeg = components['schemas']['BrokerOrderLeg'];
 export type OrderSide = components['schemas']['OrderSide'];
 // ``order_type`` is inlined into the leg schema (a Literal union), not a named
 // OpenAPI schema, so derive the alias from the leg field.
 export type OrderType = NonNullable<BrokerOrderLeg['order_type']>;
 export type TimeInForce = components['schemas']['TimeInForce'];
-export type OrderSubmitResult = components['schemas']['OrderSubmitResult'];
-export type OrderLegResult = components['schemas']['OrderLegResult'];
-export type OrderLegError = components['schemas']['OrderLegError'];
-// Phase-2 S3 order cancellation (write path).
-export type OrderCancelResult = components['schemas']['OrderCancelResult'];
 
 // SQLite-owned manual market-order tracer. The browser submits a stable ticket
 // and leg UUID; the server supplies custody attribution and broker identity.
@@ -47,7 +41,7 @@ export type ManualOrderTicket = components['schemas']['ManualOrderTicketResponse
 export type ManualOrderCancelRequest = components['schemas']['ManualOrderCancelRequest'];
 export type ManualOrderCancellation = components['schemas']['ManualOrderCancellationResponse'];
 
-// Phase-2 S6 reconciliation + flag-and-hold (clerk status + clear-hold).
+// SQLite reconciliation and flag-and-hold status are read-only at this surface.
 export type ClerkStatus = components['schemas']['ClerkStatus'];
 export type HoldState = components['schemas']['HoldState'];
 export type ReconciliationSummary = components['schemas']['ReconciliationSummary'];
@@ -56,10 +50,6 @@ export type ReconciliationSummary = components['schemas']['ReconciliationSummary
 export type CustodyDiagnosis = components['schemas']['CustodyDiagnosis'];
 export type CustodyDivergence = components['schemas']['CustodyDivergence'];
 export type CustodyPositionDelta = components['schemas']['CustodyPositionDelta'];
-// POST .../clerk/resolve request/response (Task 2.2, landed).
-export type CustodyResolutionRequest = components['schemas']['CustodyResolutionRequest'];
-export type CustodyResolutionReceipt = components['schemas']['CustodyResolutionReceipt'];
-export type CustodyResolutionStepResult = components['schemas']['CustodyResolutionStepResult'];
 
 // Activated SQLite Account Clerk projection and evidence-bound recovery.
 export type SqliteClerkProjection = components['schemas']['ClerkProjectionResponse'];

@@ -16,10 +16,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.broker.alpaca.clerk.decision_journal import DecisionReceipt
-from app.broker.alpaca.clerk.exposure import project_expected_account_exposure
 from app.broker.alpaca.clerk.fills import project_instance_fills
 from app.broker.alpaca.clerk.models import ClerkEntryKind, ClerkStatus, OrderJournalEntry
+from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionReceipt
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.v2panel.vocabulary import (
     HOLD_REASONS,
@@ -489,8 +488,6 @@ def _readiness_checks(actions: list[PanelAction], now_ms: int) -> list[Readiness
         "continue": "Bot lifecycle registry",
         "stop": "Bot lifecycle registry",
         "flatten_stop": "Bot lifecycle registry + Alpaca Clerk",
-        "clear_hold": "Alpaca Clerk account hold gate",
-        "record_inventory_baseline": "Alpaca Clerk broker-evidence baseline",
         "reconcile_now": "Alpaca Clerk reconciliation sweep",
     }
     for action in actions:
@@ -681,7 +678,7 @@ def build_panel(
         account_id=account_id,
         working_order_count=len(working_orders),
         account_working_order_count=_account_working_order_count(entries),
-        account_expected_exposure=project_expected_account_exposure(entries),
+        account_expected_exposure={},
         resume_admission=resume_admission,
     )
 

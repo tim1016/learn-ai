@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Literal
 from uuid import uuid4
 
-from app.broker.alpaca.clerk import ClerkAdmissionSnapshotChangedError
+from app.broker.alpaca.clerk.active_protocol import ClerkAdmissionSnapshotStaleError
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.marketdata.feed import MarketDataFeed
 from app.schemas.action_plan import ActionPlan
@@ -287,7 +287,7 @@ class BotStartAdmission:
                     feed,
                     custody,
                 )
-        except ClerkAdmissionSnapshotChangedError as exc:
+        except ClerkAdmissionSnapshotStaleError as exc:
             raise StartAdmissionEvidenceChanged("Clerk custody evidence changed before Start could be fenced.") from exc
 
 

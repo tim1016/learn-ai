@@ -31,27 +31,6 @@ from app.broker.ibkr.models import (
 logger = logging.getLogger(__name__)
 
 
-def build_place_order_evidence(
-    contract: object,
-    order: object,
-    trade: object,
-) -> IbkrTradeEvidence:
-    return IbkrTradeEvidence(
-        request=IbkrApiRequestEvidence(
-            call="placeOrder",
-            params={
-                "contract": _snapshot_fields(contract),
-                "order": _snapshot_fields(order),
-            },
-        ),
-        response=IbkrApiResponseEvidence(callback="openOrder", fields={}),
-        contract=snapshot_contract(contract),
-        order=snapshot_order(order),
-        order_status=snapshot_order_status(getattr(trade, "orderStatus", None)),
-        trade=snapshot_trade(trade),
-    )
-
-
 def build_open_order_evidence(
     trade: object,
     *,
@@ -109,16 +88,6 @@ def build_execution_recovery_evidence(
         fill=snapshot_fill(fill),
         execution=snapshot_execution(execution),
         commission_report=snapshot_commission_report(commission_report),
-    )
-
-
-def cancel_order_request_evidence(order: object) -> IbkrApiRequestEvidence:
-    return IbkrApiRequestEvidence(
-        call="cancelOrder",
-        params={
-            "order": _snapshot_fields(order),
-            "manualCancelOrderTime": None,
-        },
     )
 
 

@@ -250,7 +250,9 @@ jobs:
               range="HEAD~1...HEAD"
             fi
           fi
-          changed=$(git diff --name-only "$range" || true)
+          # Deleted sources cannot own tests in the current checkout and must not
+          # contribute paths that pytest can no longer collect.
+          changed=$(git diff --name-only --diff-filter=ACMRT "$range" || true)
           # Baseline dirs are always run; skip them here to avoid duplicate paths.
           read -r -a baseline_dirs <<< "$PYTHON_FAST_BASELINE_TEST_DIRS"
           baseline_pattern=$(

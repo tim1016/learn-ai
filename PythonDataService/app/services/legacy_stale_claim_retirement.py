@@ -24,13 +24,13 @@ from app.engine.live.account_artifacts import (
 from app.engine.live.account_identity import normalize_account_id
 from app.engine.live.account_registry import read_account_instance_registry
 from app.engine.live.daemon_transport import DaemonResult
+from app.engine.live.historical_run_identity import read_historical_run_ledger_object
 from app.engine.live.live_state_sidecar import (
     LiveStateSidecarCorruptError,
     LiveStateSidecarRepo,
     _file_lock,
     stable_live_state_path,
 )
-from app.engine.live.run_ledger import LiveRunLedger, read_ledger
 from app.schemas.account_reconciliation import (
     LegacyStaleClaimCandidate,
     LegacyStaleClaimRetirementReceipt,
@@ -91,6 +91,15 @@ class _LegacyStaleClaimRetirementsArtifact(BaseModel):
     account_id: str = Field(min_length=1, max_length=64)
     receipts: tuple[LegacyStaleClaimRetirementReceipt, ...] = ()
     legacy_claim_keys: tuple[tuple[str, str, str, str], ...] = ()
+
+
+class _HistoricalClaimLedger(BaseModel):
+    """Minimum historical identity needed by the IBKR claim-retirement adapter."""
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    account_id: str = Field(min_length=1)
+    created_at_ms: int = Field(ge=0)
 
 
 class LegacyStaleClaimRetirementService:
@@ -373,9 +382,11 @@ class LegacyStaleClaimRetirementService:
             )
         return claim
 
-    def _read_claim_ledger(self, run_id: str) -> LiveRunLedger | None:
+    def _read_claim_ledger(self, run_id: str) -> _HistoricalClaimLedger | None:
         try:
-            return read_ledger(self._artifacts_root / "live_runs" / run_id / "run_ledger.json")
+            path = self._artifacts_root / "live_runs" / run_id / "run_ledger.json"
+            payload = read_historical_run_ledger_object(path)
+            return _HistoricalClaimLedger.model_validate(payload)
         except (OSError, ValueError):
             return None
 

@@ -6,25 +6,16 @@ Asserts:
   surfaces touched).
 - A ``None`` client and a ``NotConnectedError`` from ``is_connected`` both
   reduce to ``client_available=False`` without raising.
-- ``make_live_engine_verdict_provider`` produces a callable that reads
-  the child's own snapshot and returns the identity verdict string the
-  engine ``_check_verdict_transition_halt`` consumes, honouring the
-  ADR-0011 amendment: ``readonly=False`` on a paper port + DU account
-  still reaches ``paper-only`` because capability is a separate fact.
-
 The pure-derivation Cartesian matrix lives in
 ``tests/broker/test_safety_verdict.py``; this file covers the snapshot
-boundary + the provider closure.
+boundary.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.broker.runtime_snapshot import (
-    build_broker_runtime_snapshot,
-    make_live_engine_verdict_provider,
-)
+from app.broker.runtime_snapshot import build_broker_runtime_snapshot
 
 
 @dataclass
@@ -106,43 +97,3 @@ def test_build_snapshot_is_connected_raises_reduces_to_disconnected() -> None:
 
     assert snapshot.client_available is True
     assert snapshot.connected is False
-
-
-def test_make_verdict_provider_paper_execution_is_paper_only() -> None:
-    """ADR-0011 amendment — an executing paper bot has readonly=False
-    but identity is still ``paper-only`` because the provider derives
-    only on (mode, port, account_prefix)."""
-    client = _FakeClient(
-        mode="paper",
-        port=4002,
-        readonly=False,
-        connected_account="DU0000001",
-    )
-    provider = make_live_engine_verdict_provider(client)  # type: ignore[arg-type]
-
-    assert provider() == "paper-only"
-
-
-def test_make_verdict_provider_live_port_is_unsafe() -> None:
-    client = _FakeClient(
-        mode="paper",
-        port=4001,  # live port
-        readonly=False,
-        connected_account="DU0000001",
-    )
-    provider = make_live_engine_verdict_provider(client)  # type: ignore[arg-type]
-
-    assert provider() == "unsafe"
-
-
-def test_make_verdict_provider_re_reads_on_every_call() -> None:
-    """The closure captures the client by reference — flipping a
-    public attribute mid-flight must surface on the next call so
-    ``_check_verdict_transition_halt`` observes the mid-session change."""
-    client = _FakeClient(connected_account="DU0000099")
-    provider = make_live_engine_verdict_provider(client)  # type: ignore[arg-type]
-
-    assert provider() == "paper-only"
-
-    client.connected_account = "U1234567"
-    assert provider() == "unsafe"

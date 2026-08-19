@@ -1,9 +1,7 @@
 """Chart endpoint wiring for the Broker V2 panel.
 
 This module keeps bar retrieval separate from the panel command/data facade.
-When SQLite authority is active it receives only S2 ``FillRecord`` values;
-legacy journal rows are normalized at this boundary before they reach the pure
-chart projection service.
+It receives only S2 ``FillRecord`` values from the activated SQLite authority.
 """
 
 from __future__ import annotations
@@ -11,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Literal
 
-from app.broker.alpaca.clerk.fills import FillRecord, project_instance_fills
+from app.broker.alpaca.clerk.fills import FillRecord
 from app.config import settings
 from app.data_lake.polygon_fetcher import fetch_aggregate_bars
 from app.schemas.broker_v2_panel import (
@@ -31,16 +29,13 @@ from app.services.broker_v2_panel.panel_data_source import (
     PanelUnavailableError,
     UnknownBotError,
     get_panel_with_chart_fills,
-    read_legacy_chart_fills,
-    read_legacy_chart_status,
     validate_panel_account_scope,
 )
 from app.services.broker_v2_panel.sqlite_panel_source import (
+    SqlitePanelBotNotFound,
     SqlitePanelEconomicUnavailable,
     read_sqlite_chart_evidence,
     read_sqlite_panel_evidence,
-    sqlite_authority_active,
-    sqlite_authority_selected_but_unavailable,
 )
 from app.services.live_chart_window import (
     ChartWindowError,
@@ -112,36 +107,32 @@ async def resolve_symbol_and_fills(
     """Resolve one bot's symbol + today's SQLite-native fills.
 
     Canonical implementation of "which fills back a bot's chart" — honors the
-    same SQLite-vs-legacy authority branch ``get_live_chart`` has always used.
     Extracted so the bot gallery wall's marker projection
     (``gallery_hub.GalleryHub``) reuses this exact resolution instead of
     re-deriving it, keeping the wall and the single-bot detail chart from ever
     diverging on fill provenance (CLAUDE.md single-source-of-truth rule).
     """
     resolved = await validate_panel_account_scope(broker, account_id)
-    if sqlite_authority_selected_but_unavailable(broker):
+    try:
+        evidence = await read_sqlite_panel_evidence(
+            broker,
+            resolved,
+            sid,
+            now_ms=now_ms,
+        )
+    except SqlitePanelBotNotFound as exc:
+        raise UnknownBotError(str(exc)) from exc
+    except SqlitePanelEconomicUnavailable as exc:
+        raise PanelUnavailableError(
+            "The activated SQLite chart evidence is unavailable.",
+            detail=str(exc),
+        ) from exc
+    if evidence is None:
         raise PanelUnavailableError(
             "The activated SQLite chart authority is unavailable.",
-            detail="Repair the selected SQLite authority; legacy chart fills are not used.",
+            detail="Restore or reactivate the account-scoped SQLite authority.",
         )
-    if sqlite_authority_active(broker):
-        try:
-            evidence = await read_sqlite_panel_evidence(
-                broker,
-                resolved,
-                sid,
-                now_ms=now_ms,
-            )
-        except SqlitePanelEconomicUnavailable as exc:
-            raise PanelUnavailableError(
-                "The activated SQLite chart evidence is unavailable.",
-                detail=str(exc),
-            ) from exc
-        if evidence is None:
-            raise UnknownBotError(f"No SQLite custody projection exists for bot '{sid}'.")
-        return evidence.status.symbol, evidence.economics.session_fills
-    status = read_legacy_chart_status(broker, sid)
-    return status.symbol, read_legacy_chart_fills(broker, resolved, sid)
+    return evidence.status.symbol, evidence.economics.session_fills
 
 
 async def get_live_chart(
@@ -152,7 +143,7 @@ async def get_live_chart(
     resolution: Literal["5s", "1m"] = "1m",
     now_ms: int | None = None,
 ) -> ChartLiveResponse:
-    """Build the LIVE chart from SQLite or normalized legacy fills."""
+    """Build the LIVE chart from SQLite fill evidence."""
     observed_at_ms = now_ms_utc() if now_ms is None else now_ms
     symbol, fills = await resolve_symbol_and_fills(broker, account_id, sid, now_ms=observed_at_ms)
     return await _build_live_chart_from_fills(
@@ -173,19 +164,17 @@ async def get_live_snapshot_parts(
 ) -> tuple[BotPanelView, ChartLiveResponse]:
     """Build panel and chart from the exact same authority-bound fill cut."""
     observed_at_ms = now_ms_utc()
-    panel, entries, fills = await get_panel_with_chart_fills(
+    panel, _entries, fills = await get_panel_with_chart_fills(
         broker,
         account_id,
         sid,
         now_ms=observed_at_ms,
     )
     if fills is None:
-        if sqlite_authority_active(broker) or sqlite_authority_selected_but_unavailable(broker):
-            raise PanelUnavailableError(
-                "The panel chart fill evidence is unavailable.",
-                detail="The active authority did not return an attributed fill set.",
-            )
-        fills = project_instance_fills(sid, entries)
+        raise PanelUnavailableError(
+            "The panel chart fill evidence is unavailable.",
+            detail="The active SQLite authority did not return an attributed fill set.",
+        )
     chart = await _build_live_chart_from_fills(
         sid,
         panel.symbol,
@@ -202,36 +191,30 @@ async def get_history_chart(
     sid: str,
     timeframe: ChartHistoryTimeframe,
 ) -> ChartHistoryResponse:
-    """Build bounded history from SQLite facts or legacy compatibility fills."""
+    """Build bounded history from SQLite facts."""
     resolved = await validate_panel_account_scope(broker, account_id)
     observed_at_ms = now_ms_utc()
-    if sqlite_authority_selected_but_unavailable(broker):
+    from_ms, to_ms = history_fill_window(timeframe, observed_at_ms)
+    try:
+        evidence = await read_sqlite_chart_evidence(
+            broker,
+            resolved,
+            sid,
+            from_ms=from_ms,
+            to_ms=to_ms,
+        )
+    except SqlitePanelEconomicUnavailable as exc:
+        raise PanelUnavailableError(
+            "The activated SQLite history chart is unavailable.",
+            detail=str(exc),
+        ) from exc
+    if evidence is None:
         raise PanelUnavailableError(
             "The activated SQLite history-chart authority is unavailable.",
-            detail="Repair the selected SQLite authority; legacy chart fills are not used.",
+            detail="Restore or reactivate the account-scoped SQLite authority.",
         )
-    if sqlite_authority_active(broker):
-        from_ms, to_ms = history_fill_window(timeframe, observed_at_ms)
-        try:
-            evidence = await read_sqlite_chart_evidence(
-                broker,
-                resolved,
-                sid,
-                from_ms=from_ms,
-                to_ms=to_ms,
-            )
-        except SqlitePanelEconomicUnavailable as exc:
-            raise PanelUnavailableError(
-                "The activated SQLite history chart is unavailable.",
-                detail=str(exc),
-            ) from exc
-        if evidence is None:
-            raise UnknownBotError(f"No SQLite custody projection exists for bot '{sid}'.")
-        status = evidence.status
-        fills = evidence.fills.fills
-    else:
-        status = read_legacy_chart_status(broker, sid)
-        fills = read_legacy_chart_fills(broker, resolved, sid)
+    status = evidence.status
+    fills = evidence.fills.fills
 
     async def _bar_source(symbol, start, end, multiplier, timespan):
         return await fetch_aggregate_bars(

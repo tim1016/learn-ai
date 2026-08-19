@@ -2,18 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
 
 from app.broker.ibkr.models import IbkrPosition, IbkrPositionsSnapshot
-from app.engine.live import account_clerk_journal as journal_module
 from app.engine.live.account_artifacts import account_artifacts_root, read_account_freeze
-from app.engine.live.account_clerk import AccountClerk
 from app.engine.live.account_clerk_journal import (
-    AccountClerkJournal,
-    AccountClerkJournalCorruptError,
     account_clerk_inbox_path,
     account_clerk_journal_path,
     read_account_clerk_journal,
@@ -32,7 +27,6 @@ from app.engine.live.journal_recovery_state import (
 )
 from app.schemas.artifact_io import atomic_write_pydantic_artifact
 from app.schemas.journal_recovery import JournalRecoveryPosition, JournalRecoveryState
-from app.services.account_start_gate import AccountStartGateError, ensure_account_start_gate
 from app.services.journal_recovery import JournalRecoveryError, JournalRecoveryService
 
 
@@ -96,7 +90,9 @@ def test_quarantine_retains_torn_journal_and_rebaseline_seeds_broker_evidence_on
     evidence = account_artifacts_root(tmp_path, account_id) / (quarantined.quarantined_journal_name or "")
     assert evidence.read_bytes() == torn_bytes
 
-    completed = service.rebaseline(account_id=account_id, idempotency_key="rebaseline-1", snapshot=_snapshot(account_id))
+    completed = service.rebaseline(
+        account_id=account_id, idempotency_key="rebaseline-1", snapshot=_snapshot(account_id)
+    )
 
     assert completed.phase == "COMPLETE"
     entries = read_account_clerk_journal(tmp_path, account_id)
@@ -270,108 +266,6 @@ def test_completed_recovery_replays_its_quarantine_receipt_without_an_empty_inbo
     assert service.state(account_id=account_id).recovery_epoch == 1
 
 
-def test_live_journal_cache_reloads_after_rebaseline_replaces_its_inode(tmp_path: Path) -> None:
-    account_id = "DU1234567"
-    journal = account_clerk_journal_path(tmp_path, account_id)
-    ledger = AccountClerkJournal(artifacts_root=tmp_path, account_id=account_id)
-    first_intent = _intent(account_id, "first")
-    ledger.record_intent(first_intent, validate_intent=lambda _: None)
-    journal.write_text("not-json\n", encoding="utf-8")
-    service = JournalRecoveryService(artifacts_root=tmp_path, now_ms=lambda: 1_780_000_000_000)
-    service.quarantine(account_id=account_id, idempotency_key="quarantine-1")
-    service.rebaseline(account_id=account_id, idempotency_key="rebaseline-1", snapshot=_empty_snapshot(account_id))
-
-    ledger.record_intent(_intent(account_id, "second"), validate_intent=lambda _: None)
-
-    entries = read_account_clerk_journal(tmp_path, account_id)
-    assert [entry.seq for entry in entries] == [1, 2]
-    assert entries[0].entry_kind == "broker_evidence_baseline"
-    assert entries[1].intent is not None
-    assert entries[1].intent.intent_id == "second"
-
-
-def test_live_journal_writer_advances_its_cache_revision_after_each_append(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """One Clerk writer must not replay its full journal for every own append."""
-
-    account_id = "DU1234567"
-    reads = 0
-    read_journal = journal_module._read_journal_jsonl
-
-    def count_journal_reads(path: Path):
-        nonlocal reads
-        reads += 1
-        return read_journal(path)
-
-    monkeypatch.setattr(journal_module, "_read_journal_jsonl", count_journal_reads)
-    ledger = AccountClerkJournal(artifacts_root=tmp_path, account_id=account_id)
-
-    for intent_id in ("first", "second", "third"):
-        ledger.record_intent(_intent(account_id, intent_id), validate_intent=lambda _: None)
-
-    assert reads == 1
-    assert [entry.seq for entry in ledger.snapshot()] == [1, 2, 3]
-
-
-def test_live_journal_cache_replays_an_uncompacted_inbox_after_its_own_append_failure(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """An own cache revision never skips the inbox-to-journal crash recovery path."""
-
-    account_id = "DU1234567"
-    ledger = AccountClerkJournal(artifacts_root=tmp_path, account_id=account_id)
-    first = _intent(account_id, "first")
-    rewrite = journal_module._rewrite_jsonl
-    failed_once = False
-
-    def fail_first_compaction(path: Path, entries: list[AccountClerkInboxEntry]) -> None:
-        nonlocal failed_once
-        if path.exists() and path.stat().st_size > 0 and not failed_once:
-            failed_once = True
-            raise OSError("injected inbox compaction failure")
-        rewrite(path, entries)
-
-    monkeypatch.setattr(journal_module, "_rewrite_jsonl", fail_first_compaction)
-    with pytest.raises(OSError, match="injected inbox compaction failure"):
-        ledger.record_intent(first, validate_intent=lambda _: None)
-    monkeypatch.setattr(journal_module, "_rewrite_jsonl", rewrite)
-
-    replayed = ledger.record_intent(first, validate_intent=lambda _: None)
-    ledger.record_intent(_intent(account_id, "second"), validate_intent=lambda _: None)
-
-    assert replayed.intent_id == first.intent_id
-    assert [entry.seq for entry in read_account_clerk_journal(tmp_path, account_id)] == [1, 2]
-    assert account_clerk_inbox_path(tmp_path, account_id).read_text(encoding="utf-8") == ""
-
-
-def test_live_journal_cache_cannot_mask_in_place_corruption(tmp_path: Path) -> None:
-    account_id = "DU1234567"
-    ledger = AccountClerkJournal(artifacts_root=tmp_path, account_id=account_id)
-    ledger.record_intent(_intent(account_id, "first"), validate_intent=lambda _: None)
-    ledger.snapshot()
-    account_clerk_journal_path(tmp_path, account_id).write_text("not-json\n", encoding="utf-8")
-
-    with pytest.raises(AccountClerkJournalCorruptError, match="invalid row"):
-        ledger.record_intent(_intent(account_id, "second"), validate_intent=lambda _: None)
-
-
-def test_pending_ceremony_blocks_an_existing_clerk_journal_writer(tmp_path: Path) -> None:
-    account_id = "DU1234567"
-    journal = account_clerk_journal_path(tmp_path, account_id)
-    journal.parent.mkdir(parents=True)
-    journal.write_text("not-json\n", encoding="utf-8")
-    service = JournalRecoveryService(artifacts_root=tmp_path, now_ms=lambda: 1_780_000_000_000)
-    service.quarantine(account_id=account_id, idempotency_key="quarantine-1")
-    pending = service.state(account_id=account_id).model_copy(update={"phase": "QUARANTINE_PENDING"})
-    atomic_write_pydantic_artifact(journal_recovery_state_path(tmp_path, account_id), pending)
-
-    with pytest.raises(AccountClerkJournalCorruptError, match="QUARANTINE_PENDING"):
-        AccountClerkJournal(artifacts_root=tmp_path, account_id=account_id).recover_inbox()
-
-
 def test_quarantine_retains_the_paired_inbox_and_never_replays_it_into_baseline(tmp_path: Path) -> None:
     account_id = "DU1234567"
     journal = account_clerk_journal_path(tmp_path, account_id)
@@ -442,39 +336,6 @@ def test_rebaseline_rejects_non_paper_or_non_finite_broker_snapshot(tmp_path: Pa
     assert service.state(account_id=account_id).phase == "REBASELINE_REQUIRED"
 
 
-@pytest.mark.asyncio
-async def test_recovery_claim_waits_for_an_already_admitted_broker_write(tmp_path: Path) -> None:
-    account_id = "DU1234567"
-    clerk = AccountClerk(artifacts_root=tmp_path, account_id=account_id)
-    service = JournalRecoveryService(artifacts_root=tmp_path, now_ms=lambda: 1_780_000_000_000)
-    entered_write = asyncio.Event()
-    release_write = asyncio.Event()
-    writes: list[str] = []
-
-    async def broker_write() -> None:
-        entered_write.set()
-        await release_write.wait()
-        writes.append("completed")
-
-    broker_task = asyncio.create_task(clerk._run_broker_write("test.recovery_race", broker_write))
-    await entered_write.wait()
-    journal = account_clerk_journal_path(tmp_path, account_id)
-    journal.parent.mkdir(parents=True, exist_ok=True)
-    journal.write_text("not-json\n", encoding="utf-8")
-    quarantine_task = asyncio.create_task(
-        asyncio.to_thread(service.quarantine, account_id=account_id, idempotency_key="quarantine-1")
-    )
-    await asyncio.sleep(0.01)
-
-    assert not quarantine_task.done()
-    release_write.set()
-    await broker_task
-    quarantined = await quarantine_task
-
-    assert writes == ["completed"]
-    assert quarantined.phase == "REBASELINE_REQUIRED"
-
-
 def test_malformed_recovery_state_is_an_account_write_fence(tmp_path: Path) -> None:
     account_id = "DU1234567"
     path = journal_recovery_state_path(tmp_path, account_id)
@@ -487,68 +348,3 @@ def test_malformed_recovery_state_is_an_account_write_fence(tmp_path: Path) -> N
         pass
     else:
         raise AssertionError("unreadable recovery state must fail closed")
-
-
-@pytest.mark.asyncio
-async def test_clerk_refuses_every_broker_write_while_broker_evidence_is_unowned(tmp_path: Path) -> None:
-    account_id = "DU1234567"
-    atomic_write_pydantic_artifact(
-        journal_recovery_state_path(tmp_path, account_id),
-        JournalRecoveryState(
-            account_id=account_id,
-            phase="COMPLETE",
-            quarantined_journal_name="clerk_journal.jsonl.corrupt-1780000000000",
-            quarantined_inbox_name="clerk_inbox.jsonl.corrupt-1780000000000",
-            quarantined_at_ms=1_780_000_000_000,
-            quarantine_receipt_id="journal-recovery-quarantine:quarantine-1",
-            quarantine_idempotency_key="quarantine-1",
-            baseline_receipt_id="journal-recovery-rebaseline:rebaseline-1",
-            rebaseline_idempotency_key="rebaseline-1",
-            broker_evidence_positions=(JournalRecoveryPosition(symbol="SPY", signed_quantity=2.0),),
-            observed_at_ms=1_780_000_000_100,
-        ),
-    )
-    clerk = AccountClerk(artifacts_root=tmp_path, account_id=account_id)
-    writes: list[str] = []
-
-    async def broker_write() -> None:
-        writes.append("called")
-
-    with pytest.raises(RuntimeError, match="CLERK_BROKER_EVIDENCE_ONLY_HOLD"):
-        await clerk._run_broker_write("test.journal_recovery", broker_write)
-
-    assert writes == []
-
-
-@pytest.mark.asyncio
-async def test_interactive_admission_refuses_unowned_broker_evidence_before_broker_refresh(tmp_path: Path) -> None:
-    account_id = "DU1234567"
-    atomic_write_pydantic_artifact(
-        journal_recovery_state_path(tmp_path, account_id),
-        JournalRecoveryState(
-            account_id=account_id,
-            phase="COMPLETE",
-            quarantined_journal_name="clerk_journal.jsonl.corrupt-1780000000000",
-            quarantined_inbox_name="clerk_inbox.jsonl.corrupt-1780000000000",
-            quarantined_at_ms=1_780_000_000_000,
-            quarantine_receipt_id="journal-recovery-quarantine:quarantine-1",
-            quarantine_idempotency_key="quarantine-1",
-            baseline_receipt_id="journal-recovery-rebaseline:rebaseline-1",
-            rebaseline_idempotency_key="rebaseline-1",
-            broker_evidence_positions=(JournalRecoveryPosition(symbol="SPY", signed_quantity=2.0),),
-            observed_at_ms=1_780_000_000_100,
-        ),
-    )
-
-    with pytest.raises(AccountStartGateError) as error:
-        await ensure_account_start_gate(
-            tmp_path,
-            account_id=account_id,
-            daemon_url="http://daemon.invalid",
-            requested_authority="account_truth",
-            client=object(),  # type: ignore[arg-type]
-            now_ms=1_780_000_000_200,
-            current_now_ms=lambda: 1_780_000_000_200,
-        )
-
-    assert error.value.detail["reason_code"] == "CLERK_BROKER_EVIDENCE_ONLY_HOLD"

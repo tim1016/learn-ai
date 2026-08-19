@@ -27,7 +27,6 @@ def _ctx(*, running: bool, variant: int) -> ActionGuardContext:
         freeze_active=bool(variant % 2),
         reconciliation_verdict=f"verdict-{variant}",
         outstanding_intents=variant,
-        channel_fresh=bool(variant % 2),
         has_exposure=bool(variant % 2),
         resume_admission=None,
         flatten_supported=bool(variant % 2),
@@ -35,8 +34,6 @@ def _ctx(*, running: bool, variant: int) -> ActionGuardContext:
         strategy_instance_id=f"sid-{variant}",
         exposure={f"SYM{variant}": float(variant)},
         working_order_count=variant,
-        account_working_order_count=variant,
-        inventory_recovery_needed=bool(variant % 2),
     )
 
 

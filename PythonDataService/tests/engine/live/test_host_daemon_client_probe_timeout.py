@@ -6,7 +6,7 @@ from app.engine.live import host_daemon_client
 from app.engine.live.host_daemon_client import DaemonResult
 
 
-async def test_fetch_startability_health_uses_instance_probe_timeout(monkeypatch) -> None:
+async def test_fetch_startability_health_uses_bounded_read_timeout(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     async def fake_classify_http(url, *, method, timeout=host_daemon_client._TIMEOUT):
@@ -23,4 +23,4 @@ async def test_fetch_startability_health_uses_instance_probe_timeout(monkeypatch
     assert health is None
     assert str(captured["url"]).endswith("/health")
     assert captured["method"] == "GET"
-    assert captured["timeout"] is host_daemon_client._START_ADMISSION_TIMEOUT
+    assert captured["timeout"] is host_daemon_client._READINESS_TIMEOUT

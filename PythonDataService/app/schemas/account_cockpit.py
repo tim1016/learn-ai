@@ -43,24 +43,3 @@ class AccountCockpitResponse(BaseModel):
     clerk: AccountServiceStatusResponse
     daemon: AccountCockpitDaemon
     blockers: list[OperatorBlocker] = Field(default_factory=list)
-
-
-class AccountClerkRestoreRequest(BaseModel):
-    """Typed confirmation for the daemon-supervised Clerk restore operation."""
-
-    model_config = ConfigDict(frozen=True)
-
-    confirmation_token: Literal["RESTORE"]
-    idempotency_key: str = Field(min_length=1, max_length=256)
-
-
-class AccountClerkRestoreReceipt(BaseModel):
-    """Durable account-event receipt for a completed Clerk restore."""
-
-    model_config = ConfigDict(frozen=True)
-
-    schema_version: Literal[1] = 1
-    receipt_id: str = Field(min_length=1, max_length=320)
-    account_id: str = Field(min_length=1, max_length=64)
-    clerk_generation: int = Field(ge=1)
-    recorded_at_ms: int = Field(ge=0, le=9_223_372_036_854_775_807)

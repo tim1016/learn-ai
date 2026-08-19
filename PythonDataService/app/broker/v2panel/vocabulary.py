@@ -89,8 +89,6 @@ ActionId = Literal[
     "flatten_stop",
     "retire",
     "cancel_order",
-    "clear_hold",
-    "record_inventory_baseline",
     "reconcile_now",
     "recover_exact_execution_evidence",
     "resolve_execution_coverage",
@@ -110,8 +108,6 @@ ACTION_IDS: Final[tuple[ActionId, ...]] = (
     "flatten_stop",
     "retire",
     "cancel_order",
-    "clear_hold",
-    "record_inventory_baseline",
     "reconcile_now",
     "recover_exact_execution_evidence",
     "resolve_execution_coverage",
@@ -284,17 +280,6 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
         "Cancel order",
         "Cancel one working order at the broker. "
         "The broker may reject the request if the order has already filled.",
-    ),
-    "clear_hold": OperatorCopy(
-        "Clear hold",
-        "Lift the account exposure hold once its root condition is healthy and "
-        "freshly observed.",
-    ),
-    "record_inventory_baseline": OperatorCopy(
-        "Recover inventory baseline",
-        "Record the freshly observed broker positions as the account accounting cutover, "
-        "retiring prior bot attribution without deleting history or assigning current "
-        "positions to a bot.",
     ),
     "reconcile_now": OperatorCopy(
         "Reconcile now",

@@ -13,7 +13,8 @@ from app.engine.live.account_artifacts import (
     ACCOUNT_EVENTS_SEQUENCE_FILENAME,
     account_artifacts_root,
 )
-from app.engine.live.account_clerk_journal import AccountClerkJournal, read_account_clerk_journal
+from app.engine.live.account_clerk_journal import read_account_clerk_journal
+from app.engine.live.account_clerk_journal_models import AccountClerkJournalEntry
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.producer_operational_log import (
     ProducerOperationalLogError,
@@ -22,6 +23,9 @@ from app.engine.live.producer_operational_log import (
     merge_operator_history,
     producer_operational_log_path,
     read_producer_operational_events,
+)
+from tests._helpers.legacy_ibkr_artifacts import (
+    write_historical_clerk_journal,
 )
 
 _ACCOUNT_ID = "DU1234567"
@@ -272,22 +276,23 @@ def test_merge_operator_history_deduplicates_restart_replay_without_global_seque
 
 
 def test_corrupt_one_producer_log_fails_at_its_read_scope_without_touching_other_logs(tmp_path: Path) -> None:
-    journal = AccountClerkJournal(artifacts_root=tmp_path, account_id=_ACCOUNT_ID, now_ms=lambda: 99)
-    journal.record_intent(
-        AccountOwnerSubmitIntent(
-            trace_id="trace-journal-isolated",
-            account_id=_ACCOUNT_ID,
-            strategy_instance_id="bot-a",
-            run_id="run-a",
-            bot_order_namespace="learn-ai/bot-a/v1",
-            intent_id="journal-isolated",
-            order_ref="learn-ai/bot-a/v1:journal-isolated",
-            intent_kind="ORDER",
-            order_spec={},
-            owner_generation=1,
-            created_at_ms=98,
-        ),
-        validate_intent=lambda _: None,
+    intent = AccountOwnerSubmitIntent(
+        trace_id="trace-journal-isolated",
+        account_id=_ACCOUNT_ID,
+        strategy_instance_id="bot-a",
+        run_id="run-a",
+        bot_order_namespace="learn-ai/bot-a/v1",
+        intent_id="journal-isolated",
+        order_ref="learn-ai/bot-a/v1:journal-isolated",
+        intent_kind="ORDER",
+        order_spec={},
+        owner_generation=1,
+        created_at_ms=98,
+    )
+    write_historical_clerk_journal(
+        tmp_path,
+        _ACCOUNT_ID,
+        [AccountClerkJournalEntry(seq=1, entry_kind="recorded", recorded_at_ms=99, intent=intent)],
     )
     append_producer_operational_event(
         tmp_path,
@@ -318,9 +323,7 @@ def test_corrupt_one_producer_log_fails_at_its_read_scope_without_touching_other
     with daemon_path.open("a", encoding="utf-8") as handle:
         handle.write('{"truncated"\n')
 
-    assert len(
-        read_producer_operational_events(tmp_path, account_id=_ACCOUNT_ID, producer="data_plane")
-    ) == 1
+    assert len(read_producer_operational_events(tmp_path, account_id=_ACCOUNT_ID, producer="data_plane")) == 1
     with pytest.raises(ProducerOperationalLogError, match="invalid producer operational row"):
         read_producer_operational_events(tmp_path, account_id=_ACCOUNT_ID)
     assert [entry.entry_kind for entry in read_account_clerk_journal(tmp_path, _ACCOUNT_ID)] == ["recorded"]

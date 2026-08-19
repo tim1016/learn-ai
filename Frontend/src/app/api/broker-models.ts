@@ -28,7 +28,6 @@ export type IbkrConnectionHealth = components['schemas']['IbkrConnectionHealth']
 /** Keep browser mutations to the exact fields the server signed and verifies. */
 export function presentedActionInvocation(
   action: PresentedOperatorAction,
-  confirmationToken?: string,
 ): PresentedOperatorActionInvocation {
   if (!action.presentation_token) {
     throw new Error('Backend action presentation is unavailable; refusing the operation.');
@@ -42,13 +41,9 @@ export function presentedActionInvocation(
     issued_at_ms: action.issued_at_ms,
     expires_at_ms: action.expires_at_ms,
     presentation_token: action.presentation_token,
-    ...(confirmationToken === undefined ? {} : { confirmation_token: confirmationToken }),
   };
 }
 export type IbkrOpenOrder = components['schemas']['IbkrOpenOrder'] &
-  IbkrOrderEvidenceFields &
-  IbkrOrderRefFields;
-export type IbkrOrderAck = components['schemas']['IbkrOrderAck'] &
   IbkrOrderEvidenceFields &
   IbkrOrderRefFields;
 export type IbkrOrderSpec = components['schemas']['IbkrOrderSpec'] &
@@ -493,22 +488,6 @@ export interface AccountTruthFactOwner {
   severity: AccountTruthSeverity;
 }
 
-export type AccountTruthOrderCancelReasonCode =
-  | 'BROKER_NOT_PAPER_CONNECTED'
-  | 'NOT_OPEN_ORDER'
-  | 'FOREIGN_OR_UNCLAIMED'
-  | 'ORDER_TERMINAL'
-  | 'ACCOUNT_FROZEN'
-  | 'ACCOUNT_FREEZE_UNREADABLE';
-
-export interface AccountTruthOrderCancelAction {
-  visible: boolean;
-  enabled: boolean;
-  reason_code: AccountTruthOrderCancelReasonCode | null;
-  label: string;
-  detail: string;
-}
-
 export type AccountTruthExecutionUncertaintyCode =
   | 'missing_order_ref'
   | 'observed_time_only'
@@ -536,7 +515,6 @@ export interface AccountTruthOrderRow extends IbkrOrderEvidenceFields, IbkrOrder
   remaining: number;
   avg_fill_price: number | null;
   owner: AccountTruthFactOwner;
-  cancel_action: AccountTruthOrderCancelAction;
   headline: string;
   detail: string;
   fetched_at_ms: number;

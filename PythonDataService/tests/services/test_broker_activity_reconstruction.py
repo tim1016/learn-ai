@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -7,14 +8,15 @@ import pytest
 from app.broker.ibkr.models import IbkrOrderEvent
 from app.engine.live.artifacts import ExecutionRow, ExecutionWriter
 from app.engine.live.broker_callbacks import BrokerCallbackWal, broker_callbacks_wal_path
-from app.engine.live.intent_events import IntentEventType
-from app.engine.live.intent_wal import IntentWal
-from app.engine.live.run_ledger import LiveRunLedger
+from app.engine.live.intent_events import IntentEvent, IntentEventType
 from app.schemas.broker_activity import BrokerActivityRow, ReasonCode, Verdict
 from app.services.broker_activity_reconstruction import reconstruct_broker_activity_for_run
 from app.services.broker_activity_wal import (
     BrokerActivityWal,
     instance_broker_activity_wal_path,
+)
+from tests._helpers.legacy_ibkr_artifacts import (
+    write_historical_intent_wal,
 )
 
 SID = "sid-reconstruct"
@@ -32,19 +34,7 @@ def _run_dir(artifacts_root: Path, run_id: str = RUN_ID) -> Path:
 
 def _write_ledger(run_dir: Path, *, run_id: str = RUN_ID) -> None:
     (run_dir / "run_ledger.json").write_text(
-        LiveRunLedger(
-            run_id=run_id,
-            code_sha="abc123",
-            strategy_instance_id=SID,
-            strategy_spec_path="spec.json",
-            strategy_spec_sha256="spec-sha",
-            qc_audit_copy_path="qc.py",
-            qc_audit_copy_sha256="qc-sha",
-            qc_cloud_backtest_id="qc-1",
-            account_id="DU123",
-            start_date_ms=1_780_000_000_000,
-            live_config={},
-        ).model_dump_json(),
+        json.dumps({"run_id": run_id, "strategy_instance_id": SID, "account_id": "DU123"}),
         encoding="utf-8",
     )
 
@@ -58,29 +48,35 @@ def _write_intent_wal(
     order_type: str = "MKT",
     limit_price: float | None = None,
 ) -> None:
-    wal = IntentWal(run_dir / "intent_events.jsonl")
-    wal.append(
-        event_type=IntentEventType.PENDING_INTENT,
-        intent_id=INTENT_ID,
-        bot_order_namespace=NS,
-        order_ref=ORDER_REF,
-        order_spec={
-            "symbol": "SPY",
-            "action": "BUY" if quantity > 0 else "SELL",
-            "quantity": abs(quantity),
-            "order_type": order_type,
-            **({"limit_price": limit_price} if limit_price is not None else {}),
-        },
-        ts_ms=1_780_000_000_000,
-    )
-    wal.append(
-        event_type=IntentEventType.SUBMITTED,
-        intent_id=INTENT_ID,
-        bot_order_namespace=NS,
-        order_ref=ORDER_REF,
-        order_id=order_id,
-        perm_id=perm_id,
-        ts_ms=1_780_000_000_001,
+    write_historical_intent_wal(
+        run_dir / "intent_events.jsonl",
+        [
+            IntentEvent(
+                seq=1,
+                event_type=IntentEventType.PENDING_INTENT,
+                intent_id=INTENT_ID,
+                bot_order_namespace=NS,
+                order_ref=ORDER_REF,
+                order_spec={
+                    "symbol": "SPY",
+                    "action": "BUY" if quantity > 0 else "SELL",
+                    "quantity": abs(quantity),
+                    "order_type": order_type,
+                    **({"limit_price": limit_price} if limit_price is not None else {}),
+                },
+                ts_ms=1_780_000_000_000,
+            ),
+            IntentEvent(
+                seq=2,
+                event_type=IntentEventType.SUBMITTED,
+                intent_id=INTENT_ID,
+                bot_order_namespace=NS,
+                order_ref=ORDER_REF,
+                order_id=order_id,
+                perm_id=perm_id,
+                ts_ms=1_780_000_000_001,
+            ),
+        ],
     )
 
 

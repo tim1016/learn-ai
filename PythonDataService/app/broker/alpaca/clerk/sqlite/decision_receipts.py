@@ -10,9 +10,10 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING, Literal, TypeAlias
 
-from app.broker.alpaca.clerk.decision_journal import DecisionOutcome
+from pydantic import BaseModel, ConfigDict, Field
+
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
 
@@ -26,6 +27,29 @@ JsonScalar: TypeAlias = str | int | float | bool | None  # noqa: UP040 (Python 3
 JsonValue: TypeAlias = (  # noqa: UP040 (Python 3.11)
     JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 )
+DecisionOutcome = Literal[
+    "enter_intent",
+    "exit_intent",
+    "entered",
+    "exited",
+    "no_action",
+    "blocked",
+]
+
+
+class DecisionReceipt(BaseModel):
+    """Trader-facing view of one SQLite decision receipt."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    seq: int = Field(ge=1)
+    ts_ms: int = Field(ge=0)
+    bar_ref: str
+    outcome: DecisionOutcome
+    reason_code: str
+    intent_id: str = ""
+    order_ref: str = ""
+    indicator_snapshot: dict[str, float | int | str | None] = Field(default_factory=dict)
 
 
 class DecisionReceiptConflictError(ValueError):

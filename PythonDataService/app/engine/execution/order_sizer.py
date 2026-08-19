@@ -1,11 +1,9 @@
-"""Live policy-application adapter for ``set_holdings`` sizing — ADR 0009.
+"""Broker-neutral policy application for ``set_holdings`` sizing — ADR 0009.
 
-The **canonical live policy-application layer**. ``LiveConfig.sizing`` carries
-the operator-selected policy; the engine threads it into the ``LivePortfolio``,
-and this module reinterprets every ``set_holdings(symbol, fraction)`` call per
-the policy's ``kind``. ``set_holdings`` is the **only** order surface this
-policy governs — ``market_order``, ``liquidate`` and options ``contracts_per_trade``
-are explicit strategy sizing and pass through untouched.
+The former IBKR runtime used this module to resolve an operator-selected policy.
+That broker consumer retired in #1583. The pure sizing models and LEAN-equivalent
+quantity math remain canonical for research, validation, and future broker-neutral
+consumers; this module itself cannot submit an order.
 
 This is an **adapter**, not a parallel hierarchy: the percent path (``SetHoldings``)
 delegates to ``app.engine.execution.sizing.LeanSetHoldingsSizing`` — the existing
@@ -205,13 +203,10 @@ class PortfolioValueProvider(Protocol):
 
 
 class WholeAccountPortfolioValueProvider:
-    """PR1 default: the whole-account portfolio value, no sleeve.
+    """Provider adapter for a whole-account portfolio value, with no sleeve.
 
-    Takes a ``callable`` that resolves the current portfolio value on every
-    invocation — ``LivePortfolio.total_value`` walks cash + positions at
-    the latest reference price, so the percent path always reads fresh data.
-    The capital-sleeve layer will drop in at this seam (ADR 0009 § 9)
-    without a runtime API change for ``OrderSizer``.
+    Takes a callable that resolves the current portfolio value on every
+    invocation. Consumers own the freshness and account-scope guarantees.
     """
 
     name: str = "whole_account"
@@ -265,10 +260,9 @@ class OrderSizer:
         buffered share count) and for ``FixedNotional`` (which floors
         ``value / price``). ``FixedShares`` ignores it.
 
-        Returns ``0`` for a flat target. The caller (``LivePortfolio.set_holdings``)
-        is responsible for converting target → delta and skipping submission
-        when the delta would be a zero-quantity order — the engine logs a
-        *sizing skip* there, not here.
+        Returns ``0`` for a flat target. A consumer is responsible for converting
+        target → delta and handling a zero quantity; this pure resolver performs
+        no submission.
         """
         policy = self._policy
         if isinstance(policy, FixedShares):
@@ -296,8 +290,7 @@ class OrderSizer:
                 return 0
             if reference_price is None:
                 raise ValueError(
-                    "SetHoldings sizing requires a reference price; "
-                    "LivePortfolio must update_reference_price(...) before set_holdings."
+                    "SetHoldings sizing requires a reference price."
                 )
             if self._portfolio_value_provider is None:
                 raise RuntimeError(
@@ -319,8 +312,7 @@ class OrderSizer:
                 return 0
             if reference_price is None:
                 raise ValueError(
-                    "FixedNotional sizing requires a reference price; "
-                    "LivePortfolio must update_reference_price(...) before set_holdings."
+                    "FixedNotional sizing requires a reference price."
                 )
             qty = int(policy.value / reference_price)
             # Long-only in v1 — match the FixedShares contract.

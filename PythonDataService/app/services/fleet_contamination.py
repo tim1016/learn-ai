@@ -8,7 +8,7 @@ import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
-from app.engine.live.account_clerk import read_account_clerk_journal
+from app.engine.live.account_clerk_journal import read_account_clerk_journal
 from app.engine.live.account_identity import InvalidAccountIdError, normalize_account_id
 from app.engine.live.fleet import compute_fleet_contamination
 from app.engine.live.journal_exposure import project_journal_exposure

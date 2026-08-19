@@ -12,8 +12,7 @@ export type LifecycleAction = 'connect' | 'disconnect' | 'reconnect';
  * Polls ``GET /api/broker/health`` every five seconds and exposes the
  * latest snapshot as a signal. The shell renders the global paper /
  * live / disconnected banner from this signal; per-page components
- * gate destructive actions (e.g. order placement) on
- * ``isPaperConnected()``.
+ * derive read-side availability from ``isPaperConnected()``.
  *
  * Per the IBKR integration plan: never derive the banner from the
  * ``IBKR_MODE`` env var. ``health.is_paper`` is the only source of
@@ -54,14 +53,11 @@ export class BrokerHealthService {
   });
 
   /**
-   * Defense-in-depth gate for any UI that places orders. Mirrors the
-   * server-side third paper safety layer (DU account-id sentinel) so
-   * the form stays locked until both sides agree.
+   * Paper-session readiness signal retained for read-only evidence views.
    *
    * Reads ``connection_state`` rather than the legacy ``connected``
    * boolean: during a TWS 1100 soft loss the socket is still up
-   * (``connected=true``) but the feed is dead — order submission
-   * would silently land on nothing. Codex P1 on PR #563.
+   * (``connected=true``) but the evidence feed is unavailable.
    */
   readonly isPaperConnected = computed<boolean>(() => {
     const h = this.health();

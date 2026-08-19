@@ -1,14 +1,10 @@
 """Router tests for account reconciliation read endpoints."""
 
-
 from __future__ import annotations
 
-import asyncio
 import json
-import threading
 from datetime import datetime
 from pathlib import Path
-from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -27,26 +23,17 @@ from app.engine.live.account_artifacts import (
     AccountClerkLease,
     AccountFreezeEvidence,
     account_artifacts_root,
-    advance_account_clerk_generation,
     append_account_event,
-    read_account_events,
     read_account_freeze,
-    write_account_clerk_lease,
     write_account_freeze,
 )
 from app.engine.live.account_clerk_journal import (
-    AccountClerkBrokerAckReceipt,
-    AccountClerkJournal,
-    AccountClerkRecordedReceipt,
-    AccountClerkRecoveryFlattenReceipt,
     account_clerk_journal_path,
 )
+from app.engine.live.account_clerk_journal_models import AccountClerkJournalEntry
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
-    latest_account_instance_binding,
-    read_account_instance_registry,
-    write_account_instance_binding,
 )
 from app.engine.live.daemon_transport import DaemonResult
 from app.engine.live.journal_recovery_state import journal_recovery_state_path
@@ -55,7 +42,12 @@ from app.services.account_directory import AccountDirectoryService, CurrentBroke
 from app.services.account_event_journal import AccountEventJournalService
 from app.services.account_reconciliation import AccountReconciliationService
 from app.services.journal_recovery import JournalRecoveryService
-from app.utils.timestamps import now_ms_utc
+from tests._helpers.legacy_ibkr_artifacts import (
+    write_historical_account_binding,
+    write_historical_clerk_generation,
+    write_historical_clerk_journal,
+    write_historical_clerk_lease,
+)
 
 
 async def _async_value(value: object) -> object:
@@ -115,9 +107,7 @@ async def test_latest_reconciliation_returns_404_when_missing(tmp_path: Path) ->
     from app.main import app
 
     service = AccountReconciliationService(artifacts_root=tmp_path, ttl_ms=10_000_000_000)
-    app.dependency_overrides[
-        account_reconciliation.get_account_reconciliation_service
-    ] = lambda: service
+    app.dependency_overrides[account_reconciliation.get_account_reconciliation_service] = lambda: service
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.get("/api/accounts/DU1234567/reconciliation/latest")
@@ -202,7 +192,7 @@ async def test_journal_recovery_route_keeps_malformed_ceremony_state_fail_closed
     assert response.json()["detail"]["reason_code"] == "JOURNAL_RECOVERY_STATE_CORRUPT"
 
 
-async def test_reconciliation_bootstraps_clerk_before_refreshing_account_truth(
+async def test_reconciliation_refreshes_account_truth_without_a_broker_writer(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -211,11 +201,6 @@ async def test_reconciliation_bootstraps_clerk_before_refreshing_account_truth(
     service = AccountReconciliationService(artifacts_root=tmp_path, ttl_ms=10_000_000_000)
     calls: list[str] = []
 
-    async def fake_ensure(_base_url: str, account_id: str) -> dict:
-        assert account_id == "DU1234567"
-        calls.append("ensure")
-        return {}
-
     async def fake_refresh(*_args, account_id: str, **kwargs):
         assert account_id == "DU1234567"
         assert kwargs["account_truth_observer"] == service.observe_account_truth
@@ -223,17 +208,9 @@ async def test_reconciliation_bootstraps_clerk_before_refreshing_account_truth(
         calls.append("refresh")
         return _truth()
 
-    monkeypatch.setattr(account_reconciliation.host_daemon_client, "ensure_account_clerk", fake_ensure)
     monkeypatch.setattr(account_reconciliation, "refresh_account_truth_now", fake_refresh)
-    monkeypatch.setattr(
-        account_reconciliation,
-        "get_settings",
-        lambda: SimpleNamespace(live_runner_daemon_url="http://daemon"),
-    )
     app.dependency_overrides[account_reconciliation.require_connected_client] = lambda: object()
-    app.dependency_overrides[
-        account_reconciliation.get_account_reconciliation_service
-    ] = lambda: service
+    app.dependency_overrides[account_reconciliation.get_account_reconciliation_service] = lambda: service
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post("/api/accounts/DU1234567/reconciliation")
@@ -242,7 +219,7 @@ async def test_reconciliation_bootstraps_clerk_before_refreshing_account_truth(
 
     assert response.status_code == 200
     assert response.json()["account_id"] == "DU1234567"
-    assert calls == ["ensure", "refresh"]
+    assert calls == ["refresh"]
 
 
 async def test_triage_returns_latest_receipt(tmp_path: Path) -> None:
@@ -254,9 +231,7 @@ async def test_triage_returns_latest_receipt(tmp_path: Path) -> None:
         account_truth=_truth(),
         now_ms=1_780_000_002_000,
     )
-    app.dependency_overrides[
-        account_reconciliation.get_account_reconciliation_service
-    ] = lambda: service
+    app.dependency_overrides[account_reconciliation.get_account_reconciliation_service] = lambda: service
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.get("/api/accounts/DU1234567/triage")
@@ -285,9 +260,7 @@ async def test_update_reconciliation_automation_policy(tmp_path: Path) -> None:
     from app.main import app
 
     service = AccountReconciliationService(artifacts_root=tmp_path)
-    app.dependency_overrides[
-        account_reconciliation.get_account_reconciliation_service
-    ] = lambda: service
+    app.dependency_overrides[account_reconciliation.get_account_reconciliation_service] = lambda: service
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.put(
@@ -320,9 +293,7 @@ async def test_triage_returns_unknown_when_registry_is_corrupt(tmp_path: Path) -
     account_root = account_artifacts_root(tmp_path, "DU1234567")
     account_root.mkdir(parents=True, exist_ok=True)
     (account_root / "instance_registry.jsonl").write_text("{not-json\n", encoding="utf-8")
-    app.dependency_overrides[
-        account_reconciliation.get_account_reconciliation_service
-    ] = lambda: service
+    app.dependency_overrides[account_reconciliation.get_account_reconciliation_service] = lambda: service
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.get("/api/accounts/DU1234567/triage")
@@ -347,9 +318,7 @@ async def test_latest_reconciliation_normalizes_account_id(tmp_path: Path) -> No
         account_truth=_truth(),
         now_ms=1_780_000_002_000,
     )
-    app.dependency_overrides[
-        account_reconciliation.get_account_reconciliation_service
-    ] = lambda: service
+    app.dependency_overrides[account_reconciliation.get_account_reconciliation_service] = lambda: service
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.get("/api/accounts/du1234567/reconciliation/latest")
@@ -383,113 +352,6 @@ async def test_reconciliation_service_honors_artifact_root_dependency_override(t
     assert response.json()["receipt_id"] == receipt.receipt_id
 
 
-async def test_raw_account_emergency_flatten_is_retired_in_favor_of_presented_actions(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from app.engine.live import host_daemon_client
-    from app.engine.live.account_clerk_journal_models import AccountClerkEmergencyAuthorization
-    from app.main import app
-
-    async def authorize(_base_url: str, account_id: str, payload: dict) -> dict:
-        assert account_id == "DU1234567"
-        assert payload == {
-            "operation_id": "account-emergency-flatten-1",
-            "reconciliation_evidence_version": "reconciliation-1",
-        }
-        return AccountClerkEmergencyAuthorization(
-            authorization_id="a" * 16,
-            account_id=account_id,
-            operation_id=payload["operation_id"],
-            confirmation_token="FLATTEN",
-            reconciliation_evidence_version=payload["reconciliation_evidence_version"],
-            evidence_observed_at_ms=1_780_000_000_000,
-            expires_at_ms=1_780_000_060_000,
-            no_exact_recovery_candidate=True,
-        ).model_dump(mode="json")
-
-    async def flatten(_base_url: str, account_id: str, payload: dict) -> dict:
-        assert account_id == "DU1234567"
-        assert payload["account"] == "DU1234567"
-        assert payload["confirmation_token"] == "FLATTEN"
-        assert payload["authorization_id"] == "a" * 16
-        assert payload["idempotency_key"] == "account-emergency-flatten-1"
-        return {
-            "accepted": True,
-            "account_id": account_id,
-            "audit_run_id": "eflat-audit-1",
-            "completed_at_ms": 1_780_000_010_000,
-        }
-
-    monkeypatch.setattr(
-        host_daemon_client,
-        "authorize_emergency_flatten",
-        authorize,
-        raising=False,
-    )
-    monkeypatch.setattr(host_daemon_client, "emergency_flatten_account", flatten)
-    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
-    app.dependency_overrides[account_reconciliation.get_account_reconciliation_service] = lambda: SimpleNamespace(
-        triage=lambda **_: SimpleNamespace(
-            emergency_flatten_confirmation=object(),
-            account_reconciliation_receipt=SimpleNamespace(
-                receipt_id="reconciliation-1",
-                account_truth_generated_at_ms=1_780_000_000_000,
-            ),
-            recovery_flatten_candidates=[],
-        )
-    )
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post(
-                "/api/accounts/DU1234567/emergency-flatten",
-                json={
-                    "account": "DU1234567",
-                    "confirmation_token": "FLATTEN",
-                    "idempotency_key": "account-emergency-flatten-1",
-                },
-            )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 410
-    assert response.json()["detail"]["reason_code"] == "PRESENTED_ACTION_REQUIRED"
-
-
-async def test_raw_account_emergency_flatten_never_reaches_the_host_clerk(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from app.engine.live import host_daemon_client
-    from app.main import app
-
-    flatten = pytest.fail
-    monkeypatch.setattr(host_daemon_client, "emergency_flatten_account", flatten)
-    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
-    app.dependency_overrides[account_reconciliation.get_account_reconciliation_service] = lambda: SimpleNamespace(
-        triage=lambda **_: SimpleNamespace(
-            emergency_flatten_confirmation=None,
-            account_reconciliation_receipt=None,
-            recovery_flatten_candidates=[],
-        )
-    )
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post(
-                "/api/accounts/DU1234567/emergency-flatten",
-                json={
-                    "account": "DU1234567",
-                    "confirmation_token": "FLATTEN",
-                    "idempotency_key": "account-emergency-flatten-2",
-                },
-            )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 410
-    assert response.json()["detail"]["reason_code"] == "PRESENTED_ACTION_REQUIRED"
-
-
 async def test_triage_contract_returns_condition_rows_for_active_freeze(tmp_path: Path) -> None:
     from app.main import app
 
@@ -510,9 +372,7 @@ async def test_triage_contract_returns_condition_rows_for_active_freeze(tmp_path
             operator_next_step="CHECK_IBKR",
         ),
     )
-    app.dependency_overrides[
-        account_reconciliation.get_account_reconciliation_service
-    ] = lambda: service
+    app.dependency_overrides[account_reconciliation.get_account_reconciliation_service] = lambda: service
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.get("/api/accounts/DU1234567/triage")
@@ -568,9 +428,7 @@ async def test_clear_freeze_endpoint_refuses_stale_pre_freeze_receipt(tmp_path: 
             operator_next_step="CHECK_IBKR",
         ),
     )
-    app.dependency_overrides[
-        account_reconciliation.get_account_reconciliation_service
-    ] = lambda: service
+    app.dependency_overrides[account_reconciliation.get_account_reconciliation_service] = lambda: service
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post(
@@ -605,9 +463,7 @@ async def test_clear_freeze_endpoint_returns_refreshed_triage_after_success(tmp_
         account_truth=_truth(),
         now_ms=1_780_000_002_000,
     )
-    app.dependency_overrides[
-        account_reconciliation.get_account_reconciliation_service
-    ] = lambda: service
+    app.dependency_overrides[account_reconciliation.get_account_reconciliation_service] = lambda: service
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post(
@@ -643,9 +499,7 @@ async def test_accept_exposure_override_endpoint_returns_refreshed_triage(
             operator_next_step="CHECK_IBKR",
         ),
     )
-    app.dependency_overrides[
-        account_reconciliation.get_account_reconciliation_service
-    ] = lambda: service
+    app.dependency_overrides[account_reconciliation.get_account_reconciliation_service] = lambda: service
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post(
@@ -667,153 +521,6 @@ async def test_accept_exposure_override_endpoint_returns_refreshed_triage(
     assert body["cleared_source"] == "account_audited_override"
     assert body["triage"]["overall_gate_result"]["status"] == "unknown"
     assert read_account_freeze(tmp_path, "DU1234567") is None
-
-
-async def test_false_crash_backfill_endpoint_repairs_disproven_registry_row(
-    tmp_path: Path,
-) -> None:
-    from app.main import app
-
-    active = AccountInstanceBinding(
-        account_id="DU1234567",
-        strategy_instance_id="bot-a",
-        run_id="run-halt",
-        bot_order_namespace="learn-ai/bot-a/v1",
-        lifecycle_state="ACTIVE",
-        recorded_at_ms=1_780_000_001_000,
-        source="host_daemon.start",
-    )
-    retired = active.model_copy(
-        update={
-            "lifecycle_state": "RETIRED",
-            "recorded_at_ms": 1_780_000_002_000,
-            "source": "host_daemon.process_crashed",
-        }
-    )
-    write_account_instance_binding(tmp_path, active)
-    write_account_instance_binding(tmp_path, retired)
-    run_dir = tmp_path / "live_runs" / "run-halt"
-    run_dir.mkdir(parents=True)
-    (run_dir / "run_status.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 2,
-                "run_id": "run-halt",
-                "started_at_ms": 1_780_000_001_000,
-                "last_update_ms": 1_780_000_002_000,
-                "ended_at_ms": 1_780_000_002_000,
-                "exit_code": 1,
-                "exit_reason": "fatal_halt",
-            }
-        ),
-        encoding="utf-8",
-    )
-    app.dependency_overrides[
-        account_reconciliation.get_account_artifacts_root
-    ] = lambda: tmp_path
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post(
-                "/api/accounts/DU1234567/registry/backfill-false-crashes"
-            )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["rows_repaired"] == 1
-    assert body["repaired_run_ids"] == ["run-halt"]
-    repaired = latest_account_instance_binding(
-        read_account_instance_registry(tmp_path, "DU1234567"),
-        account_id="DU1234567",
-        strategy_instance_id="bot-a",
-    )
-    assert repaired is not None
-    assert repaired.source == "host_daemon.process_halted"
-
-
-async def test_journal_cure_endpoint_delegates_to_daemon_and_returns_receipt(
-    monkeypatch,
-) -> None:
-    """The cure RPC is host-local; the container forwards it to the daemon."""
-
-    from app.main import app
-
-    namespace = "learn-ai/bot-a/v1"
-    forwarded: list[tuple[str, dict]] = []
-
-    async def _apply(_base_url: str, account_id: str, payload: dict) -> dict:
-        forwarded.append((account_id, payload))
-        return {
-            "schema_version": 1,
-            "account_id": account_id,
-            "bot_order_namespace": payload["bot_order_namespace"],
-            "symbol": payload["symbol"],
-            "signed_quantity": payload["signed_quantity"],
-            "operator_attribution": "local-operator",
-            "request_provenance": payload["request_provenance"],
-            "reason": payload["reason"],
-            "evidence_refs": payload["evidence_refs"],
-            "idempotency_key": payload["idempotency_key"],
-            "recorded_at_ms": 101,
-            "journal_seq": 3,
-        }
-
-    monkeypatch.setattr(account_reconciliation.host_daemon_client, "apply_operator_adjustment", _apply)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            "/api/accounts/DU1234567/journal-cures",
-            json={
-                "bot_order_namespace": namespace,
-                "symbol": "SPY",
-                "signed_quantity": -1,
-                "reason": "operator verified stale claim",
-                "evidence_refs": ["account-reconciliation:receipt-1"],
-                "request_provenance": "account-monitor/cure",
-                "idempotency_key": "cure-route-1",
-            },
-        )
-
-    assert response.status_code == 201
-    assert response.json()["signed_quantity"] == -1
-    assert forwarded[0][0] == "DU1234567"
-    assert forwarded[0][1]["idempotency_key"] == "cure-route-1"
-
-
-async def test_journal_cure_endpoint_propagates_daemon_clerk_rejection(
-    monkeypatch,
-) -> None:
-    """The daemon authors the Clerk rejection; the container surfaces it verbatim."""
-
-    from app.engine.live import host_daemon_client
-    from app.main import app
-
-    async def _apply(_base_url: str, _account_id: str, _payload: dict) -> dict:
-        raise host_daemon_client.HostDaemonError(
-            409,
-            {
-                "reason_code": "JOURNAL_CURE_IDEMPOTENCY_CONFLICT",
-                "message": "Clerk rejected or could not complete the request.",
-            },
-        )
-
-    monkeypatch.setattr(account_reconciliation.host_daemon_client, "apply_operator_adjustment", _apply)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            "/api/accounts/DU1234567/journal-cures",
-            json={
-                "bot_order_namespace": "learn-ai/bot-a/v1",
-                "symbol": "SPY",
-                "signed_quantity": -1,
-                "reason": "operator verified stale claim",
-                "evidence_refs": ["account-reconciliation:receipt-1"],
-                "request_provenance": "account-monitor/cure",
-                "idempotency_key": "cure-route-1",
-            },
-        )
-
-    assert response.status_code == 409
-    assert response.json()["detail"]["reason_code"] == "JOURNAL_CURE_IDEMPOTENCY_CONFLICT"
 
 
 async def test_events_repair_endpoint_returns_resequence_receipt(
@@ -864,136 +571,6 @@ async def test_events_repair_endpoint_surfaces_unsafe_repair(
 
     assert response.status_code == 409
     assert response.json()["detail"]["reason_code"] == "ACCOUNT_EVENTS_REPAIR_UNSAFE"
-
-
-async def test_journal_cure_preview_honors_artifact_root_dependency_override(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Preview must read the test/app-provided artifact root, never global settings."""
-
-    from app.main import app
-
-    observed_roots: list[Path] = []
-
-    class FakeJournalCureService:
-        def __init__(self, *, artifacts_root: Path) -> None:
-            observed_roots.append(artifacts_root)
-
-        def preview(
-            self,
-            *,
-            account_id: str,
-            bot_order_namespace: str,
-            symbol: str,
-        ) -> account_reconciliation.JournalCurePreview:
-            return account_reconciliation.JournalCurePreview(
-                account_id=account_id,
-                bot_order_namespace=bot_order_namespace,
-                symbol=symbol,
-                journal_quantity=0.0,
-                can_cure=False,
-                reason_code="JOURNAL_CURE_NO_STALE_CLAIM",
-            )
-
-    monkeypatch.setattr(account_reconciliation, "JournalCureService", FakeJournalCureService)
-    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.get(
-                "/api/accounts/DU1234567/journal-cures/preview",
-                params={"bot_order_namespace": "learn-ai/retired-bot/v1", "symbol": "SPY"},
-            )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    assert observed_roots == [tmp_path]
-
-
-async def test_raw_operator_recovery_flatten_is_retired_before_the_host_clerk(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    from app.config import settings
-    from app.main import app
-    from app.security.data_plane_control import CONTROL_SECRET_HEADER
-
-    namespace = "learn-ai/retired-bot/v1"
-    intent = AccountOwnerSubmitIntent(
-        trace_id="trace-operator-recovery",
-        account_id="DU1234567",
-        strategy_instance_id="retired-bot",
-        run_id="run-retired",
-        bot_order_namespace=namespace,
-        intent_id="intent-operator-recovery",
-        order_ref=f"{namespace}:intent-operator-recovery",
-        intent_kind="ORDER",
-        order_spec={},
-        owner_generation=2,
-        created_at_ms=100,
-    )
-    recorded = AccountClerkRecordedReceipt(
-        trace_id=intent.trace_id,
-        account_id=intent.account_id,
-        strategy_instance_id=intent.strategy_instance_id,
-        run_id=intent.run_id,
-        bot_order_namespace=intent.bot_order_namespace,
-        intent_id=intent.intent_id,
-        order_ref=intent.order_ref,
-        journal_seq=1,
-        recorded_at_ms=100,
-    )
-    receipt = AccountClerkRecoveryFlattenReceipt(
-        recorded=recorded,
-        broker_acked=AccountClerkBrokerAckReceipt(
-            **recorded.model_dump(exclude={"status", "recorded_at_ms"}),
-            order_id=12,
-            recorded_at_ms=101,
-        ),
-        cancelled_order_ids=(11,),
-    )
-    forwarded: list[tuple[str, str, dict[str, object]]] = []
-
-    async def _operator_recovery_flatten(
-        base_url: str,
-        account_id: str,
-        payload: dict[str, object],
-    ) -> dict[str, object]:
-        forwarded.append((base_url, account_id, payload))
-        return {"recovery_flatten": receipt.model_dump(mode="json")}
-
-    monkeypatch.setattr(
-        account_reconciliation.host_daemon_client,
-        "operator_recovery_flatten",
-        _operator_recovery_flatten,
-        raising=False,
-    )
-    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "test-control-secret")
-    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
-    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
-    try:
-        async with AsyncClient(
-            transport=ASGITransport(app=app),
-            base_url="http://test",
-            headers={CONTROL_SECRET_HEADER: "test-control-secret"},
-        ) as client:
-            response = await client.post(
-                "/api/accounts/DU1234567/operator-recovery-flatten",
-                json={"intent": intent.model_dump(mode="json"), "request_provenance": "account-monitor/recovery"},
-            )
-            replay = await client.post(
-                "/api/accounts/DU1234567/operator-recovery-flatten",
-                json={"intent": intent.model_dump(mode="json"), "request_provenance": "account-monitor/recovery"},
-            )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 410
-    assert replay.status_code == 410
-    assert response.json()["detail"]["reason_code"] == "PRESENTED_ACTION_REQUIRED"
-    assert forwarded == []
-    assert read_account_events(tmp_path, "DU1234567") == []
 
 
 async def test_account_events_endpoint_pages_filters_and_preserves_stable_event_identity(
@@ -1143,8 +720,6 @@ async def test_account_events_degrades_unprojectable_manual_order_without_blanki
 
     timestamp = 1_710_000_000_000
     account_id = "DU1234567"
-    journal = AccountClerkJournal(artifacts_root=tmp_path, account_id=account_id, now_ms=lambda: timestamp)
-
     valid_ref = "manual/operator/v1:valid-1"
     valid_intent = AccountOwnerSubmitIntent(
         trace_id="manual-order:valid-1",
@@ -1170,25 +745,21 @@ async def test_account_events_degrades_unprojectable_manual_order_without_blanki
         owner_generation=1,
         created_at_ms=timestamp - 2,
     )
-    journal.record_intent(valid_intent, validate_intent=lambda _: None)
-    journal.append_broker_ack(
-        valid_intent,
-        IbkrOrderAck(
-            account_id=account_id,
-            is_paper=True,
-            order_id=42,
-            perm_id=9001,
-            client_id=1,
-            con_id=756733,
-            symbol="SPY",
-            action="BUY",
-            quantity=3,
-            order_type="LMT",
-            limit_price=593.25,
-            status="Submitted",
-            order_ref=valid_ref,
-            placed_at_ms=timestamp,
-        ),
+    valid_ack = IbkrOrderAck(
+        account_id=account_id,
+        is_paper=True,
+        order_id=42,
+        perm_id=9001,
+        client_id=1,
+        con_id=756733,
+        symbol="SPY",
+        action="BUY",
+        quantity=3,
+        order_type="LMT",
+        limit_price=593.25,
+        status="Submitted",
+        order_ref=valid_ref,
+        placed_at_ms=timestamp,
     )
 
     # A corrupt/legacy receipt whose order_spec can no longer be projected.
@@ -1213,24 +784,46 @@ async def test_account_events_degrades_unprojectable_manual_order_without_blanki
         owner_generation=1,
         created_at_ms=timestamp - 1,
     )
-    journal.record_intent(corrupt_intent, validate_intent=lambda _: None)
-    journal.append_broker_ack(
-        corrupt_intent,
-        IbkrOrderAck(
-            account_id=account_id,
-            is_paper=True,
-            order_id=43,
-            perm_id=9002,
-            client_id=1,
-            con_id=756733,
-            symbol="SPY",
-            action="BUY",
-            quantity=1,
-            order_type="MKT",
-            status="Submitted",
-            order_ref=corrupt_ref,
-            placed_at_ms=timestamp + 1,
-        ),
+    corrupt_ack = IbkrOrderAck(
+        account_id=account_id,
+        is_paper=True,
+        order_id=43,
+        perm_id=9002,
+        client_id=1,
+        con_id=756733,
+        symbol="SPY",
+        action="BUY",
+        quantity=1,
+        order_type="MKT",
+        status="Submitted",
+        order_ref=corrupt_ref,
+        placed_at_ms=timestamp + 1,
+    )
+    write_historical_clerk_journal(
+        tmp_path,
+        account_id,
+        [
+            AccountClerkJournalEntry(seq=1, entry_kind="recorded", recorded_at_ms=timestamp, intent=valid_intent),
+            AccountClerkJournalEntry(
+                seq=2,
+                entry_kind="broker_acked",
+                recorded_at_ms=timestamp,
+                intent=valid_intent,
+                order_id=valid_ack.order_id,
+                perm_id=valid_ack.perm_id,
+                broker_ack=valid_ack,
+            ),
+            AccountClerkJournalEntry(seq=3, entry_kind="recorded", recorded_at_ms=timestamp, intent=corrupt_intent),
+            AccountClerkJournalEntry(
+                seq=4,
+                entry_kind="broker_acked",
+                recorded_at_ms=timestamp,
+                intent=corrupt_intent,
+                order_id=corrupt_ack.order_id,
+                perm_id=corrupt_ack.perm_id,
+                broker_ack=corrupt_ack,
+            ),
+        ],
     )
 
     service = AccountEventJournalService(artifacts_root=tmp_path, now_ms=lambda: timestamp)
@@ -1244,13 +837,9 @@ async def test_account_events_degrades_unprojectable_manual_order_without_blanki
     # One malformed receipt must not blank the entire Desk history.
     assert response.status_code == 200
     rows = response.json()["rows"]
-    projected_order_ids = {
-        row["operator_order_receipt"]["order_id"] for row in rows if row["operator_order_receipt"]
-    }
+    projected_order_ids = {row["operator_order_receipt"]["order_id"] for row in rows if row["operator_order_receipt"]}
     assert 42 in projected_order_ids
-    unclassified = [
-        row for row in rows if row["operator_order_receipt"] is None and row["kind"] == "other"
-    ]
+    unclassified = [row for row in rows if row["operator_order_receipt"] is None and row["kind"] == "other"]
     assert any("could not be projected" in row["operator_detail"] for row in unclassified)
 
 
@@ -1284,30 +873,37 @@ async def test_account_events_exposes_manual_order_receipts_only_to_operations(t
         owner_generation=1,
         created_at_ms=timestamp - 1,
     )
-    journal = AccountClerkJournal(
-        artifacts_root=tmp_path,
+    ack = IbkrOrderAck(
         account_id=account_id,
-        now_ms=lambda: timestamp,
+        is_paper=True,
+        order_id=42,
+        perm_id=9001,
+        client_id=1,
+        con_id=756733,
+        symbol="SPY",
+        action="BUY",
+        quantity=3,
+        order_type="LMT",
+        limit_price=593.25,
+        status="Submitted",
+        order_ref=order_ref,
+        placed_at_ms=timestamp,
     )
-    journal.record_intent(intent, validate_intent=lambda _: None)
-    journal.append_broker_ack(
-        intent,
-        IbkrOrderAck(
-            account_id=account_id,
-            is_paper=True,
-            order_id=42,
-            perm_id=9001,
-            client_id=1,
-            con_id=756733,
-            symbol="SPY",
-            action="BUY",
-            quantity=3,
-            order_type="LMT",
-            limit_price=593.25,
-            status="Submitted",
-            order_ref=order_ref,
-            placed_at_ms=timestamp,
-        ),
+    write_historical_clerk_journal(
+        tmp_path,
+        account_id,
+        [
+            AccountClerkJournalEntry(seq=1, entry_kind="recorded", recorded_at_ms=timestamp, intent=intent),
+            AccountClerkJournalEntry(
+                seq=2,
+                entry_kind="broker_acked",
+                recorded_at_ms=timestamp,
+                intent=intent,
+                order_id=ack.order_id,
+                perm_id=ack.perm_id,
+                broker_ack=ack,
+            ),
+        ],
     )
     # Pre-split Desk mirrored this acknowledgement into the shared history.
     # The legacy row is non-authoritative now, but must never suppress the
@@ -1616,13 +1212,13 @@ async def test_accounts_roster_exposes_the_current_single_account_without_a_serv
             },
         },
         "lease": None,
-            "journal": {
-                "last_seq": None,
-                "last_write_ms": None,
-                "integrity": "healthy",
-                "corruption_detail": None,
-                "recovery_phase": None,
-            },
+        "journal": {
+            "last_seq": None,
+            "last_write_ms": None,
+            "integrity": "healthy",
+            "corruption_detail": None,
+            "recovery_phase": None,
+        },
         "operating_state": "ATTENTION",
         "headline": "Account service needs attention",
         "detail": "Account verification cannot stay current until the account service is attached.",
@@ -1631,14 +1227,14 @@ async def test_accounts_roster_exposes_the_current_single_account_without_a_serv
 
 
 def test_directory_fences_an_expired_lease_and_keeps_artifact_only_accounts_visible(tmp_path: Path) -> None:
-    generation = advance_account_clerk_generation(
+    generation = write_historical_clerk_generation(
         tmp_path,
         "DU7654321",
         phase="accepting",
         recorded_at_ms=100,
         source="test",
     )
-    write_account_clerk_lease(
+    write_historical_clerk_lease(
         tmp_path,
         AccountClerkLease(
             account_id="DU7654321",
@@ -1660,14 +1256,14 @@ def test_directory_fences_an_expired_lease_and_keeps_artifact_only_accounts_visi
 
 
 def test_directory_calls_attached_account_without_bots_ready_standby(tmp_path: Path) -> None:
-    generation = advance_account_clerk_generation(
+    generation = write_historical_clerk_generation(
         tmp_path,
         "DU7654321",
         phase="accepting",
         recorded_at_ms=100,
         source="test",
     )
-    write_account_clerk_lease(
+    write_historical_clerk_lease(
         tmp_path,
         AccountClerkLease(
             account_id="DU7654321",
@@ -1696,7 +1292,7 @@ def test_directory_calls_attached_account_without_bots_ready_standby(tmp_path: P
 def test_directory_uses_latest_binding_per_bot_for_standby_count(tmp_path: Path) -> None:
     account_id = "DU7654321"
     for lifecycle_state, recorded_at_ms in (("ACTIVE", 90), ("RETIRED", 100)):
-        write_account_instance_binding(
+        write_historical_account_binding(
             tmp_path,
             AccountInstanceBinding(
                 account_id=account_id,
@@ -1708,14 +1304,14 @@ def test_directory_uses_latest_binding_per_bot_for_standby_count(tmp_path: Path)
                 source="test",
             ),
         )
-    generation = advance_account_clerk_generation(
+    generation = write_historical_clerk_generation(
         tmp_path,
         account_id,
         phase="accepting",
         recorded_at_ms=101,
         source="test",
     )
-    write_account_clerk_lease(
+    write_historical_clerk_lease(
         tmp_path,
         AccountClerkLease(
             account_id=account_id,
@@ -1744,7 +1340,7 @@ async def test_account_service_status_endpoint_projects_durable_service_evidence
     from app.main import app
 
     account_id = "DU7654321"
-    write_account_instance_binding(
+    write_historical_account_binding(
         tmp_path,
         AccountInstanceBinding(
             account_id=account_id,
@@ -1756,14 +1352,14 @@ async def test_account_service_status_endpoint_projects_durable_service_evidence
             source="test",
         ),
     )
-    generation = advance_account_clerk_generation(
+    generation = write_historical_clerk_generation(
         tmp_path,
         account_id,
         phase="accepting",
         recorded_at_ms=1_780_000_000_100,
         source="host_daemon.clerk_spawn",
     )
-    write_account_clerk_lease(
+    write_historical_clerk_lease(
         tmp_path,
         AccountClerkLease(
             account_id=account_id,
@@ -1789,11 +1385,18 @@ async def test_account_service_status_endpoint_projects_durable_service_evidence
         owner_generation=1,
         created_at_ms=1_780_000_000_103,
     )
-    AccountClerkJournal(
-        artifacts_root=tmp_path,
-        account_id=account_id,
-        now_ms=lambda: 1_780_000_000_104,
-    ).record_intent(intent, validate_intent=lambda _: None)
+    write_historical_clerk_journal(
+        tmp_path,
+        account_id,
+        [
+            AccountClerkJournalEntry(
+                seq=1,
+                entry_kind="recorded",
+                recorded_at_ms=1_780_000_000_104,
+                intent=intent,
+            )
+        ],
+    )
     service = AccountDirectoryService(
         artifacts_root=tmp_path,
         current_account=None,
@@ -1959,36 +1562,11 @@ async def test_account_cockpit_projects_restore_clerk_only_when_daemon_is_availa
 
     assert clerk_down.status_code == 200
     assert clerk_down.json()["mode"] == "CLERK_DOWN"
-    assert clerk_down.json()["blockers"] == [
-        {
-            "condition": {
-                "id": "ACCOUNT_CLERK_UNAVAILABLE",
-                "severity": "blocking",
-                "scope": "account",
-                "evidence": {},
-            },
-            "host": "account_desk",
-            "anchor": {"kind": "surface", "subject_key": None},
-            "audience": "both",
-            "disposition": "fix_here",
-            "headline": "Account Clerk is unavailable",
-            "detail": "Restore the Clerk through the host daemon. No bypass broker writer is available.",
-            "primary_move": {
-                "label": "Restore Clerk",
-                "action": {"kind": "confirm_in_form", "anchor": "account-clerk-restore-action"},
-                "target": None,
-                "confirmation": {
-                    "title": "Restore Account Clerk",
-                    "body": "Ask the host daemon to restore the sole Account Clerk for this account.",
-                    "consequence": "The daemon records a new Clerk generation if it must replace the process. The cockpit will re-observe account evidence after the restore.",
-                    "confirm_label": "Restore Clerk",
-                    "required_token": "RESTORE",
-                },
-            },
-            "secondary_moves": [],
-            "applies_to": "both",
-        }
-    ]
+    [clerk_blocker] = clerk_down.json()["blockers"]
+    assert clerk_blocker["condition"]["id"] == "ACCOUNT_CLERK_UNAVAILABLE"
+    assert clerk_blocker["disposition"] == "wait"
+    assert clerk_blocker["headline"] == "Legacy Account Clerk is retired"
+    assert clerk_blocker["primary_move"] is None
 
     async def daemon_is_down() -> tuple[DaemonResult, None]:
         return DaemonResult(kind="UNREACHABLE", detail="connection refused", error_category="connect_error"), None
@@ -2082,154 +1660,6 @@ async def test_account_cockpit_authors_the_only_journal_corruption_ceremony(
     ]
 
 
-async def test_restore_account_clerk_writes_a_durable_receipt_and_reobserves_generation(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from app.engine.live import host_daemon_client
-    from app.main import app
-
-    account_id = "DU1234567"
-    service = AccountDirectoryService(
-        artifacts_root=tmp_path,
-        current_account=CurrentBrokerAccount(account_id=account_id, is_paper=True),
-        now_ms=lambda: 1_780_000_000_000,
-    )
-    ensure_calls = 0
-
-    async def ensure_clerk(_base_url: str, restored_account_id: str) -> dict:
-        nonlocal ensure_calls
-        assert restored_account_id == account_id
-        ensure_calls += 1
-        generation = advance_account_clerk_generation(
-            tmp_path,
-            account_id,
-            phase="accepting",
-            recorded_at_ms=1_780_000_000_000,
-            source="test.restore",
-        )
-        write_account_clerk_lease(
-            tmp_path,
-            AccountClerkLease(
-                account_id=account_id,
-                generation=generation.generation,
-                pid=42,
-                ibkr_client_id=90,
-                status="RUNNING",
-                started_at_ms=1_780_000_000_000,
-                renewed_at_ms=1_780_000_000_000,
-                valid_until_ms=1_780_000_060_000,
-            ),
-        )
-        return {}
-
-    monkeypatch.setattr(host_daemon_client, "ensure_account_clerk", ensure_clerk)
-    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
-    app.dependency_overrides[account_reconciliation.get_account_directory_service] = lambda: service
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post(
-                f"/api/accounts/{account_id}/clerk/restore",
-                json={"confirmation_token": "RESTORE", "idempotency_key": "restore-1"},
-            )
-            retry = await client.post(
-                f"/api/accounts/{account_id}/clerk/restore",
-                json={"confirmation_token": "RESTORE", "idempotency_key": "restore-1"},
-            )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    assert response.json()["receipt_id"] == "account-clerk-restore:restore-1"
-    assert response.json()["clerk_generation"] == 1
-    assert retry.status_code == 200
-    assert retry.json() == response.json()
-    assert ensure_calls == 1
-    events = read_account_events(tmp_path, account_id)
-    event = events[-1]
-    assert event["event_type"] == "account_clerk_restore_completed"
-    assert event["receipt_id"] == "account-clerk-restore:restore-1"
-    assert sum(event.get("receipt_id") == "account-clerk-restore:restore-1" for event in events) == 1
-
-
-async def test_restore_account_clerk_concurrent_duplicate_never_repeats_the_daemon_action(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from app.engine.live import host_daemon_client
-    from app.main import app
-
-    account_id = "DU1234567"
-    service = AccountDirectoryService(
-        artifacts_root=tmp_path,
-        current_account=CurrentBrokerAccount(account_id=account_id, is_paper=True),
-        now_ms=lambda: 1_780_000_000_000,
-    )
-    started = threading.Event()
-    release = threading.Event()
-    ensure_calls = 0
-
-    async def ensure_clerk(_base_url: str, restored_account_id: str) -> dict:
-        nonlocal ensure_calls
-        assert restored_account_id == account_id
-        ensure_calls += 1
-        started.set()
-        await asyncio.to_thread(release.wait)
-        generation = advance_account_clerk_generation(
-            tmp_path,
-            account_id,
-            phase="accepting",
-            recorded_at_ms=1_780_000_000_000,
-            source="test.restore.concurrent",
-        )
-        write_account_clerk_lease(
-            tmp_path,
-            AccountClerkLease(
-                account_id=account_id,
-                generation=generation.generation,
-                pid=42,
-                ibkr_client_id=90,
-                status="RUNNING",
-                started_at_ms=1_780_000_000_000,
-                renewed_at_ms=1_780_000_000_000,
-                valid_until_ms=1_780_000_060_000,
-            ),
-        )
-        return {}
-
-    monkeypatch.setattr(host_daemon_client, "ensure_account_clerk", ensure_clerk)
-    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
-    app.dependency_overrides[account_reconciliation.get_account_directory_service] = lambda: service
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            first = asyncio.create_task(
-                client.post(
-                    f"/api/accounts/{account_id}/clerk/restore",
-                    json={"confirmation_token": "RESTORE", "idempotency_key": "restore-concurrent-1"},
-                )
-            )
-            await asyncio.to_thread(started.wait)
-            concurrent = await client.post(
-                f"/api/accounts/{account_id}/clerk/restore",
-                json={"confirmation_token": "RESTORE", "idempotency_key": "restore-concurrent-1"},
-            )
-            release.set()
-            completed = await first
-            retry = await client.post(
-                f"/api/accounts/{account_id}/clerk/restore",
-                json={"confirmation_token": "RESTORE", "idempotency_key": "restore-concurrent-1"},
-            )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert concurrent.status_code == 409
-    assert concurrent.json()["detail"]["reason_code"] == "IDEMPOTENCY_OUTCOME_UNKNOWN"
-    assert completed.status_code == 200
-    assert retry.status_code == 200
-    assert retry.json() == completed.json()
-    assert ensure_calls == 1
-
-
 async def test_account_session_policy_endpoint_persists_explicit_outside_session_override(
     tmp_path: Path,
 ) -> None:
@@ -2250,45 +1680,3 @@ async def test_account_session_policy_endpoint_persists_explicit_outside_session
     assert body["account_id"] == "DU1234567"
     assert body["allow_outside_live_session"] is True
     assert isinstance(body["updated_at_ms"], int)
-
-
-async def test_clerk_restart_smoke_endpoint_records_current_accepting_generation(tmp_path: Path) -> None:
-    from app.main import app
-
-    account_id = "DU1234567"
-    now_ms = now_ms_utc()
-    generation = advance_account_clerk_generation(
-        tmp_path,
-        account_id,
-        phase="accepting",
-        recorded_at_ms=now_ms,
-        source="test",
-    )
-    write_account_clerk_lease(
-        tmp_path,
-        AccountClerkLease(
-            account_id=account_id,
-            generation=generation.generation,
-            pid=123,
-            ibkr_client_id=80,
-            status="RUNNING",
-            started_at_ms=now_ms,
-            renewed_at_ms=now_ms,
-            valid_until_ms=now_ms + 60_000,
-        ),
-    )
-    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post(
-                f"/api/accounts/{account_id}/gate-promotion/restart-smoke",
-                json={"confirmation": "CLERK_RESTART_SMOKE"},
-            )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["account_id"] == account_id
-    assert body["clerk_generation"] == generation.generation
-    assert isinstance(body["recorded_at_ms"], int)

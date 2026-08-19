@@ -121,21 +121,9 @@ async def test_catalog_does_not_scan_runner_bindings_after_sqlite_activation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(panel_data_source, "_validate_account", _resolved_account)
-    monkeypatch.setattr(
-        panel_data_source,
-        "_bot_statuses",
-        lambda _broker: pytest.fail("activated catalog scanned file-backed runner bindings"),
-    )
-    monkeypatch.setattr(
-        panel_data_source,
-        "_latest_decision",
-        lambda *_args: pytest.fail("activated catalog read legacy decision journals"),
-    )
-    monkeypatch.setattr(
-        panel_data_source,
-        "get_or_create_owner",
-        lambda *_args: pytest.fail("activated catalog used the legacy rollup owner"),
-    )
+    assert not hasattr(panel_data_source, "_bot_statuses")
+    assert not hasattr(panel_data_source, "_latest_decision")
+    assert not hasattr(panel_data_source, "get_or_create_owner")
     monkeypatch.setattr(sqlite_panel_source, "read_sqlite_catalog_projections", _empty_projections)
     monkeypatch.setattr(
         sqlite_panel_source,
@@ -166,15 +154,8 @@ async def test_activated_catalog_never_scans_large_legacy_set(
     for index in range(200):
         (legacy_root / f"disposable-{index:05d}").mkdir()
 
-    scan_calls = 0
-
-    def scan_large_legacy_set(_broker: str) -> list[Path]:
-        nonlocal scan_calls
-        scan_calls += 1
-        return list(legacy_root.iterdir())
-
     monkeypatch.setattr(panel_data_source, "_validate_account", _resolved_account)
-    monkeypatch.setattr(panel_data_source, "_bot_statuses", scan_large_legacy_set)
+    assert not hasattr(panel_data_source, "_bot_statuses")
     monkeypatch.setattr(sqlite_panel_source, "read_sqlite_catalog_projections", _empty_projections)
     monkeypatch.setattr(
         sqlite_panel_source,
@@ -191,7 +172,6 @@ async def test_activated_catalog_never_scans_large_legacy_set(
         result = await panel_data_source.get_catalog("alpaca", "paper-account")
 
     assert [row.strategy_instance_id for row in result] == ["active-spy", "retired-qqq"]
-    assert scan_calls == 0
 
 
 async def _resolved_account(_broker: str, account_id: str) -> str:
@@ -656,3 +636,80 @@ async def test_catalog_fails_closed_after_bounded_revision_contention(
         await sqlite_panel_source.read_sqlite_catalog("alpaca", "paper-account")
 
     assert attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_panel_evidence_raises_bot_not_found_for_an_absent_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unknown sid is a 404, not a 503 telling the operator to repair.
+
+    Regression for the retirement of legacy broker control: collapsing the
+    absent-bot case into ``PanelUnavailableError`` sent operators to restore
+    a SQLite authority that was already healthy.
+    """
+    repository = _Repository()
+    facade = SimpleNamespace(account_id="paper-account", repository=repository)
+
+    class _CustodyReader:
+        @classmethod
+        def from_repository(cls, _received: _Repository) -> _CustodyReader:
+            return cls()
+
+        def bot_snapshot(self, _strategy_instance_id: str) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    class _EconomicReader:
+        @classmethod
+        def from_repository(cls, _received: _Repository) -> _EconomicReader:
+            return cls()
+
+        def bot_session_economic_projection(
+            self,
+            _strategy_instance_id: str,
+            *,
+            session_window: SessionWindow | None,
+        ) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(sqlite_panel_source, "active_sqlite_facade", lambda _broker: facade)
+    monkeypatch.setattr(sqlite_panel_source, "SqliteClerkProjectionReader", _CustodyReader)
+    monkeypatch.setattr(sqlite_panel_source, "SqliteEconomicProjectionReader", _EconomicReader)
+    monkeypatch.setattr(sqlite_panel_source, "current_trading_session_window", lambda _now: None)
+
+    with pytest.raises(sqlite_panel_source.SqlitePanelBotNotFound):
+        await sqlite_panel_source.read_sqlite_panel_evidence(
+            "alpaca",
+            "paper-account",
+            "ghost-spy",
+            now_ms=1_700_000_000_000,
+        )
+
+
+@pytest.mark.asyncio
+async def test_panel_evidence_returns_none_only_when_no_authority_is_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``None`` is reserved for the missing authority the operator must repair."""
+    monkeypatch.setattr(sqlite_panel_source, "active_sqlite_facade", lambda _broker: None)
+
+    evidence = await sqlite_panel_source.read_sqlite_panel_evidence(
+        "alpaca",
+        "paper-account",
+        "active-spy",
+        now_ms=1_700_000_000_000,
+    )
+
+    assert evidence is None
+
+
+def test_panel_bot_not_found_maps_to_the_unknown_bot_status() -> None:
+    """The 404/503 split the panel router renders is pinned to one taxonomy."""
+    assert panel_data_source.UnknownBotError.http_status == 404
+    assert panel_data_source.PanelUnavailableError.http_status == 503

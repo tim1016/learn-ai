@@ -104,7 +104,6 @@ async def test_existing_reads_project_active_sqlite_authority(sqlite_desk: FastA
 
     assert status.status_code == 200
     assert status.json()["authority_kind"] == "sqlite"
-    assert status.json()["generic_hold_clear_available"] is False
     assert status.json()["channel_healths"] == [
         {
             "stream": "market_data",
@@ -192,6 +191,4 @@ async def test_generic_recovery_routes_are_absent_under_sqlite(
             headers=headers,
         )
 
-    assert clear.status_code == resolve.status_code == 409
-    assert clear.json()["detail"]["reason"] == "generic_recovery_action_retired"
-    assert resolve.json()["detail"]["reason"] == "generic_recovery_action_retired"
+    assert clear.status_code == resolve.status_code == 404

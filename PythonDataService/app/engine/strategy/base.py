@@ -36,18 +36,17 @@ class DecisionSnapshot:
 
     Optional, observability-only: strategies that opt in stash this on
     ``Strategy.last_decision_snapshot`` after each consolidated bar
-    fires; downstream consumers (the live runtime's ``DecisionWriter``,
-    in particular) read it to populate ``decisions.parquet`` for
-    later three-way reconciliation.
+    fires; historical artifact and reconciliation consumers may project it to
+    ``decisions.parquet``. The retired IBKR runtime is no longer a consumer.
 
     Strategies that don't care leave ``last_decision_snapshot=None``
     and nothing reads it. Backtest paths and existing tests are
     unaffected — there is no behavior change unless an external reader
     explicitly observes this attribute.
 
-    Schema mirrors ``app.engine.live.artifacts.DECISION_COLUMNS`` so
-    the LiveEngine's writer integration can convert one-to-one without
-    bookkeeping. ``signal`` is the per-bar action the strategy took:
+    Schema mirrors ``app.engine.live.artifacts.DECISION_COLUMNS`` so historical
+    writer integrations can convert one-to-one without bookkeeping. ``signal``
+    is the per-bar action the strategy took:
     ``ENTER`` if it newly entered a position on this bar, ``EXIT`` if
     it newly liquidated, ``HOLD`` for any other state (warmup-skip,
     bars-until-exit countdown, no signal fired). The strategy is

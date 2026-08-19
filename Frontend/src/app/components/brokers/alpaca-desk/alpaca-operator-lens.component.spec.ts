@@ -18,8 +18,6 @@ function clerkStatus(): ClerkStatus {
     observed_at_ms: 1_700_000_000_000,
     authority_kind: 'sqlite',
     channel_healths: [],
-    generic_hold_clear_available: false,
-    generic_hold_clear_explanation: null,
   };
 }
 

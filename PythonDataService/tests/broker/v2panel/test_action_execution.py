@@ -13,7 +13,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.models import EffectOperationState
 from app.schemas.broker_v2_panel import PanelActionRequest, PanelActionResult
@@ -461,31 +460,39 @@ async def test_live_panel_skips_resume_admission_reconciliation(monkeypatch) -> 
         def binding_for_control(self, _broker: str, _sid: str):
             return SimpleNamespace(symbol="SPY", use_rth=True)
 
-    class _Owner:
-        def sync(self, *_args, **_kwargs) -> None:
-            return
-
-        def get_rollup(self, _sid: str):
-            return SimpleNamespace(exposure={}, fills_today=0, realized_pnl_today=0.0, open_pnl=None, last_activity_at_ms=None)
-
     async def _account(*_args) -> str:
         return "account-1"
 
     async def _clerk(**_kwargs):
         return SimpleNamespace()
 
+    async def _evidence(*_args, **_kwargs):
+        return SimpleNamespace(
+            status=status,
+            projection=SimpleNamespace(),
+            economics=SimpleNamespace(
+                session_fills=(),
+                snapshot=SimpleNamespace(
+                    exposure={},
+                    fills_today=0,
+                    realized_pnl_today=0.0,
+                    open_pnl=None,
+                    last_activity_at_ms=None,
+                ),
+            ),
+        )
+
     status = SimpleNamespace(running=True)
     sentinel = SimpleNamespace()
     monkeypatch.setattr(panel_data_source, "_validate_account", _account)
-    monkeypatch.setattr(panel_data_source, "_bot_status", lambda *_args: status)
     monkeypatch.setattr(panel_data_source, "get_bot_task_registry", lambda: _Registry())
-    monkeypatch.setattr(panel_data_source, "_read_order_journal", lambda *_args: [])
+    monkeypatch.setattr(panel_data_source, "read_sqlite_panel_evidence", _evidence)
     monkeypatch.setattr(panel_data_source, "_clerk_status", _clerk)
-    monkeypatch.setattr(panel_data_source, "_recent_decisions", lambda *_args: [])
-    monkeypatch.setattr(panel_data_source, "get_or_create_owner", lambda *_args: _Owner())
+    monkeypatch.setattr(panel_data_source, "read_sqlite_decision_receipts", lambda *_args: [])
     monkeypatch.setattr(panel_data_source, "panel_profile_for", lambda _broker: None)
     monkeypatch.setattr(panel_data_source, "build_market_pulse", lambda *_args, **_kwargs: SimpleNamespace())
     monkeypatch.setattr(panel_data_source, "build_panel", lambda *_args, **_kwargs: sentinel)
+    monkeypatch.setattr(panel_data_source, "adapt_sqlite_panel", lambda panel, *_args, **_kwargs: panel)
 
     panel = await panel_data_source.get_panel("alpaca", "account-1", _SID)
 
@@ -560,115 +567,6 @@ async def test_flatten_stop_stops_strategy_before_unprovable_exit(monkeypatch) -
 
     assert events == ["stop", "execute"]
     assert "cannot prove" in message
-
-
-async def test_inventory_baseline_performer_uses_channel_identity(monkeypatch) -> None:
-    calls: list[dict[str, str]] = []
-
-    class _Clerk:
-        async def record_inventory_baseline(self, **kwargs):
-            calls.append(kwargs)
-            return SimpleNamespace(
-                positions=(
-                    SimpleNamespace(symbol="SPY", signed_quantity=1.0),
-                )
-            )
-
-    monkeypatch.setattr(
-        "app.services.broker_v2_panel.panel_data_source.get_alpaca_clerk",
-        lambda: _Clerk(),
-    )
-
-    message = await _action_performers(
-        "alpaca", _SID, idempotency_key="baseline-1"
-    )["record_inventory_baseline"]("desk-operator", None)
-
-    assert calls == [
-        {
-            "operator": "desk-operator",
-            "reason": "Operator confirmed current Alpaca inventory from the bot panel.",
-            "strategy_instance_id": _SID,
-        }
-    ]
-    assert "SPY 1" in message
-    assert "reconciliation is clean" in message
-
-
-async def test_inventory_baseline_performer_forwards_operator_reason(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[dict[str, str]] = []
-
-    class _Clerk:
-        async def record_inventory_baseline(self, **kwargs):
-            calls.append(kwargs)
-            return SimpleNamespace(positions=())
-
-    monkeypatch.setattr(
-        "app.services.broker_v2_panel.panel_data_source.get_alpaca_clerk",
-        lambda: _Clerk(),
-    )
-
-    await _action_performers(
-        "alpaca", _SID, idempotency_key="baseline-2"
-    )["record_inventory_baseline"]("desk-operator", "operator note")
-
-    assert calls == [
-        {
-            "operator": "desk-operator",
-            "reason": "operator note",
-            "strategy_instance_id": _SID,
-        }
-    ]
-
-
-async def test_clear_hold_performer_journals_operator_reason(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The clear-hold performer forwards the operator's reason to the Clerk.
-
-    ``clerk.clear_hold`` journals this ``reason`` verbatim onto the resulting
-    ``HOLD_CLEARED`` row (see ``AlpacaClerk.clear_hold``); capturing the kwarg
-    it receives pins the exact value that lands on that row.
-    """
-    calls: list[dict[str, str]] = []
-
-    class _Clerk:
-        async def clear_hold(self, **kwargs):
-            calls.append(kwargs)
-
-    monkeypatch.setattr(
-        "app.services.broker_v2_panel.panel_data_source.get_alpaca_clerk",
-        lambda: _Clerk(),
-    )
-
-    message = await _action_performers(
-        "alpaca", _SID, idempotency_key="clear-hold-1"
-    )["clear_hold"]("desk-operator", "operator note")
-
-    assert calls == [{"operator": "desk-operator", "reason": "operator note"}]
-    assert message == "Exposure hold cleared."
-
-
-async def test_clear_hold_performer_falls_back_to_default_reason_when_none_given(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[dict[str, str]] = []
-
-    class _Clerk:
-        async def clear_hold(self, **kwargs):
-            calls.append(kwargs)
-
-    monkeypatch.setattr(
-        "app.services.broker_v2_panel.panel_data_source.get_alpaca_clerk",
-        lambda: _Clerk(),
-    )
-
-    await _action_performers(
-        "alpaca", _SID, idempotency_key="clear-hold-2"
-    )["clear_hold"]("desk-operator", None)
-
-    assert calls == [{"operator": "desk-operator", "reason": "Panel clear-hold"}]
 
 
 async def test_reconcile_performer_ignores_operator_reason(
@@ -837,31 +735,6 @@ async def test_timed_out_duplicate_never_refires_in_flight_mutation() -> None:
     result = await first_post
     assert result.applied is True
     assert calls == 1
-
-
-# ── §11 per-bot comment-discipline parity (final-review finding #2) ─────────
-#
-# Mirrors the account-level `CustodyResolutionRequest.reason` discipline
-# (`app/broker/alpaca/clerk/diagnosis.py`: required, non-blank, stripped) but
-# only for the two mutating verbs that journal an operator comment
-# (`clear_hold`, `record_inventory_baseline`). Every other action_id leaves
-# `reason` optional, unchanged from before.
-
-
-@pytest.mark.parametrize("action_id", ["clear_hold", "record_inventory_baseline"])
-@pytest.mark.parametrize("reason", [None, "", "   "])
-def test_reason_required_and_nonblank_for_comment_required_actions(
-    action_id: str, reason: str | None
-) -> None:
-    with pytest.raises(ValidationError):
-        _request(action_id=action_id, reason=reason)
-
-
-@pytest.mark.parametrize("action_id", ["clear_hold", "record_inventory_baseline"])
-def test_reason_is_stripped_for_comment_required_actions(action_id: str) -> None:
-    request = _request(action_id=action_id, reason="  operator note  ")
-
-    assert request.reason == "operator note"
 
 
 def test_reason_left_optional_for_non_comment_actions() -> None:

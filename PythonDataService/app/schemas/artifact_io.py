@@ -1,8 +1,7 @@
 """PRD #619-B — canonical fail-closed reader/writer for Pydantic artifacts.
 
-The live-run + control-plane wire artifacts (``engine_runtime.json``,
-``daemon_lease.json``, ``verdict_snapshot.json``, ``run_status.json``,
-``mutation_attempt`` records) all share the same read semantics:
+Durable JSON artifacts such as ``daemon_lease.json``,
+``verdict_snapshot.json``, and ``run_status.json`` share the same read semantics:
 
 1. Missing file → ``None``.
 2. ``OSError`` on read → ``None``.

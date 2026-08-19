@@ -17,9 +17,11 @@ from app.broker.alpaca.clerk.sqlite.database_verification import DatabaseVerific
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
     bot_order_namespace_for_instance,
-    write_account_instance_binding,
 )
 from app.services.bot_binding_repository import StrategyInstanceRecord, alpaca_v1_action_plan
+from tests._helpers.legacy_ibkr_artifacts import (
+    write_historical_account_binding,
+)
 
 ACCOUNT_ID = "PATEST"
 
@@ -89,7 +91,7 @@ def _register_account_binding(
     *,
     account_id: str = ACCOUNT_ID,
 ) -> None:
-    write_account_instance_binding(
+    write_historical_account_binding(
         root,
         AccountInstanceBinding(
             account_id=account_id,
@@ -267,9 +269,7 @@ def test_plan_scopes_candidates_to_the_selected_account(
         max_total_bytes=100_000,
     )
 
-    assert [item.strategy_instance_id for item in plan.candidates] == [
-        "selected-account-bot"
-    ]
+    assert [item.strategy_instance_id for item in plan.candidates] == ["selected-account-bot"]
     assert selected.is_dir()
     assert other.is_dir()
 

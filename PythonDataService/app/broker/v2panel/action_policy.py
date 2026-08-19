@@ -43,7 +43,6 @@ class ActionGuardContext:
     freeze_active: bool
     reconciliation_verdict: str | None
     outstanding_intents: int
-    channel_fresh: bool
     has_exposure: bool
     resume_admission: RunAdmissionDecision | None
     flatten_supported: bool
@@ -51,8 +50,6 @@ class ActionGuardContext:
     strategy_instance_id: str
     exposure: dict[str, float]
     working_order_count: int
-    account_working_order_count: int
-    inventory_recovery_needed: bool
 
 
 @dataclass(frozen=True)
@@ -254,81 +251,8 @@ def _guard_cancel_order(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlo
     return _disabled()
 
 
-def _guard_clear_hold(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
-    if not ctx.hold_active:
-        return _disabled(
-            _blocker(
-                "NO_ACCOUNT_HOLD",
-                scope="account",
-                headline="No account hold is active.",
-                detail="There is nothing to clear.",
-            )
-        )
-    if not ctx.channel_fresh:
-        return _disabled(
-            _blocker(
-                "HOLD_ROOT_NOT_RECOVERED",
-                scope="account",
-                headline="The hold's root condition is not healthy and fresh.",
-                detail="Restore both channels and reconcile before clearing the hold.",
-                evidence={"account_id": ctx.account_id},
-            )
-        )
-    return True, []
-
-
 def _guard_reconcile_now(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
     return True, []
-
-
-def _guard_record_inventory_baseline(
-    ctx: ActionGuardContext,
-) -> tuple[bool, list[OperatorBlocker]]:
-    blockers: list[OperatorBlocker] = []
-    if ctx.running:
-        blockers.append(
-            _blocker(
-                "BOT_RUNNING",
-                scope="bot",
-                headline="Stop the bot before retiring inventory attribution.",
-                detail="Stop strategy evaluation, then refresh the recovery controls.",
-                evidence={"strategy_instance_id": ctx.strategy_instance_id},
-            )
-        )
-    if not ctx.inventory_recovery_needed:
-        blockers.append(
-            _blocker(
-                "INVENTORY_BASELINE_NOT_REQUIRED",
-                scope="account",
-                headline="No inventory cutover recovery is active.",
-                detail=(
-                    "This recovery appears only for a missing-intent freeze or a "
-                    "stopped bot whose stale attribution remains while the account is flat."
-                ),
-                evidence={"account_id": ctx.account_id},
-            )
-        )
-    if ctx.outstanding_intents:
-        blockers.append(
-            _blocker(
-                "UNRESOLVED_INTENTS",
-                scope="account",
-                headline="Unresolved order intents block inventory recovery.",
-                detail="Resolve every uncertain submit before recording an inventory baseline.",
-                evidence={"outstanding_intents": ctx.outstanding_intents},
-            )
-        )
-    if ctx.account_working_order_count:
-        blockers.append(
-            _blocker(
-                "WORKING_ORDERS_PRESENT",
-                scope="account",
-                headline="Working orders block inventory recovery.",
-                detail="Cancel or settle every working order, then reconcile again.",
-                evidence={"working_order_count": ctx.account_working_order_count},
-            )
-        )
-    return (not blockers), blockers
 
 
 ACTION_REGISTRY: dict[str, ActionPolicy] = {
@@ -406,26 +330,6 @@ ACTION_REGISTRY: dict[str, ActionPolicy] = {
         guard=_guard_cancel_order,
         revision_inputs=lambda ctx: (ctx.phase,),
     ),
-    "clear_hold": ActionPolicy(
-        action_id="clear_hold",
-        supported_brokers=frozenset({"alpaca"}),
-        list_page_only=False,
-        guard=_guard_clear_hold,
-        revision_inputs=lambda ctx: (ctx.hold_active, ctx.channel_fresh),
-    ),
-    "record_inventory_baseline": ActionPolicy(
-        action_id="record_inventory_baseline",
-        supported_brokers=frozenset({"alpaca"}),
-        list_page_only=False,
-        guard=_guard_record_inventory_baseline,
-        revision_inputs=lambda ctx: (
-            ctx.running,
-            ctx.reconciliation_verdict,
-            ctx.outstanding_intents,
-            ctx.account_working_order_count,
-            ctx.inventory_recovery_needed,
-        ),
-    ),
     "reconcile_now": ActionPolicy(
         action_id="reconcile_now",
         supported_brokers=frozenset({"alpaca"}),
@@ -481,39 +385,6 @@ def _confirmation_for_action(
             ),
             confirm_label="Flatten & stop",
             required_token="FLATTEN",
-        )
-    if action_id == "record_inventory_baseline":
-        return OperatorConfirmationCopy(
-            title="Adopt current broker inventory as the accounting baseline?",
-            body=(
-                f"This account-level recovery targets {ctx.account_id}. "
-                "It reads current Alpaca positions and records an audited "
-                "cutover in the Clerk journal."
-            ),
-            consequence=(
-                "Earlier trades remain in history but stop contributing to "
-                "current account or bot exposure. All pre-cutover bot "
-                "attribution is retired; current broker positions remain "
-                "unassigned."
-            ),
-            confirm_label="Recover inventory baseline",
-            required_token="BASELINE",
-        )
-    if action_id == "clear_hold":
-        return OperatorConfirmationCopy(
-            title="Clear the account hold?",
-            body=(
-                f"This account-level hold on {ctx.account_id} currently blocks "
-                "new-entry order submission for every bot on the account."
-            ),
-            consequence=(
-                f"New-entry order submission resumes immediately for every bot "
-                f"on {ctx.account_id}. The condition that caused the hold is "
-                "not re-checked by this action — clear it only once the root "
-                "cause is confirmed resolved."
-            ),
-            confirm_label="Clear hold",
-            required_token="CLEARHOLD",
         )
     return None
 

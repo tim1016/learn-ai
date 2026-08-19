@@ -65,9 +65,10 @@
 > preceded acceptance. On 2026-08-10 the evidence-driven amendment in
 > `docs/prds/alpaca-sqlite-ui-paper-acceptance-and-ibkr-control-retirement.md`
 > accepted the ADR for Alpaca paper after a complete UI-driven paper round trip
-> and terminal reconstruction. Accounts without a valid activation fence continue
-> to use the legacy JSONL Clerk; an invalid activated authority fails closed and
-> never falls back.
+> and terminal reconstruction. ADR 0037 / #1618 completed the selectable-code
+> retirement on 2026-08-19: accounts without a valid activation fence now have
+> no Alpaca custody authority and fail unavailable. Legacy JSONL is not a
+> fallback for missing, invalid, conflicting, or failed activation.
 
 At proposal time, the Alpaca Account Clerk
 (`PythonDataService/app/broker/alpaca/clerk/`, ~6,745 lines) was an in-process

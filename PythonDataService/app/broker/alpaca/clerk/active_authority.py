@@ -1,8 +1,8 @@
-"""Boot-time selection and process registry for one active Alpaca Clerk.
+"""Boot-time selection and process registry for the SQLite Alpaca Clerk.
 
-The broker account is resolved before any writer is constructed.  A missing
-activation record selects legacy JSONL; a valid record selects SQLite; an
-invalid record or activated-startup failure selects neither.
+The broker account is resolved before any writer is constructed. A valid
+activation record selects SQLite; every other activation state selects no
+custody authority.
 """
 
 from __future__ import annotations
@@ -25,9 +25,7 @@ from app.broker.alpaca.clerk.sqlite.developer_reset_registry import (
     DeveloperCleanSlateResetRegistry,
 )
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
-from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import (
-    ReconciliationSweep as SqliteReconciliationSweep,
-)
+from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
 from app.broker.alpaca.clerk.sqlite.repository import (
     DEFAULT_LEASE_TTL_MS,
     ClerkSqliteRepository,
@@ -35,10 +33,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
 )
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
-from app.broker.alpaca.clerk.sweep import ReconciliationSweep as LegacyReconciliationSweep
 from app.broker.alpaca.clerk.trade_evidence import (
-    LegacyLifecycleRecorder,
-    LegacyTradeUpdateEvidenceSink,
     SqliteTradeUpdateEvidenceSink,
     TradeUpdateEvidenceSink,
 )
@@ -47,7 +42,7 @@ from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
-AuthorityKind = Literal["legacy", "sqlite", "unavailable"]
+AuthorityKind = Literal["sqlite", "unavailable"]
 DEFAULT_STARTUP_RECOVERY_TIMEOUT_S = 60.0
 DEFAULT_EXECUTION_LEASE_WAIT_TIMEOUT_S = DEFAULT_LEASE_TTL_MS / 1000 + 5.0
 DEFAULT_EXECUTION_LEASE_RETRY_INTERVAL_S = DEFAULT_LEASE_TTL_MS / 1000
@@ -57,10 +52,6 @@ class BackgroundSweep(Protocol):
     def start(self) -> None: ...
 
     async def stop(self) -> None: ...
-
-
-class LegacyAlpacaClerk(ActiveAlpacaClerk, LegacyLifecycleRecorder, Protocol):
-    pass
 
 
 class ActivationResolver(Protocol):
@@ -152,7 +143,6 @@ async def select_active_clerk_runtime(
     read: BrokerReadPort,
     trade: BrokerTradePort,
     artifacts_root: Path,
-    legacy_factory: Callable[[], LegacyAlpacaClerk],
     activation_store: ActivationResolver | None = None,
     repository_opener: Callable[[str, Path], ClerkSqliteRepository] = _open_repository,
     startup_recovery_timeout_s: float = DEFAULT_STARTUP_RECOVERY_TIMEOUT_S,
@@ -212,32 +202,17 @@ async def select_active_clerk_runtime(
         )
 
     if activation is None:
-        try:
-            legacy = legacy_factory()
-            await asyncio.wait_for(
-                legacy.recover(),
-                timeout=startup_recovery_timeout_s,
-            )
-        except Exception as exc:
-            logger.warning(
-                "Legacy Alpaca Clerk recovery failed; Clerk unavailable",
-                extra={"action": "legacy_active_clerk_recovery_failed"},
-                exc_info=True,
-            )
-            return _unavailable(
-                "LEGACY_CLERK_RECOVERY_FAILED",
-                account_id=account.account_id,
-                recovery=str(exc),
-            )
-        return ActiveClerkRuntime(
-            authority_kind="legacy",
-            clerk=legacy,
-            sweep=LegacyReconciliationSweep(clerk=legacy),
-            evidence_sink=LegacyTradeUpdateEvidenceSink(legacy),
+        return _unavailable(
+            "ACTIVATION_REQUIRED",
+            account_id=account.account_id,
+            recovery=(
+                "Complete the supervised SQLite Clerk cutover and activation "
+                "before starting Alpaca custody."
+            ),
         )
 
     repository: ClerkSqliteRepository | None = None
-    sweep: SqliteReconciliationSweep | None = None
+    sweep: ReconciliationSweep | None = None
     try:
         repository = await _open_repository_after_lease_expiry(
             repository_opener,
@@ -269,7 +244,7 @@ async def select_active_clerk_runtime(
         # in main.py, but the lease heartbeat must begin now so a clean-account
         # boot whose recovery only reads from the broker cannot let the lease
         # expire before the sweep is running.
-        sweep = SqliteReconciliationSweep(
+        sweep = ReconciliationSweep(
             repo=repository,
             read=guarded_read,
             trade=guarded_trade,
@@ -356,6 +331,22 @@ def set_active_clerk_runtime(runtime: ActiveClerkRuntime | None) -> None:
     _runtime = runtime
 
 
+def get_alpaca_clerk() -> ActiveAlpacaClerk | None:
+    """Return the process-selected SQLite Clerk, if one is installed."""
+    return None if _runtime is None else _runtime.clerk
+
+
+def set_alpaca_clerk(clerk: ActiveAlpacaClerk | None) -> None:
+    """Compatibility test seam backed by the sole active-runtime registry."""
+    set_active_clerk_runtime(
+        None if clerk is None else ActiveClerkRuntime(authority_kind="sqlite", clerk=clerk)
+    )
+
+
+def reset_alpaca_clerk_for_testing() -> None:
+    set_active_clerk_runtime(None)
+
+
 __all__ = [
     "DEFAULT_STARTUP_RECOVERY_TIMEOUT_S",
     "ActiveAlpacaClerk",
@@ -363,6 +354,9 @@ __all__ = [
     "AuthorityKind",
     "ClerkStartupFailure",
     "get_active_clerk_runtime",
+    "get_alpaca_clerk",
+    "reset_alpaca_clerk_for_testing",
     "select_active_clerk_runtime",
     "set_active_clerk_runtime",
+    "set_alpaca_clerk",
 ]

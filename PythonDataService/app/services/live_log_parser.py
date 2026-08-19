@@ -1,9 +1,9 @@
 """Parser for [BAR] heartbeat lines in live.log.
 
 Formula: Regex extraction of ISO datetime, consolidator_emitted count, and snapshot state from [BAR] log lines.
-Reference: PythonDataService/app/engine/live/live_engine.py lines 516-521
+Historical format: ``[BAR]`` rows emitted by the retired IBKR live runtime.
 Canonical implementation: app/services/live_log_parser.py
-Validated against: PythonDataService/tests/test_live_log_parser.py
+Validated against: PythonDataService/tests/services/test_live_log_parser.py
 """
 
 from __future__ import annotations

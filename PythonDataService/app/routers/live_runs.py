@@ -33,6 +33,10 @@ from app.engine.live.desired_state import (
     DesiredStateRepo,
     stable_desired_state_path,
 )
+from app.engine.live.historical_run_identity import (
+    read_historical_run_ledger_object,
+    read_historical_strategy_instance_id,
+)
 from app.engine.live.live_artifact_io import (
     artifact_exists,
     artifact_mtime_signature,
@@ -41,7 +45,6 @@ from app.engine.live.live_artifact_io import (
     read_parquet_rows,
     read_parquet_tail,
 )
-from app.engine.live.run_ledger import read_ledger
 from app.operator.incidents.store import IncidentStore
 from app.operator.notices.schema import OperatorIncident
 from app.schemas.live_runs import (
@@ -393,11 +396,6 @@ def _update_log_tail(run_id: str, log_path: Path) -> _LogTailState:
 # ── Private helpers ────────────────────────────────────────────────────────
 
 
-def _read_ledger(run_dir: Path) -> dict:
-    """Read run_ledger.json. Raises OSError / json.JSONDecodeError on failure."""
-    return json.loads((run_dir / "run_ledger.json").read_text(encoding="utf-8"))
-
-
 def _read_sidecar(run_dir: Path) -> RunStatusSidecar | None:
     path = run_dir / "run_status.json"
     if not path.exists():
@@ -435,7 +433,7 @@ def _last_activity_ms(run_dir: Path) -> int:
 
 def _build_summary(run_dir: Path, now_ms: int) -> LiveRunSummary:
     """Build a LiveRunSummary from the files in run_dir."""
-    ledger = _read_ledger(run_dir)
+    ledger = read_historical_run_ledger_object(run_dir / "run_ledger.json")
     sidecar = _read_sidecar(run_dir)
     state = infer_state(run_dir, now_ms)
 
@@ -559,7 +557,7 @@ def _get_last_bar_event(run_id: str, run_dir: Path) -> BarEvent | None:
 
 def _build_run_status(run_dir: Path, now_ms: int) -> LiveRunStatus:
     """Build a full LiveRunStatus for a run directory."""
-    ledger = _read_ledger(run_dir)
+    ledger = read_historical_run_ledger_object(run_dir / "run_ledger.json")
     sidecar = _read_sidecar(run_dir)
     run_id: str = ledger["run_id"]
     state = infer_state(run_dir, now_ms)
@@ -961,8 +959,8 @@ def _status_sid(run_dir: Path) -> str:
     if not ledger_path.exists():
         return ""
     try:
-        return read_ledger(ledger_path).strategy_instance_id
-    except (OSError, ValueError):
+        return read_historical_strategy_instance_id(ledger_path)
+    except (OSError, ValueError, json.JSONDecodeError):
         return ""
 
 
@@ -1060,14 +1058,14 @@ def _command_summary(run_dir: Path) -> CommandSummary:
     )
 
 
-def _ledger_or_404(run_dir: Path, run_id: str):
-    """Read the run ledger, mapping read failures to a 404."""
+def _ledger_sid_or_404(run_dir: Path, run_id: str) -> str:
+    """Read the historical strategy id, mapping malformed evidence to 404."""
     ledger_path = run_dir / "run_ledger.json"
     if not ledger_path.exists():
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} has no ledger")
     try:
-        return read_ledger(ledger_path)
-    except (OSError, ValueError) as exc:
+        return read_historical_strategy_instance_id(ledger_path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} ledger unreadable"
         ) from exc
@@ -1093,8 +1091,7 @@ async def get_desired_state(run_id: str) -> DesiredStateView:
     """Return the resolved durable-intent view for a run (UI-1)."""
     root = Path(get_settings().live_runs_root)
     run_dir = _run_dir_or_http_error(root, run_id)
-    ledger = _ledger_or_404(run_dir, run_id)
-    return _resolve_desired_state(root, ledger.strategy_instance_id)
+    return _resolve_desired_state(root, _ledger_sid_or_404(run_dir, run_id))
 
 
 # The bot polls the command dir at ~1s, independent of the bar loop

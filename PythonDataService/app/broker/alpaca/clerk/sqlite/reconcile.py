@@ -10,10 +10,6 @@ from dataclasses import dataclass, field, replace
 from typing import Literal
 from weakref import WeakKeyDictionary
 
-from app.broker.alpaca.clerk.exposure import (
-    ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
-    signed_broker_position_quantity,
-)
 from app.broker.alpaca.clerk.sqlite.exit import resolve_exit
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.facts import (
@@ -36,6 +32,10 @@ from app.broker.alpaca.clerk.sqlite.models import (
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fold_order_evidence,
     resolve_order_submission,
+)
+from app.broker.alpaca.clerk.sqlite.order_projection import (
+    ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
+    signed_broker_position_quantity,
 )
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteError,

@@ -19,7 +19,6 @@ from app.engine.live.account_artifacts import (
 )
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
-    backfill_false_crash_registry_rows,
     compute_reconcile_namespaces,
     crash_retired_restart_blocking_binding,
     evaluate_account_instance_binding,
@@ -27,7 +26,6 @@ from app.engine.live.account_registry import (
     index_account_instance_bindings,
     latest_account_instance_binding,
     read_account_instance_registry,
-    write_account_instance_binding,
 )
 from app.engine.live.exit_taxonomy import (
     ENDED_WITHOUT_STATUS_REGISTRY_SOURCE,
@@ -35,6 +33,9 @@ from app.engine.live.exit_taxonomy import (
     PROCESS_CRASHED_REGISTRY_SOURCE,
 )
 from app.schemas.live_runs import GateResult
+from tests._helpers.legacy_ibkr_artifacts import (
+    write_historical_account_binding,
+)
 
 
 def _binding(
@@ -100,7 +101,7 @@ def test_read_account_instance_registry_rejects_path_like_account_id(
 def test_account_instance_registry_accepts_current_binding(tmp_path: Path) -> None:
     binding = _binding()
 
-    path = write_account_instance_binding(tmp_path, binding)
+    path = write_historical_account_binding(tmp_path, binding)
 
     assert path == tmp_path / "accounts" / "DU123456" / "instance_registry.jsonl"
     assert read_account_instance_registry(tmp_path, "DU123456") == [binding]
@@ -116,7 +117,7 @@ def test_account_instance_registry_accepts_current_binding(tmp_path: Path) -> No
 
 
 def test_compute_reconcile_namespaces_splits_owned_from_durable_siblings(tmp_path: Path) -> None:
-    write_account_instance_binding(
+    write_historical_account_binding(
         tmp_path,
         _binding(
             sid="spy",
@@ -125,7 +126,7 @@ def test_compute_reconcile_namespaces_splits_owned_from_durable_siblings(tmp_pat
             recorded_at_ms=2,
         ),
     )
-    write_account_instance_binding(
+    write_historical_account_binding(
         tmp_path,
         _binding(
             sid="spy",
@@ -134,7 +135,7 @@ def test_compute_reconcile_namespaces_splits_owned_from_durable_siblings(tmp_pat
             recorded_at_ms=1,
         ),
     )
-    write_account_instance_binding(
+    write_historical_account_binding(
         tmp_path,
         _binding(
             sid="aapl",
@@ -143,7 +144,7 @@ def test_compute_reconcile_namespaces_splits_owned_from_durable_siblings(tmp_pat
             recorded_at_ms=4,
         ),
     )
-    write_account_instance_binding(
+    write_historical_account_binding(
         tmp_path,
         _binding(
             sid="retired",
@@ -166,7 +167,7 @@ def test_compute_reconcile_namespaces_splits_owned_from_durable_siblings(tmp_pat
 def test_compute_reconcile_namespaces_keeps_retired_sibling_but_drops_wrong_account_bindings(
     tmp_path: Path,
 ) -> None:
-    write_account_instance_binding(
+    write_historical_account_binding(
         tmp_path,
         _binding(
             sid="retiring-spy",
@@ -175,7 +176,7 @@ def test_compute_reconcile_namespaces_keeps_retired_sibling_but_drops_wrong_acco
             recorded_at_ms=1,
         ),
     )
-    write_account_instance_binding(
+    write_historical_account_binding(
         tmp_path,
         _binding(
             sid="retiring-spy",
@@ -192,7 +193,9 @@ def test_compute_reconcile_namespaces_keeps_retired_sibling_but_drops_wrong_acco
                 run_id="run-wrong",
                 namespace="learn-ai/wrong-account/v1",
                 recorded_at_ms=3,
-            ).model_copy(update={"account_id": "DU999999"}).model_dump_json()
+            )
+            .model_copy(update={"account_id": "DU999999"})
+            .model_dump_json()
             + "\n"
         )
 
@@ -278,28 +281,34 @@ def test_index_account_instance_bindings_groups_duplicate_active_namespace() -> 
 def test_has_account_recovery_evidence_after_requires_later_recovery_event() -> None:
     crash_at_ms = 1_700_000_000_000
 
-    assert has_account_recovery_evidence_after(
-        [
-            {
-                "event_type": "account_instance_binding_recorded",
-                "ts_ms": crash_at_ms + 1,
-            },
-            {
-                "event_type": "account_recovery_proof_recorded",
-                "ts_ms": crash_at_ms,
-            },
-        ],
-        crash_at_ms,
-    ) is False
-    assert has_account_recovery_evidence_after(
-        [
-            {
-                "event_type": "account_recovery_proof_recorded",
-                "ts_ms": crash_at_ms + 1,
-            },
-        ],
-        crash_at_ms,
-    ) is True
+    assert (
+        has_account_recovery_evidence_after(
+            [
+                {
+                    "event_type": "account_instance_binding_recorded",
+                    "ts_ms": crash_at_ms + 1,
+                },
+                {
+                    "event_type": "account_recovery_proof_recorded",
+                    "ts_ms": crash_at_ms,
+                },
+            ],
+            crash_at_ms,
+        )
+        is False
+    )
+    assert (
+        has_account_recovery_evidence_after(
+            [
+                {
+                    "event_type": "account_recovery_proof_recorded",
+                    "ts_ms": crash_at_ms + 1,
+                },
+            ],
+            crash_at_ms,
+        )
+        is True
+    )
 
 
 def test_crash_retired_restart_recovery_blocks_without_later_proof(tmp_path: Path) -> None:
@@ -311,8 +320,8 @@ def test_crash_retired_restart_recovery_blocks_without_later_proof(tmp_path: Pat
             "source": "host_daemon.process_crashed",
         }
     )
-    write_account_instance_binding(tmp_path, active)
-    write_account_instance_binding(tmp_path, retired)
+    write_historical_account_binding(tmp_path, active)
+    write_historical_account_binding(tmp_path, retired)
 
     blocking_binding = crash_retired_restart_blocking_binding(
         tmp_path,
@@ -332,7 +341,7 @@ def test_crash_retired_restart_recovery_allows_after_later_proof(tmp_path: Path)
             "source": "host_daemon.process_crashed",
         }
     )
-    write_account_instance_binding(tmp_path, retired)
+    write_historical_account_binding(tmp_path, retired)
     record_account_recovery_clearance(
         tmp_path,
         recovery_proof=AccountRecoveryProof(
@@ -365,7 +374,7 @@ def test_wrong_account_recovery_clearance_cannot_release_a_crash_retired_binding
     retired = _binding(recorded_at_ms=1_700_000_010_000).model_copy(
         update={"lifecycle_state": "RETIRED", "source": "host_daemon.process_crashed"}
     )
-    write_account_instance_binding(tmp_path, retired)
+    write_historical_account_binding(tmp_path, retired)
     clearance_path = account_artifacts_root(tmp_path, "DU123456") / ACCOUNT_RECOVERY_CLEARANCE_FILENAME
     clearance_path.write_text(
         AccountRecoveryClearance(
@@ -392,7 +401,7 @@ def test_legacy_recovery_proof_event_migrates_clearance_and_unblocks_binding(tmp
     retired = _binding(recorded_at_ms=1_700_000_010_000).model_copy(
         update={"lifecycle_state": "RETIRED", "source": "host_daemon.process_crashed"}
     )
-    write_account_instance_binding(tmp_path, retired)
+    write_historical_account_binding(tmp_path, retired)
     _append_legacy_account_event(
         tmp_path,
         "DU123456",
@@ -420,7 +429,7 @@ def test_legacy_audited_override_event_migrates_recovery_clearance(tmp_path: Pat
     retired = _binding(recorded_at_ms=1_700_000_010_000).model_copy(
         update={"lifecycle_state": "RETIRED", "source": "host_daemon.process_crashed"}
     )
-    write_account_instance_binding(tmp_path, retired)
+    write_historical_account_binding(tmp_path, retired)
     _append_legacy_account_event(
         tmp_path,
         "DU123456",
@@ -450,16 +459,14 @@ def test_missing_legacy_recovery_evidence_keeps_crash_retired_binding_blocked(tm
     retired = _binding(recorded_at_ms=1_700_000_010_000).model_copy(
         update={"lifecycle_state": "RETIRED", "source": "host_daemon.process_crashed"}
     )
-    write_account_instance_binding(tmp_path, retired)
+    write_historical_account_binding(tmp_path, retired)
 
     assert read_or_migrate_account_recovery_clearance(tmp_path, "DU123456") is None
     blocking_binding = crash_retired_restart_blocking_binding(
         tmp_path, account_id="DU123456", strategy_instance_id="spy-ema-paper-1"
     )
     assert blocking_binding == retired
-    assert not (
-        account_artifacts_root(tmp_path, "DU123456") / ACCOUNT_RECOVERY_CLEARANCE_FILENAME
-    ).exists()
+    assert not (account_artifacts_root(tmp_path, "DU123456") / ACCOUNT_RECOVERY_CLEARANCE_FILENAME).exists()
 
 
 def test_malformed_legacy_recovery_clearance_fails_closed(tmp_path: Path) -> None:
@@ -480,7 +487,7 @@ def test_legacy_freeze_override_event_does_not_clear_a_crash_retired_binding(tmp
     retired = _binding(recorded_at_ms=1_700_000_010_000).model_copy(
         update={"lifecycle_state": "RETIRED", "source": "host_daemon.process_crashed"}
     )
-    write_account_instance_binding(tmp_path, retired)
+    write_historical_account_binding(tmp_path, retired)
     _append_legacy_account_event(
         tmp_path,
         "DU123456",
@@ -507,7 +514,7 @@ def test_crash_retired_restart_recovery_allows_non_crash_retirement(tmp_path: Pa
             "source": "host_daemon.stop_requested",
         }
     )
-    write_account_instance_binding(tmp_path, retired)
+    write_historical_account_binding(tmp_path, retired)
 
     blocking_binding = crash_retired_restart_blocking_binding(
         tmp_path,
@@ -534,8 +541,8 @@ def test_crash_retired_restart_blocking_binding_blocks_ended_without_status(tmp_
             "source": "host_daemon.ended_without_status",
         }
     )
-    write_account_instance_binding(tmp_path, active)
-    write_account_instance_binding(tmp_path, retired)
+    write_historical_account_binding(tmp_path, active)
+    write_historical_account_binding(tmp_path, retired)
 
     blocking_binding = crash_retired_restart_blocking_binding(
         tmp_path,
@@ -555,7 +562,7 @@ def test_crash_retired_restart_blocking_binding_ended_without_status_cleared_by_
             "source": "host_daemon.ended_without_status",
         }
     )
-    write_account_instance_binding(tmp_path, retired)
+    write_historical_account_binding(tmp_path, retired)
     record_account_recovery_clearance(
         tmp_path,
         recovery_proof=AccountRecoveryProof(
@@ -612,14 +619,17 @@ def test_crash_retired_restart_blocking_binding_preserves_terminal_retirement_af
             "source": "host_daemon.deploy",
         }
     )
-    write_account_instance_binding(tmp_path, retired)
-    write_account_instance_binding(tmp_path, deploy_only)
+    write_historical_account_binding(tmp_path, retired)
+    write_historical_account_binding(tmp_path, deploy_only)
 
-    assert crash_retired_restart_blocking_binding(
-        tmp_path,
-        account_id="DU123456",
-        strategy_instance_id="spy-ema-paper-1",
-    ) == retired
+    assert (
+        crash_retired_restart_blocking_binding(
+            tmp_path,
+            account_id="DU123456",
+            strategy_instance_id="spy-ema-paper-1",
+        )
+        == retired
+    )
 
 
 def test_crash_retired_restart_blocking_binding_reads_historic_persisted_terminal_binding_after_deploy_only(
@@ -639,7 +649,7 @@ def test_crash_retired_restart_blocking_binding_reads_historic_persisted_termina
     registry_path = account_artifacts_root(tmp_path, "DU123456") / "instance_registry.jsonl"
     registry_path.parent.mkdir(parents=True, exist_ok=True)
     registry_path.write_text(json.dumps(legacy_payload) + "\n", encoding="utf-8")
-    write_account_instance_binding(
+    write_historical_account_binding(
         tmp_path,
         retired.model_copy(
             update={
@@ -663,169 +673,6 @@ def test_crash_retired_restart_blocking_binding_reads_historic_persisted_termina
     assert blocking_binding.cohort_id == "historic-cohort"
 
 
-def test_crash_retired_restart_blocking_binding_honors_false_crash_correction_after_deploy_only(
-    tmp_path: Path,
-) -> None:
-    """A correction supersedes its crash row even after successor staging."""
-
-    retired = _binding(run_id="run-halt", recorded_at_ms=1_700_000_010_000).model_copy(
-        update={
-            "lifecycle_state": "RETIRED",
-            "source": PROCESS_CRASHED_REGISTRY_SOURCE,
-        }
-    )
-    write_account_instance_binding(tmp_path, retired)
-    _write_run_status(tmp_path, "run-halt", exit_reason="fatal_halt", exit_code=1)
-    backfill_false_crash_registry_rows(
-        tmp_path,
-        account_id="DU123456",
-        now_ms=1_700_000_010_001,
-    )
-    write_account_instance_binding(
-        tmp_path,
-        retired.model_copy(
-            update={
-                "run_id": "run-staged",
-                "lifecycle_state": "DEPLOYED",
-                "recorded_at_ms": 1_700_000_020_000,
-                "source": "host_daemon.deploy",
-            }
-        ),
-    )
-
-    assert (
-        crash_retired_restart_blocking_binding(
-            tmp_path,
-            account_id="DU123456",
-            strategy_instance_id="spy-ema-paper-1",
-        )
-        is None
-    )
-
-
-def test_backfill_false_crash_registry_rows_repairs_disproven_latest_crash(tmp_path: Path) -> None:
-    active = _binding(run_id="run-halt", recorded_at_ms=1_700_000_000_000)
-    retired = active.model_copy(
-        update={
-            "lifecycle_state": "RETIRED",
-            "recorded_at_ms": 1_700_000_010_000,
-            "source": "host_daemon.process_crashed",
-        }
-    )
-    write_account_instance_binding(tmp_path, active)
-    write_account_instance_binding(tmp_path, retired)
-    _write_run_status(tmp_path, "run-halt", exit_reason="fatal_halt", exit_code=1)
-
-    result = backfill_false_crash_registry_rows(
-        tmp_path,
-        account_id="DU123456",
-        now_ms=1_700_000_010_001,
-    )
-
-    assert result.accounts_scanned == 1
-    assert result.candidate_rows == 1
-    assert result.rows_repaired == 1
-    assert result.rows_skipped_no_disproof == 0
-    assert result.repaired_run_ids == ("run-halt",)
-    repaired = latest_account_instance_binding(
-        read_account_instance_registry(tmp_path, "DU123456"),
-        account_id="DU123456",
-        strategy_instance_id="spy-ema-paper-1",
-    )
-    assert repaired is not None
-    assert repaired.source == "host_daemon.process_halted"
-    assert repaired.recorded_at_ms == 1_700_000_010_001
-
-    second = backfill_false_crash_registry_rows(
-        tmp_path,
-        account_id="DU123456",
-        now_ms=1_700_000_010_002,
-    )
-
-    assert second.candidate_rows == 0
-    assert second.rows_repaired == 0
-    assert len(read_account_instance_registry(tmp_path, "DU123456")) == 3
-
-
-def test_backfill_false_crash_registry_rows_leaves_exception_and_missing_status(
-    tmp_path: Path,
-) -> None:
-    exception_binding = _binding(
-        sid="exception-bot",
-        run_id="run-exception",
-        namespace="learn-ai/exception-bot/v1",
-        recorded_at_ms=1_700_000_010_000,
-    ).model_copy(
-        update={
-            "lifecycle_state": "RETIRED",
-            "source": "host_daemon.process_crashed",
-        }
-    )
-    missing_status_binding = _binding(
-        sid="missing-status-bot",
-        run_id="run-missing-status",
-        namespace="learn-ai/missing-status-bot/v1",
-        recorded_at_ms=1_700_000_010_001,
-    ).model_copy(
-        update={
-            "lifecycle_state": "RETIRED",
-            "source": "host_daemon.process_crashed",
-        }
-    )
-    write_account_instance_binding(tmp_path, exception_binding)
-    write_account_instance_binding(tmp_path, missing_status_binding)
-    _write_run_status(tmp_path, "run-exception", exit_reason="exception", exit_code=3)
-
-    result = backfill_false_crash_registry_rows(
-        tmp_path,
-        account_id="DU123456",
-        now_ms=1_700_000_020_000,
-    )
-
-    assert result.candidate_rows == 2
-    assert result.rows_repaired == 0
-    assert result.rows_skipped_no_disproof == 2
-    bindings = read_account_instance_registry(tmp_path, "DU123456")
-    assert len(bindings) == 2
-    assert {binding.source for binding in bindings} == {"host_daemon.process_crashed"}
-
-
-def test_backfill_false_crash_registry_rows_ignores_superseded_crash_rows(
-    tmp_path: Path,
-) -> None:
-    retired = _binding(
-        run_id="run-old-halt",
-        recorded_at_ms=1_700_000_010_000,
-    ).model_copy(
-        update={
-            "lifecycle_state": "RETIRED",
-            "source": "host_daemon.process_crashed",
-        }
-    )
-    active = _binding(
-        run_id="run-new",
-        recorded_at_ms=1_700_000_020_000,
-    )
-    write_account_instance_binding(tmp_path, retired)
-    write_account_instance_binding(tmp_path, active)
-    _write_run_status(tmp_path, "run-old-halt", exit_reason="fatal_halt", exit_code=1)
-
-    result = backfill_false_crash_registry_rows(
-        tmp_path,
-        account_id="DU123456",
-        now_ms=1_700_000_030_000,
-    )
-
-    assert result.candidate_rows == 0
-    assert result.rows_repaired == 0
-    latest = latest_account_instance_binding(
-        read_account_instance_registry(tmp_path, "DU123456"),
-        account_id="DU123456",
-        strategy_instance_id="spy-ema-paper-1",
-    )
-    assert latest == active
-
-
 def test_account_instance_registry_blocks_unknown_instance(tmp_path: Path) -> None:
     gate = evaluate_account_instance_binding(
         tmp_path,
@@ -840,7 +687,7 @@ def test_account_instance_registry_blocks_unknown_instance(tmp_path: Path) -> No
 
 
 def test_account_instance_registry_blocks_stale_run_binding(tmp_path: Path) -> None:
-    write_account_instance_binding(tmp_path, _binding(run_id="run-alpha"))
+    write_historical_account_binding(tmp_path, _binding(run_id="run-alpha"))
 
     gate = evaluate_account_instance_binding(
         tmp_path,
@@ -855,11 +702,11 @@ def test_account_instance_registry_blocks_stale_run_binding(tmp_path: Path) -> N
 
 
 def test_account_instance_registry_blocks_duplicate_namespace(tmp_path: Path) -> None:
-    write_account_instance_binding(
+    write_historical_account_binding(
         tmp_path,
         _binding(sid="spy-a", run_id="run-a", namespace="learn-ai/shared/v1"),
     )
-    write_account_instance_binding(
+    write_historical_account_binding(
         tmp_path,
         _binding(
             sid="spy-b",

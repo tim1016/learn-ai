@@ -74,9 +74,7 @@ from app.schemas.artifact_io import (
     read_pydantic_artifact,
 )
 from app.schemas.live_runs import GateResult
-from app.schemas.operator_blocker import OperatorConfirmationCopy
 from app.services.account_desk_guidance import author_account_desk_blockers
-from app.services.account_recovery_flatten_candidates import recovery_flatten_candidates
 from app.services.account_truth_snapshot import AccountTruthSnapshot, assess_account_truth
 from app.utils.advisory_lock import advisory_file_lock
 from app.utils.timestamps import now_ms_utc
@@ -995,21 +993,6 @@ class AccountReconciliationService:
             now_ms=generated_at_ms,
             receipt_invalidation=receipt_invalidation,
         )
-        recovery_candidates = recovery_flatten_candidates(
-            artifacts_root=self._artifacts_root,
-            account_id=canonical_account_id,
-            bindings=latest_bindings,
-            account_truth=receipt.account_truth if receipt is not None else None,
-            account_truth_expires_at_ms=receipt.expires_at_ms if receipt is not None else None,
-            generated_at_ms=generated_at_ms,
-        )
-        emergency_flatten_confirmation = _emergency_flatten_confirmation(
-            account_id=canonical_account_id,
-            receipt=receipt,
-            receipt_invalidation=receipt_invalidation,
-            has_exact_recovery_candidate=bool(recovery_candidates),
-            now_ms=generated_at_ms,
-        )
         return AccountTriageResponse(
             generated_at_ms=generated_at_ms,
             account_id=canonical_account_id,
@@ -1036,7 +1019,6 @@ class AccountReconciliationService:
             conditions=conditions,
             freeze_banner=_freeze_banner(freeze),
             clear_freeze_actionable=clear_freeze_actionable,
-            emergency_flatten_confirmation=emergency_flatten_confirmation,
             affected_bots=[
                 AccountTriageBotRef(
                     strategy_instance_id=binding.strategy_instance_id,
@@ -1046,45 +1028,11 @@ class AccountReconciliationService:
                 )
                 for binding in active_bindings
             ],
-            recovery_flatten_candidates=recovery_candidates,
             operator_blockers=author_account_desk_blockers(
                 conditions,
                 clear_freeze_actionable=clear_freeze_actionable,
-                recovery_flatten_candidates=recovery_candidates,
             ),
         )
-
-
-def _emergency_flatten_confirmation(
-    *,
-    account_id: str,
-    receipt: AccountReconciliationReceipt | None,
-    receipt_invalidation: _ReceiptInvalidation | None,
-    has_exact_recovery_candidate: bool,
-    now_ms: int,
-) -> OperatorConfirmationCopy | None:
-    """Declare the blunt paper-only escape hatch from fresh broker truth."""
-
-    if (
-        receipt is None
-        or receipt_invalidation is not None
-        or has_exact_recovery_candidate
-        or receipt.expires_at_ms <= now_ms
-        or receipt.connected_account_id != account_id
-        or not receipt.account_truth.account.is_paper
-        or not any(position.quantity != 0 for position in receipt.account_truth.positions)
-    ):
-        return None
-    return OperatorConfirmationCopy(
-        title="Emergency flatten paper account",
-        body=f"Submit account-wide market orders to close every open position in {account_id}.",
-        consequence=(
-            "The Account service will cancel open orders and submit market orders for every remaining paper position. "
-            "Run account reconciliation after the fills arrive."
-        ),
-        confirm_label="Emergency flatten account",
-        required_token="FLATTEN",
-    )
 
 
 def _normalize_optional_account_id(account_id: str | None) -> str | None:

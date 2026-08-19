@@ -1,7 +1,5 @@
 @if (projection.isLoading()) {
   <p class="sqlite-custody__state" role="status">Loading order custody details…</p>
-} @else if (isLegacyAuthority()) {
-  <!-- The legacy cards below remain authoritative until SQLite activation. -->
 } @else if (projection.error()) {
   <p class="sqlite-custody__state sqlite-custody__state--error" role="alert">
     Order custody details are unavailable. New broker actions remain blocked until the account record recovers.

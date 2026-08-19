@@ -14,7 +14,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from app.broker.alpaca.clerk.recovery import UNCERTAIN_SUBMIT_GRACE_MS
 from app.broker.alpaca.clerk.sqlite.execution_coverage import FILL_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.facts import (
     EnterAcceptedFacts,
@@ -34,6 +33,8 @@ from app.broker.contract.models import BrokerOrder
 
 if TYPE_CHECKING:
     from app.broker.contract.ports import BrokerTradePort
+
+UNCERTAIN_SUBMIT_GRACE_MS = 30_000
 
 __all__ = [
     "entry_order_symbol",

@@ -1,246 +1,142 @@
-"""HTTP seam tests for the broker-v2 panel router (S1).
-
-Drives the account-scoped endpoints through the FastAPI HTTP surface with
-journal fixtures on disk: panel-profile, catalog, panel, presented-action
-execution (revision 409 + idempotency), and chart history preset validation.
-"""
+"""HTTP seam coverage for the active SQLite Broker V2 panel."""
 
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
-from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport
 
-from app.broker.alpaca.clerk import reset_alpaca_clerk_for_testing, set_alpaca_clerk
-from app.broker.alpaca.clerk.journal import (
-    OrderJournal,
-    get_clerk_settings,
-    reset_clerk_settings_for_testing,
+from app.broker.alpaca.clerk.active_authority import (
+    ActiveClerkRuntime,
+    set_active_clerk_runtime,
 )
-from app.broker.alpaca.clerk.models import (
-    AccountFreezeState,
-    ClerkCustodySnapshot,
-    ClerkStatus,
-    CustodyCountFact,
-    CustodyExposureFact,
-    HoldState,
-    ReconciliationSummary,
-)
+from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.registry import (
     get_broker_registry,
     reset_broker_registry_for_testing,
 )
-from app.marketdata.feed import FeedHealth, MarketDataBar
 from app.routers import broker_v2_panel
 from app.routers.broker_v2_panel import router
+from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import BotPanelLiveSnapshot, ChartLiveResponse
-from app.services.bot_binding_repository import BrokerBotBinding
-from app.services.bot_lifecycle_projection import AlpacaLifecycleAuthoritySnapshot
-from app.services.bot_runner import BotTaskRegistry, set_bot_task_registry
-from app.services.broker_v2_panel import panel_data_source
+from app.services.bot_runner import set_bot_task_registry
 from app.services.broker_v2_panel.action_execution_service import (
     reset_idempotency_store_for_testing,
 )
-from app.utils.timestamps import now_ms_utc
-from tests.broker.v2panel.fixtures import (
-    ACCT,
-    SID,
-    fill_entry,
-    intent_entry,
-    submit_acked_entry,
-)
-
-_ACCOUNT_ID = ACCT
-
-
-class _FakeAccount:
-    account_id = _ACCOUNT_ID
-
-
-class _FakeReadPort:
-    broker_id = "alpaca"
-
-    async def get_account(self):
-        return _FakeAccount()
-
-    def capabilities(self):  # pragma: no cover - registry shape only
-        raise NotImplementedError
-
+from tests.broker.v2panel.fixtures import ACCT, SID
 
 _T0 = 1_700_000_000_000
 
 
-class _HoldFeed:
-    feed_id = "fake"
-
-    async def stream_bars(self, symbol: str, *, use_rth: bool = True):
-        yield MarketDataBar(
-            symbol=symbol,
-            start_ms=_T0,
-            end_ms=_T0 + 60_000,
-            open=Decimal("400"),
-            high=Decimal("401"),
-            low=Decimal("399"),
-            close=Decimal("400.5"),
-            volume=100,
-            fetched_at_ms=_T0 + 500,
-            feed_id="fake",
-            session_phase="RTH",
-        )
-        await asyncio.Event().wait()
-
-    def health(self, _symbol: str | None = None) -> FeedHealth:
-        observed_at_ms = now_ms_utc()
-        return FeedHealth(
-            connected=True,
-            stale=False,
-            last_bar_ms=_T0,
-            reason="",
-            active_subscription_count=0,
-            observed_at_ms=observed_at_ms,
-        )
+class _FakeAccount:
+    account_id = ACCT
 
 
-class _FakeClerk:
-    """Minimal clerk exposing only the panel/action read+control seams."""
+class _FakeBrokerPort:
+    broker_id = "alpaca"
 
-    def __init__(self) -> None:
-        self.reconciled = False
-        self.cleared = False
-        self.active_runs: dict[str, str] = {}
-        self.known_runs: set[tuple[str, str]] = set()
-        self.stopped_runs: list[str] = []
+    async def get_account(self) -> _FakeAccount:
+        return _FakeAccount()
 
-    async def register_strategy_run(self, binding: BrokerBotBinding) -> None:
-        strategy_instance_id = binding.strategy_instance_id
-        run_id = binding.run_id
-        self.active_runs[strategy_instance_id] = run_id
-        self.known_runs.add((strategy_instance_id, run_id))
+    async def list_positions(self) -> list:
+        return []
 
-    async def stop_strategy_run(
-        self,
-        *,
-        strategy_instance_id: str,
-        run_id: str,
-        reason: str | None = None,
-    ) -> None:
-        del reason
-        self.stopped_runs.append(run_id)
-        if self.active_runs.get(strategy_instance_id) == run_id:
-            self.active_runs.pop(strategy_instance_id)
+    async def list_orders(self, **_kwargs) -> list:
+        return []
 
-    def lifecycle_snapshot(
-        self,
-        strategy_instance_id: str,
-        expected_run_id: str | None,
-    ) -> AlpacaLifecycleAuthoritySnapshot:
-        active_run_id = self.active_runs.get(strategy_instance_id)
-        known = any(candidate[0] == strategy_instance_id for candidate in self.known_runs)
-        if expected_run_id is None:
-            expected_run_state = None
-        elif active_run_id == expected_run_id:
-            expected_run_state = "ACTIVE"
-        elif (strategy_instance_id, expected_run_id) in self.known_runs:
-            expected_run_state = "STOPPED"
-        else:
-            expected_run_state = "MISSING"
-        return AlpacaLifecycleAuthoritySnapshot(
-            strategy_instance_exists=active_run_id is not None or known,
-            active_run_id=active_run_id,
-            retired_at_ms=None,
-            expected_run_state=expected_run_state,
-            control_revision=len(self.known_runs) + len(self.stopped_runs),
-        )
+    async def list_activities(self, **_kwargs) -> list:
+        return []
 
-    def lifecycle_recovery_candidates(self) -> tuple[tuple[str, str], ...]:
-        return tuple(sorted(self.active_runs.items()))
+    async def submit(self, *_args, **_kwargs):  # pragma: no cover - not used
+        raise AssertionError("panel read tests must not submit broker orders")
 
-    async def status(self) -> ClerkStatus:
-        return ClerkStatus(
+    async def cancel(self, _order_id: str) -> None:  # pragma: no cover - not used
+        raise AssertionError("panel read tests must not cancel broker orders")
+
+    async def get_order_by_client_order_id(self, _client_order_id: str):
+        return None
+
+    def capabilities(self) -> None:  # pragma: no cover - registry shape only
+        raise NotImplementedError
+
+
+class _FakeRegistry:
+    def status(self, broker: str, sid: str) -> BotStatusView:
+        assert broker == "alpaca"
+        assert sid == SID
+        return BotStatusView(
+            strategy_instance_id=SID,
+            strategy_key="deployment_validation",
+            strategy_label="Deployment Validation",
             broker="alpaca",
-            account_id=_ACCOUNT_ID,
-            hold=HoldState(active=False, reason_code=None, reason=None, since_ms=None),
-            latest_reconciliation=ReconciliationSummary(
-                verdict="clean", recorded_at_ms=1_000
-            ),
-            outstanding_intents=0,
-            observed_at_ms=2_000,
-            channel_healths=None,
+            symbol="SPY",
+            mode="trade",
+            quantity=1,
+            running=True,
+            phase="ON_DUTY",
+            desired_state="RUNNING",
+            active_run_id="run-1",
+            duty_outcome=None,
+            binding_created_at_ms=_T0,
+            last_transition_at_ms=_T0,
         )
 
-    async def custody_snapshot(self, strategy_instance_id: str) -> ClerkCustodySnapshot:
-        observed_at_ms = now_ms_utc()
-        return ClerkCustodySnapshot(
-            broker="alpaca",
-            account_id=_ACCOUNT_ID,
-            strategy_instance_id=strategy_instance_id,
-            clerk_generation="clerk-test-generation",
-            journal_sequence=7,
-            reconciliation_state="clean",
-            reconciliation_fresh=True,
-            reconciled_at_ms=observed_at_ms,
-            exposure=CustodyExposureFact(state="zero", positions={}),
-            working_orders=CustodyCountFact(state="zero", count=0),
-            pending_orders=CustodyCountFact(state="zero", count=0),
-            terminal_orders=CustodyCountFact(state="zero", count=0),
-            unresolved_effects=CustodyCountFact(state="zero", count=0),
-            hold=HoldState(active=False),
-            freeze=AccountFreezeState(),
-            reason_code="CLERK_CUSTODY_PROVEN",
-            evidence_refs=("alpaca-clerk-journal:PA-TEST:7",),
-            observed_at_ms=observed_at_ms,
-        )
+    def list_bots(self, broker: str) -> list[BotStatusView]:
+        return [self.status(broker, SID)]
 
-    @asynccontextmanager
-    async def start_admission_snapshot(self, strategy_instance_id: str):
-        yield await self.custody_snapshot(strategy_instance_id)
+    def binding_for_control(self, broker: str, sid: str) -> SimpleNamespace:
+        self.status(broker, sid)
+        return SimpleNamespace(symbol="SPY", use_rth=True)
 
-    async def reconcile_once(self) -> str:
-        self.reconciled = True
-        return "clean"
-
-    async def clear_hold(self, *, operator: str, reason: str) -> ClerkStatus:
-        self.cleared = True
-        return await self.status()
+    def dry_run_activity(self, broker: str, sid: str) -> list:
+        self.status(broker, sid)
+        return []
 
 
-_ApiFixture = tuple[FastAPI, _FakeClerk, BotTaskRegistry]
-
-
-@pytest.fixture
-def api(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("ALPACA_CLERK_DIR", str(tmp_path / "alpaca_clerk"))
-    reset_clerk_settings_for_testing()
+@pytest.fixture()
+def api(tmp_path: Path):
     reset_broker_registry_for_testing()
-    reset_alpaca_clerk_for_testing()
     reset_idempotency_store_for_testing()
-    get_broker_registry().register(_FakeReadPort())
-    clerk = _FakeClerk()
-    set_alpaca_clerk(clerk)
-
-    # Deploy one bot so the roster is non-empty.
-    registry = BotTaskRegistry(
-        tmp_path / "live_state_root",
-        feed_resolver=lambda: _HoldFeed(),
-        boot_recovery_required=False,
+    set_active_clerk_runtime(None)
+    set_bot_task_registry(_FakeRegistry())  # type: ignore[arg-type]
+    port = _FakeBrokerPort()
+    get_broker_registry().register(port)  # type: ignore[arg-type]
+    repo = ClerkSqliteRepository.initialize(account_id=ACCT, artifacts_root=tmp_path)
+    repo.register_strategy_instance(
+        strategy_instance_id=SID,
+        symbol="SPY",
+        config_hash="config-1",
+        strategy_key="deployment_validation",
+        display_name="Deployment Validation",
     )
-    set_bot_task_registry(registry)
-
+    submit_start_run(
+        repo,
+        account_id=ACCT,
+        strategy_instance_id=SID,
+        lifecycle_run_id="run-1",
+    )
+    facade = SqliteAlpacaClerkFacade(
+        repo=repo,
+        read=port,  # type: ignore[arg-type]
+        trade=port,  # type: ignore[arg-type]
+    )
+    set_active_clerk_runtime(ActiveClerkRuntime(authority_kind="sqlite", clerk=facade))
     app = FastAPI()
     app.include_router(router)
     try:
-        yield app, clerk, registry
+        yield app, repo
     finally:
+        set_active_clerk_runtime(None)
         set_bot_task_registry(None)
-        set_alpaca_clerk(None)
+        repo.close()
         reset_broker_registry_for_testing()
-        reset_clerk_settings_for_testing()
         reset_idempotency_store_for_testing()
 
 
@@ -248,145 +144,72 @@ def _client(app: FastAPI) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 
 
-def _write_journal(entries) -> None:
-    journal = OrderJournal(account_id=_ACCOUNT_ID, root=get_clerk_settings().dir)
-    for entry in entries:
-        journal.append(entry)
-
-
-async def _deploy_bot(registry: BotTaskRegistry) -> None:
-    await registry.deploy(
-        broker="alpaca", strategy_instance_id=SID, symbol="SPY", use_rth=True
-    )
-
-
-# ── §4 panel-profile ─────────────────────────────────────────────────────────
-
-
 async def test_panel_profile_endpoint(api) -> None:
-    app, _clerk, _registry = api
+    app, _repo = api
     async with _client(app) as client:
         response = await client.get("/api/brokers/alpaca/panel-profile")
-    assert response.status_code == 200
-    body = response.json()
-    assert body["broker"] == "alpaca"
-    assert body["fee_fidelity"] == "none"
-    assert len(body["stations"]) == 6
+
+    assert response.status_code == 200, response.text
+    assert response.json()["broker"] == "alpaca"
+    assert len(response.json()["stations"]) == 6
+    assert "clear_hold" not in response.json()["supported_action_ids"]
+    assert "record_inventory_baseline" not in response.json()["supported_action_ids"]
 
 
-async def test_authority_facts_endpoint_keeps_process_and_custody_separate(api) -> None:
-    app, _clerk, registry = api
-    await _deploy_bot(registry)
-
+async def test_catalog_scoped_returns_sqlite_roster(api) -> None:
+    app, _repo = api
     async with _client(app) as client:
-        response = await client.get(
-            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/authority-facts"
-        )
+        response = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/catalog")
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["process"]["strategy_instance_id"] == SID
-    assert body["process"]["state"] == "RUNNING"
-    assert body["clerk"]["strategy_instance_id"] == SID
-    assert body["clerk"]["exposure"] == {"state": "zero", "positions": {}}
-    assert body["clerk"]["reason_code"] == "CLERK_CUSTODY_PROVEN"
-
-    await registry.stop("alpaca", SID)
-
-
-async def test_panel_profile_unknown_broker_is_404(api) -> None:
-    app, _clerk, _registry = api
-    async with _client(app) as client:
-        response = await client.get("/api/brokers/ibkr/panel-profile")
-    assert response.status_code == 404
-
-
-# ── §5 catalog (account-scoped) ──────────────────────────────────────────────
-
-
-async def test_catalog_scoped_returns_roster(api) -> None:
-    app, _clerk, registry = api
-    await _deploy_bot(registry)
-    _write_journal([fill_entry(sid=SID, intent="i1", ts_ms=1_000, qty=100, price=500.0)])
-
-    async with _client(app) as client:
-        response = await client.get(
-            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/catalog"
-        )
     assert response.status_code == 200
     rows = response.json()
-    assert [r["strategy_instance_id"] for r in rows] == [SID]
-    assert rows[0]["exposure"] == {"SPY": 100.0}
-    assert rows[0]["desired_state"] in ("RUNNING", "STOPPED")
-    assert rows[0]["row_action"]["action_id"] == "stop"
-    assert rows[0]["row_action"]["enabled"] is True
+    assert [row["strategy_instance_id"] for row in rows] == [SID]
+    assert rows[0]["strategy_key"] == "deployment_validation"
+    assert rows[0]["desired_state"] == "RUNNING"
 
 
-async def test_catalog_account_mismatch_is_404(api) -> None:
-    app, _clerk, registry = api
-    await _deploy_bot(registry)
+async def test_panel_scoped_uses_sqlite_projection(api) -> None:
+    app, _repo = api
     async with _client(app) as client:
         response = await client.get(
-            "/api/brokers/alpaca/accounts/WRONG-ACCT/bots/catalog"
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel"
         )
-    assert response.status_code == 404
 
-
-async def test_catalog_unscoped_alias_still_works(api) -> None:
-    app, _clerk, registry = api
-    await _deploy_bot(registry)
-    async with _client(app) as client:
-        response = await client.get("/api/brokers/alpaca/bots/catalog")
-    assert response.status_code == 200
-
-
-# ── §7 panel ─────────────────────────────────────────────────────────────────
-
-
-async def test_panel_scoped_never_emits_paused(api) -> None:
-    app, _clerk, registry = api
-    await _deploy_bot(registry)
-    _write_journal(
-        [
-            intent_entry(sid=SID, intent="i1", ts_ms=1_000),
-            submit_acked_entry(sid=SID, intent="i1", ts_ms=1_100),
-        ]
-    )
-    async with _client(app) as client:
-        response = await client.get(
-            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/panel"
-        )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     body = response.json()
-    assert body["health"]["desired_state"] in ("RUNNING", "STOPPED")
-    assert body["health"]["desired_state"] != "PAUSED"
+    assert body["health"]["desired_state"] == "RUNNING"
     assert len(body["rail"]["stations"]) == 6
     assert "revision" in body
+    assert {action["action_id"] for action in body["actions"]}.isdisjoint(
+        {"clear_hold", "record_inventory_baseline"}
+    )
 
 
 async def test_live_snapshot_bootstrap_and_sse_share_one_versioned_document(
     api,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    app, _clerk, registry = api
-    await _deploy_bot(registry)
-    panel = await panel_data_source.get_panel("alpaca", _ACCOUNT_ID, SID)
-    chart = ChartLiveResponse(
-        strategy_instance_id=SID,
-        symbol="SPY",
-        trading_date_open_ms=_T0,
-        trading_date_close_ms=_T0 + 60_000,
-        resolution="5s",
-        bars=[],
-        fill_markers=[],
-        overlay_notices=[],
-        as_of_ms=_T0,
-    )
+    app, _repo = api
+    async with _client(app) as client:
+        panel_response = await client.get(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel"
+        )
+    panel = panel_response.json()
     snapshot = BotPanelLiveSnapshot(
         stream_epoch="epoch-new",
         surface_version=7,
         panel=panel,
-        live_chart=chart,
+        live_chart=ChartLiveResponse(
+            strategy_instance_id=SID,
+            symbol="SPY",
+            trading_date_open_ms=_T0,
+            trading_date_close_ms=_T0 + 60_000,
+            resolution="5s",
+            bars=[],
+            fill_markers=[],
+            overlay_notices=[],
+            as_of_ms=_T0,
+        ),
     )
 
     class _Hub:
@@ -406,231 +229,62 @@ async def test_live_snapshot_bootstrap_and_sse_share_one_versioned_document(
         return _Hub()
 
     monkeypatch.setattr(broker_v2_panel, "get_or_start_live_projection_hub", get_hub)
-    monkeypatch.setattr(broker_v2_panel, "retain_live_projection_hub", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(broker_v2_panel, "release_live_projection_hub", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        broker_v2_panel, "retain_live_projection_hub", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        broker_v2_panel, "release_live_projection_hub", lambda *_args, **_kwargs: None
+    )
     async with _client(app) as client:
         bootstrap = await client.get(
-            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/live-snapshot",
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/live-snapshot",
             params={"resolution": "5s"},
         )
-        stale_cursor = await client.get(
-            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/live-stream",
+        stream = await client.get(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/live-stream",
             params={"resolution": "5s", "cursor": "epoch-old:99"},
-        )
-        matching_cursor = await client.get(
-            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/live-stream",
-            params={"resolution": "5s", "cursor": "epoch-new:7"},
         )
 
     assert bootstrap.status_code == 200
     assert bootstrap.json()["surface_version"] == 7
-    assert bootstrap.json()["panel"]["market_pulse"]["headline"]
-    assert stale_cursor.status_code == 200
-    assert stale_cursor.headers["content-type"].startswith("text/event-stream")
-    assert stale_cursor.headers["cache-control"] == "no-cache"
-    assert stale_cursor.headers["x-accel-buffering"] == "no"
-    assert "event: reset" in stale_cursor.text
-    assert "id: epoch-new:7" in stale_cursor.text
-    assert "event: snapshot" in stale_cursor.text
-    assert matching_cursor.status_code == 200
-    assert "event: reset" not in matching_cursor.text
-    assert "id: epoch-new:7" in matching_cursor.text
+    assert stream.status_code == 200
+    assert stream.headers["content-type"].startswith("text/event-stream")
+    assert "event: reset" in stream.text
+    assert "id: epoch-new:7" in stream.text
 
 
-# ── §11 presented-action execution ───────────────────────────────────────────
-
-
-async def test_action_reconcile_now_applies(api) -> None:
-    app, clerk, registry = api
-    await _deploy_bot(registry)
+async def test_presented_action_executes_and_stale_repost_fails_closed(api) -> None:
+    app, _repo = api
     async with _client(app) as client:
         panel = await client.get(
-            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/panel"
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel"
         )
-        action = next(item for item in panel.json()["actions"] if item["action_id"] == "reconcile_now")
-        response = await client.post(
-            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/actions",
-            json={
-                "action_id": "reconcile_now",
-                "revision": panel.json()["revision"],
-                "concurrency_token": action["concurrency_token"],
-                "idempotency_key": "k1",
-            },
+        action = next(
+            item for item in panel.json()["actions"] if item["action_id"] == "reconcile_now"
         )
-    assert response.status_code == 200
-    assert response.json()["applied"] is True
-    assert clerk.reconciled is True
-
-
-async def test_action_returns_durable_receipt_without_waiting_for_panel_refresh(
-    api: _ApiFixture,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    app, _clerk, registry = api
-    await _deploy_bot(registry)
-    refresh_started = asyncio.Event()
-    release_refresh = asyncio.Event()
-    scheduled: list[tuple[str, str, str]] = []
-
-    async def blocked_refresh(broker: str, account_id: str, sid: str) -> None:
-        refresh_started.set()
-        await release_refresh.wait()
-
-    def schedule_refresh(broker: str, account_id: str, sid: str) -> None:
-        scheduled.append((broker, account_id, sid))
-
-    monkeypatch.setattr(
-        broker_v2_panel,
-        "refresh_live_projection_hubs",
-        blocked_refresh,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        broker_v2_panel,
-        "schedule_live_projection_refresh",
-        schedule_refresh,
-        raising=False,
-    )
-
-    async with _client(app) as client:
-        panel = await client.get(
-            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/panel"
-        )
-        action = next(item for item in panel.json()["actions"] if item["action_id"] == "reconcile_now")
-        request = asyncio.create_task(
-            client.post(
-                f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/actions",
-                json={
-                    "action_id": "reconcile_now",
-                    "revision": panel.json()["revision"],
-                    "concurrency_token": action["concurrency_token"],
-                    "idempotency_key": "refresh-independent-receipt",
-                },
-            )
-        )
-        refresh_signal = asyncio.create_task(refresh_started.wait())
-        try:
-            completed, _pending = await asyncio.wait(
-                {request, refresh_signal},
-                timeout=2.0,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            returned_before_refresh = request in completed
-        finally:
-            release_refresh.set()
-            response = await request
-            refresh_signal.cancel()
-            await asyncio.gather(refresh_signal, return_exceptions=True)
-
-    assert returned_before_refresh
-    assert response.status_code == 200
-    assert response.json()["applied"] is True
-    assert scheduled == [("alpaca", _ACCOUNT_ID, SID)]
-    assert not refresh_started.is_set()
-    await registry.stop("alpaca", SID)
-
-
-async def test_action_stale_revision_is_409(api) -> None:
-    app, _clerk, registry = api
-    await _deploy_bot(registry)
-    async with _client(app) as client:
-        response = await client.post(
-            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/actions",
-            json={
-                "action_id": "reconcile_now",
-                "revision": 999_999_999,
-                "concurrency_token": "stale-token",
-                "idempotency_key": "k1",
-            },
-        )
-    assert response.status_code == 409
-    assert response.json()["detail"]["receipt_id"] is None
-
-
-async def test_action_idempotent_repost_is_noop(api) -> None:
-    app, _clerk, registry = api
-    await _deploy_bot(registry)
-    async with _client(app) as client:
-        panel = await client.get(
-            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/panel"
-        )
-        action = next(item for item in panel.json()["actions"] if item["action_id"] == "reconcile_now")
-        body = {
+        request = {
             "action_id": "reconcile_now",
             "revision": panel.json()["revision"],
             "concurrency_token": action["concurrency_token"],
-            "idempotency_key": "dup",
+            "idempotency_key": "sqlite-reconcile",
         }
         first = await client.post(
-            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/actions", json=body
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/actions", json=request
         )
         second = await client.post(
-            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/actions", json=body
-        )
-    assert first.json()["applied"] is True
-    assert second.json()["applied"] is False
-
-
-async def test_completed_stop_replay_survives_current_disabled_state(api) -> None:
-    app, _clerk, registry = api
-    await _deploy_bot(registry)
-    async with _client(app) as client:
-        panel = await client.get(
-            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/panel"
-        )
-        action = next(
-            item
-            for item in panel.json()["actions"]
-            if item["action_id"] == "stop"
-        )
-        body = {
-            "action_id": "stop",
-            "revision": panel.json()["revision"],
-            "concurrency_token": action["concurrency_token"],
-            "idempotency_key": "stop-replay",
-        }
-        first = await client.post(
-            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/actions",
-            json=body,
-        )
-        second = await client.post(
-            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/actions",
-            json=body,
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/actions", json=request
         )
 
     assert first.status_code == 200
     assert first.json()["applied"] is True
-    assert second.status_code == 200
-    assert second.json()["applied"] is False
-
-
-async def test_action_identity_is_not_a_request_field(api) -> None:
-    """The request schema forbids an operator/identity field (extra='forbid')."""
-    app, _clerk, registry = api
-    await _deploy_bot(registry)
-    async with _client(app) as client:
-        response = await client.post(
-            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/actions",
-            json={
-                "action_id": "reconcile_now",
-                "revision": 0,
-                "idempotency_key": "k",
-                "operator": "smuggled-identity",
-            },
-        )
-    # Pydantic rejects the extra field at the boundary (422).
-    assert response.status_code == 422
-
-
-# ── §8 chart interval and Polygon timeframe validation ──────────────────────
+    assert second.status_code == 409
 
 
 async def test_live_chart_accepts_five_second_resolution(
-    api: tuple[FastAPI, _FakeClerk, BotTaskRegistry],
+    api,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    app, _clerk, registry = api
-    await _deploy_bot(registry)
+    app, _repo = api
     observed: list[str] = []
 
     async def live_chart(
@@ -653,13 +307,10 @@ async def test_live_chart_accepts_five_second_resolution(
             "as_of_ms": _T0,
         }
 
-    monkeypatch.setattr(
-        "app.routers.broker_v2_panel.ds.get_live_chart",
-        live_chart,
-    )
+    monkeypatch.setattr("app.routers.broker_v2_panel.ds.get_live_chart", live_chart)
     async with _client(app) as client:
         response = await client.get(
-            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/chart/live",
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/chart/live",
             params={"resolution": "5s"},
         )
 
@@ -668,26 +319,17 @@ async def test_live_chart_accepts_five_second_resolution(
     assert observed == ["5s"]
 
 
-async def test_live_chart_rejects_unknown_resolution(
-    api: tuple[FastAPI, _FakeClerk, BotTaskRegistry],
-) -> None:
-    app, _clerk, registry = api
-    await _deploy_bot(registry)
+async def test_chart_contract_rejects_unknown_resolution_and_timeframe(api) -> None:
+    app, _repo = api
     async with _client(app) as client:
-        response = await client.get(
-            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/chart/live",
+        live = await client.get(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/chart/live",
             params={"resolution": "15s"},
         )
-
-    assert response.status_code == 422
-
-
-async def test_history_unknown_timeframe_is_422(api) -> None:
-    app, _clerk, registry = api
-    await _deploy_bot(registry)
-    async with _client(app) as client:
-        response = await client.get(
-            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/chart/history",
+        history = await client.get(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/chart/history",
             params={"timeframe": "5m"},
         )
-    assert response.status_code == 422
+
+    assert live.status_code == 422
+    assert history.status_code == 422

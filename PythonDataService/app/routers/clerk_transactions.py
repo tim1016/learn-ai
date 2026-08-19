@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Path, Query, status
 
@@ -35,7 +36,7 @@ def get_clerk_transaction_store() -> ClerkTransactionProjectionStore:
     # Local import: this router is a designated active-SQLite product module
     # (test_authority_isolation.py enforces it never imports a legacy Postgres
     # reader at module scope). The Postgres store still backs the FastAPI
-    # `Depends()` fallback below for the non-SQLite (legacy) authority path.
+    # explicit ``broker=ibkr`` compatibility path below.
     from app.services.clerk_transaction_projection_store import (
         PostgresClerkTransactionProjectionStore,
     )
@@ -78,6 +79,7 @@ async def acknowledge_external_order_endpoint(
 @router.get("/{account_id}/transactions", response_model=ClerkTransactionHistoryResponse)
 async def get_clerk_transaction_history(
     account_id: str,
+    broker: Literal["alpaca", "ibkr"] = Query(default="alpaca"),
     limit: int = Query(default=50, ge=1, le=100),
     cursor: str | None = Query(default=None, min_length=1, max_length=512),
     origin: TransactionOrigin | None = Query(default=None),
@@ -96,6 +98,19 @@ async def get_clerk_transaction_history(
         )
 
     try:
+        if broker == "ibkr":
+            return await transaction_history(
+                account_id=account_id,
+                limit=limit,
+                cursor=cursor,
+                origin=origin,
+                lifecycle_state=lifecycle_state,
+                strategy_instance_id=strategy_instance_id,
+                run_id=run_id,
+                from_ms=from_ms,
+                to_ms=to_ms,
+                store=get_clerk_transaction_store(),
+            )
         sqlite_page = await asyncio.to_thread(
             sqlite_transaction_history,
             account_id=account_id,
@@ -108,21 +123,11 @@ async def get_clerk_transaction_history(
             from_ms=from_ms,
             to_ms=to_ms,
         )
-        if sqlite_page is not None:
-            return sqlite_page
-        store = get_clerk_transaction_store()
-        return await transaction_history(
-            account_id=account_id,
-            limit=limit,
-            cursor=cursor,
-            origin=origin,
-            lifecycle_state=lifecycle_state,
-            strategy_instance_id=strategy_instance_id,
-            run_id=run_id,
-            from_ms=from_ms,
-            to_ms=to_ms,
-            store=store,
-        )
+        if sqlite_page is None:
+            raise ClerkTransactionProjectionUnavailable(
+                "Activated SQLite Clerk transaction history is unavailable"
+            )
+        return sqlite_page
     except ClerkTransactionProjectionUnavailable:
         # Availability is a backend-authored UI state, not a browser-side
         # inference from an HTTP failure. The canonical Clerk evidence remains
@@ -158,26 +163,33 @@ async def get_clerk_transaction_history(
 async def get_clerk_transaction_detail(
     account_id: str,
     transaction_id: str,
+    broker: Literal["alpaca", "ibkr"] = Query(default="alpaca"),
 ) -> ClerkTransactionRow:
     """Read exactly one selected projected receipt; never rescan Clerk or IBKR."""
 
     try:
-        sqlite_active, sqlite_row = await asyncio.to_thread(
-            sqlite_transaction_detail,
-            account_id=account_id,
-            transaction_id=transaction_id,
-        )
-        if sqlite_active:
+        if broker == "ibkr":
+            row = await transaction_detail(
+                account_id=account_id,
+                transaction_id=transaction_id,
+                store=get_clerk_transaction_store(),
+            )
+        else:
+            sqlite_active, sqlite_row = await asyncio.to_thread(
+                sqlite_transaction_detail,
+                account_id=account_id,
+                transaction_id=transaction_id,
+            )
+            if not sqlite_active:
+                raise ClerkTransactionProjectionUnavailable(
+                    "Activated SQLite Clerk transaction detail is unavailable"
+                )
             if sqlite_row is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="SQLite Clerk operation was not found for this account.",
                 )
             return sqlite_row
-        store = get_clerk_transaction_store()
-        row = await transaction_detail(
-            account_id=account_id, transaction_id=transaction_id, store=store
-        )
     except ClerkTransactionProjectionUnavailable as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

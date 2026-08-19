@@ -1,12 +1,4 @@
-"""Tests for app.engine.live.run_status.
-
-Covers:
-- _atomic_write_json: writes via tmp file, renames, content correct
-- write_run_status: creates run_status.json in run_dir
-- Schema version round-trip: schema_version=1 survives model_dump → model_validate
-- All 8 ExitReason literals are valid enum members
-- RunStatusSidecar model_dump / model_validate round-trip for each ExitReason
-"""
+"""Tests for the retained atomic JSON utility and historical run-status schema."""
 
 from __future__ import annotations
 
@@ -16,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from app.engine.live.run_status import _atomic_write_json, write_run_status
+from app.engine.live.run_status import _atomic_write_json
 from app.schemas.live_runs import ExitReason, RunStatusSidecar
 
 # ---------------------------------------------------------------------------
@@ -48,20 +40,6 @@ def test_atomic_write_json_content_correct(tmp_path: Path):
     assert read_back["run_id"] == "abc123"
 
 
-def test_atomic_write_json_overwrites_existing(tmp_path: Path):
-    target = tmp_path / "output.json"
-    _atomic_write_json(target, {"v": 1})
-    _atomic_write_json(target, {"v": 2})
-
-    read_back = json.loads(target.read_text(encoding="utf-8"))
-    assert read_back["v"] == 2
-
-
-# ---------------------------------------------------------------------------
-# write_run_status
-# ---------------------------------------------------------------------------
-
-
 def _make_sidecar(run_id: str = "run-abc", exit_reason: ExitReason | None = None) -> RunStatusSidecar:
     now = int(time.time() * 1000)
     return RunStatusSidecar(
@@ -73,44 +51,6 @@ def _make_sidecar(run_id: str = "run-abc", exit_reason: ExitReason | None = None
         exit_reason=exit_reason,
         host_pid=12345,
     )
-
-
-def test_write_run_status_creates_file(tmp_path: Path):
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
-    sidecar = _make_sidecar()
-    write_run_status(run_dir, sidecar)
-
-    expected = run_dir / "run_status.json"
-    assert expected.exists()
-
-
-def test_write_run_status_correct_fields(tmp_path: Path):
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
-    sidecar = _make_sidecar("my-run-42")
-    write_run_status(run_dir, sidecar)
-
-    data = json.loads((run_dir / "run_status.json").read_text(encoding="utf-8"))
-    assert data["run_id"] == "my-run-42"
-    assert data["schema_version"] == 2  # PRD #619-A
-    assert data["host_pid"] == 12345
-
-
-def test_write_run_status_schema_version_round_trip(tmp_path: Path):
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
-    sidecar = _make_sidecar()
-    write_run_status(run_dir, sidecar)
-
-    raw = json.loads((run_dir / "run_status.json").read_text(encoding="utf-8"))
-    restored = RunStatusSidecar.model_validate(raw)
-    assert restored.schema_version == 2  # PRD #619-A — bumped for capability fields
-
-
-# ---------------------------------------------------------------------------
-# ExitReason — completeness
-# ---------------------------------------------------------------------------
 
 
 def test_exit_reason_has_nine_values():

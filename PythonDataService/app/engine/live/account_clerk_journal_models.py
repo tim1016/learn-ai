@@ -1,9 +1,8 @@
-"""Validated durable contracts for the account-Clerk journal.
+"""Validated contracts for reading historical account-Clerk evidence.
 
-The journal's storage and replay coordinator lives in
-``account_clerk_journal``.  Keeping the on-disk row schemas and the receipts
-returned to its callers here makes those contracts independently readable and
-prevents the coordinator from becoming a second, sprawling API surface.
+The retired writer's on-disk row schemas remain here so surviving recovery and
+reconciliation readers can validate existing evidence without restoring order
+actuation.
 """
 
 from __future__ import annotations
@@ -174,9 +173,8 @@ class AccountClerkEmergencyOperationEvent(BaseModel):
             raise ValueError("authorization_issued requires an authorization")
         if self.phase != "authorization_issued" and self.authorization is not None:
             raise ValueError("only authorization_issued may carry an authorization")
-        if (
-            self.phase == "flag_and_hold"
-            and (self.bot_order_namespace is None or not self.recorded_order_refs or not self.positions)
+        if self.phase == "flag_and_hold" and (
+            self.bot_order_namespace is None or not self.recorded_order_refs or not self.positions
         ):
             raise ValueError("flag_and_hold requires attributable broker evidence")
         if self.phase == "foreign_exposure_freeze" and not self.positions:
@@ -331,11 +329,7 @@ class AccountClerkJournalEntry(BaseModel):
                 raise ValueError("non-broker-event journal rows require an intent")
             if self.entry_kind != "broker_acked" and self.broker_ack is not None:
                 raise ValueError("broker_ack is only valid on broker_acked rows")
-            if (
-                self.broker_ack is not None
-                and self.order_id is not None
-                and self.broker_ack.order_id != self.order_id
-            ):
+            if self.broker_ack is not None and self.order_id is not None and self.broker_ack.order_id != self.order_id:
                 raise ValueError("broker_ack order_id must match the journal order_id")
             if (
                 self.event_account_id is not None

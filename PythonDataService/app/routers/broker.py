@@ -15,7 +15,6 @@ import json
 import logging
 import math
 import time
-from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -55,21 +54,14 @@ from app.broker.ibkr.models import (
     IbkrChainSnapshot,
     IbkrConnectionHealth,
     IbkrOpenOrder,
-    IbkrOrderAck,
     IbkrOrderEvent,
-    IbkrOrderSpec,
     IbkrPnLTick,
     IbkrPositionsSnapshot,
     IbkrStrikeList,
     IbkrSurfaceSnapshot,
 )
-from app.broker.ibkr.order_cancel_decision import account_truth_cancel_decision
 from app.broker.ibkr.orders import (
-    OrderNotFoundError,
-    OrderRefusedError,
-    cancel_paper_order,
     list_open_orders,
-    place_paper_order,
     stream_order_events,
 )
 from app.broker.ibkr.persistence import (
@@ -89,30 +81,17 @@ from app.broker.ibkr.surface import (
     stream_option_surface,
 )
 from app.broker.ibkr.symbol_search import search_symbols
-from app.engine.live.account_owner_fence import (
-    AccountOwnerWriteFenceError,
-    require_account_owner_write_grant,
-)
-from app.engine.live.order_identity import build_manual_order_namespace, build_order_ref, mint_intent_id
 from app.routers.broker_dependencies import is_broker_disabled, require_connected_client
 from app.schemas.broker_search import OptionContractMatch, SymbolMatch
 from app.security.data_plane_control import require_data_plane_control_secret_always
 from app.services.data_plane_health import data_plane_health
 from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
-from app.services.manual_order_submission import (
-    ManualOrderBrokerReceiptError,
-    ManualOrderClerkRejectedError,
-    ManualOrderClerkUnavailableError,
-    submit_manual_order_through_clerk,
-)
 from app.services.sse_keepalive import stream_sse_with_keepalive
 from app.utils.throttle import TokenBucket, TtlCache
 
 router = APIRouter(prefix="/api/broker", tags=["broker"])
 logger = logging.getLogger(__name__)
-_ACCOUNT_SERVICE_ATTACH_TIMEOUT_S = 6.0
 _ACCOUNT_EVIDENCE_WARMUP_TIMEOUT_S = 5.0
-_pending_account_service_release_account_id: str | None = None
 
 # Computed once at module import — stable for the lifetime of the process.
 # Used by DiagnosticReportDisabled.since_ms so each request doesn't generate
@@ -316,15 +295,12 @@ async def disconnect_endpoint() -> IbkrConnectionHealth:
         try:
             client = get_client()
         except NotConnectedError:
-            await _release_account_service_after_disconnect(None)
             return synthetic_disconnected_health()
         # Operator clicked Disconnect — clear intent so the monitor stops
         # auto-reconnecting against the operator's stated wish (the previous
         # design ignored this and re-connected on the next tick).
         client.set_desired_connected(False)
-        detached_account_id = client.health().account_id
         await _disconnect_with_error_mapping(client)
-        await _release_account_service_after_disconnect(detached_account_id)
         return build_broker_health(client, get_monitor())
 
 
@@ -392,7 +368,6 @@ async def _warm_account_evidence_after_connect(
     """
     if not health.connected or health.account_id is None:
         return
-    from app.engine.live import host_daemon_client
     from app.services.account_reconciliation import AccountReconciliationService
     from app.services.account_truth_refresh import (
         account_truth_artifacts_root,
@@ -405,31 +380,6 @@ async def _warm_account_evidence_after_connect(
     reconciliation_service = AccountReconciliationService(
         artifacts_root=account_truth_artifacts_root()
     )
-
-    settings = get_settings()
-    try:
-        await asyncio.wait_for(
-            host_daemon_client.ensure_account_clerk(
-                settings.live_runner_daemon_url,
-                health.account_id,
-                ibkr_host=settings.host,
-            ),
-            timeout=_ACCOUNT_SERVICE_ATTACH_TIMEOUT_S,
-        )
-    except (
-        OSError,
-        TimeoutError,
-        host_daemon_client.HostDaemonError,
-        host_daemon_client.HostDaemonOutcomeUnknownError,
-    ) as exc:
-        logger.warning(
-            "broker connect account-service attach failed; continuing account-evidence warm-up",
-            extra={
-                "account_id": health.account_id,
-                "connection_state": health.connection_state,
-                "exception": repr(exc),
-            },
-        )
 
     async def initialize_account_evidence() -> None:
         reconciliation_service.ensure_automatic_reconciliation(account_id=health.account_id)
@@ -450,8 +400,6 @@ async def _warm_account_evidence_after_connect(
         BrokerError,
         OSError,
         TimeoutError,
-        host_daemon_client.HostDaemonError,
-        host_daemon_client.HostDaemonOutcomeUnknownError,
     ) as exc:
         logger.warning(
             "broker connect account-evidence warm-up failed",
@@ -461,39 +409,6 @@ async def _warm_account_evidence_after_connect(
                 "exception": repr(exc),
             },
         )
-
-
-async def _release_account_service_after_disconnect(account_id: str | None) -> None:
-    """Detach the account authority only after an explicit broker disconnect."""
-
-    global _pending_account_service_release_account_id
-
-    if account_id is not None:
-        _pending_account_service_release_account_id = account_id
-    pending_account_id = _pending_account_service_release_account_id
-    if pending_account_id is None:
-        return
-    from app.engine.live import host_daemon_client
-
-    settings = get_settings()
-    try:
-        await host_daemon_client.release_account_clerk(
-            settings.live_runner_daemon_url,
-            pending_account_id,
-        )
-    except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "reason_code": "OUTCOME_UNKNOWN",
-                "message": exc.detail or "Account service detach outcome is unknown; refresh before retrying.",
-            },
-        ) from exc
-    except host_daemon_client.HostDaemonError as exc:
-        raise HTTPException(exc.status_code, detail=exc.detail) from exc
-    else:
-        _pending_account_service_release_account_id = None
-
 
 async def _disconnect_with_error_mapping(client: IbkrClient) -> None:
     """Call ``client.disconnect()``, translating socket / broker errors to 502.
@@ -745,16 +660,19 @@ async def option_chain_stream(
             raise
         except BrokerError as exc:
             logger.error("Broker error in option-chain stream: %s", exc)
-            err = json.dumps({"error": str(exc)})
-            yield f"event: error\ndata: {err}\n\n"
+            yield _sse_error_frame(
+                "The option-chain stream stopped: the broker rejected or dropped the market-data request. The broker's "
+                "reason is in the service log."
+            )
         except ValueError as exc:
             # Contract qualification (``qualify_underlying``,
             # ``build_option_contract``) raises ValueError when IBKR
             # cannot resolve a symbol/strike/right combination — surface
             # those through the same SSE error path as broker errors.
             logger.error("Invalid option-chain request: %s", exc)
-            err = json.dumps({"error": str(exc)})
-            yield f"event: error\ndata: {err}\n\n"
+            yield _sse_error_frame(
+                "The option-chain request could not be qualified. Check the symbol, expiry, strike, and right."
+            )
         finally:
             await writer.close()
 
@@ -857,12 +775,15 @@ async def option_surface_stream(
             raise
         except BrokerError as exc:
             logger.error("Broker error in option-surface stream: %s", exc)
-            err = json.dumps({"error": str(exc)})
-            yield f"event: error\ndata: {err}\n\n"
+            yield _sse_error_frame(
+                "The option-surface stream stopped: the broker rejected or dropped the market-data request. The "
+                "broker's reason is in the service log."
+            )
         except ValueError as exc:
             logger.error("Invalid option-surface request: %s", exc)
-            err = json.dumps({"error": str(exc)})
-            yield f"event: error\ndata: {err}\n\n"
+            yield _sse_error_frame(
+                "The option-surface request could not be qualified. Check the symbol, expiry, strike, and right."
+            )
 
     return StreamingResponse(
         event_source(),
@@ -872,6 +793,18 @@ async def option_surface_stream(
 
 
 # ── /pnl/stream and /pnl/positions/stream (Phase 2b + 2c) ──────────────
+
+
+def _sse_error_frame(message: str) -> str:
+    """Serialize one operator-facing SSE error frame.
+
+    The caught exception is logged with its full text at each callsite; only
+    this curated sentence crosses the wire. Serializing ``str(exc)`` instead
+    hands an external caller whatever an unexpected exception happens to
+    carry (CodeQL ``py/stack-trace-exposure``), and the operator gains
+    nothing the service log does not already hold.
+    """
+    return f"event: error\ndata: {json.dumps({'error': message})}\n\n"
 
 
 def _pnl_tick_to_sse(tick: IbkrPnLTick) -> str:
@@ -896,8 +829,10 @@ async def pnl_account_stream(
             raise
         except BrokerError as exc:
             logger.error("Broker error in account-pnl stream: %s", exc)
-            err = json.dumps({"error": str(exc)})
-            yield f"event: error\ndata: {err}\n\n"
+            yield _sse_error_frame(
+                "The account P&L stream stopped: the broker connection reported an error. The broker's reason is in the "
+                "service log."
+            )
         finally:
             await pnl_writer.close()
 
@@ -938,8 +873,10 @@ async def pnl_positions_stream(
             raise
         except BrokerError as exc:
             logger.error("Broker error in positions-pnl stream: %s", exc)
-            err = json.dumps({"error": str(exc)})
-            yield f"event: error\ndata: {err}\n\n"
+            yield _sse_error_frame(
+                "The positions P&L stream stopped: the broker connection reported an error. The broker's reason is in "
+                "the service log."
+            )
         finally:
             await pnl_writer.close()
 
@@ -950,89 +887,15 @@ async def pnl_positions_stream(
     )
 
 
-# ── /orders POST (Phase 3a) ────────────────────────────────────────────
-
-
-@router.post("/orders", response_model=IbkrOrderAck, status_code=status.HTTP_201_CREATED)
-async def place_order_endpoint(spec: IbkrOrderSpec) -> IbkrOrderAck:
-    """Place one paper order. Four safety layers run before any IBKR call."""
-    client = require_connected_client()
-    try:
-        spec = _stamp_manual_order_ref_if_requested(spec)
-        if spec.manual_order:
-            return await submit_manual_order_through_clerk(
-                spec,
-                account_id=client.connected_account,
-            )
-        return await place_paper_order(client, spec)
-    except ManualOrderClerkUnavailableError as exc:
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"reason_code": exc.reason_code, "message": exc.message},
-        ) from exc
-    except ManualOrderClerkRejectedError as exc:
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE if exc.retry_safe else status.HTTP_409_CONFLICT,
-            detail={
-                "reason_code": exc.reason_code,
-                "message": "The account Clerk rejected or could not complete the manual order.",
-            },
-        ) from exc
-    except ManualOrderBrokerReceiptError as exc:
-        raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY,
-            detail={"reason_code": exc.reason_code, "message": exc.message},
-        ) from exc
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
-    except AccountOwnerWriteFenceError as exc:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, exc.reason) from exc
-    except OrderRefusedError as exc:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
-    except BrokerError as exc:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
-
-
-# ── /orders open + cancel + stream (Phase 3b) ──────────────────────────
+# ── Read-only order projections ────────────────────────────────────────
 
 
 @router.get("/orders/open", response_model=list[IbkrOpenOrder])
 async def list_open_orders_endpoint() -> list[IbkrOpenOrder]:
-    """All open orders the connected paper-client has placed."""
+    """All open orders IBKR currently reports for the connected account."""
     client = require_connected_client()
     try:
         return await list_open_orders(client)
-    except BrokerError as exc:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
-
-
-@router.delete(
-    "/orders/{order_id}",
-    response_model=IbkrOpenOrder,
-    status_code=status.HTTP_200_OK,
-)
-async def cancel_order_endpoint(order_id: int) -> IbkrOpenOrder:
-    """Cancel one paper order by ``order_id``."""
-    client = require_connected_client()
-    try:
-        require_account_owner_write_grant(
-            account_id=client.connected_account,
-            boundary="broker.cancel_order",
-        )
-        decision = await account_truth_cancel_decision(
-            client,
-            health=build_broker_health(client, get_monitor()),
-            artifacts_root=Path(get_settings().live_runs_root).parent,
-            order_id=order_id,
-        )
-        decision.raise_if_blocked()
-        return await cancel_paper_order(client, order_id)
-    except AccountOwnerWriteFenceError as exc:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, exc.reason) from exc
-    except OrderRefusedError as exc:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
-    except OrderNotFoundError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     except BrokerError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 
@@ -1062,8 +925,10 @@ async def order_events_stream_endpoint(
             raise
         except BrokerError as exc:
             logger.error("Broker error in order-event stream: %s", exc)
-            err = json.dumps({"error": str(exc)})
-            yield f"event: error\ndata: {err}\n\n"
+            yield _sse_error_frame(
+                "The order-event stream stopped: the broker connection reported an error. The broker's reason is in the "
+                "service log."
+            )
 
     return StreamingResponse(
         event_source(),
@@ -1125,19 +990,6 @@ async def bars_5s_snapshot_endpoint(
 
 
 # ── helpers ────────────────────────────────────────────────────────────
-
-
-def _stamp_manual_order_ref_if_requested(spec: IbkrOrderSpec) -> IbkrOrderSpec:
-    if not spec.manual_order:
-        return spec
-    if spec.order_ref is not None:
-        raise ValueError(
-            "manual_order requests must not provide order_ref; the broker API server-mints it."
-        )
-    namespace = build_manual_order_namespace("operator")
-    return spec.model_copy(
-        update={"order_ref": build_order_ref(namespace, mint_intent_id())}
-    )
 
 
 def _snapshot_to_json(snapshot: IbkrChainSnapshot) -> str:

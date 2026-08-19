@@ -1,10 +1,4 @@
-"""Catalog projection — the bots-list roster rows (spec §5).
-
-``build_catalog`` composes each ``BotCatalogView`` from a bot's lifecycle
-status (``BotStatusView``) and its S0 rollup (``BotRollup``). Rollups are read
-from a ``BotRollupCache`` that is bootstrapped once from the journal — never a
-full journal scan per request (§15). The projection is a pure function over its
-inputs so the router seam test can drive it with journal fixtures.
+"""SQLite catalog projection for Broker V2 roster rows (spec §5).
 
 The ``status_label`` maps the lifecycle phase to the closed status vocabulary
 (Working / Off duty / Retired, §5). ``needs_attention`` is the OR of the
@@ -14,9 +8,8 @@ unclean duty outcome) — the attention-first sort (§5) reads this flag.
 
 from __future__ import annotations
 
-from app.broker.alpaca.clerk.fills import project_instance_fills
-from app.broker.alpaca.clerk.models import OrderJournalEntry
-from app.broker.alpaca.clerk.rollup_cache import BotRollup, BotRollupCache
+from dataclasses import dataclass
+
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicSnapshot
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import BotCatalogView
@@ -36,6 +29,17 @@ class SqliteCatalogRevisionMismatch(SqliteCatalogProjectionUnavailable):
     """Custody and economic SQLite readers observed different revisions."""
 
 
+@dataclass(frozen=True)
+class CatalogEconomicRollup:
+    sid: str
+    exposure: dict[str, float]
+    fills_today: int | None
+    realized_pnl_today: float | None
+    open_pnl: float | None
+    last_activity_at_ms: int | None
+    needs_attention: bool
+
+
 def status_label_for(status: BotStatusView) -> str:
     """Map a bot's phase + liveness to the closed status vocabulary (§5)."""
     if status.phase == "RETIRED":
@@ -45,13 +49,13 @@ def status_label_for(status: BotStatusView) -> str:
     return _STATUS_LABEL_OFF_DUTY
 
 
-def sqlite_catalog_rollup(snapshot: EconomicSnapshot) -> BotRollup:
-    """Adapt one S2 economic snapshot to the existing roster rollup contract.
+def sqlite_catalog_rollup(snapshot: EconomicSnapshot) -> CatalogEconomicRollup:
+    """Adapt one S2 economic snapshot to the roster presentation contract.
 
     All execution quantities and P&L values are direct S2 projection outputs;
     this adapter intentionally does not re-derive a total from fills.
     """
-    return BotRollup(
+    return CatalogEconomicRollup(
         sid=snapshot.strategy_instance_id,
         exposure=dict(snapshot.exposure),
         fills_today=snapshot.fills_today,
@@ -59,7 +63,6 @@ def sqlite_catalog_rollup(snapshot: EconomicSnapshot) -> BotRollup:
         open_pnl=snapshot.open_pnl,
         last_activity_at_ms=snapshot.last_activity_at_ms,
         needs_attention=snapshot.execution_coverage != "complete",
-        as_of_ms=snapshot.last_activity_at_ms,
     )
 
 
@@ -96,7 +99,7 @@ def _lifecycle_needs_attention(status: BotStatusView) -> bool:
     return outcome is not None and outcome.kind in ("CRASHED", "EXITED_UNVERIFIED")
 
 
-def status_explanation_for(status: BotStatusView, rollup: BotRollup) -> str:
+def status_explanation_for(status: BotStatusView, rollup: CatalogEconomicRollup) -> str:
     """Author one concise trader-facing explanation for the roster row."""
     if _lifecycle_needs_attention(status):
         return "The previous run ended without verified custody."
@@ -117,25 +120,9 @@ def status_explanation_for(status: BotStatusView, rollup: BotRollup) -> str:
     return "Off duty and flat."
 
 
-def bootstrap_rollup_cache(
-    cache: BotRollupCache,
-    sids: list[str],
-    entries: list[OrderJournalEntry],
-) -> None:
-    """Bootstrap ``cache`` from the journal for each bot (cold-start path, §15).
-
-    Reads the journal once and projects attributed fills per bot — the only
-    O(journal) work, done at bootstrap, not per request. After this the cache
-    serves O(1) catalog reads.
-    """
-    for sid in sids:
-        fills = list(project_instance_fills(sid, entries))
-        cache.bootstrap_from_fills(sid, fills)
-
-
 def compose_catalog_view(
     status: BotStatusView,
-    rollup: BotRollup,
+    rollup: CatalogEconomicRollup,
     *,
     account_id: str,
 ) -> BotCatalogView:
@@ -164,37 +151,3 @@ def compose_catalog_view(
         last_activity_at_ms=rollup.last_activity_at_ms,
         needs_attention=rollup.needs_attention or _lifecycle_needs_attention(status),
     )
-
-
-def build_catalog(
-    statuses: list[BotStatusView],
-    cache: BotRollupCache,
-    *,
-    account_id: str,
-    mark_prices: dict[str, dict[str, float]] | None = None,
-) -> list[BotCatalogView]:
-    """Build the full catalog, attention-first (§5).
-
-    ``cache`` must already be bootstrapped (call :func:`bootstrap_rollup_cache`).
-    Rows are sorted attention-first, then by last activity (most recent first),
-    then by sid for a stable order.
-    """
-    snapshots = cache.snapshot_all(mark_prices=mark_prices)
-    views: list[BotCatalogView] = []
-    for status in statuses:
-        sid = status.strategy_instance_id
-        rollup = snapshots.get(sid)
-        if rollup is None:
-            # A bot with no journal activity yet — synthesise an empty rollup so
-            # the roster is complete (an off-duty bot with zero fills is normal).
-            rollup = cache.get_rollup(sid)
-        views.append(compose_catalog_view(status, rollup, account_id=account_id))
-
-    views.sort(
-        key=lambda v: (
-            not v.needs_attention,  # attention rows first
-            -(v.last_activity_at_ms or 0),  # most recent activity next
-            v.strategy_instance_id,  # stable tiebreak
-        )
-    )
-    return views

@@ -1,9 +1,4 @@
-"""Dedicated Clerk-journal transaction projection.
-
-The JSONL journal remains the acknowledgement authority.  This module only
-tails complete newly-appended bytes and atomically commits its Postgres read
-model and durable database cursor; it never writes the journal or invokes IBKR.
-"""
+"""Dedicated read projection for the retained IBKR Account Clerk journal."""
 
 from __future__ import annotations
 
@@ -13,17 +8,14 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
-from app.broker.alpaca.clerk.journal import JOURNAL_FILENAME
-from app.broker.alpaca.clerk.models import ClerkEntryKind, OrderJournalEntry
 from app.config import settings
 from app.engine.live.account_artifacts import account_artifact_file_path
 from app.engine.live.account_clerk_journal import ACCOUNT_CLERK_JOURNAL_FILENAME
 from app.engine.live.account_clerk_journal_models import AccountClerkJournalEntry
 from app.schemas.clerk_transaction_projection import (
     ClerkCustodyWindowSummary,
-    ClerkOrderInstruction,
     ClerkTransactionEventRow,
     ClerkTransactionHistoryResponse,
     ClerkTransactionRow,
@@ -32,11 +24,7 @@ from app.schemas.clerk_transaction_projection import (
     TransactionOrigin,
 )
 from app.services.clerk_custody_timeline import custody_timeline_from_transaction
-from app.services.clerk_transaction_projection_ibkr import (
-    event_from_journal,
-    opaque_projection_id,
-    row_from_event,
-)
+from app.services.clerk_transaction_projection_ibkr import event_from_journal, row_from_event
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -168,12 +156,6 @@ def clerk_journal_path(artifacts_root: Path, account_id: str) -> Path:
     return account_artifact_file_path(artifacts_root, account_id, ACCOUNT_CLERK_JOURNAL_FILENAME)
 
 
-def alpaca_clerk_journal_path(artifacts_root: Path, account_id: str) -> Path:
-    """Return the canonical Alpaca Clerk ledger, never an IBKR artifact path."""
-
-    return artifacts_root / "accounts" / "alpaca" / account_id / JOURNAL_FILENAME
-
-
 def _journal_generation(journal_path: Path) -> str | None:
     """Identify one canonical journal incarnation without parsing its contents."""
 
@@ -191,129 +173,6 @@ def fold_lifecycle_state(current: str, incoming: str) -> str:
     """Apply one state-machine edge without allowing terminal regression."""
 
     return current if current in _TERMINAL_STATES else incoming
-
-
-def _alpaca_lifecycle_state(kind: ClerkEntryKind, entry: OrderJournalEntry) -> str:
-    """Map only Alpaca's documented journal vocabulary; never reuse IBKR callbacks."""
-
-    if kind is ClerkEntryKind.SUBMIT_ACKED:
-        return "submitted"
-    event = entry.event.event_type if entry.event is not None else ""
-    return {
-        "fill": "filled",
-        "partial_fill": "partially_filled",
-        "canceled": "cancelled",
-        "expired": "cancelled",
-        "replaced": "cancelled",
-        "rejected": "rejected",
-    }.get(event, "submitted")
-
-
-def _alpaca_transaction_id(account_id: str, order_ref: str) -> str:
-    return opaque_projection_id("ctxn", "alpaca", account_id, order_ref)
-
-
-def _row_from_alpaca_ack(
-    account_id: str, journal_seq: int, entry: OrderJournalEntry
-) -> tuple[ClerkTransactionRow, ClerkTransactionEventRow]:
-    """Project an Alpaca acknowledgement without assigning IBKR callback meaning."""
-
-    if entry.order is None or not entry.order_ref:
-        raise ValueError("Alpaca submit acknowledgement is missing durable identity or order")
-    receipt = entry.model_dump(mode="json", exclude_none=True)
-    transaction_id = _alpaca_transaction_id(account_id, entry.order_ref)
-    event = ClerkTransactionEventRow(
-        event_id=opaque_projection_id("ctxnev", "alpaca", account_id, journal_seq, "submit_acked"),
-        broker="alpaca",
-        event_kind="submitted",
-        callback_identity=f"alpaca-journal:{journal_seq}:submit_acked",
-        lifecycle_state=_alpaca_lifecycle_state(entry.kind, entry),
-        native_order_id=entry.order.order_id,
-        journal_seq=journal_seq,
-        recorded_at_ms=entry.recorded_at_ms,
-        receipt=receipt,
-    )
-    return (
-        ClerkTransactionRow(
-            transaction_id=transaction_id,
-            broker="alpaca",
-            account_id=account_id,
-            journal_seq=journal_seq,
-            recorded_at_ms=entry.recorded_at_ms,
-            transaction_kind="manual_alpaca_acknowledgement",
-            transaction_origin="manual",
-            order_instruction=ClerkOrderInstruction(
-                symbol=entry.leg.symbol if entry.leg is not None else entry.order.symbol,
-                action=entry.leg.side if entry.leg is not None else entry.order.side,
-                quantity=entry.leg.quantity if entry.leg is not None else entry.order.quantity,
-                order_type=entry.leg.order_type if entry.leg is not None else entry.order.order_type,
-                limit_price=entry.leg.limit_price if entry.leg is not None else entry.order.limit_price,
-                time_in_force=(
-                    entry.leg.time_in_force if entry.leg is not None else entry.order.time_in_force
-                ),
-            ),
-            strategy_instance_id=f"manual/{entry.operator}",
-            run_id="manual_operator",
-            intent_id=entry.intent_id,
-            order_ref=entry.order_ref,
-            native_order_id=entry.order.order_id,
-            lifecycle_state=_alpaca_lifecycle_state(entry.kind, entry),
-            receipt=receipt,
-            events=[event],
-        ),
-        event,
-    )
-
-
-def _event_from_alpaca_journal(
-    account_id: str, journal_seq: int, entry: OrderJournalEntry
-) -> ClerkTransactionEventRow | None:
-    if not entry.order_ref:
-        return None
-    if entry.kind is ClerkEntryKind.ACTIVITY_RECOVERY:
-        if entry.activity is None:
-            return None
-        receipt = entry.model_dump(mode="json", exclude_none=True)
-        return ClerkTransactionEventRow(
-            event_id=opaque_projection_id("ctxnev", "alpaca", account_id, journal_seq, entry.activity.activity_id),
-            broker="alpaca",
-            event_kind=f"activity_{entry.activity.activity_type.lower()}",
-            callback_identity=f"alpaca-activity:{entry.activity.activity_id}",
-            lifecycle_state="recovered_activity",
-            native_order_id=entry.activity.native_order_id,
-            journal_seq=journal_seq,
-            recorded_at_ms=entry.recorded_at_ms,
-            receipt=receipt,
-        )
-    if entry.kind is ClerkEntryKind.CANCEL_ACKED:
-        receipt = entry.model_dump(mode="json", exclude_none=True)
-        return ClerkTransactionEventRow(
-            event_id=opaque_projection_id("ctxnev", "alpaca", account_id, journal_seq, "cancel_acked"),
-            broker="alpaca",
-            event_kind="cancelled",
-            callback_identity=f"alpaca-journal:{journal_seq}:cancel_acked",
-            lifecycle_state="cancelled",
-            native_order_id=entry.broker_order_id,
-            journal_seq=journal_seq,
-            recorded_at_ms=entry.recorded_at_ms,
-            receipt=receipt,
-        )
-    if entry.kind is not ClerkEntryKind.ORDER_EVENT or entry.event is None:
-        return None
-    receipt = entry.model_dump(mode="json", exclude_none=True)
-    identity = entry.event_key or f"alpaca-journal:{journal_seq}:order_event"
-    return ClerkTransactionEventRow(
-        event_id=opaque_projection_id("ctxnev", "alpaca", account_id, journal_seq, identity),
-        broker="alpaca",
-        event_kind=entry.event.event_type,
-        callback_identity=identity,
-        lifecycle_state=_alpaca_lifecycle_state(entry.kind, entry),
-        native_order_id=entry.broker_order_id,
-        native_execution_id=(identity[5:] if identity.startswith("exec:") else None),
-        journal_seq=journal_seq,
-        recorded_at_ms=entry.recorded_at_ms,
-        receipt=receipt,
-    )
 
 
 def _read_bounded_complete_tail(
@@ -422,59 +281,6 @@ def read_appended_clerk_journal(
     )
 
 
-def read_appended_alpaca_journal(
-    *, account_id: str, journal_path: Path, cursor: ClerkJournalCursor | None
-) -> ClerkTransactionBatch | None:
-    """Tail complete Alpaca Clerk records from their own durable JSONL ledger.
-
-    Alpaca journal lines deliberately have no IBKR-style callback sequence.  The
-    projection uses their append ordinal only for keyset ordering and cursor
-    progress; the broker's opaque order/event identities stay in the receipt.
-    """
-
-    offset = cursor.last_byte_offset if cursor is not None else 0
-    last_seq = cursor.last_journal_seq if cursor is not None else 0
-    bounded = _read_bounded_complete_tail(
-        journal_path=journal_path,
-        offset=offset,
-        broker="Alpaca",
-        max_read_bytes=MAX_PROJECTION_READ_BYTES,
-    )
-    if bounded is None:
-        return None
-    consumed, has_more = bounded
-    transactions: list[ClerkTransactionRow] = []
-    events: list[ClerkTransactionEventRow] = []
-    lines = consumed.splitlines()
-    for line in lines:
-        try:
-            entry = OrderJournalEntry.model_validate_json(line)
-        except Exception as exc:
-            raise ValueError("malformed complete Alpaca Clerk journal record") from exc
-        if entry.account_id != account_id:
-            raise ValueError("Alpaca Clerk journal account does not match projection account")
-        last_seq += 1
-        if entry.kind is ClerkEntryKind.SUBMIT_ACKED:
-            transaction, event = _row_from_alpaca_ack(account_id, last_seq, entry)
-            transactions.append(transaction)
-            events.append(event)
-        else:
-            event = _event_from_alpaca_journal(account_id, last_seq, entry)
-            if event is not None:
-                events.append(event)
-    return ClerkTransactionBatch(
-        account_id=account_id,
-        journal_path=str(journal_path),
-        next_byte_offset=offset + len(consumed),
-        next_journal_seq=last_seq,
-        transactions=transactions,
-        events=events,
-        source_record_count=len(lines),
-        has_more_complete_records=has_more,
-        journal_generation=_journal_generation(journal_path) or "",
-    )
-
-
 async def tail_account_journal(
     *, artifacts_root: Path, account_id: str, store: ClerkTransactionProjectionStore | None = None,
     updated_at_ms: int | None = None,
@@ -525,61 +331,6 @@ async def tail_account_journal(
                 "live",
                 "Live",
                 "Durable Clerk callback projection is current.",
-                updated_at_ms=updated_at_ms or _now_ms(),
-                high_water_journal_seq=batch.next_journal_seq,
-                lag_records=0,
-            )
-    return persisted
-
-
-async def tail_alpaca_account_journal(
-    *, artifacts_root: Path, account_id: str, store: ClerkTransactionProjectionStore | None = None,
-    updated_at_ms: int | None = None,
-    allow_rebuilding: bool = False,
-) -> int:
-    """Project one bounded Alpaca ledger tail; it performs no broker I/O."""
-
-    resolved_store = store or _default_store()
-    path = alpaca_clerk_journal_path(artifacts_root, account_id)
-    cursor = await resolved_store.read_cursor(account_id, str(path))
-    generation = _journal_generation(path)
-    if cursor is not None and cursor.journal_generation != generation:
-        cursor = None
-    try:
-        batch = read_appended_alpaca_journal(account_id=account_id, journal_path=path, cursor=cursor)
-    except (ClerkTransactionProjectionCorrupt, ValueError) as exc:
-        await resolved_store.set_feed_status(
-            account_id,
-            "corrupt",
-            "Projection corrupt",
-            "Projection stopped; canonical Clerk acknowledgement evidence is retained.",
-            updated_at_ms=updated_at_ms or _now_ms(),
-            high_water_journal_seq=cursor.last_journal_seq if cursor else None,
-        )
-        raise ClerkTransactionProjectionCorrupt(str(exc)) from exc
-    if batch is None:
-        return 0
-    persisted = await resolved_store.persist_batch(
-        batch, updated_at_ms=updated_at_ms or _now_ms(), allow_rebuilding=allow_rebuilding
-    )
-    if not allow_rebuilding:
-        if batch.has_more_complete_records:
-            await resolved_store.set_feed_status(
-                account_id,
-                "reconnecting",
-                "Catch-up in progress",
-                "Projection remains bounded while durable Alpaca Clerk records are replayed.",
-                updated_at_ms=updated_at_ms or _now_ms(),
-                high_water_journal_seq=batch.next_journal_seq,
-                lag_records=1,
-                lag_is_lower_bound=True,
-            )
-        else:
-            await resolved_store.set_feed_status(
-                account_id,
-                "live",
-                "Live",
-                "Durable Alpaca Clerk projection is current.",
                 updated_at_ms=updated_at_ms or _now_ms(),
                 high_water_journal_seq=batch.next_journal_seq,
                 lag_records=0,
@@ -661,121 +412,37 @@ async def recover_account_transaction_feed(
         raise
 
 
-async def recover_alpaca_account_transaction_feed(
-    *, artifacts_root: Path, account_id: str, store: ClerkTransactionProjectionStore,
-    updated_at_ms: int | None = None,
-) -> int:
-    """Drain the bounded Alpaca ledger backlog before declaring it current."""
-
-    now = updated_at_ms or _now_ms()
-    feed_state, *_ = await store.feed_status(account_id)
-    if feed_state == "corrupt":
-        # Keep the corruption receipt until the operator explicitly rebuilds
-        # the projection from canonical evidence.
-        return 0
-    await store.set_feed_status(
-        account_id,
-        "reconnecting",
-        "Reconnecting",
-        "Replaying durable Alpaca Clerk records.",
-        updated_at_ms=now,
-    )
-    projected = 0
-    path = alpaca_clerk_journal_path(artifacts_root, account_id)
-    try:
-        for _ in range(MAX_RECOVERY_BATCHES):
-            projected += await tail_alpaca_account_journal(
-                artifacts_root=artifacts_root,
-                account_id=account_id,
-                store=store,
-                updated_at_ms=now,
-            )
-            cursor = await store.read_cursor(account_id, str(path))
-            if not _has_complete_appended_record(
-                journal_path=path,
-                offset=cursor.last_byte_offset if cursor else 0,
-                broker="Alpaca",
-            ):
-                await store.set_feed_status(
-                    account_id,
-                    "live",
-                    "Live",
-                    "Durable Alpaca Clerk projection is current.",
-                    updated_at_ms=now,
-                    high_water_journal_seq=cursor.last_journal_seq if cursor else None,
-                    lag_records=0,
-                )
-                return projected
-        cursor = await store.read_cursor(account_id, str(path))
-        await store.set_feed_status(
-            account_id,
-            "reconnecting",
-            "Catch-up in progress",
-            "Replay remains bounded; canonical Alpaca Clerk records are retained.",
-            updated_at_ms=now,
-            high_water_journal_seq=cursor.last_journal_seq if cursor else None,
-            lag_records=1,
-            lag_is_lower_bound=True,
-        )
-        return projected
-    except (ClerkTransactionProjectionCorrupt, ValueError) as exc:
-        await store.set_feed_status(
-            account_id,
-            "corrupt",
-            "Projection corrupt",
-            "Projection stopped; canonical Alpaca Clerk evidence is retained.",
-            updated_at_ms=now,
-        )
-        raise ClerkTransactionProjectionCorrupt(str(exc)) from exc
-    except Exception:
-        await _set_offline_unless_corrupt(store, account_id=account_id, updated_at_ms=now)
-        raise
-
-
 async def rebuild_account_transaction_projection(
     *, artifacts_root: Path, account_id: str, store: ClerkTransactionProjectionStore,
-    updated_at_ms: int | None = None, reset: bool = True, broker: Literal["ibkr", "alpaca"] = "ibkr",
+    updated_at_ms: int | None = None, reset: bool = True,
 ) -> int:
-    """Reset and replay one broker's read model from canonical Clerk JSONL only."""
+    """Reset and replay the IBKR read model from canonical Clerk JSONL only."""
 
     now = updated_at_ms or _now_ms()
-    path = (
-        clerk_journal_path(artifacts_root, account_id)
-        if broker == "ibkr"
-        else alpaca_clerk_journal_path(artifacts_root, account_id)
-    )
+    path = clerk_journal_path(artifacts_root, account_id)
     if not path.is_file():
         raise ClerkTransactionProjectionUnavailable(
             "canonical Clerk journal is unavailable; projection reset was not started"
         )
     if reset:
         await store.reset_projection(
-            account_id=account_id, journal_path=str(path), broker=broker, updated_at_ms=now
+            account_id=account_id, journal_path=str(path), broker="ibkr", updated_at_ms=now
         )
     projected = 0
     try:
         for _ in range(MAX_RECOVERY_BATCHES):
-            if broker == "ibkr":
-                projected += await tail_account_journal(
-                    artifacts_root=artifacts_root,
-                    account_id=account_id,
-                    store=store,
-                    updated_at_ms=now,
-                    allow_rebuilding=True,
-                )
-            else:
-                projected += await tail_alpaca_account_journal(
-                    artifacts_root=artifacts_root,
-                    account_id=account_id,
-                    store=store,
-                    updated_at_ms=now,
-                    allow_rebuilding=True,
-                )
+            projected += await tail_account_journal(
+                artifacts_root=artifacts_root,
+                account_id=account_id,
+                store=store,
+                updated_at_ms=now,
+                allow_rebuilding=True,
+            )
             cursor = await store.read_cursor(account_id, str(path))
             if not _has_complete_appended_record(
                 journal_path=path,
                 offset=cursor.last_byte_offset if cursor else 0,
-                broker="IBKR" if broker == "ibkr" else "Alpaca",
+                broker="IBKR",
             ):
                 await store.set_feed_status(
                     account_id,
@@ -858,24 +525,6 @@ async def project_account_journal_best_effort(*, artifacts_root: Path, account_i
         logger.exception(
             "Clerk transaction projection failed after durable acknowledgement",
             extra={"account_id": account_id},
-        )
-
-
-async def project_alpaca_journal_best_effort(*, artifacts_root: Path, account_id: str) -> None:
-    """Refresh the Alpaca projection after durable evidence; never call Alpaca here."""
-
-    if not settings.CLERK_TRANSACTION_PROJECTION_ENABLED:
-        return
-    try:
-        await recover_alpaca_account_transaction_feed(
-            artifacts_root=artifacts_root,
-            account_id=account_id,
-            store=_default_store(),
-        )
-    except Exception:
-        logger.exception(
-            "Alpaca transaction projection failed after durable journal append",
-            extra={"account_id": account_id, "broker": "alpaca"},
         )
 
 
@@ -1023,19 +672,14 @@ __all__ = [
     "ClerkTransactionProjectionStore",
     "ClerkTransactionProjectionUnavailable",
     "PostgresClerkTransactionProjectionStore",
-    "alpaca_clerk_journal_path",
     "clerk_journal_path",
     "custody_window_summary",
     "fold_lifecycle_state",
     "project_account_journal_best_effort",
-    "project_alpaca_journal_best_effort",
-    "read_appended_alpaca_journal",
     "read_appended_clerk_journal",
     "rebuild_account_transaction_projection",
     "recover_account_transaction_feed",
-    "recover_alpaca_account_transaction_feed",
     "tail_account_journal",
-    "tail_alpaca_account_journal",
     "transaction_detail",
     "transaction_history",
 ]

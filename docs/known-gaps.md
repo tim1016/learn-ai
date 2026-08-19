@@ -17,70 +17,13 @@ here rather than starting a new finding-file tree.
 **Scope note.** Safety-critical and broker items below were verified open against
 current code on 2026-07-04. The architecture-investigation P1 tier and the
 run-log functional items were **not** re-verified in that pass — confirm before
-committing effort. The account-registry, architecture P1, and IBKR B-05/B-06/
-B-09--B-13 clusters were rechecked on **2026-08-17**; their individual sections
-say which findings remain.
+committing effort. The account-registry and architecture P1 clusters were
+rechecked on **2026-08-17**. The IBKR B-05 order-cancel finding was closed by
+deleting the complete order-actuation boundary on **2026-08-19**.
 
 ---
 
 ## 1. Safety-critical (partially re-verified 2026-08-17)
-
-### Bot Control / Account Clerk reconciliation (verified 2026-07-29; BUG-16 fixed 2026-08-17)
-
-- **[IBKR lineage only] Eight-bot A0 admission latency has no recorded
-  production-load qualification (high).** Normal paper entries return after the
-  Clerk's fsynced A0 receipt while later broker work runs asynchronously. The caller
-  deadline is 10 s; deterministic qualification exists, but a relevant production I/O
-  load measurement has not been recorded here. Preserve the invariant: A0 timeout is
-  unknown, never a false retry permission. Qualification: run and retain the
-  broker-free custody campaign and an appropriate paper-host load drill before
-  relying on eight concurrent entry bursts.
-  **Scope corrected 2026-08-17:** the 2026-07-28 audit this came from explicitly
-  traces IBKR `run.py` → RPC → separate-process Account Clerk. The Alpaca Broker V2
-  route (strategy → selected in-process Clerk) was swept and **does not carry this
-  item**. An unscoped "eight-bot" entry reads as applying to whatever fleet the
-  reader has in mind, which is now the Alpaca one.
-
-- **[IBKR lineage only] Eight-bot end-day cancellation remains unqualified
-  (high).** Direct operator cancel timeouts were raised in #1289, but the serialized
-  namespace-cancel path used by concurrent CLOCK_OUT needs paper-broker qualification
-  before it is advertised as fleet-safe. Preserve the invariant: a cancellation
-  timeout is uncertain and cannot be represented as a clean exit. Qualification:
-  eight-bot paper wind-down with terminal Clerk receipts and post-action
-  reconciliation.
-  **Scope corrected 2026-08-17:** same provenance and same correction as the A0 item
-  above — IBKR call graph, not reachable on the Alpaca Broker V2 route.
-
-- **Several audit findings need reachability qualification, not deletion (medium).**
-  Async entry-queue saturation, broker-stream-silence under custody load, concurrent
-  reconciliation-receipt publication, an enqueue-to-registration failure window, and
-  after-close `flatten_and_pause` actuation are recorded in the supporting 2026-07-28
-  call-graph audit. They are not proven dead or fixed by a search. Preserve their
-  respective fail-closed, durable-receipt, and no-false-actuation invariants; turn
-  each into a focused regression or paper qualification before cleanup.
-
-### Alpaca submit-to-custody fail-open seams (verified 2026-08-17)
-
-Source: `docs/audits/submit-to-custody-fail-open-sweep-2026-08-17.md`, read at
-commit `e7325d2`. "Fail open" here means missing, indeterminate, or rejected
-custody evidence can reach a state where a **later new-exposure decision is
-allowed** — not merely that a display value is optimistic.
-
-The sweep confirmed five seams and **refuted nine** candidates. The refutations
-are recorded in the audit doc's candidate table and should not be
-re-investigated; activated SQLite is fail-closed for ordinary faults, and each
-seam below is a specific conditional gap, not a general weakness.
-
-- **Legacy bot ENTER bypasses the stream-health gate (high, but see scope).**
-  `clerk/effects.py:234-301` — legacy ENTER checks desired state and an existing
-  hold, then calls `_submit_leg` directly, never consulting the installed
-  dual-channel gate that protects `submit_for_instance`. Reachable only when the
-  authority selector chooses legacy. **ADR 0038 note:** ADR 0037 retires legacy
-  JSONL as a selectable Alpaca custody authority, so this seam resolves by
-  **deletion**, not correction — the same pattern as ADR 0036 consequence 1 and
-  `rollup_cache.py`. Do not write a regression test against a module scheduled for
-  removal; verify the retirement closes it.
-  [#1618](https://github.com/tim1016/learn-ai/issues/1618)
 
 ### Execution-path fail-open seams (verified 2026-08-18)
 
@@ -94,38 +37,6 @@ Source: `docs/audits/execution-path-fail-open-2026-08-18.md`, read at commit
   blocker unless a prior POSITION_DRIFT already exists. Ordinary working bot
   ENTRY orders are not an independent new-exposure fence.
   [#1655](https://github.com/tim1016/learn-ai/issues/1655)
-- **Retiring legacy JSONL: incomplete reconciliation facts do not fence submit
-  admission (high).** `stale`/`missing_intent` project a freeze but legacy
-  manual and bot ENTER read only holds; in-flight-suppressed position drift can
-  return clean with `broker_facts_complete=False`, which protects Start but not
-  existing effects or manual submission. ADR 0037 resolves this by deletion. Do
-  not add legacy regression tests; verify retirement closes reachability.
-  [#1656](https://github.com/tim1016/learn-ai/issues/1656)
-- **Retiring legacy JSONL: unowned activity replay advances its cursor without a
-  submit fence (high).** An unowned fill is durably accepted without a hold,
-  while the bounded closed-order pass can omit its old-submitted order. ADR 0037
-  resolves this by deletion.
-  [#1657](https://github.com/tim1016/learn-ai/issues/1657)
-- **Retiring legacy JSONL: direct hold clear has a same-millisecond evidence
-  race (high).** `clerk.py:600-666` uses
-  `since_ms > proof_observed_at_ms`; equal-time later unexplained evidence can be
-  followed by `HOLD_CLEARED`. ADR 0037 resolves this by deletion. Do not fix or
-  regression-test the retiring module; verify the route is unreachable.
-  [#1658](https://github.com/tim1016/learn-ai/issues/1658)
-- **Retiring legacy JSONL: reconciliation accepts a full 500-order page as
-  complete (high).** An older working foreign order can be omitted from the
-  descending page, allowing a false-clean proof to clear a hold while the order
-  persists. ADR 0037 resolves this by deletion; do not add legacy pagination
-  behavior or regression tests.
-  [#1659](https://github.com/tim1016/learn-ai/issues/1659)
-- **Retiring legacy JSONL: developer reset can erase unactivated authority and
-  reinstall an empty writer (high).** The paper reset intentionally omits
-  broker-flat and runner-roll-call proof, checks no legacy process when SQLite
-  is absent, and records no startup reset fence without an established
-  generation. Selection then reconstructs empty legacy authority. ADR 0037
-  resolves this through no-authority fallback and deletion.
-  [#1660](https://github.com/tim1016/learn-ai/issues/1660)
-
 ### Temporal authority and liveness (verified 2026-08-18)
 
 Source: `docs/audits/temporal-compliance-2026-08-18.md`, read at commit
@@ -172,45 +83,6 @@ separate authorities under ADRs 0022 and 0029.
   behavior without retaining the rendered string.
   [#1677](https://github.com/tim1016/learn-ai/issues/1677)
 
-### Panel-layer flatness boundary (verified 2026-08-18)
-
-Decision record: ADR 0036 (one flatness rule, `abs(q) >= 1e-9`, owned by
-`folds.py::position_quantity_is_nonzero`). PR #1627 enforced it across the
-backend fold, pre-flight, and IBKR position paths, and removed the Frontend's
-own verdict. These sites were **not** in ADR 0036's consequence list — the
-numeric census counted computation sites and missed the presentation layer.
-
-All use `abs(x) > 0` (any nonzero) where the canonical rule is `abs(x) >= 1e-9`.
-They agree everywhere except the open interval `(0, 1e-9)`, where these say
-*exposed* and the canonical authority says *flat*.
-
-**Reachability matters here, and the first sweep got it wrong.** On an activated
-SQLite account — the live path — `panel_data_source.py:706` runs every panel
-through `adapt_sqlite_panel`, which keeps only `resume` from the generic action
-set (`sqlite_panel_adapter.py:56`, `SQLITE_PANEL_LIFECYCLE_ACTION_IDS =
-frozenset({"resume"})`) and replaces the rest with `projection.recovery_actions`.
-`_guard_resume` (`broker/v2panel/action_policy.py:146-172`) consults only
-`ctx.resume_admission`. So nothing `presented_actions.py` derives from flatness
-survives adaptation on an activated account. The three **live** sites are below;
-the two `presented_actions.py` sites follow them, scoped as legacy-only.
-
-- **[Legacy path only] `presented_actions.py:61` and `:63`.** `has_exposure`
-  (gating `flatten_stop`) and `account_expected_flat`, both `abs(x) > 0`. The
-  first sweep filed these as live, and the `flatten_stop` one as high severity,
-  on the assumption that the generic action set reaches an activated panel. It
-  does not — see the reachability note above. They are therefore reachable only
-  on the unactivated legacy path that **ADR 0037 retires**, and resolve by
-  deletion, exactly like `rollup_cache.py` below. Do not pin a regression test
-  to them; verify the retirement closes them.
-  [#1628](https://github.com/tim1016/learn-ai/issues/1628)
-
-**Not a defect to fix:** `broker/alpaca/clerk/rollup_cache.py:169` compares with
-the wrong tolerance *and* the wrong inclusivity (`abs(updated) <= _ZERO_ABS_TOL`,
-a lot-exhaustion constant). It was ADR 0036 consequence 1, but **ADR 0037
-supersedes it** — the module is reachable only from the legacy JSONL path that
-ADR 0037 retires, so it resolves by deletion. Do not write a regression test
-against it.
-
 ### Non-numeric operator verdict ownership (verified 2026-08-18)
 
 Source: `docs/audits/non-numeric-operator-verdict-census-2026-08-18.md`, read at
@@ -245,92 +117,24 @@ while ADR 0027 owns blocker disposition and moves.
   inconsistent.
   [#1665](https://github.com/tim1016/learn-ai/issues/1665)
 
-### Bot control-plane boundary (ADR 0038, retired 2026-08-18)
-
-[#1636](https://github.com/tim1016/learn-ai/issues/1636) closed the evaluator
-plane. The evaluator, disposition receipt/fence, run-ledger creation and writes,
-IBKR deploy/start/resume/stop/retire routes, host child-process actuation, and
-their Angular deploy/diagnostic/fleet clients are absent. The host surface now
-offers only authenticated account-Clerk capability operations and browser-safe
-health; registered `/api/live-instances` routes are capability reads/lease
-renewal plus read-only broker-activity evidence. Structural tests prove the
-retired live-runner entrypoint and imports/routes are absent, and that the host
-has neither a bot-launch route nor a direct `LiveEngine`, `LivePortfolio`, or
-native-time pending-order-queue import.
-
-The remaining names are explicit: SQLite registration/run folds are **run
-registrations** and runner JSON instance/run records are **runner restoration
-records**. A narrow `run_ledger.py` parser remains only for ADR 0037 step-5
-historical evidence; it cannot create or mutate a ledger and is unreachable from
-bot control.
-
-This retirement does **not** close the shared IBKR paper-order primitive work in
-[#1583](https://github.com/tim1016/learn-ai/issues/1583) or the legacy Clerk
-binding-writer retirement in
-[#1618](https://github.com/tim1016/learn-ai/issues/1618). Those surfaces remain
-parked and are not a second registered bot-control plane.
-
-### Resolved
-
-- **[RESOLVED 2026-07-17] Transient account freeze permanently halted healthy
-  running bots.** Active restart-intensity evidence now raises the non-terminal
-  `TransientAccountFreezePauseError` (not a
-  `ControlledLiveHaltError`); `live_engine` catches it, drops pending, and keeps
-  the run alive until the authoritative provider reports the freeze cleared.
-  Durable freezes
-  (exposure/contamination) still halt via `AccountFreezeBlockError`. The safety
-  invariant "never submit while frozen" is preserved (pending dropped at the
-  gate for both). Because the transient path never raises a terminal error, the
-  bot-event terminal classifier needed no change. Tests:
-  `test_submit_pending_orders_pauses_not_halts_on_transient_restart_intensity_freeze`,
-  `test_submit_pending_orders_resumes_after_restart_intensity_freeze_clears`,
-  `test_live_engine_pauses_not_halts_on_transient_restart_intensity_freeze`.
-  Original finding retained below for context.
-
-  **[original finding]** (verified live 2026-07-17)
-  `AccountFreezeBlockError` (`live_portfolio.py:1108`)
-  is a `ControlledLiveHaltError` caught at the outer run loop (`run.py:2688`) →
-  terminal `ExitReason.fatal_halt`. A **restart-intensity** freeze
-  (`RestartIntensityPolicy`, threshold=3 / window=300000ms) starts from an
-  expiring start-rate window, but its written account-freeze evidence remains
-  active until clear. It previously HALTed any running bot on its next submit,
-  so an unrelated restart-storm on the account killed healthy, unrelated bots,
-  which then needed retire-and-replace. Reproduced today: 3 individual starts in
-  <1 min froze the account and cascade-halted the running bot.
-  **Decision (user-approved 2026-07-17): a running bot should _pause submits_ and
-  keep running through a transient freeze, resuming when it clears** — rather than
-  halt. Implementation is non-trivial and flips a safety invariant, so it needs an
-  ADR: (a) classify freeze reason transient (restart_intensity) vs durable
-  (exposure/contamination — keep halting); (b) move the transient case out of the
-  terminal `ControlledLiveHaltError` path into a per-bar "skip submit, continue"
-  branch; (c) re-evaluate the freeze each bar and resume; (d) update
-  `bot_event_terminal_classifier` so a transient pause is not classified terminal;
-  (e) regression test. See
-  `docs/archive/reports/three-bot-concurrency-and-emergency-flatten-2026-07-17.md` §6.
-
 ## 2. Architecture-investigation P1 tier (re-verified 2026-08-17)
 
-All five P0 safety issues from `architecture-investigation-2026-07-02.md` were
-verified **fixed** in current code (unauth data plane now binds `127.0.0.1` +
-HMAC control secret; panic-flatten stamps `order_ref`; recovery-flatten re-fetches
-positions; freeze is clearable via the authenticated account recovery endpoint;
-IntentWal truncates its tolerated tail before append). The remaining P1s
-carried forward are:
+The still-reachable P0 safety issues from
+`architecture-investigation-2026-07-02.md` were verified fixed. Its IBKR
+panic-flatten, recovery-flatten, freeze mutation, and IntentWal findings left
+the living backlog when #1583 deleted those executable paths. The remaining
+P1s carried forward are:
 
 The former R3 recovery-daemon item was retired from this backlog: it concerns
 the deprecated IBKR bot-control surface, while the accepted Alpaca Clerk
 cutover is complete (ADR-0035).
 
-## 3. Broker subsystem (re-verified 2026-08-17)
+## 3. Broker subsystem (re-verified 2026-08-19)
 
-The B-06 and B-09--B-13 items from the 2026-06-07 hunt are fixed in current
-code and their regressions pass. The disconnect-blindness cluster (B-02/03/04/08)
-still needs a separate reachability review. Remaining:
-
-- **B-05** `cancel_paper_order` / `_order_belongs_to_account` match by `orderId`
-  only → can cancel a *foreign* order on the same DU account; ownership check
-  should be `account_id AND client_id` (`orders.py` / `order_projection.py`).
-  *(also VCR-P3-H; [#1583](https://github.com/tim1016/learn-ai/issues/1583))*
+The B-05 direct-cancel risk is closed by deletion: no application route or
+production helper can cancel an IBKR order. B-06 and B-09--B-13 remain fixed in
+current code and their regressions pass. The disconnect-blindness cluster
+(B-02/03/04/08) still needs a separate reachability review.
 
 ## 4. Broker session mirror — deferred product/safety decisions
 
@@ -348,20 +152,7 @@ not yet provide:
 - **Strong orphan attribution without PID/run-dir evidence** — a raw Gateway
   socket with no live PID and no run-dir stays `ghost`; may under-classify real
   orphaned bot sockets. Needs a durable session-level socket-identity history.
-- **Auto-clear of guards after clean broker recovery** — recovery keeps the
-  engine `PAUSED` with operator-only resume; decide which guard states a clean
-  recovery receipt may auto-clear vs. which stay manually acknowledged.
-
-## 5. Daemon diagnostics — deferred phase-2 features
-
-Shipped (ADR-0019, PR #910). Deferred, non-safety:
-
-- Deploy/start last-error catalog via persisted `mutation_attempts`.
-- clientId-collision detection via broker events.
-- Logs / incidents link-outs; deep WAL / readiness checks.
-- Account-level diagnostic rollup (`scope_ref` is per `strategy_instance_id` today).
-
-## 6. Numerical-rigor & frontend debt (deferred, P2)
+## 5. Numerical-rigor & frontend debt (deferred, P2)
 
 - **Golden-fixture coverage gap** — most canonical math still lacks a registered
   golden fixture; the `iv30/` snapshot sits outside manifest governance.
@@ -386,12 +177,12 @@ Shipped (ADR-0019, PR #910). Deferred, non-safety:
   Lab/chart coverage, data quality, research features, and deployment-validation
   parity copies. Replace exchange/session assumptions with the canonical
   calendar; update reference/parity copies atomically with their canonical
-  strategy. The retiring evaluator run-ledger `force_flat_at` resolves by
-  deletion under ADR 0038, not migration.
+  strategy. The former evaluator run-ledger `force_flat_at` was deleted under
+  ADR 0038 and is not a migration target.
 - **`FailureRow.ts_ms` mislabel** — a host-local time string is typed/named as
   `ms-UTC`; rename to `ts_local` and convert at ingestion. *(was VCR-P3-K)*
 
-## 7. Functional findings parked in deleted run logs (not re-verified)
+## 6. Functional findings parked in deleted run logs (not re-verified)
 
 - **`exposure_pct` unit bug** — `bars_held_total` mixes 15-min strategy bars with
   a 1-min equity curve. Build-Alpha features **F6** (noise/robustness) and **F8**
@@ -401,7 +192,7 @@ Shipped (ADR-0019, PR #910). Deferred, non-safety:
   `research/parity/qc_reconciler.py` and the prediction-set `artifact.py`.
   *(2026-05-12 ML-predictions run)*
 
-## 8. Contract-surface drift gates (verified 2026-08-18)
+## 7. Contract-surface drift gates (verified 2026-08-18)
 
 Source: `docs/audits/contract-surface-drift-2026-08-18.md`, read at commit
 `a16571c2`. OpenAPI, GraphQL, both Frontend generated clients, and the

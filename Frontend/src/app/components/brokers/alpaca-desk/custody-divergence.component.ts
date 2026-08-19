@@ -6,11 +6,7 @@ import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 /**
  * Single custody-divergence card: kind/state chip, explanation, position
  * deltas, possible causes, prerequisite detail, and evidence refs. Shared
- * presentational block for the two custody-resolution surfaces that render
- * a divergence list — the read-only Accounts-page card
- * (`AlpacaCustodyResolutionComponent`) and the resolve confirm dialog
- * (`CustodyResolutionConfirmDialogComponent`) — extracted so both render the
- * same full content instead of two hand-maintained copies drifting apart.
+ * presentational block for the read-only custody diagnosis surface.
  */
 @Component({
   selector: 'app-custody-divergence',

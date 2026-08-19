@@ -92,7 +92,7 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 | 0037 | SQLite is the sole Alpaca custody authority; legacy JSONL retired (no activation fence = no authority, never a fallback). Completes ADR 0035 |
 | 0038 | One bot control plane (Alpaca runner); the evaluator plane retires with IBKR bot-control. SQLite holds the duty facts it already fences; control intent stays file-backed so the stop latch outlives the Clerk. Supersedes ADR 0026 §4 for Alpaca |
 | 0039 | An ADR's Status states the decision's standing, not the code's conformance. The ADR file is the sole status authority; one closed value (`Accepted`/`Proposed`/`Superseded`/`Retired`) per ADR, narrative moved out, CI-checkable |
-| 0040 | `CONTEXT.md` is one glossary of the live trading/operator domain (not repo process); every section declares its lineage (`live` / `retiring (ADR 0037)` / `retiring (ADR 0038)` / `neutral`); the dangling §16.4 deferral is deleted; every newly accepted ADR carries a `Vocabulary:` line |
+| 0040 | `CONTEXT.md` is one glossary of the live trading/operator domain (not repo process); every section declares its lineage (`live` / `historical (ADR 0037/0038)` / `compatibility evidence (ADR 0038)` / `neutral`); the dangling §16.4 deferral is deleted; every newly accepted ADR carries a `Vocabulary:` line |
 | 0041 | The operator manual's Button Reference (and Glossary tables) are generated from `OPERATOR_COPY`, not hand-written; "When available" prose is dropped in favour of the panel's runtime gate reasons; CI regenerate-and-diff, as for the OpenAPI/GraphQL snapshots |
 
 ---
@@ -102,17 +102,17 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 | Doc | Domain | Replaces / supersedes | Last reviewed |
 |---|---|---|---|
 | `docs/architecture/options-math-authorities.md` | Options math | `docs/architecture/options-routes-research.md` (cleanup record) | 2026-04-29 |
-| `docs/broker-v2-operator-manual.md` | **Current** Alpaca Broker V2 operating authority | Legacy IBKR bot-control manual and point-in-time implementation plans | 2026-08-06 |
+| `docs/broker-v2-operator-manual.md` | **Current** Alpaca Broker V2 operating authority | Legacy IBKR bot-control manual and point-in-time implementation plans | 2026-08-19 |
 | `docs/runbooks/alpaca-sqlite-clerk-recovery-and-cutover.md` | Focused Alpaca SQLite recovery/cutover subprocedure incorporated by the Broker V2 manual; no independent policy authority | — | 2026-08-06 |
-| `docs/architecture/ibkr-integration-tdd.md` | IBKR — design rationale ("why") | — | — |
+| `docs/architecture/ibkr-integration-tdd.md` | IBKR read/evidence design rationale and retired-actuation record ("why") | Former Phase 3/4 submit/cancel design (retired by #1583) | 2026-08-19 |
 | `docs/engine-persistence-authority.md` | Engine-side `BacktestEngine` runs persisting through `.NET` (parity gate + 6/8-category compare) | — | 2026-05-19 |
 | `docs/feature-runner-authority.md` | Research Lab → Feature Runner | — | 2026-05-01 |
-| `docs/ibkr-integration-authority.md` | IBKR integration snapshot (not Clerk/lifecycle operator authority) | `docs/architecture/ibkr-integration-phase1/2/3.md` (archived) | 2026-07-22 |
+| `docs/ibkr-integration-authority.md` | Current read-only IBKR capability/account/order-history/market-data authority and retired-actuation boundary | `docs/architecture/ibkr-integration-phase1/2/3.md` (archived) and the pre-#1583 executable snapshot | 2026-08-19 |
 | `docs/indicator-reliability-authority.md` | Indicator reliability methodology | — | — |
 | `docs/ml-predictions-authority.md` | ML predictions (prediction-set artifact, StrategySpec wiring, QC parity infra) | — | 2026-05-12 |
 | `docs/portfolio-management.md` | Portfolio management system | `docs/portfolio-system.md` (duplicate, disputed — PR2) | — |
 | `docs/signal-engine-authority.md` | Signal engine | — | — |
-| `docs/known-gaps.md` | Living open-defect backlog (what is still broken or deferred) | consolidates the pruned audit-finding trees | 2026-07-04 |
+| `docs/known-gaps.md` | Living open-defect backlog (what is still broken or deferred) | consolidates the pruned audit-finding trees | 2026-08-19 |
 
 ---
 
@@ -138,12 +138,13 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 | `docs/audits/structural-integrity-2026-04-22.md` | Known violation baseline | Historical context |
 | `docs/audits/bot-control-8bot-call-graph-audit-2026-07-28.md` | Eight-bot call-graph evidence | Supporting investigation only; its open findings are tracked in `docs/known-gaps.md`, and it is never an operator procedure |
 | `docs/audits/clerk-lineage-reachability-2026-08-17.md` | Alpaca-vs-IBKR Clerk lineage coupling and request reachability | Supporting evidence for wayfinder #1589 / ADR-0030/0032/0035 scope questions; distinguishes *executed* from merely *imported* |
+| `docs/audits/alpaca-sqlite-sole-authority-retirement-2026-08-19.md` | ADR-0037 legacy Alpaca custody retirement and migration-gate receipt | Records structural deletion, preserved SQLite/IBKR evidence boundaries, and the explicit external-inventory prerequisite for #1618/#1656–#1660 |
 | `docs/audits/numeric-authority-census-2026-08-17.md` | P&L / exposure / position implementation census | Supporting evidence for #1590 and ADR 0036; refutes the suspected FIFO duplication |
 | `docs/audits/state-writer-census-2026-08-17.md` | Lifecycle and deploy state-writer inventory | Supporting evidence for #1591; input to the single-writer decision (#1598) |
 | `docs/audits/submit-to-custody-fail-open-sweep-2026-08-17.md` | Alpaca submit-to-custody fail-open seams (5 confirmed, 9 refuted) | Supporting evidence for #1592; its confirmed seams are landed in `docs/known-gaps.md` via #1604 |
 | `docs/audits/{three-bot-lifecycle-2026-07-23,2026-07-23-findings-corrected,eight-bot-deploy-ui-2026-07-27,deployment-validation-connectivity-incident-2026-07-27}.md` | Retired IBKR Bot Control validation and incident provenance | Historical evidence only; use the Broker V2 manual and `known-gaps.md` for current truth |
 | `docs/bars-open-attribute-fix.md` | IBKR bar handling | Surgical bug-fix note for `ib_async.RealTimeBar.open_` |
-| `docs/codex-phase-1-4-audit.md` | IBKR Phases 1-4 code audit | "Most recent code audit" per `ibkr-integration-authority.md` |
+| `docs/codex-phase-1-4-audit.md` | Retired IBKR Phases 1-4 code audit | Historical evidence only; current authority is `docs/ibkr-integration-authority.md` |
 | `docs/engine-phase-1-2-refined-plan.md` | Strategy Lab deprecation lineage | Historical completion evidence; Strategy Lab is removed. |
 | `docs/indicator-reliability-methodology.md` | Indicator reliability details | Backs `indicator-reliability-authority.md` |
 | `docs/lean-engine-phase1-verification-report.md` | Engine correctness evidence | Evidential artifact |

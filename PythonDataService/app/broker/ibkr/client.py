@@ -610,8 +610,8 @@ class IbkrClient:
         was_connected = self._ib.isConnected()
         if was_connected:
             # ib_async.IB only exposes a synchronous disconnect(); there is
-            # no disconnectAsync. The smoke run on 2026-05-13 surfaced this
-            # the first time cmd_start ever called us in production.
+            # no disconnectAsync. A 2026-05-13 smoke run surfaced this behavior
+            # in the former engine-child integration.
             self._ib.disconnect()
         self._connected_account = None
         if was_connected:

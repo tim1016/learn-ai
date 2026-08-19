@@ -719,7 +719,7 @@ Status describes the implementation at the verified revision, not design intent.
 | Trader/operator wording | `operator_surface.py`, operator guidance, presented action services | operator-surface and frontend surface tests | trader and operations lenses | current; backend authors judgment/prose |
 | Raw receipt identifiers | shared `receiptLabel` pipe at presentation boundary | pipe/component tests and frontend guards | all evidence surfaces | current; opaque IDs/refs remain exact |
 | IBKR activity narrative | host-runner callback WAL then broker-activity projector | activity schemas and publisher tests | Bot Control Activity | current; projector is a rebuildable projection |
-| Alpaca Broker System v2 reads/orders | broker contract registry → activation-selected Alpaca Clerk, registered in `main.py`; `active_authority.py` installs exactly one account authority | `/api/brokers/alpaca/*`, `/api/alpaca-clerk-sqlite/*`, committed OpenAPI, adapter/Clerk/authority tests | `/brokers/alpaca` | current; JSONL for unactivated accounts, SQLite only after a valid activation fence |
+| Alpaca Broker System v2 reads/orders | broker contract registry → activation-selected SQLite Alpaca Clerk, registered in `main.py`; `active_authority.py` installs exactly one account authority or none | `/api/brokers/alpaca/*`, `/api/alpaca-clerk-sqlite/*`, committed OpenAPI, adapter/Clerk/authority tests | `/brokers/alpaca` | current; SQLite only after a valid activation fence; missing or invalid activation fails closed as unavailable |
 | Alpaca bot runner | `services/bot_runner.py`, `broker_bots.py`; activated strategy decisions use `SqliteAlpacaClerkFacade` ENTER/EXIT custody | `/api/brokers/{broker}/bots/*`, `test_bot_runner.py`, `test_runtime.py` | Broker V2 bot panel | daemon-free; order-capable only through the account's selected Clerk authority |
 | Legacy lifecycle projection | deleted runtime/routes/client wrappers; Python lifecycle-evidence fold remains | retirement guards and migration tests | none | retired runtime; opaque historical template IDs are not a revival |
 | Observation lease | `account_observation_lease.py` and promotion service | gate-promotion tests | Account Desk evidence | shadow-only; Account Truth is effective admission authority |
@@ -730,9 +730,9 @@ The phrase “Bot Control” in this manual primarily names the established IBKR
 host-daemon control plane. Alpaca is paper-only Broker System v2: its read and order
 routes are broker-neutral contract routes under `/api/brokers/alpaca`, its desk is
 `/brokers/alpaca`, and its daemon-free bot runner is order-capable only through the
-activation-selected account Clerk. An unactivated account keeps the legacy JSONL
-writer; a valid activation fence selects SQLite; an invalid activated startup selects
-no writer. Neither route
+activation-selected SQLite account Clerk. A valid activation fence selects SQLite;
+missing, `OFF_DUTY`, malformed, conflicting, or failed activation selects no writer
+and reports the authority unavailable. Neither route
 is evidence that an Alpaca order may use the IBKR Clerk, roll-call, host daemon,
 reconciliation, or emergency-recovery controls. Do not generalize an IBKR-specific
 socket, client-ID, Account Truth, or recovery rule to Alpaca without a contract change.

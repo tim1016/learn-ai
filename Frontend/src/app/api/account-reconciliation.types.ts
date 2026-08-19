@@ -159,53 +159,8 @@ export interface AccountTriageResponse {
   conditions: AccountConditionRow[];
   freeze_banner: AccountFreezeBanner | null;
   clear_freeze_actionable: boolean;
-  emergency_flatten_confirmation: OperatorConfirmationCopy | null;
   affected_bots: AccountTriageBotRef[];
-  recovery_flatten_candidates: AccountRecoveryFlattenCandidate[];
   operator_blockers: OperatorBlocker[];
-}
-
-export interface AccountEmergencyFlattenResponse {
-  accepted: boolean;
-  account_id: string;
-  audit_run_id: string;
-  completed_at_ms: number;
-}
-
-export interface JournalCurePreview {
-  account_id: string;
-  bot_order_namespace: string;
-  symbol: string;
-  journal_quantity: number;
-  required_adjustment_sign: 'positive' | 'negative' | null;
-  can_cure: boolean;
-  reason_code: string;
-  confirmation: OperatorConfirmationCopy | null;
-}
-
-export interface JournalCureRequest {
-  bot_order_namespace: string;
-  symbol: string;
-  signed_quantity: number;
-  reason: string;
-  evidence_refs: string[];
-  request_provenance: string;
-  idempotency_key: string;
-}
-
-export interface JournalCureReceipt {
-  schema_version: 1;
-  account_id: string;
-  bot_order_namespace: string;
-  symbol: string;
-  signed_quantity: number;
-  operator_attribution: 'local-operator';
-  request_provenance: string;
-  reason: string;
-  evidence_refs: string[];
-  idempotency_key: string;
-  recorded_at_ms: number;
-  journal_seq: number;
 }
 
 export interface AccountClerkTransportStatus {
@@ -302,71 +257,6 @@ export interface StaleBindingRetirementReceipt {
   requested_by: string;
   retired_at_ms: number;
   source: string;
-}
-
-export interface AccountRecoveryFlattenOrderSpec {
-  symbol: string;
-  sec_type: string;
-  action: 'BUY' | 'SELL';
-  quantity: number;
-  order_type: 'MKT';
-  limit_price: null;
-  time_in_force: 'DAY';
-  outside_rth: boolean;
-  expiry_ms: number | null;
-  strike: number | null;
-  right: string | null;
-  multiplier: number;
-  confirm_paper: true;
-  client_order_id: string;
-  order_ref: string;
-  manual_order: boolean;
-}
-
-export interface AccountRecoveryFlattenIntent {
-  trace_id: string;
-  account_id: string;
-  strategy_instance_id: string;
-  run_id: string;
-  bot_order_namespace: string;
-  intent_id: string;
-  order_ref: string;
-  intent_kind: 'RECOVERY_FLATTEN';
-  order_spec: AccountRecoveryFlattenOrderSpec;
-  owner_generation: number;
-  created_at_ms: number;
-}
-
-export interface AccountRecoveryFlattenCandidate {
-  intent: AccountRecoveryFlattenIntent;
-  confirmation: OperatorConfirmationCopy;
-}
-
-export interface OperatorRecoveryFlattenRequest {
-  intent: AccountRecoveryFlattenIntent;
-  request_provenance: string;
-}
-
-export interface OperatorRecoveryFlattenResponse {
-  recovery_flatten: {
-    status: 'recovery_flattened';
-    recorded: {
-      intent_id: string;
-      order_ref: string;
-      journal_seq: number;
-      recorded_at_ms: number;
-    };
-    broker_acked: {
-      intent_id: string;
-      order_ref: string;
-      journal_seq: number;
-      recorded_at_ms: number;
-      order_id: number;
-      perm_id: number | null;
-      exec_id: string | null;
-    };
-    cancelled_order_ids: number[];
-  };
 }
 
 export interface AccountClearFreezeRequest {

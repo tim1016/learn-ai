@@ -8,10 +8,6 @@ from app.engine.live.account_session_policy import (
     AccountSessionPolicy,
     write_account_session_policy,
 )
-from app.services.account_gate_promotion import (
-    ClerkRestartSmokeEvidence,
-    record_clerk_restart_smoke,
-)
 from app.utils.timestamps import now_ms_utc
 
 
@@ -35,21 +31,5 @@ class AccountGatePolicyService:
             allow_outside_live_session=allow_outside_live_session,
             updated_at_ms=now_ms_utc(),
         )
-
-    def record_restart_smoke(
-        self,
-        *,
-        account_id: str,
-        confirmation: str,
-    ) -> ClerkRestartSmokeEvidence:
-        """Record the typed current-Clerk smoke after an operator restart check."""
-
-        return record_clerk_restart_smoke(
-            self._artifacts_root,
-            account_id=account_id,
-            confirmation=confirmation,
-            recorded_at_ms=now_ms_utc(),
-        )
-
 
 __all__ = ["AccountGatePolicyService"]

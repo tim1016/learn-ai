@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 
-from app.broker.alpaca.clerk import ClerkAdmissionSnapshotChangedError
+from app.broker.alpaca.clerk.active_protocol import ClerkAdmissionSnapshotStaleError
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.marketdata.feed import MarketDataFeed
 from app.schemas.broker_bots import BotStatusView
@@ -141,7 +141,7 @@ class BotResumeAdmission:
                     feed,
                     custody,
                 )
-        except ClerkAdmissionSnapshotChangedError as exc:
+        except ClerkAdmissionSnapshotStaleError as exc:
             raise StartAdmissionEvidenceChanged(
                 "Clerk custody evidence changed before Resume could be fenced."
             ) from exc
