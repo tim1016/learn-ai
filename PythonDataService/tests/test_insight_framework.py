@@ -9,7 +9,7 @@ Validates the LEAN-ported prediction-tracking system end-to-end:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -23,6 +23,12 @@ from app.engine.framework.insight import (
 )
 from app.engine.framework.insight_manager import InsightManager
 from app.engine.framework.insight_scorer import DefaultInsightScoreFunction
+from app.utils.timestamps import to_ms_utc
+
+
+def _ms(*, minutes: int = 0) -> int:
+    """Minutes as int64 ms — for expressing test deltas against an anchor timestamp."""
+    return int(timedelta(minutes=minutes).total_seconds() * 1000)
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -59,7 +65,7 @@ class TestInsightScore:
     def test_finalize_locks_scores(self):
         score = InsightScore()
         score.set_score(InsightScoreType.DIRECTION, 1.0)
-        score.finalize(datetime(2024, 6, 1))
+        score.finalize(to_ms_utc(datetime(2024, 6, 1, tzinfo=UTC)))
         assert score.is_final_score is True
         # Subsequent writes are silently ignored.
         score.set_score(InsightScoreType.DIRECTION, 0.0)
@@ -75,7 +81,7 @@ class TestInsightScore:
     def test_to_dict(self):
         score = InsightScore()
         score.set_score(InsightScoreType.DIRECTION, 1.0)
-        score.finalize(datetime(2024, 6, 1))
+        score.finalize(to_ms_utc(datetime(2024, 6, 1, tzinfo=UTC)))
         d = score.to_dict()
         assert d["direction"] == 1.0
         assert d["is_final"] is True
@@ -102,27 +108,27 @@ class TestInsight:
         assert i.period == timedelta(minutes=75)
 
     def test_close_time_auto_computed(self):
-        gen = datetime(2024, 6, 1, 10, 0)
+        gen_ms = to_ms_utc(datetime(2024, 6, 1, 10, 0, tzinfo=UTC))
         i = Insight.price(
             symbol="SPY",
             direction=InsightDirection.UP,
             period=timedelta(minutes=75),
-            generated_time=gen,
+            generated_at_ms=gen_ms,
         )
-        assert i.close_time == gen + timedelta(minutes=75)
+        assert i.close_at_ms == gen_ms + _ms(minutes=75)
 
     def test_is_active_and_expired(self):
-        gen = datetime(2024, 6, 1, 10, 0)
+        gen_ms = to_ms_utc(datetime(2024, 6, 1, 10, 0, tzinfo=UTC))
         i = Insight.price(
             symbol="SPY",
             direction=InsightDirection.UP,
             period=timedelta(minutes=30),
-            generated_time=gen,
+            generated_at_ms=gen_ms,
         )
-        assert i.is_active(datetime(2024, 6, 1, 10, 15))
-        assert not i.is_expired(datetime(2024, 6, 1, 10, 15))
-        assert i.is_expired(datetime(2024, 6, 1, 10, 30))
-        assert not i.is_active(datetime(2024, 6, 1, 10, 30))
+        assert i.is_active(gen_ms + _ms(minutes=15))
+        assert not i.is_expired(gen_ms + _ms(minutes=15))
+        assert i.is_expired(gen_ms + _ms(minutes=30))
+        assert not i.is_active(gen_ms + _ms(minutes=30))
 
     def test_group_assigns_shared_id(self):
         a = Insight.price("SPY", InsightDirection.UP, timedelta(minutes=15))
@@ -133,12 +139,12 @@ class TestInsight:
         assert a.group_id is not None
 
     def test_to_dict_serialization(self):
-        gen = datetime(2024, 6, 1, 10, 0)
+        gen_ms = to_ms_utc(datetime(2024, 6, 1, 10, 0, tzinfo=UTC))
         i = Insight.price(
             symbol="SPY",
             direction=InsightDirection.UP,
             period=timedelta(minutes=75),
-            generated_time=gen,
+            generated_at_ms=gen_ms,
             magnitude=0.001,
             confidence=0.72,
         )
@@ -239,11 +245,11 @@ class TestInsightManager:
     def _make_manager_with_insights(self) -> tuple[InsightManager, list[Insight]]:
         """Create a manager with 3 insights: 2 correct UP, 1 wrong UP."""
         mgr = InsightManager()
-        t0 = datetime(2024, 6, 1, 10, 0)
+        t0_ms = to_ms_utc(datetime(2024, 6, 1, 10, 0, tzinfo=UTC))
 
         # Insight 1: UP prediction, price goes up → correct
         i1 = Insight.price(
-            "SPY", InsightDirection.UP, timedelta(minutes=30), generated_time=t0, magnitude=0.002, confidence=0.7
+            "SPY", InsightDirection.UP, timedelta(minutes=30), generated_at_ms=t0_ms, magnitude=0.002, confidence=0.7
         )
         mgr.add(i1, Decimal("500"))
 
@@ -252,7 +258,7 @@ class TestInsightManager:
             "SPY",
             InsightDirection.UP,
             timedelta(minutes=30),
-            generated_time=t0 + timedelta(minutes=60),
+            generated_at_ms=t0_ms + _ms(minutes=60),
             magnitude=0.003,
             confidence=0.6,
         )
@@ -263,7 +269,7 @@ class TestInsightManager:
             "SPY",
             InsightDirection.UP,
             timedelta(minutes=30),
-            generated_time=t0 + timedelta(minutes=120),
+            generated_at_ms=t0_ms + _ms(minutes=120),
             magnitude=0.001,
             confidence=0.8,
         )
@@ -280,53 +286,53 @@ class TestInsightManager:
 
     def test_step_scores_expired_insights(self):
         mgr = InsightManager()
-        t0 = datetime(2024, 6, 1, 10, 0)
-        i = Insight.price("SPY", InsightDirection.UP, timedelta(minutes=30), generated_time=t0, confidence=0.7)
+        t0_ms = to_ms_utc(datetime(2024, 6, 1, 10, 0, tzinfo=UTC))
+        i = Insight.price("SPY", InsightDirection.UP, timedelta(minutes=30), generated_at_ms=t0_ms, confidence=0.7)
         mgr.add(i, Decimal("500"))
 
         # Before expiration — nothing scored.
-        scored = mgr.step(t0 + timedelta(minutes=15), {"SPY": Decimal("502")})
+        scored = mgr.step(t0_ms + _ms(minutes=15), {"SPY": Decimal("502")})
         assert len(scored) == 0
         assert not i.score.is_final_score
 
         # After expiration — scored.
-        scored = mgr.step(t0 + timedelta(minutes=30), {"SPY": Decimal("502")})
+        scored = mgr.step(t0_ms + _ms(minutes=30), {"SPY": Decimal("502")})
         assert len(scored) == 1
         assert i.score.is_final_score
         assert i.score.direction == 1.0  # UP was correct
 
     def test_step_does_not_rescore_finalized(self):
         mgr = InsightManager()
-        t0 = datetime(2024, 6, 1, 10, 0)
-        i = Insight.price("SPY", InsightDirection.UP, timedelta(minutes=30), generated_time=t0)
+        t0_ms = to_ms_utc(datetime(2024, 6, 1, 10, 0, tzinfo=UTC))
+        i = Insight.price("SPY", InsightDirection.UP, timedelta(minutes=30), generated_at_ms=t0_ms)
         mgr.add(i, Decimal("500"))
 
         # Score once.
-        mgr.step(t0 + timedelta(minutes=30), {"SPY": Decimal("502")})
+        mgr.step(t0_ms + _ms(minutes=30), {"SPY": Decimal("502")})
         assert i.score.direction == 1.0
 
         # Step again with a different price — should NOT rescore.
-        mgr.step(t0 + timedelta(minutes=60), {"SPY": Decimal("490")})
+        mgr.step(t0_ms + _ms(minutes=60), {"SPY": Decimal("490")})
         assert i.score.direction == 1.0  # Still 1.0, not rescored
 
     def test_get_active_insights(self):
         mgr = InsightManager()
-        t0 = datetime(2024, 6, 1, 10, 0)
-        i1 = Insight.price("SPY", InsightDirection.UP, timedelta(minutes=30), generated_time=t0)
-        i2 = Insight.price("SPY", InsightDirection.UP, timedelta(minutes=60), generated_time=t0)
+        t0_ms = to_ms_utc(datetime(2024, 6, 1, 10, 0, tzinfo=UTC))
+        i1 = Insight.price("SPY", InsightDirection.UP, timedelta(minutes=30), generated_at_ms=t0_ms)
+        i2 = Insight.price("SPY", InsightDirection.UP, timedelta(minutes=60), generated_at_ms=t0_ms)
         mgr.add(i1, Decimal("500"))
         mgr.add(i2, Decimal("500"))
 
-        active = mgr.get_active_insights(t0 + timedelta(minutes=45))
+        active = mgr.get_active_insights(t0_ms + _ms(minutes=45))
         assert len(active) == 1  # Only i2 is still active
         assert active[0].id == i2.id
 
     def test_get_summary_direction_accuracy(self):
         mgr, _insights = self._make_manager_with_insights()
-        t_end = datetime(2024, 6, 1, 14, 0)
+        t_end_ms = to_ms_utc(datetime(2024, 6, 1, 14, 0, tzinfo=UTC))
 
         # Score all: i1 up (correct), i2 up (wrong), i3 up (correct)
-        mgr.step(t_end, {"SPY": Decimal("510")})  # All expired
+        mgr.step(t_end_ms, {"SPY": Decimal("510")})  # All expired
         # i1: ref=500, final=510 → UP correct
         # i2: ref=505, final=510 → UP correct (price went up from 505→510)
         # i3: ref=503, final=510 → UP correct
@@ -339,8 +345,8 @@ class TestInsightManager:
 
     def test_get_summary_confidence_calibration(self):
         mgr, _ = self._make_manager_with_insights()
-        t_end = datetime(2024, 6, 1, 14, 0)
-        mgr.step(t_end, {"SPY": Decimal("510")})
+        t_end_ms = to_ms_utc(datetime(2024, 6, 1, 14, 0, tzinfo=UTC))
+        mgr.step(t_end_ms, {"SPY": Decimal("510")})
 
         summary = mgr.get_summary()
         assert len(summary.confidence_calibration) > 0
@@ -360,8 +366,8 @@ class TestInsightManager:
 
     def test_summary_to_dict(self):
         mgr, _ = self._make_manager_with_insights()
-        t_end = datetime(2024, 6, 1, 14, 0)
-        mgr.step(t_end, {"SPY": Decimal("510")})
+        t_end_ms = to_ms_utc(datetime(2024, 6, 1, 14, 0, tzinfo=UTC))
+        mgr.step(t_end_ms, {"SPY": Decimal("510")})
         d = mgr.get_summary().to_dict()
         assert "total_insights" in d
         assert "direction_accuracy" in d
