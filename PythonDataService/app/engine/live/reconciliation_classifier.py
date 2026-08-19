@@ -81,6 +81,37 @@ class BrokerSnapshot:
     executions: tuple[BrokerExecutionView, ...] = ()
 
 
+def broker_snapshot_from_ibkr(open_orders: list[object], executions: list[object]) -> BrokerSnapshot:
+    """Map synchronized IBKR evidence into the classifier's pure snapshot."""
+
+    order_views = tuple(
+        BrokerOrderView(
+            order_ref=getattr(order, "order_ref", None),
+            perm_id=getattr(order, "perm_id", None),
+            order_id=getattr(order, "order_id", None),
+            status=getattr(order, "status", None),
+            symbol=getattr(order, "symbol", None),
+            remaining=float(getattr(order, "remaining", 0.0) or 0.0),
+            filled=float(getattr(order, "cumulative_filled", 0.0) or 0.0),
+        )
+        for order in open_orders
+    )
+    execution_views = tuple(
+        BrokerExecutionView(
+            order_ref=getattr(execution, "order_ref", None),
+            perm_id=getattr(execution, "perm_id", None),
+            exec_id=getattr(execution, "exec_id", None),
+            symbol=getattr(execution, "symbol", None),
+            quantity=float(getattr(execution, "fill_quantity", 0.0) or 0.0)
+            * (-1.0 if getattr(execution, "side", None) == "SELL" else 1.0),
+            exec_time_ms=getattr(execution, "exec_time_ms", None),
+        )
+        for execution in executions
+        if getattr(execution, "event_type", None) == "fill"
+    )
+    return BrokerSnapshot(open_orders=order_views, executions=execution_views)
+
+
 @dataclass(frozen=True)
 class OwnedOrphan:
     order_ref: str
@@ -266,5 +297,6 @@ __all__ = [
     "OwnedOrphan",
     "Poison",
     "ReconcileVerdict",
+    "broker_snapshot_from_ibkr",
     "classify",
 ]

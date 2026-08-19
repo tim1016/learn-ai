@@ -65,6 +65,7 @@ from app.schemas.run_admission import (
     RunProcessAdmissionFact,
     StartRuntimeAdmissionFact,
 )
+from app.services.alpaca_bot_identity import AlpacaBotIdentityGuard
 from app.services.bot_binding_repository import (
     BotBindingRepository,
     BrokerBotBinding,
@@ -85,10 +86,6 @@ from app.services.bot_clerk_lifecycle import (
     commit_stop_before_task_cancel,
     register_alpaca_duty_run,
     stop_interrupted_alpaca_duty_run,
-)
-from app.services.bot_control_plane import (
-    BotControlPlane,
-    BotControlPlaneDiscriminator,
 )
 from app.services.bot_dry_run import DryRunActivity
 from app.services.bot_lifecycle_projection import (
@@ -217,12 +214,12 @@ class BotTaskRegistry:
             self._artifacts_root,
             instance_dir_for=self._confined_instance_dir,
         )
-        self._plane = BotControlPlaneDiscriminator(self._artifacts_root)
+        self._alpaca_identity = AlpacaBotIdentityGuard(self._artifacts_root)
         self._lifecycle_authority = ActiveSqliteAlpacaLifecycleAuthority()
         self._lifecycle_projector = lifecycle_projector or AlpacaLifecycleProjector(
             authority=self._lifecycle_authority,
             lifecycle_repo_for=self._lifecycle_repo,
-            require_alpaca_identity=self._require_alpaca_plane,
+            require_alpaca_identity=self._require_alpaca_identity,
         )
         self._boot_recovery = BotBootRecovery(
             self._artifacts_root,
@@ -1105,10 +1102,9 @@ class BotTaskRegistry:
         ):
             return tuple(candidates.values())
         for strategy_instance_id, run_id in self._lifecycle_authority.recovery_candidates():
-            self._plane.require(
+            self._alpaca_identity.require(
                 strategy_instance_id,
-                BotControlPlane.ALPACA_RUNNER,
-                sqlite_alpaca_claim=True,
+                sqlite_claim=True,
             )
             candidates[strategy_instance_id] = BotRecoveryCandidate(
                 strategy_instance_id=strategy_instance_id,
@@ -1117,15 +1113,14 @@ class BotTaskRegistry:
             )
         return tuple(candidates.values())
 
-    def _require_alpaca_plane(
+    def _require_alpaca_identity(
         self,
         strategy_instance_id: str,
-        sqlite_alpaca_claim: bool,
+        sqlite_claim: bool,
     ) -> None:
-        self._plane.require(
+        self._alpaca_identity.require(
             strategy_instance_id,
-            BotControlPlane.ALPACA_RUNNER,
-            sqlite_alpaca_claim=sqlite_alpaca_claim,
+            sqlite_claim=sqlite_claim,
         )
 
     def _carryover_checkpoint_path(self, strategy_instance_id: str) -> Path:

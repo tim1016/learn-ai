@@ -40,6 +40,8 @@ from app.marketdata.feed import FeedHealth, MarketDataBar
 from app.routers import broker_v2_panel
 from app.routers.broker_v2_panel import router
 from app.schemas.broker_v2_panel import BotPanelLiveSnapshot, ChartLiveResponse
+from app.services.bot_binding_repository import BrokerBotBinding
+from app.services.bot_lifecycle_projection import AlpacaLifecycleAuthoritySnapshot
 from app.services.bot_runner import BotTaskRegistry, set_bot_task_registry
 from app.services.broker_v2_panel import panel_data_source
 from app.services.broker_v2_panel.action_execution_service import (
@@ -111,6 +113,53 @@ class _FakeClerk:
     def __init__(self) -> None:
         self.reconciled = False
         self.cleared = False
+        self.active_runs: dict[str, str] = {}
+        self.known_runs: set[tuple[str, str]] = set()
+        self.stopped_runs: list[str] = []
+
+    async def register_strategy_run(self, binding: BrokerBotBinding) -> None:
+        strategy_instance_id = binding.strategy_instance_id
+        run_id = binding.run_id
+        self.active_runs[strategy_instance_id] = run_id
+        self.known_runs.add((strategy_instance_id, run_id))
+
+    async def stop_strategy_run(
+        self,
+        *,
+        strategy_instance_id: str,
+        run_id: str,
+        reason: str | None = None,
+    ) -> None:
+        del reason
+        self.stopped_runs.append(run_id)
+        if self.active_runs.get(strategy_instance_id) == run_id:
+            self.active_runs.pop(strategy_instance_id)
+
+    def lifecycle_snapshot(
+        self,
+        strategy_instance_id: str,
+        expected_run_id: str | None,
+    ) -> AlpacaLifecycleAuthoritySnapshot:
+        active_run_id = self.active_runs.get(strategy_instance_id)
+        known = any(candidate[0] == strategy_instance_id for candidate in self.known_runs)
+        if expected_run_id is None:
+            expected_run_state = None
+        elif active_run_id == expected_run_id:
+            expected_run_state = "ACTIVE"
+        elif (strategy_instance_id, expected_run_id) in self.known_runs:
+            expected_run_state = "STOPPED"
+        else:
+            expected_run_state = "MISSING"
+        return AlpacaLifecycleAuthoritySnapshot(
+            strategy_instance_exists=active_run_id is not None or known,
+            active_run_id=active_run_id,
+            retired_at_ms=None,
+            expected_run_state=expected_run_state,
+            control_revision=len(self.known_runs) + len(self.stopped_runs),
+        )
+
+    def lifecycle_recovery_candidates(self) -> tuple[tuple[str, str], ...]:
+        return tuple(sorted(self.active_runs.items()))
 
     async def status(self) -> ClerkStatus:
         return ClerkStatus(

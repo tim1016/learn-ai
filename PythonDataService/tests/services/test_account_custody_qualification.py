@@ -35,8 +35,6 @@ EXPECTED_DRILL_NAMES = (
     "clerk_death_with_nonterminal_intents",
     "ibkr_1101_and_1102",
     "callback_silence_with_socket_connected",
-    "pause_stop_during_daemon_outage",
-    "start_resume_deploy_during_outage",
     "flatten_with_stale_positions",
     "operational_log_concurrency",
     "outage_diff",
@@ -73,9 +71,6 @@ def test_default_campaign_covers_every_prd_drill_with_complete_receipts() -> Non
     assert "epoch_write_blocked:SOCKET_LOSS" in socket_after_a0.observed_receipts
     originator_death = next(drill for drill in report.drills if drill.drill_id == 8)
     assert "retirements_applied:1" in originator_death.observed_receipts
-    outage_control = next(drill for drill in report.drills if drill.drill_id == 14)
-    assert "pause_desired_state:PAUSED" in outage_control.observed_receipts
-    assert "stop_desired_state:STOPPED" in outage_control.observed_receipts
     retired_fill = report.drills[8]
     assert any(":broker_event:" in receipt for receipt in retired_fill.observed_receipts)
     assert "verdict:SUSPENDED" in retired_fill.observed_receipts
@@ -183,7 +178,7 @@ def test_campaign_archives_unexpected_drill_failure_and_continues(
     assert report.metrics.queue_refusal_count is None
     assert queue_metric.sample_count == 0
     assert (queue_metric.p50_ms, queue_metric.p95_ms, queue_metric.p99_ms) == (None, None, None)
-    assert next(drill for drill in report.drills if drill.drill_id == 14).passed
+    assert next(drill for drill in report.drills if drill.drill_id == 16).passed
 
 
 def test_nist_r6_percentiles_match_reference_examples() -> None:
@@ -265,7 +260,7 @@ def test_cli_archives_verifiable_backend_report(tmp_path, capsys) -> None:
     assert exit_code == 0
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["certificate"]["status"] == "DETERMINISTIC_PASSED_AWAITING_PAPER"
-    assert len(payload["drills"]) == 17
+    assert len(payload["drills"]) == 15
     assert json.loads(capsys.readouterr().out)["report_sha256"] == payload["report_sha256"]
 
 

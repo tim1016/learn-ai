@@ -1,20 +1,14 @@
-"""HTTP client: main service -> host live-run daemon (ADR 0004).
+"""HTTP client from the data service to the host account-capability bridge.
 
-The host daemon owns the subprocesses and is therefore the sole authority for
-the live ``strategy_instance_id -> run_id`` binding. The instance-status
-endpoint in ``polygon-data-service`` cannot prove liveness from artifacts, so it
-queries the daemon here.
-
-Read path (PRD #619-C2): every GET returns ``(DaemonResult, dict | None)``.
+Read paths return ``(DaemonResult, model | None)``.
 The ``DaemonResult`` classifies the transport outcome (CONNECTED / UNREACHABLE
 / AUTH_FAILED / PROTOCOL_ERROR / INCOMPATIBLE_CONTRACT); the dict carries the
 parsed body iff ``result.kind == "CONNECTED"``. Callers that only need
 fail-closed semantics keep checking ``payload is None`` — the typed result is
-additive context for log/UX surfacing and for the connectivity monitor
-(``fetch_health``) to fold into a running state.
+additive context for log and operator-facing health surfacing.
 
-Write path: POST helpers continue to raise ``HostDaemonError`` for now. The
-Typed mutation classification ties ``outcome_ambiguous=True`` to the
+Write paths raise ``HostDaemonError``. Typed mutation classification ties
+``outcome_ambiguous=True`` to the
 ``OUTCOME_UNKNOWN`` conflict response.
 """
 
@@ -30,7 +24,7 @@ from pydantic import ValidationError
 from app.engine.live.daemon_auth import TOKEN_HEADER, read_daemon_token
 from app.engine.live.daemon_transport import DaemonResult
 from app.schemas.broker_session import GatewaySocketsSnapshot
-from app.schemas.live_runs import HostRunnerHealth, HostRunnerProcessStatus
+from app.schemas.live_runs import HostRunnerHealth
 
 logger = logging.getLogger(__name__)
 
@@ -39,21 +33,8 @@ _TIMEOUT = httpx.Timeout(2.0)
 # owning processes. Keep this read bounded, but do not force false degradation
 # with the generic low-latency health timeout.
 _SOCKET_PROBE_TIMEOUT = httpx.Timeout(10.0)
-# The roll-call falls back to a per-bot /instances/{id}/process probe for idle
-# candidates the daemon's bulk snapshot omits. Under concurrent load the single-
-# loop daemon (managing running bots + their fill/order streams) can exceed the 2s
-# health timeout, which would silently drop an otherwise-ready member from the roll
-# call at its slot. A startability probe can afford to wait longer than a liveness
-# GET; keep it bounded so a genuinely wedged daemon still surfaces.
-_INSTANCE_PROBE_TIMEOUT = httpx.Timeout(10.0)
-# Starting a run and ensuring its account Clerk can both wait behind
-# the host daemon's broker reconciliation work. They are admission operations,
-# not low-latency liveness reads: keep a bounded deadline so a busy but healthy
-# daemon does not turn a safe launch into a false ``connect_timeout``.
+# Ensuring a Clerk can wait behind host-side account reconciliation work.
 _START_ADMISSION_TIMEOUT = httpx.Timeout(10.0)
-# Deploy runs git + file hashing on the host; allow more headroom than the
-# liveness GETs, but still bounded so a wedged daemon surfaces as 503.
-_DEPLOY_TIMEOUT = httpx.Timeout(15.0)
 # Clerk release can legitimately wait two seconds for TERM and another two
 # seconds after KILL. Let the daemon author the bounded-shutdown outcome.
 _CLERK_RELEASE_TIMEOUT = httpx.Timeout(6.0)
@@ -118,13 +99,13 @@ class HostDaemonCircuitBreaker:
 
 
 def _auth_headers() -> dict[str, str]:
-    """Attach ``X-Live-Runner-Token`` to every daemon request (ADR 0007).
+    """Attach the host-capability token to every bridge request (ADR 0007).
 
     Resolves the token from ``LIVE_RUNNER_DAEMON_TOKEN`` env (operator override)
     or, when env is unset, from the daemon's token file shared via the artifacts
     bind mount. If no token is resolvable (daemon not started yet, env unset, no
     file on the mount) we send no header — the daemon then 401s and the caller
-    surfaces that as it would any other error (deploy: re-raised; GETs:
+    surfaces that as it would any other error (writes: re-raised; GETs:
     ``DaemonResult.auth_failed`` + ``payload=None``).
     """
     # Lazy import keeps the engine/live client from pulling broker config into
@@ -143,8 +124,8 @@ class HostDaemonError(Exception):
     """A daemon call that must surface its status to the caller.
 
     Carries the daemon's HTTP status and detail verbatim so the
-    data-plane endpoint can re-raise (dirty-tree 409, missing-input
-    400, git 503). An unambiguous connection failure (ConnectError /
+    data-plane endpoint can re-raise account-capability refusals. An
+    unambiguous connection failure (ConnectError /
     ConnectTimeout / PoolTimeout — no bytes left the wire) maps to 503
     "daemon unreachable".
 
@@ -177,7 +158,7 @@ class HostDaemonOutcomeUnknownError(Exception):
     full durable mutation_attempt record + Reconcile action land in
     619-D.
 
-    Distinct from :class:`HostDaemonError` so the four mutation
+    Distinct from :class:`HostDaemonError` so account-capability mutation
     endpoints can branch with a typed ``except`` rather than inspect a
     status code.
     """
@@ -194,44 +175,8 @@ class HostDaemonOutcomeUnknownError(Exception):
 
 
 # ---------------------------------------------------------------------------
-# Write path (HostDaemonError — to be typed in 619-C5).
+# Account-capability write path.
 # ---------------------------------------------------------------------------
-
-
-async def deploy(base_url: str, payload: dict) -> dict:
-    """POST /deploy to the daemon and return the parsed body.
-
-    Raises :class:`HostDaemonOutcomeUnknownError` when the transport
-    fails ambiguously (ReadTimeout / WriteTimeout / RemoteProtocolError
-    after bytes may have reached the daemon); the data-plane endpoint
-    surfaces this as a typed 409 + ``OUTCOME_UNKNOWN`` (PRD #619-C5).
-    Raises :class:`HostDaemonError` on any non-2xx response or
-    unambiguous connection failure (status + detail propagated, 503 for
-    pre-send connection failures, 502 for malformed JSON).
-    """
-    return await _post_action(f"{base_url.rstrip('/')}/deploy", payload, timeout=_DEPLOY_TIMEOUT)
-
-
-async def start_run(base_url: str, run_id: str, payload: dict) -> dict:
-    """POST /runs/{run_id}/start to the daemon and return the parsed body.
-
-    Mirrors :func:`deploy`: domain failures propagate via
-    :class:`HostDaemonError`, transport-ambiguous failures via
-    :class:`HostDaemonOutcomeUnknownError`. Browsers must never hold the
-    daemon's shared secret, so the UI routes Start through the data
-    plane (which forwards the token from the artifacts bind mount)
-    rather than calling the daemon directly (ADR 0007).
-    """
-    return await _post_action(
-        f"{base_url.rstrip('/')}/runs/{run_id}/start",
-        payload,
-        timeout=_START_ADMISSION_TIMEOUT,
-    )
-
-
-async def stop_run(base_url: str, run_id: str, payload: dict) -> dict:
-    """POST /runs/{run_id}/stop. Same contract as :func:`start_run`."""
-    return await _post_action(f"{base_url.rstrip('/')}/runs/{run_id}/stop", payload)
 
 
 async def emergency_flatten_account(base_url: str, account_id: str, payload: dict) -> dict:
@@ -329,23 +274,8 @@ async def authorize_emergency_flatten(base_url: str, account_id: str, payload: d
     )
 
 
-async def retire_stale_binding(base_url: str, account_id: str, payload: dict) -> dict:
-    """POST a stale-binding retirement to the daemon (host lifecycle authority).
-
-    The Clerk records binding decisions on the host; the daemon guards that the
-    binding is DEPLOYED, records the RETIRED decision via the Clerk, and returns
-    the retired binding body verbatim.
-    """
-
-    return await _post_action(
-        f"{base_url.rstrip('/')}/accounts/{account_id}/bindings/retire",
-        payload,
-        timeout=_START_ADMISSION_TIMEOUT,
-    )
-
-
 async def _post_action(url: str, payload: dict, *, timeout: httpx.Timeout = _TIMEOUT) -> dict:
-    """Typed POST core for the four mutation forwards.
+    """Typed POST core for account-capability forwards.
 
     Internally uses :func:`_typed_post_json` to classify the transport
     outcome. Maps the closed-kind ``DaemonResult`` into:
@@ -358,8 +288,8 @@ async def _post_action(url: str, payload: dict, *, timeout: httpx.Timeout = _TIM
       :class:`HostDaemonError(503, ...)` (clean pre-send failure;
       retry is safe).
     - Any other outcome with a ``response_status >= 400`` (the daemon
-      spoke and authored its own status — auth, dirty-tree 409,
-      missing-input 400, 5xx) → :class:`HostDaemonError(<status>, ...)`,
+      spoke and authored its own status — auth, validation, conflict,
+      or 5xx) → :class:`HostDaemonError(<status>, ...)`,
       propagating the daemon's status verbatim.
     - Anything else (malformed JSON, non-dict payload, no response at
       all) → :class:`HostDaemonError(502, ...)` (the daemon spoke but
@@ -442,73 +372,6 @@ def _detail_of(response: httpx.Response) -> str:
 # ---------------------------------------------------------------------------
 
 
-async def fetch_instances(base_url: str) -> tuple[DaemonResult, dict | None]:
-    """GET /instances. Returns ``(DaemonResult, dict | None)``.
-
-    The dict is the parsed body iff ``result.kind == "CONNECTED"``. Existing
-    fail-closed callers can keep checking ``payload is None``; the result is
-    additive context for typed-failure surfacing.
-    """
-    return await _typed_get_json(
-        f"{base_url.rstrip('/')}/instances",
-        timeout=_INSTANCE_PROBE_TIMEOUT,
-    )
-
-
-async def fetch_instance_process(
-    base_url: str, strategy_instance_id: str
-) -> tuple[DaemonResult, dict | None]:
-    """GET /instances/{id}/process. Returns ``(DaemonResult, dict | None)``."""
-    return await _typed_get_json(
-        f"{base_url.rstrip('/')}/instances/{strategy_instance_id}/process",
-        timeout=_INSTANCE_PROBE_TIMEOUT,
-    )
-
-
-async def fetch_run_process(
-    base_url: str, run_id: str
-) -> tuple[DaemonResult, HostRunnerProcessStatus | None]:
-    """GET /runs/{id}/process and validate its immutable process proof."""
-    result, payload = await _typed_get_json(f"{base_url.rstrip('/')}/runs/{run_id}/process")
-    if result.kind != "CONNECTED" or payload is None:
-        return result, None
-    try:
-        return result, HostRunnerProcessStatus.model_validate(payload)
-    except ValidationError as exc:
-        return (
-            DaemonResult.incompatible_contract(
-                status=result.response_status or 200,
-                detail=str(exc),
-            ),
-            None,
-        )
-
-
-async def fetch_qc_audit_copies(base_url: str) -> tuple[DaemonResult, dict | None]:
-    """GET /qc-audit-copies. Returns ``(DaemonResult, dict | None)``."""
-    return await _typed_get_json(f"{base_url.rstrip('/')}/qc-audit-copies")
-
-
-async def fetch_audit_copy_sizing_lookup(
-    base_url: str,
-    audit_copy_path: str,
-    proposed_sizing: dict | None = None,
-) -> tuple[DaemonResult, dict | None]:
-    """GET /audit-copy-sizing-lookup. Returns ``(DaemonResult, dict | None)``.
-
-    ``proposed_sizing`` is JSON-encoded into the query string.
-    """
-    import json as _json
-    from urllib.parse import quote
-
-    params = f"audit_copy_path={quote(audit_copy_path, safe='/')}"
-    if proposed_sizing is not None:
-        params += f"&proposed_sizing={quote(_json.dumps(proposed_sizing, sort_keys=True))}"
-    return await _typed_get_json(
-        f"{base_url.rstrip('/')}/audit-copy-sizing-lookup?{params}"
-    )
-
-
 async def fetch_health(
     base_url: str,
 ) -> tuple[DaemonResult, HostRunnerHealth | None]:
@@ -516,17 +379,9 @@ async def fetch_health(
 
     The parsed envelope is non-None iff ``result.kind == "CONNECTED"``.
 
-    Two consumers, two read patterns:
-
-    - ``DaemonConnectivityMonitor`` (619-C2) discards the envelope and
-      keeps only the typed result. The monitor cares about the
-      connectivity classification + the daemon's declared
-      ``daemon_boot_id``, both carried on ``DaemonResult``.
-    - The data plane's instance-less ``/daemon-health`` route forwards
-      the envelope so the cockpit / deploy form connectivity strip can
-      observe the authenticated probe through the data plane (the
-      browser never holds the daemon token; see host_daemon.py docstring
-      on PRD #619-C P2).
+    The data plane's instance-less ``/daemon-health`` route forwards the
+    envelope so browser clients can observe the authenticated host-capability
+    probe without holding the daemon token.
 
     Parse failures classify via the typed signal:
 
@@ -541,7 +396,7 @@ async def fetch_startability_health(
 ) -> tuple[DaemonResult, HostRunnerHealth | None]:
     """GET /health with the bounded deadline used for start admission."""
 
-    return await _fetch_health(base_url, timeout=_INSTANCE_PROBE_TIMEOUT)
+    return await _fetch_health(base_url, timeout=_START_ADMISSION_TIMEOUT)
 
 
 async def _fetch_health(
@@ -588,7 +443,7 @@ async def fetch_gateway_sockets(
     """GET /broker/sockets from the host daemon.
 
     The data plane passes the configured IBKR port; the browser never calls this
-    daemon route directly because it requires the shared live-runner token.
+    daemon route directly because it requires the shared host-capability token.
     """
 
     result, response = await _classify_http(

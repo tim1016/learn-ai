@@ -8,22 +8,10 @@ domain blocks (command loop, broker, bar loop, control plane) each
 stamp their own ``heartbeat_at_ms`` / ``observation_at_ms`` so a quiet
 broker session does not look like a halted bar loop and vice versa.
 
-Module split for testability (see ``tests/engine/live/test_engine_runtime_publisher.py``):
-
-1. **This file** — the typed schema + the atomic file writer. Pure: no
-   I/O beyond the writer's single ``tmp + fsync + replace`` step; no
-   ordering enforcement (``snapshot_seq`` monotonicity is the caller's
-   responsibility).
-2. **``engine_runtime_aggregator.py``** — the in-memory state
-   aggregator (619-B follow-up). Domain producers push slot updates;
-   ``produce_snapshot()`` reads a coherent value.
-3. **``engine_runtime_publisher.py``** — the single serialized
-   publisher task (619-B follow-up). 1Hz steady-state writes; immediate
-   flush on safety transitions; monotonic ``snapshot_seq``.
-
-Splitting the three pieces means the concurrent producer race tests
-exercise the aggregator + publisher together while the atomic-write
-contract is testable in isolation.
+The former host runner's publisher retired with the IBKR evaluator plane. This
+module retains only the typed historical-evidence contract plus its isolated
+parser/serializer primitive while the shared IBKR paper substrate is parked for
+#1583; no registered bot-control route creates this artifact.
 
 All timestamps are ``int64`` ms UTC at the artifact boundary per
 ``.claude/rules/numerical-rigor.md``. No ``datetime`` / ISO strings on

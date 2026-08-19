@@ -1,6 +1,6 @@
 """Parser for live.log records (header + indented continuation blocks).
 
-Reference: live.log format produced by app.engine.live.run's logging config
+Reference: the historical ``live.log`` format produced by the retired IBKR runner
 (``YYYY-MM-DD HH:MM:SS,mmm LEVEL logger message`` plus indented traceback
 continuation lines).
 Canonical implementation: app/services/live_log_failures.py
@@ -18,9 +18,8 @@ This module exposes two parsers built on the same header tokenisation:
   ``incident_category`` so the frontend never re-derives meaning from
   raw Python tracebacks.
 
-Timestamp policy: the engine logger's ``_StepFormatter`` pins
-``converter = time.gmtime`` (``app.engine.live.run_logging``), so live.log
-timestamps are wall-clock UTC regardless of the engine host's local TZ.
+Timestamp policy: the retired runner wrote live.log timestamps in wall-clock
+UTC regardless of the engine host's local timezone.
 We surface both:
 
 * ``raw_ts``: the verbatim timestamp string from the log (``YYYY-MM-DD
@@ -609,9 +608,8 @@ def _classify_source_for_unknown(logger: str) -> IncidentSource:
 
     The category fell through the classifier; we still want the cockpit
     to badge the row with the side most likely to recover it. The
-    heuristic walks the logger namespace from most-specific (the
-    INFRA-pinned child watchdog) to least-specific (the ``__main__``
-    runner). Anything outside the known namespaces stays UNKNOWN.
+    heuristic walks historical logger namespaces from most-specific to
+    least-specific. Anything outside the known namespaces stays UNKNOWN.
     """
     if logger.startswith("ib_async"):
         return IncidentSource.BROKER

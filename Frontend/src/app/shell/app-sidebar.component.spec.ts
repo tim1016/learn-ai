@@ -5,7 +5,6 @@ import { fireEvent, render, screen } from '@testing-library/angular';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BrokerHealthService } from '../services/broker-health.service';
-import { LiveRunsService } from '../services/live-runs.service';
 import { AppSidebarComponent } from './app-sidebar.component';
 
 class FakeBrokerHealthService {
@@ -14,10 +13,6 @@ class FakeBrokerHealthService {
   readonly lifecycleAction = signal(null);
   connect = vi.fn().mockResolvedValue(undefined);
   disconnect = vi.fn().mockResolvedValue(undefined);
-}
-
-class FakeLiveRunsService {
-  startHostRunner = vi.fn().mockResolvedValue(undefined);
 }
 
 describe('AppSidebarComponent', () => {
@@ -298,7 +293,6 @@ function sidebarProviders(routes: Parameters<typeof provideRouter>[0] = []) {
   return [
     provideRouter(routes),
     { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
-    { provide: LiveRunsService, useClass: FakeLiveRunsService },
   ];
 }
 
@@ -308,7 +302,6 @@ function setup(): ComponentFixture<AppSidebarComponent> {
     imports: [AppSidebarComponent, RouterModule.forRoot([])],
     providers: [
       { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
-      { provide: LiveRunsService, useClass: FakeLiveRunsService },
     ],
   });
   const fixture = TestBed.createComponent(AppSidebarComponent);

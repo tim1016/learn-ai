@@ -1,326 +1,71 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from app.engine.live.daemon_transport import DaemonResult
-from app.engine.live.engine_runtime import (
-    BarLoopBlock,
-    BrokerBlock,
-    CommandLoopBlock,
-    ControlPlaneBlock,
-    EngineRuntimeSnapshot,
-    write_engine_runtime_snapshot,
-)
-from app.schemas.broker_session import (
-    BrokerSessionEvent,
-    BrokerSessionRosterRow,
-    GatewaySocketsSnapshot,
-)
+from app.schemas.broker_session import GatewaySocketRow, GatewaySocketsSnapshot
 from app.services import broker_session_mirror
-from app.services.broker_session_mirror import (
-    BrokerSessionMirrorService,
-    _build_runtime_index,
-)
-from app.services.fleet_daemon_snapshot_provider import FleetDaemonObservation
+from app.services.broker_session_mirror import BrokerSessionMirrorService
 
 
-class _FakeEventService:
-    def __init__(self, attachments=None) -> None:
-        self.attachments = attachments or {}
-        self.rows = None
-
-    def events_for_rows(
-        self,
-        rows: list[BrokerSessionRosterRow],
-    ):
-        self.rows = list(rows)
-        return self.attachments
+class _Events:
+    def events_for_rows(self, _rows):
+        return {}
 
 
-class _FakeHistoryService:
-    def __init__(self, past_rows=None) -> None:
-        self.past_rows = past_rows or []
-        self.current_rows = None
-        self.snapshots = []
-
+class _History:
     def past_closed_rows(self, *, current_rows):
-        self.current_rows = list(current_rows)
-        return self.past_rows
+        return []
 
-    def append_snapshot(self, snapshot) -> None:
-        self.snapshots.append(snapshot)
-
-
-def test_runtime_index_reads_child_client_id_from_engine_runtime(tmp_path: Path) -> None:
-    run_dir = tmp_path / "run-a"
-    run_dir.mkdir()
-    (run_dir / "run_ledger.json").write_text(
-        json.dumps(
-            {
-                "run_id": "run-a",
-                "strategy_instance_id": "PrajiTSLADemo",
-                "account_id": "DU123",
-            }
-        ),
-        encoding="utf-8",
-    )
-    write_engine_runtime_snapshot(
-        run_dir,
-        EngineRuntimeSnapshot(
-            strategy_instance_id="PrajiTSLADemo",
-            run_id="run-a",
-            pid=21760,
-            process_start_identity="child-boot-0001",
-            snapshot_seq=3,
-            written_at_ms=1_783_120_000_000,
-            command_loop=CommandLoopBlock(
-                heartbeat_at_ms=1_783_120_000_000,
-                state="RUNNING",
-            ),
-            broker=BrokerBlock(
-                identity="PAPER_VERIFIED",
-                submission_capability="PAPER_ORDERS_ENABLED",
-                effective_posture="PAPER_EXECUTION",
-                connection_state="connected",
-                recovery_state="RECONNECTING",
-                connection_epoch=1,
-                client_id=17,
-                connected_account="DU123",
-                port_class="paper_port",
-                observation_at_ms=1_783_120_000_000,
-                probe_completed_at_ms=1_783_119_999_900,
-                reconnect_attempt=0,
-            ),
-            bar_loop=BarLoopBlock(
-                heartbeat_at_ms=1_783_120_000_000,
-                latest_source_bar_ms=1_783_119_940_000,
-                expected_interval_ms=60_000,
-            ),
-            control_plane=ControlPlaneBlock(
-                lease_observed_at_ms=1_783_119_999_500,
-                observed_daemon_boot_id="daemon-boot-0001",
-            ),
-        ),
-    )
-
-    index = _build_runtime_index(tmp_path)
-
-    entry = index[str(run_dir.resolve())]
-    assert entry.client_id == 17
-    assert entry.strategy_instance_id == "PrajiTSLADemo"
-    assert entry.account_id == "DU123"
-    assert entry.recovery_state == "RECONNECTING"
+    def append_snapshot(self, _snapshot):
+        raise AssertionError("read-only snapshot must not append history by default")
 
 
-async def test_mirror_snapshot_records_roster_history_when_requested(
-    tmp_path: Path,
-    monkeypatch,
+@pytest.mark.asyncio
+async def test_snapshot_uses_socket_evidence_without_bot_registry_or_run_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    history = _FakeHistoryService()
-    monkeypatch.setattr(
-        broker_session_mirror,
-        "get_settings",
-        lambda: type(
-            "Settings",
-            (),
-            {
-                "live_runner_daemon_url": "",
-                "live_runs_root": str(tmp_path),
-                "port": 4002,
-            },
-        )(),
-    )
-    monkeypatch.setattr(broker_session_mirror, "_data_plane_health", lambda: None)
-    service = BrokerSessionMirrorService(
-        event_service=_FakeEventService(),
-        history_service=history,
-    )
+    settings = SimpleNamespace(live_runner_daemon_url="http://host", port=4002)
+    monkeypatch.setattr(broker_session_mirror, "get_settings", lambda: settings)
 
-    snapshot = await service.snapshot(record_history=True)
-
-    assert history.snapshots == [snapshot]
-    assert snapshot.observer_status == "degraded"
-
-
-async def test_mirror_snapshot_default_read_path_does_not_write_history(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    """Per-bot diagnostics compose the mirror at high frequency; a status
-    read must never append durable history (ADR-0026 reads-never-write)."""
-
-    history = _FakeHistoryService()
-    monkeypatch.setattr(
-        broker_session_mirror,
-        "get_settings",
-        lambda: type(
-            "Settings",
-            (),
-            {
-                "live_runner_daemon_url": "",
-                "live_runs_root": str(tmp_path),
-                "port": 4002,
-            },
-        )(),
-    )
-    monkeypatch.setattr(broker_session_mirror, "_data_plane_health", lambda: None)
-    service = BrokerSessionMirrorService(
-        event_service=_FakeEventService(),
-        history_service=history,
-    )
-
-    await service.snapshot()
-
-    assert history.snapshots == []
-
-
-async def test_mirror_snapshot_includes_past_closed_history_when_observer_online(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    past_row = BrokerSessionRosterRow(
-        row_id="bot:run-a",
-        identity_type="bot",
-        recency="past_closed",
-        socket_present=False,
-        run_id="run-a",
-        client_id=42,
-        as_of_ms=1_783_120_000_000,
-    )
-    event = BrokerSessionEvent(
-        seq=1,
-        ts_ms=1_783_120_000_000,
-        category="link_connectivity",
-        severity="warning",
-        label="IBKR link interrupted",
-        raw_event_type="IBKR_CODE",
-        client_id=42,
-        ibkr_code=1100,
-    )
-    event_service = _FakeEventService(
-        attachments={
-            past_row.row_id: SimpleNamespace(
-                events=[event],
-                event_counts={"link_connectivity": 1},
-            )
-        }
-    )
-    history = _FakeHistoryService(past_rows=[past_row])
-    monkeypatch.setattr(
-        broker_session_mirror,
-        "get_settings",
-        lambda: type(
-            "Settings",
-            (),
-            {
-                "live_runner_daemon_url": "http://daemon.test",
-                "live_runs_root": str(tmp_path),
-                "port": 4002,
-            },
-        )(),
-    )
-    monkeypatch.setattr(broker_session_mirror, "_data_plane_health", lambda: None)
-
-    async def _fetch_gateway_sockets(_daemon_url, *, gateway_port):
-        return (
-            SimpleNamespace(detail=None),
-            GatewaySocketsSnapshot(
-                fetched_at_ms=1_783_120_000_100,
-                gateway_port=gateway_port,
-                sockets=[],
-            ),
+    async def fetch(_url: str, *, gateway_port: int):
+        assert gateway_port == 4002
+        return DaemonResult.connected(), GatewaySocketsSnapshot(
+            fetched_at_ms=1,
+            gateway_port=4002,
+            sockets=[GatewaySocketRow(pid=42, command="unknown", remote_port=4002)],
         )
 
-    async def _fetch_instances(_daemon_url):
-        return (
-            DaemonResult.connected(),
-            {"instances": [], "fetched_at_ms": 1_783_120_000_100},
-        )
-
-    monkeypatch.setattr(
-        broker_session_mirror.host_daemon_client,
-        "fetch_gateway_sockets",
-        _fetch_gateway_sockets,
-    )
-    monkeypatch.setattr(
-        broker_session_mirror.host_daemon_client,
-        "fetch_instances",
-        _fetch_instances,
-    )
-    service = BrokerSessionMirrorService(
-        event_service=event_service,
-        history_service=history,
-    )
+    monkeypatch.setattr(broker_session_mirror.host_daemon_client, "fetch_gateway_sockets", fetch)
+    monkeypatch.setattr(broker_session_mirror, "_data_plane_health", lambda: None)
+    service = BrokerSessionMirrorService(event_service=_Events(), history_service=_History())
 
     snapshot = await service.snapshot()
 
-    assert snapshot.observer_status == "online"
-    assert snapshot.rows[0].event_counts == {"link_connectivity": 1}
-    assert snapshot.rows[0].events == [event]
-    assert snapshot.summary.current == 0
-    assert snapshot.summary.past == 1
-    assert snapshot.summary.unknown == 0
-    assert snapshot.summary.attention == 0
-    assert history.current_rows == []
+    assert len(snapshot.rows) == 1
+    assert snapshot.rows[0].identity_type == "ghost"
+    assert snapshot.rows[0].strategy_instance_id is None
+    assert snapshot.rows[0].run_id is None
 
 
-async def test_mirror_does_not_reconcile_against_stale_fleet_payload(
-    tmp_path: Path,
-    monkeypatch,
+@pytest.mark.asyncio
+async def test_snapshot_degrades_when_host_socket_probe_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        broker_session_mirror,
-        "get_settings",
-        lambda: SimpleNamespace(
-            live_runner_daemon_url="http://daemon.test",
-            live_runs_root=str(tmp_path),
-            port=4002,
-        ),
-    )
+    settings = SimpleNamespace(live_runner_daemon_url="http://host", port=4002)
+    monkeypatch.setattr(broker_session_mirror, "get_settings", lambda: settings)
+
+    async def fetch(_url: str, *, gateway_port: int):
+        return DaemonResult(kind="UNREACHABLE", detail="offline"), None
+
+    monkeypatch.setattr(broker_session_mirror.host_daemon_client, "fetch_gateway_sockets", fetch)
     monkeypatch.setattr(broker_session_mirror, "_data_plane_health", lambda: None)
+    service = BrokerSessionMirrorService(event_service=_Events(), history_service=_History())
 
-    async def _fetch_gateway_sockets(_daemon_url, *, gateway_port):
-        return (
-            DaemonResult.connected(),
-            GatewaySocketsSnapshot(
-                fetched_at_ms=1_783_120_000_100,
-                gateway_port=gateway_port,
-                sockets=[],
-            ),
-        )
+    snapshot = await service.snapshot()
 
-    async def _fail_fetch_instances(_daemon_url):
-        raise AssertionError("shared observations must not trigger another registry call")
-
-    monkeypatch.setattr(
-        broker_session_mirror.host_daemon_client,
-        "fetch_gateway_sockets",
-        _fetch_gateway_sockets,
-    )
-    monkeypatch.setattr(
-        broker_session_mirror.host_daemon_client,
-        "fetch_instances",
-        _fail_fetch_instances,
-    )
-    observation = FleetDaemonObservation(
-        result=DaemonResult(
-            kind="UNREACHABLE",
-            detail="connection refused",
-            error_category="connect_error",
-        ),
-        payload={"instances": [], "fetched_at_ms": 1_783_120_000_000},
-        processes_by_id={},
-        source_fetched_at_ms=1_783_120_000_000,
-        observed_at_ms=1_783_120_000_100,
-    )
-    service = BrokerSessionMirrorService(
-        event_service=_FakeEventService(),
-        history_service=_FakeHistoryService(),
-    )
-
-    snapshot = await service.snapshot(fleet_observation=observation)
-
-    assert "connection refused" in snapshot.degradation_reasons
+    assert snapshot.observer_status == "degraded"
     assert snapshot.rows == []
+    assert "offline" in snapshot.degradation_reasons

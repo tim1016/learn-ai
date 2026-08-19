@@ -38,8 +38,6 @@ from app.engine.live.account_registry import (
     retire_unmanaged_active_bindings_on_daemon_boot,
 )
 from app.engine.live.account_safety import AccountSafetyAuthority, AccountSafetyVerdict
-from app.engine.live.command_channel import CommandVerb
-from app.engine.live.desired_state import DesiredState
 from app.engine.live.producer_operational_log import append_producer_operational_event, read_producer_operational_events
 from app.schemas.account_custody_qualification import (
     BACKEND_CUSTODY_QUALIFICATION_DRILL_IDS,
@@ -56,11 +54,6 @@ from app.services.account_custody_qualification_fixtures import (
     real_clerk_trace,
     real_eight_bot_trace,
 )
-from app.services.presented_lifecycle_actions import (
-    PresentedLifecycleActionRejectedError,
-    PresentedLifecycleActionService,
-)
-from app.services.risk_reducing_lifecycle_intent import persist_risk_reducing_intent
 
 _REQUIRED_DRILL_IDS = BACKEND_CUSTODY_QUALIFICATION_DRILL_IDS
 _ACCOUNT_ID = "DUQUALIFICATION"
@@ -164,18 +157,6 @@ async def _run_campaign(controls: DeterministicFaultControls) -> CustodyQualific
         action=lambda: _callback_silence_drill(controls),
         on_failure=lambda drill: drill,
     )
-    pause_stop = await _run_isolated(
-        drill_id=14,
-        name="pause_stop_during_daemon_outage",
-        action=lambda: _pause_stop_outage_drill(controls),
-        on_failure=lambda drill: drill,
-    )
-    start_outage = _run_isolated_sync(
-        drill_id=15,
-        name="start_resume_deploy_during_outage",
-        action=lambda: _start_outage_drill(controls),
-        on_failure=lambda drill: drill,
-    )
     stale_flatten = await _run_isolated(
         drill_id=16,
         name="flatten_with_stale_positions",
@@ -207,8 +188,6 @@ async def _run_campaign(controls: DeterministicFaultControls) -> CustodyQualific
         clerk_death,
         reconnect,
         silence,
-        pause_stop,
-        start_outage,
         stale_flatten,
         producer,
         outage_diff,
@@ -886,105 +865,6 @@ async def _callback_silence_drill(controls: DeterministicFaultControls) -> Accou
         "Loss of proof invalidates entry authority despite an apparently connected socket.",
         (*receipts, *invalidation_receipt_ids),
         "RECONCILING",
-        passed,
-    )
-
-
-async def _pause_stop_outage_drill(controls: DeterministicFaultControls) -> AccountCustodyQualificationDrill:
-    clock = DeterministicClock(1_784_950_000_000)
-    with tempfile.TemporaryDirectory(prefix="account-custody-pause-stop-") as temporary_root:
-        root = Path(temporary_root)
-        shared_kwargs = {
-            "artifacts_root": root,
-            "strategy_instance_id": "bot-outage",
-            "updated_by": "qualification",
-            "reason": "daemon outage drill",
-            "now_ms": clock.now_ms,
-            "daemon_url": "http://127.0.0.1:0",
-            "live_binding_from_process": lambda _process: None,
-            "visible_live_run_dir": lambda _binding: None,
-        }
-        pause_first = await persist_risk_reducing_intent(
-            **shared_kwargs,
-            desired_state=DesiredState.PAUSED,
-            command_verb=CommandVerb.PAUSE,
-            idempotency_key="qualification-pause-outage",
-        )
-        pause_replay = await persist_risk_reducing_intent(
-            **shared_kwargs,
-            desired_state=DesiredState.PAUSED,
-            command_verb=CommandVerb.PAUSE,
-            idempotency_key="qualification-pause-outage",
-        )
-        stop_first = await persist_risk_reducing_intent(
-            **shared_kwargs,
-            desired_state=DesiredState.STOPPED,
-            command_verb=CommandVerb.STOP,
-            idempotency_key="qualification-stop-outage",
-        )
-        stop_replay = await persist_risk_reducing_intent(
-            **shared_kwargs,
-            desired_state=DesiredState.STOPPED,
-            command_verb=CommandVerb.STOP,
-            idempotency_key="qualification-stop-outage",
-        )
-        passed = (
-            pause_first.durable.state == "PAUSED"
-            and not pause_first.actuation.actuated
-            and pause_first.daemon_process is None
-            and pause_replay.replayed
-            and stop_first.durable.state == "STOPPED"
-            and not stop_first.actuation.actuated
-            and stop_first.daemon_process is None
-            and stop_replay.replayed
-        )
-    return _drill(
-        14,
-        "pause_stop_during_daemon_outage",
-        "The daemon is unreachable before operator control is requested.",
-        "Operator records risk-reducing Pause and Stop intents during the outage.",
-        "Each durable intent is accepted once; actuation remains explicitly pending and each retry is idempotent.",
-        (
-            f"pause_desired_state:{pause_first.durable.state}",
-            f"pause_actuated:{pause_first.actuation.actuated}",
-            f"pause_replayed:{pause_replay.replayed}",
-            f"stop_desired_state:{stop_first.durable.state}",
-            f"stop_actuated:{stop_first.actuation.actuated}",
-            f"stop_replayed:{stop_replay.replayed}",
-        ),
-        "RECONCILING",
-        passed,
-    )
-
-
-def _start_outage_drill(controls: DeterministicFaultControls) -> AccountCustodyQualificationDrill:
-    """Use the real action-envelope guard: no proof means no start-like queue."""
-
-    from app.schemas.presented_operator_action import PresentedOperatorActionTarget
-
-    target = PresentedOperatorActionTarget(account_id=_ACCOUNT_ID, strategy_instance_id="bot-outage", run_id="run-outage")
-    errors: list[str] = []
-    presenter = PresentedLifecycleActionService(now_ms=lambda: 1_784_950_000_000 + controls.action_to_effect_delay_ms)
-    for action_id in ("start", "resume"):
-        try:
-            presenter.validate(action_id=action_id, target=target, invocation=None, snapshot=None)
-        except PresentedLifecycleActionRejectedError as rejected:
-            errors.append(rejected.reason_code)
-    # Deploy has no run-id target and shares the same proof gate.
-    deploy_target = PresentedOperatorActionTarget(account_id=_ACCOUNT_ID, strategy_instance_id="bot-outage")
-    try:
-        presenter.validate(action_id="deploy", target=deploy_target, invocation=None, snapshot=None)
-    except PresentedLifecycleActionRejectedError as rejected:
-        errors.append(rejected.reason_code)
-    passed = errors == ["ACTION_PRESENTATION_REQUIRED"] * 3
-    return _drill(
-        15,
-        "start_resume_deploy_during_outage",
-        "No current account-safety action envelope is available during outage.",
-        "Operator requests Start, Resume, and Deploy.",
-        "Each risk-increasing action is rejected before any host command can be queued.",
-        tuple(f"action_rejected:{reason}" for reason in errors),
-        "UNAVAILABLE",
         passed,
     )
 

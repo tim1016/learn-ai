@@ -12,9 +12,7 @@ delegates to ``app.engine.execution.sizing.LeanSetHoldingsSizing`` — the exist
 canonical ``SetHoldings`` quantity-math authority. The wiring happens in PR2;
 PR1 ships ``FixedShares`` only.
 
-Four kinds, validated by Pydantic discriminated union at both untyped boundaries
-the code has today (``HostRunnerDeployRequest.live_config`` at the deploy API,
-and ``_live_config_from_ledger`` at run start):
+Four kinds are represented by a Pydantic discriminated union:
 
 * ``FixedShares(value: int >= 1)`` — target ``value`` shares (long-only in v1).
 * ``SetHoldings(fraction: Decimal in (0, 1])`` — percent of portfolio value.

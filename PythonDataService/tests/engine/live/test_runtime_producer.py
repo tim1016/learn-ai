@@ -12,8 +12,7 @@ Two layers:
    with a ``runtime_aggregator``, the producer hooks land on
    ``run()`` start, every bar tick, the verdict-check path, and the
    command-poll tick. Tested via a fake aggregator that records every
-   update; we do not exercise the full publisher because that's
-   already covered by ``test_engine_runtime_publisher.py``.
+   update without restoring the retired host-run publisher.
 """
 
 from __future__ import annotations
@@ -192,12 +191,7 @@ def test_build_control_plane_block_reads_existing_lease(tmp_path: Path) -> None:
 
 
 class _RecordingAggregator:
-    """Stand-in for ``EngineRuntimeAggregator`` that records every update.
-
-    Tests assert ON THE SEQUENCE OF CALLS, not on the publisher's
-    serialized output (already covered by
-    ``test_engine_runtime_publisher.py``).
-    """
+    """Record the shared engine producer's update sequence in isolation."""
 
     def __init__(self) -> None:
         self.command_loop_updates: list[CommandLoopBlock] = []
@@ -697,113 +691,3 @@ async def test_engine_broker_block_uses_injected_monitor_overlay(
     assert seed_block.connection_state == "reconnecting"
     assert seed_block.recovery_state == "RECONNECTING"
     assert seed_block.reconnect_attempt == 2
-
-
-@pytest.mark.asyncio
-async def test_engine_first_runtime_snapshot_coheres_without_bars(
-    tmp_path: Path,
-) -> None:
-    """Regression: pre-market deploys must NOT be marked POSTURE_DEMOTED.
-
-    Before this fix the engine seeded only ``command_loop`` and
-    ``control_plane`` at startup; ``broker`` and ``bar_loop`` only landed
-    inside the bar loop. The aggregator returns ``None`` from
-    ``snapshot()`` until all four blocks have been populated, so no
-    ``engine_runtime.json`` was ever written before the first minute
-    bar arrived from IBKR — which pre-market is hours away. The
-    cockpit then read ``ENGINE_RUNTIME_MISSING`` and blocked Resume
-    with ``POSTURE_DEMOTED``, conflating a healthy waiting-for-market
-    engine with a crashed one.
-
-    This test pins the fix: after ``run()`` completes — even with zero
-    bars — the engine's aggregator emits a coherent snapshot, and the
-    freshness evaluator on that snapshot (with the session calendar
-    reporting CLOSED, as it would pre-market) returns
-    ``posture_demoted=False``.
-    """
-    from app.engine.live.config import LiveConfig
-    from app.engine.live.engine_runtime_publisher import EngineRuntimeAggregator
-    from app.engine.live.live_engine import LiveEngine
-    from app.engine.strategy.base import Strategy
-    from app.services.runtime_freshness import evaluate_runtime_freshness
-    from tests.engine.live.fixtures.fake_broker import FakeBroker
-
-    class _NoopStrategy(Strategy):
-        def initialize(self) -> None:
-            assert self.ctx is not None
-            self.ctx.add_equity("SPY")
-            self.ctx.register_consolidator("SPY", timedelta(minutes=1), self.on_bar)
-
-        def on_bar(self, bar: TradeBar) -> None:
-            return None
-
-    # The engine publishes block heartbeats with real wall-clock
-    # ``time.time()``. Use the same clock for both the stub's probe
-    # timestamp and the freshness evaluation so heartbeat ages are
-    # non-negative — otherwise ``posture_demoted=False`` can pass by
-    # accident for blocks that would actually be stale under a real
-    # ``now_ms``.
-    now_ms = int(time.time() * 1000)
-    client = _StubIbkrClient(now_ms_fn=lambda: now_ms)
-
-    aggregator = EngineRuntimeAggregator(
-        strategy_instance_id="sid-fresh",
-        run_id="run-fresh",
-        pid=1,
-        process_start_identity="child-fresh",
-        expected_daemon_boot_id=None,
-    )
-    engine = LiveEngine(
-        client,  # type: ignore[arg-type]  # stub matches only the methods used
-        LiveConfig(),
-        broker=FakeBroker(),
-        output_dir=tmp_path,
-        account_id="DU123",
-        run_mode="live_paper",
-        readonly=False,
-        verdict_provider=lambda: "paper-only",
-        runtime_aggregator=aggregator,
-    )
-
-    # Zero bars — pre-market state. The bar loop exits immediately on
-    # the source-exhausted branch; only the startup hooks run.
-    await engine.run(_NoopStrategy(), _iter_bars([]))
-
-    # The startup hook must have actually probed the client; without the
-    # probe call, ``_last_probe_ms`` stays None and the broker block's
-    # ``probe_completed_at_ms`` would be None — which is exactly the
-    # BROKER_PROBE_MISSING regression this fix prevents.
-    assert client.probe_calls >= 1
-
-    # The startup hook must also persist ``verdict_snapshot.json``. The
-    # Resume guard reads that file via ``read_broker_safety_verdict``
-    # and treats absence as identity=UNKNOWN, which routes to
-    # BROKER_SAFETY_UNKNOWN and blocks Resume — a regression that an
-    # earlier version of this fix only addressed in the runtime
-    # aggregator path, leaving Resume still blocked on truly fresh
-    # deploys.
-    verdict_snapshot_path = tmp_path / "verdict_snapshot.json"
-    assert verdict_snapshot_path.is_file(), (
-        "verdict_snapshot.json was not written by the startup hook; "
-        "Resume would remain blocked on BROKER_SAFETY_UNKNOWN until "
-        "the first bar reaches _check_verdict_transition_halt"
-    )
-
-    # The aggregator must have a coherent snapshot to hand the publisher.
-    snapshot = await aggregator.snapshot(snapshot_seq=0, written_at_ms=now_ms)
-    assert snapshot is not None, (
-        "fresh-run snapshot is None; the startup hooks did not populate "
-        "all four blocks and the publisher will refuse to write "
-        "engine_runtime.json"
-    )
-    assert snapshot.broker.client_id == 12
-    assert snapshot.broker.recovery_state == "LINK_INTERRUPTED"
-    assert snapshot.broker.probe_completed_at_ms == now_ms
-
-    # The freshness evaluator with session_state=CLOSED (pre-market or
-    # after-hours) must NOT demote posture: bar_loop becomes
-    # NOT_APPLICABLE from the calendar, and the other three blocks were
-    # freshly seeded above.
-    freshness = evaluate_runtime_freshness(snapshot, now_ms=now_ms, session_state="CLOSED")
-    assert freshness.posture_demoted is False, f"fresh-run still demotes posture; reasons={freshness}"
-    assert freshness.bar_loop.state == "NOT_APPLICABLE"

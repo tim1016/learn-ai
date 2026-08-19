@@ -403,35 +403,6 @@ async def test_paused_drop_writes_wal_event(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_lease_lost_drop_writes_wal_event(tmp_path: Path) -> None:
-    """control_plane_lease_lost (submissions_blocked) gate emits drop events."""
-    from app.engine.live.config import LiveConfig
-    from app.engine.live.live_engine import LiveEngine
-    from tests.engine.live.fixtures.fake_broker import FakeBroker
-
-    wal_path = tmp_path / "intent_events.jsonl"
-    strategy = _OrderingStrategy()
-
-    broker = FakeBroker()
-    engine = LiveEngine(
-        None,
-        LiveConfig(),
-        broker=broker,
-        intent_wal_path=wal_path,
-        strategy_instance_id="lease-test",
-    )
-    # Force submissions_blocked state before run.
-    engine._submissions_blocked = True
-
-    bars = [_bar(i) for i in range(30, 65)]
-    await asyncio.wait_for(engine.run(strategy, _iter_bars(bars)), timeout=10.0)
-
-    drops = _read_drop_events(wal_path)
-    assert len(drops) >= 1
-    assert all(e.drop_reason == "control_plane_lease_lost" for e in drops)
-
-
-@pytest.mark.asyncio
 async def test_max_orders_drop_writes_wal_event(tmp_path: Path) -> None:
     """max_orders_per_day gate emits INTENT_DROPPED_BEFORE_SUBMIT then raises."""
     from app.engine.live.config import LiveConfig

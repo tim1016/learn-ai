@@ -1,13 +1,11 @@
-/** Retained fleet, mutation-receipt, and shared operator-notice contracts. */
+/** Retained account-evidence, receipt, and shared operator-notice contracts. */
 
 import type {
-  MutationRungReceipt,
   OperatorNoticeAction,
   OperatorNoticeActionability,
   OperatorNoticeRemedyStatus,
   OperatorNoticeTier,
 } from './live-runs.types';
-import type { OperatorBlocker } from './operator-blocker.types';
 
 export type {
   MutationRungReceipt,
@@ -19,56 +17,6 @@ export type {
   OperatorNoticeRemedyStatus,
   OperatorNoticeTier,
 } from './live-runs.types';
-
-export interface FleetExplainedBucket {
-  strategy_instance_id: string;
-  positions: Record<string, number>;
-}
-
-export interface FleetContamination {
-  net_positions: Record<string, number> | null;
-  explained_total: Record<string, number>;
-  explained_by_instance: FleetExplainedBucket[];
-  residual: Record<string, number>;
-  verdict: 'clean' | 'contaminated' | 'unknown';
-  policy_blocks_starts: boolean;
-  summary: string;
-}
-
-export type AccountIdentity = 'CONSISTENT' | 'CONFLICTING' | 'UNKNOWN';
-
-export interface FleetAccountSummary {
-  account_id: string | null;
-  account_identity: AccountIdentity;
-  account_identity_reason_codes: string[];
-  contamination: FleetContamination;
-}
-
-export type ReadinessVerdictEnum = 'READY' | 'BLOCKED' | 'DEGRADED' | 'UNKNOWN';
-
-export interface LiveInstanceSummary {
-  strategy_instance_id: string;
-  process_state: string;
-  bound_run_id?: string | null;
-  latest_run_id?: string | null;
-  desired_state?: string | null;
-  readiness_verdict?: ReadinessVerdictEnum;
-  readiness_as_of_ms?: number | null;
-  blockers: OperatorBlocker[];
-}
-
-export type FleetRosterRow = Pick<
-  LiveInstanceSummary,
-  'strategy_instance_id' | 'process_state' | 'readiness_verdict' | 'readiness_as_of_ms' | 'blockers'
->;
-
-export interface FleetRosterSnapshot {
-  stream_epoch: string;
-  surface_version: number;
-  fetched_at_ms: number;
-  daemon_fetched_at_ms?: number | null;
-  instances: FleetRosterRow[];
-}
 
 export type GateResultStatus =
   | 'pass'
@@ -144,39 +92,4 @@ export interface OperatorIncident {
   started_at_ms: number;
   resolved_at_ms: number | null;
   evidence: Record<string, unknown>;
-}
-
-export interface IntentActuation {
-  actuated: boolean;
-  effect_state?: 'QUEUED' | 'PENDING';
-  run_id?: string | null;
-  command_seq?: number | null;
-  detail: string;
-}
-
-export interface DesiredStateRecord {
-  state: string;
-  updated_at_ms: number;
-  updated_by: string;
-  reason?: string | null;
-  version: number;
-}
-
-export type MutationAttemptDispatchState =
-  | 'PREPARED'
-  | 'DISPATCHING'
-  | 'RESPONSE_CONFIRMED'
-  | 'OUTCOME_UNKNOWN'
-  | 'EFFECT_CONFIRMED'
-  | 'EFFECT_NOT_OBSERVED'
-  | 'NOT_PROVABLE'
-  | 'EVIDENCE_CONFLICT';
-
-export interface SetInstanceDesiredStateResponse {
-  durable: DesiredStateRecord;
-  actuation: IntentActuation;
-  rung_receipt: MutationRungReceipt;
-  rung_receipt_warnings: MutationRungReceipt[];
-  mutation_attempt_id: string;
-  mutation_dispatch_state: MutationAttemptDispatchState;
 }

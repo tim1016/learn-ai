@@ -1,12 +1,9 @@
 """PRD #619-B B3 — pure helpers that compose the four ``engine_runtime``
 blocks from raw engine state.
 
-Lives next to ``LiveEngine`` (rather than in
-``engine_runtime_publisher.py``) because the composition is engine-side
-business logic; the publisher / aggregator stays a pure contract carrier.
-Separating composition from the publisher keeps the publisher reusable
-for non-engine producers (the daemon watchdog reads daemon_lease and
-updates control_plane the same way).
+These helpers remain beside ``LiveEngine`` as part of the shared IBKR paper
+substrate parked for #1583. The retired host-run publisher and daemon watchdog
+are absent.
 
 ADR-0011 amendment (PRD #619-A) — the verdict-provider string is the
 single input to ``broker_identity``; ``submission_capability`` and

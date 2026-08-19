@@ -16,7 +16,7 @@ QualificationCertificateStatus = Literal[
 ]
 PaperQualificationStatus = Literal["NOT_RUN"]
 INT64_MAX = 9_223_372_036_854_775_807
-BACKEND_CUSTODY_QUALIFICATION_DRILL_IDS = (*range(1, 13), *range(14, 19))
+BACKEND_CUSTODY_QUALIFICATION_DRILL_IDS = (*range(1, 13), *range(16, 19))
 
 
 def account_custody_qualification_payload_sha256(payload: Mapping[str, object]) -> str:
@@ -128,7 +128,7 @@ class AccountCustodyQualificationReport(BaseModel):
     fleet_size: Literal[8] = 8
     entry_capacity: Literal[8] = 8
     risk_reducing_capacity: Literal[0] = 0
-    drills: tuple[AccountCustodyQualificationDrill, ...] = Field(min_length=1, max_length=17)
+    drills: tuple[AccountCustodyQualificationDrill, ...] = Field(min_length=1, max_length=15)
     metrics: AccountCustodyQualificationMetrics
     certificate: AccountCustodyQualificationCertificate
     report_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")

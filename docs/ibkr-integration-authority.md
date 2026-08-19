@@ -5,7 +5,7 @@
 > document — when this page disagrees with code, the code is right and
 > this page must be updated in the same PR.
 >
-> **Retirement boundary (2026-08-10):** this document covers the surviving IBKR
+> **Retirement boundary (2026-08-18):** this document covers the surviving IBKR
 > integration as infrastructure and historical engine context. The IBKR broker-control
 > product, sidebar group, bot list, bot panel, account pages, manual-order page, and
 > replay page are retired. Their `/broker...` URLs are redirect-only compatibility
@@ -21,7 +21,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/broker/ibkr/*` or `PythonDataService/app/engine/live/*`. Same-PR rule: if you touch those files, update the matching section here and bump **Last reviewed**.
 >
-> **Last reviewed:** 2026-08-10 (IBKR product-control retirement reconciled).
+> **Last reviewed:** 2026-08-18 (evaluator/control-plane retirement reconciled).
 
 ---
 
@@ -33,7 +33,7 @@
 - [3. Configuration and four-layer paper safety](#3-configuration-and-four-layer-paper-safety)
 - [4. Broker module surface (`app/broker/ibkr/`)](#4-broker-module-surface-appbrokeribkr)
 - [5. REST + SSE endpoints (`/api/broker/*`)](#5-rest--sse-endpoints-apibroker)
-- [6. Live runtime (`app/engine/live/`)](#6-live-runtime-appengineLive)
+- [6. Shared primitives and retired live runtime (`app/engine/live/`)](#6-shared-primitives-and-retired-live-runtime-appenginelive)
 - [7. Retired frontend boundary (`/broker/*`)](#7-retired-frontend-boundary-broker)
 - [8. Persistence](#8-persistence)
 - [9. Diagnostics](#9-diagnostics)
@@ -46,12 +46,19 @@
 
 ## 1. Scope and authority
 
-The IBKR integration answers: **can the system safely place paper orders, stream the data needed to manage them, and run a strategy that produces the same trades as the backtest?**
+The surviving IBKR integration answers: **can the platform project read-only
+market-data, account, position, order, and capability evidence without creating a
+second bot-control authority?** Shared paper-order primitives remain temporarily
+for the separately sequenced #1583 reachability proof, but no registered route,
+host process, or evaluator launches them as an IBKR bot.
 
 It does **not** answer:
 
-- Whether real-money (live) trading is supported. **It is not.** Live mode is gated by `IBKR_MODE` and a separate runner that does not exist; see §11.
-- Whether multi-symbol live trading is supported. **It is not.** `LiveEngine` raises `NotImplementedError` if `len(ctx.symbols) != 1`. See `live_engine.py:106`.
+- Whether IBKR bot deployment or lifecycle control is supported. **It is not.**
+  Deploy/start/resume/stop/retire, evaluator, run-ledger writers, and host child
+  process actuation retired under ADR 0038 / #1636.
+- Whether the surviving shared `LiveEngine`/`LivePortfolio` files constitute a
+  runnable product. **They do not.** They are quarantined primitives pending #1583.
 - Whether the backtest math is correct. That is the strategy / engine math layer's job; see [`feature-runner-authority.md`](feature-runner-authority.md) for research, and the SPY parity tests at `app/engine/tests/test_spy_*` for backtest math.
 
 **Authority precedence** for surviving IBKR integration behavior when this doc, the
@@ -241,13 +248,21 @@ Routes live in `app/routers/broker.py` and `app/routers/broker_account_truth.py`
 
 ---
 
-## 6. Live runtime (`app/engine/live/`)
+## 6. Shared primitives and retired live runtime (`app/engine/live/`)
 
-The runtime that turns a `Strategy` into paper orders against IBKR.
+**Current boundary (ADR 0038 / #1636):** the runtime that turned a `Strategy`
+into IBKR paper orders is retired. The evaluator, CLI, deploy/preflight path,
+run-ledger writers, disposition/fence protocol, host child-process launcher,
+watchdog/runtime publishers, and their HTTP schemas/routes are absent. The host
+daemon cannot import or launch `LiveEngine`, `LivePortfolio`, or their native-time
+pending-order queue. The remaining engine/order files are shared primitives parked
+for #1583; keeping them is not a product or reachability claim. `run_ledger.py` is
+read-only parsing compatibility for ADR 0037 step 5 and cannot create or mutate a
+ledger.
 
-### Surface
+### Historical surface and surviving quarantine
 
-| File | What ships |
+| File | Current status |
 |---|---|
 | `config.py` | `LiveConfig` dataclass — `symbol`, `force_flat_at: time \| None = time(15, 55)`, `consolidator_period_min`, `run_dir`, `max_submit_latency_ms`, `allowed_sessions` (canonical PRE/RTH/POST/OVERNIGHT allow-list, default `["RTH"]`). |
 | `indicator_state.py` | Envelope/payload Pydantic models, HydratePolicy tri-state, IndicatorStateRepo (atomic write + advisory lock), the six-row validation ladder, top-level hydrate() and maybe_write() entry points. |
@@ -255,15 +270,15 @@ The runtime that turns a `Strategy` into paper orders against IBKR.
 | `live_context.py` | `LiveContext` — drop-in for `StrategyContext`. Reuses `TradeBarConsolidator` verbatim. Plumbs consolidated-bar close through to `LivePortfolio` reference price. |
 | `live_engine.py` | `LiveEngine`, `LiveRunResult`, `ReplayBrokerAdapter` Protocol. Per-minute bar loop driven by `_next_bar_or_shutdown` (PR #231) — races `source.__anext__()` against `shutdown_event.wait()` so SIGINT unwedges within bounded time even when the bar source is silent (Gateway stall, market halt, IP-binding rejection). Emits a `[BAR]` heartbeat per bar (PR #229) for operator-visible aliveness during the strategy's indicator warmup window. When `output_dir` is configured, atomically persists each native `IbkrMinuteBar` before conversion/strategy use as `input_bars.parquet`, and persists exact decimal-text post-bar `equity_curve.parquet` snapshots alongside decisions, executions, and trades. Eager four-layer paper-safety validation when an `IbkrClient` is supplied. |
 | `nyse_calendar.py` | `previous_completed_nyse_session_close_ms` — pandas_market_calendars NYSE schedule wrapper; consumed only by indicator-state validation (ladder check #3). |
-| `run.py` | Operator CLI. Four subcommands: `init-ledger` (writes the run identity at `artifacts/live_runs/<run_id>/run_ledger.json`), `pre-flight` (runs the 7 morning halt checks in `pre_flight.py`), `start` (wires `shutdown_event` + SIGINT/SIGTERM handlers + rotating file logger + unhandled-exception recovery flatten + `IbkrClient.connect()/disconnect()`), `emergency-flatten`. |
+| `run.py` | **Removed.** There is no IBKR evaluator CLI or bot launch entrypoint. |
 | `reconcile.py` | Three-way daily reconciler — Python live ↔ QC Cloud ↔ IBKR fills. Per-bar `CrossEngineClass` (none/data/engine) and `FillClass` (none/within_tol/breach) classifications; writes `day-N.{md,json,parquet,hashes.json}`; emits `halt.flag` consumed by next morning's `check_no_halt_flag` pre-flight; SHA-256 manifest in the committed Markdown receipt includes `input_bars.parquet` and `equity_curve.parquet` when present. The original design is archived at `docs/archive/plans/2026-05-08-ibkr-paper-shadow-deployment-design.md` § 6. |
-| `run_logging.py` | Rotating file logger (`<run-dir>/live.log`, 10MB × 5 backups) plus console handler with `[STEP X]` formatting when callers pass `extra={"step": ...}`. Idempotent for repeat init on the same run-dir. |
+| `run_logging.py` | **Removed** with its sole CLI/evaluator consumer. |
 | `services/daily_session_schedule.py` | Start-boundary stop policy. RTH-only bots retain the default `force_flat_at=15:55 ET` stop clamped to the NYSE close. Bots declaring any extended session in `allowed_sessions` default to no daily stop so the process can continue through post/overnight; an explicit `force_flat_at` still blocks at that exchange-local time and is not clamped back to the RTH close. |
-| `pre_flight.py` | Seven morning halt checks: `clean_tree`, `run_state_intact`, `no_halt_flag` (reads `halt.flag` written by `reconcile.write_day_report`), `ntp_offset`, `no_unexpected_position`, `yesterday_artifacts_intact` (walks the SHA-256 sidecar), plus skip-gates. |
-| `run_ledger.py` | Run-identity ledger: strategy spec hash, QC audit copy hash, account_id, start-of-session ms, live-config JSON. Written by `cmd_init_ledger`. |
+| `pre_flight.py` | **Removed** with IBKR deploy/start admission. |
+| `run_ledger.py` | Read-only compatibility parser for historical ADR 0037 artifacts. No writer, initializer, or bot-control route remains. |
 | `README.md` | Operator runbook. |
 
-### What `LiveEngine.run()` does, in order, per minute bar
+### Quarantined `LiveEngine.run()` behavior (not a registered bot path)
 
 The bar loop iterates via `_next_bar_or_shutdown(source_iter, shutdown_event)` rather than `async for` (PR #231) so that SIGINT can win the race even when `source` is wedged on its own `__anext__`. When shutdown wins the race the loop body is skipped and the post-loop graceful-flatten path runs; otherwise the per-bar steps below execute:
 
@@ -304,9 +319,12 @@ The gate skips on CI when `lean-cache/` is absent (gitignored runtime data — p
 
 `LiveEngine` force-flat submits a market liquidation that fills on the next print after submission (under `FakeBroker` that's the next bar's open). `BacktestEngine` synthesizes a fill at the current bar's close, bypassing the fill model. The price residual is what `reconcile.py`'s `classify_fill` measures and classifies (`FillClass.within_tol` vs `breach` against `FillTolerances.price_atol=0.05`). Documented in `LiveEngine.run` docstring.
 
-### Graceful shutdown (SIGINT/SIGTERM, 2026-05-12; wedged-source fix 2026-05-13)
+### Historical graceful shutdown record (retired CLI)
 
-`LiveEngine.run()` accepts an optional `shutdown_event: asyncio.Event`. `run.py`'s `cmd_start` creates the event, registers SIGINT and SIGTERM handlers on the asyncio loop via `loop.add_signal_handler` that set it, and passes it through to `engine.run`. The bar loop iterates via `_next_bar_or_shutdown` (PR #231) which races `source.__anext__()` against `shutdown_event.wait()` — when shutdown wins, the loop returns `(None, True)`, `_shutdown_flatten` cancels open broker orders, liquidates open positions, submits the liquidations, and the existing `finally` block flushes artifact writers + stops the broker event stream.
+Before the CLI retired, `LiveEngine.run()` accepted an optional
+`shutdown_event: asyncio.Event`. The former `cmd_start` created the event,
+registered signal handlers, and passed it through to `engine.run`. This is
+historical behavior of the quarantined primitive, not a current launch path.
 
 **Responsiveness:** SIGINT now fires within bounded time (sub-second in practice) regardless of bar arrival. The original 2026-05-12 design checked `shutdown_event` inside the `async for` loop body, which meant SIGINT was honored only when the next bar arrived — fine when bars are flowing, but indefinitely deferred if the bar source was wedged (Gateway daily restart, market halt, IBKR error 420 from same-IP-binding rejection). The 2026-05-13 race-based helper closes this gap.
 
@@ -314,17 +332,20 @@ The gate skips on CI when `lean-cache/` is absent (gitignored runtime data — p
 
 **Platform constraint:** `add_signal_handler` raises `NotImplementedError` on Windows's default event loop and the helper falls through with a warning. Windows operators stop the run with **Ctrl+C** in the terminal; `asyncio.run` translates it to `CancelledError`, which propagates through `engine.run`'s `finally` block — writers flush and the IbkrClient disconnects cleanly, but the structured `_shutdown_flatten` path is not invoked. The dry-run runbook calls this out.
 
-### Unhandled-exception recovery (2026-05-12)
+### Historical unhandled-exception recovery (retired CLI)
 
-`cmd_start` wraps `engine.run` in an exception handler that, on an unhandled `Exception`, attempts a best-effort flatten via `_recovery_flatten`: re-fetches positions from the broker, cancels open orders (failures logged, not blocking), and submits a market liquidation per open position. Failure to recover-flatten logs the cause and tells the operator to run `emergency-flatten --confirm` manually. Exit code 3 either way.
+The former `cmd_start` wrapped `engine.run` in an exception handler and attempted
+a best-effort recovery flatten. That entrypoint and recovery command are removed.
 
-### `IbkrClient` lifecycle in `cmd_start`
+### Historical `IbkrClient` lifecycle in retired `cmd_start`
 
-`cmd_start` now calls `await client.connect()` before driving the engine and `await client.disconnect()` in the surrounding `finally`. This closes a latent bug — the prior CLI created an `IbkrClient` but never connected it, so `_validate_paper_client` would raise "requires a DU paper account, got None" on the first run against a real Gateway. The injected-broker test path (`args.broker` set by tests) bypasses this — `FakeBroker` is always "connected."
+Before retirement, `cmd_start` connected and disconnected `IbkrClient` around the
+engine. No replacement IBKR lifecycle entrypoint exists.
 
-### File logging with rotation
+### Historical file logging (removed)
 
-`app/engine/live/run_logging.py:configure_run_logging` attaches a `RotatingFileHandler` at `<run-dir>/live.log` (10 MB × 5 backups) plus a console handler to the root logger. Format inlines a `[STEP X]` prefix when callers pass `extra={"step": "N"}`; absent step attributes are defaulted by a custom filter so existing log calls don't break. Invoked in `cmd_start` after the ledger loads.
+The former `run_logging.py` attached rotating file and console handlers for
+`cmd_start`. Both the helper and its caller are removed.
 
 ---
 
@@ -409,7 +430,7 @@ As of 2026-07-01 (post Account Truth MVP; historical rows retained from the prio
 | | `tests/broker/ibkr/test_pnl.py` | 7 |
 | | `tests/broker/ibkr/test_account_truth.py` | 4 |
 | | `tests/broker/ibkr/test_router.py` | 25 |
-| **Live runtime — 15 tests** | | |
+| **Quarantined shared live primitives — historical parity coverage** | | |
 | | `tests/engine/live/test_live_context.py` | 5 |
 | | `tests/engine/live/test_live_engine.py` | 3 (incl. force-flat fire + no-fire from PR #78) |
 | | `tests/engine/live/test_live_engine_collapse.py` | 2 (entry- + exit-side from PR #78) |
@@ -430,10 +451,10 @@ Tracked deliberately. None of these are accidental gaps; each is documented and 
 | Live (real-money) trading | NOT SUPPORTED | Phase 4 in `architecture/ibkr-integration-tdd.md` §7. Will require a separate `run_live.py` runner with its own config profile, not a flag on the paper runner. |
 | Multi-symbol live | NOT SUPPORTED | `LiveEngine` raises `NotImplementedError` on `len(ctx.symbols) != 1`. Mirrors `BacktestEngine` v1 scope. |
 | Options paper trading via `LiveEngine` | NOT SUPPORTED | `LiveEngine` is equity-only in v1. Options option-chain *streaming* is supported; placing options orders via the runtime is not. |
-| Phase 8 — paper config + CLI + signal handling + log rotation | **SHIPPED** (2026-05-12, hardened 2026-05-13) | `run.py` has four subcommands (`init-ledger`, `pre-flight`, `start`, `emergency-flatten`); `start` wires `shutdown_event`, signal handlers, rotating file logger, unhandled-exception recovery flatten, and `IbkrClient.connect()/disconnect()`. PR #229 added per-minute `[BAR]` heartbeat. PR #231 unwedged the SIGINT path when bar source is silent (`_next_bar_or_shutdown` helper) and propagates source exceptions during shutdown. Deferred to follow-ups: YAML config input, `LiveConfig` → `BaseSettings` conversion, `[STEP X]` log-call sweep inside `LiveEngine.run` (helper supports it; existing calls still need migration). |
+| Phase 8 — former paper CLI/runtime | **RETIRED** (2026-08-18) | `run.py`, deploy/preflight, rotating run logging, recovery launch paths, and host child-process actuation were removed under ADR 0038 / #1636. Shared engine primitives remain quarantined for #1583 and have no registered bot-control caller. |
 | Phase 9 — daily reconciliation tooling | **SHIPPED** (2026-05-08, registered 2026-05-13) | `app/engine/live/reconcile.py` implements the three-way design from the shadow-deployment spec — Python live ↔ QC Cloud ↔ IBKR fills. Per-bar `CrossEngineClass`/`FillClass` classification, `day-N.{md,json,parquet,hashes.json}` artifacts, halt.flag wired into pre-flight, week rollup. 25 unit tests in `tests/engine/live/test_reconcile.py`. Note: the deployment plan § 11 described an older paper-vs-backtest framing; the three-way design supersedes it. |
-| Phase 10 — actual paper week + reconciliation report | NOT STARTED | Operational; the local durability and producer/consumer prerequisites are implemented. A full RTH, host-run, read-only observation and post-close reconciliation receipt remain required before any paper-week claim. |
-| Phase 10 prereq — full-RTH end-to-end dry-run pass | NOT YET RUN | The longest live-Gateway session attempted on 2026-05-13 was 30 min (container, then 20 min host-side). Neither reached strategy readiness (the current strategy needs ≥3 h 45 m of RTH minute bars). We have not yet observed `init-ledger → pre-flight → host-run start --readonly → reconcile` against one real session. [Issue #1211](https://github.com/tim1016/learn-ai/issues/1211) is the operative checklist; do not use historical root-level dry-run PDFs or smoke scripts. |
+| Phase 10 — former IBKR paper week | **CANCELLED BY RETIREMENT** | The evaluator/live-runner product no longer exists, so an IBKR host-run paper-week claim is not an operative milestone. Historical reconciliation readers may remain until their separately sequenced retirement. |
+| Phase 10 prereq — former full-RTH dry-run | **OBSOLETE** | `init-ledger`, preflight, host-run start, and the evaluator launch path were removed under #1636. |
 | Phase 10 prereq — `commissionReport` callback wiring | IMPLEMENTED; LIVE OBSERVATION PENDING | Poll-based fill conversion records `Fill.commissionReport.commission` when IBKR has reported it and retains `None` when it has not; the test suite covers both. A full RTH observation must still establish whether reports arrive reliably enough for a commission comparison to become gating. |
 | Account Truth post-hoc manual adoption | NOT SHIPPED | App-minted manual orders are supported through `manual/operator/v1`, but TWS hand-clicks remain `foreign_or_unclaimed`. The adoption workflow must be explicit, one fact at a time, append-only, and keyed by `permId` or `execId`; it is not a heuristic based on `clientId=0`. |
 | Account Truth operator-specific manual namespace | PARTIAL | The server mints a reserved manual namespace, currently `manual/operator/v1`, because this broker route has no authenticated operator/session principal. Before person-level audit claims, wire a real operator or session slug into the server mint. |
@@ -446,7 +467,7 @@ Tracked deliberately. None of these are accidental gaps; each is documented and 
 | `client_order_id` per-session uniqueness | TRACKED | Counter resets per `LivePortfolio`; `place_paper_order` idempotency cache is process-scoped. PR #76 review C2 — Phase 10 prereq. |
 | `IbkrMinuteBar` `model_validator` for `end_ms == start_ms + 60_000` and `volume >= 0` | TRACKED | Defensive; unenforced today. PR #76 review R5. |
 | `LiveEngine.run()` guard for `bars=None` and `client=None` | TRACKED | Currently passes `None` to `stream_minute_bars` if both are absent; should fail fast. PR #76 review R7. |
-| `[STEP X]` structured logging in `LiveEngine` | PARTIAL | `run_logging.configure_run_logging` supports `[STEP X]` via `extra={"step": ...}`; `cmd_start` and the new shutdown/recovery paths use it. Pre-existing log calls inside `LiveEngine.run` still need migration; tracked as a sweep. |
+| `[STEP X]` structured logging in `LiveEngine` | **RETIRED** | The evaluator CLI and its `run_logging` helper were removed; there is no remaining migration sweep. |
 | Single-account FA support | NOT SUPPORTED | `client.py:201-208` refuses to connect on >1 managed account. |
 | 2FA mid-session | OUT OF SCOPE | TDD §6 risk register. Operator handles via Gateway settings. |
 | Order ID persistence across restarts | NOT SHIPPED | `.live_state.json` is in the plan §10 hygiene tasks but unimplemented. Postgres-based persistence is a separate ticket because there is no migrations workflow yet. |
@@ -459,7 +480,8 @@ This is infrastructure context for the platform owner. Operators use the UI-firs
 procedure in `docs/broker-v2-operator-manual.md`; the retired IBKR Bot Control manual
 is historical only.
 
-Run these checks before turning the runner loose:
+These checks apply only to the surviving IBKR infrastructure/feed dependency;
+there is no IBKR runner to turn loose:
 
 1. **Platform configuration** must select the paper account, paper port, and the
    approved host allowlist. The deployed feed policy is infrastructure authority; an
@@ -495,7 +517,7 @@ If any of these fails, fix it before running. The diagnostic endpoint will tell 
 | What-if preview | `app/broker/ibkr/order_previews.py` | Non-submitting `whatIfOrderAsync` preview for manual paper order confirmation. |
 | Strategy contract | `app/engine/strategy/base.py` (unchanged for live) | `LiveContext` mirrors `StrategyContext`. |
 | Backtest engine | `app/engine/engine.py` | The replay parity gate runs both engines from the same data source. |
-| Live engine | `app/engine/live/live_engine.py` | Per-bar loop driven by `_next_bar_or_shutdown` (race-helper from PR #231); per-minute `[BAR]` heartbeat (PR #229); force-flat from PR #78. |
+| Quarantined live-engine primitive | `app/engine/live/live_engine.py` | Preserved for #1583 reachability proof; no registered route, host process, or evaluator launches it. |
 | Replay parity gate | `tests/engine/live/test_live_engine_replay.py` | `Decimal("0")` tolerance; CI skips when `lean-cache/` absent. |
 | Frontend gate | `Frontend/src/app/services/broker-health.service.ts` (`isPaperConnected`) | Defense-in-depth at form level. |
 
@@ -505,6 +527,7 @@ If any of these fails, fix it before running. The diagnostic endpoint will tell 
 
 | Date | Reviewer | Notes |
 |---|---|---|
+| 2026-08-18 | Codex GPT-5 | ADR 0038 / #1636 retired the IBKR evaluator and disposition/fence protocol, deploy/start/resume/stop/retire routes, run-ledger creation/writes, host child-process actuation, watchdog/runtime publishers, and obsolete UI/contracts. Preserved read-only IBKR evidence, the ADR 0037 run-ledger parser, legacy Clerk compatibility for #1618, and shared paper-order primitives quarantined for #1583. |
 | 2026-07-23 | Codex GPT-5 | Added durable per-run market-input and equity receipts: `input_bars.parquet` is atomically published before native IBKR bars are converted for strategy use; exact decimal-text `equity_curve.parquet` snapshots flush with the per-bar artifact checkpoint. The text representation avoids Arrow's variable-Decimal-scale dataset merge failure without a float conversion. The reconcile receipt now hashes both when present. Replaced the synthetic producer fixture with a FakeBroker run whose own decision, execution, equity, and hydration artifacts feed `write_day_report`; retained the full-RTH host-run observation as an explicit operational prerequisite. |
 | 2026-07-17 | Codex GPT-5 | Removed the unfinished `/broker/reconciliation` comparison route and component: both engine-side comparison columns were deliberately empty, while the useful Account Truth and account-recovery information is owned by `/broker/accounts/:accountId`. Removed the sidebar entry and redirected the bot-instance runbook action to the current bot control page, preserving run-scoped reconciliation without a dead route. |
 | 2026-07-15 | Codex GPT-5 | Corrected IBKR capacity scopes from current primary documentation: 32 is a simultaneous-connection count rather than a `clientId` range; the default 100 market-data lines are shared across TWS and API clients; per-second request pacing is per connection; 50 simultaneous open requests belongs to historical data; and `reqRealTimeBars` uses the shared line allocation plus 60-new-requests/600-second pacing. Added same-process real-time-bar multiplexing, reference-counted cancellation, configurable local active-line admission, and an explicit 45 requests/second transport pin. |

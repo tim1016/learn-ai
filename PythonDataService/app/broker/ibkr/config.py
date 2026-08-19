@@ -206,7 +206,7 @@ class IbkrSettings(BaseSettings):
             < self.live_runner_daemon_breaker_initial_backoff_seconds
         ):
             raise ValueError(
-                "IBKR live-runner daemon breaker max backoff must be at least "
+                "IBKR host-capability daemon breaker max backoff must be at least "
                 "its initial backoff."
             )
         return self

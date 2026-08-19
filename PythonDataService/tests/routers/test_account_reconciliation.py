@@ -50,15 +50,11 @@ from app.engine.live.account_registry import (
 )
 from app.engine.live.daemon_transport import DaemonResult
 from app.engine.live.journal_recovery_state import journal_recovery_state_path
-from app.engine.live.live_state_sidecar import LiveStateEnvelope, LiveStateSidecarRepo, stable_live_state_path
-from app.engine.live.run_ledger import LiveRunLedger, write_ledger
 from app.routers import account_reconciliation
-from app.schemas.live_runs import HostRunnerProcessState, HostRunnerProcessStatus
 from app.services.account_directory import AccountDirectoryService, CurrentBrokerAccount
 from app.services.account_event_journal import AccountEventJournalService
 from app.services.account_reconciliation import AccountReconciliationService
 from app.services.journal_recovery import JournalRecoveryService
-from app.services.legacy_stale_claim_retirement import LegacyStaleClaimRetirementService
 from app.utils.timestamps import now_ms_utc
 
 
@@ -112,72 +108,6 @@ def _truth():
         completed_orders=[],
         executions=[],
         generated_at_ms=1_780_000_001_000,
-    )
-
-
-def _seed_legacy_claim(root: Path, *, binding_state: str = "RETIRED") -> None:
-    run_id = "legacy-run"
-    sid = "legacy-spy"
-    namespace = "learn-ai/legacy-spy/v1"
-    write_ledger(
-        root / "live_runs" / run_id / "run_ledger.json",
-        LiveRunLedger(
-            run_id=run_id,
-            code_sha="a" * 40,
-            strategy_instance_id=sid,
-            strategy_spec_path="spec.json",
-            strategy_spec_sha256="b" * 64,
-            qc_audit_copy_path="audit.py",
-            qc_audit_copy_sha256="c" * 64,
-            qc_cloud_backtest_id="qc-1",
-            account_id="DU1234567",
-            start_date_ms=1_780_000_000_000,
-            live_config={},
-            created_at_ms=1_780_000_000_000,
-        ),
-    )
-    LiveStateSidecarRepo(
-        stable_live_state_path(root, sid), trusted_root=root / "live_state"
-    ).write(
-        LiveStateEnvelope(
-            strategy_instance_id=sid,
-            run_id=run_id,
-            bot_order_namespace=namespace,
-            ib_client_id=7,
-            expected_position_by_symbol={"SPY": 1},
-            last_processed_bar_ms=1,
-            last_artifact_flush_ms=1,
-        )
-    )
-    write_account_instance_binding(
-        root,
-        AccountInstanceBinding(
-            account_id="DU1234567",
-            strategy_instance_id=sid,
-            run_id=run_id,
-            bot_order_namespace=namespace,
-            lifecycle_state=binding_state,  # type: ignore[arg-type]
-            recorded_at_ms=1_780_000_001_000,
-            source="test",
-        ),
-    )
-
-
-async def _dead_run_process(
-    _base_url: str, _run_id: str
-) -> tuple[DaemonResult, HostRunnerProcessStatus]:
-    return DaemonResult.connected(), HostRunnerProcessStatus(
-        state=HostRunnerProcessState.exited,
-        run_id=_run_id,
-    )
-
-
-async def _live_run_process(
-    _base_url: str, _run_id: str
-) -> tuple[DaemonResult, HostRunnerProcessStatus]:
-    return DaemonResult.connected(), HostRunnerProcessStatus(
-        state=HostRunnerProcessState.running,
-        run_id=_run_id,
     )
 
 
@@ -313,93 +243,6 @@ async def test_reconciliation_bootstraps_clerk_before_refreshing_account_truth(
     assert response.status_code == 200
     assert response.json()["account_id"] == "DU1234567"
     assert calls == ["ensure", "refresh"]
-
-
-async def test_legacy_stale_claim_route_returns_only_proven_candidates_and_receipts_retirement(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    from app.main import app
-
-    _seed_legacy_claim(tmp_path)
-    service = LegacyStaleClaimRetirementService(artifacts_root=tmp_path, now_ms=lambda: 1_780_000_002_000)
-    app.dependency_overrides[
-        account_reconciliation.get_legacy_stale_claim_retirement_service
-    ] = lambda: service
-    app.dependency_overrides[account_reconciliation.require_connected_client] = lambda: object()
-    monkeypatch.setattr(account_reconciliation, "refresh_account_truth_now", lambda *_args, **_kwargs: _async_truth())
-    monkeypatch.setattr(
-        account_reconciliation,
-        "get_settings",
-        lambda: SimpleNamespace(live_runner_daemon_url="http://daemon"),
-    )
-    monkeypatch.setattr(account_reconciliation.host_daemon_client, "fetch_run_process", _dead_run_process)
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            candidates = await client.get("/api/accounts/DU1234567/legacy-stale-claims/candidates")
-            retired = await client.post(
-                "/api/accounts/DU1234567/legacy-stale-claims/retire",
-                json={
-                    "strategy_instance_id": "legacy-spy",
-                    "run_id": "legacy-run",
-                    "symbol": "SPY",
-                },
-            )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert candidates.status_code == 200
-    assert candidates.json()["candidates"][0]["strategy_instance_id"] == "legacy-spy"
-    assert retired.status_code == 200
-    assert retired.json()["symbol"] == "SPY"
-
-
-async def test_legacy_stale_claim_route_refuses_live_process_with_specific_reason(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    from app.main import app
-
-    _seed_legacy_claim(tmp_path)
-    service = LegacyStaleClaimRetirementService(artifacts_root=tmp_path)
-    app.dependency_overrides[
-        account_reconciliation.get_legacy_stale_claim_retirement_service
-    ] = lambda: service
-    app.dependency_overrides[account_reconciliation.require_connected_client] = lambda: object()
-    monkeypatch.setattr(account_reconciliation, "refresh_account_truth_now", lambda *_args, **_kwargs: _async_truth())
-    monkeypatch.setattr(
-        account_reconciliation,
-        "get_settings",
-        lambda: SimpleNamespace(live_runner_daemon_url="http://daemon"),
-    )
-    monkeypatch.setattr(account_reconciliation.host_daemon_client, "fetch_run_process", _live_run_process)
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post(
-                "/api/accounts/DU1234567/legacy-stale-claims/retire",
-                json={
-                    "strategy_instance_id": "legacy-spy",
-                    "run_id": "legacy-run",
-                    "symbol": "SPY",
-                },
-            )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 409
-    assert response.json()["detail"]["reason_code"] == "LEGACY_CLAIM_RUN_PROCESS_LIVE"
-
-
-async def _async_truth():
-    return _truth()
-
-
-
-
-
-
-
-
 
 
 async def test_triage_returns_latest_receipt(tmp_path: Path) -> None:
@@ -1021,38 +864,6 @@ async def test_events_repair_endpoint_surfaces_unsafe_repair(
 
     assert response.status_code == 409
     assert response.json()["detail"]["reason_code"] == "ACCOUNT_EVENTS_REPAIR_UNSAFE"
-
-
-async def test_retire_stale_binding_endpoint_delegates_to_daemon(
-    monkeypatch,
-) -> None:
-    from app.main import app
-
-    forwarded: list[tuple[str, dict]] = []
-
-    async def _retire(_base_url: str, account_id: str, payload: dict) -> dict:
-        forwarded.append((account_id, payload))
-        return {
-            "schema_version": 1,
-            "account_id": account_id,
-            "strategy_instance_id": payload["strategy_instance_id"],
-            "run_id": payload["run_id"],
-            "bot_order_namespace": "learn-ai/stale-bot/v1",
-            "lifecycle_state": "RETIRED",
-            "recorded_at_ms": 200,
-        }
-
-    monkeypatch.setattr(account_reconciliation.host_daemon_client, "retire_stale_binding", _retire)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            "/api/accounts/DU1234567/bindings/retire",
-            json={"strategy_instance_id": "stale-bot", "run_id": "run-stale"},
-        )
-
-    assert response.status_code == 201
-    assert response.json()["lifecycle_state"] == "RETIRED"
-    assert forwarded[0][0] == "DU1234567"
-    assert forwarded[0][1]["strategy_instance_id"] == "stale-bot"
 
 
 async def test_journal_cure_preview_honors_artifact_root_dependency_override(

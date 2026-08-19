@@ -3,17 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 from threading import Event, Thread
 
 import pytest
 
 import app.engine.live.account_safety as account_safety_module
-from app.broker.ibkr.models import IbkrOrderEvent
 from app.engine.live.account_artifacts import advance_account_clerk_generation
 from app.engine.live.account_clerk import AccountClerk
-from app.engine.live.account_clerk_journal import AccountClerkJournal
 from app.engine.live.account_clerk_journal_models import AccountClerkIntentRejected, AccountClerkJournalEntry
 from app.engine.live.account_epoch import (
     AccountEpochAuthority,
@@ -23,10 +20,7 @@ from app.engine.live.account_epoch import (
 )
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.account_registry import (
-    AccountInstanceBinding,
     bot_order_namespace_for_instance,
-    retire_unmanaged_active_bindings_on_daemon_boot,
-    write_account_instance_binding,
 )
 from app.engine.live.account_safety import (
     AccountSafetyAdmissionError,
@@ -44,18 +38,6 @@ from app.engine.live.account_safety import (
     account_safety_suspension_reservation,
     repair_account_safety_admission,
     retired_owner_nonterminal_custody,
-)
-from app.engine.live.bot_lifecycle_state import (
-    BotLifecyclePhase,
-    BotLifecycleStateRepo,
-    stable_bot_lifecycle_state_path,
-)
-from app.engine.live.run_ledger import LiveRunLedger, write_ledger
-from app.services.bot_deletion import (
-    BotRetirementBindingTarget,
-    BotRetirementTransitionRecord,
-    retire_bot_lifecycle_and_bindings,
-    stable_bot_retirement_transition_path,
 )
 
 ACCOUNT_ID = "DU1234567"
@@ -608,268 +590,6 @@ def test_repair_rejects_a_same_operation_receipt_from_another_fence_or_account(
             repaired_at_ms=NOW_MS,
             clerk_fence_generation=1,
         )
-
-
-@pytest.mark.asyncio
-async def test_fill_after_retirement_pending_requires_broker_clearance_before_reopening(
-    tmp_path: Path,
-) -> None:
-    strategy_instance_id = "retired-amd"
-    intent = AccountOwnerSubmitIntent(
-        trace_id="trace-late-fill",
-        account_id=ACCOUNT_ID,
-        strategy_instance_id=strategy_instance_id,
-        run_id="run-retired-amd",
-        bot_order_namespace=bot_order_namespace_for_instance(strategy_instance_id),
-        intent_id="late-fill-intent",
-        order_ref=f"learn-ai/{strategy_instance_id}/v1:late-fill-intent",
-        intent_kind="STRATEGY",
-        order_spec={"symbol": "AMD"},
-        owner_generation=1,
-        created_at_ms=NOW_MS,
-    )
-    write_account_instance_binding(
-        tmp_path,
-        AccountInstanceBinding(
-            account_id=ACCOUNT_ID,
-            strategy_instance_id=strategy_instance_id,
-            run_id=intent.run_id,
-            bot_order_namespace=intent.bot_order_namespace,
-            lifecycle_state="ACTIVE",
-            recorded_at_ms=NOW_MS,
-            source="test",
-        ),
-    )
-    AccountClerkJournal(artifacts_root=tmp_path, account_id=ACCOUNT_ID).record_intent(
-        intent,
-        validate_intent=lambda _intent: None,
-    )
-    transition_path = stable_bot_retirement_transition_path(tmp_path, strategy_instance_id)
-    transition_path.parent.mkdir(parents=True, exist_ok=True)
-    transition_path.write_text(
-        BotRetirementTransitionRecord(
-            strategy_instance_id=strategy_instance_id,
-            targets=(BotRetirementBindingTarget(account_id=ACCOUNT_ID, run_id=intent.run_id),),
-            retained_custody=(),
-            prepared_at_ms=NOW_MS,
-            updated_by="operator",
-            reason="snapshot completed before a late broker fill",
-        ).model_dump_json(),
-        encoding="utf-8",
-    )
-    epoch = _epoch_authority(tmp_path)
-    epoch.initialize()
-    safety = AccountSafetyAuthority(
-        artifacts_root=tmp_path,
-        account_id=ACCOUNT_ID,
-        now_ms=lambda: NOW_MS,
-    )
-    clerk = AccountClerk(
-        artifacts_root=tmp_path,
-        account_id=ACCOUNT_ID,
-        epoch_authority=epoch,
-        safety_authority=safety,
-    )
-
-    await clerk.record_broker_event(
-        IbkrOrderEvent(
-            account_id=ACCOUNT_ID,
-            order_ref=intent.order_ref,
-            order_id=17,
-            exec_id="late-fill-exec",
-            event_type="fill",
-            symbol="AMD",
-            side="BUY",
-            fill_quantity=1.0,
-            ts_ms=NOW_MS + 1,
-        )
-    )
-
-    state = safety.read()
-    assert state.verdict is AccountSafetyVerdict.SUSPENDED
-    assert state.suspension is not None
-    assert state.suspension.custody[0].strategy_instance_id == strategy_instance_id
-    assert state.suspension.requires_broker_clearance is True
-    assert epoch.read().status == "INVALID"
-    assert epoch.read().would_block_reason == "RETIRED_OWNER_EXPOSURE"
-
-    # A reconnect replay is idempotent broker delivery, not new live custody.
-    # Clear the broker-observation prerequisite, bind a fresh current epoch,
-    # and prove the terminal callback did not leave journal custody behind.
-    safety.observe_broker_retired_owner_custody((), observed_at_ms=NOW_MS + 2)
-    safety.bind_reconciliation(epoch.read())
-    clean = epoch.complete_reconciliation(_clean_proof(epoch.read()))
-    assert safety.lift_if_proven(epoch=clean, retained_custody=()).verdict is AccountSafetyVerdict.CLEAN
-
-    await clerk.record_broker_event(
-        IbkrOrderEvent(
-            account_id=ACCOUNT_ID,
-            order_ref=intent.order_ref,
-            order_id=17,
-            exec_id="late-fill-exec",
-            event_type="fill",
-            symbol="AMD",
-            side="BUY",
-            fill_quantity=1.0,
-            ts_ms=NOW_MS + 1,
-        )
-    )
-
-    assert safety.read().verdict is AccountSafetyVerdict.CLEAN
-
-
-@pytest.mark.asyncio
-async def test_daemon_retirement_proposal_preserves_clerk_custody_before_writing_retired_binding(
-    tmp_path: Path,
-) -> None:
-    strategy_instance_id = "daemon-retired-amd"
-    intent = AccountOwnerSubmitIntent(
-        trace_id="trace-daemon-retire",
-        account_id=ACCOUNT_ID,
-        strategy_instance_id=strategy_instance_id,
-        run_id="run-daemon-retired-amd",
-        bot_order_namespace=bot_order_namespace_for_instance(strategy_instance_id),
-        intent_id="daemon-retirement-a0",
-        order_ref=f"learn-ai/{strategy_instance_id}/v1:daemon-retirement-a0",
-        intent_kind="STRATEGY",
-        order_spec={"symbol": "AMD"},
-        owner_generation=1,
-        created_at_ms=NOW_MS,
-    )
-    AccountClerkJournal(artifacts_root=tmp_path, account_id=ACCOUNT_ID).record_intent(
-        intent,
-        validate_intent=lambda _intent: None,
-    )
-    write_account_instance_binding(
-        tmp_path,
-        AccountInstanceBinding(
-            account_id=ACCOUNT_ID,
-            strategy_instance_id=strategy_instance_id,
-            run_id=intent.run_id,
-            bot_order_namespace=intent.bot_order_namespace,
-            lifecycle_state="ACTIVE",
-            recorded_at_ms=NOW_MS,
-            source="test",
-        ),
-    )
-    retire_unmanaged_active_bindings_on_daemon_boot(
-        tmp_path,
-        managed_run_ids=frozenset(),
-        now_ms=NOW_MS + 1,
-    )
-    safety = AccountSafetyAuthority(
-        artifacts_root=tmp_path,
-        account_id=ACCOUNT_ID,
-        now_ms=lambda: NOW_MS + 2,
-    )
-    clerk = AccountClerk(
-        artifacts_root=tmp_path,
-        account_id=ACCOUNT_ID,
-        safety_authority=safety,
-    )
-
-    folded = await clerk.fold_binding_retirement_proposals()
-
-    assert folded.retirements_applied == 1
-    suspended = safety.read()
-    assert suspended.verdict is AccountSafetyVerdict.SUSPENDED
-    assert suspended.suspension is not None
-    assert suspended.suspension.requires_broker_clearance is True
-    assert suspended.suspension.custody == (
-        RetiredOwnerCustody(
-            account_id=ACCOUNT_ID,
-            strategy_instance_id=strategy_instance_id,
-            intent_id=intent.intent_id,
-            order_ref=intent.order_ref,
-        ),
-    )
-
-
-def test_retirement_preserves_nonterminal_clerk_custody_before_terminal_lifecycle(tmp_path: Path) -> None:
-    strategy_instance_id = "retired-amd"
-    run_id = "run-retired-amd"
-    intent = AccountOwnerSubmitIntent(
-        trace_id="trace-retire",
-        account_id=ACCOUNT_ID,
-        strategy_instance_id=strategy_instance_id,
-        run_id=run_id,
-        bot_order_namespace=bot_order_namespace_for_instance(strategy_instance_id),
-        intent_id="intent-retire-pending",
-        order_ref=f"learn-ai/{strategy_instance_id}/v1:intent-retire-pending",
-        intent_kind="STRATEGY",
-        order_spec={"symbol": "AMD"},
-        owner_generation=1,
-        created_at_ms=NOW_MS,
-    )
-    AccountClerkJournal(artifacts_root=tmp_path, account_id=ACCOUNT_ID).record_intent(
-        intent,
-        validate_intent=lambda _intent: None,
-    )
-    write_account_instance_binding(
-        tmp_path,
-        AccountInstanceBinding(
-            account_id=ACCOUNT_ID,
-            strategy_instance_id=strategy_instance_id,
-            run_id=run_id,
-            bot_order_namespace=intent.bot_order_namespace,
-            lifecycle_state="ACTIVE",
-            recorded_at_ms=NOW_MS,
-            source="test",
-        ),
-    )
-    run_dir = tmp_path / "live_runs" / run_id
-    run_dir.mkdir(parents=True)
-    write_ledger(
-        run_dir / "run_ledger.json",
-        LiveRunLedger(
-            run_id=run_id,
-            code_sha="abc123",
-            strategy_instance_id=strategy_instance_id,
-            strategy_spec_path="spec.json",
-            strategy_spec_sha256="spec-sha",
-            qc_audit_copy_path="qc.py",
-            qc_audit_copy_sha256="qc-sha",
-            qc_cloud_backtest_id="qc-1",
-            account_id=ACCOUNT_ID,
-            start_date_ms=NOW_MS,
-            live_config={},
-        ),
-    )
-
-    retired = retire_bot_lifecycle_and_bindings(
-        tmp_path,
-        strategy_instance_id,
-        run_ids=[run_id],
-        updated_by="operator",
-        reason="retire while A0 remains in Clerk custody",
-        now_ms=NOW_MS,
-    )
-
-    transition = stable_bot_retirement_transition_path(tmp_path, strategy_instance_id)
-    transition_payload = json.loads(transition.read_text(encoding="utf-8"))
-    safety = AccountSafetyAuthority(
-        artifacts_root=tmp_path,
-        account_id=ACCOUNT_ID,
-        now_ms=lambda: NOW_MS,
-    ).read()
-    lifecycle = BotLifecycleStateRepo(
-        stable_bot_lifecycle_state_path(tmp_path, strategy_instance_id)
-    ).read()
-
-    assert retired.phase is BotLifecyclePhase.RETIRED
-    assert lifecycle is not None and lifecycle.phase is BotLifecyclePhase.RETIRED
-    assert transition_payload["retained_custody"] == [
-        {
-            "account_id": ACCOUNT_ID,
-            "strategy_instance_id": strategy_instance_id,
-            "intent_id": intent.intent_id,
-            "order_ref": intent.order_ref,
-            "evidence_source": "clerk",
-        }
-    ]
-    assert safety.verdict is AccountSafetyVerdict.SUSPENDED
-    assert safety.suspension is not None
-    assert safety.suspension.requires_broker_clearance is True
 
 
 # ---------------------------------------------------------------------------

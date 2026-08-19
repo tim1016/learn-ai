@@ -20,8 +20,6 @@ from app.operator.notices.schema import (
     validate_actionability_action_pairing,
 )
 from app.schemas.bot_lifecycle import BotDutyOutcomeKind
-from app.schemas.operator_blocker import OperatorBlocker
-from app.schemas.presented_operator_action import PresentedOperatorActionInvocation
 
 
 class RunState(StrEnum):
@@ -400,31 +398,6 @@ class AccountEmergencyFlattenResponse(BaseModel):
     idempotency_replayed: bool = False
 
 
-class HostRunnerInstance(BaseModel):
-    """One managed strategy instance's live process binding.
-
-    The host-daemon registry is the sole authority for the live
-    ``strategy_instance_id -> run_id`` binding (ADR 0004): "live" is a
-    process fact, not an artifact fact.
-    """
-
-    strategy_instance_id: str
-    run_id: str
-    run_dir: str
-    process: HostRunnerProcessStatus
-
-
-class HostRunnerInstancesStatus(BaseModel):
-    """All strategy instances the host daemon currently manages."""
-
-    instances: list[HostRunnerInstance] = Field(default_factory=list)
-    fetched_at_ms: int
-    exited_record_retention_count: int | None = Field(default=None, ge=0)
-    exited_record_retention_ttl_ms: int | None = Field(default=None, ge=0)
-    exited_record_count: int = Field(default=0, ge=0)
-    exited_records_pruned_total: int = Field(default=0, ge=0)
-
-
 def _validate_bare_ibkr_host(value: str) -> str:
     """Keep host-side broker destinations free of URL/path syntax."""
 
@@ -448,38 +421,11 @@ class HostRunnerClerkEnsureRequest(BaseModel):
         return _validate_bare_ibkr_host(value)
 
 
-class HostRunnerStartRequest(BaseModel):
-    """Request body for starting one existing run from the host daemon."""
-
-    readonly: bool = True
-    hydrate_policy: HydratePolicy = "require"
-    strategy: str = Field(default="spy_ema_crossover", pattern=r"^[a-z][a-z0-9_]{0,63}$")
-    max_orders_per_day: int = Field(default=DEFAULT_MAX_ORDERS_PER_DAY, ge=0, le=100_000)
-    ibkr_host: str = Field(default="127.0.0.1", min_length=1, max_length=255)
-    roll_call_offer_id: str | None = Field(default=None, min_length=1, max_length=128)
-    idempotency_key: str | None = Field(default=None, min_length=1, max_length=256)
-    presented_action: PresentedOperatorActionInvocation | None = None
-
-    @field_validator("ibkr_host")
-    @classmethod
-    def _validate_ibkr_host(cls, value: str) -> str:
-        return _validate_bare_ibkr_host(value)
-
-
-class HostRunnerStopRequest(BaseModel):
-    """Request body for stopping the active host runner subprocess."""
-
-    force: bool = False
-    idempotency_key: str | None = Field(default=None, min_length=1, max_length=256)
-    presented_action: PresentedOperatorActionInvocation | None = None
-
-
 class MutationOutcomeUnknownResponse(BaseModel):
     """Typed 409 body for single-shot mutations whose transport outcome
     could not be proven (PRD #619-C5).
 
-    Surfaced by ``deploy_instance`` / ``start_run`` /
-    ``renew_daemon_lease`` when the typed daemon POST returns
+    Surfaced by ``renew_daemon_lease`` when the typed daemon POST returns
     ``DaemonResult.kind == "UNREACHABLE"`` with
     ``outcome_ambiguous=True`` — i.e., the request was (partly or
     fully) sent but the response was lost.  The mutation may or may not
@@ -505,29 +451,13 @@ class MutationOutcomeUnknownResponse(BaseModel):
     # underlying exception carried no message).
     detail: str | None = None
     # Canonical endpoint label so clients can show the right copy.
-    endpoint: Literal[
-        "deploy",
-        "start_run",
-        "renew_daemon_lease",
-    ]
+    endpoint: Literal["renew_daemon_lease"]
     # ``int64 ms UTC`` of the failure.
     occurred_at_ms: int = Field(ge=0)
     # Operator-language one-liner, server-authored per endpoint, telling
     # the operator what they need to do next (refresh state, do not
     # blindly retry).
     runbook_hint: str
-
-
-MutationAttemptDispatchState = Literal[
-    "PREPARED",
-    "DISPATCHING",
-    "RESPONSE_CONFIRMED",
-    "OUTCOME_UNKNOWN",
-    "EFFECT_CONFIRMED",
-    "EFFECT_NOT_OBSERVED",
-    "NOT_PROVABLE",
-    "EVIDENCE_CONFLICT",
-]
 
 
 MutationBlockageStageId = Literal[
@@ -583,226 +513,6 @@ class MutationRungReceipt(BaseModel):
         return self
 
 
-class HostRunnerActionResponse(BaseModel):
-    """Response for daemon start/stop actions.
-
-    VCR-0018-B / Phase 6B — ``accepted`` historically conflated
-    "signal accepted by the OS" with "process actually exited". The Stop
-    path now distinguishes the two so clients can render them as
-    separate stages:
-
-    - ``command_id`` is a stable per-stop identifier returned immediately
-      on signal acceptance.
-    - ``stop_outcome`` is the deferred outcome carried in the same
-      response. Values: ``"signal_accepted"``, ``"exited"``,
-      ``"still_running_after_2s"``. None for non-stop actions.
-    - ``exit_reason`` carries the run's documented exit reason when the
-      process actually exits.
-    """
-
-    accepted: bool
-    process: HostRunnerProcessStatus
-    command_id: str | None = None
-    stop_outcome: str | None = None
-    exit_reason: str | None = None
-    rung_receipt: MutationRungReceipt | None = None
-    rung_receipt_warnings: list[MutationRungReceipt] = Field(default_factory=list)
-    mutation_attempt_id: str | None = None
-    mutation_dispatch_state: MutationAttemptDispatchState | None = None
-    idempotency_key: str | None = None
-    idempotency_replayed: bool = False
-
-
-class IdentityCoherenceConfirmation(BaseModel):
-    """Operator confirmation for a Fresh-run symbol identity change.
-
-    Unhashed deploy-admission evidence: the backend compares these symbols to
-    the current request and the inherited instance symbol before allowing an
-    immediate start through an incoherent redeploy.
-    """
-
-    inherited_symbol: str = Field(min_length=1)
-    signal_stream: str | None = None
-    action_plan_symbol: str | None = None
-
-
-ExposureCoherencePosture = Literal["FLAT", "LONG", "SHORT", "MIXED", "UNKNOWN"]
-
-
-class ExposureCoherenceFacts(BaseModel):
-    posture: ExposureCoherencePosture
-    pending_order_count: int | None = Field(default=None, ge=0)
-    owned_positions: dict[str, int] = Field(default_factory=dict)
-    source: str
-    strategy_instance_id: str | None = None
-    run_id: str | None = None
-
-
-class ExposureCoherenceConfirmation(BaseModel):
-    """Operator confirmation for starting despite inherited exposure evidence.
-
-    This is unhashed deploy-admission evidence, not run identity. The public
-    deploy endpoint compares it with the current instance exposure facts before
-    allowing ``Deploy & start`` through a non-flat or unknown exposure state.
-    """
-
-    posture: ExposureCoherencePosture
-    pending_order_count: int | None = Field(default=None, ge=0)
-    owned_positions: dict[str, int] = Field(default_factory=dict)
-    strategy_instance_id: str | None = None
-    run_id: str | None = None
-
-
-class HostRunnerDeployBaseRequest(BaseModel):
-    """Common deploy request fields shared by public API and host daemon.
-
-    ``account_id`` is deliberately absent here. The public data-plane API
-    derives it from connected broker evidence; the host-daemon request carries
-    the derived value after that boundary has failed closed.
-    """
-
-    strategy_spec_path: str = Field(min_length=1)
-    qc_audit_copy_path: str = Field(min_length=1)
-    qc_cloud_backtest_id: str = Field(min_length=1)
-    start_date_ms: int = Field(ge=0)
-    strategy_instance_id: str = ""
-    # The hand-coded algorithm module the run starts under (#416). Recorded in
-    # the ledger so the console defaults the Start card and `run start` rejects a
-    # mismatched --strategy. Optional; "" leaves the run unguarded (legacy).
-    strategy_key: str = ""
-    live_config: dict = Field(default_factory=dict)
-    force: bool = False
-    # When true, chain a host-runner start after a successful create.
-    start: bool = False
-    start_options: HostRunnerStartRequest = Field(default_factory=HostRunnerStartRequest)
-    # PRD #593 Slice 1E (#598) / ADR 0012 §7 — redeploy lineage. Both
-    # fields are **unhashed**: they are persisted in the ledger's
-    # ``lineage`` block alongside other unhashed metadata (``code_sha``,
-    # ``sizing_provenance``, ``created_at_ms``) but are NOT in
-    # ``LIVE_CONFIG_LEDGER_KEYS`` and NOT in ``compute_run_id``.
-    # Otherwise re-deploying the same plan from two different parents
-    # would mint two ``run_id``s and break the idempotent-redeploy
-    # contract Slice 1A pinned.
-    parent_run_id: str | None = None
-    redeploy_reason: str | None = None
-
-    @field_validator("live_config", mode="after")
-    @classmethod
-    def _validate_live_config(cls, value: dict) -> dict:
-        """Delegate deploy-domain normalization outside the schema model."""
-        if not isinstance(value, dict):
-            return value
-        from app.engine.live.deploy import (
-            DeployError,
-            validate_and_normalize_deploy_config,
-        )
-        try:
-            return validate_and_normalize_deploy_config(value)
-        except DeployError as exc:
-            raise ValueError(str(exc)) from exc
-
-
-class LiveInstanceDeployRequest(HostRunnerDeployBaseRequest):
-    """Public deploy request accepted by ``/api/live-instances``.
-
-    Legacy clients may still send ``account_id``. The data-plane route treats
-    it only as an optional consistency check and never forwards it as authority;
-    the connected broker session authors the daemon payload.
-    """
-
-    model_config = ConfigDict(extra="allow")
-
-    inherited_symbol: str | None = None
-    inherited_symbol_source: str | None = None
-    identity_coherence_confirmation: IdentityCoherenceConfirmation | None = None
-    inherited_exposure_posture: ExposureCoherencePosture | None = None
-    inherited_exposure_pending_order_count: int | None = Field(default=None, ge=0)
-    inherited_exposure_positions: dict[str, int] = Field(default_factory=dict)
-    inherited_exposure_source: str | None = None
-    exposure_coherence_confirmation: ExposureCoherenceConfirmation | None = None
-    presented_action: PresentedOperatorActionInvocation | None = None
-
-    @model_validator(mode="after")
-    def _validate_legacy_extras(self) -> LiveInstanceDeployRequest:
-        extras = self.model_extra or {}
-        unexpected = sorted(key for key in extras if key != "account_id")
-        if unexpected:
-            raise ValueError(f"unknown deploy request fields: {unexpected}")
-        if "account_id" in extras:
-            value = extras["account_id"]
-            if not isinstance(value, str) or not value.strip():
-                raise ValueError("legacy account_id must be a non-empty string when provided")
-        return self
-
-    def client_supplied_account_id(self) -> str | None:
-        value = (self.model_extra or {}).get("account_id")
-        if not isinstance(value, str):
-            return None
-        return value.strip()
-
-
-class HostRunnerDeployRequest(HostRunnerDeployBaseRequest):
-    """Request body for creating a run via the daemon (ADR 0006).
-
-    The daemon supplies ``repo_root`` / ``run_root`` from its own config — they
-    are deliberately NOT client-chosen. ``strategy_spec_path`` and
-    ``qc_audit_copy_path`` are resolved against the daemon's repo root and
-    confined to it. The QC anchor (``qc_cloud_backtest_id`` +
-    ``qc_audit_copy_path``) is required — a live run is never created without it.
-    ``account_id`` is backend-authored by the public API boundary before this
-    request reaches the daemon.
-    """
-
-    account_id: str = Field(min_length=1)
-
-
-class HostRunnerDeployResponse(BaseModel):
-    """Result of a deploy: the content-addressed run plus an optional chained
-    start. ``created`` is ``False`` for an idempotent no-op (the run already
-    existed with a matching ledger)."""
-
-    run_id: str
-    run_dir: str
-    created: bool
-    start: HostRunnerActionResponse | None = None
-
-
-class QcAuditCopyListing(BaseModel):
-    """Committed QC audit copies under ``references/qc-shadow`` (ADR 0006).
-
-    ``entries`` are repo-relative POSIX paths suitable to pass straight back as
-    a deploy's ``qc_audit_copy_path``. Empty when the directory is absent or the
-    daemon is unreachable.
-    """
-
-    scope_root: str
-    entries: list[str] = Field(default_factory=list)
-
-
-class AuditCopySizingLookup(BaseModel):
-    """ADR 0009 § 3 — deploy-form gate status for the Reference parity preset.
-
-    Returned by the daemon's audit-copy-sizing lookup endpoint and surfaced to
-    the deploy form's inline gate banner. Three verdicts:
-
-    * ``proven_match`` — registered + sha re-verifies + proposed policy
-      matches the registered rule (or no proposed policy was supplied, which
-      is the deploy-form's pre-select case).
-    * ``proven_mismatch`` — registered + sha re-verifies, but the proposed
-      policy differs from the registered rule.
-    * ``cannot_prove`` — entry absent, file missing, sha drift, or allow-list
-      unavailable.
-    """
-
-    verdict: Literal["proven_match", "proven_mismatch", "cannot_prove"]
-    # Operator-facing one-line summary; safe to render verbatim.
-    detail: str
-    # The registered rule (when known) and the proposed live rule (when sent),
-    # both rendered as dicts via the same shape ``live_config.sizing`` uses.
-    expected_rule: dict | None = None
-    actual_rule: dict | None = None
-
-
 # --- Read-only live-run evidence contract ---
 
 
@@ -848,16 +558,6 @@ class CommandSummary(BaseModel):
     latest_seq: int | None = None
 
 
-class DesiredStateRecordResponse(BaseModel):
-    """Persisted lifecycle intent returned by retained mutation receipts."""
-
-    state: str
-    updated_at_ms: int
-    updated_by: str
-    reason: str | None = None
-    version: int
-
-
 class CommandTimelineEntry(BaseModel):
     """One command with its full lifecycle (#397).
 
@@ -890,33 +590,6 @@ class CommandsTimeline(BaseModel):
 
 
 LiveRunStatus.model_rebuild()
-
-
-# --- ADR 0004: instance-addressed operator console ---
-
-
-class InstanceProcessView(BaseModel):
-    """Live process snapshot for a strategy instance, from the host-daemon
-    registry (the live-binding authority). ``state`` is ``unreachable`` when
-    the daemon could not be queried — distinct from ``idle`` (daemon reachable,
-    nothing running)."""
-
-    state: str  # running | stopping | exited | idle | unreachable
-    pid: int | None = None
-    ibkr_client_id: int | None = Field(default=None, ge=0)
-    bound_run_id: str | None = None
-    started_at_ms: int | None = None
-
-
-class LiveBinding(BaseModel):
-    """The run an instance is writing to *right now* (registry-sourced).
-
-    Present only when a process is live. Commands route here and nowhere else.
-    """
-
-    run_id: str
-    run_dir: str | None = None
-    source: str = "registry"
 
 
 GateResultStatus = Literal[
@@ -985,9 +658,6 @@ class ReadinessVector(BaseModel):
     orders_cap: int | None = None
 
 
-SignalTone = Literal["ok", "warn", "neutral"]
-
-
 class InstanceBrokerView(BaseModel):
     """The instance's namespace-attributed broker slice (ADR 0005, #398).
 
@@ -1006,21 +676,6 @@ class InstanceBrokerView(BaseModel):
     # the broker connector cannot resolve a value; clients omit the
     # slot rather than rendering ``0.00`` (#611 §"Pinned risk-chip").
     unrealized_pnl: float | None = None
-
-
-class RedeployLineage(BaseModel):
-    """PRD #593 Slice 1E (#598) / ADR 0012 §7 — unhashed redeploy
-    lineage. Persisted in the ledger's ``lineage`` block alongside
-    ``code_sha`` and ``sizing_provenance`` (NOT inside ``live_config``),
-    so the fields stay out of the content hash that produces ``run_id``.
-
-    Wire-shape mirror of the TypeScript ``ActionPlanLineage`` interface.
-    """
-
-    parent_run_id: str | None = None
-    redeploy_reason: str | None = None
-    # ``int64`` ms UTC wall-clock when the redeploy was issued.
-    redeployed_at_ms: int | None = None
 
 
 BrokerConnectionState = Literal["CONNECTED", "DISCONNECTED", "DEGRADED", "UNKNOWN"]
@@ -1206,51 +861,6 @@ class ActivityBrokerEventRow(BaseModel):
         return self
 
 
-class ActivityReconciliationWarning(BaseModel):
-    """Fail-honest warning when lifecycle derivation cannot be trusted."""
-
-    code: str
-    message: str
-    row_ids: list[str] = Field(default_factory=list)
-
-
-class LiveInstanceSummary(BaseModel):
-    """One row in the account fleet overview.
-
-    PRD #616 added ``readiness_verdict`` and ``readiness_as_of_ms`` so
-    the fleet roster can render an honest status badge
-    (``dep_val_smoke_001 · IDLE · BLOCKED``) for background instances
-    without an N+1 fetch of every instance's full status.  Backend
-    authors these from the same readiness source as the per-instance
-    status endpoint.  ``UNKNOWN`` is the honest answer when readiness
-    cannot be resolved (no run, no engine).
-    """
-
-    strategy_instance_id: str
-    process_state: str
-    bound_run_id: str | None = None
-    latest_run_id: str | None = None
-    desired_state: str | None = None
-    readiness_verdict: Literal["READY", "BLOCKED", "DEGRADED", "UNKNOWN"] = "UNKNOWN"
-    readiness_as_of_ms: int | None = None
-    blockers: list[OperatorBlocker] = Field(default_factory=list)
-
-
-class FleetRosterSnapshot(BaseModel):
-    """Versioned fleet roster snapshot for REST and SSE consumers.
-
-    The roster is authored by the same shared fleet-daemon observation used by
-    per-bot SurfaceHub producers, so adding a streaming client never creates an
-    extra host-daemon polling cadence.
-    """
-
-    stream_epoch: str = ""
-    surface_version: int = Field(default=0, ge=0)
-    fetched_at_ms: int
-    daemon_fetched_at_ms: int | None = None
-    instances: list[LiveInstanceSummary] = Field(default_factory=list)
-
-
 class FleetExplainedBucket(BaseModel):
     """One instance's contribution to the account's explained position (#399)."""
 
@@ -1300,45 +910,3 @@ class FleetAccountSummary(BaseModel):
     account_identity: Literal["CONSISTENT", "CONFLICTING", "UNKNOWN"]
     account_identity_reason_codes: list[str] = Field(default_factory=list)
     contamination: FleetContamination
-
-
-class IntentActuation(BaseModel):
-    """Result of actuating durable intent against the live binding (ADR 0004).
-
-    ``actuated`` is true only when a command was queued on a live run. With no
-    live binding the durable write still gates the next start. ``effect_state``
-    keeps accepted intent distinct from its observed runtime effect: a durable
-    request remains ``PENDING`` until the engine can observe it, while a queued
-    command is only queued, not proof that the engine has applied it.
-    """
-
-    actuated: bool
-    effect_state: Literal["QUEUED", "PENDING"] = "PENDING"
-    run_id: str | None = None
-    command_seq: int | None = None
-    detail: str
-
-    @model_validator(mode="after")
-    def _derive_effect_state(self) -> IntentActuation:
-        if self.actuated and self.effect_state != "QUEUED":
-            return self.model_copy(update={"effect_state": "QUEUED"})
-        return self
-
-
-class SetInstanceDesiredStateResponse(BaseModel):
-    """Single intent knob: durable write first, then live actuation if bound."""
-
-    durable: DesiredStateRecordResponse
-    actuation: IntentActuation
-    rung_receipt: MutationRungReceipt
-    rung_receipt_warnings: list[MutationRungReceipt] = Field(default_factory=list)
-    mutation_attempt_id: str
-    mutation_dispatch_state: MutationAttemptDispatchState
-
-
-class EndDayIntentResponse(SetInstanceDesiredStateResponse):
-    """End-day receipt with durable PAUSED intent and a separate clock-out effect."""
-
-    process: InstanceProcessView
-    command_id: str | None = None
-    stop_outcome: str

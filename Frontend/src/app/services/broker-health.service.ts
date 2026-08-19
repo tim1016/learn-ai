@@ -42,11 +42,11 @@ export class BrokerHealthService {
    * (loading / unknown — render no banner).
    */
   readonly bannerState = computed<
-    'paper' | 'live' | 'degraded' | 'disconnected' | 'disabled-host-runner-active' | null
+    'paper' | 'live' | 'degraded' | 'disconnected' | 'disabled' | null
   >(() => {
     const h = this.health();
     if (h === null) return null;
-    if (h.disabled === true) return 'disabled-host-runner-active';
+    if (h.disabled === true) return 'disabled';
     if (h.connection_state === 'hard_down') return 'degraded';
     if (!h.connected) return 'disconnected';
     if (h.connection_state !== 'connected') return 'degraded';

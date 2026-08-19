@@ -11,7 +11,7 @@ import contextlib
 import os
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Literal, Self
+from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -73,13 +73,18 @@ class BotLifecycleStateRecord(BaseModel):
     # deployment binding explicitly opted in.
     carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID"
     duty_outcome: BotDutyOutcome | None = None
-    # The lifecycle evaluator stamps the durable disposition that produced
-    # this record.  The append-only disposition log can be replayed after a
-    # crash, but this field is the atomic state-side witness used to finish a
-    # receipt that was interrupted between the state write and log commit.
-    last_disposition_id: str | None = None
-    last_disposition_action: str | None = None
     version: int = 1
+
+    @model_validator(mode="before")
+    @classmethod
+    def discard_retired_evaluator_witness(cls, value: object) -> object:
+        """Read legacy files without retaining the retired receipt witness."""
+
+        if isinstance(value, dict):
+            value = dict(value)
+            value.pop("last_disposition_id", None)
+            value.pop("last_disposition_action", None)
+        return value
 
 
 class BotLifecycleStateUpdateResult(BaseModel):
@@ -121,28 +126,6 @@ class BotLifecycleStateUpdateResult(BaseModel):
         return self.record
 
 
-class BotRollCallOfferRecord(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    schema_version: Literal[1] = 1
-    offer_id: str
-    strategy_instance_id: str
-    run_id: str
-    session_date: str
-    issued_at_ms: int
-    expires_at_ms: int
-    status: Literal["active", "consumed"] = "active"
-    evidence_snapshot: dict[str, Any] = Field(default_factory=dict)
-
-
-class BotRollCallOfferLedger(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    schema_version: Literal[1] = 1
-    offers: list[BotRollCallOfferRecord] = Field(default_factory=list)
-    version: int = 1
-
-
 def stable_bot_lifecycle_state_path(artifacts_root: Path, strategy_instance_id: str) -> Path:
     return (
         strategy_instance_artifact_dir(
@@ -150,16 +133,6 @@ def stable_bot_lifecycle_state_path(artifacts_root: Path, strategy_instance_id: 
         )
         / "lifecycle_state.json"
     )
-
-
-def stable_bot_roll_call_offers_path(artifacts_root: Path, strategy_instance_id: str) -> Path:
-    return (
-        strategy_instance_artifact_dir(
-            artifacts_root, "live_state", strategy_instance_id
-        )
-        / "roll_call_offers.json"
-    )
-
 
 class BotLifecycleStateRepo:
     def __init__(self, path: Path) -> None:
@@ -182,8 +155,6 @@ class BotLifecycleStateRepo:
         now_ms: int,
         updated_by: str,
         reason: str | None = None,
-        disposition_id: str | None = None,
-        disposition_action: str | None = None,
     ) -> BotLifecycleStateRecord:
         return self.update(
             now_ms=now_ms,
@@ -191,8 +162,6 @@ class BotLifecycleStateRepo:
             phase=None,
             on_roster=on_roster,
             reason=reason,
-            disposition_id=disposition_id,
-            disposition_action=disposition_action,
         ).require_recorded()
 
     def set_phase(
@@ -204,8 +173,6 @@ class BotLifecycleStateRepo:
         active_run_id: str | None = None,
         carryover_policy: Literal["FORBID", "ALLOW"] | None = None,
         reason: str | None = None,
-        disposition_id: str | None = None,
-        disposition_action: str | None = None,
     ) -> BotLifecycleStateRecord:
         return self.update(
             now_ms=now_ms,
@@ -215,8 +182,6 @@ class BotLifecycleStateRepo:
             carryover_policy=carryover_policy,
             reason=reason,
             clear_duty_outcome=phase is BotLifecyclePhase.ON_DUTY,
-            disposition_id=disposition_id,
-            disposition_action=disposition_action,
         ).require_recorded()
 
     def retire(
@@ -226,8 +191,6 @@ class BotLifecycleStateRepo:
         updated_by: str,
         reason: str,
         replacement_strategy_instance_id: str | None = None,
-        disposition_id: str | None = None,
-        disposition_action: str | None = None,
     ) -> BotLifecycleStateRecord:
         return self.update(
             now_ms=now_ms,
@@ -244,8 +207,6 @@ class BotLifecycleStateRepo:
                 reason_code="BOT_RETIRED",
                 recorded_at_ms=now_ms,
             ),
-            disposition_id=disposition_id,
-            disposition_action=disposition_action,
         ).require_recorded()
 
     def record_terminal_outcome(
@@ -256,8 +217,6 @@ class BotLifecycleStateRepo:
         reason: str,
         expected_active_run_id: str | None = None,
         expected_version: int | None = None,
-        disposition_id: str | None = None,
-        disposition_action: str | None = None,
     ) -> BotLifecycleStateUpdateResult:
         """Record a dead process honestly without leaving it ON_DUTY."""
 
@@ -270,8 +229,6 @@ class BotLifecycleStateRepo:
             duty_outcome=outcome,
             expected_active_run_id=expected_active_run_id,
             expected_version=expected_version,
-            disposition_id=disposition_id,
-            disposition_action=disposition_action,
         )
 
     def reopen_for_deploy(
@@ -280,8 +237,6 @@ class BotLifecycleStateRepo:
         now_ms: int,
         updated_by: str,
         reason: str,
-        disposition_id: str | None = None,
-        disposition_action: str | None = None,
     ) -> BotLifecycleStateRecord:
         return self.update(
             now_ms=now_ms,
@@ -292,8 +247,6 @@ class BotLifecycleStateRepo:
             reason=reason,
             clear_retirement=True,
             clear_duty_outcome=True,
-            disposition_id=disposition_id,
-            disposition_action=disposition_action,
         ).require_recorded()
 
     def update(
@@ -314,8 +267,6 @@ class BotLifecycleStateRepo:
         clear_duty_outcome: bool = False,
         expected_active_run_id: str | None = None,
         expected_version: int | None = None,
-        disposition_id: str | None = None,
-        disposition_action: str | None = None,
     ) -> BotLifecycleStateUpdateResult:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with _file_lock(self._path):
@@ -403,16 +354,6 @@ class BotLifecycleStateRepo:
                         else (existing.duty_outcome if existing is not None else None)
                     )
                 ),
-                last_disposition_id=(
-                    disposition_id
-                    if disposition_id is not None
-                    else (existing.last_disposition_id if existing is not None else None)
-                ),
-                last_disposition_action=(
-                    disposition_action
-                    if disposition_action is not None
-                    else (existing.last_disposition_action if existing is not None else None)
-                ),
                 version=(existing.version + 1) if existing is not None else 1,
             )
             self._write_locked(record)
@@ -421,78 +362,6 @@ class BotLifecycleStateRepo:
     def _write_locked(self, record: BotLifecycleStateRecord) -> None:
         tmp_path = self._path.with_suffix(self._path.suffix + ".tmp")
         payload = record.model_dump_json().encode("utf-8")
-        with open(tmp_path, "wb") as fh:
-            fh.write(payload)
-            fh.flush()
-            os.fsync(fh.fileno())
-        try:
-            os.replace(tmp_path, self._path)
-        except Exception:
-            with contextlib.suppress(OSError):
-                tmp_path.unlink()
-            raise
-        _fsync_parent_dir(self._path)
-
-
-class BotRollCallOfferRepo:
-    def __init__(self, path: Path) -> None:
-        self._path = path
-
-    def read(self) -> BotRollCallOfferLedger:
-        if not self._path.exists():
-            return BotRollCallOfferLedger()
-        try:
-            return BotRollCallOfferLedger.model_validate_json(
-                self._path.read_text(encoding="utf-8")
-            )
-        except (OSError, ValidationError, ValueError) as exc:
-            raise BotLifecycleStateCorruptError(self._path, exc) from exc
-
-    def active_offer(self, *, now_ms: int, session_date: str | None = None) -> BotRollCallOfferRecord | None:
-        ledger = self.read()
-        for offer in reversed(ledger.offers):
-            if session_date is not None and offer.session_date != session_date:
-                continue
-            if offer.status == "active" and offer.issued_at_ms <= now_ms < offer.expires_at_ms:
-                return offer
-        return None
-
-    def append(self, offer: BotRollCallOfferRecord) -> BotRollCallOfferRecord:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        with _file_lock(self._path):
-            ledger = self.read()
-            next_ledger = BotRollCallOfferLedger(
-                offers=[*ledger.offers, offer],
-                version=ledger.version + 1,
-            )
-            self._write_locked(next_ledger)
-        return offer
-
-    def consume(self, offer_id: str) -> BotRollCallOfferRecord | None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        with _file_lock(self._path):
-            ledger = self.read()
-            matched: BotRollCallOfferRecord | None = None
-            offers: list[BotRollCallOfferRecord] = []
-            for offer in ledger.offers:
-                if offer.offer_id == offer_id and offer.status == "active":
-                    matched = offer.model_copy(update={"status": "consumed"})
-                    offers.append(matched)
-                else:
-                    offers.append(offer)
-            if matched is None:
-                return None
-            self._write_locked(
-                BotRollCallOfferLedger(
-                    offers=offers,
-                    version=ledger.version + 1,
-                )
-            )
-            return matched
-
-    def _write_locked(self, ledger: BotRollCallOfferLedger) -> None:
-        tmp_path = self._path.with_suffix(self._path.suffix + ".tmp")
-        payload = ledger.model_dump_json().encode("utf-8")
         with open(tmp_path, "wb") as fh:
             fh.write(payload)
             fh.flush()
@@ -527,8 +396,5 @@ __all__ = [
     "BotLifecycleStateRecord",
     "BotLifecycleStateRepo",
     "BotLifecycleStateUpdateResult",
-    "BotRollCallOfferRecord",
-    "BotRollCallOfferRepo",
     "stable_bot_lifecycle_state_path",
-    "stable_bot_roll_call_offers_path",
 ]

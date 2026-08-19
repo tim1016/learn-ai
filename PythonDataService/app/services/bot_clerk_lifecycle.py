@@ -10,11 +10,8 @@ from app.broker.alpaca.clerk.active_protocol import (
     RevisionBoundRunRegistrar,
 )
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
+from app.services.alpaca_bot_identity import AlpacaBotIdentityGuard
 from app.services.bot_binding_repository import BrokerBotBinding
-from app.services.bot_control_plane import (
-    BotControlPlane,
-    BotControlPlaneDiscriminator,
-)
 from app.services.bot_lifecycle_projection import ActiveSqliteAlpacaLifecycleAuthority
 
 
@@ -80,14 +77,13 @@ async def stop_interrupted_alpaca_duty_run(
     strategy_instance_id: str,
     run_id: str,
 ) -> None:
-    """Revalidate SQLite/plane identity, then stop one boot-orphaned run."""
+    """Revalidate SQLite authority, then stop one boot-orphaned run."""
 
     authority = ActiveSqliteAlpacaLifecycleAuthority()
     sqlite_claim = (strategy_instance_id, run_id) in authority.recovery_candidates()
-    BotControlPlaneDiscriminator(artifacts_root).require(
+    AlpacaBotIdentityGuard(artifacts_root).require(
         strategy_instance_id,
-        BotControlPlane.ALPACA_RUNNER,
-        sqlite_alpaca_claim=sqlite_claim,
+        sqlite_claim=sqlite_claim,
     )
     if not sqlite_claim:
         raise ClerkRunAuthorityChangedError(

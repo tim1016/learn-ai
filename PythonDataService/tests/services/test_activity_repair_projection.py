@@ -10,7 +10,7 @@ from app.engine.live.artifacts import ExecutionRow, ExecutionWriter
 from app.engine.live.broker_callbacks import BrokerCallbackWal, broker_callbacks_wal_path
 from app.engine.live.intent_events import IntentEventType
 from app.engine.live.intent_wal import IntentWal
-from app.engine.live.run_ledger import LiveRunLedger, write_ledger
+from app.engine.live.run_ledger import LiveRunLedger
 from app.schemas.broker_activity import BrokerActivityRow
 from app.services import activity_repair_projection
 from app.services.activity_repair_projection import load_activity_repair_projection
@@ -29,8 +29,7 @@ def _run_dir(artifacts_root: Path) -> Path:
 
 
 def _write_ledger(run_dir: Path) -> None:
-    write_ledger(
-        run_dir / "run_ledger.json",
+    (run_dir / "run_ledger.json").write_text(
         LiveRunLedger(
             run_id=RUN_ID,
             code_sha="abc123",
@@ -43,7 +42,8 @@ def _write_ledger(run_dir: Path) -> None:
             account_id="DU123",
             start_date_ms=1_780_000_000_000,
             live_config={},
-        ),
+        ).model_dump_json(),
+        encoding="utf-8",
     )
 
 
