@@ -27,10 +27,12 @@ from app.services.broker_v2_panel.chart_projection_service import (
 from app.services.broker_v2_panel.panel_data_source import (
     PanelDataError,
     PanelUnavailableError,
+    UnknownBotError,
     get_panel_with_chart_fills,
     validate_panel_account_scope,
 )
 from app.services.broker_v2_panel.sqlite_panel_source import (
+    SqlitePanelBotNotFound,
     SqlitePanelEconomicUnavailable,
     read_sqlite_chart_evidence,
     read_sqlite_panel_evidence,
@@ -118,6 +120,8 @@ async def resolve_symbol_and_fills(
             sid,
             now_ms=now_ms,
         )
+    except SqlitePanelBotNotFound as exc:
+        raise UnknownBotError(str(exc)) from exc
     except SqlitePanelEconomicUnavailable as exc:
         raise PanelUnavailableError(
             "The activated SQLite chart evidence is unavailable.",

@@ -464,7 +464,9 @@ async def _get_panel_with_entries(
             sid,
             now_ms=captured_now_ms,
         )
-    except (SqlitePanelBotNotFound, SqlitePanelEconomicUnavailable) as exc:
+    except SqlitePanelBotNotFound as exc:
+        raise UnknownBotError(str(exc)) from exc
+    except SqlitePanelEconomicUnavailable as exc:
         raise PanelUnavailableError(
             "The activated SQLite panel evidence is unavailable.",
             detail=str(exc),
@@ -504,7 +506,9 @@ async def _get_panel_with_entries(
                 sid,
                 now_ms=captured_now_ms,
             )
-        except (SqlitePanelBotNotFound, SqlitePanelEconomicUnavailable) as exc:
+        except SqlitePanelBotNotFound as exc:
+            raise UnknownBotError(str(exc)) from exc
+        except SqlitePanelEconomicUnavailable as exc:
             raise PanelUnavailableError(
                 "The activated SQLite panel evidence is unavailable.",
                 detail=str(exc),

@@ -387,3 +387,51 @@ def test_resumption_after_restart_picks_up_cursor_from_jsonl(tmp_path: Path) -> 
     # An earlier bar must still quarantine — the cursor survived.
     with pytest.raises(Exception):
         store2.append("SPY", "1m", _bar(ANCHOR_MS))
+
+
+@pytest.mark.parametrize(
+    "symbol,resolution",
+    [
+        ("../../ETC", "1m"),
+        ("..", "1m"),
+        ("SPY", "../1m"),
+        ("SPY/../..", "1m"),
+        ("SPY", ".."),
+    ],
+)
+def test_traversal_components_are_refused_before_any_path_is_touched(
+    tmp_path: Path, symbol: str, resolution: str
+) -> None:
+    """``symbol``/``resolution`` are public query parameters, not path input.
+
+    They name directories under the artifacts root, so a traversal component
+    would otherwise let a caller read and write outside it (CodeQL
+    ``py/path-injection``). The refusal is a ``ValueError`` at the
+    ``_key``/``_dir`` choke point, so no file is created on the way out.
+    """
+    root = tmp_path / "bars"
+    store = BarPersistence(root)
+
+    with pytest.raises(ValueError, match="unsafe"):
+        store.append(symbol, resolution, _bar(ANCHOR_MS))
+    with pytest.raises(ValueError, match="unsafe"):
+        store.replay(symbol, resolution, ANCHOR_DATE)
+    with pytest.raises(ValueError, match="unsafe"):
+        store.active_dates(symbol, resolution)
+
+    assert list(root.rglob("*")) == []
+
+
+def test_ordinary_symbols_and_resolutions_still_resolve_under_the_root(
+    tmp_path: Path,
+) -> None:
+    """Containment must not cost the dotted tickers the feed really sends."""
+    root = tmp_path / "bars"
+    store = BarPersistence(root)
+
+    assert store.append("brk.b", "1m", _bar(ANCHOR_MS)) is AppendOutcome.WRITTEN
+
+    written = list(root.rglob("*.jsonl"))
+    assert len(written) == 1
+    assert written[0].parent.name == "1m"
+    assert written[0].parent.parent.name == "BRK.B"

@@ -660,16 +660,19 @@ async def option_chain_stream(
             raise
         except BrokerError as exc:
             logger.error("Broker error in option-chain stream: %s", exc)
-            err = json.dumps({"error": str(exc)})
-            yield f"event: error\ndata: {err}\n\n"
+            yield _sse_error_frame(
+                "The option-chain stream stopped: the broker rejected or dropped the market-data request. The broker's "
+                "reason is in the service log."
+            )
         except ValueError as exc:
             # Contract qualification (``qualify_underlying``,
             # ``build_option_contract``) raises ValueError when IBKR
             # cannot resolve a symbol/strike/right combination — surface
             # those through the same SSE error path as broker errors.
             logger.error("Invalid option-chain request: %s", exc)
-            err = json.dumps({"error": str(exc)})
-            yield f"event: error\ndata: {err}\n\n"
+            yield _sse_error_frame(
+                "The option-chain request could not be qualified. Check the symbol, expiry, strike, and right."
+            )
         finally:
             await writer.close()
 
@@ -772,12 +775,15 @@ async def option_surface_stream(
             raise
         except BrokerError as exc:
             logger.error("Broker error in option-surface stream: %s", exc)
-            err = json.dumps({"error": str(exc)})
-            yield f"event: error\ndata: {err}\n\n"
+            yield _sse_error_frame(
+                "The option-surface stream stopped: the broker rejected or dropped the market-data request. The "
+                "broker's reason is in the service log."
+            )
         except ValueError as exc:
             logger.error("Invalid option-surface request: %s", exc)
-            err = json.dumps({"error": str(exc)})
-            yield f"event: error\ndata: {err}\n\n"
+            yield _sse_error_frame(
+                "The option-surface request could not be qualified. Check the symbol, expiry, strike, and right."
+            )
 
     return StreamingResponse(
         event_source(),
@@ -787,6 +793,18 @@ async def option_surface_stream(
 
 
 # ── /pnl/stream and /pnl/positions/stream (Phase 2b + 2c) ──────────────
+
+
+def _sse_error_frame(message: str) -> str:
+    """Serialize one operator-facing SSE error frame.
+
+    The caught exception is logged with its full text at each callsite; only
+    this curated sentence crosses the wire. Serializing ``str(exc)`` instead
+    hands an external caller whatever an unexpected exception happens to
+    carry (CodeQL ``py/stack-trace-exposure``), and the operator gains
+    nothing the service log does not already hold.
+    """
+    return f"event: error\ndata: {json.dumps({'error': message})}\n\n"
 
 
 def _pnl_tick_to_sse(tick: IbkrPnLTick) -> str:
@@ -811,8 +829,10 @@ async def pnl_account_stream(
             raise
         except BrokerError as exc:
             logger.error("Broker error in account-pnl stream: %s", exc)
-            err = json.dumps({"error": str(exc)})
-            yield f"event: error\ndata: {err}\n\n"
+            yield _sse_error_frame(
+                "The account P&L stream stopped: the broker connection reported an error. The broker's reason is in the "
+                "service log."
+            )
         finally:
             await pnl_writer.close()
 
@@ -853,8 +873,10 @@ async def pnl_positions_stream(
             raise
         except BrokerError as exc:
             logger.error("Broker error in positions-pnl stream: %s", exc)
-            err = json.dumps({"error": str(exc)})
-            yield f"event: error\ndata: {err}\n\n"
+            yield _sse_error_frame(
+                "The positions P&L stream stopped: the broker connection reported an error. The broker's reason is in "
+                "the service log."
+            )
         finally:
             await pnl_writer.close()
 
@@ -903,8 +925,10 @@ async def order_events_stream_endpoint(
             raise
         except BrokerError as exc:
             logger.error("Broker error in order-event stream: %s", exc)
-            err = json.dumps({"error": str(exc)})
-            yield f"event: error\ndata: {err}\n\n"
+            yield _sse_error_frame(
+                "The order-event stream stopped: the broker connection reported an error. The broker's reason is in the "
+                "service log."
+            )
 
     return StreamingResponse(
         event_source(),

@@ -318,6 +318,12 @@ async def read_sqlite_panel_evidence(
     commit between them, so this seam retries a bounded number of times and
     accepts only identical account, generation, and control-revision values.
     It never fills a mismatch from JSONL or a broker endpoint.
+
+    ``None`` means no SQLite authority is active for ``broker`` — the
+    authority itself is missing, so callers answer 503. A bot that the
+    active authority simply does not carry raises
+    ``SqlitePanelBotNotFound``, which callers answer 404. Collapsing the two
+    tells an operator to repair a healthy authority.
     """
     facade = active_sqlite_facade(broker)
     if facade is None:
@@ -340,7 +346,10 @@ async def read_sqlite_panel_evidence(
                 custody_reader.close()
                 economic_reader.close()
             if projection is None or economics is None:
-                return None
+                raise SqlitePanelBotNotFound(
+                    f"No SQLite custody projection exists for bot "
+                    f"'{strategy_instance_id}'."
+                )
             snapshot = economics.snapshot
             if (
                 projection.account_id == snapshot.account_id
@@ -360,7 +369,10 @@ async def read_sqlite_panel_evidence(
                 except SqliteCatalogRevisionMismatch:
                     continue
                 if status is None:
-                    return None
+                    raise SqlitePanelBotNotFound(
+                        f"No SQLite bot status exists for bot "
+                        f"'{strategy_instance_id}'."
+                    )
                 return SqlitePanelEvidence(
                     status=status,
                     projection=projection,

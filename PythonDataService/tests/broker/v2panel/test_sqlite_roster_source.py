@@ -636,3 +636,80 @@ async def test_catalog_fails_closed_after_bounded_revision_contention(
         await sqlite_panel_source.read_sqlite_catalog("alpaca", "paper-account")
 
     assert attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_panel_evidence_raises_bot_not_found_for_an_absent_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unknown sid is a 404, not a 503 telling the operator to repair.
+
+    Regression for the retirement of legacy broker control: collapsing the
+    absent-bot case into ``PanelUnavailableError`` sent operators to restore
+    a SQLite authority that was already healthy.
+    """
+    repository = _Repository()
+    facade = SimpleNamespace(account_id="paper-account", repository=repository)
+
+    class _CustodyReader:
+        @classmethod
+        def from_repository(cls, _received: _Repository) -> _CustodyReader:
+            return cls()
+
+        def bot_snapshot(self, _strategy_instance_id: str) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    class _EconomicReader:
+        @classmethod
+        def from_repository(cls, _received: _Repository) -> _EconomicReader:
+            return cls()
+
+        def bot_session_economic_projection(
+            self,
+            _strategy_instance_id: str,
+            *,
+            session_window: SessionWindow | None,
+        ) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(sqlite_panel_source, "active_sqlite_facade", lambda _broker: facade)
+    monkeypatch.setattr(sqlite_panel_source, "SqliteClerkProjectionReader", _CustodyReader)
+    monkeypatch.setattr(sqlite_panel_source, "SqliteEconomicProjectionReader", _EconomicReader)
+    monkeypatch.setattr(sqlite_panel_source, "current_trading_session_window", lambda _now: None)
+
+    with pytest.raises(sqlite_panel_source.SqlitePanelBotNotFound):
+        await sqlite_panel_source.read_sqlite_panel_evidence(
+            "alpaca",
+            "paper-account",
+            "ghost-spy",
+            now_ms=1_700_000_000_000,
+        )
+
+
+@pytest.mark.asyncio
+async def test_panel_evidence_returns_none_only_when_no_authority_is_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``None`` is reserved for the missing authority the operator must repair."""
+    monkeypatch.setattr(sqlite_panel_source, "active_sqlite_facade", lambda _broker: None)
+
+    evidence = await sqlite_panel_source.read_sqlite_panel_evidence(
+        "alpaca",
+        "paper-account",
+        "active-spy",
+        now_ms=1_700_000_000_000,
+    )
+
+    assert evidence is None
+
+
+def test_panel_bot_not_found_maps_to_the_unknown_bot_status() -> None:
+    """The 404/503 split the panel router renders is pinned to one taxonomy."""
+    assert panel_data_source.UnknownBotError.http_status == 404
+    assert panel_data_source.PanelUnavailableError.http_status == 503

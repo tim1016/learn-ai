@@ -216,3 +216,35 @@ def test_cli_publishes_the_content_addressed_qualification_receipt(
     assert payload["status"] == "qualified"
     assert [account["account_id"] for account in payload["accounts"]] == ["PA-ONE"]
     assert len(payload["qualification_id"]) == 64
+
+
+def test_inventory_reader_refuses_a_symlink_without_trusting_path_checks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The no-symlink contract holds on the descriptor, not on a prior check.
+
+    ``is_symlink()``/``is_file()`` then ``read_bytes()`` leaves a
+    time-of-check/time-of-use window: a writer of the inventory directory can
+    swap the checked regular file for a symlink and the read follows it.
+    Neutralising both path predicates simulates that swap; the refusal must
+    survive because ``O_NOFOLLOW`` is what enforces it.
+    """
+    actual = _write_inventory(tmp_path, ["PA-ONE"])
+    symlink = tmp_path / "inventory-link.json"
+    symlink.symlink_to(actual)
+    monkeypatch.setattr(Path, "is_symlink", lambda _self: False)
+    monkeypatch.setattr(Path, "is_file", lambda _self: True)
+
+    with pytest.raises(ActivationInventoryQualificationFailed, match="symbolic link"):
+        read_activation_inventory(symlink)
+
+
+def test_inventory_reader_refuses_a_directory_through_the_open_descriptor(
+    tmp_path: Path,
+) -> None:
+    """``fstat`` on the opened descriptor is what proves 'regular file'."""
+    directory = tmp_path / "inventory-dir"
+    directory.mkdir()
+
+    with pytest.raises(ActivationInventoryQualificationFailed, match="regular file"):
+        read_activation_inventory(directory)

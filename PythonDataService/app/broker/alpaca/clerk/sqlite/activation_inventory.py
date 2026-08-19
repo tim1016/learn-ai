@@ -10,8 +10,11 @@ whole qualification.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
+import os
+import stat
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -76,19 +79,45 @@ class ActivationInventoryQualificationReceipt:
     accounts: tuple[QualifiedActivation, ...]
 
 
+def _read_regular_file_no_follow(path: Path) -> bytes:
+    """Read ``path`` through one descriptor that never followed a symlink.
+
+    Checking ``is_symlink()``/``is_file()`` and then reading the *path* is a
+    time-of-check/time-of-use gap: anything able to write the inventory
+    directory can swap the checked regular file for a symlink in between, and
+    the read follows it.  Opening once with ``O_NOFOLLOW`` and confirming the
+    open descriptor with ``fstat`` makes the no-symlink contract in
+    :func:`read_activation_inventory` true rather than merely checked.
+    """
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise ActivationInventoryQualificationFailed(
+                "activation inventory must be a regular file"
+            )
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            return handle.read()
+    finally:
+        os.close(descriptor)
+
+
 def read_activation_inventory(path: Path) -> ActivationInventory:
     """Read one strict, regular-file inventory without following symlinks."""
-    if path.is_symlink():
-        raise ActivationInventoryQualificationFailed(
-            "activation inventory must not be a symbolic link"
-        )
-    if not path.is_file():
-        raise ActivationInventoryQualificationFailed(
-            "activation inventory must be a regular file"
-        )
     try:
-        payload = json.loads(path.read_bytes())
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raw = _read_regular_file_no_follow(path)
+    except OSError as exc:
+        # ELOOP is what O_NOFOLLOW raises on a symlink; name it so the
+        # operator sees the refused shape rather than a bare errno.
+        if exc.errno == errno.ELOOP:
+            raise ActivationInventoryQualificationFailed(
+                "activation inventory must not be a symbolic link"
+            ) from exc
+        raise ActivationInventoryQualificationFailed(
+            f"activation inventory cannot be verified: {exc}"
+        ) from exc
+    try:
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise ActivationInventoryQualificationFailed(
             f"activation inventory cannot be verified: {exc}"
         ) from exc
