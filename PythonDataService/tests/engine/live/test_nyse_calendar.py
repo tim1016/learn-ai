@@ -1,13 +1,8 @@
-"""Tests for canonical scheduled NYSE session helpers.
-
-The function is consumed only by indicator-state hydrate-validation
-(see indicator_state.py); test it as a pure function so the validation
-ladder's correctness rests on a deterministic primitive.
-"""
+"""Tests for canonical scheduled NYSE session helpers."""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -15,6 +10,7 @@ import pytest
 from app.lean_sidecar.trading_calendar import (
     NoSessionError,
     previous_completed_session_close_ms,
+    session_start_for_bar_count,
     session_state_at_ms,
 )
 
@@ -88,3 +84,23 @@ def test_nyse_session_state_honors_calendar(
 def test_nyse_session_state_rejects_negative_timestamp() -> None:
     with pytest.raises(ValueError, match="non-negative"):
         session_state_at_ms(-1)
+
+
+def test_session_start_for_bar_count_counts_half_day_and_partial_session() -> None:
+    # At 10:00 ET on the Monday after Thanksgiving, only 30 Monday bars and
+    # 210 Black-Friday bars are complete. A 300-bar 1m request therefore has
+    # to begin on the preceding Wednesday; a calendar-day lookback cannot
+    # derive that boundary reliably.
+    assert session_start_for_bar_count(
+        _ms(2026, 11, 30, 10, 0),
+        target_bars=300,
+        bar_span_ms=60_000,
+    ) == date(2026, 11, 25)
+
+
+def test_session_start_for_bar_count_counts_daily_bars_by_session() -> None:
+    assert session_start_for_bar_count(
+        _ms(2026, 11, 30, 10, 0),
+        target_bars=3,
+        bar_span_ms=None,
+    ) == date(2026, 11, 24)

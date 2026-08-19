@@ -248,6 +248,7 @@ export class DualPaneChartComponent implements AfterViewInit {
   readonly historyLoading = input(false);
   readonly liveResolution = input<ChartLiveResolution>('5s');
   readonly histBars = input<readonly ChartBar[]>([]);
+  readonly histIndicatorBars = input<readonly ChartBar[]>([]);
   readonly histFillMarkers = input<readonly ChartFillMarker[]>([]);
   readonly historyDataTimeframe = input<ChartHistoryTimeframe | null>(null);
   readonly historyTimeframe = input<ChartHistoryTimeframe>('1m');
@@ -300,6 +301,11 @@ export class DualPaneChartComponent implements AfterViewInit {
     if (this.activePane() === 'live') return this.liveBars();
     return this.historyMatchesSelection() ? this.histBars() : [];
   });
+  private readonly activeIndicatorBars = computed(() => {
+    if (this.activePane() === 'live') return this.liveBars();
+    if (!this.historyMatchesSelection()) return [];
+    return this.histIndicatorBars();
+  });
   protected readonly activeMarkers = computed(() => {
     if (this.activePane() === 'live') return this.liveFillMarkers();
     return this.historyMatchesSelection() ? this.histFillMarkers() : [];
@@ -326,7 +332,7 @@ export class DualPaneChartComponent implements AfterViewInit {
   }>({
     params: () => ({
       symbol: this.symbol(),
-      bars: this.activeBars(),
+      bars: this.activeIndicatorBars(),
       indicators: this.selectedIndicators(),
       viewKey: this.indicatorViewKey(),
     }),

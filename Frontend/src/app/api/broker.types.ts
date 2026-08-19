@@ -10727,9 +10727,9 @@ export interface components {
          * ChartHistoryResponse
          * @description Bounded Polygon chart response for one selected timeframe (§8).
          *
-         *     The server selects a calendar fetch window and returns only the most recent
-         *     useful display-bar count for that timeframe. The existing 7-day live
-         *     resolver is not widened.
+         *     ``bars`` is the bounded display window. ``indicator_bars`` includes the
+         *     preceding warmup candles required by every catalog-valid indicator recipe.
+         *     The existing 7-day live resolver is not widened.
          */
         ChartHistoryResponse: {
             /** As Of Ms */
@@ -10740,6 +10740,8 @@ export interface components {
             fill_markers: components["schemas"]["ChartFillMarker"][];
             /** From Ms */
             from_ms: number;
+            /** Indicator Bars */
+            indicator_bars: components["schemas"]["ChartBar"][];
             /** Strategy Instance Id */
             strategy_instance_id: string;
             /** Symbol */

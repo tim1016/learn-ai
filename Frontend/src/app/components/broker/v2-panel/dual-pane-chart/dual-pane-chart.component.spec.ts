@@ -237,6 +237,7 @@ describe('DualPaneChartComponent', () => {
         symbol: 'SPY',
         liveBars,
         histBars: oneMinuteBars,
+        histIndicatorBars: oneMinuteBars,
         historyDataTimeframe: '1m',
         historyTimeframe: '1m',
       },
@@ -262,11 +263,72 @@ describe('DualPaneChartComponent', () => {
     expect(screen.getByText('No candles in this window')).toBeTruthy();
 
     fixture.componentRef.setInput('histBars', fifteenMinuteBars);
+    fixture.componentRef.setInput('histIndicatorBars', fifteenMinuteBars);
     fixture.componentRef.setInput('historyDataTimeframe', '15m');
     fixture.detectChanges();
     await waitFor(() => expect(chartMocks.calculateIndicators).toHaveBeenCalledWith(
       'SPY', fifteenMinuteBars, [expect.objectContaining({ name: 'ema', params: { length: 10 } })],
     ));
+  });
+
+  it('calculates Polygon indicators with warmup bars while drawing only display bars', async () => {
+    const user = userEvent.setup();
+    const warmupBars = [liveBar(1_699_999_880_000, 1_699_999_940_000)];
+    const displayBars = [liveBar(1_699_999_940_000, 1_700_000_000_000)];
+    const indicatorBars = [...warmupBars, ...displayBars];
+    await render(DualPaneChartComponent, {
+      inputs: {
+        symbol: 'SPY',
+        liveBars: [],
+        histBars: displayBars,
+        histIndicatorBars: indicatorBars,
+        historyDataTimeframe: '1m',
+        historyTimeframe: '1m',
+      },
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Expand market chart' }));
+    const rail = screen.getByRole('complementary', { name: 'Indicator picker rail' });
+    const trendButtons = within(rail).getAllByRole('button', { name: /trend/i });
+    await user.click(trendButtons[trendButtons.length - 1]);
+    await user.click(within(rail).getByRole('button', { name: 'Add', hidden: true }));
+    await user.click(within(rail).getByRole('button', { name: /add ema to chart/i }));
+    await user.click(screen.getByRole('tab', { name: '15m Delayed' }));
+
+    await waitFor(() => expect(chartMocks.calculateIndicators).toHaveBeenCalledWith(
+      'SPY', indicatorBars, [expect.objectContaining({ name: 'ema' })],
+    ));
+    expect(chartMocks.setData).toHaveBeenCalledWith([expect.objectContaining({
+      time: displayBars[0].start_ms / 1000,
+    })]);
+  });
+
+  it('does not hide a missing history-indicator contract behind display bars', async () => {
+    const user = userEvent.setup();
+    const displayBars = [liveBar(1_699_999_940_000, 1_700_000_000_000)];
+    const { fixture } = await render(DualPaneChartComponent, {
+      inputs: {
+        symbol: 'SPY',
+        liveBars: [],
+        histBars: displayBars,
+        histIndicatorBars: [],
+        historyDataTimeframe: '1m',
+        historyTimeframe: '1m',
+      },
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Expand market chart' }));
+    const rail = screen.getByRole('complementary', { name: 'Indicator picker rail' });
+    const trendButtons = within(rail).getAllByRole('button', { name: /trend/i });
+    await user.click(trendButtons[trendButtons.length - 1]);
+    await user.click(within(rail).getByRole('button', { name: 'Add', hidden: true }));
+    await user.click(within(rail).getByRole('button', { name: /add ema to chart/i }));
+    await user.click(screen.getByRole('tab', { name: '15m Delayed' }));
+
+    await fixture.whenStable();
+    expect(chartMocks.calculateIndicators).not.toHaveBeenCalledWith(
+      'SPY', displayBars, [expect.objectContaining({ name: 'ema' })],
+    );
   });
 
   it('emits a live resolution change when 1m is selected', async () => {

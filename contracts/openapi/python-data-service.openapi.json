@@ -10830,7 +10830,7 @@
         "type": "object"
       },
       "ChartHistoryResponse": {
-        "description": "Bounded Polygon chart response for one selected timeframe (\u00a78).\n\nThe server selects a calendar fetch window and returns only the most recent\nuseful display-bar count for that timeframe. The existing 7-day live\nresolver is not widened.",
+        "description": "Bounded Polygon chart response for one selected timeframe (\u00a78).\n\n``bars`` is the bounded display window. ``indicator_bars`` includes the\npreceding warmup candles required by every catalog-valid indicator recipe.\nThe existing 7-day live resolver is not widened.",
         "properties": {
           "as_of_ms": {
             "title": "As Of Ms",
@@ -10853,6 +10853,13 @@
           "from_ms": {
             "title": "From Ms",
             "type": "integer"
+          },
+          "indicator_bars": {
+            "items": {
+              "$ref": "#/components/schemas/ChartBar"
+            },
+            "title": "Indicator Bars",
+            "type": "array"
           },
           "strategy_instance_id": {
             "title": "Strategy Instance Id",
@@ -10889,6 +10896,7 @@
           "from_ms",
           "to_ms",
           "bars",
+          "indicator_bars",
           "fill_markers",
           "truncated",
           "as_of_ms"

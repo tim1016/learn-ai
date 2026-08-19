@@ -22,6 +22,7 @@ from app.lean_sidecar.trading_calendar import (
     session_window_for_date,
     session_windows_ms_utc,
 )
+from app.services.indicator_warmup_policy import INDICATOR_WARMUP_MULTIPLIER
 from app.services.polygon_client import PolygonClientService
 from app.utils.timestamps import now_ms_utc
 
@@ -82,8 +83,6 @@ logger = logging.getLogger(__name__)
 _POLYGON_MAX_BARS = 50_000
 _MINUTES_PER_DAY = 450
 _DAYS_PER_CHUNK = _POLYGON_MAX_BARS // _MINUTES_PER_DAY
-_WARMUP_MULTIPLIER = 5
-
 _ET = ZoneInfo("US/Eastern")
 
 # Default indicator configurations matching TradingView standard setup
@@ -666,7 +665,7 @@ def compute_warmup_start_date(
     multiplier: int = 1,
 ) -> str:
     """Step back from from_date enough calendar days to warm up indicators."""
-    warmup_bars = max_lookback * _WARMUP_MULTIPLIER
+    warmup_bars = max_lookback * INDICATOR_WARMUP_MULTIPLIER
     bars_per_day = {"minute": 390, "hour": 7, "day": 1}
     bpd = bars_per_day.get(timespan, 390) * multiplier
     warmup_days = max(1, (warmup_bars // bpd) + 2)

@@ -8,9 +8,9 @@ Two contracts:
   (the 7-day cap is untouched).
 
 - **Polygon** (``build_history_chart``): a bounded contract with five explicit
-  timeframes. Each has a target display-bar count and a calendar fetch window
-  large enough to survive nights, weekends, and holidays. Never a lifetime of
-  one-minute bars in one response.
+  timeframes. Each has a target display-bar count plus a catalog-derived
+  indicator warmup budget. The fetch start comes from completed NYSE session
+  spans, not calendar-day padding.
 
 Both panes decorate bars with truthful ``ibkr`` / ``polygon`` / ``mixed``
 source tags and project fill markers from SQLite-native ``FillRecord`` values.
@@ -27,7 +27,11 @@ from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.contract.models import OrderSide
 from app.broker.ibkr.models import IbkrMinuteBar
 from app.data_lake.polygon_fetcher import PolygonBar
-from app.lean_sidecar.trading_calendar import current_trading_session_window
+from app.lean_sidecar.trading_calendar import (
+    current_trading_session_window,
+    session_open_ms_utc,
+    session_start_for_bar_count,
+)
 from app.schemas.broker_v2_panel import (
     ChartBar,
     ChartFillMarker,
@@ -36,6 +40,8 @@ from app.schemas.broker_v2_panel import (
     ChartLiveResponse,
     ChartOverlayNoticeView,
 )
+from app.services.dataset_service import INDICATOR_CONFIGS
+from app.services.indicator_warmup_policy import configured_indicator_warmup_bars
 from app.services.live_chart_window import ChartWindowResult
 
 MS_PER_DAY = 86_400_000
@@ -44,30 +50,18 @@ MS_PER_DAY = 86_400_000
 class _HistoryTimeframeSpec:
     multiplier: int
     timespan: str
-    fetch_lookback_days: int
     display_bars: int
 
 
-# Each selection fetches enough calendar time to provide the target number of
-# market-session bars, then returns only the most recent visual window. The
-# larger fetch window absorbs closed sessions without asking the client to
-# guess a date range.
-#
-# ``fetch_lookback_days`` is sized for the worst *scheduled* week, not the
-# average one. 300 one-minute bars is ~0.8 of a 390-minute session, but a
-# holiday week can strand that window behind a closed day and a half-day:
-# early on the Monday after Thanksgiving the four preceding calendar days
-# hold only Friday's 210-minute early close, so a 4-day lookback returned a
-# short chart exactly when it was being watched live. Nine days clears any
-# NYSE holiday cluster; the display cap below still trims to the visual
-# window, so the wider fetch costs pages, never extra candles.
 _HISTORY_TIMEFRAME_SPECS: dict[ChartHistoryTimeframe, _HistoryTimeframeSpec] = {
-    "1m": _HistoryTimeframeSpec(1, "minute", 9, 300),
-    "15m": _HistoryTimeframeSpec(15, "minute", 24, 300),
-    "30m": _HistoryTimeframeSpec(30, "minute", 48, 300),
-    "1h": _HistoryTimeframeSpec(1, "hour", 96, 300),
-    "1d": _HistoryTimeframeSpec(1, "day", 550, 260),
+    "1m": _HistoryTimeframeSpec(1, "minute", 300),
+    "15m": _HistoryTimeframeSpec(15, "minute", 300),
+    "30m": _HistoryTimeframeSpec(30, "minute", 300),
+    "1h": _HistoryTimeframeSpec(1, "hour", 300),
+    "1d": _HistoryTimeframeSpec(1, "day", 260),
 }
+
+_INDICATOR_WARMUP_BARS = configured_indicator_warmup_bars(INDICATOR_CONFIGS)
 
 
 class ChartTimeframeError(ValueError):
@@ -220,10 +214,12 @@ def build_live_chart(
 class _HistoryPlan:
     multiplier: int
     timespan: str
-    from_ms: int
+    display_from_ms: int
     to_ms: int
     span_ms: int
     display_bars: int
+    indicator_bars: int
+    fetch_start: date
 
 
 def _plan_history(timeframe: ChartHistoryTimeframe, now_ms: int) -> _HistoryPlan:
@@ -231,20 +227,33 @@ def _plan_history(timeframe: ChartHistoryTimeframe, now_ms: int) -> _HistoryPlan
     span_ms = {"minute": spec.multiplier * 60_000, "hour": spec.multiplier * 3_600_000, "day": spec.multiplier * MS_PER_DAY}[
         spec.timespan
     ]
+    indicator_bars = spec.display_bars + _INDICATOR_WARMUP_BARS
+    fetch_start = session_start_for_bar_count(
+        now_ms,
+        target_bars=indicator_bars,
+        bar_span_ms=None if spec.timespan == "day" else span_ms,
+    )
+    display_start = session_start_for_bar_count(
+        now_ms,
+        target_bars=spec.display_bars,
+        bar_span_ms=None if spec.timespan == "day" else span_ms,
+    )
     return _HistoryPlan(
         multiplier=spec.multiplier,
         timespan=spec.timespan,
-        from_ms=max(0, now_ms - spec.fetch_lookback_days * MS_PER_DAY),
+        display_from_ms=session_open_ms_utc(display_start),
         to_ms=now_ms,
         span_ms=span_ms,
         display_bars=spec.display_bars,
+        indicator_bars=indicator_bars,
+        fetch_start=fetch_start,
     )
 
 
 def history_fill_window(timeframe: ChartHistoryTimeframe, now_ms: int) -> tuple[int, int]:
-    """Return the candidate fill interval for one Polygon timeframe request."""
+    """Return the display-bounded fill interval for one history request."""
     plan = _plan_history(timeframe, now_ms)
-    return plan.from_ms, plan.to_ms
+    return plan.display_from_ms, plan.to_ms
 
 
 async def build_history_chart(
@@ -263,7 +272,7 @@ async def build_history_chart(
     selection, rather than resampling or reusing a prior timeframe locally.
     """
     plan = _plan_history(timeframe, now_ms)
-    start = datetime.fromtimestamp(plan.from_ms / 1000, tz=UTC).date()
+    start = plan.fetch_start
     end = datetime.fromtimestamp(plan.to_ms / 1000, tz=UTC).date() + timedelta(days=1)
 
     polygon_bars = await bar_source(symbol, start, end, plan.multiplier, plan.timespan)
@@ -273,16 +282,18 @@ async def build_history_chart(
     polygon_bars = [
         bar
         for bar in polygon_bars
-        if plan.from_ms <= bar.t_ms and bar.t_ms + plan.span_ms <= plan.to_ms
+        if bar.t_ms + plan.span_ms <= plan.to_ms
     ]
     polygon_bars.sort(key=lambda bar: bar.t_ms)
 
     truncated = len(polygon_bars) > plan.display_bars
-    if truncated:
-        polygon_bars = polygon_bars[-plan.display_bars:]
-
-    bars = [_polygon_bar_to_chart_bar(bar, span_ms=plan.span_ms) for bar in polygon_bars]
-    display_from_ms = bars[0].start_ms if bars else plan.from_ms
+    polygon_bars = polygon_bars[-plan.indicator_bars :]
+    indicator_bars = [
+        _polygon_bar_to_chart_bar(bar, span_ms=plan.span_ms)
+        for bar in polygon_bars
+    ]
+    bars = indicator_bars[-plan.display_bars :]
+    display_from_ms = bars[0].start_ms if bars else plan.display_from_ms
     markers = markers_in_window(fills, from_ms=display_from_ms, to_ms=plan.to_ms)
     return ChartHistoryResponse(
         strategy_instance_id=strategy_instance_id,
@@ -291,6 +302,7 @@ async def build_history_chart(
         from_ms=display_from_ms,
         to_ms=plan.to_ms,
         bars=bars,
+        indicator_bars=indicator_bars,
         fill_markers=markers,
         truncated=truncated,
         as_of_ms=now_ms,

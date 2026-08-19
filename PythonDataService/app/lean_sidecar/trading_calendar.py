@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -28,6 +28,8 @@ _UTC = ZoneInfo("UTC")
 _CALENDAR_NAME = "NYSE"
 _CALENDAR = mcal.get_calendar(_CALENDAR_NAME)
 _LOOKBACK_DAYS = 14
+_BAR_COUNT_CHUNK_DAYS = 366
+_UNIX_EPOCH_DATE = date(1970, 1, 1)
 _REGULAR_CLOSE_MINUTE_ET = 16 * 60
 
 NyseSessionState = Literal["RTH_OPEN", "CLOSED"]
@@ -194,6 +196,56 @@ def expected_sessions(start: date, end: date) -> list[date]:
     """
     schedule = _schedule(start, end)
     return sorted(ts.date() for ts in schedule.index)
+
+
+def session_start_for_bar_count(
+    now_ms: int,
+    *,
+    target_bars: int,
+    bar_span_ms: int | None,
+) -> date:
+    """Return the earliest NYSE session needed for ``target_bars``.
+
+    Intraday budgets count only whole scheduled spans completed by ``now_ms``;
+    daily budgets count completed sessions. The search expands over the NYSE
+    schedule until the requested budget is covered, so weekends, holidays,
+    half-days, and the partial current session affect the result directly.
+    ``bar_span_ms=None`` denotes one daily bar per completed session.
+    """
+    if now_ms < 0:
+        raise ValueError("now_ms must be non-negative int64 ms UTC")
+    if target_bars < 1:
+        raise ValueError("target_bars must be positive")
+    if bar_span_ms is not None and bar_span_ms < 1:
+        raise ValueError("bar_span_ms must be positive when supplied")
+
+    now_utc = pd.Timestamp(now_ms, unit="ms", tz="UTC")
+    chunk_end = now_utc.tz_convert(_ET).date()
+    remaining = target_bars
+    while True:
+        chunk_start = max(
+            _UNIX_EPOCH_DATE,
+            chunk_end - timedelta(days=_BAR_COUNT_CHUNK_DAYS - 1),
+        )
+        windows = session_windows_ms_utc(chunk_start, chunk_end)
+        for window in reversed(windows):
+            completed_until_ms = min(now_ms, window.close_ms_utc)
+            if bar_span_ms is None:
+                completed = int(completed_until_ms >= window.close_ms_utc)
+            else:
+                completed = max(
+                    0,
+                    (completed_until_ms - window.open_ms_utc) // bar_span_ms,
+                )
+            remaining -= completed
+            if remaining <= 0:
+                return window.session_date
+        if chunk_start == _UNIX_EPOCH_DATE:
+            raise LookupError(
+                f"only {target_bars - remaining} scheduled bars exist since the Unix epoch; "
+                f"cannot cover target_bars={target_bars}"
+            )
+        chunk_end = chunk_start - timedelta(days=1)
 
 
 def session_close_minute_et(d: date) -> int:

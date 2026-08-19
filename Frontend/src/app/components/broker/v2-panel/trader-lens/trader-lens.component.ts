@@ -80,6 +80,9 @@ export class TraderLensComponent {
     () => this.liveChart()?.overlay_notices ?? [],
   );
   protected readonly histBars = computed(() => this.histChart()?.bars ?? []);
+  protected readonly histIndicatorBars = computed(
+    () => this.histChart()?.indicator_bars ?? [],
+  );
   protected readonly histFillMarkers = computed(
     () => this.histChart()?.fill_markers ?? [],
   );

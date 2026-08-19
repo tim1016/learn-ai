@@ -17,6 +17,7 @@ from app.broker.alpaca.adapter import from_alpaca_trade_update
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.contract.models import OrderSide
 from app.data_lake.polygon_fetcher import PolygonBar
+from app.lean_sidecar.trading_calendar import session_open_ms_utc, session_start_for_bar_count
 from app.schemas.broker_bots import BotStatusView
 from app.services.broker_v2_panel import panel_chart_data_source, panel_data_source
 from app.services.broker_v2_panel.chart_projection_service import (
@@ -28,6 +29,7 @@ from app.services.broker_v2_panel.chart_projection_service import (
     history_fill_window,
     live_window,
 )
+from app.services.chart_indicator_service import ChartIndicatorService
 from app.services.live_chart_window import MAX_CHART_RANGE_MS, ChartWindowResult
 from tests.broker.v2panel.fixtures import SID
 
@@ -204,6 +206,42 @@ async def test_history_truncates_at_each_configured_display_cap(
     assert result.bars[-1].end_ms == _NOW
 
 
+async def test_history_keeps_indicator_warmup_outside_the_display_window() -> None:
+    supplied = _complete_bars(span_ms=60_000, count=800)
+
+    async def _source(symbol, start, end, source_multiplier, source_timespan):
+        return list(supplied)
+
+    result = await build_history_chart(
+        "1m",
+        [],
+        strategy_instance_id=SID,
+        symbol="SPY",
+        bar_source=_source,
+        now_ms=_NOW,
+    )
+
+    assert len(result.bars) == 300
+    assert len(result.indicator_bars) >= 800
+    assert result.indicator_bars[-300:] == result.bars
+    _, indicators = ChartIndicatorService().compute(
+        "SPY",
+        [
+            {
+                "t": bar.end_ms,
+                "o": float(bar.open),
+                "h": float(bar.high),
+                "l": float(bar.low),
+                "c": float(bar.close),
+                "v": bar.volume,
+            }
+            for bar in result.indicator_bars
+        ],
+        [{"name": "ema", "params": {"length": 500}}],
+    )
+    assert [indicator["id"] for indicator in indicators] == ["ema_500"]
+
+
 @pytest.mark.parametrize("timeframe", ["1m", "15m", "30m", "1h", "1d"])
 async def test_history_excludes_the_still_open_candle(timeframe: str) -> None:
     """A bar whose span has not elapsed is not a finished candle.
@@ -245,6 +283,19 @@ async def test_history_excludes_the_still_open_candle(timeframe: str) -> None:
 def test_unknown_timeframe_is_rejected() -> None:
     with pytest.raises(ChartTimeframeError):
         coerce_history_timeframe("5m")
+
+
+def test_history_fill_window_uses_only_the_display_budget() -> None:
+    expected_start = session_start_for_bar_count(
+        _NOW,
+        target_bars=300,
+        bar_span_ms=60_000,
+    )
+
+    from_ms, to_ms = history_fill_window("1m", _NOW)
+
+    assert from_ms == session_open_ms_utc(expected_start)
+    assert to_ms == _NOW
 
 
 async def test_history_bars_are_polygon_tagged_and_bounded() -> None:
