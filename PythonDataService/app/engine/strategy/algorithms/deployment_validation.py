@@ -25,7 +25,8 @@ from enum import StrEnum
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
-from app.engine.strategy.base import LoggedTrade, Strategy, ny_datetime
+from app.engine.strategy.base import LoggedTrade, Strategy
+from app.utils.timestamps import ny_datetime
 
 _DETECTION_START = time(9, 45)
 _STOP_AND_FLATTEN = time(15, 45)

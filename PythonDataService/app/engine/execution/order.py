@@ -7,7 +7,7 @@ from datetime import datetime
 from decimal import Decimal
 from enum import Enum
 
-from app.utils.timestamps import to_ms_utc
+from app.utils.timestamps import require_timestamp_ms
 
 
 class Direction(Enum):
@@ -87,7 +87,7 @@ class Order:
         ``time`` remains a temporary historical-fixture input alias. It is
         normalized on construction and never retained by the order object.
         """
-        normalized_ms = _require_timestamp_ms(submitted_at_ms, time, "submitted_at_ms")
+        normalized_ms = require_timestamp_ms(submitted_at_ms, time, "submitted_at_ms")
         self.order_id = order_id
         self.symbol = symbol
         self.quantity = quantity
@@ -166,7 +166,7 @@ class OrderEvent:
         """Create a fill event with the canonical numeric fill timestamp."""
         self.order_id = order_id
         self.symbol = symbol
-        self.filled_at_ms = _require_timestamp_ms(filled_at_ms, time, "filled_at_ms")
+        self.filled_at_ms = require_timestamp_ms(filled_at_ms, time, "filled_at_ms")
         self.fill_price = fill_price
         self.fill_quantity = fill_quantity
         self.direction = direction
@@ -179,15 +179,3 @@ class OrderEvent:
         self.exec_id = exec_id
         self.client_order_id = client_order_id
         self.exec_time_ms = exec_time_ms
-
-
-def _require_timestamp_ms(value: int | None, legacy: datetime | None, field_name: str) -> int:
-    if value is None:
-        if legacy is None:
-            raise TypeError(f"{field_name} is required")
-        value = to_ms_utc(legacy)
-    elif legacy is not None:
-        raise TypeError(f"received both {field_name} and legacy time")
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise TypeError(f"{field_name} must be an integer Unix millisecond value")
-    return value

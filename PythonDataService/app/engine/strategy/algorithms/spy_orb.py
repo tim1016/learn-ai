@@ -31,8 +31,9 @@ from decimal import Decimal
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
 from app.engine.framework.insight import Insight, InsightDirection
-from app.engine.strategy.base import LoggedTrade, Strategy, display_time, ny_datetime
+from app.engine.strategy.base import LoggedTrade, Strategy
 from app.lean_sidecar.trading_calendar import is_regular_session_ms_utc
+from app.utils.timestamps import display_time, ny_datetime
 
 
 @dataclass

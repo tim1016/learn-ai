@@ -49,7 +49,7 @@ if TYPE_CHECKING:
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
 from app.engine.indicators.base import BarIndicator, Indicator
-from app.engine.strategy.base import LoggedTrade, Strategy, display_time
+from app.engine.strategy.base import LoggedTrade, Strategy
 from app.engine.strategy.spec import schema as S
 from app.engine.strategy.spec.indicators import build_indicator, is_bar_indicator
 from app.engine.strategy.spec.primitives import (
@@ -57,6 +57,7 @@ from app.engine.strategy.spec.primitives import (
     EvalContext,
     Primitive,
 )
+from app.utils.timestamps import display_time
 
 
 @dataclass

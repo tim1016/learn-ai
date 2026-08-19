@@ -52,8 +52,9 @@ from app.engine.execution.order import Direction, OrderEvent
 from app.engine.framework.insight import Insight, InsightDirection
 from app.engine.indicators.ema import ExponentialMovingAverage
 from app.engine.indicators.rsi import RelativeStrengthIndex
-from app.engine.strategy.base import DecisionSnapshot, LoggedTrade, Strategy, display_time
+from app.engine.strategy.base import DecisionSnapshot, LoggedTrade, Strategy
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
+from app.utils.timestamps import display_time
 
 
 @dataclass

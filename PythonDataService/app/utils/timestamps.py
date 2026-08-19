@@ -14,8 +14,11 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime, tzinfo
 from numbers import Real
+from zoneinfo import ZoneInfo
 
 type Clock = Callable[[], int]
+
+_NY = ZoneInfo("America/New_York")
 
 
 def now_ms_utc() -> int:
@@ -59,6 +62,39 @@ def datetime_at_ms(timestamp_ms: int, *, tz: tzinfo = UTC) -> datetime:
     calendar date, wall-clock time, or display string.
     """
     return datetime.fromtimestamp(timestamp_ms / 1000, tz=tz)
+
+
+def ny_datetime(timestamp_ms: int) -> datetime:
+    """Materialize an engine timestamp in America/New_York for local-only
+    session/calendar logic or an operator-facing log line — never store the
+    result; the canonical value stays ``int64 ms UTC``."""
+    return datetime_at_ms(timestamp_ms, tz=_NY)
+
+
+def display_time(timestamp_ms: int) -> str:
+    """Format a timestamp for an operator-facing strategy log line (ET, minute precision)."""
+    return ny_datetime(timestamp_ms).strftime("%Y-%m-%d %H:%M")
+
+
+def require_timestamp_ms(value: int | None, legacy: datetime | None, field_name: str) -> int:
+    """Resolve a canonical ``ms`` value from exactly one of ``value``/``legacy``.
+
+    Shared by every engine constructor fencing a temporary legacy-``datetime``
+    input alias (``TradeBar``, ``Order``, ``OrderEvent``) — the alias is
+    converted immediately and never retained; new callers must supply
+    ``value`` (numeric ms) directly. Raises if both or neither are given, or
+    if ``value`` is present but not an ``int`` (rejecting ``bool``, which is
+    an ``int`` subclass).
+    """
+    if value is None:
+        if legacy is None:
+            raise TypeError(f"{field_name} is required")
+        value = to_ms_utc(legacy)
+    elif legacy is not None:
+        raise TypeError(f"received both {field_name} and legacy time")
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{field_name} must be an integer Unix millisecond value")
+    return value
 
 
 def timestamp_like_to_ms_utc(value: object, *, field_name: str = "timestamp") -> int:

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
-from app.utils.timestamps import to_ms_utc
+from app.utils.timestamps import require_timestamp_ms
 
 
 @dataclass(frozen=True, init=False)
@@ -61,22 +61,8 @@ class TradeBar:
         are never retained on the bar, so all consumers receive only ms UTC.
         New callers must supply ``start_ms`` and ``end_ms``.
         """
-        if start_ms is None:
-            if time is None:
-                raise TypeError("TradeBar requires start_ms")
-            start_ms = to_ms_utc(time)
-        elif time is not None:
-            raise TypeError("TradeBar received both start_ms and legacy time")
-        if end_ms is None:
-            if end_time is None:
-                raise TypeError("TradeBar requires end_ms")
-            end_ms = to_ms_utc(end_time)
-        elif end_time is not None:
-            raise TypeError("TradeBar received both end_ms and legacy end_time")
-        if isinstance(start_ms, bool) or not isinstance(start_ms, int):
-            raise TypeError("TradeBar start_ms must be an integer Unix millisecond value")
-        if isinstance(end_ms, bool) or not isinstance(end_ms, int):
-            raise TypeError("TradeBar end_ms must be an integer Unix millisecond value")
+        start_ms = require_timestamp_ms(start_ms, time, "TradeBar start_ms")
+        end_ms = require_timestamp_ms(end_ms, end_time, "TradeBar end_ms")
         if end_ms < start_ms:
             raise ValueError("TradeBar end_ms must not precede start_ms")
         object.__setattr__(self, "symbol", symbol)

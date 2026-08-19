@@ -32,7 +32,8 @@ from decimal import Decimal
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
 from app.engine.indicators.rsi import RelativeStrengthIndex
-from app.engine.strategy.base import LoggedTrade, Strategy, display_time
+from app.engine.strategy.base import LoggedTrade, Strategy
+from app.utils.timestamps import display_time
 
 
 @dataclass

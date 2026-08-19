@@ -29,7 +29,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
-from zoneinfo import ZoneInfo
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.commission import IbkrEquityCommissionModel
@@ -40,7 +39,7 @@ from app.engine.execution.order import (
     OrderEvent,
     OrderType,
 )
-from app.utils.timestamps import datetime_at_ms
+from app.utils.timestamps import ny_datetime
 
 # Set of FillModes whose fill_market_order may return None waiting for a
 # subsequent candidate bar. The engine's main loop uses this set to gate
@@ -138,7 +137,7 @@ class FillModel:
             # changing the contract: "first eligible minute bar after the
             # signal bar's trading date." Dates are transiently materialized
             # in NY for this decision; engine state stays numeric ms UTC.
-            if _eastern_date(next_bar.start_ms) <= _eastern_date(signal_bar.end_ms):
+            if ny_datetime(next_bar.start_ms).date() <= ny_datetime(signal_bar.end_ms).date():
                 return None
             fill_price = next_bar.open
             fill_time_ms = next_bar.start_ms
@@ -161,8 +160,3 @@ class FillModel:
             fee=self.compute_fee(quantity=int(order.quantity), fill_price=fill_price),
             tag=order.tag,
         )
-
-
-def _eastern_date(timestamp_ms: int):
-    """Derive an NY-local calendar date for one session-eligibility check."""
-    return datetime_at_ms(timestamp_ms, tz=ZoneInfo("America/New_York")).date()

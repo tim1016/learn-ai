@@ -28,7 +28,7 @@ from app.engine.execution.portfolio import Portfolio
 from app.engine.execution.signal_intent_executor import SignalSymbolExecutor
 from app.engine.execution.sizing import SimpleFloorSizing, SizingModel
 from app.engine.strategy.base import Strategy, StrategyContext
-from app.utils.timestamps import datetime_at_ms
+from app.utils.timestamps import ny_datetime
 
 
 @dataclass
@@ -260,8 +260,8 @@ class BacktestEngine:
             # defeat the whole cutoff.
             if (
                 self.execution_config.force_flat_at is not None
-                and _eastern_datetime(minute_bar.start_ms).time() >= self.execution_config.force_flat_at
-                and _eastern_datetime(minute_bar.start_ms).date() != last_force_flat_date
+                and ny_datetime(minute_bar.start_ms).time() >= self.execution_config.force_flat_at
+                and ny_datetime(minute_bar.start_ms).date() != last_force_flat_date
             ):
                 portfolio.clear_pending()
                 pending_fills.clear()
@@ -275,7 +275,7 @@ class BacktestEngine:
                     order_events.append(event)
                     strategy.on_order_event(event)
                 strategy.on_force_flat()
-                last_force_flat_date = _eastern_datetime(minute_bar.start_ms).date()
+                last_force_flat_date = ny_datetime(minute_bar.start_ms).date()
 
             # ----- Fill any deferred orders (NEXT_BAR_OPEN / NEXT_SESSION_OPEN)
             # with this bar as next_bar. DEFERRED_FILL_MODES is the single
@@ -318,14 +318,14 @@ class BacktestEngine:
             # against opening new exposure late, not against closing.
             if self.execution_config.session_entry_cutoff is not None and portfolio.pending_orders:
                 cutoff = self.execution_config.session_entry_cutoff
-                if _eastern_datetime(minute_bar.start_ms).time() >= cutoff:
+                if ny_datetime(minute_bar.start_ms).time() >= cutoff:
                     kept: list[Order] = []
                     for order in portfolio.pending_orders:
                         if _is_entry_order(order):
                             ctx.log(
                                 f"[SESSION CUTOFF] Dropped entry order "
                                 f"{order.order_id} for {order.symbol} qty={order.quantity} "
-                                f"at {_eastern_datetime(minute_bar.start_ms).time()} >= {cutoff}"
+                                f"at {ny_datetime(minute_bar.start_ms).time()} >= {cutoff}"
                             )
                             continue
                         kept.append(order)
@@ -544,10 +544,3 @@ class BacktestEngine:
         bar. Here we just return the attribute set there.
         """
         return getattr(consolidator, "_last_fired_bar", None)
-
-
-def _eastern_datetime(timestamp_ms: int):
-    """Materialize a timestamp only for local session-calendar checks."""
-    from zoneinfo import ZoneInfo
-
-    return datetime_at_ms(timestamp_ms, tz=ZoneInfo("America/New_York"))
