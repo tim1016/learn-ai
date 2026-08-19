@@ -164,6 +164,13 @@ separate authorities under ADRs 0022 and 0029.
   absolute-with-calendar-clamp versus calendar-relative cutoffs; then update the
   reference and pin Python/LEAN parity on regular and early-close days.
   [#1672](https://github.com/tim1016/learn-ai/issues/1672)
+- **Alpaca V2 chart crosshair bypasses the shared timestamp formatter
+  (medium).** `dual-pane-chart/dual-pane-chart.component.ts:77-89` constructs
+  `Intl.DateTimeFormat` inside the feature. The numeric input is unambiguous, but
+  formatting ownership still violates the temporal display rule. Delegate the
+  numeric-ms readout to the shared timestamp core and preserve local/ET/DST
+  behavior without retaining the rendered string.
+  [#1677](https://github.com/tim1016/learn-ai/issues/1677)
 
 ### Panel-layer flatness boundary (verified 2026-08-18)
 
@@ -268,10 +275,15 @@ here**; a dated correction note is on the ADR itself.
   family likewise has safety consumers beyond the two obvious ones:
   `services/account_directory.py`, `routers/account_reconciliation.py`,
   `engine/live/account_classifier.py:268`, `engine/live/account_safety.py:1315`,
-  `broker/ibkr/account_truth.py:857`. As with
+  `broker/ibkr/account_truth.py:857`. As with the temporal
+  `LivePortfolio.liquidate(datetime) → Order.time → pending_orders` boundary
+  (`engine/live/live_portfolio.py:1158-1196,1342-1351`;
+  `engine/execution/order.py:48-55`),
   `rollup_cache.py` under ADR 0036 and the legacy ENTER seam above: **do not
   write a regression test against a module scheduled for removal** — verify the
-  retirement closes it. [#1636](https://github.com/tim1016/learn-ai/issues/1636)
+  retirement closes it. #1636 acceptance must explicitly prove the native-time
+  queued-order boundary is unreachable/deleted, not preserved through a
+  compatibility adapter. [#1636](https://github.com/tim1016/learn-ai/issues/1636)
 
 **Vocabulary hand-off.** "Deploy state" names four artifact families; two retire
 with this plane. Naming the two survivors — SQLite registration/run folds, and
@@ -375,12 +387,14 @@ Shipped (ADR-0019, PR #910). Deferred, non-safety:
   golden fixture; the `iv30/` snapshot sits outside manifest governance.
   *(was F-0026; deferred in `auto-research/state.json`)*
 - **Temporal wire/storage contracts outside Alpaca V2 remain non-numeric
-  (medium).** The 2026-08-18 census confirmed 3 Pydantic, 29 C#, and 22 real
+  (medium).** The 2026-08-18 census confirmed 4 Pydantic, 29 C#, and 22 real
   TypeScript temporal field declarations using strings or native date types
   across golden fixtures, Data Lab, portfolio, market-data, validation, and
-  research surfaces. Group migrations by one source contract at a time; do not
-  create another cross-stack duplicate. The live Alpaca V2 wire/storage path is
-  not in this cluster.
+  research surfaces. The fourth Pydantic field is the active
+  `EngineBacktestRequest.force_flat_at: datetime.time` boundary whose OpenAPI
+  and generated TypeScript representation is a time string. Group migrations
+  by one source contract at a time; do not create another cross-stack duplicate.
+  The live Alpaca V2 wire/storage path is not in this cluster.
 - **Frontend naive `new Date(string)` — Tier 2 (medium).** Eighteen production
   calls still parse date-only or local-wall strings across validation,
   option-expiry, Options Lab, Strategy Builder, ticker ranges, Data Lab, Past

@@ -17,10 +17,12 @@ SQLite custody. This is diagnosis only. No temporal field was migrated.
 The live Alpaca contract is substantially cleaner than the repository-wide
 grep suggests. Its Pydantic models, persisted SQLite records, generated
 OpenAPI types, and V2 UI use `int64 ms UTC`; the V2 UI's only production
-`new Date(...)` call receives a number. None of the repository's 55 banned
-string/`DateTime` field declarations is on that path.
+`new Date(...)` call receives a number. None of the repository's 56 banned
+string/`DateTime`/native-time field declarations is on that path. The numeric
+input does not, however, excuse the V2 chart's feature-local timestamp
+formatter described below.
 
-Four live findings require tracked closure after adversarial refutation:
+Five live findings require tracked closure after adversarial refutation:
 
 1. **The live strategy boundary carries native datetimes.** The EMA adapter
    converts numeric market bars into `TradeBar.time` / `end_time` datetimes,
@@ -48,22 +50,29 @@ Four live findings require tracked closure after adversarial refutation:
    provenance note explicitly define those absolute clocks, while the temporal
    rule bans hardcoded session logic. The code therefore cannot be changed to
    relative offsets without first resolving which contract governs half-days.
+5. **The V2 chart formats timestamps outside the shared display authority.**
+   `dual-pane-chart.component.ts` constructs `Intl.DateTimeFormat` directly for
+   its crosshair readout. Its input is numeric and its timezone selection is
+   explicit, but the temporal rule separately requires all timestamp formatting
+   to live in the shared display component or its backing formatter.
 
-These are four independently testable seams: in-flight bar representation,
-live liveness, scheduled extended-session structure, and a strategy's undefined
-half-day contract. No new system ADR is warranted. The temporal rule already
-requires numeric in-flight values; ADR 0022 separates live liveness from
-scheduled structure; ADR 0029 assigns extended structure to capability
-evidence. The strategy-specific absolute-vs-relative choice must be made in its
-issue and reference note before implementation.
+These are five independently testable seams: in-flight bar representation,
+live liveness, scheduled extended-session structure, a strategy's undefined
+half-day contract, and timestamp-display ownership. No new system ADR is
+warranted. The temporal rule already requires numeric in-flight values and the
+shared display formatter; ADR 0022 separates live liveness from scheduled
+structure; ADR 0029 assigns extended structure to capability evidence. The
+strategy-specific absolute-vs-relative choice must be made in its issue and
+reference note before implementation.
 
 The rest of the measured debt is outside the live Alpaca path: active research,
 Data Lab, portfolio, and LEAN surfaces contain timestamp-string contracts and
 string parsing; ten active non-live mechanisms still encode session structure
-as constants. One further representation/session literal lives in the retiring
-ADR-0038 run ledger. They are recorded here and in `docs/known-gaps.md` so their
-counts are neither mistaken for live Alpaca risk nor stranded in this
-point-in-time audit.
+as constants. Two additional boundary mechanisms are deletion-owned ADR-0038
+debt: native time crosses the IBKR `LivePortfolio` order queue, and the retiring
+run ledger persists a hardcoded wall-clock close barrier. They are recorded here
+and in `docs/known-gaps.md` so their counts are neither mistaken for live Alpaca
+risk nor stranded in this point-in-time audit.
 
 ## Method and measured counts
 
@@ -81,7 +90,8 @@ count and are separated below.
 | `pd.to_datetime(...)` without `utc=True` | 51 textual; 49 executable; 1 non-UTC | The one is an explicit, bounded QC wall-clock import in `research/parity/fixture_data_reader.py`; 48 executable calls pass `utc=True`. |
 | `DateTime.Parse(` | 0 | Clean. Numeric conversion sites use `DateTimeOffset.FromUnixTimeMilliseconds`. |
 | `new Date(...)` | 131 textual; 125 executable | 95 take no argument, numeric parts, numbers, or an existing `Date`; 30 take a string/unknown. Of those, 7 are read-confirmed offset-bearing and 23 use non-offset strings (18 production, 5 tests). None of the 23 is in Alpaca V2. |
-| Banned temporal field type | 55 declarations | 3 Pydantic, 29 C#, 23 TS. One TS `time` is prose rather than a temporal value; two Python declarations are unused request models. None is on Alpaca V2. |
+| Feature-local `Intl.DateTimeFormat` | 10 executable constructors | Eight are production and two are tests. One production constructor is the canonical shared timestamp formatter; the Alpaca V2 dual-pane chart is one of the seven constructors outside that authority. |
+| Banned temporal field type | 56 declarations | 4 Pydantic, 29 C#, 23 TS. One TS `time` is prose rather than a temporal value; two Python declarations are unused request models. None is on Alpaca V2. |
 | `time(9, 30)` / `time(16, 0)` and equivalents | 0 exact call forms; 65 literal clock-constructor/replacement sites; 20 confirmed executable hardcode sites | AST classified all 65: 13 are session hardcodes and 52 are test instants or bounded date arithmetic. A semantic numeric/string pass confirmed 7 more hardcode sites. Four of the 20 are live Alpaca runtime sites, one is retiring, and 15 are active-nonlive/reference sites. |
 | `mcal.get_calendar(` | 1 | The sole call is in the canonical `lean_sidecar/trading_calendar.py` module. Clean. |
 
@@ -150,20 +160,20 @@ EMA parity required so a representation migration cannot silently change math.
 
 ### 1.3 Repository-wide banned field inventory (not live Alpaca)
 
-The 55 declaration hits classify as follows.
+The 56 declaration hits classify as follows.
 
 | Layer | Count | Read-confirmed classification |
 |---|---:|---|
-| Pydantic | 3 | `golden_fixtures.ValidationSummary.generated_at` is an active ISO wire value. `TradeRequest.timestamp` and `IndicatorRequest.timestamp` are string fields with no importer/caller beyond their definitions. |
+| Pydantic | 4 | `golden_fixtures.ValidationSummary.generated_at` is an active ISO wire value. `EngineBacktestRequest.force_flat_at` is an active native `datetime.time` request field serialized by OpenAPI as `string` / `format: time`. `TradeRequest.timestamp` and `IndicatorRequest.timestamp` are string fields with no importer/caller beyond their definitions. |
 | C# | 29 | 28 `DateTime` fields plus `PolygonResponses.TradeData.Timestamp: string`. They belong to Data Lab, market-data, portfolio, validation, and research DTO/entity/GraphQL surfaces. They are active non-Alpaca-v2 debt; EF persists many of them as `DateTime`, and GraphQL exposes `DateTime!` (for example `PortfolioSnapshot.timestamp`). |
 | TypeScript | 23 | 22 real string temporal values across generated validation/backtest types, portfolio GraphQL, Data Lab sessions, jobs, a CSV row, and mock edge data. `WorkedExampleRow.time` is explanatory table prose and is a semantic false positive. Several declarations mirror the same C#/Python wire value and are counted because the contract is duplicated at each layer. |
 
-Exact declaration groups (property multiplicity in parentheses) make the 55
+Exact declaration groups (property multiplicity in parentheses) make the 56
 reproducible:
 
 | Layer | Files / fields |
 |---|---|
-| Pydantic (3) | `models/requests.py`: `TradeRequest.timestamp`, `IndicatorRequest.timestamp` (2); `routers/golden_fixtures.py`: `ValidationSummary.generated_at` (1). |
+| Pydantic (4) | `models/requests.py`: `TradeRequest.timestamp`, `IndicatorRequest.timestamp` (2); `routers/golden_fixtures.py`: `ValidationSummary.generated_at` (1); `routers/engine.py`: `EngineBacktestRequest.force_flat_at` (1). |
 | C# (29) | `ISnapshotService.cs`: `DrawdownPoint.Timestamp` (1); `DataLabSession.cs`: created/updated (2); portfolio `Account`, `Position`, `PositionLot`, `Order`, `PortfolioSnapshot`, `ValidationResult` (10); market-data `StrategyExecution`, `StockAggregate`, `Ticker`, `Trade`, `OptionsIvSnapshot`, `SignalExperiment`, `TechnicalIndicator`, `ReferenceData`, `Quote`, `ResearchExperiment` (15); `PolygonResponses/TradeData.cs`: string `Timestamp` (1). |
 | TypeScript (23) | `jobs.service.ts` (2); `golden-fixtures.types.ts` (1); `data-lab-session.service.ts` (6); `graphql/portfolio-types.ts` (9); generated `broker.types.ts` (`force_flat_at`, `generated_at`) (2); Indicator Report CSV `time` (1); Edge mock `ts` (1); LEAN docs prose `time` (1 false positive). |
 
@@ -174,7 +184,8 @@ Conversely, `SnapshotService.ComputeDrawdownSeries` has a local
 it is transient arithmetic and not a DTO field, so it is allowed by the stated
 ban and excluded from the count.
 
-The generated `EngineBacktestRequest.force_flat_at: string` is active
+The owning `EngineBacktestRequest.force_flat_at: datetime.time` Pydantic field
+and its generated TypeScript `force_flat_at: string` counterpart are active
 non-Alpaca backtest debt, not the retiring ledger occurrence discussed in §4.
 They share a name and wall-clock representation but have different reachability;
 neither is smuggled into the Alpaca V2 binding contract.
@@ -217,6 +228,25 @@ the parse and conversion. This apparent violation is refuted for this charter.
 
 The research fixture is not the source of the live violation. The separately
 confirmed native `TradeBar` boundary is tracked in §1.2 and #1674.
+
+### 1.6 Alpaca V2 crosshair formatting bypasses the shared display authority
+
+`Frontend/src/app/components/broker/v2-panel/dual-pane-chart/
+dual-pane-chart.component.ts:77-89` receives chart-library seconds UTC, converts
+them to numeric milliseconds, and then constructs `Intl.DateTimeFormat`
+directly. The local/ET selection is explicit and the rendered string is not
+persisted, so this is not a timezone-ambiguity or representation defect.
+
+It is nevertheless a live compliance finding. `.claude/rules/temporal-rigor.md`
+requires timestamp formatting to live in the shared timestamp component or its
+backing formatter and explicitly rejects feature-local `Intl.DateTimeFormat`.
+Most Alpaca V2 timestamp displays already use `TimestampDisplayComponent`; this
+crosshair is the canonical panel's exception. The fix is to delegate the chart
+callback to the shared formatting core, extending that core with a named chart
+readout shape if its current granularities cannot preserve the intended display.
+It must not add a second feature-local helper with the same formatter inside.
+
+This is tracked by [#1677](https://github.com/tim1016/learn-ai/issues/1677).
 
 ## 2. Scheduled session structure
 
@@ -414,12 +444,19 @@ ADR-0037 legacy-JSONL custody itself contributed no confirmed hit: matching
 Pandas calls pass `utc=True`, custody evidence uses `*_ms` integers, and
 `rollup_cache.py` reads the canonical calendar window. The deprecated Angular
 IBKR bot-control folders also contain no string-valued `new Date(...)`
-candidate. `live_portfolio.liquidate(symbol, time: datetime)` is an internal
-engine parameter rather than a DTO/wire/storage field and is allowed transient
-arithmetic.
+candidate.
 
-The ADR-0038 evaluator/run-ledger plane does contain one confirmed temporal
-violation hidden from the typed-field grep by `live_config: dict`:
+The ADR-0038 IBKR evaluator/runtime plane contains two deletion-owned temporal
+boundary violations:
+
+- `LivePortfolio.liquidate(symbol, time: datetime)` forwards the native value to
+  `submit_market_order`, which stores it on `Order.time`, appends the order to
+  the long-lived `pending_orders` queue, and returns it
+  (`engine/live/live_portfolio.py:1158-1196,1342-1351`;
+  `engine/execution/order.py:48-55`). This is not transient arithmetic confined
+  to one function. The queued object crosses function and object boundaries.
+The run-ledger violation is hidden from the typed-field grep by
+`live_config: dict`:
 
 - `LiveConfig.force_flat_at` defaults to `time(15, 55)` specifically to target
   the normal 16:00 close (`engine/live/config.py:48-60`);
@@ -428,10 +465,14 @@ violation hidden from the typed-field grep by `live_config: dict`:
 - `_live_config_from_ledger` requires `force_flat_at` to be an `HH:MM` or
   `HH:MM:SS` string and converts it back to `time` (`engine/live/run.py:986-1001`).
 
-That violates both representation-at-rest and the no-hardcoded-session rule,
-but ADR 0038 Decision 1 / Consequence 6 already retires this run ledger with
-the IBKR evaluator plane. The resolution is deletion, not an `int64` migration.
-No standalone temporal issue is proposed while that retirement remains parked.
+The run-ledger path violates both representation-at-rest and the
+no-hardcoded-session rule. ADR 0038 Decision 1 / Consequence 6 already retires
+it with the IBKR evaluator plane. The `LivePortfolio` queue is the same retired
+IBKR execution lineage: #1636 must prove that the native-time
+`liquidate → Order.time → pending_orders` boundary is unreachable/deleted along
+with that control plane rather than preserve it behind a compatibility adapter.
+The resolution of both findings is deletion, not an `int64` migration, so no
+standalone temporal issue is proposed while that retirement is in flight.
 
 ## 5. Filed live issues
 
@@ -697,6 +738,58 @@ for wall-clock arithmetic, then converted back before return.
 6. No ISO/string/native datetime field is introduced at any boundary; all
    changed timestamps remain `int64 ms UTC`.
 
+### 5.5 Filed issue [#1677](https://github.com/tim1016/learn-ai/issues/1677): centralize the V2 chart crosshair formatter
+
+#### Title
+
+Alpaca V2: route chart crosshair timestamps through the shared display core
+
+#### Body
+
+**Source:** temporal-compliance charter #1643 and
+`docs/audits/temporal-compliance-2026-08-18.md`.
+
+##### Problem
+
+The canonical Alpaca V2 dual-pane chart formats its crosshair timestamp with a
+feature-local `Intl.DateTimeFormat` in
+`dual-pane-chart/dual-pane-chart.component.ts:77-89`. Its input is a numeric
+chart timestamp and its local/ET choice is explicit, but
+`.claude/rules/temporal-rigor.md` separately requires timestamp rendering to go
+through the shared timestamp display component or its backing formatter. The
+rest of the V2 panel already uses that shared authority.
+
+##### Required outcome
+
+Make the shared timestamp display core own the crosshair representation. The
+chart callback may adapt Lightweight Charts' numeric seconds to numeric
+milliseconds, but it must delegate the milliseconds and explicit display mode
+to the shared formatter. If the current shared granularities cannot express the
+readout, add one named chart-readout option to the shared core rather than a
+parallel formatter in the feature.
+
+##### Acceptance criteria
+
+1. `dual-pane-chart.component.ts` contains no direct `Intl.DateTimeFormat`,
+   `DatePipe`, or `toLocaleString` timestamp formatting and delegates its
+   crosshair readout to `shared/timestamp/timestamp-display.ts` (or the pipe that
+   directly backs it).
+2. The chart keeps numeric seconds/milliseconds until the rendering callback;
+   its display string is never stored, compared, or sent to a server.
+3. Local mode remains viewer-local. ET mode remains DST-aware
+   `America/New_York` and visibly identifies ET, consistent with the shared
+   display contract.
+4. The shared core, not the feature, owns any new chart-specific output shape.
+   Existing timestamp display modes remain unchanged for current consumers.
+5. Focused tests cover a numeric instant in local and ET modes, including a DST
+   boundary, and a source-level guard prevents feature-local timestamp
+   formatting from returning to the V2 chart.
+
+##### Verification seam
+
+Extend the shared timestamp formatter tests and the dual-pane-chart component
+tests. No broker or backend call is required.
+
 ## 6. Registered `docs/known-gaps.md` bullets
 
 - **Live Alpaca conflates scheduled phase with real-time market liveness
@@ -744,9 +837,17 @@ for wall-clock arithmetic, then converted back before return.
   preserve EMA/LEAN parity; do not add a live-only duplicate model.
   [#1674](https://github.com/tim1016/learn-ai/issues/1674)
 
+- **Alpaca V2 chart crosshair bypasses the shared timestamp formatter
+  (medium).** `dual-pane-chart/dual-pane-chart.component.ts:77-89` constructs
+  `Intl.DateTimeFormat` inside the feature. Its numeric input and explicit zone
+  avoid ambiguity but do not satisfy the display-authority rule. Delegate the
+  chart's numeric-ms rendering to the shared timestamp core; extend that core
+  once if a chart-readout shape is needed, and keep the display string ephemeral.
+  [#1677](https://github.com/tim1016/learn-ai/issues/1677)
+
 ## 7. Closure plan
 
-1. The four live issues are filed and their linked known-gap bullets land with
+1. The five live issues are filed and their linked known-gap bullets land with
    this documentation PR.
 2. Land the scheduled-authority corrections first: remove the invented
    extended fallback, then resolve and implement deployment-validation's
@@ -757,10 +858,14 @@ for wall-clock arithmetic, then converted back before return.
 4. Prove half-day, scheduled-RTH/vendor-closed, and missing/stale-evidence
    behavior at the named seams. Preserve calendar ownership for historical and
    scheduled questions.
-5. Close each issue only after its implementation PR removes its known-gap
+5. Route the dual-pane-chart crosshair through the shared timestamp formatting
+   authority and pin local/ET/DST presentation without changing numeric chart
+   data.
+6. Close each issue only after its implementation PR removes its known-gap
    bullet. Do not couple closure to the unrelated Data Lab/portfolio/LEAN
-   representation backlog or migrate the retiring run ledger.
+   representation backlog or migrate the retiring IBKR runtime/run ledger.
 
 No ADR step precedes implementation: the authority choices are already binding
-in ADRs 0022 and 0029. The retiring `force_flat_at` violation resolves only with
-the separately scoped ADR-0038 deletion; do not spend a migration on it.
+in ADRs 0022 and 0029. The retiring `force_flat_at` and
+`LivePortfolio.liquidate → Order.time → pending_orders` violations resolve only
+with the separately scoped ADR-0038 deletion; do not spend a migration on them.
