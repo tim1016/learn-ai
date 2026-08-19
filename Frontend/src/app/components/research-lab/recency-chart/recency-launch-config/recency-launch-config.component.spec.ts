@@ -64,6 +64,22 @@ describe("RecencyLaunchConfigComponent", () => {
     expect(screen.getByText("1 run")).not.toBeNull();
   });
 
+  it("keeps strategy selection interactive through its accessible checkbox", async () => {
+    const { view } = await renderConfig([makeStrategy()]);
+    await view.fixture.whenStable();
+    const strategy = screen.getByRole("checkbox", { name: /ema crossover \(2 bps\)/i });
+
+    fireEvent.click(strategy);
+    await view.fixture.whenStable();
+
+    expect(screen.getByText("0 selected")).not.toBeNull();
+
+    fireEvent.click(strategy);
+    await view.fixture.whenStable();
+
+    expect(screen.getByText("1 selected")).not.toBeNull();
+  });
+
   it("turns entered symbols into removable timeline lanes", async () => {
     const { view } = await renderConfig([makeStrategy()]);
     const symbols = screen.getByRole("textbox", { name: "Symbols" });

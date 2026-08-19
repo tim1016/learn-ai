@@ -1,0 +1,52 @@
+<section class="border-b border-slate-700 p-4 sm:p-6" aria-labelledby="recency-duration-heading">
+  <div class="mb-4 flex flex-wrap items-baseline justify-between gap-2">
+    <h3 id="recency-duration-heading" class="m-0 text-base font-semibold text-slate-100">Lookback</h3>
+    <p class="m-0 text-xs text-slate-400">How far back to include completed trades.</p>
+  </div>
+  <div class="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5" role="radiogroup" aria-label="Lookback duration">
+    @for (option of durationOptions; track option.preset) {
+      @let selected = preset() === option.preset;
+      <label
+        class="flex min-h-12 cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors"
+        [class.border-blue-400]="selected"
+        [class.bg-blue-950]="selected"
+        [class.text-blue-100]="selected"
+        [class.border-slate-700]="!selected"
+        [class.bg-slate-950]="!selected"
+        [class.text-slate-300]="!selected"
+        [for]="'recency-duration-' + option.preset"
+      >
+        <p-radiobutton
+          [formControl]="durationControl"
+          name="duration"
+          [value]="option.preset"
+          [inputId]="'recency-duration-' + option.preset"
+          [ariaLabel]="option.label"
+          (onClick)="presetChange.emit(option.preset)"
+        />
+        <span>{{ option.label }}</span>
+      </label>
+    }
+  </div>
+  @if (preset() === 'custom') {
+    <label class="mt-4 flex flex-wrap items-center gap-3 text-sm text-slate-300" for="recency-custom-months">
+      <span>Custom months</span>
+      <input
+        pInputText
+        id="recency-custom-months"
+        class="w-24"
+        type="number"
+        min="1"
+        max="24"
+        [value]="customMonths()"
+        [attr.aria-invalid]="customMonthsError() ? 'true' : null"
+        [attr.aria-describedby]="customMonthsError() ? 'recency-custom-months-error' : null"
+        [class.border-red-400]="customMonthsError() !== null"
+        (input)="onCustomMonthsInput($event)"
+      />
+      @if (customMonthsError(); as message) {
+        <small id="recency-custom-months-error" class="basis-full text-xs font-medium text-red-300" role="alert">{{ message }}</small>
+      }
+    </label>
+  }
+</section>

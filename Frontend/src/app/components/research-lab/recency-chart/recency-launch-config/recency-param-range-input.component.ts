@@ -1,4 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, input, model } from "@angular/core";
+import { ButtonModule } from "primeng/button";
+import { InputText } from "primeng/inputtext";
 import type { LowHighStepRange, ParamRange, ValueListRange } from "./recency-param-range";
 
 function parseValuesList(raw: string): number[] {
@@ -16,6 +18,7 @@ function parseValuesList(raw: string): number[] {
  */
 @Component({
   selector: "app-recency-param-range-input",
+  imports: [ButtonModule, InputText],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: "./recency-param-range-input.component.html",
   styleUrl: "./recency-param-range-input.component.scss",
