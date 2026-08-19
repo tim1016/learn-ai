@@ -255,23 +255,17 @@ consequences, re-verified line-by-line against current code. **Two of ADR 0038's
 own consequence statements did not survive that re-verification and are corrected
 here**; a dated correction note is on the ADR itself.
 
-- **`services/end_day_intent.py` is dead code (no action; retires with the
-  plane).** 241 lines; zero importers of `app.services.end_day_intent` anywhere
-  in the repo (`live_engine.py`'s `_end_day_intent_active` is an unrelated
-  instance attribute). Evaluator-plane, retires under ADR 0038 Decision 1.
-  Recorded so its deletion is not mistaken for a behaviour change. [#1635](https://github.com/tim1016/learn-ai/issues/1635)
-
 - **Evaluator-plane retirement inventory (no action here; sequence after the
   discriminator lands).** `engine/live/bot_lifecycle_evaluator.py`, its
   disposition receipt log, `engine/live/bot_lifecycle_fence.py`, the
   `routers/live_instances.py` deploy/start path, `run_ledger.json`, and the
   IBKR-lineage account-binding `DEPLOYED`/`ACTIVE`/`RETIRED` family. **The
   evaluator's live callers must be migrated or deleted first** — a repo sweep for
-  `BotLifecycleEvaluator(` finds nine sites beyond the router:
+  `BotLifecycleEvaluator(` finds eight sites beyond the router:
   `engine/live/run.py:1877`, `:1961`, `:3022`; `engine/live/host_daemon.py:1340`;
   `engine/live/lifecycle_exit_finalizer.py:51`, `:115`;
-  `services/bot_deletion.py:480`; `services/risk_reducing_lifecycle_intent.py:77`;
-  and `services/end_day_intent.py:60` (dead, see above). The account-binding
+  `services/bot_deletion.py:480`; and
+  `services/risk_reducing_lifecycle_intent.py:77`. The account-binding
   family likewise has safety consumers beyond the two obvious ones:
   `services/account_directory.py`, `routers/account_reconciliation.py`,
   `engine/live/account_classifier.py:268`, `engine/live/account_safety.py:1315`,
