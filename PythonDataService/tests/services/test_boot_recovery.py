@@ -51,6 +51,7 @@ from tests.services.test_bot_runner import (
     _CustodyClerk,
     _FakeFeed,
     _flat_start_guard,
+    _fresh_live_market_liveness,  # noqa: F401 -- autouse fixture, registered by import
     _lifecycle_json,
     _SqliteRuntimeBroker,
 )

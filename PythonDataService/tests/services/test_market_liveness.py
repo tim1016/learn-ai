@@ -58,7 +58,7 @@ def test_open_clock_and_halted_symbol_never_claim_tradability() -> None:
     assert fact.reason_code == "SYMBOL_HALTED"
 
 
-def test_scheduled_rth_can_still_be_closed_by_fresh_broker_evidence() -> None:
+def test_closed_market_clock_overrides_a_tradable_symbol_status() -> None:
     fact = compose_market_liveness(
         "SPY",
         now_ms=_NOW,

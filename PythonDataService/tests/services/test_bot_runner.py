@@ -2535,6 +2535,73 @@ async def test_unknown_liveness_blocks_entry_but_never_blocks_exit(
 
 
 @pytest.mark.asyncio
+async def test_halted_liveness_blocks_entry_but_never_blocks_exit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1671 AC4: a market-wide OPEN clock with a HALTED symbol must never
+    claim tradability at the actual submit-blocking layer (not just at the
+    compose/display layers, which have their own dedicated tests)."""
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
+    repo.register_strategy_instance(strategy_instance_id=_SID, symbol="SPY", config_hash="config-1")
+    clerk = _FakeClerk(repository=repo)
+    clerk.authority_kind = "sqlite"
+    clerk.account_id = "PA-TEST"
+    monkeypatch.setattr(
+        bot_trade_strategy,
+        "market_liveness_fact",
+        lambda symbol, observed_at_ms: compose_market_liveness(
+            symbol,
+            now_ms=observed_at_ms,
+            market_clock=MarketClockLivenessEvidence(
+                state="OPEN",
+                source="test.clock",
+                observed_at_ms=observed_at_ms,
+                vendor_timestamp_ms=observed_at_ms,
+            ),
+            symbol_status=SymbolTradingStatusEvidence(
+                symbol=symbol,
+                state="HALTED",
+                source="test.symbol-status",
+                observed_at_ms=observed_at_ms,
+                source_timestamp_ms=observed_at_ms,
+            ),
+        ),
+    )
+    bars = [
+        _green_bar(_WIN_START_MS + 60_000),
+        _green_bar(_WIN_START_MS + 120_000),  # ENTER is refused by liveness.
+        _red_bar(_WIN_START_MS + 180_000),
+        _red_bar(_WIN_START_MS + 240_000),
+        _red_bar(_WIN_START_MS + 300_000),  # EXIT must remain executable.
+    ]
+    registry = _registry(tmp_path, _FakeFeed(bars, mode="hold"))
+    set_alpaca_clerk(clerk)
+    try:
+        await registry.deploy(
+            broker="alpaca",
+            strategy_instance_id=_SID,
+            strategy_key="deployment_validation",
+            symbol="SPY",
+            mode="trade",
+            quantity=1,
+        )
+        await _wait_for(lambda: len(clerk.calls) == 1)
+        await registry.stop("alpaca", _SID)
+
+        assert [call["purpose"] for call in clerk.calls] == ["EXIT"]
+        decisions = repo.decision_receipt_tail(strategy_instance_id=_SID, limit=5)
+        blocked = next(decision for decision in decisions if decision.outcome == "blocked")
+        blocked_facts = json.loads(blocked.facts_json)
+        assert blocked_facts["reason_code"] == "SYMBOL_HALTED"
+        assert blocked_facts["market_liveness"]["state"] == "HALTED"
+        assert decisions[-1].outcome == "exit_intent"
+    finally:
+        set_alpaca_clerk(None)
+        repo.close()
+
+
+@pytest.mark.asyncio
 async def test_sqlite_trade_bot_does_not_label_an_uncertain_effect_as_entered(
     tmp_path: Path,
 ) -> None:

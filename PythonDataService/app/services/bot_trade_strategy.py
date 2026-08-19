@@ -223,6 +223,12 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
             continue
         intent = evaluation.intents[0]
         intent_id = f"{intent.bar_close_ms}:{intent.kind.value}"
+        # The liveness gate applies only to ENTER — creating new exposure.
+        # EXIT is deliberately exempt and always reaches the Clerk unblocked:
+        # an emergency risk-reduction close must never be held hostage by
+        # missing/stale liveness evidence (#1671 AC3). If a distinct
+        # cancellation primitive is ever added, it must be exempted the
+        # same way for the same reason.
         if intent.kind is SignalIntentKind.ENTER:
             liveness = market_liveness_fact(binding.symbol, now_ms_utc())
             if liveness.state != "TRADABLE":

@@ -37,6 +37,7 @@ def _bot(
     market_state: str = "AVAILABLE",
     runtime_state: str = "READY",
     liveness_state: str = "TRADABLE",
+    scheduled_phase: str = "UNKNOWN",
     observed_at_ms: int = _NOW - 1_000,
 ) -> StartRunFacts:
     return StartRunFacts(
@@ -61,6 +62,7 @@ def _bot(
             last_bar_ms=None,
             observed_at_ms=observed_at_ms,
             reason=None,
+            scheduled_phase=scheduled_phase,
         ),
         market_liveness=_liveness(liveness_state, observed_at_ms=observed_at_ms),
     )
@@ -189,6 +191,21 @@ def test_start_admission_allows_only_proven_absence_and_flat_custody() -> None:
 def test_start_admission_blocks_fresh_market_wide_closed_evidence() -> None:
     decision = evaluate_run_admission(
         _bot(liveness_state="CLOSED"),
+        _clerk(),
+        evaluated_at_ms=_NOW,
+    )
+
+    assert decision.allowed is False
+    assert decision.reason_code == "MARKET_LIVENESS_CLOSED"
+
+
+def test_start_admission_blocks_market_wide_closed_even_during_scheduled_rth() -> None:
+    """#1671 AC4: scheduled RTH must never override fresh live evidence that
+    the market is actually closed (e.g. an emergency early close) — the
+    calendar and the broker's live clock can disagree, and live evidence
+    wins for the admission decision."""
+    decision = evaluate_run_admission(
+        _bot(liveness_state="CLOSED", scheduled_phase="RTH"),
         _clerk(),
         evaluated_at_ms=_NOW,
     )
