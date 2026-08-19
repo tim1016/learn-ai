@@ -426,7 +426,7 @@ def _audit_fixture(
                         qc_fill=qc,
                         reason=(
                             f"fill {qc.fill_price} outside minute-bar range "
-                            f"[{bar.low}, {bar.high}] at {bar.time.isoformat()} "
+                            f"[{bar.low}, {bar.high}] at {bar.start_ms} "
                             f"(tolerance {atol})"
                         ),
                         expected_open=bar.open,

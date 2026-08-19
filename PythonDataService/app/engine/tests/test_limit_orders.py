@@ -16,14 +16,17 @@ Fills land AT the limit price with no slippage, plus commission.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import BacktestEngine
 from app.engine.execution.execution_config import ExecutionConfig
 from app.engine.execution.order import Direction
 from app.engine.strategy.base import Strategy
+
+_ET = ZoneInfo("America/New_York")
 
 
 class _StaticBarReader:
@@ -74,7 +77,7 @@ class _LimitStrategy(Strategy):
         self.ctx.portfolio.submit_limit_order(
             self._symbol,
             quantity=100 * self._sign,
-            time=bar.end_time,
+            submitted_at_ms=bar.end_ms,
             limit_price=self._limit_price,
             tag="entry-limit",
             take_profit_price=self._tp,
@@ -113,13 +116,13 @@ class _EntryThenExitLimitStrategy(Strategy):
         self._count += 1
         if idx == 0:
             self.ctx.portfolio.submit_market_order(
-                self._symbol, 100, bar.end_time, tag="entry"
+                self._symbol, 100, bar.end_ms, tag="entry"
             )
         elif idx == self._exit_on:
             self.ctx.portfolio.submit_limit_order(
                 self._symbol,
                 quantity=-100,
-                time=bar.end_time,
+                submitted_at_ms=bar.end_ms,
                 limit_price=self._exit_limit,
                 tag="exit-limit",
             )
@@ -136,7 +139,7 @@ def _bar(
     low: str = "500",
     close: str = "500",
 ) -> TradeBar:
-    start = datetime(2024, 1, 2, hour, minute, tzinfo=UTC)
+    start = datetime(2024, 1, 2, hour, minute, tzinfo=_ET)
     return TradeBar(
         symbol="SPY",
         time=start,
@@ -365,7 +368,7 @@ def test_limit_rests_across_bars_until_condition_met():
 
     assert len(strategy.order_events) == 1
     fill = strategy.order_events[0]
-    assert fill.time == datetime(2024, 1, 2, 15, 36, tzinfo=UTC)
+    assert fill.filled_at_ms == int(datetime(2024, 1, 2, 15, 36, tzinfo=_ET).timestamp() * 1000)
 
 
 # ===========================================================================

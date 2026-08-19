@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime
 from decimal import Decimal
 
 from app.engine.framework.insight import Insight, InsightDirection
@@ -23,6 +22,7 @@ from app.engine.framework.insight_scorer import (
     DefaultInsightScoreFunction,
     InsightScoreFunction,
 )
+from app.utils.timestamps import datetime_at_ms
 
 
 @dataclass
@@ -107,7 +107,7 @@ class InsightManager:
 
     def step(
         self,
-        utc_time: datetime,
+        timestamp_ms: int,
         current_prices: dict[str, Decimal],
     ) -> list[Insight]:
         """Process a time step — score any insights that have expired.
@@ -119,22 +119,22 @@ class InsightManager:
         for symbol, insights in self._insights_by_symbol.items():
             price = current_prices.get(symbol, Decimal(0))
             for insight in insights:
-                if insight.is_expired(utc_time) and not insight.score.is_final_score:
+                if insight.is_expired(timestamp_ms) and not insight.score.is_final_score:
                     insight.reference_value_final = price
                     self._scorer.score(insight)
-                    insight.score.finalize(utc_time)
+                    insight.score.finalize(timestamp_ms)
                     newly_scored.append(insight)
         return newly_scored
 
     def get_active_insights(
         self,
-        utc_time: datetime,
+        timestamp_ms: int,
         symbol: str | None = None,
     ) -> list[Insight]:
         """Return insights whose prediction period has not yet elapsed."""
         if symbol:
-            return [i for i in self._insights_by_symbol.get(symbol, []) if i.is_active(utc_time)]
-        return [i for ilist in self._insights_by_symbol.values() for i in ilist if i.is_active(utc_time)]
+            return [i for i in self._insights_by_symbol.get(symbol, []) if i.is_active(timestamp_ms)]
+        return [i for ilist in self._insights_by_symbol.values() for i in ilist if i.is_active(timestamp_ms)]
 
     def get_scored_insights(self) -> list[Insight]:
         """Return all insights that have been scored (finalized)."""
@@ -181,7 +181,8 @@ class InsightManager:
         # ── Accuracy by hour of day ──
         hour_stats: dict[int, dict] = {}
         for insight in scored:
-            hour = insight.generated_time.hour
+            generated_at = datetime_at_ms(insight.generated_at_ms)
+            hour = generated_at.hour
             if hour not in hour_stats:
                 hour_stats[hour] = {"count": 0, "correct": 0}
             hour_stats[hour]["count"] += 1
@@ -194,7 +195,8 @@ class InsightManager:
         # ── Accuracy by quarter ──
         quarter_stats: dict[str, dict] = {}
         for insight in scored:
-            q = f"{insight.generated_time.year}-Q{(insight.generated_time.month - 1) // 3 + 1}"
+            generated_at = datetime_at_ms(insight.generated_at_ms)
+            q = f"{generated_at.year}-Q{(generated_at.month - 1) // 3 + 1}"
             if q not in quarter_stats:
                 quarter_stats[q] = {"count": 0, "correct": 0}
             quarter_stats[q]["count"] += 1

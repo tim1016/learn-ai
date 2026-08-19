@@ -16,6 +16,7 @@ from app.engine.data.polygon_export import (
     polygon_bar_to_trade_bar,
 )
 from app.engine.data.trade_bar import TradeBar
+from app.utils.timestamps import datetime_at_ms
 
 EASTERN = ZoneInfo("America/New_York")
 
@@ -28,8 +29,8 @@ def testpolygon_bar_to_trade_bar_converts_ms_to_et_start():
     bar = polygon_bar_to_trade_bar("SPY", raw)
 
     assert bar.symbol == "SPY"
-    assert bar.time.astimezone(EASTERN) == datetime(2024, 4, 1, 10, 30, tzinfo=EASTERN)
-    assert bar.end_time == bar.time + timedelta(minutes=1)
+    assert datetime_at_ms(bar.start_ms, tz=EASTERN) == datetime(2024, 4, 1, 10, 30, tzinfo=EASTERN)
+    assert bar.end_ms == bar.start_ms + int(timedelta(minutes=1).total_seconds() * 1000)
 
 
 def testpolygon_bar_to_trade_bar_prices_are_exact_decimal():
@@ -100,4 +101,4 @@ def testgroup_by_trading_date_sorts_bars_chronologically():
     buckets = group_by_trading_date(bars)
 
     day_bars = buckets[date(2024, 4, 1)]
-    assert [b.time for b in day_bars] == sorted([b.time for b in bars])
+    assert [b.start_ms for b in day_bars] == sorted(b.start_ms for b in bars)

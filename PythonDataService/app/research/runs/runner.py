@@ -43,7 +43,7 @@ from app.research.runs.result import (
     RunTrade,
 )
 from app.research.runs.window import summarize_window
-from app.utils.timestamps import now_ms_utc, to_ms_utc
+from app.utils.timestamps import datetime_at_ms, now_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +150,7 @@ def _ms_to_run_date(ms: int) -> Date:
     return datetime.fromtimestamp(ms / 1000, tz=_NY).date()
 
 
-def _bars_held(entry_time: datetime, exit_time: datetime, resolution_minutes: int) -> int:
+def _bars_held(entry_time_ms: int, exit_time_ms: int, resolution_minutes: int) -> int:
     """Approximate the number of consolidated bars an open position spanned.
 
     Computed from the time delta and the spec's resolution. For purely
@@ -160,7 +160,7 @@ def _bars_held(entry_time: datetime, exit_time: datetime, resolution_minutes: in
     because Phase D Monte Carlo only needs the *distribution* shape,
     not absolute consolidated-bar counts. Documented limitation.
     """
-    delta_min = (exit_time - entry_time).total_seconds() / 60.0
+    delta_min = (exit_time_ms - entry_time_ms) / 60_000
     if delta_min <= 0:
         return 0
     return max(1, round(delta_min / resolution_minutes))
@@ -184,23 +184,23 @@ def _build_drawdown_curve(equity_curve: list[EquitySnapshot]) -> list[DrawdownPo
             dd = 0.0
         else:
             dd = float((peak - eq) / peak)
-        out.append(DrawdownPoint(timestamp_ms=to_ms_utc(snap.timestamp), drawdown_pct=dd))
+        out.append(DrawdownPoint(timestamp_ms=snap.timestamp_ms, drawdown_pct=dd))
     return out
 
 
 def _trade_to_run_trade(i: int, t: LoggedTrade, resolution_minutes: int) -> RunTrade:
     return RunTrade(
         trade_number=i + 1,
-        entry_time_ms=to_ms_utc(t.entry_time),
+        entry_time_ms=t.entry_time_ms,
         entry_price=float(t.entry_price),
-        exit_time_ms=to_ms_utc(t.exit_time),
+        exit_time_ms=t.exit_time_ms,
         exit_price=float(t.exit_price),
         indicators_at_entry={k: float(v) for k, v in t.indicators.items()},
         pnl_pts=float(t.pnl_pts),
         pnl_pct=float(t.pnl_pct),
         result=t.result,  # type: ignore[arg-type]
         signal_reason=t.signal_reason,
-        bars_held=_bars_held(t.entry_time, t.exit_time, resolution_minutes),
+        bars_held=_bars_held(t.entry_time_ms, t.exit_time_ms, resolution_minutes),
     )
 
 
@@ -227,12 +227,12 @@ def _summarize_metrics(
     """
     # statistics.summarize wants a sequence of EquityPoints if we want
     # the daily-resampled Sharpe path; build it from minute-bar snapshots.
-    eq_points = [EquityPoint(timestamp=s.timestamp, equity=float(s.equity)) for s in equity_curve]
+    eq_points = [EquityPoint(timestamp_ms=s.timestamp_ms, equity=float(s.equity)) for s in equity_curve]
 
     # Trading-day count derived from distinct calendar dates in the
     # equity curve. Avoids a wall-clock-day overcount for short windows
     # that span weekends.
-    trading_days = len({s.timestamp.date() for s in equity_curve}) if equity_curve else 0
+    trading_days = len({datetime_at_ms(s.timestamp_ms, tz=_NY).date() for s in equity_curve}) if equity_curve else 0
 
     flat = summarize(
         initial_cash=initial_cash,
@@ -476,10 +476,10 @@ def run_strategy_spec(
     # Pre-roll bars exist only to advance indicators and stateful primitives.
     # Keep every persisted/result statistic strictly inside the requested
     # trading window so flat warmup days cannot dilute Sharpe or exposure.
-    report_equity_curve = [snap for snap in engine_result.equity_curve if to_ms_utc(snap.timestamp) >= start_ms]
-    report_bars = [bar for bar in engine_result.bars if to_ms_utc(bar.end_time) >= start_ms]
-    trades = [trade for trade in strategy.trade_log if to_ms_utc(trade.entry_time) >= start_ms]
-    bars_held_total = sum(_bars_held(t.entry_time, t.exit_time, resolution) for t in trades)
+    report_equity_curve = [snap for snap in engine_result.equity_curve if snap.timestamp_ms >= start_ms]
+    report_bars = [bar for bar in engine_result.bars if bar.end_ms >= start_ms]
+    trades = [trade for trade in strategy.trade_log if trade.entry_time_ms >= start_ms]
+    bars_held_total = sum(_bars_held(t.entry_time_ms, t.exit_time_ms, resolution) for t in trades)
     total_bars = len(report_equity_curve)
     # ``engine_result.bars`` is appended once per minute bar pulled from
     # the data source's ``iter_bars`` loop — the engine-input layer. That
@@ -510,7 +510,7 @@ def run_strategy_spec(
         initial_cash=float(engine_result.initial_cash),
         final_equity=float(engine_result.final_equity),
         equity_curve=[
-            EquityCurvePoint(timestamp_ms=to_ms_utc(s.timestamp), equity=float(s.equity)) for s in report_equity_curve
+            EquityCurvePoint(timestamp_ms=s.timestamp_ms, equity=float(s.equity)) for s in report_equity_curve
         ],
         drawdown_curve=_build_drawdown_curve(report_equity_curve),
         trades=[_trade_to_run_trade(i, t, resolution) for i, t in enumerate(trades)],

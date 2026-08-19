@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -39,7 +38,7 @@ def test_strategy_metric_help_matches_canonical_golden_values() -> None:
     ]
     equity_curve = [
         EquityPoint(
-            timestamp=datetime.fromtimestamp(point["t"] / 1000, tz=UTC),
+            timestamp_ms=point["t"],
             equity=point["equity"],
         )
         for point in inputs["equity_points"]

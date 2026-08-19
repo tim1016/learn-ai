@@ -27,6 +27,7 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import BacktestEngine
@@ -34,6 +35,9 @@ from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import Direction, FillMode, OrderEvent
 from app.engine.strategy.spec import SpecAlgorithm, load_spec_from_path
 from app.services.engine_persistence import EngineTrade, persist_engine_run
+from app.utils.timestamps import datetime_at_ms
+
+_NY = ZoneInfo("America/New_York")
 
 __all__ = [
     "InMemoryDataReader",
@@ -61,7 +65,7 @@ class InMemoryDataReader:
         for bar in self.bars:
             if bar.symbol.upper() != target:
                 continue
-            if start <= bar.time.date() <= end:
+            if start <= datetime_at_ms(bar.start_ms, tz=_NY).date() <= end:
                 yield bar
 
 
@@ -108,15 +112,15 @@ def pair_engine_fills(events: Sequence[OrderEvent]) -> list[EngineTrade]:
         if event.direction == Direction.LONG:
             if open_entry is not None:
                 raise NotImplementedError(
-                    f"Pyramiding not supported: second LONG fill at {event.time} "
-                    f"before exit of prior entry at {open_entry.time}"
+                    f"Pyramiding not supported: second LONG fill at {event.filled_at_ms} "
+                    f"before exit of prior entry at {open_entry.filled_at_ms}"
                 )
             open_entry = event
             continue
 
         # SHORT or FLAT → exit of the open LONG.
         if open_entry is None:
-            raise ValueError(f"Unmatched {event.direction.name} fill at {event.time}: no open entry")
+            raise ValueError(f"Unmatched {event.direction.name} fill at {event.filled_at_ms}: no open entry")
         trade_number += 1
         # The exit event's ``fill_quantity`` is signed-negative (the engine's
         # convention for closing a long). The trade's positive share count is
@@ -128,8 +132,8 @@ def pair_engine_fills(events: Sequence[OrderEvent]) -> list[EngineTrade]:
         trades.append(
             EngineTrade(
                 trade_number=trade_number,
-                entry_ms_utc=int(open_entry.time.timestamp() * 1000),
-                exit_ms_utc=int(event.time.timestamp() * 1000),
+                entry_ms_utc=open_entry.filled_at_ms,
+                exit_ms_utc=event.filled_at_ms,
                 entry_price=open_entry.fill_price,
                 exit_price=event.fill_price,
                 quantity=entry_qty,
@@ -142,7 +146,7 @@ def pair_engine_fills(events: Sequence[OrderEvent]) -> list[EngineTrade]:
 
     if open_entry is not None:
         raise ValueError(
-            f"Event stream ended with an open LONG at {open_entry.time}; "
+            f"Event stream ended with an open LONG at {open_entry.filled_at_ms}; "
             f"expected engine.on_force_flat to close all positions"
         )
 

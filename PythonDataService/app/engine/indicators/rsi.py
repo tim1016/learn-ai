@@ -25,7 +25,6 @@ Critical reproducibility details:
 
 from __future__ import annotations
 
-from datetime import datetime
 from decimal import Decimal
 
 from app.engine.indicators.base import Indicator, _decimal_to_str, _str_to_decimal
@@ -50,7 +49,7 @@ class RelativeStrengthIndex(Indicator):
         # RSI(period) needs period+1 samples (for period deltas).
         return self.samples >= self.period + 1
 
-    def _compute_next_value(self, time: datetime, value: Decimal) -> Decimal | None:
+    def _compute_next_value(self, timestamp_ms: int, value: Decimal) -> Decimal | None:
         prev = self._prev_input
         self._prev_input = value
         if prev is None:

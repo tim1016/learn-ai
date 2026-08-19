@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime, tzinfo
 from numbers import Real
 
 type Clock = Callable[[], int]
@@ -49,6 +49,16 @@ def to_ms_utc(dt: datetime) -> int:
     if dt.tzinfo is None or dt.utcoffset() is None:
         raise ValueError("timestamp datetime must be timezone-aware")
     return int(dt.timestamp() * 1000)
+
+
+def datetime_at_ms(timestamp_ms: int, *, tz: tzinfo = UTC) -> datetime:
+    """Materialize an ``int64 ms UTC`` timestamp for local-only calendar work.
+
+    Engine models, persistence, and wire contracts retain the numeric value.
+    Callers use this only within the function that needs a timezone-aware
+    calendar date, wall-clock time, or display string.
+    """
+    return datetime.fromtimestamp(timestamp_ms / 1000, tz=tz)
 
 
 def timestamp_like_to_ms_utc(value: object, *, field_name: str = "timestamp") -> int:

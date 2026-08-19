@@ -55,6 +55,7 @@ from app.routers.research_runs import (
     get_artifacts_root,
     get_data_source_factory,
 )
+from app.utils.timestamps import datetime_at_ms
 
 EASTERN = ZoneInfo("America/New_York")
 START_TIME = datetime(2024, 1, 2, 10, 0, tzinfo=EASTERN)
@@ -116,7 +117,7 @@ class _SymbolMatchingDataReader:
         for b in self.bars:
             if b.symbol.upper() != target:
                 continue
-            if start <= b.time.date() <= end:
+            if start <= datetime_at_ms(b.start_ms, tz=EASTERN).date() <= end:
                 yield b
 
 

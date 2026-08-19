@@ -36,6 +36,7 @@ import pandas as pd
 
 from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.trading_calendar import session_window_for_date
+from app.utils.timestamps import to_ms_utc
 
 _NY = ZoneInfo("America/New_York")
 _UTC = ZoneInfo("UTC")
@@ -130,8 +131,8 @@ class FixtureDataReader:
             bars.append(
                 TradeBar(
                     symbol=symbol,
-                    time=bar_start,
-                    end_time=bar_end,
+                    start_ms=to_ms_utc(bar_start),
+                    end_ms=to_ms_utc(bar_end),
                     open=Decimal(str(row.open)),
                     high=Decimal(str(row.high)),
                     low=Decimal(str(row.low)),
@@ -180,7 +181,7 @@ class FixtureDataReader:
             return None
         bars = self._to_trade_bars(same_day, symbol.upper(), is_minute=is_minute)
         for bar in bars:
-            if bar.time <= fill_dt < bar.end_time:
+            if bar.start_ms <= fill_time_ms < bar.end_ms:
                 return bar
         return None
 

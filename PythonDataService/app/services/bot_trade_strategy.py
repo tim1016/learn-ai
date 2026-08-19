@@ -10,10 +10,8 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
-from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Protocol
-from zoneinfo import ZoneInfo
 
 from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
@@ -40,7 +38,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_NY = ZoneInfo("America/New_York")
 _EFFECT_PURPOSE_BY_INTENT = {
     SignalIntentKind.ENTER: EffectPurpose.ENTER,
     SignalIntentKind.EXIT: EffectPurpose.EXIT,
@@ -85,8 +82,8 @@ def _engine_bar(bar: MarketDataBar) -> TradeBar:
     """Translate the broker-neutral wire bar into the canonical engine bar."""
     return TradeBar(
         symbol=bar.symbol,
-        time=datetime.fromtimestamp(bar.start_ms / 1000, tz=_NY),
-        end_time=datetime.fromtimestamp(bar.end_ms / 1000, tz=_NY),
+        start_ms=bar.start_ms,
+        end_ms=bar.end_ms,
         open=bar.open,
         high=bar.high,
         low=bar.low,
@@ -140,7 +137,7 @@ async def _ema_crossover_evaluations(
 
     async for market_bar in feed.stream_bars(binding.symbol, use_rth=binding.use_rth):
         bar = _engine_bar(market_bar)
-        context.current_time = bar.end_time
+        context.current_time_ms = bar.end_ms
         strategy.on_minute_bar(bar)
         for consolidator in context.get_consolidators(bar.symbol):
             consolidator.update(bar)

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -28,6 +28,7 @@ from app.engine.results.statistics import (  # noqa: E402
     compute_portfolio_statistics,
     compute_trade_statistics,
 )
+from app.utils.timestamps import to_ms_utc  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -181,9 +182,9 @@ class TestENG003TradeStats:
 
 def _build_equity_curve(e_list: list[float]) -> list[EquityPoint]:
     """Build a minimal EquityPoint curve with monotone timestamps."""
-    base = datetime(2024, 1, 1)
+    base = datetime(2024, 1, 1, tzinfo=UTC)
     return [
-        EquityPoint(timestamp=base + timedelta(days=i), equity=e)
+        EquityPoint(timestamp_ms=to_ms_utc(base + timedelta(days=i)), equity=e)
         for i, e in enumerate(e_list)
     ]
 

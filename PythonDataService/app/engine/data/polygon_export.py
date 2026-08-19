@@ -31,7 +31,7 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -39,6 +39,7 @@ from zoneinfo import ZoneInfo
 
 from app.engine.data.lean_format import write_lean_daily_zip, write_lean_day_zip
 from app.engine.data.trade_bar import TradeBar
+from app.utils.timestamps import datetime_at_ms, to_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -50,17 +51,13 @@ def polygon_bar_to_trade_bar(symbol: str, raw: dict[str, Any]) -> TradeBar:
 
     Polygon timestamps are UTC epoch milliseconds pointing at the bar's
     start. LEAN uses bar start time too, so no shifting is needed — we
-    just localize to Eastern and compute ``end_time = time + 1 minute``.
+    just retain the numeric start timestamp and add one minute.
     """
     ts_ms = int(raw["timestamp"])
-    start_utc = datetime.fromtimestamp(ts_ms / 1000, tz=ZoneInfo("UTC"))
-    start_et = start_utc.astimezone(EASTERN)
-    end_et = start_et + timedelta(minutes=1)
-
     return TradeBar(
         symbol=symbol,
-        time=start_et,
-        end_time=end_et,
+        start_ms=ts_ms,
+        end_ms=ts_ms + 60_000,
         # Use str-constructed Decimals to avoid float→Decimal round-trip
         # artifacts that would corrupt the deci-cent integer encoding.
         open=Decimal(str(raw["open"])),
@@ -77,12 +74,12 @@ def group_by_trading_date(
     """Bucket bars by their Eastern-time trading date."""
     grouped: dict[date, list[TradeBar]] = defaultdict(list)
     for bar in bars:
-        et_time = bar.time.astimezone(EASTERN)
+        et_time = datetime_at_ms(bar.start_ms, tz=EASTERN)
         grouped[et_time.date()].append(bar)
     # Ensure each day's bars are chronologically sorted, even if the
     # input was out of order (e.g. from a Postgres query without ORDER BY).
     for day_bars in grouped.values():
-        day_bars.sort(key=lambda b: b.time)
+        day_bars.sort(key=lambda b: b.start_ms)
     return grouped
 
 
@@ -152,12 +149,12 @@ def _polygon_daily_bar_to_trade_bar(symbol: str, raw: dict[str, Any]) -> TradeBa
         trading_date.day,
         tzinfo=EASTERN,
     )
-    end_et = start_et + timedelta(days=1)
+    start_ms = to_ms_utc(start_et)
 
     return TradeBar(
         symbol=symbol,
-        time=start_et,
-        end_time=end_et,
+        start_ms=start_ms,
+        end_ms=start_ms + 86_400_000,
         open=Decimal(str(raw["open"])),
         high=Decimal(str(raw["high"])),
         low=Decimal(str(raw["low"])),
@@ -197,7 +194,7 @@ def export_polygon_daily_bars_to_lean(
         return None
 
     # Sort chronologically — LEAN's daily CSV is always date-ordered.
-    trade_bars.sort(key=lambda b: b.time)
+    trade_bars.sort(key=lambda b: b.start_ms)
 
     zip_path = write_lean_daily_zip(
         output_root=output_root,

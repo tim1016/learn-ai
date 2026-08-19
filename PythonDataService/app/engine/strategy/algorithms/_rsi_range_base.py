@@ -32,7 +32,7 @@ Subclasses override the small extension surface:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import timedelta
 from decimal import Decimal
 
 from app.engine.data.trade_bar import TradeBar
@@ -40,11 +40,12 @@ from app.engine.execution.order import Direction, OrderEvent
 from app.engine.indicators.adx import AverageDirectionalIndex
 from app.engine.indicators.rsi import RelativeStrengthIndex
 from app.engine.strategy.base import LoggedTrade, Strategy
+from app.utils.timestamps import datetime_at_ms
 
 
 @dataclass
 class _OpenTrade:
-    entry_time: datetime
+    entry_time_ms: int
     entry_price: Decimal
     quantity: int
     indicators: dict[str, Decimal]
@@ -100,7 +101,7 @@ class RsiRangeStrategy(Strategy):
         assert self._adx is not None
         assert self.ctx is not None
 
-        self._rsi.update(bar.end_time, bar.close)
+        self._rsi.update(bar.end_ms, bar.close)
         self._adx.update(bar)
         self._update_extra_indicators(bar)
 
@@ -110,7 +111,7 @@ class RsiRangeStrategy(Strategy):
                 self.ctx.liquidate(self._symbol)
                 self._in_position = False
                 self.ctx.log(
-                    f"EXIT SIGNAL: {bar.end_time:%Y-%m-%d %H:%M} "
+                    f"EXIT SIGNAL: {_display_time(bar.end_ms)} "
                     f"adx={float(self._adx.current_value):.2f} "
                     f"< {float(self.adx_exit_threshold):.2f}"
                 )
@@ -136,7 +137,7 @@ class RsiRangeStrategy(Strategy):
         self._pending_entry = self._indicator_snapshot(bar)
         self.ctx.set_holdings(self._symbol, Decimal(1))
         self._in_position = True
-        self.ctx.log(f"ENTRY SIGNAL: {bar.end_time:%Y-%m-%d %H:%M} close={bar.close:.2f} rsi={float(rsi_val):.2f}")
+        self.ctx.log(f"ENTRY SIGNAL: {_display_time(bar.end_ms)} close={bar.close:.2f} rsi={float(rsi_val):.2f}")
 
     # ------------------------------------------------------------------
     def on_order_event(self, event: OrderEvent) -> None:
@@ -144,14 +145,14 @@ class RsiRangeStrategy(Strategy):
             if self._pending_entry is None:
                 return
             self._open_trade = _OpenTrade(
-                entry_time=event.time,
+                entry_time_ms=event.filled_at_ms,
                 entry_price=event.fill_price,
                 quantity=event.fill_quantity,
                 indicators=self._pending_entry,
             )
             self._pending_entry = None
             if self.ctx is not None:
-                self.ctx.log(f"ENTRY: {event.time:%Y-%m-%d %H:%M} price={event.fill_price:.2f}")
+                self.ctx.log(f"ENTRY: {_display_time(event.filled_at_ms)} price={event.fill_price:.2f}")
             return
 
         # Exit fill.
@@ -162,9 +163,9 @@ class RsiRangeStrategy(Strategy):
         pnl_pct = pnl_pts / entry.entry_price
         self.trade_log.append(
             LoggedTrade(
-                entry_time=entry.entry_time,
+                entry_time_ms=entry.entry_time_ms,
                 entry_price=entry.entry_price,
-                exit_time=event.time,
+                exit_time_ms=event.filled_at_ms,
                 exit_price=event.fill_price,
                 quantity=entry.quantity,
                 pnl_pts=pnl_pts,
@@ -176,7 +177,7 @@ class RsiRangeStrategy(Strategy):
         self._open_trade = None
         if self.ctx is not None:
             self.ctx.log(
-                f"EXIT: {event.time:%Y-%m-%d %H:%M} price={event.fill_price:.2f} "
+                f"EXIT: {_display_time(event.filled_at_ms)} price={event.fill_price:.2f} "
                 f"pnl={pnl_pts:.2f} ({float(pnl_pct) * 100:.2f}%)"
             )
 
@@ -212,3 +213,9 @@ class RsiRangeStrategy(Strategy):
         if self._adx.current_value is not None:
             snap["adx"] = self._adx.current_value
         return snap
+
+
+def _display_time(timestamp_ms: int) -> str:
+    from zoneinfo import ZoneInfo
+
+    return datetime_at_ms(timestamp_ms, tz=ZoneInfo("America/New_York")).strftime("%Y-%m-%d %H:%M")

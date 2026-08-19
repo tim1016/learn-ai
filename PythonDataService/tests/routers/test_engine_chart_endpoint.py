@@ -121,7 +121,7 @@ def test_strategy_rsi_uses_canonical_wilders_value_and_bar_close_timestamp() -> 
     assert isinstance(result.data, list)
     assert [point.value for point in result.data[:-1]] == [None] * 5
     assert result.data[-1].value == pytest.approx(60.0, rel=0, abs=1e-9)
-    assert result.data[-1].t == int(bars[-1].end_time.timestamp() * 1000)
+    assert result.data[-1].t == bars[-1].end_ms
 
 
 @pytest.mark.asyncio

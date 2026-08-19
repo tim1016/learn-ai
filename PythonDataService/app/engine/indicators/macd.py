@@ -31,7 +31,6 @@ Decimal arithmetic throughout via the embedded EMAs.
 
 from __future__ import annotations
 
-from datetime import datetime
 from decimal import Decimal
 
 from app.engine.indicators.base import Indicator
@@ -79,9 +78,9 @@ class MovingAverageConvergenceDivergence(Indicator):
     def histogram(self) -> Decimal | None:
         return self._histogram
 
-    def _compute_next_value(self, time: datetime, value: Decimal) -> Decimal | None:
-        self._fast.update(time, value)
-        self._slow.update(time, value)
+    def _compute_next_value(self, timestamp_ms: int, value: Decimal) -> Decimal | None:
+        self._fast.update(timestamp_ms, value)
+        self._slow.update(timestamp_ms, value)
 
         if not (self._fast.is_ready and self._slow.is_ready):
             return None
@@ -91,7 +90,7 @@ class MovingAverageConvergenceDivergence(Indicator):
         self._macd_line = self._fast.current_value - self._slow.current_value
 
         # Feed the signal EMA with each MACD-line value.
-        self._signal.update(time, self._macd_line)
+        self._signal.update(timestamp_ms, self._macd_line)
 
         if self._signal.is_ready:
             assert self._signal.current_value is not None

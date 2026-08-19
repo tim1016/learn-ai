@@ -23,16 +23,18 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date
 from decimal import Decimal
 from typing import Protocol, TypedDict
+
+from app.utils.timestamps import datetime_at_ms
 
 TRADING_DAYS_PER_YEAR = 252
 
 
 @dataclass(frozen=True)
 class EquityPoint:
-    timestamp: datetime
+    timestamp_ms: int
     equity: float
 
 
@@ -330,45 +332,45 @@ def _max_consecutive_losses(trades: Sequence[_TradeLike]) -> int:
 def _drawdown_recovery_days(initial_equity: float, trades: Sequence[_TradeLike]) -> int | None:
     """Longest peak-to-recovery calendar duration on a closed-trade ledger.
 
-    The ledger must expose ``entry_time`` and ``exit_time``. An unrecovered
+    The ledger must expose ``entry_time_ms`` and ``exit_time_ms``. An unrecovered
     drawdown is measured from its peak through the final closed trade, which
     makes the value defined without inventing a future recovery timestamp.
     """
     if not trades:
         return None
-    first_entry = getattr(trades[0], "entry_time", None)
-    if not isinstance(first_entry, datetime):
+    first_entry_ms = getattr(trades[0], "entry_time_ms", None)
+    if not isinstance(first_entry_ms, int):
         return None
     equity = peak = initial_equity
-    peak_time = first_entry
-    longest_seconds = 0.0
+    peak_time_ms = first_entry_ms
+    longest_ms = 0
     in_drawdown = False
-    final_exit: datetime | None = None
+    final_exit_ms: int | None = None
     for trade in trades:
-        exit_time = getattr(trade, "exit_time", None)
-        if not isinstance(exit_time, datetime):
+        exit_time_ms = getattr(trade, "exit_time_ms", None)
+        if not isinstance(exit_time_ms, int):
             return None
-        final_exit = exit_time
+        final_exit_ms = exit_time_ms
         equity *= 1.0 + float(trade.pnl_pct)
         if equity >= peak:
             if in_drawdown:
-                longest_seconds = max(longest_seconds, (exit_time - peak_time).total_seconds())
+                longest_ms = max(longest_ms, exit_time_ms - peak_time_ms)
             peak = equity
-            peak_time = exit_time
+            peak_time_ms = exit_time_ms
             in_drawdown = False
         else:
             in_drawdown = True
-    if in_drawdown and final_exit is not None:
-        longest_seconds = max(longest_seconds, (final_exit - peak_time).total_seconds())
-    return max(0, int(longest_seconds // 86_400))
+    if in_drawdown and final_exit_ms is not None:
+        longest_ms = max(longest_ms, final_exit_ms - peak_time_ms)
+    return max(0, longest_ms // 86_400_000)
 
 
 def _resample_to_daily(points: Sequence[EquityPoint]) -> list[float]:
     if not points:
         return []
-    daily_values: dict[datetime, float] = {}
+    daily_values: dict[date, float] = {}
     for point in points:
-        date_key = point.timestamp.date()
+        date_key = datetime_at_ms(point.timestamp_ms).date()
         daily_values[date_key] = point.equity
     return list(daily_values.values())
 
@@ -383,16 +385,16 @@ def validate_trade_log(trades: Sequence[_TradeLike]) -> list[ValidationError]:
     errors: list[ValidationError] = []
     for i, trade in enumerate(trades):
         if (
-            hasattr(trade, "entry_time")
-            and hasattr(trade, "exit_time")
-            and trade.entry_time is not None
-            and trade.exit_time is not None
-            and trade.entry_time >= trade.exit_time
+            hasattr(trade, "entry_time_ms")
+            and hasattr(trade, "exit_time_ms")
+            and trade.entry_time_ms is not None
+            and trade.exit_time_ms is not None
+            and trade.entry_time_ms >= trade.exit_time_ms
         ):
             errors.append(
                 ValidationError(
                     code="invalid_trade_times",
-                    message=f"Trade {i}: entry_time >= exit_time",
+                    message=f"Trade {i}: entry_time_ms >= exit_time_ms",
                 )
             )
         if hasattr(trade, "pnl_pct") and math.isnan(float(trade.pnl_pct)):

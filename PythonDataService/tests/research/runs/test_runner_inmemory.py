@@ -32,6 +32,7 @@ from app.research.runs import RunRequest, run_date_to_ms, run_strategy_spec
 from app.research.runs.ledger import RunLedger
 from app.research.runs.result import BacktestRunResult
 from app.research.runs.runner import _VALID_FILL_MODES, _normalize_fill_mode, _parse_fill_mode, _summarize_metrics
+from app.utils.timestamps import to_ms_utc
 
 
 def _build_test_spec(
@@ -348,7 +349,7 @@ def test_exposure_uses_consolidated_bar_resolution():
     ts = datetime(2024, 1, 2, 9, 30, tzinfo=ZoneInfo("America/New_York"))
     equity_curve = [
         EquitySnapshot(
-            timestamp=ts,
+            timestamp_ms=to_ms_utc(ts),
             equity=Decimal("100000"),
             cash=Decimal("100000"),
             holdings_value=Decimal("0"),

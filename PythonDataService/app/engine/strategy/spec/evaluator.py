@@ -39,7 +39,7 @@ TP/SL) leave the strategy in sync with the actual portfolio.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -57,7 +57,7 @@ from app.engine.strategy.spec.primitives import (
     EvalContext,
     Primitive,
 )
-from app.utils.timestamps import to_ms_utc
+from app.utils.timestamps import datetime_at_ms
 
 
 @dataclass
@@ -71,7 +71,7 @@ class _PendingEntry:
 class _OpenTrade:
     """An entry that has filled but not yet exited."""
 
-    entry_time: datetime
+    entry_time_ms: int
     entry_price: Decimal
     quantity: int = 0
     snapshot: dict[str, Decimal] = field(default_factory=dict)
@@ -235,7 +235,7 @@ class SpecAlgorithm(Strategy):
                 ind.update(bar)  # type: ignore[arg-type]
             else:
                 source = self._sources[ind_id]
-                ind.update(bar.end_time, _bar_source_value(bar, source))  # type: ignore[arg-type]
+                ind.update(bar.end_ms, _bar_source_value(bar, source))  # type: ignore[arg-type]
 
         # 2. Bar count increments BEFORE evaluate so that BarsSinceEntry
         # reads the entry bar as 0 — entry fires on the bar where
@@ -260,7 +260,7 @@ class SpecAlgorithm(Strategy):
         # bypass / fixture truncation can never silently produce False.
         predictions: dict[str, Decimal] = {}
         if self._prediction_set is not None and self._spec.predictions:
-            ts_ms = to_ms_utc(bar.end_time)
+            ts_ms = bar.end_ms
             for ref in self._spec.predictions:
                 if ref.lookup == "exact_bar_close":
                     row = self._prediction_set.index.get(ts_ms)
@@ -269,7 +269,7 @@ class SpecAlgorithm(Strategy):
 
                         raise PredictionLookupError(
                             f"prediction ref {ref.id!r} (lookup=exact_bar_close): "
-                            f"no row at ts_ms={ts_ms} ({bar.end_time}); "
+                            f"no row at ts_ms={ts_ms}; "
                             f"coverage check should have caught this"
                         )
                 else:  # "next_after_bar_close"
@@ -279,7 +279,7 @@ class SpecAlgorithm(Strategy):
 
                         raise PredictionLookupError(
                             f"prediction ref {ref.id!r} (lookup=next_after_bar_close): "
-                            f"no row strictly after ts_ms={ts_ms} ({bar.end_time}); "
+                            f"no row strictly after ts_ms={ts_ms}; "
                             f"coverage check should have caught this"
                         )
                 if ref.field not in row:
@@ -295,7 +295,7 @@ class SpecAlgorithm(Strategy):
         ctx = EvalContext(
             indicators=self._indicators,
             current_bar_count=self._bar_count,
-            bar_close_time=bar.end_time,
+            bar_close_ms=bar.end_ms,
             bar_close_price=bar.close,
             current_bar=bar,
             in_position=self._in_position,
@@ -318,14 +318,14 @@ class SpecAlgorithm(Strategy):
                     break
             if not survival_fired and self._exit_block.evaluate(ctx):
                 self.ctx.liquidate(self._symbol)
-                self.ctx.log(f"EXIT SIGNAL: {bar.end_time.strftime('%Y-%m-%d %H:%M')} Close={bar.close:.2f}")
+                self.ctx.log(f"EXIT SIGNAL: {_display_time(bar.end_ms)} Close={bar.close:.2f}")
                 self._in_position = False
                 self._entry_bar_count = None
         else:
             entry_fired = self._entry_block.evaluate(ctx)
             entry_allowed = (
                 self._entry_start_ms is None
-                or to_ms_utc(bar.end_time) >= self._entry_start_ms
+                or bar.end_ms >= self._entry_start_ms
             )
             if entry_allowed and entry_fired:
                 # Capture diagnostics snapshot at signal time — describes the
@@ -336,7 +336,7 @@ class SpecAlgorithm(Strategy):
                 self._in_position = True
                 self._entry_bar_count = self._bar_count
                 self.ctx.log(
-                    f"ENTRY SIGNAL: {bar.end_time.strftime('%Y-%m-%d %H:%M')} "
+                    f"ENTRY SIGNAL: {_display_time(bar.end_ms)} "
                     f"Close={bar.close:.2f} "
                     f"{self._format_snapshot(snapshot)}"
                 )
@@ -384,7 +384,7 @@ class SpecAlgorithm(Strategy):
         if isinstance(action, S.CloseAllAction):
             self.ctx.liquidate(self._symbol)
             self.ctx.log(
-                f"MANAGE FIRE: {rule_name!r} at {bar.end_time.strftime('%Y-%m-%d %H:%M')} "
+                f"MANAGE FIRE: {rule_name!r} at {_display_time(bar.end_ms)} "
                 f"Close={bar.close:.2f} → CLOSE_ALL"
             )
             self._in_position = False
@@ -416,10 +416,10 @@ class SpecAlgorithm(Strategy):
         if event.direction == Direction.LONG:
             if self._pending_entry is None:
                 if self.ctx is not None:
-                    self.ctx.log(f"WARN: LONG fill at {event.time} with no pending entry")
+                    self.ctx.log(f"WARN: LONG fill at {_display_time(event.filled_at_ms)} with no pending entry")
                 return
             self._open_trade = _OpenTrade(
-                entry_time=event.time,
+                entry_time_ms=event.filled_at_ms,
                 entry_price=event.fill_price,
                 quantity=event.fill_quantity,
                 snapshot=dict(self._pending_entry.snapshot),
@@ -427,7 +427,7 @@ class SpecAlgorithm(Strategy):
             self._pending_entry = None
             if self.ctx is not None:
                 self.ctx.log(
-                    f"ENTRY: {event.time.strftime('%Y-%m-%d %H:%M')} "
+                    f"ENTRY: {_display_time(event.filled_at_ms)} "
                     f"Price={event.fill_price:.2f} "
                     f"{self._format_snapshot(self._open_trade.snapshot)}"
                 )
@@ -453,9 +453,9 @@ class SpecAlgorithm(Strategy):
         result = "WIN" if pnl_pts >= 0 else "LOSS"
         self.trade_log.append(
             LoggedTrade(
-                entry_time=entry.entry_time,
+                entry_time_ms=entry.entry_time_ms,
                 entry_price=entry.entry_price,
-                exit_time=event.time,
+                exit_time_ms=event.filled_at_ms,
                 exit_price=event.fill_price,
                 quantity=entry.quantity,
                 pnl_pts=pnl_pts,
@@ -467,7 +467,7 @@ class SpecAlgorithm(Strategy):
         )
         if self.ctx is not None:
             self.ctx.log(
-                f"EXIT: {event.time.strftime('%Y-%m-%d %H:%M')} "
+                f"EXIT: {_display_time(event.filled_at_ms)} "
                 f"Price={event.fill_price:.2f} PnL={pnl_pts:.2f} "
                 f"({pnl_pct * 100:.2f}%) {result}"
             )
@@ -478,3 +478,9 @@ class SpecAlgorithm(Strategy):
             assert self.ctx is not None
             self.ctx.liquidate(self._symbol)
             self._in_position = False
+
+
+def _display_time(timestamp_ms: int) -> str:
+    from zoneinfo import ZoneInfo
+
+    return datetime_at_ms(timestamp_ms, tz=ZoneInfo("America/New_York")).strftime("%Y-%m-%d %H:%M")

@@ -212,7 +212,7 @@ def test_snapshot_bar_close_ms_is_canonical_utc_milliseconds() -> None:
 
     snap = strategy.last_decision_snapshot
     assert snap is not None
-    last_minute_end_ms = int(bars[-1].end_time.timestamp() * 1000)
+    last_minute_end_ms = bars[-1].end_ms
     delta = last_minute_end_ms - snap.bar_close_ms
     assert 0 <= delta <= 15 * 60 * 1000, (
         f"snap.bar_close_ms={snap.bar_close_ms} should be within one "

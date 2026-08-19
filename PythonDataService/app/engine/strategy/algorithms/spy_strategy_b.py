@@ -71,7 +71,7 @@ class SpyStrategyBAlgorithm(RsiRangeStrategy):
         assert self._supertrend is not None
         assert self._macd is not None
         self._supertrend.update(bar)
-        self._macd.update(bar.end_time, bar.close)
+        self._macd.update(bar.end_ms, bar.close)
 
     def _extra_indicators_ready(self) -> bool:
         assert self._supertrend is not None

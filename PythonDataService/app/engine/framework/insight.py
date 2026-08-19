@@ -21,10 +21,12 @@ Key design decisions vs LEAN's C# implementation:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from decimal import Decimal
 from enum import Enum
 from uuid import uuid4
+
+from app.utils.timestamps import now_ms_utc
 
 
 class InsightType(Enum):
@@ -72,7 +74,7 @@ class InsightScore:
     direction: float = 0.0
     magnitude: float = 0.0
     is_final_score: bool = False
-    updated_time_utc: datetime | None = None
+    updated_at_ms: int | None = None
 
     def set_score(self, score_type: InsightScoreType, value: float) -> None:
         """Update a score dimension. No-op if already finalized."""
@@ -83,7 +85,7 @@ class InsightScore:
             self.direction = clamped
         elif score_type == InsightScoreType.MAGNITUDE:
             self.magnitude = clamped
-        self.updated_time_utc = datetime.now(UTC)
+        self.updated_at_ms = now_ms_utc()
 
     def get_score(self, score_type: InsightScoreType) -> float:
         """Read a score dimension."""
@@ -91,10 +93,10 @@ class InsightScore:
             return self.direction
         return self.magnitude
 
-    def finalize(self, time: datetime) -> None:
+    def finalize(self, timestamp_ms: int) -> None:
         """Lock the score — no further updates allowed."""
         self.is_final_score = True
-        self.updated_time_utc = time
+        self.updated_at_ms = timestamp_ms
 
     def to_dict(self) -> dict:
         return {
@@ -143,8 +145,8 @@ class Insight:
     weight: float | None = None
 
     # Timing
-    generated_time: datetime = field(default_factory=lambda: datetime(2000, 1, 1))
-    close_time: datetime = field(default_factory=lambda: datetime(2000, 1, 1))
+    generated_at_ms: int = 0
+    close_at_ms: int = 0
 
     # Reference values for scoring (Decimal for price precision)
     reference_value: Decimal = Decimal(0)
@@ -154,24 +156,24 @@ class Insight:
     score: InsightScore = field(default_factory=InsightScore)
 
     def __post_init__(self) -> None:
-        # Auto-compute close_time if it wasn't explicitly set
-        if self.close_time <= self.generated_time:
-            self.close_time = self.generated_time + self.period
+        # Auto-compute close timestamp if it wasn't explicitly set.
+        if self.close_at_ms <= self.generated_at_ms:
+            self.close_at_ms = self.generated_at_ms + int(self.period.total_seconds() * 1000)
 
-    def is_active(self, utc_time: datetime) -> bool:
+    def is_active(self, timestamp_ms: int) -> bool:
         """True if the prediction period has not yet elapsed."""
-        return utc_time < self.close_time
+        return timestamp_ms < self.close_at_ms
 
-    def is_expired(self, utc_time: datetime) -> bool:
+    def is_expired(self, timestamp_ms: int) -> bool:
         """True if the prediction period has elapsed."""
-        return utc_time >= self.close_time
+        return timestamp_ms >= self.close_at_ms
 
     @staticmethod
     def price(
         symbol: str,
         direction: InsightDirection,
         period: timedelta,
-        generated_time: datetime | None = None,
+        generated_at_ms: int | None = None,
         magnitude: float | None = None,
         confidence: float | None = None,
         weight: float | None = None,
@@ -182,14 +184,14 @@ class Insight:
 
         Matches LEAN's ``Insight.Price(...)`` factory methods.
         """
-        gen_time = generated_time or datetime(2000, 1, 1)
+        generated = 0 if generated_at_ms is None else generated_at_ms
         return Insight(
             symbol=symbol.upper(),
             type=InsightType.PRICE,
             direction=direction,
             period=period,
-            generated_time=gen_time,
-            close_time=gen_time + period,
+            generated_at_ms=generated,
+            close_at_ms=generated + int(period.total_seconds() * 1000),
             magnitude=magnitude,
             confidence=confidence,
             weight=weight,
@@ -222,8 +224,8 @@ class Insight:
             "weight": self.weight,
             "source_model": self.source_model,
             "tag": self.tag,
-            "generated_time": self.generated_time.isoformat(),
-            "close_time": self.close_time.isoformat(),
+            "generated_at_ms": self.generated_at_ms,
+            "close_at_ms": self.close_at_ms,
             "reference_value": float(self.reference_value),
             "reference_value_final": float(self.reference_value_final),
             "score": self.score.to_dict(),
