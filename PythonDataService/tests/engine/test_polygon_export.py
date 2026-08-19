@@ -12,6 +12,7 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from app.engine.data.polygon_export import (
+    _polygon_daily_bar_to_trade_bar,
     group_by_trading_date,
     polygon_bar_to_trade_bar,
 )
@@ -102,3 +103,43 @@ def testgroup_by_trading_date_sorts_bars_chronologically():
 
     day_bars = buckets[date(2024, 4, 1)]
     assert [b.start_ms for b in day_bars] == sorted(b.start_ms for b in bars)
+
+
+def testpolygon_daily_bar_to_trade_bar_spans_exactly_one_day_across_dst_transition():
+    """Regression: end_ms must be midnight-to-midnight ET, not start_ms + a
+    fixed 86_400_000ms offset — a fixed offset drifts an hour on the day a
+    DST transition falls inside the bar (temporal-rigor.md: "DST via the NY
+    zone, never a fixed offset"). 2026-03-08 is the day before the US
+    spring-forward transition (2026-03-08 02:00 ET -> 03:00 ET)."""
+    trading_date = datetime(2026, 3, 8, tzinfo=UTC)
+    raw = {
+        "timestamp": int(trading_date.timestamp() * 1000),
+        "open": 1.0,
+        "high": 1.0,
+        "low": 1.0,
+        "close": 1.0,
+        "volume": 1,
+    }
+
+    bar = _polygon_daily_bar_to_trade_bar("SPY", raw)
+
+    assert datetime_at_ms(bar.start_ms, tz=EASTERN) == datetime(2026, 3, 8, tzinfo=EASTERN)
+    assert datetime_at_ms(bar.end_ms, tz=EASTERN) == datetime(2026, 3, 9, tzinfo=EASTERN)
+    # The fixed-offset bug this regression-tests would compute a 23-hour span here.
+    assert bar.end_ms - bar.start_ms == 23 * 3_600_000
+
+
+def testpolygon_daily_bar_to_trade_bar_spans_exactly_24h_off_dst_boundary():
+    trading_date = datetime(2026, 6, 15, tzinfo=UTC)
+    raw = {
+        "timestamp": int(trading_date.timestamp() * 1000),
+        "open": 1.0,
+        "high": 1.0,
+        "low": 1.0,
+        "close": 1.0,
+        "volume": 1,
+    }
+
+    bar = _polygon_daily_bar_to_trade_bar("SPY", raw)
+
+    assert bar.end_ms - bar.start_ms == 24 * 3_600_000

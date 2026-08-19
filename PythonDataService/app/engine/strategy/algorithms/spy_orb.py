@@ -31,9 +31,8 @@ from decimal import Decimal
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
 from app.engine.framework.insight import Insight, InsightDirection
-from app.engine.strategy.base import LoggedTrade, Strategy
+from app.engine.strategy.base import LoggedTrade, Strategy, display_time, ny_datetime
 from app.lean_sidecar.trading_calendar import is_regular_session_ms_utc
-from app.utils.timestamps import datetime_at_ms
 
 
 @dataclass
@@ -154,7 +153,7 @@ class SpyOpeningRangeBreakout(Strategy):
             return
 
         # Detect new trading day.
-        bar_date = _ny_datetime(bar.end_ms).date()
+        bar_date = ny_datetime(bar.end_ms).date()
         if self._current_date is None or bar_date != self._current_date:
             self._current_date = bar_date
             self._reset_day()
@@ -173,7 +172,7 @@ class SpyOpeningRangeBreakout(Strategy):
                 self._orb_valid = self._min_range_pct <= range_pct <= self._max_range_pct
 
                 self.ctx.log(
-                    f"ORB COMPLETE: {_display_time(bar.end_ms)} "
+                    f"ORB COMPLETE: {display_time(bar.end_ms)} "
                     f"High={self._orb_high:.2f} Low={self._orb_low:.2f} "
                     f"Range={range_pct:.4f}% Valid={self._orb_valid}"
                 )
@@ -188,7 +187,7 @@ class SpyOpeningRangeBreakout(Strategy):
             self._bars_until_exit -= 1
             if self._bars_until_exit <= 0:
                 self.ctx.liquidate(self._symbol)
-                self.ctx.log(f"EXIT SIGNAL: {_display_time(bar.end_ms)} Close={bar.close:.2f}")
+                self.ctx.log(f"EXIT SIGNAL: {display_time(bar.end_ms)} Close={bar.close:.2f}")
                 self._in_position = False
         else:
             # Entry: bar must CLOSE above ORB high. The `_traded_today`
@@ -219,7 +218,7 @@ class SpyOpeningRangeBreakout(Strategy):
                 )
 
                 self.ctx.log(
-                    f"ENTRY SIGNAL: {_display_time(bar.end_ms)} "
+                    f"ENTRY SIGNAL: {display_time(bar.end_ms)} "
                     f"Close={bar.close:.2f} ORB_HIGH={self._orb_high:.2f} "
                     f"ORB_LOW={self._orb_low:.2f} Range={orb_range_pct:.4f}%"
                 )
@@ -231,7 +230,7 @@ class SpyOpeningRangeBreakout(Strategy):
         if event.direction == Direction.LONG:
             if self._pending_entry is None:
                 if self.ctx is not None:
-                    self.ctx.log(f"WARN: LONG fill at {_display_time(event.filled_at_ms)} with no pending entry")
+                    self.ctx.log(f"WARN: LONG fill at {display_time(event.filled_at_ms)} with no pending entry")
                 return
             self._open_trade = _OpenTrade(
                 entry_time_ms=event.filled_at_ms,
@@ -243,7 +242,7 @@ class SpyOpeningRangeBreakout(Strategy):
             self._pending_entry = None
             if self.ctx is not None:
                 self.ctx.log(
-                    f"ENTRY FILL: {_display_time(event.filled_at_ms)} "
+                    f"ENTRY FILL: {display_time(event.filled_at_ms)} "
                     f"Price={event.fill_price:.2f} "
                     f"ORB_HIGH={self._open_trade.orb_high:.2f}"
                 )
@@ -275,7 +274,7 @@ class SpyOpeningRangeBreakout(Strategy):
             )
             if self.ctx is not None:
                 self.ctx.log(
-                    f"EXIT FILL: {_display_time(exit_time_ms)} "
+                    f"EXIT FILL: {display_time(exit_time_ms)} "
                     f"Price={exit_price:.2f} PnL={pnl_pts:.2f} "
                     f"({pnl_pct * 100:.2f}%) {result}"
                 )
@@ -286,13 +285,3 @@ class SpyOpeningRangeBreakout(Strategy):
             assert self.ctx is not None
             self.ctx.liquidate(self._symbol)
             self._in_position = False
-
-
-def _ny_datetime(timestamp_ms: int):
-    from zoneinfo import ZoneInfo
-
-    return datetime_at_ms(timestamp_ms, tz=ZoneInfo("America/New_York"))
-
-
-def _display_time(timestamp_ms: int) -> str:
-    return _ny_datetime(timestamp_ms).strftime("%Y-%m-%d %H:%M")

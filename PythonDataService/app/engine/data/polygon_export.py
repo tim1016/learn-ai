@@ -31,7 +31,7 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -154,7 +154,7 @@ def _polygon_daily_bar_to_trade_bar(symbol: str, raw: dict[str, Any]) -> TradeBa
     return TradeBar(
         symbol=symbol,
         start_ms=start_ms,
-        end_ms=start_ms + 86_400_000,
+        end_ms=to_ms_utc(start_et + timedelta(days=1)),
         open=Decimal(str(raw["open"])),
         high=Decimal(str(raw["high"])),
         low=Decimal(str(raw["low"])),

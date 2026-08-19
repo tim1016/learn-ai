@@ -39,8 +39,7 @@ from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
 from app.engine.indicators.adx import AverageDirectionalIndex
 from app.engine.indicators.rsi import RelativeStrengthIndex
-from app.engine.strategy.base import LoggedTrade, Strategy
-from app.utils.timestamps import datetime_at_ms
+from app.engine.strategy.base import LoggedTrade, Strategy, display_time
 
 
 @dataclass
@@ -111,7 +110,7 @@ class RsiRangeStrategy(Strategy):
                 self.ctx.liquidate(self._symbol)
                 self._in_position = False
                 self.ctx.log(
-                    f"EXIT SIGNAL: {_display_time(bar.end_ms)} "
+                    f"EXIT SIGNAL: {display_time(bar.end_ms)} "
                     f"adx={float(self._adx.current_value):.2f} "
                     f"< {float(self.adx_exit_threshold):.2f}"
                 )
@@ -137,7 +136,7 @@ class RsiRangeStrategy(Strategy):
         self._pending_entry = self._indicator_snapshot(bar)
         self.ctx.set_holdings(self._symbol, Decimal(1))
         self._in_position = True
-        self.ctx.log(f"ENTRY SIGNAL: {_display_time(bar.end_ms)} close={bar.close:.2f} rsi={float(rsi_val):.2f}")
+        self.ctx.log(f"ENTRY SIGNAL: {display_time(bar.end_ms)} close={bar.close:.2f} rsi={float(rsi_val):.2f}")
 
     # ------------------------------------------------------------------
     def on_order_event(self, event: OrderEvent) -> None:
@@ -152,7 +151,7 @@ class RsiRangeStrategy(Strategy):
             )
             self._pending_entry = None
             if self.ctx is not None:
-                self.ctx.log(f"ENTRY: {_display_time(event.filled_at_ms)} price={event.fill_price:.2f}")
+                self.ctx.log(f"ENTRY: {display_time(event.filled_at_ms)} price={event.fill_price:.2f}")
             return
 
         # Exit fill.
@@ -177,7 +176,7 @@ class RsiRangeStrategy(Strategy):
         self._open_trade = None
         if self.ctx is not None:
             self.ctx.log(
-                f"EXIT: {_display_time(event.filled_at_ms)} price={event.fill_price:.2f} "
+                f"EXIT: {display_time(event.filled_at_ms)} price={event.fill_price:.2f} "
                 f"pnl={pnl_pts:.2f} ({float(pnl_pct) * 100:.2f}%)"
             )
 
@@ -214,8 +213,3 @@ class RsiRangeStrategy(Strategy):
             snap["adx"] = self._adx.current_value
         return snap
 
-
-def _display_time(timestamp_ms: int) -> str:
-    from zoneinfo import ZoneInfo
-
-    return datetime_at_ms(timestamp_ms, tz=ZoneInfo("America/New_York")).strftime("%Y-%m-%d %H:%M")

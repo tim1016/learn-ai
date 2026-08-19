@@ -19,20 +19,17 @@ an alpha port.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import time, timedelta
 from decimal import Decimal
 from enum import StrEnum
-from zoneinfo import ZoneInfo
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
-from app.engine.strategy.base import LoggedTrade, Strategy
-from app.utils.timestamps import datetime_at_ms
+from app.engine.strategy.base import LoggedTrade, Strategy, ny_datetime
 
 _DETECTION_START = time(9, 45)
 _STOP_AND_FLATTEN = time(15, 45)
 _BARS_FROM_ENTRY_FILL_TO_EXIT_SIGNAL = 3
-_NY = ZoneInfo("America/New_York")
 
 
 class DeploymentDecision(StrEnum):
@@ -89,7 +86,7 @@ class DeploymentValidationDecisionKernel:
         open_price: Decimal,
         close_price: Decimal,
     ) -> DeploymentDecision:
-        end_time = datetime.fromtimestamp(end_ms / 1000, tz=_NY)
+        end_time = ny_datetime(end_ms)
         if self._current_date != end_time.date():
             self._current_date = end_time.date()
             self._green_streak = 0
@@ -187,7 +184,7 @@ class DeploymentValidationConsecutiveGreen(Strategy):
     def on_minute_bar(self, bar: TradeBar) -> None:
         assert self.ctx is not None
 
-        end_time = _ny_datetime(bar.end_ms)
+        end_time = ny_datetime(bar.end_ms)
         bar_date = end_time.date()
         if self._current_date is None or bar_date != self._current_date:
             self._current_date = bar_date
@@ -261,7 +258,7 @@ class DeploymentValidationConsecutiveGreen(Strategy):
             self._in_position = True
             self._bars_until_exit_signal = _BARS_FROM_ENTRY_FILL_TO_EXIT_SIGNAL
             if self.ctx is not None:
-                self.ctx.log(f"ENTRY FILL: {_ny_datetime(event.filled_at_ms):%Y-%m-%d %H:%M} Price={event.fill_price:.2f}")
+                self.ctx.log(f"ENTRY FILL: {ny_datetime(event.filled_at_ms):%Y-%m-%d %H:%M} Price={event.fill_price:.2f}")
             return
 
         if self._open_trade is None:
@@ -287,7 +284,7 @@ class DeploymentValidationConsecutiveGreen(Strategy):
             )
         )
         if self.ctx is not None:
-            self.ctx.log(f"EXIT FILL: {_ny_datetime(event.filled_at_ms):%Y-%m-%d %H:%M} Price={event.fill_price:.2f}")
+            self.ctx.log(f"EXIT FILL: {ny_datetime(event.filled_at_ms):%Y-%m-%d %H:%M} Price={event.fill_price:.2f}")
         self._open_trade = None
         self._in_position = False
         self._bars_until_exit_signal = 0
@@ -305,8 +302,3 @@ class DeploymentValidationConsecutiveGreen(Strategy):
             self.ctx.liquidate(self._trade_symbol)
             self._in_position = False
             self._entry_pending = False
-
-
-def _ny_datetime(timestamp_ms: int) -> datetime:
-    """Materialize an engine timestamp only for local session/calendar logic."""
-    return datetime_at_ms(timestamp_ms, tz=_NY)

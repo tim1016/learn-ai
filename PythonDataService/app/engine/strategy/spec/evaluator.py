@@ -49,7 +49,7 @@ if TYPE_CHECKING:
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
 from app.engine.indicators.base import BarIndicator, Indicator
-from app.engine.strategy.base import LoggedTrade, Strategy
+from app.engine.strategy.base import LoggedTrade, Strategy, display_time
 from app.engine.strategy.spec import schema as S
 from app.engine.strategy.spec.indicators import build_indicator, is_bar_indicator
 from app.engine.strategy.spec.primitives import (
@@ -57,7 +57,6 @@ from app.engine.strategy.spec.primitives import (
     EvalContext,
     Primitive,
 )
-from app.utils.timestamps import datetime_at_ms
 
 
 @dataclass
@@ -318,7 +317,7 @@ class SpecAlgorithm(Strategy):
                     break
             if not survival_fired and self._exit_block.evaluate(ctx):
                 self.ctx.liquidate(self._symbol)
-                self.ctx.log(f"EXIT SIGNAL: {_display_time(bar.end_ms)} Close={bar.close:.2f}")
+                self.ctx.log(f"EXIT SIGNAL: {display_time(bar.end_ms)} Close={bar.close:.2f}")
                 self._in_position = False
                 self._entry_bar_count = None
         else:
@@ -336,7 +335,7 @@ class SpecAlgorithm(Strategy):
                 self._in_position = True
                 self._entry_bar_count = self._bar_count
                 self.ctx.log(
-                    f"ENTRY SIGNAL: {_display_time(bar.end_ms)} "
+                    f"ENTRY SIGNAL: {display_time(bar.end_ms)} "
                     f"Close={bar.close:.2f} "
                     f"{self._format_snapshot(snapshot)}"
                 )
@@ -384,7 +383,7 @@ class SpecAlgorithm(Strategy):
         if isinstance(action, S.CloseAllAction):
             self.ctx.liquidate(self._symbol)
             self.ctx.log(
-                f"MANAGE FIRE: {rule_name!r} at {_display_time(bar.end_ms)} "
+                f"MANAGE FIRE: {rule_name!r} at {display_time(bar.end_ms)} "
                 f"Close={bar.close:.2f} → CLOSE_ALL"
             )
             self._in_position = False
@@ -416,7 +415,7 @@ class SpecAlgorithm(Strategy):
         if event.direction == Direction.LONG:
             if self._pending_entry is None:
                 if self.ctx is not None:
-                    self.ctx.log(f"WARN: LONG fill at {_display_time(event.filled_at_ms)} with no pending entry")
+                    self.ctx.log(f"WARN: LONG fill at {display_time(event.filled_at_ms)} with no pending entry")
                 return
             self._open_trade = _OpenTrade(
                 entry_time_ms=event.filled_at_ms,
@@ -427,7 +426,7 @@ class SpecAlgorithm(Strategy):
             self._pending_entry = None
             if self.ctx is not None:
                 self.ctx.log(
-                    f"ENTRY: {_display_time(event.filled_at_ms)} "
+                    f"ENTRY: {display_time(event.filled_at_ms)} "
                     f"Price={event.fill_price:.2f} "
                     f"{self._format_snapshot(self._open_trade.snapshot)}"
                 )
@@ -467,7 +466,7 @@ class SpecAlgorithm(Strategy):
         )
         if self.ctx is not None:
             self.ctx.log(
-                f"EXIT: {_display_time(event.filled_at_ms)} "
+                f"EXIT: {display_time(event.filled_at_ms)} "
                 f"Price={event.fill_price:.2f} PnL={pnl_pts:.2f} "
                 f"({pnl_pct * 100:.2f}%) {result}"
             )
@@ -479,8 +478,3 @@ class SpecAlgorithm(Strategy):
             self.ctx.liquidate(self._symbol)
             self._in_position = False
 
-
-def _display_time(timestamp_ms: int) -> str:
-    from zoneinfo import ZoneInfo
-
-    return datetime_at_ms(timestamp_ms, tz=ZoneInfo("America/New_York")).strftime("%Y-%m-%d %H:%M")

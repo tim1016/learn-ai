@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 from app.engine.consolidators.trade_bar_consolidator import TradeBarConsolidator
 from app.engine.data.trade_bar import TradeBar
@@ -21,6 +22,7 @@ from app.engine.execution.portfolio import Portfolio
 from app.engine.framework.insight import Insight
 from app.engine.framework.insight_manager import InsightManager
 from app.engine.strategy.signal_intent import SignalIntent
+from app.utils.timestamps import datetime_at_ms
 
 if TYPE_CHECKING:
     from app.engine.execution.signal_intent_executor import SignalIntentExecutor
@@ -28,6 +30,20 @@ if TYPE_CHECKING:
 
     # Type-only: a runtime import would create an indicator_state -> strategy
     # cycle. The default validate_state_payload imports it locally instead.
+
+_NY = ZoneInfo("America/New_York")
+
+
+def ny_datetime(timestamp_ms: int) -> datetime:
+    """Materialize an engine timestamp in America/New_York for local-only
+    session/calendar logic or an operator-facing log line — never store the
+    result (temporal-rigor.md); the canonical value stays `int64 ms UTC`."""
+    return datetime_at_ms(timestamp_ms, tz=_NY)
+
+
+def display_time(timestamp_ms: int) -> str:
+    """Format a timestamp for an operator-facing strategy log line (ET, minute precision)."""
+    return ny_datetime(timestamp_ms).strftime("%Y-%m-%d %H:%M")
 
 
 @dataclass(frozen=True)

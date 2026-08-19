@@ -52,9 +52,8 @@ from app.engine.execution.order import Direction, OrderEvent
 from app.engine.framework.insight import Insight, InsightDirection
 from app.engine.indicators.ema import ExponentialMovingAverage
 from app.engine.indicators.rsi import RelativeStrengthIndex
-from app.engine.strategy.base import DecisionSnapshot, LoggedTrade, Strategy
+from app.engine.strategy.base import DecisionSnapshot, LoggedTrade, Strategy, display_time
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
-from app.utils.timestamps import datetime_at_ms
 
 
 @dataclass
@@ -80,13 +79,6 @@ class _OpenTrade:
     ema5: Decimal
     ema10: Decimal
     rsi: Decimal
-
-
-def _display_time(timestamp_ms: int) -> str:
-    """Format a timestamp only for an operator-facing strategy log line."""
-    from zoneinfo import ZoneInfo
-
-    return datetime_at_ms(timestamp_ms, tz=ZoneInfo("America/New_York")).strftime("%Y-%m-%d %H:%M")
 
 
 class EmaCrossoverSignalAlgorithm(Strategy):
@@ -269,7 +261,7 @@ class EmaCrossoverSignalAlgorithm(Strategy):
                         intended_price=bar.close,
                     )
                 )
-                self.ctx.log(f"EXIT SIGNAL: {_display_time(bar.end_ms)} Close={bar.close:.2f}")
+                self.ctx.log(f"EXIT SIGNAL: {display_time(bar.end_ms)} Close={bar.close:.2f}")
                 self._in_position = False
                 bar_signal = "EXIT"
         else:
@@ -319,7 +311,7 @@ class EmaCrossoverSignalAlgorithm(Strategy):
                 )
 
                 self.ctx.log(
-                    f"ENTRY SIGNAL: {_display_time(bar.end_ms)} "
+                    f"ENTRY SIGNAL: {display_time(bar.end_ms)} "
                     f"Close={bar.close:.2f} "
                     f"EMA5={ema5_val:.4f} EMA10={ema10_val:.4f} "
                     f"Gap={ema_gap:.4f} RSI={rsi_val:.2f}"
@@ -382,7 +374,7 @@ class EmaCrossoverSignalAlgorithm(Strategy):
                 # Defensive: a LONG fill without a pending entry means
                 # state is out of sync. Log and skip.
                 if self.ctx is not None:
-                    self.ctx.log(f"WARN: LONG fill at {_display_time(event.filled_at_ms)} with no pending entry")
+                    self.ctx.log(f"WARN: LONG fill at {display_time(event.filled_at_ms)} with no pending entry")
                 return
             self._open_trade = _OpenTrade(
                 entry_time_ms=event.filled_at_ms,
@@ -395,7 +387,7 @@ class EmaCrossoverSignalAlgorithm(Strategy):
             self._pending_entry = None
             if self.ctx is not None:
                 self.ctx.log(
-                    f"ENTRY: {_display_time(event.filled_at_ms)} "
+                    f"ENTRY: {display_time(event.filled_at_ms)} "
                     f"Price={event.fill_price:.2f} "
                     f"EMA5={self._open_trade.ema5:.4f} "
                     f"EMA10={self._open_trade.ema10:.4f} "
@@ -431,7 +423,7 @@ class EmaCrossoverSignalAlgorithm(Strategy):
             )
             if self.ctx is not None:
                 self.ctx.log(
-                    f"EXIT: {_display_time(exit_time_ms)} "
+                    f"EXIT: {display_time(exit_time_ms)} "
                     f"Price={exit_price:.2f} PnL={pnl_pts:.2f} "
                     f"({pnl_pct * 100:.2f}%) {result}"
                 )
