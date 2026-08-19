@@ -52,6 +52,41 @@ describe('formatTimestampDisplay', () => {
   it('returns the fallback for absent values', () => {
     expect(formatTimestampDisplay(null, { mode: 'et' })).toBe('—');
   });
+
+  describe('chart granularity', () => {
+    it('formats a short, no-year readout for a viewer-local instant', () => {
+      expect(formatTimestampDisplay(EXPIRY_ANCHOR_MS, {
+        mode: 'local',
+        granularity: 'chart',
+        localTimeZone: 'America/New_York',
+      })).toBe('Jun 19, 16:00:00');
+    });
+
+    it('adds the ET marker for exchange-time chart readouts', () => {
+      expect(formatTimestampDisplay(EXPIRY_ANCHOR_MS, {
+        mode: 'et',
+        granularity: 'chart',
+      })).toBe('Jun 19, 16:00:00 ET');
+    });
+
+    it('stays DST-aware across the spring-forward boundary (America/New_York)', () => {
+      // 2026-03-08 06:59:59 UTC = 2026-03-08 01:59:59 EST (pre-DST).
+      const beforeSpringForward = Date.UTC(2026, 2, 8, 6, 59, 59);
+      // 2026-03-08 07:00:00 UTC = 2026-03-08 03:00:00 EDT (post-DST, clocks skip 2-3am).
+      const afterSpringForward = Date.UTC(2026, 2, 8, 7, 0, 0);
+
+      expect(formatTimestampDisplay(beforeSpringForward, { mode: 'et', granularity: 'chart' })).toBe(
+        'Mar 08, 01:59:59 ET',
+      );
+      expect(formatTimestampDisplay(afterSpringForward, { mode: 'et', granularity: 'chart' })).toBe(
+        'Mar 08, 03:00:00 ET',
+      );
+    });
+
+    it('returns the fallback for absent values', () => {
+      expect(formatTimestampDisplay(undefined, { mode: 'et', granularity: 'chart' })).toBe('—');
+    });
+  });
 });
 
 describe('formatTimestampIsoInZone', () => {
