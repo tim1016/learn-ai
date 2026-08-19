@@ -31,14 +31,19 @@ def test_deployment_validation_spec_fixture_loads() -> None:
     assert "client_id" not in payload
 
 
-def _assert_time_call(node: ast.AST, hour: int, minute: int) -> None:
+def _assert_timedelta_minutes_call(node: ast.AST, minutes: int) -> None:
     assert isinstance(node, ast.Call)
     assert isinstance(node.func, ast.Name)
-    assert node.func.id == "time"
-    assert [arg.value for arg in node.args if isinstance(arg, ast.Constant)] == [hour, minute]
+    assert node.func.id == "timedelta"
+    assert [kw.arg for kw in node.keywords] == ["minutes"]
+    assert node.keywords[0].value.value == minutes
 
 
 def test_deployment_validation_qc_shadow_copy_is_parseable() -> None:
+    """Regression for #1672: the session-boundary literals were replaced
+    with calendar-derived offsets, so a half-day close still gets a real,
+    reachable stop/flatten barrier (see
+    docs/references/deployment-validation-consecutive-green.md)."""
     path = REPO_ROOT / "references" / "qc-shadow" / "DeploymentValidationAlgorithm.py"
     source = path.read_text(encoding="utf-8")
 
@@ -54,5 +59,5 @@ def test_deployment_validation_qc_shadow_copy_is_parseable() -> None:
         if isinstance(target, ast.Name)
     }
 
-    _assert_time_call(assigns["START_AFTER"], 9, 45)
-    _assert_time_call(assigns["STOP_AND_FLATTEN"], 15, 45)
+    _assert_timedelta_minutes_call(assigns["DETECTION_START_OFFSET"], 15)
+    _assert_timedelta_minutes_call(assigns["STOP_AND_FLATTEN_OFFSET"], 15)

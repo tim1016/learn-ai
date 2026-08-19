@@ -1,0 +1,16 @@
+{
+  "regular_session": {
+    "session_date": "2026-01-05",
+    "session_open_ms_utc": 1767623400000,
+    "session_close_ms_utc": 1767646800000,
+    "detection_start_ms_utc": 1767624300000,
+    "stop_and_flatten_ms_utc": 1767645900000
+  },
+  "half_day_session": {
+    "session_date": "2024-11-29",
+    "session_open_ms_utc": 1732890600000,
+    "session_close_ms_utc": 1732903200000,
+    "detection_start_ms_utc": 1732891500000,
+    "stop_and_flatten_ms_utc": 1732902300000
+  }
+}

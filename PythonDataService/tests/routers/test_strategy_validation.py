@@ -15,7 +15,9 @@ async def test_strategy_validation_catalog_and_detail_expose_manifest(tmp_path) 
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             catalog_response = await client.get("/api/strategy-validation/strategies")
-            detail_response = await client.get("/api/strategy-validation/strategies/deployment_validation")
+            deployment_validation_detail_response = await client.get(
+                "/api/strategy-validation/strategies/deployment_validation"
+            )
             ema_detail_response = await client.get("/api/strategy-validation/strategies/ema_crossover_signal")
     finally:
         app.dependency_overrides.pop(get_strategy_validation_flag_events_path, None)
@@ -25,8 +27,20 @@ async def test_strategy_validation_catalog_and_detail_expose_manifest(tmp_path) 
     strategies = {row["strategy_key"]: row for row in catalog["strategies"]}
     assert "deployment_validation" in strategies
     assert "spy_orb" in strategies
+    # #1672 recalculated deployment_validation's session-boundary literals to be
+    # calendar-relative (see docs/references/deployment-validation-consecutive-green.md).
+    # That intentionally changed the validated source files, so the manifest's
+    # pinned evidence hashes are now stale and the strategy fails closed to
+    # non-deployable until a fresh QuantConnect Cloud backtest + reconciliation
+    # is run and the manifest is updated with new evidence — the manifest is not
+    # silently re-hashed here to avoid fabricating a "passed" receipt for
+    # unrun reconciliation (see .claude/rules/numerical-rigor.md).
     assert strategies["deployment_validation"]["validation_state"] == "validated"
-    assert strategies["deployment_validation"]["deployable"] is True
+    assert strategies["deployment_validation"]["deployable"] is False
+    assert (
+        "The referenced LEAN audit copy no longer matches its validation hash."
+        in strategies["deployment_validation"]["diagnostics"]["notes"]
+    )
     assert strategies["ema_crossover_signal"]["validation_state"] == "validated"
     assert strategies["ema_crossover_signal"]["deployable"] is True
     assert (
@@ -40,19 +54,10 @@ async def test_strategy_validation_catalog_and_detail_expose_manifest(tmp_path) 
     assert strategies["spy_orb"]["validation_state"] == "needs_validation"
     assert strategies["spy_orb"]["deployable"] is False
 
-    assert detail_response.status_code == 200, detail_response.text
-    detail = detail_response.json()
-    assert detail["strategy_key"] == "deployment_validation"
-    assert detail["qc_cloud_backtest_id"] == "d2fe45a7142e88575f6fbd75229f8681"
-    assert detail["validation_case_symbol"] == "SPY"
-    assert detail["validator_code_ref"].endswith("lean_sidecar/trusted_samples/deployment_validation.py")
-    assert detail["settings_file_ref"].endswith("deployment_validation.spec.json")
-    assert detail["audit_copy_ref"] == "references/qc-shadow/DeploymentValidationAlgorithm.py"
-    assert detail["diagnostics"]["trades_matched"] == 56
-    assert detail["diagnostics"]["divergence_counts"] == {}
-    assert detail["reference_code"]["path"] == "references/qc-shadow/DeploymentValidationAlgorithm.py"
-    assert "class DeploymentValidationAlgorithm" in detail["reference_code"]["source"]
-    assert "DeploymentValidationConsecutiveGreen" not in detail["reference_code"]["source"]
+    # The detail endpoint independently re-verifies the audit copy hash and
+    # fails closed hard (503) rather than degrading, unlike the catalog above.
+    assert deployment_validation_detail_response.status_code == 503, deployment_validation_detail_response.text
+    assert deployment_validation_detail_response.json()["detail"] == "Strategy audit copy SHA mismatch"
 
     assert ema_detail_response.status_code == 200, ema_detail_response.text
     ema_detail = ema_detail_response.json()
@@ -63,6 +68,10 @@ async def test_strategy_validation_catalog_and_detail_expose_manifest(tmp_path) 
     )
     assert ema_detail["settings_file_ref"].endswith("spy_ema_crossover.spec.json")
     assert ema_detail["audit_copy_ref"] == "references/qc-shadow/SpyEmaCrossoverAlgorithm.py"
+    assert ema_detail["qc_cloud_backtest_id"] == "d2fe45a7142e88575f6fbd75229f8681"
+    assert ema_detail["validation_case_symbol"] == "SPY"
+    assert ema_detail["diagnostics"]["trades_matched"] == 31
+    assert ema_detail["diagnostics"]["divergence_counts"] == {}
 
     assert ema_detail["reference_code"]["path"] == "references/qc-shadow/SpyEmaCrossoverAlgorithm.py"
     assert "class SpyEmaCrossoverAlgorithm(QCAlgorithm)" in ema_detail["reference_code"]["source"]
@@ -83,6 +92,14 @@ async def test_strategy_validation_flag_write_is_guarded_and_appends_server_even
     tmp_path,
     monkeypatch,
 ) -> None:
+    # Subject is ema_crossover_signal, not deployment_validation: this test
+    # exercises the generic flag/refresh write path (control-secret guard,
+    # ledger append) and needs a strategy whose evidence hashes currently
+    # match its source. #1672 deliberately changed deployment_validation's
+    # source (see docs/references/deployment-validation-consecutive-green.md),
+    # so its evidence hash no longer matches and flag-write correctly refuses
+    # to act on it — that refusal is covered separately in
+    # test_strategy_validation_catalog_and_detail_expose_manifest.
     from app.config import settings
     from app.main import app
     from app.routers.strategy_validation import (
@@ -104,16 +121,16 @@ async def test_strategy_validation_flag_write_is_guarded_and_appends_server_even
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             missing_secret = await client.post(
-                "/api/strategy-validation/strategies/deployment_validation/flag",
+                "/api/strategy-validation/strategies/ema_crossover_signal/flag",
                 json={"flag": "invalidated", "reason": "Reject the seeded evidence."},
             )
             accepted = await client.post(
-                "/api/strategy-validation/strategies/deployment_validation/flag",
+                "/api/strategy-validation/strategies/ema_crossover_signal/flag",
                 headers={CONTROL_SECRET_HEADER: "test-control-secret"},
                 json={"flag": "invalidated", "reason": "Reject the seeded evidence."},
             )
             refresh_result = await client.post(
-                "/api/strategy-validation/strategies/deployment_validation/refresh",
+                "/api/strategy-validation/strategies/ema_crossover_signal/refresh",
                 headers={CONTROL_SECRET_HEADER: "test-control-secret"},
             )
     finally:
@@ -130,7 +147,7 @@ async def test_strategy_validation_flag_write_is_guarded_and_appends_server_even
     assert detail["current_flag_event"]["reason"] == "Reject the seeded evidence."
     assert detail["current_flag_event"]["behavioral_equivalence"]["verdict"] == "rejected"
     assert refresh_result.status_code == 200, refresh_result.text
-    assert refresh_result.json()["detail"]["strategy_key"] == "deployment_validation"
+    assert refresh_result.json()["detail"]["strategy_key"] == "ema_crossover_signal"
     manifest_raw = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert "flag_events" not in manifest_raw
     ledger_raw = json.loads(flag_events_path.read_text(encoding="utf-8"))

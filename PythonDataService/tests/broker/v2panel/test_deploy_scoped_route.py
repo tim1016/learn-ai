@@ -150,7 +150,15 @@ def deploy_app(tmp_path: Path, monkeypatch):
 
 _BODY = {
     "strategy_instance_id": SID,
-    "strategy_key": "deployment_validation",
+    # ema_crossover_signal, not deployment_validation: #1672 deliberately
+    # changed deployment_validation's session-boundary literals (see
+    # docs/references/deployment-validation-consecutive-green.md), which
+    # invalidates its manifest-pinned evidence hashes until a fresh QC
+    # Cloud reconciliation is run. This file exercises the deploy route's
+    # own orchestration, not evidence-hash integrity — that's covered by
+    # tests/routers/test_strategy_validation.py — so its default fixture
+    # strategy needs to be one with currently-matching evidence.
+    "strategy_key": "ema_crossover_signal",
     "symbol": "SPY",
     "sizing": {"preset": "custom", "quantity": 2},
 }
@@ -160,7 +168,7 @@ def _accepted_deploy_entry() -> StrategyValidationEntry:
     return next(
         entry
         for entry in load_strategy_validation_entries(strategy_registry_seeds())
-        if entry.strategy_key == "deployment_validation"
+        if entry.strategy_key == "ema_crossover_signal"
     )
 
 
@@ -308,8 +316,11 @@ async def test_deploy_view_is_closed_paper_only_contract(deploy_app) -> None:
     body = resp.json()
     assert body["account_mode"] == "paper"
     assert body["allowed_actions"] == ["deploy"]
+    # deployment_validation is temporarily excluded: #1672 changed its
+    # session-boundary literals, which invalidated the manifest's pinned
+    # evidence hashes until a fresh QC Cloud reconciliation is run (see
+    # docs/references/deployment-validation-consecutive-green.md).
     assert [row["strategy_key"] for row in body["strategies"]] == [
-        "deployment_validation",
         "ema_crossover_signal",
     ]
     strategy = body["strategies"][0]

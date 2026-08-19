@@ -27,8 +27,8 @@ class _StaticBarReader:
         yield from self._bars
 
 
-def _bar(hour: int, minute: int, open_: str, close: str) -> TradeBar:
-    start = datetime(2026, 1, 5, hour, minute, tzinfo=NY)
+def _bar(hour: int, minute: int, open_: str, close: str, *, day: date = date(2026, 1, 5)) -> TradeBar:
+    start = datetime(day.year, day.month, day.day, hour, minute, tzinfo=NY)
     o = Decimal(open_)
     c = Decimal(close)
     return TradeBar(
@@ -173,6 +173,51 @@ def test_stops_detecting_and_flattens_at_1545() -> None:
     _strategy, events = _run(bars)
 
     assert events == []
+
+
+def test_on_minute_bar_suppresses_entries_at_half_day_barrier() -> None:
+    """Regression for #1672: NYSE half days (e.g. the day after Thanksgiving)
+    close at 13:00 ET instead of 16:00 ET. A fixed 15:45 ET literal is never
+    reached within such a session, so the old hardcoded cutoff would have let
+    these bars enter freely. The detection-stop barrier must be
+    calendar-relative — 15 minutes before the day's actual close, 12:45 ET
+    here — so it suppresses new entries exactly like it does on a regular
+    session at 15:45 ET."""
+    half_day = date(2024, 11, 29)
+    bars = [
+        _bar(12, 44, "100", "101", day=half_day),  # ends at 12:45, half-day barrier fires before detection
+        _bar(12, 45, "101", "102", day=half_day),
+        _bar(12, 46, "102", "103", day=half_day),
+        _bar(12, 47, "103", "104", day=half_day),
+    ]
+
+    _strategy, events = _run(bars)
+
+    assert events == []
+
+
+def test_on_closed_bar_emits_exit_at_half_day_barrier() -> None:
+    """Regression for #1672: on a half day the stop/flatten EXIT branch must
+    fire well before the 13:00 ET close — 12:45 ET here — since a fixed
+    15:45 ET literal would never be reached within the session and an active
+    cycle would ride unflattened into (and past) the actual close."""
+    kernel = DeploymentValidationDecisionKernel()
+    half_day = date(2024, 11, 29)
+    entry_bars = [
+        _bar(9, 44, "100", "101", day=half_day),
+        _bar(9, 45, "101", "102", day=half_day),  # ENTER
+    ]
+    for bar in entry_bars:
+        kernel.on_closed_bar(end_ms=bar.end_ms, open_price=bar.open, close_price=bar.close)
+
+    barrier_bar = _bar(12, 44, "106", "105", day=half_day)  # ends 12:45, the half-day barrier
+    decision = kernel.on_closed_bar(
+        end_ms=barrier_bar.end_ms,
+        open_price=barrier_bar.open,
+        close_price=barrier_bar.close,
+    )
+
+    assert decision == "EXIT"
 
 
 def test_live_start_registry_class_name_resolves_strategy_class() -> None:

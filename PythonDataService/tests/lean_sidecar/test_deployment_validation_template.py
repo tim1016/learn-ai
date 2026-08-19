@@ -28,8 +28,8 @@ def test_source_contains_required_handlers() -> None:
 def test_source_pins_strategy_constants() -> None:
     src = DEPLOYMENT_VALIDATION_SOURCE
 
-    assert "START_AFTER = time(9, 45)" in src
-    assert "STOP_AND_FLATTEN = time(15, 45)" in src
+    assert "DETECTION_START_OFFSET = timedelta(minutes=15)" in src
+    assert "STOP_AND_FLATTEN_OFFSET = timedelta(minutes=15)" in src
     assert "EXIT_BAR_COUNT = 3" in src
 
 
