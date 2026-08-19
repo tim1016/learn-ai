@@ -165,6 +165,38 @@ supersedes it** — the module is reachable only from the legacy JSONL path that
 ADR 0037 retires, so it resolves by deletion. Do not write a regression test
 against it.
 
+### Non-numeric operator verdict ownership (verified 2026-08-18)
+
+Source: `docs/audits/non-numeric-operator-verdict-census-2026-08-18.md`, read at
+commit `a16571c2736b`. No new ADR is owed: ADR 0035 Decision 12 already makes
+Alpaca safety, capability, freshness, and primary-action choice backend-owned,
+while ADR 0027 owns blocker disposition and moves.
+
+- **Live account surfaces derive operational posture and availability
+  (medium).** Account Desk combines guidance, uncertainties, authority health,
+  and recovery-action flags into `healthy` / `fix_here` / `wait` / `review` /
+  `terminal`. Account Strip combines account flags into “Trading available” or
+  “Trading blocked” and freeze/hold flags into custody-block verdicts; the
+  available case omits the backend's paper-mode and active-status requirements.
+  Preserve one contract for both surfaces: a backend-authored account operator
+  view with `dominant_blocker: OperatorBlocker | null`, backend status copy, and
+  one action reference. Reuse ADR 0027 disposition; do not create a parallel
+  five-state posture enum. Angular renders it and mutation endpoints still
+  recheck.
+  [#1664](https://github.com/tim1016/learn-ai/issues/1664)
+
+- **Both live bot-detail lenses derive the banner's primary command (medium).**
+  `Frontend/src/app/components/broker/v2-panel/bot-detail-banner/lifecycle-action.ts:12-19`
+  selects Resume, Continue, or Stop from `health.running` and
+  `health.desired_state`; the Trader and Operator banners render that result as
+  their sole primary command, and Operator readiness uses it for suppression.
+  Preserve the invariant: `BotPanelView.primary_action_id` is the sole
+  backend-selected primary-action authority at the same revision as mission and
+  actions. Banner and readiness consumers use only it; any retained recovery
+  `evidence.primary` marker is diagnostic-only and must agree exactly. Angular
+  fails closed when the reference is absent or inconsistent.
+  [#1665](https://github.com/tim1016/learn-ai/issues/1665)
+
 ### Bot control-plane boundary (ADR 0038, verified 2026-08-18)
 
 Decision record: ADR 0038 — Alpaca is the only bot control plane; SQLite is the
