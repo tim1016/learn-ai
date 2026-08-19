@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
-from app.engine.live.bot_lifecycle_evaluator import BotLifecycleEvaluator
 from app.engine.live.bot_lifecycle_state import BotDutyOutcome
 from app.engine.live.clock_out import (
     ClockOutReceiptCorruptError,
@@ -19,6 +18,7 @@ from app.engine.live.desired_state import (
     stable_desired_state_path,
 )
 from app.engine.live.exit_taxonomy import classify_run_exit, read_run_exit_evidence
+from app.services.ibkr_lifecycle_guard import ibkr_lifecycle_capability
 
 
 class _ProcessWithReturnCode(Protocol):
@@ -48,7 +48,7 @@ def record_failed_launch_outcome(
 
     if not strategy_instance_id:
         return
-    BotLifecycleEvaluator(artifacts_root, strategy_instance_id).record_terminal_outcome(
+    ibkr_lifecycle_capability(artifacts_root, strategy_instance_id).record_terminal(
         BotDutyOutcome(
             kind="FAILED_LAUNCH",
             reason_code="FAILED_LAUNCH",
@@ -112,7 +112,7 @@ def record_terminal_lifecycle_outcome(
             run_id=managed.run_id,
         )
         reason = verdict.registry_source
-    BotLifecycleEvaluator(artifacts_root, managed.strategy_instance_id).record_terminal_outcome(
+    ibkr_lifecycle_capability(artifacts_root, managed.strategy_instance_id).record_terminal(
         outcome,
         updated_by="host_daemon",
         reason=reason,

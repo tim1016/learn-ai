@@ -68,6 +68,7 @@ from app.engine.live.host_daemon import (
     create_app,
 )
 from app.engine.live.host_runner_policy import validate_ibkr_host_allowed
+from app.engine.live.run_ledger import LiveRunLedger, write_ledger
 from app.engine.live.run_status import write_run_status
 from app.operator.incidents.store import IncidentStore
 from app.schemas.bot_events import (
@@ -135,6 +136,31 @@ class FakeProcess:
     def terminate(self) -> None:
         self.signals.append(signal.SIGTERM)
         self.returncode = 0
+
+
+def _write_ibkr_identity(
+    run_dir: Path,
+    *,
+    run_id: str,
+    strategy_instance_id: str,
+    account_id: str = "DU111",
+) -> None:
+    write_ledger(
+        run_dir / "run_ledger.json",
+        LiveRunLedger(
+            run_id=run_id,
+            code_sha="test-sha",
+            strategy_instance_id=strategy_instance_id,
+            strategy_spec_path="spec.json",
+            strategy_spec_sha256="spec-sha",
+            qc_audit_copy_path="qc.py",
+            qc_audit_copy_sha256="qc-sha",
+            qc_cloud_backtest_id="qc-test",
+            account_id=account_id,
+            start_date_ms=1_780_000_000_000,
+            live_config={},
+        ),
+    )
 
 
 def test_clerk_readiness_requires_matching_generation_handshake(
@@ -538,6 +564,11 @@ def _add_managed_process(
     run_id = f"run-{key}"
     run_dir = manager.live_runs_root / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
+    _write_ibkr_identity(
+        run_dir,
+        run_id=run_id,
+        strategy_instance_id=key,
+    )
     log_path = run_dir / "host_daemon.log"
     log_handle = log_path.open("a", encoding="utf-8")
     if ended_at_ms is not None:
@@ -670,9 +701,10 @@ def test_daemon_boot_replays_a_fenced_partial_bot_retirement(
     sid = "retirement-replay-bot"
     run_dir = live_runs_root / run_id
     run_dir.mkdir(parents=True)
-    (run_dir / "run_ledger.json").write_text(
-        json.dumps({"run_id": run_id, "strategy_instance_id": sid, "account_id": "DU111"}),
-        encoding="utf-8",
+    _write_ibkr_identity(
+        run_dir,
+        run_id=run_id,
+        strategy_instance_id=sid,
     )
     for account_id in ("DU111", "DU222"):
         write_account_instance_binding(
@@ -858,8 +890,9 @@ def test_instance_status_is_a_pure_observation_not_a_reaper(
 def test_host_deploy_reopens_retired_lifecycle_inside_operation_fence(
     daemon_context: tuple[RunnerProcessManager, Path],
 ) -> None:
-    manager, _ = daemon_context
+    manager, run_dir = daemon_context
     sid = "deploy-replacement-bot"
+    _write_ibkr_identity(run_dir, run_id=RUN_ID, strategy_instance_id=sid)
     repo = BotLifecycleStateRepo(stable_bot_lifecycle_state_path(manager.artifacts_root, sid))
     repo.retire(now_ms=100, updated_by="operator", reason="replace")
 
@@ -878,8 +911,9 @@ def test_host_deploy_surfaces_lifecycle_reopen_failure(
     daemon_context: tuple[RunnerProcessManager, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manager, _ = daemon_context
+    manager, run_dir = daemon_context
     sid = "deploy-reopen-failure"
+    _write_ibkr_identity(run_dir, run_id=RUN_ID, strategy_instance_id=sid)
     repo = BotLifecycleStateRepo(stable_bot_lifecycle_state_path(manager.artifacts_root, sid))
     repo.retire(now_ms=100, updated_by="operator", reason="replace")
 
@@ -1846,15 +1880,10 @@ def test_start_refuses_admission_while_account_emergency_is_in_flight(
     """No bot can cross host admission after the emergency envelope begins."""
 
     manager, run_dir = daemon_context
-    (run_dir / "run_ledger.json").write_text(
-        json.dumps(
-            {
-                "run_id": RUN_ID,
-                "strategy_instance_id": "spy_ema_paper",
-                "account_id": "DU111",
-            }
-        ),
-        encoding="utf-8",
+    _write_ibkr_identity(
+        run_dir,
+        run_id=RUN_ID,
+        strategy_instance_id="spy_ema_paper",
     )
     with manager._flatten_lock:
         manager._flatten_in_flight.add("DU111")
@@ -1875,15 +1904,10 @@ def test_start_refuses_stopped_desired_state_before_spawn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     manager, run_dir = daemon_context
-    (run_dir / "run_ledger.json").write_text(
-        json.dumps(
-            {
-                "run_id": RUN_ID,
-                "strategy_instance_id": "spy_ema_paper",
-                "account_id": "DU111",
-            }
-        ),
-        encoding="utf-8",
+    _write_ibkr_identity(
+        run_dir,
+        run_id=RUN_ID,
+        strategy_instance_id="spy_ema_paper",
     )
     DesiredStateRepo(
         stable_desired_state_path(manager.artifacts_root, "spy_ema_paper")
@@ -2581,15 +2605,10 @@ async def test_start_retires_account_registry_binding_when_spawn_fails(
     from app.engine.live.host_daemon import HostRunnerError
 
     manager, run_dir = daemon_context
-    (run_dir / "run_ledger.json").write_text(
-        json.dumps(
-            {
-                "run_id": RUN_ID,
-                "strategy_instance_id": "spy_ema_paper",
-                "account_id": "DU111",
-            }
-        ),
-        encoding="utf-8",
+    _write_ibkr_identity(
+        run_dir,
+        run_id=RUN_ID,
+        strategy_instance_id="spy_ema_paper",
     )
 
     def fake_popen(command: list[str], **kwargs: Any) -> FakeProcess:
@@ -2634,15 +2653,10 @@ async def test_child_without_status_proposes_account_retirement_for_clerk(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     manager, run_dir = daemon_context
-    (run_dir / "run_ledger.json").write_text(
-        json.dumps(
-            {
-                "run_id": RUN_ID,
-                "strategy_instance_id": "spy_ema_paper",
-                "account_id": "DU111",
-            }
-        ),
-        encoding="utf-8",
+    _write_ibkr_identity(
+        run_dir,
+        run_id=RUN_ID,
+        strategy_instance_id="spy_ema_paper",
     )
     (run_dir / "host_daemon.log").write_text(
         "Traceback (most recent call last):\nRuntimeError: boot boom\n",

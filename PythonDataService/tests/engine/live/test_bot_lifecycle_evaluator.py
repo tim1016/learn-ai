@@ -33,49 +33,105 @@ _SID = "paper-evaluator"
 
 
 class _DirectLifecycleWriterVisitor(ast.NodeVisitor):
-    """Reject a future second durable lifecycle/control-plane writer."""
+    """Find lifecycle projection writes even through accessors or injection."""
 
     _MUTATORS = {
-        "BotLifecycleStateRepo": {
-            "set_roster",
-            "set_phase",
-            "retire",
-            "record_terminal_outcome",
-            "reopen_for_deploy",
-            "update",
-        },
-        "DesiredStateRepo": {"set", "write", "delete"},
+        "set_roster",
+        "set_phase",
+        "retire",
+        "record_terminal_outcome",
+        "reopen_for_deploy",
+        "update",
     }
 
     def __init__(self) -> None:
-        self._repo_names: dict[str, str] = {}
+        self._constructor_names: set[str] = {"BotLifecycleStateRepo"}
+        self._factory_names: set[str] = set()
+        self._lifecycle_sources: set[str] = set()
         self.violations: list[str] = []
 
-    def visit_Assign(self, node: ast.Assign) -> None:
-        if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name):
-            repo_type = node.value.func.id
-            if repo_type in self._MUTATORS:
-                for target in node.targets:
-                    if isinstance(target, ast.Name):
-                        self._repo_names[target.id] = repo_type
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        if node.module == "app.engine.live.bot_lifecycle_state":
+            self._constructor_names.update(
+                alias.asname or alias.name
+                for alias in node.names
+                if alias.name == "BotLifecycleStateRepo"
+            )
         self.generic_visit(node)
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        if self._is_lifecycle_source(node.value):
+            for target in node.targets:
+                target_name = self._expression_name(target)
+                if target_name is not None:
+                    self._lifecycle_sources.add(target_name)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        annotation = ast.unparse(node.annotation)
+        if "BotLifecycleStateRepo" in annotation or (
+            node.value is not None and self._is_lifecycle_source(node.value)
+        ):
+            target_name = self._expression_name(node.target)
+            if target_name is not None:
+                self._lifecycle_sources.add(target_name)
+        self.generic_visit(node)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._record_function_contract(node)
+        self.generic_visit(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._record_function_contract(node)
+        self.generic_visit(node)
+
+    def _record_function_contract(
+        self,
+        node: ast.FunctionDef | ast.AsyncFunctionDef,
+    ) -> None:
+        for argument in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs):
+            annotation = ast.unparse(argument.annotation) if argument.annotation is not None else ""
+            if "BotLifecycleStateRepo" in annotation or self._looks_like_lifecycle_repo(argument.arg):
+                self._lifecycle_sources.add(argument.arg)
+        return_annotation = ast.unparse(node.returns) if node.returns is not None else ""
+        if "BotLifecycleStateRepo" in return_annotation or self._looks_like_lifecycle_repo(node.name):
+            self._factory_names.add(node.name)
 
     def visit_Call(self, node: ast.Call) -> None:
-        if not isinstance(node.func, ast.Attribute) or node.func.attr not in {
-            method for methods in self._MUTATORS.values() for method in methods
-        }:
+        if not isinstance(node.func, ast.Attribute) or node.func.attr not in self._MUTATORS:
             self.generic_visit(node)
             return
-        repo_type = self._repo_type(node.func.value)
-        if repo_type is not None and node.func.attr in self._MUTATORS[repo_type]:
-            self.violations.append(f"{repo_type}.{node.func.attr} at line {node.lineno}")
+        if self._is_lifecycle_source(node.func.value):
+            self.violations.append(f"lifecycle.{node.func.attr} at line {node.lineno}")
         self.generic_visit(node)
 
-    def _repo_type(self, node: ast.expr) -> str | None:
+    def _is_lifecycle_source(self, node: ast.expr) -> bool:
+        name = self._expression_name(node)
+        if name in self._lifecycle_sources or (
+            name is not None and self._looks_like_lifecycle_repo(name)
+        ):
+            return True
+        if isinstance(node, ast.Call):
+            callable_name = self._expression_name(node.func)
+            return callable_name in self._constructor_names or callable_name in self._factory_names or (
+                callable_name is not None and self._looks_like_lifecycle_repo(callable_name)
+            )
+        if isinstance(node, ast.IfExp):
+            return self._is_lifecycle_source(node.body) or self._is_lifecycle_source(node.orelse)
+        return False
+
+    @staticmethod
+    def _looks_like_lifecycle_repo(name: str) -> bool:
+        normalized = name.lower()
+        return "lifecycle" in normalized and ("repo" in normalized or "repository" in normalized)
+
+    @staticmethod
+    def _expression_name(node: ast.expr) -> str | None:
         if isinstance(node, ast.Name):
-            return self._repo_names.get(node.id)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            return node.func.id if node.func.id in self._MUTATORS else None
+            return node.id
+        if isinstance(node, ast.Attribute):
+            parent = _DirectLifecycleWriterVisitor._expression_name(node.value)
+            return f"{parent}.{node.attr}" if parent is not None else node.attr
         return None
 
 
@@ -94,12 +150,12 @@ def _admission(run_id: str, *, strategy_instance_id: str = _SID) -> LifecycleSta
     )
 
 
-def test_production_lifecycle_repositories_have_one_mutating_owner() -> None:
+def test_production_lifecycle_phase_writes_use_an_authority_projection() -> None:
     app_root = Path(__file__).parents[3] / "app"
     excluded = {
         app_root / "engine/live/bot_lifecycle_evaluator.py",
         app_root / "engine/live/bot_lifecycle_state.py",
-        app_root / "engine/live/desired_state.py",
+        app_root / "services/bot_lifecycle_projection.py",
     }
     violations: list[str] = []
     for path in app_root.rglob("*.py"):
@@ -110,6 +166,126 @@ def test_production_lifecycle_repositories_have_one_mutating_owner() -> None:
         violations.extend(f"{path.relative_to(app_root)}: {violation}" for violation in visitor.violations)
 
     assert violations == []
+
+
+def test_legacy_evaluator_construction_stays_behind_capability_boundary() -> None:
+    app_root = Path(__file__).parents[3] / "app"
+    evaluator_module = "app.engine.live.bot_lifecycle_evaluator"
+    capability_path = Path("services/ibkr_lifecycle_guard.py")
+    intent_methods = {
+        Path("services/end_day_intent.py"): {"set_desired_state"},
+        Path("services/risk_reducing_lifecycle_intent.py"): {"set_desired_state"},
+        Path("engine/live/run.py"): {
+            "seed_default_desired_state_if_absent",
+            "set_desired_state",
+        },
+        Path("routers/live_instances.py"): {"assert_start_latch_allows_start"},
+    }
+    violations: list[str] = []
+
+    for path in app_root.rglob("*.py"):
+        relative = path.relative_to(app_root)
+        if relative == Path("engine/live/bot_lifecycle_evaluator.py"):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        constructor_names: set[str] = set()
+        module_aliases: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == evaluator_module:
+                constructor_names.update(
+                    alias.asname or alias.name
+                    for alias in node.names
+                    if alias.name in {"BotLifecycleEvaluator", "*"}
+                )
+            elif isinstance(node, ast.Import):
+                module_aliases.update(
+                    alias.asname or alias.name
+                    for alias in node.names
+                    if alias.name == evaluator_module
+                )
+        if not constructor_names and not module_aliases:
+            continue
+        if relative == capability_path:
+            continue
+        allowed_methods = intent_methods.get(relative)
+        if allowed_methods is None:
+            violations.append(f"{relative}: imports BotLifecycleEvaluator outside capability")
+            continue
+
+        constructor_lines: set[int] = set()
+        allowed_constructor_lines: set[int] = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if _is_evaluator_constructor(node.func, constructor_names, module_aliases):
+                constructor_lines.add(node.lineno)
+            if (
+                isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Call)
+                and _is_evaluator_constructor(
+                    node.func.value.func,
+                    constructor_names,
+                    module_aliases,
+                )
+                and node.func.attr in allowed_methods
+            ):
+                allowed_constructor_lines.add(node.func.value.lineno)
+        for line in sorted(constructor_lines - allowed_constructor_lines):
+            violations.append(f"{relative}:{line}: raw evaluator escapes intent call")
+
+    assert violations == []
+
+
+def _is_evaluator_constructor(
+    expression: ast.expr,
+    constructor_names: set[str],
+    module_aliases: set[str],
+) -> bool:
+    if isinstance(expression, ast.Name):
+        return expression.id in constructor_names
+    return (
+        isinstance(expression, ast.Attribute)
+        and expression.attr == "BotLifecycleEvaluator"
+        and isinstance(expression.value, ast.Name)
+        and expression.value.id in module_aliases
+    )
+
+
+def test_projection_discipline_follows_accessors_and_injected_repositories() -> None:
+    source = """
+from app.engine.live.bot_lifecycle_state import BotLifecycleStateRepo as StateStore
+
+def build_state_store() -> BotLifecycleStateRepo:
+    return StateStore('state.json')
+
+class InjectedWriter:
+    def __init__(self, lifecycle_repo: BotLifecycleStateRepo):
+        self._repo: BotLifecycleStateRepo = lifecycle_repo
+
+    def mutate(self):
+        self._repo.set_phase('ON_DUTY')
+
+def accessor_writer(lifecycle_repo_for, sid):
+    lifecycle_repo_for(sid).record_terminal_outcome(None)
+
+def aliased_factory_writer():
+    build_state_store().update(now_ms=1, updated_by='test')
+"""
+    visitor = _DirectLifecycleWriterVisitor()
+    visitor.visit(ast.parse(source))
+
+    assert visitor.violations == [
+        "lifecycle.set_phase at line 12",
+        "lifecycle.record_terminal_outcome at line 15",
+        "lifecycle.update at line 18",
+    ]
+
+
+def test_projection_discipline_allows_runner_desired_state_authority() -> None:
+    visitor = _DirectLifecycleWriterVisitor()
+    visitor.visit(ast.parse("desired_repo_for(sid).set('RUNNING')"))
+
+    assert visitor.violations == []
 
 
 def test_start_requires_admission_and_never_clears_a_stopped_latch(tmp_path: Path) -> None:

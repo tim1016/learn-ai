@@ -9,7 +9,8 @@ coordinator as writers before using the shared connection.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal
 
 from app.broker.alpaca.clerk.sqlite import reads, writes
 from app.broker.alpaca.clerk.sqlite.models import (
@@ -30,6 +31,25 @@ if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 
 
+@dataclass(frozen=True, slots=True)
+class SqliteLifecycleProjectionSnapshot:
+    """One coordinator-locked read of SQLite-owned lifecycle facts."""
+
+    strategy_instance_exists: bool
+    active_run_id: str | None
+    retired_at_ms: int | None
+    expected_run_state: Literal["ACTIVE", "STOPPED", "MISSING"] | None
+    control_revision: int
+
+
+@dataclass(frozen=True, slots=True)
+class SqliteLifecycleRecoveryCandidate:
+    """One SQLite-active run that boot must reconcile with process liveness."""
+
+    strategy_instance_id: str
+    run_id: str
+
+
 class ClerkSqliteRepositoryReadApi:
     """Read-only public methods mixed into :class:`ClerkSqliteRepository`."""
 
@@ -46,6 +66,60 @@ class ClerkSqliteRepositoryReadApi:
                 (strategy_instance_id,),
             ).fetchone()
             return RunResource(**dict(row)) if row is not None else None
+
+    def lifecycle_projection_snapshot(
+        self: ClerkSqliteRepository,
+        strategy_instance_id: str,
+        expected_run_id: str | None,
+    ) -> SqliteLifecycleProjectionSnapshot:
+        """Read active run, retirement, and expected run in one snapshot."""
+
+        with self._write_lock:
+            control_revision = reads.control_meta_snapshot(self._conn).control_revision
+            instance = reads.strategy_instance(self._conn, strategy_instance_id)
+            active = self._conn.execute(
+                "SELECT lifecycle_run_id FROM runs "
+                "WHERE strategy_instance_id = ? AND state = 'ACTIVE'",
+                (strategy_instance_id,),
+            ).fetchone()
+            expected = (
+                self._conn.execute(
+                    "SELECT run_id, strategy_instance_id, lifecycle_run_id, state, started_at_ms, "
+                    "stopped_at_ms FROM runs WHERE strategy_instance_id = ? AND lifecycle_run_id = ?",
+                    (strategy_instance_id, expected_run_id),
+                ).fetchone()
+                if expected_run_id is not None
+                else None
+            )
+            return SqliteLifecycleProjectionSnapshot(
+                strategy_instance_exists=instance is not None,
+                active_run_id=active["lifecycle_run_id"] if active is not None else None,
+                retired_at_ms=instance["retired_at_ms"] if instance is not None else None,
+                expected_run_state=(
+                    expected["state"]
+                    if expected is not None
+                    else ("MISSING" if expected_run_id is not None else None)
+                ),
+                control_revision=control_revision,
+            )
+
+    def lifecycle_recovery_candidates(
+        self: ClerkSqliteRepository,
+    ) -> tuple[SqliteLifecycleRecoveryCandidate, ...]:
+        """Return every SQLite-active run under the repository coordinator."""
+
+        with self._write_lock:
+            rows = self._conn.execute(
+                "SELECT strategy_instance_id, lifecycle_run_id FROM runs "
+                "WHERE state = 'ACTIVE' ORDER BY strategy_instance_id ASC"
+            ).fetchall()
+            return tuple(
+                SqliteLifecycleRecoveryCandidate(
+                    strategy_instance_id=row["strategy_instance_id"],
+                    run_id=row["lifecycle_run_id"],
+                )
+                for row in rows
+            )
 
     def reconciliation_in_progress(self: ClerkSqliteRepository) -> bool:
         with self._write_lock:

@@ -32,7 +32,6 @@ from app.engine.live.account_safety import (
     account_safety_admission_lock,
     retired_owner_nonterminal_custody,
 )
-from app.engine.live.bot_lifecycle_evaluator import BotLifecycleEvaluator
 from app.engine.live.bot_lifecycle_fence import (
     BOT_LIFECYCLE_OPERATION_FENCE_FILENAME,
     bot_lifecycle_operation_fence,
@@ -48,6 +47,7 @@ from app.engine.live.identity import (
     strategy_instance_artifact_dir,
 )
 from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
+from app.services.ibkr_lifecycle_guard import ibkr_lifecycle_capability
 
 BOT_DELETION_FILENAME = "bot_deletion.json"
 BOT_RETIREMENT_TRANSITION_FILENAME = "retirement_transition.json"
@@ -477,9 +477,9 @@ def _complete_retirement_transition_locked(
             transition_path=path,
         )
     _verify_retired_registry_bindings(artifacts_root, transition.strategy_instance_id, bindings)
-    disposition = BotLifecycleEvaluator(
+    disposition = ibkr_lifecycle_capability(
         artifacts_root, transition.strategy_instance_id
-    ).retire(
+    ).retire_bot(
         now_ms=transition.prepared_at_ms,
         updated_by=transition.updated_by,
         reason=transition.reason,

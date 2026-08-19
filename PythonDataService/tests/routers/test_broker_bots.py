@@ -15,6 +15,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport
 
+from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.contract.capabilities import BrokerCapabilities
 from app.broker.contract.registry import (
     get_broker_registry,
@@ -24,7 +25,7 @@ from app.marketdata.feed import FeedHealth, MarketDataBar
 from app.routers.broker_bots import router
 from app.services.bot_runner import BotTaskRegistry, set_bot_task_registry
 from app.utils.timestamps import now_ms_utc
-from tests.services.test_bot_runner import _flat_start_guard
+from tests.services.test_bot_runner import _custody_proof, _CustodyClerk, _flat_start_guard
 
 _SID = "alpaca-api-bot-1"
 _T0 = 1_700_000_000_000
@@ -71,6 +72,7 @@ class _HoldFeed:
 def api(tmp_path: Path):
     reset_broker_registry_for_testing()
     get_broker_registry().register(_FakeReadPort())
+    set_alpaca_clerk(_CustodyClerk(_custody_proof(exposure={})))
     registry = BotTaskRegistry(
         tmp_path,
         feed_resolver=lambda: _HoldFeed(),
@@ -84,6 +86,7 @@ def api(tmp_path: Path):
         yield app, registry
     finally:
         set_bot_task_registry(None)
+        set_alpaca_clerk(None)
         reset_broker_registry_for_testing()
 
 

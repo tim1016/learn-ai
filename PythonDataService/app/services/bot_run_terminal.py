@@ -11,6 +11,7 @@ from app.engine.live.bot_lifecycle_state import BotDutyOutcome
 from app.engine.live.desired_state import DesiredState, DesiredStateRepo
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_carryover import prove_stop_outcome
+from app.services.bot_clerk_lifecycle import commit_stop_before_task_cancel
 from app.services.bot_run_evidence import PROVISIONAL_STOP_REASON_CODE, BotRunEvidenceService
 from app.services.bot_runtime import ManagedBot
 
@@ -69,6 +70,36 @@ class BotRunTerminalRecorder:
             expected_active_run_id=binding.run_id,
             persist_receipt=reason_code != PROVISIONAL_STOP_REASON_CODE,
         )
+
+    async def finalize_after_authority_stop(
+        self,
+        binding: BrokerBotBinding,
+        *,
+        kind: Literal["CRASHED", "EXITED_UNVERIFIED"],
+        reason_code: str,
+    ) -> None:
+        """Commit SQLite STOP before publishing an unexpected terminal fact."""
+
+        managed = self._managed_bots.get(binding.strategy_instance_id)
+        if (
+            managed is not None
+            and managed.binding.run_id == binding.run_id
+            and managed.finalized
+        ):
+            return
+        try:
+            await commit_stop_before_task_cancel(binding, reason=reason_code)
+        except Exception:
+            logger.exception(
+                "Bot terminal evidence could not commit SQLite STOP",
+                extra={
+                    "action": "bot_terminal_authority_stop_failed",
+                    "strategy_instance_id": binding.strategy_instance_id,
+                    "run_id": binding.run_id,
+                    "reason_code": reason_code,
+                },
+            )
+        self.finalize(binding, kind=kind, reason_code=reason_code)
 
     def reap(self, strategy_instance_id: str, run_id: str) -> None:
         """Remove only the task that still owns this exact run identity."""

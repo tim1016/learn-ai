@@ -459,10 +459,9 @@ async def lifespan(app: FastAPI):
     logger.info("In-container bot runner installed (task registry, daemon-free).")
 
     # S5 (#1263) — boot recovery sweep, BEFORE any bot may start (fail
-    # closed): durable ON_DUTY state from before the restart becomes typed
-    # interrupted evidence; the clerk resolves unresolved intents by identity
-    # and runs one reconciliation pass; starts stay refused while any intent
-    # remains uncertain.
+    # closed): the Clerk recovers and reconciles SQLite authority first; runner
+    # restoration candidates are then projected into typed interrupted evidence.
+    # Starts stay refused while any intent remains uncertain.
     from app.broker.alpaca.clerk import get_alpaca_clerk
 
     _boot_clerk = get_alpaca_clerk()
