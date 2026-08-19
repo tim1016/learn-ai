@@ -19,6 +19,27 @@ MARKET_LIVENESS_MAX_AGE_MS = 5_000
 _UNKNOWN_CLOCK_SOURCE = "market_liveness.unavailable"
 
 
+def _freshness_violation(
+    now_ms: int,
+    observed_at_ms: int,
+    *,
+    invalid_code: str,
+    invalid_reason: str,
+    stale_code: str,
+    stale_reason: str,
+) -> tuple[str, str] | None:
+    """Return ``(reason_code, reason)`` if ``observed_at_ms`` fails the shared
+    freshness bound (future-dated, or older than the liveness boundary), else
+    ``None``. Shared by the market-clock and symbol-status freshness checks
+    in :func:`compose_market_liveness` — the bound is identical, only the
+    reason codes/text differ per evidence kind."""
+    if now_ms < observed_at_ms:
+        return invalid_code, invalid_reason
+    if now_ms - observed_at_ms > MARKET_LIVENESS_MAX_AGE_MS:
+        return stale_code, stale_reason
+    return None
+
+
 def unknown_market_liveness(
     symbol: str,
     *,
@@ -59,23 +80,23 @@ def compose_market_liveness(
             reason_code="MARKET_CLOCK_UNAVAILABLE",
             reason="No live broker clock evidence is available.",
         )
-    if now_ms < market_clock.observed_at_ms:
+    clock_violation = _freshness_violation(
+        now_ms,
+        market_clock.observed_at_ms,
+        invalid_code="MARKET_CLOCK_INVALID",
+        invalid_reason="Live broker clock evidence is dated after the evaluation time.",
+        stale_code="MARKET_CLOCK_STALE",
+        stale_reason="Live broker clock evidence is older than the 5-second liveness boundary.",
+    )
+    if clock_violation is not None:
+        reason_code, reason = clock_violation
         return _unknown(
             normalized_symbol,
             now_ms=now_ms,
             market_clock=market_clock,
             symbol_status=symbol_status,
-            reason_code="MARKET_CLOCK_INVALID",
-            reason="Live broker clock evidence is dated after the evaluation time.",
-        )
-    if now_ms - market_clock.observed_at_ms > MARKET_LIVENESS_MAX_AGE_MS:
-        return _unknown(
-            normalized_symbol,
-            now_ms=now_ms,
-            market_clock=market_clock,
-            symbol_status=symbol_status,
-            reason_code="MARKET_CLOCK_STALE",
-            reason="Live broker clock evidence is older than the 5-second liveness boundary.",
+            reason_code=reason_code,
+            reason=reason,
         )
     if market_clock.state == "CLOSED":
         return MarketLivenessFact(
@@ -105,23 +126,23 @@ def compose_market_liveness(
             reason_code="SYMBOL_STATUS_UNAVAILABLE",
             reason="No live trading-status evidence is available for this symbol.",
         )
-    if now_ms < symbol_status.observed_at_ms:
+    status_violation = _freshness_violation(
+        now_ms,
+        symbol_status.observed_at_ms,
+        invalid_code="SYMBOL_STATUS_INVALID",
+        invalid_reason="Symbol trading-status evidence is dated after the evaluation time.",
+        stale_code="SYMBOL_STATUS_STALE",
+        stale_reason="Symbol trading-status evidence is older than the 5-second liveness boundary.",
+    )
+    if status_violation is not None:
+        reason_code, reason = status_violation
         return _unknown(
             normalized_symbol,
             now_ms=now_ms,
             market_clock=market_clock,
             symbol_status=symbol_status,
-            reason_code="SYMBOL_STATUS_INVALID",
-            reason="Symbol trading-status evidence is dated after the evaluation time.",
-        )
-    if now_ms - symbol_status.observed_at_ms > MARKET_LIVENESS_MAX_AGE_MS:
-        return _unknown(
-            normalized_symbol,
-            now_ms=now_ms,
-            market_clock=market_clock,
-            symbol_status=symbol_status,
-            reason_code="SYMBOL_STATUS_STALE",
-            reason="Symbol trading-status evidence is older than the 5-second liveness boundary.",
+            reason_code=reason_code,
+            reason=reason,
         )
     if symbol_status.state == "HALTED":
         return MarketLivenessFact(
