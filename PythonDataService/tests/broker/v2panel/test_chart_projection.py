@@ -8,8 +8,10 @@ cap is not widened.
 from __future__ import annotations
 
 import json
+from datetime import UTC, date, datetime, time
 from pathlib import Path
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -17,8 +19,18 @@ from app.broker.alpaca.adapter import from_alpaca_trade_update
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.contract.models import OrderSide
 from app.data_lake.polygon_fetcher import PolygonBar
+from app.lean_sidecar.trading_calendar import (
+    expected_sessions,
+    session_close_ms_utc,
+    session_open_ms_utc,
+    session_start_for_bar_count,
+)
 from app.schemas.broker_bots import BotStatusView
-from app.services.broker_v2_panel import panel_chart_data_source, panel_data_source
+from app.services.broker_v2_panel import (
+    chart_projection_service,
+    panel_chart_data_source,
+    panel_data_source,
+)
 from app.services.broker_v2_panel.chart_projection_service import (
     ChartTimeframeError,
     aggregator_bars_to_chart_bars,
@@ -28,6 +40,7 @@ from app.services.broker_v2_panel.chart_projection_service import (
     history_fill_window,
     live_window,
 )
+from app.services.chart_indicator_service import ChartIndicatorService
 from app.services.live_chart_window import MAX_CHART_RANGE_MS, ChartWindowResult
 from tests.broker.v2panel.fixtures import SID
 
@@ -133,7 +146,8 @@ async def test_history_timeframe_maps_to_fixed_bar_window(
         now_ms=_NOW,
     )
     assert result.timeframe == timeframe
-    assert observed == [(multiplier, timespan)]
+    assert observed
+    assert set(observed) == {(multiplier, timespan)}
     assert result.truncated is False
     assert display_bars > 0
 
@@ -168,6 +182,40 @@ def _complete_bars(*, span_ms: int, count: int, now_ms: int = _NOW) -> list[Poly
     ]
 
 
+def _complete_daily_bars(*, count: int, now_ms: int = _NOW) -> list[PolygonBar]:
+    start = session_start_for_bar_count(
+        now_ms,
+        target_bars=count,
+        bar_span_ms=None,
+    )
+    end = datetime.fromtimestamp(now_ms / 1000, tz=UTC).date()
+    sessions = [
+        session
+        for session in expected_sessions(start, end)
+        if session_close_ms_utc(session) <= now_ms
+    ][-count:]
+    return [
+        PolygonBar(
+            t_ms=int(
+                datetime.combine(
+                    session,
+                    time.min,
+                    tzinfo=ZoneInfo("America/New_York"),
+                ).timestamp()
+                * 1000
+            ),
+            open=1.0,
+            high=2.0,
+            low=0.5,
+            close=1.5,
+            volume=10,
+            vwap=1.2,
+            n=3,
+        )
+        for session in sessions
+    ]
+
+
 @pytest.mark.parametrize(
     ("timeframe", "display_bars"),
     [("1m", 300), ("15m", 300), ("30m", 300), ("1h", 300), ("1d", 260)],
@@ -182,7 +230,11 @@ async def test_history_truncates_at_each_configured_display_cap(
     cap and so could not catch a regression in ``_HISTORY_TIMEFRAME_SPECS``.
     """
     span_ms = _TIMEFRAME_SPAN_MS[timeframe]
-    supplied = _complete_bars(span_ms=span_ms, count=display_bars + 1)
+    supplied = (
+        _complete_daily_bars(count=display_bars + 1)
+        if timeframe == "1d"
+        else _complete_bars(span_ms=span_ms, count=display_bars + 1)
+    )
 
     async def _source(symbol, start, end, source_multiplier, source_timespan):
         return list(supplied)
@@ -201,7 +253,135 @@ async def test_history_truncates_at_each_configured_display_cap(
     # The oldest supplied bar is the one dropped, so the retained window starts
     # one span later than what the source returned.
     assert result.bars[0].start_ms == supplied[1].t_ms
-    assert result.bars[-1].end_ms == _NOW
+    if timeframe == "1d":
+        assert result.bars[-1].end_ms <= _NOW
+    else:
+        assert result.bars[-1].end_ms == _NOW
+
+
+async def test_history_keeps_indicator_warmup_outside_the_display_window() -> None:
+    supplied = _complete_bars(span_ms=60_000, count=800)
+
+    async def _source(symbol, start, end, source_multiplier, source_timespan):
+        return list(supplied)
+
+    result = await build_history_chart(
+        "1m",
+        [],
+        strategy_instance_id=SID,
+        symbol="SPY",
+        bar_source=_source,
+        now_ms=_NOW,
+    )
+
+    assert len(result.bars) == 300
+    assert len(result.indicator_bars) >= 800
+    assert result.indicator_bar_budget == 2_800
+    assert result.indicator_bar_budget_satisfied is False
+    assert result.indicator_bars[-300:] == result.bars
+    _, indicators = ChartIndicatorService().compute(
+        "SPY",
+        [
+            {
+                "t": bar.end_ms,
+                "o": float(bar.open),
+                "h": float(bar.high),
+                "l": float(bar.low),
+                "c": float(bar.close),
+                "v": bar.volume,
+            }
+            for bar in result.indicator_bars
+        ],
+        [{"name": "ema", "params": {"length": 500}}],
+    )
+    assert [indicator["id"] for indicator in indicators] == ["ema_500"]
+
+
+async def test_history_extends_backward_when_sparse_aggregates_underfill_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(chart_projection_service, "_INDICATOR_WARMUP_BARS", 3)
+    supplied = _complete_bars(span_ms=60_000, count=303)
+    calls: list[tuple[date, date]] = []
+
+    async def _source(symbol, start, end, source_multiplier, source_timespan):
+        calls.append((start, end))
+        return list(supplied[-300:] if len(calls) == 1 else supplied[:3])
+
+    result = await build_history_chart(
+        "1m",
+        [],
+        strategy_instance_id=SID,
+        symbol="ILLQ",
+        bar_source=_source,
+        now_ms=_NOW,
+    )
+
+    assert len(calls) == 2
+    assert len(result.indicator_bars) == 303
+    assert result.indicator_bar_budget == 303
+    assert result.indicator_bar_budget_satisfied is True
+
+
+async def test_history_never_fetches_before_polygon_two_year_entitlement() -> None:
+    starts: list[date] = []
+
+    async def _source(symbol, start, end, source_multiplier, source_timespan):
+        starts.append(start)
+        return []
+
+    result = await build_history_chart(
+        "1d",
+        [],
+        strategy_instance_id=SID,
+        symbol="SPY",
+        bar_source=_source,
+        now_ms=_NOW,
+    )
+
+    assert starts == [date(2021, 11, 14)]
+    assert result.indicator_bar_budget_satisfied is False
+
+
+async def test_daily_bar_completes_at_session_close_not_midnight_plus_one_day(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        chart_projection_service._HISTORY_TIMEFRAME_SPECS,
+        "1d",
+        chart_projection_service._HistoryTimeframeSpec(1, "day", 1),
+    )
+    monkeypatch.setattr(chart_projection_service, "_INDICATOR_WARMUP_BARS", 0)
+    now_ms = int(datetime(2026, 1, 6, 22, tzinfo=UTC).timestamp() * 1000)
+    bar_start_ms = int(
+        datetime(2026, 1, 6, tzinfo=ZoneInfo("America/New_York")).timestamp()
+        * 1000
+    )
+    daily_bar = PolygonBar(
+        t_ms=bar_start_ms,
+        open=1.0,
+        high=2.0,
+        low=0.5,
+        close=1.5,
+        volume=10,
+        vwap=1.2,
+        n=3,
+    )
+
+    async def _source(symbol, start, end, source_multiplier, source_timespan):
+        return [daily_bar]
+
+    result = await build_history_chart(
+        "1d",
+        [],
+        strategy_instance_id=SID,
+        symbol="SPY",
+        bar_source=_source,
+        now_ms=now_ms,
+    )
+
+    assert [bar.start_ms for bar in result.bars] == [bar_start_ms]
+    assert result.indicator_bar_budget_satisfied is True
 
 
 @pytest.mark.parametrize("timeframe", ["1m", "15m", "30m", "1h", "1d"])
@@ -214,9 +394,25 @@ async def test_history_excludes_the_still_open_candle(timeframe: str) -> None:
     unelapsed span must be withheld rather than drawn.
     """
     span_ms = _TIMEFRAME_SPAN_MS[timeframe]
-    closed = _complete_bars(span_ms=span_ms, count=2)
+    closed = (
+        _complete_daily_bars(count=2)
+        if timeframe == "1d"
+        else _complete_bars(span_ms=span_ms, count=2)
+    )
+    still_open_start = (
+        int(
+            datetime.combine(
+                datetime.fromtimestamp(_NOW / 1000, tz=UTC).date(),
+                time.min,
+                tzinfo=ZoneInfo("America/New_York"),
+            ).timestamp()
+            * 1000
+        )
+        if timeframe == "1d"
+        else _NOW - span_ms // 2
+    )
     still_open = PolygonBar(
-        t_ms=_NOW - span_ms // 2,
+        t_ms=still_open_start,
         open=9.0,
         high=9.0,
         low=9.0,
@@ -245,6 +441,19 @@ async def test_history_excludes_the_still_open_candle(timeframe: str) -> None:
 def test_unknown_timeframe_is_rejected() -> None:
     with pytest.raises(ChartTimeframeError):
         coerce_history_timeframe("5m")
+
+
+def test_history_fill_window_uses_only_the_display_budget() -> None:
+    expected_start = session_start_for_bar_count(
+        _NOW,
+        target_bars=300,
+        bar_span_ms=60_000,
+    )
+
+    from_ms, to_ms = history_fill_window("1m", _NOW)
+
+    assert from_ms == session_open_ms_utc(expected_start)
+    assert to_ms == _NOW
 
 
 async def test_history_bars_are_polygon_tagged_and_bounded() -> None:

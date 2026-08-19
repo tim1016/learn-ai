@@ -142,6 +142,12 @@
             {{ notice.message }}
           </div>
         }
+      } @else if (!histIndicatorBarBudgetSatisfied()) {
+        <div class="overlay-notice" role="status" aria-live="polite">
+          Polygon returned {{ histIndicatorBars().length }} of
+          {{ histIndicatorBarBudget() }} requested calculation candles. Long-lookback
+          indicators may be unavailable for this timeframe.
+        </div>
       }
 
       <div class="chart-stage">
