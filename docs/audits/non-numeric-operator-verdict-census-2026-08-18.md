@@ -203,13 +203,15 @@ false-positive inactive/wrong-mode case proves that the browser is not merely
 renaming one backend classification. ADR 0035 Decision 12 assigns that safety
 and capability verdict to the backend.
 
-**Remediation boundary.** This must not create a second account-posture
-contract. Issue #1664 owns one backend-authored account operator view consumed
-by both Account Desk and Account Strip: `dominant_blocker: OperatorBlocker |
-null`, backend-authored status copy, and one action reference. Healthy is the
-absence of a dominant blocker plus backend-authored status copy; review, wait,
-fix-here, and terminal outcomes use ADR 0027's existing blocker disposition
-instead of recreating the current five-state frontend taxonomy.
+**Remediation boundary.** This must not create a second condition authority or
+reuse one host-specific cure on the wrong surface. Issue #1664 owns one
+backend-authored account operator view from one evidence cut: a surface-neutral
+`OperatorCondition | null` plus separate `account_desk` and `fleet_roster`
+`OperatorBlocker` projections whose host, copy, disposition, and moves are
+authored for that surface. Healthy is a null condition plus backend-authored
+status copy; review, wait, fix-here, and terminal outcomes use ADR 0027's
+existing disposition instead of recreating the current five-state frontend
+taxonomy.
 
 ## Refuted or subtracted candidates
 
@@ -265,10 +267,11 @@ disposition shape.
 ### Scope
 
 - Extend the SQLite account projection with one canonical account operator view
-  consumed by both Account Desk and Account Strip. Its contract is
-  `dominant_blocker: OperatorBlocker | null`, backend-authored status copy, and
-  one structured action/move reference. Do not add a parallel
-  `healthy | fix_here | wait | review | terminal` enum.
+  authored from one evidence cut. Its contract carries a surface-neutral
+  `OperatorCondition | null` and separate host-correct `OperatorBlocker | null`
+  projections for `account_desk` and `fleet_roster`, with backend-authored
+  status copy. Do not reuse one host's blocker/cure on the other surface, and do
+  not add a parallel `healthy | fix_here | wait | review | terminal` enum.
 - Represent review, wait, fix-here, and terminal cases with ADR 0027's existing
   blocker disposition from the same recovery-policy evidence cut that authors
   `guidance` and `recovery_actions`. Healthy is a null dominant blocker plus
@@ -285,10 +288,13 @@ disposition shape.
 
 - Backend decision-table tests cover healthy, review-only uncertainty,
   available recovery, unavailable/waiting recovery, terminal authority
-  failure, inactive account, and wrong execution mode.
-- Component tests prove Account Desk and Account Strip render the same
-  backend-authored status/disposition/action contract and malformed/missing
-  posture fails closed rather than re-deriving from evidence.
+  failure, inactive account, wrong execution mode, unresolved intents, and
+  missing/stale/unhealthy Clerk channels.
+- Contract tests prove both host projections share the same condition identity
+  and severity but carry the correct host-relative disposition/copy/moves.
+  Component tests prove Account Desk and Account Strip select only their own
+  projection and malformed/missing posture fails closed rather than re-deriving
+  from evidence.
 - No client condition over `uncertainties`, `authority_health`, or
   `guidance.action_required`, nor a conjunction over account/freeze/hold flags,
   determines an operator availability verdict.
@@ -304,21 +310,23 @@ disposition shape.
 banner's sole primary action slot. This is attention/remediation arbitration,
 which ADR 0035 Decision 12 assigns to the backend. The backend already authors
 the mission verdict, every action capability, and SQLite recovery `primary`
-flags. The panel contract omits one canonical action reference, while readiness
-separately exposes the generic `readiness_checks[].evidence.primary` marker.
+flags. The panel contract omits a canonical audience-aware action selection,
+while readiness separately exposes the generic
+`readiness_checks[].evidence.primary` marker.
 
 ### Scope
 
-- Add one wire-level `primary_action_id` to `BotPanelView`, authored by the
-  backend at the same revision as `mission_verdict` and `actions`. This field is
-  the sole primary-action authority for routine lifecycle and SQLite recovery.
-- Fold `RecoveryCapability.primary` into that selection and define/test the
-  precedence. The selected id must reference an action present in the same
-  payload. Remove `readiness_checks[].evidence.primary` as a presentation input;
-  if retained as diagnostic evidence, enforce equality with
-  `primary_action_id`.
-- Make the Trader banner, Operator banner, and Operator readiness suppression
-  consume only `primary_action_id`. Delete `primaryLifecycleAction` and the
+- Add one wire-level `primary_action_by_lens` selection to `BotPanelView`,
+  authored by one backend policy at the same revision as `mission_verdict` and
+  `actions`. It carries distinct `trader` and `operator` action references.
+- Restrict the Trader reference to Trader-visible lifecycle actions. Fold
+  `RecoveryCapability.primary` only into the Operator selection and define/test
+  precedence there. Each selected id must reference an audience-compatible
+  action present in the same payload. Remove
+  `readiness_checks[].evidence.primary` as a presentation input; if retained as
+  diagnostic evidence, enforce equality with the Operator reference.
+- Make each banner consume only its lens reference and Operator readiness
+  consume only the Operator reference. Delete `primaryLifecycleAction` and the
   duplicate health-based selection. Delete the unmounted `PanelHeaderComponent`
   or convert it in the same change so an orphan cannot preserve the derivation.
 - Keep visual tone and component layout frontend-owned after the backend has
@@ -329,11 +337,14 @@ separately exposes the generic `readiness_checks[].evidence.primary` marker.
 
 - Backend tests cover stopped/resumable, paused/continuable, running/stoppable,
   blocked, and recovery-primary snapshots, including exact agreement between
-  any retained diagnostic recovery-primary marker and `primary_action_id`.
+  any retained diagnostic recovery-primary marker and the Operator reference.
+  A recovery-primary snapshot must not expose an Operator-only repair as the
+  Trader reference.
 - A missing or inconsistent primary reference fails closed to no banner action;
   Angular does not fall back to health-based selection.
-- Both lenses and readiness render/suppress the same backend-selected action
-  for the same payload; no second primary-action marker can disagree.
+- Trader and Operator render their backend-selected audience-compatible
+  actions; Operator readiness suppresses exactly the Operator selection, and no
+  second marker can disagree.
 
 ## Registered `docs/known-gaps.md` insertion
 

@@ -178,11 +178,11 @@ while ADR 0027 owns blocker disposition and moves.
   `terminal`. Account Strip combines account flags into “Trading available” or
   “Trading blocked” and freeze/hold flags into custody-block verdicts; the
   available case omits the backend's paper-mode and active-status requirements.
-  Preserve one contract for both surfaces: a backend-authored account operator
-  view with `dominant_blocker: OperatorBlocker | null`, backend status copy, and
-  one action reference. Reuse ADR 0027 disposition; do not create a parallel
-  five-state posture enum. Angular renders it and mutation endpoints still
-  recheck.
+  Preserve one evidence/condition authority for both surfaces, with separate
+  host-correct `account_desk` and `fleet_roster` blocker projections. Include
+  unresolved intents and missing/stale/unhealthy Clerk channels in the backend
+  decision table. Reuse ADR 0027 disposition; do not create a parallel
+  five-state posture enum or render one host's cure on the other surface.
   [#1664](https://github.com/tim1016/learn-ai/issues/1664)
 
 - **Both live bot-detail lenses derive the banner's primary command (medium).**
@@ -190,11 +190,13 @@ while ADR 0027 owns blocker disposition and moves.
   selects Resume, Continue, or Stop from `health.running` and
   `health.desired_state`; the Trader and Operator banners render that result as
   their sole primary command, and Operator readiness uses it for suppression.
-  Preserve the invariant: `BotPanelView.primary_action_id` is the sole
-  backend-selected primary-action authority at the same revision as mission and
-  actions. Banner and readiness consumers use only it; any retained recovery
-  `evidence.primary` marker is diagnostic-only and must agree exactly. Angular
-  fails closed when the reference is absent or inconsistent.
+  Preserve one backend selection policy with audience-correct Trader and
+  Operator references at the same revision as mission/actions. Operator
+  recovery may be primary only in the Operator lens; Trader remains restricted
+  to Trader-visible lifecycle actions. Operator readiness uses the Operator
+  reference; any retained recovery `evidence.primary` marker is diagnostic-only
+  and must agree exactly. Angular fails closed when a reference is absent or
+  inconsistent.
   [#1665](https://github.com/tim1016/learn-ai/issues/1665)
 
 ### Bot control-plane boundary (ADR 0038, verified 2026-08-18)
