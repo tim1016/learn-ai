@@ -1,136 +1,78 @@
-<section class="launch-config" aria-labelledby="recency-launch-title">
-  <header class="launch-config__intro">
-    <p class="launch-config__eyebrow">Recent-trades timeline</p>
-    <h2 id="recency-launch-title">Build a timeline</h2>
-    <p>Choose the symbols, strategies, and lookback period to compare completed trades over time.</p>
+<section class="mx-auto max-w-6xl" aria-labelledby="recency-launch-title">
+  <header class="mb-6 max-w-2xl">
+    <p class="mb-2 font-mono text-xs font-semibold uppercase tracking-widest text-blue-300">Recent-trades timeline</p>
+    <h2 id="recency-launch-title" class="mb-2 text-2xl font-semibold tracking-tight text-slate-50">Build a timeline</h2>
+    <p class="m-0 text-sm text-slate-300">Choose the symbols, strategies, and lookback period to compare completed trades over time.</p>
   </header>
 
-  <ol class="launch-config__steps" aria-label="Timeline configuration steps">
-    <li class="launch-config__step"><span>1</span>Set scope</li>
-    <li class="launch-config__step"><span>2</span>Choose strategies</li>
-    <li class="launch-config__step"><span>3</span>Set lookback</li>
+  <ol class="mb-6 grid list-none grid-cols-1 gap-2 border-b border-slate-700 pb-4 sm:grid-cols-3" aria-label="Timeline configuration steps">
+    <li class="flex items-center gap-2 text-sm font-medium text-slate-400"><span class="grid size-6 place-items-center rounded-full bg-slate-800 font-mono text-xs text-slate-300">1</span>Set scope</li>
+    <li class="flex items-center gap-2 text-sm font-medium text-slate-400"><span class="grid size-6 place-items-center rounded-full bg-slate-800 font-mono text-xs text-slate-300">2</span>Choose strategies</li>
+    <li class="flex items-center gap-2 text-sm font-medium text-slate-400"><span class="grid size-6 place-items-center rounded-full bg-slate-800 font-mono text-xs text-slate-300">3</span>Set lookback</li>
   </ol>
 
-  <div class="launch-config__workbench">
-    <section class="launch-config__section">
-      <div class="launch-config__section-heading">
-        <h3 id="recency-symbols-heading">Symbols</h3>
-        <p>Use a comma or Enter to add another.</p>
+  <div class="overflow-hidden rounded-xl border border-slate-700 bg-slate-900 shadow-lg shadow-black/10">
+    <section class="border-b border-slate-700 p-4 sm:p-6">
+      <div class="mb-4 flex flex-wrap items-baseline justify-between gap-2">
+        <h3 id="recency-symbols-heading" class="m-0 text-base font-semibold text-slate-100">Symbols</h3>
+        <p class="m-0 text-xs text-slate-400">Use a comma or Enter to add another.</p>
       </div>
-      <div class="symbol-entry" [class.symbol-entry--invalid]="symbolValidationMessage() !== null">
+      <div class="mb-2 flex flex-wrap gap-2">
         @for (symbol of committedSymbols(); track symbol) {
-          <span class="symbol-entry__chip">
+          <span class="inline-flex items-center gap-1 rounded-full border border-blue-400/30 bg-blue-950/60 py-1 pl-3 pr-1 text-blue-100">
             <app-asset-identity [symbol]="symbol" size="sm" />
-            <button type="button" [attr.aria-label]="'Remove ' + symbol" (click)="removeSymbol(symbol)">×</button>
+            <button pButton type="button" severity="secondary" size="small" [text]="true" [rounded]="true"
+              [attr.aria-label]="'Remove ' + symbol"
+              (click)="removeSymbol(symbol)"
+            ><i class="pi pi-times" aria-hidden="true"></i></button>
           </span>
         }
-        <label class="sr-only" for="recency-symbols">Symbols</label>
-        <input
-          id="recency-symbols"
-          type="text"
-          placeholder="SPY, AAPL, QQQ"
-          [value]="symbolDraft()"
-          [attr.aria-describedby]="symbolValidationMessage() ? 'recency-symbols-helper recency-symbols-error' : 'recency-symbols-helper'"
-          [attr.aria-invalid]="symbolValidationMessage() ? 'true' : null"
-          (input)="onSymbolsInput($event)"
-          (keydown)="onSymbolsKeydown($event)"
-          (blur)="commitSymbolDraft()"
-        />
       </div>
-      <p id="recency-symbols-helper" class="launch-config__helper">Each selected symbol becomes one timeline lane.</p>
+      <label class="sr-only" for="recency-symbols">Symbols</label>
+      <input pInputText id="recency-symbols" type="text" class="w-full"
+        placeholder="SPY, AAPL, QQQ"
+        [value]="symbolDraft()"
+        [attr.aria-describedby]="symbolValidationMessage() ? 'recency-symbols-helper recency-symbols-error' : 'recency-symbols-helper'"
+        [attr.aria-invalid]="symbolValidationMessage() ? 'true' : null"
+        [class.border-red-400]="symbolValidationMessage() !== null"
+        (input)="onSymbolsInput($event)"
+        (keydown)="onSymbolsKeydown($event)"
+        (blur)="commitSymbolDraft()"
+      />
+      <p id="recency-symbols-helper" class="mb-0 mt-2 text-xs text-slate-400">Each selected symbol becomes one timeline lane.</p>
       @if (symbolValidationMessage(); as message) {
-        <p id="recency-symbols-error" class="launch-config__field-error" role="alert">{{ message }}</p>
+        <p id="recency-symbols-error" class="mb-0 mt-2 text-xs font-semibold text-red-300" role="alert">{{ message }}</p>
       }
     </section>
 
-    <section class="launch-config__section" aria-labelledby="recency-strategies-heading">
-      <div class="launch-config__section-heading">
-        <h3 id="recency-strategies-heading">Strategies</h3>
-        <p>{{ selectedStrategyKeys().length }} selected</p>
-      </div>
-      <div class="strategy-grid">
-        @for (strategy of eligibleStrategies(); track strategy.name) {
-          @let selected = isSelected(strategy);
-          <article class="strategy-option" [class.strategy-option--selected]="selected">
-            <label>
-              <input type="checkbox" [checked]="selected" (change)="toggleStrategy(strategy)" />
-              <span>{{ strategy.display_name }}</span>
-            </label>
-          </article>
-        }
-      </div>
-      @if (selectedStrategies().length > 0) {
-        <div class="strategy-parameters">
-          @for (strategy of selectedStrategies(); track strategy.name) {
-            @if (numericParams(strategy).length > 0) {
-              <section class="strategy-parameters__strategy" [attr.aria-label]="strategy.display_name + ' parameters'">
-                <h4>{{ strategy.display_name }} parameters</h4>
-                <div class="strategy-parameters__ranges">
-                  @for (entry of numericParams(strategy); track entry[0]) {
-                    <app-recency-param-range-input
-                      [paramName]="entry[0]"
-                      [title]="entry[1].title || entry[0]"
-                      [defaultValue]="defaultNumericValue(entry[1])"
-                      [range]="rangeFor(strategy.name, entry[0])"
-                      (rangeChange)="updateRange(strategy.name, entry[0], $event)"
-                    ></app-recency-param-range-input>
-                  }
-                </div>
-              </section>
-            }
-          }
-        </div>
-      }
-    </section>
+    <app-recency-strategy-selection [eligibleStrategies]="eligibleStrategies()"
+      [selectedStrategyKeys]="selectedStrategyKeys()"
+      [selectedStrategies]="selectedStrategies()"
+      [rangesByStrategy]="rangesByStrategy()"
+      (strategyToggle)="toggleStrategy($event)"
+      (rangeChange)="updateRange($event.strategyKey, $event.paramName, $event.range)"
+    />
 
-    <section class="launch-config__section" aria-labelledby="recency-duration-heading">
-      <div class="launch-config__section-heading">
-        <h3 id="recency-duration-heading">Lookback</h3>
-        <p>How far back to include completed trades.</p>
-      </div>
-      <div class="duration-options" role="radiogroup" aria-label="Lookback duration">
-        @for (option of durationOptions; track option.preset) {
-          <label class="duration-option" [class.duration-option--selected]="durationPreset() === option.preset">
-            <input
-              type="radio"
-              name="duration"
-              [checked]="durationPreset() === option.preset"
-              (change)="setDurationPreset(option.preset)"
-            />
-            <span>{{ option.label }}</span>
-          </label>
-        }
-      </div>
-      @if (durationPreset() === 'custom') {
-        <label class="custom-duration" for="recency-custom-months">
-          <span>Custom months</span>
-          <input
-            id="recency-custom-months"
-            type="number"
-            min="1"
-            max="24"
-            [value]="customMonths()"
-            [attr.aria-invalid]="customMonthsError() ? 'true' : null"
-            [attr.aria-describedby]="customMonthsError() ? 'recency-custom-months-error' : null"
-            (input)="onCustomMonthsInput($event)"
-          />
-          @if (customMonthsError(); as message) {
-            <small id="recency-custom-months-error" class="launch-config__error" role="alert">{{ message }}</small>
-          }
-        </label>
-      }
-    </section>
+    <app-recency-duration-input [preset]="durationPreset()"
+      [customMonths]="customMonths()"
+      [customMonthsError]="customMonthsError()"
+      (presetChange)="setDurationPreset($event)"
+      (customMonthsChange)="setCustomMonths($event)"
+    />
 
-    <footer class="launch-config__footer">
+    <footer class="flex flex-col items-start justify-between gap-4 bg-slate-800/70 p-4 sm:flex-row sm:items-center sm:px-6">
       <div>
-        <p class="launch-config__run-count">{{ runCountLabel() }}</p>
-        <p class="launch-config__run-detail">The count includes selected strategies, parameter variations, and symbols.</p>
+        <p class="m-0 font-mono text-sm font-semibold tabular-nums text-slate-100">{{ runCountLabel() }}</p>
+        <p class="mb-0 mt-1 text-xs text-slate-400">The count includes selected strategies, parameter variations, and symbols.</p>
       </div>
-      <div class="launch-config__actions">
+      <div class="flex flex-col items-start gap-2 sm:items-end">
         @if (strategyValidationMessage(); as message) {
-          <small class="launch-config__error" role="alert">{{ message }}</small>
+          <small class="text-xs font-medium text-red-300" role="alert">{{ message }}</small>
         }
-        <button type="button" (click)="launch()">Launch timeline</button>
+        <button pButton type="button" (click)="launch()">
+          <i class="pi pi-play" aria-hidden="true"></i>
+          <span>Launch timeline</span>
+        </button>
       </div>
     </footer>
   </div>

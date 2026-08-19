@@ -1,35 +1,27 @@
 import { HttpClient } from "@angular/common/http";
 import { ChangeDetectionStrategy, Component, computed, effect, inject, output, signal } from "@angular/core";
+import { ButtonModule } from "primeng/button";
+import { InputText } from "primeng/inputtext";
 import { firstValueFrom } from "rxjs";
 
 import { environment } from "../../../../../environments/environment";
 import { JobsService } from "../../../../services/jobs.service";
-import type { ParamProperty, StrategyInfo } from "../../../strategy-lab/strategy-lab.models";
+import type { StrategyInfo } from "../../../strategy-lab/strategy-lab.models";
 import { AssetIdentityComponent } from "../../../../shared/asset-identity";
-import { RecencyParamRangeInputComponent } from "./recency-param-range-input.component";
-import { computeGridSize, type ParamRange, type StrategyRangeConfig } from "./recency-param-range";
-
-export type DurationPreset = "3m" | "6m" | "12m" | "24m" | "custom";
+import { RecencyDurationInputComponent, type DurationPreset } from "./recency-duration-input.component";
+import { RecencyStrategySelectionComponent } from "./recency-strategy-selection.component";
+import {
+  computeGridSize,
+  defaultRangeForParameter,
+  numericStrategyParams,
+  type ParamRange,
+  type StrategyRangeConfig,
+} from "./recency-param-range";
 
 const PRESET_MONTHS: Record<Exclude<DurationPreset, "custom">, number> = { "3m": 3, "6m": 6, "12m": 12, "24m": 24 };
-const DURATION_OPTIONS: readonly { readonly preset: DurationPreset; readonly label: string }[] = [
-  { preset: "3m", label: "3 months" },
-  { preset: "6m", label: "6 months" },
-  { preset: "12m", label: "12 months" },
-  { preset: "24m", label: "24 months" },
-  { preset: "custom", label: "Custom" },
-];
 const MAX_MONTHS = 24;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const DEFAULT_SYMBOLS: readonly string[] = ["SPY"];
-
-function numericDefault(prop: ParamProperty): number {
-  return typeof prop.default === "number" ? prop.default : 0;
-}
-
-function defaultRangeFor(prop: ParamProperty): ParamRange {
-  return { type: "value_list", values: [numericDefault(prop)] };
-}
 
 function parseSymbols(raw: string): string[] {
   return raw
@@ -50,7 +42,13 @@ function uniqueSymbols(symbols: readonly string[]): string[] {
  */
 @Component({
   selector: "app-recency-launch-config",
-  imports: [AssetIdentityComponent, RecencyParamRangeInputComponent],
+  imports: [
+    ButtonModule,
+    InputText,
+    AssetIdentityComponent,
+    RecencyDurationInputComponent,
+    RecencyStrategySelectionComponent,
+  ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: "./recency-launch-config.component.html",
   styleUrl: "./recency-launch-config.component.scss",
@@ -85,7 +83,6 @@ export class RecencyLaunchConfigComponent {
 
   readonly durationPreset = signal<DurationPreset>("6m");
   readonly customMonths = signal<number>(6);
-  readonly durationOptions = DURATION_OPTIONS;
 
   readonly windowMonths = computed(() => {
     const preset = this.durationPreset();
@@ -138,21 +135,6 @@ export class RecencyLaunchConfigComponent {
     if (defaultStrategy) this.selectStrategy(defaultStrategy);
   }
 
-  numericParams(strategy: StrategyInfo): [string, ParamProperty][] {
-    const props: Record<string, ParamProperty> = strategy.params_schema.properties ?? {};
-    return Object.entries(props).filter(
-      ([name, prop]) => name !== "symbol" && (prop.type === "number" || prop.type === "integer"),
-    );
-  }
-
-  defaultNumericValue(prop: ParamProperty): number {
-    return numericDefault(prop);
-  }
-
-  isSelected(strategy: StrategyInfo): boolean {
-    return this.selectedStrategyKeys().includes(strategy.name);
-  }
-
   toggleStrategy(strategy: StrategyInfo): void {
     const keys = this.selectedStrategyKeys();
     if (keys.includes(strategy.name)) {
@@ -169,8 +151,8 @@ export class RecencyLaunchConfigComponent {
 
     this.selectedStrategyKeys.set([...keys, strategy.name]);
     const defaults: Record<string, ParamRange> = {};
-    for (const [name, prop] of this.numericParams(strategy)) {
-      defaults[name] = defaultRangeFor(prop);
+    for (const [name, prop] of numericStrategyParams(strategy)) {
+      defaults[name] = defaultRangeForParameter(prop);
     }
     this.rangesByStrategy.update((m) => ({ ...m, [strategy.name]: defaults }));
   }
@@ -231,12 +213,6 @@ export class RecencyLaunchConfigComponent {
     // clamping cannot express "months are whole" without inventing a value.
     this.customMonthsError.set(null);
     this.customMonths.set(Math.min(MAX_MONTHS, Math.max(1, parsed)));
-  }
-
-  onCustomMonthsInput(event: Event): void {
-    if (event.target instanceof HTMLInputElement) {
-      this.setCustomMonths(event.target.value);
-    }
   }
 
   async launch(): Promise<void> {

@@ -1,40 +1,76 @@
-<fieldset class="param-range">
-  <legend>{{ title() || paramName() }}</legend>
+<fieldset class="m-0 min-w-0 rounded-lg border border-slate-700 bg-slate-950/70 p-3">
+  <legend class="px-1 text-xs font-semibold text-slate-300">{{ title() || paramName() }}</legend>
 
-  <div class="mode-toggle" role="group" [attr.aria-label]="'Range mode for ' + (title() || paramName())">
-    <button type="button" [class.active]="isListMode()" (click)="switchToListMode()">List</button>
-    <button type="button" [class.active]="isRangeMode()" (click)="switchToRangeMode()">Range</button>
+  <div class="mb-3 grid grid-cols-2 gap-2" role="group" [attr.aria-label]="'Range mode for ' + (title() || paramName())">
+    <button
+      pButton
+      type="button"
+      size="small"
+      [severity]="isListMode() ? 'info' : 'secondary'"
+      [outlined]="!isListMode()"
+      (click)="switchToListMode()"
+    >List</button>
+    <button
+      pButton
+      type="button"
+      size="small"
+      [severity]="isRangeMode() ? 'info' : 'secondary'"
+      [outlined]="!isRangeMode()"
+      (click)="switchToRangeMode()"
+    >Range</button>
   </div>
 
   @if (isListMode()) {
-    <label [attr.for]="paramName() + '-values'">Values (comma-separated)</label>
-    <input
-      type="text"
-      [id]="paramName() + '-values'"
-      [value]="valuesText()"
-      (input)="onValuesTextInput($any($event.target).value)"
-    />
+    <label class="grid gap-1 text-xs text-slate-400" [attr.for]="paramName() + '-values'">
+      <span>Values (comma-separated)</span>
+      <input
+        #valuesInput
+        pInputText
+        type="text"
+        class="w-full"
+        [id]="paramName() + '-values'"
+        [value]="valuesText()"
+        (input)="onValuesTextInput(valuesInput.value)"
+      />
+    </label>
   } @else {
-    <label [attr.for]="paramName() + '-low'">Low</label>
-    <input
-      type="number"
-      [id]="paramName() + '-low'"
-      [value]="lowValue()"
-      (input)="onLowInput($any($event.target).value)"
-    />
-    <label [attr.for]="paramName() + '-high'">High</label>
-    <input
-      type="number"
-      [id]="paramName() + '-high'"
-      [value]="highValue()"
-      (input)="onHighInput($any($event.target).value)"
-    />
-    <label [attr.for]="paramName() + '-step'">Step</label>
-    <input
-      type="number"
-      [id]="paramName() + '-step'"
-      [value]="stepValue()"
-      (input)="onStepInput($any($event.target).value)"
-    />
+    <div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
+      <label class="grid gap-1 text-xs text-slate-400" [attr.for]="paramName() + '-low'">
+        <span>Low</span>
+        <input
+          #lowInput
+          pInputText
+          type="number"
+          class="min-w-0 w-full"
+          [id]="paramName() + '-low'"
+          [value]="lowValue()"
+          (input)="onLowInput(lowInput.value)"
+        />
+      </label>
+      <label class="grid gap-1 text-xs text-slate-400" [attr.for]="paramName() + '-high'">
+        <span>High</span>
+        <input
+          #highInput
+          pInputText
+          type="number"
+          class="min-w-0 w-full"
+          [id]="paramName() + '-high'"
+          [value]="highValue()"
+          (input)="onHighInput(highInput.value)"
+        />
+      </label>
+      <label class="grid gap-1 text-xs text-slate-400" [attr.for]="paramName() + '-step'">
+        <span>Step</span>
+        <input
+          #stepInput
+          pInputText
+          type="number"
+          class="min-w-0 w-full"
+          [id]="paramName() + '-step'"
+          [value]="stepValue()"
+          (input)="onStepInput(stepInput.value)"
+        />
+      </label>
+    </div>
   }
 </fieldset>

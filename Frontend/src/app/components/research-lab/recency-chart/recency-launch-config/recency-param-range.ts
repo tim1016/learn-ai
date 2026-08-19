@@ -7,6 +7,8 @@
  * client-only preview so the run count updates as the user edits ranges.
  */
 
+import type { ParamProperty, StrategyInfo } from "../../../strategy-lab/strategy-lab.models";
+
 export interface ValueListRange {
   type: "value_list";
   values: number[];
@@ -20,6 +22,21 @@ export interface LowHighStepRange {
 }
 
 export type ParamRange = ValueListRange | LowHighStepRange;
+
+export function numericStrategyParams(strategy: StrategyInfo): [string, ParamProperty][] {
+  const properties: Record<string, ParamProperty> = strategy.params_schema.properties ?? {};
+  return Object.entries(properties).filter(
+    ([name, property]) => name !== "symbol" && (property.type === "number" || property.type === "integer"),
+  );
+}
+
+export function defaultNumericValue(property: ParamProperty): number {
+  return typeof property.default === "number" ? property.default : 0;
+}
+
+export function defaultRangeForParameter(property: ParamProperty): ParamRange {
+  return { type: "value_list", values: [defaultNumericValue(property)] };
+}
 
 export interface StrategyRangeConfig {
   strategyKey: string;
