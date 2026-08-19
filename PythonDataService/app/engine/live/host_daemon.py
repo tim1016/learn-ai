@@ -20,7 +20,7 @@ import sys
 import threading
 import time
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from subprocess import Popen as _RealPopen
 
@@ -79,6 +79,7 @@ _DEFAULT_ALLOWED_ORIGINS = "http://localhost:4200,http://127.0.0.1:4200"
 _DEFAULT_IBKR_CLIENT_ID_POOL = "50-99"
 _MAX_POOL_SPAN = 1_000
 _HANDSHAKE_TIMEOUT_SECONDS = 5.0
+_CLERK_SUPERVISION_INTERVAL_SECONDS = 1.0
 
 
 class HostRunnerError(RuntimeError):
@@ -332,14 +333,42 @@ def _rpc_http_error(exc: AccountClerkRpcError) -> HTTPException:
     )
 
 
+async def _supervise_account_clerks(
+    host: AccountClerkHost,
+    *,
+    interval_seconds: float,
+) -> None:
+    """Run bounded Clerk supervision passes until the host shuts down."""
+
+    while True:
+        pass_task = asyncio.create_task(
+            asyncio.to_thread(host.clerks.supervise),
+            name="account-clerk-supervision-pass",
+        )
+        try:
+            await asyncio.shield(pass_task)
+        except asyncio.CancelledError:
+            # Cancelling ``to_thread`` does not stop its worker.  Let an in-flight
+            # pass finish before the host marks its lease drained and exits.
+            with suppress(Exception):
+                await pass_task
+            raise
+        except Exception:
+            logger.exception("account Clerk supervision pass failed")
+        await asyncio.sleep(interval_seconds)
+
+
 def create_app(
     manager: AccountClerkHost | None = None,
     *,
     allowed_origins: list[str] | None = None,
     auth_token: str | None = None,
+    clerk_supervision_interval_seconds: float = _CLERK_SUPERVISION_INTERVAL_SECONDS,
 ) -> FastAPI:
     """Create the authenticated account capability host application."""
 
+    if clerk_supervision_interval_seconds <= 0:
+        raise ValueError("clerk_supervision_interval_seconds must be positive")
     host = manager or _manager_from_env()
     token = auth_token or ensure_daemon_token(host.artifacts_root)
     idempotency = DaemonCommandIdempotencyService(host.artifacts_root)
@@ -354,9 +383,19 @@ def create_app(
         )
         host._lease_writer = writer
         await writer.start()
+        supervision_task = asyncio.create_task(
+            _supervise_account_clerks(
+                host,
+                interval_seconds=clerk_supervision_interval_seconds,
+            ),
+            name="account-clerk-supervisor",
+        )
         try:
             yield
         finally:
+            supervision_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await supervision_task
             writer.set_draining()
             await asyncio.sleep(0)
             await writer.stop()

@@ -1,23 +1,18 @@
 #!/usr/bin/env bash
-# Bootstrap the host Python venv and run the live-engine host daemon.
+# Bootstrap the host Python venv and run the account-capability host daemon.
 #
 # Why this exists:
-#   The UI surfaces under /broker/* poll a HOST process at 127.0.0.1:8765
-#   for "Live engine" reachability and to actuate run start/stop. The daemon
-#   cannot live in a container because IBKR Gateway binds reqRealTimeBars to
-#   the login-session source IP (error 420 — same-IP binding); a
-#   polygon-data-service-IP client is rejected. setup-macos.sh provisions the
-#   container stack but not this host venv, so on a freshly-bootstrapped
-#   machine /broker/instances shows "Live engine unavailable" with no working
-#   Recheck. This script closes that gap.
+#   The containerized data service cannot reach the host-local Account Clerk
+#   socket or inspect host Gateway sockets. The retired IBKR evaluator and
+#   bot-process control routes are not hosted here; Alpaca Broker V2 owns bot
+#   lifecycle. This process is only the authenticated account-capability bridge.
 #
 # Usage:
 #   ./bootstrap-host-daemon.sh                 # ensure venv exists, then start (default)
 #   ./bootstrap-host-daemon.sh --setup-only    # venv + pip install, no daemon launch
 #   ./bootstrap-host-daemon.sh --restart       # pkill running daemon, then start
-#   ./bootstrap-host-daemon.sh --stop          # graceful stop: refuse if managed runs are live
-#   ./bootstrap-host-daemon.sh --stop --force  # stop daemon even if managed runs are still live
-#                                             # (those runners will be orphaned — see Codex P1)
+#   ./bootstrap-host-daemon.sh --stop          # graceful stop after authenticated health check
+#   ./bootstrap-host-daemon.sh --stop --force  # stop when health cannot be authenticated
 #   ./bootstrap-host-daemon.sh --status        # report whether daemon is up
 #
 # Override the daemon port with HOST_DAEMON_PORT (default 8765 — matches
@@ -84,41 +79,15 @@ daemon_running() {
   pgrep -f "$DAEMON_MATCH" >/dev/null 2>&1
 }
 
-# List run_ids of managed runs whose process is still alive. The daemon launches
-# each runner with start_new_session=True (host_daemon.py), so the runner is its
-# OWN session leader and survives an unconditional pkill of the daemon — Codex
-# P1 on the first review. We query /instances (with the shared-secret token) and
-# return the run_ids whose process.state is not a terminal state. If the daemon
-# is unreachable, or the token file is absent, return "unknown" so the caller
-# can warn rather than silently assume "no active runs".
-active_run_ids() {
+daemon_health_available() {
   if [[ ! -r "$TOKEN_FILE" ]]; then
-    echo "unknown"
-    return 0
+    return 1
   fi
-  local token instances
-  token="$(cat "$TOKEN_FILE")"
-  if ! curl -fsS -o /dev/null -H "X-Live-Runner-Token: $token" "$HEALTH_URL" 2>/dev/null; then
-    echo "unknown"
-    return 0
+  local token
+  if ! token="$(cat "$TOKEN_FILE")"; then
+    return 1
   fi
-  if ! instances="$(curl -fsS -H "X-Live-Runner-Token: $token" "http://127.0.0.1:${PORT}/instances" 2>/dev/null)"; then
-    echo "unknown"
-    return 0
-  fi
-  # parse JSON: emit one run_id per line for non-terminal process states.
-  # 'idle' / 'exited' / 'failed' are terminal; anything else (running, stopping,
-  # ...) means the runner is still alive. System python3 (>=3.7) is sufficient
-  # — the stop path may run before the venv is created.
-  printf '%s' "$instances" | python3 -c '
-import json, sys
-data = json.load(sys.stdin)
-terminal = {"idle", "exited", "failed"}
-for inst in data.get("instances", []):
-    state = (inst.get("process") or {}).get("state")
-    if state and state not in terminal:
-        print(inst.get("run_id"))
-'
+  curl -fsS -o /dev/null -H "X-Live-Runner-Token: $token" "$HEALTH_URL" 2>/dev/null
 }
 
 stop_daemon() {
@@ -127,34 +96,21 @@ stop_daemon() {
     rm -f "$PID_FILE"
     return 0
   fi
-  # Before pkill: refuse to kill the daemon while it manages live runners.
-  # `start_new_session=True` decouples them from the daemon's process group,
-  # so a bare pkill orphans them — the UI loses its only control path while a
-  # paper/live runner can keep trading. --force overrides for cases where the
-  # operator has already stopped the runner some other way.
-  local actives
-  actives="$(active_run_ids || true)"
-  if [[ "$actives" == "unknown" ]]; then
+  # The retired host-runner no longer owns bot processes. Account Clerk
+  # subprocesses carry durable process identity and are adopted by the next
+  # host lifetime, so a graceful host stop does not orphan trading authority.
+  # Still require an authenticated health handshake before signalling the
+  # matched process: without it we cannot prove that the expected capability
+  # host is responsive and able to mark its lease DRAINING. --force is the
+  # explicit recovery override for that unknown state.
+  if ! daemon_health_available; then
     if ! $FORCE; then
-      echo "ERROR: Daemon is running but /instances is unreachable — cannot tell" >&2
-      echo "       whether managed runners are still live. Refusing to stop." >&2
-      echo "       Re-run with --force to stop anyway (any live runner will be orphaned)," >&2
-      echo "       or run --status to inspect, or restart the daemon and retry." >&2
+      echo "ERROR: Daemon is running but authenticated health is unavailable." >&2
+      echo "       Refusing to stop an unverified host process." >&2
+      echo "       Re-run with --force only after inspecting the process and log." >&2
       return 1
     fi
-    echo "==> /instances unreachable; --force given, proceeding."
-  elif [[ -n "$actives" ]]; then
-    if ! $FORCE; then
-      echo "ERROR: Daemon is still managing live runners; refusing to stop." >&2
-      echo "       Stop each run via the UI (or POST /runs/<id>/stop on the daemon)" >&2
-      echo "       before halting the daemon, OR re-run with --force to abandon" >&2
-      echo "       them (they will continue running and be orphaned)." >&2
-      echo "       Active runs:" >&2
-      echo "$actives" | sed 's/^/         /' >&2
-      return 1
-    fi
-    echo "==> Daemon has active runs; --force given, proceeding (runners will be orphaned):"
-    echo "$actives" | sed 's/^/    /'
+    echo "==> Authenticated health unavailable; --force given, proceeding."
   fi
   echo "==> Stopping running host daemon (pkill -f $DAEMON_MATCH)..."
   pkill -f "$DAEMON_MATCH" || true
@@ -174,7 +130,7 @@ report_status() {
   if daemon_running; then
     local pid
     pid="$(pgrep -f "$DAEMON_MATCH" | head -1)"
-    if curl -fsS -o /dev/null "$HEALTH_URL" 2>/dev/null; then
+    if daemon_health_available; then
       echo "    ✅ Daemon running (pid $pid) — $HEALTH_URL responding."
     else
       echo "    ⚠️  Daemon process exists (pid $pid) but $HEALTH_URL is not responding."
@@ -278,7 +234,7 @@ if daemon_running; then
   # /health is not responding, the daemon is stuck; reporting "already
   # running" + exit 0 lies to the caller (CodeRabbit). Exit non-zero so
   # setup-macos.sh fails loudly and the operator can --restart.
-  if curl -fsS -o /dev/null "$HEALTH_URL" 2>/dev/null; then
+  if daemon_health_available; then
     echo "==> Daemon is already running. Use --restart to relaunch, or --stop to halt."
     report_status
     exit 0
@@ -289,7 +245,7 @@ if daemon_running; then
   exit 1
 fi
 
-if curl -fsS -o /dev/null "$HEALTH_URL" 2>/dev/null; then
+if curl -sS -o /dev/null "$HEALTH_URL" 2>/dev/null; then
   echo "ERROR: $HEALTH_URL is responding but no matching daemon process was found." >&2
   echo "       Something else is bound to port $PORT. Free the port and retry." >&2
   exit 1
@@ -319,7 +275,7 @@ while (( tries-- > 0 )); do
     rm -f "$PID_FILE"
     exit 1
   fi
-  if curl -fsS -o /dev/null "$HEALTH_URL" 2>/dev/null; then
+  if daemon_health_available; then
     echo "    ✅ Daemon up at $HEALTH_URL (pid $(cat "$PID_FILE"))."
     echo ""
     echo "    Stop with:  ./bootstrap-host-daemon.sh --stop"

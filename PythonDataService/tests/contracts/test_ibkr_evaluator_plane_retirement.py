@@ -145,6 +145,12 @@ def test_evaluator_authority_modules_and_imports_are_absent() -> None:
         assert retired_module not in application_imports
 
 
+def test_retired_eight_bot_launcher_is_absent() -> None:
+    assert not (
+        REPOSITORY_ROOT / "PythonDataService/scripts/launch_eight_bot_paper_run.py"
+    ).exists()
+
+
 def test_ibkr_bot_control_routes_are_unregistered() -> None:
     registered = _registered_methods_and_paths()
 
