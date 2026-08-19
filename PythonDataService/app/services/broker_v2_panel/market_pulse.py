@@ -5,7 +5,9 @@ from __future__ import annotations
 from app.marketdata.feed import MarketDataFeed
 from app.schemas.broker_capability import SessionDataCapability
 from app.schemas.broker_v2_panel import MarketPulseView
+from app.schemas.market_liveness import MarketLivenessFact
 from app.services.bot_start_admission import market_data_admission_fact
+from app.services.market_liveness import market_liveness_fact
 
 # The admission feed emits closed one-minute bars. This is the contracted source
 # cadence shown to operators, not the feed implementation's longer stale cutoff.
@@ -21,8 +23,10 @@ def build_market_pulse(
     capability: SessionDataCapability | None = None,
     use_rth: bool,
     bot_running: bool,
+    liveness: MarketLivenessFact | None = None,
 ) -> MarketPulseView:
-    """Present the same typed market-data fact Start admission consumes."""
+    """Present the same typed market-data fact Start admission consumes,
+    with scheduled session kept separate from the shared live liveness fact."""
     session_label = {
         "PRE": "PRE_MARKET", "RTH": "OPEN", "POST": "AFTER_HOURS",
         "OVERNIGHT": "AFTER_HOURS", "CLOSED": "CLOSED", "UNKNOWN": "UNKNOWN",
@@ -37,6 +41,7 @@ def build_market_pulse(
     )
     session = fact.scheduled_phase
     bars_expected = session == "RTH" if use_rth else session in {"PRE", "RTH", "POST", "OVERNIGHT"}
+    liveness = liveness or market_liveness_fact(symbol or "", now_ms)
     feed_state = {
         "AVAILABLE": "IDLE" if fact.stale else "LIVE",
         "STALE": "STALE",
@@ -49,7 +54,31 @@ def build_market_pulse(
         else None
     )
 
-    if not use_rth and not fact.extended_phase_proven and session == "CLOSED":
+    # Live broker-reported liveness takes priority over the narrower
+    # extended-session-capability check below: a HALTED/UNKNOWN/CLOSED
+    # liveness fact is the stronger, more foundational safety signal (it
+    # governs whether new exposure may be created at all, per #1671),
+    # regardless of whether extended-hours capability happens to be proven.
+    if liveness.state == "HALTED":
+        headline = f"Trading halted for {liveness.symbol}"
+        explanation = liveness.reason
+        next_step = "Keep new exposure blocked until a fresh trading-status resume arrives."
+        attention_required = True
+    elif liveness.state == "UNKNOWN":
+        headline = "Market liveness unproven"
+        explanation = liveness.reason
+        next_step = "Restore fresh market-wide and symbol trading-status evidence."
+        attention_required = True
+    elif liveness.state == "CLOSED":
+        headline = "Market closed by live broker evidence"
+        explanation = liveness.reason
+        next_step = (
+            "Investigate the scheduled-session mismatch before relying on new exposure."
+            if bars_expected
+            else None
+        )
+        attention_required = bars_expected
+    elif not use_rth and not fact.extended_phase_proven and session == "CLOSED":
         headline = "Extended-session phase unproved"
         explanation = (
             "No fresh capability matches this account and instrument, so the "
@@ -97,6 +126,9 @@ def build_market_pulse(
 
     return MarketPulseView(
         session=session_label[session],
+        market_state=liveness.state,
+        market_liveness_reason=liveness.reason,
+        market_liveness_observed_at_ms=liveness.observed_at_ms,
         feed_state=feed_state,
         latest_bar_at_ms=fact.last_bar_ms,
         age_ms=age_ms,

@@ -482,8 +482,9 @@ def from_alpaca_clock(
 ) -> BrokerClockEvidence:
     """Map a raw Alpaca ``/v2/clock`` payload to ``BrokerClockEvidence``.
 
-    **Evidence only.** The canonical calendar module remains the sole authority
-    for scheduled session structure; nothing here feeds session/calendar logic.
+    This is only a market-wide live liveness input. The canonical calendar
+    remains the scheduled-session authority, and an open clock cannot prove a
+    particular symbol tradable or not halted; that needs symbol-status evidence.
     """
     return BrokerClockEvidence(
         broker=BROKER_ID,

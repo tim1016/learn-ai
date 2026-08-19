@@ -32,6 +32,8 @@ from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
 from app.marketdata.feed import MarketDataBar, MarketDataFeed
 from app.schemas.broker_bots import AlpacaPaperStrategyKey
+from app.schemas.market_liveness import MarketLivenessFact
+from app.services.market_liveness import market_liveness_fact
 from app.utils.timestamps import now_ms_utc
 
 if TYPE_CHECKING:
@@ -179,9 +181,7 @@ _StrategyEvaluationStream = Callable[
     ["BrokerBotBinding", MarketDataFeed],
     AsyncIterator[StrategyEvaluation],
 ]
-_STRATEGY_EVALUATION_STREAMS: dict[
-    AlpacaPaperStrategyKey, _StrategyEvaluationStream
-] = {
+_STRATEGY_EVALUATION_STREAMS: dict[AlpacaPaperStrategyKey, _StrategyEvaluationStream] = {
     AlpacaPaperStrategyKey.DEPLOYMENT_VALIDATION: _deployment_validation_evaluations,
     AlpacaPaperStrategyKey.EMA_CROSSOVER_SIGNAL: _ema_crossover_evaluations,
 }
@@ -223,15 +223,35 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
             continue
         intent = evaluation.intents[0]
         intent_id = f"{intent.bar_close_ms}:{intent.kind.value}"
+        if intent.kind is SignalIntentKind.ENTER:
+            liveness = market_liveness_fact(binding.symbol, now_ms_utc())
+            if liveness.state != "TRADABLE":
+                _append_decision_receipt(
+                    decision_receipts,
+                    binding=binding,
+                    evaluation=evaluation,
+                    outcome="blocked",
+                    reason_code=liveness.reason_code,
+                    intent_id=intent_id,
+                    liveness=liveness,
+                )
+                logger.warning(
+                    "Trade bot blocked new exposure on live market-liveness evidence",
+                    extra={
+                        "action": "bot_market_liveness_blocked",
+                        "strategy_instance_id": binding.strategy_instance_id,
+                        "strategy_key": binding.strategy_key,
+                        "symbol": binding.symbol,
+                        "market_liveness_state": liveness.state,
+                        "reason_code": liveness.reason_code,
+                    },
+                )
+                continue
         _append_decision_receipt(
             decision_receipts,
             binding=binding,
             evaluation=evaluation,
-            outcome=(
-                "enter_intent"
-                if intent.kind is SignalIntentKind.ENTER
-                else "exit_intent"
-            ),
+            outcome=("enter_intent" if intent.kind is SignalIntentKind.ENTER else "exit_intent"),
             reason_code=f"STRATEGY_{intent.kind.value}",
             intent_id=intent_id,
         )
@@ -284,12 +304,19 @@ def _append_decision_receipt(
     reason_code: str,
     intent_id: str = "",
     order_ref: str = "",
+    liveness: MarketLivenessFact | None = None,
 ) -> None:
+    facts: dict[str, object] = {
+        "bar_ref": f"{binding.symbol}@{evaluation.bar.end_ms}",
+        "reason_code": reason_code,
+    }
+    if liveness is not None:
+        facts["market_liveness"] = liveness.model_dump(mode="json")
     receipts.append(
         outcome=outcome,
         symbol=binding.symbol,
         observed_at_ms=now_ms_utc(),
-        facts={"bar_ref": f"{binding.symbol}@{evaluation.bar.end_ms}", "reason_code": reason_code},
+        facts=facts,
         intent_id=intent_id or None,
         order_ref=order_ref or None,
     )

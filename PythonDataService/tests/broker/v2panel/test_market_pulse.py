@@ -5,7 +5,12 @@ from types import SimpleNamespace
 import pytest
 
 from app.marketdata.feed import FeedHealth
+from app.schemas.market_liveness import (
+    MarketClockLivenessEvidence,
+    SymbolTradingStatusEvidence,
+)
 from app.services.broker_v2_panel import market_pulse
+from app.services.market_liveness import compose_market_liveness
 
 
 class _Feed:
@@ -16,6 +21,30 @@ class _Feed:
 
     def health(self, _symbol: str | None = None) -> FeedHealth:
         return self._health
+
+
+@pytest.fixture(autouse=True)
+def _fresh_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
+    def resolve(symbol: str, now_ms: int):
+        return compose_market_liveness(
+            symbol or "SPY",
+            now_ms=now_ms,
+            market_clock=MarketClockLivenessEvidence(
+                state="OPEN",
+                source="test.clock",
+                observed_at_ms=now_ms,
+                vendor_timestamp_ms=now_ms,
+            ),
+            symbol_status=SymbolTradingStatusEvidence(
+                symbol=symbol or "SPY",
+                state="TRADABLE",
+                source="test.symbol-status",
+                observed_at_ms=now_ms,
+                source_timestamp_ms=now_ms,
+            ),
+        )
+
+    monkeypatch.setattr(market_pulse, "market_liveness_fact", resolve)
 
 
 def _session(monkeypatch: pytest.MonkeyPatch, phase: str) -> None:
@@ -230,3 +259,41 @@ def test_idle_feed_does_not_claim_to_be_live(
     assert running_pulse.feed_state == "IDLE"
     assert running_pulse.headline == "Market data idle for a running bot"
     assert running_pulse.attention_required is True
+
+
+def test_open_scheduled_phase_shows_fresh_symbol_halt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _session(monkeypatch, "RTH")
+    _admission_fact(monkeypatch, state="AVAILABLE", last_bar_ms=120_000)
+    liveness = compose_market_liveness(
+        "SPY",
+        now_ms=121_000,
+        market_clock=MarketClockLivenessEvidence(
+            state="OPEN",
+            source="test.clock",
+            observed_at_ms=121_000,
+            vendor_timestamp_ms=121_000,
+        ),
+        symbol_status=SymbolTradingStatusEvidence(
+            symbol="SPY",
+            state="HALTED",
+            source="test.symbol-status",
+            observed_at_ms=121_000,
+            source_timestamp_ms=121_000,
+        ),
+    )
+
+    pulse = market_pulse.build_market_pulse(
+        None,
+        now_ms=121_000,
+        symbol="SPY",
+        use_rth=True,
+        bot_running=True,
+        liveness=liveness,
+    )
+
+    assert pulse.session == "OPEN"
+    assert pulse.market_state == "HALTED"
+    assert pulse.headline == "Trading halted for SPY"
+    assert pulse.attention_required is True

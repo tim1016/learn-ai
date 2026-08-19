@@ -59,6 +59,9 @@ _NOW = 1_700_000_000_000
 
 _MARKET_PULSE = MarketPulseView(
     session="OPEN",
+    market_state="TRADABLE",
+    market_liveness_reason="Fresh test evidence proves tradability.",
+    market_liveness_observed_at_ms=_NOW,
     feed_state="LIVE",
     latest_bar_at_ms=_NOW - 60_000,
     age_ms=60_000,
@@ -182,6 +185,7 @@ def _panel(
             runtime=0,
             process=0,
             market_data=0,
+            market_liveness=0,
             clerk=0,
         ),
         evidence_refs=admission_evidence_refs,

@@ -129,6 +129,7 @@ from app.services.bot_runtime import (
 from app.services.bot_start_admission import (
     AdmittedBotStart,
     BotStartAdmission,
+    MarketLivenessFactResolver,
     StartAdmissionDenied,
     StartAdmissionEvidenceChanged,
     StartAdmissionUnavailable,
@@ -138,6 +139,7 @@ from app.services.bot_start_admission import (
     resolve_start_runtime_fact,
 )
 from app.services.broker_capability_service import get_broker_capability_service
+from app.services.market_liveness import market_liveness_fact
 from app.utils.timestamps import now_ms_utc
 
 __all__ = [
@@ -183,11 +185,13 @@ class BotTaskRegistry:
         carryover_allowed: bool | None = None,
         start_custody_guard: Callable[[str], AbstractAsyncContextManager[ClerkCustodySnapshot]] | None = None,
         lifecycle_projector: AlpacaLifecycleProjector | None = None,
+        market_liveness: MarketLivenessFactResolver | None = None,
     ) -> None:
         self._artifacts_root = Path(artifacts_root)
         self._feed_resolver = feed_resolver
         self._restart_policy = restart_policy or RestartIntensityPolicy()
         self._now_ms = now_ms
+        self._market_liveness = market_liveness or market_liveness_fact
         self._registry_generation = uuid4().hex
         self._bots: dict[str, ManagedBot] = {}
         self._operation_locks: dict[str, asyncio.Lock] = {}
@@ -244,6 +248,7 @@ class BotTaskRegistry:
             runtime_fact=self._start_runtime_fact,
             activate=self._activate_start_binding,
             session_capability=get_broker_capability_service().read_latest_for,
+            market_liveness=self._market_liveness,
         )
         self._resume_admission = BotResumeAdmission(
             now_ms=self._now_ms,
@@ -255,6 +260,7 @@ class BotTaskRegistry:
             activate=self._activate_resume_binding,
             carryover_account_policy_enabled=self._carryover_allowed,
             session_capability=get_broker_capability_service().read_latest_for,
+            market_liveness=self._market_liveness,
         )
         self._run_evidence = BotRunEvidenceService(
             self._bindings,
