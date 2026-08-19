@@ -8,6 +8,8 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
+from app.utils.atomic_file import fsync_file, fsync_parent_dir
+
 
 def atomic_parquet_write(
     path: Path,
@@ -37,16 +39,3 @@ def atomic_parquet_write(
         with contextlib.suppress(*cleanup_errors):
             tmp_path.unlink()
         raise
-
-
-def fsync_parent_dir(child_path: Path) -> None:
-    dir_fd = os.open(str(child_path.parent), os.O_RDONLY)
-    try:
-        os.fsync(dir_fd)
-    finally:
-        os.close(dir_fd)
-
-
-def fsync_file(path: Path) -> None:
-    with path.open("rb") as fh:
-        os.fsync(fh.fileno())

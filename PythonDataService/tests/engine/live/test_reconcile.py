@@ -11,6 +11,7 @@ dependency.
 from __future__ import annotations
 
 import json
+import os
 from datetime import date
 from pathlib import Path
 
@@ -807,6 +808,84 @@ def test_write_day_report_writes_all_four_artifacts(tmp_path: Path) -> None:
 
     # Halt flag NOT written for a clean day
     assert not (run_dir / "halt.flag").exists()
+
+
+def test_failed_day_sibling_replacement_preserves_readable_report_and_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = tmp_path / "live_runs" / "abcdef"
+    qc_dir = tmp_path / "qc" / "2026-05-04"
+    docs_dir = tmp_path / "docs"
+    bar_close_ms = _ms(2026, 5, 4, 14, 45)
+    decisions = _make_decisions(
+        [
+            {
+                "bar_close_ms": bar_close_ms,
+                "ema5": 501.0,
+                "ema10": 500.0,
+                "rsi": 62.0,
+                "signal": "HOLD",
+                "intended_price": 501.0,
+            }
+        ]
+    )
+    qc_indicators = _make_qc(
+        [
+            {
+                "bar_close_ms": bar_close_ms,
+                "ema5": 501.0,
+                "ema10": 500.0,
+                "rsi": 62.0,
+                "signal": "HOLD",
+            }
+        ]
+    )
+    _write_run_inputs(
+        run_dir,
+        qc_dir,
+        decisions=decisions,
+        executions=_make_executions([]),
+        qc_indicators=qc_indicators,
+    )
+    paths = write_day_report(
+        run_dir=run_dir,
+        qc_dir=qc_dir,
+        docs_dir=docs_dir,
+        run_label="atomic-report",
+        day_n=1,
+        day_date=date(2026, 5, 4),
+    )
+    prior_json = paths.json.read_bytes()
+    prior_markdown = paths.md.read_bytes()
+    prior_manifest = paths.hashes.read_bytes()
+    changed_decisions = decisions.copy()
+    changed_decisions.loc[0, "signal"] = "ENTER"
+    changed_decisions.to_parquet(run_dir / "decisions.parquet", index=False)
+    real_replace = os.replace
+
+    def fail_json_replacement(source: str | Path, destination: str | Path) -> None:
+        if Path(destination) == paths.json:
+            raise OSError("injected day JSON replacement failure")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", fail_json_replacement)
+
+    with pytest.raises(OSError, match="injected day JSON replacement failure"):
+        write_day_report(
+            run_dir=run_dir,
+            qc_dir=qc_dir,
+            docs_dir=docs_dir,
+            run_label="atomic-report",
+            day_n=1,
+            day_date=date(2026, 5, 4),
+        )
+
+    assert json.loads(paths.json.read_bytes()) == json.loads(prior_json)
+    assert paths.md.read_bytes() == prior_markdown
+    assert paths.hashes.read_bytes() == prior_manifest
+    pd.read_parquet(paths.parquet)
+    assert json.loads(prior_manifest)["reconcile_parquet"] != file_sha256(paths.parquet)
 
 
 def test_write_day_report_writes_halt_flag_on_engine_divergence(tmp_path: Path) -> None:

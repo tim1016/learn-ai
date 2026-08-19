@@ -262,12 +262,6 @@ positions; freeze is clearable via `account_recovery_cli.py clear-freeze`;
 IntentWal truncates its tolerated tail before append). The remaining P1s
 carried forward are:
 
-- Offline reconciliation/report bundle writers still publish Parquet and their
-  companion JSON/hash files non-atomically. Live run artifacts, live bar
-  compaction, and broker tick partitions use atomic publication; the remaining
-  report-bundle work is research-output integrity rather than control-plane
-  safety. [#1584](https://github.com/tim1016/learn-ai/issues/1584)
-
 The former R3 recovery-daemon item was retired from this backlog: it concerns
 the deprecated IBKR bot-control surface, while the accepted Alpaca Clerk
 cutover is complete (ADR-0035).
