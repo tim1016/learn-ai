@@ -122,6 +122,41 @@ def compose_market_liveness(
             reason_code=reason_code,
             reason=reason,
         )
+    # Checked before the market-clock CLOSED branch below: a symbol can be
+    # individually halted at any time, independent of the broker-wide clock
+    # (which is RTH-only and reports CLOSED through every extended session
+    # regardless — see clock_liveness_evidence), and that record is latched
+    # across reconnects specifically so it survives independent of the
+    # stream's current connection state (see
+    # MarketLivenessStore.clear_symbol_statuses). If the CLOSED branch
+    # returned first, a proven extended-hours override at the
+    # liveness_blocks_entry call site would see only "CLOSED" and never
+    # learn the symbol was actually halted.
+    blocking_status = (
+        symbol_status
+        if symbol_status is not None and symbol_status.symbol.upper() == normalized_symbol
+        else None
+    )
+    if blocking_status is not None and blocking_status.state == "HALTED":
+        return MarketLivenessFact(
+            symbol=normalized_symbol,
+            state="HALTED",
+            observed_at_ms=min(market_clock.observed_at_ms, blocking_status.observed_at_ms),
+            market_clock=market_clock,
+            symbol_status=symbol_status,
+            reason_code="SYMBOL_HALTED",
+            reason=blocking_status.reason or "Live vendor evidence reports this symbol halted.",
+        )
+    if blocking_status is not None and blocking_status.state != "TRADABLE":
+        return _unknown(
+            normalized_symbol,
+            now_ms=now_ms,
+            market_clock=market_clock,
+            connection_changed_at_ms=connection_changed_at_ms,
+            symbol_status=symbol_status,
+            reason_code="SYMBOL_STATUS_UNKNOWN",
+            reason="Live vendor evidence cannot prove this symbol is tradable.",
+        )
     if market_clock.state == "CLOSED":
         return MarketLivenessFact(
             symbol=normalized_symbol,
@@ -151,31 +186,6 @@ def compose_market_liveness(
             symbol_status=symbol_status,
             reason_code="STATUS_STREAM_DISCONNECTED",
             reason="The live Alpaca trading-status stream is not connected.",
-        )
-    blocking_status = (
-        symbol_status
-        if symbol_status is not None and symbol_status.symbol.upper() == normalized_symbol
-        else None
-    )
-    if blocking_status is not None and blocking_status.state == "HALTED":
-        return MarketLivenessFact(
-            symbol=normalized_symbol,
-            state="HALTED",
-            observed_at_ms=min(market_clock.observed_at_ms, blocking_status.observed_at_ms),
-            market_clock=market_clock,
-            symbol_status=symbol_status,
-            reason_code="SYMBOL_HALTED",
-            reason=blocking_status.reason or "Live vendor evidence reports this symbol halted.",
-        )
-    if blocking_status is not None and blocking_status.state != "TRADABLE":
-        return _unknown(
-            normalized_symbol,
-            now_ms=now_ms,
-            market_clock=market_clock,
-            connection_changed_at_ms=connection_changed_at_ms,
-            symbol_status=symbol_status,
-            reason_code="SYMBOL_STATUS_UNKNOWN",
-            reason="Live vendor evidence cannot prove this symbol is tradable.",
         )
     return MarketLivenessFact(
         symbol=normalized_symbol,

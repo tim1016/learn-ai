@@ -245,25 +245,6 @@ class AlpacaMarketLivenessConsumer:
                 extra={"action": "market_liveness_status_timestamp_missing", "symbol": symbol},
             )
             return
-        receipt_ms = self._clock()
-        if source_timestamp_ms > receipt_ms + _MAX_FUTURE_SKEW_MS:
-            # source_timestamp_ms becomes the primary ordering key in
-            # observe_symbol_status's freshness-ordering guard — accepting
-            # one dated far in the future would make every subsequent
-            # legitimate event for this symbol look "older" and be silently
-            # discarded forever, pinning whatever this corrupted or
-            # clock-skewed message claimed (e.g. a bogus resume masking a
-            # real, later halt). Refuse it before it can order anything.
-            logger.warning(
-                "alpaca market-status message is dated in the future beyond tolerance; the transition was not applied",
-                extra={
-                    "action": "market_liveness_status_timestamp_future",
-                    "symbol": symbol,
-                    "source_timestamp_ms": source_timestamp_ms,
-                    "receipt_ms": receipt_ms,
-                },
-            )
-            return
         status_code = str(message.get("sc") or "").upper()
         if status_code in _HALT_CODES:
             state = "HALTED"
@@ -277,12 +258,53 @@ class AlpacaMarketLivenessConsumer:
             state = "UNKNOWN"
             reason_code = "ALPACA_STATUS_UNKNOWN"
             reason = f"Alpaca reported unrecognized trading status {status_code or 'missing'} for {symbol}."
+
+        receipt_ms = self._clock()
+        if source_timestamp_ms > receipt_ms + _MAX_FUTURE_SKEW_MS:
+            if state == "TRADABLE":
+                # source_timestamp_ms becomes the primary ordering key in
+                # observe_symbol_status's freshness-ordering guard —
+                # accepting a future-dated *resume* would make every
+                # subsequent legitimate event for this symbol look "older"
+                # and be silently discarded forever, pinning this corrupted
+                # or clock-skewed resume in place and masking a real, later
+                # halt. Refuse it before it can order anything.
+                logger.warning(
+                    "alpaca market-status resume is dated in the future beyond tolerance; the transition was not applied",
+                    extra={
+                        "action": "market_liveness_status_timestamp_future",
+                        "symbol": symbol,
+                        "source_timestamp_ms": source_timestamp_ms,
+                        "receipt_ms": receipt_ms,
+                    },
+                )
+                return
+            # A future-dated HALT/unrecognized-status event is still
+            # safety-relevant negative evidence — dropping it, unlike a
+            # dropped resume, would leave the symbol exposed to whatever it
+            # last resolved to (TRADABLE by default with no prior record).
+            # Apply it fail-closed, but stamp it with the receipt clock
+            # instead of the unverifiable claimed time: accepting the bogus
+            # future value verbatim would poison the ordering key exactly
+            # the way a future-dated resume would, permanently masking a
+            # later legitimate resume for this symbol.
+            logger.warning(
+                "alpaca market-status message is dated in the future beyond tolerance; applying it fail-closed with the receipt time instead",
+                extra={
+                    "action": "market_liveness_status_timestamp_future_fail_closed",
+                    "symbol": symbol,
+                    "source_timestamp_ms": source_timestamp_ms,
+                    "receipt_ms": receipt_ms,
+                },
+            )
+            source_timestamp_ms = receipt_ms
+
         self._store.observe_symbol_status(
             SymbolTradingStatusEvidence(
                 symbol=symbol,
                 state=state,
                 source=_STATUS_SOURCE,
-                observed_at_ms=self._clock(),
+                observed_at_ms=receipt_ms,
                 source_timestamp_ms=source_timestamp_ms,
                 reason_code=reason_code,
                 reason=reason,

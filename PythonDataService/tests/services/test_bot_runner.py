@@ -62,6 +62,7 @@ from app.schemas.action_plan import ActionPlan
 from app.schemas.broker_bots import AlpacaPaperStrategyKey, BotProcessFact
 from app.schemas.market_liveness import (
     MarketClockLivenessEvidence,
+    MarketLivenessFact,
     SymbolTradingStatusEvidence,
 )
 from app.services.bot_binding_repository import (
@@ -2810,7 +2811,7 @@ async def test_extended_hours_entry_uses_the_feeds_capability_account_not_the_al
     clerk.authority_kind = "sqlite"
     clerk.account_id = "PA-ALPACA-EXEC"
 
-    def liveness(symbol: str, observed_at_ms: int):
+    def liveness(symbol: str, observed_at_ms: int) -> MarketLivenessFact:
         return compose_market_liveness(
             symbol,
             now_ms=observed_at_ms,

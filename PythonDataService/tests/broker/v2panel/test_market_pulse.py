@@ -311,7 +311,10 @@ def test_closed_liveness_during_a_proven_extended_phase_does_not_show_market_clo
     through a live-clock CLOSED reading once extended-hours capability is
     proven (Alpaca's clock is RTH-only). The panel must not contradict that
     by showing "Market closed" anyway — it should fall through to the
-    ordinary feed-state read, exactly like the execution gate does."""
+    ordinary feed-state read, exactly like the execution gate does. The
+    Market badge (market_state) renders right beside the headline in the V2
+    header, so it must be reconciled too — reporting raw "CLOSED" next to a
+    "Market data live" headline would itself be the contradiction."""
     _session(monkeypatch, "PRE")
     _admission_fact(monkeypatch, state="AVAILABLE", last_bar_ms=120_000)
     monkeypatch.setattr(market_pulse, "extended_phase_proven_at_ms", lambda **_kwargs: True)
@@ -339,7 +342,7 @@ def test_closed_liveness_during_a_proven_extended_phase_does_not_show_market_clo
         liveness=liveness,
     )
 
-    assert pulse.market_state == "CLOSED"  # the raw liveness fact is preserved
+    assert pulse.market_state == "TRADABLE"  # reconciled to match the headline, not the raw CLOSED fact
     assert pulse.headline != "Market closed by live broker evidence"
     assert pulse.headline == "Market data live"
 

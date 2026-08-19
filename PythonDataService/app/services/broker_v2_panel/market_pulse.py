@@ -67,6 +67,13 @@ def build_market_pulse(
         and symbol is not None
         and extended_phase_proven_at_ms(now_ms=now_ms, symbol=symbol, account_id=account_id)
     )
+    # The Market badge (market_state) renders right beside `headline` in the
+    # V2 header (panel-header.component.html) — reporting the raw "CLOSED"
+    # liveness value here while the headline below says "Market data live"
+    # would show operators a self-contradictory panel during every proven
+    # extended-hours session. TRADABLE is what the exemption actually
+    # concluded, so the badge must say what the headline says.
+    reconciled_market_state = "TRADABLE" if live_closed_is_actually_extended_hours else liveness.state
 
     # Live broker-reported liveness takes priority over the narrower
     # extended-session-capability check below: a HALTED/UNKNOWN liveness
@@ -145,7 +152,7 @@ def build_market_pulse(
 
     return MarketPulseView(
         session=session_label[session],
-        market_state=liveness.state,
+        market_state=reconciled_market_state,
         market_liveness_reason=liveness.reason,
         market_liveness_observed_at_ms=liveness.observed_at_ms,
         halted_symbol=liveness.symbol if liveness.state == "HALTED" else None,

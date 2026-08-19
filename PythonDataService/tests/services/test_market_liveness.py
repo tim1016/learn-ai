@@ -99,6 +99,44 @@ def test_closed_market_clock_overrides_a_tradable_symbol_status() -> None:
     assert fact.reason_code == "MARKET_CLOSED"
 
 
+def test_halted_symbol_status_overrides_a_closed_market_clock() -> None:
+    """Regression: Alpaca's market clock is RTH-only and reports CLOSED
+    through every extended session, so callers reconcile a CLOSED liveness
+    fact against a proven extended-hours capability to allow non-RTH entries
+    (see broker_capability_service.extended_phase_proven_at_ms). Once that
+    reconciliation actually works, this HALTED symbol status must still be
+    the one that decides the outcome — if the CLOSED branch returned first
+    without ever inspecting it, a proven-extended-hours caller would see a
+    liveness fact reporting only "CLOSED" and never learn the symbol was
+    genuinely halted, and liveness_blocks_entry would wave the ENTER
+    through."""
+    fact = compose_market_liveness(
+        "SPY",
+        now_ms=_NOW,
+        market_clock=_clock("CLOSED"),
+        connected=True,
+        connection_changed_at_ms=_NOW,
+        symbol_status=_status("HALTED"),
+    )
+
+    assert fact.state == "HALTED"
+    assert fact.reason_code == "SYMBOL_HALTED"
+
+
+def test_unrecognized_symbol_status_overrides_a_closed_market_clock() -> None:
+    fact = compose_market_liveness(
+        "SPY",
+        now_ms=_NOW,
+        market_clock=_clock("CLOSED"),
+        connected=True,
+        connection_changed_at_ms=_NOW,
+        symbol_status=_status("UNKNOWN"),
+    )
+
+    assert fact.state == "UNKNOWN"
+    assert fact.reason_code == "SYMBOL_STATUS_UNKNOWN"
+
+
 def test_symbol_with_no_evidence_at_all_is_tradable_on_a_connected_stream() -> None:
     """Regression for #1671's core bug: Alpaca's status stream is
     transition-only (halt/resume), not a per-symbol heartbeat, so a symbol
