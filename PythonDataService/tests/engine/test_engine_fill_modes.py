@@ -50,11 +50,11 @@ class _SyntheticStream:
 
 class _EmitOnceStrategy(Strategy):
     """Submits one set_holdings(1.0) on the first consolidated bar it sees;
-    records the consolidated bar's end_time and every order event."""
+    records the consolidated bar's end_ms and every order event."""
 
     def __init__(self) -> None:
         super().__init__()
-        self.signal_bar_end_time: datetime | None = None
+        self.signal_bar_end_ms: int | None = None
         self.events: list = []
 
     def initialize(self) -> None:
@@ -67,8 +67,8 @@ class _EmitOnceStrategy(Strategy):
         self.ctx.register_consolidator(symbol, timedelta(minutes=1440), self._on_daily)
 
     def _on_daily(self, bar: TradeBar) -> None:
-        if self.signal_bar_end_time is None:
-            self.signal_bar_end_time = bar.end_time
+        if self.signal_bar_end_ms is None:
+            self.signal_bar_end_ms = bar.end_ms
             assert self.ctx is not None
             self.ctx.set_holdings(self._symbol, Decimal("1.0"))
 
@@ -123,17 +123,17 @@ def test_next_session_open_fills_at_first_eligible_minute_open() -> None:
 
     engine.run(strategy)
 
-    assert strategy.signal_bar_end_time is not None
+    assert strategy.signal_bar_end_ms is not None
     # Daily consolidated bar's end_time anchors to the last contained minute:
     # day-1 15:59→16:00.
-    assert strategy.signal_bar_end_time == datetime(2026, 2, 9, 16, 0, tzinfo=NY)
+    assert strategy.signal_bar_end_ms == int(datetime(2026, 2, 9, 16, 0, tzinfo=NY).timestamp() * 1000)
     assert len(strategy.events) == 1
     event = strategy.events[0]
     assert event.direction is Direction.LONG
     # Fill at SECOND minute of day-2 (09:31 NY), at the open of [09:31, 09:32).
     # The first minute (09:30) fires the consolidator and queues the order;
     # the next iteration's pending-fills loop fires the fill.
-    assert event.time == datetime(2026, 2, 10, 9, 31, tzinfo=NY)
+    assert event.filled_at_ms == int(datetime(2026, 2, 10, 9, 31, tzinfo=NY).timestamp() * 1000)
     # Fill price = open of day-2 [09:31, 09:32) = 102.2.
     assert event.fill_price == Decimal("102.2")
 
@@ -160,11 +160,11 @@ def test_signal_bar_close_lean_stale_signal_fills_at_current_minute_open() -> No
 
     engine.run(strategy)
 
-    assert strategy.signal_bar_end_time == datetime(2026, 2, 9, 16, 0, tzinfo=NY)
+    assert strategy.signal_bar_end_ms == int(datetime(2026, 2, 9, 16, 0, tzinfo=NY).timestamp() * 1000)
     assert len(strategy.events) == 1
     event = strategy.events[0]
     assert event.direction is Direction.LONG
-    assert event.time == datetime(2026, 2, 10, 9, 31, tzinfo=NY)
+    assert event.filled_at_ms == int(datetime(2026, 2, 10, 9, 31, tzinfo=NY).timestamp() * 1000)
     assert event.fill_price == Decimal("102.0")
 
 
@@ -221,7 +221,7 @@ def test_next_session_open_same_date_signal_stays_pending_until_session_boundary
 
     # Order stays pending through day-1's 9:31 and 9:32, fills at day-2 09:30 open.
     assert len(strategy.events) == 1
-    assert strategy.events[0].time == datetime(2026, 2, 10, 9, 30, tzinfo=NY)
+    assert strategy.events[0].filled_at_ms == int(datetime(2026, 2, 10, 9, 30, tzinfo=NY).timestamp() * 1000)
     assert strategy.events[0].fill_price == Decimal("102.0")
 
 
@@ -248,5 +248,5 @@ def test_next_bar_open_keeps_existing_defer_behavior_on_same_stream() -> None:
     # NEXT_BAR_OPEN fills on the bar AFTER the consolidator-fire iteration:
     # consolidator fires on day-2 09:30 bar (queues order); fill happens on
     # day-2 09:31 bar's open.
-    assert strategy.events[0].time == datetime(2026, 2, 10, 9, 31, tzinfo=NY)
+    assert strategy.events[0].filled_at_ms == int(datetime(2026, 2, 10, 9, 31, tzinfo=NY).timestamp() * 1000)
     assert strategy.events[0].fill_price == Decimal("102.2")

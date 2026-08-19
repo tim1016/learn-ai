@@ -75,13 +75,13 @@ def test_ema_strategy_emits_an_asset_free_enter_intent() -> None:
     context.set_signal_intent_executor(executor)
 
     bar = _signal_bar()
-    context.current_time = bar.end_time
+    context.current_time_ms = bar.end_ms
     strategy._on_fifteen_minute_bar(bar)
 
     assert executor.intents == [
         SignalIntent(
             kind=SignalIntentKind.ENTER,
-            bar_close_ms=int(bar.end_time.timestamp() * 1000),
+                bar_close_ms=bar.end_ms,
             intended_price=Decimal("500"),
         )
     ]
@@ -103,7 +103,7 @@ def test_two_bps_variant_changes_only_the_gap_gate() -> None:
     original._prev_ema5_above_ema10 = False
     original_executor = _RecordingSignalIntentExecutor()
     original_context.set_signal_intent_executor(original_executor)
-    original_context.current_time = bar.end_time
+    original_context.current_time_ms = bar.end_ms
 
     two_bps = EmaCrossover2BpsAlgorithm(symbol="SPY")
     two_bps_context = StrategyContext(portfolio=Portfolio(initial_cash=Decimal("100000")))
@@ -115,7 +115,7 @@ def test_two_bps_variant_changes_only_the_gap_gate() -> None:
     two_bps._prev_ema5_above_ema10 = False
     two_bps_executor = _RecordingSignalIntentExecutor()
     two_bps_context.set_signal_intent_executor(two_bps_executor)
-    two_bps_context.current_time = bar.end_time
+    two_bps_context.current_time_ms = bar.end_ms
 
     original._on_fifteen_minute_bar(bar)
     two_bps._on_fifteen_minute_bar(bar)
@@ -158,7 +158,7 @@ def test_two_bps_variant_applies_configured_gap_and_inclusive_rsi_gates(
     executor = _RecordingSignalIntentExecutor()
     context.set_signal_intent_executor(executor)
     bar = _signal_bar()
-    context.current_time = bar.end_time
+    context.current_time_ms = bar.end_ms
 
     strategy._on_fifteen_minute_bar(bar)
 

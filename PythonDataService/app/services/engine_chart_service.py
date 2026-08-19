@@ -32,7 +32,6 @@ from app.schemas.engine_chart import (
 )
 from app.services.chart_service import compute_indicator_results, indicator_presentation
 from app.services.engine_bars_service import read_consolidated_bars
-from app.utils.timestamps import to_ms_utc
 
 _ET = ZoneInfo("America/New_York")
 
@@ -63,7 +62,7 @@ def build_engine_chart(request: EngineChartRequest) -> EngineChartResponse:
     )
     bars = [
         EngineChartBar(
-            t=to_ms_utc(bar.end_time),
+            t=bar.end_ms,
             o=float(bar.open),
             h=float(bar.high),
             l=float(bar.low),
@@ -152,8 +151,8 @@ def compute_strategy_indicator_results(
             if is_bar_indicator(indicator):
                 indicator.update(bar)
             else:
-                indicator.update(bar.end_time, bar.close)
-            timestamp = to_ms_utc(bar.end_time)
+                indicator.update(bar.end_ms, bar.close)
+            timestamp = bar.end_ms
             if isinstance(indicator, MovingAverageConvergenceDivergence):
                 macd_points["macd"].append(_point(timestamp, indicator.macd))
                 macd_points["signal"].append(_point(timestamp, indicator.signal))

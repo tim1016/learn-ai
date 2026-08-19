@@ -16,7 +16,6 @@ value during warmup).
 from __future__ import annotations
 
 from collections import deque
-from datetime import datetime
 from decimal import Decimal
 
 from app.engine.indicators.base import Indicator
@@ -28,7 +27,7 @@ class SimpleMovingAverage(Indicator):
         self._window: deque[Decimal] = deque(maxlen=period)
         self._sum: Decimal = Decimal(0)
 
-    def _compute_next_value(self, time: datetime, value: Decimal) -> Decimal | None:
+    def _compute_next_value(self, timestamp_ms: int, value: Decimal) -> Decimal | None:
         if len(self._window) == self.period:
             # Maxlen is already at period, popping is handled by deque,
             # but we track _sum manually for precision.

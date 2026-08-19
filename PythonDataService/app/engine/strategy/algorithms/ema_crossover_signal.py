@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -54,6 +54,7 @@ from app.engine.indicators.ema import ExponentialMovingAverage
 from app.engine.indicators.rsi import RelativeStrengthIndex
 from app.engine.strategy.base import DecisionSnapshot, LoggedTrade, Strategy
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
+from app.utils.timestamps import display_time
 
 
 @dataclass
@@ -73,7 +74,7 @@ class _PendingEntry:
 class _OpenTrade:
     """An entry that has filled but not yet exited."""
 
-    entry_time: datetime
+    entry_time_ms: int
     entry_price: Decimal
     quantity: int
     ema5: Decimal
@@ -193,7 +194,7 @@ class EmaCrossoverSignalAlgorithm(Strategy):
     def on_minute_bar(self, bar: TradeBar) -> None:
         if self._observations_writer is None:
             return
-        ms_utc = int(bar.end_time.timestamp() * 1000)
+        ms_utc = bar.end_ms
         self._observations_writer.writerow(
             [
                 str(ms_utc),
@@ -215,9 +216,9 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         assert self.ctx is not None
 
         # Update indicators with consolidated bar close at EndTime.
-        self._ema5.update(bar.end_time, bar.close)
-        self._ema10.update(bar.end_time, bar.close)
-        self._rsi14.update(bar.end_time, bar.close)
+        self._ema5.update(bar.end_ms, bar.close)
+        self._ema10.update(bar.end_ms, bar.close)
+        self._rsi14.update(bar.end_ms, bar.close)
 
         # Warmup guard — mirrors the C# branch.
         if not (self._ema5.is_ready and self._ema10.is_ready and self._rsi14.is_ready):
@@ -257,11 +258,11 @@ class EmaCrossoverSignalAlgorithm(Strategy):
                 self.ctx.emit_signal_intent(
                     SignalIntent(
                         kind=SignalIntentKind.EXIT,
-                        bar_close_ms=int(bar.end_time.timestamp() * 1000),
+                        bar_close_ms=bar.end_ms,
                         intended_price=bar.close,
                     )
                 )
-                self.ctx.log(f"EXIT SIGNAL: {bar.end_time.strftime('%Y-%m-%d %H:%M')} Close={bar.close:.2f}")
+                self.ctx.log(f"EXIT SIGNAL: {display_time(bar.end_ms)} Close={bar.close:.2f}")
                 self._in_position = False
                 bar_signal = "EXIT"
         else:
@@ -279,7 +280,7 @@ class EmaCrossoverSignalAlgorithm(Strategy):
                 self.ctx.emit_signal_intent(
                     SignalIntent(
                         kind=SignalIntentKind.ENTER,
-                        bar_close_ms=int(bar.end_time.timestamp() * 1000),
+                        bar_close_ms=bar.end_ms,
                         intended_price=bar.close,
                     )
                 )
@@ -311,7 +312,7 @@ class EmaCrossoverSignalAlgorithm(Strategy):
                 )
 
                 self.ctx.log(
-                    f"ENTRY SIGNAL: {bar.end_time.strftime('%Y-%m-%d %H:%M')} "
+                    f"ENTRY SIGNAL: {display_time(bar.end_ms)} "
                     f"Close={bar.close:.2f} "
                     f"EMA5={ema5_val:.4f} EMA10={ema10_val:.4f} "
                     f"Gap={ema_gap:.4f} RSI={rsi_val:.2f}"
@@ -323,10 +324,8 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         # Publish the per-bar decision snapshot (observability only —
         # live engine reads this to populate decisions.parquet; backtest
         # paths and unit tests that don't observe it see no change).
-        # ``bar.end_time`` is already an aware datetime in the engine's
-        # exchange tz, so .timestamp() is the correct UTC seconds.
         self.last_decision_snapshot = DecisionSnapshot(
-            bar_close_ms=int(bar.end_time.timestamp() * 1000),
+            bar_close_ms=bar.end_ms,
             ema5=float(ema5_val),
             ema10=float(ema10_val),
             rsi=float(rsi_val),
@@ -345,7 +344,7 @@ class EmaCrossoverSignalAlgorithm(Strategy):
                 cross_state = "below"
             else:
                 cross_state = "equal"
-            ms_utc = int(bar.end_time.timestamp() * 1000)
+            ms_utc = bar.end_ms
             self._state_writer.writerow(
                 [
                     str(ms_utc),
@@ -376,10 +375,10 @@ class EmaCrossoverSignalAlgorithm(Strategy):
                 # Defensive: a LONG fill without a pending entry means
                 # state is out of sync. Log and skip.
                 if self.ctx is not None:
-                    self.ctx.log(f"WARN: LONG fill at {event.time} with no pending entry")
+                    self.ctx.log(f"WARN: LONG fill at {display_time(event.filled_at_ms)} with no pending entry")
                 return
             self._open_trade = _OpenTrade(
-                entry_time=event.time,
+                entry_time_ms=event.filled_at_ms,
                 entry_price=event.fill_price,
                 quantity=event.fill_quantity,
                 ema5=self._pending_entry.ema5,
@@ -389,7 +388,7 @@ class EmaCrossoverSignalAlgorithm(Strategy):
             self._pending_entry = None
             if self.ctx is not None:
                 self.ctx.log(
-                    f"ENTRY: {event.time.strftime('%Y-%m-%d %H:%M')} "
+                    f"ENTRY: {display_time(event.filled_at_ms)} "
                     f"Price={event.fill_price:.2f} "
                     f"EMA5={self._open_trade.ema5:.4f} "
                     f"EMA10={self._open_trade.ema10:.4f} "
@@ -402,15 +401,15 @@ class EmaCrossoverSignalAlgorithm(Strategy):
                 return
             entry = self._open_trade
             exit_price = event.fill_price
-            exit_time = event.time
+            exit_time_ms = event.filled_at_ms
             pnl_pts = exit_price - entry.entry_price
             pnl_pct = pnl_pts / entry.entry_price
             result = "WIN" if pnl_pts >= 0 else "LOSS"
             self.trade_log.append(
                 LoggedTrade(
-                    entry_time=entry.entry_time,
+                    entry_time_ms=entry.entry_time_ms,
                     entry_price=entry.entry_price,
-                    exit_time=exit_time,
+                    exit_time_ms=exit_time_ms,
                     exit_price=exit_price,
                     quantity=entry.quantity,
                     pnl_pts=pnl_pts,
@@ -425,7 +424,7 @@ class EmaCrossoverSignalAlgorithm(Strategy):
             )
             if self.ctx is not None:
                 self.ctx.log(
-                    f"EXIT: {exit_time.strftime('%Y-%m-%d %H:%M')} "
+                    f"EXIT: {display_time(exit_time_ms)} "
                     f"Price={exit_price:.2f} PnL={pnl_pts:.2f} "
                     f"({pnl_pct * 100:.2f}%) {result}"
                 )
@@ -434,12 +433,12 @@ class EmaCrossoverSignalAlgorithm(Strategy):
     def on_end_of_algorithm(self) -> None:
         if self._in_position:
             assert self.ctx is not None
-            if self.ctx.current_time is None:
+            if self.ctx.current_time_ms is None:
                 raise RuntimeError("EMA signal exit requires a current bar time")
             self.ctx.emit_signal_intent(
                 SignalIntent(
                     kind=SignalIntentKind.EXIT,
-                    bar_close_ms=int(self.ctx.current_time.timestamp() * 1000),
+                    bar_close_ms=self.ctx.current_time_ms,
                     intended_price=self.ctx.portfolio.reference_price.get(self._symbol, Decimal(0)),
                 )
             )

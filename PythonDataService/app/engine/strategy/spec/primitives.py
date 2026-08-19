@@ -31,12 +31,13 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime, time
+from datetime import time
 from decimal import Decimal
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 from app.engine.strategy.spec import schema as S
+from app.utils.timestamps import datetime_at_ms
 
 if TYPE_CHECKING:
     from app.engine.data.trade_bar import TradeBar
@@ -54,7 +55,7 @@ class EvalContext:
 
     indicators: dict[str, Indicator]  # keyed by spec indicator id
     current_bar_count: int  # consolidated bar handler invocations so far
-    bar_close_time: datetime  # end_time of the current consolidated bar
+    bar_close_ms: int
     bar_close_price: Decimal  # close price of the current consolidated bar
     current_bar: TradeBar | None = None  # full OHLC bar for BarProperty primitives
 
@@ -352,7 +353,7 @@ class TimeOfDayPrimitive(Primitive):
         return time(int(h), int(m))
 
     def evaluate(self, ctx: EvalContext) -> bool:
-        local = ctx.bar_close_time.astimezone(self._tz).time()
+        local = datetime_at_ms(ctx.bar_close_ms, tz=self._tz).time()
         if self._after is not None and local < self._after:
             return False
         return not (self._before is not None and local > self._before)

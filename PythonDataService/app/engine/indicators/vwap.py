@@ -16,7 +16,9 @@ SPY VWAP-reversion port reconciles trade-by-trade.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date
+
+from app.utils.timestamps import datetime_at_ms
 
 
 class SessionAnchoredVwap:
@@ -34,9 +36,11 @@ class SessionAnchoredVwap:
     def is_ready(self) -> bool:
         return self._current_value is not None
 
-    def update(self, time: datetime, *, high: float, low: float, close: float, volume: float) -> None:
+    def update(self, timestamp_ms: int, *, high: float, low: float, close: float, volume: float) -> None:
         """Accumulate one bar. Resets the session on a new calendar date."""
-        d = time.date()
+        if not isinstance(timestamp_ms, int):
+            raise TypeError("timestamp_ms must be int64 milliseconds UTC")
+        d: date = datetime_at_ms(timestamp_ms).date()
         if self._session_date != d:
             self._session_date = d
             self._cum_pv = 0.0

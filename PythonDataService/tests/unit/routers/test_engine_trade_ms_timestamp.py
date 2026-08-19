@@ -10,7 +10,8 @@ import pytest
 
 from app.engine.strategy.base import LoggedTrade
 from app.models.responses import LeanTradeStatsResponse
-from app.routers.engine import _format_trade, _format_trade_record, _to_ms_utc
+from app.routers.engine import _format_trade, _format_trade_record
+from app.utils.timestamps import to_ms_utc
 
 
 def test_to_ms_utc_tz_aware_et_in_summer_uses_edt_offset() -> None:
@@ -18,7 +19,7 @@ def test_to_ms_utc_tz_aware_et_in_summer_uses_edt_offset() -> None:
     et = ZoneInfo("America/New_York")
     ts = datetime(2025, 5, 30, 14, 30, tzinfo=et)
 
-    assert _to_ms_utc(ts) == 1_748_629_800_000
+    assert to_ms_utc(ts) == 1_748_629_800_000
 
 
 def test_to_ms_utc_tz_aware_et_in_winter_uses_est_offset() -> None:
@@ -26,12 +27,12 @@ def test_to_ms_utc_tz_aware_et_in_winter_uses_est_offset() -> None:
     et = ZoneInfo("America/New_York")
     ts = datetime(2025, 1, 15, 14, 30, tzinfo=et)
 
-    assert _to_ms_utc(ts) == 1_736_969_400_000
+    assert to_ms_utc(ts) == 1_736_969_400_000
 
 
 def test_to_ms_utc_rejects_naive_datetimes() -> None:
     with pytest.raises(ValueError, match="timezone-aware"):
-        _to_ms_utc(datetime(2025, 5, 30, 14, 30))
+        to_ms_utc(datetime(2025, 5, 30, 14, 30))
 
 
 @pytest.mark.parametrize(
@@ -48,15 +49,15 @@ def test_to_ms_utc_rejects_naive_datetimes() -> None:
     ],
 )
 def test_to_ms_utc_misc_inputs(input_dt: datetime, expected: int) -> None:
-    assert _to_ms_utc(input_dt) == expected
+    assert to_ms_utc(input_dt) == expected
 
 
 def _logged_trade() -> LoggedTrade:
     et = ZoneInfo("America/New_York")
     return LoggedTrade(
-        entry_time=datetime(2025, 5, 30, 14, 30, tzinfo=et),
+        entry_time_ms=to_ms_utc(datetime(2025, 5, 30, 14, 30, tzinfo=et)),
         entry_price=Decimal("100.0"),
-        exit_time=datetime(2025, 5, 30, 15, 30, tzinfo=et),
+        exit_time_ms=to_ms_utc(datetime(2025, 5, 30, 15, 30, tzinfo=et)),
         exit_price=Decimal("101.0"),
         quantity=3,
         pnl_pts=Decimal("1.0"),

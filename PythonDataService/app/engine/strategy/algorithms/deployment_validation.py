@@ -19,19 +19,18 @@ an alpha port.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import time, timedelta
 from decimal import Decimal
 from enum import StrEnum
-from zoneinfo import ZoneInfo
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
 from app.engine.strategy.base import LoggedTrade, Strategy
+from app.utils.timestamps import ny_datetime
 
 _DETECTION_START = time(9, 45)
 _STOP_AND_FLATTEN = time(15, 45)
 _BARS_FROM_ENTRY_FILL_TO_EXIT_SIGNAL = 3
-_NY = ZoneInfo("America/New_York")
 
 
 class DeploymentDecision(StrEnum):
@@ -44,10 +43,10 @@ class DeploymentDecision(StrEnum):
 
 @dataclass
 class _OpenTrade:
-    entry_time: datetime
+    entry_time_ms: int
     entry_price: Decimal
     quantity: int
-    signal_time: datetime
+    signal_time_ms: int
 
 
 @dataclass(frozen=True)
@@ -88,7 +87,7 @@ class DeploymentValidationDecisionKernel:
         open_price: Decimal,
         close_price: Decimal,
     ) -> DeploymentDecision:
-        end_time = datetime.fromtimestamp(end_ms / 1000, tz=_NY)
+        end_time = ny_datetime(end_ms)
         if self._current_date != end_time.date():
             self._current_date = end_time.date()
             self._green_streak = 0
@@ -142,14 +141,14 @@ class DeploymentValidationConsecutiveGreen(Strategy):
         self._in_position = False
         self._stopped_for_day = False
         self._bars_until_exit_signal = 0
-        self._pending_signal_time: datetime | None = None
+        self._pending_signal_time_ms: int | None = None
         self._open_trade: _OpenTrade | None = None
 
         self.trade_log: list[LoggedTrade] = []
 
     def _publish_decision(self, bar: TradeBar, signal: str) -> None:
         self.last_decision_snapshot = _DeploymentDecisionSnapshot(
-            bar_close_ms=int(bar.end_time.timestamp() * 1000),
+            bar_close_ms=bar.end_ms,
             signal=signal,
             intended_price=float(bar.close),
         )
@@ -171,7 +170,7 @@ class DeploymentValidationConsecutiveGreen(Strategy):
     def _reset_detection(self) -> None:
         self._green_streak = 0
         self._entry_pending = False
-        self._pending_signal_time = None
+        self._pending_signal_time_ms = None
 
     def _reset_day(self) -> None:
         self._reset_detection()
@@ -186,18 +185,19 @@ class DeploymentValidationConsecutiveGreen(Strategy):
     def on_minute_bar(self, bar: TradeBar) -> None:
         assert self.ctx is not None
 
-        bar_date = bar.end_time.date()
+        end_time = ny_datetime(bar.end_ms)
+        bar_date = end_time.date()
         if self._current_date is None or bar_date != self._current_date:
             self._current_date = bar_date
             self._reset_day()
 
-        if bar.end_time.time() >= _STOP_AND_FLATTEN:
+        if end_time.time() >= _STOP_AND_FLATTEN:
             self._stopped_for_day = True
             self._reset_detection()
             signal = "HOLD"
             if self._in_position or self._entry_pending:
                 self.ctx.liquidate(self._trade_symbol)
-                self.ctx.log(f"SESSION FLATTEN SIGNAL: {bar.end_time.strftime('%Y-%m-%d %H:%M')}")
+                self.ctx.log(f"SESSION FLATTEN SIGNAL: {end_time.strftime('%Y-%m-%d %H:%M')}")
                 self._in_position = False
                 self._entry_pending = False
                 self._bars_until_exit_signal = 0
@@ -205,7 +205,7 @@ class DeploymentValidationConsecutiveGreen(Strategy):
             self._publish_decision(bar, signal)
             return
 
-        if self._stopped_for_day or bar.end_time.time() < _DETECTION_START:
+        if self._stopped_for_day or end_time.time() < _DETECTION_START:
             self._reset_detection()
             self._publish_decision(bar, "HOLD")
             return
@@ -215,7 +215,7 @@ class DeploymentValidationConsecutiveGreen(Strategy):
             signal = "HOLD"
             if self._bars_until_exit_signal <= 0:
                 self.ctx.liquidate(self._trade_symbol)
-                self.ctx.log(f"EXIT SIGNAL: {bar.end_time.strftime('%Y-%m-%d %H:%M')} Close={bar.close:.2f}")
+                self.ctx.log(f"EXIT SIGNAL: {end_time.strftime('%Y-%m-%d %H:%M')} Close={bar.close:.2f}")
                 self._in_position = False
                 self._bars_until_exit_signal = 0
                 self._reset_detection()
@@ -233,14 +233,14 @@ class DeploymentValidationConsecutiveGreen(Strategy):
             self._green_streak = 0
 
         if self._green_streak >= 2:
-            self._pending_signal_time = bar.end_time
+            self._pending_signal_time_ms = bar.end_ms
             # Cross-asset ``trade_symbol`` is legacy deployment metadata. Engine
             # Lab hides/rejects it because the backtest engine has one price
             # stream; the retired IBKR runner was its only execution consumer.
             self.ctx.set_holdings(self._trade_symbol, Decimal(1))
             self._entry_pending = True
             self._green_streak = 0
-            self.ctx.log(f"ENTRY SIGNAL: {bar.end_time.strftime('%Y-%m-%d %H:%M')} Close={bar.close:.2f}")
+            self.ctx.log(f"ENTRY SIGNAL: {end_time.strftime('%Y-%m-%d %H:%M')} Close={bar.close:.2f}")
             self._publish_decision(bar, "ENTER")
             return
 
@@ -248,18 +248,18 @@ class DeploymentValidationConsecutiveGreen(Strategy):
 
     def on_order_event(self, event: OrderEvent) -> None:
         if event.direction == Direction.LONG:
-            signal_time = self._pending_signal_time or event.time
+            signal_time_ms = self._pending_signal_time_ms or event.filled_at_ms
             self._open_trade = _OpenTrade(
-                entry_time=event.time,
+                entry_time_ms=event.filled_at_ms,
                 entry_price=event.fill_price,
                 quantity=event.fill_quantity,
-                signal_time=signal_time,
+                signal_time_ms=signal_time_ms,
             )
             self._entry_pending = False
             self._in_position = True
             self._bars_until_exit_signal = _BARS_FROM_ENTRY_FILL_TO_EXIT_SIGNAL
             if self.ctx is not None:
-                self.ctx.log(f"ENTRY FILL: {event.time.strftime('%Y-%m-%d %H:%M')} Price={event.fill_price:.2f}")
+                self.ctx.log(f"ENTRY FILL: {ny_datetime(event.filled_at_ms):%Y-%m-%d %H:%M} Price={event.fill_price:.2f}")
             return
 
         if self._open_trade is None:
@@ -272,20 +272,20 @@ class DeploymentValidationConsecutiveGreen(Strategy):
         result = "WIN" if pnl_pts >= 0 else "LOSS"
         self.trade_log.append(
             LoggedTrade(
-                entry_time=entry.entry_time,
+                entry_time_ms=entry.entry_time_ms,
                 entry_price=entry.entry_price,
-                exit_time=event.time,
+                exit_time_ms=event.filled_at_ms,
                 exit_price=exit_price,
                 quantity=entry.quantity,
                 pnl_pts=pnl_pts,
                 pnl_pct=pnl_pct,
                 result=result,
-                indicators={"signal_time_ms": Decimal(int(entry.signal_time.timestamp() * 1000))},
+                indicators={"signal_time_ms": Decimal(entry.signal_time_ms)},
                 signal_reason="two_consecutive_green_minute_bars",
             )
         )
         if self.ctx is not None:
-            self.ctx.log(f"EXIT FILL: {event.time.strftime('%Y-%m-%d %H:%M')} Price={event.fill_price:.2f}")
+            self.ctx.log(f"EXIT FILL: {ny_datetime(event.filled_at_ms):%Y-%m-%d %H:%M} Price={event.fill_price:.2f}")
         self._open_trade = None
         self._in_position = False
         self._bars_until_exit_signal = 0

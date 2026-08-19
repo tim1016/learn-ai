@@ -40,6 +40,7 @@ from app.engine.engine import BacktestEngine
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode
 from app.engine.strategy.algorithms.sma_crossover import SmaCrossoverAlgorithm
+from app.utils.timestamps import datetime_at_ms
 
 EASTERN = ZoneInfo("America/New_York")
 SYMBOL = "TEST"
@@ -122,7 +123,7 @@ class _FakeDataReader:
 
     def iter_bars(self, symbol: str, start: date, end: date) -> Iterator[TradeBar]:
         for b in self.bars:
-            if start <= b.time.date() <= end:
+            if start <= datetime_at_ms(b.start_ms, tz=EASTERN).date() <= end:
                 yield b
 
 

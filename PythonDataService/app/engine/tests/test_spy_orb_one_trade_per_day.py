@@ -34,9 +34,12 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.strategy.algorithms.spy_orb import SpyOpeningRangeBreakout
+
+_ET = ZoneInfo("America/New_York")
 
 
 # ---------------------------------------------------------------------------
@@ -91,8 +94,8 @@ def _rth_15min_bars_for(day: date) -> list[datetime]:
     9:45 (end of 9:30-9:45 bar) through 16:00 (end of 15:45-16:00 bar) = 26 bars.
     """
     out = []
-    end = datetime.combine(day, datetime.min.time()).replace(hour=9, minute=45)
-    final = datetime.combine(day, datetime.min.time()).replace(hour=16, minute=0)
+    end = datetime.combine(day, datetime.min.time(), tzinfo=_ET).replace(hour=9, minute=45)
+    final = datetime.combine(day, datetime.min.time(), tzinfo=_ET).replace(hour=16, minute=0)
     while end <= final:
         out.append(end)
         end = end + timedelta(minutes=15)
@@ -172,7 +175,7 @@ def test_new_day_resets_traded_today() -> None:
 
     # Simulate the first bar of the NEXT trading day.
     next_day_bar = _bar(
-        datetime(2026, 1, 6, 9, 45),
+        datetime(2026, 1, 6, 9, 45, tzinfo=_ET),
         open_=101.00,
         high=101.20,
         low=100.90,

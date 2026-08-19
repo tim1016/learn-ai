@@ -798,9 +798,9 @@ def _compatibility_ledger_statistics(
         pnl_pct = pnl_points / entry_price if entry_price != 0 else Decimal(0)
         ledger.append(
             LoggedTrade(
-                entry_time=datetime.fromtimestamp(trade.entry_ms_utc / 1000, tz=UTC),
+                entry_time_ms=trade.entry_ms_utc,
                 entry_price=entry_price,
-                exit_time=datetime.fromtimestamp(trade.exit_ms_utc / 1000, tz=UTC),
+                exit_time_ms=trade.exit_ms_utc,
                 exit_price=exit_price,
                 quantity=int(trade.quantity),
                 pnl_pts=pnl_points,

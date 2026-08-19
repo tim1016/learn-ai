@@ -28,6 +28,7 @@ from app.engine.indicators.rolling_distance_sigma import RollingDistanceSigma
 from app.engine.indicators.vwap import SessionAnchoredVwap
 from app.engine.strategy.base import Strategy
 from app.lean_sidecar.trading_calendar import session_window_for_date
+from app.utils.timestamps import datetime_at_ms
 
 _ET = ZoneInfo("America/New_York")
 
@@ -107,12 +108,12 @@ class SpyVwapReversionAlgorithm(Strategy):
 
     def _on_bar(self, bar: TradeBar) -> None:
         assert self.ctx is not None
-        # Bar close time in exchange-local (ET); the reader yields ET bars.
-        t = bar.end_time
+        # Convert at the local calendar boundary only; engine state retains UTC ms.
+        t = datetime_at_ms(bar.end_ms, tz=_ET)
         self._maybe_reset_session(t.date())
 
         self._vwap.update(
-            t,
+            bar.end_ms,
             high=float(bar.high),
             low=float(bar.low),
             close=float(bar.close),

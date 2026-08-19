@@ -104,6 +104,7 @@ def test_fixture_first_and_last_minute_timestamps_match_window() -> None:
     from zoneinfo import ZoneInfo
 
     from app.research.parity.fixture_data_reader import FixtureDataReader
+    from app.utils.timestamps import datetime_at_ms
 
     NY = ZoneInfo("America/New_York")
     reader = FixtureDataReader(csv_path=_PRICES, symbol="AAPL")
@@ -114,15 +115,15 @@ def test_fixture_first_and_last_minute_timestamps_match_window() -> None:
     last = bars[-1]
 
     # First bar = 2026-02-09 09:31 NY (FixtureDataReader interprets the CSV
-    # row's timestamp as bar.time; the first regular-session minute bar of
+    # row's timestamp as ``start_ms``; the first regular-session minute bar of
     # 2026-02-09 in QC's capture starts at 09:31 NY).
-    assert first.time == datetime(2026, 2, 9, 9, 31, tzinfo=NY), (
-        f"first bar time = {first.time} (expected 2026-02-09 09:31 NY)"
+    assert datetime_at_ms(first.start_ms, tz=NY) == datetime(2026, 2, 9, 9, 31, tzinfo=NY), (
+        f"first bar start_ms = {first.start_ms} (expected 2026-02-09 09:31 NY)"
     )
 
     # Last bar = 2026-02-11 16:00 NY (final session-close minute).
-    assert last.time == datetime(2026, 2, 11, 16, 0, tzinfo=NY), (
-        f"last bar time = {last.time} (expected 2026-02-11 16:00 NY)"
+    assert datetime_at_ms(last.start_ms, tz=NY) == datetime(2026, 2, 11, 16, 0, tzinfo=NY), (
+        f"last bar start_ms = {last.start_ms} (expected 2026-02-11 16:00 NY)"
     )
 
 
@@ -133,10 +134,14 @@ def test_fixture_bars_are_tz_aware_ny() -> None:
     the engine's `next_bar.time.date() <= signal_bar.end_time.date()`
     eligibility check (.date() on a naive datetime is the local interpretation,
     which can drift across UTC midnight)."""
+    from zoneinfo import ZoneInfo
+
     from app.research.parity.fixture_data_reader import FixtureDataReader
+    from app.utils.timestamps import datetime_at_ms
 
     reader = FixtureDataReader(csv_path=_PRICES, symbol="AAPL")
     bars = list(reader.iter_bars("AAPL"))
     for bar in bars[:10]:  # spot-check leading 10 bars; same code path
-        assert bar.time.tzinfo is not None, "bar.time is tz-naive"
-        assert "New_York" in str(bar.time.tzinfo), f"bar.time tzinfo = {bar.time.tzinfo} (expected America/New_York)"
+        local = datetime_at_ms(bar.start_ms, tz=ZoneInfo("America/New_York"))
+        assert local.tzinfo is not None, "bar local time is tz-naive"
+        assert "New_York" in str(local.tzinfo), f"bar local tzinfo = {local.tzinfo} (expected America/New_York)"

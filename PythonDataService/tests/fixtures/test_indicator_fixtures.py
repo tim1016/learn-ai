@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 import sys
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -27,10 +27,11 @@ from golden_support.registry import default as registry  # noqa: E402
 from app.engine.indicators.ema import ExponentialMovingAverage  # noqa: E402
 from app.engine.indicators.rsi import RelativeStrengthIndex  # noqa: E402
 from app.engine.indicators.sma import SimpleMovingAverage  # noqa: E402
+from app.utils.timestamps import to_ms_utc  # noqa: E402
 
 PERIOD = 3
 N_BARS = 8
-_BASE_TIME = datetime(2024, 1, 1)
+_BASE_TIME = datetime(2024, 1, 1, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------
@@ -61,12 +62,15 @@ def _oracle_vals(out: pa.Table, row: int) -> list[float | None]:
     return vals
 
 
+def _timestamp_ms(offset_seconds: int) -> int:
+    return to_ms_utc(_BASE_TIME + timedelta(seconds=offset_seconds))
+
+
 def _run_ema(prices: list[float]) -> list[float | None]:
     ind = ExponentialMovingAverage("ema", PERIOD)
     result: list[float | None] = []
     for i, p in enumerate(prices):
-        t = _BASE_TIME + timedelta(seconds=i)
-        ind.update(t, Decimal(str(p)))
+        ind.update(_timestamp_ms(i), Decimal(str(p)))
         result.append(float(ind.current_value) if ind.current_value is not None else None)
     return result
 
@@ -75,8 +79,7 @@ def _run_sma(prices: list[float]) -> list[float | None]:
     ind = SimpleMovingAverage("sma", PERIOD)
     result: list[float | None] = []
     for i, p in enumerate(prices):
-        t = _BASE_TIME + timedelta(seconds=i)
-        ind.update(t, Decimal(str(p)))
+        ind.update(_timestamp_ms(i), Decimal(str(p)))
         result.append(float(ind.current_value) if ind.current_value is not None else None)
     return result
 
@@ -85,8 +88,7 @@ def _run_rsi(prices: list[float]) -> list[float | None]:
     ind = RelativeStrengthIndex("rsi", PERIOD)
     result: list[float | None] = []
     for i, p in enumerate(prices):
-        t = _BASE_TIME + timedelta(seconds=i)
-        ind.update(t, Decimal(str(p)))
+        ind.update(_timestamp_ms(i), Decimal(str(p)))
         result.append(float(ind.current_value) if ind.current_value is not None else None)
     return result
 
@@ -134,9 +136,9 @@ class TestIND001EMA:
     def test_ema_ready_at_period(self) -> None:
         ind = ExponentialMovingAverage("ema", PERIOD)
         for i in range(PERIOD - 1):
-            ind.update(_BASE_TIME + timedelta(seconds=i), Decimal("10"))
+            ind.update(_timestamp_ms(i), Decimal("10"))
             assert not ind.is_ready
-        ind.update(_BASE_TIME + timedelta(seconds=PERIOD - 1), Decimal("10"))
+        ind.update(_timestamp_ms(PERIOD - 1), Decimal("10"))
         assert ind.is_ready
 
     def test_ema_monotone_case_exact(self) -> None:
@@ -144,12 +146,12 @@ class TestIND001EMA:
         # Case A: [10, 12, 14, 16, ...]
         ind = ExponentialMovingAverage("ema", PERIOD)
         for i, p in enumerate([10, 12, 14]):
-            ind.update(_BASE_TIME + timedelta(seconds=i), Decimal(str(p)))
+            ind.update(_timestamp_ms(i), Decimal(str(p)))
         # At samples=3: EMA = SMA(10,12,14) = 12
         assert abs(float(ind.current_value) - 12.0) < 1e-9
 
         # At samples=4: p=16, k=0.5 → EMA = 16*0.5 + 12*0.5 = 14
-        ind.update(_BASE_TIME + timedelta(seconds=3), Decimal("16"))
+        ind.update(_timestamp_ms(3), Decimal("16"))
         assert abs(float(ind.current_value) - 14.0) < 1e-9
 
 
@@ -182,9 +184,9 @@ class TestIND002SMA:
     def test_sma_ready_at_period(self) -> None:
         ind = SimpleMovingAverage("sma", PERIOD)
         for i in range(PERIOD - 1):
-            ind.update(_BASE_TIME + timedelta(seconds=i), Decimal("10"))
+            ind.update(_timestamp_ms(i), Decimal("10"))
             assert not ind.is_ready
-        ind.update(_BASE_TIME + timedelta(seconds=PERIOD - 1), Decimal("10"))
+        ind.update(_timestamp_ms(PERIOD - 1), Decimal("10"))
         assert ind.is_ready
 
     def test_sma_rolling_window(self) -> None:
@@ -192,7 +194,7 @@ class TestIND002SMA:
         ind = SimpleMovingAverage("sma", PERIOD)
         prices = [10, 12, 14, 16]
         for i, p in enumerate(prices):
-            ind.update(_BASE_TIME + timedelta(seconds=i), Decimal(str(p)))
+            ind.update(_timestamp_ms(i), Decimal(str(p)))
         # At samples=4: SMA = mean([12, 14, 16]) = 14
         assert abs(float(ind.current_value) - 14.0) < 1e-9
 
@@ -233,9 +235,9 @@ class TestIND003RSI:
     def test_rsi_ready_at_period_plus_one(self) -> None:
         ind = RelativeStrengthIndex("rsi", PERIOD)
         for i in range(PERIOD):
-            ind.update(_BASE_TIME + timedelta(seconds=i), Decimal(str(10 + i)))
+            ind.update(_timestamp_ms(i), Decimal(str(10 + i)))
             assert not ind.is_ready
-        ind.update(_BASE_TIME + timedelta(seconds=PERIOD), Decimal(str(10 + PERIOD)))
+        ind.update(_timestamp_ms(PERIOD), Decimal(str(10 + PERIOD)))
         assert ind.is_ready
 
     def test_rsi_bounded_zero_to_100(self) -> None:

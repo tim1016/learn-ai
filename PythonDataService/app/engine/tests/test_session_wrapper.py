@@ -14,14 +14,18 @@ by a dedicated test:
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import BacktestEngine
 from app.engine.execution.execution_config import ExecutionConfig
 from app.engine.execution.order import Direction, FillMode
 from app.engine.strategy.base import Strategy
+from app.utils.timestamps import datetime_at_ms
+
+_ET = ZoneInfo("America/New_York")
 
 
 class _StaticBarReader:
@@ -73,7 +77,7 @@ class _EntryThenExitStrategy(Strategy):
             self.ctx.portfolio.submit_market_order(
                 self._symbol,
                 quantity=100,
-                time=bar.end_time,
+                submitted_at_ms=bar.end_ms,
                 tag="entry",
                 take_profit_price=self._tp,
                 stop_loss_price=self._sl,
@@ -84,7 +88,7 @@ class _EntryThenExitStrategy(Strategy):
                 self.ctx.portfolio.submit_market_order(
                     self._symbol,
                     quantity=-pos.quantity,
-                    time=bar.end_time,
+                    submitted_at_ms=bar.end_ms,
                     tag="exit",
                 )
 
@@ -129,7 +133,7 @@ class _EntryOnEveryBarStrategy(Strategy):
             self.ctx.portfolio.submit_market_order(
                 self._symbol,
                 quantity=100,
-                time=bar.end_time,
+                submitted_at_ms=bar.end_ms,
                 tag="entry",
             )
 
@@ -138,7 +142,7 @@ class _EntryOnEveryBarStrategy(Strategy):
 
 
 def _bar(hour: int, minute: int, *, high: str = "500", low: str = "500", close: str = "500") -> TradeBar:
-    start = datetime(2024, 1, 2, hour, minute, tzinfo=UTC)
+    start = datetime(2024, 1, 2, hour, minute, tzinfo=_ET)
     return TradeBar(
         symbol="SPY",
         time=start,
@@ -245,7 +249,7 @@ def test_every_bar_entry_stops_producing_fills_once_cutoff_hits():
     # accidentally block the pre-cutoff entry.
     assert len(strategy.order_events) >= 1
     first_fill = strategy.order_events[0]
-    assert first_fill.time.time() < time(15, 35)
+    assert datetime_at_ms(first_fill.filled_at_ms, tz=_ET).time() < time(15, 35)
 
 
 # ===========================================================================

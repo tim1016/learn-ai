@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo
 
 from app.engine.data.lean_format import LeanMinuteDataReader, write_lean_day_zip
 from app.engine.data.trade_bar import TradeBar
+from app.utils.timestamps import datetime_at_ms
 
 _ET = ZoneInfo("America/New_York")
 
@@ -59,8 +60,8 @@ def test_reader_default_session_drops_extended_hours(tmp_path: Path) -> None:
 
     # 09:30-16:00 ET, one bar per minute, half-open on the close side ⇒ 6h30m = 390 bars
     assert len(bars) == 390
-    first = bars[0].time.astimezone(_ET)
-    last = bars[-1].time.astimezone(_ET)
+    first = datetime_at_ms(bars[0].start_ms, tz=_ET)
+    last = datetime_at_ms(bars[-1].start_ms, tz=_ET)
     assert (first.hour, first.minute) == (9, 30), f"first bar at {first}"
     assert (last.hour, last.minute) == (15, 59), f"last bar at {last}"
 
@@ -73,8 +74,8 @@ def test_reader_extended_session_keeps_premarket_and_after_hours(tmp_path: Path)
 
     # 04:00-20:00 ET = 16h × 60 = 960 bars; nothing filtered out.
     assert len(bars) == 960
-    first = bars[0].time.astimezone(_ET)
-    last = bars[-1].time.astimezone(_ET)
+    first = datetime_at_ms(bars[0].start_ms, tz=_ET)
+    last = datetime_at_ms(bars[-1].start_ms, tz=_ET)
     assert (first.hour, first.minute) == (4, 0)
     assert (last.hour, last.minute) == (19, 59)
 
@@ -94,5 +95,5 @@ def test_reader_half_day_respects_early_close(tmp_path: Path) -> None:
 
     # 09:30-13:00 ET, half-open ⇒ 3h30m = 210 bars
     assert len(bars) == 210
-    last = bars[-1].time.astimezone(_ET)
+    last = datetime_at_ms(bars[-1].start_ms, tz=_ET)
     assert (last.hour, last.minute) == (12, 59), f"last bar at {last}"

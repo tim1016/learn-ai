@@ -64,7 +64,7 @@ def read_consolidated_bars(
     the minute reader with the requested session filter; day timeframes
     consume the daily reader. Bars stream through one
     ``TradeBarConsolidator`` and the trailing working bar is flushed
-    with ``scan(last_input.end_time)`` — the same end-of-data flush the
+    with ``scan(last_input.end_ms)`` — the same end-of-data flush the
     engine performs. Missing days are reported in ``coverage``, never
     raised: a display read must not fail because the cache has gaps.
     """
@@ -83,6 +83,6 @@ def read_consolidated_bars(
     for bar in source_bars:
         consolidator.update(bar)
     if source_bars:
-        consolidator.scan(source_bars[-1].end_time)
+        consolidator.scan(source_bars[-1].end_ms)
 
     return ConsolidatedBars(bars=fired, coverage=coverage)

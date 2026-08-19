@@ -16,7 +16,6 @@ recompute the value.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from datetime import UTC, datetime
 from decimal import Decimal
 
 
@@ -33,61 +32,62 @@ class Indicator(ABC):
         self.period = period
         self.samples: int = 0
         self._current_value: Decimal | None = None
-        self._current_time: datetime | None = None
+        self._current_time_ms: int | None = None
         self._previous_value: Decimal | None = None
-        self._previous_time: datetime | None = None
+        self._previous_time_ms: int | None = None
 
     @property
     def current_value(self) -> Decimal | None:
         return self._current_value
 
     @property
-    def current_time(self) -> datetime | None:
-        return self._current_time
+    def current_time_ms(self) -> int | None:
+        return self._current_time_ms
 
     @property
     def previous_value(self) -> Decimal | None:
         return self._previous_value
 
     @property
-    def previous_time(self) -> datetime | None:
-        return self._previous_time
+    def previous_time_ms(self) -> int | None:
+        return self._previous_time_ms
 
     @property
     def is_ready(self) -> bool:
         return self.samples >= self.period
 
-    def update(self, time: datetime, value: Decimal) -> bool:
+    def update(self, timestamp_ms: int, value: Decimal) -> bool:
         """Push a new data point. Returns True if the value was consumed.
 
         Duplicate timestamps (same instant as the last update) are silently
         dropped — this matches LEAN's deduplication in IndicatorBase.
         """
+        timestamp_ms = _require_timestamp_ms(timestamp_ms)
         if not isinstance(value, Decimal):
             # Coerce to Decimal to avoid float drift inside recursive formulas.
             value = Decimal(str(value))
-        if self._current_time is not None and time <= self._current_time:
+        if self._current_time_ms is not None and timestamp_ms <= self._current_time_ms:
             # Stale or duplicate — skip.
             return False
         self.samples += 1
-        new_value = self._compute_next_value(time, value)
+        new_value = self._compute_next_value(timestamp_ms, value)
         if new_value is not None:
             self._previous_value = self._current_value
-            self._previous_time = self._current_time
+            self._previous_time_ms = self._current_time_ms
             self._current_value = new_value
-            self._current_time = time
+            self._current_time_ms = timestamp_ms
         return True
 
     def reset(self) -> None:
         self.samples = 0
         self._current_value = None
-        self._current_time = None
+        self._current_time_ms = None
         self._previous_value = None
-        self._previous_time = None
+        self._previous_time_ms = None
         self._reset_state()
 
     @abstractmethod
-    def _compute_next_value(self, time: datetime, value: Decimal) -> Decimal | None:
+    def _compute_next_value(self, timestamp_ms: int, value: Decimal) -> Decimal | None:
         """Compute and return the new indicator value, or None."""
         raise NotImplementedError
 
@@ -107,9 +107,9 @@ class Indicator(ABC):
             "period": self.period,
             "samples": self.samples,
             "current_value": _decimal_to_str(self._current_value),
-            "current_time_ms": _datetime_to_ms(self._current_time),
+            "current_time_ms": self._current_time_ms,
             "previous_value": _decimal_to_str(self._previous_value),
-            "previous_time_ms": _datetime_to_ms(self._previous_time),
+            "previous_time_ms": self._previous_time_ms,
             **self._to_state_extra(),
         }
 
@@ -127,9 +127,9 @@ class Indicator(ABC):
                 raise ValueError(f"period mismatch: state={state['period']} self={self.period}")
             self.samples = int(state["samples"])
             self._current_value = _str_to_decimal(state["current_value"])
-            self._current_time = _ms_to_datetime(state["current_time_ms"])
+            self._current_time_ms = _int_ms_or_none(state["current_time_ms"])
             self._previous_value = _str_to_decimal(state["previous_value"])
-            self._previous_time = _ms_to_datetime(state["previous_time_ms"])
+            self._previous_time_ms = _int_ms_or_none(state["previous_time_ms"])
         except KeyError as exc:
             raise ValueError(f"restore_state: missing required key {exc} in state dict") from exc
         self._restore_state_extra(state)
@@ -157,25 +157,25 @@ class BarIndicator(ABC):
         self.period = period
         self.samples: int = 0
         self._current_value: Decimal | None = None
-        self._current_time: datetime | None = None
+        self._current_time_ms: int | None = None
         self._previous_value: Decimal | None = None
-        self._previous_time: datetime | None = None
+        self._previous_time_ms: int | None = None
 
     @property
     def current_value(self) -> Decimal | None:
         return self._current_value
 
     @property
-    def current_time(self) -> datetime | None:
-        return self._current_time
+    def current_time_ms(self) -> int | None:
+        return self._current_time_ms
 
     @property
     def previous_value(self) -> Decimal | None:
         return self._previous_value
 
     @property
-    def previous_time(self) -> datetime | None:
-        return self._previous_time
+    def previous_time_ms(self) -> int | None:
+        return self._previous_time_ms
 
     @property
     def is_ready(self) -> bool:
@@ -184,27 +184,27 @@ class BarIndicator(ABC):
     def update(self, bar: object) -> bool:
         """Push a new bar. Returns True if consumed.
 
-        Duplicate or out-of-order bars (same or earlier ``end_time``) are
+        Duplicate or out-of-order bars (same or earlier ``end_ms``) are
         silently dropped, matching the ``Indicator`` base behavior.
         """
-        end_time = bar.end_time  # type: ignore[attr-defined]
-        if self._current_time is not None and end_time <= self._current_time:
+        end_ms = _require_timestamp_ms(bar.end_ms)  # type: ignore[attr-defined]
+        if self._current_time_ms is not None and end_ms <= self._current_time_ms:
             return False
         self.samples += 1
         new_value = self._compute_next_value(bar)
         if new_value is not None:
             self._previous_value = self._current_value
-            self._previous_time = self._current_time
+            self._previous_time_ms = self._current_time_ms
             self._current_value = new_value
-            self._current_time = end_time
+            self._current_time_ms = end_ms
         return True
 
     def reset(self) -> None:
         self.samples = 0
         self._current_value = None
-        self._current_time = None
+        self._current_time_ms = None
         self._previous_value = None
-        self._previous_time = None
+        self._previous_time_ms = None
         self._reset_state()
 
     @abstractmethod
@@ -228,9 +228,9 @@ class BarIndicator(ABC):
             "period": self.period,
             "samples": self.samples,
             "current_value": _decimal_to_str(self._current_value),
-            "current_time_ms": _datetime_to_ms(self._current_time),
+            "current_time_ms": self._current_time_ms,
             "previous_value": _decimal_to_str(self._previous_value),
-            "previous_time_ms": _datetime_to_ms(self._previous_time),
+            "previous_time_ms": self._previous_time_ms,
             **self._to_state_extra(),
         }
 
@@ -248,9 +248,9 @@ class BarIndicator(ABC):
                 raise ValueError(f"period mismatch: state={state['period']} self={self.period}")
             self.samples = int(state["samples"])
             self._current_value = _str_to_decimal(state["current_value"])
-            self._current_time = _ms_to_datetime(state["current_time_ms"])
+            self._current_time_ms = _int_ms_or_none(state["current_time_ms"])
             self._previous_value = _str_to_decimal(state["previous_value"])
-            self._previous_time = _ms_to_datetime(state["previous_time_ms"])
+            self._previous_time_ms = _int_ms_or_none(state["previous_time_ms"])
         except KeyError as exc:
             raise ValueError(f"restore_state: missing required key {exc} in state dict") from exc
         self._restore_state_extra(state)
@@ -271,15 +271,15 @@ def _str_to_decimal(value: str | None) -> Decimal | None:
     return None if value is None else Decimal(value)
 
 
-def _datetime_to_ms(value: datetime | None) -> int | None:
+def _int_ms_or_none(value: object) -> int | None:
     if value is None:
         return None
-    if value.tzinfo is None or value.utcoffset() is None:
-        raise ValueError(
-            f"_datetime_to_ms received a tz-naive datetime: {value!r}. All indicator timestamps must be tz-aware UTC."
-        )
-    return int(value.timestamp() * 1000)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"indicator timestamp must be an integer Unix millisecond value, got {value!r}")
+    return value
 
 
-def _ms_to_datetime(value: int | None) -> datetime | None:
-    return None if value is None else datetime.fromtimestamp(value / 1000, tz=UTC)
+def _require_timestamp_ms(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"indicator timestamp must be an integer Unix millisecond value, got {value!r}")
+    return value

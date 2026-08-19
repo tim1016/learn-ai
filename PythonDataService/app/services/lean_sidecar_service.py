@@ -84,7 +84,7 @@ from app.services.lean_sidecar_persistence import (
     build_persist_payload,
     persist_via_dotnet,
 )
-from app.utils.timestamps import now_ms_utc
+from app.utils.timestamps import datetime_at_ms, now_ms_utc, to_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -328,8 +328,8 @@ def _generate_synthetic_bars(
         bars.append(
             TradeBar(
                 symbol=symbol,
-                time=start,
-                end_time=start + timedelta(minutes=1),
+                start_ms=to_ms_utc(start),
+                end_ms=to_ms_utc(start + timedelta(minutes=1)),
                 open=Decimal(str(close - increment / 2)),
                 high=Decimal(str(close + increment / 2)),
                 low=Decimal(str(close - increment)),
@@ -355,15 +355,15 @@ def _aggregate_daily_bar(symbol: str, minute_bars: list[TradeBar]) -> TradeBar:
         raise LeanSidecarServiceError(f"no minute bars to aggregate for {symbol}")
     first = minute_bars[0]
     last = minute_bars[-1]
-    # ``time`` for the daily bar is session midnight in ET so the
+    # ``start_ms`` for the daily bar is session midnight in ET so the
     # writer (lean_format.write_lean_daily_zip) stamps the right
     # ``YYYYMMDD 00:00`` timestamp.
-    session_date = first.time.astimezone(_ET).date()
+    session_date = datetime_at_ms(first.start_ms, tz=_ET).date()
     session_midnight = datetime(session_date.year, session_date.month, session_date.day, tzinfo=_ET)
     return TradeBar(
         symbol=symbol,
-        time=session_midnight,
-        end_time=session_midnight + timedelta(days=1),
+        start_ms=to_ms_utc(session_midnight),
+        end_ms=to_ms_utc(session_midnight + timedelta(days=1)),
         open=first.open,
         high=max(b.high for b in minute_bars),
         low=min(b.low for b in minute_bars),

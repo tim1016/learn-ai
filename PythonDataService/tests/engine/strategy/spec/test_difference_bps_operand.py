@@ -13,6 +13,7 @@ from pydantic import TypeAdapter
 
 from app.engine.strategy.spec.primitives import EvalContext, evaluate_operand
 from app.engine.strategy.spec.schema import Operand
+from app.utils.timestamps import to_ms_utc
 
 
 @dataclass
@@ -28,7 +29,7 @@ def _context(left: str, right: str) -> EvalContext:
             "right": _ReadyIndicator(Decimal(right)),
         },
         current_bar_count=1,
-        bar_close_time=datetime(2024, 1, 2, tzinfo=UTC),
+        bar_close_ms=to_ms_utc(datetime(2024, 1, 2, tzinfo=UTC)),
         bar_close_price=Decimal(right),
     )
 

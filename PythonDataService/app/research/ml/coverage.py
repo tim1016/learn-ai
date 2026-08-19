@@ -23,7 +23,6 @@ from typing import TYPE_CHECKING, Protocol
 from app.engine.consolidators.trade_bar_consolidator import TradeBarConsolidator
 from app.engine.data.trade_bar import TradeBar
 from app.research.ml.loader import PredictionCoverageError, PredictionSet
-from app.utils.timestamps import to_ms_utc
 
 if TYPE_CHECKING:
     from app.engine.strategy.spec.schema import PredictionRef
@@ -32,10 +31,10 @@ logger = logging.getLogger(__name__)
 
 
 class _BarLike(Protocol):
-    """Anything with an ``end_time: datetime`` (TradeBar duck-types fine)."""
+    """Anything with an ``end_ms: int`` (TradeBar duck-types fine)."""
 
     @property
-    def end_time(self): ...
+    def end_ms(self) -> int: ...
 
 
 def assert_bar_clock_coverage(
@@ -71,7 +70,7 @@ def assert_bar_clock_coverage(
     modes across refs; each ref is validated independently.
     """
     bars: list[_BarLike] = list(bar_stream)
-    fired_ms: list[int] = [to_ms_utc(bar.end_time) for bar in bars]
+    fired_ms: list[int] = [bar.end_ms for bar in bars]
     have_ms: set[int] = set(prediction_set.index.keys())
     sorted_have: list[int] = prediction_set._sorted_ts
 

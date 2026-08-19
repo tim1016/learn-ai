@@ -70,7 +70,7 @@ class _BracketEntryStrategy(Strategy):
         self.ctx.portfolio.submit_market_order(
             self._symbol,
             quantity=100,
-            time=bar.end_time,
+            submitted_at_ms=bar.end_ms,
             take_profit_price=self._tp,
             stop_loss_price=self._sl,
         )

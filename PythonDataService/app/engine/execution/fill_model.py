@@ -39,6 +39,7 @@ from app.engine.execution.order import (
     OrderEvent,
     OrderType,
 )
+from app.utils.timestamps import ny_datetime
 
 # Set of FillModes whose fill_market_order may return None waiting for a
 # subsequent candidate bar. The engine's main loop uses this set to gate
@@ -66,10 +67,10 @@ class FillModel:
             cells charge IBKR equity-tier commission.
         fill_stale_signal_at_current_open: Optional LEAN equity-market-order
             compatibility path. When ``SIGNAL_BAR_CLOSE`` is selected and the
-            current minute bar starts after the signal bar's ``end_time``
+            current minute bar starts after the signal bar's ``end_ms``
             (e.g. Friday's 15:45-16:00 consolidated bar emits on Monday's
             first minute), fill at the current minute's open and timestamp
-            the event at that minute's ``end_time``. Disabled by default so
+            the event at that minute's ``end_ms``. Disabled by default so
             existing research/backtest behavior stays byte-identical.
     """
 
@@ -114,18 +115,18 @@ class FillModel:
             if (
                 self.fill_stale_signal_at_current_open
                 and current_bar is not None
-                and signal_bar.end_time < current_bar.time
+                and signal_bar.end_ms < current_bar.start_ms
             ):
                 fill_price = current_bar.open
-                fill_time = current_bar.end_time
+                fill_time_ms = current_bar.end_ms
             else:
                 fill_price = signal_bar.close
-                fill_time = signal_bar.end_time
+                fill_time_ms = signal_bar.end_ms
         elif self.mode == FillMode.NEXT_BAR_OPEN:
             if next_bar is None:
                 return None
             fill_price = next_bar.open
-            fill_time = next_bar.time
+            fill_time_ms = next_bar.start_ms
         elif self.mode == FillMode.NEXT_SESSION_OPEN:
             if next_bar is None:
                 return None
@@ -134,13 +135,12 @@ class FillModel:
             # implementation for regular-hours-only fixtures. A future
             # EligibilityPolicy would replace this date comparison without
             # changing the contract: "first eligible minute bar after the
-            # signal bar's trading date." Both .end_time and .time are
-            # tz-aware (set by FixtureDataReader and LeanMinuteDataReader);
-            # .date() returns the NY-local calendar date.
-            if next_bar.time.date() <= signal_bar.end_time.date():
+            # signal bar's trading date." Dates are transiently materialized
+            # in NY for this decision; engine state stays numeric ms UTC.
+            if ny_datetime(next_bar.start_ms).date() <= ny_datetime(signal_bar.end_ms).date():
                 return None
             fill_price = next_bar.open
-            fill_time = next_bar.time
+            fill_time_ms = next_bar.start_ms
         else:
             raise ValueError(f"unknown fill mode: {self.mode}")
 
@@ -153,7 +153,7 @@ class FillModel:
         return OrderEvent(
             order_id=order.order_id,
             symbol=order.symbol,
-            time=fill_time,
+            filled_at_ms=fill_time_ms,
             fill_price=fill_price,
             fill_quantity=order.quantity,
             direction=order.direction,

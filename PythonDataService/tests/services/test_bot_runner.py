@@ -19,6 +19,7 @@ import csv
 import json
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -107,6 +108,16 @@ def _bar(start_ms: int, symbol: str = "SPY") -> MarketDataBar:
         feed_id="ibkr",
         session_phase="RTH",
     )
+
+
+def test_live_market_bar_translates_to_numeric_engine_timestamps() -> None:
+    from app.services.bot_trade_strategy import _engine_bar
+
+    source = _bar(_RTH_MS)
+    engine_bar = _engine_bar(source)
+
+    assert (engine_bar.start_ms, engine_bar.end_ms) == (source.start_ms, source.end_ms)
+    assert not any(isinstance(value, datetime) for value in vars(engine_bar).values())
 
 
 class _FakeFeed:
@@ -2631,6 +2642,8 @@ async def test_ema_trade_bot_releases_backtest_chart_bars(
 
     assert len(contexts) == 1
     assert contexts[0].consolidated_bars == []
+    assert isinstance(contexts[0].current_time_ms, int)
+    assert not any(isinstance(value, datetime) for value in vars(contexts[0]).values())
 
 
 # ── entry after exactly 2 green bars in-window ────────────────────────────────

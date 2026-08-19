@@ -10,11 +10,12 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from app.engine.indicators.rsi import RelativeStrengthIndex
+from app.utils.timestamps import to_ms_utc
 
 
 def _feed(ind: RelativeStrengthIndex, values: list[Decimal], t0: datetime) -> None:
     for i, v in enumerate(values):
-        ind.update(t0 + timedelta(minutes=15 * i), v)
+        ind.update(to_ms_utc(t0 + timedelta(minutes=15 * i)), v)
 
 
 def test_round_trip_post_warmup() -> None:
@@ -51,6 +52,6 @@ def test_bit_identical_outputs_for_five_more_bars_after_restore() -> None:
     next_values = [Decimal("125"), Decimal("123"), Decimal("128"), Decimal("130"), Decimal("129")]
     for i, v in enumerate(next_values):
         t = t0 + timedelta(minutes=15 * (20 + i))
-        src.update(t, v)
-        dst.update(t, v)
+        src.update(to_ms_utc(t), v)
+        dst.update(to_ms_utc(t), v)
         assert dst.current_value == src.current_value, f"bar {i}: {dst.current_value} != {src.current_value}"

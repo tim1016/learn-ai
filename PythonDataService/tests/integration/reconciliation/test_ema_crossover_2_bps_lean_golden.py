@@ -52,7 +52,7 @@ def test_ema_crossover_2_bps_matches_lean_fills_and_equity(implementation: str) 
     assert len(result.order_events) == len(expected["filled_order_events"]) == 6
     price_errors: list[Decimal] = []
     for actual, oracle in zip(result.order_events, expected["filled_order_events"], strict=True):
-        assert int(actual.time.timestamp() * 1_000) == oracle["ms_utc"]
+        assert actual.filled_at_ms == oracle["ms_utc"]
         assert _direction(actual.direction) == oracle["direction"]
         assert actual.fill_quantity == oracle["fill_quantity"]
         assert actual.fee == Decimal(oracle["order_fee"])

@@ -73,10 +73,10 @@ def test_two_green_bars_from_0945_enter_next_bar_open_and_exit_cycle() -> None:
 
     assert len(events) == 2
     assert events[0].direction is Direction.LONG
-    assert events[0].time == datetime(2026, 1, 5, 9, 46, tzinfo=NY)
+    assert events[0].filled_at_ms == int(datetime(2026, 1, 5, 9, 46, tzinfo=NY).timestamp() * 1000)
     assert events[0].fill_price == Decimal("104")
     assert events[1].direction is Direction.SHORT
-    assert events[1].time == datetime(2026, 1, 5, 9, 49, tzinfo=NY)
+    assert events[1].filled_at_ms == int(datetime(2026, 1, 5, 9, 49, tzinfo=NY).timestamp() * 1000)
     assert len(strategy.trade_log) == 1
     assert strategy.trade_log[0].signal_reason == "two_consecutive_green_minute_bars"
 
@@ -93,7 +93,7 @@ def test_signal_kernel_emits_semantic_enter_then_exit_without_execution_state() 
 
     decisions = [
         kernel.on_closed_bar(
-            end_ms=int(bar.end_time.timestamp() * 1000),
+            end_ms=bar.end_ms,
             open_price=bar.open,
             close_price=bar.close,
         )
@@ -117,7 +117,7 @@ def test_cross_asset_mode_subscribes_signal_symbol_and_orders_trade_symbol() -> 
         _bar(9, 44, "100", "101"),
         _bar(9, 45, "101", "102"),
     ]:
-        ctx.current_time = bar.end_time
+        ctx.current_time_ms = bar.end_ms
         strategy.on_minute_bar(bar)
 
     assert len(portfolio.pending_orders) == 1

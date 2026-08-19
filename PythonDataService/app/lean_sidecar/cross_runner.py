@@ -50,7 +50,6 @@ from app.engine.execution.sizing import LeanSetHoldingsSizing
 from app.engine.strategy.base import Strategy
 
 _ET = ZoneInfo("America/New_York")
-_UTC = ZoneInfo("UTC")
 
 # Single search package for strategy resolution. Keeping it explicit (not
 # autodiscovering every Strategy subclass in the codebase) means a test-only
@@ -208,15 +207,13 @@ def _normalize_order_events(
     (defense in depth — the engine should always populate it)."""
     normalized: list[CrossRunOrderEvent] = []
     for i, e in enumerate(order_events):
-        t = e.time if e.time.tzinfo is not None else e.time.replace(tzinfo=_ET)
-        ms_utc = int(t.astimezone(_UTC).timestamp() * 1000)
         direction_str: Literal["Buy", "Sell"] = "Buy" if e.fill_quantity >= 0 else "Sell"
         normalized.append(
             CrossRunOrderEvent(
                 order_event_id=i,
                 order_id=e.order_id,
                 symbol=(e.symbol or symbol_default).upper(),
-                ms_utc=ms_utc,
+                ms_utc=e.filled_at_ms,
                 direction=direction_str,
                 fill_quantity=abs(int(e.fill_quantity)),
                 fill_price=e.fill_price,

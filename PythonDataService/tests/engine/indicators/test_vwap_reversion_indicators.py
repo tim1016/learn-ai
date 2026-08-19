@@ -14,6 +14,7 @@ import numpy as np
 
 from app.engine.indicators.rolling_distance_sigma import RollingDistanceSigma
 from app.engine.indicators.vwap import SessionAnchoredVwap
+from app.utils.timestamps import to_ms_utc
 
 
 def _t(minute: int) -> datetime:
@@ -30,7 +31,7 @@ def test_session_anchored_vwap_matches_numpy_cumulative() -> None:
     vwap = SessionAnchoredVwap()
     got = []
     for i, (h, l, c, v) in enumerate(bars):
-        vwap.update(_t(i), high=h, low=l, close=c, volume=v)
+        vwap.update(to_ms_utc(_t(i)), high=h, low=l, close=c, volume=v)
         got.append(vwap.current_value)
 
     typ = np.array([(h + l + c) / 3 for h, l, c, _ in bars])

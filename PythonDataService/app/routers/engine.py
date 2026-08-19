@@ -85,7 +85,7 @@ from app.services.parity_companion import (
     new_parity_group_id,
 )
 from app.services.run_verdict_service import compute_run_verdict
-from app.utils.timestamps import now_ms_utc, to_ms_utc
+from app.utils.timestamps import now_ms_utc
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -582,9 +582,9 @@ def _format_trade(index: int, trade: Any) -> EngineTradeResponse:
     indicators = {k: float(v) for k, v in raw_indicators.items()}
     return EngineTradeResponse(
         trade_number=index,
-        entry_time=_to_ms_utc(trade.entry_time),
+        entry_time=trade.entry_time_ms,
         entry_price=float(trade.entry_price),
-        exit_time=_to_ms_utc(trade.exit_time),
+        exit_time=trade.exit_time_ms,
         exit_price=float(trade.exit_price),
         quantity=int(trade.quantity),
         indicators=indicators,
@@ -601,8 +601,8 @@ def _format_trade_record(index: int, trade: Any, cumulative_pnl_pct: float) -> T
     return TradeRecord(
         trade_number=index,
         trade_type="Buy",  # engine strategies are long-only for now
-        entry_timestamp=_to_ms_utc(trade.entry_time),
-        exit_timestamp=_to_ms_utc(trade.exit_time),
+        entry_timestamp=trade.entry_time_ms,
+        exit_timestamp=trade.exit_time_ms,
         entry_price=float(trade.entry_price),
         exit_price=float(trade.exit_price),
         pnl=float(trade.pnl_pts),
@@ -1249,7 +1249,7 @@ def execute_engine_backtest(
     from app.engine.results.statistics import EquityPoint
 
     equity_points = (
-        [EquityPoint(timestamp=s.timestamp, equity=float(s.equity)) for s in result.equity_curve]
+        [EquityPoint(timestamp_ms=s.timestamp_ms, equity=float(s.equity)) for s in result.equity_curve]
         if result.equity_curve
         else None
     )
@@ -1275,7 +1275,7 @@ def execute_engine_backtest(
             # Convert retained TradeBar objects → DataFrame with timestamp + close
             bar_records = [
                 {
-                    "timestamp": b.time,
+                    "timestamp": b.start_ms,
                     "open": float(b.open),
                     "high": float(b.high),
                     "low": float(b.low),
@@ -1319,7 +1319,7 @@ def execute_engine_backtest(
 
     equity_curve_dicts = [
         {
-            "timestamp": _to_ms_utc(s.timestamp),
+            "timestamp": s.timestamp_ms,
             "equity": float(s.equity),
             "cash": float(s.cash),
             "holdings_value": float(s.holdings_value),
@@ -1469,14 +1469,6 @@ def execute_engine_backtest(
 # ---------------------------------------------------------------------------
 # Wire-format helpers
 # ---------------------------------------------------------------------------
-def _to_ms_utc(dt: datetime) -> int:
-    """Convert a datetime to canonical int64 ms UTC for API payloads."""
-    try:
-        return to_ms_utc(dt)
-    except ValueError as exc:
-        raise ValueError("engine timestamp must be timezone-aware before serialization") from exc
-
-
 def _record_actual_strategy_bars(request: EngineBacktestRequest, strategy: Strategy) -> None:
     """Overwrite ``data_policy.strategy_bars`` with the strategy's real timeframe.
 
@@ -1506,7 +1498,7 @@ def _serialize_chart_bar(b: TradeBar) -> dict[str, Any]:
     ``chart_bars`` and the ``/bars`` store endpoint, so the two can be
     equality-tested against each other."""
     return {
-        "t": _to_ms_utc(b.time),
+        "t": b.start_ms,
         "o": float(b.open),
         "h": float(b.high),
         "l": float(b.low),

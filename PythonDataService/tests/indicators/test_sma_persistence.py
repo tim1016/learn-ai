@@ -8,11 +8,12 @@ from decimal import Decimal
 import pytest
 
 from app.engine.indicators.sma import SimpleMovingAverage
+from app.utils.timestamps import to_ms_utc
 
 
 def _feed(ind: SimpleMovingAverage, values: list[Decimal], t0: datetime) -> None:
     for i, v in enumerate(values):
-        ind.update(t0 + timedelta(minutes=15 * i), v)
+        ind.update(to_ms_utc(t0 + timedelta(minutes=15 * i)), v)
 
 
 def test_round_trip_through_state_dict() -> None:
@@ -41,13 +42,13 @@ def test_bit_identical_outputs_after_restore() -> None:
 
     # Path A: continue the original.
     extra_bar_time = t0 + timedelta(minutes=15 * 4)
-    src.update(extra_bar_time, Decimal("104"))
+    src.update(to_ms_utc(extra_bar_time), Decimal("104"))
     expected = src.current_value
 
     # Path B: restore a fresh instance and feed the same extra bar.
     dst = SimpleMovingAverage("S", 3)
     dst.restore_state(state)
-    dst.update(extra_bar_time, Decimal("104"))
+    dst.update(to_ms_utc(extra_bar_time), Decimal("104"))
     actual = dst.current_value
 
     assert actual == expected  # Decimal equality — atol=0
@@ -56,7 +57,7 @@ def test_bit_identical_outputs_after_restore() -> None:
 def test_restore_state_rejects_oversized_window() -> None:
     """A corrupt state with window > period must fail-fast, not silently truncate."""
     src = SimpleMovingAverage("S", 3)
-    src.update(datetime(2026, 5, 18, 14, 0, tzinfo=UTC), Decimal("100"))
+    src.update(to_ms_utc(datetime(2026, 5, 18, 14, 0, tzinfo=UTC)), Decimal("100"))
     state = src.to_state_dict()
     state["window"] = [str(Decimal(i)) for i in range(5)]  # 5 > period=3
     state["sum"] = str(sum(Decimal(i) for i in range(5)))

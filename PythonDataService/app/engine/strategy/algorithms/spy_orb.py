@@ -25,7 +25,7 @@ Validation properties:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 
 from app.engine.data.trade_bar import TradeBar
@@ -33,6 +33,7 @@ from app.engine.execution.order import Direction, OrderEvent
 from app.engine.framework.insight import Insight, InsightDirection
 from app.engine.strategy.base import LoggedTrade, Strategy
 from app.lean_sidecar.trading_calendar import is_regular_session_ms_utc
+from app.utils.timestamps import display_time, ny_datetime
 
 
 @dataclass
@@ -47,7 +48,7 @@ class _PendingEntry:
 class _OpenTrade:
     """An entry that has filled but not yet exited."""
 
-    entry_time: datetime
+    entry_time_ms: int
     entry_price: Decimal
     quantity: int
     orb_high: Decimal
@@ -88,7 +89,7 @@ class SpyOpeningRangeBreakout(Strategy):
         self._max_range_pct = Decimal(str(max_range_pct))
 
         # Daily state — reset each session.
-        self._current_date: datetime | None = None
+        self._current_date: date | None = None
         self._bar_of_day: int = 0
         self._orb_high: Decimal = Decimal(0)
         self._orb_low: Decimal = Decimal("999999")
@@ -129,9 +130,9 @@ class SpyOpeningRangeBreakout(Strategy):
     # Helpers
     # ------------------------------------------------------------------
     @staticmethod
-    def _is_rth(bar_time: datetime) -> bool:
+    def _is_rth(bar_end_ms: int) -> bool:
         """True if the bar falls within regular trading hours."""
-        return is_regular_session_ms_utc(int(bar_time.timestamp() * 1000))
+        return is_regular_session_ms_utc(bar_end_ms)
 
     def _reset_day(self) -> None:
         """Reset all daily state for a new session."""
@@ -149,11 +150,11 @@ class SpyOpeningRangeBreakout(Strategy):
         assert self.ctx is not None
 
         # Filter to RTH only.
-        if not self._is_rth(bar.end_time):
+        if not self._is_rth(bar.end_ms):
             return
 
         # Detect new trading day.
-        bar_date = bar.end_time.date()
+        bar_date = ny_datetime(bar.end_ms).date()
         if self._current_date is None or bar_date != self._current_date:
             self._current_date = bar_date
             self._reset_day()
@@ -172,7 +173,7 @@ class SpyOpeningRangeBreakout(Strategy):
                 self._orb_valid = self._min_range_pct <= range_pct <= self._max_range_pct
 
                 self.ctx.log(
-                    f"ORB COMPLETE: {bar.end_time.strftime('%Y-%m-%d %H:%M')} "
+                    f"ORB COMPLETE: {display_time(bar.end_ms)} "
                     f"High={self._orb_high:.2f} Low={self._orb_low:.2f} "
                     f"Range={range_pct:.4f}% Valid={self._orb_valid}"
                 )
@@ -187,7 +188,7 @@ class SpyOpeningRangeBreakout(Strategy):
             self._bars_until_exit -= 1
             if self._bars_until_exit <= 0:
                 self.ctx.liquidate(self._symbol)
-                self.ctx.log(f"EXIT SIGNAL: {bar.end_time.strftime('%Y-%m-%d %H:%M')} Close={bar.close:.2f}")
+                self.ctx.log(f"EXIT SIGNAL: {display_time(bar.end_ms)} Close={bar.close:.2f}")
                 self._in_position = False
         else:
             # Entry: bar must CLOSE above ORB high. The `_traded_today`
@@ -218,7 +219,7 @@ class SpyOpeningRangeBreakout(Strategy):
                 )
 
                 self.ctx.log(
-                    f"ENTRY SIGNAL: {bar.end_time.strftime('%Y-%m-%d %H:%M')} "
+                    f"ENTRY SIGNAL: {display_time(bar.end_ms)} "
                     f"Close={bar.close:.2f} ORB_HIGH={self._orb_high:.2f} "
                     f"ORB_LOW={self._orb_low:.2f} Range={orb_range_pct:.4f}%"
                 )
@@ -230,10 +231,10 @@ class SpyOpeningRangeBreakout(Strategy):
         if event.direction == Direction.LONG:
             if self._pending_entry is None:
                 if self.ctx is not None:
-                    self.ctx.log(f"WARN: LONG fill at {event.time} with no pending entry")
+                    self.ctx.log(f"WARN: LONG fill at {display_time(event.filled_at_ms)} with no pending entry")
                 return
             self._open_trade = _OpenTrade(
-                entry_time=event.time,
+                entry_time_ms=event.filled_at_ms,
                 entry_price=event.fill_price,
                 quantity=event.fill_quantity,
                 orb_high=self._pending_entry.orb_high,
@@ -242,7 +243,7 @@ class SpyOpeningRangeBreakout(Strategy):
             self._pending_entry = None
             if self.ctx is not None:
                 self.ctx.log(
-                    f"ENTRY FILL: {event.time.strftime('%Y-%m-%d %H:%M')} "
+                    f"ENTRY FILL: {display_time(event.filled_at_ms)} "
                     f"Price={event.fill_price:.2f} "
                     f"ORB_HIGH={self._open_trade.orb_high:.2f}"
                 )
@@ -251,15 +252,15 @@ class SpyOpeningRangeBreakout(Strategy):
                 return
             entry = self._open_trade
             exit_price = event.fill_price
-            exit_time = event.time
+            exit_time_ms = event.filled_at_ms
             pnl_pts = exit_price - entry.entry_price
             pnl_pct = pnl_pts / entry.entry_price
             result = "WIN" if pnl_pts >= 0 else "LOSS"
             self.trade_log.append(
                 LoggedTrade(
-                    entry_time=entry.entry_time,
+                    entry_time_ms=entry.entry_time_ms,
                     entry_price=entry.entry_price,
-                    exit_time=exit_time,
+                    exit_time_ms=exit_time_ms,
                     exit_price=exit_price,
                     quantity=entry.quantity,
                     pnl_pts=pnl_pts,
@@ -274,7 +275,7 @@ class SpyOpeningRangeBreakout(Strategy):
             )
             if self.ctx is not None:
                 self.ctx.log(
-                    f"EXIT FILL: {exit_time.strftime('%Y-%m-%d %H:%M')} "
+                    f"EXIT FILL: {display_time(exit_time_ms)} "
                     f"Price={exit_price:.2f} PnL={pnl_pts:.2f} "
                     f"({pnl_pct * 100:.2f}%) {result}"
                 )
