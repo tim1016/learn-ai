@@ -612,7 +612,7 @@ def test_reference_code_uses_service_fallback_when_repo_reference_absent(tmp_pat
         # pins the current file's hash, not the manifest's — the manifest's
         # pinned hash is deliberately left stale until a fresh QC Cloud
         # reconciliation is run (see tests/routers/test_strategy_validation.py).
-        audit_copy_sha256="55a07f83f4643119dbe2302acc8b94c7b17e704874dd052b8b6617f4478d8041",
+        audit_copy_sha256="64f7293e351be0469a3cd76df1d5a57806cf4cab25c4d2f1737ddbb9b35286a4",
     )
 
     code = reference_code_for_entry(entry, repo_root=tmp_path)

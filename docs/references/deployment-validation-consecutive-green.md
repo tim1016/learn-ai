@@ -38,9 +38,12 @@ Thanksgiving) it resolves to 09:45/12:45 ET — previously the stop/flatten
 barrier was a fixed 15:45 ET literal that a half-day session never reaches,
 so the flatten safety net for any open position silently never fired.
 Regression coverage: `tests/engine/test_deployment_validation_strategy.py::
-test_half_day_stops_detecting_new_entries_at_1245` and
-`::test_kernel_flattens_an_active_cycle_at_the_half_day_barrier`, both
-fixtured against 2024-11-29.
+test_on_minute_bar_suppresses_entries_at_half_day_barrier` and
+`::test_on_closed_bar_emits_exit_at_half_day_barrier`, both fixtured
+against 2024-11-29. Cross-implementation numeric parity (canonical Python,
+QC shadow copy, LEAN trusted template) is pinned at tolerance 0 by
+`tests/engine/test_deployment_validation_session_window_parity.py` against
+`tests/fixtures/golden/deployment-validation-session-window/`.
 
 ### Superseded validation evidence — re-validation required before deploy
 
@@ -85,8 +88,9 @@ audit copy under `references/qc-shadow/`.
 ## Validation
 
 - Engine behavior: `PythonDataService/tests/engine/test_deployment_validation_strategy.py`
+- Cross-implementation session-window parity (canonical Python, QC shadow copy, LEAN trusted template): `PythonDataService/tests/engine/test_deployment_validation_session_window_parity.py` against `PythonDataService/tests/fixtures/golden/deployment-validation-session-window/`
 - Deployment artifacts: `PythonDataService/tests/engine/live/test_deployment_validation_deploy_artifacts.py`
 - Engine registry: `PythonDataService/tests/test_engine_strategies_endpoint.py`
 - LEAN template shape and registry: `PythonDataService/tests/lean_sidecar/test_deployment_validation_template.py`, `PythonDataService/tests/services/test_lean_sidecar_template_registry.py`
 
-No external golden fixture is required because this is an internal deployment-validation primitive rather than a port from LEAN, TradingView, or a paper. Cross-engine reconciliation fixtures can be added later once this template is included in the parity matrix.
+No external golden fixture is required because this is an internal deployment-validation primitive rather than a port from LEAN, TradingView, or a paper — the session-window parity fixture above is an internal self-consistency check (see its attribution.md), not an external oracle comparison. Cross-engine reconciliation fixtures that actually execute the QC shadow copy / LEAN template inside a LEAN sandbox can be added later once this template is included in the parity matrix.

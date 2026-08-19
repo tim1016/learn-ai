@@ -175,7 +175,7 @@ def test_stops_detecting_and_flattens_at_1545() -> None:
     assert events == []
 
 
-def test_half_day_stops_detecting_new_entries_at_1245() -> None:
+def test_on_minute_bar_suppresses_entries_at_half_day_barrier() -> None:
     """Regression for #1672: NYSE half days (e.g. the day after Thanksgiving)
     close at 13:00 ET instead of 16:00 ET. A fixed 15:45 ET literal is never
     reached within such a session, so the old hardcoded cutoff would have let
@@ -196,7 +196,7 @@ def test_half_day_stops_detecting_new_entries_at_1245() -> None:
     assert events == []
 
 
-def test_kernel_flattens_an_active_cycle_at_the_half_day_barrier() -> None:
+def test_on_closed_bar_emits_exit_at_half_day_barrier() -> None:
     """Regression for #1672: on a half day the stop/flatten EXIT branch must
     fire well before the 13:00 ET close — 12:45 ET here — since a fixed
     15:45 ET literal would never be reached within the session and an active

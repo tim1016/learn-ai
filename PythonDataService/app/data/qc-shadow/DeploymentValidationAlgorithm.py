@@ -24,7 +24,7 @@ engine, whose deployment run uses ``fill_mode=next_bar_open``.
 
 # ruff: noqa: F403, F405
 from AlgorithmImports import *  # noqa: F401
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 
 class DeploymentValidationAlgorithm(QCAlgorithm):  # type: ignore[name-defined]
@@ -56,7 +56,7 @@ class DeploymentValidationAlgorithm(QCAlgorithm):  # type: ignore[name-defined]
         self._reset_detection()
         self._stopped_for_day = False
 
-    def _session_window(self, bar_date):
+    def _session_window(self, bar_date: date) -> tuple[datetime, datetime]:
         """Return ``(detection_start, stop_and_flatten)`` for ``bar_date``.
 
         Derived from the exchange's own scheduled session hours, not a fixed
