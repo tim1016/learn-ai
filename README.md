@@ -345,12 +345,22 @@ git clone <repo-url>
 cd learn-ai
 ```
 
-Create a `.env` file in the project root:
+Copy the environment template, then generate the required local data-plane
+control secret:
 
-```env
-POLYGON_API_KEY=your_polygon_api_key_here
-FRED_API_KEY=your_fred_api_key       # optional
+```bash
+cp .env.example .env
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
+
+Paste the generated value into `DATA_PLANE_CONTROL_SECRET` in the untracked
+`.env` file, then replace the API-key placeholders you use. Compose refuses to
+start the data plane and frontend proxy when the control secret is missing or
+blank; there is no checked-in development credential.
+
+`setup-macos.sh` performs this step automatically on a fresh checkout and
+rotates the retired `local-dev-control-secret` value during an upgrade without
+overwriting an operator-provided secret.
 
 ### 2. Start the backend services
 
@@ -381,6 +391,8 @@ npx ng serve
 Open [http://localhost:4200](http://localhost:4200) in your browser.
 
 The repository proxy configuration is required for protected broker actions.
+For host development it reads `DATA_PLANE_CONTROL_SECRET` from the repository
+root `.env`; an exported shell value takes precedence.
 For a non-default service location, set `BACKEND_PROXY_TARGET` or
 `DATA_PLANE_PROXY_TARGET`; do not replace `proxy.conf.js` with a target-only
 proxy configuration.

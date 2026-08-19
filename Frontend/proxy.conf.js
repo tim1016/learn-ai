@@ -3,6 +3,9 @@ const DATA_PLANE_CONTROL_INTENT_HEADER = 'X-Data-Plane-Control-Intent';
 const DATA_PLANE_CONTROL_INTENT_QUERY = 'control_intent';
 const DATA_PLANE_CONTROL_INTENT_VALUE = 'learn-ai-browser-control';
 const dataPlaneControlSurfaces = require('../contracts/data-plane-control-surfaces.json');
+const {
+  resolveDataPlaneControlSecret,
+} = require('./scripts/data-plane-control-secret.cjs');
 // Host development reaches the compose services through their loopback ports.
 // Containers override these targets with their compose-network service names.
 // Keeping the control-header hook in this one configuration prevents a local
@@ -10,7 +13,7 @@ const dataPlaneControlSurfaces = require('../contracts/data-plane-control-surfac
 const backendProxyTarget = process.env.BACKEND_PROXY_TARGET ?? 'http://127.0.0.1:5000';
 const DEFAULT_DATA_PLANE_PROXY_TARGET = 'http://127.0.0.1:8000';
 const TRUSTED_DATA_PLANE_PROXY_HOSTS = new Set(['127.0.0.1', 'localhost', 'python-service']);
-const dataPlaneControlSecret = process.env.DATA_PLANE_CONTROL_SECRET ?? 'local-dev-control-secret';
+const dataPlaneControlSecret = resolveDataPlaneControlSecret();
 const UNSAFE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const SAFE_READ_METHODS = new Set(['GET', 'HEAD']);
 const CONTROL_PREFIXES = dataPlaneControlSurfaces.control_prefixes;

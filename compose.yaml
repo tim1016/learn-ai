@@ -150,7 +150,7 @@ services:
       - HOST=0.0.0.0
       - PORT=8000
       - ALLOWED_ORIGINS=http://backend:8080,http://localhost:5000,http://localhost:4200
-      - DATA_PLANE_CONTROL_SECRET=${DATA_PLANE_CONTROL_SECRET:-local-dev-control-secret}
+      - DATA_PLANE_CONTROL_SECRET=${DATA_PLANE_CONTROL_SECRET:?Set DATA_PLANE_CONTROL_SECRET in .env before starting the stack}
       - BACKEND_URL=http://backend:8080
       - REDIS_URL=redis://:${REDIS_PASSWORD:-local-dev-redis-password}@redis:6379/0
       # Data lake writer root (Slice 1b). Container path of the host-bind mount above.
@@ -411,7 +411,7 @@ services:
       # old-space limit so workers don't hit ERR_WORKER_OUT_OF_MEMORY.
       - NODE_OPTIONS=--max-old-space-size=3584
       # Keep Angular's dev proxy secret in lockstep with the Python data plane.
-      - DATA_PLANE_CONTROL_SECRET=${DATA_PLANE_CONTROL_SECRET:-local-dev-control-secret}
+      - DATA_PLANE_CONTROL_SECRET=${DATA_PLANE_CONTROL_SECRET:?Set DATA_PLANE_CONTROL_SECRET in .env before starting the stack}
       # Container networking needs service names; host `ng serve` defaults to
       # loopback ports in the same canonical proxy configuration.
       - BACKEND_PROXY_TARGET=${BACKEND_PROXY_TARGET:-http://backend:8080}
