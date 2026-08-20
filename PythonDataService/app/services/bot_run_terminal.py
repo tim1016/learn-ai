@@ -9,9 +9,11 @@ from typing import Literal
 
 from app.engine.live.bot_lifecycle_state import BotDutyOutcome
 from app.engine.live.desired_state import DesiredState, DesiredStateRepo
+from app.schemas.bot_run_evidence import BotCrashDiagnostic
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_carryover import prove_stop_outcome
 from app.services.bot_clerk_lifecycle import commit_stop_before_task_cancel
+from app.services.bot_crash_diagnostic import capture_bot_crash_diagnostic
 from app.services.bot_run_evidence import PROVISIONAL_STOP_REASON_CODE, BotRunEvidenceService
 from app.services.bot_runtime import ManagedBot
 
@@ -43,6 +45,22 @@ class BotRunTerminalRecorder:
         reason_code: str,
     ) -> None:
         """Record the terminal duty fact once for the binding's exact run."""
+        self._finalize(
+            binding,
+            kind=kind,
+            reason_code=reason_code,
+            crash_diagnostic=None,
+        )
+
+    def _finalize(
+        self,
+        binding: BrokerBotBinding,
+        *,
+        kind: Literal["STOPPED", "CRASHED", "EXITED_UNVERIFIED"],
+        reason_code: str,
+        crash_diagnostic: BotCrashDiagnostic | None,
+    ) -> None:
+        self._require_crashed_outcome_for_diagnostic(kind, crash_diagnostic)
         managed = self._managed_bots.get(binding.strategy_instance_id)
         if managed is not None and managed.binding.run_id == binding.run_id:
             if managed.finalized:
@@ -69,6 +87,7 @@ class BotRunTerminalRecorder:
             reason=reason_code,
             expected_active_run_id=binding.run_id,
             persist_receipt=reason_code != PROVISIONAL_STOP_REASON_CODE,
+            crash_diagnostic=crash_diagnostic,
         )
 
     async def finalize_after_authority_stop(
@@ -79,6 +98,22 @@ class BotRunTerminalRecorder:
         reason_code: str,
     ) -> None:
         """Commit SQLite STOP before publishing an unexpected terminal fact."""
+        await self._finalize_after_authority_stop(
+            binding,
+            kind=kind,
+            reason_code=reason_code,
+            crash_diagnostic=None,
+        )
+
+    async def _finalize_after_authority_stop(
+        self,
+        binding: BrokerBotBinding,
+        *,
+        kind: Literal["CRASHED", "EXITED_UNVERIFIED"],
+        reason_code: str,
+        crash_diagnostic: BotCrashDiagnostic | None,
+    ) -> None:
+        self._require_crashed_outcome_for_diagnostic(kind, crash_diagnostic)
 
         managed = self._managed_bots.get(binding.strategy_instance_id)
         if (
@@ -99,7 +134,36 @@ class BotRunTerminalRecorder:
                     "reason_code": reason_code,
                 },
             )
-        self.finalize(binding, kind=kind, reason_code=reason_code)
+        self._finalize(
+            binding,
+            kind=kind,
+            reason_code=reason_code,
+            crash_diagnostic=crash_diagnostic,
+        )
+
+    async def finalize_crash(
+        self,
+        binding: BrokerBotBinding,
+        error: Exception,
+        *,
+        reason_code: str,
+    ) -> None:
+        """Persist one crash with its exact run-scoped developer evidence."""
+        crash_diagnostic = capture_bot_crash_diagnostic(error)
+        await self._finalize_after_authority_stop(
+            binding,
+            kind="CRASHED",
+            reason_code=reason_code,
+            crash_diagnostic=crash_diagnostic,
+        )
+
+    @staticmethod
+    def _require_crashed_outcome_for_diagnostic(
+        kind: Literal["STOPPED", "CRASHED", "EXITED_UNVERIFIED"],
+        crash_diagnostic: BotCrashDiagnostic | None,
+    ) -> None:
+        if crash_diagnostic is not None and kind != "CRASHED":
+            raise ValueError("crash diagnostics require a CRASHED terminal outcome")
 
     def reap(self, strategy_instance_id: str, run_id: str) -> None:
         """Remove only the task that still owns this exact run identity."""

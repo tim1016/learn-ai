@@ -303,7 +303,7 @@ generated from the same backend copy map the panel itself renders.
 |---|---|---|
 | `ON_DUTY` | On duty | The bot is running and evaluating bars as they close. |
 | `STOPPED` | Stopped cleanly | The bot exited on an operator stop or a service shutdown. |
-| `CRASHED` | Crashed | The bot exited on an unhandled error. Check the duty reason. |
+| `CRASHED` | Crashed | The bot exited on an unhandled runtime error. This terminal outcome is not a market-data health verdict. |
 | `EXITED_UNVERIFIED` | Exited unverified | The bot's task ended without a clean stop. Its final state is not confirmed. |
 
 ### Hold States

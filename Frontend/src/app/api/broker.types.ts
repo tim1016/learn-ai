@@ -8143,6 +8143,20 @@ export interface components {
             process: components["schemas"]["BotProcessFact"];
         };
         /**
+         * BotCrashDiagnostic
+         * @description Exact developer evidence for the exception that ended one run.
+         */
+        BotCrashDiagnostic: {
+            /** Exception Type */
+            exception_type: string;
+            /** Message */
+            message: string;
+            /** Source File */
+            source_file: string;
+            /** Source Line */
+            source_line: number;
+        };
+        /**
          * BotDutyOutcomeView
          * @description Durable terminal duty evidence rendered by the operator surface.
          */
@@ -8458,6 +8472,24 @@ export interface components {
             type: string;
         };
         /**
+         * BotRunTerminalOutcomeView
+         * @description Immutable terminal outcome and optional crash evidence for one run.
+         */
+        BotRunTerminalOutcomeView: {
+            crash_diagnostic?: components["schemas"]["BotCrashDiagnostic"] | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "CLOCKED_OUT_FLAT" | "STOPPED" | "HALTED" | "CRASHED" | "FAILED_LAUNCH" | "EXITED_UNVERIFIED" | "RETIRED";
+            /** Reason Code */
+            reason_code: string;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+            /** Run Id */
+            run_id?: string | null;
+        };
+        /**
          * BotRunView
          * @description Read-only launch and terminal evidence for one strategy run.
          */
@@ -8478,7 +8510,7 @@ export interface components {
             started_at_ms: number;
             /** Strategy Instance Id */
             strategy_instance_id: string;
-            terminal_outcome: components["schemas"]["BotDutyOutcomeView"] | null;
+            terminal_outcome: components["schemas"]["BotRunTerminalOutcomeView"] | null;
         };
         /**
          * BotStatusView

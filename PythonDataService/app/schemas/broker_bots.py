@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.schemas.action_plan import ActionPlan
+from app.schemas.bot_run_evidence import BotRunTerminalOutcomeView
 from app.schemas.live_runs import BotDutyOutcomeView
 from app.schemas.run_admission import RunAdmissionDecision
 
@@ -273,7 +274,7 @@ class BotRunView(BaseModel):
     started_at_ms: int = Field(ge=0)
     is_current: bool
     process: BotProcessFact | None
-    terminal_outcome: BotDutyOutcomeView | None
+    terminal_outcome: BotRunTerminalOutcomeView | None
 
 
 class BotRunHistoryPage(BaseModel):
