@@ -611,6 +611,7 @@ async def test_start_admission_evaluates_liveness_with_a_post_await_timestamp() 
         mode="trade",
         quantity=1,
         carryover_policy="FORBID",
+        evidence_override=None,
         action_plan=alpaca_v1_action_plan("SPY"),
     )
 

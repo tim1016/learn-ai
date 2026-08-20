@@ -31,7 +31,7 @@ from app.routers.broker_v2_panel import router
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.operator_blocker import AccountOperatorPosture
 from app.schemas.run_admission import RunAdmissionDecision
-from app.schemas.strategy_validation import StrategyValidationEntry
+from app.schemas.strategy_validation import StrategyValidationEntry, StrategyValidationFlagRequest
 from app.services.bot_runner import (
     AdmittedBotStart,
     BotRunnerError,
@@ -43,6 +43,7 @@ from app.services.broker_account_snapshot import (
 from app.services.broker_v2_panel import panel_data_source
 from app.services.broker_v2_panel.paper_deploy_service import _strategy_views
 from app.services.strategy_validation_manifest import (
+    append_strategy_validation_flag_event,
     load_strategy_validation_entries,
     strategy_registry_seeds,
 )
@@ -123,6 +124,37 @@ class _FakeDeployRegistry:
 @pytest.fixture()
 def deploy_app(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("ALPACA_CLERK_DIR", str(tmp_path))
+    registry_seeds = strategy_registry_seeds()
+    flag_events_path = tmp_path / "strategy-validation" / "flag-events.json"
+    for strategy_key in ("rsi_mean_reversion", "sma_crossover"):
+        append_strategy_validation_flag_event(
+            strategy_key,
+            StrategyValidationFlagRequest(
+                flag="validated",
+                reason="Test-only human validation without accepted equivalence evidence.",
+            ),
+            registry_seeds,
+            flag_events_path=flag_events_path,
+            flagged_by="test:deploy-route",
+            now_ms=_T0,
+        )
+    validation_entries = [
+        entry
+        for entry in load_strategy_validation_entries(
+            registry_seeds,
+            flag_events_path=flag_events_path,
+        )
+        if entry.strategy_key in {
+            "ema_crossover_signal",
+            "rsi_mean_reversion",
+            "sma_crossover",
+        }
+    ]
+    monkeypatch.setattr(
+        panel_data_source,
+        "load_strategy_validation_entries",
+        lambda _registry: validation_entries,
+    )
     clear_broker_account_snapshot_cache_for_testing()
     reset_broker_registry_for_testing()
     get_broker_registry().register(_FakeReadPort())  # type: ignore[arg-type]
