@@ -23,6 +23,7 @@ import {
   PanelActionButtonComponent,
   type PanelActionTone,
 } from '../panel-action-button/panel-action-button.component';
+import { ACTION_TONES } from '../bot-detail-banner/lifecycle-action';
 
 type ReadinessCheck = BotPanelView['readiness_checks'][number];
 
@@ -33,27 +34,6 @@ interface ReadinessControl {
   readonly suppressedBlockerReasonCode: string | null;
   readonly tone: PanelActionTone;
 }
-
-interface PrimaryReadinessControl extends ReadinessControl {
-  readonly action: PanelAction;
-}
-
-const OPERATOR_ACTION_TONES: Partial<Record<ActionId, PanelActionTone>> = {
-  resume: 'primary',
-  pause: 'warning',
-  continue: 'primary',
-  stop: 'danger',
-  stop_bot_decisions: 'danger',
-  flatten_stop: 'danger',
-  reconcile_now: 'neutral',
-  recover_exact_execution_evidence: 'warning',
-  resolve_execution_coverage: 'warning',
-  cancel_verified_working_orders: 'danger',
-  prepare_safe_flatten: 'neutral',
-  open_custody_timeline: 'neutral',
-  rebuild_from_mirror: 'warning',
-  reset_authority: 'danger',
-};
 
 @Component({
   selector: 'app-operator-readiness',
@@ -72,30 +52,15 @@ const OPERATOR_ACTION_TONES: Partial<Record<ActionId, PanelActionTone>> = {
 })
 export class OperatorReadinessComponent {
   readonly panel = input.required<BotPanelView>();
-  /** The one lifecycle control promoted to the banner; its gate remains visible below. */
+  /**
+   * The Operator lens's backend-selected banner action
+   * (`primary_action_by_lens.operator`, issue #1665). Its gate remains
+   * visible below; the accordion row for this exact operation is suppressed
+   * here to avoid duplicating the banner's control.
+   */
   readonly bannerActionId = input<ActionId | null>(null);
   readonly actionPending = input(false);
   readonly actionRequested = output<PanelActionTrigger>();
-
-  /** A policy-primary recovery must never be hidden behind an accordion row. */
-  protected readonly primaryControl = computed<PrimaryReadinessControl | null>(() => {
-    const panel = this.panel();
-    const check = panel.readiness_checks.find(
-      (candidate) => candidate.evidence['primary'] === true,
-    );
-    if (check === undefined || check.operation === this.bannerActionId()) return null;
-    const tone = OPERATOR_ACTION_TONES[check.operation];
-    if (tone === undefined) return null;
-    const action = panel.actions.find((candidate) => candidate.action_id === check.operation);
-    if (action === undefined) return null;
-    return {
-      action,
-      check,
-      suppressedBlockerId: null,
-      suppressedBlockerReasonCode: null,
-      tone,
-    };
-  });
 
   protected readonly readinessControls = computed<readonly ReadinessControl[]>(
     () => {
@@ -105,10 +70,8 @@ export class OperatorReadinessComponent {
       );
 
       return panel.readiness_checks.map((check) => {
-        const tone = OPERATOR_ACTION_TONES[check.operation];
-        const isPrimary = check.evidence['primary'] === true;
+        const tone = ACTION_TONES[check.operation];
         const action = tone && check.operation !== this.bannerActionId()
-          && !isPrimary
           ? actions.get(check.operation) ?? null
           : null;
 

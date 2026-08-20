@@ -142,6 +142,7 @@ const BASE_PANEL: BotPanelView = {
       concurrency_token: 'test-token',
     },
   ],
+  primary_action_by_lens: { trader: 'stop', operator: 'stop' },
   readiness_checks: [],
   readiness_ready_count: 0,
   readiness_blocked_count: 0,

@@ -119,6 +119,15 @@ ACTION_IDS: Final[tuple[ActionId, ...]] = (
     "reset_authority",
 )
 
+# The closed set of action ids the Trader banner may ever reference as its
+# primary command (issue #1665, ADR 0027 audience-aware selection). Every
+# other action id — recovery capabilities, ``retire``, ``pause``,
+# ``flatten_stop``, ... — is Operator-only and must never reach
+# ``BotPanelView.primary_action_by_lens.trader``. Enforced by the
+# ``BotPanelView`` model validator; authored by
+# ``panel_projection_service.select_primary_action_by_lens``.
+TRADER_LIFECYCLE_ACTION_IDS: Final[frozenset[str]] = frozenset({"resume", "continue", "stop"})
+
 
 # ── Server-authored copy (decision #7) ───────────────────────────────────────
 # One label + explanation per emitted code. The copy-coverage contract test

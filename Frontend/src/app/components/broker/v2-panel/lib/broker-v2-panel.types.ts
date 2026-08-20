@@ -47,6 +47,7 @@ export type ClerkCard = components['schemas']['ClerkCard'];
 export type StationView = components['schemas']['StationView'];
 export type TransactionRail = components['schemas']['TransactionRail'];
 export type PanelAction = components['schemas']['PanelAction'];
+export type PrimaryActionByLens = components['schemas']['PrimaryActionByLens'];
 
 /**
  * One `PanelActionButtonComponent` trigger event. The reason remains nullable

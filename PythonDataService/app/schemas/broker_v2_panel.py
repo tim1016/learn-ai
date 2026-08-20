@@ -15,9 +15,10 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.broker.v2panel.vocabulary import (
+    TRADER_LIFECYCLE_ACTION_IDS,
     ActionId,
     ChannelState,
     DesiredState,
@@ -260,6 +261,28 @@ class TransactionRail(BaseModel):
     stations: list[StationView]
 
 
+class PrimaryActionByLens(BaseModel):
+    """The one backend-selected banner action for each lens (issue #1665).
+
+    ``trader`` is restricted to the closed
+    ``app.broker.v2panel.vocabulary.TRADER_LIFECYCLE_ACTION_IDS`` set
+    (``resume`` / ``continue`` / ``stop``); an Operator-only recovery
+    capability can never reach it. ``operator`` also considers those same
+    lifecycle actions, but a SQLite ``RecoveryCapability.primary`` recovery
+    action takes precedence when one is available — the audience-aware
+    precedence rule authored once by
+    ``panel_projection_service.select_primary_action_by_lens`` (ADR 0027).
+    Either reference is ``None``, never a guess, when nothing currently
+    qualifies; the frontend renders no banner action in that case rather than
+    deriving one from ``health``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    trader: ActionId | None
+    operator: ActionId | None
+
+
 class MissionVerdictView(BaseModel):
     """Backend-authored answer to whether this bot can perform its mission now."""
 
@@ -393,6 +416,9 @@ class BotPanelView(BaseModel):
     journal_tail_ref: str
     journal_tail_seq: int | None
     actions: list[PanelAction]
+    # The one backend-selected banner action per lens (issue #1665). Neither
+    # Angular banner may derive a primary action from ``health`` any more.
+    primary_action_by_lens: PrimaryActionByLens
     readiness_checks: list[ReadinessCheckView]
     # Server-authored presentation aggregate. Consumers render these counts
     # verbatim so every surface reports the same command-gate posture.
@@ -407,6 +433,33 @@ class BotPanelView(BaseModel):
     fills_today: int | None
     realized_pnl_today: float | None
     open_pnl: float | None
+
+    @model_validator(mode="after")
+    def _primary_action_by_lens_is_coherent(self) -> BotPanelView:
+        """Fail closed on a dangling or audience-incompatible reference.
+
+        Every non-``None`` lens reference must name an action present in
+        ``actions`` (no dangling reference), and the Trader reference must
+        additionally be one of the closed Trader-visible lifecycle action ids
+        — an Operator-only recovery capability can never become the Trader
+        banner's primary command (issue #1665).
+        """
+        action_ids = {action.action_id for action in self.actions}
+        trader_ref = self.primary_action_by_lens.trader
+        if trader_ref is not None and (
+            trader_ref not in TRADER_LIFECYCLE_ACTION_IDS or trader_ref not in action_ids
+        ):
+            raise ValueError(
+                f"primary_action_by_lens.trader={trader_ref!r} must reference a "
+                "Trader-visible lifecycle action present in `actions`"
+            )
+        operator_ref = self.primary_action_by_lens.operator
+        if operator_ref is not None and operator_ref not in action_ids:
+            raise ValueError(
+                f"primary_action_by_lens.operator={operator_ref!r} must reference "
+                "an action present in `actions`"
+            )
+        return self
 
 
 # ── §11 Presented-actions execution request/response ─────────────────────────

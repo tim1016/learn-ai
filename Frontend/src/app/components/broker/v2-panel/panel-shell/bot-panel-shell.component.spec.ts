@@ -140,6 +140,7 @@ const PANEL: BotPanelView = {
   journal_tail_ref: '/api/brokers/alpaca/accounts/DUM284968/bots/sid-001/journal',
   journal_tail_seq: null,
   actions: [],
+  primary_action_by_lens: { trader: null, operator: null },
   readiness_checks: [],
   readiness_ready_count: 0,
   readiness_blocked_count: 0,
@@ -280,6 +281,7 @@ function safeFlattenSnapshot(): BotPanelLiveSnapshot {
     ...PANEL,
     revision: 17,
     actions: [PREPARE_SAFE_FLATTEN_ACTION],
+    primary_action_by_lens: { trader: null, operator: 'prepare_safe_flatten' },
     readiness_checks: [{
       operation: PREPARE_SAFE_FLATTEN_ACTION.action_id,
       label: PREPARE_SAFE_FLATTEN_ACTION.label,
@@ -300,6 +302,7 @@ function historicalRecoverySnapshot(): BotPanelLiveSnapshot {
     ...PANEL,
     revision: 17,
     actions: [HISTORICAL_RECOVERY_ACTION],
+    primary_action_by_lens: { trader: null, operator: 'recover_exact_execution_evidence' },
     readiness_checks: [{
       operation: HISTORICAL_RECOVERY_ACTION.action_id,
       label: HISTORICAL_RECOVERY_ACTION.label,
@@ -320,6 +323,7 @@ function custodyTimelineSnapshot(): BotPanelLiveSnapshot {
     ...PANEL,
     revision: 17,
     actions: [OPEN_CUSTODY_TIMELINE_ACTION],
+    primary_action_by_lens: { trader: null, operator: 'open_custody_timeline' },
     readiness_checks: [{
       operation: OPEN_CUSTODY_TIMELINE_ACTION.action_id,
       label: OPEN_CUSTODY_TIMELINE_ACTION.label,
@@ -919,6 +923,7 @@ describe('BotPanelShellComponent', () => {
           concurrency_token: 'start-token',
         },
       ],
+      primary_action_by_lens: { trader: 'resume', operator: 'resume' },
     }));
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
@@ -1155,6 +1160,7 @@ describe('BotPanelShellComponent', () => {
           concurrency_token: 'start-token',
         },
       ],
+      primary_action_by_lens: { trader: 'resume', operator: 'resume' },
     }));
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
@@ -1191,6 +1197,7 @@ describe('BotPanelShellComponent', () => {
           concurrency_token: 'start-token',
         },
       ],
+      primary_action_by_lens: { trader: 'resume', operator: 'resume' },
     }));
     mockService.runBotAction.mockRejectedValueOnce(
       new HttpErrorResponse({
