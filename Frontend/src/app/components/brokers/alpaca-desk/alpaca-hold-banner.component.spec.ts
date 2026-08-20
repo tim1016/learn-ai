@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { ClerkStatus } from '../../../api/alpaca.types';
 import { BrokersService } from '../../../services/brokers.service';
+import { healthyAccountOperatorPostureFixture } from '../../../testing/operator-blocker-fixtures';
 import { AlpacaHoldBannerComponent } from './alpaca-hold-banner.component';
 
 function heldStatus(overrides: Partial<ClerkStatus> = {}): ClerkStatus {
@@ -18,6 +19,7 @@ function heldStatus(overrides: Partial<ClerkStatus> = {}): ClerkStatus {
     latest_reconciliation: { verdict: 'unexplained_order', recorded_at_ms: 1_700_000_000_000 },
     outstanding_intents: 0,
     observed_at_ms: 1_700_000_000_000,
+    operator_posture: healthyAccountOperatorPostureFixture(),
     ...overrides,
   };
 }
@@ -30,6 +32,7 @@ function clearStatus(): ClerkStatus {
     latest_reconciliation: { verdict: 'clean', recorded_at_ms: 1_700_000_000_000 },
     outstanding_intents: 0,
     observed_at_ms: 1_700_000_000_000,
+    operator_posture: healthyAccountOperatorPostureFixture(),
   };
 }
 

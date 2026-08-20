@@ -11,7 +11,7 @@ import {
 
 import { AccountDeskTransactionHistoryComponent } from '../../broker/account-desk/account-desk-transaction-history.component';
 import { AccountDeskTransactionHistoryStore } from '../../broker/account-desk/account-desk-transaction-history-store.service';
-import type { SqliteRecoveryAction } from '../../../api/alpaca.types';
+import { ACCOUNT_DESK_CLERK_RECOVERY_ANCHOR, type OperatorMove } from '../../../api/operator-blocker.types';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
 import type { SqliteTimelineQuery } from '../../../services/brokers.service';
@@ -39,26 +39,16 @@ export class AlpacaOperatorLensComponent {
   readonly timelineQuery = input<SqliteTimelineQuery | null>(null);
   private readonly data = inject(AlpacaOperatorLensDataService);
   private readonly custodyPanel = viewChild<ElementRef<HTMLDetailsElement>>('custodyPanel');
-  private readonly custody = viewChild(AlpacaSqliteCustodyComponent);
 
   protected readonly status = this.data.status;
   protected readonly projection = this.data.projection;
   protected readonly projectionRefreshVersion = this.data.projectionRefreshVersion;
   protected readonly custodyOpened = signal(false);
-  private readonly pendingRepair = signal<SqliteRecoveryAction | null>(null);
 
   constructor() {
     effect(() => {
-      const action = this.pendingRepair();
-      const custody = this.custody();
-      if (action === null || custody === undefined) return;
-      this.pendingRepair.set(null);
-      custody.requestPresentedAction(action);
-    });
-    effect(() => {
       if (this.timelineQuery() === null) return;
-      this.custodyOpened.set(true);
-      this.custodyPanel()?.nativeElement.setAttribute('open', '');
+      this.openCustodyPanel();
     });
   }
 
@@ -68,9 +58,20 @@ export class AlpacaOperatorLensComponent {
     }
   }
 
-  protected openRepair(action: SqliteRecoveryAction): void {
+  /**
+   * The dominant posture card's `fix_here` move is a `confirm_in_form`
+   * pointing at this lens's own recovery panel (#1664) — open it in place.
+   * Other move kinds (`open_runbook`, terminal moves) are rendered by the
+   * posture card itself and have no in-lens target yet.
+   */
+  protected onBlockerMoveRequested(move: OperatorMove): void {
+    if (move.action.kind === 'confirm_in_form' && move.action.anchor === ACCOUNT_DESK_CLERK_RECOVERY_ANCHOR) {
+      this.openCustodyPanel();
+    }
+  }
+
+  private openCustodyPanel(): void {
     this.custodyOpened.set(true);
-    this.pendingRepair.set(action);
     this.custodyPanel()?.nativeElement.setAttribute('open', '');
   }
 

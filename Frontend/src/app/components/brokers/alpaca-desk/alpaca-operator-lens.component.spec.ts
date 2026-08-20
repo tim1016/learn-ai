@@ -3,12 +3,14 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ClerkStatus, SqliteClerkProjection } from '../../../api/alpaca.types';
+import { ACCOUNT_DESK_CLERK_RECOVERY_ANCHOR, type AccountOperatorPosture } from '../../../api/operator-blocker.types';
 import { BrokerService } from '../../../services/broker.service';
 import { BrokersService } from '../../../services/brokers.service';
+import { healthyAccountOperatorPostureFixture, operatorBlockerFixture } from '../../../testing/operator-blocker-fixtures';
 import { AlpacaOperatorLensDataService } from './alpaca-operator-lens-data.service';
 import { AlpacaOperatorLensComponent } from './alpaca-operator-lens.component';
 
-function clerkStatus(): ClerkStatus {
+function clerkStatus(posture: AccountOperatorPosture = healthyAccountOperatorPostureFixture()): ClerkStatus {
   return {
     broker: 'alpaca',
     account_id: 'PA1',
@@ -18,6 +20,29 @@ function clerkStatus(): ClerkStatus {
     observed_at_ms: 1_700_000_000_000,
     authority_kind: 'sqlite',
     channel_healths: [],
+    operator_posture: posture,
+  };
+}
+
+/** The backend-authored posture for a fix_here custody condition (#1664). */
+function fixHereAccountDeskPosture(): AccountOperatorPosture {
+  const blocker = operatorBlockerFixture({
+    host: 'account_desk',
+    disposition: 'fix_here',
+    headline: 'Clerk reconciliation required',
+    detail: 'The Clerk needs a fresh broker observation.',
+    primaryMove: {
+      label: 'Open Clerk recovery',
+      action: { kind: 'confirm_in_form', anchor: ACCOUNT_DESK_CLERK_RECOVERY_ANCHOR },
+      target: null,
+    },
+  });
+  return {
+    condition: blocker.condition,
+    account_desk: blocker,
+    fleet_roster: { ...blocker, host: 'fleet_roster', disposition: 'fix_elsewhere' },
+    status_headline: blocker.headline,
+    status_detail: blocker.detail ?? null,
   };
 }
 
@@ -59,11 +84,12 @@ function getPortfolioHistory() {
 function lensDataProvider(
   currentProjection: SqliteClerkProjection = projection(),
   refreshProjection = vi.fn(),
+  clerkStatusValue: ClerkStatus = clerkStatus(),
 ) {
   return {
     provide: AlpacaOperatorLensDataService,
     useValue: {
-      status: resourceValue(clerkStatus()),
+      status: resourceValue(clerkStatusValue),
       projection: resourceValue(currentProjection),
       projectionRefreshVersion: signal(0),
       refreshProjection,
@@ -72,7 +98,7 @@ function lensDataProvider(
 }
 
 describe('AlpacaOperatorLensComponent', () => {
-  it('forwards the inline repair to the existing evidence-bound custody action flow', async () => {
+  it('opens the recovery panel from the backend-authored fix_here move, then runs the presented action', async () => {
     const repair = {
       action_id: 'reconcile_now' as const,
       label: 'Reconcile now',
@@ -109,7 +135,7 @@ describe('AlpacaOperatorLensComponent', () => {
 
     await render(AlpacaOperatorLensComponent, {
       providers: [
-        lensDataProvider(activeProjection, refreshProjection),
+        lensDataProvider(activeProjection, refreshProjection, clerkStatus(fixHereAccountDeskPosture())),
         { provide: BrokerService, useValue: { accountTransactions: vi.fn(), accountTransaction: vi.fn() } },
         {
           provide: BrokersService,
@@ -121,6 +147,11 @@ describe('AlpacaOperatorLensComponent', () => {
         },
       ],
     });
+
+    expect(screen.getByRole('heading', { name: 'Clerk reconciliation required' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Open Clerk recovery' }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Reconcile now' })).toBeTruthy());
 
     fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
 

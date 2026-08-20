@@ -10,6 +10,7 @@ only ``alpaca``; unknown brokers resolve to ``404``.
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 from collections.abc import Awaitable, Callable
 from typing import Literal, NoReturn
@@ -92,6 +93,7 @@ from app.services.sqlite_clerk_compat import (
 from app.utils.timestamps import now_ms_utc
 
 router = APIRouter(prefix="/api/brokers", tags=["brokers-v2"])
+logger = logging.getLogger(__name__)
 
 _DEFAULT_READ_LIMIT = 100
 _MAX_READ_LIMIT = 500
@@ -593,13 +595,30 @@ async def get_clerk_status(broker: str) -> ClerkStatus:
 
     A protected read (the always-on data-plane secret gates the whole router).
     Transport only: resolve the account-scoped Clerk facade and delegate — the
-    Clerk owns the journal-derived hold + verdict + outstanding-intent state.
+    Clerk owns the journal-derived hold + verdict + outstanding-intent state,
+    plus (#1664) the one canonical account operator posture, authored from
+    this same custody projection and a same-request account observation.
+
+    The account read degrades gracefully: a broker-side failure does not 503
+    this endpoint (custody state is independently available) — it instead
+    surfaces as an explicit ``alpaca_account_evidence_unavailable`` operator
+    condition so the account/paper-mode checks fail closed rather than
+    silently passing.
     """
     sqlite = _require_sqlite_facade(broker)
     projection = await _read_sqlite_account_projection(sqlite)
+    try:
+        account = await resolve_broker_account_snapshot(broker)
+    except BrokerError as error:
+        logger.warning(
+            "Clerk status account read failed; reporting evidence-unavailable posture",
+            extra={"broker": broker, "reason": error.message},
+        )
+        account = None
     return sqlite_clerk_status(
         projection,
         channel_healths=sqlite.channel_health_snapshot(),
+        account=account,
     )
 
 

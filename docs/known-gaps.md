@@ -84,16 +84,16 @@ Alpaca safety, capability, freshness, and primary-action choice backend-owned,
 while ADR 0027 owns blocker disposition and moves.
 
 - **Live account surfaces derive operational posture and availability
-  (medium).** Account Desk combines guidance, uncertainties, authority health,
-  and recovery-action flags into `healthy` / `fix_here` / `wait` / `review` /
-  `terminal`. Account Strip combines account flags into “Trading available” or
-  “Trading blocked” and freeze/hold flags into custody-block verdicts; the
-  available case omits the backend's paper-mode and active-status requirements.
-  Preserve one evidence/condition authority for both surfaces, with separate
-  host-correct `account_desk` and `fleet_roster` blocker projections. Include
-  unresolved intents and missing/stale/unhealthy Clerk channels in the backend
-  decision table. Reuse ADR 0027 disposition; do not create a parallel
-  five-state posture enum or render one host's cure on the other surface.
+  (medium) — fixed.** Account Desk and Account Strip previously derived
+  operator verdicts client-side. `ClerkStatus.operator_posture`
+  (`app/broker/alpaca/clerk/sqlite/account_operator_posture.py`) now authors
+  one canonical `AccountOperatorPosture` from a single evidence cut (the same
+  custody guidance/recovery-catalog facts plus paper mode, active account
+  status, Alpaca trading/account blocks, unresolved intents, and Clerk-channel
+  health) and projects it onto host-correct `account_desk` and `fleet_roster`
+  `OperatorBlocker`s (ADR 0027 disposition; no parallel five-state enum).
+  `AlpacaOperatorPostureComponent` and `AccountStripComponent` render only
+  their own host projection and fail closed when it hasn't loaded.
   [#1664](https://github.com/tim1016/learn-ai/issues/1664)
 
 - **Both live bot-detail lenses derive the banner's primary command (medium).**

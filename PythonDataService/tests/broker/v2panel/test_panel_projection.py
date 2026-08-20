@@ -34,6 +34,7 @@ from app.broker.contract.models import OrderSide
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import BotPanelView, MarketPulseView
 from app.schemas.live_runs import BotDutyOutcomeView
+from app.schemas.operator_blocker import AccountOperatorPosture
 from app.schemas.run_admission import RunAdmissionDecision, RunAdmissionFactAges
 from app.services.bot_dry_run import DryRunActivity
 from app.services.broker_v2_panel.panel_projection_service import (
@@ -136,6 +137,13 @@ def _clerk_status(
             ChannelHealth(stream="market_data", healthy=healthy, reason="", observed_at_ms=_NOW - 10),
             ChannelHealth(stream="execution", healthy=healthy, reason="", observed_at_ms=_NOW - 10),
         ],
+        operator_posture=AccountOperatorPosture(
+            condition=None,
+            account_desk=None,
+            fleet_roster=None,
+            status_headline="Account Clerk custody is healthy",
+            status_detail=None,
+        ),
     )
 
 

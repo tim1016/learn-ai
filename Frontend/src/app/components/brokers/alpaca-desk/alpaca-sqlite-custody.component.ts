@@ -118,14 +118,6 @@ export class AlpacaSqliteCustodyComponent {
   protected readonly reductionPlan = signal<SqliteSafeFlattenPlan | null>(null);
   protected readonly receipt = signal<ActionReceiptView | null>(null);
   protected readonly selectedTimelineEntry = signal<SqliteTimelineEntry | null>(null);
-  /**
-   * Executes an exact capability already presented by the current Clerk
-   * projection. The operator posture uses this to keep diagnosis and repair
-   * in one place without recreating confirmation or concurrency handling.
-   */
-  requestPresentedAction(action: SqliteRecoveryAction): void {
-    if (action.available && this.busyActionId() === null) void this.runAction(action);
-  }
 
   constructor() {
     effect(() => {

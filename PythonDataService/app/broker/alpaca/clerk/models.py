@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.broker.contract.models import BrokerActivity, BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
 from app.schemas.action_plan import ActionPlan, StockEntryLeg
+from app.schemas.operator_blocker import AccountOperatorPosture
 
 MAX_EPOCH_MS = 9_223_372_036_854_775_807
 EpochMs = Annotated[
@@ -445,6 +446,12 @@ class ClerkStatus(BaseModel):
     # (distinct from "installed and healthy").
     channel_healths: list[ChannelHealth] | None = None
     authority_kind: Literal["sqlite"] = "sqlite"
+    # #1664: the one canonical account-level operator decision, authored from
+    # this same evidence cut. See app/broker/alpaca/clerk/sqlite/
+    # account_operator_posture.py. Account Desk and Account Strip render only
+    # their own host projection and never re-derive a verdict from the raw
+    # facts above.
+    operator_posture: AccountOperatorPosture
 
 
 class CustodyCountFact(BaseModel):

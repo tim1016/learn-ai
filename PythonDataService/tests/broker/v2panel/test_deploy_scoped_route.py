@@ -29,6 +29,7 @@ from app.broker.contract.registry import (
 from app.config import settings
 from app.routers.broker_v2_panel import router
 from app.schemas.broker_bots import BotStatusView
+from app.schemas.operator_blocker import AccountOperatorPosture
 from app.schemas.run_admission import RunAdmissionDecision
 from app.schemas.strategy_validation import StrategyValidationEntry
 from app.services.bot_runner import (
@@ -49,6 +50,13 @@ from app.utils.timestamps import now_ms_utc
 from tests.broker.v2panel.fixtures import ACCT, SID
 
 _T0 = 1_700_000_000_000
+_HEALTHY_POSTURE = AccountOperatorPosture(
+    condition=None,
+    account_desk=None,
+    fleet_roster=None,
+    status_headline="Account Clerk custody is healthy",
+    status_detail=None,
+)
 
 
 class _FakeAccount:
@@ -133,6 +141,7 @@ def deploy_app(tmp_path: Path, monkeypatch):
                 ChannelHealth(stream="market_data", healthy=True, observed_at_ms=observed_at_ms),
                 ChannelHealth(stream="execution", healthy=True, observed_at_ms=observed_at_ms),
             ],
+            operator_posture=_HEALTHY_POSTURE,
         )
 
     monkeypatch.setattr(panel_data_source, "_clerk_status", clerk_status)
@@ -550,6 +559,7 @@ async def test_deploy_blocks_when_clerk_channel_health_is_unproven(
             outstanding_intents=0,
             observed_at_ms=_T0,
             channel_healths=None,
+            operator_posture=_HEALTHY_POSTURE,
         )
 
     monkeypatch.setattr(panel_data_source, "_clerk_status", no_channel_status)
@@ -600,6 +610,7 @@ async def test_deploy_requires_both_fresh_clerk_channels(
             outstanding_intents=0,
             observed_at_ms=now_ms_utc(),
             channel_healths=channels,
+            operator_posture=_HEALTHY_POSTURE,
         )
 
     monkeypatch.setattr(panel_data_source, "_clerk_status", incomplete_channel_status)
@@ -686,6 +697,7 @@ async def test_clerk_hold_authors_blocked_view_and_submission_remedy(
             ),
             outstanding_intents=0,
             observed_at_ms=_T0,
+            operator_posture=_HEALTHY_POSTURE,
         )
 
     monkeypatch.setattr(panel_data_source, "_clerk_status", held_status)
@@ -727,6 +739,7 @@ async def test_account_freeze_category_and_remedy_reach_deploy_unchanged(
             ),
             outstanding_intents=0,
             observed_at_ms=_T0,
+            operator_posture=_HEALTHY_POSTURE,
         )
 
     monkeypatch.setattr(panel_data_source, "_clerk_status", frozen_status)

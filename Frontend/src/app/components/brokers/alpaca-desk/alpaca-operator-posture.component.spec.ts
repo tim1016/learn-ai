@@ -2,212 +2,95 @@ import { fireEvent, render, screen } from '@testing-library/angular';
 import { provideRouter, Router } from '@angular/router';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { SqliteClerkProjection, SqliteRecoveryAction } from '../../../api/alpaca.types';
+import type { AccountOperatorPosture } from '../../../api/operator-blocker.types';
 import { operatorBlockerFixture } from '../../../testing/operator-blocker-fixtures';
 import { AlpacaOperatorPostureComponent } from './alpaca-operator-posture.component';
 
-function action(overrides: Partial<SqliteRecoveryAction> = {}): SqliteRecoveryAction {
+function healthyPosture(): AccountOperatorPosture {
   return {
-    action_id: 'reconcile_now',
-    label: 'Reconcile now',
-    explanation: 'Compare Clerk custody to a fresh broker observation.',
-    available: true,
-    unavailable_reason_code: null,
-    unavailable_reason: null,
-    scope: 'ACCOUNT_CLERK',
-    freshness: 'fresh',
-    evidence: [],
-    reduction_plan: null,
-    confirmation: null,
-    next_step: 'Run reconciliation against the current observation.',
-    concurrency_token: 'token-1',
-    execution_ref: null,
-    mutation: true,
-    primary: true,
-    ...overrides,
+    condition: null,
+    account_desk: null,
+    fleet_roster: null,
+    status_headline: 'Account Clerk custody is healthy',
+    status_detail: 'Durable Clerk state has no active hold or unresolved uncertainty in this scope.',
   };
 }
 
-function projection(overrides: Partial<SqliteClerkProjection> = {}): SqliteClerkProjection {
+function blockedPosture(
+  overrides: Parameters<typeof operatorBlockerFixture>[0] = {},
+): AccountOperatorPosture {
+  const blocker = operatorBlockerFixture({ host: 'account_desk', ...overrides });
   return {
-    account_id: 'PA1',
-    strategy_instance_id: null,
-    authority_generation: 1,
-    db_identity_token: 'db-1',
-    authority_health: 'healthy',
-    authority_health_reason: null,
-    control_revision: 3,
-    custody_owner: 'ACCOUNT_CLERK',
-    runs: [],
-    commands: [],
-    operations: [],
-    positions: [],
-    holds: [],
-    uncertainties: [],
-    latest_reconciliation: null,
-    terminal_receipts: [],
-    guidance: {
-      headline: 'Clerk reconciliation required',
-      explanation: 'The Clerk needs a fresh broker observation.',
-      scope: 'ACCOUNT_CLERK',
-      impact: 'No new exposure may be created.',
-      custody_owner: 'ACCOUNT_CLERK',
-      may_create_exposure: false,
-      available_safety_actions: ['Reconcile now'],
-      action_required: true,
-      next_step: 'Run reconciliation.',
-    },
-    recovery_actions: [action()],
-    generated_at_ms: 1_700_000_000_000,
-    ...overrides,
+    condition: blocker.condition,
+    account_desk: blocker,
+    fleet_roster: { ...blocker, host: 'fleet_roster' },
+    status_headline: blocker.headline,
+    status_detail: blocker.detail ?? null,
   };
 }
 
 describe('AlpacaOperatorPostureComponent', () => {
-  it('renders one healthy posture from server-authored Clerk guidance', async () => {
+  it('renders the backend-authored healthy status copy when the condition is null', async () => {
     await render(AlpacaOperatorPostureComponent, {
-      inputs: {
-        projection: projection({ guidance: { ...projection().guidance, action_required: false } }),
-      },
+      inputs: { posture: healthyPosture() },
     });
 
-    expect(screen.getByRole('heading', { name: 'Clerk reconciliation required' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Account Clerk custody is healthy' })).toBeTruthy();
     expect(screen.queryByRole('button')).toBeNull();
   });
 
-  it('does not claim health when unresolved uncertainty remains without a required action', async () => {
+  it('fails closed to an explicit unavailable state when posture has not loaded', async () => {
+    await render(AlpacaOperatorPostureComponent, {
+      inputs: { posture: null },
+    });
+
+    expect(screen.getByRole('heading', { name: 'Account status unavailable' })).toBeTruthy();
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  it('renders the account_desk projection verbatim, not the fleet_roster projection', async () => {
+    const blocker = operatorBlockerFixture({
+      host: 'account_desk',
+      disposition: 'fix_elsewhere',
+      headline: 'Desk headline',
+    });
+    const posture: AccountOperatorPosture = {
+      condition: blocker.condition,
+      account_desk: blocker,
+      fleet_roster: { ...blocker, headline: 'Roster headline', host: 'fleet_roster' },
+      status_headline: blocker.headline,
+      status_detail: blocker.detail ?? null,
+    };
+
+    await render(AlpacaOperatorPostureComponent, { inputs: { posture } });
+
+    expect(screen.getByRole('heading', { name: 'Desk headline' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Roster headline' })).toBeNull();
+  });
+
+  it('emits the exact OperatorMove for a fix_here disposition on confirm_in_form', async () => {
+    const blockerMoveRequested = vi.fn();
+    const move = {
+      label: 'Open Clerk recovery',
+      action: { kind: 'confirm_in_form' as const, anchor: 'account-desk-clerk-recovery' },
+      target: null,
+    };
     await render(AlpacaOperatorPostureComponent, {
       inputs: {
-        projection: projection({
-          guidance: {
-            ...projection().guidance,
-            headline: 'Execution evidence needs review',
-            explanation: 'One broker outcome is not yet proven.',
-            action_required: false,
-          },
-          recovery_actions: [],
-          uncertainties: [{
-            uncertainty_id: 'uncertainty-1',
-            scope: 'ACCOUNT_CLERK',
-            strategy_instance_id: null,
-            reason_code: 'BROKER_OUTCOME_UNPROVEN',
-            severity: 'warning',
-            headline: 'Execution evidence needs review',
-            explanation: 'One broker outcome is not yet proven.',
-            operator_impact: 'Review before relying on the account record.',
-            blocks_new_exposure: false,
-            allows_reduction: true,
-            next_step: 'Review the order evidence.',
-            custody_owner: 'ACCOUNT_CLERK',
-            observed_at_ms: 1_700_000_000_000,
-            evidence_age_ms: 10,
-            evidence_refs: ['order-1'],
-          }],
-        }),
+        posture: blockedPosture({ disposition: 'fix_here', primaryMove: move }),
       },
+      on: { blockerMoveRequested },
     });
 
-    expect(screen.getByRole('heading', { name: 'Execution evidence needs review' })).toBeTruthy();
-    expect(screen.getByText('Review the current evidence.')).toBeTruthy();
-    expect(screen.queryByRole('heading', { name: 'System healthy' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Open Clerk recovery' }));
+
+    expect(blockerMoveRequested).toHaveBeenCalledWith(move);
   });
 
-  it('keeps an available recovery action visible when server guidance marks it review-only', async () => {
-    const repairRequested = vi.fn();
-    await render(AlpacaOperatorPostureComponent, {
-      inputs: {
-        projection: projection({
-          guidance: {
-            ...projection().guidance,
-            action_required: false,
-          },
-          uncertainties: [{
-            uncertainty_id: 'uncertainty-1',
-            scope: 'ACCOUNT_CLERK',
-            strategy_instance_id: null,
-            reason_code: 'BROKER_OUTCOME_UNPROVEN',
-            severity: 'warning',
-            headline: 'Execution evidence needs review',
-            explanation: 'One broker outcome is not yet proven.',
-            operator_impact: 'Review before relying on the account record.',
-            blocks_new_exposure: false,
-            allows_reduction: true,
-            next_step: 'Review the order evidence.',
-            custody_owner: 'ACCOUNT_CLERK',
-            observed_at_ms: 1_700_000_000_000,
-            evidence_age_ms: 10,
-            evidence_refs: ['order-1'],
-          }],
-        }),
-      },
-      on: { repairRequested },
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
-
-    expect(repairRequested).toHaveBeenCalledWith(expect.objectContaining({ action_id: 'reconcile_now' }));
-  });
-
-  it('attaches the available repair action to the dominant Clerk posture', async () => {
-    const repairRequested = vi.fn();
-    await render(AlpacaOperatorPostureComponent, {
-      inputs: { projection: projection() },
-      on: { repairRequested },
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
-
-    expect(repairRequested).toHaveBeenCalledWith(expect.objectContaining({ action_id: 'reconcile_now' }));
-  });
-
-  it('renders an unavailable primary recovery as a disabled control with its exact reason', async () => {
-    await render(AlpacaOperatorPostureComponent, {
-      inputs: {
-        projection: projection({
-          recovery_actions: [action({
-            available: false,
-            unavailable_reason_code: 'BOT_SCOPE_REQUIRED',
-            unavailable_reason: 'Open the affected bot before recovering exact evidence.',
-            label: 'Recover exact execution evidence',
-            action_id: 'recover_exact_execution_evidence',
-          })],
-        }),
-      },
-    });
-
-    const recovery = screen.getByRole('button', { name: 'Recover exact execution evidence' });
-    expect(recovery.hasAttribute('disabled')).toBe(true);
-    expect(recovery.getAttribute('aria-describedby')).toBe('operator-posture-unavailable-reason');
-    expect(screen.getByText('Open the affected bot before recovering exact evidence.')).toBeTruthy();
-    expect(screen.getByText(/Bot scope required/i)).toBeTruthy();
-  });
-
-  it('keeps an unavailable recovery visible when no capability is designated primary', async () => {
-    await render(AlpacaOperatorPostureComponent, {
-      inputs: {
-        projection: projection({
-          recovery_actions: [action({
-            action_id: 'recover_exact_execution_evidence',
-            label: 'Recover exact execution evidence',
-            available: false,
-            primary: false,
-            unavailable_reason_code: 'PAPER_QUALIFICATION_REQUIRED',
-            unavailable_reason: 'Complete paper qualification before recovery.',
-          })],
-        }),
-      },
-    });
-
-    expect(
-      screen.getByRole('button', { name: 'Recover exact execution evidence' }).hasAttribute('disabled'),
-    ).toBe(true);
-    expect(screen.getByText('Complete paper qualification before recovery.')).toBeTruthy();
-  });
-
-  it('renders the exact OperatorBlocker move for a fix-elsewhere disposition', async () => {
+  it('navigates for a fix_elsewhere disposition instead of emitting a move', async () => {
     const view = await render(AlpacaOperatorPostureComponent, {
       inputs: {
-        blocker: operatorBlockerFixture({
+        posture: blockedPosture({
           disposition: 'fix_elsewhere',
           headline: 'Broker connection needs attention',
         }),
@@ -222,15 +105,35 @@ describe('AlpacaOperatorPostureComponent', () => {
     expect(navigate).toHaveBeenCalledWith(['/broker'], { fragment: undefined });
   });
 
-  it.each([
-    ['wait', 'Waiting for fresh account evidence.'],
-    ['terminal', 'Manual escalation required.'],
-  ] as const)('uses the %s OperatorBlocker disposition without inventing a repair', async (disposition, copy) => {
+  it('uses the wait disposition without inventing a repair', async () => {
     await render(AlpacaOperatorPostureComponent, {
-      inputs: { blocker: operatorBlockerFixture({ disposition, primaryMove: null }) },
+      inputs: { posture: blockedPosture({ disposition: 'wait', primaryMove: null }) },
     });
 
-    expect(screen.getByText(copy)).toBeTruthy();
+    expect(screen.getByText('Waiting for fresh account evidence.')).toBeTruthy();
     expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  it('renders every terminal move as a button', async () => {
+    const blockerMoveRequested = vi.fn();
+    const runbookMove = {
+      label: 'Open Clerk recovery runbook',
+      action: { kind: 'open_runbook' as const, slug: 'alpaca-account-clerk-authority-recovery' },
+      target: null,
+    };
+    await render(AlpacaOperatorPostureComponent, {
+      inputs: {
+        posture: blockedPosture({
+          disposition: 'terminal',
+          primaryMove: runbookMove,
+          headline: 'Manual escalation required',
+        }),
+      },
+      on: { blockerMoveRequested },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Clerk recovery runbook' }));
+
+    expect(blockerMoveRequested).toHaveBeenCalledWith(runbookMove);
   });
 });

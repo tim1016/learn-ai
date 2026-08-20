@@ -2,6 +2,8 @@ import { render, screen, within } from '@testing-library/angular';
 import { describe, expect, it } from 'vitest';
 
 import type { BrokerAccountSnapshot, ClerkStatus } from '../../../../api/alpaca.types';
+import type { AccountOperatorPosture } from '../../../../api/operator-blocker.types';
+import { operatorBlockerFixture } from '../../../../testing/operator-blocker-fixtures';
 import { AccountStripComponent } from './account-strip.component';
 
 const account: BrokerAccountSnapshot = {
@@ -23,6 +25,27 @@ const account: BrokerAccountSnapshot = {
   observed_at_ms: 1_700_000_000_000,
 };
 
+const healthyPosture: AccountOperatorPosture = {
+  condition: null,
+  account_desk: null,
+  fleet_roster: null,
+  status_headline: 'Account Clerk custody is healthy',
+  status_detail: 'Durable Clerk state has no active hold or unresolved uncertainty in this scope.',
+};
+
+function blockedPosture(
+  overrides: Parameters<typeof operatorBlockerFixture>[0] = {},
+): AccountOperatorPosture {
+  const blocker = operatorBlockerFixture({ host: 'fleet_roster', ...overrides });
+  return {
+    condition: blocker.condition,
+    account_desk: { ...blocker, host: 'account_desk' },
+    fleet_roster: blocker,
+    status_headline: blocker.headline,
+    status_detail: blocker.detail ?? null,
+  };
+}
+
 const clerkStatus: ClerkStatus = {
   account_id: 'PA9',
   broker: 'alpaca',
@@ -37,6 +60,7 @@ const clerkStatus: ClerkStatus = {
     { stream: 'market_data', healthy: true, observed_at_ms: 1_700_000_000_000 },
     { stream: 'execution', healthy: false, observed_at_ms: 1_700_000_000_000 },
   ],
+  operator_posture: healthyPosture,
 };
 
 describe('AccountStripComponent', () => {
@@ -57,26 +81,51 @@ describe('AccountStripComponent', () => {
     expect(alert.textContent).not.toContain('fleet remains hidden');
   });
 
-  it('renders reconciliation and channel health as text, not color alone', async () => {
+  it('renders the backend-authored fleet_roster status headline, not a client-derived verdict', async () => {
     await render(AccountStripComponent, {
       componentInputs: { account, clerkStatus },
     });
 
     const posture = screen.getByLabelText('Alpaca account posture');
+    expect(within(posture).getByText('Account Clerk custody is healthy')).toBeTruthy();
     expect(within(posture).getByText('Clean')).toBeTruthy();
     expect(within(posture).getByText(/Market Data healthy/i)).toBeTruthy();
     expect(within(posture).getByText(/Execution unhealthy/i)).toBeTruthy();
+    expect(within(posture).queryByText('Trading available')).toBeNull();
+    expect(within(posture).queryByText('Trading blocked')).toBeNull();
   });
 
-  it('does not claim custody is clear before Clerk posture is observed', async () => {
+  it('renders the fleet_roster blocker headline/detail when a condition is active', async () => {
+    await render(AccountStripComponent, {
+      componentInputs: {
+        account,
+        clerkStatus: {
+          ...clerkStatus,
+          operator_posture: blockedPosture({
+            disposition: 'wait',
+            primaryMove: null,
+            headline: 'An account command is still resolving',
+            detail: '2 account command(s) are still awaiting a final broker outcome.',
+          }),
+        },
+      },
+    });
+
+    const posture = screen.getByLabelText('Alpaca account posture');
+    expect(within(posture).getByText('An account command is still resolving')).toBeTruthy();
+    expect(
+      within(posture).getByText('2 account command(s) are still awaiting a final broker outcome.'),
+    ).toBeTruthy();
+  });
+
+  it('fails closed to Loading rather than re-deriving a verdict when posture has not loaded', async () => {
     await render(AccountStripComponent, {
       componentInputs: { account },
     });
 
     expect(screen.getByText('Loading')).toBeTruthy();
     expect(screen.getByText('Custody not observed')).toBeTruthy();
-    expect(screen.queryByText('Clear')).toBeNull();
-    expect(screen.queryByText('No custody block')).toBeNull();
+    expect(screen.queryByText('Account Clerk custody is healthy')).toBeNull();
   });
 
   it('renders unavailable custody without a last-good Clerk snapshot', async () => {
@@ -86,7 +135,6 @@ describe('AccountStripComponent', () => {
 
     expect(screen.getAllByText('Unavailable')).toHaveLength(3);
     expect(screen.getByText('Custody not observed')).toBeTruthy();
-    expect(screen.queryByText('Clear')).toBeNull();
   });
 
   it('preserves backend-authored hold prose in an alert', async () => {
@@ -144,7 +192,6 @@ describe('AccountStripComponent', () => {
     const alert = screen.getByRole('alert');
     expect(alert.textContent).toContain('Account frozen');
     expect(alert.textContent).toContain('Current custody cannot be proved.');
-    expect(screen.getByText('Frozen')).toBeTruthy();
     expect(screen.queryByText('This hold must remain hidden behind the freeze.')).toBeNull();
   });
 });

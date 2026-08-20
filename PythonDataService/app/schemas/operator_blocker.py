@@ -216,3 +216,40 @@ class DeployPreflightResponse(BaseModel):
 
     ready: bool
     blockers: list[OperatorBlocker]
+
+
+class AccountOperatorPosture(BaseModel):
+    """One canonical account-level operator decision, authored from one
+    evidence cut (issue #1664).
+
+    ``condition`` is ``None`` exactly when the account is healthy; in that
+    case both host projections are also ``None`` and ``status_headline`` /
+    ``status_detail`` carry the backend-authored healthy copy. When
+    ``condition`` is set, ``account_desk`` and ``fleet_roster`` are the
+    host-relative ``OperatorBlocker`` projections of that one condition —
+    they share ``condition`` (identity and severity) but may carry different
+    disposition, copy, and moves per ADR 0027. Consumers read only their own
+    host projection and must never fall back to the other host's projection
+    or re-derive a verdict from raw evidence.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    condition: OperatorCondition | None
+    account_desk: OperatorBlocker | None
+    fleet_roster: OperatorBlocker | None
+    status_headline: str
+    status_detail: str | None
+
+    @model_validator(mode="after")
+    def _hosts_match_condition(self) -> AccountOperatorPosture:
+        if self.condition is None:
+            if self.account_desk is not None or self.fleet_roster is not None:
+                raise ValueError("a healthy posture (condition=None) must not carry a host blocker")
+            return self
+        for blocker in (self.account_desk, self.fleet_roster):
+            if blocker is not None and blocker.condition != self.condition:
+                raise ValueError(
+                    "a host blocker's condition must match the posture's condition identity"
+                )
+        return self

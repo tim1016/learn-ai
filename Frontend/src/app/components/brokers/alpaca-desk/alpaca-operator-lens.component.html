@@ -12,19 +12,10 @@
   } @else if (status.error()) {
     <p role="alert">Operator data is unavailable right now.</p>
   } @else if (status.value(); as clerkStatus) {
-    @if (projection.isLoading()) {
-      <p role="status">Loading account status…</p>
-    } @else if (projection.value(); as clerkProjection) {
-      <app-alpaca-operator-posture
-        [projection]="clerkProjection"
-        (repairRequested)="openRepair($event)"
-      />
-    } @else {
-      <section class="operator-lens__fallback" aria-label="Account status">
-        <h3>{{ clerkStatus.hold.active ? 'Trading hold active' : 'Detailed account status unavailable' }}</h3>
-        <p>{{ clerkStatus.hold.reason ?? 'The detailed order record could not be read.' }}</p>
-      </section>
-    }
+    <app-alpaca-operator-posture
+      [posture]="clerkStatus.operator_posture"
+      (blockerMoveRequested)="onBlockerMoveRequested($event)"
+    />
 
     <div class="operator-workspace">
       <app-account-desk-transaction-history

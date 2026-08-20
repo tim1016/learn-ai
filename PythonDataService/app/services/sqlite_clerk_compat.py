@@ -6,6 +6,10 @@ from collections.abc import Sequence
 
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.models import ChannelHealth, ClerkStatus
+from app.broker.alpaca.clerk.sqlite.account_operator_posture import (
+    AccountOperatorPostureContext,
+    build_account_operator_posture,
+)
 from app.broker.alpaca.clerk.sqlite.order_projection import (
     ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
 )
@@ -20,7 +24,12 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     build_recovery_catalog,
 )
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.contract.models import BrokerAccountSnapshot
 from app.schemas.clerk_custody import CustodyDiagnosis
+from app.services.broker_v2_panel.panel_projection_service import (
+    ChannelHealthEvaluation,
+    evaluate_channel_health,
+)
 from app.utils.timestamps import now_ms_utc
 
 
@@ -134,7 +143,16 @@ def sqlite_clerk_status(
     projection: ClerkProjection,
     *,
     channel_healths: Sequence[ChannelHealth] | None = None,
+    account: BrokerAccountSnapshot | None = None,
 ) -> ClerkStatus:
+    """Compose the Clerk status, including the #1664 canonical operator posture.
+
+    ``account`` is the same-request Alpaca account observation. It is
+    optional only because a live broker read can fail independently of the
+    Clerk's own custody folds; when it is unavailable the posture reports an
+    explicit ``alpaca_account_evidence_unavailable`` condition instead of
+    silently skipping the paper-mode/active-status checks (#1664 scope).
+    """
     hold = projection.holds[0] if projection.holds else None
     unresolved = sum(
         _operation_requires_reconciliation(operation)
@@ -147,6 +165,23 @@ def sqlite_clerk_status(
         verdict = "unexplained_order"
     else:
         verdict = "clean"
+    channel_evaluation = evaluate_channel_health(channel_healths, projection.generated_at_ms)
+    posture = build_account_operator_posture(
+        AccountOperatorPostureContext(
+            authority_health=projection.authority_health,
+            uncertainty_count=len(projection.uncertainties),
+            guidance=projection.guidance,
+            recovery_actions=projection.recovery_actions,
+            account_mode=account.account_mode if account is not None else "paper",
+            account_status=account.account_status if account is not None else "ACTIVE",
+            trading_blocked=account.trading_blocked if account is not None else False,
+            account_blocked=account.account_blocked if account is not None else False,
+            outstanding_intents=unresolved,
+            channels_ready=channel_evaluation.ready,
+            channels_detail=_channel_evaluation_detail(channel_evaluation),
+            account_evidence_unavailable=account is None,
+        )
+    )
     return ClerkStatus(
         broker="alpaca",
         account_id=projection.account_id,
@@ -167,7 +202,21 @@ def sqlite_clerk_status(
             list(channel_healths) if channel_healths is not None else None
         ),
         authority_kind="sqlite",
+        operator_posture=posture,
     )
+
+
+def _channel_evaluation_detail(evaluation: ChannelHealthEvaluation) -> str | None:
+    if evaluation.ready:
+        return None
+    parts: list[str] = []
+    if evaluation.missing:
+        parts.append(f"missing: {', '.join(evaluation.missing)}")
+    if evaluation.stale:
+        parts.append(f"stale: {', '.join(evaluation.stale)}")
+    if evaluation.unhealthy:
+        parts.append(f"unhealthy: {', '.join(evaluation.unhealthy)}")
+    return "Clerk submission channels are not ready (" + "; ".join(parts) + ")."
 
 
 def _operation_requires_reconciliation(operation: ProjectedOperation) -> bool:

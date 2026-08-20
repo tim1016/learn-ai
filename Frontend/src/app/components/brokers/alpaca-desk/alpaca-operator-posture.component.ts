@@ -8,140 +8,58 @@ import {
 } from '@angular/core';
 import { Router } from '@angular/router';
 
-import type {
-  SqliteClerkProjection,
-  SqliteRecoveryAction,
-} from '../../../api/alpaca.types';
-import type { OperatorBlocker, OperatorMove } from '../../../api/operator-blocker.types';
-import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
+import type { AccountOperatorPosture, OperatorBlocker, OperatorMove } from '../../../api/operator-blocker.types';
+import { accountOperatorPostureBlocker, movesForBlocker } from '../../../api/operator-blocker.types';
 
-type PostureDisposition = OperatorBlocker['disposition'] | 'healthy' | 'review';
-
-interface OperatorPostureView {
+interface PostureView {
   readonly headline: string;
-  readonly detail: string;
-  readonly disposition: PostureDisposition;
-  readonly action: SqliteRecoveryAction | OperatorMove | null;
-  readonly nextStep: string | null;
+  readonly detail: string | null;
+  /** Null exactly when the account is healthy — drives disposition-based rendering. */
+  readonly blocker: OperatorBlocker | null;
+  readonly moves: readonly OperatorMove[];
 }
 
 /**
- * One decision-first operator posture. `OperatorBlocker` remains authoritative
- * when a caller has one; active SQLite custody uses its own server-authored
- * guidance and recovery capability until that broader contract is available on
- * the Alpaca account endpoint.
+ * One decision-first operator posture card, authored entirely by the
+ * backend-supplied `AccountOperatorPosture` (issue #1664). This component
+ * renders `posture.account_desk` verbatim when a condition is active, or
+ * the backend-authored healthy status copy when it is null. A missing or
+ * malformed posture fails closed to an explicit "unavailable" state rather
+ * than re-deriving a verdict from raw evidence.
  */
 @Component({
   selector: 'app-alpaca-operator-posture',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ReceiptLabelPipe],
   templateUrl: './alpaca-operator-posture.component.html',
   styleUrl: './alpaca-operator-posture.component.scss',
 })
 export class AlpacaOperatorPostureComponent {
   private readonly router = inject(Router, { optional: true });
-  readonly blocker = input<OperatorBlocker | null>(null);
-  readonly projection = input<SqliteClerkProjection | null>(null);
+  readonly posture = input<AccountOperatorPosture | null>(null);
 
-  readonly repairRequested = output<SqliteRecoveryAction>();
   readonly blockerMoveRequested = output<OperatorMove>();
 
-  protected readonly posture = computed<OperatorPostureView | null>(() => {
-    const blocker = this.blocker();
-    if (blocker !== null) return blockerPosture(blocker);
-
-    const projection = this.projection();
-    if (projection === null) return null;
-    return projectionPosture(projection);
+  protected readonly view = computed<PostureView | null>(() => {
+    const posture = this.posture();
+    if (posture === null) return null;
+    const blocker = accountOperatorPostureBlocker(posture, 'account_desk');
+    return {
+      headline: blocker?.headline ?? posture.status_headline,
+      // A blocker's own null detail must render as "no detail", not fall
+      // back to the unrelated healthy-case status_detail.
+      detail: blocker !== null ? (blocker.detail ?? null) : posture.status_detail,
+      blocker,
+      moves: blocker !== null ? movesForBlocker(blocker) : [],
+    };
   });
 
-  protected readonly isRecoveryAction = isRecoveryAction;
-
-  protected requestRepair(action: SqliteRecoveryAction): void {
-    this.repairRequested.emit(action);
-  }
-
-  protected requestBlockerMove(move: OperatorMove): void {
-    this.blockerMoveRequested.emit(move);
-  }
-
-  protected requestMove(action: SqliteRecoveryAction | OperatorMove | null): void {
-    if (isRecoveryAction(action) || action === null) return;
-    if (action.action.kind === 'navigate' && this.router !== null) {
-      void this.router.navigate([action.action.route], {
-        fragment: action.action.fragment ?? undefined,
+  protected requestMove(move: OperatorMove): void {
+    if (move.action.kind === 'navigate' && this.router !== null) {
+      void this.router.navigate([move.action.route], {
+        fragment: move.action.fragment ?? undefined,
       });
       return;
     }
-    this.requestBlockerMove(action);
+    this.blockerMoveRequested.emit(move);
   }
-}
-
-function blockerPosture(blocker: OperatorBlocker): OperatorPostureView {
-  return {
-    headline: blocker.headline,
-    detail: blocker.detail ?? '',
-    disposition: blocker.disposition,
-    action: blocker.primary_move,
-    nextStep: blocker.primary_move?.target ?? null,
-  };
-}
-
-function projectionPosture(projection: SqliteClerkProjection): OperatorPostureView {
-  const guidance = projection.guidance;
-  const primaryAction = projection.recovery_actions.find((action) => action.primary)
-    ?? projection.recovery_actions.find((action) => !action.available)
-    ?? null;
-  const isHealthy = !guidance.action_required
-    && projection.uncertainties.length === 0
-    && projection.authority_health === 'healthy';
-  if (isHealthy) {
-    return {
-      headline: guidance.headline,
-      detail: guidance.explanation,
-      disposition: 'healthy',
-      action: null,
-      nextStep: guidance.next_step,
-    };
-  }
-  if (primaryAction?.available) {
-    return {
-      headline: guidance.headline,
-      detail: guidance.explanation,
-      disposition: 'fix_here',
-      action: primaryAction,
-      nextStep: primaryAction.next_step,
-    };
-  }
-  if (primaryAction !== null) {
-    return {
-      headline: guidance.headline,
-      detail: guidance.explanation,
-      disposition: guidance.action_required ? 'wait' : 'review',
-      action: primaryAction,
-      nextStep: primaryAction.next_step,
-    };
-  }
-  if (!guidance.action_required) {
-    return {
-      headline: guidance.headline,
-      detail: guidance.explanation,
-      disposition: 'review',
-      action: null,
-      nextStep: guidance.next_step,
-    };
-  }
-  return {
-    headline: guidance.headline,
-    detail: guidance.impact,
-    disposition: 'terminal',
-    action: null,
-    nextStep: guidance.next_step,
-  };
-}
-
-export function isRecoveryAction(
-  action: SqliteRecoveryAction | OperatorMove | null,
-): action is SqliteRecoveryAction {
-  return action !== null && 'action_id' in action;
 }

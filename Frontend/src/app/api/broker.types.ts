@@ -2110,7 +2110,15 @@ export interface paths {
          *
          *     A protected read (the always-on data-plane secret gates the whole router).
          *     Transport only: resolve the account-scoped Clerk facade and delegate — the
-         *     Clerk owns the journal-derived hold + verdict + outstanding-intent state.
+         *     Clerk owns the journal-derived hold + verdict + outstanding-intent state,
+         *     plus (#1664) the one canonical account operator posture, authored from
+         *     this same custody projection and a same-request account observation.
+         *
+         *     The account read degrades gracefully: a broker-side failure does not 503
+         *     this endpoint (custody state is independently available) — it instead
+         *     surfaces as an explicit ``alpaca_account_evidence_unavailable`` operator
+         *     condition so the account/paper-mode checks fail closed rather than
+         *     silently passing.
          */
         get: operations["get_clerk_status_api_brokers__broker__clerk_status_get"];
         put?: never;
@@ -6002,6 +6010,30 @@ export interface components {
             state: "VERIFIED" | "REVOKED" | "EXPIRED" | "ABSENT";
             /** Valid Until Ms */
             valid_until_ms?: number | null;
+        };
+        /**
+         * AccountOperatorPosture
+         * @description One canonical account-level operator decision, authored from one
+         *     evidence cut (issue #1664).
+         *
+         *     ``condition`` is ``None`` exactly when the account is healthy; in that
+         *     case both host projections are also ``None`` and ``status_headline`` /
+         *     ``status_detail`` carry the backend-authored healthy copy. When
+         *     ``condition`` is set, ``account_desk`` and ``fleet_roster`` are the
+         *     host-relative ``OperatorBlocker`` projections of that one condition —
+         *     they share ``condition`` (identity and severity) but may carry different
+         *     disposition, copy, and moves per ADR 0027. Consumers read only their own
+         *     host projection and must never fall back to the other host's projection
+         *     or re-derive a verdict from raw evidence.
+         */
+        AccountOperatorPosture: {
+            account_desk: components["schemas"]["OperatorBlocker"] | null;
+            condition: components["schemas"]["OperatorCondition"] | null;
+            fleet_roster: components["schemas"]["OperatorBlocker"] | null;
+            /** Status Detail */
+            status_detail: string | null;
+            /** Status Headline */
+            status_headline: string;
         };
         /**
          * AccountPnlAttributionResponse
@@ -10099,6 +10131,7 @@ export interface components {
             latest_reconciliation?: components["schemas"]["ReconciliationSummary"] | null;
             /** Observed At Ms */
             observed_at_ms: number;
+            operator_posture: components["schemas"]["AccountOperatorPosture"];
             /** Outstanding Intents */
             outstanding_intents: number;
         };

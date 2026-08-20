@@ -1,6 +1,8 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 
 import type { BrokerAccountSnapshot, ClerkStatus } from '../../../../api/alpaca.types';
+import type { AccountOperatorPosture } from '../../../../api/operator-blocker.types';
+import { accountOperatorPostureBlocker } from '../../../../api/operator-blocker.types';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { fmtCurrency } from '../../format';
@@ -10,7 +12,18 @@ interface ChannelPosture {
   readonly healthy: boolean;
 }
 
-/** Pure account-level posture for the bots fleet container. */
+interface AccountStatusView {
+  readonly headline: string;
+  readonly detail: string | null;
+}
+
+/**
+ * Pure account-level posture for the bots fleet container. The single
+ * "Account status" fact renders only the backend-authored `fleet_roster`
+ * projection of `ClerkStatus.operator_posture` (issue #1664) — it never
+ * combines `trading_blocked`/`account_blocked`/`freeze`/`hold` into a
+ * client-derived verdict.
+ */
 @Component({
   selector: 'app-account-strip',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -47,4 +60,18 @@ export class AccountStripComponent {
   protected readonly freezeActive = computed(
     () => this.clerkStatus()?.freeze?.active ?? false,
   );
+
+  private readonly posture = computed<AccountOperatorPosture | null>(
+    () => this.clerkStatus()?.operator_posture ?? null,
+  );
+
+  /** Fails closed (null) when the posture hasn't loaded yet — never re-derived from raw facts. */
+  protected readonly accountStatus = computed<AccountStatusView | null>(() => {
+    const posture = this.posture();
+    if (posture === null) return null;
+    const blocker = accountOperatorPostureBlocker(posture, 'fleet_roster');
+    return blocker !== null
+      ? { headline: blocker.headline, detail: blocker.detail ?? null }
+      : { headline: posture.status_headline, detail: posture.status_detail };
+  });
 }
