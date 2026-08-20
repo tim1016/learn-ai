@@ -117,6 +117,7 @@ class ReconciliationResponse(BaseModel):
     resolved_count: int
     foreign_order_count: int
     drifted_symbols: tuple[str, ...]
+    indeterminate_symbols: tuple[str, ...]
 
     @classmethod
     def from_result(cls, result: AccountReconciliationResult) -> ReconciliationResponse:
@@ -125,6 +126,7 @@ class ReconciliationResponse(BaseModel):
             resolved_count=result.resolved_count,
             foreign_order_count=result.foreign_order_count,
             drifted_symbols=result.drifted_symbols,
+            indeterminate_symbols=result.indeterminate_symbols,
         )
 
 
