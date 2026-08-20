@@ -18744,6 +18744,8 @@ export interface components {
             drifted_symbols: string[];
             /** Foreign Order Count */
             foreign_order_count: number;
+            /** Indeterminate Symbols */
+            indeterminate_symbols: string[];
             /** Resolved Count */
             resolved_count: number;
             /**
