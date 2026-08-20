@@ -18,8 +18,8 @@ import { BotDetailBannerComponent } from '../../bot-detail-banner/bot-detail-ban
 import { MissionVerdictStatusComponent } from '../../bot-detail-banner/mission-verdict-status.component';
 import { BotBannerOverflowComponent } from '../../bot-detail-banner/bot-banner-overflow.component';
 import {
-  lifecycleActionTone,
-  primaryLifecycleAction,
+  actionTone,
+  primaryActionForLens,
 } from '../../bot-detail-banner/lifecycle-action';
 
 /** The trader's concise, action-oriented bot-detail banner. */
@@ -49,11 +49,8 @@ export class TraderBotBannerComponent {
     this.panel().account_id,
     'bots',
   ]);
-  protected readonly primaryAction = computed(() => primaryLifecycleAction(this.panel()));
-  protected readonly primaryActionTone = computed(() => {
-    const action = this.primaryAction();
-    return action === null ? 'primary' : lifecycleActionTone(action);
-  });
+  protected readonly primaryAction = computed(() => primaryActionForLens(this.panel(), 'trader'));
+  protected readonly primaryActionTone = computed(() => actionTone(this.primaryAction()));
   protected readonly manualOrderNavigation = computed(() =>
     buildManualOrderTicketNavigation(
       this.panel().broker,

@@ -117,6 +117,7 @@ function makePanel(): BotPanelView {
     journal_tail_ref: '',
     journal_tail_seq: null,
     actions: [],
+    primary_action_by_lens: { trader: null, operator: null },
     readiness_checks: [],
     readiness_ready_count: 0,
     readiness_blocked_count: 0,
@@ -354,6 +355,7 @@ describe('OperatorLensComponent', () => {
       ...makePanel(),
       health: { ...makeHealth(), running: false, phase: 'OFF_DUTY', desired_state: 'STOPPED' },
       actions: [resumeAction],
+      primary_action_by_lens: { trader: 'resume', operator: 'resume' },
       readiness_checks: [makeReadinessCheck(resumeAction)],
     };
 
@@ -650,7 +652,7 @@ describe('OperatorLensComponent', () => {
     expect(screen.getByText('This will close all open positions.')).toBeTruthy();
   });
 
-  it('keeps the backend-selected exact-evidence recovery control outside the accordion', async () => {
+  it('renders the backend-selected recovery-primary action once, in the banner, not the accordion (#1665)', async () => {
     const fakeSvc = makeFakePanelService();
     const actionRequested = vi.fn();
     const recoveryAction: PanelAction = {
@@ -666,6 +668,10 @@ describe('OperatorLensComponent', () => {
     const panel: BotPanelView = {
       ...makePanel(),
       actions: [recoveryAction],
+      // The backend policy folds RecoveryCapability.primary into the Operator
+      // reference (ADR 0027 precedence); readiness must suppress exactly this
+      // operation's accordion row rather than re-deriving its own promotion.
+      primary_action_by_lens: { trader: null, operator: 'recover_exact_execution_evidence' },
       readiness_checks: [makeReadinessCheck(recoveryAction, {
         evidence: { primary: true },
         cure: 'Prepare the exact paper execution evidence.',
@@ -686,7 +692,7 @@ describe('OperatorLensComponent', () => {
       providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
     });
 
-    expect(screen.getByText('Recommended action')).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: recoveryAction.label })).toHaveLength(1);
     fireEvent.click(screen.getByRole('button', { name: recoveryAction.label }));
 
     expect(actionRequested).toHaveBeenCalledWith({ action: recoveryAction, reason: null });

@@ -15,23 +15,6 @@
     </p>
   </div>
 
-  @if (primaryControl(); as control) {
-    <div class="readiness-primary-action">
-      <div>
-        <strong>Recommended action</strong>
-        <p>{{ control.check.cure ?? control.check.explanation }}</p>
-      </div>
-      <app-panel-action-button
-        [action]="control.action"
-        [pending]="actionPending()"
-        [tone]="control.tone"
-        [suppressedBlockerId]="control.suppressedBlockerId"
-        [suppressedBlockerReasonCode]="control.suppressedBlockerReasonCode"
-        (triggered)="actionRequested.emit($event)"
-      />
-    </div>
-  }
-
   <p-accordion class="readiness-list" [multiple]="true">
     @for (control of readinessControls(); track control.check.operation) {
       @let check = control.check;
