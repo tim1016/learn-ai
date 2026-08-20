@@ -88,6 +88,7 @@ from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
+
 class PanelDataError(Exception):
     """Base typed panel-data error; the router translates to HTTP."""
 
@@ -192,6 +193,7 @@ def _bot_status(broker: str, sid: str) -> BotStatusView:
         if exc.http_status == 404:
             raise UnknownBotError(str(exc), detail=exc.detail) from exc
         raise PanelUnavailableError(str(exc), detail=exc.detail) from exc
+
 
 def _bot_process_fact(broker: str, sid: str) -> BotProcessFact:
     registry = get_bot_task_registry()
@@ -348,6 +350,7 @@ async def deploy_alpaca_paper_bot(
             mode="dry_run" if request.execution_mode == "dry_run" else "trade",
             quantity=request.sizing.quantity,
             carryover_policy=request.carryover_policy,
+            evidence_override=request.evidence_override,
         )
     except BotRunnerError as exc:
         raise PanelRunnerError(
@@ -391,6 +394,7 @@ async def preview_alpaca_paper_start_admission(
             mode="dry_run" if request.execution_mode == "dry_run" else "trade",
             quantity=request.sizing.quantity,
             carryover_policy=request.carryover_policy,
+            evidence_override=request.evidence_override,
         )
     except BotRunnerError as exc:
         raise PanelRunnerError(
@@ -414,11 +418,29 @@ def _require_alpaca_deploy_request(
             next_action=view.eligibility.next_action,
             http_status=409,
         )
-    if not any(strategy.strategy_key == request.strategy_key for strategy in view.strategies):
+    strategy = next(
+        (strategy for strategy in view.strategies if strategy.strategy_key == request.strategy_key),
+        None,
+    )
+    if strategy is None:
         raise PanelRunnerError(
             "The selected strategy is not currently accepted for Alpaca deployment.",
             detail="Its latest validation evidence is missing, superseded, invalidated, or not accepted for deploy.",
             next_action="Review the strategy in Strategy Validation, then refresh this page.",
+            http_status=409,
+        )
+    if strategy.evidence_status == "human_override_required" and request.evidence_override is None:
+        raise PanelRunnerError(
+            "This strategy requires a human evidence override.",
+            detail=strategy.override_explanation,
+            next_action="Accept the evidence-only deployment risk and record an operator reason.",
+            http_status=409,
+        )
+    if strategy.evidence_status == "accepted" and request.evidence_override is not None:
+        raise PanelRunnerError(
+            "An evidence override is not valid for this accepted strategy.",
+            detail="The selected strategy already has current accepted deployment evidence.",
+            next_action="Remove the override and submit the accepted strategy normally.",
             http_status=409,
         )
     if request.carryover_policy == "ALLOW" and not view.carryover_available:

@@ -45,6 +45,23 @@ dl,
   grid-column: 2;
 }
 
+.launch-receipt__override {
+  grid-column: 1 / -1;
+  padding: 0.85rem 1rem;
+  border: 1px solid color-mix(in srgb, var(--bear) 55%, transparent);
+  border-left: 4px solid var(--bear);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--bear) 8%, transparent);
+
+  strong {
+    color: var(--bear);
+  }
+
+  p {
+    margin: 0.35rem 0 0;
+  }
+}
+
 dl {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

@@ -624,7 +624,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "\n"
             "Alpha — bar exit conditions (evaluated while in trade)\n"
             "    death_cross = SMA_short < SMA_long\n"
-            "    ⇒ if death_cross: Liquidate(symbol)\n"
+            "    ⇒ if death_cross: emit EXIT intent\n"
             "\n"
             "Risk Management — position survival rules\n"
             "    none — exit is signal-driven only. Re-entry requires a\n"
@@ -632,7 +632,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "    that would otherwise produce many spurious trades.\n"
             "\n"
             "Portfolio Construction\n"
-            "    SetHoldings(symbol, 1.0)  — single-position, all-in\n"
+            "    action plan binds ENTER/EXIT to one long stock leg\n"
             "\n"
             "Execution\n"
             "    fill_mode = signal_bar_close (LEAN default) | next_bar_open"
@@ -669,6 +669,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             long_window=p.long_window,  # type: ignore[attr-defined]
             resolution_minutes=p.resolution_minutes,  # type: ignore[attr-defined]
         ),
+        action_plan_contract="single_long_stock",
+        signal_intent_binding="action_plan_stock",
     ),
     "daily_sma_crossover": StrategyRegistration(
         display_name="Daily SMA Crossover",
@@ -776,7 +778,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "\n"
             "Alpha — bar exit conditions (evaluated while in trade)\n"
             "    overbought = RSI > overbought_threshold\n"
-            "    ⇒ if overbought: Liquidate(symbol)\n"
+            "    ⇒ if overbought: emit EXIT intent\n"
             "\n"
             "Risk Management — position survival rules\n"
             "    none — no stop, no time-stop, no max drawdown guard.\n"
@@ -784,7 +786,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "    below oversold after an exit (intentional).\n"
             "\n"
             "Portfolio Construction\n"
-            "    SetHoldings(symbol, 1.0)  — single-position, all-in\n"
+            "    action plan binds ENTER/EXIT to one long stock leg\n"
             "\n"
             "Execution\n"
             "    fill_mode = signal_bar_close | next_bar_open"
@@ -815,6 +817,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             overbought=p.overbought,  # type: ignore[attr-defined]
             resolution_minutes=p.resolution_minutes,  # type: ignore[attr-defined]
         ),
+        action_plan_contract="single_long_stock",
+        signal_intent_binding="action_plan_stock",
     ),
     "spy_orb": StrategyRegistration(
         display_name="Opening Range Breakout",

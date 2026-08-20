@@ -21,21 +21,25 @@
 
     <div class="grid content-start items-start gap-1 min-w-0">
       @if (strategies().length === 1) {
-        <span class="text-[length:var(--fs-xs)] font-semibold uppercase tracking-[var(--ls-caps)] text-[var(--text-subtle)]">Validated strategy</span>
+        <span class="text-[length:var(--fs-xs)] font-semibold uppercase tracking-[var(--ls-caps)] text-[var(--text-subtle)]">Deployment strategy</span>
         <strong>{{ selectedStrategy()?.label }}</strong>
       } @else {
-        <label for="deploy-strategy" class="text-[length:var(--fs-xs)] font-semibold uppercase tracking-[var(--ls-caps)] text-[var(--text-subtle)]">Validated strategy</label>
+        <label for="deploy-strategy" class="text-[length:var(--fs-xs)] font-semibold uppercase tracking-[var(--ls-caps)] text-[var(--text-subtle)]">Deployment strategy</label>
         <select id="deploy-strategy" (change)="changeStrategy($event)">
           @for (strategy of strategies(); track strategy.strategy_key) {
             <option
               [value]="strategy.strategy_key"
               [selected]="strategy.strategy_key === strategyKey()"
-            >{{ strategy.label }}</option>
+            >{{ strategy.label }}{{ strategy.evidence_status === 'human_override_required' ? ' — human override required' : '' }}</option>
           }
         </select>
       }
       <div class="flex flex-wrap items-center justify-between gap-2 min-h-6">
-        <span class="text-[length:var(--fs-xs)] font-bold text-[var(--bull)]">✓ Validated</span>
+        @if (selectedStrategy()?.evidence_status === 'human_override_required') {
+          <span class="text-[length:var(--fs-xs)] font-bold text-[var(--bear)]">Evidence only · override required</span>
+        } @else {
+          <span class="text-[length:var(--fs-xs)] font-bold text-[var(--bull)]">✓ Accepted evidence</span>
+        }
         @if (selectedStrategy(); as selected) {
           <div class="flex items-center gap-2">
             <button

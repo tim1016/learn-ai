@@ -59,6 +59,23 @@ and lifecycle evidence retain those authorities. Historical-run APIs and UI may
 read the append-only records later, but selecting a historical run cannot
 retarget a lifecycle command.
 
+## Amendment: evidence-only human overrides (2026-08-20)
+
+An operator may deploy a human-validated strategy whose behavioral-equivalence
+verdict is `evidence_only` only through the closed Alpaca paper override
+contract. The request must carry the exact acknowledgement
+`I_ACCEPT_EVIDENCE_ONLY_DEPLOYMENT_RISK` and a substantive operator reason.
+Both values are part of immutable strategy-instance configuration, its
+configuration hash, every resumed run binding, and the terminal deployment
+receipt.
+
+This is not a general admission bypass. The override cannot substitute for a
+human validated flag, cannot accept an invalidated or rejected event, and
+cannot register missing executable strategy machinery. Account posture, Clerk
+custody, channel health, intent custody, market data, and Start admission
+remain fail-closed. Changing the override decision or reason requires a new
+`strategy_instance_id`; Resume preserves the original decision.
+
 ## Amendment: bounded run reads and immutable terminal receipts (2026-08-02)
 
 The Python control plane exposes the current run separately from bounded,

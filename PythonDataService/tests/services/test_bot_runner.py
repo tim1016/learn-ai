@@ -57,6 +57,7 @@ from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.live.bot_lifecycle_state import BotDutyOutcome, BotLifecyclePhase
 from app.engine.live.desired_state import DesiredState
 from app.engine.strategy.base import StrategyContext
+from app.engine.strategy.signal_intent import SignalIntentKind
 from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeedError
 from app.schemas.action_plan import ActionPlan
 from app.schemas.broker_bots import AlpacaPaperStrategyKey, BotProcessFact
@@ -89,7 +90,10 @@ from app.services.bot_runner import (
 )
 from app.services.bot_runner_errors import InvalidRunHistoryCursorError
 from app.services.bot_runtime import PauseAwareFeed
-from app.services.bot_trade_strategy import supported_alpaca_paper_strategy_keys
+from app.services.bot_trade_strategy import (
+    strategy_evaluations,
+    supported_alpaca_paper_strategy_keys,
+)
 from app.services.market_liveness import compose_market_liveness, unknown_market_liveness
 from app.utils.timestamps import now_ms_utc
 
@@ -138,6 +142,64 @@ def _fresh_live_market_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_every_admitted_alpaca_paper_strategy_has_a_runtime() -> None:
     assert supported_alpaca_paper_strategy_keys() == frozenset(AlpacaPaperStrategyKey)
+
+
+def _strategy_signal_bars(closes: list[str]) -> list[MarketDataBar]:
+    return [
+        MarketDataBar(
+            symbol="SPY",
+            start_ms=_RTH_MS + index * 15 * 60_000,
+            end_ms=_RTH_MS + index * 15 * 60_000 + 60_000,
+            open=Decimal(close),
+            high=Decimal(close),
+            low=Decimal(close),
+            close=Decimal(close),
+            volume=100,
+            fetched_at_ms=_RTH_MS + index * 15 * 60_000 + 60_100,
+            feed_id="canonical-signal-test",
+            session_phase="RTH",
+        )
+        for index, close in enumerate(closes)
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("strategy_key", "closes", "expected_kinds"),
+    [
+        ("sma_crossover", ["1"] * 30 + ["100", "100"], [SignalIntentKind.ENTER]),
+        (
+            "rsi_mean_reversion",
+            [str(100 - index) for index in range(16)]
+            + [str(85 + index * 5) for index in range(18)],
+            [SignalIntentKind.ENTER, SignalIntentKind.EXIT],
+        ),
+    ],
+)
+async def test_human_override_strategies_emit_canonical_live_intents(
+    strategy_key: str,
+    closes: list[str],
+    expected_kinds: list[SignalIntentKind],
+) -> None:
+    binding = BrokerBotBinding(
+        strategy_instance_id=f"{strategy_key}-live-test",
+        strategy_key=strategy_key,
+        broker="alpaca",
+        symbol="SPY",
+        mode="dry_run",
+        action_plan=alpaca_v1_action_plan("SPY"),
+        run_id="run-001",
+        created_at_ms=_T0,
+    )
+    feed = _FakeFeed(_strategy_signal_bars(closes), mode="finite")
+
+    kinds = [
+        intent.kind
+        async for evaluation in strategy_evaluations(binding, feed)
+        for intent in evaluation.intents
+    ]
+
+    assert kinds == expected_kinds
 
 
 def _bar(start_ms: int, symbol: str = "SPY") -> MarketDataBar:

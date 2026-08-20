@@ -26,6 +26,8 @@ from app.engine.strategy.algorithms.deployment_validation import (
 from app.engine.strategy.algorithms.ema_crossover_signal import (
     EmaCrossoverSignalAlgorithm,
 )
+from app.engine.strategy.algorithms.rsi_mean_reversion import RsiMeanReversionAlgorithm
+from app.engine.strategy.algorithms.sma_crossover import SmaCrossoverAlgorithm
 from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
 from app.marketdata.feed import MarketDataBar, MarketDataFeed
@@ -78,6 +80,18 @@ class StrategyEvaluation:
 
 class _EffectReceipt(Protocol):
     state: object
+
+
+class _LiveSignalStrategy(Protocol):
+    """Canonical strategy surface required by the long-lived signal adapter."""
+
+    ctx: StrategyContext | None
+
+    def initialize(self) -> None: ...
+
+    def on_minute_bar(self, bar: TradeBar) -> None: ...
+
+    def rollback_blocked_entry(self) -> None: ...
 
 
 class _RecordingSignalIntentExecutor:
@@ -160,18 +174,25 @@ async def _deployment_validation_evaluations(
         yield StrategyEvaluation(bar=bar, intents=intents, rollback_blocked_entry=kernel.rollback_blocked_entry)
 
 
-async def _ema_crossover_evaluations(
+_SIGNAL_STRATEGY_FACTORIES: dict[
+    AlpacaPaperStrategyKey,
+    Callable[[str], _LiveSignalStrategy],
+] = {
+    AlpacaPaperStrategyKey.EMA_CROSSOVER_SIGNAL: lambda symbol: EmaCrossoverSignalAlgorithm(symbol=symbol),
+    AlpacaPaperStrategyKey.SMA_CROSSOVER: lambda symbol: SmaCrossoverAlgorithm(symbol=symbol),
+    AlpacaPaperStrategyKey.RSI_MEAN_REVERSION: lambda symbol: RsiMeanReversionAlgorithm(symbol=symbol),
+}
+
+_DEFAULT_SYMBOLS: dict[AlpacaPaperStrategyKey, str] = {strategy_key: "SPY" for strategy_key in AlpacaPaperStrategyKey}
+
+
+async def _signal_strategy_evaluations(
     binding: BrokerBotBinding,
     feed: MarketDataFeed,
 ) -> AsyncIterator[StrategyEvaluation]:
-    """Run the canonical EMA strategy against the production minute stream.
-
-    Formula: canonical EMA(5)/EMA(10), RSI(14), gap and five-bar lifecycle.
-    Reference: ``references/qc-shadow/SpyEmaCrossoverAlgorithm.py``.
-    Canonical implementation: ``app.engine.strategy.algorithms.ema_crossover_signal``.
-    Validated against: ``tests/services/test_bot_runner.py::test_ema_trade_bot_matches_first_lean_round_trip``.
-    """
-    strategy = EmaCrossoverSignalAlgorithm(symbol=binding.symbol)
+    """Run one canonical signal-intent strategy on the production minute stream."""
+    strategy_key = AlpacaPaperStrategyKey(binding.strategy_key)
+    strategy = _SIGNAL_STRATEGY_FACTORIES[strategy_key](binding.symbol)
     context = StrategyContext(portfolio=Portfolio(initial_cash=Decimal("100000")))
     strategy.ctx = context
     strategy.initialize()
@@ -224,13 +245,20 @@ _StrategyEvaluationStream = Callable[
 ]
 _STRATEGY_EVALUATION_STREAMS: dict[AlpacaPaperStrategyKey, _StrategyEvaluationStream] = {
     AlpacaPaperStrategyKey.DEPLOYMENT_VALIDATION: _deployment_validation_evaluations,
-    AlpacaPaperStrategyKey.EMA_CROSSOVER_SIGNAL: _ema_crossover_evaluations,
+    AlpacaPaperStrategyKey.EMA_CROSSOVER_SIGNAL: _signal_strategy_evaluations,
+    AlpacaPaperStrategyKey.SMA_CROSSOVER: _signal_strategy_evaluations,
+    AlpacaPaperStrategyKey.RSI_MEAN_REVERSION: _signal_strategy_evaluations,
 }
 
 
 def supported_alpaca_paper_strategy_keys() -> frozenset[AlpacaPaperStrategyKey]:
     """Return the strategies backed by an executable Clerk intent stream."""
     return frozenset(_STRATEGY_EVALUATION_STREAMS)
+
+
+def alpaca_paper_strategy_default_symbol(strategy_key: AlpacaPaperStrategyKey) -> str:
+    """Return the bounded form default for one executable strategy."""
+    return _DEFAULT_SYMBOLS[strategy_key]
 
 
 async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None:

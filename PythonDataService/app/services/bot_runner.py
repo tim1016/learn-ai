@@ -54,6 +54,7 @@ from app.engine.live.desired_state import (
 from app.engine.live.identity import strategy_instance_artifact_dir
 from app.marketdata.feed import MarketDataFeed, MarketDataFeedError
 from app.schemas.broker_bots import (
+    AlpacaPaperEvidenceOverride,
     BotProcessFact,
     BotRunHistoryPage,
     BotRunView,
@@ -287,6 +288,7 @@ class BotTaskRegistry:
         mode: Literal["log_only", "dry_run", "trade"] = "log_only",
         quantity: int = 1,
         carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID",
+        evidence_override: AlpacaPaperEvidenceOverride | None = None,
     ) -> BotStatusView:
         """Deploy and start a bot; durable evidence before liveness."""
         return (
@@ -299,6 +301,7 @@ class BotTaskRegistry:
                 mode=mode,
                 quantity=quantity,
                 carryover_policy=carryover_policy,
+                evidence_override=evidence_override,
             )
         ).bot
 
@@ -313,6 +316,7 @@ class BotTaskRegistry:
         mode: Literal["log_only", "dry_run", "trade"] = "log_only",
         quantity: int = 1,
         carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID",
+        evidence_override: AlpacaPaperEvidenceOverride | None = None,
     ) -> AdmittedBotStart:
         """Start one bot and return the exact execution-time admission."""
         require_start_configuration(
@@ -329,6 +333,7 @@ class BotTaskRegistry:
             mode=mode,
             quantity=quantity,
             carryover_policy=carryover_policy,
+            evidence_override=evidence_override,
             action_plan=alpaca_v1_action_plan(symbol),
         )
         async with self._operation_lock(strategy_instance_id):
@@ -355,6 +360,7 @@ class BotTaskRegistry:
         mode: Literal["log_only", "dry_run", "trade"] = "log_only",
         quantity: int = 1,
         carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID",
+        evidence_override: AlpacaPaperEvidenceOverride | None = None,
     ) -> RunAdmissionDecision:
         """Project the same Start decision used immediately before mutation."""
         require_start_configuration(
@@ -371,6 +377,7 @@ class BotTaskRegistry:
             mode=mode,
             quantity=quantity,
             carryover_policy=carryover_policy,
+            evidence_override=evidence_override,
             action_plan=alpaca_v1_action_plan(symbol),
         )
         async with self._operation_lock(strategy_instance_id):

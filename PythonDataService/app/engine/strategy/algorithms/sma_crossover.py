@@ -14,10 +14,10 @@ the retired pandas-ta service implementation:
 Unlike the legacy pandas-ta version which runs bar-by-bar over a pre-computed
 DataFrame, this port plugs into the LEAN-compatible engine: minute bars stream
 in, a ``TradeBarConsolidator`` produces bars at ``resolution_minutes``, and both
-SMAs update on each consolidated close. Orders go through the portfolio + fill
-model, so trades are recorded from ``on_order_event`` fills the same way SPY
-does — this keeps trade-log statistics consistent with portfolio net profit in
-either fill mode.
+SMAs update on each consolidated close. The strategy emits instrument-free
+ENTER/EXIT intents; the selected execution adapter binds those decisions to an
+instrument and sizing policy. Backtests still route those intents through the
+portfolio fill model, so trade logs remain fill-driven.
 
 The strategy is configurable via constructor kwargs so the registry can build
 it with user-supplied parameters; defaults mirror the legacy strategy's defaults
@@ -38,6 +38,7 @@ from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
 from app.engine.indicators.sma import SimpleMovingAverage
 from app.engine.strategy.base import LoggedTrade, Strategy
+from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
 from app.utils.timestamps import display_time
 
 
@@ -169,7 +170,13 @@ class SmaCrossoverAlgorithm(Strategy):
 
         if self._in_position:
             if fresh_death_cross:
-                self.ctx.liquidate(self._symbol)
+                self.ctx.emit_signal_intent(
+                    SignalIntent(
+                        kind=SignalIntentKind.EXIT,
+                        bar_close_ms=bar.end_ms,
+                        intended_price=bar.close,
+                    )
+                )
                 self.ctx.log(
                     f"EXIT SIGNAL: {display_time(bar.end_ms)} "
                     f"Close={bar.close:.2f} "
@@ -180,7 +187,13 @@ class SmaCrossoverAlgorithm(Strategy):
         else:
             if fresh_golden_cross:
                 self._pending_entry = _PendingEntry(sma_short=short_val, sma_long=long_val)
-                self.ctx.set_holdings(self._symbol, Decimal(1))
+                self.ctx.emit_signal_intent(
+                    SignalIntent(
+                        kind=SignalIntentKind.ENTER,
+                        bar_close_ms=bar.end_ms,
+                        intended_price=bar.close,
+                    )
+                )
                 self._in_position = True
                 self.ctx.log(
                     f"ENTRY SIGNAL: {display_time(bar.end_ms)} "
@@ -190,6 +203,11 @@ class SmaCrossoverAlgorithm(Strategy):
                 )
 
         self._prev_short_above_long = current_above
+
+    def rollback_blocked_entry(self) -> None:
+        """Undo lifecycle state when the live liveness gate blocks ENTER."""
+        self._in_position = False
+        self._pending_entry = None
 
     # ------------------------------------------------------------------
     # Fill-driven trade bookkeeping (same shape as SpyEmaCrossoverAlgorithm).
@@ -250,6 +268,13 @@ class SmaCrossoverAlgorithm(Strategy):
     def on_end_of_algorithm(self) -> None:
         if self._in_position:
             assert self.ctx is not None
-            self.ctx.liquidate(self._symbol)
+            if self.ctx.current_time_ms is None:
+                raise RuntimeError("SMA crossover exit requires a current bar time")
+            self.ctx.emit_signal_intent(
+                SignalIntent(
+                    kind=SignalIntentKind.EXIT,
+                    bar_close_ms=self.ctx.current_time_ms,
+                    intended_price=self.ctx.portfolio.reference_price.get(self._symbol, Decimal(0)),
+                )
+            )
             self._in_position = False
-

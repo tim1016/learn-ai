@@ -12,6 +12,12 @@
     <div><dt>Account</dt><dd>{{ receipt().account_id }}</dd></div>
     <div><dt>Execution</dt><dd>{{ receipt().execution_mode | receiptLabel }} · {{ receipt().sizing.quantity }} share(s) · carryover {{ receipt().carryover_policy === 'ALLOW' ? 'allowed' : 'forbidden' }}</dd></div>
   </dl>
+  @if (receipt().evidence_override; as evidenceOverride) {
+    <section class="launch-receipt__override" role="alert">
+      <strong>Deployed with a dangerous human evidence override</strong>
+      <p>{{ evidenceOverride.reason }}</p>
+    </section>
+  }
   <div class="launch-receipt__next">
     <p>{{ receipt().next_action }}</p>
     <a [routerLink]="receipt().panel_path">Open bot control</a>

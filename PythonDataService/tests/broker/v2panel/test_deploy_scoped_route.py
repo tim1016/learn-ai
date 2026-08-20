@@ -31,7 +31,7 @@ from app.routers.broker_v2_panel import router
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.operator_blocker import AccountOperatorPosture
 from app.schemas.run_admission import RunAdmissionDecision
-from app.schemas.strategy_validation import StrategyValidationEntry
+from app.schemas.strategy_validation import StrategyValidationEntry, StrategyValidationFlagRequest
 from app.services.bot_runner import (
     AdmittedBotStart,
     BotRunnerError,
@@ -43,6 +43,7 @@ from app.services.broker_account_snapshot import (
 from app.services.broker_v2_panel import panel_data_source
 from app.services.broker_v2_panel.paper_deploy_service import _strategy_views
 from app.services.strategy_validation_manifest import (
+    append_strategy_validation_flag_event,
     load_strategy_validation_entries,
     strategy_registry_seeds,
 )
@@ -123,6 +124,37 @@ class _FakeDeployRegistry:
 @pytest.fixture()
 def deploy_app(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("ALPACA_CLERK_DIR", str(tmp_path))
+    registry_seeds = strategy_registry_seeds()
+    flag_events_path = tmp_path / "strategy-validation" / "flag-events.json"
+    for strategy_key in ("rsi_mean_reversion", "sma_crossover"):
+        append_strategy_validation_flag_event(
+            strategy_key,
+            StrategyValidationFlagRequest(
+                flag="validated",
+                reason="Test-only human validation without accepted equivalence evidence.",
+            ),
+            registry_seeds,
+            flag_events_path=flag_events_path,
+            flagged_by="test:deploy-route",
+            now_ms=_T0,
+        )
+    validation_entries = [
+        entry
+        for entry in load_strategy_validation_entries(
+            registry_seeds,
+            flag_events_path=flag_events_path,
+        )
+        if entry.strategy_key in {
+            "ema_crossover_signal",
+            "rsi_mean_reversion",
+            "sma_crossover",
+        }
+    ]
+    monkeypatch.setattr(
+        panel_data_source,
+        "load_strategy_validation_entries",
+        lambda _registry: validation_entries,
+    )
     clear_broker_account_snapshot_cache_for_testing()
     reset_broker_registry_for_testing()
     get_broker_registry().register(_FakeReadPort())  # type: ignore[arg-type]
@@ -197,6 +229,7 @@ async def test_deploy_scoped_correct_account_delegates(deploy_app) -> None:
     assert body["account_id"] == ACCT
     assert body["execution_mode"] == "paper"
     assert body["sizing"] == {"preset": "custom", "quantity": 2}
+    assert body["evidence_override"] is None
     assert body["bot"]["strategy_instance_id"] == SID
     assert body["bot"]["mode"] == "trade"
     assert body["bot"]["quantity"] == 2
@@ -325,12 +358,12 @@ async def test_deploy_view_is_closed_paper_only_contract(deploy_app) -> None:
     body = resp.json()
     assert body["account_mode"] == "paper"
     assert body["allowed_actions"] == ["deploy"]
-    # deployment_validation is temporarily excluded: #1672 changed its
-    # session-boundary literals, which invalidated the manifest's pinned
-    # evidence hashes until a fresh QC Cloud reconciliation is run (see
-    # docs/references/deployment-validation-consecutive-green.md).
+    # Runtime-supported, human-validated evidence-only strategies are visible,
+    # but the command boundary requires an explicit typed override for them.
     assert [row["strategy_key"] for row in body["strategies"]] == [
         "ema_crossover_signal",
+        "rsi_mean_reversion",
+        "sma_crossover",
     ]
     strategy = body["strategies"][0]
     assert set(strategy) == {
@@ -338,8 +371,17 @@ async def test_deploy_view_is_closed_paper_only_contract(deploy_app) -> None:
         "label",
         "explanation",
         "validation_case_symbol",
+        "evidence_status",
+        "override_explanation",
     }
     assert strategy["validation_case_symbol"] == "SPY"
+    assert strategy["evidence_status"] == "accepted"
+    assert strategy["override_explanation"] is None
+    assert [row["evidence_status"] for row in body["strategies"][1:]] == [
+        "human_override_required",
+        "human_override_required",
+    ]
+    assert all(row["override_explanation"] for row in body["strategies"][1:])
     assert body["evaluated_at_ms"] > 0
     assert {check["gate_id"] for check in body["readiness_checks"]} == {
         "strategy.validation_accepted",
@@ -450,6 +492,115 @@ def test_deploy_rejects_accepted_event_with_gating_divergence() -> None:
     changed = entry.model_copy(update={"current_flag_event": changed_event})
 
     assert _strategy_views([changed]) == ()
+
+
+@pytest.mark.asyncio
+async def test_evidence_only_strategy_requires_explicit_human_override(deploy_app) -> None:
+    fast_app, registry = deploy_app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=fast_app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots",
+            json={
+                **_BODY,
+                "strategy_instance_id": "sma-paper-no-override",
+                "strategy_key": "sma_crossover",
+            },
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["message"] == "This strategy requires a human evidence override."
+    assert registry.deploy_calls == []
+
+
+@pytest.mark.asyncio
+async def test_evidence_only_strategy_persists_override_in_runner_and_receipt(deploy_app) -> None:
+    fast_app, registry = deploy_app
+    evidence_override = {
+        "acknowledgement": "I_ACCEPT_EVIDENCE_ONLY_DEPLOYMENT_RISK",
+        "reason": "Paper canary approved by the strategy owner.",
+    }
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=fast_app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots",
+            json={
+                **_BODY,
+                "strategy_instance_id": "sma-paper-override",
+                "strategy_key": "sma_crossover",
+                "evidence_override": evidence_override,
+            },
+        )
+
+    assert response.status_code == 201
+    assert response.json()["evidence_override"] == evidence_override
+    assert registry.deploy_calls[0]["evidence_override"].model_dump() == evidence_override
+
+
+@pytest.mark.asyncio
+async def test_evidence_override_acknowledgement_and_reason_are_closed(deploy_app) -> None:
+    fast_app, registry = deploy_app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=fast_app),
+        base_url="http://test",
+    ) as client:
+        wrong_ack = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots",
+            json={
+                **_BODY,
+                "strategy_key": "sma_crossover",
+                "evidence_override": {
+                    "acknowledgement": "I_ACCEPT_THE_RISK",
+                    "reason": "Paper canary approved by the strategy owner.",
+                },
+            },
+        )
+        short_reason = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots",
+            json={
+                **_BODY,
+                "strategy_key": "sma_crossover",
+                "evidence_override": {
+                    "acknowledgement": "I_ACCEPT_EVIDENCE_ONLY_DEPLOYMENT_RISK",
+                    "reason": "too short",
+                },
+            },
+        )
+
+    assert wrong_ack.status_code == 422
+    assert short_reason.status_code == 422
+    assert registry.deploy_calls == []
+
+
+@pytest.mark.asyncio
+async def test_accepted_strategy_rejects_unnecessary_evidence_override(deploy_app) -> None:
+    fast_app, registry = deploy_app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=fast_app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots",
+            json={
+                **_BODY,
+                "evidence_override": {
+                    "acknowledgement": "I_ACCEPT_EVIDENCE_ONLY_DEPLOYMENT_RISK",
+                    "reason": "This should not be accepted for normal evidence.",
+                },
+            },
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["message"] == ("An evidence override is not valid for this accepted strategy.")
+    assert registry.deploy_calls == []
 
 
 @pytest.mark.asyncio

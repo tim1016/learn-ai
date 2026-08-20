@@ -9,6 +9,7 @@ import pytest
 
 import app.engine.live.durable_append_log as durable_append_log
 from app.schemas.bot_run_evidence import BotCrashDiagnostic
+from app.schemas.broker_bots import AlpacaPaperEvidenceOverride
 from app.services.bot_binding_repository import (
     BotBindingRepository,
     BotRunOutcomeRecord,
@@ -20,6 +21,7 @@ from app.services.bot_binding_repository import (
     StrategyInstanceRecord,
     alpaca_v1_action_plan,
 )
+from app.services.bot_carryover import immutable_configuration_payload
 
 _SID = "alpaca-spy-ema-01"
 
@@ -36,12 +38,14 @@ def _binding(
     run_id: str = "run-001",
     created_at_ms: int = 1_000,
     symbol: str = "SPY",
+    evidence_override: AlpacaPaperEvidenceOverride | None = None,
 ) -> BrokerBotBinding:
     return BrokerBotBinding(
         strategy_instance_id=_SID,
         strategy_key="deployment_validation",
         broker="alpaca",
         symbol=symbol,
+        evidence_override=evidence_override,
         action_plan=alpaca_v1_action_plan(symbol),
         run_id=run_id,
         created_at_ms=created_at_ms,
@@ -92,6 +96,35 @@ def test_changed_configuration_cannot_reuse_strategy_instance_identity(
     assert not (tmp_path / "live_state" / _SID / "runs" / "run-002.json").exists()
 
 
+def test_evidence_override_is_durable_immutable_configuration(tmp_path: Path) -> None:
+    repository = _repository(tmp_path)
+    override = AlpacaPaperEvidenceOverride(
+        acknowledgement="I_ACCEPT_EVIDENCE_ONLY_DEPLOYMENT_RISK",
+        reason="Paper canary approved by the strategy owner.",
+    )
+    binding = _binding(evidence_override=override)
+
+    repository.record_launch(binding, launch_reason="deploy")
+
+    assert repository.read(_SID) == binding
+    instance = json.loads((tmp_path / "live_state" / _SID / "strategy_instance.json").read_text())
+    assert instance["evidence_override"] == override.model_dump()
+
+    with pytest.raises(StrategyInstanceConfigurationConflictError):
+        repository.record_launch(
+            _binding(
+                run_id="run-002",
+                created_at_ms=2_000,
+                evidence_override=override.model_copy(update={"reason": "A different human risk decision."}),
+            ),
+            launch_reason="resume",
+        )
+
+
+def test_absent_override_preserves_pre_override_configuration_hash_shape() -> None:
+    assert "evidence_override" not in immutable_configuration_payload(_binding())
+
+
 def test_duplicate_run_is_idempotent_but_changed_run_payload_conflicts(
     tmp_path: Path,
 ) -> None:
@@ -128,9 +161,7 @@ def test_terminal_outcome_is_create_once_and_run_scoped(tmp_path: Path) -> None:
 
     assert repository.read_outcome(_SID, binding.run_id) == outcome
     with pytest.raises(RunOutcomeConflictError):
-        repository.record_outcome(
-            outcome.model_copy(update={"reason_code": "SERVICE_SHUTDOWN"})
-        )
+        repository.record_outcome(outcome.model_copy(update={"reason_code": "SERVICE_SHUTDOWN"}))
 
 
 def test_crash_diagnostic_requires_a_crashed_terminal_outcome() -> None:
@@ -199,6 +230,7 @@ def test_terminal_outcome_recovers_after_interrupted_atomic_publication(
         recorded_at_ms=2_000,
     )
     outcome_path = tmp_path / "live_state" / _SID / "run_outcomes" / f"{binding.run_id}.json"
+
     def fail_publication(*args: object, **kwargs: object) -> None:
         raise OSError("injected outcome publication failure")
 
@@ -236,9 +268,7 @@ def test_terminal_outcome_rejects_a_run_record_with_a_mismatched_run_id(
     with pytest.raises(ValueError, match="terminal outcome belongs"):
         repository.record_outcome(outcome)
 
-    assert not (
-        tmp_path / "live_state" / _SID / "run_outcomes" / f"{binding.run_id}.json"
-    ).exists()
+    assert not (tmp_path / "live_state" / _SID / "run_outcomes" / f"{binding.run_id}.json").exists()
 
 
 def test_legacy_binding_is_lifted_without_rewrite_then_migrated_on_resume(

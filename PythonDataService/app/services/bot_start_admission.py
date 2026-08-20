@@ -13,7 +13,7 @@ from app.broker.alpaca.clerk.active_protocol import ClerkAdmissionSnapshotStaleE
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.marketdata.feed import MarketDataFeed
 from app.schemas.action_plan import ActionPlan
-from app.schemas.broker_bots import BotStatusView
+from app.schemas.broker_bots import AlpacaPaperEvidenceOverride, BotStatusView
 from app.schemas.broker_capability import SessionDataCapability
 from app.schemas.market_liveness import MarketLivenessFact
 from app.schemas.run_admission import (
@@ -53,6 +53,7 @@ class StartRequest:
     mode: Literal["log_only", "dry_run", "trade"]
     quantity: int
     carryover_policy: Literal["FORBID", "ALLOW"]
+    evidence_override: AlpacaPaperEvidenceOverride | None
     action_plan: ActionPlan
 
 
@@ -107,6 +108,7 @@ def make_start_request(
     mode: Literal["log_only", "dry_run", "trade"],
     quantity: int,
     carryover_policy: Literal["FORBID", "ALLOW"],
+    evidence_override: AlpacaPaperEvidenceOverride | None,
     action_plan: ActionPlan,
 ) -> StartRequest:
     """Build the one typed request shared by preview and execution."""
@@ -119,6 +121,7 @@ def make_start_request(
         mode=mode,
         quantity=quantity,
         carryover_policy=carryover_policy,
+        evidence_override=evidence_override,
         action_plan=action_plan,
     )
 
@@ -210,6 +213,7 @@ def new_run_binding(request: StartRequest, *, now_ms: int) -> BrokerBotBinding:
         mode=request.mode,
         quantity=request.quantity,
         carryover_policy=request.carryover_policy,
+        evidence_override=request.evidence_override,
         action_plan=request.action_plan,
         run_id=uuid4().hex,
         created_at_ms=now_ms,

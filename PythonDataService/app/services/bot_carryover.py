@@ -39,6 +39,7 @@ class CarryoverBinding(Protocol):
     mode: Literal["log_only", "dry_run", "trade"]
     quantity: int
     carryover_policy: Literal["FORBID", "ALLOW"]
+    evidence_override: object | None
     action_plan: ActionPlan
     run_id: str
 
@@ -87,6 +88,10 @@ def immutable_configuration_payload(binding: CarryoverBinding) -> dict:
     return binding.model_dump(
         mode="json",
         exclude={"run_id", "created_at_ms"},
+        # Optional configuration fields added in later schema versions must
+        # not invalidate hashes for older bindings when they remain absent.
+        # A populated evidence override is still included and hash-bound.
+        exclude_none=True,
     )
 
 

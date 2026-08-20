@@ -4509,6 +4509,16 @@
             "title": "Carryover Policy",
             "type": "string"
           },
+          "evidence_override": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AlpacaPaperEvidenceOverride"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "execution_mode": {
             "default": "paper",
             "enum": [
@@ -4587,6 +4597,16 @@
             "title": "Carryover Policy",
             "type": "string"
           },
+          "evidence_override": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AlpacaPaperEvidenceOverride"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "execution_mode": {
             "default": "paper",
             "enum": [
@@ -4625,8 +4645,16 @@
       },
       "AlpacaPaperDeployStrategy": {
         "additionalProperties": false,
-        "description": "Trader-facing option for one currently accepted deploy strategy.",
+        "description": "Trader-facing option for one accepted or explicitly overridable strategy.",
         "properties": {
+          "evidence_status": {
+            "enum": [
+              "accepted",
+              "human_override_required"
+            ],
+            "title": "Evidence Status",
+            "type": "string"
+          },
           "explanation": {
             "title": "Explanation",
             "type": "string"
@@ -4634,6 +4662,17 @@
           "label": {
             "title": "Label",
             "type": "string"
+          },
+          "override_explanation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Override Explanation"
           },
           "strategy_key": {
             "$ref": "#/components/schemas/AlpacaPaperStrategyKey"
@@ -4647,7 +4686,8 @@
           "strategy_key",
           "label",
           "explanation",
-          "validation_case_symbol"
+          "validation_case_symbol",
+          "evidence_status"
         ],
         "title": "AlpacaPaperDeployStrategy",
         "type": "object"
@@ -4750,6 +4790,26 @@
           "allowed_actions"
         ],
         "title": "AlpacaPaperDeployView",
+        "type": "object"
+      },
+      "AlpacaPaperEvidenceOverride": {
+        "additionalProperties": false,
+        "description": "Explicit operator acceptance of an evidence-only deployment risk.",
+        "properties": {
+          "acknowledgement": {
+            "const": "I_ACCEPT_EVIDENCE_ONLY_DEPLOYMENT_RISK",
+            "title": "Acknowledgement"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "acknowledgement",
+          "reason"
+        ],
+        "title": "AlpacaPaperEvidenceOverride",
         "type": "object"
       },
       "AlpacaPaperExecutionMode": {
@@ -4866,7 +4926,9 @@
         "description": "Strategies supported by the Clerk-governed Alpaca paper runner.",
         "enum": [
           "deployment_validation",
-          "ema_crossover_signal"
+          "ema_crossover_signal",
+          "sma_crossover",
+          "rsi_mean_reversion"
         ],
         "title": "AlpacaPaperStrategyKey",
         "type": "string"
@@ -7219,6 +7281,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/BotDutyOutcomeView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "evidence_override": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AlpacaPaperEvidenceOverride"
               },
               {
                 "type": "null"

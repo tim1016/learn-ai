@@ -20,7 +20,10 @@ from app.schemas.broker_bots import (
 from app.schemas.run_admission import RunAdmissionDecision
 from app.schemas.strategy_validation import StrategyValidationEntry
 from app.services.bot_runner import alpaca_v1_action_plan
-from app.services.bot_trade_strategy import supported_alpaca_paper_strategy_keys
+from app.services.bot_trade_strategy import (
+    alpaca_paper_strategy_default_symbol,
+    supported_alpaca_paper_strategy_keys,
+)
 from app.services.broker_v2_panel.panel_projection_service import evaluate_channel_health
 from app.services.strategy_validation_manifest import strategy_audit_copy_is_current
 from app.utils.timestamps import now_ms_utc
@@ -50,40 +53,55 @@ def _entry_matches_accepted_snapshot(entry: StrategyValidationEntry) -> bool:
 def _strategy_views(
     entries: list[StrategyValidationEntry],
 ) -> tuple[AlpacaPaperDeployStrategy, ...]:
-    """Project only runtime-supported strategies with current accepted evidence."""
+    """Project executable strategies with accepted or human-overridable evidence."""
     supported_strategy_keys = supported_alpaca_paper_strategy_keys()
     strategies: list[AlpacaPaperDeployStrategy] = []
     for entry in entries:
         event = entry.current_flag_event
-        snapshot = event.evidence_snapshot if event is not None else None
-        diagnostics = snapshot.diagnostics if snapshot is not None else None
-        if (
-            entry.strategy_key not in supported_strategy_keys
-            or entry.validation_state != "validated"
-            or not entry.deployable
-            or event is None
-            or event.flag != "validated"
-            or event.behavioral_equivalence.verdict != "accepted_for_deploy"
-            or any(event.behavioral_equivalence.gating_divergence_counts.values())
-            or not _entry_matches_accepted_snapshot(entry)
-            or diagnostics is None
-            or any(diagnostics.divergence_counts.values())
-            or not snapshot.validation_case_symbol
-            or not snapshot.qc_cloud_backtest_id
-            or not snapshot.settings_file_ref
-            or not snapshot.settings_file_sha256
-            or not snapshot.audit_copy_ref
-            or not snapshot.audit_copy_sha256
-            or not snapshot.reconciliation_ref
-            or not strategy_audit_copy_is_current(entry)
-        ):
+        if entry.strategy_key not in supported_strategy_keys:
             continue
+        if entry.validation_state != "validated" or event is None or event.flag != "validated":
+            continue
+        snapshot = event.evidence_snapshot
+        diagnostics = snapshot.diagnostics
+        accepted = (
+            entry.deployable
+            and event.behavioral_equivalence.verdict == "accepted_for_deploy"
+            and not any(event.behavioral_equivalence.gating_divergence_counts.values())
+            and _entry_matches_accepted_snapshot(entry)
+            and diagnostics is not None
+            and not any(diagnostics.divergence_counts.values())
+            and bool(snapshot.validation_case_symbol)
+            and bool(snapshot.qc_cloud_backtest_id)
+            and bool(snapshot.settings_file_ref)
+            and bool(snapshot.settings_file_sha256)
+            and bool(snapshot.audit_copy_ref)
+            and bool(snapshot.audit_copy_sha256)
+            and bool(snapshot.reconciliation_ref)
+            and strategy_audit_copy_is_current(entry)
+        )
+        evidence_only = event.behavioral_equivalence.verdict == "evidence_only"
+        if not accepted and not evidence_only:
+            continue
+        strategy_key = AlpacaPaperStrategyKey(entry.strategy_key)
         strategies.append(
             AlpacaPaperDeployStrategy(
-                strategy_key=AlpacaPaperStrategyKey(entry.strategy_key),
+                strategy_key=strategy_key,
                 label=entry.display_name,
                 explanation=entry.description,
-                validation_case_symbol=snapshot.validation_case_symbol,
+                validation_case_symbol=(
+                    snapshot.validation_case_symbol or alpaca_paper_strategy_default_symbol(strategy_key)
+                ),
+                evidence_status=("accepted" if accepted else "human_override_required"),
+                override_explanation=(
+                    None
+                    if accepted
+                    else (
+                        "A human marked this strategy validated, but its behavioral evidence is "
+                        "evidence-only and is not accepted for deployment. Continuing can produce "
+                        "decisions that have not been reconciled to the reference implementation."
+                    )
+                ),
             )
         )
     return tuple(strategies)
@@ -96,6 +114,10 @@ def _readiness_checks(
     *,
     now_ms: int,
 ) -> tuple[AlpacaPaperDeployReadinessCheck, ...]:
+    accepted_strategies = tuple(strategy for strategy in strategies if strategy.evidence_status == "accepted")
+    override_strategies = tuple(
+        strategy for strategy in strategies if strategy.evidence_status == "human_override_required"
+    )
     account_ready = (
         account.account_mode == "paper"
         and account.account_status.upper() == "ACTIVE"
@@ -117,30 +139,31 @@ def _readiness_checks(
     return (
         AlpacaPaperDeployReadinessCheck(
             gate_id="strategy.validation_accepted",
-            label="Accepted strategy evidence",
+            label="Strategy evidence path",
             ready=bool(strategies),
             scope="strategy",
             authority="Strategy validation current-state projection",
             headline=(
-                "Validated strategies are accepted for deployment."
+                "At least one executable strategy has a deployment evidence path."
                 if strategies
                 else "No runtime-supported strategy has current accepted validation evidence."
             ),
             explanation=(
-                "The latest human validation event is validated and its behavioral-equivalence verdict is accepted for deploy."
+                (
+                    "Accepted strategies use current behavioral-equivalence evidence. Evidence-only "
+                    "strategies require an explicit human risk acknowledgement and operator reason."
+                )
                 if strategies
-                else "The selector excludes missing, superseded, invalidated, evidence-only, and rejected validation events."
+                else "The selector excludes missing, invalidated, rejected, and runtime-unsupported strategies."
             ),
             evidence_summary=(
-                "Current accepted evidence: "
-                + ", ".join(strategy.label for strategy in strategies)
-                + "."
+                "Executable strategies: " + ", ".join(strategy.label for strategy in strategies) + "."
                 if strategies
                 else "No accepted strategy validation event is available."
             ),
             evidence={
-                "strategy_keys": ", ".join(strategy.strategy_key for strategy in strategies),
-                "verdict": "accepted_for_deploy" if strategies else None,
+                "accepted_strategy_keys": ", ".join(strategy.strategy_key for strategy in accepted_strategies),
+                "override_strategy_keys": ", ".join(strategy.strategy_key for strategy in override_strategies),
             },
             recovery=(
                 None
@@ -299,10 +322,9 @@ def _eligibility(
         reason_code="ALPACA_PAPER_DEPLOY_READY",
         headline="This Alpaca paper account is eligible for a Clerk-governed deployment.",
         explanation=(
-            "The operator may choose Clerk-governed paper execution or a "
-            "zero-broker-write Dry Run before launch."
+            "The operator may choose Clerk-governed paper execution or a zero-broker-write Dry Run before launch."
         ),
-        next_action="Choose the symbol and sizing, then deploy the bot.",
+        next_action="Complete the deployment ticket, review the summary, then deploy the bot.",
     )
 
 
@@ -412,20 +434,30 @@ def build_alpaca_paper_deploy_receipt(
             else f"{request.strategy_instance_id} is on duty in Alpaca paper."
         ),
         explanation=(
-            "The immutable Dry Run binding consumes market data and records only simulated activity."
-            if request.execution_mode == "dry_run"
-            else "The deployment binding is durable and all strategy effects are owned by the Alpaca Clerk."
+            "The immutable binding records a human override of evidence-only strategy proof. "
+            "This launch is not numerical-equivalence evidence; all other admission gates remain in force."
+            if request.evidence_override is not None
+            else (
+                "The immutable Dry Run binding consumes market data and records only simulated activity."
+                if request.execution_mode == "dry_run"
+                else "The deployment binding is durable and all strategy effects are owned by the Alpaca Clerk."
+            )
         ),
         next_action=(
-            "Open the bot panel and verify clearly labelled simulated decisions and fills."
-            if request.execution_mode == "dry_run"
-            else "Open the production bot panel and verify the first Clerk receipt."
+            "Open the bot panel, inspect every early decision, and stop the bot if behavior differs from expectation."
+            if request.evidence_override is not None
+            else (
+                "Open the bot panel and verify clearly labelled simulated decisions and fills."
+                if request.execution_mode == "dry_run"
+                else "Open the production bot panel and verify the first Clerk receipt."
+            )
         ),
         panel_path=(f"/brokers/{broker}/accounts/{view.account_id}/bots/{request.strategy_instance_id}"),
         account_id=view.account_id,
         execution_mode=request.execution_mode,
         sizing=request.sizing,
         carryover_policy=request.carryover_policy,
+        evidence_override=request.evidence_override,
         action_plan=alpaca_v1_action_plan(request.symbol),
         admission=admission,
         bot=bot,

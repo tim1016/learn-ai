@@ -128,6 +128,16 @@
           (strategyKeyChange)="setStrategyKey($event)"
         />
 
+        <app-deploy-evidence-override
+          [strategy]="selectedStrategy()"
+          [acknowledged]="ticket().evidenceOverrideAcknowledged"
+          [reason]="ticket().evidenceOverrideReason"
+          [reasonError]="evidenceOverrideReasonError()"
+          (acknowledgedChange)="setEvidenceOverrideAcknowledged($event)"
+          (reasonChange)="setEvidenceOverrideReason($event)"
+          (reasonBlur)="touchEvidenceOverrideReason()"
+        />
+
         <div class="deploy-layout">
           <div class="deploy-layout__main">
             <app-deploy-execution-section
@@ -188,11 +198,17 @@
                 <div><dt>Strategy</dt><dd>{{ selectedStrategy()?.label ?? 'Unavailable' }}</dd></div>
                 <div><dt>Trade</dt><dd>{{ ticket().symbol || 'Symbol required' }} · {{ quantityLabel() }}</dd></div>
                 <div><dt>Mode</dt><dd>{{ executionLabel() }}</dd></div>
+                <div><dt>Evidence</dt><dd>{{ strategyRequiresOverride() ? 'Human override' : 'Accepted' }}</dd></div>
               </dl>
-              <button type="submit" [disabled]="!canSubmit()" [attr.aria-busy]="submitting()">
+              <button
+                type="submit"
+                [disabled]="!canSubmit()"
+                [attr.aria-busy]="submitting()"
+                aria-describedby="deploy-submit-guidance"
+              >
                 {{ submitting() ? 'Deploying…' : 'Deploy ' + executionLabel().toLowerCase() + ' bot' }}
               </button>
-              <small>{{ view.eligibility.eligible ? view.eligibility.next_action : 'Resolve the current blocker before launch.' }}</small>
+              <small id="deploy-submit-guidance" aria-live="polite">{{ submissionReadiness().guidance }}</small>
             </div>
           </aside>
         </div>

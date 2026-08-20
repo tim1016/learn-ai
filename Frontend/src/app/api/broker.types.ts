@@ -7306,6 +7306,7 @@ export interface components {
              * @enum {string}
              */
             carryover_policy: "FORBID" | "ALLOW";
+            evidence_override?: components["schemas"]["AlpacaPaperEvidenceOverride"] | null;
             /**
              * Execution Mode
              * @default paper
@@ -7348,6 +7349,7 @@ export interface components {
              * @enum {string}
              */
             carryover_policy?: "FORBID" | "ALLOW";
+            evidence_override?: components["schemas"]["AlpacaPaperEvidenceOverride"] | null;
             /**
              * Execution Mode
              * @default paper
@@ -7363,13 +7365,20 @@ export interface components {
         };
         /**
          * AlpacaPaperDeployStrategy
-         * @description Trader-facing option for one currently accepted deploy strategy.
+         * @description Trader-facing option for one accepted or explicitly overridable strategy.
          */
         AlpacaPaperDeployStrategy: {
+            /**
+             * Evidence Status
+             * @enum {string}
+             */
+            evidence_status: "accepted" | "human_override_required";
             /** Explanation */
             explanation: string;
             /** Label */
             label: string;
+            /** Override Explanation */
+            override_explanation?: string | null;
             strategy_key: components["schemas"]["AlpacaPaperStrategyKey"];
             /** Validation Case Symbol */
             validation_case_symbol: string;
@@ -7414,6 +7423,19 @@ export interface components {
             sizing_options: components["schemas"]["AlpacaPaperSizingOption"][];
             /** Strategies */
             strategies: components["schemas"]["AlpacaPaperDeployStrategy"][];
+        };
+        /**
+         * AlpacaPaperEvidenceOverride
+         * @description Explicit operator acceptance of an evidence-only deployment risk.
+         */
+        AlpacaPaperEvidenceOverride: {
+            /**
+             * Acknowledgement
+             * @constant
+             */
+            acknowledgement: "I_ACCEPT_EVIDENCE_ONLY_DEPLOYMENT_RISK";
+            /** Reason */
+            reason: string;
         };
         /**
          * AlpacaPaperExecutionMode
@@ -7478,7 +7500,7 @@ export interface components {
          * @description Strategies supported by the Clerk-governed Alpaca paper runner.
          * @enum {string}
          */
-        AlpacaPaperStrategyKey: "deployment_validation" | "ema_crossover_signal";
+        AlpacaPaperStrategyKey: "deployment_validation" | "ema_crossover_signal" | "sma_crossover" | "rsi_mean_reversion";
         /**
          * AlphaDecayStatsResponse
          * @description Alpha decay regression statistics with power-guard flags.
@@ -8549,6 +8571,7 @@ export interface components {
              */
             desired_state: "RUNNING" | "PAUSED" | "STOPPED";
             duty_outcome: components["schemas"]["BotDutyOutcomeView"] | null;
+            evidence_override?: components["schemas"]["AlpacaPaperEvidenceOverride"] | null;
             /** Last Transition At Ms */
             last_transition_at_ms: number | null;
             /**
