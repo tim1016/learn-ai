@@ -18,14 +18,17 @@ from app.schemas.broker_bots import (
     BotStatusView,
 )
 from app.schemas.run_admission import RunAdmissionDecision
-from app.schemas.strategy_validation import StrategyValidationEntry
+from app.schemas.strategy_validation import StrategyValidationEntry, StrategyValidationFlagEvent
 from app.services.bot_runner import alpaca_v1_action_plan
 from app.services.bot_trade_strategy import (
     alpaca_paper_strategy_default_symbol,
     supported_alpaca_paper_strategy_keys,
 )
 from app.services.broker_v2_panel.panel_projection_service import evaluate_channel_health
-from app.services.strategy_validation_manifest import strategy_audit_copy_is_current
+from app.services.strategy_validation_manifest import (
+    strategy_audit_copy_is_current,
+    strategy_settings_file_is_current,
+)
 from app.utils.timestamps import now_ms_utc
 
 
@@ -50,10 +53,85 @@ def _entry_matches_accepted_snapshot(entry: StrategyValidationEntry) -> bool:
     )
 
 
+def _accepted_proof_blocked_reason(
+    entry: StrategyValidationEntry,
+    event: StrategyValidationFlagEvent,
+) -> str | None:
+    """Name the first reason the proof recorded at acceptance no longer verifies, or None if it still holds."""
+    snapshot = event.evidence_snapshot
+    diagnostics = snapshot.diagnostics
+    divergent_gating = sorted(
+        category for category, count in event.behavioral_equivalence.gating_divergence_counts.items() if count
+    )
+    divergent_diagnostics = sorted(
+        category for category, count in (diagnostics.divergence_counts if diagnostics is not None else {}).items() if count
+    )
+    missing_snapshot_fields = [
+        field_name
+        for field_name, value in (
+            ("validation_case_symbol", snapshot.validation_case_symbol),
+            ("qc_cloud_backtest_id", snapshot.qc_cloud_backtest_id),
+            ("settings_file_ref", snapshot.settings_file_ref),
+            ("settings_file_sha256", snapshot.settings_file_sha256),
+            ("audit_copy_ref", snapshot.audit_copy_ref),
+            ("audit_copy_sha256", snapshot.audit_copy_sha256),
+            ("reconciliation_ref", snapshot.reconciliation_ref),
+        )
+        if not value
+    ]
+    checks: tuple[tuple[bool, str], ...] = (
+        (
+            event.behavioral_equivalence.verdict == "accepted_for_deploy",
+            "The recorded behavioral-equivalence verdict is no longer accepted for deploy.",
+        ),
+        (
+            strategy_settings_file_is_current(entry),
+            f"The settings/deploy binding file at '{entry.settings_file_ref}' no longer matches its recorded hash.",
+        ),
+        (
+            strategy_audit_copy_is_current(entry),
+            f"The audit copy at '{entry.audit_copy_ref}' no longer matches its recorded hash.",
+        ),
+        (
+            not divergent_gating,
+            f"The accepted validation event now records a gating divergence in: {', '.join(divergent_gating)}.",
+        ),
+        (
+            _entry_matches_accepted_snapshot(entry),
+            "The current manifest entry no longer matches the proof snapshot recorded at acceptance; "
+            "the manifest was edited after acceptance.",
+        ),
+        (
+            diagnostics is not None,
+            "The accepted proof is missing its diagnostics record.",
+        ),
+        (
+            diagnostics is not None and not divergent_diagnostics,
+            f"The accepted proof's diagnostics now record a divergence in: {', '.join(divergent_diagnostics)}.",
+        ),
+        (
+            not missing_snapshot_fields,
+            f"The accepted proof snapshot is missing required field(s): {', '.join(missing_snapshot_fields)}.",
+        ),
+        (
+            entry.deployable,
+            "The strategy validation manifest no longer marks this strategy as deployable.",
+        ),
+    )
+    for passed, reason in checks:
+        if not passed:
+            return reason
+    return None
+
+
 def _strategy_views(
     entries: list[StrategyValidationEntry],
 ) -> tuple[AlpacaPaperDeployStrategy, ...]:
-    """Project executable strategies with accepted or human-overridable evidence."""
+    """Project every runtime-supported, human-validated strategy: accepted, overridable, or blocked.
+
+    A human validated flag always guarantees a row. Re-derivation of the
+    recorded proof may demote a row to ``blocked``; it never removes it.
+    """
     supported_strategy_keys = supported_alpaca_paper_strategy_keys()
     strategies: list[AlpacaPaperDeployStrategy] = []
     for entry in entries:
@@ -63,45 +141,37 @@ def _strategy_views(
         if entry.validation_state != "validated" or event is None or event.flag != "validated":
             continue
         snapshot = event.evidence_snapshot
-        diagnostics = snapshot.diagnostics
-        accepted = (
-            entry.deployable
-            and event.behavioral_equivalence.verdict == "accepted_for_deploy"
-            and not any(event.behavioral_equivalence.gating_divergence_counts.values())
-            and _entry_matches_accepted_snapshot(entry)
-            and diagnostics is not None
-            and not any(diagnostics.divergence_counts.values())
-            and bool(snapshot.validation_case_symbol)
-            and bool(snapshot.qc_cloud_backtest_id)
-            and bool(snapshot.settings_file_ref)
-            and bool(snapshot.settings_file_sha256)
-            and bool(snapshot.audit_copy_ref)
-            and bool(snapshot.audit_copy_sha256)
-            and bool(snapshot.reconciliation_ref)
-            and strategy_audit_copy_is_current(entry)
-        )
-        evidence_only = event.behavioral_equivalence.verdict == "evidence_only"
-        if not accepted and not evidence_only:
-            continue
         strategy_key = AlpacaPaperStrategyKey(entry.strategy_key)
+        validation_case_symbol = snapshot.validation_case_symbol or alpaca_paper_strategy_default_symbol(
+            strategy_key
+        )
+        if event.behavioral_equivalence.verdict == "evidence_only":
+            strategies.append(
+                AlpacaPaperDeployStrategy(
+                    strategy_key=strategy_key,
+                    label=entry.display_name,
+                    explanation=entry.description,
+                    validation_case_symbol=validation_case_symbol,
+                    evidence_status="human_override_required",
+                    selectable=True,
+                    override_explanation=(
+                        "A human marked this strategy validated, but its behavioral evidence is "
+                        "evidence-only and is not accepted for deployment. Continuing can produce "
+                        "decisions that have not been reconciled to the reference implementation."
+                    ),
+                )
+            )
+            continue
+        blocked_reason = _accepted_proof_blocked_reason(entry, event)
         strategies.append(
             AlpacaPaperDeployStrategy(
                 strategy_key=strategy_key,
                 label=entry.display_name,
                 explanation=entry.description,
-                validation_case_symbol=(
-                    snapshot.validation_case_symbol or alpaca_paper_strategy_default_symbol(strategy_key)
-                ),
-                evidence_status=("accepted" if accepted else "human_override_required"),
-                override_explanation=(
-                    None
-                    if accepted
-                    else (
-                        "A human marked this strategy validated, but its behavioral evidence is "
-                        "evidence-only and is not accepted for deployment. Continuing can produce "
-                        "decisions that have not been reconciled to the reference implementation."
-                    )
-                ),
+                validation_case_symbol=validation_case_symbol,
+                evidence_status=("accepted" if blocked_reason is None else "blocked"),
+                selectable=blocked_reason is None,
+                blocked_explanation=blocked_reason,
             )
         )
     return tuple(strategies)
@@ -118,6 +188,8 @@ def _readiness_checks(
     override_strategies = tuple(
         strategy for strategy in strategies if strategy.evidence_status == "human_override_required"
     )
+    blocked_strategies = tuple(strategy for strategy in strategies if strategy.evidence_status == "blocked")
+    selectable_strategies = tuple(strategy for strategy in strategies if strategy.selectable)
     account_ready = (
         account.account_mode == "paper"
         and account.account_status.upper() == "ACTIVE"
@@ -140,34 +212,39 @@ def _readiness_checks(
         AlpacaPaperDeployReadinessCheck(
             gate_id="strategy.validation_accepted",
             label="Strategy evidence path",
-            ready=bool(strategies),
+            ready=bool(selectable_strategies),
             scope="strategy",
             authority="Strategy validation current-state projection",
             headline=(
-                "At least one executable strategy has a deployment evidence path."
-                if strategies
-                else "No runtime-supported strategy has current accepted validation evidence."
+                "At least one executable strategy is selectable for deployment."
+                if selectable_strategies
+                else "No runtime-supported strategy is currently selectable for deployment."
             ),
             explanation=(
                 (
                     "Accepted strategies use current behavioral-equivalence evidence. Evidence-only "
-                    "strategies require an explicit human risk acknowledgement and operator reason."
+                    "strategies require an explicit human risk acknowledgement and operator reason. "
+                    "Blocked strategies are shown but not selectable until their proof is repaired."
                 )
-                if strategies
-                else "The selector excludes missing, invalidated, rejected, and runtime-unsupported strategies."
+                if selectable_strategies
+                else (
+                    "The selector excludes missing, invalidated, rejected, and runtime-unsupported strategies. "
+                    "Blocked rows are shown but do not count toward eligibility."
+                )
             ),
             evidence_summary=(
-                "Executable strategies: " + ", ".join(strategy.label for strategy in strategies) + "."
-                if strategies
-                else "No accepted strategy validation event is available."
+                "Selectable strategies: " + ", ".join(strategy.label for strategy in selectable_strategies) + "."
+                if selectable_strategies
+                else "No selectable strategy validation event is available."
             ),
             evidence={
                 "accepted_strategy_keys": ", ".join(strategy.strategy_key for strategy in accepted_strategies),
                 "override_strategy_keys": ", ".join(strategy.strategy_key for strategy in override_strategies),
+                "blocked_strategy_keys": ", ".join(strategy.strategy_key for strategy in blocked_strategies),
             },
             recovery=(
                 None
-                if strategies
+                if selectable_strategies
                 else "Review and accept current behavioral-equivalence evidence in Strategy Validation."
             ),
         ),

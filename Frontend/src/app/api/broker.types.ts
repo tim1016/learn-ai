@@ -7365,20 +7365,30 @@ export interface components {
         };
         /**
          * AlpacaPaperDeployStrategy
-         * @description Trader-facing option for one accepted or explicitly overridable strategy.
+         * @description Trader-facing option for one accepted, explicitly overridable, or blocked strategy.
+         *
+         *     A validated strategy whose recorded proof no longer re-verifies is
+         *     demoted to ``evidence_status="blocked"`` rather than removed from the
+         *     row set: the operator's validation flag always guarantees a row.
+         *     ``selectable`` is the server's own launchability fact — a blocked row is
+         *     always present but never selectable.
          */
         AlpacaPaperDeployStrategy: {
+            /** Blocked Explanation */
+            blocked_explanation?: string | null;
             /**
              * Evidence Status
              * @enum {string}
              */
-            evidence_status: "accepted" | "human_override_required";
+            evidence_status: "accepted" | "human_override_required" | "blocked";
             /** Explanation */
             explanation: string;
             /** Label */
             label: string;
             /** Override Explanation */
             override_explanation?: string | null;
+            /** Selectable */
+            selectable: boolean;
             strategy_key: components["schemas"]["AlpacaPaperStrategyKey"];
             /** Validation Case Symbol */
             validation_case_symbol: string;

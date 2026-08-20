@@ -169,6 +169,17 @@ export class AlpacaDeployWorkflowComponent {
     () => this.selectedStrategy()?.evidence_status === 'human_override_required',
   );
 
+  protected readonly evidenceSummaryLabel = computed(() => {
+    switch (this.selectedStrategy()?.evidence_status) {
+      case 'human_override_required':
+        return 'Human override';
+      case 'blocked':
+        return 'Blocked';
+      default:
+        return 'Accepted';
+    }
+  });
+
   protected readonly evidenceOverrideComplete = computed(() =>
     !this.strategyRequiresOverride()
     || (
@@ -214,8 +225,15 @@ export class AlpacaDeployWorkflowComponent {
     if (this.ticketForm.instanceId().invalid()) {
       return { canSubmit: false, guidance: 'Fix the bot name before deployment.' };
     }
-    if (this.selectedStrategy() === null) {
+    const selectedStrategy = this.selectedStrategy();
+    if (selectedStrategy === null) {
       return { canSubmit: false, guidance: 'Choose a deployment strategy.' };
+    }
+    if (!selectedStrategy.selectable) {
+      return {
+        canSubmit: false,
+        guidance: selectedStrategy.blocked_explanation ?? 'This strategy is not currently selectable.',
+      };
     }
     if (this.selectedExecutionMode()?.availability !== 'available') {
       return { canSubmit: false, guidance: 'Choose an available execution mode.' };
@@ -248,6 +266,7 @@ export class AlpacaDeployWorkflowComponent {
       const view = this.currentView();
       const requestedKey = this.queryParams().get('strategy') ?? this.queryParams().get('strategy_key');
       const strategy = view?.strategies.find((candidate) => candidate.strategy_key === requestedKey)
+        ?? view?.strategies.find((candidate) => candidate.selectable)
         ?? view?.strategies[0];
       if (!strategy) return;
       this.ticket.update((current) => {

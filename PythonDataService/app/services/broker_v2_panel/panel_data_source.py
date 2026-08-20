@@ -410,14 +410,14 @@ def _require_alpaca_deploy_request(
     view: AlpacaPaperDeployView,
     request: AlpacaPaperDeployRequest,
 ) -> None:
-    """Apply the shared form/configuration preflight before run admission."""
-    if not view.eligibility.eligible:
-        raise PanelRunnerError(
-            view.eligibility.headline,
-            detail=view.eligibility.explanation,
-            next_action=view.eligibility.next_action,
-            http_status=409,
-        )
+    """Apply the shared form/configuration preflight before run admission.
+
+    The requested strategy's own identity and selectability are checked
+    before the account-level eligibility gate: a request naming a missing or
+    blocked strategy must see that specific, proof-naming reason — not the
+    catalog's generic "nothing is selectable" headline, which is what
+    ``view.eligibility`` reports whenever every row happens to be blocked.
+    """
     strategy = next(
         (strategy for strategy in view.strategies if strategy.strategy_key == request.strategy_key),
         None,
@@ -427,6 +427,20 @@ def _require_alpaca_deploy_request(
             "The selected strategy is not currently accepted for Alpaca deployment.",
             detail="Its latest validation evidence is missing, superseded, invalidated, or not accepted for deploy.",
             next_action="Review the strategy in Strategy Validation, then refresh this page.",
+            http_status=409,
+        )
+    if not strategy.selectable:
+        raise PanelRunnerError(
+            "The selected strategy is not currently selectable for deployment.",
+            detail=strategy.blocked_explanation or "This strategy's recorded proof no longer verifies.",
+            next_action="Repair the named proof, or re-validate the strategy in Strategy Validation.",
+            http_status=409,
+        )
+    if not view.eligibility.eligible:
+        raise PanelRunnerError(
+            view.eligibility.headline,
+            detail=view.eligibility.explanation,
+            next_action=view.eligibility.next_action,
             http_status=409,
         )
     if strategy.evidence_status == "human_override_required" and request.evidence_override is None:

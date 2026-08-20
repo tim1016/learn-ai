@@ -1,5 +1,6 @@
 import { HttpErrorResponse } from '@angular/common/http';
-import { fireEvent, render, screen } from '@testing-library/angular';
+import { fireEvent, render, screen, within } from '@testing-library/angular';
+import userEvent from '@testing-library/user-event';
 import { ActivatedRoute, convertToParamMap, provideRouter, Router } from '@angular/router';
 import { of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
@@ -19,7 +20,9 @@ const VALIDATION_STRATEGY: DeployBotView['strategies'][number] = {
   explanation: 'Validated canonical decision kernel.',
   validation_case_symbol: 'SPY',
   evidence_status: 'accepted',
+  selectable: true,
   override_explanation: null,
+  blocked_explanation: null,
 };
 
 const EMA_STRATEGY: DeployBotView['strategies'][number] = {
@@ -28,7 +31,9 @@ const EMA_STRATEGY: DeployBotView['strategies'][number] = {
   explanation: 'Validated EMA(5), EMA(10), and RSI(14) crossover signal.',
   validation_case_symbol: 'SPY',
   evidence_status: 'accepted',
+  selectable: true,
   override_explanation: null,
+  blocked_explanation: null,
 };
 
 const SMA_OVERRIDE_STRATEGY: DeployBotView['strategies'][number] = {
@@ -37,8 +42,26 @@ const SMA_OVERRIDE_STRATEGY: DeployBotView['strategies'][number] = {
   explanation: 'Human-validated SMA crossover with evidence-only parity.',
   validation_case_symbol: 'SPY',
   evidence_status: 'human_override_required',
+  selectable: true,
   override_explanation: 'Behavioral evidence is evidence-only and not accepted for deployment.',
+  blocked_explanation: null,
 };
+
+const BLOCKED_STRATEGY: DeployBotView['strategies'][number] = {
+  strategy_key: 'rsi_mean_reversion',
+  label: 'RSI Mean Reversion',
+  explanation: 'Validated RSI mean-reversion entries with ADX confirmation.',
+  validation_case_symbol: 'SPY',
+  evidence_status: 'blocked',
+  selectable: false,
+  override_explanation: null,
+  blocked_explanation: "The audit copy at 'docs/references/rsi-mean-reversion.md' no longer matches its recorded hash.",
+};
+
+const BLOCKED_EXPLANATION = BLOCKED_STRATEGY.blocked_explanation;
+if (BLOCKED_EXPLANATION === null || BLOCKED_EXPLANATION === undefined) {
+  throw new Error('BLOCKED_STRATEGY fixture must carry a blocked_explanation');
+}
 
 const DEPLOY_VIEW: DeployBotView = {
   broker: 'alpaca',
@@ -443,6 +466,85 @@ describe('AlpacaDeployWorkflowComponent', () => {
       .toBe('ema_crossover_signal');
     expect(screen.getByRole('link', { name: 'View validation' }).getAttribute('href'))
       .toBe('/strategy-validation?strategy=ema_crossover_signal');
+  });
+
+  it('renders a blocked strategy disabled in the selector and names the backend reason', async () => {
+    const queryParamMap = convertToParamMap({ strategy_key: 'rsi_mean_reversion' });
+    const service = mockService(RECEIPT, {
+      ...DEPLOY_VIEW,
+      strategies: [VALIDATION_STRATEGY, EMA_STRATEGY, SMA_OVERRIDE_STRATEGY, BLOCKED_STRATEGY],
+    });
+    await render(AlpacaDeployWorkflowComponent, {
+      providers: [
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: { queryParamMap: of(queryParamMap), snapshot: { queryParamMap } },
+        },
+        { provide: BrokerV2PanelService, useValue: service },
+      ],
+      componentInputs: { accountId: 'PA9' },
+    });
+    await screen.findByText(DEPLOY_VIEW.eligibility.headline);
+    await userEvent.type(screen.getByLabelText('Bot name'), 'rsi-blocked-01');
+
+    const select = screen.getByLabelText<HTMLSelectElement>('Deployment strategy');
+    expect(select.value).toBe('rsi_mean_reversion');
+    const blockedOption = screen.getByRole<HTMLOptionElement>('option', { name: /RSI Mean Reversion/ });
+    expect(blockedOption.disabled).toBe(true);
+    expect(blockedOption.textContent).toContain('blocked');
+    expect(screen.getByText('Blocked · proof no longer verifies')).toBeTruthy();
+    expect(screen.getAllByText(BLOCKED_EXPLANATION).length).toBeGreaterThanOrEqual(1);
+
+    const deployButton = screen.getByRole<HTMLButtonElement>('button', {
+      name: 'Deploy paper bot',
+      description: BLOCKED_EXPLANATION,
+    });
+    expect(deployButton.disabled).toBe(true);
+    const launchCommand = deployButton.closest<HTMLElement>('.launch-command');
+    if (launchCommand === null) throw new Error('launch-command container not found');
+    expect(within(launchCommand).getByText('Blocked')).toBeTruthy();
+  });
+
+  it('shows the blocked reason for a single blocked strategy without a strategy selector', async () => {
+    const queryParamMap = convertToParamMap({ strategy_key: 'rsi_mean_reversion' });
+    const service = mockService(RECEIPT, { ...DEPLOY_VIEW, strategies: [BLOCKED_STRATEGY] });
+    await render(AlpacaDeployWorkflowComponent, {
+      providers: [
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: { queryParamMap: of(queryParamMap), snapshot: { queryParamMap } },
+        },
+        { provide: BrokerV2PanelService, useValue: service },
+      ],
+      componentInputs: { accountId: 'PA9' },
+    });
+    await screen.findByText(DEPLOY_VIEW.eligibility.headline);
+    await userEvent.type(screen.getByLabelText('Bot name'), 'rsi-blocked-01');
+
+    expect(screen.queryByLabelText('Deployment strategy')).toBeNull();
+    expect(screen.getAllByText(BLOCKED_STRATEGY.label).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('Blocked · proof no longer verifies')).toBeTruthy();
+    expect(screen.getAllByText(BLOCKED_EXPLANATION).length).toBeGreaterThanOrEqual(1);
+
+    const deployButton = screen.getByRole<HTMLButtonElement>('button', {
+      name: 'Deploy paper bot',
+      description: BLOCKED_EXPLANATION,
+    });
+    expect(deployButton.disabled).toBe(true);
+  });
+
+  it('auto-selects the first selectable strategy, skipping a blocked one, when no deep link is given', async () => {
+    const service = mockService(RECEIPT, {
+      ...DEPLOY_VIEW,
+      strategies: [BLOCKED_STRATEGY, EMA_STRATEGY, SMA_OVERRIDE_STRATEGY],
+    });
+    await renderWorkflow(service);
+
+    expect((screen.getByLabelText('Deployment strategy') as HTMLSelectElement).value)
+      .toBe('ema_crossover_signal');
+    expect(screen.getByText('✓ Accepted evidence')).toBeTruthy();
   });
 
   it('preserves a trader-edited symbol when the validated strategy changes', async () => {
