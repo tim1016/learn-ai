@@ -1,8 +1,8 @@
 # IBKR integration authority
 
 > **Current-state authority.** Last reviewed 2026-08-19 for issue #1583.
-> Historical implementation detail is available in git history and the archived
-> phase records; it is not an active product contract.
+> Historical implementation detail is available in Git history; it is not an
+> active product contract.
 
 ## Product boundary
 

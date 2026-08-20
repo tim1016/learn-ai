@@ -3,7 +3,7 @@
 **Status:** Implemented tooling; human account activation remains gated by issue #1383.
 
 **Authority:** This is the focused Alpaca SQLite subprocedure incorporated by
-`docs/bot-control-operator-manual.md`. It does not authorize a cutover by itself and
+`docs/broker-v2-operator-manual.md`. It does not authorize a cutover by itself and
 does not replace that manual.
 
 The tool is broker-free: it verifies operator-captured JSON evidence but never calls

@@ -2,10 +2,10 @@
 
 **Status:** Retired 2026-08-06
 **Provenance:** Retired without adoption. The IBKR Bot Cockpit/operator-surface implementation was removed; new bot-control work targets Alpaca Broker V2.
-**Supersession note (2026-07-22):** Account Clerk, lifecycle, and operator procedure
-authority is ADR-0030, ADR-0026, and `docs/bot-control-operator-manual.md`. References
-to AccountOwner, its takeover, the former lifecycle snapshot, or the roadmap below are
-historical proposal context, not current implementation authority.
+**Supersession note:** Current bot-control procedure is
+`docs/broker-v2-operator-manual.md`; Alpaca control-plane authority is ADR-0038.
+References to AccountOwner, its takeover, the former lifecycle snapshot, or the roadmap
+below are historical proposal context, not current implementation authority.
 **Related**: ADR-0001 (files canonical; Postgres rebuildable), ADR-0013
 (operator-surface judgment vs evidence), ADR-0018 (broker session mirror),
 ADR-0019 (daemon diagnostics), ADR-0022 (timestamp authority), ADR-0024
@@ -427,8 +427,7 @@ are deleted.
 
 ## References
 
-- `docs/bot-control-operator-manual.md` — current Bot Control, lifecycle, and Clerk
-  operator authority.
+- `docs/broker-v2-operator-manual.md` — current Alpaca Broker V2 operator authority.
 - ADR-0030 — current account-rooted Clerk and journal authority.
 - `PythonDataService/app/routers/live_instances.py` — current status assembly
   and status-time publisher bootstrap.
@@ -442,5 +441,5 @@ are deleted.
 - `Frontend/src/app/services/broker-sse.ts` — current native `EventSource`
   wrapper replaced by the authenticated connection primitive and typed
   snapshot/event-feed adapters.
-- `docs/archive/plans/bot-control-stream-primary-prd.md` — archived PRD #951 interim
+- Git history — retired PRD #951 interim design.
   stream affordance map and surface-disposal contract.

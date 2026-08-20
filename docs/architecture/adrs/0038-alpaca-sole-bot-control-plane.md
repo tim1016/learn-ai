@@ -5,7 +5,7 @@
 - **Date:** 2026-08-17
 - **Context:** Wayfinder map [#1588](https://github.com/tim1016/learn-ai/issues/1588),
   decision ticket [#1598](https://github.com/tim1016/learn-ai/issues/1598); the
-  census in `docs/audits/state-writer-census-2026-08-17.md`.
+  pre-retirement writer census is retained in Git history.
   Grilling session: `grill-with-docs` + `domain-modeling`, 2026-08-17.
 - **Supersedes:** ADR 0026 §4 and its 2026-07-21 amendment, for Alpaca bots.
 - **Vocabulary:** `CONTEXT.md` § "Bot control plane (resolved 2026-08-17)".

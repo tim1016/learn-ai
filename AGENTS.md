@@ -57,18 +57,39 @@ allowed only for removal, decommissioning, or migration to Alpaca Broker V2.
 - `docs/references/` — Per-port notes: what was ported, from where (repo + commit), with what tolerance
 - `references/` — Vendored reference code (LEAN snippets, backtesters) under version control
 - `.claude/skills/` — Lazy-loaded skills for recurring tasks
-- `.claude/rules/` — Stack-specific rules, referenced from here but read only when relevant
+- `.claude/rules/` — Stack-specific rules; Codex reads the relevant file explicitly before significant stack work
 
-## Authority hierarchy
+## Codex and Claude compatibility
 
-When sources conflict, resolve in this order:
+`AGENTS.md` is Codex's repository entry point. It adds Codex guidance without
+changing the established Claude hierarchy. Do not delete, rename, reorder, scope,
+or otherwise reshape `CLAUDE.md`, `.claude/CLAUDE.md`, `.claude/rules/`,
+`.claude/skills/`, Claude hooks, commands, or settings merely to accommodate Codex.
+If a task independently requires a factual correction to one of those surfaces,
+make the smallest correction that preserves its existing intent.
 
-1. **Vendored references** in `references/` (ground truth for what we're porting)
-2. **Official docs** (angular.dev, learn.microsoft.com, chillicream.com, fastapi.tiangolo.com, pandas.pydata.org)
-3. **`.claude/rules/*.md`** in this repo
-4. **Model training knowledge**
+For Codex, paths under `.claude/skills/` and `.claude/rules/` are committed
+repository sources, not an assumed auto-discovery mechanism. Read the relevant
+source when this file's routing says it applies.
 
-**When conflicts arise, surface them.** Do not silently pick. State the conflict, cite the sources, ask the user which to follow.
+## Authority by claim
+
+Use the authority for the claim being changed; do not apply a universal source
+ordering across unrelated domains.
+
+| Claim | Authority | If sources disagree |
+|---|---|---|
+| Codex behavior | `AGENTS.md` plus the routed repository rule or skill | Surface the conflict; do not modify Claude configuration as a resolution |
+| Claude behavior | Existing `CLAUDE.md` / `.claude/**` hierarchy | Preserve its current precedence and behavior |
+| Product or system decision | Accepted ADR, with later explicit supersession winning | Record or ask for an explicit decision |
+| Mathematical port target | Pinned vendored reference plus the math registry and golden/parity test | Surface the conflict; do not silently choose |
+| Engine ownership | `docs/architecture/engine-authority-map.md` and its migration plan | Follow the migration sequencing |
+| Current runtime or wire shape | Manifest/config, generated contract, implementation, and executable tests | Docs describe this evidence; they do not override it |
+| Framework behavior | Installed manifest version and official documentation for that version | Derive the version from the manifest, not a prose cache |
+| Open defect | `docs/known-gaps.md` | Closed findings belong in durable decision history or Git history |
+
+`docs/doc-authority.md` is the router for domain documentation and its
+supersession rules.
 
 ## Engine and math authority
 
@@ -100,6 +121,7 @@ Full conventions live in `.claude/rules/`. Read the relevant file before signifi
 - `.claude/rules/python.md` — FastAPI, pandas, async conventions
 - `.claude/rules/testing.md` — Per-stack testing standards
 - `.claude/rules/numerical-rigor.md` — The core scientific rules (tolerances, golden fixtures, reconciliation taxonomy)
+- `.claude/rules/temporal-rigor.md` — Timestamp, calendar, and display-time authority
 
 ## Hard rules (apply to every task)
 

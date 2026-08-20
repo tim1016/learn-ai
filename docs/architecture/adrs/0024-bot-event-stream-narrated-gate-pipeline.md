@@ -108,4 +108,4 @@ The gates themselves are untouchable — they are the safety model. What is cons
 - ADR-0015 (operator notice contract; `order.*`/`submit.*` namespace extends its `OperatorNoticeCode` union and exhaustiveness gate).
 - `IBKR_CODE_MEANINGS` (`app/broker/ibkr/event_codes.py`) — the code→meaning table reused for authoring, never forked.
 - The `run_status.json` `exit_error_{code,message,detail}` → `InstanceLastExit` path — the reference pattern generalized to every terminal outcome.
-- `docs/archive/plans/bot-lifecycle-gate-map.md` § Review Update ("gate board drift risk") — historical prior art for the no-parallel-gate-projection rule reaffirmed in §9.
+- Git history — historical prior art for the no-parallel-gate-projection rule reaffirmed in §9.

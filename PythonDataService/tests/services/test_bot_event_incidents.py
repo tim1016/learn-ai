@@ -23,7 +23,7 @@ from app.services.bot_event_incidents import (
     terminal_incident_dedupe_key,
 )
 
-RUNBOOK_PATH = Path(__file__).resolve().parents[3] / "docs" / "bot-control-operator-manual.md"
+RUNBOOK_PATH = Path(__file__).resolve().parents[3] / "docs" / "broker-v2-operator-manual.md"
 
 
 def _raw_terminal(
