@@ -8336,6 +8336,7 @@ export interface components {
             mode: "log_only" | "dry_run" | "trade";
             /** Open Pnl */
             open_pnl: number | null;
+            primary_action_by_lens: components["schemas"]["PrimaryActionByLens"];
             rail: components["schemas"]["TransactionRail"];
             /** Readiness Blocked Count */
             readiness_blocked_count: number;
@@ -18144,6 +18145,28 @@ export interface components {
             /** Vega */
             vega: number;
         };
+        /**
+         * PrimaryActionByLens
+         * @description The one backend-selected banner action for each lens (issue #1665).
+         *
+         *     ``trader`` is restricted to the closed
+         *     ``app.broker.v2panel.vocabulary.TRADER_LIFECYCLE_ACTION_IDS`` set
+         *     (``resume`` / ``continue`` / ``stop``); an Operator-only recovery
+         *     capability can never reach it. ``operator`` also considers those same
+         *     lifecycle actions, but a SQLite ``RecoveryCapability.primary`` recovery
+         *     action takes precedence when one is available — the audience-aware
+         *     precedence rule authored once by
+         *     ``panel_projection_service.select_primary_action_by_lens`` (ADR 0027).
+         *     Either reference is ``None``, never a guess, when nothing currently
+         *     qualifies; the frontend renders no banner action in that case rather than
+         *     deriving one from ``health``.
+         */
+        PrimaryActionByLens: {
+            /** Operator */
+            operator: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority") | null;
+            /** Trader */
+            trader: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority") | null;
+        };
         /** ProjectedCommandResponse */
         ProjectedCommandResponse: {
             /** Action */
@@ -18780,6 +18803,8 @@ export interface components {
             drifted_symbols: string[];
             /** Foreign Order Count */
             foreign_order_count: number;
+            /** Indeterminate Symbols */
+            indeterminate_symbols: string[];
             /** Resolved Count */
             resolved_count: number;
             /**

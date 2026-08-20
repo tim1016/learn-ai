@@ -10,6 +10,9 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Literal
 
+import pytest
+from pydantic import ValidationError
+
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.models import (
     AccountFreezeState,
@@ -32,7 +35,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
 )
 from app.broker.contract.models import OrderSide
 from app.schemas.broker_bots import BotStatusView
-from app.schemas.broker_v2_panel import BotPanelView, MarketPulseView
+from app.schemas.broker_v2_panel import BotHealthCard, BotPanelView, MarketPulseView, PanelAction
 from app.schemas.live_runs import BotDutyOutcomeView
 from app.schemas.operator_blocker import AccountOperatorPosture
 from app.schemas.run_admission import RunAdmissionDecision, RunAdmissionFactAges
@@ -40,6 +43,7 @@ from app.services.bot_dry_run import DryRunActivity
 from app.services.broker_v2_panel.panel_projection_service import (
     build_panel,
     compute_revision,
+    select_primary_action_by_lens,
 )
 from app.services.broker_v2_panel.sqlite_panel_adapter import (
     adapt_sqlite_panel,
@@ -1305,3 +1309,237 @@ def test_revision_is_deterministic_and_changes_on_state_change() -> None:
 
 def _action(panel, action_id):
     return next(a for a in panel.actions if a.action_id == action_id)
+
+
+# ── primary_action_by_lens policy (#1665) ────────────────────────────────────
+
+
+def _health(*, running: bool, desired_state: str = "RUNNING") -> BotHealthCard:
+    return BotHealthCard(
+        strategy_instance_id=SID,
+        phase="ON_DUTY" if running else "OFF_DUTY",
+        phase_label="On duty" if running else "Off duty",
+        desired_state=desired_state,  # type: ignore[arg-type]
+        desired_state_label=desired_state.title(),
+        running=running,
+        duty_outcome=None,
+        last_decision_at_ms=None,
+        decision_stale=False,
+        last_bar_at_ms=None,
+        resume_eligible=not running,
+        resume_label="Resume",
+        resume_explanation="Resume.",
+        carryover_checkpoint_exposure={},
+    )
+
+
+def _stub_action(action_id: str, *, enabled: bool = True) -> PanelAction:
+    return PanelAction(
+        action_id=action_id,  # type: ignore[arg-type]
+        label=action_id,
+        explanation=f"{action_id} this bot.",
+        enabled=enabled,
+        blockers=[],
+        confirmation=None,
+        revision=1,
+        concurrency_token=f"{action_id}-token",
+    )
+
+
+def _recovery_capability(action_id: str, *, primary: bool, available: bool = True) -> RecoveryCapability:
+    return RecoveryCapability(
+        action_id=action_id,
+        label=action_id,
+        explanation=f"{action_id} recovery capability.",
+        available=available,
+        unavailable_reason_code=None,
+        unavailable_reason=None,
+        scope="CUSTODY_SUBJECT",
+        freshness="not_required",
+        evidence=(),
+        reduction_plan=None,
+        confirmation=None,
+        next_step="Do it.",
+        concurrency_token=f"{action_id}-token",
+        execution_ref=None,
+        mutation=True,
+        primary=primary,
+    )
+
+
+def test_select_primary_action_by_lens_stopped_resumable() -> None:
+    selection = select_primary_action_by_lens([_stub_action("resume")], _health(running=False))
+
+    assert selection.trader == "resume"
+    assert selection.operator == "resume"
+
+
+def test_select_primary_action_by_lens_paused_continuable() -> None:
+    selection = select_primary_action_by_lens(
+        [_stub_action("continue")],
+        _health(running=True, desired_state="PAUSED"),
+    )
+
+    assert selection.trader == "continue"
+    assert selection.operator == "continue"
+
+
+def test_select_primary_action_by_lens_running_stoppable() -> None:
+    selection = select_primary_action_by_lens([_stub_action("stop")], _health(running=True))
+
+    assert selection.trader == "stop"
+    assert selection.operator == "stop"
+
+
+def test_select_primary_action_by_lens_blocked_action_still_referenced() -> None:
+    """A disabled lifecycle action is still the reference; ``enabled`` only
+    gates the button, not whether the banner may point at it (matches the
+    pre-existing behavior of the frontend's retired ``primaryLifecycleAction``,
+    and ADR 0027's ``wait`` disposition — a block is allowed to name its
+    control without offering a fake, always-enabled button)."""
+    selection = select_primary_action_by_lens(
+        [_stub_action("resume", enabled=False)],
+        _health(running=False),
+    )
+
+    assert selection.trader == "resume"
+    assert selection.operator == "resume"
+
+
+def test_select_primary_action_by_lens_missing_action_fails_closed() -> None:
+    """No Trader-visible lifecycle action is presented: both references are
+    ``None`` rather than guessing from `health` alone."""
+    selection = select_primary_action_by_lens([], _health(running=False))
+
+    assert selection.trader is None
+    assert selection.operator is None
+
+
+def test_select_primary_action_by_lens_recovery_primary_never_becomes_trader_reference() -> None:
+    """The one deterministic Operator precedence rule (#1665): a recovery
+    capability marked primary outranks the routine lifecycle command for the
+    Operator lens, but can never leak into the Trader lens even when the
+    Trader-visible lifecycle action is also presented alongside it."""
+    selection = select_primary_action_by_lens(
+        [_stub_action("stop"), _stub_action("rebuild_from_mirror")],
+        _health(running=True),
+        recovery_primary_action_id="rebuild_from_mirror",
+    )
+
+    assert selection.trader == "stop"
+    assert selection.operator == "rebuild_from_mirror"
+
+
+def test_select_primary_action_by_lens_dangling_recovery_primary_falls_back() -> None:
+    """A recovery-primary id that is not actually presented (stale evidence,
+    a caller bug) must never leak through as a dangling reference — Operator
+    falls back to the same lifecycle candidate as Trader."""
+    selection = select_primary_action_by_lens(
+        [_stub_action("stop")],
+        _health(running=True),
+        recovery_primary_action_id="rebuild_from_mirror",
+    )
+
+    assert selection.trader == "stop"
+    assert selection.operator == "stop"
+
+
+def test_build_panel_populates_primary_action_by_lens_for_stopped_resumable_bot() -> None:
+    panel = _panel(_status(running=False), _clerk_status(), [], exposure={})
+
+    assert panel.primary_action_by_lens.trader == "resume"
+    assert panel.primary_action_by_lens.operator == "resume"
+
+
+def test_build_panel_populates_primary_action_by_lens_for_running_stoppable_bot() -> None:
+    panel = _panel(_status(running=True), _clerk_status(), [])
+
+    assert panel.primary_action_by_lens.trader == "stop"
+    assert panel.primary_action_by_lens.operator == "stop"
+
+
+def test_build_panel_populates_primary_action_by_lens_for_paused_continuable_bot() -> None:
+    panel = _panel(_status(running=True, desired_state="PAUSED"), _clerk_status(), [])
+
+    assert panel.primary_action_by_lens.trader == "continue"
+    assert panel.primary_action_by_lens.operator == "continue"
+
+
+def test_build_panel_populates_primary_action_by_lens_for_blocked_bot() -> None:
+    """An account-held, stopped bot still names Resume as its reference —
+    only ``enabled`` reflects the block; the reference itself is stable."""
+    panel = _panel(
+        _status(running=False),
+        _clerk_status(hold=True, hold_code="STREAM_HEALTH_HOLD"),
+        [],
+        exposure={},
+    )
+
+    assert panel.mission_verdict.state == "blocked"
+    assert _action(panel, "resume").enabled is False
+    assert panel.primary_action_by_lens.trader == "resume"
+    assert panel.primary_action_by_lens.operator == "resume"
+
+
+def test_sqlite_adapter_recovery_primary_selects_operator_reference_without_leaking_to_trader() -> None:
+    """#1665: the audience-aware precedence, exercised through the real
+    SQLite adapter path. A running, SQLite-activated bot never gets a plain
+    ``stop`` back (only the Operator-only ``stop_bot_decisions`` capability
+    survives activation while running), so the Trader reference must fail
+    closed to ``None`` — it must never fall back to the Operator-only
+    recovery action id. Also proves the retained
+    ``readiness_checks[].evidence['primary']`` diagnostic marker can never
+    disagree with the Operator reference, since both derive from the same
+    ``RecoveryCapability.primary`` flag."""
+    base = _panel(_status(running=True), _clerk_status(), [])
+    projection = replace(
+        _rail_projection(orders=()),
+        recovery_actions=(
+            _recovery_capability("reconcile_now", primary=False),
+            _recovery_capability("rebuild_from_mirror", primary=True),
+        ),
+    )
+
+    adapted = adapt_sqlite_panel(base, projection)
+
+    assert adapted.primary_action_by_lens.trader is None
+    assert adapted.primary_action_by_lens.operator == "rebuild_from_mirror"
+    primary_check = next(
+        check for check in adapted.readiness_checks if check.evidence.get("primary") is True
+    )
+    assert primary_check.operation == adapted.primary_action_by_lens.operator
+
+
+def test_sqlite_adapter_falls_back_to_lifecycle_when_no_recovery_action_is_primary() -> None:
+    base = _panel(_status(running=False), _clerk_status(), [], exposure={})
+    projection = replace(
+        _rail_projection(orders=()),
+        recovery_actions=(_recovery_capability("reconcile_now", primary=False),),
+    )
+
+    adapted = adapt_sqlite_panel(base, projection)
+
+    assert adapted.primary_action_by_lens.trader == "resume"
+    assert adapted.primary_action_by_lens.operator == "resume"
+    assert all(check.evidence.get("primary") is not True for check in adapted.readiness_checks)
+
+
+def test_primary_action_by_lens_rejects_operator_only_action_as_trader_reference() -> None:
+    """Schema-level defense in depth: the model validator itself must refuse
+    to construct a ``BotPanelView`` whose Trader reference is an
+    Operator-only action, independent of any policy-function test above."""
+    base = _panel(_status(running=True), _clerk_status(), [])
+    payload = base.model_dump()
+    payload["primary_action_by_lens"] = {"trader": "rebuild_from_mirror", "operator": None}
+
+    with pytest.raises(ValidationError):
+        BotPanelView.model_validate(payload)
+
+
+def test_primary_action_by_lens_rejects_dangling_operator_reference() -> None:
+    base = _panel(_status(running=True), _clerk_status(), [])
+    payload = base.model_dump()
+    payload["primary_action_by_lens"] = {"trader": None, "operator": "rebuild_from_mirror"}
+
+    with pytest.raises(ValidationError):
+        BotPanelView.model_validate(payload)

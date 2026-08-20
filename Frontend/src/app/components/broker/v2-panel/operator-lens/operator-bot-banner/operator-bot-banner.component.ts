@@ -19,8 +19,8 @@ import { MissionVerdictStatusComponent } from '../../bot-detail-banner/mission-v
 import { BotBannerOverflowComponent } from '../../bot-detail-banner/bot-banner-overflow.component';
 import { PanelInstrumentQuoteComponent } from '../../instrument-quote/panel-instrument-quote.component';
 import {
-  lifecycleActionTone,
-  primaryLifecycleAction,
+  actionTone,
+  primaryActionForLens,
 } from '../../bot-detail-banner/lifecycle-action';
 
 const OVERFLOW_ACTION_IDS: readonly ActionId[] = [
@@ -57,11 +57,8 @@ export class OperatorBotBannerComponent {
     this.panel().account_id,
     'bots',
   ]);
-  protected readonly primaryAction = computed(() => primaryLifecycleAction(this.panel()));
-  protected readonly primaryActionTone = computed(() => {
-    const action = this.primaryAction();
-    return action === null ? 'primary' : lifecycleActionTone(action);
-  });
+  protected readonly primaryAction = computed(() => primaryActionForLens(this.panel(), 'operator'));
+  protected readonly primaryActionTone = computed(() => actionTone(this.primaryAction()));
   protected readonly overflowActions = computed(() =>
     this.panel().actions.filter((action) => OVERFLOW_ACTION_IDS.includes(action.action_id)),
   );

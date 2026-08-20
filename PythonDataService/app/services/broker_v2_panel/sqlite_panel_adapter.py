@@ -41,6 +41,7 @@ from app.services.broker_v2_panel.catalog_projection_service import (
     require_sqlite_catalog_identity,
     sqlite_catalog_rollup,
 )
+from app.services.broker_v2_panel.panel_projection_service import select_primary_action_by_lens
 
 _WORKING_BROKER_STATES = frozenset(
     {"new", "accepted", "pending_new", "partially_filled", "pending_cancel"}
@@ -90,6 +91,10 @@ def adapt_sqlite_panel(
     ]
     checks = [_readiness_check(item, projection.generated_at_ms) for item in projection.recovery_actions]
     ready_count = sum(check.ready for check in checks)
+    recovery_primary_action_id = next(
+        (item.action_id for item in projection.recovery_actions if item.primary),
+        None,
+    )
     return panel.model_copy(
         update={
             "updated_at_ms": projection.generated_at_ms,
@@ -105,6 +110,11 @@ def adapt_sqlite_panel(
             ),
             "journal_tail_seq": projection.control_revision,
             "actions": actions,
+            "primary_action_by_lens": select_primary_action_by_lens(
+                actions,
+                panel.health,
+                recovery_primary_action_id=recovery_primary_action_id,
+            ),
             "readiness_checks": checks,
             "readiness_ready_count": ready_count,
             "readiness_blocked_count": len(checks) - ready_count,

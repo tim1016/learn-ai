@@ -23,6 +23,7 @@ from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionReceipt
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.v2panel.vocabulary import (
     HOLD_REASONS,
+    ActionId,
     ChannelState,
     copy_for,
     duty_outcome_copy_key,
@@ -37,6 +38,7 @@ from app.schemas.broker_v2_panel import (
     MarketPulseView,
     MissionVerdictView,
     PanelAction,
+    PrimaryActionByLens,
     ReadinessCheckView,
     RecentDecisionView,
     RecentFillView,
@@ -600,6 +602,53 @@ def _mission_verdict(
     )
 
 
+def _lifecycle_candidate_action_id(health: BotHealthCard) -> ActionId:
+    """The one Trader-visible lifecycle action id implied by ``health`` alone.
+
+    Mirrors the pre-#1665 frontend ``primaryLifecycleAction`` state machine,
+    narrowed to the closed ``TRADER_LIFECYCLE_ACTION_IDS`` set. Whether that
+    action is actually presented for this bot is checked by the caller.
+    """
+    if not health.running:
+        return "resume"
+    if health.desired_state == "PAUSED":
+        return "continue"
+    return "stop"
+
+
+def select_primary_action_by_lens(
+    actions: list[PanelAction],
+    health: BotHealthCard,
+    *,
+    recovery_primary_action_id: str | None = None,
+) -> PrimaryActionByLens:
+    """Author the one backend-selected banner action for each lens (#1665).
+
+    Trader is always the Trader-visible lifecycle action implied by
+    ``health`` (resume/continue/stop), and only when that action is currently
+    presented — a missing action fails closed to ``None`` rather than
+    guessing. Operator prefers a SQLite recovery capability marked
+    ``primary`` (``recovery_primary_action_id``); that is the one precedence
+    rule this policy applies (ADR 0027 audience-aware selection): an active
+    account-custody recovery need always outranks the routine lifecycle
+    command, because the routine command may not even reflect the bot's true
+    blocked state (a running bot under an engaged recovery has no plain
+    ``stop`` — only ``stop_bot_decisions``, an Operator-only capability).
+    Operator falls back to the same lifecycle candidate as Trader when no
+    recovery capability is primary right now.
+    """
+    action_ids = {action.action_id for action in actions}
+    lifecycle_candidate = _lifecycle_candidate_action_id(health)
+    trader = lifecycle_candidate if lifecycle_candidate in action_ids else None
+    recovery_primary_is_presented = (
+        recovery_primary_action_id is not None and recovery_primary_action_id in action_ids
+    )
+    operator: ActionId | None = (
+        recovery_primary_action_id if recovery_primary_is_presented else trader  # type: ignore[assignment]
+    )
+    return PrimaryActionByLens(trader=trader, operator=operator)
+
+
 def build_panel(
     status: BotStatusView,
     clerk_status: ClerkStatus,
@@ -727,6 +776,7 @@ def build_panel(
         journal_tail_ref=journal_tail_ref,
         journal_tail_seq=journal_tail_seq,
         actions=actions,
+        primary_action_by_lens=select_primary_action_by_lens(actions, health),
         readiness_checks=readiness_checks,
         readiness_ready_count=readiness_ready_count,
         readiness_blocked_count=len(readiness_checks) - readiness_ready_count,

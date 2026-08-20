@@ -406,9 +406,13 @@ def test_plan_flags_position_drift_when_broker_and_attributed_disagree() -> None
     assert plan.drifted_symbols == ("SPY",)
 
 
-def test_plan_suppresses_drift_for_a_symbol_with_a_non_terminal_in_flight_order() -> None:
-    """#1378 acceptance: a symbol with a non-terminal in-flight order is not
-    flagged as drift — the fill/ack for it just hasn't landed yet."""
+def test_plan_marks_indeterminate_for_a_symbol_with_a_non_terminal_in_flight_order() -> None:
+    """#1378: a symbol with a non-terminal in-flight order is not flagged as
+    a *confirmed* drift — the fill/ack for it just hasn't landed yet.
+
+    #1655: it is still not proven equal, so it must not be reported "clean"
+    either — that would admit new exposure while custody is indeterminate.
+    """
     working_order = _broker_order(_our_order_ref(), status="partially_filled")
     plan = plan_account_reconciliation(
         namespaces=_namespaces(),
@@ -416,8 +420,24 @@ def test_plan_suppresses_drift_for_a_symbol_with_a_non_terminal_in_flight_order(
         broker_positions=[_position("SPY", quantity=5)],
         attributed_positions={"SPY": 3.0},
     )
-    assert plan.verdict == "clean"
+    assert plan.verdict == "position_drift"
+    assert plan.drifted_symbols == ()
     assert plan.indeterminate_symbols == ("SPY",)
+
+
+def test_plan_flags_position_drift_verdict_when_drift_and_indeterminate_both_present() -> None:
+    """A confirmed drift on one symbol and an indeterminate mismatch on
+    another must both surface — neither category may hide the other."""
+    working_order = _broker_order(_our_order_ref(), symbol="QQQ", status="accepted")
+    plan = plan_account_reconciliation(
+        namespaces=_namespaces(),
+        broker_orders=[working_order],
+        broker_positions=[_position("SPY", quantity=5), _position("QQQ", quantity=2)],
+        attributed_positions={"SPY": 3.0, "QQQ": 0.0},
+    )
+    assert plan.verdict == "position_drift"
+    assert plan.drifted_symbols == ("SPY",)
+    assert plan.indeterminate_symbols == ("QQQ",)
 
 
 def test_plan_prioritizes_unexplained_order_over_position_drift() -> None:
@@ -871,6 +891,157 @@ async def test_reconcile_account_raises_an_account_clerk_uncertainty_for_positio
     assert uncertainty is not None
     assert uncertainty["blocks_new_exposure"] == 1
     assert uncertainty["allows_reduction"] == 1
+
+
+async def test_reconcile_blocks_new_exposure_on_first_indeterminate_mismatch(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """#1655 acceptance: a first-time in-flight position mismatch (a broker
+    position that disagrees with attributed exposure on a symbol whose
+    captured order is still working) must not be admission-clean. It must
+    author a durable account-wide blocker that fences manual submission, an
+    already-active bot's next ENTER, and a different bot's ENTER — while
+    cancel/reduce/reconcile stay reachable."""
+    submitted = await submit_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="entry-1",
+        lifecycle_run_id=RUN_ID,
+        leg=_leg(quantity=5),
+        trade=_FakeTrade(),
+    )
+    assert submitted.order_ref is not None
+
+    # The order and position snapshots land on different points of the same
+    # fill's propagation: the order reports 2 filled (still working), but
+    # the broker's position already shows 3 — a real broker race, not a bug
+    # in either read.
+    working = _broker_order(
+        submitted.order_ref,
+        status="partially_filled",
+        filled_quantity=2.0,
+        filled_avg_price=100.0,
+    )
+    other_sid, other_run_id = "qqq-bot", "run-qqq"
+    repo.register_strategy_instance(strategy_instance_id=other_sid, symbol="QQQ", config_hash="h2")
+    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=other_sid, lifecycle_run_id=other_run_id)
+
+    result = await reconcile_account(
+        repo,
+        read=_FakeRead(orders=[working], positions=[_position("SPY", quantity=3.0)]),
+        trade=_FakeTrade(),
+    )
+
+    assert result.verdict == "position_drift"
+    assert result.drifted_symbols == ()
+    assert result.indeterminate_symbols == ("SPY",)
+
+    uncertainty = repo.active_uncertainty(
+        scope="ACCOUNT_CLERK", reason_code="POSITION_DRIFT", strategy_instance_id=None
+    )
+    assert uncertainty is not None
+    assert uncertainty["blocks_new_exposure"] == 1
+    assert uncertainty["allows_reduction"] == 1
+
+    # New exposure is blocked account-wide: the affected bot's own next
+    # ENTER, a different bot's ENTER, and manual submission all read the
+    # same ACCOUNT_CLERK-scoped uncertainty.
+    same_strategy = admit_new_exposure(repo, strategy_instance_id=SID)
+    assert same_strategy.allowed is False
+    assert same_strategy.reason_code == "POSITION_DRIFT"
+
+    different_strategy = admit_new_exposure(repo, strategy_instance_id=other_sid)
+    assert different_strategy.allowed is False
+    assert different_strategy.reason_code == "POSITION_DRIFT"
+
+    from app.broker.alpaca.clerk.sqlite.custody_subjects import manual_operator_subject_id
+    from app.broker.alpaca.clerk.sqlite.uncertainty import Capability, decide_capability
+
+    manual = decide_capability(
+        repo, capability=Capability.NEW_EXPOSURE, subject_id=manual_operator_subject_id("desk")
+    )
+    assert manual.allowed is False
+    assert manual.reason_code == "POSITION_DRIFT"
+
+    # Safety capabilities stay reachable while blocked.
+    assert decide_capability(repo, capability=Capability.CANCEL, strategy_instance_id=SID).allowed
+    assert decide_capability(repo, capability=Capability.RECONCILE, strategy_instance_id=SID).allowed
+
+
+async def test_reconcile_resolves_indeterminate_mismatch_only_once_proven_equal(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """#1655: the blocker must survive while the order is still working (even
+    once the broker position momentarily agrees with a *stale* attributed
+    read), and resolve only after a complete pass proves exact equality with
+    no in-flight indeterminacy — exactly once."""
+    submitted = await submit_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="entry-1",
+        lifecycle_run_id=RUN_ID,
+        leg=_leg(quantity=5),
+        trade=_FakeTrade(),
+    )
+    assert submitted.order_ref is not None
+    working = _broker_order(
+        submitted.order_ref,
+        status="partially_filled",
+        filled_quantity=2.0,
+        filled_avg_price=100.0,
+    )
+    first = await reconcile_account(
+        repo,
+        read=_FakeRead(orders=[working], positions=[_position("SPY", quantity=3.0)]),
+        trade=_FakeTrade(),
+    )
+    assert first.verdict == "position_drift"
+    assert not admit_new_exposure(repo, strategy_instance_id=SID).allowed
+
+    # The order finally reports fully filled and the broker position agrees
+    # exactly — a coherent snapshot with no in-flight indeterminacy.
+    filled = _broker_order(
+        submitted.order_ref,
+        status="filled",
+        filled_quantity=5.0,
+        filled_avg_price=100.0,
+    )
+    second = await reconcile_account(
+        repo,
+        read=_FakeRead(orders=[filled], positions=[_position("SPY", quantity=5.0)]),
+        trade=_FakeTrade(),
+    )
+    assert second.verdict == "clean"
+    assert second.indeterminate_symbols == ()
+    assert (
+        repo.active_uncertainty(scope="ACCOUNT_CLERK", reason_code="POSITION_DRIFT", strategy_instance_id=None)
+        is None
+    )
+    resolutions = [
+        transition
+        for transition in repo.custody_transitions()
+        if transition["transition_kind"] == "UNCERTAINTY_RESOLVED"
+        and '"resolution_kind":"CLEAN_BROKER_RECONCILIATION"' in transition["facts_json"]
+    ]
+    assert len(resolutions) == 1
+    assert admit_new_exposure(repo, strategy_instance_id=SID).allowed
+
+    # A further clean pass must not re-resolve (idempotent — no phantom
+    # second UNCERTAINTY_RESOLVED transition racing a fresh observation).
+    await reconcile_account(
+        repo,
+        read=_FakeRead(orders=[filled], positions=[_position("SPY", quantity=5.0)]),
+        trade=_FakeTrade(),
+    )
+    resolutions_after = [
+        transition
+        for transition in repo.custody_transitions()
+        if transition["transition_kind"] == "UNCERTAINTY_RESOLVED"
+        and '"resolution_kind":"CLEAN_BROKER_RECONCILIATION"' in transition["facts_json"]
+    ]
+    assert len(resolutions_after) == 1
 
 
 async def test_reconcile_uses_post_recovery_broker_snapshot_for_final_verdict(
@@ -1329,6 +1500,86 @@ async def test_reconcile_account_recovers_an_unknown_manual_order_after_reposito
         assert trade.lookup_calls == [submitted.leg.order_ref]
         assert after_restart.order(submitted.leg.order_ref).broker_order_id is not None  # type: ignore[union-attr]
         assert after_restart.effect_operation(submitted.leg.effect_operation_id).state == "in_progress"  # type: ignore[union-attr]
+    finally:
+        after_restart.close()
+
+
+async def test_indeterminate_blocker_survives_restart_and_boot_recovery_stays_blocked(
+    tmp_path: Path,
+) -> None:
+    """#1655: the durable indeterminate-mismatch blocker is not in-memory
+    state. A process crash right after it is published (simulated here by
+    closing the handle without any further writes) must leave a freshly
+    reopened repository — including the boot-recovery reconciliation path
+    (:meth:`SqliteAlpacaClerkFacade.recover`) — still fenced against new
+    exposure, and a later coherent snapshot must resolve it exactly once."""
+    clock = _clock_at(1_700_000_000_000)
+    before_restart = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    try:
+        before_restart.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
+        submit_start_run(before_restart, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+        submitted = await submit_enter(
+            before_restart,
+            account_id=ACCOUNT_ID,
+            strategy_instance_id=SID,
+            decision_id="entry-1",
+            lifecycle_run_id=RUN_ID,
+            leg=_leg(quantity=5),
+            trade=_FakeTrade(),
+        )
+        assert submitted.order_ref is not None
+        order_ref = submitted.order_ref
+        working = _broker_order(order_ref, status="partially_filled", filled_quantity=2.0, filled_avg_price=100.0)
+
+        # Publish the blocker, then crash: no further durable writes happen
+        # on this handle before it is closed.
+        result = await reconcile_account(
+            before_restart,
+            read=_FakeRead(orders=[working], positions=[_position("SPY", quantity=3.0)]),
+            trade=_FakeTrade(),
+        )
+        assert result.verdict == "position_drift"
+        assert result.indeterminate_symbols == ("SPY",)
+    finally:
+        before_restart.close()
+
+    after_restart = ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    try:
+        assert (
+            after_restart.active_uncertainty(
+                scope="ACCOUNT_CLERK", reason_code="POSITION_DRIFT", strategy_instance_id=None
+            )
+            is not None
+        )
+        assert not admit_new_exposure(after_restart, strategy_instance_id=SID).allowed
+
+        from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+
+        # Boot recovery: still fenced while the mismatch remains indeterminate.
+        facade = SqliteAlpacaClerkFacade(
+            repo=after_restart,
+            read=_FakeRead(orders=[working], positions=[_position("SPY", quantity=3.0)]),
+            trade=_FakeTrade(),
+        )
+        await facade.recover()
+        assert not admit_new_exposure(after_restart, strategy_instance_id=SID).allowed
+
+        # A later coherent, fully-filled snapshot resolves the block exactly once.
+        filled = _broker_order(order_ref, status="filled", filled_quantity=5.0, filled_avg_price=100.0)
+        cleared = await reconcile_account(
+            after_restart,
+            read=_FakeRead(orders=[filled], positions=[_position("SPY", quantity=5.0)]),
+            trade=_FakeTrade(),
+        )
+        assert cleared.verdict == "clean"
+        assert admit_new_exposure(after_restart, strategy_instance_id=SID).allowed
+        resolutions = [
+            transition
+            for transition in after_restart.custody_transitions()
+            if transition["transition_kind"] == "UNCERTAINTY_RESOLVED"
+            and '"resolution_kind":"CLEAN_BROKER_RECONCILIATION"' in transition["facts_json"]
+        ]
+        assert len(resolutions) == 1
     finally:
         after_restart.close()
 

@@ -45,6 +45,7 @@ const PANEL: BotPanelView = {
     action_id: 'resume', label: 'Resume', explanation: 'Resume bot.', enabled: true,
     blockers: [], confirmation: null, revision: 1, concurrency_token: 'resume-token',
   }],
+  primary_action_by_lens: { trader: 'resume', operator: 'resume' },
   readiness_checks: [], readiness_ready_count: 0, readiness_blocked_count: 1,
   exposure: {}, working_orders: [], recent_decisions: [], recent_fills: [], fills_today: 0,
   realized_pnl_today: 0, open_pnl: null,
@@ -66,5 +67,36 @@ describe('TraderBotBannerComponent', () => {
     expect(screen.queryByText('Paper')).toBeNull();
     expect(screen.queryByText('Runtime idle')).toBeNull();
     expect(screen.queryByText('acc-1')).toBeNull();
+  });
+
+  it('never renders an Operator-only action as the primary command, even when presented (#1665)', async () => {
+    const panel: BotPanelView = {
+      ...PANEL,
+      actions: [
+        ...PANEL.actions,
+        {
+          action_id: 'rebuild_from_mirror',
+          label: 'Rebuild from mirror',
+          explanation: 'Recover custody.',
+          enabled: true,
+          blockers: [],
+          confirmation: null,
+          revision: 1,
+          concurrency_token: 'rebuild-token',
+        },
+      ],
+      // The backend never selects an Operator-only repair for the Trader lens;
+      // this fixture proves the banner defers to that reference rather than
+      // re-deriving a primary action from `actions`/`health` on its own.
+      primary_action_by_lens: { trader: null, operator: 'rebuild_from_mirror' },
+    };
+
+    await render(TraderBotBannerComponent, {
+      inputs: { panel },
+      providers: [provideRouter([])],
+    });
+
+    expect(screen.queryByRole('button', { name: 'Rebuild from mirror' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
   });
 });

@@ -6632,6 +6632,9 @@
             ],
             "title": "Open Pnl"
           },
+          "primary_action_by_lens": {
+            "$ref": "#/components/schemas/PrimaryActionByLens"
+          },
           "rail": {
             "$ref": "#/components/schemas/TransactionRail"
           },
@@ -6726,6 +6729,7 @@
           "journal_tail_ref",
           "journal_tail_seq",
           "actions",
+          "primary_action_by_lens",
           "readiness_checks",
           "readiness_ready_count",
           "readiness_blocked_count",
@@ -29171,6 +29175,77 @@
         "title": "PricingPointResult",
         "type": "object"
       },
+      "PrimaryActionByLens": {
+        "description": "The one backend-selected banner action for each lens (issue #1665).\n\n``trader`` is restricted to the closed\n``app.broker.v2panel.vocabulary.TRADER_LIFECYCLE_ACTION_IDS`` set\n(``resume`` / ``continue`` / ``stop``); an Operator-only recovery\ncapability can never reach it. ``operator`` also considers those same\nlifecycle actions, but a SQLite ``RecoveryCapability.primary`` recovery\naction takes precedence when one is available \u2014 the audience-aware\nprecedence rule authored once by\n``panel_projection_service.select_primary_action_by_lens`` (ADR 0027).\nEither reference is ``None``, never a guess, when nothing currently\nqualifies; the frontend renders no banner action in that case rather than\nderiving one from ``health``.",
+        "properties": {
+          "operator": {
+            "anyOf": [
+              {
+                "enum": [
+                  "deploy",
+                  "resume",
+                  "pause",
+                  "continue",
+                  "stop",
+                  "flatten_stop",
+                  "retire",
+                  "cancel_order",
+                  "reconcile_now",
+                  "recover_exact_execution_evidence",
+                  "resolve_execution_coverage",
+                  "cancel_verified_working_orders",
+                  "prepare_safe_flatten",
+                  "stop_bot_decisions",
+                  "open_custody_timeline",
+                  "rebuild_from_mirror",
+                  "reset_authority"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operator"
+          },
+          "trader": {
+            "anyOf": [
+              {
+                "enum": [
+                  "deploy",
+                  "resume",
+                  "pause",
+                  "continue",
+                  "stop",
+                  "flatten_stop",
+                  "retire",
+                  "cancel_order",
+                  "reconcile_now",
+                  "recover_exact_execution_evidence",
+                  "resolve_execution_coverage",
+                  "cancel_verified_working_orders",
+                  "prepare_safe_flatten",
+                  "stop_bot_decisions",
+                  "open_custody_timeline",
+                  "rebuild_from_mirror",
+                  "reset_authority"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trader"
+          }
+        },
+        "required": [
+          "trader",
+          "operator"
+        ],
+        "title": "PrimaryActionByLens",
+        "type": "object"
+      },
       "ProjectedCommandResponse": {
         "properties": {
           "action": {
@@ -30926,6 +31001,13 @@
             "title": "Foreign Order Count",
             "type": "integer"
           },
+          "indeterminate_symbols": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Indeterminate Symbols",
+            "type": "array"
+          },
           "resolved_count": {
             "title": "Resolved Count",
             "type": "integer"
@@ -30945,7 +31027,8 @@
           "verdict",
           "resolved_count",
           "foreign_order_count",
-          "drifted_symbols"
+          "drifted_symbols",
+          "indeterminate_symbols"
         ],
         "title": "ReconciliationResponse",
         "type": "object"

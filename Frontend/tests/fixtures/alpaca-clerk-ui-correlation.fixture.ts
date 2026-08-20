@@ -168,6 +168,7 @@ export function panelAtRevision(revision: number): BotPanelView {
       revision,
       concurrency_token: `resume-token-${revision}`,
     }],
+    primary_action_by_lens: { trader: PRESENTED_ACTION_ID, operator: PRESENTED_ACTION_ID },
     readiness_checks: [],
     readiness_ready_count: 0,
     readiness_blocked_count: 0,

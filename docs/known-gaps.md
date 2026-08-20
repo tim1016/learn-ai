@@ -25,18 +25,6 @@ deleting the complete order-actuation boundary on **2026-08-19**.
 
 ## 1. Safety-critical (partially re-verified 2026-08-17)
 
-### Execution-path fail-open seams (verified 2026-08-18)
-
-Source: `docs/audits/execution-path-fail-open-2026-08-18.md`, read at commit
-`a7771477`. This sweep excluded #1614–#1618 and #1592's nine refuted candidates.
-
-- **Activated SQLite: first in-flight position mismatch is admission-clean
-  (high).**
-  `sqlite/reconcile.py:121-184,363-381,777-825` classifies a mismatch on a
-  captured working-order symbol as indeterminate, returns `clean`, and authors no
-  blocker unless a prior POSITION_DRIFT already exists. Ordinary working bot
-  ENTRY orders are not an independent new-exposure fence.
-  [#1655](https://github.com/tim1016/learn-ai/issues/1655)
 ### Temporal authority and liveness (verified 2026-08-18)
 
 Source: `docs/audits/temporal-compliance-2026-08-18.md`, read at commit

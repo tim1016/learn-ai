@@ -26,7 +26,7 @@ import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 import { OperatorRunHistoryComponent } from '../bot-run-history/operator-run-history.component';
 import { OperatorDisclosureCardComponent } from './operator-disclosure-card.component';
 import { OperatorBotBannerComponent } from './operator-bot-banner/operator-bot-banner.component';
-import { primaryLifecycleAction } from '../bot-detail-banner/lifecycle-action';
+import { primaryActionForLens } from '../bot-detail-banner/lifecycle-action';
 
 /**
  * Operator lens (spec §7).
@@ -106,7 +106,9 @@ export class OperatorLensComponent {
   protected readonly health = computed(() => this.panel().health);
   protected readonly clerk = computed(() => this.panel().clerk);
   protected readonly rail = computed(() => this.panel().rail);
-  protected readonly primaryAction = computed<PanelAction | null>(() => primaryLifecycleAction(this.panel()));
+  protected readonly primaryAction = computed<PanelAction | null>(() =>
+    primaryActionForLens(this.panel(), 'operator'),
+  );
 
   // ── Template handlers ─────────────────────────────────────────────────────
 
