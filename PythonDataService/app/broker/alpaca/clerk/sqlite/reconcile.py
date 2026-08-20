@@ -172,7 +172,11 @@ def plan_account_reconciliation(
     verdict: AccountVerdict
     if foreign:
         verdict = "unexplained_order"
-    elif drifted:
+    elif drifted or indeterminate:
+        # #1655: a symbol whose broker/attributed mismatch is only explained
+        # by a still-working captured order is not proven equal — it is
+        # unproven, not clean. Treat it the same as a confirmed drift for
+        # admission purposes until a later pass proves exact equality.
         verdict = "position_drift"
     else:
         verdict = "clean"
@@ -368,19 +372,27 @@ def _sync_position_drift(
     broker_positions: list[BrokerPosition],
     attributed_positions: dict[str, float],
 ) -> None:
-    if not drifted_symbols and indeterminate_symbols:
-        # A working order can explain the mismatch, but cannot prove that a
-        # previously observed drift disappeared. Keep the active episode until
-        # a pass without in-flight activity proves equality.
-        return
-    if not drifted_symbols:
+    """Fence account-wide new exposure on any unproven broker/attributed mismatch.
+
+    #1655: a symbol whose mismatch is only explained by a still-working
+    captured order (``indeterminate_symbols``) is not proof the position
+    truly matches — the order and position reads can land on different
+    points of the same fill's propagation. Such a symbol is folded into the
+    same durable episode as a confirmed drift so a *first* indeterminate
+    observation still authors a blocker instead of silently passing. The
+    episode is resolved only when a later pass proves both sets empty —
+    exact equality with no in-flight indeterminacy — never merely because a
+    working order now "explains" a symbol that was drifted before.
+    """
+    mismatched_symbols = tuple(sorted({*drifted_symbols, *indeterminate_symbols}))
+    if not mismatched_symbols:
         resolve_reconciliation_uncertainty(
             repo,
             reason_code=POSITION_DRIFT_REASON_CODE,
             evidence_refs=("fresh_position_snapshot",),
         )
         return
-    symbols = ", ".join(drifted_symbols)
+    symbols = ", ".join(mismatched_symbols)
     broker_by_symbol: dict[str, float] = {}
     for position in broker_positions:
         symbol = position.symbol.upper()
@@ -394,7 +406,7 @@ def _sync_position_drift(
                 broker_qty=broker_by_symbol.get(symbol, 0.0),
                 attributed_qty=attributed_positions.get(symbol, 0.0),
             )
-            for symbol in drifted_symbols
+            for symbol in mismatched_symbols
         )
     )
     raise_uncertainty(
@@ -404,10 +416,11 @@ def _sync_position_drift(
         headline="Account position doesn't match broker records",
         explanation=(
             f"The broker's reported position for {symbols} differs from the Clerk's "
-            "attributed exposure outside the accepted tolerance."
+            "attributed exposure outside the accepted tolerance, or remains unproven "
+            "while a captured order for that symbol is still working at the broker."
         ),
         operator_impact=("New positions are paused account-wide. Recognized risk reduction remains available."),
-        next_step="Reconcile now, then review the drifted symbols before resuming.",
+        next_step="Reconcile now, then review the affected symbols before resuming.",
         evidence_refs=("fresh_position_snapshot",),
         cause_facts=cause.to_mapping(),
         refresh_unchanged=True,
@@ -485,6 +498,7 @@ class AccountReconciliationResult:
     resolved_count: int = 0
     foreign_order_count: int = 0
     drifted_symbols: tuple[str, ...] = field(default_factory=tuple)
+    indeterminate_symbols: tuple[str, ...] = field(default_factory=tuple)
     receipt_id: str | None = None
     recorded_at_ms: int | None = None
 
@@ -807,7 +821,11 @@ def _finalize_reconciliation_verdict(
         broker_positions=broker_positions,
         attributed_positions=repo.attributed_positions_by_symbol(),
     )
-    if plan.verdict == "clean" and not plan.indeterminate_symbols:
+    if plan.verdict == "clean":
+        # #1655: verdict is only ever "clean" when both drifted_symbols and
+        # indeterminate_symbols are empty (see plan_account_reconciliation),
+        # so a non-flat instance here is a genuine flat-exit proof, never one
+        # masked by an unproven in-flight mismatch.
         _resolve_flat_exit_fences(repo, instances)
     resolve_incomplete_reconciliation_uncertainty(
         repo,
@@ -818,6 +836,7 @@ def _finalize_reconciliation_verdict(
         resolved_count=resolved_count,
         foreign_order_count=len(plan.foreign_orders),
         drifted_symbols=plan.drifted_symbols,
+        indeterminate_symbols=plan.indeterminate_symbols,
     )
     if trigger != "OPERATOR_RECONCILE_NOW":
         return result
