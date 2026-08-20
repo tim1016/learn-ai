@@ -1,0 +1,45 @@
+@if (strategy()?.evidence_status === 'human_override_required') {
+  <section
+    class="evidence-override"
+    role="alert"
+    aria-labelledby="evidence-override-title"
+  >
+    <div class="evidence-override__heading">
+      <span aria-hidden="true">!</span>
+      <div>
+        <h2 id="evidence-override-title">Dangerous human override</h2>
+        <p>{{ strategy()?.override_explanation }}</p>
+      </div>
+    </div>
+
+    <label class="evidence-override__acknowledgement">
+      <input
+        type="checkbox"
+        [checked]="acknowledged()"
+        (change)="changeAcknowledgement($event)"
+      />
+      <span>I accept the evidence-only deployment risk for this strategy.</span>
+    </label>
+
+    <div class="evidence-override__reason">
+      <label for="evidence-override-reason">Operator reason</label>
+      <textarea
+        id="evidence-override-reason"
+        rows="3"
+        maxlength="500"
+        [value]="reason()"
+        [attr.aria-invalid]="reasonError() !== null"
+        aria-describedby="evidence-override-help"
+        (input)="changeReason($event)"
+        (blur)="reasonBlur.emit()"
+      ></textarea>
+      <small id="evidence-override-help">
+        Record why this unreconciled strategy is being deployed. This becomes
+        immutable receipt evidence.
+      </small>
+      @if (reasonError(); as error) {
+        <em role="alert">{{ error }}</em>
+      }
+    </div>
+  </section>
+}

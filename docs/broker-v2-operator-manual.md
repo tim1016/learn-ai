@@ -20,6 +20,37 @@ manual SQLite trading. See
 `docs/references/alpaca-sqlite-clerk-recovery-language.md` for the wording matrix and
 `docs/runbooks/alpaca-sqlite-clerk-recovery-and-cutover.md` for the offline subprocedure.
 
+## Alpaca paper bot deployment
+
+The Deploy page lists only strategies for which the Python runner has a
+registered executable signal-intent adapter and the latest human validation
+event marks the strategy validated.
+
+A strategy with current `accepted_for_deploy` evidence follows the normal
+path. A strategy whose behavioral verdict is `evidence_only` is visible but
+carries a **Dangerous human override** warning. To deploy it, the operator must
+separately accept the exact evidence-only risk acknowledgement and record a
+reason of at least ten characters. The same typed override is checked during
+Start preview and execution, stored in the immutable strategy-instance
+configuration and its configuration hash, and returned in the launch receipt.
+
+This override replaces only the `evidence_only` criterion. It cannot make an
+unvalidated, invalidated, rejected, or runtime-unsupported strategy deployable.
+It does not relax account posture, Clerk custody, channel health, intent
+custody, market-data, or Start-admission gates. Do not treat a successful paper
+launch as numerical-equivalence evidence.
+
+SMA Crossover and RSI Mean Reversion are the initial runtime-supported
+evidence-only choices. Both execute their canonical Python algorithms with
+default registry parameters and emit asset-free ENTER/EXIT intents. The
+selected symbol and sizing are bound by the Alpaca Action Plan; the Clerk
+remains the only broker-effect authority.
+
+A bot's strategy and override decision are immutable. To change either one,
+stop the current bot if needed and deploy a new `strategy_instance_id`.
+Resume creates a new run of the unchanged binding; it does not provide a
+rebinding path.
+
 ## SQLite manual paper tickets
 
 The Alpaca Account Desk is the only manual-order entry point when its selected

@@ -79,6 +79,7 @@ def project_bot_status(
         mode=binding.mode,
         quantity=binding.quantity,
         carryover_policy=binding.carryover_policy,
+        evidence_override=binding.evidence_override,
         carryover_account_policy_enabled=carryover_account_policy_enabled,
         carryover_checkpoint_exposure=checkpoint_exposure,
         carryover_checkpoint_config_matches=checkpoint_matches,

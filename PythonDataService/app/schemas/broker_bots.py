@@ -59,14 +59,14 @@ class AlpacaPaperStrategyKey(StrEnum):
 
     DEPLOYMENT_VALIDATION = "deployment_validation"
     EMA_CROSSOVER_SIGNAL = "ema_crossover_signal"
+    SMA_CROSSOVER = "sma_crossover"
+    RSI_MEAN_REVERSION = "rsi_mean_reversion"
 
 
 def _normalized_symbol(value: str) -> str:
     normalized = value.strip().upper()
     if _SYMBOL_RE.fullmatch(normalized) is None:
-        raise ValueError(
-            "symbol must start with a letter and contain only letters, numbers, periods, or hyphens"
-        )
+        raise ValueError("symbol must start with a letter and contain only letters, numbers, periods, or hyphens")
     return normalized
 
 
@@ -110,6 +110,25 @@ class AlpacaPaperSizingSelection(BaseModel):
         return self
 
 
+class AlpacaPaperEvidenceOverride(BaseModel):
+    """Explicit operator acceptance of an evidence-only deployment risk."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    acknowledgement: Literal["I_ACCEPT_EVIDENCE_ONLY_DEPLOYMENT_RISK"]
+    reason: str
+
+    @field_validator("reason")
+    @classmethod
+    def _require_substantive_reason(cls, value: str) -> str:
+        reason = value.strip()
+        if len(reason) < 10:
+            raise ValueError("evidence override reason must contain at least 10 characters")
+        if len(reason) > 500:
+            raise ValueError("evidence override reason must contain at most 500 characters")
+        return reason
+
+
 class AlpacaPaperDeployRequest(BaseModel):
     """Closed account-scoped command for the production Alpaca deploy page."""
 
@@ -121,6 +140,7 @@ class AlpacaPaperDeployRequest(BaseModel):
     sizing: AlpacaPaperSizingSelection = Field(default_factory=AlpacaPaperSizingSelection)
     execution_mode: Literal["paper", "dry_run"] = "paper"
     carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID"
+    evidence_override: AlpacaPaperEvidenceOverride | None = None
 
     @field_validator("strategy_instance_id")
     @classmethod
@@ -152,7 +172,7 @@ class AlpacaPaperDeployEligibility(BaseModel):
 
 
 class AlpacaPaperDeployStrategy(BaseModel):
-    """Trader-facing option for one currently accepted deploy strategy."""
+    """Trader-facing option for one accepted or explicitly overridable strategy."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -160,6 +180,8 @@ class AlpacaPaperDeployStrategy(BaseModel):
     label: str
     explanation: str
     validation_case_symbol: str
+    evidence_status: Literal["accepted", "human_override_required"]
+    override_explanation: str | None = None
 
 
 class AlpacaPaperDeployReadinessCheck(BaseModel):
@@ -249,6 +271,7 @@ class BotStatusView(BaseModel):
     mode: Literal["log_only", "dry_run", "trade"]
     quantity: int | None
     carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID"
+    evidence_override: AlpacaPaperEvidenceOverride | None = None
     carryover_account_policy_enabled: bool = False
     carryover_checkpoint_exposure: dict[str, float] = Field(default_factory=dict)
     carryover_checkpoint_config_matches: bool = False
@@ -356,6 +379,7 @@ class AlpacaPaperDeployReceipt(BaseModel):
     execution_mode: Literal["paper", "dry_run"] = "paper"
     sizing: AlpacaPaperSizingSelection
     carryover_policy: Literal["FORBID", "ALLOW"]
+    evidence_override: AlpacaPaperEvidenceOverride | None = None
     action_plan: ActionPlan
     admission: RunAdmissionDecision
     bot: BotStatusView

@@ -13,11 +13,10 @@ Rule set (unchanged from the pandas-ta reference):
     * **End of run**    — any open position is closed on ``on_end_of_algorithm``.
 
 The legacy strategy consumes a pre-computed DataFrame and enters/exits at the
-bar's close. The new engine routes minute bars through a ``TradeBarConsolidator``
-and fills through the configured fill model, so actual fill prices will drift
-slightly (signal-bar-close vs next-bar-open). The trade-set contract — same
-entries, same exits, same WIN/LOSS verdict on the same input data — is
-validated by ``test_rsi_mean_reversion_parity`` against the legacy module.
+bar's close. The new engine emits instrument-free ENTER/EXIT intents from a
+``TradeBarConsolidator`` and binds them to the configured execution adapter.
+The trade-set contract — same entries, exits, and WIN/LOSS verdicts on the same
+input data — is validated by ``test_rsi_mean_reversion_parity``.
 
 Parameters are constructor kwargs so the router's strategy registry can build
 instances from a user-supplied ``RsiMeanReversionParams`` Pydantic model.
@@ -33,6 +32,7 @@ from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
 from app.engine.indicators.rsi import RelativeStrengthIndex
 from app.engine.strategy.base import LoggedTrade, Strategy
+from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
 from app.utils.timestamps import display_time
 
 
@@ -142,7 +142,13 @@ class RsiMeanReversionAlgorithm(Strategy):
         if not self._in_position:
             if rsi_val < self._oversold:
                 self._pending_entry = _PendingEntry(rsi=rsi_val)
-                self.ctx.set_holdings(self._symbol, Decimal(1))
+                self.ctx.emit_signal_intent(
+                    SignalIntent(
+                        kind=SignalIntentKind.ENTER,
+                        bar_close_ms=bar.end_ms,
+                        intended_price=bar.close,
+                    )
+                )
                 self._in_position = True
                 self.ctx.log(
                     f"ENTRY SIGNAL: {display_time(bar.end_ms)} "
@@ -151,13 +157,24 @@ class RsiMeanReversionAlgorithm(Strategy):
                 )
         else:
             if rsi_val > self._overbought:
-                self.ctx.liquidate(self._symbol)
+                self.ctx.emit_signal_intent(
+                    SignalIntent(
+                        kind=SignalIntentKind.EXIT,
+                        bar_close_ms=bar.end_ms,
+                        intended_price=bar.close,
+                    )
+                )
                 self.ctx.log(
                     f"EXIT SIGNAL: {display_time(bar.end_ms)} "
                     f"Close={bar.close:.2f} RSI{self._window}={rsi_val:.2f} "
                     f"> overbought({self._overbought})"
                 )
                 self._in_position = False
+
+    def rollback_blocked_entry(self) -> None:
+        """Undo lifecycle state when the live liveness gate blocks ENTER."""
+        self._in_position = False
+        self._pending_entry = None
 
     # ------------------------------------------------------------------
     # Fill-driven trade bookkeeping
@@ -215,6 +232,13 @@ class RsiMeanReversionAlgorithm(Strategy):
     def on_end_of_algorithm(self) -> None:
         if self._in_position:
             assert self.ctx is not None
-            self.ctx.liquidate(self._symbol)
+            if self.ctx.current_time_ms is None:
+                raise RuntimeError("RSI mean-reversion exit requires a current bar time")
+            self.ctx.emit_signal_intent(
+                SignalIntent(
+                    kind=SignalIntentKind.EXIT,
+                    bar_close_ms=self.ctx.current_time_ms,
+                    intended_price=self.ctx.portfolio.reference_price.get(self._symbol, Decimal(0)),
+                )
+            )
             self._in_position = False
-

@@ -22,8 +22,14 @@ from app.engine.live.durable_append_log import (
     create_exclusive_durable_file,
 )
 from app.engine.live.run_status import _atomic_write_json
-from app.schemas.action_plan import ActionPlan, CloseLegExit, StockEntryLeg, StockInstrument
+from app.schemas.action_plan import (
+    ActionPlan,
+    CloseLegExit,
+    StockEntryLeg,
+    StockInstrument,
+)
 from app.schemas.bot_lifecycle import BotDutyOutcomeKind
+from app.schemas.broker_bots import AlpacaPaperEvidenceOverride
 from app.services.bot_carryover import configuration_hash
 
 logger = logging.getLogger(__name__)
@@ -79,6 +85,7 @@ class BrokerBotBinding(BaseModel):
     mode: Literal["log_only", "dry_run", "trade"] = "log_only"
     quantity: int = 1
     carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID"
+    evidence_override: AlpacaPaperEvidenceOverride | None = None
     action_plan: ActionPlan
     run_id: str = Field(pattern=_RUN_ID_PATTERN)
     created_at_ms: int
@@ -98,6 +105,7 @@ class StrategyInstanceRecord(BaseModel):
     mode: Literal["log_only", "dry_run", "trade"]
     quantity: int
     carryover_policy: Literal["FORBID", "ALLOW"]
+    evidence_override: AlpacaPaperEvidenceOverride | None = None
     action_plan: ActionPlan
     configuration_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     created_at_ms: int
@@ -113,6 +121,7 @@ class StrategyInstanceRecord(BaseModel):
             mode=binding.mode,
             quantity=binding.quantity,
             carryover_policy=binding.carryover_policy,
+            evidence_override=binding.evidence_override,
             action_plan=binding.action_plan,
             configuration_hash=configuration_hash(binding),
             created_at_ms=binding.created_at_ms,
@@ -485,6 +494,7 @@ class BotBindingRepository:
             mode=instance.mode,
             quantity=instance.quantity,
             carryover_policy=instance.carryover_policy,
+            evidence_override=instance.evidence_override,
             action_plan=instance.action_plan,
             run_id=run.run_id,
             created_at_ms=run.started_at_ms,

@@ -34,6 +34,7 @@ import {
   type RunAdmissionDecision,
 } from '../v2-panel/lib/broker-v2-panel.service';
 import { DeployBindingStripComponent } from './deploy-binding-strip.component';
+import { DeployEvidenceOverrideComponent } from './deploy-evidence-override.component';
 import {
   DeployExecutionSectionComponent,
   type DeploySizingPreset,
@@ -45,6 +46,7 @@ import { DeployStartAdmissionComponent } from './deploy-start-admission.componen
 const INSTANCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const SYMBOL_RE = /^[A-Za-z][A-Za-z0-9.-]{0,11}$/;
 const DEPLOY_LENS_QUERY_PARAM = 'deployLens';
+const EVIDENCE_OVERRIDE_ACKNOWLEDGEMENT = 'I_ACCEPT_EVIDENCE_ONLY_DEPLOYMENT_RISK' as const;
 
 interface AlpacaDeployTicket {
   instanceId: string;
@@ -54,6 +56,8 @@ interface AlpacaDeployTicket {
   quantity: number;
   executionMode: Extract<DeployExecutionMode['mode'], 'dry_run' | 'paper'>;
   allowCarryover: boolean;
+  evidenceOverrideAcknowledged: boolean;
+  evidenceOverrideReason: string;
 }
 
 interface DeployError {
@@ -78,6 +82,7 @@ type DeployLens = 'trader' | 'operator';
     TooltipModule,
     TimestampDisplayComponent,
     DeployBindingStripComponent,
+    DeployEvidenceOverrideComponent,
     DeployExecutionSectionComponent,
     DeployLaunchReceiptComponent,
     DeployReadinessSectionComponent,
@@ -108,6 +113,7 @@ export class AlpacaDeployWorkflowComponent {
   protected readonly submitError = signal<DeployError | null>(null);
   protected readonly receipt = signal<DeployBotReceipt | null>(null);
   protected readonly admissionDecision = signal<RunAdmissionDecision | null>(null);
+  protected readonly evidenceOverrideTouched = signal(false);
 
   protected readonly deployView = resource({
     params: () => this.accountId().trim(),
@@ -126,6 +132,8 @@ export class AlpacaDeployWorkflowComponent {
     quantity: 1,
     executionMode: 'paper',
     allowCarryover: false,
+    evidenceOverrideAcknowledged: false,
+    evidenceOverrideReason: '',
   });
 
   protected readonly ticketForm = form(this.ticket, (ticket) => {
@@ -133,7 +141,7 @@ export class AlpacaDeployWorkflowComponent {
     pattern(ticket.instanceId, INSTANCE_ID_RE, {
       message: 'Use letters, numbers, periods, underscores, or hyphens.',
     });
-    required(ticket.strategyKey, { message: 'Choose an accepted strategy.' });
+    required(ticket.strategyKey, { message: 'Choose a deployment strategy.' });
     required(ticket.symbol, { message: 'Enter the strategy signal symbol.' });
     pattern(ticket.symbol, SYMBOL_RE, { message: 'Enter a valid stock symbol.' });
     min(ticket.quantity, 1, { message: 'Quantity must be at least one whole share.' });
@@ -151,6 +159,18 @@ export class AlpacaDeployWorkflowComponent {
       (strategy) => strategy.strategy_key === strategyKey,
     ) ?? null;
   });
+
+  protected readonly strategyRequiresOverride = computed(
+    () => this.selectedStrategy()?.evidence_status === 'human_override_required',
+  );
+
+  protected readonly evidenceOverrideComplete = computed(() =>
+    !this.strategyRequiresOverride()
+    || (
+      this.ticket().evidenceOverrideAcknowledged
+      && this.ticket().evidenceOverrideReason.trim().length >= 10
+    ),
+  );
 
   protected readonly selectedExecutionMode = computed(() => {
     const view = this.currentView();
@@ -181,6 +201,7 @@ export class AlpacaDeployWorkflowComponent {
       && this.selectedExecutionMode()?.availability === 'available'
       && this.selectedStrategy() !== null
       && this.ticketForm().valid()
+      && this.evidenceOverrideComplete()
       && !this.submitting(),
     );
   });
@@ -242,8 +263,15 @@ export class AlpacaDeployWorkflowComponent {
       const symbol = current.symbol && current.symbol !== previous?.validation_case_symbol
         ? current.symbol
         : strategy.validation_case_symbol;
-      return { ...current, strategyKey: strategy.strategy_key, symbol };
+      return {
+        ...current,
+        strategyKey: strategy.strategy_key,
+        symbol,
+        evidenceOverrideAcknowledged: false,
+        evidenceOverrideReason: '',
+      };
     });
+    this.evidenceOverrideTouched.set(false);
   }
 
   protected setSymbol(value: string): void {
@@ -284,6 +312,25 @@ export class AlpacaDeployWorkflowComponent {
     if (!this.currentView()?.carryover_available) return;
     this.clearAdmission();
     this.ticket.update((current) => ({ ...current, allowCarryover: checked }));
+  }
+
+  protected setEvidenceOverrideAcknowledged(acknowledged: boolean): void {
+    if (!this.strategyRequiresOverride()) return;
+    this.clearAdmission();
+    this.ticket.update((current) => ({
+      ...current,
+      evidenceOverrideAcknowledged: acknowledged,
+    }));
+  }
+
+  protected setEvidenceOverrideReason(reason: string): void {
+    if (!this.strategyRequiresOverride()) return;
+    this.clearAdmission();
+    this.ticket.update((current) => ({ ...current, evidenceOverrideReason: reason }));
+  }
+
+  protected touchEvidenceOverrideReason(): void {
+    this.evidenceOverrideTouched.set(true);
   }
 
   protected touchInstanceId(): void {
@@ -343,7 +390,7 @@ export class AlpacaDeployWorkflowComponent {
     ticket: AlpacaDeployTicket,
     strategy: DeployBotStrategy,
   ): DeployBotBody {
-    return {
+    const body: DeployBotBody = {
       strategy_instance_id: ticket.instanceId.trim(),
       strategy_key: strategy.strategy_key,
       symbol: ticket.symbol.trim().toUpperCase(),
@@ -354,6 +401,13 @@ export class AlpacaDeployWorkflowComponent {
       execution_mode: ticket.executionMode,
       carryover_policy: ticket.allowCarryover ? 'ALLOW' : 'FORBID',
     };
+    if (strategy.evidence_status === 'human_override_required') {
+      body.evidence_override = {
+        acknowledgement: EVIDENCE_OVERRIDE_ACKNOWLEDGEMENT,
+        reason: ticket.evidenceOverrideReason.trim(),
+      };
+    }
+    return body;
   }
 
   private submissionStillCurrent(submitted: DeployBotBody): boolean {
@@ -366,7 +420,9 @@ export class AlpacaDeployWorkflowComponent {
       && current.sizing?.preset === submitted.sizing?.preset
       && current.sizing?.quantity === submitted.sizing?.quantity
       && current.execution_mode === submitted.execution_mode
-      && current.carryover_policy === submitted.carryover_policy;
+      && current.carryover_policy === submitted.carryover_policy
+      && current.evidence_override?.acknowledgement === submitted.evidence_override?.acknowledgement
+      && current.evidence_override?.reason === submitted.evidence_override?.reason;
   }
 
   protected instanceIdError(): string | null {
@@ -386,6 +442,13 @@ export class AlpacaDeployWorkflowComponent {
     return this.ticketForm.quantity().errors()[0]?.message ?? null;
   }
 
+  protected evidenceOverrideReasonError(): string | null {
+    if (!this.strategyRequiresOverride() || !this.evidenceOverrideTouched()) return null;
+    return this.ticket().evidenceOverrideReason.trim().length >= 10
+      ? null
+      : 'Enter at least 10 characters explaining this risk decision.';
+  }
+
   private admissionFromError(error: unknown): RunAdmissionDecision | null {
     if (!(error instanceof HttpErrorResponse)) return null;
     const admission = error.error?.detail?.admission as RunAdmissionDecision | undefined;
@@ -396,6 +459,7 @@ export class AlpacaDeployWorkflowComponent {
     this.ticketForm.strategyKey().markAsTouched();
     this.ticketForm.symbol().markAsTouched();
     this.ticketForm.quantity().markAsTouched();
+    if (this.strategyRequiresOverride()) this.evidenceOverrideTouched.set(true);
   }
 
   private toDeployError(error: unknown): DeployError {

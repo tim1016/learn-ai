@@ -18,6 +18,8 @@ const VALIDATION_STRATEGY: DeployBotView['strategies'][number] = {
   label: 'Deployment Validation',
   explanation: 'Validated canonical decision kernel.',
   validation_case_symbol: 'SPY',
+  evidence_status: 'accepted',
+  override_explanation: null,
 };
 
 const EMA_STRATEGY: DeployBotView['strategies'][number] = {
@@ -25,6 +27,17 @@ const EMA_STRATEGY: DeployBotView['strategies'][number] = {
   label: 'EMA Crossover Signal',
   explanation: 'Validated EMA(5), EMA(10), and RSI(14) crossover signal.',
   validation_case_symbol: 'SPY',
+  evidence_status: 'accepted',
+  override_explanation: null,
+};
+
+const SMA_OVERRIDE_STRATEGY: DeployBotView['strategies'][number] = {
+  strategy_key: 'sma_crossover',
+  label: 'SMA Crossover',
+  explanation: 'Human-validated SMA crossover with evidence-only parity.',
+  validation_case_symbol: 'SPY',
+  evidence_status: 'human_override_required',
+  override_explanation: 'Behavioral evidence is evidence-only and not accepted for deployment.',
 };
 
 const DEPLOY_VIEW: DeployBotView = {
@@ -40,7 +53,7 @@ const DEPLOY_VIEW: DeployBotView = {
     explanation: 'Every ENTER and EXIT is executed through the Alpaca Clerk.',
     next_action: 'Review the ticket and deploy the paper bot.',
   },
-  strategies: [VALIDATION_STRATEGY, EMA_STRATEGY],
+  strategies: [VALIDATION_STRATEGY, EMA_STRATEGY, SMA_OVERRIDE_STRATEGY],
   execution_modes: [
     {
       mode: 'dry_run',
@@ -189,7 +202,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
     await renderWorkflow();
 
     expect(screen.getAllByText('Deployment Validation').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('✓ Validated')).toBeTruthy();
+    expect(screen.getByText('✓ Accepted evidence')).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Bot binding' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Trading setup' })).toBeTruthy();
     expect(screen.getByRole('radio', { name: 'One share' })).toBeTruthy();
@@ -282,7 +295,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
     fireEvent.input(screen.getByLabelText('Bot name'), {
       target: { value: 'ema-paper-01' },
     });
-    fireEvent.change(screen.getByLabelText('Validated strategy'), {
+    fireEvent.change(screen.getByLabelText('Deployment strategy'), {
       target: { value: 'ema_crossover_signal' },
     });
 
@@ -301,6 +314,79 @@ describe('AlpacaDeployWorkflowComponent', () => {
       .toBe('ema_crossover_signal');
   });
 
+  it('requires and submits durable human acknowledgement for evidence-only strategy', async () => {
+    const overrideReceipt: DeployBotReceipt = {
+      ...RECEIPT,
+      bot: {
+        ...RECEIPT.bot,
+        strategy_instance_id: 'sma-paper-01',
+        strategy_key: 'sma_crossover',
+      },
+      evidence_override: {
+        acknowledgement: 'I_ACCEPT_EVIDENCE_ONLY_DEPLOYMENT_RISK',
+        reason: 'Paper canary approved by the strategy owner.',
+      },
+    };
+    const service = mockService(overrideReceipt);
+    await renderWorkflow(service);
+
+    fireEvent.input(screen.getByLabelText('Bot name'), {
+      target: { value: 'sma-paper-01' },
+    });
+    fireEvent.change(screen.getByLabelText('Deployment strategy'), {
+      target: { value: 'sma_crossover' },
+    });
+
+    const deployButton = screen.getByRole('button', { name: 'Deploy paper bot' }) as HTMLButtonElement;
+    expect(screen.getByRole('heading', { name: 'Dangerous human override' })).toBeTruthy();
+    expect(screen.getByText('Evidence only · override required')).toBeTruthy();
+    expect(deployButton.disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole('checkbox', {
+      name: 'I accept the evidence-only deployment risk for this strategy.',
+    }));
+    expect(deployButton.disabled).toBe(true);
+
+    fireEvent.input(screen.getByLabelText('Operator reason'), {
+      target: { value: 'Paper canary approved by the strategy owner.' },
+    });
+    expect(deployButton.disabled).toBe(false);
+    fireEvent.click(deployButton);
+
+    await vi.waitFor(() => expect(service.deployBot).toHaveBeenCalledOnce());
+    expect(service.deployBot.mock.calls[0][2] as DeployBotBody).toMatchObject({
+      strategy_key: 'sma_crossover',
+      evidence_override: {
+        acknowledgement: 'I_ACCEPT_EVIDENCE_ONLY_DEPLOYMENT_RISK',
+        reason: 'Paper canary approved by the strategy owner.',
+      },
+    });
+    expect(await screen.findByText('Deployed with a dangerous human evidence override')).toBeTruthy();
+    expect(screen.getByText('Paper canary approved by the strategy owner.')).toBeTruthy();
+  });
+
+  it('clears evidence override state when the trader returns to an accepted strategy', async () => {
+    const { fixture } = await renderWorkflow();
+    const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
+
+    fireEvent.change(screen.getByLabelText('Deployment strategy'), {
+      target: { value: 'sma_crossover' },
+    });
+    fireEvent.click(screen.getByRole('checkbox', {
+      name: 'I accept the evidence-only deployment risk for this strategy.',
+    }));
+    fireEvent.input(screen.getByLabelText('Operator reason'), {
+      target: { value: 'Paper canary approved by the strategy owner.' },
+    });
+    fireEvent.change(screen.getByLabelText('Deployment strategy'), {
+      target: { value: 'ema_crossover_signal' },
+    });
+
+    expect(screen.queryByRole('heading', { name: 'Dangerous human override' })).toBeNull();
+    expect(component['ticket']().evidenceOverrideAcknowledged).toBe(false);
+    expect(component['ticket']().evidenceOverrideReason).toBe('');
+  });
+
   it('initializes the validated strategy from the strategy-key deep link', async () => {
     const queryParamMap = convertToParamMap({ strategy_key: 'ema_crossover_signal' });
     await render(AlpacaDeployWorkflowComponent, {
@@ -316,7 +402,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
     });
     await screen.findByText(DEPLOY_VIEW.eligibility.headline);
 
-    expect((screen.getByLabelText('Validated strategy') as HTMLSelectElement).value)
+    expect((screen.getByLabelText('Deployment strategy') as HTMLSelectElement).value)
       .toBe('ema_crossover_signal');
     expect(screen.getByRole('link', { name: 'View validation' }).getAttribute('href'))
       .toBe('/strategy-validation?strategy=ema_crossover_signal');
@@ -328,7 +414,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
     fireEvent.input(screen.getByPlaceholderText('SPY'), {
       target: { value: 'QQQ' },
     });
-    fireEvent.change(screen.getByLabelText('Validated strategy'), {
+    fireEvent.change(screen.getByLabelText('Deployment strategy'), {
       target: { value: 'ema_crossover_signal' },
     });
 
