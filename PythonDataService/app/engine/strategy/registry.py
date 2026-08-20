@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from dataclasses import field as dc_field
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -475,6 +475,39 @@ class StrategyRegistration:
     # from guessing strategy semantics from parameter names.
     chart_indicators: tuple[StrategyChartIndicator, ...] = ()
     strategy_bars: StrategyBarCadence = StrategyBarCadence("minute", 1)
+
+
+def public_params_schema(reg: StrategyRegistration, *, extra_hidden: frozenset[str] = frozenset()) -> dict[str, Any]:
+    """Return this registration's parameter JSON schema with hidden fields removed.
+
+    ``extra_hidden`` lets one construction path (e.g. the Alpaca deploy form,
+    where ``symbol`` is deploy-authoritative rather than a tunable) hide
+    additional fields without every registration declaring them in its own
+    ``hidden_params``.
+    """
+    hidden = reg.hidden_params | extra_hidden
+    schema = reg.param_schema.model_json_schema()
+    if not hidden:
+        return schema
+    schema = dict(schema)
+    properties = dict(schema.get("properties") or {})
+    for name in hidden:
+        properties.pop(name, None)
+    schema["properties"] = properties
+    if "required" in schema:
+        schema["required"] = [name for name in schema["required"] if name not in hidden]
+    return schema
+
+
+def hidden_params_present(
+    reg: StrategyRegistration,
+    params: dict[str, Any],
+    *,
+    extra_hidden: frozenset[str] = frozenset(),
+) -> list[str]:
+    """Return the submitted parameter names this registration hides, sorted."""
+    hidden = reg.hidden_params | extra_hidden
+    return sorted(hidden.intersection(params))
 
 
 _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {

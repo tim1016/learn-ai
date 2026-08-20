@@ -187,4 +187,5 @@ def _request_from(binding: BrokerBotBinding) -> StartRequest:
         carryover_policy=binding.carryover_policy,
         evidence_override=binding.evidence_override,
         action_plan=binding.action_plan,
+        strategy_params=binding.strategy_params,
     )

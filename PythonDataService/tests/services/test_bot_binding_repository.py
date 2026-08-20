@@ -13,6 +13,7 @@ from app.schemas.broker_bots import AlpacaPaperEvidenceOverride
 from app.services.bot_binding_repository import (
     BotBindingRepository,
     BotRunOutcomeRecord,
+    BotRunRecord,
     BrokerBotBinding,
     CurrentRunBinding,
     RunIdentityConflictError,
@@ -21,7 +22,7 @@ from app.services.bot_binding_repository import (
     StrategyInstanceRecord,
     alpaca_v1_action_plan,
 )
-from app.services.bot_carryover import immutable_configuration_payload
+from app.services.bot_carryover import configuration_hash, immutable_configuration_payload
 
 _SID = "alpaca-spy-ema-01"
 
@@ -39,6 +40,7 @@ def _binding(
     created_at_ms: int = 1_000,
     symbol: str = "SPY",
     evidence_override: AlpacaPaperEvidenceOverride | None = None,
+    strategy_params: dict[str, object] | None = None,
 ) -> BrokerBotBinding:
     return BrokerBotBinding(
         strategy_instance_id=_SID,
@@ -47,6 +49,7 @@ def _binding(
         symbol=symbol,
         evidence_override=evidence_override,
         action_plan=alpaca_v1_action_plan(symbol),
+        strategy_params=strategy_params,
         run_id=run_id,
         created_at_ms=created_at_ms,
     )
@@ -96,6 +99,35 @@ def test_changed_configuration_cannot_reuse_strategy_instance_identity(
     assert not (tmp_path / "live_state" / _SID / "runs" / "run-002.json").exists()
 
 
+def test_strategy_params_round_trip_and_are_immutable_configuration(
+    tmp_path: Path,
+) -> None:
+    """#1701: deploy-time parameters are part of create-once configuration.
+
+    Resume replays the exact original parameter set (round-trip through
+    ``record_launch``/``read``); changing a parameter for the same instance
+    identity is refused the same way a changed symbol already is.
+    """
+    repository = _repository(tmp_path)
+    first = _binding(strategy_params={"gap": 5.0, "rsi_min": 40.0})
+    repository.record_launch(first, launch_reason="deploy")
+
+    assert repository.read(_SID) == first
+    assert repository.read(_SID).strategy_params == {"gap": 5.0, "rsi_min": 40.0}
+
+    resumed = _binding(run_id="run-002", created_at_ms=2_000, strategy_params={"gap": 5.0, "rsi_min": 40.0})
+    repository.record_launch(resumed, launch_reason="resume")
+    assert repository.read(_SID) == resumed
+
+    with pytest.raises(StrategyInstanceConfigurationConflictError):
+        repository.record_launch(
+            _binding(run_id="run-003", created_at_ms=3_000, strategy_params={"gap": 9.0, "rsi_min": 40.0}),
+            launch_reason="resume",
+        )
+    assert repository.read(_SID) == resumed
+    assert not (tmp_path / "live_state" / _SID / "runs" / "run-003.json").exists()
+
+
 def test_evidence_override_is_durable_immutable_configuration(tmp_path: Path) -> None:
     repository = _repository(tmp_path)
     override = AlpacaPaperEvidenceOverride(
@@ -123,6 +155,17 @@ def test_evidence_override_is_durable_immutable_configuration(tmp_path: Path) ->
 
 def test_absent_override_preserves_pre_override_configuration_hash_shape() -> None:
     assert "evidence_override" not in immutable_configuration_payload(_binding())
+
+
+def test_absent_strategy_params_preserves_pre_feature_configuration_hash_shape() -> None:
+    """#1701: a binding persisted before this feature existed must keep its
+    original configuration_hash. `strategy_params` defaults to `None` (not
+    `{}`) specifically so `exclude_none=True` strips it here — an empty-dict
+    default would appear in the hash payload and invalidate every hash
+    computed before this field existed, the same way ``evidence_override``
+    is already required to behave."""
+    assert "strategy_params" not in immutable_configuration_payload(_binding())
+    assert configuration_hash(_binding()) == configuration_hash(_binding(strategy_params=None))
 
 
 def test_duplicate_run_is_idempotent_but_changed_run_payload_conflicts(
@@ -306,6 +349,47 @@ def test_legacy_binding_is_lifted_without_rewrite_then_migrated_on_resume(
     ]
     assert json.loads((instance_dir / "runs" / "run-001.json").read_text())["launch_reason"] == "legacy"
     assert repository.read(_SID) == resumed
+
+
+def test_a_strategy_instance_record_predating_1701_still_reads_and_hash_validates(
+    tmp_path: Path,
+) -> None:
+    """A ``strategy_instance.json`` written before #1701 added the field has
+    no ``strategy_params`` key at all — not even an empty one. Its
+    ``configuration_hash`` was computed over a payload that never included
+    the key. Reading it today must still hash-validate; if `strategy_params`
+    ever defaulted to `{}` instead of `None`, this would raise
+    ``ValueError('strategy instance configuration hash is invalid')`` for
+    every bot deployed before this PR."""
+    repository = _repository(tmp_path)
+    instance_dir = tmp_path / "live_state" / _SID
+    instance_dir.mkdir(parents=True)
+    pre_1701_record = StrategyInstanceRecord.from_binding(_binding()).model_dump(mode="json")
+    pre_1701_record.pop("strategy_params")
+    (instance_dir / "strategy_instance.json").write_text(
+        json.dumps(pre_1701_record), encoding="utf-8"
+    )
+    (instance_dir / "current_run.json").write_text(
+        CurrentRunBinding(strategy_instance_id=_SID, run_id="run-001", bound_at_ms=1_000).model_dump_json(),
+        encoding="utf-8",
+    )
+    runs_dir = instance_dir / "runs"
+    runs_dir.mkdir()
+    (runs_dir / "run-001.json").write_text(
+        BotRunRecord(
+            run_id="run-001",
+            strategy_instance_id=_SID,
+            configuration_hash=pre_1701_record["configuration_hash"],
+            launch_reason="deploy",
+            started_at_ms=1_000,
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+
+    read_back = repository.read(_SID)
+
+    assert read_back == _binding()
+    assert read_back.strategy_params is None
 
 
 def test_read_returns_none_for_instance_without_current_run(tmp_path: Path) -> None:

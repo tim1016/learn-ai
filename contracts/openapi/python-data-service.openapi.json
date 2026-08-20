@@ -4549,6 +4549,18 @@
             "title": "Panel Path",
             "type": "string"
           },
+          "parameters": {
+            "title": "Parameters",
+            "type": "object"
+          },
+          "parameters_diverge_from_defaults": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Parameters Diverge From Defaults",
+            "type": "array"
+          },
           "receipt_id": {
             "title": "Receipt Id",
             "type": "string"
@@ -4615,6 +4627,10 @@
             ],
             "title": "Execution Mode",
             "type": "string"
+          },
+          "parameters": {
+            "title": "Parameters",
+            "type": "object"
           },
           "sizing": {
             "$ref": "#/components/schemas/AlpacaPaperSizingSelection"
@@ -4685,6 +4701,10 @@
               }
             ],
             "title": "Override Explanation"
+          },
+          "params_schema": {
+            "title": "Params Schema",
+            "type": "object"
           },
           "selectable": {
             "title": "Selectable",

@@ -192,12 +192,17 @@ async def test_deploy_view_is_closed_paper_only_contract(deploy_app) -> None:
         "selectable",
         "override_explanation",
         "blocked_explanation",
+        "params_schema",
     }
     assert strategy["validation_case_symbol"] == "SPY"
     assert strategy["evidence_status"] == "accepted"
     assert strategy["selectable"] is True
     assert strategy["override_explanation"] is None
     assert strategy["blocked_explanation"] is None
+    # #1701: every registered tunable is present, seeded from its default;
+    # `symbol` is deploy-authoritative and is never part of this schema.
+    assert set(strategy["params_schema"]["properties"]) == {"gap", "rsi_min", "rsi_max"}
+    assert "symbol" not in strategy["params_schema"]["properties"]
     assert [row["evidence_status"] for row in body["strategies"][1:]] == [
         "human_override_required",
         "human_override_required",

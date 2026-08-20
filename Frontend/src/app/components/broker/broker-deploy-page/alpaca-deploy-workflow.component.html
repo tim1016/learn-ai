@@ -163,6 +163,12 @@
               (carryoverAllowedChange)="setCarryover($event)"
             />
 
+            <app-deploy-parameters-section
+              [paramsSchema]="paramsSchema()"
+              [values]="ticket().parameters"
+              (parameterChange)="setParameter($event)"
+            />
+
             <section id="deploy-trader-panel" role="tabpanel" aria-labelledby="deploy-trader-tab" [hidden]="activeLens() !== 'trader'"></section>
             <section
               id="deploy-operator-panel"

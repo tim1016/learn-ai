@@ -1,0 +1,40 @@
+<section class="parameters-card" aria-labelledby="deploy-parameters-title">
+  <h2 id="deploy-parameters-title">Strategy parameters</h2>
+
+  @if (entries().length === 0) {
+    <p class="m-0 text-[length:var(--fs-sm)] text-[var(--text-secondary)]">This strategy has no configurable parameters.</p>
+  } @else {
+    <div class="grid grid-cols-[repeat(auto-fill,minmax(12rem,1fr))] gap-3">
+      @for (entry of entries(); track entry.field) {
+        <label class="grid min-w-0 content-start gap-2">
+          <span class="flex items-center gap-2">
+            <span class="text-[length:var(--fs-xs)] font-semibold uppercase tracking-[var(--ls-caps)] text-[var(--text-subtle)]">{{ entry.property.title ?? entry.field }}</span>
+            @if (entry.property.description; as description) {
+              <button
+                type="button"
+                class="info-tip"
+                [pTooltip]="description"
+                tooltipPosition="top"
+                [attr.aria-label]="'About ' + (entry.property.title ?? entry.field) + ': ' + description"
+              >i</button>
+            }
+            @if (entry.divergesFromDefault) {
+              <span class="divergence-badge" [pTooltip]="'Registered default: ' + entry.property.default" tooltipPosition="top">differs from default</span>
+            }
+          </span>
+          <input
+            pInputText
+            type="text"
+            [inputMode]="entry.isNumeric ? 'decimal' : 'text'"
+            [value]="entry.currentValue"
+            [attr.min]="entry.property.minimum ?? null"
+            [attr.max]="entry.property.maximum ?? null"
+            [attr.aria-label]="entry.property.title ?? entry.field"
+            class="w-full"
+            (change)="changeParameter(entry, $event.target)"
+          />
+        </label>
+      }
+    </div>
+  }
+</section>

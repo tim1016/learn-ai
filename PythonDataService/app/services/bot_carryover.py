@@ -13,7 +13,7 @@ import json
 import logging
 from collections.abc import Callable
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -41,6 +41,7 @@ class CarryoverBinding(Protocol):
     carryover_policy: Literal["FORBID", "ALLOW"]
     evidence_override: object | None
     action_plan: ActionPlan
+    strategy_params: dict[str, Any] | None
     run_id: str
 
     def model_dump(self, **kwargs) -> dict: ...

@@ -7327,6 +7327,13 @@ export interface components {
             outcome?: "success";
             /** Panel Path */
             panel_path: string;
+            /** Parameters */
+            parameters?: Record<string, never>;
+            /**
+             * Parameters Diverge From Defaults
+             * @default []
+             */
+            parameters_diverge_from_defaults?: string[];
             /** Receipt Id */
             receipt_id: string;
             /** Recorded At Ms */
@@ -7356,6 +7363,8 @@ export interface components {
              * @enum {string}
              */
             execution_mode?: "paper" | "dry_run";
+            /** Parameters */
+            parameters?: Record<string, never>;
             sizing?: components["schemas"]["AlpacaPaperSizingSelection"];
             /** Strategy Instance Id */
             strategy_instance_id: string;
@@ -7387,6 +7396,8 @@ export interface components {
             label: string;
             /** Override Explanation */
             override_explanation?: string | null;
+            /** Params Schema */
+            params_schema?: Record<string, never>;
             /** Selectable */
             selectable: boolean;
             strategy_key: components["schemas"]["AlpacaPaperStrategyKey"];

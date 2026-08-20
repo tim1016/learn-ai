@@ -25,6 +25,7 @@ import { TagModule } from 'primeng/tag';
 import { TooltipModule } from 'primeng/tooltip';
 
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
+import type { ParamsSchema } from '../../strategy-lab/strategy-lab.models';
 import {
   BrokerV2PanelService,
   type DeployBotBody,
@@ -40,6 +41,7 @@ import {
   type DeploySizingPreset,
 } from './deploy-execution-section.component';
 import { DeployLaunchReceiptComponent } from './deploy-launch-receipt.component';
+import { DeployParametersSectionComponent } from './deploy-parameters-section.component';
 import { DeployReadinessSectionComponent } from './deploy-readiness-section.component';
 import { DeployStartAdmissionComponent } from './deploy-start-admission.component';
 
@@ -58,6 +60,7 @@ interface AlpacaDeployTicket {
   allowCarryover: boolean;
   evidenceOverrideAcknowledged: boolean;
   evidenceOverrideReason: string;
+  parameters: Record<string, unknown>;
 }
 
 interface DeployError {
@@ -90,6 +93,7 @@ type DeployLens = 'trader' | 'operator';
     DeployEvidenceOverrideComponent,
     DeployExecutionSectionComponent,
     DeployLaunchReceiptComponent,
+    DeployParametersSectionComponent,
     DeployReadinessSectionComponent,
     DeployStartAdmissionComponent,
   ],
@@ -139,6 +143,7 @@ export class AlpacaDeployWorkflowComponent {
     allowCarryover: false,
     evidenceOverrideAcknowledged: false,
     evidenceOverrideReason: '',
+    parameters: {},
   });
 
   protected readonly ticketForm = form(this.ticket, (ticket) => {
@@ -167,6 +172,14 @@ export class AlpacaDeployWorkflowComponent {
 
   protected readonly strategyRequiresOverride = computed(
     () => this.selectedStrategy()?.evidence_status === 'human_override_required',
+  );
+
+  // The generated OpenAPI type narrows `dict[str, Any]` to `Record<string, never>`
+  // (a known codegen limitation shared by every such field in this schema —
+  // see e.g. strategy-lab-runner.service.ts's own `params` body construction);
+  // the backend always sends a real JSON-schema object here.
+  protected readonly paramsSchema = computed<ParamsSchema>(
+    () => (this.selectedStrategy()?.params_schema ?? {}) as unknown as ParamsSchema,
   );
 
   protected readonly evidenceSummaryLabel = computed(() => {
@@ -325,9 +338,18 @@ export class AlpacaDeployWorkflowComponent {
         symbol,
         evidenceOverrideAcknowledged: false,
         evidenceOverrideReason: '',
+        parameters: {},
       };
     });
     this.evidenceOverrideTouched.set(false);
+  }
+
+  protected setParameter(change: { field: string; value: string | number }): void {
+    this.clearAdmission();
+    this.ticket.update((current) => ({
+      ...current,
+      parameters: { ...current.parameters, [change.field]: change.value },
+    }));
   }
 
   protected setSymbol(value: string): void {
@@ -456,6 +478,8 @@ export class AlpacaDeployWorkflowComponent {
       },
       execution_mode: ticket.executionMode,
       carryover_policy: ticket.allowCarryover ? 'ALLOW' : 'FORBID',
+      // Same generated-type narrowing noted on `paramsSchema` above, in reverse.
+      parameters: ticket.parameters as unknown as DeployBotBody['parameters'],
     };
     if (strategy.evidence_status === 'human_override_required') {
       body.evidence_override = {
@@ -478,7 +502,8 @@ export class AlpacaDeployWorkflowComponent {
       && current.execution_mode === submitted.execution_mode
       && current.carryover_policy === submitted.carryover_policy
       && current.evidence_override?.acknowledgement === submitted.evidence_override?.acknowledgement
-      && current.evidence_override?.reason === submitted.evidence_override?.reason;
+      && current.evidence_override?.reason === submitted.evidence_override?.reason
+      && JSON.stringify(current.parameters) === JSON.stringify(submitted.parameters);
   }
 
   protected instanceIdError(): string | null {
