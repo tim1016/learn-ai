@@ -173,7 +173,14 @@ class AlpacaPaperDeployEligibility(BaseModel):
 
 
 class AlpacaPaperDeployStrategy(BaseModel):
-    """Trader-facing option for one accepted or explicitly overridable strategy."""
+    """Trader-facing option for one accepted, explicitly overridable, or blocked strategy.
+
+    A validated strategy whose recorded proof no longer re-verifies is
+    demoted to ``evidence_status="blocked"`` rather than removed from the
+    row set: the operator's validation flag always guarantees a row.
+    ``selectable`` is the server's own launchability fact — a blocked row is
+    always present but never selectable.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -181,8 +188,10 @@ class AlpacaPaperDeployStrategy(BaseModel):
     label: str
     explanation: str
     validation_case_symbol: str
-    evidence_status: Literal["accepted", "human_override_required"]
+    evidence_status: Literal["accepted", "human_override_required", "blocked"]
+    selectable: bool
     override_explanation: str | None = None
+    blocked_explanation: str | None = None
 
 
 class AlpacaPaperDeployReadinessCheck(BaseModel):

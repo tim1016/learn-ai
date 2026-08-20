@@ -5,15 +5,15 @@ but only the unscoped ``/{broker}/bots`` route existed — the scoped form
 404'd for the *correct* account (found live 2026-07-30, canary run). These
 tests pin the scoped alias: correct account delegates to the bot runner,
 mismatched account gets the documented typed 404.
+
+The ``deploy_app`` HTTP harness and its fakes live in ``conftest.py``,
+shared with ``test_deploy_stale_proof_demotion.py``.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import httpx
 import pytest
-from fastapi import FastAPI
 from httpx import ASGITransport
 
 from app.broker.alpaca.clerk.models import (
@@ -22,195 +22,12 @@ from app.broker.alpaca.clerk.models import (
     ClerkStatus,
     HoldState,
 )
-from app.broker.contract.registry import (
-    get_broker_registry,
-    reset_broker_registry_for_testing,
-)
 from app.config import settings
-from app.routers.broker_v2_panel import router
-from app.schemas.broker_bots import BotStatusView
-from app.schemas.operator_blocker import AccountOperatorPosture
-from app.schemas.run_admission import RunAdmissionDecision
-from app.schemas.strategy_validation import StrategyValidationEntry, StrategyValidationFlagRequest
-from app.services.bot_runner import (
-    AdmittedBotStart,
-    BotRunnerError,
-    set_bot_task_registry,
-)
-from app.services.broker_account_snapshot import (
-    clear_broker_account_snapshot_cache_for_testing,
-)
+from app.services.bot_runner import AdmittedBotStart, BotRunnerError
 from app.services.broker_v2_panel import panel_data_source
-from app.services.broker_v2_panel.paper_deploy_service import _strategy_views
-from app.services.strategy_validation_manifest import (
-    append_strategy_validation_flag_event,
-    load_strategy_validation_entries,
-    strategy_registry_seeds,
-)
 from app.utils.timestamps import now_ms_utc
+from tests.broker.v2panel.conftest import _BODY, _HEALTHY_POSTURE, _T0, _FakeAccount
 from tests.broker.v2panel.fixtures import ACCT, SID
-
-_T0 = 1_700_000_000_000
-_HEALTHY_POSTURE = AccountOperatorPosture(
-    condition=None,
-    account_desk=None,
-    fleet_roster=None,
-    status_headline="Account Clerk custody is healthy",
-    status_detail=None,
-)
-
-
-class _FakeAccount:
-    account_id = ACCT
-    account_mode = "paper"
-    account_status = "ACTIVE"
-    trading_blocked = False
-    account_blocked = False
-
-
-class _FakeReadPort:
-    broker_id = "alpaca"
-
-    async def get_account(self) -> _FakeAccount:
-        return _FakeAccount()
-
-    def capabilities(self) -> None:  # pragma: no cover
-        raise NotImplementedError
-
-
-class _FakeDeployRegistry:
-    def __init__(self) -> None:
-        self.deploy_calls: list[dict] = []
-
-    def _decision(self, kwargs: dict) -> RunAdmissionDecision:
-        return RunAdmissionDecision(
-            operation="START",
-            allowed=True,
-            reason_code="START_ADMITTED",
-            explanation="The Clerk and bot registry admit Start.",
-            next_step=None,
-            strategy_instance_id=kwargs["strategy_instance_id"],
-            proposed_run_id="run-test",
-            configuration_hash="a" * 64,
-            account_id=ACCT,
-            evaluated_at_ms=_T0,
-            fact_ages_ms={"runtime": 0, "process": 0, "market_data": 0, "market_liveness": 0, "clerk": 0},
-            evidence_refs=("test-admission",),
-        )
-
-    async def deploy_with_admission(self, **kwargs) -> AdmittedBotStart:
-        self.deploy_calls.append(kwargs)
-        bot = BotStatusView(
-            strategy_instance_id=kwargs["strategy_instance_id"],
-            strategy_key=kwargs["strategy_key"],
-            broker=kwargs["broker"],
-            symbol=kwargs["symbol"],
-            mode=kwargs["mode"],
-            quantity=kwargs["quantity"],
-            running=True,
-            phase="ON_DUTY",
-            desired_state="RUNNING",
-            active_run_id="run-test",
-            duty_outcome=None,
-            binding_created_at_ms=_T0,
-            last_transition_at_ms=None,
-        )
-        return AdmittedBotStart(bot=bot, admission=self._decision(kwargs))
-
-    async def preview_start_admission(self, **kwargs) -> RunAdmissionDecision:
-        return self._decision(kwargs)
-
-
-@pytest.fixture()
-def deploy_app(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("ALPACA_CLERK_DIR", str(tmp_path))
-    registry_seeds = strategy_registry_seeds()
-    flag_events_path = tmp_path / "strategy-validation" / "flag-events.json"
-    for strategy_key in ("rsi_mean_reversion", "sma_crossover"):
-        append_strategy_validation_flag_event(
-            strategy_key,
-            StrategyValidationFlagRequest(
-                flag="validated",
-                reason="Test-only human validation without accepted equivalence evidence.",
-            ),
-            registry_seeds,
-            flag_events_path=flag_events_path,
-            flagged_by="test:deploy-route",
-            now_ms=_T0,
-        )
-    validation_entries = [
-        entry
-        for entry in load_strategy_validation_entries(
-            registry_seeds,
-            flag_events_path=flag_events_path,
-        )
-        if entry.strategy_key in {
-            "ema_crossover_signal",
-            "rsi_mean_reversion",
-            "sma_crossover",
-        }
-    ]
-    monkeypatch.setattr(
-        panel_data_source,
-        "load_strategy_validation_entries",
-        lambda _registry: validation_entries,
-    )
-    clear_broker_account_snapshot_cache_for_testing()
-    reset_broker_registry_for_testing()
-    get_broker_registry().register(_FakeReadPort())  # type: ignore[arg-type]
-    registry = _FakeDeployRegistry()
-    set_bot_task_registry(registry)  # type: ignore[arg-type]
-
-    async def clerk_status() -> ClerkStatus:
-        observed_at_ms = now_ms_utc()
-        return ClerkStatus(
-            broker="alpaca",
-            account_id=ACCT,
-            hold=HoldState(active=False),
-            outstanding_intents=0,
-            observed_at_ms=observed_at_ms,
-            channel_healths=[
-                ChannelHealth(stream="market_data", healthy=True, observed_at_ms=observed_at_ms),
-                ChannelHealth(stream="execution", healthy=True, observed_at_ms=observed_at_ms),
-            ],
-            operator_posture=_HEALTHY_POSTURE,
-        )
-
-    monkeypatch.setattr(panel_data_source, "_clerk_status", clerk_status)
-
-    fast_app = FastAPI()
-    fast_app.include_router(router)
-
-    try:
-        yield fast_app, registry
-    finally:
-        set_bot_task_registry(None)
-        clear_broker_account_snapshot_cache_for_testing()
-        reset_broker_registry_for_testing()
-
-
-_BODY = {
-    "strategy_instance_id": SID,
-    # ema_crossover_signal, not deployment_validation: #1672 deliberately
-    # changed deployment_validation's session-boundary literals (see
-    # docs/references/deployment-validation-consecutive-green.md), which
-    # invalidates its manifest-pinned evidence hashes until a fresh QC
-    # Cloud reconciliation is run. This file exercises the deploy route's
-    # own orchestration, not evidence-hash integrity — that's covered by
-    # tests/routers/test_strategy_validation.py — so its default fixture
-    # strategy needs to be one with currently-matching evidence.
-    "strategy_key": "ema_crossover_signal",
-    "symbol": "SPY",
-    "sizing": {"preset": "custom", "quantity": 2},
-}
-
-
-def _accepted_deploy_entry() -> StrategyValidationEntry:
-    return next(
-        entry
-        for entry in load_strategy_validation_entries(strategy_registry_seeds())
-        if entry.strategy_key == "ema_crossover_signal"
-    )
 
 
 @pytest.mark.asyncio
@@ -372,15 +189,20 @@ async def test_deploy_view_is_closed_paper_only_contract(deploy_app) -> None:
         "explanation",
         "validation_case_symbol",
         "evidence_status",
+        "selectable",
         "override_explanation",
+        "blocked_explanation",
     }
     assert strategy["validation_case_symbol"] == "SPY"
     assert strategy["evidence_status"] == "accepted"
+    assert strategy["selectable"] is True
     assert strategy["override_explanation"] is None
+    assert strategy["blocked_explanation"] is None
     assert [row["evidence_status"] for row in body["strategies"][1:]] == [
         "human_override_required",
         "human_override_required",
     ]
+    assert all(row["selectable"] for row in body["strategies"][1:])
     assert all(row["override_explanation"] for row in body["strategies"][1:])
     assert body["evaluated_at_ms"] > 0
     assert {check["gate_id"] for check in body["readiness_checks"]} == {
@@ -452,46 +274,6 @@ async def test_deploy_requires_current_accepted_validation_provenance(
     assert deploy_response.status_code == 409
     assert deploy_response.json()["detail"]["outcome"] == "conflict"
     assert registry.deploy_calls == []
-
-
-def test_deploy_rejects_manifest_proof_that_differs_from_accepted_snapshot() -> None:
-    entry = _accepted_deploy_entry()
-    changed = entry.model_copy(update={"settings_file_sha256": "0" * 64})
-
-    assert _strategy_views([changed]) == ()
-
-
-def test_deploy_reverifies_the_accepted_audit_copy_hash() -> None:
-    entry = _accepted_deploy_entry()
-    event = entry.current_flag_event
-    assert event is not None
-    bad_hash = "0" * 64
-    changed_snapshot = event.evidence_snapshot.model_copy(update={"audit_copy_sha256": bad_hash})
-    changed_event = event.model_copy(update={"evidence_snapshot": changed_snapshot})
-    changed = entry.model_copy(
-        update={
-            "audit_copy_sha256": bad_hash,
-            "current_flag_event": changed_event,
-        }
-    )
-
-    assert _strategy_views([changed]) == ()
-
-
-def test_deploy_rejects_accepted_event_with_gating_divergence() -> None:
-    entry = _accepted_deploy_entry()
-    event = entry.current_flag_event
-    assert event is not None
-    changed_event = event.model_copy(
-        update={
-            "behavioral_equivalence": event.behavioral_equivalence.model_copy(
-                update={"gating_divergence_counts": {"DECISION_MISMATCH": 1}}
-            )
-        }
-    )
-    changed = entry.model_copy(update={"current_flag_event": changed_event})
-
-    assert _strategy_views([changed]) == ()
 
 
 @pytest.mark.asyncio

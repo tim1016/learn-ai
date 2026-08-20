@@ -4645,12 +4645,24 @@
       },
       "AlpacaPaperDeployStrategy": {
         "additionalProperties": false,
-        "description": "Trader-facing option for one accepted or explicitly overridable strategy.",
+        "description": "Trader-facing option for one accepted, explicitly overridable, or blocked strategy.\n\nA validated strategy whose recorded proof no longer re-verifies is\ndemoted to ``evidence_status=\"blocked\"`` rather than removed from the\nrow set: the operator's validation flag always guarantees a row.\n``selectable`` is the server's own launchability fact \u2014 a blocked row is\nalways present but never selectable.",
         "properties": {
+          "blocked_explanation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked Explanation"
+          },
           "evidence_status": {
             "enum": [
               "accepted",
-              "human_override_required"
+              "human_override_required",
+              "blocked"
             ],
             "title": "Evidence Status",
             "type": "string"
@@ -4674,6 +4686,10 @@
             ],
             "title": "Override Explanation"
           },
+          "selectable": {
+            "title": "Selectable",
+            "type": "boolean"
+          },
           "strategy_key": {
             "$ref": "#/components/schemas/AlpacaPaperStrategyKey"
           },
@@ -4687,7 +4703,8 @@
           "label",
           "explanation",
           "validation_case_symbol",
-          "evidence_status"
+          "evidence_status",
+          "selectable"
         ],
         "title": "AlpacaPaperDeployStrategy",
         "type": "object"

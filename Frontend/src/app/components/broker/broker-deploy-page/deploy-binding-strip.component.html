@@ -30,15 +30,22 @@
             <option
               [value]="strategy.strategy_key"
               [selected]="strategy.strategy_key === strategyKey()"
-            >{{ strategy.label }}{{ strategy.evidence_status === 'human_override_required' ? ' — human override required' : '' }}</option>
+              [disabled]="!strategy.selectable"
+            >{{ strategy.label }}{{ strategy.evidence_status === 'human_override_required' ? ' — human override required' : '' }}{{ strategy.evidence_status === 'blocked' ? ' — blocked' : '' }}</option>
           }
         </select>
       }
       <div class="flex flex-wrap items-center justify-between gap-2 min-h-6">
-        @if (selectedStrategy()?.evidence_status === 'human_override_required') {
-          <span class="text-[length:var(--fs-xs)] font-bold text-[var(--bear)]">Evidence only · override required</span>
-        } @else {
-          <span class="text-[length:var(--fs-xs)] font-bold text-[var(--bull)]">✓ Accepted evidence</span>
+        @switch (selectedStrategy()?.evidence_status) {
+          @case ('human_override_required') {
+            <span class="text-[length:var(--fs-xs)] font-bold text-[var(--bear)]">Evidence only · override required</span>
+          }
+          @case ('blocked') {
+            <span class="text-[length:var(--fs-xs)] font-bold text-[var(--bear)]">Blocked · proof no longer verifies</span>
+          }
+          @default {
+            <span class="text-[length:var(--fs-xs)] font-bold text-[var(--bull)]">✓ Accepted evidence</span>
+          }
         }
         @if (selectedStrategy(); as selected) {
           <div class="flex items-center gap-2">
@@ -55,6 +62,9 @@
           </div>
         }
       </div>
+      @if (selectedStrategy()?.blocked_explanation; as blockedReason) {
+        <p class="basis-full text-[length:var(--fs-xs)] text-[var(--bear)]">{{ blockedReason }}</p>
+      }
     </div>
   </div>
 </section>

@@ -429,6 +429,13 @@ def _require_alpaca_deploy_request(
             next_action="Review the strategy in Strategy Validation, then refresh this page.",
             http_status=409,
         )
+    if not strategy.selectable:
+        raise PanelRunnerError(
+            "The selected strategy is not currently selectable for deployment.",
+            detail=strategy.blocked_explanation or "This strategy's recorded proof no longer verifies.",
+            next_action="Repair the named proof, or re-validate the strategy in Strategy Validation.",
+            http_status=409,
+        )
     if strategy.evidence_status == "human_override_required" and request.evidence_override is None:
         raise PanelRunnerError(
             "This strategy requires a human evidence override.",
