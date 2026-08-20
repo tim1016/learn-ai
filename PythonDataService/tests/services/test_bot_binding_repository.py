@@ -150,6 +150,40 @@ def test_crash_diagnostic_requires_a_crashed_terminal_outcome() -> None:
         )
 
 
+def test_terminal_outcome_rejects_conflicting_crash_diagnostics(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path)
+    binding = _binding()
+    repository.record_launch(binding, launch_reason="deploy")
+    outcome = BotRunOutcomeRecord(
+        strategy_instance_id=_SID,
+        run_id=binding.run_id,
+        kind="CRASHED",
+        reason_code="TypeError",
+        recorded_at_ms=2_000,
+        crash_diagnostic=BotCrashDiagnostic(
+            exception_type="TypeError",
+            message="unexpected keyword argument 'start_ms'",
+            source_file="app/services/bot_trade_strategy.py",
+            source_line=86,
+        ),
+    )
+    repository.record_outcome(outcome)
+    repository.record_outcome(outcome)
+
+    assert outcome.crash_diagnostic is not None
+    conflicting = outcome.model_copy(
+        update={
+            "crash_diagnostic": outcome.crash_diagnostic.model_copy(
+                update={"source_line": 87}
+            )
+        }
+    )
+    with pytest.raises(RunOutcomeConflictError):
+        repository.record_outcome(conflicting)
+
+
 def test_terminal_outcome_recovers_after_interrupted_atomic_publication(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

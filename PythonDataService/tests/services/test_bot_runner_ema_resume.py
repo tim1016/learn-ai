@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncIterator, Callable
 from decimal import Decimal
 from pathlib import Path
 
@@ -14,10 +15,12 @@ import app.services.bot_trade_strategy as bot_trade_strategy
 from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, BrokerPosition
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.marketdata.feed import FeedHealth, MarketDataBar
 from app.schemas.market_liveness import (
     MarketClockLivenessEvidence,
+    MarketLivenessFact,
     SymbolTradingStatusEvidence,
 )
 from app.services.bot_runner import BotTaskRegistry
@@ -27,7 +30,10 @@ from app.utils.timestamps import now_ms_utc
 _STRATEGY_INSTANCE_ID = "alpaca-skeleton-1"
 
 
-def _tradable_market_liveness(symbol: str, observed_at_ms: int):
+def _tradable_market_liveness(
+    symbol: str,
+    observed_at_ms: int,
+) -> MarketLivenessFact:
     return compose_market_liveness(
         symbol,
         now_ms=observed_at_ms,
@@ -54,19 +60,35 @@ class _FlatBroker:
 
     broker_id = "alpaca"
 
-    async def list_orders(self, **_kwargs) -> list:
+    async def list_orders(
+        self,
+        *,
+        status: str | None = None,
+        limit: int | None = None,
+        after_ms: int | None = None,
+    ) -> list[BrokerOrder]:
+        del status, limit, after_ms
         return []
 
-    async def list_positions(self) -> list:
+    async def list_positions(self) -> list[BrokerPosition]:
         return []
 
-    async def submit(self, *_args, **_kwargs):
+    async def submit(
+        self,
+        _leg: BrokerOrderLeg,
+        *,
+        client_order_id: str,
+    ) -> BrokerOrder:
+        del client_order_id
         raise AssertionError("the warmup bar must not submit an order")
 
     async def cancel(self, _order_id: str) -> None:
         raise AssertionError("the warmup bar must not cancel an order")
 
-    async def get_order_by_client_order_id(self, _client_order_id: str):
+    async def get_order_by_client_order_id(
+        self,
+        _client_order_id: str,
+    ) -> BrokerOrder | None:
         return None
 
 
@@ -90,7 +112,12 @@ class _ResumeFeed:
         self._error = error
         self.bars_consumed = 0
 
-    async def stream_bars(self, _symbol: str, *, use_rth: bool = True):
+    async def stream_bars(
+        self,
+        _symbol: str,
+        *,
+        use_rth: bool = True,
+    ) -> AsyncIterator[MarketDataBar]:
         del use_rth
         for bar in self._bars:
             self.bars_consumed += 1
@@ -110,7 +137,11 @@ class _ResumeFeed:
         )
 
 
-async def _wait_for(predicate, *, timeout_s: float = 2.0) -> None:
+async def _wait_for(
+    predicate: Callable[[], bool],
+    *,
+    timeout_s: float = 2.0,
+) -> None:
     deadline = asyncio.get_running_loop().time() + timeout_s
     while not predicate():
         if asyncio.get_running_loop().time() > deadline:

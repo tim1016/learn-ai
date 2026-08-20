@@ -324,6 +324,7 @@ class BotBindingRepository:
             and existing.run_id == candidate.run_id
             and existing.kind == candidate.kind
             and existing.reason_code == candidate.reason_code
+            and existing.crash_diagnostic == candidate.crash_diagnostic
         )
         if not same_terminal_fact:
             raise RunOutcomeConflictError(

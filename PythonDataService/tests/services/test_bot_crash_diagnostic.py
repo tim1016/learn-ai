@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from app.schemas.bot_run_evidence import CRASH_MESSAGE_MAX_LENGTH
+from app.schemas.bot_run_evidence import CRASH_MESSAGE_MAX_LENGTH, BotCrashDiagnostic
 from app.services.bot_crash_diagnostic import capture_bot_crash_diagnostic
 
 
-def _capture(error: Exception):
+def _capture(error: Exception) -> BotCrashDiagnostic:
     try:
         raise error
     except Exception as caught:

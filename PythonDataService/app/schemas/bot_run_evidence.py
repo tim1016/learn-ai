@@ -28,7 +28,7 @@ class BotRunTerminalOutcomeView(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     kind: BotDutyOutcomeKind
-    reason_code: str
+    reason_code: str = Field(min_length=1, max_length=128)
     recorded_at_ms: int = Field(ge=0)
     run_id: str | None = None
     crash_diagnostic: BotCrashDiagnostic | None = None
