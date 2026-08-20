@@ -30937,6 +30937,13 @@
             "title": "Foreign Order Count",
             "type": "integer"
           },
+          "indeterminate_symbols": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Indeterminate Symbols",
+            "type": "array"
+          },
           "resolved_count": {
             "title": "Resolved Count",
             "type": "integer"
@@ -30956,7 +30963,8 @@
           "verdict",
           "resolved_count",
           "foreign_order_count",
-          "drifted_symbols"
+          "drifted_symbols",
+          "indeterminate_symbols"
         ],
         "title": "ReconciliationResponse",
         "type": "object"

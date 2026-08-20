@@ -853,6 +853,7 @@ async def test_reconcile_now_runs_operator_pass(
         "resolved_count": 2,
         "foreign_order_count": 0,
         "drifted_symbols": ["SPY"],
+        "indeterminate_symbols": [],
     }
     assert observed["trigger"] == "OPERATOR_RECONCILE_NOW"
 
