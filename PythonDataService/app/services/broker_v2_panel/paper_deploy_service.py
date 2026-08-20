@@ -324,7 +324,7 @@ def _eligibility(
         explanation=(
             "The operator may choose Clerk-governed paper execution or a zero-broker-write Dry Run before launch."
         ),
-        next_action="Choose the symbol and sizing, then deploy the bot.",
+        next_action="Complete the deployment ticket, review the summary, then deploy the bot.",
     )
 
 

@@ -365,6 +365,43 @@ describe('AlpacaDeployWorkflowComponent', () => {
     expect(screen.getByText('Paper canary approved by the strategy owner.')).toBeTruthy();
   });
 
+  it('names the invalid bot name instead of asking for already-complete trading inputs', async () => {
+    const service = mockService(RECEIPT, {
+      ...DEPLOY_VIEW,
+      eligibility: {
+        ...DEPLOY_VIEW.eligibility,
+        next_action: 'Choose the symbol and sizing, then deploy the bot.',
+      },
+    });
+    await renderWorkflow(service);
+
+    fireEvent.input(screen.getByLabelText('Bot name'), {
+      target: { value: 'RSI MEAN reversion' },
+    });
+    fireEvent.change(screen.getByLabelText('Deployment strategy'), {
+      target: { value: 'sma_crossover' },
+    });
+    fireEvent.click(screen.getByRole('checkbox', {
+      name: 'I accept the evidence-only deployment risk for this strategy.',
+    }));
+    fireEvent.input(screen.getByLabelText('Operator reason'), {
+      target: { value: 'I am just testing out' },
+    });
+
+    const deployButton = screen.getByRole('button', { name: 'Deploy paper bot' });
+    expect(deployButton.hasAttribute('disabled')).toBe(true);
+    expect(deployButton.getAttribute('aria-describedby')).toBe('deploy-submit-guidance');
+    expect(screen.getByText('Fix the bot name before deployment.')).toBeTruthy();
+    expect(screen.queryByText('Choose the symbol and sizing, then deploy the bot.')).toBeNull();
+
+    fireEvent.input(screen.getByLabelText('Bot name'), {
+      target: { value: 'rsi-mean-reversion' },
+    });
+
+    expect(deployButton.hasAttribute('disabled')).toBe(false);
+    expect(screen.getByText('Ready to deploy this bot.')).toBeTruthy();
+  });
+
   it('clears evidence override state when the trader returns to an accepted strategy', async () => {
     const { fixture } = await renderWorkflow();
     const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;

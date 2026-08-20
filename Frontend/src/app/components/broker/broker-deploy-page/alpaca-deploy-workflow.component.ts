@@ -70,6 +70,11 @@ interface DeployError {
   recordedAtMs: number | null;
 }
 
+interface DeploySubmissionReadiness {
+  canSubmit: boolean;
+  guidance: string;
+}
+
 type DeployLens = 'trader' | 'operator';
 
 @Component({
@@ -192,19 +197,51 @@ export class AlpacaDeployWorkflowComponent {
     return `${quantity} ${quantity === 1 ? 'share' : 'shares'}`;
   });
 
-  protected readonly canSubmit = computed(() => {
+  protected readonly submissionReadiness = computed<DeploySubmissionReadiness>(() => {
     const view = this.currentView();
-    return Boolean(
-      view
-      && view.eligibility.eligible
-      && view.allowed_actions.includes('deploy')
-      && this.selectedExecutionMode()?.availability === 'available'
-      && this.selectedStrategy() !== null
-      && this.ticketForm().valid()
-      && this.evidenceOverrideComplete()
-      && !this.submitting(),
-    );
+    if (!view) {
+      return { canSubmit: false, guidance: 'Loading deployment readiness…' };
+    }
+    if (!view.eligibility.eligible || !view.allowed_actions.includes('deploy')) {
+      return {
+        canSubmit: false,
+        guidance: view.eligibility.next_action || 'Resolve the current blocker before launch.',
+      };
+    }
+    if (this.submitting()) {
+      return { canSubmit: false, guidance: 'Deployment is in progress.' };
+    }
+    if (this.ticketForm.instanceId().invalid()) {
+      return { canSubmit: false, guidance: 'Fix the bot name before deployment.' };
+    }
+    if (this.selectedStrategy() === null) {
+      return { canSubmit: false, guidance: 'Choose a deployment strategy.' };
+    }
+    if (this.selectedExecutionMode()?.availability !== 'available') {
+      return { canSubmit: false, guidance: 'Choose an available execution mode.' };
+    }
+    if (this.ticketForm.symbol().invalid()) {
+      return { canSubmit: false, guidance: 'Fix the trading symbol before deployment.' };
+    }
+    if (this.ticket().sizingPreset === 'custom' && this.ticketForm.quantity().invalid()) {
+      return { canSubmit: false, guidance: 'Fix the position size before deployment.' };
+    }
+    if (this.strategyRequiresOverride() && !this.ticket().evidenceOverrideAcknowledged) {
+      return { canSubmit: false, guidance: 'Accept the evidence-only deployment risk.' };
+    }
+    if (!this.evidenceOverrideComplete()) {
+      return {
+        canSubmit: false,
+        guidance: 'Enter at least 10 characters explaining this risk decision.',
+      };
+    }
+    if (!this.ticketForm().valid()) {
+      return { canSubmit: false, guidance: 'Complete the highlighted deployment fields.' };
+    }
+    return { canSubmit: true, guidance: 'Ready to deploy this bot.' };
   });
+
+  protected readonly canSubmit = computed(() => this.submissionReadiness().canSubmit);
 
   constructor() {
     effect(() => {

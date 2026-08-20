@@ -200,10 +200,15 @@
                 <div><dt>Mode</dt><dd>{{ executionLabel() }}</dd></div>
                 <div><dt>Evidence</dt><dd>{{ strategyRequiresOverride() ? 'Human override' : 'Accepted' }}</dd></div>
               </dl>
-              <button type="submit" [disabled]="!canSubmit()" [attr.aria-busy]="submitting()">
+              <button
+                type="submit"
+                [disabled]="!canSubmit()"
+                [attr.aria-busy]="submitting()"
+                aria-describedby="deploy-submit-guidance"
+              >
                 {{ submitting() ? 'Deploying…' : 'Deploy ' + executionLabel().toLowerCase() + ' bot' }}
               </button>
-              <small>{{ view.eligibility.eligible ? view.eligibility.next_action : 'Resolve the current blocker before launch.' }}</small>
+              <small id="deploy-submit-guidance" aria-live="polite">{{ submissionReadiness().guidance }}</small>
             </div>
           </aside>
         </div>
