@@ -3,7 +3,9 @@
 Formula: RSI(14) range + Supertrend long + ADX > 20 + MACD > 0 → entry; ADX < 20 → exit. Extends RsiRangeStrategy base.
 Reference: Internal — no external port reference; long-only 15-min RTH SPY strategy.
 Canonical implementation: app/engine/strategy/algorithms/spy_strategy_b.py
-Validated against: app/engine/tests/ (existing tests; no parity fixture identified).
+Validated against: app/engine/tests/ (gate-wiring unit tests); golden fixture ENG-008
+    (tests/fixtures/test_strategy_parity_fixtures.py) pins trade_log self-equivalence
+    at registered defaults as a pre-port receipt for the S3 intent port (#1699).
 
 Entry gates (all evaluated each bar while flat):
     * ``rsi_low_gate <= RSI <= rsi_high_gate``.
