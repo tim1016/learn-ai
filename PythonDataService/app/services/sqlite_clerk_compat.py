@@ -172,14 +172,16 @@ def sqlite_clerk_status(
             uncertainty_count=len(projection.uncertainties),
             guidance=projection.guidance,
             recovery_actions=projection.recovery_actions,
-            account_mode=account.account_mode if account is not None else "paper",
-            account_status=account.account_status if account is not None else "ACTIVE",
-            trading_blocked=account.trading_blocked if account is not None else False,
-            account_blocked=account.account_blocked if account is not None else False,
+            # None together exactly when the account snapshot is
+            # unavailable — never defaulted to a fake eligible shape. See
+            # AccountOperatorPostureContext's docstring (#1664 review).
+            account_mode=account.account_mode if account is not None else None,
+            account_status=account.account_status if account is not None else None,
+            trading_blocked=account.trading_blocked if account is not None else None,
+            account_blocked=account.account_blocked if account is not None else None,
             outstanding_intents=unresolved,
             channels_ready=channel_evaluation.ready,
             channels_detail=_channel_evaluation_detail(channel_evaluation),
-            account_evidence_unavailable=account is None,
         )
     )
     return ClerkStatus(

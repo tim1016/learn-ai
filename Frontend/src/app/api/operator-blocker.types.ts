@@ -171,20 +171,26 @@ export type AccountOperatorPostureHost = 'account_desk' | 'fleet_roster';
  */
 export const ACCOUNT_DESK_CLERK_RECOVERY_ANCHOR = 'account-desk-clerk-recovery';
 
-/** Backend-authored move list for one blocker, honoring the ADR 0027 disposition rules. */
+/**
+ * Backend-authored move list for one blocker, honoring the ADR 0027
+ * disposition rules. `wait` never carries a move (the cure is elsewhere,
+ * by design); every other disposition renders its primary move followed
+ * by any secondary moves the backend attaches — the schema permits
+ * `secondary_moves` on any non-`wait` disposition, not just `terminal`.
+ */
 export function movesForBlocker(blocker: OperatorBlocker): readonly OperatorMove[] {
   const secondaryMoves = blocker.secondary_moves ?? [];
   if (blocker.disposition === 'wait') return [];
-  if (blocker.disposition === 'terminal') {
-    return blocker.primary_move ? [blocker.primary_move, ...secondaryMoves] : secondaryMoves;
-  }
-  return blocker.primary_move ? [blocker.primary_move] : [];
+  return blocker.primary_move ? [blocker.primary_move, ...secondaryMoves] : secondaryMoves;
 }
 
 /**
- * Selects the one host projection a surface may render from a possibly
- * missing/malformed posture. Returns `null` (fail closed, never re-derive)
- * when the posture itself hasn't loaded yet.
+ * Selects the one host projection a surface may render. Returns `null`
+ * (fail closed, never re-derive from raw evidence) when `posture` itself
+ * is `null` — the only case this function guards. The backend's
+ * `AccountOperatorPosture` validator (not this selector) is what makes a
+ * partial projection — a non-null `condition` with one host's blocker
+ * missing — impossible on the wire in the first place.
  */
 export function accountOperatorPostureBlocker(
   posture: AccountOperatorPosture | null,

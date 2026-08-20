@@ -11,6 +11,8 @@ moves, per ADR 0027.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from pydantic import ValidationError
 
@@ -22,8 +24,8 @@ from app.broker.alpaca.clerk.sqlite.projection_models import ProjectionGuidance,
 from app.schemas.operator_blocker import AccountOperatorPosture
 
 
-def _guidance(**overrides) -> ProjectionGuidance:
-    values = {
+def _guidance(**overrides: Any) -> ProjectionGuidance:
+    values: dict[str, Any] = {
         "headline": "Account Clerk custody is healthy",
         "explanation": "Durable Clerk state has no active hold or unresolved uncertainty in this scope.",
         "scope": "ACCOUNT_CLERK",
@@ -38,8 +40,8 @@ def _guidance(**overrides) -> ProjectionGuidance:
     return ProjectionGuidance(**values)
 
 
-def _recovery_action(**overrides) -> RecoveryCapability:
-    values = {
+def _recovery_action(**overrides: Any) -> RecoveryCapability:
+    values: dict[str, Any] = {
         "action_id": "reconcile_now",
         "label": "Reconcile now",
         "explanation": "Compare Clerk custody to a fresh broker observation.",
@@ -61,8 +63,8 @@ def _recovery_action(**overrides) -> RecoveryCapability:
     return RecoveryCapability(**values)
 
 
-def _context(**overrides) -> AccountOperatorPostureContext:
-    values = {
+def _context(**overrides: Any) -> AccountOperatorPostureContext:
+    values: dict[str, Any] = {
         "authority_health": "healthy",
         "uncertainty_count": 0,
         "guidance": _guidance(),
@@ -74,7 +76,6 @@ def _context(**overrides) -> AccountOperatorPostureContext:
         "outstanding_intents": 0,
         "channels_ready": True,
         "channels_detail": None,
-        "account_evidence_unavailable": False,
     }
     values.update(overrides)
     return AccountOperatorPostureContext(**values)
@@ -248,19 +249,36 @@ def test_unresolved_intents_wait_as_a_warning() -> None:
     assert posture.account_desk.disposition == "wait"
 
 
-def test_account_evidence_unavailable_takes_priority_over_other_eligibility_checks() -> None:
+def test_missing_account_snapshot_reports_evidence_unavailable() -> None:
     posture = build_account_operator_posture(
         _context(
-            account_evidence_unavailable=True,
-            account_mode="live",
-            account_status="INACTIVE",
-            trading_blocked=True,
+            account_mode=None,
+            account_status=None,
+            trading_blocked=None,
+            account_blocked=None,
         )
     )
 
     assert posture.condition is not None
     assert posture.condition.id == "alpaca_account_evidence_unavailable"
     assert posture.condition.severity == "warning"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"account_mode": None},
+        {"account_status": None},
+        {"trading_blocked": None},
+        {"account_blocked": None},
+    ],
+)
+def test_partial_none_account_fields_are_unrepresentable(overrides: dict[str, Any]) -> None:
+    """A missing account snapshot must leave all four fields unset — never a
+    partial mix that could accidentally read a stale/defaulted value on one
+    field while treating another as authoritative (2026-08-19 review)."""
+    with pytest.raises(ValueError, match="all present or all None"):
+        _context(**overrides)
 
 
 def test_custody_condition_takes_priority_over_account_eligibility() -> None:
@@ -329,6 +347,39 @@ def test_mismatched_host_blocker_condition_is_rejected() -> None:
             condition=mismatched_posture.condition,
             account_desk=mismatched_posture.account_desk,
             fleet_roster=other_posture.fleet_roster,
+            status_headline="mismatch",
+            status_detail=None,
+        )
+
+
+@pytest.mark.parametrize("missing_field", ["account_desk", "fleet_roster"])
+def test_non_null_condition_requires_both_host_projections(missing_field: str) -> None:
+    posture = build_account_operator_posture(_context(outstanding_intents=1))
+    assert posture.condition is not None
+    assert posture.account_desk is not None
+    assert posture.fleet_roster is not None
+
+    with pytest.raises(ValidationError, match="requires both the account_desk and fleet_roster"):
+        AccountOperatorPosture(
+            condition=posture.condition,
+            account_desk=None if missing_field == "account_desk" else posture.account_desk,
+            fleet_roster=None if missing_field == "fleet_roster" else posture.fleet_roster,
+            status_headline="partial",
+            status_detail=None,
+        )
+
+
+def test_host_projection_must_carry_the_matching_host_field() -> None:
+    posture = build_account_operator_posture(_context(outstanding_intents=1))
+    assert posture.condition is not None
+    assert posture.fleet_roster is not None
+
+    with pytest.raises(ValidationError, match="must carry host="):
+        AccountOperatorPosture(
+            condition=posture.condition,
+            # host="fleet_roster" placed in the account_desk slot.
+            account_desk=posture.fleet_roster,
+            fleet_roster=posture.fleet_roster,
             status_headline="mismatch",
             status_detail=None,
         )

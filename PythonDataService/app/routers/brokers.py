@@ -95,6 +95,13 @@ from app.utils.timestamps import now_ms_utc
 router = APIRouter(prefix="/api/brokers", tags=["brokers-v2"])
 logger = logging.getLogger(__name__)
 
+# Matches app/broker/alpaca/client.py's own request timeout. That client
+# already turns a stuck request into a BrokerError within this bound, but
+# this router should not implicitly trust a transitive dependency to
+# enforce it — a defense-in-depth bound so /clerk/status can never block
+# UI polling indefinitely regardless of how the account read is wired.
+_ACCOUNT_SNAPSHOT_TIMEOUT_S = 15.0
+
 _DEFAULT_READ_LIMIT = 100
 _MAX_READ_LIMIT = 500
 _MAX_ACTIVITY_LIMIT = 100
@@ -608,7 +615,20 @@ async def get_clerk_status(broker: str) -> ClerkStatus:
     sqlite = _require_sqlite_facade(broker)
     projection = await _read_sqlite_account_projection(sqlite)
     try:
-        account = await resolve_broker_account_snapshot(broker)
+        account = await asyncio.wait_for(
+            # Shielded: a timeout here must cancel only this request's wait,
+            # never the account-snapshot cache's shared in-flight task —
+            # otherwise this request's bound would cut off a read that a
+            # concurrent /clerk/status caller is still legitimately waiting on.
+            asyncio.shield(resolve_broker_account_snapshot(broker)),
+            timeout=_ACCOUNT_SNAPSHOT_TIMEOUT_S,
+        )
+    except TimeoutError:
+        logger.warning(
+            "Clerk status account read timed out; reporting evidence-unavailable posture",
+            extra={"broker": broker, "timeout_s": _ACCOUNT_SNAPSHOT_TIMEOUT_S},
+        )
+        account = None
     except BrokerError as error:
         logger.warning(
             "Clerk status account read failed; reporting evidence-unavailable posture",

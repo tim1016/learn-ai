@@ -14,6 +14,7 @@
   } @else if (status.value(); as clerkStatus) {
     <app-alpaca-operator-posture
       [posture]="clerkStatus.operator_posture"
+      [moveIsSupported]="isBlockerMoveSupported"
       (blockerMoveRequested)="onBlockerMoveRequested($event)"
     />
 

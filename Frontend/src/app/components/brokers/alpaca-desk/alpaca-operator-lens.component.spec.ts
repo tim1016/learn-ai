@@ -46,6 +46,28 @@ function fixHereAccountDeskPosture(): AccountOperatorPosture {
   };
 }
 
+/** A terminal authority-failure posture whose only move is open_runbook — no in-lens target exists yet. */
+function terminalRunbookPosture(): AccountOperatorPosture {
+  const blocker = operatorBlockerFixture({
+    host: 'account_desk',
+    disposition: 'terminal',
+    headline: 'Alpaca execution is paused',
+    detail: 'The Account Clerk authority is unavailable and cannot prove safe execution.',
+    primaryMove: {
+      label: 'Open Clerk recovery runbook',
+      action: { kind: 'open_runbook', slug: 'alpaca-account-clerk-authority-recovery' },
+      target: null,
+    },
+  });
+  return {
+    condition: blocker.condition,
+    account_desk: blocker,
+    fleet_roster: { ...blocker, host: 'fleet_roster' },
+    status_headline: blocker.headline,
+    status_detail: blocker.detail ?? null,
+  };
+}
+
 function projection(): SqliteClerkProjection {
   return {
     account_id: 'PA1', strategy_instance_id: null, authority_generation: 1,
@@ -159,6 +181,24 @@ describe('AlpacaOperatorLensComponent', () => {
       expect(executeSqliteRecoveryAction).toHaveBeenCalledWith('PA1', repair);
     });
     expect(refreshProjection).toHaveBeenCalledOnce();
+  });
+
+  it('does not render a dead button for a terminal open_runbook move it cannot dispatch', async () => {
+    await render(AlpacaOperatorLensComponent, {
+      providers: [
+        lensDataProvider(projection(), vi.fn(), clerkStatus(terminalRunbookPosture())),
+        { provide: BrokerService, useValue: { accountTransactions: vi.fn(), accountTransaction: vi.fn() } },
+        { provide: BrokersService, useValue: { getPortfolioHistory: getPortfolioHistory() } },
+      ],
+    });
+
+    expect(screen.getByRole('heading', { name: 'Alpaca execution is paused' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Open Clerk recovery runbook' })).toBeNull();
+    expect(screen.getByText('This requires attention outside this desk.')).toBeTruthy();
+    // The recovery panel must not have opened as a side effect of a click
+    // that never had anywhere to dispatch a move.
+    const custodyPanel = document.querySelector('.operator-lens__deep details');
+    expect(custodyPanel?.hasAttribute('open')).toBe(false);
   });
 
   it('composes the canonical forensic grid, filters, and shared receipt reader', async () => {

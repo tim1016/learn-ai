@@ -68,7 +68,7 @@ describe('AlpacaOperatorPostureComponent', () => {
     expect(screen.queryByRole('heading', { name: 'Roster headline' })).toBeNull();
   });
 
-  it('emits the exact OperatorMove for a fix_here disposition on confirm_in_form', async () => {
+  it('emits the exact OperatorMove for a fix_here disposition the host declares supported', async () => {
     const blockerMoveRequested = vi.fn();
     const move = {
       label: 'Open Clerk recovery',
@@ -78,6 +78,7 @@ describe('AlpacaOperatorPostureComponent', () => {
     await render(AlpacaOperatorPostureComponent, {
       inputs: {
         posture: blockedPosture({ disposition: 'fix_here', primaryMove: move }),
+        moveIsSupported: () => true,
       },
       on: { blockerMoveRequested },
     });
@@ -85,6 +86,29 @@ describe('AlpacaOperatorPostureComponent', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open Clerk recovery' }));
 
     expect(blockerMoveRequested).toHaveBeenCalledWith(move);
+  });
+
+  it('suppresses a move the host has not declared support for, instead of a dead click', async () => {
+    const blockerMoveRequested = vi.fn();
+    await render(AlpacaOperatorPostureComponent, {
+      inputs: {
+        // Default moveIsSupported only self-dispatches navigate; a
+        // confirm_in_form move is not rendered without host opt-in.
+        posture: blockedPosture({
+          disposition: 'fix_here',
+          primaryMove: {
+            label: 'Open Clerk recovery',
+            action: { kind: 'confirm_in_form' as const, anchor: 'account-desk-clerk-recovery' },
+            target: null,
+          },
+        }),
+      },
+      on: { blockerMoveRequested },
+    });
+
+    expect(screen.queryByRole('button', { name: 'Open Clerk recovery' })).toBeNull();
+    expect(screen.getByText('This requires attention outside this desk.')).toBeTruthy();
+    expect(blockerMoveRequested).not.toHaveBeenCalled();
   });
 
   it('navigates for a fix_elsewhere disposition instead of emitting a move', async () => {
@@ -114,7 +138,7 @@ describe('AlpacaOperatorPostureComponent', () => {
     expect(screen.queryByRole('button')).toBeNull();
   });
 
-  it('renders every terminal move as a button', async () => {
+  it('renders every terminal move as a button when the host declares it supported', async () => {
     const blockerMoveRequested = vi.fn();
     const runbookMove = {
       label: 'Open Clerk recovery runbook',
@@ -128,6 +152,7 @@ describe('AlpacaOperatorPostureComponent', () => {
           primaryMove: runbookMove,
           headline: 'Manual escalation required',
         }),
+        moveIsSupported: () => true,
       },
       on: { blockerMoveRequested },
     });
@@ -135,5 +160,25 @@ describe('AlpacaOperatorPostureComponent', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open Clerk recovery runbook' }));
 
     expect(blockerMoveRequested).toHaveBeenCalledWith(runbookMove);
+  });
+
+  it('falls back to the outside-desk message for an unsupported terminal runbook move', async () => {
+    await render(AlpacaOperatorPostureComponent, {
+      inputs: {
+        // Default moveIsSupported does not include open_runbook.
+        posture: blockedPosture({
+          disposition: 'terminal',
+          primaryMove: {
+            label: 'Open Clerk recovery runbook',
+            action: { kind: 'open_runbook' as const, slug: 'alpaca-account-clerk-authority-recovery' },
+            target: null,
+          },
+          headline: 'Manual escalation required',
+        }),
+      },
+    });
+
+    expect(screen.queryByRole('button', { name: 'Open Clerk recovery runbook' })).toBeNull();
+    expect(screen.getByText('This requires attention outside this desk.')).toBeTruthy();
   });
 });

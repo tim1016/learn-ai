@@ -81,20 +81,45 @@ class AccountOperatorPostureContext:
     ``uncertainty_count`` are the same custody-side facts that already
     author ``ClerkProjectionResponse``. The remaining fields are the
     account-eligibility facts paper-deploy readiness already requires.
+
+    ``account_mode``/``account_status``/``trading_blocked``/
+    ``account_blocked`` are ``None`` together exactly when the Alpaca
+    account snapshot could not be read this cycle — there is no separate
+    "evidence unavailable" flag to fall out of sync with them. Absence is
+    unrepresentable any other way: ``__post_init__`` rejects a context
+    where only some of the four are ``None`` (2026-08-19 review: a prior
+    revision defaulted a missing snapshot to paper/ACTIVE/unblocked, which
+    was safe only because ``_eligibility_condition`` happened to check the
+    now-removed flag first).
     """
 
     authority_health: AuthorityHealth
     uncertainty_count: int
     guidance: ProjectionGuidance
     recovery_actions: tuple[RecoveryCapability, ...]
-    account_mode: str
-    account_status: str
-    trading_blocked: bool
-    account_blocked: bool
+    account_mode: str | None
+    account_status: str | None
+    trading_blocked: bool | None
+    account_blocked: bool | None
     outstanding_intents: int
     channels_ready: bool
     channels_detail: str | None
-    account_evidence_unavailable: bool = False
+
+    def __post_init__(self) -> None:
+        account_fields = (
+            self.account_mode,
+            self.account_status,
+            self.trading_blocked,
+            self.account_blocked,
+        )
+        some_present = any(field is not None for field in account_fields)
+        all_present = all(field is not None for field in account_fields)
+        if some_present and not all_present:
+            raise ValueError(
+                "account_mode/account_status/trading_blocked/account_blocked must be "
+                "all present or all None — a missing account snapshot leaves all four "
+                "unset, never a partial mix"
+            )
 
 
 def build_account_operator_posture(ctx: AccountOperatorPostureContext) -> AccountOperatorPosture:
@@ -216,7 +241,7 @@ def _custody_condition(ctx: AccountOperatorPostureContext) -> AccountOperatorPos
 # None of these have an in-app cure, so both hosts always get `wait`/no move —
 # the honest cure lives at Alpaca or in a future retry, not behind a button.
 def _eligibility_condition(ctx: AccountOperatorPostureContext) -> AccountOperatorPosture | None:
-    if ctx.account_evidence_unavailable:
+    if ctx.account_mode is None:
         return _eligibility_posture(
             condition_id="alpaca_account_evidence_unavailable",
             severity="warning",

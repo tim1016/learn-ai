@@ -26,6 +26,8 @@
       </div>
     } @else if (current.blocker?.disposition === 'wait') {
       <p class="operator-posture__status" role="status">Waiting for fresh account evidence.</p>
+    } @else if (current.blocker !== null) {
+      <p class="operator-posture__status" role="alert">This requires attention outside this desk.</p>
     }
   </section>
 } @else {

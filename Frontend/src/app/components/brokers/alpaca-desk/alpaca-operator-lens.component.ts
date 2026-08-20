@@ -59,11 +59,18 @@ export class AlpacaOperatorLensComponent {
   }
 
   /**
-   * The dominant posture card's `fix_here` move is a `confirm_in_form`
-   * pointing at this lens's own recovery panel (#1664) — open it in place.
-   * Other move kinds (`open_runbook`, terminal moves) are rendered by the
-   * posture card itself and have no in-lens target yet.
+   * This predicate replaces the posture card's own default, so it must
+   * restate `navigate` (self-dispatched by the card) in addition to this
+   * lens's own capability — the `confirm_in_form` recovery anchor, which
+   * opens this lens's recovery panel in place. The card only ever renders
+   * a button for a move that passes this predicate (#1664 review), so an
+   * `open_runbook` terminal move — for which this lens has no target yet —
+   * is not offered as a dead click instead of silently doing nothing.
    */
+  protected readonly isBlockerMoveSupported = (move: OperatorMove): boolean =>
+    move.action.kind === 'navigate' ||
+    (move.action.kind === 'confirm_in_form' && move.action.anchor === ACCOUNT_DESK_CLERK_RECOVERY_ANCHOR);
+
   protected onBlockerMoveRequested(move: OperatorMove): void {
     if (move.action.kind === 'confirm_in_form' && move.action.anchor === ACCOUNT_DESK_CLERK_RECOVERY_ANCHOR) {
       this.openCustodyPanel();

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -227,7 +228,7 @@ class _FakeAccountReadPort:
 
 
 @pytest.fixture()
-def sqlite_desk_clean(tmp_path: Path):
+def sqlite_desk_clean(tmp_path: Path) -> Iterator[FastAPI]:
     """A boot-selected SQLite authority with no active custody uncertainty."""
     repo = ClerkSqliteRepository.initialize(
         account_id="PA-SQLITE-DESK-CLEAN",
@@ -303,6 +304,31 @@ async def test_clerk_status_degrades_to_evidence_unavailable_when_account_read_f
     sqlite_desk_clean: FastAPI,
 ) -> None:
     """No broker is registered — the account read fails, but the endpoint still 200s."""
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=sqlite_desk_clean), base_url="http://test"
+    ) as client:
+        status = await client.get("/api/brokers/alpaca/clerk/status")
+
+    assert status.status_code == 200
+    posture = status.json()["operator_posture"]
+    assert posture["condition"]["id"] == "alpaca_account_evidence_unavailable"
+    assert posture["condition"]["severity"] == "warning"
+
+
+@pytest.mark.asyncio
+async def test_clerk_status_degrades_to_evidence_unavailable_when_account_read_times_out(
+    sqlite_desk_clean: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bound account read that times out must still 200 with the same
+    evidence-unavailable posture as an outright read failure — the endpoint
+    can never block UI polling for the account read's full budget."""
+
+    async def timed_out_snapshot(_broker: str) -> Any:
+        raise TimeoutError("simulated account read timeout")
+
+    monkeypatch.setattr(brokers_router, "resolve_broker_account_snapshot", timed_out_snapshot)
+
     async with httpx.AsyncClient(
         transport=ASGITransport(app=sqlite_desk_clean), base_url="http://test"
     ) as client:
