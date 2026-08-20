@@ -1384,6 +1384,47 @@
         }
       },
       "status": "active"
+    },
+    {
+      "id": "ENG-008",
+      "name": "Strategy A/B/C self-equivalence (pre-port receipt)",
+      "category": "strategy-parity",
+      "canonical_module": "PythonDataService/app/engine/strategy/algorithms/spy_strategy_a.py, spy_strategy_b.py, spy_strategy_c.py (shared base: _rsi_range_base.py)",
+      "canonical_callable": "SpyStrategyAAlgorithm, SpyStrategyBAlgorithm, SpyStrategyCAlgorithm",
+      "reference": {
+        "kind": "internal_regression",
+        "oracle": "Strategy A/B/C's own current (pre-port) trade_log output, captured once as a refactor-neutrality receipt — not an external correctness oracle.",
+        "citation": "docs/references/strategy-abc-self-equivalence.md"
+      },
+      "market_input": {
+        "source": "synthetic",
+        "vendor": null,
+        "generated_by": "PythonDataService/scripts/fixture_generators/strategy_abc_self_equivalence.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 0.0,
+        "rtol": 0.0,
+        "note": "Bit-exact. All LoggedTrade fields are Decimal, int, str, or bool produced by exact Decimal arithmetic (no float division) replayed against the same pinned input; any divergence, even at the last Decimal digit, is exactly the signal the S3 intent port must explain rather than silently tolerate."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.arrow",
+          "output": "output.json",
+          "attribution": "attribution.md",
+          "content_sha256": {
+            "input.arrow": "584e2fe111490e98d3c43e253e2f2fc4c8714b9d6d49ec000081acc524512218",
+            "output.json": "09436ded064f124e62a8de31224b7cda38af40579137723fa9afaaa43d9baf25"
+          },
+          "file_sha256": {
+            "input.arrow": "68eedbcf7f878759cda41b60efb1c643b2fb0142174ca705c710ce0d1a2ae3bb",
+            "output.json": "72eb22f3ab7568991bc97d36471ffaf806783a31fe2805c8b51f914415e0cdfe",
+            "attribution.md": "d869ffc3c79705fb199e7d09a441acae4bcf12e507b1d224c48de3b07cb923cb"
+          }
+        }
+      },
+      "status": "active"
     }
   ]
 }
