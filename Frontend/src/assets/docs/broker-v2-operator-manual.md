@@ -359,3 +359,49 @@ with the surface that can present it — in the
 [Button Reference](#button-reference) above, and is not repeated here.
 
 <!-- END GENERATED: glossary -->
+
+---
+
+## Terminal incident references
+
+These runbook slugs remain the documentation contract for terminal notices that the
+current broker-activity bridge can emit. They describe evidence handling only. The
+retired IBKR launcher/evaluator is not an operator surface, and none of these entries
+authorizes an IBKR order, cancellation, deploy, start, or stop action.
+
+### `ibkr-order-rejection`
+
+<!-- terminal-runbook-slug: ibkr-order-rejection -->
+
+Preserve the broker rejection evidence and inspect the read-only IBKR account/order
+evidence. Do not retry or alter an IBKR order. For an Alpaca bot, use only the
+evidence-bound recovery capability presented by the Broker V2 panel.
+
+### `submit-outcome-uncertain`
+
+<!-- terminal-runbook-slug: submit-outcome-uncertain -->
+
+Treat the submission as unknown until reconciliation supplies exact broker evidence.
+Do not create a replacement order or clear a hold manually.
+
+### `bot-halted`
+
+<!-- terminal-runbook-slug: bot-halted -->
+
+Read the backend-authored duty reason and the account custody timeline. Resume only
+when the Broker V2 panel presents an enabled, evidence-backed action.
+
+### `bot-launch-failed`
+
+<!-- terminal-runbook-slug: bot-launch-failed -->
+
+Keep the bot off duty, retain the failure evidence, and correct the selected Alpaca
+deployment input before using the panel's next admitted action. Do not use a legacy
+IBKR host launcher.
+
+### `unmapped-terminal-diagnostic`
+
+<!-- terminal-runbook-slug: unmapped-terminal-diagnostic -->
+
+Preserve the opaque diagnostic and inspect the custody timeline. Escalate an
+unclassified failure rather than mapping it to a generic retry or recovery action.

@@ -45,8 +45,8 @@ glossary failing at the one job it has.
 
 Two further facts, both established by reading the deleted file out of git:
 
-- `CONTEXT.md:6` defers *"the full identity/control-plane term list"* to
-  `docs/ibkr-paper-deployment-plan.md` **§16.4**. That section is titled
+- `CONTEXT.md:6` defers *"the full identity/control-plane term list"* to the
+  retired paper-deployment plan's **§16.4** (available in Git history). That section is titled
   **"Cross-references"** and contains a PR-queue file map — ADR links and a list
   of code surfaces affected by PRs A–K. It never held a term list. The deferral
   was **wrong when it was written**, roughly three months before the file was
@@ -94,8 +94,8 @@ deliberate abstention from a `CONTEXT.md` entry was correct and is confirmed her
 §16.4 really is a PR-queue cross-reference table, so the four citations go and the
 header stops deferring authority it never successfully delegated.
 
-**The pointer was off by one section, not simply wrong.** `docs/archive/plans/
-ibkr-paper-deployment-plan.md` § "16.3. Term Lock (deployment-specific glossary)"
+**The pointer was off by one section, not simply wrong.** The retired
+paper-deployment plan's § "16.3. Term Lock (deployment-specific glossary)"
 sits immediately above §16.4 and *is* a 12-term table. Seven of those terms appear
 nowhere in `CONTEXT.md`: `submit_mode`, `execution_source`, `Layer A divergence`,
 `Layer B divergence`, `shadow_sim`, `NoSubmitBrokerAdapter`, and `(T3) topology`.

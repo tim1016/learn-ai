@@ -2,7 +2,7 @@
 
 **Status:** Accepted 2026-05-28
 **Decision drivers:** add a high-frequency intraday strategy (VWAP-band reversion on 1-min SPY) without committing it to live broker submission until reconciled against paper fills.
-**Related:** ADR 0001 (substrate), ADR 0003 (topology), historical plan `docs/archive/plans/ibkr-paper-deployment-plan.md` § 16.
+**Related:** ADR 0001 (substrate), ADR 0003 (topology), and the retired paper-deployment plan in Git history.
 
 ## Context
 
@@ -59,4 +59,4 @@ Concretely:
 - `PythonDataService/app/engine/live/live_engine.py` — engine to be made adapter-polymorphic at the order boundary.
 - `PythonDataService/app/broker/ibkr/orders.py` — `IbkrBrokerAdapter`'s current submission path; `NoSubmitBrokerAdapter` is its sibling.
 - `PythonDataService/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json` — strategy-spec growth template.
-- `docs/archive/plans/ibkr-paper-deployment-plan.md` § 16 — historical design-lock resolutions and PR queue.
+- Git history — historical design-lock resolutions and PR queue.

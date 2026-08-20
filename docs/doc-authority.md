@@ -4,19 +4,48 @@
 
 **Agent convention:** Only docs marked `canonical` or `protected-canonical` should be used as implementation authority. `supporting` docs provide context and provenance. `archived` docs in `docs/archive/` carry status banners and must not be treated as authority.
 
-**2026-07-04 prune.** ~150 point-in-time working docs — completed implementation plans (`docs/superpowers/`, `docs/architecture/phases/`), session handoffs (`docs/handoffs/`), shipped-feature PRDs, and closed audit findings (`docs/audits/auto-research/findings/`, `docs/audits/vibe-coded-app-research/`) — were **hard-deleted to git history** rather than archived. Git history is their provenance record. Open defects lifted out of the deleted audit findings live in `docs/known-gaps.md`.
+**2026-07-04 and 2026-08-19 prunes.** Point-in-time implementation plans, session
+handoffs, shipped-feature PRDs, closed audit findings, and the retired IBKR
+launcher/evaluator operating record were **hard-deleted to Git history**. Git history
+is their provenance record. Open defects belong in `docs/known-gaps.md`; current
+Alpaca Broker V2 behavior belongs in `docs/broker-v2-operator-manual.md`.
 
-**2026-07-29 Bot Control authority reconciliation (superseded 2026-08-06).** The old AccountOwner implementation
-snapshot, former "single canonical" operator runbook, cockpit/cohort plans, obsolete
-runbooks, dated audits, and the five-bot handoff moved to `docs/archive/` with status
-banners. `docs/bot-control-operator-manual.md` is now historical IBKR provenance;
-`docs/broker-v2-operator-manual.md` is the **current operating authority** for Alpaca Broker V2,
-rendered in-app at `/brokers/alpaca/manual`. It supersedes all older operating manuals,
-quick procedures, runbooks, controller/cockpit plans, AccountOwner snapshots, and
-point-in-time audits as behavior instructions. ADRs remain decision authority; code,
-contracts, and focused tests remain implementation evidence.
+**Agent instructions:** `AGENTS.md` is the Codex entry point. The committed
+`CLAUDE.md` / `.claude/**` hierarchy remains the Claude-specific configuration;
+adding Codex guidance must not restructure it.
 
-**Note on AI rules:** Agent-facing rules live in `.claude/rules/` (Claude Code) — not in `.codex/` (no `.codex/` directory exists in this repo). `AGENTS.md` is the cross-agent entry point.
+## Classification contract
+
+The checker classifies every Markdown document deterministically. Exact canonical
+rows below take precedence. The remaining rules, in order, are:
+
+| Path | Classification | Meaning |
+|---|---|---|
+| `docs/architecture/adrs/**` | `canonical` | Durable decision rationale; the ADR file owns its status. |
+| `docs/prds/**` | `in-flight` | Design context; verify status before acting on it. |
+| `docs/architecture/**`, `docs/audits/**`, `docs/design/**`, `docs/domain/**`, `docs/process/**`, `docs/references/**`, `docs/runbooks/**`, `docs/screenshots/**`, `docs/spy-lean-output/**`, `docs/superpowers/**`, `docs/validation/**` | `supporting` | Context or evidence, never a replacement for its canonical authority. |
+| Other `docs/*.md` files | `supporting`, unless listed as canonical below | Root-level context or index. |
+| `docs/archive/**` | `archived` | Retained non-operational history; never implementation authority. |
+
+An unknown directory fails the documentation contract rather than inheriting a broad
+catch-all classification.
+
+The contract resolves repository-local navigation links in canonical,
+protected-canonical, in-flight, and current runbook documents. Supporting research
+may cite historical code locations or retired artifacts as evidence, so it is not
+held to the same live-navigation guarantee.
+
+## Authority by claim
+
+| Claim | Primary authority | Conflict rule |
+|---|---|---|
+| Agent behavior | Native client hierarchy (`AGENTS.md` for Codex; existing `CLAUDE.md` / `.claude/**` for Claude) | Preserve Claude's configuration; surface a cross-client safety conflict |
+| Product/system decision | Accepted ADR | A later explicit supersession wins |
+| Mathematical port target | Pinned vendored reference, math registry, and golden/parity test | Surface unresolved disagreement |
+| Engine ownership | `docs/architecture/engine-authority-map.md` | Follow its migration plan |
+| Current runtime/wire shape | Manifest/config, generated contract, implementation, and executable tests | Docs describe evidence; they do not override it |
+| Framework behavior | Installed manifest plus official version-matched docs | Do not rely on prose version caches |
+| Open defect | `docs/known-gaps.md` | Closed findings are deleted or retained only in durable decision history |
 
 ---
 
@@ -87,6 +116,7 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 | 0031 | Cross-stack boundary selection and generated contracts |
 | 0032 | Broker contract v2 and verbatim capture |
 | 0033 | Account custody clocks and safety composition |
+| 0034 | Immutable strategy instances and append-only runs |
 | 0035 | Alpaca Account Clerk event-sourced SQLite authority (supersedes JSONL-authority parts of 0001/0008/0030/0033 for Alpaca only) |
 | 0036 | One flatness boundary (`abs(q) >= 1e-9`), owned by the backend; Angular holds no flatness verdict. Succeeds ADR 0013's no-frontend-derived-verdicts principle for numeric boundaries |
 | 0037 | SQLite is the sole Alpaca custody authority; legacy JSONL retired (no activation fence = no authority, never a fallback). Completes ADR 0035 |
@@ -107,7 +137,7 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 | `docs/architecture/ibkr-integration-tdd.md` | IBKR read/evidence design rationale and retired-actuation record ("why") | Former Phase 3/4 submit/cancel design (retired by #1583) | 2026-08-19 |
 | `docs/engine-persistence-authority.md` | Engine-side `BacktestEngine` runs persisting through `.NET` (parity gate + 6/8-category compare) | — | 2026-05-19 |
 | `docs/feature-runner-authority.md` | Research Lab → Feature Runner | — | 2026-05-01 |
-| `docs/ibkr-integration-authority.md` | Current read-only IBKR capability/account/order-history/market-data authority and retired-actuation boundary | `docs/architecture/ibkr-integration-phase1/2/3.md` (archived) and the pre-#1583 executable snapshot | 2026-08-19 |
+| `docs/ibkr-integration-authority.md` | Current read-only IBKR capability/account/order-history/market-data authority and retired-actuation boundary | Retired phase plans and the pre-#1583 executable snapshot (Git history) | 2026-08-19 |
 | `docs/indicator-reliability-authority.md` | Indicator reliability methodology | — | — |
 | `docs/ml-predictions-authority.md` | ML predictions (prediction-set artifact, StrategySpec wiring, QC parity infra) | — | 2026-05-12 |
 | `docs/portfolio-management.md` | Portfolio management system | `docs/portfolio-system.md` (duplicate, disputed — PR2) | — |
@@ -120,8 +150,6 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 
 | Doc | Domain | Notes |
 |---|---|---|
-| `docs/arch-overview.md` | System architecture overview | Review on next arch change |
-| `docs/bot-control-operator-manual.md` | Historical IBKR operator record | The UI, rendered manual, and catalog/control projections it describes are retired; use the Broker V2 manual for current behavior. |
 | `docs/architecture/backtesting-engine-grounding-2026-04-26.md` | Engine diagnostic | Cited by `numerical-authority-migration-plan.md` |
 | `docs/architecture/build-alpha-style-features-1-8-research-spec.md` | Alpha-style features | Features 6-8 may be unshipped — keep for traceability |
 | `docs/architecture/edge-feature-design.md` | Edge feature engineering spec | Actionable engineering spec |
@@ -136,16 +164,12 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 | `docs/audits/computational-fidelity-2026-04-22.md` | Timestamp ban motivation | Cited by `numerical-rigor.md` |
 | `docs/audits/computational-fidelity-2026-04-22-addendum.md` | Timestamp ban motivation | Addendum cited by same rule |
 | `docs/audits/structural-integrity-2026-04-22.md` | Known violation baseline | Historical context |
-| `docs/audits/bot-control-8bot-call-graph-audit-2026-07-28.md` | Eight-bot call-graph evidence | Supporting investigation only; its open findings are tracked in `docs/known-gaps.md`, and it is never an operator procedure |
 | `docs/audits/clerk-lineage-reachability-2026-08-17.md` | Alpaca-vs-IBKR Clerk lineage coupling and request reachability | Supporting evidence for wayfinder #1589 / ADR-0030/0032/0035 scope questions; distinguishes *executed* from merely *imported* |
 | `docs/audits/alpaca-sqlite-sole-authority-retirement-2026-08-19.md` | ADR-0037 legacy Alpaca custody retirement and migration-gate receipt | Records structural deletion, preserved SQLite/IBKR evidence boundaries, and the explicit external-inventory prerequisite for #1618/#1656–#1660 |
 | `docs/audits/numeric-authority-census-2026-08-17.md` | P&L / exposure / position implementation census | Supporting evidence for #1590 and ADR 0036; refutes the suspected FIFO duplication |
-| `docs/audits/state-writer-census-2026-08-17.md` | Lifecycle and deploy state-writer inventory | Supporting evidence for #1591; input to the single-writer decision (#1598) |
 | `docs/audits/submit-to-custody-fail-open-sweep-2026-08-17.md` | Alpaca submit-to-custody fail-open seams (5 confirmed, 9 refuted) | Supporting evidence for #1592; its confirmed seams are landed in `docs/known-gaps.md` via #1604 |
-| `docs/audits/{three-bot-lifecycle-2026-07-23,2026-07-23-findings-corrected,eight-bot-deploy-ui-2026-07-27,deployment-validation-connectivity-incident-2026-07-27}.md` | Retired IBKR Bot Control validation and incident provenance | Historical evidence only; use the Broker V2 manual and `known-gaps.md` for current truth |
 | `docs/bars-open-attribute-fix.md` | IBKR bar handling | Surgical bug-fix note for `ib_async.RealTimeBar.open_` |
-| `docs/codex-phase-1-4-audit.md` | Retired IBKR Phases 1-4 code audit | Historical evidence only; current authority is `docs/ibkr-integration-authority.md` |
-| `docs/engine-phase-1-2-refined-plan.md` | Strategy Lab deprecation lineage | Historical completion evidence; Strategy Lab is removed. |
+| `docs/engine-phase-1-2-refined-plan.md` | Engine Lab / Strategy Lab deprecation lineage | Historical planning context; Strategy Lab remains an active product surface. |
 | `docs/indicator-reliability-methodology.md` | Indicator reliability details | Backs `indicator-reliability-authority.md` |
 | `docs/lean-engine-phase1-verification-report.md` | Engine correctness evidence | Evidential artifact |
 | `docs/references/alpaca-sqlite-clerk-invariant-traceability.md` | ADR 0035 invariant-to-code/test evidence | Supports ADR 0035 and issue #1395 review |
@@ -180,31 +204,12 @@ PRDs were on 2026-07-04). Verify status before trusting them as current.
 
 ---
 
-## Archive (preserved for provenance — not implementation authority)
+## Archive (retained non-operational history — not implementation authority)
 
-Point-in-time docs normally prune to git history. The 2026-07-22 Clerk/controller
-consolidation is a deliberate exception: its obsolete material has operational and
-audit value, so it was moved to `docs/archive/` with explicit replacement pointers.
+`docs/archive/` is limited to historical material that has a continuing research or
+decision-record purpose. Retired IBKR launcher/evaluator plans, runbooks, audits,
+handoffs, and prompts were deleted rather than moved here; use Git history when that
+specific history is needed.
 
-All files under `docs/archive/` carry a status banner. See `docs/archive/README.md` for the convention.
-
-Key archive subdirectories:
-- `docs/archive/plans/` — stale plans, phase snapshots, and conflict docs (archived in PR1+PR2)
-- `docs/archive/reports/` — dated audits and historical implementation snapshots
-- `docs/archive/runbooks/` — superseded operator/runbook material
-- `docs/archive/prompts/` — verbatim LLM prompts stored as files
-- `docs/archive/handoffs/` — per-session context dumps and demo notes
-- `docs/archive/deleted-artifacts.md` — ledger of deleted raw outputs
-
-The Clerk/controller batch is represented by the following archive roots:
-
-- `docs/archive/runbooks/operator-architecture-and-runbook.md`
-- `docs/archive/runbooks/bot-cockpit-traffic-controller-guide.md`
-- `docs/archive/reports/bot-lifecycle-account-owner-authority.md`
-- `docs/archive/plans/2026-07-20-concurrent-cohort-reconciliation-hardening.md`
-- `docs/archive/reports/three-bot-concurrency-and-emergency-flatten-2026-07-17.md`
-
-Previously disputed docs are now archived in `docs/archive/plans/` with banners naming their canonical replacement:
-- `docs/archive/plans/black-scholes-implementation.md` → authority: `docs/architecture/options-math-authorities.md`
-- `docs/archive/plans/lean-engine-implementation-plan.md` → authority: `docs/architecture/engine-authority-map.md`
-- `docs/archive/plans/portfolio-system.md` → authority: `docs/portfolio-management.md`
+Remaining archive files carry a status banner and must not be used as implementation
+authority. See `docs/archive/README.md` for the convention.
