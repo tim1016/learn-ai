@@ -47,6 +47,9 @@
             @if (status.detail) {
               <span>{{ status.detail }}</span>
             }
+            @if (status.move; as move) {
+              <button type="button" class="posture-fact__move" (click)="requestMove(move)">{{ move.label }}</button>
+            }
           }
           <app-timestamp-display [value]="clerk.observed_at_ms" mode="local" />
         } @else {

@@ -294,8 +294,10 @@ async def test_clerk_status_reports_wrong_execution_mode_from_the_same_read(
     assert status.status_code == 200
     posture = status.json()["operator_posture"]
     assert posture["condition"]["id"] == "alpaca_account_wrong_execution_mode"
-    assert posture["account_desk"]["disposition"] == "wait"
-    assert posture["fleet_roster"]["disposition"] == "wait"
+    # Terminal, not wait: a non-paper account is a static config problem that
+    # fresh evidence can never resolve (2026-08-20 review).
+    assert posture["account_desk"]["disposition"] == "terminal"
+    assert posture["fleet_roster"]["disposition"] == "terminal"
     assert posture["account_desk"]["condition"]["id"] == posture["fleet_roster"]["condition"]["id"]
 
 
@@ -313,6 +315,32 @@ async def test_clerk_status_degrades_to_evidence_unavailable_when_account_read_f
     posture = status.json()["operator_posture"]
     assert posture["condition"]["id"] == "alpaca_account_evidence_unavailable"
     assert posture["condition"]["severity"] == "warning"
+
+
+@pytest.mark.asyncio
+async def test_clerk_status_reports_identity_mismatch_instead_of_the_wrong_accounts_facts(
+    sqlite_desk_clean: FastAPI,
+) -> None:
+    """The registered broker port observes a different account than the one
+    the active SQLite Clerk authority is bound to (e.g. credentials were
+    repointed) — the wrong account's paper mode/status/block flags must
+    never be attributed to this projection's account (2026-08-20 review)."""
+    mismatched_account = _FakeAccount()
+    mismatched_account.account_id = "PA-WRONG-ACCOUNT"
+    get_broker_registry().register(_FakeAccountReadPort(mismatched_account))  # type: ignore[arg-type]
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=sqlite_desk_clean), base_url="http://test"
+    ) as client:
+        status = await client.get("/api/brokers/alpaca/clerk/status")
+
+    assert status.status_code == 200
+    assert status.json()["account_id"] == "PA-SQLITE-DESK-CLEAN"
+    posture = status.json()["operator_posture"]
+    assert posture["condition"]["id"] == "alpaca_account_identity_mismatch"
+    assert posture["condition"]["severity"] == "blocking"
+    assert posture["account_desk"]["disposition"] == "terminal"
+    assert posture["fleet_roster"]["disposition"] == "terminal"
 
 
 @pytest.mark.asyncio

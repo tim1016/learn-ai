@@ -97,6 +97,19 @@
   }
 }
 
+.posture-fact__move {
+  display: inline-block;
+  margin-top: var(--space-1);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-text, var(--accent));
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semi);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .channel-list {
   display: flex;
   flex-wrap: wrap;

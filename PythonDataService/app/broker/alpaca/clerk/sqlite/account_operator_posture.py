@@ -59,6 +59,13 @@ _RUNBOOK_MOVE = OperatorMove(
     label="Open Clerk recovery runbook",
     action=OpenRunbookAction(kind="open_runbook", slug="alpaca-account-clerk-authority-recovery"),
 )
+# For account-eligibility conditions with no self-healing path (wrong
+# execution mode, identity mismatch): distinct from _RUNBOOK_MOVE, which is
+# specifically about custody/authority recovery, not account configuration.
+_ACCOUNT_CONFIGURATION_RUNBOOK_MOVE = OperatorMove(
+    label="Open account configuration runbook",
+    action=OpenRunbookAction(kind="open_runbook", slug="alpaca-account-configuration"),
+)
 
 # One (disposition, move) pair per host, keyed by the custody-side
 # disposition. `fix_here` on account_desk (it owns the in-place recovery
@@ -104,6 +111,13 @@ class AccountOperatorPostureContext:
     outstanding_intents: int
     channels_ready: bool
     channels_detail: str | None
+    # True when a same-request account read succeeded but named a different
+    # account than the projection this posture is being authored for (e.g.
+    # Alpaca credentials point at account B while the active SQLite Clerk
+    # authority is bound to account A). The caller must also leave the four
+    # account_* fields above None in this case — a mismatched account's
+    # facts must never be attributed to this projection's account.
+    account_identity_mismatch: bool = False
 
     def __post_init__(self) -> None:
         account_fields = (
@@ -237,10 +251,28 @@ def _custody_condition(ctx: AccountOperatorPostureContext) -> AccountOperatorPos
     )
 
 
-# One evidence check per row: (predicate, condition_id, severity, headline, detail-builder).
-# None of these have an in-app cure, so both hosts always get `wait`/no move —
-# the honest cure lives at Alpaca or in a future retry, not behind a button.
+# One evidence check per row. Most of these have no in-app cure and cannot
+# self-heal by waiting either, so they use `wait`/no move by default — the
+# honest cure lives at Alpaca or in a future retry, not behind a button.
+# Two rows (identity mismatch, wrong execution mode) are static
+# configuration problems fresh evidence can never resolve: they override the
+# default with `terminal` + an honest runbook move instead of leaving the UI
+# saying "waiting" forever (2026-08-20 review).
 def _eligibility_condition(ctx: AccountOperatorPostureContext) -> AccountOperatorPosture | None:
+    if ctx.account_identity_mismatch:
+        return _eligibility_posture(
+            condition_id="alpaca_account_identity_mismatch",
+            severity="blocking",
+            headline="Account identity does not match this Clerk authority",
+            detail=(
+                "The Alpaca account observed by this read does not match the "
+                "account this Clerk authority is bound to. Paper-mode and "
+                "active-status checks cannot trust a different account's facts."
+            ),
+            evidence={"account_identity_mismatch": True},
+            account_desk=("terminal", _ACCOUNT_CONFIGURATION_RUNBOOK_MOVE),
+            fleet_roster=("terminal", _ACCOUNT_CONFIGURATION_RUNBOOK_MOVE),
+        )
     if ctx.account_mode is None:
         return _eligibility_posture(
             condition_id="alpaca_account_evidence_unavailable",
@@ -260,9 +292,12 @@ def _eligibility_condition(ctx: AccountOperatorPostureContext) -> AccountOperato
             headline="This account is not in paper mode",
             detail=(
                 "Paper deployment and manual orders require a paper-mode "
-                f"account; Alpaca reports {ctx.account_mode!r} mode for this account."
+                f"account; Alpaca reports {ctx.account_mode!r} mode for this account. "
+                "This will not resolve by waiting — the account mode must be changed."
             ),
             evidence={"account_mode": ctx.account_mode},
+            account_desk=("terminal", _ACCOUNT_CONFIGURATION_RUNBOOK_MOVE),
+            fleet_roster=("terminal", _ACCOUNT_CONFIGURATION_RUNBOOK_MOVE),
         )
     if ctx.account_status.upper() != "ACTIVE":
         return _eligibility_posture(
@@ -321,13 +356,15 @@ def _eligibility_posture(
     headline: str,
     detail: str,
     evidence: dict[str, str | int | float | bool | None],
+    account_desk: _HostProjection = ("wait", None),
+    fleet_roster: _HostProjection = ("wait", None),
 ) -> AccountOperatorPosture:
     return _posture(
         condition_id=condition_id,
         severity=severity,
         headline=headline,
         detail=detail,
-        account_desk=("wait", None),
-        fleet_roster=("wait", None),
+        account_desk=account_desk,
+        fleet_roster=fleet_roster,
         evidence=evidence,
     )

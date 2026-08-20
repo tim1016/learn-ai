@@ -204,14 +204,47 @@ def test_inactive_account_waits_with_account_status_evidence() -> None:
     assert "not active" in posture.account_desk.headline
 
 
-def test_wrong_execution_mode_waits_with_mode_evidence() -> None:
+def test_wrong_execution_mode_is_terminal_with_a_real_cure_not_an_indefinite_wait() -> None:
+    """A non-paper account is a static config problem — no fresh evidence
+    resolves it, so it must not sit in `wait` forever (2026-08-20 review)."""
     posture = build_account_operator_posture(_context(account_mode="live"))
 
     assert posture.condition is not None
     assert posture.condition.id == "alpaca_account_wrong_execution_mode"
+    assert posture.condition.severity == "blocking"
     assert posture.condition.evidence["account_mode"] == "live"
     assert posture.account_desk is not None
+    assert posture.account_desk.disposition == "terminal"
+    assert posture.account_desk.primary_move is not None
+    assert posture.account_desk.primary_move.action.kind == "open_runbook"
     assert "paper mode" in posture.account_desk.headline
+    assert posture.fleet_roster is not None
+    assert posture.fleet_roster.disposition == "terminal"
+
+
+def test_account_identity_mismatch_is_terminal_and_takes_priority_over_stale_defaults() -> None:
+    """A mismatched account read must never leak its facts into this
+    projection's account — the eligibility fields stay None regardless of
+    what the (wrong) account's mode/status/block flags actually were."""
+    posture = build_account_operator_posture(
+        _context(
+            account_identity_mismatch=True,
+            account_mode=None,
+            account_status=None,
+            trading_blocked=None,
+            account_blocked=None,
+        )
+    )
+
+    assert posture.condition is not None
+    assert posture.condition.id == "alpaca_account_identity_mismatch"
+    assert posture.condition.severity == "blocking"
+    assert posture.account_desk is not None
+    assert posture.account_desk.disposition == "terminal"
+    assert posture.account_desk.primary_move is not None
+    assert posture.account_desk.primary_move.action.kind == "open_runbook"
+    assert posture.fleet_roster is not None
+    assert posture.fleet_roster.disposition == "terminal"
 
 
 def test_trading_blocked_takes_priority_over_channels_and_intents() -> None:

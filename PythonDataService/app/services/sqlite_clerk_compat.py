@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
@@ -31,6 +32,8 @@ from app.services.broker_v2_panel.panel_projection_service import (
     evaluate_channel_health,
 )
 from app.utils.timestamps import now_ms_utc
+
+logger = logging.getLogger(__name__)
 
 
 def active_sqlite_facade(broker: str = "alpaca") -> SqliteAlpacaClerkFacade | None:
@@ -152,6 +155,13 @@ def sqlite_clerk_status(
     Clerk's own custody folds; when it is unavailable the posture reports an
     explicit ``alpaca_account_evidence_unavailable`` condition instead of
     silently skipping the paper-mode/active-status checks (#1664 scope).
+
+    If ``account`` names a different account than ``projection`` — e.g. the
+    registered Alpaca port's credentials were repointed while this SQLite
+    Clerk authority is still bound to the original account — its facts are
+    never attributed to this projection's account (2026-08-20 review): the
+    posture reports an explicit ``alpaca_account_identity_mismatch``
+    condition instead of silently blending two accounts' evidence.
     """
     hold = projection.holds[0] if projection.holds else None
     unresolved = sum(
@@ -166,6 +176,17 @@ def sqlite_clerk_status(
     else:
         verdict = "clean"
     channel_evaluation = evaluate_channel_health(channel_healths, projection.generated_at_ms)
+    identity_mismatch = account is not None and account.account_id != projection.account_id
+    if identity_mismatch:
+        logger.warning(
+            "Clerk status account read named a different account than the "
+            "active projection; reporting identity-mismatch posture",
+            extra={
+                "projection_account_id": projection.account_id,
+                "observed_account_id": account.account_id if account is not None else None,
+            },
+        )
+    account_usable = account is not None and not identity_mismatch
     posture = build_account_operator_posture(
         AccountOperatorPostureContext(
             authority_health=projection.authority_health,
@@ -173,12 +194,14 @@ def sqlite_clerk_status(
             guidance=projection.guidance,
             recovery_actions=projection.recovery_actions,
             # None together exactly when the account snapshot is
-            # unavailable — never defaulted to a fake eligible shape. See
-            # AccountOperatorPostureContext's docstring (#1664 review).
-            account_mode=account.account_mode if account is not None else None,
-            account_status=account.account_status if account is not None else None,
-            trading_blocked=account.trading_blocked if account is not None else None,
-            account_blocked=account.account_blocked if account is not None else None,
+            # unavailable or names the wrong account — never defaulted to a
+            # fake eligible shape. See AccountOperatorPostureContext's
+            # docstring (#1664 review).
+            account_mode=account.account_mode if account_usable else None,
+            account_status=account.account_status if account_usable else None,
+            trading_blocked=account.trading_blocked if account_usable else None,
+            account_blocked=account.account_blocked if account_usable else None,
+            account_identity_mismatch=identity_mismatch,
             outstanding_intents=unresolved,
             channels_ready=channel_evaluation.ready,
             channels_detail=_channel_evaluation_detail(channel_evaluation),

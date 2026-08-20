@@ -1,5 +1,6 @@
-import { render, screen, within } from '@testing-library/angular';
-import { describe, expect, it } from 'vitest';
+import { fireEvent, render, screen, within } from '@testing-library/angular';
+import { provideRouter, Router } from '@angular/router';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { BrokerAccountSnapshot, ClerkStatus } from '../../../../api/alpaca.types';
 import type { AccountOperatorPosture } from '../../../../api/operator-blocker.types';
@@ -116,6 +117,53 @@ describe('AccountStripComponent', () => {
     expect(
       within(posture).getByText('2 account command(s) are still awaiting a final broker outcome.'),
     ).toBeTruthy();
+  });
+
+  it('renders and dispatches the fleet_roster projection\'s declared navigate move', async () => {
+    const view = await render(AccountStripComponent, {
+      componentInputs: {
+        account,
+        clerkStatus: {
+          ...clerkStatus,
+          operator_posture: blockedPosture({
+            disposition: 'fix_elsewhere',
+            headline: 'Clerk reconciliation required',
+          }),
+        },
+      },
+      providers: [provideRouter([])],
+    });
+
+    const router = view.fixture.debugElement.injector.get(Router);
+    const navigate = vi.spyOn(router, 'navigate').mockResolvedValue(true);
+
+    const posture = screen.getByLabelText('Alpaca account posture');
+    fireEvent.click(within(posture).getByRole('button', { name: 'Connect the broker' }));
+
+    expect(navigate).toHaveBeenCalledWith(['/broker'], { fragment: undefined });
+  });
+
+  it('does not render a button for a move it cannot dispatch itself', async () => {
+    await render(AccountStripComponent, {
+      componentInputs: {
+        account,
+        clerkStatus: {
+          ...clerkStatus,
+          operator_posture: blockedPosture({
+            disposition: 'fix_here',
+            headline: 'Clerk reconciliation required',
+            primaryMove: {
+              label: 'Open Clerk recovery',
+              action: { kind: 'confirm_in_form', anchor: 'account-desk-clerk-recovery' },
+              target: null,
+            },
+          }),
+        },
+      },
+    });
+
+    const posture = screen.getByLabelText('Alpaca account posture');
+    expect(within(posture).queryByRole('button')).toBeNull();
   });
 
   it('fails closed to Loading rather than re-deriving a verdict when posture has not loaded', async () => {
