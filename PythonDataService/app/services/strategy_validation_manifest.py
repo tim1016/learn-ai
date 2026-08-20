@@ -294,6 +294,21 @@ def strategy_audit_copy_is_current(
     )
 
 
+def strategy_settings_file_is_current(
+    entry: StrategyValidationEntry,
+    *,
+    repo_root: Path = _REPO_ROOT,
+) -> bool:
+    """Return whether the entry's referenced settings/deploy binding file still matches its hash."""
+    if entry.settings_file_ref is None or entry.settings_file_sha256 is None:
+        return False
+    return _ref_matches_sha256(
+        repo_root,
+        entry.settings_file_ref,
+        entry.settings_file_sha256,
+    )
+
+
 class StrategyValidationManifestError(RuntimeError):
     pass
 

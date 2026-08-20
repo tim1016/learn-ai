@@ -1,5 +1,6 @@
 import { HttpErrorResponse } from '@angular/common/http';
-import { fireEvent, render, screen } from '@testing-library/angular';
+import { fireEvent, render, screen, within } from '@testing-library/angular';
+import userEvent from '@testing-library/user-event';
 import { ActivatedRoute, convertToParamMap, provideRouter, Router } from '@angular/router';
 import { of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
@@ -56,6 +57,11 @@ const BLOCKED_STRATEGY: DeployBotView['strategies'][number] = {
   override_explanation: null,
   blocked_explanation: "The audit copy at 'docs/references/rsi-mean-reversion.md' no longer matches its recorded hash.",
 };
+
+const BLOCKED_EXPLANATION = BLOCKED_STRATEGY.blocked_explanation;
+if (BLOCKED_EXPLANATION === null || BLOCKED_EXPLANATION === undefined) {
+  throw new Error('BLOCKED_STRATEGY fixture must carry a blocked_explanation');
+}
 
 const DEPLOY_VIEW: DeployBotView = {
   broker: 'alpaca',
@@ -480,24 +486,53 @@ describe('AlpacaDeployWorkflowComponent', () => {
       componentInputs: { accountId: 'PA9' },
     });
     await screen.findByText(DEPLOY_VIEW.eligibility.headline);
-    fireEvent.input(screen.getByLabelText('Bot name'), {
-      target: { value: 'rsi-blocked-01' },
-    });
+    await userEvent.type(screen.getByLabelText('Bot name'), 'rsi-blocked-01');
 
-    const select = screen.getByLabelText('Deployment strategy') as HTMLSelectElement;
+    const select = screen.getByLabelText<HTMLSelectElement>('Deployment strategy');
     expect(select.value).toBe('rsi_mean_reversion');
-    const blockedOption = Array.from(select.options).find(
-      (option) => option.value === 'rsi_mean_reversion',
-    ) as HTMLOptionElement;
+    const blockedOption = screen.getByRole<HTMLOptionElement>('option', { name: /RSI Mean Reversion/ });
     expect(blockedOption.disabled).toBe(true);
     expect(blockedOption.textContent).toContain('blocked');
     expect(screen.getByText('Blocked · proof no longer verifies')).toBeTruthy();
-    expect(screen.getAllByText(BLOCKED_STRATEGY.blocked_explanation as string).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(BLOCKED_EXPLANATION).length).toBeGreaterThanOrEqual(1);
 
-    const deployButton = screen.getByRole('button', { name: 'Deploy paper bot' }) as HTMLButtonElement;
+    const deployButton = screen.getByRole<HTMLButtonElement>('button', {
+      name: 'Deploy paper bot',
+      description: BLOCKED_EXPLANATION,
+    });
     expect(deployButton.disabled).toBe(true);
-    expect(document.querySelector('#deploy-submit-guidance')?.textContent)
-      .toBe(BLOCKED_STRATEGY.blocked_explanation);
+    const launchCommand = deployButton.closest<HTMLElement>('.launch-command');
+    if (launchCommand === null) throw new Error('launch-command container not found');
+    expect(within(launchCommand).getByText('Blocked')).toBeTruthy();
+  });
+
+  it('shows the blocked reason for a single blocked strategy without a strategy selector', async () => {
+    const queryParamMap = convertToParamMap({ strategy_key: 'rsi_mean_reversion' });
+    const service = mockService(RECEIPT, { ...DEPLOY_VIEW, strategies: [BLOCKED_STRATEGY] });
+    await render(AlpacaDeployWorkflowComponent, {
+      providers: [
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: { queryParamMap: of(queryParamMap), snapshot: { queryParamMap } },
+        },
+        { provide: BrokerV2PanelService, useValue: service },
+      ],
+      componentInputs: { accountId: 'PA9' },
+    });
+    await screen.findByText(DEPLOY_VIEW.eligibility.headline);
+    await userEvent.type(screen.getByLabelText('Bot name'), 'rsi-blocked-01');
+
+    expect(screen.queryByLabelText('Deployment strategy')).toBeNull();
+    expect(screen.getAllByText(BLOCKED_STRATEGY.label).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('Blocked · proof no longer verifies')).toBeTruthy();
+    expect(screen.getAllByText(BLOCKED_EXPLANATION).length).toBeGreaterThanOrEqual(1);
+
+    const deployButton = screen.getByRole<HTMLButtonElement>('button', {
+      name: 'Deploy paper bot',
+      description: BLOCKED_EXPLANATION,
+    });
+    expect(deployButton.disabled).toBe(true);
   });
 
   it('auto-selects the first selectable strategy, skipping a blocked one, when no deep link is given', async () => {

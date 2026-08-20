@@ -25,7 +25,10 @@ from app.services.bot_trade_strategy import (
     supported_alpaca_paper_strategy_keys,
 )
 from app.services.broker_v2_panel.panel_projection_service import evaluate_channel_health
-from app.services.strategy_validation_manifest import strategy_audit_copy_is_current
+from app.services.strategy_validation_manifest import (
+    strategy_audit_copy_is_current,
+    strategy_settings_file_is_current,
+)
 from app.utils.timestamps import now_ms_utc
 
 
@@ -82,8 +85,12 @@ def _accepted_proof_blocked_reason(
             "The recorded behavioral-equivalence verdict is no longer accepted for deploy.",
         ),
         (
-            entry.deployable,
-            "The strategy validation manifest no longer marks this strategy as deployable.",
+            strategy_settings_file_is_current(entry),
+            f"The settings/deploy binding file at '{entry.settings_file_ref}' no longer matches its recorded hash.",
+        ),
+        (
+            strategy_audit_copy_is_current(entry),
+            f"The audit copy at '{entry.audit_copy_ref}' no longer matches its recorded hash.",
         ),
         (
             not divergent_gating,
@@ -107,8 +114,8 @@ def _accepted_proof_blocked_reason(
             f"The accepted proof snapshot is missing required field(s): {', '.join(missing_snapshot_fields)}.",
         ),
         (
-            strategy_audit_copy_is_current(entry),
-            f"The audit copy at '{snapshot.audit_copy_ref}' no longer matches its recorded hash.",
+            entry.deployable,
+            "The strategy validation manifest no longer marks this strategy as deployable.",
         ),
     )
     for passed, reason in checks:

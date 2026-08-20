@@ -169,6 +169,17 @@ export class AlpacaDeployWorkflowComponent {
     () => this.selectedStrategy()?.evidence_status === 'human_override_required',
   );
 
+  protected readonly evidenceSummaryLabel = computed(() => {
+    switch (this.selectedStrategy()?.evidence_status) {
+      case 'human_override_required':
+        return 'Human override';
+      case 'blocked':
+        return 'Blocked';
+      default:
+        return 'Accepted';
+    }
+  });
+
   protected readonly evidenceOverrideComplete = computed(() =>
     !this.strategyRequiresOverride()
     || (

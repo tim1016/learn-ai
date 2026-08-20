@@ -193,6 +193,26 @@ class AlpacaPaperDeployStrategy(BaseModel):
     override_explanation: str | None = None
     blocked_explanation: str | None = None
 
+    @model_validator(mode="after")
+    def _evidence_status_invariants(self) -> AlpacaPaperDeployStrategy:
+        if self.evidence_status == "blocked":
+            if self.selectable:
+                raise ValueError("A blocked strategy row cannot be selectable.")
+            if self.blocked_explanation is None:
+                raise ValueError("A blocked strategy row must carry a blocked_explanation.")
+            if self.override_explanation is not None:
+                raise ValueError("A blocked strategy row cannot carry an override_explanation.")
+            return self
+        if not self.selectable:
+            raise ValueError(f"A {self.evidence_status} strategy row must be selectable.")
+        if self.blocked_explanation is not None:
+            raise ValueError(f"A {self.evidence_status} strategy row cannot carry a blocked_explanation.")
+        if self.evidence_status == "human_override_required" and self.override_explanation is None:
+            raise ValueError("A human_override_required strategy row must carry an override_explanation.")
+        if self.evidence_status == "accepted" and self.override_explanation is not None:
+            raise ValueError("An accepted strategy row cannot carry an override_explanation.")
+        return self
+
 
 class AlpacaPaperDeployReadinessCheck(BaseModel):
     """One production-backed predicate in the current Deploy admission decision."""

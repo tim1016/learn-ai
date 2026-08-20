@@ -89,6 +89,39 @@ def _raise_panel_error(error: ds.PanelDataError) -> NoReturn:
     )
 
 
+def _raise_alpaca_deploy_error(error: ds.PanelDataError) -> NoReturn:
+    """Typed-conflict body shared by admission preview and actual deploy.
+
+    Both endpoints preflight through the same
+    ``ds._require_alpaca_deploy_request`` and must refuse a non-selectable
+    strategy (and every other preflight conflict) with an identical body
+    shape. No receipt exists on any error path, so ``receipt_id`` is always
+    ``None`` here.
+    """
+    operation_attempted = isinstance(error, ds.PanelRunnerError) and error.operation_attempted
+    outcome = (
+        "conflict"
+        if error.http_status == 409
+        else ("unknown" if operation_attempted and error.http_status >= 500 else "blocked")
+    )
+    raise HTTPException(
+        status_code=error.http_status,
+        detail={
+            "outcome": outcome,
+            "receipt_id": None,
+            "recorded_at_ms": now_ms_utc(),
+            "message": str(error),
+            "why": error.detail,
+            "next_action": error.next_action,
+            "admission": (
+                error.admission_decision.model_dump(mode="json")
+                if isinstance(error, ds.PanelRunnerError) and error.admission_decision is not None
+                else None
+            ),
+        },
+    ) from error
+
+
 def _raise_action_error(error: ActionExecutionError, request: PanelActionRequest) -> NoReturn:
     outcome_unknown = isinstance(error, ActionOutcomeUnknownError)
     outcome = (
@@ -194,7 +227,7 @@ async def preview_bot_start_admission_scoped(
             request,
         )
     except ds.PanelDataError as error:
-        _raise_panel_error(error)
+        _raise_alpaca_deploy_error(error)
 
 
 @router.post(
@@ -211,36 +244,7 @@ async def deploy_bot_scoped(
     try:
         return await ds.deploy_alpaca_paper_bot(broker, account_id, request)
     except ds.PanelDataError as error:
-        operation_attempted = (
-            isinstance(error, ds.PanelRunnerError)
-            and error.operation_attempted
-        )
-        outcome = (
-            "conflict"
-            if error.http_status == 409
-            else (
-                "unknown"
-                if operation_attempted and error.http_status >= 500
-                else "blocked"
-            )
-        )
-        raise HTTPException(
-            status_code=error.http_status,
-            detail={
-                "outcome": outcome,
-                "receipt_id": None,
-                "recorded_at_ms": now_ms_utc(),
-                "message": str(error),
-                "why": error.detail,
-                "next_action": error.next_action,
-                "admission": (
-                    error.admission_decision.model_dump(mode="json")
-                    if isinstance(error, ds.PanelRunnerError)
-                    and error.admission_decision is not None
-                    else None
-                ),
-            },
-        ) from error
+        _raise_alpaca_deploy_error(error)
 
 
 # ── §7 Panel projection (account-scoped + unscoped alias) ────────────────────

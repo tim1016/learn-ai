@@ -9,6 +9,7 @@ in this package without a cross-file import.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -85,7 +86,7 @@ class _FakeDeployRegistry:
             evidence_refs=("test-admission",),
         )
 
-    async def deploy_with_admission(self, **kwargs) -> AdmittedBotStart:
+    async def deploy_with_admission(self, **kwargs: object) -> AdmittedBotStart:
         self.deploy_calls.append(kwargs)
         bot = BotStatusView(
             strategy_instance_id=kwargs["strategy_instance_id"],
@@ -104,12 +105,15 @@ class _FakeDeployRegistry:
         )
         return AdmittedBotStart(bot=bot, admission=self._decision(kwargs))
 
-    async def preview_start_admission(self, **kwargs) -> RunAdmissionDecision:
+    async def preview_start_admission(self, **kwargs: object) -> RunAdmissionDecision:
         return self._decision(kwargs)
 
 
 @pytest.fixture()
-def deploy_app(tmp_path: Path, monkeypatch):
+def deploy_app(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[tuple[FastAPI, _FakeDeployRegistry]]:
     monkeypatch.setenv("ALPACA_CLERK_DIR", str(tmp_path))
     registry_seeds = strategy_registry_seeds()
     flag_events_path = tmp_path / "strategy-validation" / "flag-events.json"

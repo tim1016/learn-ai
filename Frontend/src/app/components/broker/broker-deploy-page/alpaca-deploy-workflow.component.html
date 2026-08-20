@@ -198,7 +198,7 @@
                 <div><dt>Strategy</dt><dd>{{ selectedStrategy()?.label ?? 'Unavailable' }}</dd></div>
                 <div><dt>Trade</dt><dd>{{ ticket().symbol || 'Symbol required' }} · {{ quantityLabel() }}</dd></div>
                 <div><dt>Mode</dt><dd>{{ executionLabel() }}</dd></div>
-                <div><dt>Evidence</dt><dd>{{ strategyRequiresOverride() ? 'Human override' : 'Accepted' }}</dd></div>
+                <div><dt>Evidence</dt><dd>{{ evidenceSummaryLabel() }}</dd></div>
               </dl>
               <button
                 type="submit"
