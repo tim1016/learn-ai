@@ -26,7 +26,8 @@ export const BROKER_V2_EMERGENCY_COPY: Readonly<Record<string, VocabularyCopy>> 
   },
   CRASHED: {
     label: 'Crashed',
-    explanation: 'The bot exited on an unhandled error. Check the duty reason.',
+    explanation:
+      'The bot exited on an unhandled runtime error. This terminal outcome is not a market-data health verdict.',
   },
   EXITED_UNVERIFIED: {
     label: 'Exited unverified',

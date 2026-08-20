@@ -1033,9 +1033,9 @@ class BotTaskRegistry:
                 "Bot crashed: market-data feed died",
                 extra={"action": "bot_crashed", "strategy_instance_id": sid, "error": str(exc)},
             )
-            await self._terminal.finalize_after_authority_stop(
+            await self._terminal.finalize_crash(
                 binding,
-                kind="CRASHED",
+                exc,
                 reason_code="FEED_DEATH",
             )
         except Exception as exc:
@@ -1046,9 +1046,9 @@ class BotTaskRegistry:
                 "Bot crashed",
                 extra={"action": "bot_crashed", "strategy_instance_id": sid},
             )
-            await self._terminal.finalize_after_authority_stop(
+            await self._terminal.finalize_crash(
                 binding,
-                kind="CRASHED",
+                exc,
                 reason_code=type(exc).__name__,
             )
         else:

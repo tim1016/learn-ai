@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 import app.engine.live.durable_append_log as durable_append_log
+from app.schemas.bot_run_evidence import BotCrashDiagnostic
 from app.schemas.broker_bots import AlpacaPaperEvidenceOverride
 from app.services.bot_binding_repository import (
     BotBindingRepository,
@@ -161,6 +162,57 @@ def test_terminal_outcome_is_create_once_and_run_scoped(tmp_path: Path) -> None:
     assert repository.read_outcome(_SID, binding.run_id) == outcome
     with pytest.raises(RunOutcomeConflictError):
         repository.record_outcome(outcome.model_copy(update={"reason_code": "SERVICE_SHUTDOWN"}))
+
+
+def test_crash_diagnostic_requires_a_crashed_terminal_outcome() -> None:
+    with pytest.raises(ValueError, match="require a CRASHED terminal outcome"):
+        BotRunOutcomeRecord(
+            strategy_instance_id=_SID,
+            run_id="run-001",
+            kind="STOPPED",
+            reason_code="OPERATOR_STOP",
+            recorded_at_ms=2_000,
+            crash_diagnostic=BotCrashDiagnostic(
+                exception_type="TypeError",
+                message="unexpected keyword argument 'start_ms'",
+                source_file="app/services/bot_trade_strategy.py",
+                source_line=86,
+            ),
+        )
+
+
+def test_terminal_outcome_rejects_conflicting_crash_diagnostics(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path)
+    binding = _binding()
+    repository.record_launch(binding, launch_reason="deploy")
+    outcome = BotRunOutcomeRecord(
+        strategy_instance_id=_SID,
+        run_id=binding.run_id,
+        kind="CRASHED",
+        reason_code="TypeError",
+        recorded_at_ms=2_000,
+        crash_diagnostic=BotCrashDiagnostic(
+            exception_type="TypeError",
+            message="unexpected keyword argument 'start_ms'",
+            source_file="app/services/bot_trade_strategy.py",
+            source_line=86,
+        ),
+    )
+    repository.record_outcome(outcome)
+    repository.record_outcome(outcome)
+
+    assert outcome.crash_diagnostic is not None
+    conflicting = outcome.model_copy(
+        update={
+            "crash_diagnostic": outcome.crash_diagnostic.model_copy(
+                update={"source_line": 87}
+            )
+        }
+    )
+    with pytest.raises(RunOutcomeConflictError):
+        repository.record_outcome(conflicting)
 
 
 def test_terminal_outcome_recovers_after_interrupted_atomic_publication(

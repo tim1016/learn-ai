@@ -173,7 +173,8 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
         "Stopped cleanly", "The bot exited on an operator stop or a service shutdown."
     ),
     "CRASHED": OperatorCopy(
-        "Crashed", "The bot exited on an unhandled error. Check the duty reason."
+        "Crashed",
+        "The bot exited on an unhandled runtime error. This terminal outcome is not a market-data health verdict.",
     ),
     "EXITED_UNVERIFIED": OperatorCopy(
         "Exited unverified",

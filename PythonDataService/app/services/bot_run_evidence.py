@@ -9,8 +9,8 @@ from app.engine.live.bot_lifecycle_state import (
     BotLifecycleStateRecord,
     BotLifecycleStateRepo,
 )
+from app.schemas.bot_run_evidence import BotCrashDiagnostic, BotRunTerminalOutcomeView
 from app.schemas.broker_bots import (
-    BotDutyOutcomeView,
     BotProcessFact,
     BotRunHistoryPage,
     BotRunView,
@@ -70,10 +70,15 @@ class BotRunEvidenceService:
         reason: str,
         expected_active_run_id: str | None = None,
         persist_receipt: bool = True,
+        crash_diagnostic: BotCrashDiagnostic | None = None,
     ) -> AlpacaLifecycleProjectionResult:
         """Publish immutable evidence before mutating the lifecycle projection."""
         if persist_receipt:
-            self._record_terminal_receipt(strategy_instance_id, outcome)
+            self._record_terminal_receipt(
+                strategy_instance_id,
+                outcome,
+                crash_diagnostic=crash_diagnostic,
+            )
         run_id = expected_active_run_id or outcome.run_id
         if run_id is None:
             return self._lifecycle_projector.refresh(
@@ -94,6 +99,8 @@ class BotRunEvidenceService:
         self,
         strategy_instance_id: str,
         outcome: BotDutyOutcome,
+        *,
+        crash_diagnostic: BotCrashDiagnostic | None = None,
     ) -> None:
         if outcome.run_id is None:
             return
@@ -104,6 +111,7 @@ class BotRunEvidenceService:
                 kind=outcome.kind,
                 reason_code=outcome.reason_code,
                 recorded_at_ms=outcome.recorded_at_ms,
+                crash_diagnostic=crash_diagnostic,
             )
         )
 
@@ -189,11 +197,12 @@ class BotRunEvidenceService:
             record.run_id,
         )
         terminal = (
-            BotDutyOutcomeView(
+            BotRunTerminalOutcomeView(
                 kind=outcome.kind,
                 reason_code=outcome.reason_code,
                 recorded_at_ms=outcome.recorded_at_ms,
                 run_id=outcome.run_id,
+                crash_diagnostic=outcome.crash_diagnostic,
             )
             if outcome is not None
             else self._current_lifecycle_outcome(record, is_current=is_current)
@@ -214,7 +223,7 @@ class BotRunEvidenceService:
         record: BotRunRecord,
         *,
         is_current: bool,
-    ) -> BotDutyOutcomeView | None:
+    ) -> BotRunTerminalOutcomeView | None:
         if not is_current:
             return None
         lifecycle = self._lifecycle_repo_for(record.strategy_instance_id).read()
@@ -224,7 +233,7 @@ class BotRunEvidenceService:
             or lifecycle.duty_outcome.run_id != record.run_id
         ):
             return None
-        return BotDutyOutcomeView(
+        return BotRunTerminalOutcomeView(
             kind=lifecycle.duty_outcome.kind,
             reason_code=lifecycle.duty_outcome.reason_code,
             recorded_at_ms=lifecycle.duty_outcome.recorded_at_ms,
