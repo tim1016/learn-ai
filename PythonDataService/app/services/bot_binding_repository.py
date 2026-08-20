@@ -15,7 +15,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.engine.live.durable_append_log import (
     create_atomic_exclusive_durable_file,
@@ -24,6 +24,7 @@ from app.engine.live.durable_append_log import (
 from app.engine.live.run_status import _atomic_write_json
 from app.schemas.action_plan import ActionPlan, CloseLegExit, StockEntryLeg, StockInstrument
 from app.schemas.bot_lifecycle import BotDutyOutcomeKind
+from app.schemas.bot_run_evidence import BotCrashDiagnostic
 from app.services.bot_carryover import configuration_hash
 
 logger = logging.getLogger(__name__)
@@ -154,6 +155,13 @@ class BotRunOutcomeRecord(BaseModel):
     kind: BotDutyOutcomeKind
     reason_code: str = Field(min_length=1, max_length=128)
     recorded_at_ms: int = Field(ge=0)
+    crash_diagnostic: BotCrashDiagnostic | None = None
+
+    @model_validator(mode="after")
+    def require_crashed_outcome_for_diagnostic(self) -> BotRunOutcomeRecord:
+        if self.crash_diagnostic is not None and self.kind != "CRASHED":
+            raise ValueError("crash diagnostics require a CRASHED terminal outcome")
+        return self
 
 
 class BotBindingRepository:

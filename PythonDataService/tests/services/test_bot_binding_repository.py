@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 import app.engine.live.durable_append_log as durable_append_log
+from app.schemas.bot_run_evidence import BotCrashDiagnostic
 from app.services.bot_binding_repository import (
     BotBindingRepository,
     BotRunOutcomeRecord,
@@ -129,6 +130,23 @@ def test_terminal_outcome_is_create_once_and_run_scoped(tmp_path: Path) -> None:
     with pytest.raises(RunOutcomeConflictError):
         repository.record_outcome(
             outcome.model_copy(update={"reason_code": "SERVICE_SHUTDOWN"})
+        )
+
+
+def test_crash_diagnostic_requires_a_crashed_terminal_outcome() -> None:
+    with pytest.raises(ValueError, match="require a CRASHED terminal outcome"):
+        BotRunOutcomeRecord(
+            strategy_instance_id=_SID,
+            run_id="run-001",
+            kind="STOPPED",
+            reason_code="OPERATOR_STOP",
+            recorded_at_ms=2_000,
+            crash_diagnostic=BotCrashDiagnostic(
+                exception_type="TypeError",
+                message="unexpected keyword argument 'start_ms'",
+                source_file="app/services/bot_trade_strategy.py",
+                source_line=86,
+            ),
         )
 
 

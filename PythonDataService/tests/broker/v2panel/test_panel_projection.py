@@ -1022,6 +1022,32 @@ def test_stop_outcome_copy_distinguishes_approved_carryover() -> None:
     assert "durable checkpoint" in panel.health.duty_outcome.explanation
 
 
+@pytest.mark.parametrize("reason_code", ["TypeError", "FEED_DEATH"])
+def test_crash_copy_is_source_neutral_and_not_a_market_data_verdict(
+    reason_code: str,
+) -> None:
+    status = _status(running=False)
+    status = status.model_copy(
+        update={
+            "duty_outcome": BotDutyOutcomeView(
+                kind="CRASHED",
+                reason_code=reason_code,
+                recorded_at_ms=_NOW,
+                run_id="run-1",
+            ),
+        }
+    )
+
+    panel = _panel(status, _clerk_status(), [])
+
+    assert panel.health.duty_outcome is not None
+    assert panel.health.duty_outcome.label == "Crashed"
+    assert panel.health.duty_outcome.explanation == (
+        "The bot exited on an unhandled runtime error. "
+        "This terminal outcome is not a market-data health verdict."
+    )
+
+
 def test_stop_enabled_only_when_running() -> None:
     running_panel = _panel(_status(running=True), _clerk_status(), [])
     stopped_panel = _panel(_status(running=False), _clerk_status(), [], exposure={})

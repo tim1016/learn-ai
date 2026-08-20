@@ -6082,6 +6082,43 @@
         "title": "BotControlAuthorityFacts",
         "type": "object"
       },
+      "BotCrashDiagnostic": {
+        "additionalProperties": false,
+        "description": "Exact developer evidence for the exception that ended one run.",
+        "properties": {
+          "exception_type": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Exception Type",
+            "type": "string"
+          },
+          "message": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Message",
+            "type": "string"
+          },
+          "source_file": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Source File",
+            "type": "string"
+          },
+          "source_line": {
+            "minimum": 1.0,
+            "title": "Source Line",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "exception_type",
+          "message",
+          "source_file",
+          "source_line"
+        ],
+        "title": "BotCrashDiagnostic",
+        "type": "object"
+      },
       "BotDutyOutcomeView": {
         "additionalProperties": false,
         "description": "Durable terminal duty evidence rendered by the operator surface.",
@@ -6994,6 +7031,62 @@
         "title": "BotRunReadValidationIssue",
         "type": "object"
       },
+      "BotRunTerminalOutcomeView": {
+        "additionalProperties": false,
+        "description": "Immutable terminal outcome and optional crash evidence for one run.",
+        "properties": {
+          "crash_diagnostic": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BotCrashDiagnostic"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "enum": [
+              "CLOCKED_OUT_FLAT",
+              "STOPPED",
+              "HALTED",
+              "CRASHED",
+              "FAILED_LAUNCH",
+              "EXITED_UNVERIFIED",
+              "RETIRED"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "recorded_at_ms": {
+            "minimum": 0.0,
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          }
+        },
+        "required": [
+          "kind",
+          "reason_code",
+          "recorded_at_ms"
+        ],
+        "title": "BotRunTerminalOutcomeView",
+        "type": "object"
+      },
       "BotRunView": {
         "additionalProperties": false,
         "description": "Read-only launch and terminal evidence for one strategy run.",
@@ -7042,7 +7135,7 @@
           "terminal_outcome": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/BotDutyOutcomeView"
+                "$ref": "#/components/schemas/BotRunTerminalOutcomeView"
               },
               {
                 "type": "null"
