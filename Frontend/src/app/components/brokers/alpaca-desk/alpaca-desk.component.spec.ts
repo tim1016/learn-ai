@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BrokerService } from '../../../services/broker.service';
 import { BrokersService } from '../../../services/brokers.service';
+import { healthyAccountOperatorPostureFixture } from '../../../testing/operator-blocker-fixtures';
 import { BrokerV2PanelService } from '../../broker/v2-panel/lib/broker-v2-panel.service';
 import { AlpacaDeskComponent } from './alpaca-desk.component';
 
@@ -44,6 +45,7 @@ function brokerService() {
       latest_reconciliation: null,
       outstanding_intents: 0,
       observed_at_ms: 1,
+      operator_posture: healthyAccountOperatorPostureFixture(),
     }),
     getCustodyDiagnosis: vi.fn().mockResolvedValue({
       broker: 'alpaca',

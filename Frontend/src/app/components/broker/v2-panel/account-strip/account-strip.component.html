@@ -26,7 +26,6 @@
       <div class="posture-fact">
         <span class="posture-fact__label">Broker</span>
         <strong>{{ snap.account_status | receiptLabel }}</strong>
-        <span>{{ snap.trading_blocked || snap.account_blocked ? 'Trading blocked' : 'Trading available' }}</span>
       </div>
 
       <div class="posture-fact">
@@ -41,10 +40,17 @@
       </div>
 
       <div class="posture-fact">
-        <span class="posture-fact__label">Account service</span>
+        <span class="posture-fact__label">Account status</span>
         @if (clerkStatus(); as clerk) {
-          <strong>{{ freezeActive() ? 'Frozen' : holdActive() ? 'Hold active' : 'Clear' }}</strong>
-          <span>{{ freezeActive() || holdActive() ? 'New entries blocked' : 'No custody block' }}</span>
+          @if (accountStatus(); as status) {
+            <strong>{{ status.headline }}</strong>
+            @if (status.detail) {
+              <span>{{ status.detail }}</span>
+            }
+            @if (status.move; as move) {
+              <button type="button" class="posture-fact__move" (click)="requestMove(move)">{{ move.label }}</button>
+            }
+          }
           <app-timestamp-display [value]="clerk.observed_at_ms" mode="local" />
         } @else {
           <strong>{{ clerkUnavailable() ? 'Unavailable' : 'Loading' }}</strong>

@@ -84,12 +84,14 @@ describe('OperatorBlockerListComponent', () => {
     const secondaryMove = blocker.primary_move;
     if (secondaryMove === null) throw new Error('Test blocker must include a primary move.');
     fixture.componentRef.setInput('blockers', [
+      // wait never carries a move (the cure is elsewhere) — 0.
       { ...blocker, disposition: 'wait' },
+      // Every non-wait disposition renders primary + secondary moves — 2 each.
       { ...blocker, disposition: 'fix_elsewhere', secondary_moves: [secondaryMove] },
       { ...blocker, disposition: 'terminal', secondary_moves: [secondaryMove] },
     ]);
     fixture.detectChanges();
 
-    expect(fixture.nativeElement.querySelectorAll('.operator-blocker-list__move')).toHaveLength(3);
+    expect(fixture.nativeElement.querySelectorAll('.operator-blocker-list__move')).toHaveLength(4);
   });
 });

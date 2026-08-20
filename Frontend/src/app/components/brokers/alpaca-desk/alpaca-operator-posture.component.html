@@ -1,9 +1,9 @@
-@if (posture(); as current) {
+@if (view(); as current) {
   <section
     class="operator-posture"
-    [class.operator-posture--healthy]="current.disposition === 'healthy'"
-    [class.operator-posture--caution]="current.disposition !== 'healthy' && current.disposition !== 'terminal'"
-    [class.operator-posture--blocked]="current.disposition === 'terminal'"
+    [class.operator-posture--healthy]="current.blocker === null"
+    [class.operator-posture--caution]="current.blocker !== null && current.blocker.disposition !== 'terminal'"
+    [class.operator-posture--blocked]="current.blocker?.disposition === 'terminal'"
     aria-labelledby="operator-posture-title"
   >
     <div>
@@ -14,51 +14,26 @@
       }
     </div>
 
-    @if (isRecoveryAction(current.action)) {
-      <div class="operator-posture__recovery-action">
-        <button
-          type="button"
-          [disabled]="!current.action.available"
-          [attr.aria-describedby]="!current.action.available && current.action.unavailable_reason ? 'operator-posture-unavailable-reason' : null"
-          (click)="requestRepair(current.action)"
-        >{{ current.action.label }}</button>
-        @if (!current.action.available && current.action.unavailable_reason; as reason) {
-          <p id="operator-posture-unavailable-reason" class="operator-posture__status" role="status">
-            @if (current.action.unavailable_reason_code; as code) {
-              <strong>{{ code | receiptLabel }}:</strong>
-            }
-            {{ reason }}
-          </p>
+    @if (current.moves.length > 0) {
+      <div class="operator-posture__moves">
+        @for (move of current.moves; track move.label + move.action.kind) {
+          <button
+            type="button"
+            [class.operator-posture__link]="current.blocker?.disposition === 'fix_elsewhere'"
+            (click)="requestMove(move)"
+          >{{ move.label }}</button>
         }
       </div>
-    } @else {
-      @switch (current.disposition) {
-        @case ('fix_here') {
-          @if (current.action; as move) {
-            <button type="button" (click)="requestMove(move)">{{ move.label }}</button>
-          }
-        }
-        @case ('fix_elsewhere') {
-          @if (current.action; as move) {
-            <button type="button" class="operator-posture__link" (click)="requestMove(move)">
-              {{ move.label }}
-            </button>
-          }
-        }
-        @case ('wait') {
-          <p class="operator-posture__status" role="status">Waiting for fresh account evidence.</p>
-        }
-        @case ('review') {
-          <p class="operator-posture__status" role="status">Review the current evidence.</p>
-        }
-        @case ('terminal') {
-          <p class="operator-posture__status" role="alert">Manual escalation required.</p>
-        }
-      }
+    } @else if (current.blocker?.disposition === 'wait') {
+      <p class="operator-posture__status" role="status">Waiting for fresh account evidence.</p>
+    } @else if (current.blocker !== null) {
+      <p class="operator-posture__status" role="alert">This requires attention outside this desk.</p>
     }
-
-    @if (current.nextStep; as nextStep) {
-      <p class="operator-posture__next"><strong>Recommended next step:</strong> {{ nextStep }}</p>
-    }
+  </section>
+} @else {
+  <section class="operator-posture operator-posture--unknown" role="status">
+    <p class="operator-posture__eyebrow">Account status</p>
+    <h2>Account status unavailable</h2>
+    <p class="operator-posture__detail">The current account posture could not be read.</p>
   </section>
 }

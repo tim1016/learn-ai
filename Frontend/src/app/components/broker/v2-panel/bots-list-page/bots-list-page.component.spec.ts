@@ -6,6 +6,7 @@ import { MessageService } from 'primeng/api';
 
 import type { BrokerAccountSnapshot, ClerkStatus } from '../../../../api/alpaca.types';
 import { BrokersService } from '../../../../services/brokers.service';
+import { healthyAccountOperatorPostureFixture } from '../../../../testing/operator-blocker-fixtures';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import type { BotCatalogView } from '../lib/broker-v2-panel.types';
 import { BotsListPageComponent } from './bots-list-page.component';
@@ -39,6 +40,7 @@ function fakeClerkStatus(): ClerkStatus {
     hold: { active: false },
     outstanding_intents: 0,
     observed_at_ms: 1_700_000_000_000,
+    operator_posture: healthyAccountOperatorPostureFixture(),
   };
 }
 

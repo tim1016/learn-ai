@@ -67,7 +67,9 @@ export function accountDeskAnchorOrVerdictFallback(value: unknown): OperatorBloc
 export interface NavigateAction {
   kind: 'navigate';
   route: string;
-  fragment: string | null;
+  // Optional: the wire schema default (`= None`) makes the OpenAPI contract
+  // mark this not-required.
+  fragment?: string | null;
 }
 
 export interface ConfirmInFormAction {
@@ -98,7 +100,9 @@ export type OperatorAction =
 export interface OperatorMove {
   label: string;
   action: OperatorAction;
-  target: string | null;
+  // Optional below: the wire schema default (`= None` / `Field(default_factory=...)`)
+  // makes the OpenAPI contract mark these not-required.
+  target?: string | null;
   confirmation?: OperatorConfirmationCopy | null;
 }
 
@@ -107,7 +111,7 @@ export interface OperatorConfirmationCopy {
   body: string;
   consequence: string;
   confirm_label: string;
-  required_token: string;
+  required_token?: string;
 }
 
 export type BlockerSeverity = 'blocking' | 'warning';
@@ -116,7 +120,9 @@ export interface OperatorCondition {
   id: string;
   severity: BlockerSeverity;
   scope: OperatorConditionScope;
-  evidence: Record<string, string | number | boolean | null>;
+  // Optional: the wire schema carries a `Field(default_factory=dict)` default,
+  // so the generated OpenAPI contract does not mark it required.
+  evidence?: Record<string, string | number | boolean | null>;
 }
 
 export interface OperatorBlocker {
@@ -127,10 +133,71 @@ export interface OperatorBlocker {
   audience: OperatorBlockerAudience;
   disposition: Disposition;
   headline: string;
-  detail: string | null;
-  primary_move: OperatorMove | null;
-  secondary_moves: OperatorMove[];
+  // Optional below: the wire schema default makes the OpenAPI contract mark
+  // these not-required (matches OperatorMove/OperatorConfirmationCopy above).
+  detail?: string | null;
+  primary_move?: OperatorMove | null;
+  secondary_moves?: OperatorMove[];
   applies_to: 'deploy' | 'run' | 'both';
+}
+
+/**
+ * One canonical account-level operator decision, authored from one evidence
+ * cut (issue #1664). `condition` is `null` exactly when the account is
+ * healthy — in that case both host projections are also `null` and
+ * `status_headline` / `status_detail` carry the backend-authored healthy
+ * copy. When `condition` is set, `account_desk` and `fleet_roster` share
+ * that one condition's identity/severity but carry host-relative
+ * disposition, copy, and moves per ADR 0027. Consumers read only their own
+ * host projection via `accountOperatorPostureBlocker` below and must never
+ * fall back to the other host's projection or re-derive a verdict from raw
+ * evidence.
+ */
+export interface AccountOperatorPosture {
+  condition: OperatorCondition | null;
+  account_desk: OperatorBlocker | null;
+  fleet_roster: OperatorBlocker | null;
+  status_headline: string;
+  status_detail: string | null;
+}
+
+export type AccountOperatorPostureHost = 'account_desk' | 'fleet_roster';
+
+/**
+ * The `confirm_in_form` anchor the Alpaca operator lens recognizes to open
+ * its in-place Clerk recovery panel. Mirrors
+ * `ACCOUNT_DESK_RECOVERY_ANCHOR` in
+ * `app/broker/alpaca/clerk/sqlite/account_operator_posture.py`.
+ */
+export const ACCOUNT_DESK_CLERK_RECOVERY_ANCHOR = 'account-desk-clerk-recovery';
+
+/**
+ * Backend-authored move list for one blocker, honoring the ADR 0027
+ * disposition rules. `wait` never carries a move (the cure is elsewhere,
+ * by design); every other disposition renders its primary move followed
+ * by any secondary moves the backend attaches — the schema permits
+ * `secondary_moves` on any non-`wait` disposition, not just `terminal`.
+ */
+export function movesForBlocker(blocker: OperatorBlocker): readonly OperatorMove[] {
+  const secondaryMoves = blocker.secondary_moves ?? [];
+  if (blocker.disposition === 'wait') return [];
+  return blocker.primary_move ? [blocker.primary_move, ...secondaryMoves] : secondaryMoves;
+}
+
+/**
+ * Selects the one host projection a surface may render. Returns `null`
+ * (fail closed, never re-derive from raw evidence) when `posture` itself
+ * is `null` — the only case this function guards. The backend's
+ * `AccountOperatorPosture` validator (not this selector) is what makes a
+ * partial projection — a non-null `condition` with one host's blocker
+ * missing — impossible on the wire in the first place.
+ */
+export function accountOperatorPostureBlocker(
+  posture: AccountOperatorPosture | null,
+  host: AccountOperatorPostureHost,
+): OperatorBlocker | null {
+  if (posture === null) return null;
+  return host === 'account_desk' ? posture.account_desk : posture.fleet_roster;
 }
 
 /** Returns the projections whose full backend-authored guidance belongs in a lens. */

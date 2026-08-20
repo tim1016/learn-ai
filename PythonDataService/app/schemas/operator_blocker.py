@@ -216,3 +216,51 @@ class DeployPreflightResponse(BaseModel):
 
     ready: bool
     blockers: list[OperatorBlocker]
+
+
+class AccountOperatorPosture(BaseModel):
+    """One canonical account-level operator decision, authored from one
+    evidence cut (issue #1664).
+
+    ``condition`` is ``None`` exactly when the account is healthy; in that
+    case both host projections are also ``None`` and ``status_headline`` /
+    ``status_detail`` carry the backend-authored healthy copy. Whenever
+    ``condition`` is set, both ``account_desk`` and ``fleet_roster`` are
+    required — a non-null condition can never validate with only one host
+    projection present, so a consumer selecting its own host never silently
+    reads ``None`` for a live blocking condition. They share ``condition``
+    (identity and severity) but carry host-relative disposition, copy, and
+    moves per ADR 0027; each projection's own ``host`` field is validated
+    to match the slot it is assigned to. Consumers read only their own host
+    projection and must never fall back to the other host's projection or
+    re-derive a verdict from raw evidence.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    condition: OperatorCondition | None
+    account_desk: OperatorBlocker | None
+    fleet_roster: OperatorBlocker | None
+    status_headline: str
+    status_detail: str | None
+
+    @model_validator(mode="after")
+    def _hosts_match_condition(self) -> AccountOperatorPosture:
+        if self.condition is None:
+            if self.account_desk is not None or self.fleet_roster is not None:
+                raise ValueError("a healthy posture (condition=None) must not carry a host blocker")
+            return self
+        if self.account_desk is None or self.fleet_roster is None:
+            raise ValueError(
+                "a non-null condition requires both the account_desk and fleet_roster "
+                "projections — a partial projection would silently render as no blocker "
+                "on the missing host"
+            )
+        for slot, blocker in (("account_desk", self.account_desk), ("fleet_roster", self.fleet_roster)):
+            if blocker.condition != self.condition:
+                raise ValueError(
+                    "a host blocker's condition must match the posture's condition identity"
+                )
+            if blocker.host != slot:
+                raise ValueError(f"the {slot} projection must carry host={slot!r}, not {blocker.host!r}")
+        return self

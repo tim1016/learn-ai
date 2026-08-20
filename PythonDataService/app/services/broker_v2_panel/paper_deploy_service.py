@@ -105,7 +105,7 @@ def _readiness_checks(
     freeze = clerk_status.freeze
     hold = clerk_status.hold
     channels = clerk_status.channel_healths or []
-    channel_evaluation = evaluate_channel_health(clerk_status, now_ms)
+    channel_evaluation = evaluate_channel_health(clerk_status.channel_healths, now_ms)
     channel_ready = channel_evaluation.ready
     channel_summary = (
         ", ".join(

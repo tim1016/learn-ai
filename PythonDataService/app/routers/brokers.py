@@ -10,6 +10,7 @@ only ``alpaca``; unknown brokers resolve to ``404``.
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 from collections.abc import Awaitable, Callable
 from typing import Literal, NoReturn
@@ -92,6 +93,14 @@ from app.services.sqlite_clerk_compat import (
 from app.utils.timestamps import now_ms_utc
 
 router = APIRouter(prefix="/api/brokers", tags=["brokers-v2"])
+logger = logging.getLogger(__name__)
+
+# Matches app/broker/alpaca/client.py's own request timeout. That client
+# already turns a stuck request into a BrokerError within this bound, but
+# this router should not implicitly trust a transitive dependency to
+# enforce it — a defense-in-depth bound so /clerk/status can never block
+# UI polling indefinitely regardless of how the account read is wired.
+_ACCOUNT_SNAPSHOT_TIMEOUT_S = 15.0
 
 _DEFAULT_READ_LIMIT = 100
 _MAX_READ_LIMIT = 500
@@ -593,13 +602,43 @@ async def get_clerk_status(broker: str) -> ClerkStatus:
 
     A protected read (the always-on data-plane secret gates the whole router).
     Transport only: resolve the account-scoped Clerk facade and delegate — the
-    Clerk owns the journal-derived hold + verdict + outstanding-intent state.
+    Clerk owns the journal-derived hold + verdict + outstanding-intent state,
+    plus (#1664) the one canonical account operator posture, authored from
+    this same custody projection and a same-request account observation.
+
+    The account read degrades gracefully: a broker-side failure does not 503
+    this endpoint (custody state is independently available) — it instead
+    surfaces as an explicit ``alpaca_account_evidence_unavailable`` operator
+    condition so the account/paper-mode checks fail closed rather than
+    silently passing.
     """
     sqlite = _require_sqlite_facade(broker)
     projection = await _read_sqlite_account_projection(sqlite)
+    try:
+        account = await asyncio.wait_for(
+            # Shielded: a timeout here must cancel only this request's wait,
+            # never the account-snapshot cache's shared in-flight task —
+            # otherwise this request's bound would cut off a read that a
+            # concurrent /clerk/status caller is still legitimately waiting on.
+            asyncio.shield(resolve_broker_account_snapshot(broker)),
+            timeout=_ACCOUNT_SNAPSHOT_TIMEOUT_S,
+        )
+    except TimeoutError:
+        logger.warning(
+            "Clerk status account read timed out; reporting evidence-unavailable posture",
+            extra={"broker": broker, "timeout_s": _ACCOUNT_SNAPSHOT_TIMEOUT_S},
+        )
+        account = None
+    except BrokerError as error:
+        logger.warning(
+            "Clerk status account read failed; reporting evidence-unavailable posture",
+            extra={"broker": broker, "reason": error.message},
+        )
+        account = None
     return sqlite_clerk_status(
         projection,
         channel_healths=sqlite.channel_health_snapshot(),
+        account=account,
     )
 
 

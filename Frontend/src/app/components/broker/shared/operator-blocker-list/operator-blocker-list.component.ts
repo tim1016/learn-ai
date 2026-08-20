@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, input, output } from '@angular/core';
 
 import type { OperatorBlocker, OperatorMove } from '../../../../api/operator-blocker.types';
+import { movesForBlocker } from '../../../../api/operator-blocker.types';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 
 export interface OperatorBlockerMoveEvent {
@@ -22,14 +23,8 @@ export class OperatorBlockerListComponent {
 
   readonly moveSelected = output<OperatorBlockerMoveEvent>();
 
-  moves(blocker: OperatorBlocker): OperatorMove[] {
-    if (blocker.disposition === 'wait') return [];
-    if (blocker.disposition === 'terminal') {
-      return blocker.primary_move
-        ? [blocker.primary_move, ...blocker.secondary_moves]
-        : blocker.secondary_moves;
-    }
-    return blocker.primary_move ? [blocker.primary_move] : [];
+  moves(blocker: OperatorBlocker): readonly OperatorMove[] {
+    return movesForBlocker(blocker);
   }
 
   trackBlocker(blocker: OperatorBlocker): string {

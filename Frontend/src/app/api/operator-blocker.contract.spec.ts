@@ -3,9 +3,11 @@ import { describe, expect, it } from 'vitest';
 import {
   OPERATOR_BLOCKER_ANCHOR_KINDS,
   accountDeskAnchorOrVerdictFallback,
+  movesForBlocker,
   operatorAttentionConditionCount,
   operatorBlockersForAccountDeskLens,
   type OperatorBlocker,
+  type OperatorMove,
 } from './operator-blocker.types';
 
 const CONTRACT_BLOCKER: OperatorBlocker = {
@@ -106,5 +108,33 @@ describe('OperatorBlocker contract mirror', () => {
       operatorProjection,
       { ...operatorProjection, audience: 'trader' },
     ])).toBe(0);
+  });
+
+  it('includes secondary moves for every non-wait disposition, not just terminal', () => {
+    const secondaryMove: OperatorMove = {
+      label: 'Open runbook',
+      action: { kind: 'open_runbook', slug: 'fleet-contamination' },
+      target: null,
+    };
+    const fixHere: OperatorBlocker = {
+      ...CONTRACT_BLOCKER,
+      disposition: 'fix_here',
+      secondary_moves: [secondaryMove],
+    };
+    const fixElsewhere: OperatorBlocker = {
+      ...CONTRACT_BLOCKER,
+      disposition: 'fix_elsewhere',
+      secondary_moves: [secondaryMove],
+    };
+    const waiting: OperatorBlocker = {
+      ...CONTRACT_BLOCKER,
+      disposition: 'wait',
+      primary_move: null,
+      secondary_moves: [secondaryMove],
+    };
+
+    expect(movesForBlocker(fixHere)).toEqual([CONTRACT_BLOCKER.primary_move, secondaryMove]);
+    expect(movesForBlocker(fixElsewhere)).toEqual([CONTRACT_BLOCKER.primary_move, secondaryMove]);
+    expect(movesForBlocker(waiting)).toEqual([]);
   });
 });

@@ -14,10 +14,11 @@ lets the idempotency key make double-clicks safe (§11).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.fills import project_instance_fills
-from app.broker.alpaca.clerk.models import ClerkEntryKind, ClerkStatus, OrderJournalEntry
+from app.broker.alpaca.clerk.models import ChannelHealth, ClerkEntryKind, ClerkStatus, OrderJournalEntry
 from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionReceipt
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.v2panel.vocabulary import (
@@ -265,11 +266,17 @@ def build_clerk_card(clerk_status: ClerkStatus, now_ms: int) -> ClerkCard:
 
 
 def evaluate_channel_health(
-    clerk_status: ClerkStatus,
+    channel_healths: Sequence[ChannelHealth] | None,
     now_ms: int,
 ) -> ChannelHealthEvaluation:
-    """Evaluate the exact channel set required by every submission gate."""
-    by_stream = {health.stream: health for health in clerk_status.channel_healths or []}
+    """Evaluate the exact channel set required by every submission gate.
+
+    Takes the raw channel-health facts (not a full ``ClerkStatus``) so
+    callers that are still assembling a ``ClerkStatus`` — e.g. one that must
+    fold this verdict into the same status object (#1664) — can evaluate
+    channel readiness first.
+    """
+    by_stream = {health.stream: health for health in channel_healths or []}
     missing = tuple(stream for stream in _REQUIRED_CLERK_CHANNELS if stream not in by_stream)
     stale = tuple(
         stream
@@ -292,7 +299,7 @@ def evaluate_channel_health(
 
 def channel_health_fresh(clerk_status: ClerkStatus, now_ms: int) -> bool:
     """True iff market-data and execution health are both healthy and fresh."""
-    return evaluate_channel_health(clerk_status, now_ms).ready
+    return evaluate_channel_health(clerk_status.channel_healths, now_ms).ready
 
 
 _TERMINAL_ORDER_EVENTS = frozenset({"fill", "canceled", "rejected", "expired"})
@@ -716,7 +723,7 @@ def build_panel(
     )
 
     working_orders = _working_orders(status.strategy_instance_id, entries)
-    channel_health = evaluate_channel_health(clerk_status, now_ms)
+    channel_health = evaluate_channel_health(clerk_status.channel_healths, now_ms)
     actions = build_actions(
         status,
         clerk,

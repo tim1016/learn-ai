@@ -9,6 +9,13 @@ import { BrokersService } from '../../../services/brokers.service';
  * the shell has selected Operator. The Clerk status supplies the account
  * identity for the evidence-bound SQLite projection, so the second request
  * cannot accidentally inspect a different account.
+ *
+ * `status` and `projection` are bound to the same `projectionRefreshVersion`
+ * trigger. `status` carries `operator_posture` — the dominant posture card's
+ * sole data source — so a recovery action that only invalidated `projection`
+ * without also reloading `status` would leave that card showing a stale (or
+ * missing a newly created) blocker for the rest of the desk's lifetime
+ * (2026-08-20 review).
  */
 @Injectable()
 export class AlpacaOperatorLensDataService {
@@ -17,8 +24,8 @@ export class AlpacaOperatorLensDataService {
   readonly projectionRefreshVersion = signal(0);
 
   readonly status = resource({
-    params: () => (this.requested() ? 'alpaca' : undefined),
-    loader: ({ params }) => this.brokers.getClerkStatus(params),
+    params: () => (this.requested() ? this.projectionRefreshVersion() : undefined),
+    loader: () => this.brokers.getClerkStatus('alpaca'),
   });
 
   private readonly sqliteAccountId = computed(() => {
@@ -43,7 +50,7 @@ export class AlpacaOperatorLensDataService {
     this.requested.set(true);
   }
 
-  /** Refresh every Desk surface bound to the current Clerk projection. */
+  /** Refresh every Desk surface bound to the current Clerk projection, including the canonical posture. */
   refreshProjection(): void {
     this.projectionRefreshVersion.update((version) => version + 1);
   }
