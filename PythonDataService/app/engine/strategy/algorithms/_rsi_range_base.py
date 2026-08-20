@@ -4,8 +4,11 @@ Formula: RSI(14) range filter [rsi_low_gate, rsi_high_gate] + ADX(14) exit gate 
 Reference: Internal — no external port reference; RSI indicator per LEAN Wilder's method (see app/engine/indicators/rsi.py), ADX per Wilder (1978) (see app/engine/indicators/adx.py).
 Canonical implementation: app/engine/strategy/algorithms/_rsi_range_base.py (base); SpyStrategyA/B/C are the leaf canonicals.
 Validated against: app/engine/tests/ (exercised transitively via SpyStrategyA/B/C tests);
-golden fixture ENG-008 (tests/fixtures/test_strategy_parity_fixtures.py) exercises this
-base transitively as the shared skeleton behind Strategy A/B/C's pre-port receipt (#1699).
+golden fixture ENG-008 (tests/fixtures/test_strategy_parity_fixtures.py) pins this base's
+trade_log as the pre-port receipt for the #1700 intent port — the S3 port that made this
+base emit ENTER/EXIT SignalIntents instead of calling set_holdings/liquidate directly. The
+fixture proves the port is numerically neutral: Engine Lab's SignalSymbolExecutor maps
+ENTER/EXIT back to identical set_holdings(symbol, 1)/liquidate(symbol) calls, synchronously.
 
 All three share the same skeleton:
 
@@ -13,7 +16,9 @@ All three share the same skeleton:
 * Wilders RSI(14) + ADX(14) as the always-on shared indicators.
 * Simple RSI *range* filter on entry — no state machine.
 * Shared exit: ``ADX < exit_threshold``.
-* Long-only, 100 % equity sizing via ``set_holdings(symbol, 1.0)``.
+* Long-only. Emits instrument-free ENTER/EXIT ``SignalIntent``s; the execution
+  boundary binds them to an instrument and sizing policy (100 % equity via
+  ``set_holdings`` in Engine Lab; an Action Plan stock leg when deployed live).
 * LEAN-style two-stage trade bookkeeping
   (pending-entry on signal → open-trade on fill → trade_log on exit fill).
 
@@ -42,6 +47,7 @@ from app.engine.execution.order import Direction, OrderEvent
 from app.engine.indicators.adx import AverageDirectionalIndex
 from app.engine.indicators.rsi import RelativeStrengthIndex
 from app.engine.strategy.base import LoggedTrade, Strategy
+from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
 from app.utils.timestamps import display_time
 
 
@@ -110,7 +116,9 @@ class RsiRangeStrategy(Strategy):
         # --- Exit: any existing position exits on ADX < threshold.
         if self._in_position:
             if self._adx.current_value is not None and self._adx.current_value < self.adx_exit_threshold:
-                self.ctx.liquidate(self._symbol)
+                self.ctx.emit_signal_intent(
+                    SignalIntent(kind=SignalIntentKind.EXIT, bar_close_ms=bar.end_ms, intended_price=bar.close)
+                )
                 self._in_position = False
                 self.ctx.log(
                     f"EXIT SIGNAL: {display_time(bar.end_ms)} "
@@ -137,7 +145,9 @@ class RsiRangeStrategy(Strategy):
             return
 
         self._pending_entry = self._indicator_snapshot(bar)
-        self.ctx.set_holdings(self._symbol, Decimal(1))
+        self.ctx.emit_signal_intent(
+            SignalIntent(kind=SignalIntentKind.ENTER, bar_close_ms=bar.end_ms, intended_price=bar.close)
+        )
         self._in_position = True
         self.ctx.log(f"ENTRY SIGNAL: {display_time(bar.end_ms)} close={bar.close:.2f} rsi={float(rsi_val):.2f}")
 
@@ -188,9 +198,23 @@ class RsiRangeStrategy(Strategy):
         self._pending_entry = None
         self._open_trade = None
 
+    def rollback_blocked_entry(self) -> None:
+        """Undo lifecycle state when the live liveness gate blocks ENTER."""
+        self._in_position = False
+        self._pending_entry = None
+
     def on_end_of_algorithm(self) -> None:
-        if self._in_position and self.ctx is not None:
-            self.ctx.liquidate(self._symbol)
+        if self._in_position:
+            assert self.ctx is not None
+            if self.ctx.current_time_ms is None:
+                raise RuntimeError(f"{self.__class__.__name__} exit requires a current bar time")
+            self.ctx.emit_signal_intent(
+                SignalIntent(
+                    kind=SignalIntentKind.EXIT,
+                    bar_close_ms=self.ctx.current_time_ms,
+                    intended_price=self.ctx.portfolio.reference_price.get(self._symbol, Decimal(0)),
+                )
+            )
             self._in_position = False
 
     # ------------------------------------------------------------------

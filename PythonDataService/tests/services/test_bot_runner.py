@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import json
+import random
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import datetime
@@ -163,6 +164,24 @@ def _strategy_signal_bars(closes: list[str]) -> list[MarketDataBar]:
     ]
 
 
+def _rsi_range_family_closes(bar_count: int = 100) -> list[str]:
+    """Deterministic random-walk closes that trigger every RSI-range-family
+    strategy's (A/B/C) distinct entry gate at least once (#1700).
+
+    Same synthetic-walk technique as the ENG-008 backtest fixture generator
+    (``scripts/fixture_generators/strategy_abc_self_equivalence.py``), tuned
+    to a short, cheap bar count for this live-seam smoke test rather than
+    ENG-008's own numerical-equivalence receipt.
+    """
+    rng = random.Random(1700)
+    price = 400.0
+    closes = []
+    for _ in range(bar_count):
+        price += rng.gauss(0, 1.2)
+        closes.append(f"{price:.2f}")
+    return closes
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("strategy_key", "closes", "expected_kinds"),
@@ -174,6 +193,9 @@ def _strategy_signal_bars(closes: list[str]) -> list[MarketDataBar]:
             + [str(85 + index * 5) for index in range(18)],
             [SignalIntentKind.ENTER, SignalIntentKind.EXIT],
         ),
+        ("spy_strategy_a", _rsi_range_family_closes(), [SignalIntentKind.ENTER, SignalIntentKind.EXIT]),
+        ("spy_strategy_b", _rsi_range_family_closes(), [SignalIntentKind.ENTER, SignalIntentKind.EXIT]),
+        ("spy_strategy_c", _rsi_range_family_closes(), [SignalIntentKind.ENTER, SignalIntentKind.EXIT]),
     ],
 )
 async def test_human_override_strategies_emit_canonical_live_intents(

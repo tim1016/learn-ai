@@ -23,12 +23,8 @@ from app.engine.strategy.algorithms.deployment_validation import (
     DeploymentDecision,
     DeploymentValidationDecisionKernel,
 )
-from app.engine.strategy.algorithms.ema_crossover_signal import (
-    EmaCrossoverSignalAlgorithm,
-)
-from app.engine.strategy.algorithms.rsi_mean_reversion import RsiMeanReversionAlgorithm
-from app.engine.strategy.algorithms.sma_crossover import SmaCrossoverAlgorithm
 from app.engine.strategy.base import StrategyContext
+from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
 from app.marketdata.feed import MarketDataBar, MarketDataFeed
 from app.schemas.broker_bots import AlpacaPaperStrategyKey
@@ -174,16 +170,17 @@ async def _deployment_validation_evaluations(
         yield StrategyEvaluation(bar=bar, intents=intents, rollback_blocked_entry=kernel.rollback_blocked_entry)
 
 
-_SIGNAL_STRATEGY_FACTORIES: dict[
-    AlpacaPaperStrategyKey,
-    Callable[[str], _LiveSignalStrategy],
-] = {
-    AlpacaPaperStrategyKey.EMA_CROSSOVER_SIGNAL: lambda symbol: EmaCrossoverSignalAlgorithm(symbol=symbol),
-    AlpacaPaperStrategyKey.SMA_CROSSOVER: lambda symbol: SmaCrossoverAlgorithm(symbol=symbol),
-    AlpacaPaperStrategyKey.RSI_MEAN_REVERSION: lambda symbol: RsiMeanReversionAlgorithm(symbol=symbol),
-}
+def _build_signal_strategy(strategy_key: AlpacaPaperStrategyKey, symbol: str) -> _LiveSignalStrategy:
+    """Construct one registered strategy through its canonical registry `build`.
 
-_DEFAULT_SYMBOLS: dict[AlpacaPaperStrategyKey, str] = {strategy_key: "SPY" for strategy_key in AlpacaPaperStrategyKey}
+    The deploy request's symbol is authoritative and is injected into the
+    parameter set before construction; every other parameter stays at its
+    registered default. There is no live-adapter-private construction path —
+    a strategy is only live-executable if its registry registration builds it.
+    """
+    registration = _STRATEGY_REGISTRY[strategy_key.value]
+    params = registration.param_schema(symbol=symbol)  # type: ignore[call-arg]
+    return registration.build(params)  # type: ignore[return-value]
 
 
 async def _signal_strategy_evaluations(
@@ -192,7 +189,7 @@ async def _signal_strategy_evaluations(
 ) -> AsyncIterator[StrategyEvaluation]:
     """Run one canonical signal-intent strategy on the production minute stream."""
     strategy_key = AlpacaPaperStrategyKey(binding.strategy_key)
-    strategy = _SIGNAL_STRATEGY_FACTORIES[strategy_key](binding.symbol)
+    strategy = _build_signal_strategy(strategy_key, binding.symbol)
     context = StrategyContext(portfolio=Portfolio(initial_cash=Decimal("100000")))
     strategy.ctx = context
     strategy.initialize()
@@ -248,6 +245,9 @@ _STRATEGY_EVALUATION_STREAMS: dict[AlpacaPaperStrategyKey, _StrategyEvaluationSt
     AlpacaPaperStrategyKey.EMA_CROSSOVER_SIGNAL: _signal_strategy_evaluations,
     AlpacaPaperStrategyKey.SMA_CROSSOVER: _signal_strategy_evaluations,
     AlpacaPaperStrategyKey.RSI_MEAN_REVERSION: _signal_strategy_evaluations,
+    AlpacaPaperStrategyKey.SPY_STRATEGY_A: _signal_strategy_evaluations,
+    AlpacaPaperStrategyKey.SPY_STRATEGY_B: _signal_strategy_evaluations,
+    AlpacaPaperStrategyKey.SPY_STRATEGY_C: _signal_strategy_evaluations,
 }
 
 
@@ -257,8 +257,9 @@ def supported_alpaca_paper_strategy_keys() -> frozenset[AlpacaPaperStrategyKey]:
 
 
 def alpaca_paper_strategy_default_symbol(strategy_key: AlpacaPaperStrategyKey) -> str:
-    """Return the bounded form default for one executable strategy."""
-    return _DEFAULT_SYMBOLS[strategy_key]
+    """Return the registered parameter schema's default symbol for one strategy."""
+    registration = _STRATEGY_REGISTRY[strategy_key.value]
+    return registration.param_schema().symbol  # type: ignore[attr-defined]
 
 
 async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None:

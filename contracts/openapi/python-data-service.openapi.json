@@ -4945,7 +4945,10 @@
           "deployment_validation",
           "ema_crossover_signal",
           "sma_crossover",
-          "rsi_mean_reversion"
+          "rsi_mean_reversion",
+          "spy_strategy_a",
+          "spy_strategy_b",
+          "spy_strategy_c"
         ],
         "title": "AlpacaPaperStrategyKey",
         "type": "string"

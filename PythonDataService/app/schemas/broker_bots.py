@@ -62,6 +62,9 @@ class AlpacaPaperStrategyKey(StrEnum):
     EMA_CROSSOVER_SIGNAL = "ema_crossover_signal"
     SMA_CROSSOVER = "sma_crossover"
     RSI_MEAN_REVERSION = "rsi_mean_reversion"
+    SPY_STRATEGY_A = "spy_strategy_a"
+    SPY_STRATEGY_B = "spy_strategy_b"
+    SPY_STRATEGY_C = "spy_strategy_c"
 
 
 def _normalized_symbol(value: str) -> str:
