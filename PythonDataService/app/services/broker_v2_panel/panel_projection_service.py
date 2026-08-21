@@ -268,6 +268,8 @@ def build_clerk_card(clerk_status: ClerkStatus, now_ms: int) -> ClerkCard:
 def evaluate_channel_health(
     channel_healths: Sequence[ChannelHealth] | None,
     now_ms: int,
+    *,
+    required_streams: tuple[str, ...] = _REQUIRED_CLERK_CHANNELS,
 ) -> ChannelHealthEvaluation:
     """Evaluate the exact channel set required by every submission gate.
 
@@ -275,18 +277,22 @@ def evaluate_channel_health(
     callers that are still assembling a ``ClerkStatus`` — e.g. one that must
     fold this verdict into the same status object (#1664) — can evaluate
     channel readiness first.
+
+    ``required_streams`` defaults to both Clerk-submission channels. Dry Run
+    admission (#1702) needs only ``market_data`` — it never opens the
+    ``execution`` channel — so it passes a narrower tuple.
     """
     by_stream = {health.stream: health for health in channel_healths or []}
-    missing = tuple(stream for stream in _REQUIRED_CLERK_CHANNELS if stream not in by_stream)
+    missing = tuple(stream for stream in required_streams if stream not in by_stream)
     stale = tuple(
         stream
-        for stream in _REQUIRED_CLERK_CHANNELS
+        for stream in required_streams
         if stream in by_stream
         and now_ms - by_stream[stream].observed_at_ms > CHANNEL_FRESH_THRESHOLD_MS
     )
     unhealthy = tuple(
         stream
-        for stream in _REQUIRED_CLERK_CHANNELS
+        for stream in required_streams
         if stream in by_stream and not by_stream[stream].healthy
     )
     return ChannelHealthEvaluation(

@@ -43,6 +43,7 @@ from app.services.bot_dry_run import DryRunActivity
 from app.services.broker_v2_panel.panel_projection_service import (
     build_panel,
     compute_revision,
+    evaluate_channel_health,
     select_primary_action_by_lens,
 )
 from app.services.broker_v2_panel.sqlite_panel_adapter import (
@@ -983,6 +984,32 @@ def test_recent_fills_reuse_canonical_fill_deduplication() -> None:
 
     assert len(panel.recent_fills) == 1
     assert panel.recent_fills[0].filled_at_ms == _NOW - 800
+
+
+def test_evaluate_channel_health_required_streams_narrows_to_market_data() -> None:
+    """#1702: Dry Run checks only the market-data stream — it never opens
+    the execution channel, so an unhealthy/absent execution stream must not
+    fail a Dry-Run-scoped evaluation."""
+    now_ms = 1_700_000_000_000
+    market_data_only = (ChannelHealth(stream="market_data", healthy=True, observed_at_ms=now_ms),)
+
+    full = evaluate_channel_health(market_data_only, now_ms)
+    scoped = evaluate_channel_health(market_data_only, now_ms, required_streams=("market_data",))
+
+    assert full.ready is False
+    assert full.missing == ("execution",)
+    assert scoped.ready is True
+    assert scoped.missing == ()
+
+
+def test_evaluate_channel_health_required_streams_still_catches_unhealthy_market_data() -> None:
+    now_ms = 1_700_000_000_000
+    unhealthy = (ChannelHealth(stream="market_data", healthy=False, observed_at_ms=now_ms),)
+
+    scoped = evaluate_channel_health(unhealthy, now_ms, required_streams=("market_data",))
+
+    assert scoped.ready is False
+    assert scoped.unhealthy == ("market_data",)
 
 
 def test_unhealthy_required_channel_blocks_trade_mode_mission() -> None:

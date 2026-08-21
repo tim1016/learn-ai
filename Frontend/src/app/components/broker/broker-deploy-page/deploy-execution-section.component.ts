@@ -27,6 +27,11 @@ export function deploySizingLabel(preset: DeploySizingPreset): string {
 })
 export class DeployExecutionSectionComponent {
   readonly executionModes = input.required<DeployExecutionMode[]>();
+  // Backend-authored reason Paper is unreachable for the selected strategy
+  // (#1702) — `null` when Paper is admissible or no strategy is selected.
+  // Dry Run always admits every runtime-backed row, so only Paper can be
+  // disabled by this input; Live stays governed by `availability` alone.
+  readonly paperUnavailableReason = input<string | null>(null);
   readonly selectedMode = input.required<DeployExecutionMode['mode']>();
   readonly actionPlanExplanation = input.required<string>();
   readonly symbol = input.required<string>();
@@ -49,11 +54,20 @@ export class DeployExecutionSectionComponent {
   readonly executionModeChange = output<DeployExecutionMode['mode']>();
 
   protected capabilityStatus(mode: DeployExecutionMode): string {
+    if (this.isDisabledForStrategy(mode)) return 'Unavailable';
     return mode.availability === 'available' ? 'Available' : 'Planned';
   }
 
   protected isPlanned(mode: DeployExecutionMode): boolean {
     return mode.availability === 'planned';
+  }
+
+  protected isDisabledForStrategy(mode: DeployExecutionMode): boolean {
+    return mode.mode === 'paper' && this.paperUnavailableReason() !== null;
+  }
+
+  protected modeExplanation(mode: DeployExecutionMode): string {
+    return (this.isDisabledForStrategy(mode) ? this.paperUnavailableReason() : null) ?? mode.explanation;
   }
 
   protected sizingOptionLabel(preset: DeploySizingPreset): string {
@@ -72,7 +86,9 @@ export class DeployExecutionSectionComponent {
     const mode = this.executionModes().find(
       (candidate) => candidate.mode === selectedValue,
     );
-    if (mode?.availability === 'available') this.executionModeChange.emit(mode.mode);
+    if (mode?.availability === 'available' && !this.isDisabledForStrategy(mode)) {
+      this.executionModeChange.emit(mode.mode);
+    }
   }
 
   protected changeSizing(event: Event): void {

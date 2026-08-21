@@ -168,6 +168,7 @@ def _start_facts(
         strategy_instance_id=_SID,
         proposed_run_id="run-new",
         configuration_hash="a" * 64,
+        mode="trade",
         runtime=StartRuntimeAdmissionFact(
             state="READY",
             observed_at_ms=observed_at_ms,

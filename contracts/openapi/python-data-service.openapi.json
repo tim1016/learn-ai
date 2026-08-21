@@ -4661,8 +4661,19 @@
       },
       "AlpacaPaperDeployStrategy": {
         "additionalProperties": false,
-        "description": "Trader-facing option for one accepted, explicitly overridable, or blocked strategy.\n\nA validated strategy whose recorded proof no longer re-verifies is\ndemoted to ``evidence_status=\"blocked\"`` rather than removed from the\nrow set: the operator's validation flag always guarantees a row.\n``selectable`` is the server's own launchability fact \u2014 a blocked row is\nalways present but never selectable.",
+        "description": "Trader-facing option for one accepted, evidence-only, or blocked strategy.\n\nA validated strategy whose recorded proof no longer re-verifies is\ndemoted to ``evidence_status=\"blocked\"`` rather than removed from the\nrow set: the operator's validation flag always guarantees a row.\n``selectable`` is the server's own Paper-launchability fact \u2014 a blocked\nrow is always present but never Paper-selectable.\n\n``admissible_modes`` (#1702) is the mode-explicit fact the deploy form\nactually needs: gates are tiered by execution mode, so a row can be\nDry-Run-admissible without being Paper-selectable. Every catalog row is\nruntime-backed today, so ``\"dry_run\"`` is always present; ``\"paper\"`` is\npresent iff ``selectable`` is ``True`` \u2014 the two facts are kept in sync\nby the invariant below, not merged into one, because ``selectable``\nalready has a settled meaning (\"is this row currently Paper-admissible\")\nthat this change does not repurpose.",
         "properties": {
+          "admissible_modes": {
+            "items": {
+              "enum": [
+                "dry_run",
+                "paper"
+              ],
+              "type": "string"
+            },
+            "title": "Admissible Modes",
+            "type": "array"
+          },
           "blocked_explanation": {
             "anyOf": [
               {
@@ -4677,7 +4688,7 @@
           "evidence_status": {
             "enum": [
               "accepted",
-              "human_override_required",
+              "evidence_only",
               "blocked"
             ],
             "title": "Evidence Status",
@@ -4723,7 +4734,8 @@
           "explanation",
           "validation_case_symbol",
           "evidence_status",
-          "selectable"
+          "selectable",
+          "admissible_modes"
         ],
         "title": "AlpacaPaperDeployStrategy",
         "type": "object"
@@ -4771,6 +4783,9 @@
             "title": "Carryover Label",
             "type": "string"
           },
+          "dry_run_eligibility": {
+            "$ref": "#/components/schemas/AlpacaPaperDeployEligibility"
+          },
           "eligibility": {
             "$ref": "#/components/schemas/AlpacaPaperDeployEligibility"
           },
@@ -4815,6 +4830,7 @@
           "account_label",
           "evaluated_at_ms",
           "eligibility",
+          "dry_run_eligibility",
           "readiness_checks",
           "execution_modes",
           "strategies",

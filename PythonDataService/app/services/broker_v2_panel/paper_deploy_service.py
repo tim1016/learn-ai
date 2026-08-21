@@ -217,26 +217,29 @@ def _strategy_views(
                     label=entry.display_name,
                     explanation=entry.description,
                     validation_case_symbol=validation_case_symbol,
-                    evidence_status="human_override_required",
+                    evidence_status="evidence_only",
                     selectable=True,
+                    admissible_modes=("dry_run", "paper"),
                     override_explanation=(
                         "A human marked this strategy validated, but its behavioral evidence is "
-                        "evidence-only and is not accepted for deployment. Continuing can produce "
-                        "decisions that have not been reconciled to the reference implementation."
+                        "evidence-only and is not accepted as behavioral-equivalence proof. Continuing "
+                        "can produce decisions that have not been reconciled to the reference implementation."
                     ),
                     params_schema=_deploy_params_schema(strategy_key),
                 )
             )
             continue
         blocked_reason = _accepted_proof_blocked_reason(entry, event)
+        selectable = blocked_reason is None
         strategies.append(
             AlpacaPaperDeployStrategy(
                 strategy_key=strategy_key,
                 label=entry.display_name,
                 explanation=entry.description,
                 validation_case_symbol=validation_case_symbol,
-                evidence_status=("accepted" if blocked_reason is None else "blocked"),
-                selectable=blocked_reason is None,
+                evidence_status=("accepted" if selectable else "blocked"),
+                selectable=selectable,
+                admissible_modes=("dry_run", "paper") if selectable else ("dry_run",),
                 blocked_explanation=blocked_reason,
                 params_schema=_deploy_params_schema(strategy_key),
             )
@@ -253,7 +256,7 @@ def _readiness_checks(
 ) -> tuple[AlpacaPaperDeployReadinessCheck, ...]:
     accepted_strategies = tuple(strategy for strategy in strategies if strategy.evidence_status == "accepted")
     override_strategies = tuple(
-        strategy for strategy in strategies if strategy.evidence_status == "human_override_required"
+        strategy for strategy in strategies if strategy.evidence_status == "evidence_only"
     )
     blocked_strategies = tuple(strategy for strategy in strategies if strategy.evidence_status == "blocked")
     selectable_strategies = tuple(strategy for strategy in strategies if strategy.selectable)
@@ -290,8 +293,9 @@ def _readiness_checks(
             explanation=(
                 (
                     "Accepted strategies use current behavioral-equivalence evidence. Evidence-only "
-                    "strategies require an explicit human risk acknowledgement and operator reason. "
-                    "Blocked strategies are shown but not selectable until their proof is repaired."
+                    "strategies are Paper-selectable on the human-validated flag alone; their behavioral "
+                    "verdict remains displayed but does not gate Paper. Blocked strategies are shown but "
+                    "not selectable until their proof is repaired."
                 )
                 if selectable_strategies
                 else (
@@ -472,6 +476,49 @@ def _eligibility(
     )
 
 
+def _dry_run_eligibility(
+    strategies: tuple[AlpacaPaperDeployStrategy, ...],
+    clerk_status: ClerkStatus,
+    *,
+    now_ms: int,
+) -> AlpacaPaperDeployEligibility:
+    """Author the Dry Run launch verdict — deliberately narrower than Paper's.
+
+    Per the gate table (#1702), Dry Run requires only a registered runtime
+    and a healthy market-data channel. It does not consider account posture,
+    Clerk freeze, Clerk hold, outstanding intents, or the execution channel —
+    none of those are "not applicable" to a mode that makes no broker
+    contact and holds no custody.
+    """
+    market_data_ready = evaluate_channel_health(
+        clerk_status.channel_healths, now_ms, required_streams=("market_data",)
+    ).ready
+    any_runtime = bool(strategies)
+    if not any_runtime:
+        return AlpacaPaperDeployEligibility(
+            eligible=False,
+            reason_code="STRATEGY_NOT_ACCEPTED_FOR_DEPLOY",
+            headline="No runtime-supported strategy is currently available for Dry Run.",
+            explanation="The catalog excludes missing, invalidated, rejected, and runtime-unsupported strategies.",
+            next_action="Review and validate a strategy in Strategy Validation.",
+        )
+    if not market_data_ready:
+        return AlpacaPaperDeployEligibility(
+            eligible=False,
+            reason_code="CLERK_CHANNEL_UNHEALTHY",
+            headline="Deployment is blocked until the Clerk market-data channel is healthy.",
+            explanation="Dry Run consumes real market data; it cannot simulate decisions without it.",
+            next_action="Restore the market-data channel and refresh the deployment check.",
+        )
+    return AlpacaPaperDeployEligibility(
+        eligible=True,
+        reason_code="ALPACA_DRY_RUN_READY",
+        headline="A zero-broker-write Dry Run is available.",
+        explanation="A registered strategy and a healthy market-data channel are present; Dry Run holds no custody.",
+        next_action="Complete the deployment ticket, review the summary, then start the Dry Run.",
+    )
+
+
 def build_alpaca_paper_deploy_view(
     account: BrokerAccountSnapshot,
     clerk_status: ClerkStatus,
@@ -487,6 +534,7 @@ def build_alpaca_paper_deploy_view(
         now_ms=evaluated_at_ms,
     )
     eligibility = _eligibility(readiness_checks)
+    dry_run_eligibility = _dry_run_eligibility(strategies, clerk_status, now_ms=evaluated_at_ms)
     return AlpacaPaperDeployView(
         broker="alpaca",
         account_id=account.account_id,
@@ -494,6 +542,7 @@ def build_alpaca_paper_deploy_view(
         account_label=f"Alpaca paper · {account.account_id}",
         evaluated_at_ms=evaluated_at_ms,
         eligibility=eligibility,
+        dry_run_eligibility=dry_run_eligibility,
         readiness_checks=readiness_checks,
         execution_modes=(
             AlpacaPaperExecutionMode(

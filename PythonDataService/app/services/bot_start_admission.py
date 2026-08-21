@@ -294,6 +294,12 @@ class BotStartAdmission:
         self, binding: BrokerBotBinding
     ) -> AsyncIterator[tuple[RunAdmissionDecision, MarketDataFeed | None, ClerkCustodySnapshot]]:
         try:
+            # Fetched unconditionally for every mode, including dry_run: this
+            # is a local/read-mostly Clerk-owned snapshot (not a live broker
+            # call), and the decision still needs its account_id and
+            # evidence_refs. #1702 relaxes what dry_run is *gated on* inside
+            # evaluate_run_admission, never what is *fetched* to build the
+            # decision.
             async with self._custody_guard(binding.strategy_instance_id) as custody:
                 observed_at_ms = self._now_ms()
                 runtime = await self._runtime_fact(binding.strategy_instance_id, observed_at_ms)
@@ -311,6 +317,7 @@ class BotStartAdmission:
                     strategy_instance_id=binding.strategy_instance_id,
                     proposed_run_id=binding.run_id,
                     configuration_hash=configuration_hash(binding),
+                    mode=binding.mode,
                     runtime=runtime,
                     process=process,
                     market_data=market_data_admission_fact(

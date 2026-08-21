@@ -79,6 +79,11 @@ class StartRunFacts(BaseModel):
     strategy_instance_id: str
     proposed_run_id: str
     configuration_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    # First-class strictness tier (#1702): the pure admission policy branches
+    # on this to relax evidence/custody-display gates for Dry Run only. Never
+    # defaulted — every construction site must be explicit about which tier
+    # it is admitting into.
+    mode: Literal["log_only", "dry_run", "trade"]
     runtime: StartRuntimeAdmissionFact
     process: RunProcessAdmissionFact
     market_data: MarketDataAdmissionFact
@@ -108,6 +113,10 @@ class ResumeRunFacts(BaseModel):
     proposed_run_id: str
     prior_run_id: str
     configuration_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    # Mode is immutable per instance (set at Start); Resume replays the same
+    # tier the instance was created with. See StartRunFacts.mode for why this
+    # is required, not defaulted.
+    mode: Literal["log_only", "dry_run", "trade"]
     runtime: StartRuntimeAdmissionFact
     process: RunProcessAdmissionFact
     market_data: MarketDataAdmissionFact

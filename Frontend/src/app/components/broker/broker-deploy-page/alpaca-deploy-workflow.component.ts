@@ -35,7 +35,6 @@ import {
   type RunAdmissionDecision,
 } from '../v2-panel/lib/broker-v2-panel.service';
 import { DeployBindingStripComponent } from './deploy-binding-strip.component';
-import { DeployEvidenceOverrideComponent } from './deploy-evidence-override.component';
 import {
   DeployExecutionSectionComponent,
   type DeploySizingPreset,
@@ -48,7 +47,6 @@ import { DeployStartAdmissionComponent } from './deploy-start-admission.componen
 const INSTANCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const SYMBOL_RE = /^[A-Za-z][A-Za-z0-9.-]{0,11}$/;
 const DEPLOY_LENS_QUERY_PARAM = 'deployLens';
-const EVIDENCE_OVERRIDE_ACKNOWLEDGEMENT = 'I_ACCEPT_EVIDENCE_ONLY_DEPLOYMENT_RISK' as const;
 
 interface AlpacaDeployTicket {
   instanceId: string;
@@ -58,8 +56,6 @@ interface AlpacaDeployTicket {
   quantity: number;
   executionMode: Extract<DeployExecutionMode['mode'], 'dry_run' | 'paper'>;
   allowCarryover: boolean;
-  evidenceOverrideAcknowledged: boolean;
-  evidenceOverrideReason: string;
   parameters: Record<string, unknown>;
 }
 
@@ -90,7 +86,6 @@ type DeployLens = 'trader' | 'operator';
     TooltipModule,
     TimestampDisplayComponent,
     DeployBindingStripComponent,
-    DeployEvidenceOverrideComponent,
     DeployExecutionSectionComponent,
     DeployLaunchReceiptComponent,
     DeployParametersSectionComponent,
@@ -123,7 +118,6 @@ export class AlpacaDeployWorkflowComponent {
   protected readonly invalidParameterFields = signal<ReadonlySet<string>>(new Set());
   protected readonly receipt = signal<DeployBotReceipt | null>(null);
   protected readonly admissionDecision = signal<RunAdmissionDecision | null>(null);
-  protected readonly evidenceOverrideTouched = signal(false);
 
   protected readonly deployView = resource({
     params: () => this.accountId().trim(),
@@ -142,8 +136,6 @@ export class AlpacaDeployWorkflowComponent {
     quantity: 1,
     executionMode: 'paper',
     allowCarryover: false,
-    evidenceOverrideAcknowledged: false,
-    evidenceOverrideReason: '',
     parameters: {},
   });
 
@@ -171,18 +163,19 @@ export class AlpacaDeployWorkflowComponent {
     ) ?? null;
   });
 
-  protected readonly strategyRequiresOverride = computed(
-    () => this.selectedStrategy()?.evidence_status === 'human_override_required',
-  );
-
   protected readonly paramsSchema = computed<DeployStrategyParamsSchema>(
     () => this.selectedStrategy()?.params_schema ?? {},
   );
 
+  // Informational only (#1702): the behavioral verdict renders in every
+  // mode, but no longer gates Paper — a human-validated flag plus full
+  // Clerk custody proof is enough. The backend's `admissible_modes` is the
+  // sole authority on whether a mode is reachable; the frontend never
+  // re-derives that from `evidence_status`.
   protected readonly evidenceSummaryLabel = computed(() => {
     switch (this.selectedStrategy()?.evidence_status) {
-      case 'human_override_required':
-        return 'Human override';
+      case 'evidence_only':
+        return 'Evidence only';
       case 'blocked':
         return 'Blocked';
       default:
@@ -190,13 +183,15 @@ export class AlpacaDeployWorkflowComponent {
     }
   });
 
-  protected readonly evidenceOverrideComplete = computed(() =>
-    !this.strategyRequiresOverride()
-    || (
-      this.ticket().evidenceOverrideAcknowledged
-      && this.ticket().evidenceOverrideReason.trim().length >= 10
-    ),
-  );
+  // Backend-authored reason the Paper option is unreachable for the
+  // selected strategy (#1702). `null` whenever Paper is admissible or no
+  // strategy is selected yet — every non-Paper-admissible row is a blocked
+  // row today, so `blocked_explanation` is always present when this fires.
+  protected readonly paperUnavailableReason = computed(() => {
+    const strategy = this.selectedStrategy();
+    if (strategy === null || strategy.admissible_modes.includes('paper')) return null;
+    return strategy.blocked_explanation ?? null;
+  });
 
   protected readonly selectedExecutionMode = computed(() => {
     const view = this.currentView();
@@ -239,10 +234,13 @@ export class AlpacaDeployWorkflowComponent {
     if (selectedStrategy === null) {
       return { canSubmit: false, guidance: 'Choose a deployment strategy.' };
     }
-    if (!selectedStrategy.selectable) {
+    // Mode-aware, not strategy-wide (#1702): a blocked strategy is still
+    // Dry-Run-admissible, so admissibility is checked against the ticket's
+    // chosen mode, not `selectable` (which means "Paper-admissible" only).
+    if (!selectedStrategy.admissible_modes.includes(this.ticket().executionMode)) {
       return {
         canSubmit: false,
-        guidance: selectedStrategy.blocked_explanation ?? 'This strategy is not currently selectable.',
+        guidance: this.paperUnavailableReason() ?? 'This strategy is not admissible for the selected mode.',
       };
     }
     if (this.selectedExecutionMode()?.availability !== 'available') {
@@ -256,15 +254,6 @@ export class AlpacaDeployWorkflowComponent {
     }
     if (this.invalidParameterFields().size > 0) {
       return { canSubmit: false, guidance: 'Fix the highlighted strategy parameter before deployment.' };
-    }
-    if (this.strategyRequiresOverride() && !this.ticket().evidenceOverrideAcknowledged) {
-      return { canSubmit: false, guidance: 'Accept the evidence-only deployment risk.' };
-    }
-    if (!this.evidenceOverrideComplete()) {
-      return {
-        canSubmit: false,
-        guidance: 'Enter at least 10 characters explaining this risk decision.',
-      };
     }
     if (!this.ticketForm().valid()) {
       return { canSubmit: false, guidance: 'Complete the highlighted deployment fields.' };
@@ -336,12 +325,9 @@ export class AlpacaDeployWorkflowComponent {
         ...current,
         strategyKey: strategy.strategy_key,
         symbol,
-        evidenceOverrideAcknowledged: false,
-        evidenceOverrideReason: '',
         parameters: {},
       };
     });
-    this.evidenceOverrideTouched.set(false);
   }
 
   protected setParameter(change: { field: string; value: string | number }): void {
@@ -381,6 +367,7 @@ export class AlpacaDeployWorkflowComponent {
       (candidate) => candidate.mode === mode,
     );
     if (option?.availability !== 'available') return;
+    if (mode === 'paper' && this.paperUnavailableReason() !== null) return;
     this.clearAdmission();
     this.ticket.update((current) => ({
       ...current,
@@ -394,25 +381,6 @@ export class AlpacaDeployWorkflowComponent {
     if (!this.currentView()?.carryover_available) return;
     this.clearAdmission();
     this.ticket.update((current) => ({ ...current, allowCarryover: checked }));
-  }
-
-  protected setEvidenceOverrideAcknowledged(acknowledged: boolean): void {
-    if (!this.strategyRequiresOverride()) return;
-    this.clearAdmission();
-    this.ticket.update((current) => ({
-      ...current,
-      evidenceOverrideAcknowledged: acknowledged,
-    }));
-  }
-
-  protected setEvidenceOverrideReason(reason: string): void {
-    if (!this.strategyRequiresOverride()) return;
-    this.clearAdmission();
-    this.ticket.update((current) => ({ ...current, evidenceOverrideReason: reason }));
-  }
-
-  protected touchEvidenceOverrideReason(): void {
-    this.evidenceOverrideTouched.set(true);
   }
 
   protected touchInstanceId(): void {
@@ -489,12 +457,10 @@ export class AlpacaDeployWorkflowComponent {
       // noted in strategy-lab-runner.service.ts's own `params` construction.
       parameters: ticket.parameters as unknown as DeployBotBody['parameters'],
     };
-    if (strategy.evidence_status === 'human_override_required') {
-      body.evidence_override = {
-        acknowledgement: EVIDENCE_OVERRIDE_ACKNOWLEDGEMENT,
-        reason: ticket.evidenceOverrideReason.trim(),
-      };
-    }
+    // #1702: the evidence-only override contract no longer gates Paper — it
+    // is re-pointed at Live, which this ticket cannot reach (`executionMode`
+    // is closed to 'dry_run' | 'paper'). Never attach `evidence_override`:
+    // the backend now rejects one submitted with a Paper request outright.
     return body;
   }
 
@@ -509,8 +475,6 @@ export class AlpacaDeployWorkflowComponent {
       && current.sizing?.quantity === submitted.sizing?.quantity
       && current.execution_mode === submitted.execution_mode
       && current.carryover_policy === submitted.carryover_policy
-      && current.evidence_override?.acknowledgement === submitted.evidence_override?.acknowledgement
-      && current.evidence_override?.reason === submitted.evidence_override?.reason
       && JSON.stringify(current.parameters) === JSON.stringify(submitted.parameters);
   }
 
@@ -531,13 +495,6 @@ export class AlpacaDeployWorkflowComponent {
     return this.ticketForm.quantity().errors()[0]?.message ?? null;
   }
 
-  protected evidenceOverrideReasonError(): string | null {
-    if (!this.strategyRequiresOverride() || !this.evidenceOverrideTouched()) return null;
-    return this.ticket().evidenceOverrideReason.trim().length >= 10
-      ? null
-      : 'Enter at least 10 characters explaining this risk decision.';
-  }
-
   private admissionFromError(error: unknown): RunAdmissionDecision | null {
     if (!(error instanceof HttpErrorResponse)) return null;
     const admission = error.error?.detail?.admission as RunAdmissionDecision | undefined;
@@ -548,7 +505,6 @@ export class AlpacaDeployWorkflowComponent {
     this.ticketForm.strategyKey().markAsTouched();
     this.ticketForm.symbol().markAsTouched();
     this.ticketForm.quantity().markAsTouched();
-    if (this.strategyRequiresOverride()) this.evidenceOverrideTouched.set(true);
   }
 
   private toDeployError(error: unknown): DeployError {

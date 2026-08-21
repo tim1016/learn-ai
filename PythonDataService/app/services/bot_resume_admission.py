@@ -130,6 +130,7 @@ class BotResumeAdmission:
                     proposed_run_id=proposed.run_id,
                     prior_run_id=prior.run_id,
                     configuration_hash=configuration_hash(prior),
+                    mode=prior.mode,
                     runtime=runtime,
                     process=self._process_fact(prior, observed_at_ms),
                     market_data=market_data_admission_fact(

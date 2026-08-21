@@ -28,6 +28,7 @@ from app.broker.contract.models import BrokerAccountSnapshot
 from app.schemas.broker_bots import (
     AlpacaPaperDeployReceipt,
     AlpacaPaperDeployRequest,
+    AlpacaPaperDeployStrategy,
     AlpacaPaperDeployView,
     BotControlAuthorityFacts,
     BotProcessFact,
@@ -417,11 +418,11 @@ def _require_alpaca_deploy_request(
 ) -> ResolvedDeployParams:
     """Apply the shared form/configuration preflight before run admission.
 
-    The requested strategy's own identity and selectability are checked
-    before the account-level eligibility gate: a request naming a missing or
-    blocked strategy must see that specific, proof-naming reason — not the
-    catalog's generic "nothing is selectable" headline, which is what
-    ``view.eligibility`` reports whenever every row happens to be blocked.
+    The requested strategy's own identity is checked before any mode-scoped
+    gate: a request naming a missing strategy must see that specific reason,
+    not a mode-eligibility headline. The remaining checks are mode-tiered
+    (#1702) — Dry Run and Paper ask for what each tier is worth, dispatched
+    to ``_require_dry_run_deploy_request`` / ``_require_paper_deploy_request``.
 
     Returns the resolved strategy parameter set (registered defaults merged
     with the request's overrides) so callers can thread it into both the
@@ -438,7 +439,60 @@ def _require_alpaca_deploy_request(
             next_action="Review the strategy in Strategy Validation, then refresh this page.",
             http_status=409,
         )
-    if not strategy.selectable:
+    if request.execution_mode == "dry_run":
+        _require_dry_run_deploy_request(view, strategy)
+    else:
+        _require_paper_deploy_request(view, strategy, request)
+    try:
+        return resolve_deploy_strategy_params(request.strategy_key, request.symbol, request.parameters)
+    except ValueError as exc:
+        raise PanelRunnerError(
+            "The submitted strategy parameters are invalid.",
+            detail=str(exc),
+            next_action="Correct the highlighted parameter(s) and resubmit.",
+            http_status=400,
+        ) from exc
+
+
+def _require_dry_run_deploy_request(
+    view: AlpacaPaperDeployView,
+    strategy: AlpacaPaperDeployStrategy,
+) -> None:
+    """Dry Run asks only for a registered runtime and a healthy market-data channel.
+
+    Human validation, account posture, custody freeze, exposure hold, and
+    intent custody are all "not applicable" to Dry Run per the gate table —
+    it makes no broker contact and holds no custody, so none of the Paper
+    checks below apply here.
+    """
+    if "dry_run" not in strategy.admissible_modes:
+        raise PanelRunnerError(  # defensive: every catalog row is runtime-backed today (#1702)
+            "The selected strategy is not currently available for Dry Run.",
+            detail="This strategy has no registered live-decision runtime.",
+            next_action="Choose a runtime-backed strategy.",
+            http_status=409,
+        )
+    if not view.dry_run_eligibility.eligible:
+        raise PanelRunnerError(
+            view.dry_run_eligibility.headline,
+            detail=view.dry_run_eligibility.explanation,
+            next_action=view.dry_run_eligibility.next_action,
+            http_status=409,
+        )
+
+
+def _require_paper_deploy_request(
+    view: AlpacaPaperDeployView,
+    strategy: AlpacaPaperDeployStrategy,
+    request: AlpacaPaperDeployRequest,
+) -> None:
+    """Paper asks for the human-validated flag and full Clerk custody proof.
+
+    The evidence-only override contract no longer gates Paper (#1702): it is
+    re-pointed at Live, so any override submitted here is rejected outright
+    rather than required or silently accepted.
+    """
+    if "paper" not in strategy.admissible_modes:
         raise PanelRunnerError(
             "The selected strategy is not currently selectable for deployment.",
             detail=strategy.blocked_explanation or "This strategy's recorded proof no longer verifies.",
@@ -452,18 +506,14 @@ def _require_alpaca_deploy_request(
             next_action=view.eligibility.next_action,
             http_status=409,
         )
-    if strategy.evidence_status == "human_override_required" and request.evidence_override is None:
+    if request.evidence_override is not None:
         raise PanelRunnerError(
-            "This strategy requires a human evidence override.",
-            detail=strategy.override_explanation,
-            next_action="Accept the evidence-only deployment risk and record an operator reason.",
-            http_status=409,
-        )
-    if strategy.evidence_status == "accepted" and request.evidence_override is not None:
-        raise PanelRunnerError(
-            "An evidence override is not valid for this accepted strategy.",
-            detail="The selected strategy already has current accepted deployment evidence.",
-            next_action="Remove the override and submit the accepted strategy normally.",
+            "An evidence override is not valid for Paper deployment.",
+            detail=(
+                "The evidence-only override contract now applies only to Live. Paper is admitted on the "
+                "human-validated flag and full Clerk custody proof alone, regardless of behavioral verdict."
+            ),
+            next_action="Remove the override and submit the strategy normally.",
             http_status=409,
         )
     if request.carryover_policy == "ALLOW" and not view.carryover_available:
@@ -473,15 +523,6 @@ def _require_alpaca_deploy_request(
             next_action="Deploy with carryover disabled or enable the account policy first.",
             http_status=409,
         )
-    try:
-        return resolve_deploy_strategy_params(request.strategy_key, request.symbol, request.parameters)
-    except ValueError as exc:
-        raise PanelRunnerError(
-            "The submitted strategy parameters are invalid.",
-            detail=str(exc),
-            next_action="Correct the highlighted parameter(s) and resubmit.",
-            http_status=400,
-        ) from exc
 
 
 async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:

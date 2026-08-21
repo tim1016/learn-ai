@@ -30,15 +30,15 @@
             <option
               [value]="strategy.strategy_key"
               [selected]="strategy.strategy_key === strategyKey()"
-              [disabled]="!strategy.selectable"
-            >{{ strategy.label }}{{ strategy.evidence_status === 'human_override_required' ? ' — human override required' : '' }}{{ strategy.evidence_status === 'blocked' ? ' — blocked' : '' }}</option>
+              [disabled]="strategy.admissible_modes.length === 0"
+            >{{ strategy.label }}{{ strategy.evidence_status === 'evidence_only' ? ' — evidence only' : '' }}{{ strategy.evidence_status === 'blocked' ? ' — blocked' : '' }}</option>
           }
         </select>
       }
       <div class="flex flex-wrap items-center justify-between gap-2 min-h-6">
         @switch (selectedStrategy()?.evidence_status) {
-          @case ('human_override_required') {
-            <span class="text-[length:var(--fs-xs)] font-bold text-[var(--bear)]">Evidence only · override required</span>
+          @case ('evidence_only') {
+            <span class="text-[length:var(--fs-xs)] font-bold text-[var(--bear)]">Evidence only</span>
           }
           @case ('blocked') {
             <span class="text-[length:var(--fs-xs)] font-bold text-[var(--bear)]">Blocked · proof no longer verifies</span>
