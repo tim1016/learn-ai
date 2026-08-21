@@ -531,7 +531,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
     const blockedOption = screen.getByRole<HTMLOptionElement>('option', { name: /RSI Mean Reversion/ });
     expect(blockedOption.disabled).toBe(false);
     expect(blockedOption.textContent).toContain('blocked');
-    expect(screen.getByText('Blocked · proof no longer verifies')).toBeTruthy();
+    expect(screen.getAllByText('Blocked').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(BLOCKED_EXPLANATION).length).toBeGreaterThanOrEqual(1);
 
     const paperRadio = screen.getByRole<HTMLInputElement>('radio', { name: /Paper/ });
@@ -577,7 +577,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
 
     expect(screen.queryByLabelText('Deployment strategy')).toBeNull();
     expect(screen.getAllByText(BLOCKED_STRATEGY.label).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('Blocked · proof no longer verifies')).toBeTruthy();
+    expect(screen.getAllByText('Blocked').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(BLOCKED_EXPLANATION).length).toBeGreaterThanOrEqual(1);
 
     const deployButton = screen.getByRole<HTMLButtonElement>('button', {
@@ -587,34 +587,29 @@ describe('AlpacaDeployWorkflowComponent', () => {
     expect(deployButton.disabled).toBe(true);
   });
 
-  it('disables both execution modes for a validated strategy with no registered runtime', async () => {
+  it('lets the operator inspect a no-runtime strategy while disabling both execution modes', async () => {
     // #1703: unlike a stale-proof blocked row (BLOCKED_STRATEGY, still
-    // Dry-Run-admissible), a no-runtime row admits neither mode — reuses
-    // the existing disabled-option / disabled-radio pattern from #1702,
-    // no new UI.
-    const queryParamMap = convertToParamMap({ strategy_key: 'spy_strategy_b' });
+    // Dry-Run-admissible), a no-runtime row admits neither mode. The row
+    // remains selectable in the catalog so its backend-authored reason is
+    // inspectable; only the execution modes are disabled.
     const service = mockService(RECEIPT, {
       ...DEPLOY_VIEW,
       strategies: [VALIDATION_STRATEGY, EMA_STRATEGY, SMA_OVERRIDE_STRATEGY, NO_RUNTIME_STRATEGY],
     });
-    await render(AlpacaDeployWorkflowComponent, {
-      providers: [
-        provideRouter([]),
-        {
-          provide: ActivatedRoute,
-          useValue: { queryParamMap: of(queryParamMap), snapshot: { queryParamMap } },
-        },
-        { provide: BrokerV2PanelService, useValue: service },
-      ],
-      componentInputs: { accountId: 'PA9' },
-    });
-    await screen.findByText(DEPLOY_VIEW.eligibility.headline);
-    await userEvent.type(screen.getByLabelText('Bot name'), 'strategy-b-01');
+    await renderWorkflow(service);
 
     const select = screen.getByLabelText<HTMLSelectElement>('Deployment strategy');
-    expect(select.value).toBe('spy_strategy_b');
     const noRuntimeOption = screen.getByRole<HTMLOptionElement>('option', { name: /Strategy B/ });
-    expect(noRuntimeOption.disabled).toBe(true);
+    expect(select.value).toBe('deployment_validation');
+    expect(noRuntimeOption.disabled).toBe(false);
+
+    fireEvent.change(select, {
+      target: { value: 'spy_strategy_b' },
+    });
+    await userEvent.type(screen.getByLabelText('Bot name'), 'strategy-b-01');
+
+    expect(select.value).toBe('spy_strategy_b');
+    expect(screen.getAllByText('Blocked').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(NO_RUNTIME_EXPLANATION).length).toBeGreaterThanOrEqual(1);
 
     const paperRadio = screen.getByRole<HTMLInputElement>('radio', { name: /Paper/ });

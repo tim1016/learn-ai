@@ -78,6 +78,7 @@ def test_dry_run_ineligible_with_no_runtime_backed_strategy() -> None:
 
     assert verdict.eligible is False
     assert verdict.reason_code == "STRATEGY_NOT_ACCEPTED_FOR_DEPLOY"
+    assert "strategy validation" in verdict.next_action.lower()
 
 
 def test_dry_run_ineligible_with_unhealthy_market_data() -> None:

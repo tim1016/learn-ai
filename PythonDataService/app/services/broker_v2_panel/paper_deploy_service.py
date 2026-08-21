@@ -47,6 +47,28 @@ class ResolvedDeployParams:
     diverges_from_defaults: tuple[str, ...]
 
 
+def strategy_gate_recovery(
+    strategies: tuple[AlpacaPaperDeployStrategy, ...],
+) -> str | None:
+    """Return the action that can actually clear the strategy gate.
+
+    A runtime-backed blocked row needs its evidence repaired. A visible row
+    with no runtime cannot be repaired in Strategy Validation; its runtime
+    must be registered instead. Keeping this distinction here gives the
+    readiness view and the request preflight one recovery authority.
+    """
+    if any(strategy.selectable for strategy in strategies):
+        return None
+    if any("dry_run" in strategy.admissible_modes for strategy in strategies):
+        return "Repair the named proof, or re-validate the strategy in Strategy Validation."
+    if strategies:
+        return (
+            "Choose a runtime-backed strategy, or have an engineer register this "
+            "strategy's live-decision runtime."
+        )
+    return "Review and validate a strategy in Strategy Validation."
+
+
 def resolve_deploy_strategy_params(
     strategy_key: str,
     symbol: str,
@@ -196,11 +218,7 @@ def _readiness_checks(
                 "override_strategy_keys": ", ".join(strategy.strategy_key for strategy in override_strategies),
                 "blocked_strategy_keys": ", ".join(strategy.strategy_key for strategy in blocked_strategies),
             },
-            recovery=(
-                None
-                if selectable_strategies
-                else "Review and accept current behavioral-equivalence evidence in Strategy Validation."
-            ),
+            recovery=strategy_gate_recovery(strategies),
         ),
         AlpacaPaperDeployReadinessCheck(
             gate_id="broker.account_posture",
@@ -382,6 +400,8 @@ def _dry_run_eligibility(
     # available". Check `admissible_modes` directly instead.
     any_runtime = any("dry_run" in strategy.admissible_modes for strategy in strategies)
     if not any_runtime:
+        next_action = strategy_gate_recovery(strategies)
+        assert next_action is not None
         return AlpacaPaperDeployEligibility(
             eligible=False,
             reason_code="STRATEGY_NOT_ACCEPTED_FOR_DEPLOY",
@@ -390,7 +410,7 @@ def _dry_run_eligibility(
                 "Every visible strategy is either unvalidated, or validated with no registered "
                 "live-decision runtime yet."
             ),
-            next_action="Review and validate a strategy in Strategy Validation.",
+            next_action=next_action,
         )
     if not market_data_ready:
         return AlpacaPaperDeployEligibility(
