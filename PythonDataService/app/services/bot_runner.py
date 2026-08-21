@@ -499,6 +499,14 @@ class BotTaskRegistry:
                 detail="Use the legacy host boundary only for an existing IBKR run.",
             )
         lifecycle_repo = self._lifecycle_repo(binding.strategy_instance_id)
+        # Preserve the prior run's terminal evidence before registering the
+        # proposed run with the Clerk or advancing current_run.json. A
+        # preservation failure must leave zero Clerk runs and zero process
+        # activity behind, so it runs unguarded, ahead of both.
+        self._run_evidence.preserve_terminal(
+            binding.strategy_instance_id,
+            lifecycle_repo.read(),
+        )
         try:
             await register_alpaca_duty_run(binding, admission_snapshot=admission_snapshot)
         except (ActiveClerkUnavailableError, ClerkAdmissionTokenStaleError) as exc:
@@ -507,13 +515,6 @@ class BotTaskRegistry:
                 detail="Refresh Clerk custody before starting an Alpaca bot.",
             ) from exc
         try:
-            # Preserve the prior immutable outcome before record_launch advances
-            # current_run.json. A crash between these operations must not hide a
-            # previous run's only terminal evidence from the history projection.
-            self._run_evidence.preserve_terminal(
-                binding.strategy_instance_id,
-                lifecycle_repo.read(),
-            )
             self._bindings.record_launch(binding, launch_reason=reason)
             self._desired_repo(binding.strategy_instance_id).set(
                 DesiredState.RUNNING, updated_by=_UPDATED_BY, now_ms=now, reason=reason

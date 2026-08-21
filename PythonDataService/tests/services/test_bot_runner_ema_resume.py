@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 from collections.abc import AsyncIterator, Callable
 from decimal import Decimal
 from pathlib import Path
@@ -175,6 +176,12 @@ def _first_resumed_bar() -> MarketDataBar:
     )
 
 
+def _clerk_run_count(db_path: Path) -> int:
+    """Count Clerk-registered runs, proving/disproving a phantom registration."""
+    with sqlite3.connect(db_path) as connection:
+        return connection.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
+
+
 def _registry_with_sqlite_clerk(
     tmp_path: Path,
     feed: _ResumeFeed,
@@ -307,3 +314,101 @@ async def test_ema_resume_records_the_first_live_bar_without_crashing(
         finally:
             set_alpaca_clerk(None)
             repository.close()
+
+
+@pytest.mark.asyncio
+async def test_resume_after_diagnostic_crash_reuses_the_existing_receipt(
+    tmp_path: Path,
+) -> None:
+    """PRD #1716 AC-1: a diagnostic-bearing crash can Resume into a new run,
+    with the previous receipt left byte-for-byte unchanged."""
+    crash_message = "TradeBar.__init__() got an unexpected keyword argument 'start_ms'"
+    feed = _ResumeFeed()
+    feed.install((_first_resumed_bar(),), error=TypeError(crash_message))
+    repository, clerk, registry = _registry_with_sqlite_clerk(tmp_path, feed)
+    set_alpaca_clerk(clerk)
+    try:
+        await registry.deploy(
+            broker="alpaca",
+            strategy_instance_id=_STRATEGY_INSTANCE_ID,
+            symbol="SPY",
+        )
+        await _wait_for(lambda: not registry.any_running())
+
+        crashed_run = registry.current_run("alpaca", _STRATEGY_INSTANCE_ID)
+        assert crashed_run.terminal_outcome is not None
+        assert crashed_run.terminal_outcome.kind == "CRASHED"
+        diagnostic = crashed_run.terminal_outcome.crash_diagnostic
+        assert diagnostic is not None
+        outcome_path = (
+            tmp_path
+            / "runner/live_state"
+            / _STRATEGY_INSTANCE_ID
+            / "run_outcomes"
+            / f"{crashed_run.run_id}.json"
+        )
+        original_receipt_bytes = outcome_path.read_bytes()
+
+        feed.install((_first_resumed_bar(),))
+        resumed = await registry.resume_existing("alpaca", _STRATEGY_INSTANCE_ID)
+        await _wait_for(lambda: feed.bars_consumed == 1)
+
+        assert resumed.active_run_id != crashed_run.run_id
+        assert resumed.running is True
+        assert outcome_path.read_bytes() == original_receipt_bytes
+
+        preserved = json.loads(outcome_path.read_text(encoding="utf-8"))
+        assert preserved["crash_diagnostic"] == diagnostic.model_dump(mode="json")
+    finally:
+        try:
+            if registry.any_running():
+                await registry.stop("alpaca", _STRATEGY_INSTANCE_ID)
+        finally:
+            set_alpaca_clerk(None)
+            repository.close()
+
+
+@pytest.mark.asyncio
+async def test_resume_with_an_unreadable_receipt_registers_no_clerk_run(
+    tmp_path: Path,
+) -> None:
+    """PRD #1716: a preservation failure precedes Clerk registration and
+    leaves zero Clerk runs, zero process activity, and current_run.json
+    unchanged behind."""
+    feed = _ResumeFeed()
+    feed.install((_first_resumed_bar(),), error=TypeError("boom"))
+    repository, clerk, registry = _registry_with_sqlite_clerk(tmp_path, feed)
+    set_alpaca_clerk(clerk)
+    try:
+        await registry.deploy(
+            broker="alpaca",
+            strategy_instance_id=_STRATEGY_INSTANCE_ID,
+            symbol="SPY",
+        )
+        await _wait_for(lambda: not registry.any_running())
+        crashed_run = registry.current_run("alpaca", _STRATEGY_INSTANCE_ID)
+        outcome_path = (
+            tmp_path
+            / "runner/live_state"
+            / _STRATEGY_INSTANCE_ID
+            / "run_outcomes"
+            / f"{crashed_run.run_id}.json"
+        )
+        outcome_path.write_text("{not valid json", encoding="utf-8")
+        current_run_path = (
+            tmp_path / "runner/live_state" / _STRATEGY_INSTANCE_ID / "current_run.json"
+        )
+        original_current_run_bytes = current_run_path.read_bytes()
+        clerk_run_count_before = _clerk_run_count(repository.db_path)
+
+        feed.install((_first_resumed_bar(),))
+        with pytest.raises(ValueError):
+            await registry.resume_existing("alpaca", _STRATEGY_INSTANCE_ID)
+
+        assert registry.any_running() is False
+        assert current_run_path.read_bytes() == original_current_run_bytes
+        assert outcome_path.read_text(encoding="utf-8") == "{not valid json"
+        assert _clerk_run_count(repository.db_path) == clerk_run_count_before
+    finally:
+        set_alpaca_clerk(None)
+        repository.close()
