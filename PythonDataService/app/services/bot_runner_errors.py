@@ -64,6 +64,27 @@ class RunAdmissionRefusedError(BotRunnerError):
     http_status = 409
 
 
+class ActivationFailedCleanupProvenError(BotRunnerError):
+    """Activation failed after Clerk registration, but the Clerk stop committed.
+
+    A known, resolved failure — the attempted run is durably stopped, not
+    lost in an unknown state. Distinct from an unproven cleanup, which keeps
+    today's untyped propagation so the action layer reports ``unknown``.
+    """
+
+    http_status = 500
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        attempted_run_id: str,
+        detail: str | None = None,
+    ) -> None:
+        super().__init__(message, detail=detail)
+        self.attempted_run_id = attempted_run_id
+
+
 def raise_run_refusal(decision: RunAdmissionDecision) -> NoReturn:
     """Translate one denied policy decision into the stable runner taxonomy."""
     if decision.reason_code == "RUN_ALREADY_ACTIVE":

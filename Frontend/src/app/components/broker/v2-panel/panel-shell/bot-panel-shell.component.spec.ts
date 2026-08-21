@@ -1295,4 +1295,62 @@ describe('BotPanelShellComponent', () => {
     expect(screen.getByText('Resume is no longer available for this bot.')).toBeTruthy();
     expect(screen.getByText('Terminal Evidence Unreadable')).toBeTruthy();
   });
+
+  it('renders a cleanup-proven activation failure as Failure, distinct from Unknown', async () => {
+    // PRD #1716 FR-6: outcome=failure (cleanup proven) must read differently
+    // from outcome=unknown (unproven cleanup) — both the headline label and
+    // the backend-authored prose distinguish failed-but-safe from unresolved.
+    mockService.getLiveSnapshot.mockResolvedValueOnce(liveSnapshot({
+      ...PANEL,
+      health: { ...PANEL.health, running: false },
+      actions: [
+        {
+          action_id: 'resume',
+          label: 'Resume',
+          explanation: 'Resume evaluating bars.',
+          enabled: true,
+          blockers: [],
+          confirmation: null,
+          revision: 1,
+          concurrency_token: 'start-token',
+        },
+      ],
+      primary_action_by_lens: { trader: 'resume', operator: 'resume' },
+    }));
+    mockService.runBotAction.mockRejectedValueOnce(
+      new HttpErrorResponse({
+        status: 500,
+        error: {
+          detail: {
+            action_id: 'resume',
+            outcome: 'failure',
+            receipt_id: null,
+            recorded_at_ms: 1_753_800_000_000,
+            message: "Activation failed after Clerk registration for run 'run-2'; the Clerk stop committed.",
+            why: null,
+            reason_code: null,
+          },
+        },
+      }),
+    );
+    const { fixture } = await render(BotPanelShellComponent, {
+      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }, { provide: BrokersService, useValue: brokersMock },
+        { provide: MessageService, useValue: messageService }],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(screen.getByText('Failure')).toBeTruthy();
+    expect(screen.queryByText('Unknown')).toBeNull();
+    expect(
+      screen.getByText(
+        "Activation failed after Clerk registration for run 'run-2'; the Clerk stop committed.",
+      ),
+    ).toBeTruthy();
+  });
 });

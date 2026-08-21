@@ -111,6 +111,7 @@ from app.services.bot_run_terminal import (
     prove_terminal_stop_outcome,
 )
 from app.services.bot_runner_errors import (
+    ActivationFailedCleanupProvenError,
     BootRecoveryIncompleteError,
     BotAlreadyRunningError,
     BotRunnerError,
@@ -554,9 +555,11 @@ class BotTaskRegistry:
             # Let supervision enter its exception boundary before a Start releases
             # Clerk intake. A first effect waits on that same fence.
             await asyncio.sleep(0)
-        except BaseException:
+        except BaseException as exc:
+            cleanup_proven = False
             try:
                 await commit_stop_before_task_cancel(binding, reason="activation_failed_after_registration")
+                cleanup_proven = True
             except Exception:
                 logger.error(
                     "SQLite Clerk could not durably stop a failed activation",
@@ -567,6 +570,18 @@ class BotTaskRegistry:
                     },
                     exc_info=True,
                 )
+            # A resolved failure is reported as known only for a genuine
+            # Exception with cleanup proven. asyncio.CancelledError and other
+            # BaseException-only paths are not Exception instances, so they
+            # keep today's raw propagation and are never converted into an
+            # operator-facing resolved failure.
+            if cleanup_proven and isinstance(exc, Exception):
+                raise ActivationFailedCleanupProvenError(
+                    f"Activation failed after Clerk registration for run "
+                    f"'{binding.run_id}'; the Clerk stop committed.",
+                    attempted_run_id=binding.run_id,
+                    detail=str(exc),
+                ) from exc
             raise
 
     def _start_process_fact(

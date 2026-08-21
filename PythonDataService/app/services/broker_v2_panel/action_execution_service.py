@@ -78,6 +78,19 @@ class ActionOutcomeUnknownError(ActionExecutionError):
     http_status = 500
 
 
+class ActivationFailedError(ActionExecutionError):
+    """A performer registered real state, then failed with cleanup proven (500).
+
+    A known, resolved failure distinct from ``ActionOutcomeUnknownError``:
+    the outcome is ``failure``, not ``unknown``, because the attempted run's
+    Clerk stop provably committed. Still burns the idempotency key like any
+    other post-execution failure — a blind retry with the same key must not
+    re-fire the action.
+    """
+
+    http_status = 500
+
+
 # A performer runs one action and returns a human-readable outcome message.
 # Receives the channel-derived operator identity and the request's
 # operator-authored reason (may be ``None``); most performers ignore reason.
@@ -394,6 +407,14 @@ async def execute_action(
         )
         if reserved_fresh:
             await ledger.release(sid, request.action_id, request.idempotency_key)
+        raise
+    except ActivationFailedError as err:
+        # A known, resolved failure (cleanup proven): burn the key like any
+        # other post-execution failure, but report it as-is rather than
+        # collapsing it into ActionOutcomeUnknownError — the outcome is
+        # failure, not unknown.
+        if reserved_fresh:
+            await ledger.fail(sid, request.action_id, request.idempotency_key, str(err))
         raise
     except Exception as err:
         # The performer ran and failed: burn the key so a blind retry does not
