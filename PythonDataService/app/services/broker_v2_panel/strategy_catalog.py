@@ -30,7 +30,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from app.engine.strategy.registry import _STRATEGY_REGISTRY, StrategyRegistration
+from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.schemas.strategy_validation import StrategyValidationEntry, StrategyValidationFlagEvent
 from app.services.bot_trade_strategy import (
     alpaca_paper_strategy_default_symbol,
@@ -47,6 +47,11 @@ NO_RUNTIME_BLOCKED_EXPLANATION = (
     "This strategy has no registered live-decision runtime. It is validated, "
     "but the Python runner cannot dispatch it yet — this is a 'not built "
     "yet' block, distinct from an unmet validation or a stale evidence proof."
+)
+_EVIDENCE_ONLY_OVERRIDE_EXPLANATION = (
+    "A human marked this strategy validated, but its behavioral evidence is "
+    "evidence-only and is not accepted as behavioral-equivalence proof. Continuing "
+    "can produce decisions that have not been reconciled to the reference implementation."
 )
 
 
@@ -74,9 +79,10 @@ class CatalogEntry:
     blocked_explanation: str | None
 
 
-def _catalog_visible_registrations() -> dict[str, StrategyRegistration]:
-    """The definition facet: registry entries flagged catalog-visible."""
-    return {key: registration for key, registration in _STRATEGY_REGISTRY.items() if registration.catalog_visible}
+def _is_catalog_visible(strategy_key: str) -> bool:
+    """The definition facet's own gate: a registered, catalog-visible key."""
+    registration = _STRATEGY_REGISTRY.get(strategy_key)
+    return registration is not None and registration.catalog_visible
 
 
 def _entry_matches_accepted_snapshot(entry: StrategyValidationEntry) -> bool:
@@ -171,6 +177,57 @@ def _accepted_proof_blocked_reason(
     return None
 
 
+@dataclass(frozen=True)
+class _Disposition:
+    """The validation facet's launch verdict for one runtime-annotated entry."""
+
+    has_runtime: bool
+    evidence_status: EvidenceStatus
+    selectable: bool
+    override_explanation: str | None
+    blocked_explanation: str | None
+
+
+def _disposition(
+    entry: StrategyValidationEntry,
+    event: StrategyValidationFlagEvent,
+    *,
+    has_runtime: bool,
+) -> _Disposition:
+    """Derive one entry's launch disposition from the validation facet and the runtime fact.
+
+    Precedence, most restrictive first: no runtime blocks regardless of
+    behavioral verdict (#1703); evidence-only is Paper-selectable on the
+    human-validated flag alone (#1706); otherwise the accepted proof must
+    still re-verify (#1698), or the row demotes to blocked.
+    """
+    if not has_runtime:
+        return _Disposition(
+            has_runtime=False,
+            evidence_status="blocked",
+            selectable=False,
+            override_explanation=None,
+            blocked_explanation=NO_RUNTIME_BLOCKED_EXPLANATION,
+        )
+    if event.behavioral_equivalence.verdict == "evidence_only":
+        return _Disposition(
+            has_runtime=True,
+            evidence_status="evidence_only",
+            selectable=True,
+            override_explanation=_EVIDENCE_ONLY_OVERRIDE_EXPLANATION,
+            blocked_explanation=None,
+        )
+    blocked_reason = _accepted_proof_blocked_reason(entry, event)
+    selectable = blocked_reason is None
+    return _Disposition(
+        has_runtime=True,
+        evidence_status=("accepted" if selectable else "blocked"),
+        selectable=selectable,
+        override_explanation=None,
+        blocked_explanation=blocked_reason,
+    )
+
+
 def compose_strategy_catalog(
     entries: list[StrategyValidationEntry],
 ) -> tuple[CatalogEntry, ...]:
@@ -181,67 +238,30 @@ def compose_strategy_catalog(
     An entry that is missing, invalidated, rejected, or not catalog-visible
     at all produces no row, unchanged from before this slice.
     """
-    visible = _catalog_visible_registrations()
     runtime_keys = supported_alpaca_paper_strategy_keys()
     catalog: list[CatalogEntry] = []
     for entry in entries:
-        if entry.strategy_key not in visible:
+        if not _is_catalog_visible(entry.strategy_key):
             continue
         event = entry.current_flag_event
         if entry.validation_state != "validated" or event is None or event.flag != "validated":
             continue
+        disposition = _disposition(entry, event, has_runtime=entry.strategy_key in runtime_keys)
         snapshot = event.evidence_snapshot
         validation_case_symbol = snapshot.validation_case_symbol or alpaca_paper_strategy_default_symbol(
             entry.strategy_key
         )
-        has_runtime = entry.strategy_key in runtime_keys
-        if not has_runtime:
-            catalog.append(
-                CatalogEntry(
-                    strategy_key=entry.strategy_key,
-                    label=entry.display_name,
-                    explanation=entry.description,
-                    validation_case_symbol=validation_case_symbol,
-                    has_runtime=False,
-                    evidence_status="blocked",
-                    selectable=False,
-                    override_explanation=None,
-                    blocked_explanation=NO_RUNTIME_BLOCKED_EXPLANATION,
-                )
-            )
-            continue
-        if event.behavioral_equivalence.verdict == "evidence_only":
-            catalog.append(
-                CatalogEntry(
-                    strategy_key=entry.strategy_key,
-                    label=entry.display_name,
-                    explanation=entry.description,
-                    validation_case_symbol=validation_case_symbol,
-                    has_runtime=True,
-                    evidence_status="evidence_only",
-                    selectable=True,
-                    override_explanation=(
-                        "A human marked this strategy validated, but its behavioral evidence is "
-                        "evidence-only and is not accepted as behavioral-equivalence proof. Continuing "
-                        "can produce decisions that have not been reconciled to the reference implementation."
-                    ),
-                    blocked_explanation=None,
-                )
-            )
-            continue
-        blocked_reason = _accepted_proof_blocked_reason(entry, event)
-        selectable = blocked_reason is None
         catalog.append(
             CatalogEntry(
                 strategy_key=entry.strategy_key,
                 label=entry.display_name,
                 explanation=entry.description,
                 validation_case_symbol=validation_case_symbol,
-                has_runtime=True,
-                evidence_status=("accepted" if selectable else "blocked"),
-                selectable=selectable,
-                override_explanation=None,
-                blocked_explanation=blocked_reason,
+                has_runtime=disposition.has_runtime,
+                evidence_status=disposition.evidence_status,
+                selectable=disposition.selectable,
+                override_explanation=disposition.override_explanation,
+                blocked_explanation=disposition.blocked_explanation,
             )
         )
     return tuple(catalog)
