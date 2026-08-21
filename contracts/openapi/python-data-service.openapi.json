@@ -11723,9 +11723,13 @@
             "type": "string"
           },
           "authority_kind": {
-            "const": "sqlite",
-            "default": "sqlite",
-            "title": "Authority Kind"
+            "default": "real_paper",
+            "enum": [
+              "real_paper",
+              "synthetic"
+            ],
+            "title": "Authority Kind",
+            "type": "string"
           },
           "broker": {
             "title": "Broker",
@@ -13562,9 +13566,13 @@
             "type": "string"
           },
           "authority_kind": {
-            "const": "sqlite",
-            "default": "sqlite",
-            "title": "Authority Kind"
+            "default": "real_paper",
+            "enum": [
+              "real_paper",
+              "synthetic"
+            ],
+            "title": "Authority Kind",
+            "type": "string"
           },
           "blocked_reason": {
             "anyOf": [

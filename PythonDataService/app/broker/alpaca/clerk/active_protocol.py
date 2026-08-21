@@ -34,13 +34,14 @@ class RevisionBoundRunRegistrar(Protocol):
         binding: BrokerBotBinding,
         *,
         admission_snapshot: ClerkCustodySnapshot,
+        sealed_account_id: str | None = None,
     ) -> None: ...
 
 
 class ActiveAlpacaClerk(Protocol):
     """Safety-critical surface exposed by the activated SQLite authority."""
 
-    authority_kind: Literal["sqlite"]
+    authority_kind: Literal["sqlite", "synthetic"]
     broker_id: str
 
     async def recover(self) -> None: ...
@@ -52,6 +53,7 @@ class ActiveAlpacaClerk(Protocol):
         binding: BrokerBotBinding,
         *,
         admission_snapshot: ClerkCustodySnapshot | None = None,
+        sealed_account_id: str | None = None,
     ) -> None: ...
 
     async def stop_strategy_run(

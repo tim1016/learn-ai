@@ -44,6 +44,7 @@ from app.engine.strategy.algorithms.spy_strategy_a import SpyStrategyAAlgorithm
 from app.engine.strategy.algorithms.spy_strategy_b import SpyStrategyBAlgorithm
 from app.engine.strategy.algorithms.spy_strategy_c import SpyStrategyCAlgorithm
 from app.engine.strategy.base import Strategy
+from app.engine.strategy.signal_program import EmaCrossoverSignalProgram
 
 
 class StrategyParamsBase(BaseModel):
@@ -521,6 +522,10 @@ class StrategyRegistration:
     # from guessing strategy semantics from parameter names.
     chart_indicators: tuple[StrategyChartIndicator, ...] = ()
     strategy_bars: StrategyBarCadence = StrategyBarCadence("minute", 1)
+    # A Signal Program is optional because existing strategies may still use
+    # the legacy event-handler lifecycle. When present, this is the one
+    # construction authority for the program and its staged SignalSession.
+    signal_program_factory: Callable[[StrategyParamsBase], EmaCrossoverSignalProgram] | None = None
 
 
 def public_params_schema(reg: StrategyRegistration, *, extra_hidden: frozenset[str] = frozenset()) -> dict[str, Any]:
@@ -554,6 +559,21 @@ def hidden_params_present(
     """Return the submitted parameter names this registration hides, sorted."""
     hidden = reg.hidden_params | extra_hidden
     return sorted(hidden.intersection(params))
+
+
+def _build_ema_crossover_signal_program(params: StrategyParamsBase) -> EmaCrossoverSignalProgram:
+    """Construct the sole broker-neutral EMA Signal Program from registry params."""
+    typed = params
+    assert isinstance(typed, EmaCrossoverSignalParams)
+    strategy = EmaCrossoverSignalAlgorithm(
+        symbol=typed.symbol,
+        gap=typed.gap,
+        rsi_min=typed.rsi_min,
+        rsi_max=typed.rsi_max,
+    )
+    program = EmaCrossoverSignalProgram.create(strategy)
+    strategy.signal_program = program
+    return program
 
 
 _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
@@ -663,12 +683,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             StrategyChartIndicator("rsi", {"length": 14}),
         ),
         strategy_bars=StrategyBarCadence("minute", 15),
-        build=lambda p: EmaCrossoverSignalAlgorithm(
-            symbol=p.symbol,  # type: ignore[attr-defined]
-            gap=p.gap,  # type: ignore[attr-defined]
-            rsi_min=p.rsi_min,  # type: ignore[attr-defined]
-            rsi_max=p.rsi_max,  # type: ignore[attr-defined]
-        ),
+        build=lambda p: _build_ema_crossover_signal_program(p).strategy,  # type: ignore[return-value]
+        signal_program_factory=_build_ema_crossover_signal_program,
         instrument_surface="policy",
         action_plan_contract="single_long_stock",
         signal_intent_binding="action_plan_stock",

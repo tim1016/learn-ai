@@ -370,6 +370,17 @@ so they survive a broker change.
   bound to that account; it is a domain seam, not another runtime service. Its
   Account service remains present while the approved broker account is
   connected, including when no bots are on duty.
+- **Synthetic Account Authority** — the account-scoped safety and audit
+  boundary for an explicitly activated `sim:` account. It may exercise Clerk
+  custody semantics for a Dry Run, but it has no claim on a broker-reported
+  account or its exposure.
+- **Authority kind** — the closed account-world label `real_paper` or
+  `synthetic` carried with an authority-scoped read. It prevents an operator
+  view or aggregate from presenting simulated and broker-paper facts as one
+  account truth.
+- **Sealed account** — the exact account identity committed by a bot's
+  immutable configuration. A run can register only with the same Account
+  Authority; a mismatch is a refusal before any run or custody work exists.
 - **Account service standby** — the healthy idle state of an attached Broker
   Account Authority with no bots on duty. Observation and reconciliation
   continue in the background, so standby is ready rather than fenced.

@@ -12,8 +12,12 @@ import base64
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
+from app.broker.alpaca.clerk.account_authority import (
+    require_real_paper_account_id,
+    require_synthetic_account_id,
+)
 from app.broker.alpaca.clerk.active_protocol import ClerkAdmissionSnapshotStaleError
 from app.broker.alpaca.clerk.models import (
     AccountFreezeState,
@@ -117,6 +121,12 @@ class StrategyRegistrationConflictError(RuntimeError):
     """One strategy identity was reused with different immutable semantics."""
 
 
+class SealedAccountMismatchError(RuntimeError):
+    """A deployment seal names an account other than this Clerk repository."""
+
+    reason_code = "SEALED_ACCOUNT_MISMATCH"
+
+
 class StrategyAdmissionStaleError(ClerkAdmissionSnapshotStaleError):
     """A Start or Resume snapshot no longer matches SQLite Clerk authority."""
 
@@ -128,7 +138,7 @@ class MissingEntryCustodyError(RuntimeError):
 class SqliteAlpacaClerkFacade:
     """Narrow live-control surface backed by one account repository."""
 
-    authority_kind = "sqlite"
+    authority_kind: Literal["sqlite", "synthetic"]
     broker_id = "alpaca"
     supports_revision_bound_admission = True
 
@@ -140,11 +150,17 @@ class SqliteAlpacaClerkFacade:
         trade: BrokerTradePort,
         stream_health: StreamHealthGate | None = None,
         intake: ReentrantAsyncLock | None = None,
+        authority_kind: Literal["sqlite", "synthetic"] = "sqlite",
     ) -> None:
+        if authority_kind == "synthetic":
+            require_synthetic_account_id(repo.account_id)
+        else:
+            require_real_paper_account_id(repo.account_id)
         self._repo = repo
         self._intake = intake or ReentrantAsyncLock()
         self._read, self._trade = guard_broker_ports(read=read, trade=trade, intake=self._intake)
         self._stream_health = stream_health
+        self.authority_kind = authority_kind
         self._effect_tasks: dict[tuple[str, str], asyncio.Task[EffectOperationReceipt]] = {}
 
     @property

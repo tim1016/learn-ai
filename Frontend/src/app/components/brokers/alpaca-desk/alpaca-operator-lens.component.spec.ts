@@ -18,7 +18,7 @@ function clerkStatus(posture: AccountOperatorPosture = healthyAccountOperatorPos
     latest_reconciliation: null,
     outstanding_intents: 0,
     observed_at_ms: 1_700_000_000_000,
-    authority_kind: 'sqlite',
+    authority_kind: 'real_paper',
     channel_healths: [],
     operator_posture: posture,
   };

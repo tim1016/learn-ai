@@ -226,7 +226,7 @@ def sqlite_clerk_status(
         channel_healths=(
             list(channel_healths) if channel_healths is not None else None
         ),
-        authority_kind="sqlite",
+        authority_kind="real_paper",
         operator_posture=posture,
     )
 
@@ -293,7 +293,7 @@ def sqlite_custody_diagnosis(projection: ClerkProjection) -> CustodyDiagnosis:
             if not divergent
             else "Use the SQLite Clerk's typed, evidence-bound recovery actions."
         ),
-        authority_kind="sqlite",
+        authority_kind="real_paper",
         divergences=divergences,
         resolution_plan=(),
     )

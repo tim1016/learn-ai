@@ -10213,10 +10213,10 @@ export interface components {
             account_id: string;
             /**
              * Authority Kind
-             * @default sqlite
-             * @constant
+             * @default real_paper
+             * @enum {string}
              */
-            authority_kind?: "sqlite";
+            authority_kind?: "real_paper" | "synthetic";
             /** Broker */
             broker: string;
             /** Channel Healths */
@@ -10945,10 +10945,10 @@ export interface components {
             account_id: string;
             /**
              * Authority Kind
-             * @default sqlite
-             * @constant
+             * @default real_paper
+             * @enum {string}
              */
-            authority_kind?: "sqlite";
+            authority_kind?: "real_paper" | "synthetic";
             /** Blocked Reason */
             blocked_reason?: string | null;
             /**

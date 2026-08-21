@@ -142,6 +142,10 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         self._observations_fp: object | None = None
         self._state_writer: csv.writer | None = None  # type: ignore[type-arg]
         self._state_fp: object | None = None
+        # Set only by the registry's Signal Program factory. Direct
+        # construction stays a compatibility surface for historical tests and
+        # ledgers; public Backtest construction goes through this program.
+        self.signal_program: object | None = None
 
     def initialize(self) -> None:
         # LEAN-parity defaults — match the C# reference Initialize().
@@ -170,7 +174,7 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         self.ctx.register_consolidator(
             self._symbol,
             timedelta(minutes=15),
-            self._on_fifteen_minute_bar,
+            self._signal_program_handler(),
         )
 
         if self._output_dir is not None:
@@ -185,6 +189,21 @@ class EmaCrossoverSignalAlgorithm(Strategy):
             self._state_writer = csv.writer(self._state_fp)  # type: ignore[arg-type]
             self._state_writer.writerow(["ts_ms_utc", "close", "ema_fast", "ema_slow", "rsi", "cross_state", "signal"])
             self._state_fp.flush()  # type: ignore[union-attr]
+
+    def _signal_program_handler(self):
+        """Use the registered staged program when one owns this strategy."""
+        if self.signal_program is None or not self.signal_program.active:  # type: ignore[union-attr]
+            return self._on_fifteen_minute_bar
+        return self.signal_program.session.advance  # type: ignore[union-attr]
+
+    def signal_program_settings(self) -> dict[str, str]:
+        """Stable EMA settings which participate in evaluation identity."""
+        return {
+            "symbol": self._symbol_name,
+            "gap": str(self._gap),
+            "rsi_min": str(self._rsi_min),
+            "rsi_max": str(self._rsi_max),
+        }
 
     # ------------------------------------------------------------------
     # on_minute_bar override — writes to observations.csv when output_dir

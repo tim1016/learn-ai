@@ -30,7 +30,7 @@ export class AlpacaOperatorLensDataService {
 
   private readonly sqliteAccountId = computed(() => {
     const status = this.status.value();
-    return this.requested() && status?.authority_kind === 'sqlite'
+    return this.requested() && status?.authority_kind === 'real_paper'
       ? status.account_id
       : undefined;
   });
