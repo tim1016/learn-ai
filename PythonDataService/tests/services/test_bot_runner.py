@@ -59,6 +59,7 @@ from app.engine.live.bot_lifecycle_state import BotDutyOutcome, BotLifecyclePhas
 from app.engine.live.desired_state import DesiredState
 from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.signal_intent import SignalIntentKind
+from app.engine.strategy.signal_program import Settlement
 from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeedError
 from app.schemas.action_plan import ActionPlan
 from app.schemas.broker_bots import BotProcessFact
@@ -254,6 +255,39 @@ async def test_binding_strategy_params_reach_the_constructed_live_strategy() -> 
 
     assert await kinds_for({}) == [SignalIntentKind.ENTER, SignalIntentKind.EXIT]
     assert await kinds_for({"overbought": 99.9}) == [SignalIntentKind.ENTER]
+
+
+@pytest.mark.asyncio
+async def test_ema_live_adapter_exposes_and_settles_signal_program_stages() -> None:
+    """#1727: the live adapter must not silently fall back to legacy EMA dispatch.
+
+    A stage is intentionally left pending until its runner reports an explicit
+    disposition.  Advancing through the first ENTER and EXIT proves no staged
+    no-action decision stays locked and suppresses the later legitimate intent.
+    """
+    binding = BrokerBotBinding(
+        strategy_instance_id="ema-staged-live-test",
+        strategy_key="ema_crossover_signal",
+        broker="alpaca",
+        symbol="SPY",
+        mode="dry_run",
+        action_plan=alpaca_v1_action_plan("SPY"),
+        run_id="run-001",
+        created_at_ms=_T0,
+    )
+    staged_count = 0
+    intents: list[SignalIntentKind] = []
+    async for evaluation in strategy_evaluations(
+        binding,
+        _FakeFeed(_ema_parity_bars_through_first_exit(), mode="finite"),
+    ):
+        if evaluation.settle_stage is not None:
+            staged_count += 1
+            evaluation.settle_stage(Settlement.COMMIT)
+        intents.extend(intent.kind for intent in evaluation.intents)
+
+    assert staged_count > 0
+    assert intents == [SignalIntentKind.ENTER, SignalIntentKind.EXIT]
 
 
 def _bar(start_ms: int, symbol: str = "SPY") -> MarketDataBar:
