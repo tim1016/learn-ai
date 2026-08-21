@@ -73,6 +73,7 @@ from app.services.broker_v2_panel.paper_deploy_service import (
     build_alpaca_paper_deploy_receipt,
     build_alpaca_paper_deploy_view,
     resolve_deploy_strategy_params,
+    strategy_gate_recovery,
 )
 from app.services.broker_v2_panel.sqlite_panel_adapter import (
     adapt_sqlite_panel,
@@ -501,10 +502,12 @@ def _require_paper_deploy_request(
     rather than required or silently accepted.
     """
     if "paper" not in strategy.admissible_modes:
+        next_action = strategy_gate_recovery((strategy,))
+        assert next_action is not None
         raise PanelRunnerError(
             "The selected strategy is not currently selectable for deployment.",
             detail=strategy.blocked_explanation or "This strategy's recorded proof no longer verifies.",
-            next_action="Repair the named proof, or re-validate the strategy in Strategy Validation.",
+            next_action=next_action,
             http_status=409,
         )
     if not view.eligibility.eligible:

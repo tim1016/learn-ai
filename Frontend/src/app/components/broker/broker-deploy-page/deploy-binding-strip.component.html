@@ -30,7 +30,6 @@
             <option
               [value]="strategy.strategy_key"
               [selected]="strategy.strategy_key === strategyKey()"
-              [disabled]="strategy.admissible_modes.length === 0"
             >{{ strategy.label }}{{ strategy.evidence_status === 'evidence_only' ? ' — evidence only' : '' }}{{ strategy.evidence_status === 'blocked' ? ' — blocked' : '' }}</option>
           }
         </select>
@@ -41,7 +40,7 @@
             <span class="text-[length:var(--fs-xs)] font-bold text-[var(--bear)]">Evidence only</span>
           }
           @case ('blocked') {
-            <span class="text-[length:var(--fs-xs)] font-bold text-[var(--bear)]">Blocked · proof no longer verifies</span>
+            <span class="text-[length:var(--fs-xs)] font-bold text-[var(--bear)]">Blocked</span>
           }
           @default {
             <span class="text-[length:var(--fs-xs)] font-bold text-[var(--bull)]">✓ Accepted evidence</span>

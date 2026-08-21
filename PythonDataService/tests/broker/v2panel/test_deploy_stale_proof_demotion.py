@@ -17,7 +17,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport
 
 from app.schemas.strategy_validation import StrategyValidationEntry, StrategyValidationFlagRequest
-from app.services.broker_v2_panel import panel_data_source
+from app.services.broker_v2_panel import panel_data_source, strategy_catalog
 from app.services.broker_v2_panel.paper_deploy_service import _strategy_views
 from app.services.strategy_validation_manifest import (
     append_strategy_validation_flag_event,
@@ -300,6 +300,48 @@ async def test_deploy_reports_not_eligible_when_every_strategy_is_blocked(
 
 
 @pytest.mark.asyncio
+async def test_no_runtime_only_catalog_reports_runtime_specific_recovery(
+    deploy_app: tuple[FastAPI, _FakeDeployRegistry],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A missing runtime cannot be repaired by re-validating evidence."""
+    fast_app, registry = deploy_app
+    monkeypatch.setattr(
+        panel_data_source,
+        "load_strategy_validation_entries",
+        lambda _registry: [_accepted_deploy_entry()],
+    )
+    monkeypatch.setattr(
+        strategy_catalog,
+        "supported_alpaca_paper_strategy_keys",
+        lambda: frozenset(),
+    )
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
+        view_response = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/deploy")
+        deploy_response = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots",
+            json=_BODY,
+        )
+
+    body = view_response.json()
+    strategy_gate = next(
+        check for check in body["readiness_checks"] if check["gate_id"] == "strategy.validation_accepted"
+    )
+    for next_action in (
+        strategy_gate["recovery"],
+        body["eligibility"]["next_action"],
+        body["dry_run_eligibility"]["next_action"],
+        deploy_response.json()["detail"]["next_action"],
+    ):
+        assert next_action is not None
+        assert "runtime" in next_action.lower()
+        assert "strategy validation" not in next_action.lower()
+    assert deploy_response.status_code == 409
+    assert registry.deploy_calls == []
+
+
+@pytest.mark.asyncio
 async def test_deploy_names_the_blocked_strategy_reason_even_when_every_strategy_is_blocked(
     deploy_app: tuple[FastAPI, _FakeDeployRegistry],
     monkeypatch: pytest.MonkeyPatch,
@@ -331,4 +373,6 @@ async def test_deploy_names_the_blocked_strategy_reason_even_when_every_strategy
     assert detail["message"] == "The selected strategy is not currently selectable for deployment."
     assert detail["why"]
     assert "no longer matches its recorded hash" in detail["why"]
+    assert "strategy validation" in detail["next_action"].lower()
+    assert "runtime" not in detail["next_action"].lower()
     assert registry.deploy_calls == []
