@@ -59,7 +59,13 @@ from app.engine.results.lean_statistics import compute_lean_statistics
 from app.engine.results.statistics import summarize
 from app.engine.results.trade_record import TradeRecord
 from app.engine.strategy.base import Strategy
-from app.engine.strategy.registry import _STRATEGY_REGISTRY, ChartParamRef, StrategyRegistration
+from app.engine.strategy.registry import (
+    _STRATEGY_REGISTRY,
+    ChartParamRef,
+    StrategyRegistration,
+    hidden_params_present,
+    public_params_schema,
+)
 from app.models.responses import (
     LeanPortfolioStatsResponse,
     LeanRuntimeStatsResponse,
@@ -91,22 +97,8 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-def _public_params_schema(reg: StrategyRegistration) -> dict[str, Any]:
-    schema = reg.param_schema.model_json_schema()
-    if not reg.hidden_params:
-        return schema
-    schema = dict(schema)
-    properties = dict(schema.get("properties") or {})
-    for name in reg.hidden_params:
-        properties.pop(name, None)
-    schema["properties"] = properties
-    if "required" in schema:
-        schema["required"] = [name for name in schema["required"] if name not in reg.hidden_params]
-    return schema
-
-
 def _reject_hidden_params(reg: StrategyRegistration, params: dict[str, Any]) -> None:
-    hidden = sorted(reg.hidden_params.intersection(params))
+    hidden = hidden_params_present(reg, params)
     if hidden:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -681,7 +673,7 @@ def list_engine_strategies() -> list[StrategyInfo]:
                 name=name,
                 display_name=reg.display_name,
                 description=reg.description,
-                params_schema=_public_params_schema(reg),
+                params_schema=public_params_schema(reg),
                 supported_resolutions=sorted(reg.supported_resolutions),
                 algorithm_pseudocode=reg.algorithm_pseudocode,
                 gotchas=list(reg.gotchas),

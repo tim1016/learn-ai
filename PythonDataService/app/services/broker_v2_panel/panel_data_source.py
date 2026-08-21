@@ -63,8 +63,10 @@ from app.services.broker_v2_panel.panel_projection_service import (
     build_panel,
 )
 from app.services.broker_v2_panel.paper_deploy_service import (
+    ResolvedDeployParams,
     build_alpaca_paper_deploy_receipt,
     build_alpaca_paper_deploy_view,
+    resolve_deploy_strategy_params,
 )
 from app.services.broker_v2_panel.sqlite_panel_adapter import (
     adapt_sqlite_panel,
@@ -333,7 +335,7 @@ async def deploy_alpaca_paper_bot(
 ) -> AlpacaPaperDeployReceipt:
     """Execute the production paper deployment command through the runner seam."""
     view = await get_alpaca_paper_deploy_view(broker, account_id)
-    _require_alpaca_deploy_request(view, request)
+    resolved_params = _require_alpaca_deploy_request(view, request)
     registry = get_bot_task_registry()
     if registry is None:  # guarded by the view; retained for type narrowing
         raise PanelUnavailableError(
@@ -351,6 +353,7 @@ async def deploy_alpaca_paper_bot(
             quantity=request.sizing.quantity,
             carryover_policy=request.carryover_policy,
             evidence_override=request.evidence_override,
+            strategy_params=resolved_params.effective,
         )
     except BotRunnerError as exc:
         raise PanelRunnerError(
@@ -367,6 +370,7 @@ async def deploy_alpaca_paper_bot(
         request=request,
         bot=started.bot,
         admission=started.admission,
+        resolved_params=resolved_params,
     )
 
 
@@ -377,7 +381,7 @@ async def preview_alpaca_paper_start_admission(
 ) -> RunAdmissionDecision:
     """Project the same request-specific Start decision used by execution."""
     view = await get_alpaca_paper_deploy_view(broker, account_id)
-    _require_alpaca_deploy_request(view, request)
+    resolved_params = _require_alpaca_deploy_request(view, request)
     registry = get_bot_task_registry()
     if registry is None:
         raise PanelUnavailableError(
@@ -395,6 +399,7 @@ async def preview_alpaca_paper_start_admission(
             quantity=request.sizing.quantity,
             carryover_policy=request.carryover_policy,
             evidence_override=request.evidence_override,
+            strategy_params=resolved_params.effective,
         )
     except BotRunnerError as exc:
         raise PanelRunnerError(
@@ -409,7 +414,7 @@ async def preview_alpaca_paper_start_admission(
 def _require_alpaca_deploy_request(
     view: AlpacaPaperDeployView,
     request: AlpacaPaperDeployRequest,
-) -> None:
+) -> ResolvedDeployParams:
     """Apply the shared form/configuration preflight before run admission.
 
     The requested strategy's own identity and selectability are checked
@@ -417,6 +422,10 @@ def _require_alpaca_deploy_request(
     blocked strategy must see that specific, proof-naming reason — not the
     catalog's generic "nothing is selectable" headline, which is what
     ``view.eligibility`` reports whenever every row happens to be blocked.
+
+    Returns the resolved strategy parameter set (registered defaults merged
+    with the request's overrides) so callers can thread it into both the
+    runner binding and the deploy receipt without re-validating.
     """
     strategy = next(
         (strategy for strategy in view.strategies if strategy.strategy_key == request.strategy_key),
@@ -464,6 +473,15 @@ def _require_alpaca_deploy_request(
             next_action="Deploy with carryover disabled or enable the account policy first.",
             http_status=409,
         )
+    try:
+        return resolve_deploy_strategy_params(request.strategy_key, request.symbol, request.parameters)
+    except ValueError as exc:
+        raise PanelRunnerError(
+            "The submitted strategy parameters are invalid.",
+            detail=str(exc),
+            next_action="Correct the highlighted parameter(s) and resubmit.",
+            http_status=400,
+        ) from exc
 
 
 async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:

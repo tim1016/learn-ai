@@ -31,6 +31,7 @@ import {
   type DeployBotReceipt,
   type DeployBotStrategy,
   type DeployExecutionMode,
+  type DeployStrategyParamsSchema,
   type RunAdmissionDecision,
 } from '../v2-panel/lib/broker-v2-panel.service';
 import { DeployBindingStripComponent } from './deploy-binding-strip.component';
@@ -40,6 +41,7 @@ import {
   type DeploySizingPreset,
 } from './deploy-execution-section.component';
 import { DeployLaunchReceiptComponent } from './deploy-launch-receipt.component';
+import { DeployParametersSectionComponent } from './deploy-parameters-section.component';
 import { DeployReadinessSectionComponent } from './deploy-readiness-section.component';
 import { DeployStartAdmissionComponent } from './deploy-start-admission.component';
 
@@ -58,6 +60,7 @@ interface AlpacaDeployTicket {
   allowCarryover: boolean;
   evidenceOverrideAcknowledged: boolean;
   evidenceOverrideReason: string;
+  parameters: Record<string, unknown>;
 }
 
 interface DeployError {
@@ -90,6 +93,7 @@ type DeployLens = 'trader' | 'operator';
     DeployEvidenceOverrideComponent,
     DeployExecutionSectionComponent,
     DeployLaunchReceiptComponent,
+    DeployParametersSectionComponent,
     DeployReadinessSectionComponent,
     DeployStartAdmissionComponent,
   ],
@@ -116,6 +120,7 @@ export class AlpacaDeployWorkflowComponent {
 
   protected readonly submitting = signal(false);
   protected readonly submitError = signal<DeployError | null>(null);
+  protected readonly invalidParameterFields = signal<ReadonlySet<string>>(new Set());
   protected readonly receipt = signal<DeployBotReceipt | null>(null);
   protected readonly admissionDecision = signal<RunAdmissionDecision | null>(null);
   protected readonly evidenceOverrideTouched = signal(false);
@@ -139,6 +144,7 @@ export class AlpacaDeployWorkflowComponent {
     allowCarryover: false,
     evidenceOverrideAcknowledged: false,
     evidenceOverrideReason: '',
+    parameters: {},
   });
 
   protected readonly ticketForm = form(this.ticket, (ticket) => {
@@ -167,6 +173,10 @@ export class AlpacaDeployWorkflowComponent {
 
   protected readonly strategyRequiresOverride = computed(
     () => this.selectedStrategy()?.evidence_status === 'human_override_required',
+  );
+
+  protected readonly paramsSchema = computed<DeployStrategyParamsSchema>(
+    () => this.selectedStrategy()?.params_schema ?? {},
   );
 
   protected readonly evidenceSummaryLabel = computed(() => {
@@ -243,6 +253,9 @@ export class AlpacaDeployWorkflowComponent {
     }
     if (this.ticket().sizingPreset === 'custom' && this.ticketForm.quantity().invalid()) {
       return { canSubmit: false, guidance: 'Fix the position size before deployment.' };
+    }
+    if (this.invalidParameterFields().size > 0) {
+      return { canSubmit: false, guidance: 'Fix the highlighted strategy parameter before deployment.' };
     }
     if (this.strategyRequiresOverride() && !this.ticket().evidenceOverrideAcknowledged) {
       return { canSubmit: false, guidance: 'Accept the evidence-only deployment risk.' };
@@ -325,9 +338,22 @@ export class AlpacaDeployWorkflowComponent {
         symbol,
         evidenceOverrideAcknowledged: false,
         evidenceOverrideReason: '',
+        parameters: {},
       };
     });
     this.evidenceOverrideTouched.set(false);
+  }
+
+  protected setParameter(change: { field: string; value: string | number }): void {
+    this.clearAdmission();
+    this.ticket.update((current) => ({
+      ...current,
+      parameters: { ...current.parameters, [change.field]: change.value },
+    }));
+  }
+
+  protected setInvalidParameterFields(fields: ReadonlySet<string>): void {
+    this.invalidParameterFields.set(fields);
   }
 
   protected setSymbol(value: string): void {
@@ -456,6 +482,12 @@ export class AlpacaDeployWorkflowComponent {
       },
       execution_mode: ticket.executionMode,
       carryover_policy: ticket.allowCarryover ? 'ALLOW' : 'FORBID',
+      // `parameters` genuinely varies by strategy (unlike `params_schema`,
+      // which has one uniform shape typed at the OpenAPI boundary) — the
+      // generated type narrows this dict[str, Any] request field to
+      // `Record<string, never>`, the same pre-existing codegen limitation
+      // noted in strategy-lab-runner.service.ts's own `params` construction.
+      parameters: ticket.parameters as unknown as DeployBotBody['parameters'],
     };
     if (strategy.evidence_status === 'human_override_required') {
       body.evidence_override = {
@@ -478,7 +510,8 @@ export class AlpacaDeployWorkflowComponent {
       && current.execution_mode === submitted.execution_mode
       && current.carryover_policy === submitted.carryover_policy
       && current.evidence_override?.acknowledgement === submitted.evidence_override?.acknowledgement
-      && current.evidence_override?.reason === submitted.evidence_override?.reason;
+      && current.evidence_override?.reason === submitted.evidence_override?.reason
+      && JSON.stringify(current.parameters) === JSON.stringify(submitted.parameters);
   }
 
   protected instanceIdError(): string | null {

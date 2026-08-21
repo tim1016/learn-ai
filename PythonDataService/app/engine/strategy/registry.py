@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from dataclasses import field as dc_field
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -155,6 +155,15 @@ class SmaCrossoverParams(StrategyParamsBase):
     long_window: int = Field(30, ge=3, le=1000)
     resolution_minutes: int = Field(15, ge=1, le=1440)
 
+    @model_validator(mode="after")
+    def _validate_window_order(self) -> SmaCrossoverParams:
+        # Mirrors SmaCrossoverAlgorithm.__init__'s own guard: a schema-valid
+        # payload that violates this would otherwise pass admission and
+        # persist immutably before crashing at strategy construction.
+        if self.long_window <= self.short_window:
+            raise ValueError("long_window must be strictly greater than short_window")
+        return self
+
 
 class DailySmaCrossoverParams(StrategyParamsBase):
     """Daily-resolution SMA crossover — no ``resolution_minutes`` field.
@@ -170,6 +179,12 @@ class DailySmaCrossoverParams(StrategyParamsBase):
     short_window: int = Field(50, ge=2, le=500)
     long_window: int = Field(200, ge=3, le=1000)
 
+    @model_validator(mode="after")
+    def _validate_window_order(self) -> DailySmaCrossoverParams:
+        if self.long_window <= self.short_window:
+            raise ValueError("long_window must be strictly greater than short_window")
+        return self
+
 
 class RsiMeanReversionParams(StrategyParamsBase):
     symbol: str = Field("SPY", min_length=1, max_length=20)
@@ -177,6 +192,15 @@ class RsiMeanReversionParams(StrategyParamsBase):
     oversold: float = Field(30.0, gt=0, lt=100)
     overbought: float = Field(70.0, gt=0, lt=100)
     resolution_minutes: int = Field(15, ge=1, le=1440)
+
+    @model_validator(mode="after")
+    def _validate_threshold_order(self) -> RsiMeanReversionParams:
+        # Mirrors RsiMeanReversionAlgorithm.__init__'s own guard: a
+        # schema-valid payload that violates this would otherwise pass
+        # admission and persist immutably before crashing at construction.
+        if not self.oversold < self.overbought:
+            raise ValueError("oversold must be strictly less than overbought")
+        return self
 
 
 class OrbParams(StrategyParamsBase):
@@ -305,6 +329,16 @@ class RsiRangeStrategyAParams(StrategyParamsBase):
     )
     resolution_minutes: int = Field(15, ge=1, le=1440, description="Bar resolution. Default 15 minutes.")
 
+    @model_validator(mode="after")
+    def _validate_rsi_gate_order(self) -> RsiRangeStrategyAParams:
+        # Mirrors RsiRangeStrategy.__init__'s own guard (the shared A/B/C
+        # base class): a schema-valid payload that violates this would
+        # otherwise pass admission and persist immutably before crashing
+        # at construction.
+        if self.rsi_low_gate >= self.rsi_high_gate:
+            raise ValueError("rsi_low_gate must be strictly less than rsi_high_gate")
+        return self
+
 
 class RsiRangeStrategyBParams(StrategyParamsBase):
     """Strategy B — Supertrend + ADX-entry + MACD + RSI-range, ADX-exit."""
@@ -339,6 +373,12 @@ class RsiRangeStrategyBParams(StrategyParamsBase):
     )
     resolution_minutes: int = Field(15, ge=1, le=1440, description="Bar resolution.")
 
+    @model_validator(mode="after")
+    def _validate_rsi_gate_order(self) -> RsiRangeStrategyBParams:
+        if self.rsi_low_gate >= self.rsi_high_gate:
+            raise ValueError("rsi_low_gate must be strictly less than rsi_high_gate")
+        return self
+
 
 class RsiRangeStrategyCParams(StrategyParamsBase):
     """Strategy C — ADX-entry + ADX-rising + RSI-range, ADX-exit.
@@ -366,6 +406,12 @@ class RsiRangeStrategyCParams(StrategyParamsBase):
         description="Exit when ADX drops below this threshold. Default 15 (same as Strategy A).",
     )
     resolution_minutes: int = Field(15, ge=1, le=1440, description="Bar resolution.")
+
+    @model_validator(mode="after")
+    def _validate_rsi_gate_order(self) -> RsiRangeStrategyCParams:
+        if self.rsi_low_gate >= self.rsi_high_gate:
+            raise ValueError("rsi_low_gate must be strictly less than rsi_high_gate")
+        return self
 
 
 @dataclass(frozen=True, slots=True)
@@ -475,6 +521,39 @@ class StrategyRegistration:
     # from guessing strategy semantics from parameter names.
     chart_indicators: tuple[StrategyChartIndicator, ...] = ()
     strategy_bars: StrategyBarCadence = StrategyBarCadence("minute", 1)
+
+
+def public_params_schema(reg: StrategyRegistration, *, extra_hidden: frozenset[str] = frozenset()) -> dict[str, Any]:
+    """Return this registration's parameter JSON schema with hidden fields removed.
+
+    ``extra_hidden`` lets one construction path (e.g. the Alpaca deploy form,
+    where ``symbol`` is deploy-authoritative rather than a tunable) hide
+    additional fields without every registration declaring them in its own
+    ``hidden_params``.
+    """
+    hidden = reg.hidden_params | extra_hidden
+    schema = reg.param_schema.model_json_schema()
+    if not hidden:
+        return schema
+    schema = dict(schema)
+    properties = dict(schema.get("properties") or {})
+    for name in hidden:
+        properties.pop(name, None)
+    schema["properties"] = properties
+    if "required" in schema:
+        schema["required"] = [name for name in schema["required"] if name not in hidden]
+    return schema
+
+
+def hidden_params_present(
+    reg: StrategyRegistration,
+    params: dict[str, Any],
+    *,
+    extra_hidden: frozenset[str] = frozenset(),
+) -> list[str]:
+    """Return the submitted parameter names this registration hides, sorted."""
+    hidden = reg.hidden_params | extra_hidden
+    return sorted(hidden.intersection(params))
 
 
 _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {

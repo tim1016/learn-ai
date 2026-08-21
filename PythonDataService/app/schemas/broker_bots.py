@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -18,6 +18,7 @@ from app.schemas.action_plan import ActionPlan
 from app.schemas.bot_run_evidence import BotRunTerminalOutcomeView
 from app.schemas.live_runs import BotDutyOutcomeView
 from app.schemas.run_admission import RunAdmissionDecision
+from app.schemas.strategy_params_schema import StrategyParamsSchema
 
 
 def _validated_strategy_instance_id(value: str) -> str:
@@ -145,6 +146,12 @@ class AlpacaPaperDeployRequest(BaseModel):
     execution_mode: Literal["paper", "dry_run"] = "paper"
     carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID"
     evidence_override: AlpacaPaperEvidenceOverride | None = None
+    # Every tunable the strategy author exposed (EMA gap, RSI range, ADX
+    # thresholds, indicator periods, bar resolution, ...), validated by the
+    # strategy's own registered param_schema — the same schema Engine Lab and
+    # Strategy Lab already use. Never contains `symbol`: the deploy request's
+    # own `symbol` field above is authoritative and is injected separately.
+    parameters: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("strategy_instance_id")
     @classmethod
@@ -195,6 +202,13 @@ class AlpacaPaperDeployStrategy(BaseModel):
     selectable: bool
     override_explanation: str | None = None
     blocked_explanation: str | None = None
+    # This strategy's registered tunables as JSON schema — the same schema
+    # Engine Lab and Strategy Lab already render (`GET /api/engine/strategies`).
+    # `symbol` is never present: it is deploy-authoritative, carried on the
+    # request's own `symbol` field instead of as a tunable. Typed (not
+    # `dict[str, Any]`) so the OpenAPI-generated frontend type is real,
+    # not the codegen's blanket `Record<string, never>` for untyped dicts.
+    params_schema: StrategyParamsSchema = Field(default_factory=StrategyParamsSchema)
 
     @model_validator(mode="after")
     def _evidence_status_invariants(self) -> AlpacaPaperDeployStrategy:
@@ -416,3 +430,9 @@ class AlpacaPaperDeployReceipt(BaseModel):
     action_plan: ActionPlan
     admission: RunAdmissionDecision
     bot: BotStatusView
+    # The full resolved parameter set bound to this immutable instance
+    # (registered defaults merged with the request's overrides). Informational
+    # only — `parameters_diverge_from_defaults` names the fields that differ
+    # from the strategy's registered validated defaults; neither ever gates.
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    parameters_diverge_from_defaults: tuple[str, ...] = ()

@@ -11,7 +11,7 @@ import logging
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
@@ -188,16 +188,26 @@ async def _deployment_validation_evaluations(
         )
 
 
-def _build_signal_strategy(strategy_key: AlpacaPaperStrategyKey, symbol: str) -> _LiveSignalStrategy:
+def _build_signal_strategy(
+    strategy_key: AlpacaPaperStrategyKey,
+    symbol: str,
+    strategy_params: dict[str, Any] | None,
+) -> _LiveSignalStrategy:
     """Construct one registered strategy through its canonical registry `build`.
 
-    The deploy request's symbol is authoritative and is injected into the
-    parameter set before construction; every other parameter stays at its
-    registered default. There is no live-adapter-private construction path —
-    a strategy is only live-executable if its registry registration builds it.
+    ``strategy_params`` is the instance's immutable, already-resolved
+    deploy-time parameter set (#1701) — registered defaults merged with the
+    deploy request's overrides. It is ``None`` (not ``{}``) on a binding
+    persisted before #1701 existed — see ``BrokerBotBinding.strategy_params``
+    for why the field is optional rather than defaulted — so every registered
+    default applies here exactly as it did before this feature existed. The
+    deploy request's symbol is always authoritative and is injected last,
+    overriding any `symbol` key that might otherwise be present. There is no
+    live-adapter-private construction path — a strategy is only
+    live-executable if its registry registration builds it.
     """
     registration = _STRATEGY_REGISTRY[strategy_key.value]
-    params = registration.param_schema(symbol=symbol)  # type: ignore[call-arg]
+    params = registration.param_schema(**{**(strategy_params or {}), "symbol": symbol})  # type: ignore[arg-type]
     return registration.build(params)  # type: ignore[return-value]
 
 
@@ -253,7 +263,7 @@ async def _signal_strategy_evaluations(
 ) -> AsyncIterator[StrategyEvaluation]:
     """Run one canonical signal-intent strategy on the production minute stream."""
     strategy_key = AlpacaPaperStrategyKey(binding.strategy_key)
-    strategy = _build_signal_strategy(strategy_key, binding.symbol)
+    strategy = _build_signal_strategy(strategy_key, binding.symbol, binding.strategy_params)
     context = StrategyContext(portfolio=Portfolio(initial_cash=Decimal("100000")))
     strategy.ctx = context
     strategy.initialize()

@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Any
+
+from pydantic import ValidationError
+
 from app.broker.alpaca.clerk.models import ClerkStatus
 from app.broker.contract.models import BrokerAccountSnapshot
 from app.config import settings
+from app.engine.strategy.registry import _STRATEGY_REGISTRY, hidden_params_present, public_params_schema
 from app.schemas.broker_bots import (
     AlpacaPaperDeployEligibility,
     AlpacaPaperDeployReadinessCheck,
@@ -18,6 +24,7 @@ from app.schemas.broker_bots import (
     BotStatusView,
 )
 from app.schemas.run_admission import RunAdmissionDecision
+from app.schemas.strategy_params_schema import StrategyParamsSchema
 from app.schemas.strategy_validation import StrategyValidationEntry, StrategyValidationFlagEvent
 from app.services.bot_runner import alpaca_v1_action_plan
 from app.services.bot_trade_strategy import (
@@ -30,6 +37,57 @@ from app.services.strategy_validation_manifest import (
     strategy_settings_file_is_current,
 )
 from app.utils.timestamps import now_ms_utc
+
+
+@dataclass(frozen=True)
+class ResolvedDeployParams:
+    """One strategy's fully-resolved deploy-time parameter set.
+
+    ``effective`` is the complete parameter set bound to the immutable
+    strategy instance — registered defaults merged with the request's
+    overrides, `symbol` excluded (it is carried on the binding separately).
+    Storing the full set, not a sparse diff, means a later change to a
+    strategy's registered defaults can never silently alter an
+    already-deployed instance's behavior on Resume.
+    """
+
+    effective: dict[str, Any]
+    diverges_from_defaults: tuple[str, ...]
+
+
+def resolve_deploy_strategy_params(
+    strategy_key: AlpacaPaperStrategyKey,
+    symbol: str,
+    requested_parameters: dict[str, Any],
+) -> ResolvedDeployParams:
+    """Validate deploy-time tunables against the strategy's own param_schema.
+
+    The same schema Engine Lab and Strategy Lab already validate against —
+    there is no second, deploy-specific parameter contract. ``symbol`` is
+    always deploy-authoritative, never a submittable tunable, regardless of
+    whether the registration itself declares it in ``hidden_params``.
+
+    Raises ``ValueError`` with a human-readable message for an unknown
+    strategy, a hidden/live-only parameter, or a schema validation failure —
+    callers translate this into their own typed error shape.
+    """
+    registration = _STRATEGY_REGISTRY.get(strategy_key.value)
+    if registration is None:
+        raise ValueError(f"Unknown strategy '{strategy_key.value}'.")
+    hidden = hidden_params_present(registration, requested_parameters, extra_hidden=frozenset({"symbol"}))
+    if hidden:
+        raise ValueError(f"These parameters are not editable at deploy time: {', '.join(hidden)}.")
+    try:
+        validated = registration.param_schema.model_validate({**requested_parameters, "symbol": symbol})
+    except ValidationError as exc:
+        problems = "; ".join(
+            f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}" for error in exc.errors()
+        )
+        raise ValueError(f"Invalid strategy parameters: {problems}.") from exc
+    defaults = registration.param_schema().model_dump(exclude={"symbol"})
+    effective = validated.model_dump(exclude={"symbol"})
+    diverges = tuple(sorted(name for name, value in effective.items() if value != defaults.get(name)))
+    return ResolvedDeployParams(effective=effective, diverges_from_defaults=diverges)
 
 
 def _entry_matches_accepted_snapshot(entry: StrategyValidationEntry) -> bool:
@@ -124,6 +182,13 @@ def _accepted_proof_blocked_reason(
     return None
 
 
+def _deploy_params_schema(strategy_key: AlpacaPaperStrategyKey) -> StrategyParamsSchema:
+    """This strategy's tunable JSON schema, `symbol` always hidden (#1701)."""
+    registration = _STRATEGY_REGISTRY[strategy_key.value]
+    schema = public_params_schema(registration, extra_hidden=frozenset({"symbol"}))
+    return StrategyParamsSchema.model_validate(schema)
+
+
 def _strategy_views(
     entries: list[StrategyValidationEntry],
 ) -> tuple[AlpacaPaperDeployStrategy, ...]:
@@ -159,6 +224,7 @@ def _strategy_views(
                         "evidence-only and is not accepted for deployment. Continuing can produce "
                         "decisions that have not been reconciled to the reference implementation."
                     ),
+                    params_schema=_deploy_params_schema(strategy_key),
                 )
             )
             continue
@@ -172,6 +238,7 @@ def _strategy_views(
                 evidence_status=("accepted" if blocked_reason is None else "blocked"),
                 selectable=blocked_reason is None,
                 blocked_explanation=blocked_reason,
+                params_schema=_deploy_params_schema(strategy_key),
             )
         )
     return tuple(strategies)
@@ -497,6 +564,7 @@ def build_alpaca_paper_deploy_receipt(
     request: AlpacaPaperDeployRequest,
     bot: BotStatusView,
     admission: RunAdmissionDecision,
+    resolved_params: ResolvedDeployParams,
 ) -> AlpacaPaperDeployReceipt:
     """Author the terminal receipt after the runner accepts the deployment."""
     return AlpacaPaperDeployReceipt(
@@ -538,4 +606,6 @@ def build_alpaca_paper_deploy_receipt(
         action_plan=alpaca_v1_action_plan(request.symbol),
         admission=admission,
         bot=bot,
+        parameters=resolved_params.effective,
+        parameters_diverge_from_defaults=resolved_params.diverges_from_defaults,
     )

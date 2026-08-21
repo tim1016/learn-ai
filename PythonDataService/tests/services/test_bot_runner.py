@@ -224,6 +224,42 @@ async def test_human_override_strategies_emit_canonical_live_intents(
     assert kinds == expected_kinds
 
 
+@pytest.mark.asyncio
+async def test_binding_strategy_params_reach_the_constructed_live_strategy() -> None:
+    """#1701: the deploy-time parameter set bound to an instance actually
+    changes strategy behavior — it isn't merely accepted and ignored.
+
+    Raising rsi_mean_reversion's overbought threshold well above this bar
+    series' RSI range suppresses the EXIT intent the default parameters
+    produce, proving ``strategy_params`` flows from the binding into the
+    live-constructed strategy via the registry `build` callable (#1700).
+    """
+    closes = [str(100 - index) for index in range(16)] + [str(85 + index * 5) for index in range(18)]
+    bars = _strategy_signal_bars(closes)
+
+    async def kinds_for(strategy_params: dict[str, float]) -> list[SignalIntentKind]:
+        binding = BrokerBotBinding(
+            strategy_instance_id="rsi-mean-reversion-params-live-test",
+            strategy_key="rsi_mean_reversion",
+            broker="alpaca",
+            symbol="SPY",
+            mode="dry_run",
+            action_plan=alpaca_v1_action_plan("SPY"),
+            run_id="run-001",
+            created_at_ms=_T0,
+            strategy_params=strategy_params,
+        )
+        feed = _FakeFeed(bars, mode="finite")
+        return [
+            intent.kind
+            async for evaluation in strategy_evaluations(binding, feed)
+            for intent in evaluation.intents
+        ]
+
+    assert await kinds_for({}) == [SignalIntentKind.ENTER, SignalIntentKind.EXIT]
+    assert await kinds_for({"overbought": 99.9}) == [SignalIntentKind.ENTER]
+
+
 def _bar(start_ms: int, symbol: str = "SPY") -> MarketDataBar:
     return MarketDataBar(
         symbol=symbol,

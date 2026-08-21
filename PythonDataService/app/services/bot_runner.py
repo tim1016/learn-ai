@@ -33,7 +33,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import ValidationError
@@ -317,6 +317,7 @@ class BotTaskRegistry:
         quantity: int = 1,
         carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID",
         evidence_override: AlpacaPaperEvidenceOverride | None = None,
+        strategy_params: dict[str, Any] | None = None,
     ) -> AdmittedBotStart:
         """Start one bot and return the exact execution-time admission."""
         require_start_configuration(
@@ -335,6 +336,7 @@ class BotTaskRegistry:
             carryover_policy=carryover_policy,
             evidence_override=evidence_override,
             action_plan=alpaca_v1_action_plan(symbol),
+            strategy_params=strategy_params,
         )
         async with self._operation_lock(strategy_instance_id):
             try:
@@ -361,6 +363,7 @@ class BotTaskRegistry:
         quantity: int = 1,
         carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID",
         evidence_override: AlpacaPaperEvidenceOverride | None = None,
+        strategy_params: dict[str, Any] | None = None,
     ) -> RunAdmissionDecision:
         """Project the same Start decision used immediately before mutation."""
         require_start_configuration(
@@ -379,6 +382,7 @@ class BotTaskRegistry:
             carryover_policy=carryover_policy,
             evidence_override=evidence_override,
             action_plan=alpaca_v1_action_plan(symbol),
+            strategy_params=strategy_params,
         )
         async with self._operation_lock(strategy_instance_id):
             try:

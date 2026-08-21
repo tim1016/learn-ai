@@ -6,7 +6,7 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 from app.broker.alpaca.clerk.active_protocol import ClerkAdmissionSnapshotStaleError
@@ -55,6 +55,11 @@ class StartRequest:
     carryover_policy: Literal["FORBID", "ALLOW"]
     evidence_override: AlpacaPaperEvidenceOverride | None
     action_plan: ActionPlan
+    # `None`, not `{}` — a binding's `strategy_params` must stay absent (not
+    # an empty dict) so the hash-backward-compatibility rule in
+    # bot_binding_repository.py's ``BrokerBotBinding`` holds all the way
+    # through construction.
+    strategy_params: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -110,6 +115,7 @@ def make_start_request(
     carryover_policy: Literal["FORBID", "ALLOW"],
     evidence_override: AlpacaPaperEvidenceOverride | None,
     action_plan: ActionPlan,
+    strategy_params: dict[str, Any] | None = None,
 ) -> StartRequest:
     """Build the one typed request shared by preview and execution."""
     return StartRequest(
@@ -123,6 +129,7 @@ def make_start_request(
         carryover_policy=carryover_policy,
         evidence_override=evidence_override,
         action_plan=action_plan,
+        strategy_params=strategy_params,
     )
 
 
@@ -215,6 +222,7 @@ def new_run_binding(request: StartRequest, *, now_ms: int) -> BrokerBotBinding:
         carryover_policy=request.carryover_policy,
         evidence_override=request.evidence_override,
         action_plan=request.action_plan,
+        strategy_params=request.strategy_params,
         run_id=uuid4().hex,
         created_at_ms=now_ms,
     )

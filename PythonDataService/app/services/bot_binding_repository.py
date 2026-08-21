@@ -13,7 +13,7 @@ import logging
 import re
 from collections.abc import Callable
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -88,6 +88,13 @@ class BrokerBotBinding(BaseModel):
     carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID"
     evidence_override: AlpacaPaperEvidenceOverride | None = None
     action_plan: ActionPlan
+    # The strategy's fully-resolved deploy-time parameter set (registered
+    # defaults merged with the deploy request's overrides). `None`, not `{}`,
+    # is the absent case — `immutable_configuration_payload`'s
+    # `exclude_none=True` requires that so a binding persisted before #1701
+    # keeps its original configuration_hash (same rule `evidence_override`
+    # already follows; see `test_absent_override_preserves_pre_override_configuration_hash_shape`).
+    strategy_params: dict[str, Any] | None = None
     run_id: str = Field(pattern=_RUN_ID_PATTERN)
     created_at_ms: int
 
@@ -108,6 +115,7 @@ class StrategyInstanceRecord(BaseModel):
     carryover_policy: Literal["FORBID", "ALLOW"]
     evidence_override: AlpacaPaperEvidenceOverride | None = None
     action_plan: ActionPlan
+    strategy_params: dict[str, Any] | None = None
     configuration_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     created_at_ms: int
 
@@ -124,6 +132,7 @@ class StrategyInstanceRecord(BaseModel):
             carryover_policy=binding.carryover_policy,
             evidence_override=binding.evidence_override,
             action_plan=binding.action_plan,
+            strategy_params=binding.strategy_params,
             configuration_hash=configuration_hash(binding),
             created_at_ms=binding.created_at_ms,
         )
@@ -505,6 +514,7 @@ class BotBindingRepository:
             carryover_policy=instance.carryover_policy,
             evidence_override=instance.evidence_override,
             action_plan=instance.action_plan,
+            strategy_params=instance.strategy_params,
             run_id=run.run_id,
             created_at_ms=run.started_at_ms,
         )
