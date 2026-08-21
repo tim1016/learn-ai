@@ -28,7 +28,6 @@ from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.marketdata.feed import MarketDataBar, MarketDataFeed
-from app.schemas.broker_bots import AlpacaPaperStrategyKey
 from app.schemas.market_liveness import MarketLivenessFact
 from app.services.bot_start_admission import market_data_capability_account_id
 from app.services.broker_capability_service import extended_phase_proven_at_ms
@@ -53,9 +52,7 @@ _INTENT_BY_DEPLOYMENT_DECISION = {
 # durable state. Deployment validation is the one deliberately bounded
 # validation primitive approved for this path; every future strategy must opt
 # in here with its reconstruction evidence rather than inheriting permission.
-EXPOSURE_CARRYOVER_STRATEGY_KEYS: frozenset[AlpacaPaperStrategyKey] = frozenset(
-    {AlpacaPaperStrategyKey.DEPLOYMENT_VALIDATION}
-)
+EXPOSURE_CARRYOVER_STRATEGY_KEYS: frozenset[str] = frozenset({"deployment_validation"})
 
 
 @dataclass(frozen=True)
@@ -189,7 +186,7 @@ async def _deployment_validation_evaluations(
 
 
 def _build_signal_strategy(
-    strategy_key: AlpacaPaperStrategyKey,
+    strategy_key: str,
     symbol: str,
     strategy_params: dict[str, Any] | None,
 ) -> _LiveSignalStrategy:
@@ -206,7 +203,7 @@ def _build_signal_strategy(
     live-adapter-private construction path — a strategy is only
     live-executable if its registry registration builds it.
     """
-    registration = _STRATEGY_REGISTRY[strategy_key.value]
+    registration = _STRATEGY_REGISTRY[strategy_key]
     params = registration.param_schema(**{**(strategy_params or {}), "symbol": symbol})  # type: ignore[arg-type]
     return registration.build(params)  # type: ignore[return-value]
 
@@ -262,8 +259,7 @@ async def _signal_strategy_evaluations(
     feed: MarketDataFeed,
 ) -> AsyncIterator[StrategyEvaluation]:
     """Run one canonical signal-intent strategy on the production minute stream."""
-    strategy_key = AlpacaPaperStrategyKey(binding.strategy_key)
-    strategy = _build_signal_strategy(strategy_key, binding.symbol, binding.strategy_params)
+    strategy = _build_signal_strategy(binding.strategy_key, binding.symbol, binding.strategy_params)
     context = StrategyContext(portfolio=Portfolio(initial_cash=Decimal("100000")))
     strategy.ctx = context
     strategy.initialize()
@@ -309,11 +305,9 @@ async def strategy_evaluations(
     binding: BrokerBotBinding,
     feed: MarketDataFeed,
 ) -> AsyncIterator[StrategyEvaluation]:
-    try:
-        strategy_key = AlpacaPaperStrategyKey(binding.strategy_key)
-    except ValueError as exc:
-        raise ValueError(f"unsupported Alpaca paper strategy: {binding.strategy_key}") from exc
-    evaluation_stream = _STRATEGY_EVALUATION_STREAMS[strategy_key]
+    evaluation_stream = _STRATEGY_EVALUATION_STREAMS.get(binding.strategy_key)
+    if evaluation_stream is None:
+        raise ValueError(f"unsupported Alpaca paper strategy: {binding.strategy_key}")
     async for evaluation in evaluation_stream(binding, feed):
         yield evaluation
 
@@ -331,25 +325,25 @@ _StrategyEvaluationStream = Callable[
     ["BrokerBotBinding", MarketDataFeed],
     AsyncIterator[StrategyEvaluation],
 ]
-_STRATEGY_EVALUATION_STREAMS: dict[AlpacaPaperStrategyKey, _StrategyEvaluationStream] = {
-    AlpacaPaperStrategyKey.DEPLOYMENT_VALIDATION: _deployment_validation_evaluations,
-    AlpacaPaperStrategyKey.EMA_CROSSOVER_SIGNAL: _signal_strategy_evaluations,
-    AlpacaPaperStrategyKey.SMA_CROSSOVER: _signal_strategy_evaluations,
-    AlpacaPaperStrategyKey.RSI_MEAN_REVERSION: _signal_strategy_evaluations,
-    AlpacaPaperStrategyKey.SPY_STRATEGY_A: _signal_strategy_evaluations,
-    AlpacaPaperStrategyKey.SPY_STRATEGY_B: _signal_strategy_evaluations,
-    AlpacaPaperStrategyKey.SPY_STRATEGY_C: _signal_strategy_evaluations,
+_STRATEGY_EVALUATION_STREAMS: dict[str, _StrategyEvaluationStream] = {
+    "deployment_validation": _deployment_validation_evaluations,
+    "ema_crossover_signal": _signal_strategy_evaluations,
+    "sma_crossover": _signal_strategy_evaluations,
+    "rsi_mean_reversion": _signal_strategy_evaluations,
+    "spy_strategy_a": _signal_strategy_evaluations,
+    "spy_strategy_b": _signal_strategy_evaluations,
+    "spy_strategy_c": _signal_strategy_evaluations,
 }
 
 
-def supported_alpaca_paper_strategy_keys() -> frozenset[AlpacaPaperStrategyKey]:
-    """Return the strategies backed by an executable Clerk intent stream."""
+def supported_alpaca_paper_strategy_keys() -> frozenset[str]:
+    """Return the registry keys backed by an executable Clerk intent stream."""
     return frozenset(_STRATEGY_EVALUATION_STREAMS)
 
 
-def alpaca_paper_strategy_default_symbol(strategy_key: AlpacaPaperStrategyKey) -> str:
+def alpaca_paper_strategy_default_symbol(strategy_key: str) -> str:
     """Return the registered parameter schema's default symbol for one strategy."""
-    registration = _STRATEGY_REGISTRY[strategy_key.value]
+    registration = _STRATEGY_REGISTRY[strategy_key]
     return registration.param_schema().symbol  # type: ignore[attr-defined]
 
 

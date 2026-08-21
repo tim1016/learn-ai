@@ -8,7 +8,6 @@ derives state that is not artifact- or registry-backed.
 from __future__ import annotations
 
 import re
-from enum import StrEnum
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -25,6 +24,24 @@ def _validated_strategy_instance_id(value: str) -> str:
     from app.engine.live.identity import validate_strategy_instance_id
 
     return validate_strategy_instance_id(value)
+
+
+def _validated_catalog_strategy_key(value: str) -> str:
+    """Reject a strategy key the canonical registry does not define (#1703).
+
+    Replaces the closed ``AlpacaPaperStrategyKey`` enum: any registered,
+    catalog-visible registry key is accepted at the wire boundary — this is
+    the "definition" facet check only. Whether the key is actually
+    *selectable* (validated, runtime-backed, proof current) is a deploy-time
+    admission decision made downstream against the composed catalog, not a
+    422 at parse time.
+    """
+    from app.engine.strategy.registry import _STRATEGY_REGISTRY
+
+    registration = _STRATEGY_REGISTRY.get(value)
+    if registration is None or not registration.catalog_visible:
+        raise ValueError(f"Unknown strategy key '{value}'.")
+    return value
 
 
 _SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.-]{0,11}$")
@@ -54,18 +71,6 @@ class BotControlAuthorityFacts(BaseModel):
 
     process: BotProcessFact
     clerk: ClerkCustodySnapshot
-
-
-class AlpacaPaperStrategyKey(StrEnum):
-    """Strategies supported by the Clerk-governed Alpaca paper runner."""
-
-    DEPLOYMENT_VALIDATION = "deployment_validation"
-    EMA_CROSSOVER_SIGNAL = "ema_crossover_signal"
-    SMA_CROSSOVER = "sma_crossover"
-    RSI_MEAN_REVERSION = "rsi_mean_reversion"
-    SPY_STRATEGY_A = "spy_strategy_a"
-    SPY_STRATEGY_B = "spy_strategy_b"
-    SPY_STRATEGY_C = "spy_strategy_c"
 
 
 def _normalized_symbol(value: str) -> str:
@@ -140,7 +145,10 @@ class AlpacaPaperDeployRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     strategy_instance_id: str = Field(min_length=1, max_length=128)
-    strategy_key: AlpacaPaperStrategyKey
+    # #1703: was the closed `AlpacaPaperStrategyKey` enum. Any registry-
+    # defined, catalog-visible key is now accepted at the wire boundary —
+    # see `_validated_catalog_strategy_key` for exactly what "defined" means.
+    strategy_key: str = Field(min_length=1, max_length=128)
     symbol: str = Field(min_length=1, max_length=12)
     sizing: AlpacaPaperSizingSelection = Field(default_factory=AlpacaPaperSizingSelection)
     execution_mode: Literal["paper", "dry_run"] = "paper"
@@ -157,6 +165,11 @@ class AlpacaPaperDeployRequest(BaseModel):
     @classmethod
     def _validate_strategy_instance_id(cls, value: str) -> str:
         return _validated_strategy_instance_id(value)
+
+    @field_validator("strategy_key")
+    @classmethod
+    def _validate_strategy_key(cls, value: str) -> str:
+        return _validated_catalog_strategy_key(value)
 
     @field_validator("symbol")
     @classmethod
@@ -191,19 +204,27 @@ class AlpacaPaperDeployStrategy(BaseModel):
     ``selectable`` is the server's own Paper-launchability fact — a blocked
     row is always present but never Paper-selectable.
 
+    A validated strategy with no registered runtime (#1703) is composed the
+    same way — visible, ``evidence_status="blocked"``, ``selectable=False``
+    — with a ``blocked_explanation`` naming the missing runtime rather than
+    a stale proof, so "not built yet" reads differently from "not
+    validated". It is the one case that also admits neither execution mode;
+    see ``admissible_modes`` below.
+
     ``admissible_modes`` (#1702) is the mode-explicit fact the deploy form
     actually needs: gates are tiered by execution mode, so a row can be
-    Dry-Run-admissible without being Paper-selectable. Every catalog row is
-    runtime-backed today, so ``"dry_run"`` is always present; ``"paper"`` is
-    present iff ``selectable`` is ``True`` — the two facts are kept in sync
-    by the invariant below, not merged into one, because ``selectable``
-    already has a settled meaning ("is this row currently Paper-admissible")
-    that this change does not repurpose.
+    Dry-Run-admissible without being Paper-selectable. A runtime-backed row
+    always admits ``"dry_run"``; ``"paper"`` is present iff ``selectable``
+    is ``True`` — the two facts are kept in sync by the invariant below, not
+    merged into one, because ``selectable`` already has a settled meaning
+    ("is this row currently Paper-admissible") that this change does not
+    repurpose. A no-runtime row admits neither mode (Dry Run itself
+    requires a registered runtime).
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    strategy_key: AlpacaPaperStrategyKey
+    strategy_key: str
     label: str
     explanation: str
     validation_case_symbol: str
@@ -242,17 +263,21 @@ class AlpacaPaperDeployStrategy(BaseModel):
 
     @model_validator(mode="after")
     def _admissible_modes_invariants(self) -> AlpacaPaperDeployStrategy:
-        # Every row in this catalog is already filtered to a registered
-        # runtime (see `_strategy_views`), so Dry Run is unconditionally
-        # admissible today. Paper tracks `selectable` exactly — one launch
-        # fact, two surfaces (the flag callers already branch on, and the
-        # mode-explicit set the deploy form renders).
-        if "dry_run" not in self.admissible_modes:
-            raise ValueError("Every catalog row is runtime-backed and must admit dry_run.")
-        if self.selectable and "paper" not in self.admissible_modes:
-            raise ValueError("A selectable strategy row must admit paper.")
-        if not self.selectable and "paper" in self.admissible_modes:
-            raise ValueError("A non-selectable strategy row cannot admit paper.")
+        # A selectable row is always runtime-backed and admits exactly both
+        # modes. A non-selectable row is either runtime-backed but blocked
+        # (stale proof, gating divergence, ...) — Dry Run ignores validation
+        # and behavioral evidence entirely, so it stays dry_run-admissible —
+        # or has no registered runtime at all (#1703), in which case it
+        # admits neither mode: Dry Run itself requires a registered runtime
+        # (see `_dry_run_eligibility`'s runtime check). This relaxation only
+        # widens what a *non-selectable* row may look like; a selectable
+        # row's guarantee (always both modes) is unchanged from #1702.
+        if self.selectable:
+            if self.admissible_modes != ("dry_run", "paper"):
+                raise ValueError("A selectable strategy row must admit exactly dry_run and paper.")
+            return self
+        if self.admissible_modes not in ((), ("dry_run",)):
+            raise ValueError("A non-selectable strategy row may admit only dry_run, or neither mode.")
         return self
 
 

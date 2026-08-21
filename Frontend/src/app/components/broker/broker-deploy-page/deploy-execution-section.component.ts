@@ -29,9 +29,12 @@ export class DeployExecutionSectionComponent {
   readonly executionModes = input.required<DeployExecutionMode[]>();
   // Backend-authored reason Paper is unreachable for the selected strategy
   // (#1702) — `null` when Paper is admissible or no strategy is selected.
-  // Dry Run always admits every runtime-backed row, so only Paper can be
-  // disabled by this input; Live stays governed by `availability` alone.
   readonly paperUnavailableReason = input<string | null>(null);
+  // Backend-authored reason Dry Run is unreachable for the selected strategy
+  // (#1703) — `null` unless the strategy has no registered runtime at all;
+  // every other row stays Dry-Run-admissible regardless of validation state.
+  // Live stays governed by `availability` alone, not by either input.
+  readonly dryRunUnavailableReason = input<string | null>(null);
   readonly selectedMode = input.required<DeployExecutionMode['mode']>();
   readonly actionPlanExplanation = input.required<string>();
   readonly symbol = input.required<string>();
@@ -63,11 +66,17 @@ export class DeployExecutionSectionComponent {
   }
 
   protected isDisabledForStrategy(mode: DeployExecutionMode): boolean {
-    return mode.mode === 'paper' && this.paperUnavailableReason() !== null;
+    return this.strategyUnavailableReason(mode) !== null;
   }
 
   protected modeExplanation(mode: DeployExecutionMode): string {
-    return (this.isDisabledForStrategy(mode) ? this.paperUnavailableReason() : null) ?? mode.explanation;
+    return this.strategyUnavailableReason(mode) ?? mode.explanation;
+  }
+
+  private strategyUnavailableReason(mode: DeployExecutionMode): string | null {
+    if (mode.mode === 'paper') return this.paperUnavailableReason();
+    if (mode.mode === 'dry_run') return this.dryRunUnavailableReason();
+    return null;
   }
 
   protected sizingOptionLabel(preset: DeploySizingPreset): string {

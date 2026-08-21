@@ -605,6 +605,34 @@ async def test_deploy_rejects_semantics_outside_closed_contract(
 
 
 @pytest.mark.asyncio
+async def test_deploy_accepts_a_registry_defined_strategy_key_the_catalog_has_not_validated(
+    deploy_app,
+) -> None:
+    """#1703: the retired enum is replaced by registry-validated keys, not a second enum.
+
+    ``spy_strategy_a`` is a real, catalog-visible registry entry that this
+    fixture's validation manifest does not mark validated (only
+    ``ema_crossover_signal``, ``rsi_mean_reversion``, and ``sma_crossover``
+    are, per ``deploy_app``). The wire boundary accepts it — it is a genuine
+    registry key, not the 422 case above — and the request fails downstream
+    with the ordinary "not currently accepted" conflict, exactly as an
+    unvalidated ``ema_crossover_signal`` request would have failed before
+    the enum was retired.
+    """
+    fast_app, registry = deploy_app
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
+        resp = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots",
+            json={**_BODY, "strategy_key": "spy_strategy_a"},
+        )
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["message"] == "The selected strategy is not currently accepted for Alpaca deployment."
+    assert registry.deploy_calls == []
+
+
+@pytest.mark.asyncio
 async def test_carryover_requires_account_policy_and_explicit_deploy_opt_in(
     deploy_app,
     monkeypatch,

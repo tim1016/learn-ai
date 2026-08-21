@@ -7368,7 +7368,8 @@ export interface components {
             sizing?: components["schemas"]["AlpacaPaperSizingSelection"];
             /** Strategy Instance Id */
             strategy_instance_id: string;
-            strategy_key: components["schemas"]["AlpacaPaperStrategyKey"];
+            /** Strategy Key */
+            strategy_key: string;
             /** Symbol */
             symbol: string;
         };
@@ -7382,14 +7383,22 @@ export interface components {
          *     ``selectable`` is the server's own Paper-launchability fact — a blocked
          *     row is always present but never Paper-selectable.
          *
+         *     A validated strategy with no registered runtime (#1703) is composed the
+         *     same way — visible, ``evidence_status="blocked"``, ``selectable=False``
+         *     — with a ``blocked_explanation`` naming the missing runtime rather than
+         *     a stale proof, so "not built yet" reads differently from "not
+         *     validated". It is the one case that also admits neither execution mode;
+         *     see ``admissible_modes`` below.
+         *
          *     ``admissible_modes`` (#1702) is the mode-explicit fact the deploy form
          *     actually needs: gates are tiered by execution mode, so a row can be
-         *     Dry-Run-admissible without being Paper-selectable. Every catalog row is
-         *     runtime-backed today, so ``"dry_run"`` is always present; ``"paper"`` is
-         *     present iff ``selectable`` is ``True`` — the two facts are kept in sync
-         *     by the invariant below, not merged into one, because ``selectable``
-         *     already has a settled meaning ("is this row currently Paper-admissible")
-         *     that this change does not repurpose.
+         *     Dry-Run-admissible without being Paper-selectable. A runtime-backed row
+         *     always admits ``"dry_run"``; ``"paper"`` is present iff ``selectable``
+         *     is ``True`` — the two facts are kept in sync by the invariant below, not
+         *     merged into one, because ``selectable`` already has a settled meaning
+         *     ("is this row currently Paper-admissible") that this change does not
+         *     repurpose. A no-runtime row admits neither mode (Dry Run itself
+         *     requires a registered runtime).
          */
         AlpacaPaperDeployStrategy: {
             /** Admissible Modes */
@@ -7410,7 +7419,8 @@ export interface components {
             params_schema?: components["schemas"]["StrategyParamsSchema"];
             /** Selectable */
             selectable: boolean;
-            strategy_key: components["schemas"]["AlpacaPaperStrategyKey"];
+            /** Strategy Key */
+            strategy_key: string;
             /** Validation Case Symbol */
             validation_case_symbol: string;
         };
@@ -7527,12 +7537,6 @@ export interface components {
              */
             quantity?: number;
         };
-        /**
-         * AlpacaPaperStrategyKey
-         * @description Strategies supported by the Clerk-governed Alpaca paper runner.
-         * @enum {string}
-         */
-        AlpacaPaperStrategyKey: "deployment_validation" | "ema_crossover_signal" | "sma_crossover" | "rsi_mean_reversion" | "spy_strategy_a" | "spy_strategy_b" | "spy_strategy_c";
         /**
          * AlphaDecayStatsResponse
          * @description Alpha decay regression statistics with power-guard flags.

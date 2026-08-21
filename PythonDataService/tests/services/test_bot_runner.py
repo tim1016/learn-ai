@@ -61,7 +61,7 @@ from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.signal_intent import SignalIntentKind
 from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeedError
 from app.schemas.action_plan import ActionPlan
-from app.schemas.broker_bots import AlpacaPaperStrategyKey, BotProcessFact
+from app.schemas.broker_bots import BotProcessFact
 from app.schemas.market_liveness import (
     MarketClockLivenessEvidence,
     MarketLivenessFact,
@@ -91,10 +91,7 @@ from app.services.bot_runner import (
 )
 from app.services.bot_runner_errors import InvalidRunHistoryCursorError
 from app.services.bot_runtime import PauseAwareFeed
-from app.services.bot_trade_strategy import (
-    strategy_evaluations,
-    supported_alpaca_paper_strategy_keys,
-)
+from app.services.bot_trade_strategy import strategy_evaluations
 from app.services.market_liveness import compose_market_liveness, unknown_market_liveness
 from app.utils.timestamps import now_ms_utc
 
@@ -139,10 +136,6 @@ def _fresh_live_market_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
     # bot_trade_strategy's, so it needs its own patch or it falls through to
     # the real (unconfigured, fail-closed) store and every ENTER is rejected.
     monkeypatch.setattr(clerk_runtime, "market_liveness_fact", _tradable_market_liveness)
-
-
-def test_every_admitted_alpaca_paper_strategy_has_a_runtime() -> None:
-    assert supported_alpaca_paper_strategy_keys() == frozenset(AlpacaPaperStrategyKey)
 
 
 def _strategy_signal_bars(closes: list[str]) -> list[MarketDataBar]:
