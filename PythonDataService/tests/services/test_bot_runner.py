@@ -3208,6 +3208,11 @@ async def test_dry_run_records_simulated_round_trip_with_zero_broker_writes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Synthetic authorities are process-scoped; begin with the current test's
+    # isolated artifact root rather than a prior registry's sim: account.
+    from app.broker.alpaca.clerk.active_authority import reset_alpaca_clerk_for_testing
+
+    reset_alpaca_clerk_for_testing()
     clerk = _FakeClerk()
     _install_fake_clerk(monkeypatch, clerk)
     bars = _ema_parity_bars_through_first_exit()
@@ -3232,7 +3237,21 @@ async def test_dry_run_records_simulated_round_trip_with_zero_broker_writes(
         ("ENTER", "buy", 3.0, True),
         ("EXIT", "sell", 3.0, True),
     ]
-    assert all(row.order_ref.startswith("simulated:") for row in activity)
+    # The panel suffix is derived from the synthetic Clerk's real custody
+    # operations, not a runner-minted simulated order namespace.
+    assert all(not row.order_ref.startswith("simulated:") for row in activity)
+    from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
+    from app.broker.alpaca.clerk.active_authority import get_clerk_runtime
+    from app.services.source_bar_ledger import SourceBarLedger
+
+    account_id = synthetic_account_id_for_strategy(_SID)
+    runtime = get_clerk_runtime(account_id)
+    assert runtime is not None
+    assert runtime.authority_kind == "synthetic"
+    assert runtime.selected_account_id == account_id
+    retained = SourceBarLedger(artifacts_root=tmp_path, account_id=account_id)
+    assert len(retained.bars(provider="lean-golden", symbol="SPY")) == len(bars)
+    assert all(row.bar_ref.startswith(f"source-bar:{account_id}:") for row in activity)
     await registry.stop("alpaca", _SID)
 
 

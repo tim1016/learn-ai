@@ -49,6 +49,13 @@ def authority_kind_for_account(account_id: str) -> AccountAuthorityKind:
     return "synthetic" if is_synthetic_account_id(account_id) else "real_paper"
 
 
+def synthetic_account_id_for_strategy(strategy_instance_id: str) -> str:
+    """Return the one isolated Dry Run authority for an immutable instance."""
+    from app.engine.live.identity import validate_strategy_instance_id
+
+    return f"{SIM_ACCOUNT_PREFIX}{validate_strategy_instance_id(strategy_instance_id)}"
+
+
 @dataclass(frozen=True)
 class AccountBoundBrokerPorts:
     """Ports bound to one verified account identity at composition time."""
@@ -100,4 +107,5 @@ __all__ = [
     "is_synthetic_account_id",
     "require_real_paper_account_id",
     "require_synthetic_account_id",
+    "synthetic_account_id_for_strategy",
 ]

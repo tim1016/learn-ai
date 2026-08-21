@@ -35,7 +35,7 @@ from app.services.bot_trade_strategy import EXPOSURE_CARRYOVER_STRATEGY_KEYS
 from app.services.market_liveness import market_liveness_fact
 from app.services.run_admission import evaluate_run_admission
 
-CustodyGuard = Callable[[str], AbstractAsyncContextManager[ClerkCustodySnapshot]]
+CustodyGuard = Callable[[BrokerBotBinding], AbstractAsyncContextManager[ClerkCustodySnapshot]]
 ProcessFactResolver = Callable[[BrokerBotBinding, int], RunProcessAdmissionFact]
 RuntimeFactResolver = Callable[[str, int], Awaitable[StartRuntimeAdmissionFact]]
 CheckpointResolver = Callable[[BrokerBotBinding], ResumeCheckpointAdmissionFact | None]
@@ -114,7 +114,7 @@ class BotResumeAdmission:
         status: BotStatusView,
     ) -> AsyncIterator[tuple[RunAdmissionDecision, MarketDataFeed | None, ClerkCustodySnapshot]]:
         try:
-            async with self._custody_guard(prior.strategy_instance_id) as custody:
+            async with self._custody_guard(prior) as custody:
                 observed_at_ms = self._now_ms()
                 feed = self._feed_resolver()
                 capability_account_id = market_data_capability_account_id(feed)

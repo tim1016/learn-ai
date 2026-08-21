@@ -14,6 +14,8 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Protocol
 
 from app.broker.alpaca.clerk import get_alpaca_clerk
+from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
+from app.broker.alpaca.clerk.active_authority import get_clerk_runtime
 from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
 from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionOutcome, SqliteDecisionReceipts
 from app.engine.data.trade_bar import TradeBar
@@ -32,6 +34,7 @@ from app.schemas.market_liveness import MarketLivenessFact
 from app.services.bot_start_admission import market_data_capability_account_id
 from app.services.broker_capability_service import extended_phase_proven_at_ms
 from app.services.market_liveness import liveness_blocks_entry, market_liveness_fact
+from app.services.source_bar_ledger import SourceBarLedger
 from app.utils.timestamps import now_ms_utc, ny_datetime
 
 if TYPE_CHECKING:
@@ -109,6 +112,46 @@ class _RecordingSignalIntentExecutor:
         _intent: SignalIntent,
     ) -> None:
         return
+
+
+class _RetainedSourceBarFeed:
+    """Append exact source observations before strategy warmup or advance."""
+
+    def __init__(self, source: MarketDataFeed, ledger: SourceBarLedger) -> None:
+        self._source = source
+        self._ledger = ledger
+        self.feed_id = source.feed_id
+
+    @property
+    def capability_account_id(self) -> str | None:
+        return getattr(self._source, "capability_account_id", None)
+
+    async def stream_bars(
+        self,
+        symbol: str,
+        *,
+        use_rth: bool = True,
+    ) -> AsyncIterator[MarketDataBar]:
+        async for bar in self._source.stream_bars(symbol, use_rth=use_rth):
+            self._ledger.append(bar)
+            yield bar
+
+    async def recent_closed_bars(
+        self,
+        symbol: str,
+        *,
+        use_rth: bool = True,
+        lookback_days: int = 5,
+    ) -> list[MarketDataBar]:
+        bars = await self._source.recent_closed_bars(
+            symbol, use_rth=use_rth, lookback_days=lookback_days
+        )
+        for bar in bars:
+            self._ledger.append(bar)
+        return bars
+
+    def health(self, symbol: str | None = None):
+        return self._source.health(symbol)
 
 
 def _liveness_blocks_entry(
@@ -544,26 +587,62 @@ async def run_dry_run_bot(
     binding: BrokerBotBinding,
     feed: MarketDataFeed,
     journal: DryRunActivityJournal,
+    *,
+    source_bars: SourceBarLedger | None,
 ) -> None:
-    """Run real strategy decisions with durable simulated fills and no Clerk."""
+    """Run the signal session through its isolated synthetic Clerk authority."""
     from app.services.bot_dry_run import DryRunActivity
 
-    async for intent in strategy_intents(binding, feed):
+    if source_bars is None:
+        raise RuntimeError("Dry Run requires its durable source-bar ledger.")
+    account_id = synthetic_account_id_for_strategy(binding.strategy_instance_id)
+    runtime = get_clerk_runtime(account_id)
+    clerk = None if runtime is None else runtime.clerk
+    if clerk is None or getattr(clerk, "authority_kind", None) != "synthetic":
+        raise RuntimeError("Dry Run requires its activated synthetic Clerk authority.")
+    retained_feed = _RetainedSourceBarFeed(feed, source_bars)
+    async for evaluation in strategy_evaluations(binding, retained_feed):
+        if len(evaluation.intents) > 1:
+            raise RuntimeError("A supported Dry Run strategy emitted multiple intents for one closed bar.")
+        if not evaluation.intents:
+            continue
+        intent = evaluation.intents[0]
         side = "buy" if intent.kind is SignalIntentKind.ENTER else "sell"
-        order_ref = f"simulated:{binding.run_id}:{intent.bar_close_ms}:{intent.kind}"
+        receipt = await clerk.execute_for_instance(
+            strategy_instance_id=binding.strategy_instance_id,
+            run_id=binding.run_id,
+            decision_id=f"{intent.bar_close_ms}:{intent.kind.value}",
+            purpose=_EFFECT_PURPOSE_BY_INTENT[intent.kind],
+            action_plan=binding.action_plan,
+            quantity=binding.quantity,
+            use_rth=binding.use_rth,
+            capability_account_id=market_data_capability_account_id(feed),
+        )
+        if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
+            if intent.kind is SignalIntentKind.ENTER:
+                evaluation.rollback_blocked_entry()
+            else:
+                evaluation.rollback_blocked_exit()
+            continue
+        retained = source_bars.latest_for_symbol(binding.symbol)
+        if retained is None:
+            raise RuntimeError("Dry Run effect has no retained source bar for simulated price evidence.")
+        order_ref = receipt.child_order_refs[0] if receipt.child_order_refs else (
+            f"simulated:{binding.run_id}:{intent.bar_close_ms}:{intent.kind.value}"
+        )
         journal.append(
             DryRunActivity(
                 seq=journal.next_seq(),
                 strategy_instance_id=binding.strategy_instance_id,
                 run_id=binding.run_id,
                 recorded_at_ms=intent.bar_close_ms,
-                bar_ref=f"{binding.symbol}@{intent.bar_close_ms}",
+                bar_ref=retained.bar_ref,
                 intent=intent.kind.value,
                 order_ref=order_ref,
                 symbol=binding.symbol,
                 side=side,
                 quantity=float(binding.quantity),
-                fill_price=float(intent.intended_price),
+                fill_price=float(retained.close),
             )
         )
         logger.info(

@@ -31,7 +31,7 @@ from app.services.session_authority import session_state_at_ms
 
 logger = logging.getLogger(__name__)
 
-CustodyGuard = Callable[[str], AbstractAsyncContextManager[ClerkCustodySnapshot]]
+CustodyGuard = Callable[[BrokerBotBinding], AbstractAsyncContextManager[ClerkCustodySnapshot]]
 ProcessFactResolver = Callable[[BrokerBotBinding, int], RunProcessAdmissionFact]
 RuntimeFactResolver = Callable[[str, int], Awaitable[StartRuntimeAdmissionFact]]
 MarketLivenessFactResolver = Callable[[str, int], MarketLivenessFact]
@@ -195,9 +195,9 @@ async def resolve_start_runtime_fact(
 
 
 def default_start_custody_guard(
-    strategy_instance_id: str,
+    binding: BrokerBotBinding,
 ) -> AbstractAsyncContextManager[ClerkCustodySnapshot]:
-    """Resolve the production Clerk guard lazily after application startup."""
+    """Resolve only the real-paper Clerk; Dry Run supplies its exact sim authority."""
     from app.broker.alpaca.clerk import get_alpaca_clerk
 
     clerk = get_alpaca_clerk()
@@ -206,7 +206,12 @@ def default_start_custody_guard(
             "Start admission is unavailable because the Clerk is not installed.",
             detail="Restore the account Clerk before starting a bot.",
         )
-    return clerk.start_admission_snapshot(strategy_instance_id)
+    if binding.mode == "dry_run":
+        raise StartAdmissionUnavailable(
+            "Dry Run requires its isolated synthetic Clerk authority.",
+            detail="Activate the strategy's sim: account before starting Dry Run.",
+        )
+    return clerk.start_admission_snapshot(binding.strategy_instance_id)
 
 
 def new_run_binding(request: StartRequest, *, now_ms: int) -> BrokerBotBinding:
@@ -300,7 +305,7 @@ class BotStartAdmission:
             # evidence_refs. #1702 relaxes what dry_run is *gated on* inside
             # evaluate_run_admission, never what is *fetched* to build the
             # decision.
-            async with self._custody_guard(binding.strategy_instance_id) as custody:
+            async with self._custody_guard(binding) as custody:
                 observed_at_ms = self._now_ms()
                 runtime = await self._runtime_fact(binding.strategy_instance_id, observed_at_ms)
                 # Re-captured after the await: the market clock refreshes on

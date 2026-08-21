@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.broker.alpaca.clerk import get_alpaca_clerk
+from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
+from app.broker.alpaca.clerk.active_authority import get_clerk_runtime
 from app.broker.alpaca.clerk.active_protocol import (
     ClerkAdmissionSnapshotStaleError,
     RevisionBoundRunRegistrar,
@@ -33,6 +35,14 @@ def _requires_duty_authority(binding: BrokerBotBinding) -> bool:
     return binding.broker == "alpaca"
 
 
+def _clerk_for_binding(binding: BrokerBotBinding):
+    """Resolve the exact account-keyed authority; Dry Run never falls back."""
+    if binding.mode != "dry_run":
+        return get_alpaca_clerk()
+    runtime = get_clerk_runtime(synthetic_account_id_for_strategy(binding.strategy_instance_id))
+    return None if runtime is None else runtime.clerk
+
+
 async def register_alpaca_duty_run(
     binding: BrokerBotBinding,
     *,
@@ -41,14 +51,27 @@ async def register_alpaca_duty_run(
     """Persist SQLite duty identity before any Alpaca task can exist."""
     if not _requires_duty_authority(binding):
         return
-    clerk = get_alpaca_clerk()
+    clerk = _clerk_for_binding(binding)
     if clerk is None:
         raise ActiveClerkUnavailableError("The Alpaca Clerk is not installed.")
     if admission_snapshot is None or not isinstance(clerk, RevisionBoundRunRegistrar):
-        await clerk.register_strategy_run(binding)
+        if binding.mode == "dry_run":
+            await clerk.register_strategy_run(
+                binding,
+                sealed_account_id=synthetic_account_id_for_strategy(binding.strategy_instance_id),
+            )
+        else:
+            await clerk.register_strategy_run(binding)
         return
     try:
-        await clerk.register_strategy_run(binding, admission_snapshot=admission_snapshot)
+        if binding.mode == "dry_run":
+            await clerk.register_strategy_run(
+                binding,
+                admission_snapshot=admission_snapshot,
+                sealed_account_id=synthetic_account_id_for_strategy(binding.strategy_instance_id),
+            )
+        else:
+            await clerk.register_strategy_run(binding, admission_snapshot=admission_snapshot)
     except ClerkAdmissionSnapshotStaleError as exc:
         raise ClerkAdmissionTokenStaleError(str(exc)) from exc
 
@@ -61,7 +84,7 @@ async def commit_stop_before_task_cancel(
     """Persist the active authority's STOP before process cancellation."""
     if not _requires_duty_authority(binding):
         return
-    clerk = get_alpaca_clerk()
+    clerk = _clerk_for_binding(binding)
     if clerk is None:
         raise ActiveClerkUnavailableError("The Alpaca Clerk is not installed.")
     await clerk.stop_strategy_run(

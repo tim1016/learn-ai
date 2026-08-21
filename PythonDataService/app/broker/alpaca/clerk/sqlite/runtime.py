@@ -579,25 +579,26 @@ class SqliteAlpacaClerkFacade:
                 # reach the broker — the same shared predicate
                 # bot_trade_strategy.py's own gate uses, so the two can
                 # never silently diverge.
-                liveness = market_liveness_fact(entry.instrument.underlying, self._repo.clock())
-                if liveness_blocks_entry(
-                    liveness,
-                    use_rth=use_rth,
-                    # Must be the feed's capability account, not
-                    # ``self.account_id`` (Alpaca execution custody) — that
-                    # can never scope an IBKR market-data entitlement, so
-                    # every extended-hours entry would be rejected here.
-                    extended_phase_proven=lambda: extended_phase_proven_at_ms(
-                        now_ms=self._repo.clock(),
-                        symbol=entry.instrument.underlying,
-                        account_id=capability_account_id,
-                    ),
-                ):
-                    return rejected(
-                        reason_code="MARKET_LIVENESS_BLOCKED",
-                        explanation="Current market-liveness evidence does not permit new exposure.",
-                        next_step="Wait for fresh tradable-market evidence before retrying ENTER.",
-                    )
+                if self.authority_kind == "sqlite":
+                    liveness = market_liveness_fact(entry.instrument.underlying, self._repo.clock())
+                    if liveness_blocks_entry(
+                        liveness,
+                        use_rth=use_rth,
+                        # Must be the feed's capability account, not
+                        # ``self.account_id`` (Alpaca execution custody) — that
+                        # can never scope an IBKR market-data entitlement, so
+                        # every extended-hours entry would be rejected here.
+                        extended_phase_proven=lambda: extended_phase_proven_at_ms(
+                            now_ms=self._repo.clock(),
+                            symbol=entry.instrument.underlying,
+                            account_id=capability_account_id,
+                        ),
+                    ):
+                        return rejected(
+                            reason_code="MARKET_LIVENESS_BLOCKED",
+                            explanation="Current market-liveness evidence does not permit new exposure.",
+                            next_step="Wait for fresh tradable-market evidence before retrying ENTER.",
+                        )
                 try:
                     accepted_enter = accept_enter(
                         self._repo,

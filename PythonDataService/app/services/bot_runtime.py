@@ -13,6 +13,7 @@ from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_dry_run import DryRunActivityJournal
 from app.services.bot_runner_errors import RunAdmissionRefusedError, UnknownBotError
 from app.services.bot_trade_strategy import run_dry_run_bot, run_trade_bot
+from app.services.source_bar_ledger import SourceBarLedger
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -111,6 +112,7 @@ async def execute_bot_run(
     *,
     run_gate: asyncio.Event | None,
     instance_dir: Path,
+    source_bars: SourceBarLedger | None = None,
 ) -> None:
     """Execute one binding's configured mode behind its same-run pause gate."""
     run_feed = PauseAwareFeed(feed, run_gate) if run_gate is not None else feed
@@ -121,6 +123,7 @@ async def execute_bot_run(
             binding,
             run_feed,
             DryRunActivityJournal(instance_dir),
+            source_bars=source_bars,
         )
     else:
         await _run_log_only_bot(binding, run_feed)
