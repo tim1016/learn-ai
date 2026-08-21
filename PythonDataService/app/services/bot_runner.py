@@ -769,7 +769,7 @@ class BotTaskRegistry:
         updated_by: str = "operator",
         reason: str | None = None,
     ) -> BotStatusView:
-        """Pause bar evaluation without ending or replacing the current run."""
+        """Pause custody effects without ending or replacing the current run."""
         async with self._operation_lock(strategy_instance_id):
             self._confined_instance_dir(strategy_instance_id)
             managed = require_live_managed_bot(self._bots, broker, strategy_instance_id)
@@ -779,9 +779,10 @@ class BotTaskRegistry:
                     "The current run is already paused.",
                     detail="Use Continue to let this same run evaluate bars again.",
                 )
-            # Pause conservatively stops bar evaluation before the durable
-            # write. Unlike Stop's intent-first ordering, this prevents one
-            # more strategy decision while the PAUSED transition is recorded.
+            # Pause switches the existing task to OBSERVE_ONLY before the
+            # durable write. Unlike Stop's intent-first ordering, no later
+            # candidate can enter custody while PAUSED is being recorded;
+            # feed/session progression continues for replay equivalence.
             managed.run_gate.clear()
             try:
                 self._desired_repo(strategy_instance_id).set(

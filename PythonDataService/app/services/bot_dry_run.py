@@ -15,13 +15,15 @@ MAX_DRY_RUN_TAIL = 500
 
 
 class DryRunActivity(BaseModel):
-    """One strategy intent and its explicitly simulated immediate fill."""
+    """One simulated fill with its selected synthetic custody authority."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     seq: int = Field(ge=1)
     strategy_instance_id: str
     run_id: str
+    authority_account_id: str
+    authority_kind: Literal["synthetic"]
     recorded_at_ms: int = Field(ge=0)
     bar_ref: str
     intent: Literal["ENTER", "EXIT"]

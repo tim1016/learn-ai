@@ -1813,7 +1813,7 @@ async def test_continue_refuses_a_live_run_that_is_not_paused(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_pause_aware_feed_discards_bars_buffered_during_pause() -> None:
+async def test_pause_aware_feed_progresses_bars_in_observe_only_mode() -> None:
     class _QueueFeed:
         feed_id = "queue"
 
@@ -1837,8 +1837,7 @@ async def test_pause_aware_feed_discards_bars_buffered_during_pause() -> None:
     source = _QueueFeed()
     gate = asyncio.Event()
     gate.set()
-    clock = [100]
-    feed = PauseAwareFeed(source, gate, now_ms=lambda: clock[0])
+    feed = PauseAwareFeed(source, gate)
     stream = feed.stream_bars("SPY")
 
     await source.queue.put(_bar(0))
@@ -1846,14 +1845,13 @@ async def test_pause_aware_feed_discards_bars_buffered_during_pause() -> None:
 
     gate.clear()
     await source.queue.put(_bar(100))
-    next_bar = asyncio.create_task(anext(stream))
-    await asyncio.sleep(0)
-    assert not next_bar.done()
+    assert (await anext(stream)).end_ms == 60_100
+    assert feed.observe_only is True
 
-    clock[0] = 200_000
     gate.set()
     await source.queue.put(_bar(300_000))
-    assert (await next_bar).end_ms == 360_000
+    assert (await anext(stream)).end_ms == 360_000
+    assert feed.observe_only is False
 
 
 def test_dry_run_activity_projection_excludes_prior_run_rows(tmp_path: Path) -> None:
@@ -1864,6 +1862,8 @@ def test_dry_run_activity_projection_excludes_prior_run_rows(tmp_path: Path) -> 
                 seq=seq,
                 strategy_instance_id=_SID,
                 run_id=run_id,
+                authority_account_id=f"sim:{_SID}",
+                authority_kind="synthetic",
                 recorded_at_ms=seq * 1_000,
                 bar_ref=f"SPY@{seq * 1_000}",
                 intent="ENTER",
@@ -3237,6 +3237,9 @@ async def test_dry_run_records_simulated_round_trip_with_zero_broker_writes(
         ("ENTER", "buy", 3.0, True),
         ("EXIT", "sell", 3.0, True),
     ]
+    assert {(row.authority_account_id, row.authority_kind) for row in activity} == {
+        (f"sim:{_SID}", "synthetic")
+    }
     # The panel suffix is derived from the synthetic Clerk's real custody
     # operations, not a runner-minted simulated order namespace.
     assert all(not row.order_ref.startswith("simulated:") for row in activity)

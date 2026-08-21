@@ -18882,6 +18882,10 @@ export interface components {
          * @description Bounded backend-authored decision receipt for the Trader lens.
          */
         RecentDecisionView: {
+            /** Authority Account Id */
+            authority_account_id?: string | null;
+            /** Authority Kind */
+            authority_kind?: ("real_paper" | "synthetic") | null;
             /** Bar Ref */
             bar_ref: string;
             /** Order Ref */
@@ -18908,6 +18912,10 @@ export interface components {
          * @description Bounded Clerk-attributed fill receipt for the Trader lens.
          */
         RecentFillView: {
+            /** Authority Account Id */
+            authority_account_id?: string | null;
+            /** Authority Kind */
+            authority_kind?: ("real_paper" | "synthetic") | null;
             /** Filled At Ms */
             filled_at_ms: number;
             /** Order Ref */

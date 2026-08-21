@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -14,7 +14,6 @@ from app.services.bot_dry_run import DryRunActivityJournal
 from app.services.bot_runner_errors import RunAdmissionRefusedError, UnknownBotError
 from app.services.bot_trade_strategy import run_dry_run_bot, run_trade_bot
 from app.services.source_bar_ledger import SourceBarLedger
-from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -40,20 +39,28 @@ class ManagedBot:
 
 
 class PauseAwareFeed:
-    """Hold bar delivery while one live run is durably paused."""
+    """Progress the feed while a paused run is restricted to observation.
+
+    A pause is deliberately not a stream backpressure mechanism.  Holding or
+    discarding source bars would make the next strategy decision depend on an
+    operator's timing and leave retained-bar replay unable to reproduce the
+    session.  The runner reads ``observe_only`` per closed bar and settles any
+    candidate as discarded instead of sending it to custody.
+    """
 
     def __init__(
         self,
         source: MarketDataFeed,
         gate: asyncio.Event,
-        *,
-        now_ms: Callable[[], int] = now_ms_utc,
     ) -> None:
         self._source = source
         self._gate = gate
-        self._now_ms = now_ms
-        self._discard_before_ms = 0
         self.feed_id = source.feed_id
+
+    @property
+    def observe_only(self) -> bool:
+        """True only while the same live run remains paused."""
+        return not self._gate.is_set()
 
     async def stream_bars(
         self,
@@ -62,15 +69,6 @@ class PauseAwareFeed:
         use_rth: bool = True,
     ) -> AsyncIterator[MarketDataBar]:
         async for bar in self._source.stream_bars(symbol, use_rth=use_rth):
-            blocked = not self._gate.is_set()
-            await self._gate.wait()
-            if blocked:
-                # The source can buffer bars while an operator has paused this
-                # run. Resume from a current cut instead of replaying that
-                # backlog into late trading decisions.
-                self._discard_before_ms = self._now_ms()
-            if bar.end_ms <= self._discard_before_ms:
-                continue
             yield bar
 
     async def recent_closed_bars(

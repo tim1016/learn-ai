@@ -1193,6 +1193,8 @@ def test_dry_run_activity_is_structurally_labelled_simulated() -> None:
         seq=1,
         strategy_instance_id=SID,
         run_id="run-dry",
+        authority_account_id=f"sim:{SID}",
+        authority_kind="synthetic",
         recorded_at_ms=_NOW - 100,
         bar_ref="SPY@1699999999900",
         intent="ENTER",
@@ -1216,6 +1218,10 @@ def test_dry_run_activity_is_structurally_labelled_simulated() -> None:
     assert panel.recent_decisions[0].reason_code == "SIMULATED_ENTER"
     assert panel.recent_fills[0].simulated is True
     assert panel.recent_fills[0].order_ref.startswith("simulated:")
+    assert panel.recent_decisions[0].authority_account_id == f"sim:{SID}"
+    assert panel.recent_decisions[0].authority_kind == "synthetic"
+    assert panel.recent_fills[0].authority_account_id == f"sim:{SID}"
+    assert panel.recent_fills[0].authority_kind == "synthetic"
     assert panel.health.last_decision_at_ms == _NOW - 100
     assert panel.health.last_bar_at_ms == 1_699_999_999_900
 

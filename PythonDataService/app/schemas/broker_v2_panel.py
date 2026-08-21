@@ -345,6 +345,8 @@ class RecentDecisionView(BaseModel):
     bar_ref: str
     order_ref: str | None
     simulated: bool = False
+    authority_account_id: str | None = None
+    authority_kind: Literal["real_paper", "synthetic"] | None = None
 
 
 class RecentFillView(BaseModel):
@@ -359,6 +361,8 @@ class RecentFillView(BaseModel):
     price: float | None
     filled_at_ms: int
     simulated: bool = False
+    authority_account_id: str | None = None
+    authority_kind: Literal["real_paper", "synthetic"] | None = None
 
 
 class MarketPulseView(BaseModel):

@@ -418,6 +418,8 @@ def _dry_run_decision_views(
             bar_ref=row.bar_ref,
             order_ref=row.order_ref,
             simulated=True,
+            authority_account_id=row.authority_account_id,
+            authority_kind=row.authority_kind,
         )
         for row in reversed(activity[-limit:])
     ]
@@ -437,6 +439,8 @@ def _dry_run_fill_views(
             price=row.fill_price,
             filled_at_ms=row.recorded_at_ms,
             simulated=True,
+            authority_account_id=row.authority_account_id,
+            authority_kind=row.authority_kind,
         )
         for row in reversed(activity[-limit:])
     ]

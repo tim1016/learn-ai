@@ -28,6 +28,7 @@ from app.engine.strategy.algorithms.deployment_validation import (
 from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
+from app.engine.strategy.signal_program import Settlement
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.marketdata.feed import MarketDataBar, MarketDataFeed
 from app.schemas.market_liveness import MarketLivenessFact
@@ -81,6 +82,9 @@ class StrategyEvaluation:
     # bar can emit a fresh ENTER that overwrites bookkeeping for a position
     # that was never actually closed.
     rollback_blocked_exit: Callable[[], None]
+    # A registry-backed SignalSession owns the staged decision cycle.  The
+    # execution adapter supplies exactly one disposition before the next bar.
+    settle_stage: Callable[[Settlement], None] | None = None
 
 
 class _EffectReceipt(Protocol):
@@ -125,6 +129,11 @@ class _RetainedSourceBarFeed:
     @property
     def capability_account_id(self) -> str | None:
         return getattr(self._source, "capability_account_id", None)
+
+    @property
+    def observe_only(self) -> bool:
+        """Whether the enclosing run is progressing without custody effects."""
+        return bool(getattr(self._source, "observe_only", False))
 
     async def stream_bars(
         self,
@@ -248,6 +257,10 @@ def _build_signal_strategy(
     """
     registration = _STRATEGY_REGISTRY[strategy_key]
     params = registration.param_schema(**{**(strategy_params or {}), "symbol": symbol})  # type: ignore[arg-type]
+    if registration.signal_program_factory is not None:
+        program = registration.signal_program_factory(params)
+        program.active = True
+        return program.strategy
     return registration.build(params)  # type: ignore[return-value]
 
 
@@ -292,6 +305,7 @@ async def _warm_up_signal_strategy(
     )
     for market_bar in warmup_bars:
         _drain_bar(strategy, context, _engine_bar(market_bar))
+        _settle_warmup_stage(strategy)
         context.signal_intents.clear()
         context.consolidated_bars.clear()
     strategy.on_force_flat()
@@ -311,7 +325,8 @@ async def _signal_strategy_evaluations(
 
     async for market_bar in feed.stream_bars(binding.symbol, use_rth=binding.use_rth):
         _drain_bar(strategy, context, _engine_bar(market_bar))
-        intents = tuple(context.signal_intents)
+        stage = _active_signal_stage(strategy)
+        intents = stage.intents if stage is not None else tuple(context.signal_intents)
         context.signal_intents.clear()
         # StrategyContext retains consolidated bars for finite backtest
         # charting. This adapter is long-lived and has no chart consumer, so
@@ -322,6 +337,7 @@ async def _signal_strategy_evaluations(
             intents=intents,
             rollback_blocked_entry=strategy.rollback_blocked_entry,
             rollback_blocked_exit=strategy.rollback_blocked_exit,
+            settle_stage=(None if stage is None else lambda settlement: _settle_program(strategy, settlement)),
         )
         # #1708 review finding 2: the consolidator only fires a working
         # bucket lazily, when a *later* bar arrives. RTH streaming stops
@@ -333,7 +349,8 @@ async def _signal_strategy_evaluations(
             for consolidator in context.get_consolidators(market_bar.symbol):
                 if consolidator.scan(market_bar.end_ms) is None:
                     continue
-                intents = tuple(context.signal_intents)
+                stage = _active_signal_stage(strategy)
+                intents = stage.intents if stage is not None else tuple(context.signal_intents)
                 context.signal_intents.clear()
                 context.consolidated_bars.clear()
                 yield StrategyEvaluation(
@@ -341,7 +358,49 @@ async def _signal_strategy_evaluations(
                     intents=intents,
                     rollback_blocked_entry=strategy.rollback_blocked_entry,
                     rollback_blocked_exit=strategy.rollback_blocked_exit,
+                    settle_stage=(None if stage is None else lambda settlement: _settle_program(strategy, settlement)),
                 )
+
+
+def _active_signal_stage(strategy: _LiveSignalStrategy):
+    program = getattr(strategy, "signal_program", None)
+    session = getattr(program, "session", None)
+    return getattr(session, "active_stage", None)
+
+
+def _settle_program(strategy: _LiveSignalStrategy, settlement: Settlement) -> None:
+    program = getattr(strategy, "signal_program", None)
+    session = getattr(program, "session", None)
+    if session is None:
+        raise RuntimeError("Signal strategy has no SignalSession to settle.")
+    session.settle(settlement)
+
+
+def _settle_warmup_stage(strategy: _LiveSignalStrategy) -> None:
+    """Warmup evolves math but never gives its staged candidate to custody."""
+    if _active_signal_stage(strategy) is not None:
+        _settle_program(strategy, Settlement.DISCARD)
+
+
+def _settle_evaluation(evaluation: StrategyEvaluation, settlement: Settlement) -> None:
+    """Settle a staged evaluation exactly once when the runner owns one."""
+    if evaluation.settle_stage is not None:
+        evaluation.settle_stage(settlement)
+
+
+def _discard_evaluation(evaluation: StrategyEvaluation, intent: SignalIntent) -> None:
+    """Restore local strategy state after an intent cannot reach custody."""
+    if evaluation.settle_stage is not None:
+        _settle_evaluation(evaluation, Settlement.DISCARD)
+    elif intent.kind is SignalIntentKind.ENTER:
+        evaluation.rollback_blocked_entry()
+    else:
+        evaluation.rollback_blocked_exit()
+
+
+def _feed_is_observe_only(feed: MarketDataFeed) -> bool:
+    """Read the same-run pause mode without coupling strategy code to runtime."""
+    return bool(getattr(feed, "observe_only", False))
 
 
 async def strategy_evaluations(
@@ -359,9 +418,16 @@ async def strategy_intents(
     binding: BrokerBotBinding,
     feed: MarketDataFeed,
 ) -> AsyncIterator[SignalIntent]:
+    """Compatibility stream that commits each yielded staged evaluation.
+
+    Custody runners use :func:`strategy_evaluations` so they can atomically
+    choose a disposition.  This read-only convenience stream has no custody
+    seam, therefore its only sound disposition is an immediate commit.
+    """
     async for evaluation in strategy_evaluations(binding, feed):
         for intent in evaluation.intents:
             yield intent
+        _settle_evaluation(evaluation, Settlement.COMMIT)
 
 
 _StrategyEvaluationStream = Callable[
@@ -423,9 +489,21 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
                 outcome="no_action",
                 reason_code="NO_ACTION",
             )
+            _settle_evaluation(evaluation, Settlement.COMMIT)
             continue
         intent = evaluation.intents[0]
         intent_id = f"{intent.bar_close_ms}:{intent.kind.value}"
+        if _feed_is_observe_only(feed):
+            _discard_evaluation(evaluation, intent)
+            _append_decision_receipt(
+                decision_receipts,
+                binding=binding,
+                evaluation=evaluation,
+                outcome="blocked",
+                reason_code="PAUSED_OBSERVE_ONLY",
+                intent_id=intent_id,
+            )
+            continue
         # The liveness gate applies only to ENTER — creating new exposure.
         # EXIT is deliberately exempt and always reaches the Clerk unblocked:
         # an emergency risk-reduction close must never be held hostage by
@@ -439,7 +517,7 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
                 # committed at signal emission — otherwise it believes it
                 # holds a position it was never actually granted, and its
                 # later EXIT has no real custody to close (#1671 AC6).
-                evaluation.rollback_blocked_entry()
+                _discard_evaluation(evaluation, intent)
                 _append_decision_receipt(
                     decision_receipts,
                     binding=binding,
@@ -501,10 +579,7 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
             # custody to close (#1671 AC6); a rejected EXIT needs the
             # symmetric rollback or the strategy believes it is flat while
             # the broker still holds the position (#1708 review finding 1).
-            if intent.kind is SignalIntentKind.ENTER:
-                evaluation.rollback_blocked_entry()
-            else:
-                evaluation.rollback_blocked_exit()
+            _discard_evaluation(evaluation, intent)
             _record_blocked_decision(
                 decision_receipts,
                 binding=binding,
@@ -512,6 +587,8 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
                 intent_id=intent_id,
                 receipt=receipt,
             )
+        else:
+            _settle_evaluation(evaluation, Settlement.COMMIT)
         logger.info(
             "Trade bot effect accepted",
             extra={
@@ -605,8 +682,22 @@ async def run_dry_run_bot(
         if len(evaluation.intents) > 1:
             raise RuntimeError("A supported Dry Run strategy emitted multiple intents for one closed bar.")
         if not evaluation.intents:
+            _settle_evaluation(evaluation, Settlement.COMMIT)
             continue
         intent = evaluation.intents[0]
+        if _feed_is_observe_only(retained_feed):
+            _discard_evaluation(evaluation, intent)
+            logger.info(
+                "Dry-run candidate discarded while paused in observe-only mode",
+                extra={
+                    "action": "dry_run_paused_observe_only",
+                    "strategy_instance_id": binding.strategy_instance_id,
+                    "run_id": binding.run_id,
+                    "intent": intent.kind.value,
+                    "bar_end_ms": intent.bar_close_ms,
+                },
+            )
+            continue
         side = "buy" if intent.kind is SignalIntentKind.ENTER else "sell"
         receipt = await clerk.execute_for_instance(
             strategy_instance_id=binding.strategy_instance_id,
@@ -619,11 +710,9 @@ async def run_dry_run_bot(
             capability_account_id=market_data_capability_account_id(feed),
         )
         if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
-            if intent.kind is SignalIntentKind.ENTER:
-                evaluation.rollback_blocked_entry()
-            else:
-                evaluation.rollback_blocked_exit()
+            _discard_evaluation(evaluation, intent)
             continue
+        _settle_evaluation(evaluation, Settlement.COMMIT)
         retained = source_bars.latest_for_symbol(binding.symbol)
         if retained is None:
             raise RuntimeError("Dry Run effect has no retained source bar for simulated price evidence.")
@@ -635,6 +724,8 @@ async def run_dry_run_bot(
                 seq=journal.next_seq(),
                 strategy_instance_id=binding.strategy_instance_id,
                 run_id=binding.run_id,
+                authority_account_id=account_id,
+                authority_kind="synthetic",
                 recorded_at_ms=intent.bar_close_ms,
                 bar_ref=retained.bar_ref,
                 intent=intent.kind.value,
