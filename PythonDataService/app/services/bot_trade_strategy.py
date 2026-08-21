@@ -48,11 +48,11 @@ _INTENT_BY_DEPLOYMENT_DECISION = {
     DeploymentDecision.ENTER: SignalIntentKind.ENTER,
     DeploymentDecision.EXIT: SignalIntentKind.EXIT,
 }
-# Carryover requires reconstructing the strategy's in-flight lifecycle from
-# durable state. Deployment validation is the one deliberately bounded
-# validation primitive approved for this path; every future strategy must opt
-# in here with its reconstruction evidence rather than inheriting permission.
-EXPOSURE_CARRYOVER_STRATEGY_KEYS: frozenset[str] = frozenset({"deployment_validation"})
+# Carryover is globally disabled until a future, separately reviewed slice can
+# prove replay equivalence, retained open-cycle coverage, and first-future-
+# decision safety for each individual program.  The empty set is deliberately
+# an explicit policy boundary, not an omitted configuration default.
+EXPOSURE_CARRYOVER_STRATEGY_KEYS: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)

@@ -430,8 +430,10 @@ so they survive a broker change.
   zero. An exit that deliberately leaves exposure open is a carryover stop, not
   a clean exit.
 - **Carryover stop checkpoint** — the durable Clerk-backed account-exposure
-  evidence captured when an approved STOP leaves instance-attributed exposure
-  in place.
+  evidence that a future individually qualified program may use when an
+  approved STOP leaves instance-attributed exposure in place. Alpaca Paper
+  carryover is currently globally disabled: no current program or setting may
+  create an approved checkpoint or resume exposure from one.
 - **Resume custody proof** — a fresh proof that immutable strategy
   configuration, current Clerk attribution, and broker account truth exactly
   match the carryover stop checkpoint. A new run may attach to the stopped
@@ -1194,6 +1196,20 @@ against a broker, so this vocabulary survives a broker change.
 - **Signal intent** — an instrument-free ENTER or EXIT decision emitted by a
   signal-only strategy at a decision-bar close. The Action Plan consumes that
   decision to choose the traded leg; the strategy never chooses the asset.
+- **Signal Program** — the versioned, registry-selected definition of a
+  broker-neutral strategy decision stream. It constructs the strategy's
+  **Signal Session**; it never selects an account, custody authority, or broker.
+- **Signal Session** — one running Signal Program's ordered decision-clock
+  state. It advances only accepted closed timeframe buckets and requires each
+  **Evaluation Stage** to settle before it accepts another decision clock.
+- **Evaluation Stage** — the one pending semantic result of a Signal Session
+  evaluation, including its trace and an optional ENTER/EXIT candidate. It is
+  settled as **COMMIT** (allow its execution-boundary request) or **DISCARD**
+  (restore retryable strategy state); it is never a broker-order receipt.
+- **Evaluation Trace** — stable, broker-neutral evidence of one closed decision
+  clock: bar qualification, readiness, relation/signal facts, candidate, reason
+  evidence, and the semantic Action Plan request. It is not a custody journal
+  and does not prove an order was submitted.
 - **Strategy Validation page** — the standalone surface that owns a strategy
   *becoming* validated and that displays the equivalence evidence. It is a
   **master-detail list** (a row per validated strategy, click through to detail),

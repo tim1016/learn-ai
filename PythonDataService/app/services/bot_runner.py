@@ -40,7 +40,6 @@ from pydantic import ValidationError
 
 from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
-from app.config import settings
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.live.bot_lifecycle_state import (
     BotLifecycleStateCorruptError,
@@ -213,9 +212,11 @@ class BotTaskRegistry:
         # artifacts_root but are managed by the host daemon, not the
         # in-container runner).
         self._supported_broker_ids = supported_broker_ids
-        self._carryover_allowed = (
-            settings.ALPACA_PAPER_CARRYOVER_ENABLED if carryover_allowed is None else carryover_allowed
-        )
+        # The former environment/request opt-in has no authority while the
+        # replay proof program is incomplete.  Retain the constructor
+        # parameter for compatibility with existing callers, but it cannot
+        # re-enable exposure carryover for an Alpaca paper account.
+        self._carryover_allowed = False
         self._bindings = BotBindingRepository(
             self._artifacts_root,
             instance_dir_for=self._confined_instance_dir,

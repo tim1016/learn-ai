@@ -37,6 +37,20 @@ DRIFT_REDUCTION_EVIDENCE_MAX_AGE_MS = 30_000
 REDUCTION_QTY_EPSILON = 1e-9
 
 
+def _has_attributed_exposure(repo: ClerkSqliteRepository, *, strategy_instance_id: str) -> bool:
+    """Whether one strategy still has Clerk-attributed economic exposure.
+
+    The Clerk is intentionally conservative here.  An ENTER remains in
+    custody until an EXIT proves that the attributed position is flat, but a
+    legacy/repaired projection can contain attributed exposure without a
+    currently live ENTER effect.  Both cases forbid a fresh ENTER.
+    """
+    return any(
+        abs(quantity) >= REDUCTION_QTY_EPSILON
+        for quantity in repo.attributed_positions_for_strategy(strategy_instance_id).values()
+    )
+
+
 class Capability(StrEnum):
     NEW_EXPOSURE = "NEW_EXPOSURE"
     CANCEL = "CANCEL"
@@ -489,6 +503,35 @@ def decide_capability(
                 capability=capability,
                 reason_code=reason_code,
                 why=uncertainty["explanation"],
+            )
+    if capability is Capability.NEW_EXPOSURE and strategy_instance_id is not None:
+        active_enter = next(
+            (
+                effect
+                for effect in repo.reconcilable_effect_operations()
+                if effect.strategy_instance_id == strategy_instance_id and effect.kind == "ENTER"
+            ),
+            None,
+        )
+        if active_enter is not None:
+            return CapabilityDecision(
+                allowed=False,
+                capability=capability,
+                reason_code="ENTER_IN_PROGRESS",
+                why=(
+                    f"ENTER {active_enter.effect_operation_id} still owns a pending or open "
+                    "custody lifecycle for this strategy."
+                ),
+            )
+        if _has_attributed_exposure(repo, strategy_instance_id=strategy_instance_id):
+            return CapabilityDecision(
+                allowed=False,
+                capability=capability,
+                reason_code="ATTRIBUTED_EXPOSURE_EXISTS",
+                why=(
+                    "This strategy still has Clerk-attributed exposure; a fresh ENTER waits "
+                    "for a proved EXIT to flat."
+                ),
             )
     if capability is Capability.NEW_EXPOSURE:
         manual_order_outstanding = (

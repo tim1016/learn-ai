@@ -34,8 +34,8 @@ from app.broker.alpaca.clerk.sqlite.developer_reset_registry import (
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
 from app.broker.alpaca.clerk.sqlite.repository import (
-    AlreadyInitialized,
     DEFAULT_LEASE_TTL_MS,
+    AlreadyInitialized,
     ClerkSqliteRepository,
     ExecutionLeaseHeld,
 )

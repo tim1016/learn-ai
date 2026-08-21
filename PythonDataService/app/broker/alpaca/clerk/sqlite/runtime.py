@@ -51,6 +51,7 @@ from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import (
     prepare_historical_execution_recovery,
     replay_historical_execution_recovery,
 )
+from app.broker.alpaca.clerk.sqlite.idempotency import UnknownEntryOrderError
 from app.broker.alpaca.clerk.sqlite.intake_fence import (
     IntakeFenceYieldError,
     ReentrantAsyncLock,
@@ -83,6 +84,7 @@ from app.broker.alpaca.clerk.sqlite.reconcile import (
 )
 from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryPolicyContext
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate, stream_health_refusal
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerOrderLeg, OrderSide
@@ -523,7 +525,13 @@ class SqliteAlpacaClerkFacade:
         use_rth: bool = True,
         capability_account_id: str | None = None,
     ) -> EffectOperationReceipt:
-        def rejected() -> EffectOperationReceipt:
+        def rejected(
+            *,
+            reason_code: str,
+            explanation: str,
+            next_step: str | None = None,
+            order_refs: tuple[str, ...] = (),
+        ) -> EffectOperationReceipt:
             return _effect_receipt(
                 strategy_instance_id=strategy_instance_id,
                 run_id=run_id,
@@ -532,7 +540,9 @@ class SqliteAlpacaClerkFacade:
                 action_plan=action_plan,
                 quantity=quantity,
                 state="rejected",
-                order_refs=(),
+                order_refs=order_refs,
+                explanation=f"{reason_code}: {explanation}",
+                next_step=next_step,
             )
 
         async with self._intake:
@@ -556,7 +566,11 @@ class SqliteAlpacaClerkFacade:
                     # ACCOUNT_CLERK hold + rejected receipt, no broker
                     # contact. EXIT/cancel remain unaffected: exit.py never
                     # consults `active_holds_for_admission`.
-                    return rejected()
+                    return rejected(
+                        reason_code=STREAM_HEALTH_REASON_CODE,
+                        explanation="The required market-data or execution channel is unhealthy.",
+                        next_step="Restore both channels and let the Clerk observe fresh health evidence.",
+                    )
                 # #1671: the caller's own liveness check happens before this
                 # sole-writer boundary is even reached, racing whatever
                 # queues ahead of it under `self._intake`. Recheck here,
@@ -579,34 +593,81 @@ class SqliteAlpacaClerkFacade:
                         account_id=capability_account_id,
                     ),
                 ):
-                    return rejected()
-                accepted_enter = accept_enter(
-                    self._repo,
-                    account_id=self.account_id,
-                    strategy_instance_id=strategy_instance_id,
-                    decision_id=durable_decision_id,
-                    lifecycle_run_id=run_id,
-                    leg=operation_leg,
-                )
+                    return rejected(
+                        reason_code="MARKET_LIVENESS_BLOCKED",
+                        explanation="Current market-liveness evidence does not permit new exposure.",
+                        next_step="Wait for fresh tradable-market evidence before retrying ENTER.",
+                    )
+                try:
+                    accepted_enter = accept_enter(
+                        self._repo,
+                        account_id=self.account_id,
+                        strategy_instance_id=strategy_instance_id,
+                        decision_id=durable_decision_id,
+                        lifecycle_run_id=run_id,
+                        leg=operation_leg,
+                    )
+                except AdmissionBlockedError as exc:
+                    return rejected(
+                        reason_code=exc.decision.reason_code or "ENTER_ADMISSION_BLOCKED",
+                        explanation=exc.decision.why or "The Clerk refused new exposure.",
+                    )
             else:
+                active_exit = self._repo.active_exit_for_strategy(strategy_instance_id)
+                if active_exit is not None:
+                    return _effect_receipt(
+                        strategy_instance_id=strategy_instance_id,
+                        run_id=run_id,
+                        decision_id=decision_id,
+                        purpose=purpose,
+                        action_plan=action_plan,
+                        quantity=quantity,
+                        state=active_exit.state,
+                        order_refs=tuple(
+                            order.order_ref
+                            for order in self._repo.orders_for_effect_operation(
+                                active_exit.effect_operation_id
+                            )
+                        ),
+                        explanation=(
+                            f"EXIT_IN_PROGRESS: existing EXIT {active_exit.effect_operation_id} "
+                            "already owns this strategy's reduction custody."
+                        ),
+                        next_step="Await the existing EXIT custody outcome; do not submit another EXIT.",
+                    )
                 candidates = [
                     order
                     for order in self._repo.entry_orders_for_strategy(strategy_instance_id)
                     if _entry_symbol(self._repo, order.order_ref).upper() == entry.instrument.underlying.upper()
                 ]
                 if not candidates:
-                    raise MissingEntryCustodyError(
-                        f"strategy instance {strategy_instance_id!r} has no SQLite-owned "
-                        f"entry for {entry.instrument.underlying!r}"
+                    return rejected(
+                        reason_code="EXIT_CUSTODY_UNPROVEN",
+                        explanation=(
+                            f"No SQLite-owned entry exists for {entry.instrument.underlying!r}; "
+                            "the Clerk cannot prove a safe reduction target."
+                        ),
+                        next_step="Reconcile the instance custody before attempting another EXIT.",
                     )
-                accepted_exit = accept_exit(
-                    self._repo,
-                    account_id=self.account_id,
-                    strategy_instance_id=strategy_instance_id,
-                    decision_id=durable_decision_id,
-                    lifecycle_run_id=run_id,
-                    entry_order_ref=candidates[-1].order_ref,
-                )
+                try:
+                    accepted_exit = accept_exit(
+                        self._repo,
+                        account_id=self.account_id,
+                        strategy_instance_id=strategy_instance_id,
+                        decision_id=durable_decision_id,
+                        lifecycle_run_id=run_id,
+                        entry_order_ref=candidates[-1].order_ref,
+                    )
+                except UnknownEntryOrderError:
+                    # The lookup and accept both occur under the Clerk intake
+                    # lock.  If the target vanished despite that, return a
+                    # closed custody result rather than ending the bot task
+                    # while economic exposure may still exist.
+                    return rejected(
+                        reason_code="EXIT_CUSTODY_UNPROVEN",
+                        explanation="The Clerk could not prove that the selected entry still belongs to this EXIT.",
+                        next_step="Reconcile the instance custody before attempting another EXIT.",
+                    )
 
         if purpose is EffectPurpose.ENTER:
             submitted_enter = await submit_accepted_enter(
@@ -957,6 +1018,8 @@ def _effect_receipt(
     quantity: int,
     state: str,
     order_refs: tuple[str, ...],
+    explanation: str | None = None,
+    next_step: str | None = None,
 ) -> EffectOperationReceipt:
     from app.broker.alpaca.clerk.models import AlpacaEffectOperation
 
@@ -981,8 +1044,10 @@ def _effect_receipt(
             quantity=quantity,
         ),
         state=mapped,
-        explanation=f"The SQLite Account Clerk recorded {purpose.value} as {state}.",
-        next_step=(
+        explanation=explanation or f"The SQLite Account Clerk recorded {purpose.value} as {state}.",
+        next_step=next_step
+        if next_step is not None
+        else (
             "Await fresh broker evidence and automatic reconciliation."
             if mapped
             in {

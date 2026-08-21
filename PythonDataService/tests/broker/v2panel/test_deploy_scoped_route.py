@@ -646,15 +646,14 @@ async def test_carryover_requires_account_policy_and_explicit_deploy_opt_in(
             json=carryover_body,
         )
         monkeypatch.setattr(settings, "ALPACA_PAPER_CARRYOVER_ENABLED", True)
-        accepted = await client.post(
+        still_blocked = await client.post(
             f"/api/brokers/alpaca/accounts/{ACCT}/bots",
             json=carryover_body,
         )
 
     assert blocked.status_code == 409
-    assert accepted.status_code == 201
-    assert len(registry.deploy_calls) == 1
-    assert registry.deploy_calls[0]["carryover_policy"] == "ALLOW"
+    assert still_blocked.status_code == 409
+    assert registry.deploy_calls == []
 
 
 @pytest.mark.asyncio

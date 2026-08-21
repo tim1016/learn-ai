@@ -529,9 +529,9 @@ def _require_paper_deploy_request(
         )
     if request.carryover_policy == "ALLOW" and not view.carryover_available:
         raise PanelRunnerError(
-            "Exposure carryover is not enabled for this Alpaca paper account.",
+            "Exposure carryover is globally disabled for Alpaca paper bots.",
             detail=view.carryover_explanation,
-            next_action="Deploy with carryover disabled or enable the account policy first.",
+            next_action="Deploy with carryover disabled; per-program qualification is not available yet.",
             http_status=409,
         )
 

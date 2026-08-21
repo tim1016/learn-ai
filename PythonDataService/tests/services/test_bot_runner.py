@@ -1894,182 +1894,12 @@ def test_dry_run_activity_projection_excludes_prior_run_rows(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_approved_carryover_resumes_for_the_explicitly_supported_strategy(
+async def test_carryover_rejects_a_new_deploy_even_when_the_constructor_requests_it(
     tmp_path: Path,
 ) -> None:
-    feed = _FakeFeed([], mode="hold")
-    clerk = _CustodyClerk(_custody_proof(exposure={}))
-    registry = _registry(
-        tmp_path,
-        feed,
-        carryover_allowed=True,
-        start_custody_guard=clerk.start_admission_snapshot,
-    )
-    set_alpaca_clerk(clerk)
-    try:
-        deployed = await registry.deploy(
-            broker="alpaca",
-            strategy_instance_id=_SID,
-            symbol="SPY",
-            mode="trade",
-            carryover_policy="ALLOW",
-        )
-        clerk.proof = _custody_proof(exposure={"SPY": 1.0})
-        stopped = await registry.stop("alpaca", _SID)
+    registry = _registry(tmp_path, _FakeFeed([], mode="hold"), carryover_allowed=True)
 
-        assert stopped.duty_outcome is not None
-        assert stopped.duty_outcome.reason_code == "STOPPED_WITH_APPROVED_ATTRIBUTED_EXPOSURE"
-        assert stopped.carryover_checkpoint_exposure == {"SPY": 1.0}
-        assert stopped.carryover_checkpoint_config_matches is True
-        assert _lifecycle_json(tmp_path)["carryover_policy"] == "ALLOW"
-        assert clerk.cancel_calls == [_SID]
-
-        resumed = await registry.resume_existing("alpaca", _SID)
-        assert resumed.running is True
-        assert resumed.active_run_id != deployed.active_run_id
-        await registry.stop("alpaca", _SID)
-    finally:
-        set_alpaca_clerk(None)
-
-
-@pytest.mark.asyncio
-async def test_ema_resume_refuses_carried_exposure_without_restorable_exit_state(
-    tmp_path: Path,
-) -> None:
-    feed = _FakeFeed([], mode="hold")
-    clerk = _CustodyClerk(_custody_proof(exposure={}))
-    registry = _registry(
-        tmp_path,
-        feed,
-        carryover_allowed=True,
-        start_custody_guard=clerk.start_admission_snapshot,
-    )
-    set_alpaca_clerk(clerk)
-    try:
-        await registry.deploy(
-            broker="alpaca",
-            strategy_instance_id=_SID,
-            strategy_key="ema_crossover_signal",
-            symbol="SPY",
-            mode="trade",
-            carryover_policy="ALLOW",
-        )
-        clerk.proof = _custody_proof(exposure={"SPY": 1.0})
-        await registry.stop("alpaca", _SID)
-
-        with pytest.raises(RecoveryUncertainError, match="cannot safely restore"):
-            await registry.resume_existing("alpaca", _SID)
-
-        assert registry.status("alpaca", _SID).running is False
-    finally:
-        set_alpaca_clerk(None)
-
-
-@pytest.mark.asyncio
-async def test_ema_resume_allows_freshly_proven_flat_custody(
-    tmp_path: Path,
-) -> None:
-    feed = _FakeFeed([], mode="hold")
-    clerk = _CustodyClerk(_custody_proof(exposure={}))
-    registry = _registry(
-        tmp_path,
-        feed,
-        carryover_allowed=True,
-        start_custody_guard=clerk.start_admission_snapshot,
-    )
-    set_alpaca_clerk(clerk)
-    try:
-        deployed = await registry.deploy(
-            broker="alpaca",
-            strategy_instance_id=_SID,
-            strategy_key="ema_crossover_signal",
-            symbol="SPY",
-            mode="trade",
-            carryover_policy="ALLOW",
-        )
-        clerk.proof = _custody_proof(exposure={"SPY": 1.0})
-        await registry.stop("alpaca", _SID)
-        clerk.proof = _custody_proof(exposure={})
-
-        resumed = await registry.resume_existing("alpaca", _SID)
-
-        assert resumed.running is True
-        assert resumed.active_run_id != deployed.active_run_id
-        await registry.stop("alpaca", _SID)
-    finally:
-        set_alpaca_clerk(None)
-
-
-@pytest.mark.asyncio
-async def test_carryover_resume_refuses_quantity_mismatch_without_side_effect(
-    tmp_path: Path,
-) -> None:
-    feed = _FakeFeed([], mode="hold")
-    clerk = _CustodyClerk(_custody_proof(exposure={}))
-    registry = _registry(
-        tmp_path,
-        feed,
-        carryover_allowed=True,
-        start_custody_guard=clerk.start_admission_snapshot,
-    )
-    set_alpaca_clerk(clerk)
-    try:
-        await registry.deploy(
-            broker="alpaca",
-            strategy_instance_id=_SID,
-            symbol="SPY",
-            mode="trade",
-            carryover_policy="ALLOW",
-        )
-        clerk.proof = _custody_proof(exposure={"SPY": 1.0})
-        await registry.stop("alpaca", _SID)
-        clerk.proof = _custody_proof(exposure={"SPY": 2.0})
-
-        with pytest.raises(RecoveryUncertainError, match="custody proof changed"):
-            await registry.resume_existing("alpaca", _SID)
-
-        assert registry.status("alpaca", _SID).running is False
-    finally:
-        set_alpaca_clerk(None)
-
-
-@pytest.mark.asyncio
-async def test_forbidden_carryover_requires_flatten_before_resume(
-    tmp_path: Path,
-) -> None:
-    feed = _FakeFeed([], mode="hold")
-    clerk = _CustodyClerk(_custody_proof(exposure={}))
-    registry = _registry(
-        tmp_path,
-        feed,
-        start_custody_guard=clerk.start_admission_snapshot,
-    )
-    set_alpaca_clerk(clerk)
-    try:
-        await registry.deploy(
-            broker="alpaca",
-            strategy_instance_id=_SID,
-            symbol="SPY",
-            mode="trade",
-        )
-        clerk.proof = _custody_proof(exposure={"SPY": 1.0})
-        stopped = await registry.stop("alpaca", _SID)
-
-        assert stopped.duty_outcome is not None
-        assert stopped.duty_outcome.reason_code == "STOP_REQUIRES_FLATTEN"
-        with pytest.raises(CarryoverPolicyRefusedError, match="not approved"):
-            await registry.resume_existing("alpaca", _SID)
-    finally:
-        set_alpaca_clerk(None)
-
-
-@pytest.mark.asyncio
-async def test_account_policy_refuses_carryover_before_artifact_write(
-    tmp_path: Path,
-) -> None:
-    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
-
-    with pytest.raises(CarryoverPolicyRefusedError):
+    with pytest.raises(CarryoverPolicyRefusedError, match="globally disabled"):
         await registry.deploy(
             broker="alpaca",
             strategy_instance_id=_SID,
@@ -2081,42 +1911,17 @@ async def test_account_policy_refuses_carryover_before_artifact_write(
 
 
 @pytest.mark.asyncio
-async def test_account_policy_must_remain_enabled_for_carryover_resume(
-    tmp_path: Path,
-) -> None:
-    feed = _FakeFeed([], mode="hold")
-    clerk = _CustodyClerk(_custody_proof(exposure={}))
-    enabled_registry = _registry(
-        tmp_path,
-        feed,
-        carryover_allowed=True,
-        start_custody_guard=clerk.start_admission_snapshot,
+async def test_default_start_status_exposes_carryover_as_disabled(tmp_path: Path) -> None:
+    registry = _registry(tmp_path, _FakeFeed([], mode="hold"), carryover_allowed=True)
+    deployed = await registry.deploy(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        symbol="SPY",
+        mode="dry_run",
     )
-    set_alpaca_clerk(clerk)
-    try:
-        await enabled_registry.deploy(
-            broker="alpaca",
-            strategy_instance_id=_SID,
-            symbol="SPY",
-            mode="trade",
-            carryover_policy="ALLOW",
-        )
-        clerk.proof = _custody_proof(exposure={"SPY": 1.0})
-        await enabled_registry.stop("alpaca", _SID)
 
-        disabled_registry = _registry(
-            tmp_path,
-            feed,
-            carryover_allowed=False,
-            start_custody_guard=clerk.start_admission_snapshot,
-        )
-        with pytest.raises(CarryoverPolicyRefusedError):
-            await disabled_registry.resume_existing("alpaca", _SID)
-    finally:
-        set_alpaca_clerk(None)
-
-    assert disabled_registry.status("alpaca", _SID).running is False
-    assert disabled_registry.status("alpaca", _SID).carryover_account_policy_enabled is False
+    assert deployed.carryover_account_policy_enabled is False
+    await registry.stop("alpaca", _SID)
 
 
 # ── shutdown ──────────────────────────────────────────────────────────

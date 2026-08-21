@@ -9,7 +9,6 @@ from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.models import ClerkStatus
 from app.broker.contract.models import BrokerAccountSnapshot
-from app.config import settings
 from app.engine.strategy.registry import _STRATEGY_REGISTRY, hidden_params_present, public_params_schema
 from app.schemas.broker_bots import (
     AlpacaPaperDeployEligibility,
@@ -500,17 +499,12 @@ def build_alpaca_paper_deploy_view(
             "The backend will author exactly one long stock ENTER leg and one "
             "matching close-leg EXIT for the selected symbol."
         ),
-        carryover_available=settings.ALPACA_PAPER_CARRYOVER_ENABLED,
-        carryover_label="Allow Clerk-proven exposure carryover on STOP",
+        carryover_available=False,
+        carryover_label="Exposure carryover is not yet qualified",
         carryover_explanation=(
-            "Default off. When enabled, STOP may preserve exactly attributed "
-            "exposure only after a durable Clerk checkpoint; Resume still "
-            "requires a fresh exact proof."
-            if settings.ALPACA_PAPER_CARRYOVER_ENABLED
-            else (
-                "Account policy currently forbids carried exposure. STOP with "
-                "exposure requires a Clerk flatten before Resume."
-            )
+            "Carryover is globally disabled until a separately reviewed per-program "
+            "replay and restart-safety qualification is complete. STOP with exposure "
+            "requires a Clerk-proven flatten before Resume."
         ),
         allowed_actions=("deploy",) if eligibility.eligible else (),
     )

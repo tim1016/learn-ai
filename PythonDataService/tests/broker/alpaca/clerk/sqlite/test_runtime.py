@@ -230,6 +230,28 @@ async def test_registration_precedes_live_enter_and_caller_cancellation_keeps_cu
     repo.close()
 
 
+async def test_exit_without_owned_entry_returns_a_closed_custody_result(tmp_path: Path) -> None:
+    """A stale strategy EXIT cannot crash its run while custody is uncertain."""
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=_Broker(), trade=_Broker())
+    binding = _binding()
+    await facade.register_strategy_run(binding)
+
+    receipt = await facade.execute_for_instance(
+        strategy_instance_id=binding.strategy_instance_id,
+        run_id=binding.run_id,
+        decision_id="exit-without-entry",
+        purpose=EffectPurpose.EXIT,
+        action_plan=binding.action_plan,
+        quantity=binding.quantity,
+    )
+
+    assert receipt.state is EffectOperationState.REJECTED
+    assert receipt.explanation.startswith("EXIT_CUSTODY_UNPROVEN:")
+    assert receipt.next_step == "Reconcile the instance custody before attempting another EXIT."
+    repo.close()
+
+
 async def test_parked_enter_submit_does_not_block_trade_update_fold(tmp_path: Path) -> None:
     """The operation claim, not intake, owns the broker conversation (#1548)."""
     repo = ClerkSqliteRepository.initialize(
