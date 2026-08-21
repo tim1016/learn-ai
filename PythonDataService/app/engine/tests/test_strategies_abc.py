@@ -17,6 +17,8 @@ import random
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import pytest
+
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.portfolio import Portfolio
 from app.engine.execution.signal_intent_executor import SignalSymbolExecutor
@@ -37,6 +39,32 @@ def _wire(strategy) -> StrategyContext:
     strategy.ctx = ctx
     strategy.initialize()
     ctx.set_signal_intent_executor(SignalSymbolExecutor(ctx.symbols[0]))
+    return ctx
+
+
+class _RecordingSignalIntentExecutor:
+    """No-op executor mirroring the live seam's own ``_RecordingSignalIntentExecutor``
+    (``app.services.bot_trade_strategy``): the async live adapter drains
+    ``ctx.signal_intents`` itself and only reaches the broker after the
+    Clerk admits the intent, so no order exists yet for a blocked/rejected
+    signal to leave behind."""
+
+    def execute(self, context, intent) -> None:
+        return
+
+
+def _wire_live(strategy) -> StrategyContext:
+    """Attach a ``StrategyContext`` matching the Alpaca live seam's own
+    wiring (``bot_trade_strategy._signal_strategy_evaluations``), not
+    Engine Lab's same-symbol executor. Rollback tests must use this: the
+    real ``SignalSymbolExecutor`` submits a genuine pending order on ENTER,
+    which a blocked-ENTER rollback was never meant to (and cannot) undo --
+    only the live seam's own no-op executor accurately models what a
+    rejected/blocked intent leaves behind (nothing)."""
+    ctx = StrategyContext(portfolio=Portfolio(initial_cash=Decimal(100_000)))
+    strategy.ctx = ctx
+    strategy.initialize()
+    ctx.set_signal_intent_executor(_RecordingSignalIntentExecutor())
     return ctx
 
 
@@ -163,7 +191,15 @@ def test_strategy_c_gate_passes_when_adx_rising_above_threshold():
 # ---------------------------------------------------------------------------
 
 
-def test_rollback_blocked_entry_resets_lifecycle_and_re_arms():
+@pytest.mark.parametrize(
+    "strategy_cls,seed",
+    [
+        (SpyStrategyAAlgorithm, 1700),
+        (SpyStrategyBAlgorithm, 1700),
+        (SpyStrategyCAlgorithm, 1700),
+    ],
+)
+def test_rollback_blocked_entry_resets_lifecycle_and_re_arms(strategy_cls, seed):
     """#1700 AC: a blocked ENTER leaves the strategy flat and re-armed, so a
     later EXIT never tries to close custody that was never granted.
 
@@ -174,10 +210,16 @@ def test_rollback_blocked_entry_resets_lifecycle_and_re_arms():
     "Re-armed" means the strategy is flat and will re-evaluate its entry
     gates fresh on the next bar — exactly its state before any entry ever
     fired, not a promise that the next bar re-enters.
+
+    Wired with the live seam's no-op executor (``_wire_live``), not Engine
+    Lab's ``SignalSymbolExecutor``: the real live adapter never creates a
+    broker order before the Clerk admits the intent, so this asserts no
+    order is created for a blocked ENTER at all -- across all three
+    strategies (#1708 review finding 5), not just one.
     """
-    s = SpyStrategyCAlgorithm()
-    ctx = _wire(s)
-    rng = random.Random(1700)
+    s = strategy_cls()
+    ctx = _wire_live(s)
+    rng = random.Random(seed)
     price = 400.0
     t = datetime(2024, 1, 2, 14, 30, tzinfo=UTC)
     for i in range(100):
@@ -190,11 +232,13 @@ def test_rollback_blocked_entry_resets_lifecycle_and_re_arms():
             break
     assert s._in_position
     assert s._pending_entry is not None
+    assert ctx.portfolio.pending_orders == []
 
     s.rollback_blocked_entry()
 
     assert not s._in_position
     assert s._pending_entry is None
+    assert ctx.portfolio.pending_orders == []
 
 
 def test_base_strategy_exits_when_adx_below_threshold():

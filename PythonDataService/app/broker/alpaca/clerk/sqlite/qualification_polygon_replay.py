@@ -99,6 +99,21 @@ class PolygonReplayMarketDataFeed:
         async for bar in self._delegate.stream_bars(symbol, use_rth=use_rth):
             yield bar.model_copy(update={"feed_id": self.feed_id})
 
+    async def recent_closed_bars(
+        self,
+        symbol: str,
+        *,
+        use_rth: bool = True,
+        lookback_days: int = 5,
+    ) -> list[MarketDataBar]:
+        # The qualification harness proves exact reproduction of a pinned
+        # fixture (see POLYGON_FIXTURE_SHA256); it deliberately never grows
+        # extra history the fixture doesn't carry, so warmup is always
+        # empty here. The replayed IBKR client also has no
+        # ``reqHistoricalDataAsync`` stub to serve one.
+        del symbol, use_rth, lookback_days
+        return []
+
     def health(self, symbol: str | None = None) -> FeedHealth:
         return self._delegate.health(symbol)
 

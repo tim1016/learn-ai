@@ -203,6 +203,17 @@ class RsiRangeStrategy(Strategy):
         self._in_position = False
         self._pending_entry = None
 
+    def rollback_blocked_exit(self) -> None:
+        """Undo the EXIT-time state committed by ``_on_bar`` when the caller
+        refuses to act on this signal (e.g. a Clerk admission rejection).
+        ``_in_position`` flips to ``False`` at EXIT *emission*, before the
+        caller knows whether the exit will actually be admitted — without
+        this, a rejected EXIT leaves the strategy believing it is flat while
+        the broker still holds the position, and the next eligible bar can
+        emit a fresh ENTER that overwrites ``_open_trade`` for a position
+        that was never actually closed."""
+        self._in_position = True
+
     def on_end_of_algorithm(self) -> None:
         if self._in_position:
             assert self.ctx is not None

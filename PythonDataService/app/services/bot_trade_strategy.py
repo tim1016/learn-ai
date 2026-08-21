@@ -26,13 +26,14 @@ from app.engine.strategy.algorithms.deployment_validation import (
 from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
+from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.marketdata.feed import MarketDataBar, MarketDataFeed
 from app.schemas.broker_bots import AlpacaPaperStrategyKey
 from app.schemas.market_liveness import MarketLivenessFact
 from app.services.bot_start_admission import market_data_capability_account_id
 from app.services.broker_capability_service import extended_phase_proven_at_ms
 from app.services.market_liveness import liveness_blocks_entry, market_liveness_fact
-from app.utils.timestamps import now_ms_utc
+from app.utils.timestamps import now_ms_utc, ny_datetime
 
 if TYPE_CHECKING:
     from app.services.bot_dry_run import DryRunActivityJournal
@@ -72,6 +73,14 @@ class StrategyEvaluation:
     # the later EXIT it emits has no real custody to close, crashing the
     # run with ``MissingEntryCustodyError``.
     rollback_blocked_entry: Callable[[], None]
+    # Symmetric undo for a blocked/rejected EXIT (#1708 review finding 1).
+    # Both signal generators flip their position-tracking flag to "flat" at
+    # EXIT *emission*, before the caller knows whether the Clerk will admit
+    # it. Without this, a rejected EXIT leaves the strategy believing it is
+    # flat while the broker still holds the position, and the next eligible
+    # bar can emit a fresh ENTER that overwrites bookkeeping for a position
+    # that was never actually closed.
+    rollback_blocked_exit: Callable[[], None]
 
 
 class _EffectReceipt(Protocol):
@@ -88,6 +97,10 @@ class _LiveSignalStrategy(Protocol):
     def on_minute_bar(self, bar: TradeBar) -> None: ...
 
     def rollback_blocked_entry(self) -> None: ...
+
+    def rollback_blocked_exit(self) -> None: ...
+
+    def on_force_flat(self) -> None: ...
 
 
 class _RecordingSignalIntentExecutor:
@@ -167,7 +180,12 @@ async def _deployment_validation_evaluations(
                 ),
             )
         )
-        yield StrategyEvaluation(bar=bar, intents=intents, rollback_blocked_entry=kernel.rollback_blocked_entry)
+        yield StrategyEvaluation(
+            bar=bar,
+            intents=intents,
+            rollback_blocked_entry=kernel.rollback_blocked_entry,
+            rollback_blocked_exit=kernel.rollback_blocked_exit,
+        )
 
 
 def _build_signal_strategy(
@@ -193,6 +211,52 @@ def _build_signal_strategy(
     return registration.build(params)  # type: ignore[return-value]
 
 
+_WARMUP_LOOKBACK_DAYS = 5
+"""Trailing calendar-day window backfilled before live decisions begin.
+
+Generous relative to any registered signal strategy's indicator: the
+largest known requirement is Strategy A's EMA(50) on 15-min bars (750
+minutes, roughly two RTH sessions). #1708 review finding 3: a fresh RTH
+session alone provides only ~26 fifteen-minute bars -- short of the
+ADX(28)/EMA(50)-class warmup several registered strategies need -- so a
+strategy deployed cold would silently withhold decisions for its first
+day(s) of live trading.
+"""
+
+
+def _drain_bar(strategy: _LiveSignalStrategy, context: StrategyContext, bar: TradeBar) -> None:
+    """Feed one closed bar through the strategy/consolidator pipeline."""
+    context.current_time_ms = bar.end_ms
+    strategy.on_minute_bar(bar)
+    for consolidator in context.get_consolidators(bar.symbol):
+        consolidator.update(bar)
+
+
+async def _warm_up_signal_strategy(
+    strategy: _LiveSignalStrategy,
+    context: StrategyContext,
+    feed: MarketDataFeed,
+    binding: BrokerBotBinding,
+) -> None:
+    """Replay recent closed bars so indicators are ready before live
+    decisions begin (#1708 review finding 3).
+
+    Replayed bars only prime indicator/consolidator state. Any position
+    the replay itself would have opened is discarded by ``on_force_flat``
+    afterward -- a freshly (re)deployed strategy instance always starts
+    flat regardless of what the replayed history implies; only its
+    indicator readiness carries forward.
+    """
+    warmup_bars = await feed.recent_closed_bars(
+        binding.symbol, use_rth=binding.use_rth, lookback_days=_WARMUP_LOOKBACK_DAYS
+    )
+    for market_bar in warmup_bars:
+        _drain_bar(strategy, context, _engine_bar(market_bar))
+        context.signal_intents.clear()
+        context.consolidated_bars.clear()
+    strategy.on_force_flat()
+
+
 async def _signal_strategy_evaluations(
     binding: BrokerBotBinding,
     feed: MarketDataFeed,
@@ -204,13 +268,10 @@ async def _signal_strategy_evaluations(
     strategy.ctx = context
     strategy.initialize()
     context.set_signal_intent_executor(_RecordingSignalIntentExecutor())
+    await _warm_up_signal_strategy(strategy, context, feed, binding)
 
     async for market_bar in feed.stream_bars(binding.symbol, use_rth=binding.use_rth):
-        bar = _engine_bar(market_bar)
-        context.current_time_ms = bar.end_ms
-        strategy.on_minute_bar(bar)
-        for consolidator in context.get_consolidators(bar.symbol):
-            consolidator.update(bar)
+        _drain_bar(strategy, context, _engine_bar(market_bar))
         intents = tuple(context.signal_intents)
         context.signal_intents.clear()
         # StrategyContext retains consolidated bars for finite backtest
@@ -221,7 +282,27 @@ async def _signal_strategy_evaluations(
             bar=market_bar,
             intents=intents,
             rollback_blocked_entry=strategy.rollback_blocked_entry,
+            rollback_blocked_exit=strategy.rollback_blocked_exit,
         )
+        # #1708 review finding 2: the consolidator only fires a working
+        # bucket lazily, when a *later* bar arrives. RTH streaming stops
+        # at the session close, so the final 15:45-16:00 bucket would
+        # otherwise sit unflushed until the next session's bars start
+        # arriving -- stranding that decision overnight. Force the flush
+        # at the exact session-close boundary instead.
+        if market_bar.end_ms == session_close_ms_utc(ny_datetime(market_bar.end_ms).date()):
+            for consolidator in context.get_consolidators(market_bar.symbol):
+                if consolidator.scan(market_bar.end_ms) is None:
+                    continue
+                intents = tuple(context.signal_intents)
+                context.signal_intents.clear()
+                context.consolidated_bars.clear()
+                yield StrategyEvaluation(
+                    bar=market_bar,
+                    intents=intents,
+                    rollback_blocked_entry=strategy.rollback_blocked_entry,
+                    rollback_blocked_exit=strategy.rollback_blocked_exit,
+                )
 
 
 async def strategy_evaluations(
@@ -373,16 +454,20 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
             capability_account_id=capability_account_id,
         )
         if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
+            # The strategy already committed its ENTER/EXIT-time state
+            # before this call — the outer liveness gate above only catches
+            # evidence that was already stale/blocking *before* the Clerk
+            # was reached. This Clerk-boundary rejection is a distinct
+            # failure mode: evidence that changed *while* the intent
+            # awaited the Clerk's sole-writer intake lock. A rejected ENTER
+            # needs the identical rollback or a later EXIT has no real
+            # custody to close (#1671 AC6); a rejected EXIT needs the
+            # symmetric rollback or the strategy believes it is flat while
+            # the broker still holds the position (#1708 review finding 1).
             if intent.kind is SignalIntentKind.ENTER:
-                # #1671 AC6: the strategy already committed its ENTER-time
-                # state before this call — the outer gate above only
-                # catches evidence that was already stale/blocking *before*
-                # the Clerk was reached. This Clerk-boundary rejection is
-                # the same failure mode from evidence that changed *while*
-                # the ENTER awaited the Clerk's sole-writer intake lock; it
-                # needs the identical rollback or a later EXIT still has no
-                # real custody to close.
                 evaluation.rollback_blocked_entry()
+            else:
+                evaluation.rollback_blocked_exit()
             _record_blocked_decision(
                 decision_receipts,
                 binding=binding,
