@@ -26,19 +26,32 @@ The Deploy page lists only strategies for which the Python runner has a
 registered executable signal-intent adapter and the latest human validation
 event marks the strategy validated.
 
-A strategy with current `accepted_for_deploy` evidence follows the normal
-path. A strategy whose behavioral verdict is `evidence_only` is visible but
-carries a **Dangerous human override** warning. To deploy it, the operator must
-separately accept the exact evidence-only risk acknowledgement and record a
-reason of at least ten characters. The same typed override is checked during
-Start preview and execution, stored in the immutable strategy-instance
-configuration and its configuration hash, and returned in the launch receipt.
+Admission is tiered by execution mode (ADR 0034's mode-tiered-admission
+amendment). A strategy with current `accepted_for_deploy` evidence follows
+the normal path in every mode. A strategy whose behavioral verdict is
+`evidence_only` is Paper-selectable on the human-validated flag alone — no
+risk acknowledgement or operator reason is required, and the behavioral
+verdict displays for information only; it does not gate Paper. Do not treat
+a successful paper launch as numerical-equivalence evidence.
 
-This override replaces only the `evidence_only` criterion. It cannot make an
-unvalidated, invalidated, rejected, or runtime-unsupported strategy deployable.
-It does not relax account posture, Clerk custody, channel health, intent
-custody, market-data, or Start-admission gates. Do not treat a successful paper
-launch as numerical-equivalence evidence.
+Dry Run is more permissive again: it admits any runtime-backed strategy
+regardless of the human-validated flag or behavioral verdict, and needs only
+a healthy market-data channel — it makes no broker contact and holds no
+custody, so account posture, Clerk custody freeze, exposure hold, and intent
+custody are all not applicable. Exposure carryover is forbidden in Dry Run.
+Each strategy row carries a backend-authored `admissible_modes` set, and the
+deploy form disables an execution mode the selected strategy cannot reach,
+with the backend's own reason.
+
+The evidence-only override contract (the **Dangerous human override**
+acknowledgement, its typed reason, and the configuration-hash-bound record on
+the launch receipt) is retained but currently unreachable: it is scoped to
+Live, which remains unreachable and stubbed, not to Dry Run or Paper. A Paper
+request that still carries the override is refused with a typed conflict.
+When it does apply, it cannot make an unvalidated, invalidated, rejected, or
+runtime-unsupported strategy deployable, and it does not relax account
+posture, Clerk custody, channel health, intent custody, market-data, or
+Start-admission gates.
 
 SMA Crossover and RSI Mean Reversion are the initial runtime-supported
 evidence-only choices. Both execute their canonical Python algorithms with
