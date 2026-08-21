@@ -345,11 +345,18 @@ class SqliteAlpacaClerkFacade:
         binding: BrokerBotBinding,
         *,
         admission_snapshot: ClerkCustodySnapshot | None = None,
+        sealed_account_id: str | None = None,
     ) -> None:
         """Durably register immutable strategy + run before order capability."""
         from app.services.bot_carryover import configuration_hash, immutable_configuration_payload
 
         async with self._intake:
+            if sealed_account_id is not None and sealed_account_id != self.account_id:
+                raise SealedAccountMismatchError(
+                    f"{SealedAccountMismatchError.reason_code}: sealed account "
+                    f"{sealed_account_id!r} does not match "
+                    f"authority account {self.account_id!r}"
+                )
             if admission_snapshot is not None:
                 self._require_current_admission_snapshot(binding, admission_snapshot)
             config_hash = configuration_hash(binding)
