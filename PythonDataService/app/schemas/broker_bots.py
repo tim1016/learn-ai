@@ -18,6 +18,7 @@ from app.schemas.action_plan import ActionPlan
 from app.schemas.bot_run_evidence import BotRunTerminalOutcomeView
 from app.schemas.live_runs import BotDutyOutcomeView
 from app.schemas.run_admission import RunAdmissionDecision
+from app.schemas.strategy_params_schema import StrategyParamsSchema
 
 
 def _validated_strategy_instance_id(value: str) -> str:
@@ -204,8 +205,10 @@ class AlpacaPaperDeployStrategy(BaseModel):
     # This strategy's registered tunables as JSON schema — the same schema
     # Engine Lab and Strategy Lab already render (`GET /api/engine/strategies`).
     # `symbol` is never present: it is deploy-authoritative, carried on the
-    # request's own `symbol` field instead of as a tunable.
-    params_schema: dict[str, Any] = Field(default_factory=dict)
+    # request's own `symbol` field instead of as a tunable. Typed (not
+    # `dict[str, Any]`) so the OpenAPI-generated frontend type is real,
+    # not the codegen's blanket `Record<string, never>` for untyped dicts.
+    params_schema: StrategyParamsSchema = Field(default_factory=StrategyParamsSchema)
 
     @model_validator(mode="after")
     def _evidence_status_invariants(self) -> AlpacaPaperDeployStrategy:

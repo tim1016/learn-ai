@@ -25,13 +25,13 @@ import { TagModule } from 'primeng/tag';
 import { TooltipModule } from 'primeng/tooltip';
 
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
-import type { ParamsSchema } from '../../strategy-lab/strategy-lab.models';
 import {
   BrokerV2PanelService,
   type DeployBotBody,
   type DeployBotReceipt,
   type DeployBotStrategy,
   type DeployExecutionMode,
+  type DeployStrategyParamsSchema,
   type RunAdmissionDecision,
 } from '../v2-panel/lib/broker-v2-panel.service';
 import { DeployBindingStripComponent } from './deploy-binding-strip.component';
@@ -120,6 +120,7 @@ export class AlpacaDeployWorkflowComponent {
 
   protected readonly submitting = signal(false);
   protected readonly submitError = signal<DeployError | null>(null);
+  protected readonly invalidParameterFields = signal<ReadonlySet<string>>(new Set());
   protected readonly receipt = signal<DeployBotReceipt | null>(null);
   protected readonly admissionDecision = signal<RunAdmissionDecision | null>(null);
   protected readonly evidenceOverrideTouched = signal(false);
@@ -174,12 +175,8 @@ export class AlpacaDeployWorkflowComponent {
     () => this.selectedStrategy()?.evidence_status === 'human_override_required',
   );
 
-  // The generated OpenAPI type narrows `dict[str, Any]` to `Record<string, never>`
-  // (a known codegen limitation shared by every such field in this schema —
-  // see e.g. strategy-lab-runner.service.ts's own `params` body construction);
-  // the backend always sends a real JSON-schema object here.
-  protected readonly paramsSchema = computed<ParamsSchema>(
-    () => (this.selectedStrategy()?.params_schema ?? {}) as unknown as ParamsSchema,
+  protected readonly paramsSchema = computed<DeployStrategyParamsSchema>(
+    () => this.selectedStrategy()?.params_schema ?? {},
   );
 
   protected readonly evidenceSummaryLabel = computed(() => {
@@ -256,6 +253,9 @@ export class AlpacaDeployWorkflowComponent {
     }
     if (this.ticket().sizingPreset === 'custom' && this.ticketForm.quantity().invalid()) {
       return { canSubmit: false, guidance: 'Fix the position size before deployment.' };
+    }
+    if (this.invalidParameterFields().size > 0) {
+      return { canSubmit: false, guidance: 'Fix the highlighted strategy parameter before deployment.' };
     }
     if (this.strategyRequiresOverride() && !this.ticket().evidenceOverrideAcknowledged) {
       return { canSubmit: false, guidance: 'Accept the evidence-only deployment risk.' };
@@ -350,6 +350,10 @@ export class AlpacaDeployWorkflowComponent {
       ...current,
       parameters: { ...current.parameters, [change.field]: change.value },
     }));
+  }
+
+  protected setInvalidParameterFields(fields: ReadonlySet<string>): void {
+    this.invalidParameterFields.set(fields);
   }
 
   protected setSymbol(value: string): void {
@@ -478,7 +482,11 @@ export class AlpacaDeployWorkflowComponent {
       },
       execution_mode: ticket.executionMode,
       carryover_policy: ticket.allowCarryover ? 'ALLOW' : 'FORBID',
-      // Same generated-type narrowing noted on `paramsSchema` above, in reverse.
+      // `parameters` genuinely varies by strategy (unlike `params_schema`,
+      // which has one uniform shape typed at the OpenAPI boundary) — the
+      // generated type narrows this dict[str, Any] request field to
+      // `Record<string, never>`, the same pre-existing codegen limitation
+      // noted in strategy-lab-runner.service.ts's own `params` construction.
       parameters: ticket.parameters as unknown as DeployBotBody['parameters'],
     };
     if (strategy.evidence_status === 'human_override_required') {

@@ -30,9 +30,14 @@
             [attr.min]="entry.property.minimum ?? null"
             [attr.max]="entry.property.maximum ?? null"
             [attr.aria-label]="entry.property.title ?? entry.field"
+            [attr.aria-invalid]="entry.invalid ? 'true' : null"
+            [class.invalid]="entry.invalid"
             class="w-full"
             (change)="changeParameter(entry, $event.target)"
           />
+          @if (entry.invalid) {
+            <span class="parameter-error" role="alert">Enter a valid {{ entry.isNumeric ? 'number' : 'value' }}.</span>
+          }
         </label>
       }
     </div>

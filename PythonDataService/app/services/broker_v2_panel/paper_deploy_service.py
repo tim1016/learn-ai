@@ -24,6 +24,7 @@ from app.schemas.broker_bots import (
     BotStatusView,
 )
 from app.schemas.run_admission import RunAdmissionDecision
+from app.schemas.strategy_params_schema import StrategyParamsSchema
 from app.schemas.strategy_validation import StrategyValidationEntry, StrategyValidationFlagEvent
 from app.services.bot_runner import alpaca_v1_action_plan
 from app.services.bot_trade_strategy import (
@@ -181,10 +182,11 @@ def _accepted_proof_blocked_reason(
     return None
 
 
-def _deploy_params_schema(strategy_key: AlpacaPaperStrategyKey) -> dict[str, Any]:
+def _deploy_params_schema(strategy_key: AlpacaPaperStrategyKey) -> StrategyParamsSchema:
     """This strategy's tunable JSON schema, `symbol` always hidden (#1701)."""
     registration = _STRATEGY_REGISTRY[strategy_key.value]
-    return public_params_schema(registration, extra_hidden=frozenset({"symbol"}))
+    schema = public_params_schema(registration, extra_hidden=frozenset({"symbol"}))
+    return StrategyParamsSchema.model_validate(schema)
 
 
 def _strategy_views(

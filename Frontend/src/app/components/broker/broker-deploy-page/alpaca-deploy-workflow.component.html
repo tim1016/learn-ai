@@ -167,6 +167,7 @@
               [paramsSchema]="paramsSchema()"
               [values]="ticket().parameters"
               (parameterChange)="setParameter($event)"
+              (invalidFieldsChange)="setInvalidParameterFields($event)"
             />
 
             <section id="deploy-trader-panel" role="tabpanel" aria-labelledby="deploy-trader-tab" [hidden]="activeLens() !== 'trader'"></section>

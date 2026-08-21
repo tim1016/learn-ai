@@ -12,7 +12,7 @@
     <div><dt>Account</dt><dd>{{ receipt().account_id }}</dd></div>
     <div><dt>Execution</dt><dd>{{ receipt().execution_mode | receiptLabel }} · {{ receipt().sizing.quantity }} share(s) · carryover {{ receipt().carryover_policy === 'ALLOW' ? 'allowed' : 'forbidden' }}</dd></div>
     @if (receipt().parameters_diverge_from_defaults?.length) {
-      <div><dt>Parameters</dt><dd>Differs from registered defaults: {{ receipt().parameters_diverge_from_defaults!.join(', ') }}</dd></div>
+      <div><dt>Parameters</dt><dd>Differs from registered defaults: {{ receipt().parameters_diverge_from_defaults!.join(', ') | receiptLabel }}</dd></div>
     }
   </dl>
   @if (receipt().evidence_override; as evidenceOverride) {

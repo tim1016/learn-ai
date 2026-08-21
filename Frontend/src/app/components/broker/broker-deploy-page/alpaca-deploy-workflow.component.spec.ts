@@ -38,7 +38,7 @@ const EMA_STRATEGY: DeployBotView['strategies'][number] = {
     properties: {
       gap: { type: 'number', default: 0.2, title: 'Crossover gap', description: 'Minimum EMA gap for entry.' },
     },
-  } as unknown as DeployBotView['strategies'][number]['params_schema'],
+  },
 };
 
 const SMA_OVERRIDE_STRATEGY: DeployBotView['strategies'][number] = {
@@ -365,6 +365,31 @@ describe('AlpacaDeployWorkflowComponent', () => {
 
     await vi.waitFor(() => expect(service.deployBot).toHaveBeenCalledOnce());
     expect((service.deployBot.mock.calls[0][2] as DeployBotBody).parameters).toEqual({ gap: 5 });
+  });
+
+  it('blocks deployment while a strategy parameter is showing unparseable text', async () => {
+    const service = mockService();
+    await renderWorkflow(service);
+
+    fireEvent.input(screen.getByLabelText('Bot name'), {
+      target: { value: 'ema-paper-params-02' },
+    });
+    fireEvent.change(screen.getByLabelText('Deployment strategy'), {
+      target: { value: 'ema_crossover_signal' },
+    });
+
+    const deployButton = screen.getByRole('button', { name: 'Deploy paper bot' }) as HTMLButtonElement;
+    expect(deployButton.disabled).toBe(false);
+
+    const gapInput = screen.getByRole('textbox', { name: 'Crossover gap' }) as HTMLInputElement;
+    fireEvent.change(gapInput, { target: { value: 'not-a-number' } });
+
+    expect(deployButton.disabled).toBe(true);
+    fireEvent.click(deployButton);
+    expect(service.deployBot).not.toHaveBeenCalled();
+
+    fireEvent.change(gapInput, { target: { value: '0.4' } });
+    expect(deployButton.disabled).toBe(false);
   });
 
   it('requires and submits durable human acknowledgement for evidence-only strategy', async () => {

@@ -7396,8 +7396,7 @@ export interface components {
             label: string;
             /** Override Explanation */
             override_explanation?: string | null;
-            /** Params Schema */
-            params_schema?: Record<string, never>;
+            params_schema?: components["schemas"]["StrategyParamsSchema"];
             /** Selectable */
             selectable: boolean;
             strategy_key: components["schemas"]["AlpacaPaperStrategyKey"];
@@ -17752,6 +17751,24 @@ export interface components {
             supported_action_ids: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority")[];
         };
         /**
+         * ParamPropertySchema
+         * @description One parameter's JSON-schema leaf metadata.
+         */
+        ParamPropertySchema: {
+            /** Default */
+            default?: unknown;
+            /** Description */
+            description?: string | null;
+            /** Maximum */
+            maximum?: number | null;
+            /** Minimum */
+            minimum?: number | null;
+            /** Title */
+            title?: string | null;
+            /** Type */
+            type?: string | null;
+        };
+        /**
          * ParameterCandidateConfig
          * @description One fully-materialized strategy candidate in a train-side grid.
          */
@@ -21718,6 +21735,22 @@ export interface components {
             theta: number;
             /** Vega */
             vega: number;
+        };
+        /**
+         * StrategyParamsSchema
+         * @description A strategy registration's public parameter schema.
+         */
+        StrategyParamsSchema: {
+            /** Properties */
+            properties?: {
+                [key: string]: components["schemas"]["ParamPropertySchema"];
+            };
+            /** Required */
+            required?: string[];
+            /** Title */
+            title?: string | null;
+            /** Type */
+            type?: string | null;
         };
         /** StrategyReferenceCode */
         StrategyReferenceCode: {
