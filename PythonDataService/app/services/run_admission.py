@@ -230,125 +230,134 @@ def evaluate_run_admission(
             explanation="The required market-data feed is not proven ready for this run.",
             next_step=f"Restore fresh market data before {bot.operation.title()}.",
         )
-    if bot.market_liveness.state != "TRADABLE":
-        reason_codes = {
-            "HALTED": "MARKET_LIVENESS_HALTED",
-            "CLOSED": "MARKET_LIVENESS_CLOSED",
-            "UNKNOWN": "MARKET_LIVENESS_UNKNOWN",
-        }
-        return decide(
-            allowed=False,
-            reason_code=reason_codes[bot.market_liveness.state],
-            explanation=bot.market_liveness.reason,
-            next_step=(
-                f"Wait for fresh market-wide and symbol trading-status evidence before {bot.operation.title()}."
-            ),
-        )
-    if clerk.reconciliation_state != "clean" or not clerk.reconciliation_fresh:
-        return decide(
-            allowed=False,
-            reason_code=clerk.reason_code,
-            explanation="The Clerk cannot currently prove reconciled custody for this instance.",
-            next_step=clerk.next_step or "Reconcile the account through the Clerk.",
-        )
-    if clerk.freeze.active:
-        return decide(
-            allowed=False,
-            reason_code=clerk.freeze.category or "CLERK_FREEZE_ACTIVE",
-            explanation=clerk.freeze.explanation or "The Clerk has frozen new exposure.",
-            next_step=clerk.freeze.next_step or f"Resolve the Clerk freeze before {bot.operation.title()}.",
-        )
-    if clerk.hold.active:
-        return decide(
-            allowed=False,
-            reason_code=clerk.hold.reason_code or "CLERK_HOLD_ACTIVE",
-            explanation=clerk.hold.reason or "The Clerk is holding new exposure.",
-            next_step=f"Resolve the Clerk hold before {bot.operation.title()}.",
-        )
-    if clerk.exposure.state == "unknown":
-        return decide(
-            allowed=False,
-            reason_code="CLERK_EXPOSURE_UNKNOWN",
-            explanation="The Clerk cannot prove the instance exposure state.",
-            next_step=f"Reconcile exposure through the Clerk before {bot.operation.title()}.",
-        )
-    if clerk.exposure.state == "non_zero" and bot.operation == "START":
-        return decide(
-            allowed=False,
-            reason_code="START_REQUIRES_FLAT_CUSTODY",
-            explanation="The Clerk proves that this instance already has attributed exposure.",
-            next_step="Use Resume for approved carryover, or flatten through the Clerk.",
-        )
-
-    unresolved = (
-        ("working orders", clerk.working_orders),
-        ("pending orders", clerk.pending_orders),
-        ("effects", clerk.unresolved_effects),
-    )
-    unknown = next((label for label, fact in unresolved if fact.state == "unknown"), None)
-    if unknown is not None:
-        return decide(
-            allowed=False,
-            reason_code="CLERK_WORK_STATE_UNKNOWN",
-            explanation=f"The Clerk cannot prove the state of {unknown}.",
-            next_step=f"Reconcile all order and effect work before {bot.operation.title()}.",
-        )
-    remaining = next((label for label, fact in unresolved if fact.state == "non_zero"), None)
-    if remaining is not None:
-        return decide(
-            allowed=False,
-            reason_code="CLERK_WORK_REMAINS",
-            explanation=f"The Clerk proves that unresolved {remaining} remain.",
-            next_step=f"Resolve the remaining Clerk work before {bot.operation.title()}.",
-        )
-    if isinstance(bot, ResumeRunFacts) and clerk.exposure.state == "non_zero":
-        if not bot.exposure_carryover_supported:
+    # #1702: everything from here down is either an execution-channel gate or
+    # a custody/evidence gate — Dry Run makes no broker contact, holds no
+    # custody, and never carries exposure, so none of it applies to Dry Run.
+    # The guard is additive-only: trade/paper (and log_only) fall through
+    # unchanged, byte-for-byte, to the exact checks that existed before this
+    # mode ever existed.
+    if bot.mode != "dry_run":
+        if bot.market_liveness.state != "TRADABLE":
+            reason_codes = {
+                "HALTED": "MARKET_LIVENESS_HALTED",
+                "CLOSED": "MARKET_LIVENESS_CLOSED",
+                "UNKNOWN": "MARKET_LIVENESS_UNKNOWN",
+            }
             return decide(
                 allowed=False,
-                reason_code="RESUME_CARRYOVER_UNSUPPORTED",
-                explanation="This strategy cannot safely restore its prior open-position lifecycle.",
-                next_step="Flatten the exact Clerk-attributed exposure before Resume.",
-            )
-        if bot.carryover_policy != "ALLOW" or not bot.carryover_account_policy_enabled:
-            return decide(
-                allowed=False,
-                reason_code="RESUME_CARRYOVER_NOT_ALLOWED",
-                explanation="The stopped exposure is not approved by both the immutable instance and account policy.",
-                next_step="Flatten the exact Clerk-attributed exposure before Resume.",
-            )
-        checkpoint = bot.checkpoint
-        if checkpoint is None or not checkpoint.approved:
-            return decide(
-                allowed=False,
-                reason_code="RESUME_CHECKPOINT_MISSING",
-                explanation="No approved terminal STOP checkpoint proves this carried exposure.",
-                next_step="Flatten the attributed exposure or restore the approved STOP checkpoint.",
-            )
-        matches = (
-            checkpoint.account_id == clerk.account_id
-            and checkpoint.stopped_run_id == bot.prior_run_id
-            and checkpoint.configuration_hash == bot.configuration_hash
-            and _exposure_matches(checkpoint.exposure, clerk.exposure.positions)
-        )
-        if not matches:
-            logger.warning(
-                "Resume checkpoint custody does not match current Clerk exposure",
-                extra={
-                    "action": "resume_checkpoint_mismatch",
-                    "strategy_instance_id": bot.strategy_instance_id,
-                    "checkpoint_exposure": checkpoint.exposure,
-                    "clerk_exposure": clerk.exposure.positions,
-                },
-            )
-            return decide(
-                allowed=False,
-                reason_code="RESUME_CHECKPOINT_MISMATCH",
-                explanation=(
-                    "The carryover custody proof changed: account, prior run, "
-                    "configuration, or Clerk-attributed exposure no longer matches STOP."
+                reason_code=reason_codes[bot.market_liveness.state],
+                explanation=bot.market_liveness.reason,
+                next_step=(
+                    f"Wait for fresh market-wide and symbol trading-status evidence before {bot.operation.title()}."
                 ),
-                next_step="Reconcile and flatten rather than adopting changed custody.",
             )
+        if clerk.reconciliation_state != "clean" or not clerk.reconciliation_fresh:
+            return decide(
+                allowed=False,
+                reason_code=clerk.reason_code,
+                explanation="The Clerk cannot currently prove reconciled custody for this instance.",
+                next_step=clerk.next_step or "Reconcile the account through the Clerk.",
+            )
+        if clerk.freeze.active:
+            return decide(
+                allowed=False,
+                reason_code=clerk.freeze.category or "CLERK_FREEZE_ACTIVE",
+                explanation=clerk.freeze.explanation or "The Clerk has frozen new exposure.",
+                next_step=clerk.freeze.next_step or f"Resolve the Clerk freeze before {bot.operation.title()}.",
+            )
+        if clerk.hold.active:
+            return decide(
+                allowed=False,
+                reason_code=clerk.hold.reason_code or "CLERK_HOLD_ACTIVE",
+                explanation=clerk.hold.reason or "The Clerk is holding new exposure.",
+                next_step=f"Resolve the Clerk hold before {bot.operation.title()}.",
+            )
+        if clerk.exposure.state == "unknown":
+            return decide(
+                allowed=False,
+                reason_code="CLERK_EXPOSURE_UNKNOWN",
+                explanation="The Clerk cannot prove the instance exposure state.",
+                next_step=f"Reconcile exposure through the Clerk before {bot.operation.title()}.",
+            )
+        if clerk.exposure.state == "non_zero" and bot.operation == "START":
+            return decide(
+                allowed=False,
+                reason_code="START_REQUIRES_FLAT_CUSTODY",
+                explanation="The Clerk proves that this instance already has attributed exposure.",
+                next_step="Use Resume for approved carryover, or flatten through the Clerk.",
+            )
+
+        unresolved = (
+            ("working orders", clerk.working_orders),
+            ("pending orders", clerk.pending_orders),
+            ("effects", clerk.unresolved_effects),
+        )
+        unknown = next((label for label, fact in unresolved if fact.state == "unknown"), None)
+        if unknown is not None:
+            return decide(
+                allowed=False,
+                reason_code="CLERK_WORK_STATE_UNKNOWN",
+                explanation=f"The Clerk cannot prove the state of {unknown}.",
+                next_step=f"Reconcile all order and effect work before {bot.operation.title()}.",
+            )
+        remaining = next((label for label, fact in unresolved if fact.state == "non_zero"), None)
+        if remaining is not None:
+            return decide(
+                allowed=False,
+                reason_code="CLERK_WORK_REMAINS",
+                explanation=f"The Clerk proves that unresolved {remaining} remain.",
+                next_step=f"Resolve the remaining Clerk work before {bot.operation.title()}.",
+            )
+        if isinstance(bot, ResumeRunFacts) and clerk.exposure.state == "non_zero":
+            if not bot.exposure_carryover_supported:
+                return decide(
+                    allowed=False,
+                    reason_code="RESUME_CARRYOVER_UNSUPPORTED",
+                    explanation="This strategy cannot safely restore its prior open-position lifecycle.",
+                    next_step="Flatten the exact Clerk-attributed exposure before Resume.",
+                )
+            if bot.carryover_policy != "ALLOW" or not bot.carryover_account_policy_enabled:
+                return decide(
+                    allowed=False,
+                    reason_code="RESUME_CARRYOVER_NOT_ALLOWED",
+                    explanation=(
+                        "The stopped exposure is not approved by both the immutable instance and account policy."
+                    ),
+                    next_step="Flatten the exact Clerk-attributed exposure before Resume.",
+                )
+            checkpoint = bot.checkpoint
+            if checkpoint is None or not checkpoint.approved:
+                return decide(
+                    allowed=False,
+                    reason_code="RESUME_CHECKPOINT_MISSING",
+                    explanation="No approved terminal STOP checkpoint proves this carried exposure.",
+                    next_step="Flatten the attributed exposure or restore the approved STOP checkpoint.",
+                )
+            matches = (
+                checkpoint.account_id == clerk.account_id
+                and checkpoint.stopped_run_id == bot.prior_run_id
+                and checkpoint.configuration_hash == bot.configuration_hash
+                and _exposure_matches(checkpoint.exposure, clerk.exposure.positions)
+            )
+            if not matches:
+                logger.warning(
+                    "Resume checkpoint custody does not match current Clerk exposure",
+                    extra={
+                        "action": "resume_checkpoint_mismatch",
+                        "strategy_instance_id": bot.strategy_instance_id,
+                        "checkpoint_exposure": checkpoint.exposure,
+                        "clerk_exposure": clerk.exposure.positions,
+                    },
+                )
+                return decide(
+                    allowed=False,
+                    reason_code="RESUME_CHECKPOINT_MISMATCH",
+                    explanation=(
+                        "The carryover custody proof changed: account, prior run, "
+                        "configuration, or Clerk-attributed exposure no longer matches STOP."
+                    ),
+                    next_step="Reconcile and flatten rather than adopting changed custody.",
+                )
     return decide(
         allowed=True,
         reason_code=f"{bot.operation}_ADMITTED",

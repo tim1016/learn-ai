@@ -76,6 +76,61 @@ custody, channel health, intent custody, market data, and Start admission
 remain fail-closed. Changing the override decision or reason requires a new
 `strategy_instance_id`; Resume preserves the original decision.
 
+## Amendment: mode-tiered admission (2026-08-20)
+
+The evidence-only override amendment above states plainly, one section up,
+that Paper deployment of a `evidence_only`-verdict strategy is possible
+*only* through the closed override contract. That sentence was applied at
+the wrong tier. It is corrected here as a recorded decision — the PRD's
+"Decisions confirmed — 2026-08-20 (operator review)" section (#1697,
+decision 3) already resolved this; this amendment transcribes it.
+
+Every admission gate splits into exactly one of two kinds:
+
+- **Custody gates** — is the account provably sound (Clerk reconciliation,
+  freeze, exposure hold, intent custody, account tradable posture, the
+  execution channel). These never relax. They protect the account, not the
+  math, and no execution-mode tier changes them for `paper` or `trade`.
+- **Evidence gates** — how confident are we in the math (the human-validated
+  flag, the accepted behavioral verdict, the evidence-only override). These
+  relax by tier, because they answer "should this specific strategy's logic
+  be trusted with this consequence," and Dry Run and Paper carry different
+  consequences.
+
+Three tiers, tiered by what each one is worth:
+
+- **Dry Run** requires only a registered runtime and a healthy market-data
+  channel. It ignores the human-validated flag, the behavioral verdict,
+  account tradable posture, Clerk custody freeze, exposure hold, and intent
+  custody — Dry Run makes no broker-execution contact, holds no custody, and
+  records only through its own journal, so none of those facts describe a
+  risk Dry Run carries. Exposure carryover is forbidden outright.
+- **Paper** requires the human-validated flag and full Clerk custody proof
+  (reconciliation, freeze, hold, intent custody, account posture, both
+  submission channels). It no longer requires a risk acknowledgement or the
+  evidence-only override for a human-validated strategy, regardless of
+  whether its behavioral verdict is `accepted` or `evidence_only` — the
+  verdict still displays, but only the validated flag plus full custody
+  proof gate Paper now. Custody gates are untouched.
+- **Live** (planned, still unreachable) additionally requires the accepted
+  behavioral verdict, or — for a human-validated strategy whose verdict is
+  not accepted — the closed evidence-only override contract from the prior
+  amendment. This is exactly where that contract now applies. An operator
+  will need it only when Live exists and only for that one case.
+
+Nothing already built is discarded. The override schema
+(`AlpacaPaperEvidenceOverride`), its receipt plumbing (the override decision
+and reason preserved on the terminal receipt when present), and the
+immutable strategy-instance configuration hashing all survive unchanged in
+shape. Only the Paper-gating call site is removed: a `paper`-mode deploy
+request that still carries an `evidence_override` is refused with a typed
+conflict naming Live as the contract's tier, the same "surface invalid
+input, never silently drop it" pattern the accepted-strategy override
+rejection already used. The Live branch of the gate table is written and
+stubbed — `execution_mode` stays closed to `paper` and `dry_run` — so no
+admission, routing, or execution path for Live opens as part of this
+amendment.
+
 ## Amendment: bounded run reads and immutable terminal receipts (2026-08-02)
 
 The Python control plane exposes the current run separately from bounded,

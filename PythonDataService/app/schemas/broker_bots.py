@@ -183,13 +183,22 @@ class AlpacaPaperDeployEligibility(BaseModel):
 
 
 class AlpacaPaperDeployStrategy(BaseModel):
-    """Trader-facing option for one accepted, explicitly overridable, or blocked strategy.
+    """Trader-facing option for one accepted, evidence-only, or blocked strategy.
 
     A validated strategy whose recorded proof no longer re-verifies is
     demoted to ``evidence_status="blocked"`` rather than removed from the
     row set: the operator's validation flag always guarantees a row.
-    ``selectable`` is the server's own launchability fact — a blocked row is
-    always present but never selectable.
+    ``selectable`` is the server's own Paper-launchability fact — a blocked
+    row is always present but never Paper-selectable.
+
+    ``admissible_modes`` (#1702) is the mode-explicit fact the deploy form
+    actually needs: gates are tiered by execution mode, so a row can be
+    Dry-Run-admissible without being Paper-selectable. Every catalog row is
+    runtime-backed today, so ``"dry_run"`` is always present; ``"paper"`` is
+    present iff ``selectable`` is ``True`` — the two facts are kept in sync
+    by the invariant below, not merged into one, because ``selectable``
+    already has a settled meaning ("is this row currently Paper-admissible")
+    that this change does not repurpose.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -198,8 +207,9 @@ class AlpacaPaperDeployStrategy(BaseModel):
     label: str
     explanation: str
     validation_case_symbol: str
-    evidence_status: Literal["accepted", "human_override_required", "blocked"]
+    evidence_status: Literal["accepted", "evidence_only", "blocked"]
     selectable: bool
+    admissible_modes: tuple[Literal["dry_run", "paper"], ...]
     override_explanation: str | None = None
     blocked_explanation: str | None = None
     # This strategy's registered tunables as JSON schema — the same schema
@@ -224,10 +234,25 @@ class AlpacaPaperDeployStrategy(BaseModel):
             raise ValueError(f"A {self.evidence_status} strategy row must be selectable.")
         if self.blocked_explanation is not None:
             raise ValueError(f"A {self.evidence_status} strategy row cannot carry a blocked_explanation.")
-        if self.evidence_status == "human_override_required" and self.override_explanation is None:
-            raise ValueError("A human_override_required strategy row must carry an override_explanation.")
+        if self.evidence_status == "evidence_only" and self.override_explanation is None:
+            raise ValueError("An evidence_only strategy row must carry an override_explanation.")
         if self.evidence_status == "accepted" and self.override_explanation is not None:
             raise ValueError("An accepted strategy row cannot carry an override_explanation.")
+        return self
+
+    @model_validator(mode="after")
+    def _admissible_modes_invariants(self) -> AlpacaPaperDeployStrategy:
+        # Every row in this catalog is already filtered to a registered
+        # runtime (see `_strategy_views`), so Dry Run is unconditionally
+        # admissible today. Paper tracks `selectable` exactly — one launch
+        # fact, two surfaces (the flag callers already branch on, and the
+        # mode-explicit set the deploy form renders).
+        if "dry_run" not in self.admissible_modes:
+            raise ValueError("Every catalog row is runtime-backed and must admit dry_run.")
+        if self.selectable and "paper" not in self.admissible_modes:
+            raise ValueError("A selectable strategy row must admit paper.")
+        if not self.selectable and "paper" in self.admissible_modes:
+            raise ValueError("A non-selectable strategy row cannot admit paper.")
         return self
 
 
@@ -282,7 +307,12 @@ class AlpacaPaperDeployView(BaseModel):
     account_mode: Literal["paper"]
     account_label: str
     evaluated_at_ms: int = Field(ge=0)
+    # Paper eligibility (name kept as-is: renaming would ripple across the
+    # existing test suite for no behavioral gain). `dry_run_eligibility`
+    # (#1702) is the parallel, deliberately narrower verdict for the Dry Run
+    # tier — see `_dry_run_eligibility` for exactly which gates it omits.
     eligibility: AlpacaPaperDeployEligibility
+    dry_run_eligibility: AlpacaPaperDeployEligibility
     readiness_checks: tuple[AlpacaPaperDeployReadinessCheck, ...]
     execution_modes: tuple[AlpacaPaperExecutionMode, ...]
     strategies: tuple[AlpacaPaperDeployStrategy, ...]

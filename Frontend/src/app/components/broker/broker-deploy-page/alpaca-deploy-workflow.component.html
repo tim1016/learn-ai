@@ -128,20 +128,11 @@
           (strategyKeyChange)="setStrategyKey($event)"
         />
 
-        <app-deploy-evidence-override
-          [strategy]="selectedStrategy()"
-          [acknowledged]="ticket().evidenceOverrideAcknowledged"
-          [reason]="ticket().evidenceOverrideReason"
-          [reasonError]="evidenceOverrideReasonError()"
-          (acknowledgedChange)="setEvidenceOverrideAcknowledged($event)"
-          (reasonChange)="setEvidenceOverrideReason($event)"
-          (reasonBlur)="touchEvidenceOverrideReason()"
-        />
-
         <div class="deploy-layout">
           <div class="deploy-layout__main">
             <app-deploy-execution-section
               [executionModes]="view.execution_modes"
+              [paperUnavailableReason]="paperUnavailableReason()"
               [selectedMode]="ticket().executionMode"
               [actionPlanExplanation]="view.action_plan_explanation"
               [symbol]="ticket().symbol"

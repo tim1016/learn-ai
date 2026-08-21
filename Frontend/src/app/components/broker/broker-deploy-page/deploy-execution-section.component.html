@@ -8,7 +8,7 @@
         <div
           class="mode-option relative flex min-w-0 items-center justify-between gap-2 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--bg-elevated)] p-3"
           [class.mode-option--selected]="mode.mode === selectedMode()"
-          [class.mode-option--planned]="isPlanned(mode)"
+          [class.mode-option--planned]="isPlanned(mode) || isDisabledForStrategy(mode)"
         >
           <label class="flex min-w-0 cursor-pointer items-center gap-2">
             <input
@@ -16,7 +16,7 @@
               name="alpaca-execution-mode"
               [value]="mode.mode"
               [checked]="mode.mode === selectedMode()"
-              [disabled]="isPlanned(mode)"
+              [disabled]="isPlanned(mode) || isDisabledForStrategy(mode)"
               (change)="changeExecutionMode($event)"
             />
             <strong>{{ mode.label }}</strong>
@@ -25,9 +25,9 @@
           <button
             type="button"
             class="info-tip"
-            [pTooltip]="mode.explanation"
+            [pTooltip]="modeExplanation(mode)"
             tooltipPosition="top"
-            [attr.aria-label]="'About ' + mode.label + ': ' + mode.explanation"
+            [attr.aria-label]="'About ' + mode.label + ': ' + modeExplanation(mode)"
           >i</button>
         </div>
       }

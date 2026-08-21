@@ -9,15 +9,18 @@ admission-preview preflight all applying the identical rule).
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import httpx
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport
 
-from app.schemas.strategy_validation import StrategyValidationEntry
+from app.schemas.strategy_validation import StrategyValidationEntry, StrategyValidationFlagRequest
 from app.services.broker_v2_panel import panel_data_source
 from app.services.broker_v2_panel.paper_deploy_service import _strategy_views
 from app.services.strategy_validation_manifest import (
+    append_strategy_validation_flag_event,
     load_strategy_validation_entries,
     strategy_registry_seeds,
 )
@@ -81,6 +84,58 @@ def test_deploy_reverifies_the_accepted_audit_copy_hash() -> None:
     assert row.blocked_explanation is not None
     assert "audit copy" in row.blocked_explanation
     assert "no longer matches its recorded hash" in row.blocked_explanation
+
+
+def test_strategy_views_admissible_modes_track_selectable() -> None:
+    """#1702: every row admits dry_run (runtime-backed); paper tracks
+    selectable exactly — accepted and evidence-only rows admit both modes,
+    a blocked row admits dry_run only."""
+    accepted = _accepted_deploy_entry()
+    blocked = _synthetic_blocked_entry("deployment_validation")
+
+    rows = _strategy_views([accepted, blocked])
+
+    rows_by_key = {row.strategy_key: row for row in rows}
+    accepted_row = rows_by_key[accepted.strategy_key]
+    blocked_row = rows_by_key["deployment_validation"]
+    assert accepted_row.evidence_status == "accepted"
+    assert accepted_row.selectable is True
+    assert accepted_row.admissible_modes == ("dry_run", "paper")
+    assert blocked_row.evidence_status == "blocked"
+    assert blocked_row.selectable is False
+    assert blocked_row.admissible_modes == ("dry_run",)
+
+
+def test_strategy_views_evidence_only_row_is_paper_admissible_with_no_override(tmp_path: Path) -> None:
+    """#1702: an evidence-only row is Paper-selectable — its behavioral
+    verdict no longer gates Paper, only the human-validated flag does."""
+    seeds = strategy_registry_seeds()
+    flag_events_path = tmp_path / "strategy-validation" / "flag-events.json"
+    append_strategy_validation_flag_event(
+        "sma_crossover",
+        StrategyValidationFlagRequest(
+            flag="validated",
+            reason="Test-only human validation without accepted equivalence evidence.",
+        ),
+        seeds,
+        flag_events_path=flag_events_path,
+        flagged_by="test:mode-tiered-admission",
+        now_ms=1_700_000_000_000,
+    )
+    (entry,) = [
+        entry
+        for entry in load_strategy_validation_entries(seeds, flag_events_path=flag_events_path)
+        if entry.strategy_key == "sma_crossover"
+    ]
+
+    rows = _strategy_views([entry])
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.evidence_status == "evidence_only"
+    assert row.selectable is True
+    assert row.admissible_modes == ("dry_run", "paper")
+    assert row.override_explanation is not None
 
 
 def test_deploy_demotes_accepted_event_with_gating_divergence() -> None:
@@ -158,6 +213,34 @@ async def test_deploy_refuses_non_selectable_strategy_with_typed_conflict(
     assert "not currently selectable" in detail["message"]
     assert detail["admission"] is None
     assert registry.deploy_calls == []
+
+
+@pytest.mark.asyncio
+async def test_deploy_admits_blocked_strategy_for_dry_run_but_refuses_paper(
+    deploy_app: tuple[FastAPI, _FakeDeployRegistry],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1702: a blocked row (proof no longer verifies) is Dry-Run-admissible —
+    Dry Run ignores the human-validated flag and behavioral evidence
+    entirely — even though it remains Paper-unselectable (regression, same
+    typed conflict as the Paper-refusal test above)."""
+    fast_app, registry = deploy_app
+    monkeypatch.setattr(
+        panel_data_source,
+        "load_strategy_validation_entries",
+        lambda _registry: [_accepted_deploy_entry(), _synthetic_blocked_entry("deployment_validation")],
+    )
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
+        dry_run_response = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots",
+            json={**_BODY, "strategy_key": "deployment_validation", "execution_mode": "dry_run"},
+        )
+
+    assert dry_run_response.status_code == 201
+    assert dry_run_response.json()["execution_mode"] == "dry_run"
+    assert registry.deploy_calls[0]["strategy_key"] == "deployment_validation"
+    assert registry.deploy_calls[0]["mode"] == "dry_run"
 
 
 @pytest.mark.asyncio

@@ -175,8 +175,9 @@ async def test_deploy_view_is_closed_paper_only_contract(deploy_app) -> None:
     body = resp.json()
     assert body["account_mode"] == "paper"
     assert body["allowed_actions"] == ["deploy"]
-    # Runtime-supported, human-validated evidence-only strategies are visible,
-    # but the command boundary requires an explicit typed override for them.
+    # Runtime-supported, human-validated evidence-only strategies are visible
+    # and Paper-selectable (#1702): Paper gates on the human-validated flag
+    # plus full Clerk custody proof, not on the behavioral verdict.
     assert [row["strategy_key"] for row in body["strategies"]] == [
         "ema_crossover_signal",
         "rsi_mean_reversion",
@@ -190,6 +191,7 @@ async def test_deploy_view_is_closed_paper_only_contract(deploy_app) -> None:
         "validation_case_symbol",
         "evidence_status",
         "selectable",
+        "admissible_modes",
         "override_explanation",
         "blocked_explanation",
         "params_schema",
@@ -197,6 +199,7 @@ async def test_deploy_view_is_closed_paper_only_contract(deploy_app) -> None:
     assert strategy["validation_case_symbol"] == "SPY"
     assert strategy["evidence_status"] == "accepted"
     assert strategy["selectable"] is True
+    assert strategy["admissible_modes"] == ["dry_run", "paper"]
     assert strategy["override_explanation"] is None
     assert strategy["blocked_explanation"] is None
     # #1701: every registered tunable is present, seeded from its default;
@@ -204,10 +207,11 @@ async def test_deploy_view_is_closed_paper_only_contract(deploy_app) -> None:
     assert set(strategy["params_schema"]["properties"]) == {"gap", "rsi_min", "rsi_max"}
     assert "symbol" not in strategy["params_schema"]["properties"]
     assert [row["evidence_status"] for row in body["strategies"][1:]] == [
-        "human_override_required",
-        "human_override_required",
+        "evidence_only",
+        "evidence_only",
     ]
     assert all(row["selectable"] for row in body["strategies"][1:])
+    assert all(row["admissible_modes"] == ["dry_run", "paper"] for row in body["strategies"][1:])
     assert all(row["override_explanation"] for row in body["strategies"][1:])
     assert body["evaluated_at_ms"] > 0
     assert {check["gate_id"] for check in body["readiness_checks"]} == {
@@ -282,7 +286,11 @@ async def test_deploy_requires_current_accepted_validation_provenance(
 
 
 @pytest.mark.asyncio
-async def test_evidence_only_strategy_requires_explicit_human_override(deploy_app) -> None:
+async def test_evidence_only_strategy_deploys_to_paper_with_no_override_required(deploy_app) -> None:
+    """#1702: Paper gates on the human-validated flag alone; the override
+    contract that used to require an acknowledgement here is re-pointed at
+    Live, so an evidence-only strategy deploys to Paper with no
+    ``evidence_override`` in the request at all."""
     fast_app, registry = deploy_app
 
     async with httpx.AsyncClient(
@@ -298,13 +306,18 @@ async def test_evidence_only_strategy_requires_explicit_human_override(deploy_ap
             },
         )
 
-    assert response.status_code == 409
-    assert response.json()["detail"]["message"] == "This strategy requires a human evidence override."
-    assert registry.deploy_calls == []
+    assert response.status_code == 201
+    assert response.json()["evidence_override"] is None
+    assert response.json()["bot"]["strategy_key"] == "sma_crossover"
+    assert registry.deploy_calls[0]["evidence_override"] is None
 
 
 @pytest.mark.asyncio
-async def test_evidence_only_strategy_persists_override_in_runner_and_receipt(deploy_app) -> None:
+async def test_evidence_override_submitted_with_paper_is_rejected(deploy_app) -> None:
+    """#1702: the evidence-only override contract is Live-only now. A Paper
+    request that still carries one is a typed conflict, not a silent drop —
+    the same "surface invalid input" pattern the accepted-strategy override
+    rejection below already used."""
     fast_app, registry = deploy_app
     evidence_override = {
         "acknowledgement": "I_ACCEPT_EVIDENCE_ONLY_DEPLOYMENT_RISK",
@@ -325,9 +338,9 @@ async def test_evidence_only_strategy_persists_override_in_runner_and_receipt(de
             },
         )
 
-    assert response.status_code == 201
-    assert response.json()["evidence_override"] == evidence_override
-    assert registry.deploy_calls[0]["evidence_override"].model_dump() == evidence_override
+    assert response.status_code == 409
+    assert response.json()["detail"]["message"] == "An evidence override is not valid for Paper deployment."
+    assert registry.deploy_calls == []
 
 
 @pytest.mark.asyncio
@@ -386,7 +399,7 @@ async def test_accepted_strategy_rejects_unnecessary_evidence_override(deploy_ap
         )
 
     assert response.status_code == 409
-    assert response.json()["detail"]["message"] == ("An evidence override is not valid for this accepted strategy.")
+    assert response.json()["detail"]["message"] == "An evidence override is not valid for Paper deployment."
     assert registry.deploy_calls == []
 
 
@@ -707,3 +720,57 @@ async def test_account_trading_block_authors_ineligible_deploy_view(
     assert view["eligibility"]["reason_code"] == "ALPACA_ACCOUNT_NOT_TRADABLE"
     assert view["allowed_actions"] == []
     assert registry.deploy_calls == []
+
+
+@pytest.mark.asyncio
+async def test_dry_run_admits_despite_clerk_hold_and_freeze_while_paper_stays_refused(
+    deploy_app,
+    monkeypatch,
+) -> None:
+    """#1702: Clerk custody freeze and exposure hold are "not applicable" to
+    Dry Run — it makes no broker contact and holds no custody. Paper remains
+    fail-closed under the exact same Clerk facts (regression)."""
+    fast_app, registry = deploy_app
+
+    async def frozen_and_held_status() -> ClerkStatus:
+        return ClerkStatus(
+            broker="alpaca",
+            account_id=ACCT,
+            hold=HoldState(
+                active=True,
+                reason_code="UNEXPLAINED_ORDER_HOLD",
+                reason="An unattributed broker order requires operator review.",
+                since_ms=_T0 - 1,
+            ),
+            freeze=AccountFreezeState(
+                active=True,
+                category="ACCOUNT_STATE_UNPROVABLE",
+                explanation="Fresh order and exposure truth is unavailable.",
+                next_step="Restore broker observation, then reconcile.",
+                observed_at_ms=_T0,
+            ),
+            outstanding_intents=3,
+            observed_at_ms=now_ms_utc(),
+            channel_healths=[
+                ChannelHealth(stream="market_data", healthy=True, observed_at_ms=now_ms_utc()),
+            ],
+            operator_posture=_HEALTHY_POSTURE,
+        )
+
+    monkeypatch.setattr(panel_data_source, "_clerk_status", frozen_and_held_status)
+    async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
+        dry_run_response = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots",
+            json={**_BODY, "execution_mode": "dry_run"},
+        )
+        paper_response = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots",
+            json=_BODY,
+        )
+
+    assert dry_run_response.status_code == 201
+    assert dry_run_response.json()["execution_mode"] == "dry_run"
+    assert paper_response.status_code == 409
+    assert paper_response.json()["detail"]["outcome"] == "conflict"
+    assert len(registry.deploy_calls) == 1
+    assert registry.deploy_calls[0]["mode"] == "dry_run"

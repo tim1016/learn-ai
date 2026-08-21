@@ -7374,22 +7374,33 @@ export interface components {
         };
         /**
          * AlpacaPaperDeployStrategy
-         * @description Trader-facing option for one accepted, explicitly overridable, or blocked strategy.
+         * @description Trader-facing option for one accepted, evidence-only, or blocked strategy.
          *
          *     A validated strategy whose recorded proof no longer re-verifies is
          *     demoted to ``evidence_status="blocked"`` rather than removed from the
          *     row set: the operator's validation flag always guarantees a row.
-         *     ``selectable`` is the server's own launchability fact — a blocked row is
-         *     always present but never selectable.
+         *     ``selectable`` is the server's own Paper-launchability fact — a blocked
+         *     row is always present but never Paper-selectable.
+         *
+         *     ``admissible_modes`` (#1702) is the mode-explicit fact the deploy form
+         *     actually needs: gates are tiered by execution mode, so a row can be
+         *     Dry-Run-admissible without being Paper-selectable. Every catalog row is
+         *     runtime-backed today, so ``"dry_run"`` is always present; ``"paper"`` is
+         *     present iff ``selectable`` is ``True`` — the two facts are kept in sync
+         *     by the invariant below, not merged into one, because ``selectable``
+         *     already has a settled meaning ("is this row currently Paper-admissible")
+         *     that this change does not repurpose.
          */
         AlpacaPaperDeployStrategy: {
+            /** Admissible Modes */
+            admissible_modes: ("dry_run" | "paper")[];
             /** Blocked Explanation */
             blocked_explanation?: string | null;
             /**
              * Evidence Status
              * @enum {string}
              */
-            evidence_status: "accepted" | "human_override_required" | "blocked";
+            evidence_status: "accepted" | "evidence_only" | "blocked";
             /** Explanation */
             explanation: string;
             /** Label */
@@ -7432,6 +7443,7 @@ export interface components {
             carryover_explanation: string;
             /** Carryover Label */
             carryover_label: string;
+            dry_run_eligibility: components["schemas"]["AlpacaPaperDeployEligibility"];
             eligibility: components["schemas"]["AlpacaPaperDeployEligibility"];
             /** Evaluated At Ms */
             evaluated_at_ms: number;

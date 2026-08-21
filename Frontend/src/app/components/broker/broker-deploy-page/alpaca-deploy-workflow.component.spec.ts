@@ -21,6 +21,7 @@ const VALIDATION_STRATEGY: DeployBotView['strategies'][number] = {
   validation_case_symbol: 'SPY',
   evidence_status: 'accepted',
   selectable: true,
+  admissible_modes: ['dry_run', 'paper'],
   override_explanation: null,
   blocked_explanation: null,
 };
@@ -32,6 +33,7 @@ const EMA_STRATEGY: DeployBotView['strategies'][number] = {
   validation_case_symbol: 'SPY',
   evidence_status: 'accepted',
   selectable: true,
+  admissible_modes: ['dry_run', 'paper'],
   override_explanation: null,
   blocked_explanation: null,
   params_schema: {
@@ -46,8 +48,9 @@ const SMA_OVERRIDE_STRATEGY: DeployBotView['strategies'][number] = {
   label: 'SMA Crossover',
   explanation: 'Human-validated SMA crossover with evidence-only parity.',
   validation_case_symbol: 'SPY',
-  evidence_status: 'human_override_required',
+  evidence_status: 'evidence_only',
   selectable: true,
+  admissible_modes: ['dry_run', 'paper'],
   override_explanation: 'Behavioral evidence is evidence-only and not accepted for deployment.',
   blocked_explanation: null,
 };
@@ -59,6 +62,7 @@ const BLOCKED_STRATEGY: DeployBotView['strategies'][number] = {
   validation_case_symbol: 'SPY',
   evidence_status: 'blocked',
   selectable: false,
+  admissible_modes: ['dry_run'],
   override_explanation: null,
   blocked_explanation: "The audit copy at 'docs/references/rsi-mean-reversion.md' no longer matches its recorded hash.",
 };
@@ -80,6 +84,13 @@ const DEPLOY_VIEW: DeployBotView = {
     headline: 'This Alpaca paper account is eligible.',
     explanation: 'Every ENTER and EXIT is executed through the Alpaca Clerk.',
     next_action: 'Review the ticket and deploy the paper bot.',
+  },
+  dry_run_eligibility: {
+    eligible: true,
+    reason_code: 'ALPACA_DRY_RUN_READY',
+    headline: 'A zero-broker-write Dry Run is available.',
+    explanation: 'A registered strategy and a healthy market-data channel are present.',
+    next_action: 'Complete the deployment ticket, review the summary, then start the Dry Run.',
   },
   strategies: [VALIDATION_STRATEGY, EMA_STRATEGY, SMA_OVERRIDE_STRATEGY],
   execution_modes: [
@@ -392,20 +403,11 @@ describe('AlpacaDeployWorkflowComponent', () => {
     expect(deployButton.disabled).toBe(false);
   });
 
-  it('requires and submits durable human acknowledgement for evidence-only strategy', async () => {
-    const overrideReceipt: DeployBotReceipt = {
-      ...RECEIPT,
-      bot: {
-        ...RECEIPT.bot,
-        strategy_instance_id: 'sma-paper-01',
-        strategy_key: 'sma_crossover',
-      },
-      evidence_override: {
-        acknowledgement: 'I_ACCEPT_EVIDENCE_ONLY_DEPLOYMENT_RISK',
-        reason: 'Paper canary approved by the strategy owner.',
-      },
-    };
-    const service = mockService(overrideReceipt);
+  it('deploys an evidence-only strategy to Paper with no override required, verdict shown informationally', async () => {
+    // #1702: Paper gates on the human-validated flag alone. The behavioral
+    // verdict still renders (informational), but nothing blocks submission
+    // and no evidence_override is sent.
+    const service = mockService();
     await renderWorkflow(service);
 
     fireEvent.input(screen.getByLabelText('Bot name'), {
@@ -415,32 +417,17 @@ describe('AlpacaDeployWorkflowComponent', () => {
       target: { value: 'sma_crossover' },
     });
 
+    expect(screen.queryByRole('heading', { name: 'Dangerous human override' })).toBeNull();
+    expect(screen.getAllByText('Evidence only').length).toBeGreaterThanOrEqual(1);
     const deployButton = screen.getByRole('button', { name: 'Deploy paper bot' }) as HTMLButtonElement;
-    expect(screen.getByRole('heading', { name: 'Dangerous human override' })).toBeTruthy();
-    expect(screen.getByText('Evidence only · override required')).toBeTruthy();
-    expect(deployButton.disabled).toBe(true);
-
-    fireEvent.click(screen.getByRole('checkbox', {
-      name: 'I accept the evidence-only deployment risk for this strategy.',
-    }));
-    expect(deployButton.disabled).toBe(true);
-
-    fireEvent.input(screen.getByLabelText('Operator reason'), {
-      target: { value: 'Paper canary approved by the strategy owner.' },
-    });
     expect(deployButton.disabled).toBe(false);
+
     fireEvent.click(deployButton);
 
     await vi.waitFor(() => expect(service.deployBot).toHaveBeenCalledOnce());
-    expect(service.deployBot.mock.calls[0][2] as DeployBotBody).toMatchObject({
-      strategy_key: 'sma_crossover',
-      evidence_override: {
-        acknowledgement: 'I_ACCEPT_EVIDENCE_ONLY_DEPLOYMENT_RISK',
-        reason: 'Paper canary approved by the strategy owner.',
-      },
-    });
-    expect(await screen.findByText('Deployed with a dangerous human evidence override')).toBeTruthy();
-    expect(screen.getByText('Paper canary approved by the strategy owner.')).toBeTruthy();
+    const body = service.deployBot.mock.calls[0][2] as DeployBotBody;
+    expect(body.strategy_key).toBe('sma_crossover');
+    expect(body).not.toHaveProperty('evidence_override');
   });
 
   it('names the invalid bot name instead of asking for already-complete trading inputs', async () => {
@@ -459,12 +446,6 @@ describe('AlpacaDeployWorkflowComponent', () => {
     fireEvent.change(screen.getByLabelText('Deployment strategy'), {
       target: { value: 'sma_crossover' },
     });
-    fireEvent.click(screen.getByRole('checkbox', {
-      name: 'I accept the evidence-only deployment risk for this strategy.',
-    }));
-    fireEvent.input(screen.getByLabelText('Operator reason'), {
-      target: { value: 'I am just testing out' },
-    });
 
     const deployButton = screen.getByRole('button', { name: 'Deploy paper bot' });
     expect(deployButton.hasAttribute('disabled')).toBe(true);
@@ -478,28 +459,6 @@ describe('AlpacaDeployWorkflowComponent', () => {
 
     expect(deployButton.hasAttribute('disabled')).toBe(false);
     expect(screen.getByText('Ready to deploy this bot.')).toBeTruthy();
-  });
-
-  it('clears evidence override state when the trader returns to an accepted strategy', async () => {
-    const { fixture } = await renderWorkflow();
-    const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
-
-    fireEvent.change(screen.getByLabelText('Deployment strategy'), {
-      target: { value: 'sma_crossover' },
-    });
-    fireEvent.click(screen.getByRole('checkbox', {
-      name: 'I accept the evidence-only deployment risk for this strategy.',
-    }));
-    fireEvent.input(screen.getByLabelText('Operator reason'), {
-      target: { value: 'Paper canary approved by the strategy owner.' },
-    });
-    fireEvent.change(screen.getByLabelText('Deployment strategy'), {
-      target: { value: 'ema_crossover_signal' },
-    });
-
-    expect(screen.queryByRole('heading', { name: 'Dangerous human override' })).toBeNull();
-    expect(component['ticket']().evidenceOverrideAcknowledged).toBe(false);
-    expect(component['ticket']().evidenceOverrideReason).toBe('');
   });
 
   it('initializes the validated strategy from the strategy-key deep link', async () => {
@@ -523,7 +482,10 @@ describe('AlpacaDeployWorkflowComponent', () => {
       .toBe('/strategy-validation?strategy=ema_crossover_signal');
   });
 
-  it('renders a blocked strategy disabled in the selector and names the backend reason', async () => {
+  it('renders a blocked strategy selectable for Dry Run while Paper stays disabled with the backend reason', async () => {
+    // #1702: a blocked row is Dry-Run-admissible even though its proof no
+    // longer verifies for Paper — the dropdown no longer disables it, and
+    // the backend-authored reason surfaces on the Paper option instead.
     const queryParamMap = convertToParamMap({ strategy_key: 'rsi_mean_reversion' });
     const service = mockService(RECEIPT, {
       ...DEPLOY_VIEW,
@@ -546,10 +508,16 @@ describe('AlpacaDeployWorkflowComponent', () => {
     const select = screen.getByLabelText<HTMLSelectElement>('Deployment strategy');
     expect(select.value).toBe('rsi_mean_reversion');
     const blockedOption = screen.getByRole<HTMLOptionElement>('option', { name: /RSI Mean Reversion/ });
-    expect(blockedOption.disabled).toBe(true);
+    expect(blockedOption.disabled).toBe(false);
     expect(blockedOption.textContent).toContain('blocked');
     expect(screen.getByText('Blocked · proof no longer verifies')).toBeTruthy();
     expect(screen.getAllByText(BLOCKED_EXPLANATION).length).toBeGreaterThanOrEqual(1);
+
+    const paperRadio = screen.getByRole<HTMLInputElement>('radio', { name: /Paper/ });
+    expect(paperRadio.disabled).toBe(true);
+    expect(screen.getByRole('button', {
+      name: `About Paper: ${BLOCKED_EXPLANATION}`,
+    })).toBeTruthy();
 
     const deployButton = screen.getByRole<HTMLButtonElement>('button', {
       name: 'Deploy paper bot',
@@ -559,6 +527,14 @@ describe('AlpacaDeployWorkflowComponent', () => {
     const launchCommand = deployButton.closest<HTMLElement>('.launch-command');
     if (launchCommand === null) throw new Error('launch-command container not found');
     expect(within(launchCommand).getByText('Blocked')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('radio', { name: /Dry Run/i }));
+
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Deploy dry run bot' }).disabled).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Deploy dry run bot' }));
+
+    await vi.waitFor(() => expect(service.deployBot).toHaveBeenCalledOnce());
+    expect((service.deployBot.mock.calls[0][2] as DeployBotBody).execution_mode).toBe('dry_run');
   });
 
   it('shows the blocked reason for a single blocked strategy without a strategy selector', async () => {
