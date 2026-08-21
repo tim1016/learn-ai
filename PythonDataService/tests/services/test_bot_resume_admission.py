@@ -15,7 +15,11 @@ from app.broker.alpaca.clerk.models import (
 )
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.market_liveness import MarketClockLivenessEvidence, MarketLivenessFact
-from app.schemas.run_admission import RunProcessAdmissionFact, StartRuntimeAdmissionFact
+from app.schemas.run_admission import (
+    RunProcessAdmissionFact,
+    StartRuntimeAdmissionFact,
+    TerminalEvidenceAdmissionFact,
+)
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_resume_admission import BotResumeAdmission
 from app.services.market_liveness import compose_market_liveness
@@ -144,6 +148,11 @@ async def test_resume_admission_evaluates_liveness_with_a_post_await_timestamp()
         process_fact=process_fact,
         runtime_fact=runtime_fact,
         checkpoint=lambda binding: None,
+        terminal_evidence=lambda binding: TerminalEvidenceAdmissionFact(
+            state="SUMMARY_READY",
+            evidence_ref="terminal-evidence:run-prior:absent",
+            explanation="No terminal evidence blocks Resume for the prior run.",
+        ),
         activate=activate,
         carryover_account_policy_enabled=False,
         session_capability=lambda symbol, account_id: None,

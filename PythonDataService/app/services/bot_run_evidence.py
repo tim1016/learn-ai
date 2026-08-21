@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 
 from app.engine.live.bot_lifecycle_state import (
@@ -32,6 +33,8 @@ from app.services.bot_runner_errors import (
 
 PROVISIONAL_STOP_REASON_CODE = "STOPPED_PENDING_CUSTODY_PROOF"
 
+logger = logging.getLogger(__name__)
+
 
 class BotRunEvidenceService:
     """Own run terminal receipts and compose command-neutral run views."""
@@ -52,14 +55,49 @@ class BotRunEvidenceService:
         strategy_instance_id: str,
         lifecycle: BotLifecycleStateRecord | None,
     ) -> None:
-        """Copy the terminal projection before a new run clears it."""
+        """Reuse the prior run's authoritative receipt before a new run clears it.
+
+        The receipt (`run_outcomes/{run_id}.json`) is create-once terminal
+        evidence; the lifecycle projection is a lower-fidelity summary of it
+        and never overwrites or competes with an existing receipt. Only a
+        genuinely absent receipt is synthesized from the projection — an
+        existing receipt is read and, if present, left untouched. A receipt
+        that fails to read propagates rather than falling through to
+        reconstruction.
+        """
         if (
             lifecycle is None
             or lifecycle.duty_outcome is None
             or lifecycle.duty_outcome.reason_code == PROVISIONAL_STOP_REASON_CODE
         ):
             return
-        self._record_terminal_receipt(strategy_instance_id, lifecycle.duty_outcome)
+        outcome = lifecycle.duty_outcome
+        if outcome.run_id is None:
+            return
+        existing = self._repository.read_outcome(strategy_instance_id, outcome.run_id)
+        if existing is not None:
+            if (
+                existing.kind != outcome.kind
+                or existing.reason_code != outcome.reason_code
+                or existing.recorded_at_ms != outcome.recorded_at_ms
+            ):
+                logger.warning(
+                    "Terminal receipt disagrees with the lifecycle projection; "
+                    "the receipt remains authoritative",
+                    extra={
+                        "action": "terminal_receipt_projection_disagreement",
+                        "strategy_instance_id": strategy_instance_id,
+                        "run_id": outcome.run_id,
+                        "receipt_kind": existing.kind,
+                        "receipt_reason_code": existing.reason_code,
+                        "receipt_recorded_at_ms": existing.recorded_at_ms,
+                        "projection_kind": outcome.kind,
+                        "projection_reason_code": outcome.reason_code,
+                        "projection_recorded_at_ms": outcome.recorded_at_ms,
+                    },
+                )
+            return
+        self._record_terminal_receipt(strategy_instance_id, outcome)
 
     def record_terminal(
         self,

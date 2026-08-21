@@ -103,6 +103,23 @@ class ResumeCheckpointAdmissionFact(BaseModel):
     evidence_ref: str
 
 
+class TerminalEvidenceAdmissionFact(BaseModel):
+    """Whether the prior run's terminal evidence is safe for Resume to touch.
+
+    Mirrors exactly what ``BotRunEvidenceService.preserve_terminal`` will do
+    at activation: an existing receipt is reused, an absent one is
+    synthesized from the lifecycle summary, and either is "ready". Only a
+    receipt or lifecycle projection that fails to read is unready.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    state: Literal["RECEIPT_READY", "SUMMARY_READY", "UNREADABLE"]
+    evidence_ref: str
+    explanation: str
+    next_step: str | None = None
+
+
 class ResumeRunFacts(BaseModel):
     """Bot-owned immutable and lifecycle facts for a proposed new run."""
 
@@ -127,6 +144,7 @@ class ResumeRunFacts(BaseModel):
     carryover_account_policy_enabled: bool
     exposure_carryover_supported: bool
     checkpoint: ResumeCheckpointAdmissionFact | None
+    terminal_evidence: TerminalEvidenceAdmissionFact
 
 
 RunAdmissionFacts = StartRunFacts | ResumeRunFacts

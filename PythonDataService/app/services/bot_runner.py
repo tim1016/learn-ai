@@ -43,6 +43,7 @@ from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.config import settings
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.live.bot_lifecycle_state import (
+    BotLifecycleStateCorruptError,
     BotLifecycleStateRepo,
     stable_bot_lifecycle_state_path,
 )
@@ -65,6 +66,7 @@ from app.schemas.run_admission import (
     RunAdmissionDecision,
     RunProcessAdmissionFact,
     StartRuntimeAdmissionFact,
+    TerminalEvidenceAdmissionFact,
 )
 from app.services.alpaca_bot_identity import AlpacaBotIdentityGuard
 from app.services.bot_binding_repository import (
@@ -109,6 +111,7 @@ from app.services.bot_run_terminal import (
     prove_terminal_stop_outcome,
 )
 from app.services.bot_runner_errors import (
+    ActivationFailedCleanupProvenError,
     BootRecoveryIncompleteError,
     BotAlreadyRunningError,
     BotRunnerError,
@@ -258,6 +261,7 @@ class BotTaskRegistry:
             process_fact=self._resume_process_fact,
             runtime_fact=self._start_runtime_fact,
             checkpoint=self._resume_checkpoint_fact,
+            terminal_evidence=self._resume_terminal_evidence_fact,
             activate=self._activate_resume_binding,
             carryover_account_policy_enabled=self._carryover_allowed,
             session_capability=get_broker_capability_service().read_latest_for,
@@ -499,6 +503,14 @@ class BotTaskRegistry:
                 detail="Use the legacy host boundary only for an existing IBKR run.",
             )
         lifecycle_repo = self._lifecycle_repo(binding.strategy_instance_id)
+        # Preserve the prior run's terminal evidence before registering the
+        # proposed run with the Clerk or advancing current_run.json. A
+        # preservation failure must leave zero Clerk runs and zero process
+        # activity behind, so it runs unguarded, ahead of both.
+        self._run_evidence.preserve_terminal(
+            binding.strategy_instance_id,
+            lifecycle_repo.read(),
+        )
         try:
             await register_alpaca_duty_run(binding, admission_snapshot=admission_snapshot)
         except (ActiveClerkUnavailableError, ClerkAdmissionTokenStaleError) as exc:
@@ -507,13 +519,6 @@ class BotTaskRegistry:
                 detail="Refresh Clerk custody before starting an Alpaca bot.",
             ) from exc
         try:
-            # Preserve the prior immutable outcome before record_launch advances
-            # current_run.json. A crash between these operations must not hide a
-            # previous run's only terminal evidence from the history projection.
-            self._run_evidence.preserve_terminal(
-                binding.strategy_instance_id,
-                lifecycle_repo.read(),
-            )
             self._bindings.record_launch(binding, launch_reason=reason)
             self._desired_repo(binding.strategy_instance_id).set(
                 DesiredState.RUNNING, updated_by=_UPDATED_BY, now_ms=now, reason=reason
@@ -550,9 +555,11 @@ class BotTaskRegistry:
             # Let supervision enter its exception boundary before a Start releases
             # Clerk intake. A first effect waits on that same fence.
             await asyncio.sleep(0)
-        except BaseException:
+        except BaseException as exc:
+            cleanup_proven = False
             try:
                 await commit_stop_before_task_cancel(binding, reason="activation_failed_after_registration")
+                cleanup_proven = True
             except Exception:
                 logger.error(
                     "SQLite Clerk could not durably stop a failed activation",
@@ -563,6 +570,18 @@ class BotTaskRegistry:
                     },
                     exc_info=True,
                 )
+            # A resolved failure is reported as known only for a genuine
+            # Exception with cleanup proven. asyncio.CancelledError and other
+            # BaseException-only paths are not Exception instances, so they
+            # keep today's raw propagation and are never converted into an
+            # operator-facing resolved failure.
+            if cleanup_proven and isinstance(exc, Exception):
+                raise ActivationFailedCleanupProvenError(
+                    f"Activation failed after Clerk registration for run "
+                    f"'{binding.run_id}'; the Clerk stop committed.",
+                    attempted_run_id=binding.run_id,
+                    detail=str(exc),
+                ) from exc
             raise
 
     def _start_process_fact(
@@ -634,6 +653,55 @@ class BotTaskRegistry:
             exposure=checkpoint.exposure,
             approved=checkpoint.approved,
             evidence_ref=f"carryover-checkpoint:{path.name}:{checkpoint.recorded_at_ms}",
+        )
+
+    def _resume_terminal_evidence_fact(
+        self,
+        binding: BrokerBotBinding,
+    ) -> TerminalEvidenceAdmissionFact:
+        """Mirror preserve_terminal()'s own decision so preview and execution agree."""
+        engineering_next_step = "This requires engineering investigation; Refresh to check for updated evidence."
+        try:
+            lifecycle = self._lifecycle_repo(binding.strategy_instance_id).read()
+        except BotLifecycleStateCorruptError as exc:
+            return TerminalEvidenceAdmissionFact(
+                state="UNREADABLE",
+                evidence_ref=f"terminal-evidence:{binding.strategy_instance_id}:lifecycle-corrupt",
+                explanation=f"The lifecycle projection could not be read: {exc}",
+                next_step=engineering_next_step,
+            )
+        outcome = lifecycle.duty_outcome if lifecycle is not None else None
+        if outcome is None or outcome.run_id is None or outcome.reason_code == PROVISIONAL_STOP_REASON_CODE:
+            return TerminalEvidenceAdmissionFact(
+                state="SUMMARY_READY",
+                evidence_ref=f"terminal-evidence:{binding.strategy_instance_id}:absent",
+                explanation="No terminal evidence blocks Resume for the prior run.",
+            )
+        try:
+            receipt = self._bindings.read_outcome(binding.strategy_instance_id, outcome.run_id)
+        except (ValueError, OSError) as exc:
+            return TerminalEvidenceAdmissionFact(
+                state="UNREADABLE",
+                evidence_ref=f"terminal-evidence:{outcome.run_id}:receipt-corrupt",
+                explanation=f"The terminal receipt for run '{outcome.run_id}' could not be read: {exc}",
+                next_step=engineering_next_step,
+            )
+        if receipt is not None:
+            return TerminalEvidenceAdmissionFact(
+                state="RECEIPT_READY",
+                evidence_ref=(
+                    f"terminal-evidence:{outcome.run_id}:receipt:"
+                    f"{receipt.recorded_at_ms}:{receipt.kind}:{receipt.reason_code}"
+                ),
+                explanation="An authoritative terminal receipt exists for the prior run.",
+            )
+        return TerminalEvidenceAdmissionFact(
+            state="SUMMARY_READY",
+            evidence_ref=(
+                f"terminal-evidence:{outcome.run_id}:summary:"
+                f"{outcome.recorded_at_ms}:{outcome.kind}:{outcome.reason_code}"
+            ),
+            explanation="Only the lifecycle summary exists; Resume will convert it into a receipt.",
         )
 
     async def stop(

@@ -278,6 +278,18 @@ async def test_presented_action_executes_and_stale_repost_fails_closed(api) -> N
     assert first.status_code == 200
     assert first.json()["applied"] is True
     assert second.status_code == 409
+    body = second.json()["detail"]
+    assert body.keys() >= {
+        "action_id",
+        "outcome",
+        "receipt_id",
+        "recorded_at_ms",
+        "message",
+        "why",
+        "reason_code",
+    }
+    assert body["action_id"] == "reconcile_now"
+    assert body["outcome"] == "conflict"
 
 
 async def test_live_chart_accepts_five_second_resolution(

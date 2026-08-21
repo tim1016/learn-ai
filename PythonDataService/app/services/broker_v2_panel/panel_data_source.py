@@ -45,13 +45,18 @@ from app.schemas.broker_v2_panel import (
     PanelActionResult,
 )
 from app.schemas.run_admission import RunAdmissionDecision
-from app.services.bot_runner import BotRunnerError, get_bot_task_registry
+from app.services.bot_runner import (
+    ActivationFailedCleanupProvenError,
+    BotRunnerError,
+    get_bot_task_registry,
+)
 from app.services.bot_start_admission import market_data_capability_account_id
 from app.services.broker_account_snapshot import resolve_broker_account_snapshot
 from app.services.broker_capability_service import get_broker_capability_service
 from app.services.broker_v2_panel.action_execution_service import (
     ActionNotAvailableError,
     ActionPerformer,
+    ActivationFailedError,
     durable_idempotency_store_for,
     execute_action,
 )
@@ -781,10 +786,21 @@ def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[s
             raise PanelUnavailableError("The bot runner is not available.")
         try:
             admitted = await registry.resume_existing_with_admission(broker, sid)
+        except ActivationFailedCleanupProvenError as exc:
+            raise ActivationFailedError(
+                f"Resume for run '{exc.attempted_run_id}' failed after Clerk "
+                "registration; the Clerk stop committed.",
+                detail=exc.detail or str(exc),
+            ) from exc
         except BotRunnerError as exc:
             raise ActionNotAvailableError(
                 "Resume is no longer available for this bot.",
                 detail=exc.detail or str(exc),
+                reason_code=(
+                    exc.admission_decision.reason_code
+                    if exc.admission_decision is not None
+                    else None
+                ),
             ) from exc
         return (
             f"Bot resumed as new run {admitted.bot.active_run_id} from its immutable configuration. "

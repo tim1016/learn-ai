@@ -89,7 +89,10 @@ from app.services.bot_runner import (
     RunAdmissionRefusedError,
     UnknownBotError,
 )
-from app.services.bot_runner_errors import InvalidRunHistoryCursorError
+from app.services.bot_runner_errors import (
+    ActivationFailedCleanupProvenError,
+    InvalidRunHistoryCursorError,
+)
 from app.services.bot_runtime import PauseAwareFeed
 from app.services.bot_trade_strategy import strategy_evaluations
 from app.services.market_liveness import compose_market_liveness, unknown_market_liveness
@@ -1538,8 +1541,12 @@ async def test_resume_preserves_prior_outcome_before_current_pointer_advances(
         raise RuntimeError("injected crash after current run pointer write")
 
     monkeypatch.setattr(registry._bindings, "record_launch", crash_after_current_pointer_write)
-    with pytest.raises(RuntimeError, match="injected crash"):
+    # PRD #1716 FR-6: this crash occurs after Clerk registration, and the
+    # autouse _CustodyClerk fixture's stop succeeds, so it's reclassified as
+    # a known, resolved failure rather than the raw RuntimeError.
+    with pytest.raises(ActivationFailedCleanupProvenError) as exc_info:
         await registry.resume_existing("alpaca", _SID)
+    assert "injected crash" in (exc_info.value.detail or "")
 
     restarted_registry = _registry(tmp_path, feed)
     history = restarted_registry.run_history("alpaca", _SID, cursor=None, limit=1)
@@ -1547,6 +1554,60 @@ async def test_resume_preserves_prior_outcome_before_current_pointer_advances(
     assert history.runs[0].run_id == prior_run_id
     assert history.runs[0].terminal_outcome is not None
     assert history.runs[0].terminal_outcome.reason_code == "OPERATOR_STOP"
+
+
+@pytest.mark.asyncio
+async def test_activation_failure_with_unproven_cleanup_keeps_raw_propagation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """PRD #1716 FR-6: when the Clerk stop cannot be proven, the original
+    exception propagates unchanged and is never reported as a resolved
+    (known) failure."""
+    clerk = _OrderingClerk(_custody_proof(exposure={}))
+    clerk.fail_stop = True
+    feed = _FakeFeed([], mode="hold")
+    registry = _registry(tmp_path, feed, start_custody_guard=clerk.start_admission_snapshot)
+    set_alpaca_clerk(clerk)
+    try:
+        original_record_launch = registry._bindings.record_launch
+
+        def crash_after_launch(*args: object, **kwargs: object) -> None:
+            original_record_launch(*args, **kwargs)
+            raise RuntimeError("injected crash, cleanup will fail too")
+
+        monkeypatch.setattr(registry._bindings, "record_launch", crash_after_launch)
+
+        with pytest.raises(RuntimeError, match="injected crash"):
+            await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+
+        assert registry.any_running() is False
+    finally:
+        set_alpaca_clerk(None)
+
+
+@pytest.mark.asyncio
+async def test_activation_cancellation_is_never_reported_as_a_resolved_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """PRD #1716 FR-6: asyncio.CancelledError is not Exception-typed, so it
+    keeps raw propagation even when the Clerk stop cleanup succeeds."""
+    feed = _FakeFeed([], mode="hold")
+    registry = _registry(tmp_path, feed)
+
+    original_record_launch = registry._bindings.record_launch
+
+    def cancel_after_launch(*args: object, **kwargs: object) -> None:
+        original_record_launch(*args, **kwargs)
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(registry._bindings, "record_launch", cancel_after_launch)
+
+    with pytest.raises(asyncio.CancelledError):
+        await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+
+    assert registry.any_running() is False
 
 
 @pytest.mark.asyncio

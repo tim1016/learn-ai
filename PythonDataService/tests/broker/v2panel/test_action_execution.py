@@ -16,11 +16,16 @@ import pytest
 
 from app.broker.alpaca.clerk.models import EffectOperationState
 from app.schemas.broker_v2_panel import PanelActionRequest, PanelActionResult
-from app.services.bot_runner_errors import RunAdmissionRefusedError
+from app.schemas.run_admission import RunAdmissionDecision, RunAdmissionFactAges
+from app.services.bot_runner_errors import (
+    ActivationFailedCleanupProvenError,
+    RunAdmissionRefusedError,
+)
 from app.services.broker_v2_panel import panel_data_source
 from app.services.broker_v2_panel.action_execution_service import (
     ActionNotAvailableError,
     ActionOutcomeUnknownError,
+    ActivationFailedError,
     DurableIdempotencyStore,
     IdempotencyStore,
     StaleRevisionError,
@@ -206,6 +211,72 @@ async def test_performer_raised_action_execution_error_burns_key_not_released(
 
     assert store._records[(_SID, "stop", "mid-flight")].state == "failed"
     assert "panel_action_rejected" not in caplog.text
+
+
+async def test_activation_failed_cleanup_proven_burns_the_key_as_a_known_failure() -> None:
+    """PRD #1716 FR-6: cleanup-proven activation failures burn the
+    idempotency key (post-execution) and report as-is, not wrapped into
+    ActionOutcomeUnknownError."""
+
+    async def _perform(_operator: str, _reason: str | None) -> str:
+        raise ActivationFailedError(
+            "Resume for run 'run-2' failed after Clerk registration; the Clerk stop committed.",
+            detail="boom",
+        )
+
+    store = IdempotencyStore()
+    with pytest.raises(ActivationFailedError) as exc:
+        await execute_action(
+            _request(action_id="resume", key="cleanup-proven-1"),
+            sid=_SID,
+            current_revision=42,
+            current_concurrency_token="token",
+            performers={"resume": _perform},
+            operator_identity="op",
+            store=store,
+        )
+
+    assert "the Clerk stop committed" in str(exc.value)
+    assert store._records[(_SID, "resume", "cleanup-proven-1")].state == "failed"
+
+
+async def test_activation_failed_replay_returns_the_same_failure_without_reexecuting() -> None:
+    """PRD #1716 FR-6: reusing the same key replays the identical terminal
+    failure without another activation attempt."""
+    calls: list[str] = []
+
+    async def _perform(_operator: str, _reason: str | None) -> str:
+        calls.append("attempted")
+        raise ActivationFailedError(
+            "Resume for run 'run-2' failed after Clerk registration; the Clerk stop committed.",
+        )
+
+    store = IdempotencyStore()
+    request = _request(action_id="resume", key="cleanup-proven-2")
+    with pytest.raises(ActivationFailedError):
+        await execute_action(
+            request,
+            sid=_SID,
+            current_revision=42,
+            current_concurrency_token="token",
+            performers={"resume": _perform},
+            operator_identity="op",
+            store=store,
+        )
+
+    with pytest.raises(ActionNotAvailableError) as replay:
+        await execute_action(
+            request,
+            sid=_SID,
+            current_revision=42,
+            current_concurrency_token="token",
+            performers={"resume": _perform},
+            operator_identity="op",
+            store=store,
+        )
+
+    assert calls == ["attempted"]
+    assert "previously failed" in str(replay.value)
 
 
 async def test_disabled_presented_action_cannot_bypass_guard_via_post(
@@ -442,7 +513,76 @@ async def test_resume_performer_returns_known_refusal_when_fresh_admission_chang
         )
 
     assert exc.value.http_status == 409
+    assert exc.value.reason_code is None
     assert exc.value.detail == "The Clerk evidence changed before activation."
+
+
+async def test_resume_performer_carries_the_admission_reason_code(monkeypatch) -> None:
+    """PRD #1716 FR-4: an admission denial's reason_code survives the
+    bot-runner-to-action mapping so the router/frontend can render it."""
+    decision = RunAdmissionDecision(
+        operation="RESUME",
+        allowed=False,
+        reason_code="TERMINAL_EVIDENCE_UNREADABLE",
+        explanation="The terminal receipt could not be read.",
+        next_step="This requires engineering investigation; Refresh to check for updated evidence.",
+        strategy_instance_id=_SID,
+        proposed_run_id="run-2",
+        configuration_hash="a" * 64,
+        account_id="paper-account",
+        evaluated_at_ms=1_000,
+        fact_ages_ms=RunAdmissionFactAges(runtime=0, process=0, market_data=0, market_liveness=0, clerk=0),
+        evidence_refs=(),
+    )
+
+    class _Registry:
+        async def resume_existing_with_admission(self, _broker: str, _sid: str):
+            raise RunAdmissionRefusedError(
+                "Resume admission was refused.",
+                detail=decision.explanation,
+                admission_decision=decision,
+            )
+
+    monkeypatch.setattr(
+        "app.services.broker_v2_panel.panel_data_source.get_bot_task_registry",
+        lambda: _Registry(),
+    )
+
+    with pytest.raises(ActionNotAvailableError) as exc:
+        await _action_performers("alpaca", _SID, idempotency_key="resume-3")["resume"](
+            "desk-operator", None
+        )
+
+    assert exc.value.reason_code == "TERMINAL_EVIDENCE_UNREADABLE"
+    assert exc.value.detail == decision.explanation
+
+
+async def test_resume_performer_maps_cleanup_proven_activation_failure(monkeypatch) -> None:
+    """PRD #1716 FR-6: a cleanup-proven activation failure becomes the
+    action layer's ActivationFailedError, not the generic
+    ActionNotAvailableError used for pre-execution admission denials."""
+
+    class _Registry:
+        async def resume_existing_with_admission(self, _broker: str, _sid: str):
+            raise ActivationFailedCleanupProvenError(
+                "Activation failed after Clerk registration for run 'run-2'; "
+                "the Clerk stop committed.",
+                attempted_run_id="run-2",
+                detail="TypeError: boom",
+            )
+
+    monkeypatch.setattr(
+        "app.services.broker_v2_panel.panel_data_source.get_bot_task_registry",
+        lambda: _Registry(),
+    )
+
+    with pytest.raises(ActivationFailedError) as exc:
+        await _action_performers("alpaca", _SID, idempotency_key="resume-4")["resume"](
+            "desk-operator", None
+        )
+
+    assert "run-2" in str(exc.value)
+    assert exc.value.detail == "TypeError: boom"
 
 
 async def test_live_panel_skips_resume_admission_reconciliation(monkeypatch) -> None:
