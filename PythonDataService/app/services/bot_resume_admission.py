@@ -16,6 +16,7 @@ from app.schemas.run_admission import (
     RunAdmissionDecision,
     RunProcessAdmissionFact,
     StartRuntimeAdmissionFact,
+    TerminalEvidenceAdmissionFact,
 )
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_carryover import configuration_hash
@@ -38,6 +39,7 @@ CustodyGuard = Callable[[str], AbstractAsyncContextManager[ClerkCustodySnapshot]
 ProcessFactResolver = Callable[[BrokerBotBinding, int], RunProcessAdmissionFact]
 RuntimeFactResolver = Callable[[str, int], Awaitable[StartRuntimeAdmissionFact]]
 CheckpointResolver = Callable[[BrokerBotBinding], ResumeCheckpointAdmissionFact | None]
+TerminalEvidenceResolver = Callable[[BrokerBotBinding], TerminalEvidenceAdmissionFact]
 
 
 @dataclass(frozen=True)
@@ -60,6 +62,7 @@ class BotResumeAdmission:
         process_fact: ProcessFactResolver,
         runtime_fact: RuntimeFactResolver,
         checkpoint: CheckpointResolver,
+        terminal_evidence: TerminalEvidenceResolver,
         activate: CustodyBoundActivator,
         carryover_account_policy_enabled: bool,
         session_capability: SessionCapabilityResolver,
@@ -71,6 +74,7 @@ class BotResumeAdmission:
         self._process_fact = process_fact
         self._runtime_fact = runtime_fact
         self._checkpoint = checkpoint
+        self._terminal_evidence = terminal_evidence
         self._activate = activate
         self._carryover_account_policy_enabled = carryover_account_policy_enabled
         self._session_capability = session_capability
@@ -159,6 +163,7 @@ class BotResumeAdmission:
                         prior.strategy_key in EXPOSURE_CARRYOVER_STRATEGY_KEYS
                     ),
                     checkpoint=self._checkpoint(prior),
+                    terminal_evidence=self._terminal_evidence(prior),
                 )
                 yield (
                     evaluate_run_admission(

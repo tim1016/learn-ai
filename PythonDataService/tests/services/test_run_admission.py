@@ -23,12 +23,18 @@ from app.schemas.run_admission import (
     RunProcessAdmissionFact,
     StartRunFacts,
     StartRuntimeAdmissionFact,
+    TerminalEvidenceAdmissionFact,
 )
 from app.services.market_liveness import compose_market_liveness
 from app.services.run_admission import evaluate_run_admission
 
 _NOW = 1_700_000_010_000
 _SID = "alpaca-start-1"
+_READY_TERMINAL_EVIDENCE = TerminalEvidenceAdmissionFact(
+    state="RECEIPT_READY",
+    evidence_ref="terminal-evidence:run-prior:receipt:1:CRASHED:TypeError",
+    explanation="An authoritative terminal receipt exists for the prior run.",
+)
 
 
 def _bot(
@@ -152,6 +158,7 @@ def _resume_bot(
     phase: str = "OFF_DUTY",
     checkpoint: ResumeCheckpointAdmissionFact | None = None,
     mode: str = "trade",
+    terminal_evidence: TerminalEvidenceAdmissionFact = _READY_TERMINAL_EVIDENCE,
 ) -> ResumeRunFacts:
     return ResumeRunFacts(
         strategy_instance_id=_SID,
@@ -183,6 +190,7 @@ def _resume_bot(
         carryover_account_policy_enabled=True,
         exposure_carryover_supported=True,
         checkpoint=checkpoint,
+        terminal_evidence=terminal_evidence,
     )
 
 
@@ -341,6 +349,35 @@ def test_resume_admission_refuses_invalid_instance_lifecycle(
 
     assert decision.allowed is False
     assert decision.reason_code == reason_code
+
+
+def test_resume_admission_refuses_unreadable_terminal_evidence() -> None:
+    """PRD #1716 FR-3: an unreadable receipt denies before any custody gate."""
+    unreadable = TerminalEvidenceAdmissionFact(
+        state="UNREADABLE",
+        evidence_ref="terminal-evidence:run-prior:receipt-corrupt",
+        explanation="The terminal receipt for run 'run-prior' could not be read: boom",
+        next_step="This requires engineering investigation; Refresh to check for updated evidence.",
+    )
+
+    decision = evaluate_run_admission(
+        _resume_bot(terminal_evidence=unreadable),
+        _clerk(),
+        evaluated_at_ms=_NOW,
+    )
+
+    assert decision.allowed is False
+    assert decision.reason_code == "TERMINAL_EVIDENCE_UNREADABLE"
+    assert decision.explanation == unreadable.explanation
+    assert decision.next_step == unreadable.next_step
+
+
+def test_resume_admission_decision_carries_the_terminal_evidence_reference() -> None:
+    """The concurrency token (hashed from evidence_refs) must move when the
+    underlying receipt or summary content changes."""
+    decision = evaluate_run_admission(_resume_bot(), _clerk(), evaluated_at_ms=_NOW)
+
+    assert _READY_TERMINAL_EVIDENCE.evidence_ref in decision.evidence_refs
 
 
 def test_resume_admission_requires_exact_approved_carryover_checkpoint() -> None:

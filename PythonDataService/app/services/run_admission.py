@@ -79,8 +79,10 @@ def _decision(
             f"{bot.market_liveness.symbol_status.source}:"
             f"{bot.market_liveness.symbol_status.observed_at_ms}"
         )
-    if isinstance(bot, ResumeRunFacts) and bot.checkpoint is not None:
-        evidence_refs.append(bot.checkpoint.evidence_ref)
+    if isinstance(bot, ResumeRunFacts):
+        evidence_refs.append(bot.terminal_evidence.evidence_ref)
+        if bot.checkpoint is not None:
+            evidence_refs.append(bot.checkpoint.evidence_ref)
     return RunAdmissionDecision(
         operation=bot.operation,
         allowed=allowed,
@@ -217,6 +219,13 @@ def evaluate_run_admission(
                 reason_code="RESUME_REQUIRES_STOPPED_INSTANCE",
                 explanation="Resume requires an off-duty instance with durable STOPPED intent.",
                 next_step="Resolve the prior lifecycle transition before Resume.",
+            )
+        if bot.terminal_evidence.state == "UNREADABLE":
+            return decide(
+                allowed=False,
+                reason_code="TERMINAL_EVIDENCE_UNREADABLE",
+                explanation=bot.terminal_evidence.explanation,
+                next_step=bot.terminal_evidence.next_step,
             )
     if bot.market_data.state != "AVAILABLE":
         reason_codes = {

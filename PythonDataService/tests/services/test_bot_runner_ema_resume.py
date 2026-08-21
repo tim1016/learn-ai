@@ -25,6 +25,7 @@ from app.schemas.market_liveness import (
     SymbolTradingStatusEvidence,
 )
 from app.services.bot_runner import BotTaskRegistry
+from app.services.bot_runner_errors import RunAdmissionRefusedError
 from app.services.market_liveness import compose_market_liveness
 from app.utils.timestamps import now_ms_utc
 
@@ -369,12 +370,12 @@ async def test_resume_after_diagnostic_crash_reuses_the_existing_receipt(
 
 
 @pytest.mark.asyncio
-async def test_resume_with_an_unreadable_receipt_registers_no_clerk_run(
+async def test_resume_with_an_unreadable_receipt_is_denied_before_clerk_registration(
     tmp_path: Path,
 ) -> None:
-    """PRD #1716: a preservation failure precedes Clerk registration and
-    leaves zero Clerk runs, zero process activity, and current_run.json
-    unchanged behind."""
+    """PRD #1716 FR-3/FR-4: an unreadable receipt denies admission with
+    TERMINAL_EVIDENCE_UNREADABLE before any Clerk registration, process
+    activity, or current_run.json advancement is attempted."""
     feed = _ResumeFeed()
     feed.install((_first_resumed_bar(),), error=TypeError("boom"))
     repository, clerk, registry = _registry_with_sqlite_clerk(tmp_path, feed)
@@ -401,10 +402,19 @@ async def test_resume_with_an_unreadable_receipt_registers_no_clerk_run(
         original_current_run_bytes = current_run_path.read_bytes()
         clerk_run_count_before = _clerk_run_count(repository.db_path)
 
+        # AC-4b / FR-3: preview and execution evaluate the identical rule, so
+        # the panel can present Resume as unavailable before the click.
+        preview = await registry.preview_resume_admission("alpaca", _STRATEGY_INSTANCE_ID)
+        assert preview.allowed is False
+        assert preview.reason_code == "TERMINAL_EVIDENCE_UNREADABLE"
+
         feed.install((_first_resumed_bar(),))
-        with pytest.raises(ValueError):
+        with pytest.raises(RunAdmissionRefusedError) as exc_info:
             await registry.resume_existing("alpaca", _STRATEGY_INSTANCE_ID)
 
+        decision = exc_info.value.admission_decision
+        assert decision is not None
+        assert decision.reason_code == "TERMINAL_EVIDENCE_UNREADABLE"
         assert registry.any_running() is False
         assert current_run_path.read_bytes() == original_current_run_bytes
         assert outcome_path.read_text(encoding="utf-8") == "{not valid json"
