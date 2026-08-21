@@ -19,10 +19,14 @@ certify Strategy A/B/C's math is correct against any outside authority. It
 exists per [issue #1699](https://github.com/tim1016/learn-ai/issues/1699) as
 a **refactor-neutrality receipt**: Strategy A/B/C were originally written for
 manual Strategy Lab use, not bot deployment (see the parent PRD, issue
-#1697), and are about to be ported to the strategy-spec/intent format used by
-the bot runner (S3). This fixture pins their *current* trade-log output so
-S3 can prove it did not change strategy behavior, rather than argue it in
-prose.
+#1697), and were ported to `SignalIntent` emission in
+[issue #1700](https://github.com/tim1016/learn-ai/issues/1700) (S3) so they
+could be deployed via the same execution boundary as SMA Crossover / RSI Mean
+Reversion. This fixture pinned their *pre-port* trade-log output so that S3
+port could prove — mechanically, not in prose — that swapping direct
+`set_holdings`/`liquidate` calls for `emit_signal_intent(ENTER/EXIT)` left
+every trade unchanged. `PythonDataService/tests/fixtures/test_strategy_parity_fixtures.py`
+passed unchanged before and after the #1700 port.
 
 ## Protocol
 

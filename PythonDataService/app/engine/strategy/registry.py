@@ -669,6 +669,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             long_window=p.long_window,  # type: ignore[attr-defined]
             resolution_minutes=p.resolution_minutes,  # type: ignore[attr-defined]
         ),
+        instrument_surface="policy",
         action_plan_contract="single_long_stock",
         signal_intent_binding="action_plan_stock",
     ),
@@ -817,6 +818,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             overbought=p.overbought,  # type: ignore[attr-defined]
             resolution_minutes=p.resolution_minutes,  # type: ignore[attr-defined]
         ),
+        instrument_surface="policy",
         action_plan_contract="single_long_stock",
         signal_intent_binding="action_plan_stock",
     ),
@@ -1228,6 +1230,9 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             adx_exit_threshold=p.adx_exit_threshold,  # type: ignore[attr-defined]
             resolution_minutes=p.resolution_minutes,  # type: ignore[attr-defined]
         ),
+        instrument_surface="policy",
+        action_plan_contract="single_long_stock",
+        signal_intent_binding="action_plan_stock",
     ),
     "spy_strategy_b": StrategyRegistration(
         display_name="Strategy B — Supertrend + ADX + MACD + RSI-range",
@@ -1328,6 +1333,9 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             adx_exit_threshold=p.adx_exit_threshold,  # type: ignore[attr-defined]
             resolution_minutes=p.resolution_minutes,  # type: ignore[attr-defined]
         ),
+        instrument_surface="policy",
+        action_plan_contract="single_long_stock",
+        signal_intent_binding="action_plan_stock",
     ),
     "spy_strategy_c": StrategyRegistration(
         display_name="Strategy C — ADX-rising + RSI-range",
@@ -1395,6 +1403,9 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             adx_exit_threshold=p.adx_exit_threshold,  # type: ignore[attr-defined]
             resolution_minutes=p.resolution_minutes,  # type: ignore[attr-defined]
         ),
+        instrument_surface="policy",
+        action_plan_contract="single_long_stock",
+        signal_intent_binding="action_plan_stock",
     ),
 }
 

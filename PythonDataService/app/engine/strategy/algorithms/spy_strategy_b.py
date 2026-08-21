@@ -5,7 +5,8 @@ Reference: Internal — no external port reference; long-only 15-min RTH SPY str
 Canonical implementation: app/engine/strategy/algorithms/spy_strategy_b.py
 Validated against: app/engine/tests/ (gate-wiring unit tests); golden fixture ENG-008
     (tests/fixtures/test_strategy_parity_fixtures.py) pins trade_log self-equivalence
-    at registered defaults as a pre-port receipt for the S3 intent port (#1699).
+    at registered defaults — the base class's #1700 port to SignalIntent emission
+    reproduces this trade_log unchanged, per that fixture's #1699 pre-port receipt.
 
 Entry gates (all evaluated each bar while flat):
     * ``rsi_low_gate <= RSI <= rsi_high_gate``.
@@ -16,7 +17,8 @@ Entry gates (all evaluated each bar while flat):
 Exit:
     ADX < ``adx_exit_threshold`` (default 20).
 
-Long-only. 15-min RTH bars. 100 %-equity sizing. No SL/TP.
+Long-only. 15-min RTH bars. Emits ENTER/EXIT SignalIntents (100 %-equity sizing when
+bound by Engine Lab's same-symbol executor). No SL/TP.
 """
 
 from __future__ import annotations

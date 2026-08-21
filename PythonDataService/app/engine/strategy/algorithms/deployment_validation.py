@@ -155,6 +155,19 @@ class DeploymentValidationDecisionKernel:
         self._cycle_active = False
         self._bars_since_enter = 0
 
+    def rollback_blocked_exit(self) -> None:
+        """Undo the EXIT-time state committed by ``on_closed_bar`` when the
+        caller refuses to act on this signal (e.g. a Clerk admission
+        rejection). Both EXIT branches unconditionally clear
+        ``_cycle_active``/``_bars_since_enter`` at emission, before the
+        caller knows whether the exit will actually be admitted — without
+        this, a rejected EXIT leaves the kernel believing the cycle already
+        closed while the broker still holds the position. Restoring
+        ``_bars_since_enter`` to the trigger threshold means the very next
+        eligible bar re-fires EXIT rather than silently dropping the retry."""
+        self._cycle_active = True
+        self._bars_since_enter = _BARS_FROM_ENTRY_FILL_TO_EXIT_SIGNAL
+
 
 class DeploymentValidationConsecutiveGreen(Strategy):
     """Deterministic minute-bar strategy for validating deployment plumbing."""

@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from app.broker.ibkr.bars import (
     IBKRBarStreamError,
     IBKRBarSubscriptionStalled,
+    fetch_historical_minute_bars,
     stream_minute_bars,
 )
 from app.broker.ibkr.client import IbkrClient, NotConnectedError
@@ -177,6 +178,44 @@ class IbkrMarketDataFeed:
                     "active_count": state.active_count,
                 },
             )
+
+    async def recent_closed_bars(
+        self,
+        symbol: str,
+        *,
+        use_rth: bool = True,
+        lookback_days: int = 5,
+    ) -> list[MarketDataBar]:
+        """Return closed 1-minute bars from the trailing ``lookback_days``
+        calendar days, oldest first, via IBKR's read-only historical-data
+        endpoint.
+
+        Used only to warm up a strategy's indicator state before live
+        decisions begin (a fresh RTH session alone can't warm
+        ADX/EMA-class indicators with multi-day lookback periods) -- never
+        itself treated as a decision. A fetch failure is non-fatal:
+        callers fall back to a cold start, matching pre-warmup behavior.
+        """
+        normalized_symbol = symbol.upper()
+        try:
+            historical = await fetch_historical_minute_bars(
+                self._client,
+                normalized_symbol,
+                duration=f"{lookback_days} D",
+                use_rth=use_rth,
+            )
+        except (IBKRBarStreamError, NotConnectedError) as exc:
+            logger.warning(
+                "Historical warmup bars unavailable; strategy will cold-start",
+                extra={
+                    "action": "warmup_bars_unavailable",
+                    "feed_id": self.feed_id,
+                    "symbol": normalized_symbol,
+                    "error": str(exc),
+                },
+            )
+            return []
+        return [self._translate(bar) for bar in historical]
 
     def health(self, symbol: str | None = None) -> FeedHealth:
         """Return aggregate or symbol-scoped point-in-time feed health."""

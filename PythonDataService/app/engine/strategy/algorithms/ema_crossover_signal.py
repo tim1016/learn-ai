@@ -368,6 +368,31 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         self._bars_until_exit = 0
         self._pending_entry = None
 
+    def rollback_blocked_exit(self) -> None:
+        """Undo the EXIT-time state committed by ``_on_fifteen_minute_bar``
+        when the caller refuses to act on this signal (e.g. a Clerk
+        admission rejection). ``_in_position`` flips to ``False`` and
+        ``_bars_until_exit`` is consumed at EXIT *emission*, before the
+        caller knows whether the exit will actually be admitted — without
+        this, a rejected EXIT leaves the strategy believing it is flat
+        while the broker still holds the position. Restoring
+        ``_bars_until_exit`` to the pre-decrement value means the next bar
+        re-fires EXIT rather than silently dropping the retry."""
+        self._in_position = True
+        self._bars_until_exit += 1
+
+    def on_force_flat(self) -> None:
+        """Reset lifecycle bookkeeping to a clean flat slate.
+
+        Called after live-adapter warmup replay (#1708 review finding 3):
+        indicator state (EMA/RSI) is meant to carry forward from the
+        replay, but any position the replay itself would have opened is
+        not real and must not leak into the live decision loop."""
+        self._in_position = False
+        self._bars_until_exit = 0
+        self._pending_entry = None
+        self._open_trade = None
+
     # ------------------------------------------------------------------
     # Fill-driven trade bookkeeping.
     # ------------------------------------------------------------------

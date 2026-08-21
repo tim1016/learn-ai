@@ -7510,7 +7510,7 @@ export interface components {
          * @description Strategies supported by the Clerk-governed Alpaca paper runner.
          * @enum {string}
          */
-        AlpacaPaperStrategyKey: "deployment_validation" | "ema_crossover_signal" | "sma_crossover" | "rsi_mean_reversion";
+        AlpacaPaperStrategyKey: "deployment_validation" | "ema_crossover_signal" | "sma_crossover" | "rsi_mean_reversion" | "spy_strategy_a" | "spy_strategy_b" | "spy_strategy_c";
         /**
          * AlphaDecayStatsResponse
          * @description Alpha decay regression statistics with power-guard flags.
