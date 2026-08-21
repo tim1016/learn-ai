@@ -17687,6 +17687,39 @@ export interface components {
             revision: number;
         };
         /**
+         * PanelActionErrorResponse
+         * @description A rejected action execution (409/500) (§11, PRD #1716 FR-4).
+         *
+         *     Published so the OpenAPI contract and generated frontend types carry the
+         *     exact error shape callers previously narrowed by hand from an untyped
+         *     ``HTTPException.detail`` record. ``reason_code`` is the stable machine
+         *     code (e.g. an admission ``reason_code``) for a raw-identifier display
+         *     through the shared ``receiptLabel`` pipe; ``message``/``why`` remain
+         *     backend-authored prose rendered as-is.
+         */
+        PanelActionErrorResponse: {
+            /**
+             * Action Id
+             * @enum {string}
+             */
+            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
+            /** Message */
+            message: string;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "conflict" | "failure" | "unknown";
+            /** Reason Code */
+            reason_code: string | null;
+            /** Receipt Id */
+            receipt_id: string | null;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+            /** Why */
+            why: string | null;
+        };
+        /**
          * PanelActionRequest
          * @description Execute one presented action (§11).
          *
@@ -26853,6 +26886,15 @@ export interface operations {
                     "application/json": components["schemas"]["PanelActionResult"];
                 };
             };
+            /** @description The action's revision/concurrency token is stale, or it is no longer available. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PanelActionErrorResponse"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -26860,6 +26902,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description The performer began but did not return a terminal command receipt. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PanelActionErrorResponse"];
                 };
             };
         };
@@ -27416,6 +27467,15 @@ export interface operations {
                     "application/json": components["schemas"]["PanelActionResult"];
                 };
             };
+            /** @description The action's revision/concurrency token is stale, or it is no longer available. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PanelActionErrorResponse"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -27423,6 +27483,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description The performer began but did not return a terminal command receipt. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PanelActionErrorResponse"];
                 };
             };
         };

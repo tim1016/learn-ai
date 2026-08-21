@@ -24,6 +24,7 @@ export type PresentedOperatorActionInvocation = components['schemas']['Presented
 export type PresentedOperatorActionRejection = components['schemas']['PresentedOperatorActionRejection'];
 export type PresentedOperatorActionResult = components['schemas']['PresentedOperatorActionResult'];
 export type IbkrConnectionHealth = components['schemas']['IbkrConnectionHealth'];
+export type PanelActionErrorResponse = components['schemas']['PanelActionErrorResponse'];
 
 /** Keep browser mutations to the exact fields the server signed and verifies. */
 export function presentedActionInvocation(

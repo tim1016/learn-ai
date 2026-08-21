@@ -44,6 +44,7 @@ from app.schemas.broker_v2_panel import (
     ChartLiveResponse,
     LiveSnapshotUnavailableResponse,
     PanelAction,
+    PanelActionErrorResponse,
     PanelActionRequest,
     PanelActionResult,
     PanelProfile,
@@ -124,21 +125,22 @@ def _raise_alpaca_deploy_error(error: ds.PanelDataError) -> NoReturn:
 
 def _raise_action_error(error: ActionExecutionError, request: PanelActionRequest) -> NoReturn:
     outcome_unknown = isinstance(error, ActionOutcomeUnknownError)
-    outcome = (
+    outcome: Literal["conflict", "failure", "unknown"] = (
         "unknown"
         if outcome_unknown
         else ("conflict" if isinstance(error, StaleRevisionError) else "failure")
     )
     raise HTTPException(
         status_code=error.http_status,
-        detail={
-            "action_id": request.action_id,
-            "outcome": outcome,
-            "receipt_id": request.idempotency_key if outcome_unknown else None,
-            "recorded_at_ms": now_ms_utc(),
-            "message": str(error),
-            "why": error.detail,
-        },
+        detail=PanelActionErrorResponse(
+            action_id=request.action_id,
+            outcome=outcome,
+            receipt_id=request.idempotency_key if outcome_unknown else None,
+            recorded_at_ms=now_ms_utc(),
+            message=str(error),
+            why=error.detail,
+            reason_code=error.reason_code,
+        ).model_dump(mode="json"),
     )
 
 
@@ -441,10 +443,23 @@ async def _run_action(broker: str, account_id: str, sid: str, request: PanelActi
         _raise_action_error(error, request)
 
 
+_ACTION_ERROR_RESPONSES = {
+    409: {
+        "model": PanelActionErrorResponse,
+        "description": "The action's revision/concurrency token is stale, or it is no longer available.",
+    },
+    500: {
+        "model": PanelActionErrorResponse,
+        "description": "The performer began but did not return a terminal command receipt.",
+    },
+}
+
+
 @router.post(
     "/{broker}/accounts/{account_id}/bots/{sid}/actions",
     response_model=PanelActionResult,
     summary="Execute one presented action (revision-guarded, idempotent) (§11)",
+    responses=_ACTION_ERROR_RESPONSES,
 )
 async def run_action_scoped(broker: str, account_id: str, sid: str, request: PanelActionRequest) -> PanelActionResult:
     return await _run_action(broker, account_id, sid, request)
@@ -454,6 +469,7 @@ async def run_action_scoped(broker: str, account_id: str, sid: str, request: Pan
     "/{broker}/bots/{sid}/actions",
     response_model=PanelActionResult,
     summary="Execute one presented action (single-account alias) (§11)",
+    responses=_ACTION_ERROR_RESPONSES,
 )
 async def run_action_unscoped(broker: str, sid: str, request: PanelActionRequest) -> PanelActionResult:
     account_id = await _resolve_default_account(broker)

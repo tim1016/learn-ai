@@ -42,9 +42,16 @@ class ActionExecutionError(Exception):
 
     http_status: int = 500
 
-    def __init__(self, message: str, *, detail: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        detail: str | None = None,
+        reason_code: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.detail = detail
+        self.reason_code = reason_code
 
 
 class StaleRevisionError(ActionExecutionError):

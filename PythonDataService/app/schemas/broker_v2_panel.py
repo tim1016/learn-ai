@@ -501,6 +501,28 @@ class PanelActionResult(BaseModel):
     message: str
 
 
+class PanelActionErrorResponse(BaseModel):
+    """A rejected action execution (409/500) (§11, PRD #1716 FR-4).
+
+    Published so the OpenAPI contract and generated frontend types carry the
+    exact error shape callers previously narrowed by hand from an untyped
+    ``HTTPException.detail`` record. ``reason_code`` is the stable machine
+    code (e.g. an admission ``reason_code``) for a raw-identifier display
+    through the shared ``receiptLabel`` pipe; ``message``/``why`` remain
+    backend-authored prose rendered as-is.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    action_id: ActionId
+    outcome: Literal["conflict", "failure", "unknown"]
+    receipt_id: str | None
+    recorded_at_ms: int
+    message: str
+    why: str | None
+    reason_code: str | None
+
+
 # ── §8 Chart shapes ──────────────────────────────────────────────────────────
 
 ChartSource = Literal["ibkr", "polygon", "mixed"]

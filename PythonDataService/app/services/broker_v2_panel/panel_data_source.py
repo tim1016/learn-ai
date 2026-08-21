@@ -785,6 +785,11 @@ def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[s
             raise ActionNotAvailableError(
                 "Resume is no longer available for this bot.",
                 detail=exc.detail or str(exc),
+                reason_code=(
+                    exc.admission_decision.reason_code
+                    if exc.admission_decision is not None
+                    else None
+                ),
             ) from exc
         return (
             f"Bot resumed as new run {admitted.bot.active_run_id} from its immutable configuration. "

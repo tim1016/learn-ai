@@ -28197,6 +28197,95 @@
         "title": "PanelAction",
         "type": "object"
       },
+      "PanelActionErrorResponse": {
+        "description": "A rejected action execution (409/500) (\u00a711, PRD #1716 FR-4).\n\nPublished so the OpenAPI contract and generated frontend types carry the\nexact error shape callers previously narrowed by hand from an untyped\n``HTTPException.detail`` record. ``reason_code`` is the stable machine\ncode (e.g. an admission ``reason_code``) for a raw-identifier display\nthrough the shared ``receiptLabel`` pipe; ``message``/``why`` remain\nbackend-authored prose rendered as-is.",
+        "properties": {
+          "action_id": {
+            "enum": [
+              "deploy",
+              "resume",
+              "pause",
+              "continue",
+              "stop",
+              "flatten_stop",
+              "retire",
+              "cancel_order",
+              "reconcile_now",
+              "recover_exact_execution_evidence",
+              "resolve_execution_coverage",
+              "cancel_verified_working_orders",
+              "prepare_safe_flatten",
+              "stop_bot_decisions",
+              "open_custody_timeline",
+              "rebuild_from_mirror",
+              "reset_authority"
+            ],
+            "title": "Action Id",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "conflict",
+              "failure",
+              "unknown"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "receipt_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Receipt Id"
+          },
+          "recorded_at_ms": {
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
+          "why": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Why"
+          }
+        },
+        "required": [
+          "action_id",
+          "outcome",
+          "receipt_id",
+          "recorded_at_ms",
+          "message",
+          "why",
+          "reason_code"
+        ],
+        "title": "PanelActionErrorResponse",
+        "type": "object"
+      },
       "PanelActionRequest": {
         "additionalProperties": false,
         "description": "Execute one presented action (\u00a711).\n\nIdentity is NEVER a request field \u2014 it derives from the authenticated\ncontrol channel (\u00a714). The form carries only the reason.",
@@ -48538,6 +48627,16 @@
             },
             "description": "Successful Response"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelActionErrorResponse"
+                }
+              }
+            },
+            "description": "The action's revision/concurrency token is stale, or it is no longer available."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -48547,6 +48646,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelActionErrorResponse"
+                }
+              }
+            },
+            "description": "The performer began but did not return a terminal command receipt."
           }
         },
         "summary": "Execute one presented action (revision-guarded, idempotent) (\u00a711)",
@@ -49854,6 +49963,16 @@
             },
             "description": "Successful Response"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelActionErrorResponse"
+                }
+              }
+            },
+            "description": "The action's revision/concurrency token is stale, or it is no longer available."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -49863,6 +49982,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelActionErrorResponse"
+                }
+              }
+            },
+            "description": "The performer began but did not return a terminal command receipt."
           }
         },
         "summary": "Execute one presented action (single-account alias) (\u00a711)",

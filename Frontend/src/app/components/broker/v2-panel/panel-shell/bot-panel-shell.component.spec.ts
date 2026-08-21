@@ -1245,4 +1245,54 @@ describe('BotPanelShellComponent', () => {
     // state doesn't linger (the 2026-08-04 val-nvda-0804-05 409).
     expect(mockService.getLiveSnapshot).toHaveBeenCalledTimes(2);
   });
+
+  it('renders a receiptLabel-formatted reason_code when the backend sends no why prose', async () => {
+    mockService.getLiveSnapshot.mockResolvedValueOnce(liveSnapshot({
+      ...PANEL,
+      health: { ...PANEL.health, running: false },
+      actions: [
+        {
+          action_id: 'resume',
+          label: 'Resume',
+          explanation: 'Resume evaluating bars.',
+          enabled: true,
+          blockers: [],
+          confirmation: null,
+          revision: 1,
+          concurrency_token: 'start-token',
+        },
+      ],
+      primary_action_by_lens: { trader: 'resume', operator: 'resume' },
+    }));
+    mockService.runBotAction.mockRejectedValueOnce(
+      new HttpErrorResponse({
+        status: 409,
+        error: {
+          detail: {
+            action_id: 'resume',
+            outcome: 'failure',
+            receipt_id: null,
+            recorded_at_ms: 1_753_800_000_000,
+            message: 'Resume is no longer available for this bot.',
+            why: null,
+            reason_code: 'TERMINAL_EVIDENCE_UNREADABLE',
+          },
+        },
+      }),
+    );
+    const { fixture } = await render(BotPanelShellComponent, {
+      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }, { provide: BrokersService, useValue: brokersMock },
+        { provide: MessageService, useValue: messageService }],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(screen.getByText('Resume is no longer available for this bot.')).toBeTruthy();
+    expect(screen.getByText('Terminal Evidence Unreadable')).toBeTruthy();
+  });
 });

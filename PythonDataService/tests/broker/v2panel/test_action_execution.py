@@ -16,6 +16,7 @@ import pytest
 
 from app.broker.alpaca.clerk.models import EffectOperationState
 from app.schemas.broker_v2_panel import PanelActionRequest, PanelActionResult
+from app.schemas.run_admission import RunAdmissionDecision, RunAdmissionFactAges
 from app.services.bot_runner_errors import RunAdmissionRefusedError
 from app.services.broker_v2_panel import panel_data_source
 from app.services.broker_v2_panel.action_execution_service import (
@@ -442,7 +443,48 @@ async def test_resume_performer_returns_known_refusal_when_fresh_admission_chang
         )
 
     assert exc.value.http_status == 409
+    assert exc.value.reason_code is None
     assert exc.value.detail == "The Clerk evidence changed before activation."
+
+
+async def test_resume_performer_carries_the_admission_reason_code(monkeypatch) -> None:
+    """PRD #1716 FR-4: an admission denial's reason_code survives the
+    bot-runner-to-action mapping so the router/frontend can render it."""
+    decision = RunAdmissionDecision(
+        operation="RESUME",
+        allowed=False,
+        reason_code="TERMINAL_EVIDENCE_UNREADABLE",
+        explanation="The terminal receipt could not be read.",
+        next_step="This requires engineering investigation; Refresh to check for updated evidence.",
+        strategy_instance_id=_SID,
+        proposed_run_id="run-2",
+        configuration_hash="a" * 64,
+        account_id="paper-account",
+        evaluated_at_ms=1_000,
+        fact_ages_ms=RunAdmissionFactAges(runtime=0, process=0, market_data=0, market_liveness=0, clerk=0),
+        evidence_refs=(),
+    )
+
+    class _Registry:
+        async def resume_existing_with_admission(self, _broker: str, _sid: str):
+            raise RunAdmissionRefusedError(
+                "Resume admission was refused.",
+                detail=decision.explanation,
+                admission_decision=decision,
+            )
+
+    monkeypatch.setattr(
+        "app.services.broker_v2_panel.panel_data_source.get_bot_task_registry",
+        lambda: _Registry(),
+    )
+
+    with pytest.raises(ActionNotAvailableError) as exc:
+        await _action_performers("alpaca", _SID, idempotency_key="resume-3")["resume"](
+            "desk-operator", None
+        )
+
+    assert exc.value.reason_code == "TERMINAL_EVIDENCE_UNREADABLE"
+    assert exc.value.detail == decision.explanation
 
 
 async def test_live_panel_skips_resume_admission_reconciliation(monkeypatch) -> None:
