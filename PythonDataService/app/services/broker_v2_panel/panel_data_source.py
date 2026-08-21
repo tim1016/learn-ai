@@ -466,7 +466,10 @@ def _require_dry_run_deploy_request(
     checks below apply here.
     """
     if "dry_run" not in strategy.admissible_modes:
-        raise PanelRunnerError(  # defensive: every catalog row is runtime-backed today (#1702)
+        # A validated strategy with no registered runtime (#1703) reaches
+        # here with `admissible_modes == ()` — visible in the catalog, but
+        # genuinely unable to run in any mode.
+        raise PanelRunnerError(
             "The selected strategy is not currently available for Dry Run.",
             detail="This strategy has no registered live-decision runtime.",
             next_action="Choose a runtime-backed strategy.",

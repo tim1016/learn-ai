@@ -22,9 +22,27 @@ manual SQLite trading. See
 
 ## Alpaca paper bot deployment
 
-The Deploy page lists only strategies for which the Python runner has a
-registered executable signal-intent adapter and the latest human validation
-event marks the strategy validated.
+The Deploy page lists every catalog-visible strategy the operator has
+marked validated in Strategy Validation. A validated strategy is never
+silently absent: the catalog composes it from exactly two facts — the
+canonical strategy registry and the validation flag-event log — and a
+strategy that fails either the runtime check or proof re-verification stays
+visible, shown blocked with a backend-authored reason, instead of being
+dropped from the list.
+
+A blocked row carries one of two distinct reasons, both surfaced through
+the same `blocked_explanation` field with different wording. A
+**stale-proof block** means the recorded acceptance evidence — the
+settings file, the audit copy, or the manifest snapshot — no longer
+re-verifies; this row stays Dry-Run-admissible, because Dry Run does not
+depend on validation or behavioral evidence at all. A **no-runtime block**
+means the strategy has no registered live-decision runtime yet — "not
+built yet", distinct from "not validated" — and this row admits neither
+Dry Run nor Paper, because Dry Run itself requires a registered runtime to
+execute. Neither blocked reason counts toward the account's Deploy
+eligibility, and neither is repaired by re-flagging the strategy validated;
+a stale proof needs its evidence restored, a missing runtime needs an
+engineer to register one.
 
 Admission is tiered by execution mode (ADR 0034's mode-tiered-admission
 amendment). A strategy with current `accepted_for_deploy` evidence follows

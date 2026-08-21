@@ -72,6 +72,27 @@ if (BLOCKED_EXPLANATION === null || BLOCKED_EXPLANATION === undefined) {
   throw new Error('BLOCKED_STRATEGY fixture must carry a blocked_explanation');
 }
 
+// #1703: a validated strategy with no registered runtime — visible, but
+// admits neither execution mode (unlike BLOCKED_STRATEGY above, which stays
+// Dry-Run-admissible because its block is a stale proof, not a missing
+// runtime).
+const NO_RUNTIME_STRATEGY: DeployBotView['strategies'][number] = {
+  strategy_key: 'spy_strategy_b',
+  label: 'Strategy B',
+  explanation: 'Validated RSI-range strategy with no registered runtime yet.',
+  validation_case_symbol: 'SPY',
+  evidence_status: 'blocked',
+  selectable: false,
+  admissible_modes: [],
+  override_explanation: null,
+  blocked_explanation: 'This strategy has no registered live-decision runtime yet.',
+};
+
+const NO_RUNTIME_EXPLANATION = NO_RUNTIME_STRATEGY.blocked_explanation;
+if (NO_RUNTIME_EXPLANATION === null || NO_RUNTIME_EXPLANATION === undefined) {
+  throw new Error('NO_RUNTIME_STRATEGY fixture must carry a blocked_explanation');
+}
+
 const DEPLOY_VIEW: DeployBotView = {
   broker: 'alpaca',
   account_id: 'PA9',
@@ -562,6 +583,52 @@ describe('AlpacaDeployWorkflowComponent', () => {
     const deployButton = screen.getByRole<HTMLButtonElement>('button', {
       name: 'Deploy paper bot',
       description: BLOCKED_EXPLANATION,
+    });
+    expect(deployButton.disabled).toBe(true);
+  });
+
+  it('disables both execution modes for a validated strategy with no registered runtime', async () => {
+    // #1703: unlike a stale-proof blocked row (BLOCKED_STRATEGY, still
+    // Dry-Run-admissible), a no-runtime row admits neither mode — reuses
+    // the existing disabled-option / disabled-radio pattern from #1702,
+    // no new UI.
+    const queryParamMap = convertToParamMap({ strategy_key: 'spy_strategy_b' });
+    const service = mockService(RECEIPT, {
+      ...DEPLOY_VIEW,
+      strategies: [VALIDATION_STRATEGY, EMA_STRATEGY, SMA_OVERRIDE_STRATEGY, NO_RUNTIME_STRATEGY],
+    });
+    await render(AlpacaDeployWorkflowComponent, {
+      providers: [
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: { queryParamMap: of(queryParamMap), snapshot: { queryParamMap } },
+        },
+        { provide: BrokerV2PanelService, useValue: service },
+      ],
+      componentInputs: { accountId: 'PA9' },
+    });
+    await screen.findByText(DEPLOY_VIEW.eligibility.headline);
+    await userEvent.type(screen.getByLabelText('Bot name'), 'strategy-b-01');
+
+    const select = screen.getByLabelText<HTMLSelectElement>('Deployment strategy');
+    expect(select.value).toBe('spy_strategy_b');
+    const noRuntimeOption = screen.getByRole<HTMLOptionElement>('option', { name: /Strategy B/ });
+    expect(noRuntimeOption.disabled).toBe(true);
+    expect(screen.getAllByText(NO_RUNTIME_EXPLANATION).length).toBeGreaterThanOrEqual(1);
+
+    const paperRadio = screen.getByRole<HTMLInputElement>('radio', { name: /Paper/ });
+    const dryRunRadio = screen.getByRole<HTMLInputElement>('radio', { name: /Dry Run/i });
+    expect(paperRadio.disabled).toBe(true);
+    expect(dryRunRadio.disabled).toBe(true);
+
+    fireEvent.click(dryRunRadio);
+
+    // Clicking a disabled-for-this-strategy mode is a no-op: the ticket
+    // stays on the default 'paper' mode, so the button label is unchanged.
+    const deployButton = screen.getByRole<HTMLButtonElement>('button', {
+      name: 'Deploy paper bot',
+      description: NO_RUNTIME_EXPLANATION,
     });
     expect(deployButton.disabled).toBe(true);
   });

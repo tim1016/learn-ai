@@ -193,6 +193,16 @@ export class AlpacaDeployWorkflowComponent {
     return strategy.blocked_explanation ?? null;
   });
 
+  // Backend-authored reason the Dry Run option is unreachable (#1703). Only
+  // a validated strategy with no registered runtime is ever Dry-Run-blocked
+  // — every other row (accepted, evidence-only, or blocked on a stale
+  // proof) stays Dry-Run-admissible regardless of validation state.
+  protected readonly dryRunUnavailableReason = computed(() => {
+    const strategy = this.selectedStrategy();
+    if (strategy === null || strategy.admissible_modes.includes('dry_run')) return null;
+    return strategy.blocked_explanation ?? null;
+  });
+
   protected readonly selectedExecutionMode = computed(() => {
     const view = this.currentView();
     return view?.execution_modes.find(
@@ -238,9 +248,12 @@ export class AlpacaDeployWorkflowComponent {
     // Dry-Run-admissible, so admissibility is checked against the ticket's
     // chosen mode, not `selectable` (which means "Paper-admissible" only).
     if (!selectedStrategy.admissible_modes.includes(this.ticket().executionMode)) {
+      const reason = this.ticket().executionMode === 'paper'
+        ? this.paperUnavailableReason()
+        : this.dryRunUnavailableReason();
       return {
         canSubmit: false,
-        guidance: this.paperUnavailableReason() ?? 'This strategy is not admissible for the selected mode.',
+        guidance: reason ?? 'This strategy is not admissible for the selected mode.',
       };
     }
     if (this.selectedExecutionMode()?.availability !== 'available') {
@@ -368,6 +381,7 @@ export class AlpacaDeployWorkflowComponent {
     );
     if (option?.availability !== 'available') return;
     if (mode === 'paper' && this.paperUnavailableReason() !== null) return;
+    if (mode === 'dry_run' && this.dryRunUnavailableReason() !== null) return;
     this.clearAdmission();
     this.ticket.update((current) => ({
       ...current,

@@ -4642,7 +4642,10 @@
             "type": "string"
           },
           "strategy_key": {
-            "$ref": "#/components/schemas/AlpacaPaperStrategyKey"
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Strategy Key",
+            "type": "string"
           },
           "symbol": {
             "maxLength": 12,
@@ -4661,7 +4664,7 @@
       },
       "AlpacaPaperDeployStrategy": {
         "additionalProperties": false,
-        "description": "Trader-facing option for one accepted, evidence-only, or blocked strategy.\n\nA validated strategy whose recorded proof no longer re-verifies is\ndemoted to ``evidence_status=\"blocked\"`` rather than removed from the\nrow set: the operator's validation flag always guarantees a row.\n``selectable`` is the server's own Paper-launchability fact \u2014 a blocked\nrow is always present but never Paper-selectable.\n\n``admissible_modes`` (#1702) is the mode-explicit fact the deploy form\nactually needs: gates are tiered by execution mode, so a row can be\nDry-Run-admissible without being Paper-selectable. Every catalog row is\nruntime-backed today, so ``\"dry_run\"`` is always present; ``\"paper\"`` is\npresent iff ``selectable`` is ``True`` \u2014 the two facts are kept in sync\nby the invariant below, not merged into one, because ``selectable``\nalready has a settled meaning (\"is this row currently Paper-admissible\")\nthat this change does not repurpose.",
+        "description": "Trader-facing option for one accepted, evidence-only, or blocked strategy.\n\nA validated strategy whose recorded proof no longer re-verifies is\ndemoted to ``evidence_status=\"blocked\"`` rather than removed from the\nrow set: the operator's validation flag always guarantees a row.\n``selectable`` is the server's own Paper-launchability fact \u2014 a blocked\nrow is always present but never Paper-selectable.\n\nA validated strategy with no registered runtime (#1703) is composed the\nsame way \u2014 visible, ``evidence_status=\"blocked\"``, ``selectable=False``\n\u2014 with a ``blocked_explanation`` naming the missing runtime rather than\na stale proof, so \"not built yet\" reads differently from \"not\nvalidated\". It is the one case that also admits neither execution mode;\nsee ``admissible_modes`` below.\n\n``admissible_modes`` (#1702) is the mode-explicit fact the deploy form\nactually needs: gates are tiered by execution mode, so a row can be\nDry-Run-admissible without being Paper-selectable. A runtime-backed row\nalways admits ``\"dry_run\"``; ``\"paper\"`` is present iff ``selectable``\nis ``True`` \u2014 the two facts are kept in sync by the invariant below, not\nmerged into one, because ``selectable`` already has a settled meaning\n(\"is this row currently Paper-admissible\") that this change does not\nrepurpose. A no-runtime row admits neither mode (Dry Run itself\nrequires a registered runtime).",
         "properties": {
           "admissible_modes": {
             "items": {
@@ -4721,7 +4724,8 @@
             "type": "boolean"
           },
           "strategy_key": {
-            "$ref": "#/components/schemas/AlpacaPaperStrategyKey"
+            "title": "Strategy Key",
+            "type": "string"
           },
           "validation_case_symbol": {
             "title": "Validation Case Symbol",
@@ -4973,20 +4977,6 @@
         },
         "title": "AlpacaPaperSizingSelection",
         "type": "object"
-      },
-      "AlpacaPaperStrategyKey": {
-        "description": "Strategies supported by the Clerk-governed Alpaca paper runner.",
-        "enum": [
-          "deployment_validation",
-          "ema_crossover_signal",
-          "sma_crossover",
-          "rsi_mean_reversion",
-          "spy_strategy_a",
-          "spy_strategy_b",
-          "spy_strategy_c"
-        ],
-        "title": "AlpacaPaperStrategyKey",
-        "type": "string"
       },
       "AlphaDecayStatsResponse": {
         "description": "Alpha decay regression statistics with power-guard flags.",

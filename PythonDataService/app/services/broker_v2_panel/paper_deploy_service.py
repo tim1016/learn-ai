@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import ValidationError
 
@@ -20,22 +20,14 @@ from app.schemas.broker_bots import (
     AlpacaPaperDeployView,
     AlpacaPaperExecutionMode,
     AlpacaPaperSizingOption,
-    AlpacaPaperStrategyKey,
     BotStatusView,
 )
 from app.schemas.run_admission import RunAdmissionDecision
 from app.schemas.strategy_params_schema import StrategyParamsSchema
-from app.schemas.strategy_validation import StrategyValidationEntry, StrategyValidationFlagEvent
+from app.schemas.strategy_validation import StrategyValidationEntry
 from app.services.bot_runner import alpaca_v1_action_plan
-from app.services.bot_trade_strategy import (
-    alpaca_paper_strategy_default_symbol,
-    supported_alpaca_paper_strategy_keys,
-)
 from app.services.broker_v2_panel.panel_projection_service import evaluate_channel_health
-from app.services.strategy_validation_manifest import (
-    strategy_audit_copy_is_current,
-    strategy_settings_file_is_current,
-)
+from app.services.broker_v2_panel.strategy_catalog import compose_strategy_catalog
 from app.utils.timestamps import now_ms_utc
 
 
@@ -56,7 +48,7 @@ class ResolvedDeployParams:
 
 
 def resolve_deploy_strategy_params(
-    strategy_key: AlpacaPaperStrategyKey,
+    strategy_key: str,
     symbol: str,
     requested_parameters: dict[str, Any],
 ) -> ResolvedDeployParams:
@@ -71,9 +63,9 @@ def resolve_deploy_strategy_params(
     strategy, a hidden/live-only parameter, or a schema validation failure —
     callers translate this into their own typed error shape.
     """
-    registration = _STRATEGY_REGISTRY.get(strategy_key.value)
+    registration = _STRATEGY_REGISTRY.get(strategy_key)
     if registration is None:
-        raise ValueError(f"Unknown strategy '{strategy_key.value}'.")
+        raise ValueError(f"Unknown strategy '{strategy_key}'.")
     hidden = hidden_params_present(registration, requested_parameters, extra_hidden=frozenset({"symbol"}))
     if hidden:
         raise ValueError(f"These parameters are not editable at deploy time: {', '.join(hidden)}.")
@@ -90,161 +82,49 @@ def resolve_deploy_strategy_params(
     return ResolvedDeployParams(effective=effective, diverges_from_defaults=diverges)
 
 
-def _entry_matches_accepted_snapshot(entry: StrategyValidationEntry) -> bool:
-    """Require the deploy projection to use exactly the human-accepted proof."""
-    event = entry.current_flag_event
-    if event is None:
-        return False
-    snapshot = event.evidence_snapshot
-    return (
-        entry.validator_code_ref == snapshot.validator_code_ref
-        and entry.validator_code_sha256 == snapshot.validator_code_sha256
-        and entry.settings_file_ref == snapshot.settings_file_ref
-        and entry.settings_file_sha256 == snapshot.settings_file_sha256
-        and entry.qc_cloud_backtest_id == snapshot.qc_cloud_backtest_id
-        and entry.audit_copy_ref == snapshot.audit_copy_ref
-        and entry.audit_copy_sha256 == snapshot.audit_copy_sha256
-        and entry.reconciliation_ref == snapshot.reconciliation_ref
-        and entry.validation_case_symbol == snapshot.validation_case_symbol
-        and entry.reconciliation_status == snapshot.reconciliation_status
-        and entry.diagnostics == snapshot.diagnostics
-    )
-
-
-def _accepted_proof_blocked_reason(
-    entry: StrategyValidationEntry,
-    event: StrategyValidationFlagEvent,
-) -> str | None:
-    """Name the first reason the proof recorded at acceptance no longer verifies, or None if it still holds."""
-    snapshot = event.evidence_snapshot
-    diagnostics = snapshot.diagnostics
-    divergent_gating = sorted(
-        category for category, count in event.behavioral_equivalence.gating_divergence_counts.items() if count
-    )
-    divergent_diagnostics = sorted(
-        category for category, count in (diagnostics.divergence_counts if diagnostics is not None else {}).items() if count
-    )
-    missing_snapshot_fields = [
-        field_name
-        for field_name, value in (
-            ("validation_case_symbol", snapshot.validation_case_symbol),
-            ("qc_cloud_backtest_id", snapshot.qc_cloud_backtest_id),
-            ("settings_file_ref", snapshot.settings_file_ref),
-            ("settings_file_sha256", snapshot.settings_file_sha256),
-            ("audit_copy_ref", snapshot.audit_copy_ref),
-            ("audit_copy_sha256", snapshot.audit_copy_sha256),
-            ("reconciliation_ref", snapshot.reconciliation_ref),
-        )
-        if not value
-    ]
-    checks: tuple[tuple[bool, str], ...] = (
-        (
-            event.behavioral_equivalence.verdict == "accepted_for_deploy",
-            "The recorded behavioral-equivalence verdict is no longer accepted for deploy.",
-        ),
-        (
-            strategy_settings_file_is_current(entry),
-            f"The settings/deploy binding file at '{entry.settings_file_ref}' no longer matches its recorded hash.",
-        ),
-        (
-            strategy_audit_copy_is_current(entry),
-            f"The audit copy at '{entry.audit_copy_ref}' no longer matches its recorded hash.",
-        ),
-        (
-            not divergent_gating,
-            f"The accepted validation event now records a gating divergence in: {', '.join(divergent_gating)}.",
-        ),
-        (
-            _entry_matches_accepted_snapshot(entry),
-            "The current manifest entry no longer matches the proof snapshot recorded at acceptance; "
-            "the manifest was edited after acceptance.",
-        ),
-        (
-            diagnostics is not None,
-            "The accepted proof is missing its diagnostics record.",
-        ),
-        (
-            diagnostics is not None and not divergent_diagnostics,
-            f"The accepted proof's diagnostics now record a divergence in: {', '.join(divergent_diagnostics)}.",
-        ),
-        (
-            not missing_snapshot_fields,
-            f"The accepted proof snapshot is missing required field(s): {', '.join(missing_snapshot_fields)}.",
-        ),
-        (
-            entry.deployable,
-            "The strategy validation manifest no longer marks this strategy as deployable.",
-        ),
-    )
-    for passed, reason in checks:
-        if not passed:
-            return reason
-    return None
-
-
-def _deploy_params_schema(strategy_key: AlpacaPaperStrategyKey) -> StrategyParamsSchema:
+def _deploy_params_schema(strategy_key: str) -> StrategyParamsSchema:
     """This strategy's tunable JSON schema, `symbol` always hidden (#1701)."""
-    registration = _STRATEGY_REGISTRY[strategy_key.value]
+    registration = _STRATEGY_REGISTRY[strategy_key]
     schema = public_params_schema(registration, extra_hidden=frozenset({"symbol"}))
     return StrategyParamsSchema.model_validate(schema)
+
+
+def _admissible_modes(*, selectable: bool, has_runtime: bool) -> tuple[Literal["dry_run", "paper"], ...]:
+    """Derive the wire-facing mode set from the catalog's own launch facts (#1702, #1703)."""
+    if selectable:
+        return ("dry_run", "paper")
+    if has_runtime:
+        return ("dry_run",)
+    return ()
 
 
 def _strategy_views(
     entries: list[StrategyValidationEntry],
 ) -> tuple[AlpacaPaperDeployStrategy, ...]:
-    """Project every runtime-supported, human-validated strategy: accepted, overridable, or blocked.
+    """Project the composed strategy catalog into deploy-wire rows.
 
-    A human validated flag always guarantees a row. Re-derivation of the
-    recorded proof may demote a row to ``blocked``; it never removes it.
+    Entity composition (the definition + validation-state facets, the
+    runtime annotation, and the evidence-disposition derivation) is owned
+    by ``strategy_catalog.compose_strategy_catalog``; this function adds
+    only the deploy-specific wire shape — ``params_schema`` and the
+    mode-explicit ``admissible_modes`` tuple derived from
+    ``selectable`` / ``has_runtime``.
     """
-    supported_strategy_keys = supported_alpaca_paper_strategy_keys()
-    strategies: list[AlpacaPaperDeployStrategy] = []
-    for entry in entries:
-        event = entry.current_flag_event
-        if entry.strategy_key not in supported_strategy_keys:
-            continue
-        if entry.validation_state != "validated" or event is None or event.flag != "validated":
-            continue
-        snapshot = event.evidence_snapshot
-        strategy_key = AlpacaPaperStrategyKey(entry.strategy_key)
-        validation_case_symbol = snapshot.validation_case_symbol or alpaca_paper_strategy_default_symbol(
-            strategy_key
+    return tuple(
+        AlpacaPaperDeployStrategy(
+            strategy_key=entry.strategy_key,
+            label=entry.label,
+            explanation=entry.explanation,
+            validation_case_symbol=entry.validation_case_symbol,
+            evidence_status=entry.evidence_status,
+            selectable=entry.selectable,
+            admissible_modes=_admissible_modes(selectable=entry.selectable, has_runtime=entry.has_runtime),
+            override_explanation=entry.override_explanation,
+            blocked_explanation=entry.blocked_explanation,
+            params_schema=_deploy_params_schema(entry.strategy_key),
         )
-        if event.behavioral_equivalence.verdict == "evidence_only":
-            strategies.append(
-                AlpacaPaperDeployStrategy(
-                    strategy_key=strategy_key,
-                    label=entry.display_name,
-                    explanation=entry.description,
-                    validation_case_symbol=validation_case_symbol,
-                    evidence_status="evidence_only",
-                    selectable=True,
-                    admissible_modes=("dry_run", "paper"),
-                    override_explanation=(
-                        "A human marked this strategy validated, but its behavioral evidence is "
-                        "evidence-only and is not accepted as behavioral-equivalence proof. Continuing "
-                        "can produce decisions that have not been reconciled to the reference implementation."
-                    ),
-                    params_schema=_deploy_params_schema(strategy_key),
-                )
-            )
-            continue
-        blocked_reason = _accepted_proof_blocked_reason(entry, event)
-        selectable = blocked_reason is None
-        strategies.append(
-            AlpacaPaperDeployStrategy(
-                strategy_key=strategy_key,
-                label=entry.display_name,
-                explanation=entry.description,
-                validation_case_symbol=validation_case_symbol,
-                evidence_status=("accepted" if selectable else "blocked"),
-                selectable=selectable,
-                admissible_modes=("dry_run", "paper") if selectable else ("dry_run",),
-                blocked_explanation=blocked_reason,
-                params_schema=_deploy_params_schema(strategy_key),
-            )
-        )
-    return tuple(strategies)
+        for entry in compose_strategy_catalog(entries)
+    )
 
 
 def _readiness_checks(
@@ -288,19 +168,22 @@ def _readiness_checks(
             headline=(
                 "At least one executable strategy is selectable for deployment."
                 if selectable_strategies
-                else "No runtime-supported strategy is currently selectable for deployment."
+                else "No strategy is currently selectable for deployment."
             ),
             explanation=(
                 (
                     "Accepted strategies use current behavioral-equivalence evidence. Evidence-only "
                     "strategies are Paper-selectable on the human-validated flag alone; their behavioral "
                     "verdict remains displayed but does not gate Paper. Blocked strategies are shown but "
-                    "not selectable until their proof is repaired."
+                    "not selectable — either their proof no longer verifies, or they have no registered "
+                    "live-decision runtime yet."
                 )
                 if selectable_strategies
                 else (
-                    "The selector excludes missing, invalidated, rejected, and runtime-unsupported strategies. "
-                    "Blocked rows are shown but do not count toward eligibility."
+                    "The selector excludes missing, invalidated, and rejected strategies. A validated "
+                    "strategy always gets a row — blocked, with a reason, when its proof no longer "
+                    "verifies or it has no registered runtime — but blocked rows never count toward "
+                    "eligibility."
                 )
             ),
             evidence_summary=(
@@ -493,13 +376,20 @@ def _dry_run_eligibility(
     market_data_ready = evaluate_channel_health(
         clerk_status.channel_healths, now_ms, required_streams=("market_data",)
     ).ready
-    any_runtime = bool(strategies)
+    # #1703: a visible catalog row no longer implies a registered runtime —
+    # a validated-but-no-runtime row is now composed (not dropped), so
+    # `bool(strategies)` alone can no longer stand in for "any runtime is
+    # available". Check `admissible_modes` directly instead.
+    any_runtime = any("dry_run" in strategy.admissible_modes for strategy in strategies)
     if not any_runtime:
         return AlpacaPaperDeployEligibility(
             eligible=False,
             reason_code="STRATEGY_NOT_ACCEPTED_FOR_DEPLOY",
-            headline="No runtime-supported strategy is currently available for Dry Run.",
-            explanation="The catalog excludes missing, invalidated, rejected, and runtime-unsupported strategies.",
+            headline="No runtime-backed strategy is currently available for Dry Run.",
+            explanation=(
+                "Every visible strategy is either unvalidated, or validated with no registered "
+                "live-decision runtime yet."
+            ),
             next_action="Review and validate a strategy in Strategy Validation.",
         )
     if not market_data_ready:
