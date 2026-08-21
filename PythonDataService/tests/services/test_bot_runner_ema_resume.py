@@ -126,6 +126,16 @@ class _ResumeFeed:
             raise self._error
         await asyncio.Event().wait()
 
+    async def recent_closed_bars(
+        self,
+        _symbol: str,
+        *,
+        use_rth: bool = True,
+        lookback_days: int = 5,
+    ) -> list[MarketDataBar]:
+        del use_rth, lookback_days
+        return []
+
     def health(self, _symbol: str | None = None) -> FeedHealth:
         return FeedHealth(
             connected=True,

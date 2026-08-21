@@ -117,4 +117,21 @@ class MarketDataFeed(Protocol):
         use_rth: bool = True,
     ) -> AsyncIterator[MarketDataBar]: ...
 
+    async def recent_closed_bars(
+        self,
+        symbol: str,
+        *,
+        use_rth: bool = True,
+        lookback_days: int = 5,
+    ) -> list[MarketDataBar]:
+        """Return closed 1-minute bars from the trailing ``lookback_days``
+        calendar days, oldest first.
+
+        Used to warm up a consumer's indicator state before it starts
+        making decisions from ``stream_bars`` -- never itself a decision
+        input. A source that cannot serve history returns an empty list;
+        callers must treat that as "no warmup available", not an error.
+        """
+        ...
+
     def health(self, symbol: str | None = None) -> FeedHealth: ...
