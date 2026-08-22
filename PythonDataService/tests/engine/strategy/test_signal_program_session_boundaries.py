@@ -11,10 +11,8 @@ caller) or from ``ZoneInfo("America/New_York")`` directly -- never a
 hardcoded ``09:30``/``13:00``/``16:00`` literal -- per
 ``.claude/rules/temporal-rigor.md``.
 
-Coverage is derived from the registry (``_sealed_programs()``), never a
-hand-written key list, matching the convention already established in
-``test_signal_program_discard_safety.py`` and
-``test_signal_program_decision_clock.py``.
+Coverage is derived from the registry (``SEALED_KEYS``, see
+``tests/_helpers/signal_program.py``), never a hand-written key list.
 
 Scope and granularity, stated up front so gaps are explicit rather than
 implied:
@@ -52,9 +50,6 @@ implied:
 
 from __future__ import annotations
 
-import ast
-import inspect
-import textwrap
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from functools import lru_cache
@@ -65,11 +60,6 @@ import pytest
 
 from app.engine.consolidators.trade_bar_consolidator import TradeBarConsolidator
 from app.engine.data.trade_bar import TradeBar
-from app.engine.execution.portfolio import Portfolio
-from app.engine.execution.signal_intent_executor import SignalIntentExecutionContext
-from app.engine.strategy.base import StrategyContext
-from app.engine.strategy.registry import _STRATEGY_REGISTRY, StrategyParamsBase
-from app.engine.strategy.signal_intent import SignalIntent
 from app.engine.strategy.signal_program import (
     EvaluationMode,
     Settlement,
@@ -77,79 +67,26 @@ from app.engine.strategy.signal_program import (
     StageQuarantine,
 )
 from app.lean_sidecar import trading_calendar
-
-# ---------------------------------------------------------------------------
-# Registry-derived program list -- never a hand-written key list.
-# ---------------------------------------------------------------------------
-
-
-def _sealed_programs() -> list[tuple[str, Any]]:
-    return [(key, reg) for key, reg in _STRATEGY_REGISTRY.items() if reg.signal_program_factory is not None]
-
-
-_SEALED_KEYS = [key for key, _ in _sealed_programs()]
+from tests._helpers.signal_program import (
+    SEALED_KEYS,
+    bucket,
+    custody_snapshot,
+    custody_surface,
+    sequential_bucket,
+)
+from tests.engine.strategy.conftest import PreparedProgram, build_program
 
 
-class _RecordingExecutor:
-    """Absorbs committed intents so a Pause bar's absence of commits is provable."""
+def _construct_program(key: str) -> PreparedProgram:
+    """Build a registered program and require an explicit mode for every bar.
 
-    def __init__(self) -> None:
-        self.intents: list[SignalIntent] = []
-
-    def execute(self, _context: SignalIntentExecutionContext, intent: SignalIntent) -> None:
-        self.intents.append(intent)
-
-
-def _construct_program(key: str) -> tuple[SignalProgram, StrategyParamsBase, _RecordingExecutor]:
-    """Build a registered program and warm the strategy exactly as the discard-safety
-    and decision-clock sibling tests do: drive the session directly rather than
-    through ``BacktestEngine``, since these programs declare a fixed backtest
-    window that would filter out synthetic bars outside it.
+    ``activate_for_runner`` matches the live runner's contract; this file's
+    ``on_consolidated_bar`` cases must not rely on the backtest-only
+    default-DECIDE convenience.
     """
-    registration = _STRATEGY_REGISTRY[key]
-    assert registration.signal_program_factory is not None
-    params = registration.param_schema()
-    program = registration.signal_program_factory(params)
-    strategy = program.strategy
-    strategy.ctx = StrategyContext(portfolio=Portfolio(initial_cash=Decimal("100000")))
-    strategy.initialize()
-    executor = _RecordingExecutor()
-    strategy.ctx.set_signal_intent_executor(executor)
-    # Require an explicit captured mode for every bar, matching the live
-    # runner's contract -- this repo's ``on_consolidated_bar`` tests should
-    # not rely on the backtest-only default-DECIDE convenience.
-    program.activate_for_runner()
-    return program, params, executor
-
-
-# ---------------------------------------------------------------------------
-# Bar builders.
-# ---------------------------------------------------------------------------
-
-
-def _bucket(symbol: str, start_ms: int, end_ms: int, close: str) -> TradeBar:
-    price = Decimal(close)
-    return TradeBar(
-        symbol=symbol,
-        start_ms=start_ms,
-        end_ms=end_ms,
-        open=price,
-        high=price + Decimal("1"),
-        low=price - Decimal("1"),
-        close=price,
-        volume=1_000,
-    )
-
-
-# Arbitrary well-formed epoch anchor for tests that only need internally
-# consistent, sequential decision buckets -- not calendar-derived, and kept
-# large enough that a "backwards" offset never goes negative.
-_BASE_MS = 1_700_000_000_000
-
-
-def _sequential_bucket(symbol: str, index: int, width: int, close: str) -> TradeBar:
-    start = _BASE_MS + index * width
-    return _bucket(symbol, start, start + width, close)
+    prepared = build_program(key)
+    prepared.program.activate_for_runner()
+    return prepared
 
 
 def _stage(
@@ -171,21 +108,40 @@ def _stage(
     return result
 
 
+def _drain_quarantines(program: SignalProgram) -> dict[str, int]:
+    """Drain the refusals the program retained, tallied by reason.
+
+    Mirrors what the live runner does with ``take_quarantine()``. The sealed
+    ``SignalProgram`` deliberately keeps no counter of its own: an accessor
+    read only by tests, living in a file whose bytes *are* the sealed
+    decision identity, is what moved these diagnostics out to
+    ``app/services/bot_trade_strategy.py`` in the first place.
+    """
+    tally: dict[str, int] = {}
+    while (quarantine := program.take_quarantine()) is not None:
+        tally[quarantine.reason] = tally.get(quarantine.reason, 0) + 1
+    return tally
+
+
 def _feed_through_program(
     program: SignalProgram,
     bar: TradeBar,
     *,
     mode: EvaluationMode = EvaluationMode.DECIDE,
-) -> None:
-    """Drive one bar through the production entrypoint (capture + on_consolidated_bar)
-    and settle any real stage it creates -- this is the path that actually
-    populates ``SignalProgram.quarantine_counts``, unlike driving
-    ``SignalSession.advance`` directly.
+) -> dict[str, int]:
+    """Drive one bar through the production entrypoint (capture +
+    ``on_consolidated_bar``) and settle any real stage it creates.
+
+    Returns the refusals *this bar* produced. Per-bar rather than cumulative:
+    asserting a running total stayed put is an indirect way of saying "this
+    bar was not refused", and says it less clearly.
     """
     program.capture_source_bar(bar, mode=mode)
     program.on_consolidated_bar(bar)
+    refused = _drain_quarantines(program)
     if program.session.active_stage is not None:
         program.session.settle(Settlement.DISCARD)
+    return refused
 
 
 # ---------------------------------------------------------------------------
@@ -255,52 +211,11 @@ def _fixed_est_open_ms(d: date) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Custody-surface reflection -- same technique as
-# test_signal_program_discard_safety.py, reproduced locally per this test
-# suite's existing per-file convention (see that file and
-# test_signal_program_decision_clock.py, both of which independently
-# re-derive ``_sealed_programs()`` rather than importing it).
-# ---------------------------------------------------------------------------
-
-_ROLLBACK_METHODS = ("rollback_blocked_entry", "rollback_blocked_exit")
-_DESCRIBE_METHOD = "evaluate_signal_bar"
-
-
-def _assigned_self_attrs(strategy: object, method_name: str) -> frozenset[str]:
-    method = getattr(type(strategy), method_name, None)
-    if method is None:
-        return frozenset()
-    names: set[str] = set()
-    tree = ast.parse(textwrap.dedent(inspect.getsource(method)))
-    for node in ast.walk(tree):
-        targets: list[ast.expr] = []
-        if isinstance(node, ast.Assign):
-            targets = list(node.targets)
-        elif isinstance(node, ast.AugAssign):
-            targets = [node.target]
-        for target in targets:
-            if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name) and target.value.id == "self":
-                names.add(target.attr)
-    return frozenset(names)
-
-
-def _custody_surface(strategy: object) -> frozenset[str]:
-    restored: set[str] = set()
-    for method_name in _ROLLBACK_METHODS:
-        restored |= _assigned_self_attrs(strategy, method_name)
-    return frozenset(restored) - _assigned_self_attrs(strategy, _DESCRIBE_METHOD)
-
-
-def _custody_snapshot(strategy: object, surface: frozenset[str]) -> dict[str, object]:
-    return {name: repr(getattr(strategy, name)) for name in sorted(surface)}
-
-
-# ---------------------------------------------------------------------------
 # 1. Ordinary day.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("key", _SEALED_KEYS)
+@pytest.mark.parametrize("key", SEALED_KEYS)
 def test_ordinary_day_full_session_accepted_end_to_end(key: str) -> None:
     program, params, _executor = _construct_program(key)
     width = program.session.timeframe_ms
@@ -317,7 +232,7 @@ def test_ordinary_day_full_session_accepted_end_to_end(key: str) -> None:
 
     for i in range(bucket_count):
         start = open_ms + i * width
-        bar = _bucket(params.symbol, start, start + width, str(100 + (i % 11)))
+        bar = bucket(params.symbol, start, start + width, str(100 + (i % 11)))
         stage = _stage(program, bar)
         assert not isinstance(stage, StageQuarantine), (
             f"'{key}' quarantined bucket {i}/{bucket_count} of the ordinary {day} "
@@ -330,7 +245,7 @@ def test_ordinary_day_full_session_accepted_end_to_end(key: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("key", _SEALED_KEYS)
+@pytest.mark.parametrize("key", SEALED_KEYS)
 def test_early_close_short_session_accepted_end_to_end(key: str) -> None:
     program, params, _executor = _construct_program(key)
     width = program.session.timeframe_ms
@@ -350,7 +265,7 @@ def test_early_close_short_session_accepted_end_to_end(key: str) -> None:
     for i in range(bucket_count):
         start = open_ms + i * width
         end = start + width
-        bar = _bucket(params.symbol, start, end, str(100 + (i % 11)))
+        bar = bucket(params.symbol, start, end, str(100 + (i % 11)))
         stage = _stage(program, bar)
         assert not isinstance(stage, StageQuarantine), (
             f"'{key}' quarantined bucket {i}/{bucket_count} of the {day} early-close "
@@ -365,7 +280,7 @@ def test_early_close_short_session_accepted_end_to_end(key: str) -> None:
     )
 
 
-def test_early_close_minute_feed_through_real_consolidator_flushes_final_bucket() -> None:
+def test_early_close_minute_feed_through_real_consolidator_flushes_finalbucket() -> None:
     """End-to-end proof using the REAL per-minute ``TradeBarConsolidator``.
 
     LEAN's consolidator (ported here) never closes its trailing working bar
@@ -377,7 +292,7 @@ def test_early_close_minute_feed_through_real_consolidator_flushes_final_bucket(
 
     Scoped to one representative program (see the module docstring for why).
     """
-    key = _SEALED_KEYS[0]
+    key = SEALED_KEYS[0]
     program, params, _executor = _construct_program(key)
     width = program.session.timeframe_ms
 
@@ -422,11 +337,11 @@ def test_early_close_minute_feed_through_real_consolidator_flushes_final_bucket(
         f"half-day close {close_ms}"
     )
 
-    for bucket in consolidated:
-        stage = _stage(program, bucket)
+    for fired in consolidated:
+        stage = _stage(program, fired)
         assert not isinstance(stage, StageQuarantine), (
             f"'{key}' quarantined a real consolidator-produced bucket ending "
-            f"{bucket.end_ms} during the {day} early close: "
+            f"{fired.end_ms} during the {day} early close: "
             f"{stage.reason if isinstance(stage, StageQuarantine) else ''}"
         )
 
@@ -461,7 +376,7 @@ def test_dst_transition_fixed_offset_would_have_been_wrong_by_one_hour() -> None
     )
 
 
-@pytest.mark.parametrize("key", _SEALED_KEYS)
+@pytest.mark.parametrize("key", SEALED_KEYS)
 def test_dst_transition_decision_clock_accepts_bars_from_both_sides(key: str) -> None:
     program, params, _executor = _construct_program(key)
     width = program.session.timeframe_ms
@@ -469,7 +384,7 @@ def test_dst_transition_decision_clock_accepts_bars_from_both_sides(key: str) ->
 
     for day in (day_before, day_after):
         open_ms = trading_calendar.session_open_ms_utc(day)
-        bar = _bucket(params.symbol, open_ms, open_ms + width, "100")
+        bar = bucket(params.symbol, open_ms, open_ms + width, "100")
         stage = _stage(program, bar)
         assert not isinstance(stage, StageQuarantine), (
             f"'{key}' quarantined the first decision bucket of {day} while crossing "
@@ -483,18 +398,18 @@ def test_dst_transition_decision_clock_accepts_bars_from_both_sides(key: str) ->
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("key", _SEALED_KEYS)
+@pytest.mark.parametrize("key", SEALED_KEYS)
 def test_missing_bucket_gap_is_tolerated(key: str) -> None:
     program, params, _executor = _construct_program(key)
     width = program.session.timeframe_ms
 
-    first = _sequential_bucket(params.symbol, 0, width, "100")
+    first = sequential_bucket(params.symbol, 0, width, "100")
     stage = _stage(program, first)
     assert not isinstance(stage, StageQuarantine), "setup failed: first bucket was refused"
 
     # Bucket index 1 is never delivered at all -- a missing minute that left
     # a whole decision bucket undelivered.
-    after_gap = _sequential_bucket(params.symbol, 2, width, "101")
+    after_gap = sequential_bucket(params.symbol, 2, width, "101")
     stage = _stage(program, after_gap)
     assert not isinstance(stage, StageQuarantine), (
         f"'{key}' refused a legitimate bucket after a gap: "
@@ -502,7 +417,7 @@ def test_missing_bucket_gap_is_tolerated(key: str) -> None:
     )
 
 
-@pytest.mark.parametrize("key", _SEALED_KEYS)
+@pytest.mark.parametrize("key", SEALED_KEYS)
 @pytest.mark.parametrize(
     ("label", "offending_index_delta", "offending_close"),
     [
@@ -520,25 +435,24 @@ def test_duplicate_revised_or_backwards_bucket_is_refused_and_counted(
     program, params, _executor = _construct_program(key)
     width = program.session.timeframe_ms
 
-    first = _sequential_bucket(params.symbol, 0, width, "100")
-    _feed_through_program(program, first)
-    assert program.quarantine_counts == {}, f"setup failed for '{key}'/{label}: first bucket was refused"
+    first = sequential_bucket(params.symbol, 0, width, "100")
+    refused_first = _feed_through_program(program, first)
+    assert refused_first == {}, f"setup failed for '{key}'/{label}: first bucket was refused"
 
-    offending_start = _BASE_MS + offending_index_delta * width
-    offending = _bucket(params.symbol, offending_start, offending_start + width, offending_close)
-    _feed_through_program(program, offending)
+    offending = sequential_bucket(params.symbol, offending_index_delta, width, offending_close)
+    refused_offending = _feed_through_program(program, offending)
 
-    assert program.quarantine_counts == {"NON_MONOTONIC_DECISION_CLOCK": 1}, (
+    assert refused_offending == {"NON_MONOTONIC_DECISION_CLOCK": 1}, (
         f"'{key}' accepted a {label} decision bucket (end_ms={offending.end_ms}) after "
-        f"already deciding through end_ms={first.end_ms}: {program.quarantine_counts}"
+        f"already deciding through end_ms={first.end_ms}: {refused_offending}"
     )
     assert program.session.active_stage is None, f"'{key}' left an active stage after refusing a {label} bucket"
 
     # Recovery: a genuinely new, later bucket must still be accepted.
-    following = _sequential_bucket(params.symbol, 1, width, "101")
-    _feed_through_program(program, following)
-    assert program.quarantine_counts == {"NON_MONOTONIC_DECISION_CLOCK": 1}, (
-        f"'{key}' quarantined the recovery bucket after a {label} refusal: {program.quarantine_counts}"
+    following = sequential_bucket(params.symbol, 1, width, "101")
+    refused_following = _feed_through_program(program, following)
+    assert refused_following == {}, (
+        f"'{key}' quarantined the recovery bucket after a {label} refusal: {refused_following}"
     )
 
 
@@ -547,34 +461,34 @@ def test_duplicate_revised_or_backwards_bucket_is_refused_and_counted(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("key", _SEALED_KEYS)
+@pytest.mark.parametrize("key", SEALED_KEYS)
 def test_history_live_overlap_bar_produces_no_second_decision(key: str) -> None:
     program, params, _executor = _construct_program(key)
     width = program.session.timeframe_ms
 
     # A short warmup/history replay: three sequential decision buckets.
-    warmup = [_sequential_bucket(params.symbol, i, width, str(100 + i)) for i in range(3)]
+    warmup = [sequential_bucket(params.symbol, i, width, str(100 + i)) for i in range(3)]
     for bar in warmup:
-        _feed_through_program(program, bar)
-    assert program.quarantine_counts == {}, f"setup failed for '{key}': a warmup bucket was refused"
+        refused_warmup = _feed_through_program(program, bar)
+        assert refused_warmup == {}, f"setup failed for '{key}': a warmup bucket was refused"
 
     # The live feed re-delivers the LAST warmup bucket verbatim (same
     # end_ms) -- e.g. a reconnect replaying the tail of history it already
     # consumed. This must not produce a second decision.
     redelivered = warmup[-1]
-    _feed_through_program(program, redelivered)
+    refused_overlap = _feed_through_program(program, redelivered)
 
-    assert program.quarantine_counts == {"NON_MONOTONIC_DECISION_CLOCK": 1}, (
+    assert refused_overlap == {"NON_MONOTONIC_DECISION_CLOCK": 1}, (
         f"'{key}' let a history/live overlap bucket (end_ms={redelivered.end_ms}) "
-        f"produce a second decision instead of refusing it: {program.quarantine_counts}"
+        f"produce a second decision instead of refusing it: {refused_overlap}"
     )
     assert program.session.active_stage is None, f"'{key}' left an active stage after an overlap redelivery"
 
     # The program must still work afterward: a genuinely new bucket is accepted.
-    fresh = _sequential_bucket(params.symbol, 3, width, "104")
-    _feed_through_program(program, fresh)
-    assert program.quarantine_counts == {"NON_MONOTONIC_DECISION_CLOCK": 1}, (
-        f"'{key}' quarantined the post-overlap recovery bucket: {program.quarantine_counts}"
+    fresh = sequential_bucket(params.symbol, 3, width, "104")
+    refused_fresh = _feed_through_program(program, fresh)
+    assert refused_fresh == {}, (
+        f"'{key}' quarantined the post-overlap recovery bucket: {refused_fresh}"
     )
 
 
@@ -583,7 +497,7 @@ def test_history_live_overlap_bar_produces_no_second_decision(key: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("key", _SEALED_KEYS)
+@pytest.mark.parametrize("key", SEALED_KEYS)
 def test_pause_observe_only_records_trace_without_commit_and_program_still_decides_after(
     key: str,
 ) -> None:
@@ -592,15 +506,15 @@ def test_pause_observe_only_records_trace_without_commit_and_program_still_decid
     session = program.session
     width = session.timeframe_ms
 
-    surface = _custody_surface(strategy)
+    surface = custody_surface(strategy)
     assert surface, (
         f"'{key}' declares no custody surface via rollback_blocked_entry/exit; "
         "this Pause invariant would hold vacuously"
     )
-    before = _custody_snapshot(strategy, surface)
+    before = custody_snapshot(strategy, surface)
     traces_before = len(session.traces)
 
-    paused = [_sequential_bucket(params.symbol, i, width, str(100 + (i % 11))) for i in range(20)]
+    paused = [sequential_bucket(params.symbol, i, width, str(100 + (i % 11))) for i in range(20)]
     for bar in paused:
         # Deliberately NOT ``_feed_through_program``: that helper settles any
         # leftover active stage itself, which would silently paper over a
@@ -614,7 +528,8 @@ def test_pause_observe_only_records_trace_without_commit_and_program_still_decid
             f"'{key}' left an unsettled OBSERVE_ONLY stage -- Pause must auto-settle DISCARD"
         )
 
-    assert program.quarantine_counts == {}, f"'{key}' quarantined a Paused bar unexpectedly: {program.quarantine_counts}"
+    paused_refusals = _drain_quarantines(program)
+    assert paused_refusals == {}, f"'{key}' quarantined a Paused bar unexpectedly: {paused_refusals}"
     new_traces = session.traces[traces_before:]
     assert len(new_traces) == len(paused), f"'{key}' did not record a trace for every Paused (OBSERVE_ONLY) bar"
     assert all(t.evaluation_mode is EvaluationMode.OBSERVE_ONLY for t in new_traces), (
@@ -622,7 +537,7 @@ def test_pause_observe_only_records_trace_without_commit_and_program_still_decid
     )
     assert executor.intents == [], f"'{key}' executed a committed intent while Paused: {executor.intents}"
 
-    after_pause = _custody_snapshot(strategy, surface)
+    after_pause = custody_snapshot(strategy, surface)
     assert after_pause == before, (
         f"'{key}' advanced position custody while Paused (OBSERVE_ONLY): "
         f"{ {k: (before[k], after_pause[k]) for k in before if before[k] != after_pause[k]} }"
@@ -630,7 +545,7 @@ def test_pause_observe_only_records_trace_without_commit_and_program_still_decid
 
     # Pause must not corrupt the program: the very next DECIDE bar must still
     # stage cleanly (no leftover UNSETTLED_STAGE from a mishandled auto-settle).
-    resumed = _sequential_bucket(params.symbol, len(paused), width, "103")
+    resumed = sequential_bucket(params.symbol, len(paused), width, "103")
     stage = _stage(program, resumed, mode=EvaluationMode.DECIDE)
     assert not isinstance(stage, StageQuarantine), (
         f"'{key}' quarantined the first DECIDE bar after Resume: "
@@ -643,7 +558,7 @@ def test_pause_observe_only_records_trace_without_commit_and_program_still_decid
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("key", _SEALED_KEYS)
+@pytest.mark.parametrize("key", SEALED_KEYS)
 def test_timeframe_mismatched_bucket_is_refused_and_counted(key: str) -> None:
     """Generalizes ``test_signal_program_decision_clock.py``'s single-program
     (``sma_crossover`` only) ``TIMEFRAME_MISMATCH`` counting proof to every
@@ -652,11 +567,11 @@ def test_timeframe_mismatched_bucket_is_refused_and_counted(key: str) -> None:
     """
     program, params, _executor = _construct_program(key)
     width = program.session.timeframe_ms
-    mis_shaped = _bucket(params.symbol, 0, width - 60_000, "100")
-    _feed_through_program(program, mis_shaped)
+    mis_shaped = bucket(params.symbol, 0, width - 60_000, "100")
+    refused = _feed_through_program(program, mis_shaped)
 
-    assert program.quarantine_counts == {"TIMEFRAME_MISMATCH": 1}, (
+    assert refused == {"TIMEFRAME_MISMATCH": 1}, (
         f"'{key}' did not refuse-and-count a bucket narrower than its own {width}ms "
-        f"timeframe: {program.quarantine_counts}"
+        f"timeframe: {refused}"
     )
     assert program.session.active_stage is None

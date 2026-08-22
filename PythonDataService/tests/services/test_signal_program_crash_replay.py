@@ -4,12 +4,10 @@ Proves the acceptance criterion: "Crash-window fixtures prove deterministic
 replay, named candidate-without-disposition divergence, idempotent no-action
 evidence, and no duplicate broker contact per program."
 
-Every test is parametrized over the DERIVED sealed-program list --
-``[(k, r) for k, r in _STRATEGY_REGISTRY.items() if r.signal_program_factory
-is not None]`` -- never a hand-written key list, matching the precedent
-``tests/engine/strategy/test_signal_program_discard_safety.py`` sets and
-explains: a future promotion is covered the moment it registers a
-``signal_program_factory``.
+Every test is parametrized over the DERIVED sealed-program list
+(``SEALED_KEYS`` in ``tests/_helpers/signal_program.py``, computed from
+``_STRATEGY_REGISTRY``) -- never a hand-written key list: a future promotion
+is covered the moment it registers a ``signal_program_factory``.
 
 Bars are fed at the MINUTE level through ``_LiveSignalRuntime.replay_closed_bar``
 -- the same seam ``replay_warmup_bars`` (the function under test) itself
@@ -64,17 +62,13 @@ from __future__ import annotations
 
 from collections import Counter
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
 
-from app.engine.data.trade_bar import TradeBar
-from app.engine.execution.portfolio import Portfolio
-from app.engine.execution.signal_intent_executor import SignalIntentExecutionContext
 from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
-from app.engine.strategy.signal_intent import SignalIntent
 from app.engine.strategy.signal_program import (
     EvaluationMode,
     EvaluationStage,
@@ -87,6 +81,12 @@ from app.marketdata.feed import MarketDataBar
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_trade_strategy import _build_signal_strategy
 from app.services.bot_trade_strategy_warmup import replay_warmup_bars
+from tests._helpers.signal_program import (
+    SEALED_KEYS,
+    RecordingExecutor,
+    bind_strategy_context,
+    bucket,
+)
 
 if TYPE_CHECKING:
     from app.services.bot_trade_strategy import _LiveSignalRuntime
@@ -99,14 +99,6 @@ _MINUTE_MS = 60_000
 # periods (`_floor_to_period_ms`), so this anchor is arbitrary EXCEPT that
 # it must be real and documented -- not an epoch-0 fake.
 _ANCHOR_MS = 1_704_205_800_000
-
-
-def _sealed_programs() -> list[tuple[str, Any]]:
-    return [
-        (key, registration)
-        for key, registration in _STRATEGY_REGISTRY.items()
-        if registration.signal_program_factory is not None
-    ]
 
 
 def _generate_random_walk_closes(
@@ -135,18 +127,6 @@ a real intent (``captured_decisions=None`` discards every bucket regardless
 of content), so it stays cheap rather than paying for the full 230-bucket
 walk twice per program."""
 _DETERMINISM_CLOSES = _generate_random_walk_closes(seed=7, count=_DETERMINISM_BUCKET_COUNT + 1)
-
-
-class _RecordingExecutor:
-    """Records every ``SignalIntent`` the strategy's own execution boundary
-    receives -- the proxy for "broker contact" at this layer (see the
-    module docstring)."""
-
-    def __init__(self) -> None:
-        self.intents: list[SignalIntent] = []
-
-    def execute(self, _context: SignalIntentExecutionContext, intent: SignalIntent) -> None:
-        self.intents.append(intent)
 
 
 class _StaticWarmupFeed:
@@ -228,17 +208,16 @@ def _minute_bars_for_closes(symbol: str, resolution_minutes: int, closes: list[s
 
 def _fresh_runtime_and_executor(
     key: str, symbol: str
-) -> tuple[_LiveSignalRuntime, StrategyContext, _RecordingExecutor]:
+) -> tuple[_LiveSignalRuntime, StrategyContext, RecordingExecutor]:
     """Construct one live-shaped ``_LiveSignalRuntime`` exactly as the live
     adapter's own ``_signal_strategy_evaluations`` does (``_build_signal_strategy``
     then bind context, initialize, bind executor) -- except the executor here
-    actually records instead of the adapter's no-op stub."""
+    actually records instead of the adapter's no-op stub.
+
+    The recorded intents are this file's proxy for "broker contact" (see the
+    module docstring)."""
     runtime = _build_signal_strategy(key, symbol, None)
-    context = StrategyContext(portfolio=Portfolio(initial_cash=Decimal("100000")))
-    runtime.strategy.ctx = context
-    runtime.strategy.initialize()
-    executor = _RecordingExecutor()
-    context.set_signal_intent_executor(executor)
+    context, executor = bind_strategy_context(runtime.strategy)
     return runtime, context, executor
 
 
@@ -290,7 +269,7 @@ async def _reference_traces(key: str, symbol: str, resolution_minutes: int) -> l
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("key", [k for k, _ in _sealed_programs()])
+@pytest.mark.parametrize("key", SEALED_KEYS)
 async def test_replay_warmup_bars_is_deterministic_across_two_fresh_instances(key: str) -> None:
     """Replaying the identical bar sequence from two independent, freshly
     constructed instances of the same program must yield an identical trace
@@ -337,7 +316,7 @@ async def test_replay_warmup_bars_is_deterministic_across_two_fresh_instances(ke
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("key", [k for k, _ in _sealed_programs()])
+@pytest.mark.parametrize("key", SEALED_KEYS)
 async def test_replay_warmup_bars_is_idempotent_for_an_already_blocked_candidate(key: str) -> None:
     """A bucket whose candidate was already durably captured with a
     NON-commit outcome (here: ``"blocked"`` -- the liveness gate refused it,
@@ -377,7 +356,7 @@ async def test_replay_warmup_bars_is_idempotent_for_an_already_blocked_candidate
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("key", [k for k, _ in _sealed_programs()])
+@pytest.mark.parametrize("key", SEALED_KEYS)
 async def test_warmup_replay_then_live_loop_never_duplicates_broker_contact(key: str) -> None:
     """A clean-restart warmup (every bucket already durably captured with
     its TRUE outcome -- no crash) followed by the live loop's own
@@ -417,16 +396,7 @@ async def test_warmup_replay_then_live_loop_never_duplicates_broker_contact(key:
 
     # The live loop's own resumption re-offers a bucket already consumed
     # during warmup replay -- the exact "overlap" the criterion names.
-    overlap_bar = TradeBar(
-        symbol=symbol,
-        start_ms=last_bar_close_ms - width_ms,
-        end_ms=last_bar_close_ms,
-        open=Decimal("500"),
-        high=Decimal("501"),
-        low=Decimal("499"),
-        close=Decimal("500"),
-        volume=1_000,
-    )
+    overlap_bar = bucket(symbol, last_bar_close_ms - width_ms, last_bar_close_ms, "500")
     quarantined = session.advance(overlap_bar, mode=EvaluationMode.DECIDE)
     assert isinstance(quarantined, StageQuarantine), (
         f"'{key}' re-decided an already-replayed bucket instead of refusing it: {quarantined}"
@@ -436,17 +406,7 @@ async def test_warmup_replay_then_live_loop_never_duplicates_broker_contact(key:
     # Genuinely new bars: the live loop's ordinary decide-and-commit path.
     for offset, close in enumerate(_RANDOM_WALK_CLOSES[warmup_end : warmup_end + 20]):
         end_ms = last_bar_close_ms + (offset + 1) * width_ms
-        price = Decimal(close)
-        new_bar = TradeBar(
-            symbol=symbol,
-            start_ms=end_ms - width_ms,
-            end_ms=end_ms,
-            open=price,
-            high=price + Decimal("1"),
-            low=price - Decimal("1"),
-            close=price,
-            volume=1_000,
-        )
+        new_bar = bucket(symbol, end_ms - width_ms, end_ms, close)
         stage = session.advance(new_bar, mode=EvaluationMode.DECIDE)
         assert not isinstance(stage, StageQuarantine), f"'{key}' quarantined a genuinely new bucket: {stage}"
         session.settle(Settlement.COMMIT)
@@ -465,7 +425,7 @@ async def test_warmup_replay_then_live_loop_never_duplicates_broker_contact(key:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("key", [k for k, _ in _sealed_programs()])
+@pytest.mark.parametrize("key", SEALED_KEYS)
 async def test_replay_warmup_bars_names_the_candidate_without_disposition(key: str) -> None:
     """The crash window: a bucket ``SignalSession.advance`` staged but that
     has no known disposition (the process died after staging, before Clerk

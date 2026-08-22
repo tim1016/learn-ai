@@ -70,17 +70,12 @@ from __future__ import annotations
 import ast
 import inspect
 import textwrap
-from decimal import Decimal
 from typing import Any
 
 import pytest
 
 from app.engine.data.trade_bar import TradeBar
-from app.engine.execution.portfolio import Portfolio
-from app.engine.execution.signal_intent_executor import SignalIntentExecutionContext
-from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
-from app.engine.strategy.signal_intent import SignalIntent
 from app.engine.strategy.signal_program import (
     EvaluationMode,
     EvaluationTrace,
@@ -90,35 +85,7 @@ from app.engine.strategy.signal_program import (
     trace_root,
 )
 from app.services.bot_trade_strategy import run_dry_run_bot, run_trade_bot
-
-
-class _RecordingExecutor:
-    """Absorbs committed intents so a program can COMMIT without a broker."""
-
-    def __init__(self) -> None:
-        self.intents: list[SignalIntent] = []
-
-    def execute(self, _context: SignalIntentExecutionContext, intent: SignalIntent) -> None:
-        self.intents.append(intent)
-
-
-def _sealed_programs() -> list[tuple[str, Any]]:
-    return [(key, reg) for key, reg in _STRATEGY_REGISTRY.items() if reg.signal_program_factory is not None]
-
-
-def _bar(symbol: str, index: int, width_ms: int, close: str) -> TradeBar:
-    start = index * width_ms
-    price = Decimal(close)
-    return TradeBar(
-        symbol=symbol,
-        start_ms=start,
-        end_ms=start + width_ms,
-        open=price,
-        high=price + Decimal("1"),
-        low=price - Decimal("1"),
-        close=price,
-        volume=1_000,
-    )
+from tests._helpers.signal_program import SEALED_KEYS, bind_strategy_context, indexed_bucket
 
 
 def _zigzag(n: int, *, up: float, down: float, period: int, start: float) -> list[float]:
@@ -198,27 +165,45 @@ def _qualified_bar_sequence(symbol: str, width_ms: int) -> list[TradeBar]:
         levels.append(level)
     levels += _zigzag(300, up=2.0, down=1.0, period=4, start=levels[-1])  # 4a. ADX up-trend
     levels += _zigzag(300, up=-2.0, down=-1.0, period=4, start=levels[-1])  # 4b. ADX down-trend
-    return [_bar(symbol, index + 1, width_ms, f"{level:.2f}") for index, level in enumerate(levels)]
+    return [indexed_bucket(symbol, index + 1, width_ms, f"{level:.2f}") for index, level in enumerate(levels)]
 
 
-def _prepare(program: SignalProgram) -> None:
-    strategy = program.strategy
-    strategy.ctx = StrategyContext(portfolio=Portfolio(initial_cash=Decimal("100000")))
-    strategy.initialize()
-    strategy.ctx.set_signal_intent_executor(_RecordingExecutor())
+def _assert_nothing_was_quarantined(program: SignalProgram, bar: TradeBar, *, label: str) -> None:
+    """Fail if the session refused this bar instead of deciding on it.
+
+    ``on_consolidated_bar`` absorbs a refusal rather than returning it -- it
+    retains a ``StageQuarantine`` for its owner to drain (the runner logs it;
+    see ``test_signal_program_decision_clock.py``). Driving the production
+    entrypoint therefore means draining that buffer per bar, or a qualified
+    bar swallowed by the width or clock gate would show up here only as a
+    shorter trace list rather than as the refusal it actually was.
+    """
+    quarantine: StageQuarantine | None = program.take_quarantine()
+    assert quarantine is None, (
+        f"{label} replay quarantined a qualified bar at end_ms={bar.end_ms}: {quarantine.reason}"
+    )
 
 
 def _replay_backtest(program: SignalProgram, bars: list[TradeBar]) -> list[EvaluationTrace]:
-    """Mirror ``engine.py``'s own wiring: DECIDE always, COMMIT at the drain seam."""
-    _prepare(program)
+    """Mirror ``engine.py``'s own wiring: activate, fire the consolidator
+    callback, commit at the drain seam.
+
+    Verbatim against ``app/engine/engine.py``: ``run()`` calls
+    ``program.activate_for_backtest()``; each consolidated bucket reaches
+    ``program.on_consolidated_bar`` through the callback
+    ``Strategy._signal_program_handler`` registers; and
+    ``_commit_staged_signal_program`` calls ``program.session.commit_if_staged()``.
+    The mode is never passed in -- Backtest supplies it exclusively through
+    the DECIDE default ``activate_for_backtest`` sets, which is precisely the
+    axis this file claims to vary, so the replay must go through the same
+    entrypoint that reads it.
+    """
+    bind_strategy_context(program.strategy)
     program.activate_for_backtest()
     session = program.session
     for bar in bars:
-        stage = session.advance(bar, mode=EvaluationMode.DECIDE)
-        assert not isinstance(stage, StageQuarantine), (
-            f"backtest replay quarantined a qualified bar at end_ms={bar.end_ms}: "
-            f"{stage.reason if isinstance(stage, StageQuarantine) else ''}"
-        )
+        program.on_consolidated_bar(bar)
+        _assert_nothing_was_quarantined(program, bar, label="backtest")
         session.commit_if_staged()
     return list(session.traces)
 
@@ -226,31 +211,36 @@ def _replay_backtest(program: SignalProgram, bars: list[TradeBar]) -> list[Evalu
 def _replay_runner(program: SignalProgram, bars: list[TradeBar]) -> list[EvaluationTrace]:
     """Mirror the runner adapter both Dry Run and Paper share for a qualified bar.
 
-    ``_evaluation_mode_for`` supplies ``EvaluationMode.DECIDE`` for any
-    ordinary, unpaused feed, and both ``run_trade_bot`` and
-    ``run_dry_run_bot`` settle ``Settlement.COMMIT`` on every closed bar
-    that clears the liveness/Clerk custody boundary -- see the module
-    docstring for the full citation trail. That is reproduced directly
-    against ``SignalSession`` here, exactly as
-    ``test_signal_program_discard_safety.py`` drives the session rather
-    than the full runner, so a real ``StageQuarantine`` return value can be
-    asserted against instead of silently absorbed the way
-    ``SignalProgram.on_consolidated_bar`` absorbs one into a log line.
+    Verbatim against ``app/services/bot_trade_strategy.py``:
+    ``_build_signal_strategy`` calls ``program.activate_for_runner()``, which
+    leaves *no* default mode; ``_LiveSignalRuntime.replay_closed_bar`` calls
+    ``program.capture_source_bar(bar, mode=...)`` before the bucket can fire
+    and then drains the bar into the consolidator, which reaches
+    ``program.on_consolidated_bar``; and a bar clearing the liveness/Clerk
+    custody boundary is settled ``Settlement.COMMIT`` by both
+    ``run_trade_bot`` and ``run_dry_run_bot`` -- see the module docstring for
+    the full citation trail. ``_evaluation_mode_for`` supplies
+    ``EvaluationMode.DECIDE`` for any ordinary, unpaused feed, which is the
+    qualified-bar case this criterion names.
+
+    The one axis that separates this from ``_replay_backtest`` is exactly the
+    one the docstring above claims: the mode arrives per bar, captured
+    against the closing source bar, instead of from an activation-time
+    default. Both replays go through ``on_consolidated_bar``, because that is
+    the only place either default or capture is ever read.
     """
-    _prepare(program)
+    bind_strategy_context(program.strategy)
     program.activate_for_runner()
     session = program.session
     for bar in bars:
-        stage = session.advance(bar, mode=EvaluationMode.DECIDE)
-        assert not isinstance(stage, StageQuarantine), (
-            f"runner replay quarantined a qualified bar at end_ms={bar.end_ms}: "
-            f"{stage.reason if isinstance(stage, StageQuarantine) else ''}"
-        )
+        program.capture_source_bar(bar, mode=EvaluationMode.DECIDE)
+        program.on_consolidated_bar(bar)
+        _assert_nothing_was_quarantined(program, bar, label="runner")
         session.settle(Settlement.COMMIT)
     return list(session.traces)
 
 
-@pytest.mark.parametrize("key", [k for k, _ in _sealed_programs()])
+@pytest.mark.parametrize("key", SEALED_KEYS)
 def test_backtest_dry_run_paper_traces_are_equal(key: str) -> None:
     registration = _STRATEGY_REGISTRY[key]
     params = registration.param_schema()

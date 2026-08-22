@@ -64,10 +64,8 @@ import pytest
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
-from app.engine.execution.portfolio import Portfolio
-from app.engine.execution.signal_intent_executor import SignalIntentExecutionContext
-from app.engine.strategy.base import Strategy, StrategyContext
-from app.engine.strategy.registry import _STRATEGY_REGISTRY, StrategyRegistration
+from app.engine.strategy.base import Strategy
+from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
 from app.engine.strategy.signal_program import (
     EvaluationMode,
@@ -77,13 +75,13 @@ from app.engine.strategy.signal_program import (
     SignalProgram,
     StageQuarantine,
 )
+from tests._helpers.signal_program import SEALED_KEYS, indexed_bucket
+from tests.engine.strategy.conftest import build_program
 
-
-def _sealed_programs() -> list[tuple[str, StrategyRegistration]]:
-    return [(key, reg) for key, reg in _STRATEGY_REGISTRY.items() if reg.signal_program_factory is not None]
-
-
-_SEALED_KEYS = [key for key, _ in _sealed_programs()]
+_FLAT_CLOSE = "500"
+"""Every bar this file drives carries the same close: entry and exit
+conditions here are produced entirely by the installed indicator doubles
+below, never by price movement."""
 
 
 # ---------------------------------------------------------------------------
@@ -142,31 +140,6 @@ class _ReadySupertrend:
 
     def update(self, _bar: TradeBar) -> None:
         return None
-
-
-@dataclass
-class _RecordingExecutor:
-    """Absorbs committed intents so COMMIT never requires a broker."""
-
-    intents: list[SignalIntent]
-
-    def execute(self, _context: SignalIntentExecutionContext, intent: SignalIntent) -> None:
-        self.intents.append(intent)
-
-
-def _bar(symbol: str, index: int, width_ms: int, close: str = "500") -> TradeBar:
-    start = index * width_ms
-    price = Decimal(close)
-    return TradeBar(
-        symbol=symbol,
-        start_ms=start,
-        end_ms=start + width_ms,
-        open=price,
-        high=price + Decimal("1"),
-        low=price - Decimal("1"),
-        close=price,
-        volume=1_000,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -280,17 +253,6 @@ _RIGS: dict[str, _ProgramRig] = {
 }
 
 
-def _initialized_program(key: str) -> SignalProgram:
-    registration = _STRATEGY_REGISTRY[key]
-    assert registration.signal_program_factory is not None, f"'{key}' has no signal_program_factory"
-    program = registration.signal_program_factory(registration.param_schema())
-    strategy = program.strategy
-    strategy.ctx = StrategyContext(portfolio=Portfolio(initial_cash=Decimal("100000")))
-    strategy.initialize()
-    strategy.ctx.set_signal_intent_executor(_RecordingExecutor(intents=[]))
-    return program
-
-
 @dataclass(frozen=True)
 class _DriveResult:
     stage: EvaluationStage
@@ -316,7 +278,7 @@ def _drive_to_first_exit(
 
     def _advance_commit(*, expect_candidate: str | None, label: str) -> EvaluationStage:
         nonlocal offset
-        stage = session.advance(_bar(symbol, offset, width), mode=EvaluationMode.DECIDE)
+        stage = session.advance(indexed_bucket(symbol, offset, width, _FLAT_CLOSE), mode=EvaluationMode.DECIDE)
         assert not isinstance(stage, StageQuarantine), f"{label}: quarantined ({stage.reason})"
         assert stage.trace.staged_candidate == expect_candidate, (
             f"{label}: expected staged_candidate={expect_candidate!r}, got "
@@ -341,7 +303,7 @@ def _drive_to_first_exit(
 
     rig.arm_exit(strategy)
     exit_offset = offset
-    stage = session.advance(_bar(symbol, exit_offset, width), mode=EvaluationMode.DECIDE)
+    stage = session.advance(indexed_bucket(symbol, exit_offset, width, _FLAT_CLOSE), mode=EvaluationMode.DECIDE)
     assert not isinstance(stage, StageQuarantine), f"exit bar: quarantined ({stage.reason})"
     assert stage.trace.staged_candidate == "EXIT", (
         f"exit bar: expected staged_candidate='EXIT', got {stage.trace.staged_candidate!r} "
@@ -355,7 +317,7 @@ def _drive_to_first_exit(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("key", _SEALED_KEYS)
+@pytest.mark.parametrize("key", SEALED_KEYS)
 def test_suppressed_exit_reproposal_matches_declared_exit_eligibility(key: str) -> None:
     registration = _STRATEGY_REGISTRY[key]
     contract = registration.signal_program_contract
@@ -368,7 +330,7 @@ def test_suppressed_exit_reproposal_matches_declared_exit_eligibility(key: str) 
         "would be exactly the coverage loss issue #1730 exists to prevent."
     )
 
-    program = _initialized_program(key)
+    program = build_program(key).program
     strategy = program.strategy
     session = program.session
 
@@ -376,7 +338,7 @@ def test_suppressed_exit_reproposal_matches_declared_exit_eligibility(key: str) 
     session.settle(Settlement.DISCARD)
 
     reproposal = session.advance(
-        _bar(strategy._symbol_name, drive.next_offset, session.timeframe_ms),  # type: ignore[attr-defined]
+        indexed_bucket(strategy._symbol_name, drive.next_offset, session.timeframe_ms, _FLAT_CLOSE),  # type: ignore[attr-defined]
         mode=EvaluationMode.DECIDE,
     )
     assert not isinstance(reproposal, StageQuarantine), f"reproposal bar quarantined: {reproposal.reason}"
@@ -430,7 +392,7 @@ def _traces_for_one_enter_exit_cycle(key: str, *, apply_fills: bool) -> list[Eva
     program itself computes -- this test does not assert which.
     """
     rig = _RIGS[key]
-    program = _initialized_program(key)
+    program = build_program(key).program
     strategy = program.strategy
     session = program.session
     order_ids = count(1)
@@ -447,7 +409,7 @@ def _traces_for_one_enter_exit_cycle(key: str, *, apply_fills: bool) -> list[Eva
 
     rig.arm_entry(strategy)
     symbol = strategy._symbol_name  # type: ignore[attr-defined]
-    post_exit_stage = session.advance(_bar(symbol, drive.next_offset, session.timeframe_ms), mode=EvaluationMode.DECIDE)
+    post_exit_stage = session.advance(indexed_bucket(symbol, drive.next_offset, session.timeframe_ms, _FLAT_CLOSE), mode=EvaluationMode.DECIDE)
     assert not isinstance(post_exit_stage, StageQuarantine), (
         f"'{key}': post-exit observation bar quarantined ({post_exit_stage.reason})"
     )
@@ -457,7 +419,7 @@ def _traces_for_one_enter_exit_cycle(key: str, *, apply_fills: bool) -> list[Eva
     return list(session.traces)
 
 
-@pytest.mark.parametrize("key", _SEALED_KEYS)
+@pytest.mark.parametrize("key", SEALED_KEYS)
 def test_fill_event_callback_does_not_change_evaluation_traces(key: str) -> None:
     rig = _RIGS.get(key)
     assert rig is not None, (
