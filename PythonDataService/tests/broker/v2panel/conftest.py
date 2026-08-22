@@ -82,7 +82,14 @@ class _FakeDeployRegistry:
             configuration_hash="a" * 64,
             account_id=ACCT,
             evaluated_at_ms=_T0,
-            fact_ages_ms={"runtime": 0, "process": 0, "market_data": 0, "market_liveness": 0, "clerk": 0},
+            fact_ages_ms={
+                "program_build": 0,
+                "runtime": 0,
+                "process": 0,
+                "market_data": 0,
+                "market_liveness": 0,
+                "clerk": 0,
+            },
             evidence_refs=("test-admission",),
         )
 

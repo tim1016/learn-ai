@@ -601,11 +601,12 @@ def test_sqlite_decision_receipts_adapt_durable_s1_rows_without_jsonl(
         outcome="enter_intent",
         symbol="SPY",
         intent_id="intent-3",
-        order_ref=None,
+        order_ref="order-ref-3",
         observed_at_ms=1_700_000_180_000,
         facts_json=(
             '{"bar_ref":"SPY@1700000180000","indicator_snapshot":{"fast":12.0},'
-            '"reason_code":"STRATEGY_ENTER"}'
+            '"reason_code":"STRATEGY_ENTER","decision_id":"deadbeef","'
+            'effect_operation_id":"effect-op-3"}'
         ),
     )
     repository = SimpleNamespace(
@@ -617,13 +618,20 @@ def test_sqlite_decision_receipts_adapt_durable_s1_rows_without_jsonl(
         lambda _broker: SimpleNamespace(account_id="paper-account", repository=repository),
     )
 
-    receipts = sqlite_panel_source.read_sqlite_decision_receipts("alpaca", "active-spy")
+    result = sqlite_panel_source.read_sqlite_decision_receipts("alpaca", "active-spy")
 
-    assert receipts is not None
+    assert result is not None
+    receipts, causal_links = result
     assert [receipt.seq for receipt in receipts] == [3]
     assert receipts[0].bar_ref == "SPY@1700000180000"
     assert receipts[0].reason_code == "STRATEGY_ENTER"
     assert receipts[0].intent_id == "intent-3"
+    # PRD Sec 19: decision/effect identities stored at Clerk intake are read
+    # back verbatim, keyed by seq, never inferred from proximity.
+    assert causal_links[3] == sqlite_panel_source.DecisionCausalLinks(
+        decision_id="deadbeef",
+        effect_operation_id="effect-op-3",
+    )
 
 
 @pytest.mark.asyncio

@@ -46,18 +46,32 @@ from app.schemas.broker_v2_panel import (
 )
 from app.schemas.live_runs import BotDutyOutcomeView
 from app.schemas.operator_blocker import AccountOperatorPosture
-from app.schemas.run_admission import RunAdmissionDecision, RunAdmissionFactAges
+from app.schemas.run_admission import (
+    ProgramBuildAdmissionFact,
+    RunAdmissionDecision,
+    RunAdmissionFactAges,
+)
+from app.schemas.signal_program_seal import (
+    ConfiguredSignalProgramSeal,
+    ResolvedSignalParameter,
+    SignalClockContract,
+    SignalDataContract,
+    seal_bot_program,
+)
+from app.services.bot_binding_repository import ProgramBuildRunEvidence
 from app.services.bot_dry_run import DryRunActivity
 from app.services.broker_v2_panel.panel_projection_service import (
     build_panel,
     compute_revision,
     evaluate_channel_health,
+    program_build_view_from_run_evidence,
     select_primary_action_by_lens,
 )
 from app.services.broker_v2_panel.sqlite_panel_adapter import (
     adapt_sqlite_panel,
     build_sqlite_catalog,
 )
+from app.services.broker_v2_panel.sqlite_panel_source import DecisionCausalLinks
 from app.services.sqlite_clerk_compat import sqlite_clerk_status
 from tests.broker.v2panel.fixtures import (
     ACCT,
@@ -217,6 +231,9 @@ def _panel(
     dry_run_activity: list[DryRunActivity] | None = None,
     last_bar_at_ms: int | None = _NOW - 300,
     admission_evidence_refs: tuple[str, ...] = ("test:resume-admission",),
+    sealed_program=None,
+    program_build: ProgramBuildAdmissionFact | None = None,
+    decision_causal_links: dict[int, DecisionCausalLinks] | None = None,
 ):
     resolved_exposure = {"SPY": 100.0} if exposure is None else exposure
     if resume_allowed is None:
@@ -250,6 +267,7 @@ def _panel(
         account_id=ACCT,
         evaluated_at_ms=_NOW,
         fact_ages_ms=RunAdmissionFactAges(
+            program_build=0,
             runtime=0,
             process=0,
             market_data=0,
@@ -274,6 +292,9 @@ def _panel(
         flatten_supported=True,
         now_ms=_NOW,
         resume_admission=resume_admission,
+        sealed_program=sealed_program,
+        program_build=program_build,
+        decision_causal_links=decision_causal_links,
         dry_run_activity=dry_run_activity,
         market_pulse=_MARKET_PULSE,
     )
@@ -924,6 +945,129 @@ def test_panel_composes_cards_rail_and_actions() -> None:
     )
 
 
+def _sealed_bot_program():
+    configured = ConfiguredSignalProgramSeal(
+        program_key="ema_crossover_signal",
+        program_version="ema-crossover-signal/v1",
+        golden_trace_root="a" * 64,
+        parameters={
+            "fast_period": ResolvedSignalParameter(value=12, unit="bars", origin="registered_default"),
+        },
+        parameters_match_validated_settings=True,
+        data=SignalDataContract(
+            provider="polygon",
+            symbol="SPY",
+            base_timeframe_ms=60_000,
+            decision_timeframe_ms=60_000,
+        ),
+        clock=SignalClockContract(use_rth=True, warmup_lookback_days=5),
+    )
+    return seal_bot_program(
+        strategy_instance_id=SID,
+        configured_signal=configured,
+        configured_signal_hash=configured.semantic_hash(),
+        broker="alpaca",
+        sealed_account_id=ACCT,
+        mode="trade",
+        action_plan={"on_enter": [], "on_exit": []},
+        quantity=1,
+        carryover_policy="FORBID",
+        validation_event_id="event-1",
+        validation_snapshot_sha256="d" * 64,
+        sealed_at_ms=_NOW,
+    )
+
+
+def test_program_build_view_from_run_evidence_replays_the_proven_verdict() -> None:
+    """#1728 Gap 2: the frozen per-run record maps losslessly onto the same
+    ``ProgramBuildAdmissionFact`` shape a fresh proof would produce."""
+    seal = _sealed_bot_program()
+    evidence = ProgramBuildRunEvidence(
+        strategy_instance_id=SID,
+        run_id="run-1",
+        sealed_program_hash=seal.bot_configuration_hash,
+        program_version=seal.configured_signal.program_version,
+        golden_trace_root=seal.configured_signal.golden_trace_root,
+        running_artifact_digest="b" * 64,
+        qualification_receipt_hash="c" * 64,
+        verified_at_ms=1_000,
+    )
+
+    fact = program_build_view_from_run_evidence("ema_crossover_signal", evidence)
+
+    assert fact.state == "PROVEN"
+    assert fact.program_key == "ema_crossover_signal"
+    assert fact.program_version == evidence.program_version
+    assert fact.golden_trace_root == evidence.golden_trace_root
+    assert fact.running_artifact_digest == evidence.running_artifact_digest
+    assert fact.qualification_receipt_hash == evidence.qualification_receipt_hash
+    # The frozen verified_at_ms is replayed verbatim — never today's clock.
+    assert fact.verified_at_ms == 1_000
+    assert fact.evidence_refs == (
+        f"signal-program-seal:{seal.bot_configuration_hash}",
+        "program-build-receipt:" + "c" * 64,
+        "program-build-digest:" + "b" * 64,
+    )
+
+
+def test_panel_exposes_sealed_program_build_proof_and_decision_causal_links() -> None:
+    """PRD Sec 11.1-11.4, 19: seal + build proof + FR-030 causal links reach the panel."""
+    decision = decision_receipt(seq=3, ts_ms=_NOW - 500, outcome="entered", reason_code="CROSS_UP")
+    seal = _sealed_bot_program()
+    program_build = ProgramBuildAdmissionFact(
+        state="PROVEN",
+        program_key="ema_crossover_signal",
+        program_version=seal.configured_signal.program_version,
+        golden_trace_root=seal.configured_signal.golden_trace_root,
+        running_artifact_digest="b" * 64,
+        qualification_receipt_hash="c" * 64,
+        verified_at_ms=_NOW,
+        evidence_refs=(f"program-build-digest:{'b' * 64}",),
+        explanation="The running Signal Program build matches its golden qualification receipt.",
+    )
+    causal_links = {3: DecisionCausalLinks(decision_id="e" * 64, effect_operation_id="effect-op-3")}
+    panel = _panel(
+        _status(mode="trade"),
+        _clerk_status(),
+        [],
+        decision,
+        sealed_program=seal,
+        program_build=program_build,
+        decision_causal_links=causal_links,
+    )
+
+    # Seal content reused verbatim — never re-derived.
+    assert panel.sealed_program == seal
+    assert panel.sealed_program.configured_signal.parameters["fast_period"].value == 12
+    assert panel.sealed_program.configured_signal.parameters["fast_period"].origin == "registered_default"
+    assert panel.sealed_program.configured_signal.parameters_match_validated_settings is True
+
+    # Build proof is dynamic run evidence, distinct from the seal above.
+    assert panel.program_build == program_build
+    assert panel.program_build.state == "PROVEN"
+
+    # Admission policy verdict reaches the panel.
+    assert panel.resume_admission is not None
+
+    # Durable causal links (decision_id/effect_operation_id) attach to the
+    # exact receipt that carries them; order_ref was already present.
+    linked = next(row for row in panel.recent_decisions if row.seq == 3)
+    assert linked.decision_id == "e" * 64
+    assert linked.effect_operation_id == "effect-op-3"
+
+
+def test_panel_renders_explicit_absence_when_no_seal_or_causal_links_supplied() -> None:
+    """PRD Sec 19: an absent link/seal is an explicit state, never inferred."""
+    decision = decision_receipt(seq=4, ts_ms=_NOW - 500, outcome="no_action", reason_code="NO_SIGNAL")
+    panel = _panel(_status(mode="trade"), _clerk_status(), [], decision)
+
+    assert panel.sealed_program is None
+    assert panel.program_build.state == "NOT_APPLICABLE"
+    row = next(r for r in panel.recent_decisions if r.seq == 4)
+    assert row.decision_id is None
+    assert row.effect_operation_id is None
+
+
 def test_unperformed_actions_are_not_advertised_and_flatten_has_blast_radius() -> None:
     panel = _panel(_status(), _clerk_status(), [], exposure={"SPY": 2.0})
     changed_exposure = _panel(_status(), _clerk_status(), [], exposure={"SPY": 3.0})
@@ -1270,6 +1414,60 @@ def test_dry_run_activity_is_structurally_labelled_simulated() -> None:
     assert "broker writes are impossible" in panel.execution_policy
     assert panel.recent_decisions[0].simulated is True
     assert panel.recent_decisions[0].reason_code == "SIMULATED_ENTER"
+    # #1728 Gap 1: with no SQLite decision-receipt evidence for this Dry Run
+    # instance, the causal links render the explicit absence, never a guess.
+    assert panel.recent_decisions[0].decision_id is None
+    assert panel.recent_decisions[0].effect_operation_id is None
+    assert panel.recent_fills[0].simulated is True
+    assert panel.recent_fills[0].order_ref.startswith("simulated:")
+
+
+def test_dry_run_decisions_use_sqlite_causal_links_when_evidence_exists() -> None:
+    """#1728 Gap 1: Dry Run runs through the same governed synthetic Clerk
+    (PR #1722) and durably records every decision through the identical
+    SQLite decision-receipt path Paper uses. Whenever that SQLite evidence
+    exists, the panel must expose its real causal links, not the legacy WAL.
+    """
+    activity = DryRunActivity(
+        seq=1,
+        strategy_instance_id=SID,
+        run_id="run-dry",
+        authority_account_id=f"sim:{SID}",
+        authority_kind="synthetic",
+        recorded_at_ms=_NOW - 100,
+        bar_ref="SPY@1699999999900",
+        intent="ENTER",
+        order_ref="simulated:run-dry:1699999999900:ENTER",
+        symbol="SPY",
+        side="buy",
+        quantity=1,
+        fill_price=401.25,
+    )
+    decision = decision_receipt(seq=5, ts_ms=_NOW - 50, outcome="entered", reason_code="CROSS_UP")
+    causal_links = {5: DecisionCausalLinks(decision_id="f" * 64, effect_operation_id="effect-op-5")}
+
+    panel = _panel(
+        _status(running=True, mode="dry_run"),
+        _clerk_status(),
+        [],
+        decision,
+        decision_causal_links=causal_links,
+        dry_run_activity=[activity],
+    )
+
+    assert panel.mode == "dry_run"
+    row = panel.recent_decisions[0]
+    assert row.seq == 5
+    # Sourced from the SQLite receipt, not the WAL's "SIMULATED_ENTER" — proves
+    # the SQLite-backed path was used, not the legacy fallback.
+    assert row.reason_code == "CROSS_UP"
+    assert row.simulated is True
+    assert row.authority_account_id == f"sim:{SID}"
+    assert row.authority_kind == "synthetic"
+    assert row.decision_id == "f" * 64
+    assert row.effect_operation_id == "effect-op-5"
+    # Fills remain WAL-sourced — Gap 1 is about decision causal links, and
+    # SQLite decision receipts carry no fill quantity/price.
     assert panel.recent_fills[0].simulated is True
     assert panel.recent_fills[0].order_ref.startswith("simulated:")
     assert panel.recent_decisions[0].authority_account_id == f"sim:{SID}"

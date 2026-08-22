@@ -6779,6 +6779,9 @@
           "primary_action_by_lens": {
             "$ref": "#/components/schemas/PrimaryActionByLens"
           },
+          "program_build": {
+            "$ref": "#/components/schemas/ProgramBuildAdmissionFact"
+          },
           "rail": {
             "$ref": "#/components/schemas/TransactionRail"
           },
@@ -6822,9 +6825,29 @@
             "title": "Recent Fills",
             "type": "array"
           },
+          "resume_admission": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunAdmissionDecision"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "revision": {
             "title": "Revision",
             "type": "integer"
+          },
+          "sealed_program": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SealedBotProgram"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "strategy_instance_id": {
             "title": "Strategy Instance Id",
@@ -6862,6 +6885,9 @@
           "account_id",
           "symbol",
           "mode",
+          "sealed_program",
+          "program_build",
+          "resume_admission",
           "updated_at_ms",
           "revision",
           "market_pulse",
@@ -12938,6 +12964,58 @@
           "poll_interval_ms"
         ],
         "title": "CommandsTimeline",
+        "type": "object"
+      },
+      "ConfiguredSignalProgramSeal": {
+        "additionalProperties": false,
+        "description": "Inner seal: the exact semantic signal program selected by the user.",
+        "properties": {
+          "clock": {
+            "$ref": "#/components/schemas/SignalClockContract"
+          },
+          "data": {
+            "$ref": "#/components/schemas/SignalDataContract"
+          },
+          "golden_trace_root": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Golden Trace Root",
+            "type": "string"
+          },
+          "parameters": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ResolvedSignalParameter"
+            },
+            "title": "Parameters",
+            "type": "object"
+          },
+          "parameters_match_validated_settings": {
+            "title": "Parameters Match Validated Settings",
+            "type": "boolean"
+          },
+          "program_key": {
+            "title": "Program Key",
+            "type": "string"
+          },
+          "program_version": {
+            "title": "Program Version",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 2,
+            "default": 2,
+            "title": "Schema Version"
+          }
+        },
+        "required": [
+          "program_key",
+          "program_version",
+          "golden_trace_root",
+          "parameters",
+          "parameters_match_validated_settings",
+          "data",
+          "clock"
+        ],
+        "title": "ConfiguredSignalProgramSeal",
         "type": "object"
       },
       "ConfirmInFormAction": {
@@ -29620,6 +29698,108 @@
         "title": "PrimaryActionByLens",
         "type": "object"
       },
+      "ProgramBuildAdmissionFact": {
+        "additionalProperties": false,
+        "description": "Admission-time proof that loaded program bytes match qualification.",
+        "properties": {
+          "evidence_refs": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Refs",
+            "type": "array"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "golden_trace_root": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Golden Trace Root"
+          },
+          "next_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Step"
+          },
+          "program_key": {
+            "title": "Program Key",
+            "type": "string"
+          },
+          "program_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Program Version"
+          },
+          "qualification_receipt_hash": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Qualification Receipt Hash"
+          },
+          "running_artifact_digest": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Running Artifact Digest"
+          },
+          "state": {
+            "enum": [
+              "PROVEN",
+              "UNPROVEN",
+              "NOT_APPLICABLE"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "verified_at_ms": {
+            "minimum": 0.0,
+            "title": "Verified At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "state",
+          "program_key",
+          "verified_at_ms",
+          "explanation"
+        ],
+        "title": "ProgramBuildAdmissionFact",
+        "type": "object"
+      },
       "ProjectedCommandResponse": {
         "properties": {
           "action": {
@@ -31248,6 +31428,28 @@
             "title": "Bar Ref",
             "type": "string"
           },
+          "decision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision Id"
+          },
+          "effect_operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effect Operation Id"
+          },
           "order_ref": {
             "anyOf": [
               {
@@ -32382,6 +32584,49 @@
         "title": "ResolvedChartIndicator",
         "type": "object"
       },
+      "ResolvedSignalParameter": {
+        "additionalProperties": false,
+        "description": "One effective parameter with its unit and deploy-time origin.",
+        "properties": {
+          "origin": {
+            "enum": [
+              "registered_default",
+              "deploy_override",
+              "deployment_symbol"
+            ],
+            "title": "Origin",
+            "type": "string"
+          },
+          "unit": {
+            "title": "Unit",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "value",
+          "unit",
+          "origin"
+        ],
+        "title": "ResolvedSignalParameter",
+        "type": "object"
+      },
       "ResumeComparison": {
         "additionalProperties": false,
         "description": "An already-evaluated Resume checkpoint comparison.",
@@ -32790,12 +33035,17 @@
             "title": "Process",
             "type": "integer"
           },
+          "program_build": {
+            "title": "Program Build",
+            "type": "integer"
+          },
           "runtime": {
             "title": "Runtime",
             "type": "integer"
           }
         },
         "required": [
+          "program_build",
           "runtime",
           "process",
           "market_data",
@@ -34845,6 +35095,99 @@
         "title": "ScenarioResponse",
         "type": "object"
       },
+      "SealedBotProgram": {
+        "additionalProperties": false,
+        "description": "Outer seal: signal identity plus execution-plan and validation choice.",
+        "properties": {
+          "action_plan": {
+            "title": "Action Plan",
+            "type": "object"
+          },
+          "bot_configuration_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Bot Configuration Hash",
+            "type": "string"
+          },
+          "broker": {
+            "title": "Broker",
+            "type": "string"
+          },
+          "carryover_policy": {
+            "enum": [
+              "FORBID",
+              "ALLOW"
+            ],
+            "title": "Carryover Policy",
+            "type": "string"
+          },
+          "configured_signal": {
+            "$ref": "#/components/schemas/ConfiguredSignalProgramSeal"
+          },
+          "configured_signal_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Configured Signal Hash",
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "log_only",
+              "dry_run",
+              "trade"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "quantity": {
+            "exclusiveMinimum": 0.0,
+            "title": "Quantity",
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 2,
+            "default": 2,
+            "title": "Schema Version"
+          },
+          "sealed_account_id": {
+            "title": "Sealed Account Id",
+            "type": "string"
+          },
+          "sealed_at_ms": {
+            "minimum": 0.0,
+            "title": "Sealed At Ms",
+            "type": "integer"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "validation_event_id": {
+            "title": "Validation Event Id",
+            "type": "string"
+          },
+          "validation_snapshot_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Validation Snapshot Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_instance_id",
+          "configured_signal",
+          "configured_signal_hash",
+          "broker",
+          "sealed_account_id",
+          "mode",
+          "action_plan",
+          "quantity",
+          "carryover_policy",
+          "validation_event_id",
+          "validation_snapshot_sha256",
+          "sealed_at_ms",
+          "bot_configuration_hash"
+        ],
+        "title": "SealedBotProgram",
+        "type": "object"
+      },
       "SeasonalityMonthResponse": {
         "properties": {
           "median_compounded_return": {
@@ -35336,6 +35679,99 @@
           }
         },
         "title": "SignalBehaviorMetricsResponse",
+        "type": "object"
+      },
+      "SignalClockContract": {
+        "additionalProperties": false,
+        "description": "Calendar, warmup, session, pause, and replay semantics.",
+        "properties": {
+          "calendar": {
+            "const": "XNYS",
+            "default": "XNYS",
+            "title": "Calendar"
+          },
+          "early_close_policy": {
+            "const": "calendar_session_close",
+            "default": "calendar_session_close",
+            "title": "Early Close Policy"
+          },
+          "pause_policy": {
+            "const": "OBSERVE_ONLY",
+            "default": "OBSERVE_ONLY",
+            "title": "Pause Policy"
+          },
+          "replay_protocol": {
+            "const": "retained_source_bars_in_decision_clock_order",
+            "default": "retained_source_bars_in_decision_clock_order",
+            "title": "Replay Protocol"
+          },
+          "session_timezone": {
+            "const": "America/New_York",
+            "default": "America/New_York",
+            "title": "Session Timezone"
+          },
+          "use_rth": {
+            "title": "Use Rth",
+            "type": "boolean"
+          },
+          "warmup_lookback_days": {
+            "minimum": 0.0,
+            "title": "Warmup Lookback Days",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "use_rth",
+          "warmup_lookback_days"
+        ],
+        "title": "SignalClockContract",
+        "type": "object"
+      },
+      "SignalDataContract": {
+        "additionalProperties": false,
+        "description": "Closed source-series and bar-semantics contract.",
+        "properties": {
+          "bar_semantics": {
+            "const": "closed_end_exclusive",
+            "default": "closed_end_exclusive",
+            "title": "Bar Semantics"
+          },
+          "base_timeframe_ms": {
+            "exclusiveMinimum": 0.0,
+            "title": "Base Timeframe Ms",
+            "type": "integer"
+          },
+          "decision_timeframe_ms": {
+            "exclusiveMinimum": 0.0,
+            "title": "Decision Timeframe Ms",
+            "type": "integer"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "revision_policy": {
+            "const": "exact_retained_source_bar",
+            "default": "exact_retained_source_bar",
+            "title": "Revision Policy"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "timestamp_contract": {
+            "const": "int64_ms_utc",
+            "default": "int64_ms_utc",
+            "title": "Timestamp Contract"
+          }
+        },
+        "required": [
+          "provider",
+          "symbol",
+          "base_timeframe_ms",
+          "decision_timeframe_ms"
+        ],
+        "title": "SignalDataContract",
         "type": "object"
       },
       "SignalDiagnosticsResponse": {

@@ -8409,6 +8409,7 @@ export interface components {
             /** Open Pnl */
             open_pnl: number | null;
             primary_action_by_lens: components["schemas"]["PrimaryActionByLens"];
+            program_build: components["schemas"]["ProgramBuildAdmissionFact"];
             rail: components["schemas"]["TransactionRail"];
             /** Readiness Blocked Count */
             readiness_blocked_count: number;
@@ -8422,8 +8423,10 @@ export interface components {
             recent_decisions: components["schemas"]["RecentDecisionView"][];
             /** Recent Fills */
             recent_fills: components["schemas"]["RecentFillView"][];
+            resume_admission: components["schemas"]["RunAdmissionDecision"] | null;
             /** Revision */
             revision: number;
+            sealed_program: components["schemas"]["SealedBotProgram"] | null;
             /** Strategy Instance Id */
             strategy_instance_id: string;
             /** Strategy Key */
@@ -10569,6 +10572,32 @@ export interface components {
             entries: components["schemas"]["CommandTimelineEntry"][];
             /** Poll Interval Ms */
             poll_interval_ms: number;
+        };
+        /**
+         * ConfiguredSignalProgramSeal
+         * @description Inner seal: the exact semantic signal program selected by the user.
+         */
+        ConfiguredSignalProgramSeal: {
+            clock: components["schemas"]["SignalClockContract"];
+            data: components["schemas"]["SignalDataContract"];
+            /** Golden Trace Root */
+            golden_trace_root: string;
+            /** Parameters */
+            parameters: {
+                [key: string]: components["schemas"]["ResolvedSignalParameter"];
+            };
+            /** Parameters Match Validated Settings */
+            parameters_match_validated_settings: boolean;
+            /** Program Key */
+            program_key: string;
+            /** Program Version */
+            program_version: string;
+            /**
+             * Schema Version
+             * @default 2
+             * @constant
+             */
+            schema_version?: 2;
         };
         /**
          * ConfirmInFormAction
@@ -18309,6 +18338,38 @@ export interface components {
             /** Trader */
             trader: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority") | null;
         };
+        /**
+         * ProgramBuildAdmissionFact
+         * @description Admission-time proof that loaded program bytes match qualification.
+         */
+        ProgramBuildAdmissionFact: {
+            /**
+             * Evidence Refs
+             * @default []
+             */
+            evidence_refs?: string[];
+            /** Explanation */
+            explanation: string;
+            /** Golden Trace Root */
+            golden_trace_root?: string | null;
+            /** Next Step */
+            next_step?: string | null;
+            /** Program Key */
+            program_key: string;
+            /** Program Version */
+            program_version?: string | null;
+            /** Qualification Receipt Hash */
+            qualification_receipt_hash?: string | null;
+            /** Running Artifact Digest */
+            running_artifact_digest?: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "PROVEN" | "UNPROVEN" | "NOT_APPLICABLE";
+            /** Verified At Ms */
+            verified_at_ms: number;
+        };
         /** ProjectedCommandResponse */
         ProjectedCommandResponse: {
             /** Action */
@@ -18888,6 +18949,10 @@ export interface components {
             authority_kind?: ("real_paper" | "synthetic") | null;
             /** Bar Ref */
             bar_ref: string;
+            /** Decision Id */
+            decision_id?: string | null;
+            /** Effect Operation Id */
+            effect_operation_id?: string | null;
             /** Order Ref */
             order_ref: string | null;
             /**
@@ -19338,6 +19403,21 @@ export interface components {
             strategy_default: boolean;
         };
         /**
+         * ResolvedSignalParameter
+         * @description One effective parameter with its unit and deploy-time origin.
+         */
+        ResolvedSignalParameter: {
+            /**
+             * Origin
+             * @enum {string}
+             */
+            origin: "registered_default" | "deploy_override" | "deployment_symbol";
+            /** Unit */
+            unit: string;
+            /** Value */
+            value: string | number | boolean;
+        };
+        /**
          * ResumeComparison
          * @description An already-evaluated Resume checkpoint comparison.
          */
@@ -19558,6 +19638,8 @@ export interface components {
             market_liveness: number;
             /** Process */
             process: number;
+            /** Program Build */
+            program_build: number;
             /** Runtime */
             runtime: number;
         };
@@ -20506,6 +20588,49 @@ export interface components {
              */
             warnings?: string[];
         };
+        /**
+         * SealedBotProgram
+         * @description Outer seal: signal identity plus execution-plan and validation choice.
+         */
+        SealedBotProgram: {
+            /** Action Plan */
+            action_plan: Record<string, never>;
+            /** Bot Configuration Hash */
+            bot_configuration_hash: string;
+            /** Broker */
+            broker: string;
+            /**
+             * Carryover Policy
+             * @enum {string}
+             */
+            carryover_policy: "FORBID" | "ALLOW";
+            configured_signal: components["schemas"]["ConfiguredSignalProgramSeal"];
+            /** Configured Signal Hash */
+            configured_signal_hash: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "log_only" | "dry_run" | "trade";
+            /** Quantity */
+            quantity: number;
+            /**
+             * Schema Version
+             * @default 2
+             * @constant
+             */
+            schema_version?: 2;
+            /** Sealed Account Id */
+            sealed_account_id: string;
+            /** Sealed At Ms */
+            sealed_at_ms: number;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            /** Validation Event Id */
+            validation_event_id: string;
+            /** Validation Snapshot Sha256 */
+            validation_snapshot_sha256: string;
+        };
         /** SeasonalityMonthResponse */
         SeasonalityMonthResponse: {
             /** Median Compounded Return */
@@ -20722,6 +20847,78 @@ export interface components {
              * @default 0
              */
             skewness_active_returns?: number;
+        };
+        /**
+         * SignalClockContract
+         * @description Calendar, warmup, session, pause, and replay semantics.
+         */
+        SignalClockContract: {
+            /**
+             * Calendar
+             * @default XNYS
+             * @constant
+             */
+            calendar?: "XNYS";
+            /**
+             * Early Close Policy
+             * @default calendar_session_close
+             * @constant
+             */
+            early_close_policy?: "calendar_session_close";
+            /**
+             * Pause Policy
+             * @default OBSERVE_ONLY
+             * @constant
+             */
+            pause_policy?: "OBSERVE_ONLY";
+            /**
+             * Replay Protocol
+             * @default retained_source_bars_in_decision_clock_order
+             * @constant
+             */
+            replay_protocol?: "retained_source_bars_in_decision_clock_order";
+            /**
+             * Session Timezone
+             * @default America/New_York
+             * @constant
+             */
+            session_timezone?: "America/New_York";
+            /** Use Rth */
+            use_rth: boolean;
+            /** Warmup Lookback Days */
+            warmup_lookback_days: number;
+        };
+        /**
+         * SignalDataContract
+         * @description Closed source-series and bar-semantics contract.
+         */
+        SignalDataContract: {
+            /**
+             * Bar Semantics
+             * @default closed_end_exclusive
+             * @constant
+             */
+            bar_semantics?: "closed_end_exclusive";
+            /** Base Timeframe Ms */
+            base_timeframe_ms: number;
+            /** Decision Timeframe Ms */
+            decision_timeframe_ms: number;
+            /** Provider */
+            provider: string;
+            /**
+             * Revision Policy
+             * @default exact_retained_source_bar
+             * @constant
+             */
+            revision_policy?: "exact_retained_source_bar";
+            /** Symbol */
+            symbol: string;
+            /**
+             * Timestamp Contract
+             * @default int64_ms_utc
+             * @constant
+             */
+            timestamp_contract?: "int64_ms_utc";
         };
         /**
          * SignalDiagnosticsResponse

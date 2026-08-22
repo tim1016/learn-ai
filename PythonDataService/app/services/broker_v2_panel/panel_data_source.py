@@ -28,6 +28,7 @@ from app.broker.alpaca.clerk.models import (
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerAccountSnapshot
+from app.engine.live.identity import strategy_instance_artifact_dir
 from app.schemas.broker_bots import (
     AlpacaPaperDeployReceipt,
     AlpacaPaperDeployRequest,
@@ -47,8 +48,9 @@ from app.schemas.broker_v2_panel import (
     PanelActionRequest,
     PanelActionResult,
 )
-from app.schemas.run_admission import RunAdmissionDecision
-from app.services.bot_binding_repository import BrokerBotBinding
+from app.schemas.run_admission import ProgramBuildAdmissionFact, RunAdmissionDecision
+from app.services.account_truth_refresh import account_truth_artifacts_root
+from app.services.bot_binding_repository import BotBindingRepository, BrokerBotBinding
 from app.services.bot_runner import (
     ActivationFailedCleanupProvenError,
     BotRunnerError,
@@ -71,6 +73,7 @@ from app.services.broker_v2_panel.market_pulse import build_market_pulse
 from app.services.broker_v2_panel.panel_profile_service import panel_profile_for
 from app.services.broker_v2_panel.panel_projection_service import (
     build_panel,
+    program_build_view_from_run_evidence,
 )
 from app.services.broker_v2_panel.paper_deploy_service import (
     ResolvedDeployParams,
@@ -93,6 +96,7 @@ from app.services.broker_v2_panel.sqlite_panel_source import (
     read_sqlite_decision_receipts,
     read_sqlite_panel_evidence,
 )
+from app.services.signal_program_admission import prove_running_program_build
 from app.services.strategy_validation_manifest import (
     StrategyValidationManifestError,
     load_strategy_validation_entries,
@@ -190,6 +194,45 @@ async def _panel_authority_for_binding(
                 detail="The sealed synthetic Clerk did not provide a SQLite projection authority.",
             )
         yield facade
+
+
+def _run_evidence_repository() -> BotBindingRepository:
+    """One-shot reader bound to the same artifacts_root the in-container bot
+    runner uses (``main.py`` wires ``BotTaskRegistry`` from the identical
+    ``account_truth_artifacts_root()`` value). ``BotBindingRepository`` holds
+    no state beyond that root and an instance-dir resolver, so constructing
+    one per read costs nothing and never risks reading a stale singleton.
+    """
+    root = account_truth_artifacts_root()
+    return BotBindingRepository(
+        root,
+        instance_dir_for=lambda strategy_instance_id: strategy_instance_artifact_dir(
+            root, "live_state", strategy_instance_id
+        ),
+    )
+
+
+def _resolve_program_build(
+    binding: BrokerBotBinding,
+    *,
+    verified_at_ms: int,
+) -> ProgramBuildAdmissionFact:
+    """PRD Sec 11.3 run evidence: what was actually proven for THIS run.
+
+    Prefers the durable per-run record written at Start/Resume
+    (``BotBindingRepository.read_program_build_evidence``) over a fresh
+    ``prove_running_program_build`` re-check, so the panel never shows a
+    verdict that drifted from what was actually admitted underfoot. Falls
+    back to the live proof only when no per-run evidence was ever recorded
+    — a build that closed UNPROVEN/NOT_APPLICABLE at Start writes no
+    evidence file, and runs launched before #1728 predate this capture.
+    """
+    evidence = _run_evidence_repository().read_program_build_evidence(
+        binding.strategy_instance_id, binding.run_id
+    )
+    if evidence is not None:
+        return program_build_view_from_run_evidence(binding.strategy_key, evidence)
+    return prove_running_program_build(binding, verified_at_ms=verified_at_ms)
 
 
 async def resolve_account_snapshot(broker: str) -> BrokerAccountSnapshot:
@@ -397,6 +440,7 @@ async def deploy_alpaca_paper_bot(
             carryover_policy=request.carryover_policy,
             evidence_override=request.evidence_override,
             strategy_params=resolved_params.effective,
+            strategy_param_origins=resolved_params.origins,
         )
     except BotRunnerError as exc:
         raise PanelRunnerError(
@@ -443,6 +487,7 @@ async def preview_alpaca_paper_start_admission(
             carryover_policy=request.carryover_policy,
             evidence_override=request.evidence_override,
             strategy_params=resolved_params.effective,
+            strategy_param_origins=resolved_params.origins,
         )
     except BotRunnerError as exc:
         raise PanelRunnerError(
@@ -687,19 +732,28 @@ async def _get_panel_with_entries_from_authority(
     entries: list[OrderJournalEntry] = []
     clerk_status = await _clerk_status(symbol=binding.symbol)
     try:
-        decisions = read_sqlite_decision_receipts(broker, sid, facade=facade)
+        decision_read = read_sqlite_decision_receipts(broker, sid, facade=facade)
     except SqlitePanelDecisionUnavailable as exc:
         raise PanelUnavailableError(
             "The activated SQLite decision evidence is unavailable.",
             detail=str(exc),
         ) from exc
-    if decisions is None:
+    if decision_read is None:
         raise PanelUnavailableError(
             "The activated SQLite decision evidence is unavailable.",
             detail="The SQLite authority became unavailable during panel projection.",
         )
+    decisions, decision_causal_links = decision_read
     decision = decisions[-1] if decisions else None
     economics = evidence.economics.snapshot
+
+    # PRD Sec 11.3/11.4 run evidence: prefer the exact build durably recorded
+    # for THIS run at Start/Resume over a fresh re-check, which can drift
+    # from what actually started running if the manifest or artifacts change
+    # underfoot afterwards (#1728 Gap 2). Falls back to the same canonical
+    # proof Start/Resume admission uses only when no per-run evidence was
+    # ever recorded (never PROVEN at Start, or a run that predates it).
+    program_build = _resolve_program_build(binding, verified_at_ms=captured_now_ms)
 
     profile = panel_profile_for(broker)
     flatten_supported = profile.flatten_supported if profile is not None else False
@@ -724,7 +778,10 @@ async def _get_panel_with_entries_from_authority(
         now_ms=captured_now_ms,
         selected_transaction_ref=transaction_ref,
         recent_decisions=decisions,
+        decision_causal_links=decision_causal_links,
         resume_admission=resume_admission,
+        sealed_program=binding.sealed_program,
+        program_build=program_build,
         dry_run_activity=registry.dry_run_activity(broker, sid),
         market_pulse=build_market_pulse(
             market_data_feed,

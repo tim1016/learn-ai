@@ -93,10 +93,21 @@ class _FakeRegistry:
 
     def binding_for_control(self, broker: str, sid: str) -> SimpleNamespace:
         self.status(broker, sid)
-        return SimpleNamespace(symbol="SPY", use_rth=True)
+        return SimpleNamespace(
+            strategy_instance_id=sid,
+            run_id="run-1",
+            symbol="SPY",
+            use_rth=True,
+            strategy_key="deployment_validation",
+            sealed_program=None,
+        )
 
     def dry_run_activity(self, broker: str, sid: str) -> list:
         self.status(broker, sid)
+        return []
+
+    def bindings_for_broker(self, broker: str) -> list:
+        """No durable dry-run bindings — the catalog is the plain SQLite roster."""
         return []
 
 
@@ -183,6 +194,12 @@ async def test_panel_scoped_uses_sqlite_projection(api) -> None:
     assert {action["action_id"] for action in body["actions"]}.isdisjoint(
         {"clear_hold", "record_inventory_baseline"}
     )
+    # PRD Sec 11.1-11.4: "deployment_validation" is a legacy compatibility
+    # strategy with no registered Signal Program, so the panel renders the
+    # seal/build-proof absence explicitly rather than guessing.
+    assert body["sealed_program"] is None
+    assert body["program_build"]["state"] == "NOT_APPLICABLE"
+    assert body["program_build"]["program_key"] == "deployment_validation"
 
 
 async def test_live_snapshot_bootstrap_and_sse_share_one_versioned_document(

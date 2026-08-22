@@ -478,14 +478,35 @@ async def read_sqlite_chart_evidence(
         raise SqlitePanelEconomicUnavailable(str(exc)) from exc
 
 
+@dataclass(frozen=True)
+class DecisionCausalLinks:
+    """PRD Sec 19 stored decision/effect identities for one receipt row.
+
+    Populated only from facts durably written at Clerk intake
+    (``append_atomic_decision_receipt_row`` stamps ``decision_id`` ==
+    ``evaluation_id`` and ``effect_operation_id`` onto every effect-bearing
+    decision). The projector never infers these from timing or proximity; a
+    row with neither key renders both fields ``None`` — an explicit absence,
+    not a guess.
+    """
+
+    decision_id: str | None
+    effect_operation_id: str | None
+
+
 def read_sqlite_decision_receipts(
     broker: str,
     strategy_instance_id: str,
     *,
     limit: int = 8,
     facade: SqliteAlpacaClerkFacade | None = None,
-) -> list[DecisionReceipt] | None:
-    """Read bounded decision evidence from SQLite, never the legacy JSONL tail."""
+) -> tuple[list[DecisionReceipt], dict[int, DecisionCausalLinks]] | None:
+    """Read bounded decision evidence and its stored causal links from SQLite.
+
+    Never the legacy JSONL tail. The causal-link mapping is keyed by
+    ``seq`` so a caller can pair it back onto the parallel receipt list
+    without a second SQLite round trip.
+    """
     facade = facade or active_sqlite_facade(broker)
     if facade is None:
         return None
@@ -498,11 +519,24 @@ def read_sqlite_decision_receipts(
         raise SqlitePanelDecisionUnavailable(
             f"SQLite decision evidence is unavailable for bot '{strategy_instance_id}'."
         ) from exc
-    return [_decision_receipt_from_resource(resource) for resource in resources]
+    # Named `adapted_views`, not `receipts` — the AST writer-boundary scan
+    # (`test_repository_writer_boundary.py`) treats any `receipts.append(...)`
+    # call as a durable `SqliteDecisionReceipts.append` mutation; this is a
+    # plain in-memory list of already-read display DTOs, not a repository
+    # handle.
+    adapted_views: list[DecisionReceipt] = []
+    causal_links: dict[int, DecisionCausalLinks] = {}
+    for resource in resources:
+        receipt, causal = _decision_receipt_from_resource(resource)
+        adapted_views.append(receipt)
+        causal_links[resource.seq] = causal
+    return adapted_views, causal_links
 
 
-def _decision_receipt_from_resource(resource: DecisionReceiptResource) -> DecisionReceipt:
-    """Adapt a durable S1 receipt to the existing panel evidence view type."""
+def _decision_receipt_from_resource(
+    resource: DecisionReceiptResource,
+) -> tuple[DecisionReceipt, DecisionCausalLinks]:
+    """Adapt a durable S1 receipt to the panel evidence view + its causal links."""
     try:
         facts = json.loads(resource.facts_json)
     except (TypeError, json.JSONDecodeError) as exc:
@@ -514,7 +548,7 @@ def _decision_receipt_from_resource(resource: DecisionReceiptResource) -> Decisi
             f"SQLite decision receipt {resource.seq} facts must be an object."
         )
     try:
-        return DecisionReceipt.model_validate(
+        receipt = DecisionReceipt.model_validate(
             {
                 "seq": resource.seq,
                 "ts_ms": resource.observed_at_ms,
@@ -530,6 +564,22 @@ def _decision_receipt_from_resource(resource: DecisionReceiptResource) -> Decisi
         raise SqlitePanelDecisionUnavailable(
             f"SQLite decision receipt {resource.seq} does not satisfy the panel evidence contract."
         ) from exc
+    causal = DecisionCausalLinks(
+        decision_id=_facts_optional_str(facts, "decision_id") or _facts_optional_str(facts, "evaluation_id"),
+        effect_operation_id=_facts_optional_str(facts, "effect_operation_id"),
+    )
+    return receipt, causal
+
+
+def _facts_optional_str(facts: dict, key: str) -> str | None:
+    """Read one optional string identity out of decision-receipt facts.
+
+    A present-but-empty or non-string value is treated the same as absent
+    (``None``) rather than raising — these are supplementary causal-link
+    identities, not the receipt's own required contract fields.
+    """
+    value = facts.get(key)
+    return value if isinstance(value, str) and value else None
 
 
 async def read_sqlite_catalog_projections(
@@ -828,6 +878,7 @@ async def execute_sqlite_panel_action(
 
 
 __all__ = [
+    "DecisionCausalLinks",
     "SqliteChartEvidence",
     "SqlitePanelBotNotFound",
     "SqlitePanelDecisionUnavailable",

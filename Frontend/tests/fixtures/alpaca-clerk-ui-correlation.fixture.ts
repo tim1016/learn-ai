@@ -81,6 +81,14 @@ export function panelAtRevision(revision: number): BotPanelView {
     account_id: ACCOUNT_ID,
     symbol: UI_CORRELATION_CAMPAIGN.symbol,
     mode: 'log_only',
+    sealed_program: null,
+    program_build: {
+      state: 'NOT_APPLICABLE',
+      program_key: 'ema_crossover',
+      verified_at_ms: BASE_TIMESTAMP_MS,
+      explanation: 'No Signal Program build proof supplied.',
+    },
+    resume_admission: null,
     updated_at_ms: BASE_TIMESTAMP_MS + revision,
     revision,
     market_pulse: {

@@ -16,7 +16,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal
 
+from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
 from app.broker.alpaca.clerk.fills import project_instance_fills
 from app.broker.alpaca.clerk.models import ChannelHealth, ClerkEntryKind, ClerkStatus, OrderJournalEntry
 from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionReceipt
@@ -45,7 +47,9 @@ from app.schemas.broker_v2_panel import (
     TransactionRail,
     WorkingOrderView,
 )
-from app.schemas.run_admission import RunAdmissionDecision
+from app.schemas.run_admission import ProgramBuildAdmissionFact, RunAdmissionDecision
+from app.schemas.signal_program_seal import SealedBotProgram
+from app.services.bot_binding_repository import ProgramBuildRunEvidence
 from app.services.bot_dry_run import DryRunActivity
 from app.services.broker_v2_panel.presented_actions import build_actions
 from app.services.broker_v2_panel.station_derivation import (
@@ -53,6 +57,14 @@ from app.services.broker_v2_panel.station_derivation import (
     derive_stations,
     transaction_refs_for_bot,
 )
+
+if TYPE_CHECKING:
+    # Deferred to a type-checking-only import: `sqlite_panel_source` imports
+    # `sqlite_panel_adapter`, which imports `select_primary_action_by_lens`
+    # from this module — a real module-level import here would be circular.
+    # `from __future__ import annotations` already makes every annotation in
+    # this file a string, so this is purely for static type checkers.
+    from app.services.broker_v2_panel.sqlite_panel_source import DecisionCausalLinks
 
 # A channel-health observation older than this is not "fresh" for the clear-hold
 # gate (§7.3). Reuse the station staleness threshold — one trading day.
@@ -375,7 +387,16 @@ def _account_working_order_count(entries: list[OrderJournalEntry]) -> int:
     )
 
 
-def _recent_decision_views(receipts: list[DecisionReceipt], *, limit: int = 8) -> list[RecentDecisionView]:
+def _recent_decision_views(
+    receipts: list[DecisionReceipt],
+    *,
+    causal_links: dict[int, DecisionCausalLinks] | None = None,
+    limit: int = 8,
+    simulated: bool = False,
+    authority_account_id: str | None = None,
+    authority_kind: Literal["real_paper", "synthetic"] | None = None,
+) -> list[RecentDecisionView]:
+    links = causal_links or {}
     return [
         RecentDecisionView(
             seq=receipt.seq,
@@ -384,6 +405,11 @@ def _recent_decision_views(receipts: list[DecisionReceipt], *, limit: int = 8) -
             reason_code=receipt.reason_code,
             bar_ref=receipt.bar_ref,
             order_ref=receipt.order_ref or None,
+            decision_id=(links[receipt.seq].decision_id if receipt.seq in links else None),
+            effect_operation_id=(links[receipt.seq].effect_operation_id if receipt.seq in links else None),
+            simulated=simulated,
+            authority_account_id=authority_account_id,
+            authority_kind=authority_kind,
         )
         for receipt in reversed(receipts[-limit:])
     ]
@@ -446,6 +472,40 @@ def _dry_run_fill_views(
     ]
 
 
+def program_build_view_from_run_evidence(
+    strategy_key: str,
+    evidence: ProgramBuildRunEvidence,
+) -> ProgramBuildAdmissionFact:
+    """PRD Sec 11.3 run evidence: the exact build proven and durably recorded
+    when this run passed Start/Resume admission (#1728 Gap 2) — not a fresh
+    re-check, which can drift from what is actually running if the
+    qualification manifest or artifacts change underfoot after Start. The
+    evidence this reads from is only ever written by
+    ``BotBindingRepository._ensure_program_build_evidence`` after the same
+    canonical ``prove_running_program_build`` closed ``state="PROVEN"``, so
+    reconstructing that state here is a lossless replay of that verdict, not
+    a new proof.
+    """
+    return ProgramBuildAdmissionFact(
+        state="PROVEN",
+        program_key=strategy_key,
+        program_version=evidence.program_version,
+        golden_trace_root=evidence.golden_trace_root,
+        running_artifact_digest=evidence.running_artifact_digest,
+        qualification_receipt_hash=evidence.qualification_receipt_hash,
+        verified_at_ms=evidence.verified_at_ms,
+        evidence_refs=(
+            f"signal-program-seal:{evidence.sealed_program_hash}",
+            f"program-build-receipt:{evidence.qualification_receipt_hash}",
+            f"program-build-digest:{evidence.running_artifact_digest}",
+        ),
+        explanation=(
+            "The Signal Program build proven and recorded when this run started "
+            "matches its golden qualification receipt."
+        ),
+    )
+
+
 def _execution_policy(mode: str) -> str:
     policies = {
         "dry_run": (
@@ -465,15 +525,49 @@ def _recent_activity_views(
     entries: list[OrderJournalEntry],
     decision_receipts: list[DecisionReceipt],
     dry_run_activity: list[DryRunActivity],
+    *,
+    decision_causal_links: dict[int, DecisionCausalLinks] | None = None,
 ) -> tuple[list[RecentDecisionView], list[RecentFillView]]:
-    """Project real or simulated activity behind one explicit mode boundary."""
+    """Project real or simulated activity behind one explicit mode boundary.
+
+    Dry Run runs through its own isolated synthetic Clerk authority (PR
+    #1722) and durably records every decision through the identical SQLite
+    decision-receipt path Paper uses — the caller already reads
+    ``decision_receipts``/``decision_causal_links`` from that Dry-Run-scoped
+    authority (see ``sqlite_panel_source.read_sqlite_decision_receipts`` and
+    the synthetic facade selected by ``panel_data_source._panel_authority_for_binding``),
+    so PRD Sec 19 causal links (``decision_id``/``effect_operation_id``)
+    render for Dry Run exactly like Paper whenever that SQLite evidence
+    exists. Only a Dry Run instance with no SQLite decision-receipt evidence
+    at all — one that never ran under the governed synthetic Clerk — falls
+    back to the legacy simulated-activity WAL, and that fallback's
+    causal-link fields still render the explicit absence (``None``), never a
+    guess borrowed from the SQLite path.
+
+    Simulated fills always come from the WAL (#1728 Gap 1 is about decision
+    causal links, not fills — the WAL is Dry Run's genuine fill record; SQLite
+    decision receipts carry no fill quantity/price).
+    """
     if status.mode == "dry_run":
+        if decision_receipts:
+            return (
+                _recent_decision_views(
+                    decision_receipts,
+                    causal_links=decision_causal_links,
+                    simulated=True,
+                    authority_account_id=synthetic_account_id_for_strategy(
+                        status.strategy_instance_id
+                    ),
+                    authority_kind="synthetic",
+                ),
+                _dry_run_fill_views(dry_run_activity),
+            )
         return (
             _dry_run_decision_views(dry_run_activity),
             _dry_run_fill_views(dry_run_activity),
         )
     return (
-        _recent_decision_views(decision_receipts),
+        _recent_decision_views(decision_receipts, causal_links=decision_causal_links),
         _recent_fill_views(status.strategy_instance_id, entries),
     )
 
@@ -677,7 +771,10 @@ def build_panel(
     now_ms: int,
     selected_transaction_ref: str | None = None,
     recent_decisions: list[DecisionReceipt] | None = None,
+    decision_causal_links: dict[int, DecisionCausalLinks] | None = None,
     resume_admission: RunAdmissionDecision | None = None,
+    sealed_program: SealedBotProgram | None = None,
+    program_build: ProgramBuildAdmissionFact | None = None,
     dry_run_activity: list[DryRunActivity] | None = None,
     market_pulse: MarketPulseView,
 ) -> BotPanelView:
@@ -686,6 +783,12 @@ def build_panel(
     ``entries`` is the account order journal (read once). ``selected_transaction_ref``
     defaults to the bot's most recent transaction (§7.1).
     """
+    resolved_program_build = program_build or ProgramBuildAdmissionFact(
+        state="NOT_APPLICABLE",
+        program_key=status.strategy_key,
+        verified_at_ms=now_ms,
+        explanation="No Signal Program build proof was supplied to this panel projection.",
+    )
     refs = transaction_refs_for_bot(status.strategy_instance_id, entries)
     transaction_ref = selected_transaction_ref or (refs[-1] if refs else None)
     latest_reconciliation = _latest_reconciliation_entry(entries)
@@ -754,6 +857,7 @@ def build_panel(
         entries,
         decision_receipts,
         activity,
+        decision_causal_links=decision_causal_links,
     )
     readiness_checks = _readiness_checks(actions, now_ms)
     readiness_ready_count = sum(check.ready for check in readiness_checks)
@@ -769,6 +873,9 @@ def build_panel(
         account_id=account_id,
         symbol=status.symbol,
         mode=status.mode,
+        sealed_program=sealed_program,
+        program_build=resolved_program_build,
+        resume_admission=resume_admission,
         updated_at_ms=now_ms,
         revision=revision,
         market_pulse=market_pulse,

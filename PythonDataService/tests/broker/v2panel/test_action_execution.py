@@ -531,7 +531,14 @@ async def test_resume_performer_carries_the_admission_reason_code(monkeypatch) -
         configuration_hash="a" * 64,
         account_id="paper-account",
         evaluated_at_ms=1_000,
-        fact_ages_ms=RunAdmissionFactAges(runtime=0, process=0, market_data=0, market_liveness=0, clerk=0),
+        fact_ages_ms=RunAdmissionFactAges(
+            program_build=0,
+            runtime=0,
+            process=0,
+            market_data=0,
+            market_liveness=0,
+            clerk=0,
+        ),
         evidence_refs=(),
     )
 
@@ -597,8 +604,15 @@ async def test_live_panel_skips_resume_admission_reconciliation(monkeypatch) -> 
         def dry_run_activity(self, _broker: str, _sid: str):
             return []
 
-        def binding_for_control(self, _broker: str, _sid: str):
-            return SimpleNamespace(symbol="SPY", use_rth=True)
+        def binding_for_control(self, _broker: str, sid: str):
+            return SimpleNamespace(
+                strategy_instance_id=sid,
+                run_id="run-1",
+                symbol="SPY",
+                use_rth=True,
+                strategy_key="deployment_validation",
+                sealed_program=None,
+            )
 
     async def _account(*_args) -> str:
         return "account-1"
@@ -631,7 +645,7 @@ async def test_live_panel_skips_resume_admission_reconciliation(monkeypatch) -> 
     monkeypatch.setattr(
         panel_data_source,
         "read_sqlite_decision_receipts",
-        lambda *_args, **_kwargs: [],
+        lambda *_args, **_kwargs: ([], {}),
     )
     monkeypatch.setattr(panel_data_source, "panel_profile_for", lambda _broker: None)
     monkeypatch.setattr(panel_data_source, "build_market_pulse", lambda *_args, **_kwargs: SimpleNamespace())
@@ -885,3 +899,77 @@ def test_reason_left_optional_for_non_comment_actions() -> None:
     request = _request(action_id="resume", reason=None)
 
     assert request.reason is None
+
+
+def test_resolve_program_build_prefers_frozen_evidence_over_live_check(monkeypatch) -> None:
+    """#1728 Gap 2: the panel must show what was proven and recorded for the
+    current run, not a fresh re-check that can drift from what is actually
+    running underfoot."""
+    from app.services.bot_binding_repository import ProgramBuildRunEvidence
+
+    evidence = ProgramBuildRunEvidence(
+        strategy_instance_id=_SID,
+        run_id="run-1",
+        sealed_program_hash="a" * 64,
+        program_version="ema-crossover-signal/v1",
+        golden_trace_root="b" * 64,
+        running_artifact_digest="c" * 64,
+        qualification_receipt_hash="d" * 64,
+        verified_at_ms=1_000,
+    )
+
+    class _FakeRepo:
+        def read_program_build_evidence(self, strategy_instance_id: str, run_id: str):
+            assert (strategy_instance_id, run_id) == (_SID, "run-1")
+            return evidence
+
+    def _must_not_run(*_args, **_kwargs):
+        raise AssertionError("must not fall back to a live re-check when frozen evidence exists")
+
+    monkeypatch.setattr(panel_data_source, "_run_evidence_repository", lambda: _FakeRepo())
+    monkeypatch.setattr(panel_data_source, "prove_running_program_build", _must_not_run)
+
+    binding = SimpleNamespace(
+        strategy_instance_id=_SID, run_id="run-1", strategy_key="ema_crossover_signal"
+    )
+
+    fact = panel_data_source._resolve_program_build(binding, verified_at_ms=9_999)
+
+    assert fact.state == "PROVEN"
+    assert fact.program_key == "ema_crossover_signal"
+    assert fact.program_version == evidence.program_version
+    assert fact.golden_trace_root == evidence.golden_trace_root
+    assert fact.running_artifact_digest == evidence.running_artifact_digest
+    assert fact.qualification_receipt_hash == evidence.qualification_receipt_hash
+    # The frozen record's own verified_at_ms is replayed, never today's clock.
+    assert fact.verified_at_ms == 1_000
+
+
+def test_resolve_program_build_falls_back_to_live_check_when_no_evidence_recorded(
+    monkeypatch,
+) -> None:
+    """No durable per-run record exists (never PROVEN at Start, or a run that
+    predates #1728) — the panel must fall back to the canonical live proof
+    rather than fabricate a frozen verdict."""
+
+    class _FakeRepo:
+        def read_program_build_evidence(self, _strategy_instance_id: str, _run_id: str):
+            return None
+
+    sentinel = SimpleNamespace()
+
+    def _live_proof(binding, *, verified_at_ms):
+        assert binding.strategy_instance_id == _SID
+        assert verified_at_ms == 9_999
+        return sentinel
+
+    monkeypatch.setattr(panel_data_source, "_run_evidence_repository", lambda: _FakeRepo())
+    monkeypatch.setattr(panel_data_source, "prove_running_program_build", _live_proof)
+
+    binding = SimpleNamespace(
+        strategy_instance_id=_SID, run_id="run-1", strategy_key="deployment_validation"
+    )
+
+    fact = panel_data_source._resolve_program_build(binding, verified_at_ms=9_999)
+
+    assert fact is sentinel
