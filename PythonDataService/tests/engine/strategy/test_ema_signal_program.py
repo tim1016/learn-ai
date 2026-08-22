@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import json
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
@@ -18,6 +19,7 @@ from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_intent import SignalIntent
 from app.engine.strategy.signal_program import (
     EmaCrossoverSignalProgram,
+    EvaluationMode,
     EvaluationTrace,
     Settlement,
     StageQuarantine,
@@ -114,14 +116,14 @@ def test_session_quarantines_a_second_advance_until_the_first_stage_settles() ->
     executor = context._signal_intent_executor
     assert isinstance(executor, _RecordingExecutor)
 
-    stage = program.session.advance(_bar())
+    stage = program.session.advance(_bar(), mode=EvaluationMode.DECIDE)
 
     assert stage.status is StageStatus.STAGED
     assert stage.trace.staged_candidate == "ENTER"
     assert stage.trace.action_plan_request == {"contract": "single_long_stock", "intent": "ENTER"}
     assert executor.intents == []
-    assert isinstance(program.session.advance(_bar(1)), StageQuarantine)
-    assert program.session.advance(_bar(1)).status is StageStatus.UNSETTLED_STAGE
+    assert isinstance(program.session.advance(_bar(1), mode=EvaluationMode.DECIDE), StageQuarantine)
+    assert program.session.advance(_bar(1), mode=EvaluationMode.DECIDE).status is StageStatus.UNSETTLED_STAGE
 
     program.session.settle(Settlement.COMMIT)
 
@@ -136,7 +138,7 @@ def test_discarded_countdown_exit_reemits_on_the_next_eligible_clock() -> None:
     executor = context._signal_intent_executor
     assert isinstance(executor, _RecordingExecutor)
 
-    first = program.session.advance(_bar())
+    first = program.session.advance(_bar(), mode=EvaluationMode.DECIDE)
     assert first.trace.staged_candidate == "EXIT"
     program.session.settle(Settlement.DISCARD)
 
@@ -144,11 +146,26 @@ def test_discarded_countdown_exit_reemits_on_the_next_eligible_clock() -> None:
     assert strategy._in_position is True
     assert strategy._bars_until_exit == 1
 
-    second = program.session.advance(_bar(1))
+    second = program.session.advance(_bar(1), mode=EvaluationMode.DECIDE)
     assert second.trace.staged_candidate == "EXIT"
     program.session.settle(Settlement.COMMIT)
 
     assert [intent.kind.value for intent in executor.intents] == ["EXIT"]
+
+
+def test_observe_only_candidate_is_discarded_before_continue_can_change_mode() -> None:
+    program, strategy, context = _prepared_program()
+    executor = context._signal_intent_executor
+    assert isinstance(executor, _RecordingExecutor)
+
+    observed = program.session.advance(_bar(), mode=EvaluationMode.OBSERVE_ONLY)
+
+    assert observed.trace.evaluation_mode is EvaluationMode.OBSERVE_ONLY
+    assert observed.trace.staged_candidate == "ENTER"
+    assert observed.settlement is Settlement.DISCARD
+    assert program.session.active_stage is None
+    assert executor.intents == []
+    assert strategy._in_position is False
 
 
 def test_trace_root_changes_only_when_trace_semantics_change() -> None:
@@ -177,3 +194,29 @@ def test_validated_ema_settings_corpus_has_a_pinned_trace_root() -> None:
 
     assert trace_corpus_root(corpus["entries"]) == corpus["trace_root"]
     assert len(corpus["entries"]) == 10
+    cells_root = fixture.parents[2] / "cross-engine-studies/cells"
+    registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
+
+    for entry in corpus["entries"]:
+        cell = cells_root / entry["cell"]
+        minute_bars: list[TradeBar] = []
+        with (cell / "lean" / "observations.csv").open(encoding="utf-8", newline="") as handle:
+            for row in csv.DictReader(handle):
+                end_ms = int(row["ms_utc"])
+                minute_bars.append(
+                    TradeBar(
+                        symbol=entry["settings"]["symbol"],
+                        start_ms=end_ms - 60_000,
+                        end_ms=end_ms,
+                        open=Decimal(row["open"]),
+                        high=Decimal(row["high"]),
+                        low=Decimal(row["low"]),
+                        close=Decimal(row["close"]),
+                        volume=int(Decimal(row["volume"])),
+                    )
+                )
+        strategy = registration.build(registration.param_schema(**entry["settings"]))
+        BacktestEngine(InMemoryDataReader(minute_bars)).run(strategy)
+        assert strategy.signal_program is not None
+        assert len(strategy.signal_program.session.traces) == entry["trace_count"]
+        assert trace_root(strategy.signal_program.session.traces) == entry["trace_root"]

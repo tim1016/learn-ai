@@ -24,10 +24,13 @@ decision clock and requires `COMMIT` or `DISCARD` before accepting another.
 ## Trace corpus
 
 `PythonDataService/tests/fixtures/golden/ema-signal-session/v1/trace-corpus.json`
-names all ten validated EMA settings cells and pins the stable semantic root
-`2082cb107beb5a6d189446f6c9c1c1e580adb106e9c8b09d7b155fddfc1a9f1e`.
-The root is SHA-256 over canonical sorted-key JSON of the named settings
-evidence. It is an exact identity commitment, not a floating-point comparison.
+names all ten validated EMA settings cells and pins each cell's complete
+`EvaluationTrace` count and semantic root. Its stable corpus root is
+`82b81f82b5690919871e50a6c9ac39f26fa28d2c09b96dad4a777d4615cd6179`.
+The test replays every committed LEAN observations fixture through the
+registry-backed program, compares the generated trace root with that cell's
+receipt, then hashes the per-cell receipts. These are exact identity
+commitments, not floating-point comparisons.
 
 `tests/engine/strategy/test_ema_signal_program.py` proves:
 
@@ -36,6 +39,7 @@ evidence. It is an exact identity commitment, not a floating-point comparison.
 3. a discarded countdown EXIT re-emits on its next eligible clock;
 4. a trace-semantic change changes the root, while a trace-preserving refactor
    does not.
+5. every validated input cell reproduces its complete semantic trace receipt.
 
 Backtest commits each stage immediately at its established order-drain seam,
 so its existing externally validated numerical and trade behavior is unchanged.

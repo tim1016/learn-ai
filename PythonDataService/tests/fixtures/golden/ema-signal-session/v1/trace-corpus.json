@@ -3,16 +3,16 @@
   "program_key": "ema_crossover_signal",
   "program_version": "ema-crossover-signal/v1",
   "entries": [
-    {"cell": "AAPL_W6mo_2025-11-03_to_2026-04-30", "settings": {"gap": "0.20", "rsi_max": "70", "rsi_min": "50", "symbol": "AAPL"}},
-    {"cell": "AAPL_W12mo_2025-05-01_to_2026-04-30", "settings": {"gap": "0.20", "rsi_max": "70", "rsi_min": "50", "symbol": "AAPL"}},
-    {"cell": "QQQ_W3mo_2026-02-02_to_2026-04-30", "settings": {"gap": "0.20", "rsi_max": "70", "rsi_min": "50", "symbol": "QQQ"}},
-    {"cell": "QQQ_W6mo_2025-11-03_to_2026-04-30", "settings": {"gap": "0.20", "rsi_max": "70", "rsi_min": "50", "symbol": "QQQ"}},
-    {"cell": "QQQ_W12mo_2025-05-01_to_2026-04-30", "settings": {"gap": "0.20", "rsi_max": "70", "rsi_min": "50", "symbol": "QQQ"}},
-    {"cell": "SPY_W3mo_2026-02-02_to_2026-04-30", "settings": {"gap": "0.20", "rsi_max": "70", "rsi_min": "50", "symbol": "SPY"}},
-    {"cell": "SPY_W6mo_2025-11-03_to_2026-04-30", "settings": {"gap": "0.20", "rsi_max": "70", "rsi_min": "50", "symbol": "SPY"}},
-    {"cell": "SPY_W12mo_2025-05-01_to_2026-04-30", "settings": {"gap": "0.20", "rsi_max": "70", "rsi_min": "50", "symbol": "SPY"}},
-    {"cell": "TSLA_W6mo_2025-11-03_to_2026-04-30", "settings": {"gap": "0.20", "rsi_max": "70", "rsi_min": "50", "symbol": "TSLA"}},
-    {"cell": "TSLA_W12mo_2025-05-01_to_2026-04-30", "settings": {"gap": "0.20", "rsi_max": "70", "rsi_min": "50", "symbol": "TSLA"}}
+    {"cell": "AAPL_W6mo_2025-11-03_to_2026-04-30", "settings": {"gap": "0.20", "rsi_max": "70", "rsi_min": "50", "symbol": "AAPL"}, "trace_count": 2576, "trace_root": "4f7c984bf0b974e6ca7f89a6089a6a3347471ba80e46f436db9622bed276d038"},
+    {"cell": "AAPL_W12mo_2025-05-01_to_2026-04-30", "settings": {"gap": "0.20", "rsi_max": "70", "rsi_min": "50", "symbol": "AAPL"}, "trace_count": 5892, "trace_root": "726d56e067c2902ce2e7a4e15347fe9eb69442ea94cfc3f6f81ead779872406e"},
+    {"cell": "QQQ_W3mo_2026-02-02_to_2026-04-30", "settings": {"gap": "0.20", "rsi_max": "70", "rsi_min": "50", "symbol": "QQQ"}, "trace_count": 1014, "trace_root": "7410dfce31bb4f7de69355932ae1eb40c43ed2c0a3293b6ca0ea5eeff309995e"},
+    {"cell": "QQQ_W6mo_2025-11-03_to_2026-04-30", "settings": {"gap": "0.20", "rsi_max": "70", "rsi_min": "50", "symbol": "QQQ"}, "trace_count": 2576, "trace_root": "35616c9d89ca535c85675deb1c2324b6e639aa63ef5d76938fd09e4755bc2aba"},
+    {"cell": "QQQ_W12mo_2025-05-01_to_2026-04-30", "settings": {"gap": "0.20", "rsi_max": "70", "rsi_min": "50", "symbol": "QQQ"}, "trace_count": 5892, "trace_root": "1c547a3fdf7c33df4b25dddc705a676ce2ca86afd929e133f2909d2e601705c3"},
+    {"cell": "SPY_W3mo_2026-02-02_to_2026-04-30", "settings": {"gap": "0.20", "rsi_max": "70", "rsi_min": "50", "symbol": "SPY"}, "trace_count": 1014, "trace_root": "0f243226caa26e6edef85b6cd7f2036c2d323ad2be6098ddb0e84cc0b8c06a84"},
+    {"cell": "SPY_W6mo_2025-11-03_to_2026-04-30", "settings": {"gap": "0.20", "rsi_max": "70", "rsi_min": "50", "symbol": "SPY"}, "trace_count": 2576, "trace_root": "e662a9080a22f05944647dc6a7b3c0b2370b737c6357a8384b3b7bef3e9603a3"},
+    {"cell": "SPY_W12mo_2025-05-01_to_2026-04-30", "settings": {"gap": "0.20", "rsi_max": "70", "rsi_min": "50", "symbol": "SPY"}, "trace_count": 5892, "trace_root": "471750574fd6f38b73a7d70afe8ca0df14a4bc222fe6022dd6c8ff7125e80977"},
+    {"cell": "TSLA_W6mo_2025-11-03_to_2026-04-30", "settings": {"gap": "0.20", "rsi_max": "70", "rsi_min": "50", "symbol": "TSLA"}, "trace_count": 2576, "trace_root": "33c3a7e9f4d5bd2e6a2355e9a2001a5009e892892adb7ae9c00720dfc4a930f4"},
+    {"cell": "TSLA_W12mo_2025-05-01_to_2026-04-30", "settings": {"gap": "0.20", "rsi_max": "70", "rsi_min": "50", "symbol": "TSLA"}, "trace_count": 5892, "trace_root": "64d788ef2cf5a79f328f88d40950aa17e7c08c41fefd71b13ea7fcad7802b321"}
   ],
-  "trace_root": "2082cb107beb5a6d189446f6c9c1c1e580adb106e9c8b09d7b155fddfc1a9f1e"
+  "trace_root": "82b81f82b5690919871e50a6c9ac39f26fa28d2c09b96dad4a777d4615cd6179"
 }

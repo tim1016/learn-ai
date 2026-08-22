@@ -28,7 +28,12 @@ from app.engine.strategy.algorithms.deployment_validation import (
 from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
-from app.engine.strategy.signal_program import EvaluationStage, Settlement
+from app.engine.strategy.signal_program import (
+    EmaCrossoverSignalProgram,
+    EvaluationMode,
+    EvaluationStage,
+    Settlement,
+)
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeed
 from app.schemas.market_liveness import MarketLivenessFact
@@ -85,6 +90,9 @@ class StrategyEvaluation:
     # A registry-backed SignalSession owns the staged decision cycle.  The
     # execution adapter supplies exactly one disposition before the next bar.
     settle_stage: Callable[[Settlement], None] | None = None
+    # This mode was captured with the source bar before a consolidator could
+    # turn it into a semantic decision. It must never be sampled later.
+    evaluation_mode: EvaluationMode = EvaluationMode.DECIDE
 
 
 class _EffectReceipt(Protocol):
@@ -105,6 +113,29 @@ class _LiveSignalStrategy(Protocol):
     def rollback_blocked_exit(self) -> None: ...
 
     def on_force_flat(self) -> None: ...
+
+
+@dataclass(frozen=True)
+class _LiveSignalRuntime:
+    """Typed program/strategy composition for one runner-owned instance."""
+
+    strategy: _LiveSignalStrategy
+    program: EmaCrossoverSignalProgram | None
+
+    def capture_source_bar(self, bar: TradeBar, *, mode: EvaluationMode) -> None:
+        if self.program is not None:
+            self.program.capture_source_bar(bar, mode=mode)
+
+    def active_stage(self) -> EvaluationStage | None:
+        return None if self.program is None else self.program.session.active_stage
+
+    def take_completed_stage(self) -> EvaluationStage | None:
+        return None if self.program is None else self.program.take_completed_stage()
+
+    def settle(self, settlement: Settlement) -> None:
+        if self.program is None:
+            raise RuntimeError("This legacy strategy has no SignalSession to settle.")
+        self.program.session.settle(settlement)
 
 
 class _RecordingSignalIntentExecutor:
@@ -134,6 +165,10 @@ class _RetainedSourceBarFeed:
     def observe_only(self) -> bool:
         """Whether the enclosing run is progressing without custody effects."""
         return bool(getattr(self._source, "observe_only", False))
+
+    def evaluation_mode_for(self, bar: MarketDataBar) -> EvaluationMode:
+        """Forward the immutable mode captured by the outer runtime feed."""
+        return _evaluation_mode_for(self._source, bar)
 
     async def stream_bars(
         self,
@@ -183,7 +218,7 @@ class _RetainedSourceBarFeed:
             symbol, use_rth=False, lookback_days=lookback_days
         )
         for bar in bars:
-            self._ledger.append(bar)
+            self._ledger.append_history(bar)
         return [bar for bar in bars if _includes_session_phase(bar, use_rth=use_rth)]
 
     def health(self, symbol: str | None = None) -> FeedHealth:
@@ -242,6 +277,14 @@ def _engine_bar(bar: MarketDataBar) -> TradeBar:
     )
 
 
+def _evaluation_mode_for(feed: MarketDataFeed, bar: MarketDataBar) -> EvaluationMode:
+    """Read a mode captured at feed yield; ordinary feeds always decide."""
+    try:
+        return feed.evaluation_mode_for(bar)  # type: ignore[attr-defined,no-any-return]
+    except AttributeError:
+        return EvaluationMode.DECIDE
+
+
 async def _deployment_validation_evaluations(
     binding: BrokerBotBinding,
     feed: MarketDataFeed,
@@ -270,6 +313,7 @@ async def _deployment_validation_evaluations(
             intents=intents,
             rollback_blocked_entry=kernel.rollback_blocked_entry,
             rollback_blocked_exit=kernel.rollback_blocked_exit,
+            evaluation_mode=_evaluation_mode_for(feed, bar),
         )
 
 
@@ -277,7 +321,7 @@ def _build_signal_strategy(
     strategy_key: str,
     symbol: str,
     strategy_params: dict[str, Any] | None,
-) -> _LiveSignalStrategy:
+) -> _LiveSignalRuntime:
     """Construct one registered strategy through its canonical registry `build`.
 
     ``strategy_params`` is the instance's immutable, already-resolved
@@ -295,9 +339,9 @@ def _build_signal_strategy(
     params = registration.param_schema(**{**(strategy_params or {}), "symbol": symbol})  # type: ignore[arg-type]
     if registration.signal_program_factory is not None:
         program = registration.signal_program_factory(params)
-        program.active = True
-        return program.strategy
-    return registration.build(params)  # type: ignore[return-value]
+        program.activate_for_runner()
+        return _LiveSignalRuntime(strategy=program.strategy, program=program)  # type: ignore[arg-type]
+    return _LiveSignalRuntime(strategy=registration.build(params), program=None)  # type: ignore[arg-type]
 
 
 _WARMUP_LOOKBACK_DAYS = 5
@@ -322,7 +366,7 @@ def _drain_bar(strategy: _LiveSignalStrategy, context: StrategyContext, bar: Tra
 
 
 async def _warm_up_signal_strategy(
-    strategy: _LiveSignalStrategy,
+    runtime: _LiveSignalRuntime,
     context: StrategyContext,
     feed: MarketDataFeed,
     binding: BrokerBotBinding,
@@ -340,11 +384,13 @@ async def _warm_up_signal_strategy(
         binding.symbol, use_rth=binding.use_rth, lookback_days=_WARMUP_LOOKBACK_DAYS
     )
     for market_bar in warmup_bars:
-        _drain_bar(strategy, context, _engine_bar(market_bar))
-        _settle_warmup_stage(strategy)
+        engine_bar = _engine_bar(market_bar)
+        runtime.capture_source_bar(engine_bar, mode=EvaluationMode.OBSERVE_ONLY)
+        _drain_bar(runtime.strategy, context, engine_bar)
+        _settle_warmup_stage(runtime)
         context.signal_intents.clear()
         context.consolidated_bars.clear()
-    strategy.on_force_flat()
+    runtime.strategy.on_force_flat()
 
 
 async def _signal_strategy_evaluations(
@@ -352,16 +398,20 @@ async def _signal_strategy_evaluations(
     feed: MarketDataFeed,
 ) -> AsyncIterator[StrategyEvaluation]:
     """Run one canonical signal-intent strategy on the production minute stream."""
-    strategy = _build_signal_strategy(binding.strategy_key, binding.symbol, binding.strategy_params)
+    runtime = _build_signal_strategy(binding.strategy_key, binding.symbol, binding.strategy_params)
+    strategy = runtime.strategy
     context = StrategyContext(portfolio=Portfolio(initial_cash=Decimal("100000")))
     strategy.ctx = context
     strategy.initialize()
     context.set_signal_intent_executor(_RecordingSignalIntentExecutor())
-    await _warm_up_signal_strategy(strategy, context, feed, binding)
+    await _warm_up_signal_strategy(runtime, context, feed, binding)
 
     async for market_bar in feed.stream_bars(binding.symbol, use_rth=binding.use_rth):
-        _drain_bar(strategy, context, _engine_bar(market_bar))
-        evaluation = _evaluation_from_active_stage(strategy, context, market_bar)
+        mode = _evaluation_mode_for(feed, market_bar)
+        engine_bar = _engine_bar(market_bar)
+        runtime.capture_source_bar(engine_bar, mode=mode)
+        _drain_bar(strategy, context, engine_bar)
+        evaluation = _evaluation_from_active_stage(runtime, context, market_bar, mode=mode)
         if evaluation.settle_stage is not None or evaluation.intents:
             yield evaluation
         # #1708 review finding 2: the consolidator only fires a working
@@ -374,18 +424,20 @@ async def _signal_strategy_evaluations(
             for consolidator in context.get_consolidators(market_bar.symbol):
                 if consolidator.scan(market_bar.end_ms) is None:
                     continue
-                evaluation = _evaluation_from_active_stage(strategy, context, market_bar)
+                evaluation = _evaluation_from_active_stage(runtime, context, market_bar, mode=mode)
                 if evaluation.settle_stage is not None or evaluation.intents:
                     yield evaluation
 
 
 def _evaluation_from_active_stage(
-    strategy: _LiveSignalStrategy,
+    runtime: _LiveSignalRuntime,
     context: StrategyContext,
     market_bar: MarketDataBar,
+    *,
+    mode: EvaluationMode,
 ) -> StrategyEvaluation:
     """Drain one strategy stage and release adapter-only output buffers."""
-    stage = _active_signal_stage(strategy)
+    stage = runtime.active_stage() or runtime.take_completed_stage()
     intents = stage.intents if stage is not None else tuple(context.signal_intents)
     context.signal_intents.clear()
     # StrategyContext retains consolidated bars for finite backtest charting.
@@ -395,30 +447,33 @@ def _evaluation_from_active_stage(
     return StrategyEvaluation(
         bar=market_bar,
         intents=intents,
-        rollback_blocked_entry=strategy.rollback_blocked_entry,
-        rollback_blocked_exit=strategy.rollback_blocked_exit,
-        settle_stage=(None if stage is None else lambda settlement: _settle_program(strategy, settlement)),
+        rollback_blocked_entry=runtime.strategy.rollback_blocked_entry,
+        rollback_blocked_exit=runtime.strategy.rollback_blocked_exit,
+        settle_stage=(
+            None
+            if stage is None
+            else (lambda _settlement: None)
+            if stage.settlement is not None
+            else lambda settlement: _settle_active_stage(runtime, context, settlement)
+        ),
+        evaluation_mode=(stage.trace.evaluation_mode if stage is not None else mode),
     )
 
 
-def _active_signal_stage(strategy: _LiveSignalStrategy) -> EvaluationStage | None:
-    program = getattr(strategy, "signal_program", None)
-    session = getattr(program, "session", None)
-    return getattr(session, "active_stage", None)
-
-
-def _settle_program(strategy: _LiveSignalStrategy, settlement: Settlement) -> None:
-    program = getattr(strategy, "signal_program", None)
-    session = getattr(program, "session", None)
-    if session is None:
-        raise RuntimeError("Signal strategy has no SignalSession to settle.")
-    session.settle(settlement)
-
-
-def _settle_warmup_stage(strategy: _LiveSignalStrategy) -> None:
+def _settle_warmup_stage(runtime: _LiveSignalRuntime) -> None:
     """Warmup evolves math but never gives its staged candidate to custody."""
-    if _active_signal_stage(strategy) is not None:
-        _settle_program(strategy, Settlement.DISCARD)
+    if runtime.active_stage() is not None:
+        runtime.settle(Settlement.DISCARD)
+
+
+def _settle_active_stage(
+    runtime: _LiveSignalRuntime,
+    context: StrategyContext,
+    settlement: Settlement,
+) -> None:
+    """Settle a typed stage without leaking its committed intent into legacy buffers."""
+    runtime.settle(settlement)
+    context.signal_intents.clear()
 
 
 def _settle_evaluation(evaluation: StrategyEvaluation, settlement: Settlement) -> None:
@@ -435,11 +490,6 @@ def _discard_evaluation(evaluation: StrategyEvaluation, intent: SignalIntent) ->
         evaluation.rollback_blocked_entry()
     else:
         evaluation.rollback_blocked_exit()
-
-
-def _feed_is_observe_only(feed: MarketDataFeed) -> bool:
-    """Read the same-run pause mode without coupling strategy code to runtime."""
-    return bool(getattr(feed, "observe_only", False))
 
 
 async def strategy_evaluations(
@@ -532,7 +582,7 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
             continue
         intent = evaluation.intents[0]
         intent_id = f"{intent.bar_close_ms}:{intent.kind.value}"
-        if _feed_is_observe_only(feed):
+        if evaluation.evaluation_mode is EvaluationMode.OBSERVE_ONLY:
             _discard_evaluation(evaluation, intent)
             _append_decision_receipt(
                 decision_receipts,
@@ -724,7 +774,7 @@ async def run_dry_run_bot(
             _settle_evaluation(evaluation, Settlement.COMMIT)
             continue
         intent = evaluation.intents[0]
-        if _feed_is_observe_only(retained_feed):
+        if evaluation.evaluation_mode is EvaluationMode.OBSERVE_ONLY:
             _discard_evaluation(evaluation, intent)
             logger.info(
                 "Dry-run candidate discarded while paused in observe-only mode",

@@ -39,17 +39,10 @@ from uuid import uuid4
 from pydantic import ValidationError
 
 from app.broker.alpaca.clerk import get_alpaca_clerk
-from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
 from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
-    activate_synthetic_clerk_authority,
-    get_clerk_runtime,
-    register_clerk_runtime,
-    select_synthetic_clerk_runtime,
-    unregister_clerk_runtime,
 )
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
-from app.broker.alpaca.clerk.synthetic_broker import SyntheticBroker
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.live.bot_lifecycle_state import (
     BotLifecycleStateCorruptError,
@@ -78,6 +71,7 @@ from app.schemas.run_admission import (
     TerminalEvidenceAdmissionFact,
 )
 from app.services.alpaca_bot_identity import AlpacaBotIdentityGuard
+from app.services.bot_binding_authority import BindingAuthoritySelector
 from app.services.bot_binding_repository import (
     BotBindingRepository,
     BrokerBotBinding,
@@ -104,7 +98,6 @@ from app.services.bot_lifecycle_projection import (
     ActiveSqliteAlpacaLifecycleAuthority,
     AlpacaLifecycleProjector,
     ProjectionStatus,
-    SqliteAlpacaLifecycleAuthority,
 )
 from app.services.bot_registry_projection import (
     project_bot_status,
@@ -147,14 +140,12 @@ from app.services.bot_start_admission import (
     StartAdmissionDenied,
     StartAdmissionEvidenceChanged,
     StartAdmissionUnavailable,
-    default_start_custody_guard,
     log_run_launch,
     make_start_request,
     resolve_start_runtime_fact,
 )
 from app.services.broker_capability_service import get_broker_capability_service
 from app.services.market_liveness import market_liveness_fact
-from app.services.source_bar_ledger import SourceBarLedger
 from app.utils.timestamps import now_ms_utc
 
 __all__ = [
@@ -197,7 +188,6 @@ class BotTaskRegistry:
         now_ms: Callable[[], int] = now_ms_utc,
         boot_recovery_required: bool = True,
         supported_broker_ids: frozenset[str] | None = None,
-        carryover_allowed: bool | None = None,
         start_custody_guard: Callable[[str], AbstractAsyncContextManager[ClerkCustodySnapshot]] | None = None,
         lifecycle_projector: AlpacaLifecycleProjector | None = None,
         market_liveness: MarketLivenessFactResolver | None = None,
@@ -224,24 +214,27 @@ class BotTaskRegistry:
         # artifacts_root but are managed by the host daemon, not the
         # in-container runner).
         self._supported_broker_ids = supported_broker_ids
-        # The former environment/request opt-in has no authority while the
-        # replay proof program is incomplete.  Retain the constructor
-        # parameter for compatibility with existing callers, but it cannot
-        # re-enable exposure carryover for an Alpaca paper account.
+        # Exposure carryover remains unavailable until a separately reviewed
+        # replay proof exists; it is no longer a compatibility constructor
+        # switch that appears configurable but has no effect.
         self._carryover_allowed = False
-        self._external_start_custody_guard = start_custody_guard
-        self._synthetic_brokers: dict[str, SyntheticBroker] = {}
         self._bindings = BotBindingRepository(
             self._artifacts_root,
             instance_dir_for=self._confined_instance_dir,
         )
         self._alpaca_identity = AlpacaBotIdentityGuard(self._artifacts_root)
         self._lifecycle_authority = ActiveSqliteAlpacaLifecycleAuthority()
-        self._provided_lifecycle_projector = lifecycle_projector
         self._lifecycle_projector = lifecycle_projector or AlpacaLifecycleProjector(
             authority=self._lifecycle_authority,
             lifecycle_repo_for=self._lifecycle_repo,
             require_alpaca_identity=self._require_alpaca_identity,
+        )
+        self._authorities = BindingAuthoritySelector(
+            artifacts_root=self._artifacts_root,
+            lifecycle_repo_for=self._lifecycle_repo,
+            real_projector=self._lifecycle_projector,
+            external_start_guard=start_custody_guard,
+            runtime_in_use=self._synthetic_runtime_in_use,
         )
         self._boot_recovery = BotBootRecovery(
             self._artifacts_root,
@@ -535,7 +528,7 @@ class BotTaskRegistry:
             self._desired_repo(binding.strategy_instance_id).set(
                 DesiredState.RUNNING, updated_by=_UPDATED_BY, now_ms=now, reason=reason
             )
-            projection = self._lifecycle_projector_for_binding(binding).project_active(
+            projection = self._authority_for(binding).lifecycle_projector().project_active(
                 strategy_instance_id=binding.strategy_instance_id,
                 run_id=binding.run_id,
                 now_ms=now,
@@ -903,7 +896,7 @@ class BotTaskRegistry:
             managed.binding,
             reason_code=outcome,
         )
-        await self._release_synthetic_runtime_if_unused(managed.binding)
+        await self._authority_for(managed.binding).release_if_unused()
         return self.status(broker, strategy_instance_id)
 
     async def stop_all(self) -> None:
@@ -945,7 +938,7 @@ class BotTaskRegistry:
                 managed.binding.strategy_instance_id,
                 managed.binding.run_id,
             )
-            await self._release_synthetic_runtime_if_unused(managed.binding)
+            await self._authority_for(managed.binding).release_if_unused()
 
     # ── S5 boot recovery (container restart is a drilled event) ───────
 
@@ -1107,14 +1100,7 @@ class BotTaskRegistry:
         """Run the bot; on ANY exit record a typed durable duty outcome, then reap."""
         sid = binding.strategy_instance_id
         try:
-            source_bars = (
-                SourceBarLedger(
-                    artifacts_root=self._artifacts_root,
-                    account_id=synthetic_account_id_for_strategy(sid),
-                )
-                if binding.mode == "dry_run"
-                else None
-            )
+            source_bars = self._authority_for(binding).source_bars()
             await execute_bot_run(
                 binding,
                 feed,
@@ -1176,7 +1162,7 @@ class BotTaskRegistry:
             # otherwise a fast cancellation can unregister custody between
             # the task's provisional terminal record and the final proof.
             if managed is None or managed.stop_reason_code is None:
-                await self._release_synthetic_runtime_if_unused(binding)
+                await self._authority_for(binding).release_if_unused()
 
     # ── guards and composition ────────────────────────────────────────
 
@@ -1184,79 +1170,21 @@ class BotTaskRegistry:
         """One lifecycle mutation at a time for a strategy instance."""
         return self._operation_locks.setdefault(strategy_instance_id, asyncio.Lock())
 
+    def _authority_for(self, binding: BrokerBotBinding):
+        """Return the one typed custody/evidence authority for a binding."""
+        return self._authorities.for_binding(binding)
+
     def _start_custody_guard(
         self,
         binding: BrokerBotBinding,
     ) -> AbstractAsyncContextManager[ClerkCustodySnapshot]:
-        """Select the only account authority permitted for this binding."""
-        if binding.mode == "dry_run":
-            return self._synthetic_start_custody_guard(binding)
-        if self._external_start_custody_guard is not None:
-            return self._external_start_custody_guard(binding.strategy_instance_id)
-        return default_start_custody_guard(binding)
-
-    def _lifecycle_projector_for_binding(self, binding: BrokerBotBinding) -> AlpacaLifecycleProjector:
-        if binding.mode != "dry_run":
-            return self._lifecycle_projector
-        account_id = synthetic_account_id_for_strategy(binding.strategy_instance_id)
-        runtime = get_clerk_runtime(account_id)
-        repository = None if runtime is None else runtime.sqlite_repository
-        if repository is None:
-            raise RunAdmissionRefusedError(
-                "Dry Run lifecycle authority is unavailable.",
-                detail="Activate the isolated synthetic Clerk before deploying this bot.",
-            )
-        return AlpacaLifecycleProjector(
-            authority=SqliteAlpacaLifecycleAuthority(repository),
-            lifecycle_repo_for=self._lifecycle_repo,
-            require_alpaca_identity=lambda _sid, _sqlite_claim: None,
-        )
+        return self._authority_for(binding).start_custody_guard()
 
     def _lifecycle_projector_for_instance(self, strategy_instance_id: str) -> AlpacaLifecycleProjector:
         binding = self._bindings.read(strategy_instance_id)
         if binding is None:
             return self._lifecycle_projector
-        return self._lifecycle_projector_for_binding(binding)
-
-    @asynccontextmanager
-    async def _synthetic_start_custody_guard(
-        self,
-        binding: BrokerBotBinding,
-    ) -> AsyncIterator[ClerkCustodySnapshot]:
-        runtime = await self._synthetic_runtime_for(binding)
-        clerk = runtime.clerk
-        if clerk is None:
-            raise StartAdmissionUnavailable(
-                "Dry Run synthetic Clerk activation failed.",
-                detail=(runtime.startup_failure.recovery if runtime.startup_failure is not None else "Retry activation."),
-            )
-        async with clerk.start_admission_snapshot(binding.strategy_instance_id) as snapshot:
-            yield snapshot
-
-    async def _synthetic_runtime_for(self, binding: BrokerBotBinding) -> ActiveClerkRuntime:
-        """Explicitly compose the deterministic ``sim:<instance>`` authority."""
-        account_id = synthetic_account_id_for_strategy(binding.strategy_instance_id)
-        existing = get_clerk_runtime(account_id)
-        if existing is not None:
-            return existing
-        source_bars = SourceBarLedger(artifacts_root=self._artifacts_root, account_id=account_id)
-        broker = SyntheticBroker(account_id=account_id, source_bars=source_bars)
-        # Activation is an explicit deployment-time action, never a startup
-        # fallback and never a substitution of the real-paper authority.
-        await activate_synthetic_clerk_authority(
-            account_id=account_id,
-            artifacts_root=self._artifacts_root,
-        )
-        runtime = await select_synthetic_clerk_runtime(
-            account_id=account_id,
-            read=broker,
-            trade=broker,
-            artifacts_root=self._artifacts_root,
-        )
-        if runtime.clerk is not None:
-            register_clerk_runtime(runtime)
-            self._synthetic_brokers[account_id] = broker
-        return runtime
+        return self._authority_for(binding).lifecycle_projector()
 
     @asynccontextmanager
     async def synthetic_runtime_for_projection(
@@ -1272,31 +1200,17 @@ class BotTaskRegistry:
         """
         if binding.mode != "dry_run":
             raise ValueError("Only a Dry Run binding has a synthetic authority.")
-        account_id = synthetic_account_id_for_strategy(binding.strategy_instance_id)
-        was_active = get_clerk_runtime(account_id) is not None
-        runtime = await self._synthetic_runtime_for(binding)
-        try:
+        async with self._authority_for(binding).runtime_for_projection() as runtime:
+            if runtime is None:
+                raise RunAdmissionRefusedError(
+                    "Only a Dry Run binding has a synthetic projection runtime."
+                )
             yield runtime
-        finally:
-            if not was_active:
-                await self._release_synthetic_runtime_if_unused(binding)
 
     async def _recover_synthetic_authorities_for_boot(self) -> None:
         """Compose each already-activated Dry Run authority before boot repair."""
         for binding in self._bindings.list_for_broker("alpaca"):
-            if binding.mode != "dry_run":
-                continue
-            runtime = await self._synthetic_runtime_for(binding)
-            if runtime.clerk is None:
-                detail = (
-                    runtime.startup_failure.recovery
-                    if runtime.startup_failure is not None
-                    else "Synthetic runtime was not composed."
-                )
-                raise RunAdmissionRefusedError(
-                    "Dry Run synthetic authority could not be restored for boot recovery.",
-                    detail=detail,
-                )
+            await self._authority_for(binding).ensure_recoverable()
 
     async def _stop_interrupted_authority_run(
         self,
@@ -1312,23 +1226,13 @@ class BotTaskRegistry:
             binding=binding,
         )
 
-    async def _release_synthetic_runtime_if_unused(self, binding: BrokerBotBinding) -> None:
-        """Close a synthetic Clerk only after the owning Dry Run has reaped."""
-        if binding.mode != "dry_run":
-            return
-        account_id = synthetic_account_id_for_strategy(binding.strategy_instance_id)
-        if any(
-            managed.binding.mode == "dry_run"
-            and managed.binding.strategy_instance_id != binding.strategy_instance_id
-            and synthetic_account_id_for_strategy(managed.binding.strategy_instance_id) == account_id
+    def _synthetic_runtime_in_use(self, binding: BrokerBotBinding) -> bool:
+        """Keep a deterministic per-instance runtime only while its task owns it."""
+        return any(
+            managed.binding.strategy_instance_id == binding.strategy_instance_id
             and not managed.task.done()
             for managed in self._bots.values()
-        ):
-            return
-        runtime = unregister_clerk_runtime(account_id)
-        if runtime is not None:
-            await runtime.close()
-        self._synthetic_brokers.pop(account_id, None)
+        )
 
     def _is_running(self, strategy_instance_id: str) -> bool:
         managed = self._bots.get(strategy_instance_id)
@@ -1371,22 +1275,10 @@ class BotTaskRegistry:
             for binding in bindings
         }
         for binding in bindings:
-            if binding.mode != "dry_run":
-                continue
-            account_id = synthetic_account_id_for_strategy(binding.strategy_instance_id)
-            runtime = get_clerk_runtime(account_id)
-            repository = None if runtime is None else runtime.sqlite_repository
-            if repository is None:
-                raise RunAdmissionRefusedError(
-                    "Dry Run lifecycle authority is unavailable for boot recovery.",
-                    detail=f"Restore the isolated synthetic authority {account_id!r} before boot repair.",
-                )
-            for candidate in repository.lifecycle_recovery_candidates():
-                if candidate.strategy_instance_id != binding.strategy_instance_id:
-                    continue
+            for strategy_instance_id, run_id in self._authority_for(binding).lifecycle_recovery_candidates():
                 candidates[binding.strategy_instance_id] = BotRecoveryCandidate(
-                    strategy_instance_id=binding.strategy_instance_id,
-                    run_id=candidate.run_id,
+                    strategy_instance_id=strategy_instance_id,
+                    run_id=run_id,
                     sqlite_active=True,
                 )
         clerk = get_alpaca_clerk()

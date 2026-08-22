@@ -96,7 +96,7 @@ class BacktestEngine:
         portfolio = Portfolio(initial_cash=Decimal(1))  # placeholder; set below
         ctx = StrategyContext(portfolio=portfolio)
         strategy.ctx = ctx
-        program = getattr(strategy, "signal_program", None)
+        program = strategy.signal_program
         if program is not None:
             program.activate_for_backtest()
         strategy.initialize()
@@ -560,6 +560,6 @@ class BacktestEngine:
     @staticmethod
     def _commit_staged_signal_program(strategy: Strategy) -> None:
         """Apply a registry-owned staged program at Backtest's legacy seam."""
-        program = getattr(strategy, "signal_program", None)
+        program = strategy.signal_program
         if program is not None:
             program.session.commit_if_staged()

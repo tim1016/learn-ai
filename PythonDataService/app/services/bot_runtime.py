@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from app.engine.strategy.signal_program import EvaluationMode
 from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeed
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_dry_run import DryRunActivityJournal
@@ -56,6 +57,7 @@ class PauseAwareFeed:
         self._source = source
         self._gate = gate
         self.feed_id = source.feed_id
+        self._captured_modes: dict[tuple[str, int, int], EvaluationMode] = {}
 
     @property
     def observe_only(self) -> bool:
@@ -69,7 +71,16 @@ class PauseAwareFeed:
         use_rth: bool = True,
     ) -> AsyncIterator[MarketDataBar]:
         async for bar in self._source.stream_bars(symbol, use_rth=use_rth):
+            mode = EvaluationMode.DECIDE if self._gate.is_set() else EvaluationMode.OBSERVE_ONLY
+            self._captured_modes[(bar.symbol, bar.start_ms, bar.end_ms)] = mode
             yield bar
+
+    def evaluation_mode_for(self, bar: MarketDataBar) -> EvaluationMode:
+        """Return the mode captured when this precise source bar was yielded."""
+        return self._captured_modes.pop(
+            (bar.symbol, bar.start_ms, bar.end_ms),
+            EvaluationMode.DECIDE,
+        )
 
     async def recent_closed_bars(
         self,

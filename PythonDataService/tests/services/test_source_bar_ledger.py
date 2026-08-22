@@ -13,7 +13,13 @@ import pytest
 from app.broker.alpaca.clerk.synthetic_broker import SyntheticBarBindingError, SyntheticBroker
 from app.broker.contract.models import BrokerOrderLeg
 from app.marketdata.feed import MarketDataBar
-from app.services.source_bar_ledger import SourceBarConflictError, SourceBarLedger
+from app.services import source_bar_ledger
+from app.services.bot_trade_strategy import _RetainedSourceBarFeed
+from app.services.source_bar_ledger import (
+    SourceBarConflictError,
+    SourceBarLedger,
+    SourceBarRetentionLimitError,
+)
 
 
 def _bar(
@@ -59,22 +65,71 @@ def test_source_bar_ledger_treats_later_fetch_time_as_exact_redelivery(tmp_path:
     assert ledger.find_by_market_bar(_bar()) == retained
 
 
-def test_source_bar_ledger_uses_initialized_identity_index_after_restart(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_source_bar_ledger_uses_sqlite_identity_index_after_restart(tmp_path: Path) -> None:
     original = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:ema-1")
     original.append(_bar())
     restarted = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:ema-1")
 
-    def fail_full_replay() -> list:
-        raise AssertionError("append must use the initialized identity index")
-
-    monkeypatch.setattr(restarted._wal, "read_all", fail_full_replay)
-
     retained = restarted.append(_bar(start_ms=1_700_000_060_000))
 
     assert retained.seq == 2
+    assert restarted.path.name == "source_bars.sqlite3"
+
+
+def test_source_bar_ledger_rejects_non_monotonic_live_delivery(tmp_path: Path) -> None:
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:ema-1")
+    ledger.append(_bar(start_ms=1_700_000_060_000))
+
+    with pytest.raises(SourceBarConflictError, match="SOURCE_BAR_NON_MONOTONIC_LIVE"):
+        ledger.append(_bar())
+
+
+def test_source_bar_ledger_rejects_history_after_live_delivery_begins(tmp_path: Path) -> None:
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:ema-1")
+    ledger.append_history(_bar())
+    ledger.append(_bar(start_ms=1_700_000_060_000))
+
+    with pytest.raises(SourceBarConflictError, match="SOURCE_BAR_HISTORY_AFTER_LIVE"):
+        ledger.append_history(_bar(start_ms=1_700_000_120_000))
+
+
+def test_source_bar_ledger_fails_closed_at_its_explicit_retention_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(source_bar_ledger, "_MAX_ROWS_PER_STREAM", 1)
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:ema-1")
+    ledger.append(_bar())
+
+    with pytest.raises(SourceBarRetentionLimitError, match="SOURCE_BAR_RETENTION_LIMIT"):
+        ledger.append(_bar(start_ms=1_700_000_060_000))
+
+
+@pytest.mark.asyncio
+async def test_retained_feed_persists_unfiltered_stream_before_applying_rth_policy(tmp_path: Path) -> None:
+    class _Source:
+        feed_id = "polygon-minute"
+
+        def __init__(self) -> None:
+            self.use_rth_calls: list[bool] = []
+
+        async def stream_bars(self, _symbol: str, *, use_rth: bool = True):
+            self.use_rth_calls.append(use_rth)
+            yield _bar().model_copy(update={"session_phase": "PRE"})
+            yield _bar(start_ms=1_700_000_060_000).model_copy(update={"session_phase": "RTH"})
+
+    source = _Source()
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:ema-1")
+    retained = _RetainedSourceBarFeed(source, ledger)
+
+    yielded = [bar async for bar in retained.stream_bars("SPY", use_rth=True)]
+
+    assert source.use_rth_calls == [False]
+    assert [bar.session_phase for bar in yielded] == ["RTH"]
+    assert [bar.session_phase for bar in ledger.bars(provider="polygon-minute", symbol="SPY")] == [
+        "PRE",
+        "RTH",
+    ]
 
 
 @pytest.mark.asyncio
@@ -112,6 +167,40 @@ async def test_synthetic_port_consumes_order_scoped_exact_bar_binding(tmp_path: 
 
     assert order.filled_avg_price == float(evaluated.close)
     assert order.filled_at_ms == evaluated.end_ms
+
+
+@pytest.mark.asyncio
+async def test_synthetic_position_projection_preserves_average_cost_through_reduce_and_flip(
+    tmp_path: Path,
+) -> None:
+    """Average-cost fold parity: buy, reduce, add, then cross through flat."""
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:ema-1")
+    broker = SyntheticBroker(account_id="sim:ema-1", source_bars=ledger)
+
+    async def submit(order_id: str, side: str, quantity: int, close: str, offset: int) -> None:
+        retained = ledger.append(_bar(close=close, start_ms=1_700_000_000_000 + offset))
+        broker.bind_evaluated_bar(order_id, retained)
+        await broker.submit(
+            BrokerOrderLeg(symbol="SPY", side=side, quantity=quantity),
+            client_order_id=order_id,
+        )
+
+    await submit("buy-1", "buy", 10, "100", 0)
+    await submit("sell-reduce", "sell", 4, "120", 60_000)
+    await submit("buy-add", "buy", 2, "110", 120_000)
+
+    [long_position] = await broker.list_positions()
+    assert long_position.quantity == 8
+    assert long_position.average_entry_price == 102.5
+    assert long_position.cost_basis == 820
+
+    await submit("sell-flip", "sell", 10, "130", 180_000)
+
+    [short_position] = await broker.list_positions()
+    assert short_position.quantity == -2
+    assert short_position.side == "short"
+    assert short_position.average_entry_price == 130
+    assert short_position.cost_basis == 260
 
 
 def test_synthetic_port_rejects_binding_from_another_account_authority(tmp_path: Path) -> None:

@@ -1,4 +1,18 @@
-"""Retained-bar-backed broker port for one isolated synthetic Clerk authority."""
+"""Retained-bar-backed broker port for one isolated synthetic Clerk authority.
+
+Math Provenance Contract
+------------------------
+Formula: for each symbol, the projected position is an average-cost fold of
+durable synthetic fills. Same-direction fills add signed entry notional;
+reductions retain the prior average cost for the remaining quantity; a flip
+opens only the residual at the flip fill price. A position is emitted iff
+``position_quantity_is_nonzero(quantity)``.
+Reference: average-cost broker position convention, recorded in
+``docs/references/synthetic-broker-position-projection.md``.
+Canonical implementation: ``_project_positions`` in this module.
+Validated against: ``tests/services/test_source_bar_ledger.py`` exact
+buy/reduce/add/flip parity fixture (``atol=0``, ``rtol=0``).
+"""
 
 from __future__ import annotations
 
@@ -10,6 +24,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.broker.alpaca.clerk.account_authority import require_synthetic_account_id
+from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.contract.capabilities import BrokerCapabilities
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
@@ -132,13 +147,7 @@ class SyntheticBroker:
         )
 
     async def list_positions(self) -> list[BrokerPosition]:
-        quantities: dict[str, tuple[float, float]] = {}
-        for order in self._latest_orders():
-            if order.filled_quantity <= 0 or order.filled_avg_price is None:
-                continue
-            signed = order.filled_quantity if order.side.lower() == "buy" else -order.filled_quantity
-            quantity, cost = quantities.get(order.symbol, (0.0, 0.0))
-            quantities[order.symbol] = (quantity + signed, cost + signed * order.filled_avg_price)
+        quantities = _project_positions(self._latest_orders())
         observed_at_ms = now_ms_utc()
         return [
             BrokerPosition(
@@ -157,7 +166,7 @@ class SyntheticBroker:
                 observed_at_ms=observed_at_ms,
             )
             for symbol, (quantity, cost) in quantities.items()
-            if quantity != 0
+            if position_quantity_is_nonzero(quantity)
         ]
 
     async def list_orders(
@@ -425,6 +434,39 @@ class SyntheticBroker:
             ),
             None,
         )
+
+
+def _project_positions(orders: list[BrokerOrder]) -> dict[str, tuple[float, float]]:
+    """Fold fills into canonical average-cost ``(quantity, signed_notional)``.
+
+    The result intentionally contains signed notional: a long's notional is
+    positive and a short's is negative. That representation makes both the
+    same-direction weighted average and a side-flip's residual opening price
+    exact at the broker model's float boundary.
+    """
+    positions: dict[str, tuple[float, float]] = {}
+    for order in orders:
+        if order.filled_quantity <= 0 or order.filled_avg_price is None:
+            continue
+        signed_fill = order.filled_quantity if order.side.lower() == "buy" else -order.filled_quantity
+        quantity, notional = positions.get(order.symbol, (0.0, 0.0))
+        if not position_quantity_is_nonzero(quantity) or quantity * signed_fill > 0:
+            positions[order.symbol] = (
+                quantity + signed_fill,
+                notional + signed_fill * order.filled_avg_price,
+            )
+            continue
+
+        next_quantity = quantity + signed_fill
+        if not position_quantity_is_nonzero(next_quantity):
+            positions[order.symbol] = (0.0, 0.0)
+            continue
+        if quantity * next_quantity > 0:
+            average_entry_price = abs(notional / quantity)
+            positions[order.symbol] = (next_quantity, next_quantity * average_entry_price)
+            continue
+        positions[order.symbol] = (next_quantity, next_quantity * order.filled_avg_price)
+    return positions
 
 
 __all__ = [

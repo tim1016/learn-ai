@@ -18,16 +18,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass
-from decimal import Decimal
+from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol
 
 from app.engine.data.trade_bar import TradeBar
-from app.engine.execution.signal_intent_executor import (
-    SignalIntentExecutionContext,
-)
-from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
+from app.engine.strategy.signal_intent import SignalIntent
 
 
 class Settlement(StrEnum):
@@ -35,6 +31,13 @@ class Settlement(StrEnum):
 
     COMMIT = "COMMIT"
     DISCARD = "DISCARD"
+
+
+class EvaluationMode(StrEnum):
+    """The immutable authority carried by an observed source bar."""
+
+    DECIDE = "DECIDE"
+    OBSERVE_ONLY = "OBSERVE_ONLY"
 
 
 class StageStatus(StrEnum):
@@ -61,6 +64,7 @@ class EvaluationTrace:
     staged_candidate: str | None
     reason_evidence: dict[str, str | int | bool]
     action_plan_request: dict[str, str] | None
+    evaluation_mode: EvaluationMode = EvaluationMode.DECIDE
 
     def semantic_payload(self) -> dict[str, Any]:
         """Return only fields that define the observable decision meaning."""
@@ -71,8 +75,10 @@ class EvaluationTrace:
 class EvaluationStage:
     """A decision cycle awaiting its single settlement action."""
 
+    bar: TradeBar
     trace: EvaluationTrace
     intents: tuple[SignalIntent, ...]
+    decision: SignalDecision
     status: StageStatus = StageStatus.STAGED
     settlement: Settlement | None = None
 
@@ -85,33 +91,34 @@ class StageQuarantine:
     reason: str
 
 
-class _EmaSignalStrategy(Protocol):
-    """Minimal legacy-strategy surface adapted into the staged program."""
+@dataclass(frozen=True)
+class SignalDecision:
+    """A strategy-owned semantic decision, before any custody effect exists.
 
-    ctx: Any
-    _in_position: bool
-    _bars_until_exit: int
-    _ema5: Any
-    _ema10: Any
-    _rsi14: Any
+    The program owns the stage and settlement.  The strategy owns the
+    mathematical facts that make the decision meaningful.  Keeping this data
+    public and immutable is what lets the session record or discard a paused
+    bar without reading a strategy's private state or swapping its executor.
+    """
 
-    def _on_fifteen_minute_bar(self, bar: TradeBar) -> None: ...
+    intent: SignalIntent | None
+    ready: bool
+    relation_facts: dict[str, bool]
+    signal_facts: dict[str, str]
+    reason_evidence: dict[str, str | int | bool]
+    action_plan_request: dict[str, str] | None
 
-    def rollback_blocked_entry(self) -> None: ...
 
-    def rollback_blocked_exit(self) -> None: ...
+class SignalProgramStrategy(Protocol):
+    """Public strategy interface owned by a typed signal program."""
+
+    def evaluate_signal_bar(self, bar: TradeBar) -> SignalDecision: ...
+
+    def commit_signal_decision(self, bar: TradeBar, intent: SignalIntent) -> None: ...
+
+    def discard_signal_decision(self, bar: TradeBar, intent: SignalIntent | None) -> None: ...
 
     def signal_program_settings(self) -> dict[str, str]: ...
-
-
-class _CaptureExecutor:
-    """Capture an intent until the session's settlement commits it."""
-
-    def __init__(self) -> None:
-        self.intents: list[SignalIntent] = []
-
-    def execute(self, _context: SignalIntentExecutionContext, intent: SignalIntent) -> None:
-        self.intents.append(intent)
 
 
 class EmaCrossoverSignalSession:
@@ -121,7 +128,7 @@ class EmaCrossoverSignalSession:
     PROGRAM_VERSION = "ema-crossover-signal/v1"
     TIMEFRAME_MS = 15 * 60 * 1000
 
-    def __init__(self, strategy: _EmaSignalStrategy) -> None:
+    def __init__(self, strategy: SignalProgramStrategy) -> None:
         self._strategy = strategy
         self._active_stage: EvaluationStage | None = None
         self._last_bar_close_ms: int | None = None
@@ -131,42 +138,30 @@ class EmaCrossoverSignalSession:
     def active_stage(self) -> EvaluationStage | None:
         return self._active_stage
 
-    def advance(self, bar: TradeBar) -> EvaluationStage | StageQuarantine:
-        """Evaluate one complete 15-minute bucket without applying its intent."""
+    def advance(
+        self,
+        bar: TradeBar,
+        *,
+        mode: EvaluationMode,
+    ) -> EvaluationStage | StageQuarantine:
+        """Evaluate one complete bucket under its captured immutable mode."""
         if self._active_stage is not None:
             return StageQuarantine(StageStatus.UNSETTLED_STAGE, "UNSETTLED_STAGE")
         if bar.end_ms - bar.start_ms != self.TIMEFRAME_MS:
             return StageQuarantine(StageStatus.REJECTED_BAR, "TIMEFRAME_MISMATCH")
         if self._last_bar_close_ms is not None and bar.end_ms <= self._last_bar_close_ms:
             return StageQuarantine(StageStatus.REJECTED_BAR, "NON_MONOTONIC_DECISION_CLOCK")
-        if self._strategy.ctx is None:
-            raise RuntimeError("SignalSession requires an initialized strategy context")
-
-        context = self._strategy.ctx
-        prior_executor = context._signal_intent_executor
-        if prior_executor is None:
-            raise RuntimeError("SignalSession requires a bound SignalIntentExecutor")
-        capture = _CaptureExecutor()
-        context.set_signal_intent_executor(capture)
-        prior_in_position = self._strategy._in_position
-        prior_countdown = self._strategy._bars_until_exit
-        try:
-            self._strategy._on_fifteen_minute_bar(bar)
-        finally:
-            context.set_signal_intent_executor(prior_executor)
-
-        intents = tuple(capture.intents)
-        if len(intents) > 1:
-            raise RuntimeError("EMA SignalSession may stage at most one intent per decision clock")
-        trace = self._build_trace(
-            bar=bar,
-            intent=intents[0] if intents else None,
-            prior_in_position=prior_in_position,
-            prior_countdown=prior_countdown,
-        )
-        stage = EvaluationStage(trace=trace, intents=intents)
+        decision = self._strategy.evaluate_signal_bar(bar)
+        intents = () if decision.intent is None else (decision.intent,)
+        trace = self._build_trace(bar=bar, decision=decision, mode=mode)
+        stage = EvaluationStage(bar=bar, trace=trace, intents=intents, decision=decision)
         self._active_stage = stage
         self._last_bar_close_ms = bar.end_ms
+        if mode is EvaluationMode.OBSERVE_ONLY:
+            # An observed candidate is deliberately terminal in the same
+            # call. Continue may change the run gate immediately afterward,
+            # but it cannot resurrect this already-discarded evaluation.
+            self.settle(Settlement.DISCARD)
         return stage
 
     def settle(self, settlement: Settlement) -> EvaluationStage:
@@ -175,20 +170,10 @@ class EmaCrossoverSignalSession:
         if stage is None:
             raise RuntimeError("SignalSession has no staged evaluation to settle")
         if settlement is Settlement.COMMIT:
-            context = self._strategy.ctx
-            assert context is not None
-            executor = context._signal_intent_executor
-            assert executor is not None
             for intent in stage.intents:
-                executor.execute(context, intent)
+                self._strategy.commit_signal_decision(stage.bar, intent)
         else:
-            for intent in stage.intents:
-                if intent.kind is SignalIntentKind.ENTER:
-                    self._strategy.rollback_blocked_entry()
-                elif intent.kind is SignalIntentKind.EXIT:
-                    self._strategy.rollback_blocked_exit()
-                else:  # pragma: no cover - closed enum guard
-                    raise ValueError(f"unsupported signal intent kind: {intent.kind!r}")
+            self._strategy.discard_signal_decision(stage.bar, stage.decision.intent)
 
         stage.settlement = settlement
         self.traces.append(stage.trace)
@@ -204,25 +189,9 @@ class EmaCrossoverSignalSession:
         self,
         *,
         bar: TradeBar,
-        intent: SignalIntent | None,
-        prior_in_position: bool,
-        prior_countdown: int,
+        decision: SignalDecision,
+        mode: EvaluationMode,
     ) -> EvaluationTrace:
-        ema_fast = self._indicator_value(self._strategy._ema5)
-        ema_slow = self._indicator_value(self._strategy._ema10)
-        rsi = self._indicator_value(self._strategy._rsi14)
-        ready = all(
-            indicator is not None and bool(indicator.is_ready)
-            for indicator in (self._strategy._ema5, self._strategy._ema10, self._strategy._rsi14)
-        )
-        relation_facts = {
-            "ema_fast_above_slow": ready and ema_fast is not None and ema_slow is not None and ema_fast > ema_slow,
-            "was_in_position": prior_in_position,
-        }
-        signal_facts = {
-            "decision": intent.kind.value if intent is not None else "HOLD",
-            "timeframe": "15m",
-        }
         settings = self._strategy.signal_program_settings()
         evaluation_id = _semantic_hash(
             {
@@ -239,45 +208,60 @@ class EmaCrossoverSignalSession:
             bar_close_ms=bar.end_ms,
             bar_qualified=True,
             bucket_closed=True,
-            ready=ready,
-            relation_facts=relation_facts,
-            signal_facts=signal_facts,
-            staged_candidate=intent.kind.value if intent is not None else None,
-            reason_evidence={
-                "prior_countdown": prior_countdown,
-                "ema_fast": str(ema_fast) if ema_fast is not None else "UNREADY",
-                "ema_slow": str(ema_slow) if ema_slow is not None else "UNREADY",
-                "rsi": str(rsi) if rsi is not None else "UNREADY",
-            },
-            action_plan_request=(
-                {"contract": "single_long_stock", "intent": intent.kind.value}
-                if intent is not None
-                else None
-            ),
+            ready=decision.ready,
+            relation_facts=decision.relation_facts,
+            signal_facts=decision.signal_facts,
+            staged_candidate=decision.intent.kind.value if decision.intent is not None else None,
+            reason_evidence=decision.reason_evidence,
+            action_plan_request=decision.action_plan_request,
+            evaluation_mode=mode,
         )
-
-    @staticmethod
-    def _indicator_value(indicator: Any) -> Decimal | None:
-        if indicator is None or not indicator.is_ready:
-            return None
-        return indicator.current_value
 
 
 @dataclass
 class EmaCrossoverSignalProgram:
     """Registered Signal Program which is the only session-construction seam."""
 
-    strategy: _EmaSignalStrategy
+    strategy: SignalProgramStrategy
     session: EmaCrossoverSignalSession
     active: bool = False
+    _default_evaluation_mode: EvaluationMode | None = None
+    _captured_modes_by_close_ms: dict[int, EvaluationMode] = field(default_factory=dict)
+    _completed_stages: list[EvaluationStage] = field(default_factory=list)
 
     @classmethod
-    def create(cls, strategy: _EmaSignalStrategy) -> EmaCrossoverSignalProgram:
+    def create(cls, strategy: SignalProgramStrategy) -> EmaCrossoverSignalProgram:
         return cls(strategy=strategy, session=EmaCrossoverSignalSession(strategy))
 
     def activate_for_backtest(self) -> None:
         """Select staged callbacks only for Backtest's explicit adapter seam."""
         self.active = True
+        self._default_evaluation_mode = EvaluationMode.DECIDE
+
+    def activate_for_runner(self) -> None:
+        """Require the live adapter to supply a captured mode for every bar."""
+        self.active = True
+        self._default_evaluation_mode = None
+
+    def capture_source_bar(self, bar: TradeBar, *, mode: EvaluationMode) -> None:
+        """Bind the source bar's mode before its consolidator can fire."""
+        existing = self._captured_modes_by_close_ms.get(bar.end_ms)
+        if existing is not None and existing is not mode:
+            raise RuntimeError("A source bar cannot have two evaluation modes")
+        self._captured_modes_by_close_ms[bar.end_ms] = mode
+
+    def on_consolidated_bar(self, bar: TradeBar) -> None:
+        """Advance using the mode captured with the bucket's closing source bar."""
+        mode = self._captured_modes_by_close_ms.pop(bar.end_ms, self._default_evaluation_mode)
+        if mode is None:
+            raise RuntimeError("SignalProgram requires a captured evaluation mode for every live bar")
+        stage = self.session.advance(bar, mode=mode)
+        if isinstance(stage, EvaluationStage) and stage.settlement is not None:
+            self._completed_stages.append(stage)
+
+    def take_completed_stage(self) -> EvaluationStage | None:
+        """Return an already-settled observation for runner audit projection."""
+        return self._completed_stages.pop(0) if self._completed_stages else None
 
 
 def trace_root(traces: list[EvaluationTrace]) -> str:
@@ -298,9 +282,11 @@ def _semantic_hash(value: Any) -> str:
 __all__ = [
     "EmaCrossoverSignalProgram",
     "EmaCrossoverSignalSession",
+    "EvaluationMode",
     "EvaluationStage",
     "EvaluationTrace",
     "Settlement",
+    "SignalDecision",
     "StageQuarantine",
     "StageStatus",
     "trace_corpus_root",

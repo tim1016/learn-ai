@@ -59,7 +59,7 @@ from app.engine.live.bot_lifecycle_state import BotDutyOutcome, BotLifecyclePhas
 from app.engine.live.desired_state import DesiredState
 from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.signal_intent import SignalIntentKind
-from app.engine.strategy.signal_program import Settlement
+from app.engine.strategy.signal_program import EvaluationMode, Settlement
 from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeedError
 from app.schemas.action_plan import ActionPlan
 from app.schemas.broker_bots import BotProcessFact
@@ -95,7 +95,7 @@ from app.services.bot_runner_errors import (
     InvalidRunHistoryCursorError,
 )
 from app.services.bot_runtime import PauseAwareFeed
-from app.services.bot_trade_strategy import strategy_evaluations
+from app.services.bot_trade_strategy import StrategyEvaluation, strategy_evaluations
 from app.services.market_liveness import compose_market_liveness, unknown_market_liveness
 from app.utils.timestamps import now_ms_utc
 
@@ -830,7 +830,6 @@ def _registry(
     feed: _FakeFeed | None,
     *,
     policy: RestartIntensityPolicy | None = None,
-    carryover_allowed: bool = False,
     now_ms: Callable[[], int] = now_ms_utc,
     start_custody_guard: (
         Callable[[str], AbstractAsyncContextManager[ClerkCustodySnapshot]] | None
@@ -842,7 +841,6 @@ def _registry(
         restart_policy=policy or RestartIntensityPolicy(threshold=100),
         # Boot recovery has its own suite (test_boot_recovery.py).
         boot_recovery_required=False,
-        carryover_allowed=carryover_allowed,
         start_custody_guard=start_custody_guard or _flat_start_guard,
         now_ms=now_ms,
         market_liveness=_tradable_market_liveness,
@@ -1928,6 +1926,51 @@ async def test_pause_aware_feed_progresses_bars_in_observe_only_mode() -> None:
     assert feed.observe_only is False
 
 
+@pytest.mark.asyncio
+async def test_pause_mode_is_captured_at_the_decision_bar_not_sampled_after_continue() -> None:
+    """A Continue after the raw close cannot release its paused EMA candidate."""
+
+    gate = asyncio.Event()
+    gate.set()
+
+    class _ModeBoundaryFeed(_FakeFeed):
+        async def stream_bars(self, symbol: str, *, use_rth: bool = True):
+            async for bar in super().stream_bars(symbol, use_rth=use_rth):
+                if bar.end_ms == _EMA_FIRST_ENTER_MS:
+                    gate.clear()
+                elif bar.end_ms > _EMA_FIRST_ENTER_MS:
+                    gate.set()
+                yield bar
+
+    binding = BrokerBotBinding(
+        strategy_instance_id="ema-pause-mode-test",
+        strategy_key="ema_crossover_signal",
+        broker="alpaca",
+        symbol="SPY",
+        mode="dry_run",
+        action_plan=alpaca_v1_action_plan("SPY"),
+        run_id="run-001",
+        created_at_ms=_T0,
+    )
+    paused_enter: list[StrategyEvaluation] = []
+    decided_intents: list[SignalIntentKind] = []
+    feed = PauseAwareFeed(
+        _ModeBoundaryFeed(_ema_parity_bars_through_first_exit(), mode="finite"),
+        gate,
+    )
+
+    async for evaluation in strategy_evaluations(binding, feed):
+        if evaluation.evaluation_mode is EvaluationMode.OBSERVE_ONLY and evaluation.intents:
+            paused_enter.append(evaluation)
+        elif evaluation.intents:
+            decided_intents.extend(intent.kind for intent in evaluation.intents)
+        if evaluation.settle_stage is not None:
+            evaluation.settle_stage(Settlement.COMMIT)
+
+    assert [evaluation.intents[0].kind for evaluation in paused_enter] == [SignalIntentKind.ENTER]
+    assert decided_intents == []
+
+
 def test_dry_run_activity_projection_excludes_prior_run_rows(tmp_path: Path) -> None:
     journal = DryRunActivityJournal(tmp_path)
     for run_id, seq in (("run-prior", 1), ("run-current", 2)):
@@ -1968,10 +2011,10 @@ def test_dry_run_activity_projection_excludes_prior_run_rows(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_carryover_rejects_a_new_deploy_even_when_the_constructor_requests_it(
+async def test_carryover_rejects_a_new_deploy_without_an_enablement_switch(
     tmp_path: Path,
 ) -> None:
-    registry = _registry(tmp_path, _FakeFeed([], mode="hold"), carryover_allowed=True)
+    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
 
     with pytest.raises(CarryoverPolicyRefusedError, match="globally disabled"):
         await registry.deploy(
@@ -1986,7 +2029,7 @@ async def test_carryover_rejects_a_new_deploy_even_when_the_constructor_requests
 
 @pytest.mark.asyncio
 async def test_default_start_status_exposes_carryover_as_disabled(tmp_path: Path) -> None:
-    registry = _registry(tmp_path, _FakeFeed([], mode="hold"), carryover_allowed=True)
+    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
     deployed = await registry.deploy(
         broker="alpaca",
         strategy_instance_id=_SID,
