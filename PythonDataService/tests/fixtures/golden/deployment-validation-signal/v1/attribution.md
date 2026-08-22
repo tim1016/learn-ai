@@ -29,15 +29,18 @@ originally captured to reconcile.
   bucket — hence the far larger per-cell trace counts (tens of thousands per
   cell, one per RTH minute) than the 15-minute programs' ~35,900-trace
   shared window.
-- Assumption: `DeploymentValidationConsecutiveGreen.initialize()` sets its
-  own fixed backtest window (`set_start_date(2024, 3, 28)` /
-  `set_end_date(2026, 4, 15)`), unaffected by
-  `scripts/generate_signal_program_trace_corpus.py`'s `_ensure_backtest_window`
-  fallback (which only fills the gap for strategies that do not set their
-  own dates). Every cell's window ends 2026-04-30; bars after this
-  strategy's own 2026-04-15 end date are therefore not replayed into its
-  corpus, the same truncation `ema_crossover_signal`/`sma_crossover` already
-  accept from their own earlier fixed end dates.
+- Backtest window: `DeploymentValidationConsecutiveGreen.initialize()` sets
+  its own fixed window (`set_start_date(2024, 3, 28)` /
+  `set_end_date(2026, 4, 15)`). The generator neither sets nor overrides a
+  window — `scripts/generate_signal_program_trace_corpus.py`'s
+  `_entry_for_cell` builds the registered strategy and hands the cell's
+  minute bars to `BacktestEngine(InMemoryDataReader(...))`, whose
+  `iter_bars(symbol, start_date, end_date)` bounds iteration to whatever
+  window the strategy configured for itself. Every cell's data runs to
+  2026-04-30, so each cell's final ~11 trading days fall outside this
+  strategy's own 2026-04-15 end date and are not replayed into the corpus —
+  the same truncation `ema_crossover_signal`/`sma_crossover` already accept
+  from their own (earlier, 2026-03-27) fixed end dates.
 - Tolerance: not applicable. The root is a byte-stable SHA-256 commitment;
   there is no external reference this promotion is tolerance-compared
   against (see `numerical_provenance.equivalence_level="bit_exact"` on the
