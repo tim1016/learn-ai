@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import csv
-import json
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from pathlib import Path
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import BacktestEngine
@@ -27,7 +24,6 @@ from app.engine.strategy.signal_program import (
     SignalSession,
     StageQuarantine,
     StageStatus,
-    trace_corpus_root,
     trace_root,
 )
 from app.services.spec_strategy_runner import InMemoryDataReader
@@ -257,46 +253,3 @@ def test_trace_root_changes_only_when_trace_semantics_change() -> None:
 
     assert trace_root([trace]) == trace_root([replace(trace)])
     assert trace_root([trace]) != trace_root([replace(trace, staged_candidate="EXIT")])
-
-
-def test_validated_ema_settings_corpus_has_a_pinned_trace_root() -> None:
-    fixture = Path(__file__).resolve().parents[2] / "fixtures/golden/ema-signal-session/v1/trace-corpus.json"
-    corpus = json.loads(fixture.read_text(encoding="utf-8"))
-
-    assert trace_corpus_root(corpus["entries"]) == corpus["trace_root"]
-    assert len(corpus["entries"]) == 10
-    cells_root = fixture.parents[2] / "cross-engine-studies/cells"
-    registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
-    contract = registration.signal_program_contract
-    assert contract is not None
-    # This is the runtime admission gate (PRD S11.4): a program edit that
-    # changes behavior without also updating the registry's sealed
-    # golden_trace_root must fail here, not slip through as a "qualified"
-    # receipt. `scripts/run_signal_program_build_qualification.py` binds its
-    # emitted receipt to `contract.golden_trace_root`, so this suite passing
-    # is what makes that receipt admissible evidence.
-    assert corpus["trace_root"] == contract.golden_trace_root
-
-    for entry in corpus["entries"]:
-        cell = cells_root / entry["cell"]
-        minute_bars: list[TradeBar] = []
-        with (cell / "lean" / "observations.csv").open(encoding="utf-8", newline="") as handle:
-            for row in csv.DictReader(handle):
-                end_ms = int(row["ms_utc"])
-                minute_bars.append(
-                    TradeBar(
-                        symbol=entry["settings"]["symbol"],
-                        start_ms=end_ms - 60_000,
-                        end_ms=end_ms,
-                        open=Decimal(row["open"]),
-                        high=Decimal(row["high"]),
-                        low=Decimal(row["low"]),
-                        close=Decimal(row["close"]),
-                        volume=int(Decimal(row["volume"])),
-                    )
-                )
-        strategy = registration.build(registration.param_schema(**entry["settings"]))
-        BacktestEngine(InMemoryDataReader(minute_bars)).run(strategy)
-        assert strategy.signal_program is not None
-        assert len(strategy.signal_program.session.traces) == entry["trace_count"]
-        assert trace_root(strategy.signal_program.session.traces) == entry["trace_root"]

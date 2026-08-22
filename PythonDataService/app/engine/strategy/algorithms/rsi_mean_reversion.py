@@ -24,7 +24,6 @@ instances from a user-supplied ``RsiMeanReversionParams`` Pydantic model.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
@@ -131,12 +130,6 @@ class RsiMeanReversionAlgorithm(Strategy):
             self._resolution,
             self._signal_program_handler(),
         )
-
-    def _signal_program_handler(self) -> Callable[[TradeBar], None]:
-        """Use the registered staged program when one owns this strategy."""
-        if self.signal_program is None or not self.signal_program.active:
-            return self._on_consolidated_bar
-        return self.signal_program.on_consolidated_bar
 
     def signal_program_settings(self) -> dict[str, str]:
         """Stable RSI settings which participate in evaluation identity."""
@@ -246,10 +239,6 @@ class RsiMeanReversionAlgorithm(Strategy):
             f"Close={bar.close:.2f} RSI{self._window}={rsi_val:.2f} "
             f"< oversold({self._oversold})"
         )
-
-    def discard_signal_decision(self, _bar: TradeBar, _intent: SignalIntent | None) -> None:
-        """A staged candidate has no speculative lifecycle state to unwind."""
-        return
 
     def rollback_blocked_entry(self) -> None:
         """Undo lifecycle state when the live liveness gate blocks ENTER."""

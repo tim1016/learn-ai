@@ -261,6 +261,32 @@ class Strategy(ABC):
     # ------------------------------------------------------------------
     # Declarative configuration (called in initialize)
     # ------------------------------------------------------------------
+
+    def _signal_program_handler(self) -> Callable[[TradeBar], None]:
+        """Route consolidated bars to the staged program when one owns this
+        strategy, else to the strategy's own compatibility callback.
+
+        Lives here rather than being restated per strategy: the body reads
+        only ``self.signal_program`` (declared just above) and the
+        conventional ``_on_consolidated_bar``, so every copy was identical.
+        ``EmaCrossoverSignalAlgorithm`` overrides it solely because its
+        compatibility callback predates that convention and is still named
+        ``_on_fifteen_minute_bar``.
+        """
+        if self.signal_program is None or not self.signal_program.active:
+            return self._on_consolidated_bar  # type: ignore[attr-defined]
+        return self.signal_program.on_consolidated_bar
+
+    def discard_signal_decision(self, _bar: TradeBar, _intent: SignalIntent | None) -> None:
+        """A staged candidate has no speculative lifecycle state to unwind.
+
+        The correct default: a strategy that mutates position custody only
+        in ``commit_signal_decision`` -- which every Signal Program is
+        required to do -- has nothing to undo when a candidate is discarded.
+        A strategy that genuinely stages speculative state overrides this.
+        """
+        return
+
     def set_start_date(self, year: int, month: int, day: int) -> None:
         from zoneinfo import ZoneInfo
 

@@ -39,7 +39,6 @@ Subclasses override the small extension surface:
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
@@ -123,12 +122,6 @@ class RsiRangeStrategy(Strategy):
         self._adx = AverageDirectionalIndex(f"{self.__class__.__name__}_ADX", self.adx_period)
         self._init_extra_indicators()
         self.ctx.register_consolidator(self._symbol, self._resolution, self._signal_program_handler())
-
-    def _signal_program_handler(self) -> Callable[[TradeBar], None]:
-        """Use the registered staged program when one owns this strategy."""
-        if self.signal_program is None or not self.signal_program.active:
-            return self._on_consolidated_bar
-        return self.signal_program.on_consolidated_bar
 
     def signal_program_settings(self) -> dict[str, str]:
         """Stable RSI-range settings which participate in evaluation identity."""
@@ -256,10 +249,6 @@ class RsiRangeStrategy(Strategy):
             f"ENTRY SIGNAL: {display_time(bar.end_ms)} close={bar.close:.2f} "
             f"rsi={float(self._rsi.current_value):.2f}"
         )
-
-    def discard_signal_decision(self, _bar: TradeBar, _intent: SignalIntent | None) -> None:
-        """A staged candidate has no speculative lifecycle state to unwind."""
-        return
 
     # ------------------------------------------------------------------
     def on_order_event(self, event: OrderEvent) -> None:

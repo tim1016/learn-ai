@@ -425,10 +425,6 @@ class EmaCrossoverSignalAlgorithm(Strategy):
             f"EMA5={ema5_val:.4f} EMA10={ema10_val:.4f} Gap={ema_gap:.4f} RSI={rsi_val:.2f}"
         )
 
-    def discard_signal_decision(self, _bar: TradeBar, _intent: SignalIntent | None) -> None:
-        """A staged candidate has no speculative lifecycle state to unwind."""
-        return
-
     def rollback_blocked_entry(self) -> None:
         """Undo the ENTER-time state committed by ``_on_fifteen_minute_bar``
         when the caller refuses to act on this signal (e.g. a liveness

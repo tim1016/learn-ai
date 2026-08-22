@@ -83,28 +83,28 @@ _PYTEST_TIMEOUT_SECONDS = 300
 # when that lands.
 _QUALIFICATION_SUITES: dict[str, str] = {
     "ema_crossover_signal": (
-        "tests/engine/strategy/test_ema_signal_program.py"
-        "::test_validated_ema_settings_corpus_has_a_pinned_trace_root"
+        "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
+        "[ema_crossover_signal]"
     ),
     "sma_crossover": (
-        "tests/engine/strategy/test_sma_signal_program.py"
-        "::test_validated_sma_settings_corpus_has_a_pinned_trace_root"
+        "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
+        "[sma_crossover]"
     ),
     "rsi_mean_reversion": (
-        "tests/engine/strategy/test_rsi_signal_program.py"
-        "::test_validated_rsi_mean_reversion_settings_corpus_has_a_pinned_trace_root"
+        "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
+        "[rsi_mean_reversion]"
     ),
     "spy_strategy_a": (
-        "tests/engine/strategy/test_spy_strategy_a_signal_program.py"
-        "::test_validated_spy_strategy_a_settings_corpus_has_a_pinned_trace_root"
+        "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
+        "[spy_strategy_a]"
     ),
     "spy_strategy_b": (
-        "tests/engine/strategy/test_spy_strategy_b_signal_program.py"
-        "::test_validated_spy_strategy_b_settings_corpus_has_a_pinned_trace_root"
+        "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
+        "[spy_strategy_b]"
     ),
     "spy_strategy_c": (
-        "tests/engine/strategy/test_spy_strategy_c_signal_program.py"
-        "::test_validated_spy_strategy_c_settings_corpus_has_a_pinned_trace_root"
+        "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
+        "[spy_strategy_c]"
     ),
 }
 
@@ -125,47 +125,51 @@ _QUALIFICATION_SUITES: dict[str, str] = {
 # ``closure - exclusions == artifact_paths`` exactly, so a newly introduced
 # import must be explicitly triaged into one bucket or the other — silent
 # drift in either direction fails the build.
-_EMA_SIGNAL_DECISION_CLOSURE_EXCLUSIONS: dict[str, str] = {
+_SHARED_EXECUTION_BOUNDARY_EXCLUSIONS: dict[str, str] = {
     "app/engine/execution/commission.py": (
-        "Commission/fee model; consulted only when pricing a fill, never inside "
-        "evaluate_signal_bar()'s decision math."
+        "Commission/fee model; consulted only when pricing a fill, never inside evaluate_signal_bar()'s decision math."
     ),
     "app/engine/execution/order.py": (
-        "Direction/OrderEvent are read only by on_order_event(), which runs after "
-        "a fill and only appends to the trade log — the trace for that bar is "
-        "already built and immutable by then."
-    ),
-    "app/engine/execution/portfolio.py": (
-        "Cash/holdings/fill accounting; evaluate_signal_bar() reads only bar.close, "
-        "never portfolio state, to compute its facts."
+        'Direction/OrderEvent are read only by on_order_event(), which runs after a fill and only appends to the trade log — the trace for that bar is already built and immutable by then.'
     ),
     "app/engine/execution/signal_intent_executor.py": (
-        "Referenced only under `if TYPE_CHECKING:` in strategy/base.py — never "
-        "imported at runtime — and its concrete executors translate an "
-        "already-decided SignalIntent into broker actions after the trace exists."
+        'Referenced only under `if TYPE_CHECKING:` in strategy/base.py — never imported at runtime — and its concrete executors translate an already-decided SignalIntent into broker actions after the trace exists.'
     ),
     "app/engine/execution/sizing.py": (
-        "Share/notional sizing math belongs to the execution boundary that sizes "
-        "an already-decided trade; never consulted for entry/exit facts."
-    ),
-    "app/engine/framework/insight.py": (
-        "Insight/InsightDirection are constructed inside commit_signal_decision(), "
-        "which advance() calls only after _build_trace() has already produced the "
-        "immutable EvaluationTrace."
-    ),
-    "app/engine/framework/insight_manager.py": (
-        "Reached only via StrategyContext.emit_insight(), called from "
-        "commit_signal_decision() after the trace for that bar already exists."
+        'Share/notional sizing math belongs to the execution boundary that sizes an already-decided trade; never consulted for entry/exit facts.'
     ),
     "app/engine/framework/insight_scorer.py": (
-        "Scores Insight objects for the Alpha framework; never consulted by "
-        "evaluate_signal_bar()."
+        'Scores Insight objects for the Alpha framework; never consulted by evaluate_signal_bar().'
     ),
     "app/research/parity/ibkr_commission.py": (
-        "IBKR fee-tier table reached only through execution/commission.py; same "
-        "fee-only reasoning."
+        'IBKR fee-tier table reached only through execution/commission.py; same fee-only reasoning.'
     ),
 }
+
+
+def _closure_exclusions(*, portfolio: str, insight: str, insight_manager: str) -> dict[str, str]:
+    """One program's triage: the shared execution-boundary reasons plus the
+    three whose wording is genuinely program-specific (they name the class
+    that does or does not reach the file).
+
+    Six programs previously restated all nine entries. Six of the nine
+    carried byte-identical prose, so a correction to any of them had to be
+    made six times, and nothing would have caught the sixth being missed --
+    it is documentation, not an assertion.
+    """
+    return {
+        **_SHARED_EXECUTION_BOUNDARY_EXCLUSIONS,
+        "app/engine/execution/portfolio.py": portfolio,
+        "app/engine/framework/insight.py": insight,
+        "app/engine/framework/insight_manager.py": insight_manager,
+    }
+
+
+_EMA_SIGNAL_DECISION_CLOSURE_EXCLUSIONS: dict[str, str] = _closure_exclusions(
+    portfolio='Cash/holdings/fill accounting; evaluate_signal_bar() reads only bar.close, never portfolio state, to compute its facts.',
+    insight='Insight/InsightDirection are constructed inside commit_signal_decision(), which advance() calls only after _build_trace() has already produced the immutable EvaluationTrace.',
+    insight_manager='Reached only via StrategyContext.emit_insight(), called from commit_signal_decision() after the trace for that bar already exists.',
+)
 
 # Same triage, for `sma_crossover`'s own closure (issue #1730 Slice 5). The
 # roots differ (no RSI/EMA indicators, no Insight emission from
@@ -173,48 +177,11 @@ _EMA_SIGNAL_DECISION_CLOSURE_EXCLUSIONS: dict[str, str] = {
 # below is reached the same way EMA's is: through app/engine/strategy/base.py
 # and app/engine/execution/*'s own general, strategy-agnostic imports, never
 # from evaluate_signal_bar()'s decision math.
-_SMA_SIGNAL_DECISION_CLOSURE_EXCLUSIONS: dict[str, str] = {
-    "app/engine/execution/commission.py": (
-        "Commission/fee model; consulted only when pricing a fill, never inside "
-        "evaluate_signal_bar()'s decision math."
-    ),
-    "app/engine/execution/order.py": (
-        "Direction/OrderEvent are read only by on_order_event(), which runs after "
-        "a fill and only appends to the trade log — the trace for that bar is "
-        "already built and immutable by then."
-    ),
-    "app/engine/execution/portfolio.py": (
-        "Cash/holdings/fill accounting; evaluate_signal_bar() reads only bar.close, "
-        "never portfolio state, to compute its facts."
-    ),
-    "app/engine/execution/signal_intent_executor.py": (
-        "Referenced only under `if TYPE_CHECKING:` in strategy/base.py — never "
-        "imported at runtime — and its concrete executors translate an "
-        "already-decided SignalIntent into broker actions after the trace exists."
-    ),
-    "app/engine/execution/sizing.py": (
-        "Share/notional sizing math belongs to the execution boundary that sizes "
-        "an already-decided trade; never consulted for entry/exit facts."
-    ),
-    "app/engine/framework/insight.py": (
-        "Reached via strategy/base.py's StrategyContext.emit_insight() plumbing, "
-        "which SmaCrossoverAlgorithm.commit_signal_decision never calls — and "
-        "even where a program does call it, that only happens after "
-        "_build_trace() has already produced the immutable EvaluationTrace."
-    ),
-    "app/engine/framework/insight_manager.py": (
-        "Reached only via StrategyContext.emit_insight(), never called by "
-        "SmaCrossoverAlgorithm; not consulted by evaluate_signal_bar() either way."
-    ),
-    "app/engine/framework/insight_scorer.py": (
-        "Scores Insight objects for the Alpha framework; never consulted by "
-        "evaluate_signal_bar()."
-    ),
-    "app/research/parity/ibkr_commission.py": (
-        "IBKR fee-tier table reached only through execution/commission.py; same "
-        "fee-only reasoning."
-    ),
-}
+_SMA_SIGNAL_DECISION_CLOSURE_EXCLUSIONS: dict[str, str] = _closure_exclusions(
+    portfolio='Cash/holdings/fill accounting; evaluate_signal_bar() reads only bar.close, never portfolio state, to compute its facts.',
+    insight="Reached via strategy/base.py's StrategyContext.emit_insight() plumbing, which SmaCrossoverAlgorithm.commit_signal_decision never calls — and even where a program does call it, that only happens after _build_trace() has already produced the immutable EvaluationTrace.",
+    insight_manager='Reached only via StrategyContext.emit_insight(), never called by SmaCrossoverAlgorithm; not consulted by evaluate_signal_bar() either way.',
+)
 
 # Same triage, for `rsi_mean_reversion`'s own closure (issue #1730 Slice 5).
 # The roots differ (a single RSI series, no crossover-state seeding), but
@@ -222,48 +189,11 @@ _SMA_SIGNAL_DECISION_CLOSURE_EXCLUSIONS: dict[str, str] = {
 # through app/engine/strategy/base.py and app/engine/execution/*'s own
 # general, strategy-agnostic imports, never from evaluate_signal_bar()'s
 # decision math.
-_RSI_SIGNAL_DECISION_CLOSURE_EXCLUSIONS: dict[str, str] = {
-    "app/engine/execution/commission.py": (
-        "Commission/fee model; consulted only when pricing a fill, never inside "
-        "evaluate_signal_bar()'s decision math."
-    ),
-    "app/engine/execution/order.py": (
-        "Direction/OrderEvent are read only by on_order_event(), which runs after "
-        "a fill and only appends to the trade log — the trace for that bar is "
-        "already built and immutable by then."
-    ),
-    "app/engine/execution/portfolio.py": (
-        "Cash/holdings/fill accounting; evaluate_signal_bar() reads only bar.close, "
-        "never portfolio state, to compute its facts."
-    ),
-    "app/engine/execution/signal_intent_executor.py": (
-        "Referenced only under `if TYPE_CHECKING:` in strategy/base.py — never "
-        "imported at runtime — and its concrete executors translate an "
-        "already-decided SignalIntent into broker actions after the trace exists."
-    ),
-    "app/engine/execution/sizing.py": (
-        "Share/notional sizing math belongs to the execution boundary that sizes "
-        "an already-decided trade; never consulted for entry/exit facts."
-    ),
-    "app/engine/framework/insight.py": (
-        "Reached via strategy/base.py's StrategyContext.emit_insight() plumbing, "
-        "which RsiMeanReversionAlgorithm.commit_signal_decision never calls — and "
-        "even where a program does call it, that only happens after "
-        "_build_trace() has already produced the immutable EvaluationTrace."
-    ),
-    "app/engine/framework/insight_manager.py": (
-        "Reached only via StrategyContext.emit_insight(), never called by "
-        "RsiMeanReversionAlgorithm; not consulted by evaluate_signal_bar() either way."
-    ),
-    "app/engine/framework/insight_scorer.py": (
-        "Scores Insight objects for the Alpha framework; never consulted by "
-        "evaluate_signal_bar()."
-    ),
-    "app/research/parity/ibkr_commission.py": (
-        "IBKR fee-tier table reached only through execution/commission.py; same "
-        "fee-only reasoning."
-    ),
-}
+_RSI_SIGNAL_DECISION_CLOSURE_EXCLUSIONS: dict[str, str] = _closure_exclusions(
+    portfolio='Cash/holdings/fill accounting; evaluate_signal_bar() reads only bar.close, never portfolio state, to compute its facts.',
+    insight="Reached via strategy/base.py's StrategyContext.emit_insight() plumbing, which RsiMeanReversionAlgorithm.commit_signal_decision never calls — and even where a program does call it, that only happens after _build_trace() has already produced the immutable EvaluationTrace.",
+    insight_manager='Reached only via StrategyContext.emit_insight(), never called by RsiMeanReversionAlgorithm; not consulted by evaluate_signal_bar() either way.',
+)
 
 # Same triage, for `spy_strategy_a`'s own closure (issue #1730 Slice 5). The
 # roots are the two files that hold its decision math -- spy_strategy_a.py
@@ -272,49 +202,11 @@ _RSI_SIGNAL_DECISION_CLOSURE_EXCLUSIONS: dict[str, str] = {
 # app/engine/strategy/base.py and app/engine/execution/*'s own general,
 # strategy-agnostic imports, never from evaluate_signal_bar()'s decision
 # math.
-_SPY_STRATEGY_A_SIGNAL_DECISION_CLOSURE_EXCLUSIONS: dict[str, str] = {
-    "app/engine/execution/commission.py": (
-        "Commission/fee model; consulted only when pricing a fill, never inside "
-        "evaluate_signal_bar()'s decision math."
-    ),
-    "app/engine/execution/order.py": (
-        "Direction/OrderEvent are read only by on_order_event(), which runs after "
-        "a fill and only appends to the trade log — the trace for that bar is "
-        "already built and immutable by then."
-    ),
-    "app/engine/execution/portfolio.py": (
-        "Cash/holdings/fill accounting; evaluate_signal_bar() reads only bar.close "
-        "(and bar.high/bar.low for ADX), never portfolio state, to compute its facts."
-    ),
-    "app/engine/execution/signal_intent_executor.py": (
-        "Referenced only under `if TYPE_CHECKING:` in strategy/base.py — never "
-        "imported at runtime — and its concrete executors translate an "
-        "already-decided SignalIntent into broker actions after the trace exists."
-    ),
-    "app/engine/execution/sizing.py": (
-        "Share/notional sizing math belongs to the execution boundary that sizes "
-        "an already-decided trade; never consulted for entry/exit facts."
-    ),
-    "app/engine/framework/insight.py": (
-        "Reached via strategy/base.py's StrategyContext.emit_insight() plumbing, "
-        "which RsiRangeStrategy.commit_signal_decision never calls — and even "
-        "where a program does call it, that only happens after _build_trace() has "
-        "already produced the immutable EvaluationTrace."
-    ),
-    "app/engine/framework/insight_manager.py": (
-        "Reached only via StrategyContext.emit_insight(), never called by "
-        "RsiRangeStrategy/SpyStrategyAAlgorithm; not consulted by "
-        "evaluate_signal_bar() either way."
-    ),
-    "app/engine/framework/insight_scorer.py": (
-        "Scores Insight objects for the Alpha framework; never consulted by "
-        "evaluate_signal_bar()."
-    ),
-    "app/research/parity/ibkr_commission.py": (
-        "IBKR fee-tier table reached only through execution/commission.py; same "
-        "fee-only reasoning."
-    ),
-}
+_SPY_STRATEGY_A_SIGNAL_DECISION_CLOSURE_EXCLUSIONS: dict[str, str] = _closure_exclusions(
+    portfolio='Cash/holdings/fill accounting; evaluate_signal_bar() reads only bar.close (and bar.high/bar.low for ADX), never portfolio state, to compute its facts.',
+    insight="Reached via strategy/base.py's StrategyContext.emit_insight() plumbing, which RsiRangeStrategy.commit_signal_decision never calls — and even where a program does call it, that only happens after _build_trace() has already produced the immutable EvaluationTrace.",
+    insight_manager='Reached only via StrategyContext.emit_insight(), never called by RsiRangeStrategy/SpyStrategyAAlgorithm; not consulted by evaluate_signal_bar() either way.',
+)
 
 # Same triage, for `spy_strategy_b`'s own closure (issue #1730 Slice 5, first
 # RSI-range-family promotion). The roots are
@@ -326,49 +218,11 @@ _SPY_STRATEGY_A_SIGNAL_DECISION_CLOSURE_EXCLUSIONS: dict[str, str] = {
 # SMA's are: through app/engine/strategy/base.py and app/engine/execution/*'s
 # own general, strategy-agnostic imports, never from
 # evaluate_signal_bar()'s decision math.
-_SPY_STRATEGY_B_SIGNAL_DECISION_CLOSURE_EXCLUSIONS: dict[str, str] = {
-    "app/engine/execution/commission.py": (
-        "Commission/fee model; consulted only when pricing a fill, never inside "
-        "evaluate_signal_bar()'s decision math."
-    ),
-    "app/engine/execution/order.py": (
-        "Direction/OrderEvent are read only by on_order_event(), which runs after "
-        "a fill and only appends to the trade log — the trace for that bar is "
-        "already built and immutable by then."
-    ),
-    "app/engine/execution/portfolio.py": (
-        "Cash/holdings/fill accounting; evaluate_signal_bar() reads only bar.close, "
-        "never portfolio state, to compute its facts."
-    ),
-    "app/engine/execution/signal_intent_executor.py": (
-        "Referenced only under `if TYPE_CHECKING:` in strategy/base.py — never "
-        "imported at runtime — and its concrete executors translate an "
-        "already-decided SignalIntent into broker actions after the trace exists."
-    ),
-    "app/engine/execution/sizing.py": (
-        "Share/notional sizing math belongs to the execution boundary that sizes "
-        "an already-decided trade; never consulted for entry/exit facts."
-    ),
-    "app/engine/framework/insight.py": (
-        "Reached via strategy/base.py's StrategyContext.emit_insight() plumbing, "
-        "which RsiRangeStrategy.commit_signal_decision never calls — and even "
-        "where a program does call it, that only happens after _build_trace() "
-        "has already produced the immutable EvaluationTrace."
-    ),
-    "app/engine/framework/insight_manager.py": (
-        "Reached only via StrategyContext.emit_insight(), never called by "
-        "RsiRangeStrategy/SpyStrategyBAlgorithm; not consulted by "
-        "evaluate_signal_bar() either way."
-    ),
-    "app/engine/framework/insight_scorer.py": (
-        "Scores Insight objects for the Alpha framework; never consulted by "
-        "evaluate_signal_bar()."
-    ),
-    "app/research/parity/ibkr_commission.py": (
-        "IBKR fee-tier table reached only through execution/commission.py; same "
-        "fee-only reasoning."
-    ),
-}
+_SPY_STRATEGY_B_SIGNAL_DECISION_CLOSURE_EXCLUSIONS: dict[str, str] = _closure_exclusions(
+    portfolio='Cash/holdings/fill accounting; evaluate_signal_bar() reads only bar.close, never portfolio state, to compute its facts.',
+    insight="Reached via strategy/base.py's StrategyContext.emit_insight() plumbing, which RsiRangeStrategy.commit_signal_decision never calls — and even where a program does call it, that only happens after _build_trace() has already produced the immutable EvaluationTrace.",
+    insight_manager='Reached only via StrategyContext.emit_insight(), never called by RsiRangeStrategy/SpyStrategyBAlgorithm; not consulted by evaluate_signal_bar() either way.',
+)
 
 # Same triage, for `spy_strategy_c`'s own closure (issue #1730 Slice 5,
 # second additional promotion). Its decision math lives on the shared
@@ -379,47 +233,23 @@ _SPY_STRATEGY_B_SIGNAL_DECISION_CLOSURE_EXCLUSIONS: dict[str, str] = {
 # `app/engine/strategy/base.py`/`app/engine/execution/*`'s own general,
 # strategy-agnostic imports, never from `RsiRangeStrategy.evaluate_signal_bar`'s
 # decision math.
-_SPY_C_SIGNAL_DECISION_CLOSURE_EXCLUSIONS: dict[str, str] = {
-    "app/engine/execution/commission.py": (
-        "Commission/fee model; consulted only when pricing a fill, never inside "
-        "evaluate_signal_bar()'s decision math."
-    ),
-    "app/engine/execution/order.py": (
-        "Direction/OrderEvent are read only by on_order_event(), which runs after "
-        "a fill and only appends to the trade log — the trace for that bar is "
-        "already built and immutable by then."
-    ),
-    "app/engine/execution/portfolio.py": (
-        "Cash/holdings/fill accounting; evaluate_signal_bar() reads only the "
-        "consolidated bar, never portfolio state, to compute its facts."
-    ),
-    "app/engine/execution/signal_intent_executor.py": (
-        "Referenced only under `if TYPE_CHECKING:` in strategy/base.py — never "
-        "imported at runtime — and its concrete executors translate an "
-        "already-decided SignalIntent into broker actions after the trace exists."
-    ),
-    "app/engine/execution/sizing.py": (
-        "Share/notional sizing math belongs to the execution boundary that sizes "
-        "an already-decided trade; never consulted for entry/exit facts."
-    ),
-    "app/engine/framework/insight.py": (
-        "Reached via strategy/base.py's StrategyContext.emit_insight() plumbing, "
-        "which RsiRangeStrategy.commit_signal_decision never calls — and even "
-        "where a program does call it, that only happens after _build_trace() "
-        "has already produced the immutable EvaluationTrace."
-    ),
-    "app/engine/framework/insight_manager.py": (
-        "Reached only via StrategyContext.emit_insight(), never called by "
-        "RsiRangeStrategy; not consulted by evaluate_signal_bar() either way."
-    ),
-    "app/engine/framework/insight_scorer.py": (
-        "Scores Insight objects for the Alpha framework; never consulted by "
-        "evaluate_signal_bar()."
-    ),
-    "app/research/parity/ibkr_commission.py": (
-        "IBKR fee-tier table reached only through execution/commission.py; same "
-        "fee-only reasoning."
-    ),
+_SPY_C_SIGNAL_DECISION_CLOSURE_EXCLUSIONS: dict[str, str] = _closure_exclusions(
+    portfolio='Cash/holdings/fill accounting; evaluate_signal_bar() reads only the consolidated bar, never portfolio state, to compute its facts.',
+    insight="Reached via strategy/base.py's StrategyContext.emit_insight() plumbing, which RsiRangeStrategy.commit_signal_decision never calls — and even where a program does call it, that only happens after _build_trace() has already produced the immutable EvaluationTrace.",
+    insight_manager='Reached only via StrategyContext.emit_insight(), never called by RsiRangeStrategy; not consulted by evaluate_signal_bar() either way.',
+)
+
+
+# One place the matrix test reads to find a program's triage, so a program
+# added later is covered by the closure matrix the moment it appears here
+# rather than needing its own near-identical test file.
+_CLOSURE_EXCLUSIONS_BY_PROGRAM: dict[str, dict[str, str]] = {
+    "ema_crossover_signal": _EMA_SIGNAL_DECISION_CLOSURE_EXCLUSIONS,
+    "sma_crossover": _SMA_SIGNAL_DECISION_CLOSURE_EXCLUSIONS,
+    "rsi_mean_reversion": _RSI_SIGNAL_DECISION_CLOSURE_EXCLUSIONS,
+    "spy_strategy_a": _SPY_STRATEGY_A_SIGNAL_DECISION_CLOSURE_EXCLUSIONS,
+    "spy_strategy_b": _SPY_STRATEGY_B_SIGNAL_DECISION_CLOSURE_EXCLUSIONS,
+    "spy_strategy_c": _SPY_C_SIGNAL_DECISION_CLOSURE_EXCLUSIONS,
 }
 
 
