@@ -1,0 +1,151 @@
+"""Per-program warmup lookback regression coverage.
+
+``replay_warmup_bars`` (``app/services/bot_trade_strategy_warmup.py``) asks
+``MarketDataFeed.recent_closed_bars`` for a trailing calendar-day window
+before a live strategy starts deciding. That window used to be a single
+hardcoded ``_WARMUP_LOOKBACK_DAYS = 5`` for every registered strategy, even
+though each sealed program's own ``SignalProgramContract`` (in
+``app/engine/strategy/registry.py``) already declares the window its own
+math actually needs -- e.g. ``sma_crossover`` declares 7 days, well above
+the floor. A strategy needing more than 5 days silently withheld live
+decisions (``ready=False``) until enough bars accumulated organically,
+while looking "running" the whole time.
+
+These tests prove ``_warmup_lookback_days_for`` (and, through it,
+``replay_warmup_bars``) prefers the registered contract's own
+``warmup_lookback_days`` over the constant, and that the constant still
+floors an unregistered ``strategy_key``.
+"""
+
+from __future__ import annotations
+
+from decimal import Decimal
+
+import pytest
+
+from app.engine.execution.portfolio import Portfolio
+from app.engine.strategy.base import StrategyContext
+from app.marketdata.feed import MarketDataBar
+from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
+from app.services.bot_trade_strategy_warmup import (
+    _WARMUP_LOOKBACK_DAYS,
+    _warmup_lookback_days_for,
+    replay_warmup_bars,
+)
+
+
+def _binding(*, strategy_key: str) -> BrokerBotBinding:
+    return BrokerBotBinding(
+        strategy_instance_id="warmup-lookback-test",
+        strategy_key=strategy_key,
+        broker="alpaca",
+        symbol="SPY",
+        mode="trade",
+        quantity=1,
+        action_plan=alpaca_v1_action_plan("SPY"),
+        run_id="run-1",
+        created_at_ms=0,
+    )
+
+
+class _RecordingFeed:
+    """``MarketDataFeed`` double that records the ``lookback_days`` it was
+    asked for and returns no history -- ``replay_warmup_bars`` only needs
+    the recorded call for this test, never the bars themselves."""
+
+    feed_id = "fake-recording"
+
+    def __init__(self) -> None:
+        self.recorded_lookback_days: int | None = None
+
+    async def recent_closed_bars(
+        self,
+        symbol: str,
+        *,
+        use_rth: bool = True,
+        lookback_days: int = 5,
+    ) -> list[MarketDataBar]:
+        del symbol, use_rth
+        self.recorded_lookback_days = lookback_days
+        return []
+
+
+class _FakeStrategy:
+    def __init__(self) -> None:
+        self.force_flat_calls = 0
+
+    def on_force_flat(self) -> None:
+        self.force_flat_calls += 1
+
+
+class _FakeRuntime:
+    """Duck-typed ``_LiveSignalRuntime`` stand-in.
+
+    ``replay_warmup_bars`` never reaches ``replay_closed_bar``/
+    ``active_stage``/``settle`` when the feed hands back an empty warmup
+    window (see ``_RecordingFeed`` above), so only ``strategy.on_force_flat``
+    -- called unconditionally at the end of every replay -- needs a real
+    implementation here.
+    """
+
+    def __init__(self) -> None:
+        self.strategy = _FakeStrategy()
+
+
+def _context() -> StrategyContext:
+    return StrategyContext(portfolio=Portfolio(initial_cash=Decimal(0)))
+
+
+@pytest.mark.parametrize(
+    ("strategy_key", "expected_days"),
+    [
+        pytest.param("sma_crossover", 7, id="sma_crossover-contract-declares-7"),
+        pytest.param("spy_strategy_a", 9, id="spy_strategy_a-contract-declares-9"),
+    ],
+)
+def test_warmup_lookback_days_for_prefers_the_registered_contracts_own_window(
+    strategy_key: str, expected_days: int
+) -> None:
+    assert _warmup_lookback_days_for(_binding(strategy_key=strategy_key)) == expected_days
+
+
+def test_warmup_lookback_days_for_floors_an_unregistered_strategy_key_at_the_constant() -> None:
+    binding = _binding(strategy_key="not-a-registered-strategy")
+    assert _warmup_lookback_days_for(binding) == _WARMUP_LOOKBACK_DAYS
+
+
+@pytest.mark.asyncio
+async def test_replay_warmup_bars_requests_the_larger_contract_lookback_from_the_feed() -> None:
+    """End-to-end through ``replay_warmup_bars``: a strategy whose sealed
+    contract declares more than the floor (``sma_crossover`` declares 7, the
+    floor is 5) must have that larger window actually requested from the
+    feed -- not just resolvable in isolation."""
+    feed = _RecordingFeed()
+    binding = _binding(strategy_key="sma_crossover")
+
+    result = await replay_warmup_bars(
+        _FakeRuntime(),  # type: ignore[arg-type]
+        _context(),
+        feed,  # type: ignore[arg-type]
+        binding,
+        captured_decisions=None,
+    )
+
+    assert result is None
+    assert feed.recorded_lookback_days == 7
+
+
+@pytest.mark.asyncio
+async def test_replay_warmup_bars_requests_the_floor_for_an_unregistered_strategy() -> None:
+    feed = _RecordingFeed()
+    binding = _binding(strategy_key="not-a-registered-strategy")
+
+    await replay_warmup_bars(
+        _FakeRuntime(),  # type: ignore[arg-type]
+        _context(),
+        feed,  # type: ignore[arg-type]
+        binding,
+        captured_decisions=None,
+    )
+
+    assert feed.recorded_lookback_days == _WARMUP_LOOKBACK_DAYS

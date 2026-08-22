@@ -12,6 +12,22 @@ settings identity needed to detect a semantic signal-program change.
 - Root generation: `trace_corpus_root(entries)` in
   `app.engine.strategy.signal_program`, encoded as canonical sorted-key JSON
   and SHA-256.
+- Backtest window: `EmaCrossoverSignalAlgorithm.initialize()` sets the
+  window itself (`app/engine/strategy/algorithms/ema_crossover_signal.py:161`)
+  — `set_start_date(2024, 3, 28)` / `set_end_date(2026, 3, 27)` — while
+  every one of these ten cells' own committed price history in
+  `tests/fixtures/golden/cross-engine-studies/cells/` runs through
+  2026-04-30. This corpus predates
+  `scripts/generate_signal_program_trace_corpus.py` and was not built by
+  it, but that script reproduces every one of its ten per-cell
+  `trace_root`/`trace_count` values exactly (see "Regeneration" below) —
+  proof the original replay used this same hardcoded window, not the full
+  cell range. The generator itself neither sets nor overrides a window: its
+  `_entry_for_cell` hands the cell's minute bars to
+  `BacktestEngine(InMemoryDataReader(...))`, whose
+  `iter_bars(symbol, start_date, end_date)` bounds iteration to whatever
+  window the strategy configured for itself, so roughly the final month of
+  each cell is never replayed here either.
 - Tolerance: not applicable. The root is a byte-stable SHA-256 commitment;
   indicator and trade equivalence retain their separately pinned
   `atol=1e-9, rtol=0` LEAN tests.

@@ -27,6 +27,18 @@ reconcile.
 - Root generation: `trace_corpus_root(entries)` in
   `app.engine.strategy.signal_program`, encoded as canonical sorted-key JSON
   and SHA-256.
+- Backtest window: `RsiRangeStrategy.initialize()` (the shared base
+  `SpyStrategyBAlgorithm` extends) sets the window itself
+  (`app/engine/strategy/algorithms/_rsi_range_base.py:116`) —
+  `set_start_date(2024, 3, 28)` / `set_end_date(2026, 3, 27)`, identical to
+  `ema_crossover_signal` and `sma_crossover`. The generator neither sets nor
+  overrides a window: `scripts/generate_signal_program_trace_corpus.py`'s
+  `_entry_for_cell` builds the registered strategy and hands the cell's
+  minute bars to `BacktestEngine(InMemoryDataReader(...))`, whose
+  `iter_bars(symbol, start_date, end_date)` bounds iteration to whatever
+  window the strategy configured for itself. All six programs promoted in
+  this slice therefore replay the same window over the same ten cells and
+  produce the same 35,900 total traces.
 - Tolerance: not applicable. The root is a byte-stable SHA-256 commitment;
   there is no external reference this promotion is tolerance-compared
   against (see `numerical_provenance.equivalence_level="bit_exact"` on the

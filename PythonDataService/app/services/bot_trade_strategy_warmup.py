@@ -28,6 +28,7 @@ from app.broker.alpaca.clerk.sqlite.decision_receipts import (
     SqliteDecisionReceipts,
 )
 from app.engine.strategy.base import StrategyContext
+from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_program import EvaluationMode, EvaluationStage, Settlement
 from app.marketdata.feed import MarketDataBar, MarketDataFeed
 
@@ -36,20 +37,49 @@ if TYPE_CHECKING:
     from app.services.bot_trade_strategy import _LiveSignalRuntime
 
 _WARMUP_LOOKBACK_DAYS = 5
-"""Trailing calendar-day window backfilled before live decisions begin.
+"""Floor for the trailing calendar-day window backfilled before live
+decisions begin.
 
-Generous relative to any registered signal strategy's indicator: the
-largest known requirement is Strategy A's EMA(50) on 15-min bars (750
-minutes, roughly two RTH sessions). #1708 review finding 3: a fresh RTH
-session alone provides only ~26 fifteen-minute bars -- short of the
+This is no longer the lookback every strategy gets -- it is only the floor
+:func:`_warmup_lookback_days_for` falls back to for an unregistered
+``strategy_key`` or a registration with no ``signal_program_contract`` (see
+that function's docstring). #1708 review finding 3: a fresh RTH session
+alone provides only ~26 fifteen-minute bars -- short of the
 ADX(28)/EMA(50)-class warmup several registered strategies need -- so a
 strategy deployed cold would silently withhold decisions for its first
-day(s) of live trading.
+day(s) of live trading. Review finding (post-#1708): the floor alone was
+not generous enough for every registered program either -- Strategy A's
+sealed contract declares 9 days, not 5 -- so a fixed constant let a
+program silently start deciding on incomplete history. Each sealed
+program's own ``SignalProgramContract.warmup_lookback_days`` (see
+``app/engine/strategy/registry.py``) is now the primary source; this
+constant only floors it.
 """
 
 _COMMIT_WORTHY_OUTCOMES: frozenset[str] = frozenset(
     {"enter_intent", "exit_intent", "entered", "exited"}
 )
+
+
+def _warmup_lookback_days_for(binding: BrokerBotBinding) -> int:
+    """Resolve the trailing calendar-day warmup window for this binding.
+
+    Looks up ``binding.strategy_key`` against ``_STRATEGY_REGISTRY`` -- the
+    same lookup pattern ``build_start_program_seal``
+    (``app/services/signal_program_admission.py``) already uses -- and
+    prefers the sealed program's own declared
+    ``SignalProgramContract.warmup_lookback_days`` over the module-level
+    floor. ``max()`` against ``_WARMUP_LOOKBACK_DAYS`` means a registered
+    contract can only ever lengthen warmup relative to today's behavior,
+    never shorten it. An unregistered ``strategy_key``, or a registration
+    with no ``signal_program_contract`` at all (legacy/explicit strategies
+    predating Signal Programs), falls back to the floor unchanged.
+    """
+    registration = _STRATEGY_REGISTRY.get(binding.strategy_key)
+    contract = None if registration is None else registration.signal_program_contract
+    if contract is None:
+        return _WARMUP_LOOKBACK_DAYS
+    return max(contract.warmup_lookback_days, _WARMUP_LOOKBACK_DAYS)
 
 
 async def replay_warmup_bars(
@@ -110,7 +140,7 @@ async def replay_warmup_bars(
     it does not resurrect exposure.
     """
     warmup_bars = await feed.recent_closed_bars(
-        binding.symbol, use_rth=binding.use_rth, lookback_days=_WARMUP_LOOKBACK_DAYS
+        binding.symbol, use_rth=binding.use_rth, lookback_days=_warmup_lookback_days_for(binding)
     )
     captured = captured_decisions or {}
     uncaptured: tuple[MarketDataBar, EvaluationStage] | None = None
@@ -149,10 +179,11 @@ def captured_decision_outcomes(receipts: SqliteDecisionReceipts) -> dict[str, st
     disposition and recognize the one bucket that has none.
     ``MAX_DECISION_RECEIPT_READ`` bounds the read the same way every other
     decision-receipt read in this codebase is bounded; it comfortably
-    covers ``_WARMUP_LOOKBACK_DAYS`` (5 trading days is at most a few
-    hundred 15-minute buckets for a registered signal program) with wide
-    margin. An empty result means this instance has never captured a
-    decision -- there is no crash to recover from.
+    covers even the longest lookback :func:`_warmup_lookback_days_for`
+    resolves today (9 trading days is at most a few hundred 15-minute
+    buckets for a registered signal program) with wide margin. An empty
+    result means this instance has never captured a decision -- there is
+    no crash to recover from.
     """
     return {
         receipt.intent_id: receipt.outcome
