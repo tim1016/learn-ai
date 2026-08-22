@@ -122,6 +122,50 @@ def append_atomic_decision_receipt_row(
     receipt: AtomicDecisionReceipt,
 ) -> DecisionReceiptResource:
     """Insert effect-bearing evidence inside an already-open custody transaction."""
+    facts_json = _enrich_atomic_receipt_facts(
+        receipt,
+        run_id=run_id,
+        effect_operation_id=effect_operation_id,
+        order_ref=order_ref,
+        retention_class="protected_effect",
+        resolved_to_existing_effect=False,
+    )
+    return _append_decision_receipt_in_transaction(
+        conn,
+        strategy_instance_id=strategy_instance_id,
+        outcome=receipt.outcome,
+        symbol=receipt.symbol,
+        intent_id=receipt.decision_id,
+        order_ref=order_ref,
+        observed_at_ms=receipt.observed_at_ms,
+        facts_json=facts_json,
+    )
+
+
+def _enrich_atomic_receipt_facts(
+    receipt: AtomicDecisionReceipt,
+    *,
+    run_id: str | None,
+    effect_operation_id: str | None,
+    order_ref: str | None,
+    retention_class: str,
+    resolved_to_existing_effect: bool,
+) -> str:
+    """Shape one atomic receipt's facts exactly as the durable row stores
+    them.
+
+    Shared by :func:`append_atomic_decision_receipt_row` (the write path),
+    :func:`atomic_decision_receipt_conflicts_with_existing` (the pre-write
+    divergence check ``commit_first_transition`` runs before it will ever
+    treat a replay as idempotent), and
+    :func:`append_competing_decision_receipt_row` (a losing EXIT's own
+    evidence) so the three shapes never drift apart -- CLAUDE.md guiding
+    philosophy #5, one canonical implementation per concept.
+    ``effect_operation_id`` is a causal link either way: whether this
+    decision produced that effect itself (``resolved_to_existing_effect``
+    False) or lost a race and merely resolved to one that already existed
+    (True) is the one bit a causal reader needs to tell the two apart.
+    """
     facts = json.loads(receipt.facts_json)
     if not isinstance(facts, dict):
         raise ValueError("atomic decision receipt facts must be a JSON object")
@@ -132,18 +176,99 @@ def append_atomic_decision_receipt_row(
             "run_id": run_id,
             "effect_operation_id": effect_operation_id,
             "order_ref": order_ref,
-            "retention_class": "protected_effect",
+            "retention_class": retention_class,
+            "resolved_to_existing_effect": resolved_to_existing_effect,
         }
     )
-    return _append_decision_receipt_in_transaction(
+    return canonicalize(facts)
+
+
+def atomic_decision_receipt_conflicts_with_existing(
+    conn: sqlite3.Connection,
+    *,
+    strategy_instance_id: str,
+    run_id: str | None,
+    effect_operation_id: str | None,
+    receipt: AtomicDecisionReceipt,
+) -> bool:
+    """Whether replaying ``receipt`` under an already-durable command
+    diverges from the decision evidence that command already captured.
+
+    ``commit_first_transition``'s existing-same shortcut returns before
+    ever calling :meth:`ClerkSqliteRepository.append_transition` again, so
+    it never re-enters ``_commit_transition_row`` and never reaches
+    :func:`append_atomic_decision_receipt_row`'s own conflict detection --
+    a same-key/same-payload replay short-circuits before rebuilding the
+    transition at all. This performs the identical ``_same_decision``
+    comparison at that one shortcut, so a differing receipt is surfaced as
+    a durable conflict instead of silently discarded. No stored receipt at
+    all for an already-durable command counts as a divergence too: a
+    receipt supplied now that was never captured originally is exactly the
+    same "evidence would otherwise vanish" shape, just with nothing to
+    diff against.
+    """
+    candidate_facts_json = _enrich_atomic_receipt_facts(
+        receipt,
+        run_id=run_id,
+        effect_operation_id=effect_operation_id,
+        order_ref=None,
+        retention_class="protected_effect",
+        resolved_to_existing_effect=False,
+    )
+    existing = _receipt_for_decision(
+        conn,
+        strategy_instance_id=strategy_instance_id,
+        decision_id=receipt.decision_id,
+    )
+    if existing is None:
+        return True
+    return not _same_decision(
+        existing,
+        outcome=receipt.outcome,
+        symbol=receipt.symbol,
+        intent_id=receipt.decision_id,
+        facts_json=candidate_facts_json,
+    )
+
+
+def append_competing_decision_receipt_row(
+    conn: sqlite3.Connection,
+    *,
+    strategy_instance_id: str,
+    run_id: str | None,
+    resolved_effect_operation_id: str,
+    receipt: AtomicDecisionReceipt,
+) -> DecisionReceiptResource:
+    """Durably capture a losing decision that resolved to an already-active
+    effect instead of creating one of its own.
+
+    FR-022: a competing EXIT returns typed existing custody. FR-018
+    requires every Clerk intake outcome -- including this one -- to
+    atomically capture its decision receipt: the evaluation that lost the
+    race still happened and needs durable evidence, including the link a
+    causal reader needs to explain why it produced no new effect of its
+    own. Reuses :func:`append_decision_receipt_row`'s own
+    idempotent/conflict-detecting insert: a byte-identical replay is a
+    no-op, a diverging one raises ``DecisionReceiptConflictError`` rather
+    than silently losing evidence.
+    """
+    facts_json = _enrich_atomic_receipt_facts(
+        receipt,
+        run_id=run_id,
+        effect_operation_id=resolved_effect_operation_id,
+        order_ref=None,
+        retention_class="protected_competing_exit",
+        resolved_to_existing_effect=True,
+    )
+    return append_decision_receipt_row(
         conn,
         strategy_instance_id=strategy_instance_id,
         outcome=receipt.outcome,
         symbol=receipt.symbol,
         intent_id=receipt.decision_id,
-        order_ref=order_ref,
+        order_ref=None,
         observed_at_ms=receipt.observed_at_ms,
-        facts_json=canonicalize(facts),
+        facts_json=facts_json,
     )
 
 

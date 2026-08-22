@@ -687,6 +687,18 @@ class SqliteAlpacaClerkFacade:
             else:
                 active_exit = self._repo.active_exit_for_strategy(strategy_instance_id)
                 if active_exit is not None:
+                    # FR-019/FR-023: this evaluation reached the custody seam
+                    # and was answered by an effect that already exists. It is
+                    # still a decision that happened, so it leaves durable
+                    # evidence linked to the effect that resolved it -- without
+                    # that link the causal read (FR-030) cannot later explain
+                    # why this evaluation produced no effect of its own.
+                    if atomic_receipt is not None:
+                        self._repo.capture_decision_against_active_exit(
+                            strategy_instance_id=strategy_instance_id,
+                            run_id=run_id,
+                            decision_receipt=atomic_receipt,
+                        )
                     return _effect_receipt(
                         strategy_instance_id=strategy_instance_id,
                         run_id=run_id,

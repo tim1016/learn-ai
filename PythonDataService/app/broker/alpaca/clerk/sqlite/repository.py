@@ -26,6 +26,7 @@ issue #1377 onward, the effect/order) — never a separate write.
 
 from __future__ import annotations
 
+import logging
 import secrets
 import sqlite3
 import threading
@@ -37,7 +38,9 @@ from app.broker.alpaca.clerk.sqlite import reads, writes
 from app.broker.alpaca.clerk.sqlite.decision_receipts import (
     AtomicDecisionReceipt,
     append_atomic_decision_receipt_row,
+    append_competing_decision_receipt_row,
     append_decision_receipt_row,
+    atomic_decision_receipt_conflicts_with_existing,
     update_decision_receipt_for_bar,
 )
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
@@ -73,6 +76,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
     CommandExistingSame,
     CommittedTransition,
     DecisionReceiptResource,
+    EffectOperationResource,
     OperationClaim,
     TransitionInput,
 )
@@ -88,6 +92,8 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     ExecutionCoverageConflictCause,
 )
 from app.utils.timestamps import Clock, now_ms_utc
+
+logger = logging.getLogger(__name__)
 
 DB_FILENAME = "clerk.db"
 MIRROR_FILENAME = "custody_transitions.mirror"
@@ -927,6 +933,41 @@ class ClerkSqliteRepository(
             )
             if existing is not None:
                 if existing.payload_hash == payload_hash:
+                    if decision_receipt is not None and (
+                        existing.strategy_instance_id is None
+                        or atomic_decision_receipt_conflicts_with_existing(
+                            self._conn,
+                            strategy_instance_id=existing.strategy_instance_id,
+                            run_id=existing.run_id,
+                            effect_operation_id=existing.effect_operation_id,
+                            receipt=decision_receipt,
+                        )
+                    ):
+                        # R2's idempotency contract covers the command
+                        # payload only -- `payload_hash` never included
+                        # `decision_receipt` (open-pr-review finding: a
+                        # replay with the same key/payload but different
+                        # decision evidence was returning here as
+                        # ``CommandExistingSame`` and silently discarding
+                        # the new receipt, since this shortcut never calls
+                        # ``append_transition`` and so never reaches
+                        # ``append_atomic_decision_receipt_row``'s own
+                        # conflict detection). Surfacing it as a durable
+                        # conflict, exactly like a diverging payload_hash
+                        # already does, closes that gap without widening
+                        # what counts as "the same command".
+                        logger.warning(
+                            "commit_first_transition replay carried decision "
+                            "evidence diverging from the durably captured "
+                            "receipt; refusing to silently discard it",
+                            extra={
+                                "action": "decision_receipt_replay_conflict",
+                                "command_id": command_id,
+                                "idempotency_key": idempotency_key,
+                                "decision_id": decision_receipt.decision_id,
+                            },
+                        )
+                        return CommandExistingConflict(existing)
                     return CommandExistingSame(existing)
                 return CommandExistingConflict(existing)
 
@@ -1169,6 +1210,50 @@ class ClerkSqliteRepository(
                 order_ref=order_ref,
                 facts_json=facts_json,
             )
+
+    def capture_decision_against_active_exit(
+        self,
+        *,
+        strategy_instance_id: str,
+        run_id: str | None,
+        decision_receipt: AtomicDecisionReceipt,
+    ) -> EffectOperationResource | None:
+        """Durably capture a decision that a competing, already-active EXIT
+        will answer with typed existing custody (FR-022) instead of a fresh
+        effect of its own.
+
+        Callers gate the "return existing custody" short-circuit on
+        :meth:`active_exit_for_strategy`; FR-018 requires that short-circuit
+        to atomically capture the decision receipt too, exactly like a
+        decision that goes on to create its own effect does, so the losing
+        evaluation is not silently invisible to a later causal read. The
+        check and the capture share one hold of the write lock: the active
+        EXIT this returns is the same one the receipt gets durably linked
+        to, with nothing able to intervene between the two. A decision that
+        turns out to be its own EXIT's replay (not a competing one) is still
+        safe to pass through here -- the receipt insert is the same
+        idempotent/conflict-detecting write every other receipt append uses,
+        so it becomes a no-op rather than a duplicate row.
+
+        Returns the active EXIT effect this decision resolved to, or
+        ``None`` if no EXIT is currently active for this strategy (nothing
+        to capture against; the caller should proceed with the normal
+        accept path instead).
+        """
+        with self._write_lock:
+            self._assert_not_poisoned()
+            self._renew_execution_lease()
+            active = reads.active_exit_for_strategy(self._conn, strategy_instance_id)
+            if active is None:
+                return None
+            append_competing_decision_receipt_row(
+                self._conn,
+                strategy_instance_id=strategy_instance_id,
+                run_id=run_id,
+                resolved_effect_operation_id=active.effect_operation_id,
+                receipt=decision_receipt,
+            )
+            return active
 
     def raise_hold_if_none_active(
         self, *, scope: str, reason_code: str, build_transition: Callable[[], TransitionInput]

@@ -48,6 +48,7 @@ from app.broker.alpaca.clerk.sqlite.enter import (
     resolve_enter_submission,
     submit_enter,
 )
+from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.synthetic_broker import SyntheticBroker
@@ -313,6 +314,92 @@ def test_atomic_decision_receipt_replay_is_idempotent_and_conflicting_replay_qua
         write(_atomic_receipt(decision_id="dec-1", bar_ref="decision-bar:test:SPY:999"))
 
     assert repo.decision_receipt_tail(strategy_instance_id=SID, limit=10) == [original]
+
+
+# ── 3b. The commit_first_transition shortcut cannot bypass that check ──────
+
+
+def test_commit_first_transition_shortcut_surfaces_diverging_decision_receipt_as_a_conflict(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """Open-PR-review finding: ``payload_hash`` covers only
+    ``(account_id, strategy_instance_id, decision_id, action, leg)`` --
+    never ``decision_receipt``. A replay under the identical idempotency
+    key and payload but a *different* decision receipt (a different
+    ``bar_ref``, i.e. different evaluation evidence) used to hit
+    ``commit_first_transition``'s ``CommandExistingSame`` shortcut, which
+    returns before ever calling ``append_transition`` again -- so the new
+    receipt was silently discarded and never even compared against what
+    was stored. This proves the shortcut itself (not
+    ``append_atomic_decision_receipt_row`` in isolation, which
+    the test above already covers) now durably surfaces that divergence as
+    a conflict instead."""
+    original = _atomic_receipt(decision_id="dec-1", bar_ref="decision-bar:test:SPY:1")
+    accepted = accept_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="dec-1",
+        lifecycle_run_id=RUN_ID,
+        leg=_leg(),
+        decision_receipt=original,
+    )
+    assert accepted.created
+
+    before = repo.decision_receipt_tail(strategy_instance_id=SID, limit=10)
+    assert len(before) == 1
+    assert json.loads(before[0].facts_json)["bar_ref"] == "decision-bar:test:SPY:1"
+
+    diverging = _atomic_receipt(decision_id="dec-1", bar_ref="decision-bar:test:SPY:999")
+    with pytest.raises(DurableConflictError):
+        accept_enter(
+            repo,
+            account_id=ACCOUNT_ID,
+            strategy_instance_id=SID,
+            decision_id="dec-1",
+            lifecycle_run_id=RUN_ID,
+            leg=_leg(),
+            decision_receipt=diverging,
+        )
+
+    # Append-only: the durable conflict never rewrites or appends anything.
+    after = repo.decision_receipt_tail(strategy_instance_id=SID, limit=10)
+    assert after == before
+    assert json.loads(after[0].facts_json)["bar_ref"] == "decision-bar:test:SPY:1"
+
+
+def test_commit_first_transition_shortcut_is_idempotent_for_a_byte_identical_replay(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """The flip side of the conflict test above: a genuine transport retry
+    -- identical decision receipt, not merely identical command payload --
+    must still take the fast, no-append ``CommandExistingSame`` path."""
+    receipt = _atomic_receipt(decision_id="dec-1")
+    first = accept_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="dec-1",
+        lifecycle_run_id=RUN_ID,
+        leg=_leg(),
+        decision_receipt=receipt,
+    )
+    assert first.created
+    before = repo.decision_receipt_tail(strategy_instance_id=SID, limit=10)
+
+    retry = accept_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="dec-1",
+        lifecycle_run_id=RUN_ID,
+        leg=_leg(),
+        decision_receipt=_atomic_receipt(decision_id="dec-1"),
+    )
+
+    assert not retry.created
+    assert retry.effect_operation_id == first.effect_operation_id
+    assert repo.decision_receipt_tail(strategy_instance_id=SID, limit=10) == before
 
 
 # ── 4. Synthetic authority can never write a real account (FR-028) ─────────
