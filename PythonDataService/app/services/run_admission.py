@@ -18,6 +18,7 @@ from app.schemas.run_admission import (
     RunAdmissionFactAges,
     RunAdmissionFacts,
 )
+from app.services.canary_admission import canary_gate_applies, canary_pairing_admitted
 
 AUTHORITY_FACT_MAX_AGE_MS = 5_000
 _QTY_TOLERANCE_ULPS = 4
@@ -170,6 +171,28 @@ def evaluate_run_admission(
             reason_code="SEALED_ACCOUNT_MISMATCH",
             explanation="The immutable run binding names a different custody account than this Clerk snapshot.",
             next_step="Redeploy against the selected account; do not adopt changed custody on Resume.",
+        )
+    # #1729 AC4: the guarded canary path additionally requires one exact
+    # (program, account) pairing an operator has explicitly enabled. Every
+    # other canary proof (seal, build, provider, validation, replay, Clerk
+    # custody) is already composed by the gates below (and, for Clerk
+    # custody, further below in the non-dry-run block) — `canary_gate_applies`
+    # only turns this check on once the build is already PROVEN, so it never
+    # pre-empts the PROGRAM_BUILD_UNPROVEN gate's own reason code.
+    if canary_gate_applies(
+        mode=bot.mode, program_build_state=bot.program_build.state
+    ) and not canary_pairing_admitted(
+        program_key=bot.program_build.program_key, account_id=bot.sealed_account_id
+    ):
+        return decide(
+            allowed=False,
+            reason_code="CANARY_PAIRING_NOT_ALLOWLISTED",
+            explanation=(
+                "This exact program/account pairing is not on the closed canary allowlist. "
+                "The guarded Alpaca Paper path admits only pairings an operator has "
+                "explicitly enabled after reviewing the full composed proof."
+            ),
+            next_step="Add this exact (program, account) pairing to the canary allowlist after review.",
         )
     if bot.program_build.state == "UNPROVEN":
         return decide(

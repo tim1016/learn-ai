@@ -322,6 +322,13 @@ def prove_running_program_build(
         or configured.program_key != binding.strategy_key
         or configured.program_version != contract.program_version
         or configured.golden_trace_root != contract.golden_trace_root
+        # #1729 AC4 "provider" proof: the sealed qualification-lineage
+        # identity (PRD Sec 11.6) must still be present and unchanged
+        # against the currently registered contract. This is not a
+        # live-feed parity gate — see SignalDataContract.provider's
+        # docstring — just an identity check at the same cadence as the
+        # program_version/golden_trace_root checks above.
+        or configured.data.provider != contract.provider
     ):
         return _unproven(
             binding.strategy_key,

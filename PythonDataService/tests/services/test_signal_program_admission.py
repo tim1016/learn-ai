@@ -212,6 +212,26 @@ def test_tampered_qualification_receipt_fails_closed(tmp_path: Path) -> None:
     assert proof.state == "UNPROVEN"
 
 
+def test_sealed_provider_identity_mismatch_fails_closed() -> None:
+    """#1729 AC4: "provider" proof means the sealed qualification-lineage
+    identity (PRD Sec 11.6) is present and unchanged against the currently
+    registered contract -- not a live-feed parity gate. A seal claiming a
+    different provider than the registry cannot prove its running build,
+    at the same cadence as the program_version/golden_trace_root checks."""
+    binding = _sealed_binding()
+    seal = binding.sealed_program
+    assert seal is not None
+    assert seal.configured_signal.data.provider == "polygon"
+    tampered_data = seal.configured_signal.data.model_copy(update={"provider": "not-the-qualified-lineage"})
+    tampered_configured = seal.configured_signal.model_copy(update={"data": tampered_data})
+    tampered_seal = seal.model_copy(update={"configured_signal": tampered_configured})
+    binding = binding.model_copy(update={"sealed_program": tampered_seal})
+
+    proof = prove_running_program_build(binding, verified_at_ms=_NOW)
+
+    assert proof.state == "UNPROVEN"
+
+
 def test_legacy_signal_instance_without_v2_seal_is_not_resumable() -> None:
     proof = prove_running_program_build(_binding(), verified_at_ms=_NOW)
 

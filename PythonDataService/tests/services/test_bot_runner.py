@@ -2641,6 +2641,15 @@ async def test_ema_trade_bot_matches_first_lean_round_trip(
 ) -> None:
     clerk = _FakeClerk()
     _install_fake_clerk(monkeypatch, clerk)
+    # #1729 AC4: real Alpaca Paper ("trade" mode) admission of a
+    # Signal-Program-backed strategy is gated by an exact (program, account)
+    # canary allowlist that ships empty in production. This test exercises
+    # engine round-trip parity, not the allowlist itself, so it explicitly
+    # enables the one pairing it deploys under.
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("ema_crossover_signal", "paper-account")}),
+    )
     bars = _ema_parity_bars_through_first_exit()
     feed = _FakeFeed(bars, mode="hold")
     registry = _registry(tmp_path, feed)
@@ -3583,6 +3592,13 @@ async def test_ema_trade_bot_releases_backtest_chart_bars(
 
     clerk = _FakeClerk()
     _install_fake_clerk(monkeypatch, clerk)
+    # #1729 AC4: see test_ema_trade_bot_matches_first_lean_round_trip above —
+    # this test exercises chart-bar release, not the canary allowlist, so it
+    # explicitly enables the one pairing it deploys under.
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("ema_crossover_signal", "paper-account")}),
+    )
     contexts: list[StrategyContext] = []
     context_factory = bot_trade_strategy.StrategyContext
 

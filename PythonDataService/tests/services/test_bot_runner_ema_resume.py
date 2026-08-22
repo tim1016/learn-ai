@@ -273,6 +273,15 @@ async def test_ema_resume_does_not_decide_on_an_incomplete_signal_bucket(
         "market_liveness_fact",
         _tradable_market_liveness,
     )
+    # #1729 AC4: real Alpaca Paper ("trade" mode) admission of a
+    # Signal-Program-backed strategy is gated by an exact (program, account)
+    # canary allowlist that ships empty in production. This test exercises
+    # signal-bucket resume behavior, not the allowlist itself, so it
+    # explicitly enables the one pairing it deploys under.
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("ema_crossover_signal", "PA-TEST")}),
+    )
     feed = _ResumeFeed()
     repository, clerk, registry = _registry_with_sqlite_clerk(tmp_path, feed)
     set_alpaca_clerk(clerk)
