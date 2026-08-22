@@ -86,6 +86,10 @@ _QUALIFICATION_SUITES: dict[str, str] = {
         "tests/engine/strategy/test_ema_signal_program.py"
         "::test_validated_ema_settings_corpus_has_a_pinned_trace_root"
     ),
+    "sma_crossover": (
+        "tests/engine/strategy/test_sma_signal_program.py"
+        "::test_validated_sma_settings_corpus_has_a_pinned_trace_root"
+    ),
 }
 
 # --- Signal-decision digest closure (issue #1728 defect 2) ----------------
@@ -136,6 +140,55 @@ _EMA_SIGNAL_DECISION_CLOSURE_EXCLUSIONS: dict[str, str] = {
     "app/engine/framework/insight_manager.py": (
         "Reached only via StrategyContext.emit_insight(), called from "
         "commit_signal_decision() after the trace for that bar already exists."
+    ),
+    "app/engine/framework/insight_scorer.py": (
+        "Scores Insight objects for the Alpha framework; never consulted by "
+        "evaluate_signal_bar()."
+    ),
+    "app/research/parity/ibkr_commission.py": (
+        "IBKR fee-tier table reached only through execution/commission.py; same "
+        "fee-only reasoning."
+    ),
+}
+
+# Same triage, for `sma_crossover`'s own closure (issue #1730 Slice 5). The
+# roots differ (no RSI/EMA indicators, no Insight emission from
+# SmaCrossoverAlgorithm.commit_signal_decision), but every excluded file
+# below is reached the same way EMA's is: through app/engine/strategy/base.py
+# and app/engine/execution/*'s own general, strategy-agnostic imports, never
+# from evaluate_signal_bar()'s decision math.
+_SMA_SIGNAL_DECISION_CLOSURE_EXCLUSIONS: dict[str, str] = {
+    "app/engine/execution/commission.py": (
+        "Commission/fee model; consulted only when pricing a fill, never inside "
+        "evaluate_signal_bar()'s decision math."
+    ),
+    "app/engine/execution/order.py": (
+        "Direction/OrderEvent are read only by on_order_event(), which runs after "
+        "a fill and only appends to the trade log — the trace for that bar is "
+        "already built and immutable by then."
+    ),
+    "app/engine/execution/portfolio.py": (
+        "Cash/holdings/fill accounting; evaluate_signal_bar() reads only bar.close, "
+        "never portfolio state, to compute its facts."
+    ),
+    "app/engine/execution/signal_intent_executor.py": (
+        "Referenced only under `if TYPE_CHECKING:` in strategy/base.py — never "
+        "imported at runtime — and its concrete executors translate an "
+        "already-decided SignalIntent into broker actions after the trace exists."
+    ),
+    "app/engine/execution/sizing.py": (
+        "Share/notional sizing math belongs to the execution boundary that sizes "
+        "an already-decided trade; never consulted for entry/exit facts."
+    ),
+    "app/engine/framework/insight.py": (
+        "Reached via strategy/base.py's StrategyContext.emit_insight() plumbing, "
+        "which SmaCrossoverAlgorithm.commit_signal_decision never calls — and "
+        "even where a program does call it, that only happens after "
+        "_build_trace() has already produced the immutable EvaluationTrace."
+    ),
+    "app/engine/framework/insight_manager.py": (
+        "Reached only via StrategyContext.emit_insight(), never called by "
+        "SmaCrossoverAlgorithm; not consulted by evaluate_signal_bar() either way."
     ),
     "app/engine/framework/insight_scorer.py": (
         "Scores Insight objects for the Alpha framework; never consulted by "

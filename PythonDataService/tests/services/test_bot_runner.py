@@ -169,18 +169,33 @@ def _isolated_synthetic_authority() -> None:
     reset_alpaca_clerk_for_testing()
 
 
-def _strategy_signal_bars(closes: list[str]) -> list[MarketDataBar]:
+def _strategy_signal_bars(closes: list[str], *, bar_minutes: int = 1) -> list[MarketDataBar]:
+    """One synthetic bar per 15-minute decision window, spaced 15 minutes apart.
+
+    ``bar_minutes`` (default 1) is the bar's own width -- a legacy
+    compatibility strategy's ``_on_consolidated_bar`` never checks a
+    consolidated bar's width, so a narrow 1-minute source bar landing in an
+    otherwise-empty 15-minute bucket is a fine, cheap stand-in for a full
+    bucket's worth of source bars. A registered Signal Program is stricter:
+    ``SignalSession.advance()`` (``app/engine/strategy/signal_program.py``)
+    rejects any consolidated bar whose width isn't exactly
+    ``TIMEFRAME_MS`` (15 minutes) as ``TIMEFRAME_MISMATCH`` -- a 1-minute
+    source bar alone in its bucket produces a 1-minute-wide consolidated
+    bar, quarantining every decision clock. Pass ``bar_minutes=15`` so each
+    source bar alone already spans its full decision window.
+    """
+    width_ms = bar_minutes * 60_000
     return [
         MarketDataBar(
             symbol="SPY",
             start_ms=_RTH_MS + index * 15 * 60_000,
-            end_ms=_RTH_MS + index * 15 * 60_000 + 60_000,
+            end_ms=_RTH_MS + index * 15 * 60_000 + width_ms,
             open=Decimal(close),
             high=Decimal(close),
             low=Decimal(close),
             close=Decimal(close),
             volume=100,
-            fetched_at_ms=_RTH_MS + index * 15 * 60_000 + 60_100,
+            fetched_at_ms=_RTH_MS + index * 15 * 60_000 + width_ms + 100,
             feed_id="canonical-signal-test",
             session_phase="RTH",
         )
@@ -227,6 +242,30 @@ async def test_human_override_strategies_emit_canonical_live_intents(
     closes: list[str],
     expected_kinds: list[SignalIntentKind],
 ) -> None:
+    """Both compatibility strategies (no ``SignalSession``, e.g.
+    ``rsi_mean_reversion``) and registered Signal Programs (e.g.
+    ``sma_crossover``, issue #1730 Slice 5) appear in this parametrize list.
+
+    Two adaptations keep both families working through the same harness:
+
+    * Bar shape: a registered Signal Program's ``SignalSession.advance()``
+      rejects a consolidated bar whose width isn't exactly 15 minutes
+      (``TIMEFRAME_MISMATCH``) -- see ``_strategy_signal_bars``'s
+      ``bar_minutes`` docstring. Every strategy this test currently covers
+      that IS a Signal Program needs ``bar_minutes=15``; strategies not yet
+      promoted (PRD Slice 5 has not reached them) keep the cheaper
+      1-minute default.
+    * Settlement: a Signal Program leaves its stage pending until a runner
+      reports an explicit disposition (``evaluation.settle_stage`` is
+      non-``None``, mirroring
+      ``test_ema_live_adapter_exposes_and_settles_signal_program_stages``'s
+      pattern) — an unsettled stage would otherwise quarantine every later
+      decision clock (``UNSETTLED_STAGE``). Immediately committing each
+      staged evaluation matches ``strategy_intents``' own "no custody seam,
+      therefore immediate commit" semantics; it is a no-op for
+      compatibility strategies, whose evaluations never carry a stage to
+      settle.
+    """
     binding = BrokerBotBinding(
         strategy_instance_id=f"{strategy_key}-live-test",
         strategy_key=strategy_key,
@@ -237,13 +276,14 @@ async def test_human_override_strategies_emit_canonical_live_intents(
         run_id="run-001",
         created_at_ms=_T0,
     )
-    feed = _FakeFeed(_strategy_signal_bars(closes), mode="finite")
+    is_signal_program = _STRATEGY_REGISTRY[strategy_key].signal_program_factory is not None
+    feed = _FakeFeed(_strategy_signal_bars(closes, bar_minutes=15 if is_signal_program else 1), mode="finite")
 
-    kinds = [
-        intent.kind
-        async for evaluation in strategy_evaluations(binding, feed)
-        for intent in evaluation.intents
-    ]
+    kinds: list[SignalIntentKind] = []
+    async for evaluation in strategy_evaluations(binding, feed):
+        if evaluation.settle_stage is not None:
+            evaluation.settle_stage(Settlement.COMMIT)
+        kinds.extend(intent.kind for intent in evaluation.intents)
 
     assert kinds == expected_kinds
 

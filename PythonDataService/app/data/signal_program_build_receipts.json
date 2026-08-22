@@ -10,6 +10,16 @@
       "qualification_suite": "tests/engine/strategy/test_ema_signal_program.py::test_validated_ema_settings_corpus_has_a_pinned_trace_root",
       "qualified_at_ms": 1787412850292,
       "receipt_hash": "b84788ff312958bd3cb2928855821c49b90ed01deecf9d657eb848cbd94bd882"
+    },
+    {
+      "schema_version": 1,
+      "program_key": "sma_crossover",
+      "program_version": "sma-crossover/v1",
+      "golden_trace_root": "b0a136f7b485179bc37c7998df430480b94b0866d9bc58dbead636fa84a320e9",
+      "artifact_digest": "f621916d997fdb7828fb58e294da03f97556cdb36ad6a70847c2bc1493363bc3",
+      "qualification_suite": "tests/engine/strategy/test_sma_signal_program.py::test_validated_sma_settings_corpus_has_a_pinned_trace_root",
+      "qualified_at_ms": 1787415514353,
+      "receipt_hash": "657d1752a3fe2368f700655e077e856dc20757fc910d0ba7b1ed97df9bb6fc6c"
     }
   ]
 }

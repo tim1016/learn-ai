@@ -169,6 +169,13 @@ class EmaCrossover2BpsParams(EmaCrossoverParams):
 
 
 class SmaCrossoverParams(StrategyParamsBase):
+    # FR-002: versions this schema's own legal type/unit/range contract —
+    # sealed as ``ConfiguredSignalProgramSeal.parameter_schema_version`` so a
+    # future change to the ``ge``/``le`` bounds below is a provable identity
+    # change without duplicating every bound into the seal itself. Mirrors
+    # ``EmaCrossoverSignalParams.PARAMETER_SCHEMA_VERSION``'s pattern.
+    PARAMETER_SCHEMA_VERSION: ClassVar[str] = "sma-crossover-params/v1"
+
     symbol: str = Field("SPY", min_length=1, max_length=20)
     short_window: int = Field(10, ge=2, le=500)
     long_window: int = Field(30, ge=3, le=1000)
@@ -660,6 +667,32 @@ def _build_ema_crossover_signal_program(params: StrategyParamsBase) -> SignalPro
     return program
 
 
+# Same pattern as the EMA identity above (issue #1730 Slice 5, first
+# additional promotion): declared once here, referenced by both the
+# construction seam and the registry contract below.
+_SMA_SIGNAL_PROGRAM_KEY = "sma_crossover"
+_SMA_SIGNAL_PROGRAM_VERSION = "sma-crossover/v1"
+
+
+def _build_sma_crossover_signal_program(params: StrategyParamsBase) -> SignalProgram:
+    """Construct the sole broker-neutral SMA Signal Program from registry params."""
+    typed = params
+    assert isinstance(typed, SmaCrossoverParams)
+    strategy = SmaCrossoverAlgorithm(
+        symbol=typed.symbol,
+        short_window=typed.short_window,
+        long_window=typed.long_window,
+        resolution_minutes=typed.resolution_minutes,
+    )
+    program = SignalProgram.create(
+        strategy,
+        program_key=_SMA_SIGNAL_PROGRAM_KEY,
+        program_version=_SMA_SIGNAL_PROGRAM_VERSION,
+    )
+    strategy.signal_program = program
+    return program
+
+
 _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     _EMA_SIGNAL_PROGRAM_KEY: StrategyRegistration(
         display_name="EMA Crossover Signal",
@@ -901,6 +934,135 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     "sma_crossover": StrategyRegistration(
         display_name="SMA Crossover",
         class_name="SmaCrossoverAlgorithm",
+        signal_program_contract=SignalProgramContract(
+            program_version=_SMA_SIGNAL_PROGRAM_VERSION,
+            protocol_version=SignalSession.PROTOCOL_VERSION,
+            parameter_schema_version=SmaCrossoverParams.PARAMETER_SCHEMA_VERSION,
+            golden_trace_root="b0a136f7b485179bc37c7998df430480b94b0866d9bc58dbead636fa84a320e9",
+            provider="polygon",
+            base_timeframe_ms=60_000,
+            # Matches validated_settings' resolution_minutes=15 below, the
+            # only resolution this contract is qualified for. SmaCrossoverParams
+            # also accepts a different resolution_minutes (1-1440) for
+            # backtesting, but a deploy that resolves a non-default value
+            # today seals with this fixed 15-minute figure regardless --
+            # build_start_program_seal (app/services/signal_program_admission.py)
+            # sources SignalDataContract.decision_timeframe_ms from the
+            # contract, not the resolved parameter. parameters_match_validated_settings
+            # already reports False for such a deploy (the resolved
+            # resolution_minutes disagrees with validated_settings), so the
+            # divergence is visible evidence, not a silent one -- but the
+            # seal's decision_timeframe_ms field itself is inaccurate for
+            # that case. This is a pre-existing gap in the seal (latent
+            # since ema_crossover_signal never exposed a tunable
+            # resolution), newly reachable now that a tunable-resolution
+            # program is sealed; fixing it means sourcing
+            # decision_timeframe_ms from the resolved parameter in
+            # signal_program_admission.py, an admission-service change
+            # outside this registration's scope.
+            decision_timeframe_ms=15 * 60_000,
+            # SmaCrossoverAlgorithm.initialize() builds SMA(long_window=30),
+            # needing 30 consolidated 15-minute bars (450 minutes) ~= 2
+            # trading sessions (390 min/session, NYSE regular hours) before
+            # is_ready. 7 calendar days is a comfortable buffer over that
+            # 2-session minimum, covering weekends/holidays -- the same
+            # margin-over-minimum convention as ema_crossover_signal's 5-day
+            # buffer over its own (smaller, ~0.6-session) RSI(14) warmup.
+            warmup_lookback_days=7,
+            # SmaCrossoverAlgorithm.initialize() constructs exactly these two
+            # named series (SMA{short_window}, SMA{long_window}), each fed
+            # bar.close at bar.end_ms. SimpleMovingAverage has no recursive
+            # seeding (app/engine/indicators/sma.py): is_ready flips at
+            # samples >= period like every other indicator
+            # (app/engine/indicators/base.py), so warmup_bars == period for
+            # both series -- unlike EMA's RSI, there is no period+1 warmup
+            # override to account for.
+            signals=(
+                SignalSeriesContract(name="sma_short", indicator="sma", field="close", period=10, warmup_bars=10),
+                SignalSeriesContract(name="sma_long", indicator="sma", field="close", period=30, warmup_bars=30),
+            ),
+            decision_streams=tuple(kind.value for kind in SignalIntentKind),
+            bar_integrity=SignalBarIntegrityContract(),
+            # SmaCrossoverAlgorithm.evaluate_signal_bar exits the instant its
+            # relation (a fresh death cross) is true on a decision clock --
+            # there is no held countdown the way EMA's fixed 5-bar exit
+            # timer works, so this seals as "level_true"
+            # (ExitEligibilityContract's second rule, added for this
+            # promotion) rather than restating EMA's countdown rule
+            # dishonestly. countdown_state_persistable=False for the
+            # stronger reason that SmaCrossoverAlgorithm has not implemented
+            # report_state_for_persistence/restore_state_from_persistence/
+            # validate_state_payload at all yet -- no state, flat or
+            # otherwise, currently survives a Pause/Resume, not just a
+            # mid-exit one.
+            exit_eligibility=ExitEligibilityContract(
+                rule="level_true",
+                countdown_state_persistable=False,
+            ),
+            numerical_provenance=NumericalProvenanceContract(
+                formula=(
+                    "Long-only golden-cross / death-cross. Enter long on a fresh SMA(short_window) "
+                    "> SMA(long_window) crossover; exit on a fresh SMA(short_window) < "
+                    "SMA(long_window) crossover."
+                ),
+                reference=(
+                    "Internal strategy retained from the retired pandas-ta service implementation; "
+                    "LEAN inspiration but no line-for-line port. No LEAN or TradingView "
+                    "reconciliation exists for this promotion -- Polygon live data is unavailable, "
+                    "so per PRD direction this program is qualified against its own deterministic "
+                    "replay of IBKR-sourced minute bars only, with no cross-engine parity claim."
+                ),
+                canonical_implementation=(
+                    "app/engine/strategy/algorithms/sma_crossover.py::SmaCrossoverAlgorithm"
+                ),
+                validated_against=(
+                    "app/engine/tests/test_sma_crossover_parity.py; "
+                    "app/engine/strategy/spec/tests/test_spec_sma_parity.py; "
+                    "tests/engine/strategy/test_sma_signal_program.py::"
+                    "test_validated_sma_settings_corpus_has_a_pinned_trace_root"
+                ),
+                # The trace/decision identity is Decimal-exact and
+                # SHA-256-compared (signal_program.py), not
+                # tolerance-compared -- see
+                # test_validated_sma_settings_corpus_has_a_pinned_trace_root's
+                # byte-exact trace_root assertion. Unlike EMA, there is no
+                # second, one-level-down LEAN-value-parity claim here (no
+                # tolerance_atol/tolerance_rtol/parity_fixture_ids) --
+                # nothing beyond this corpus's own self-consistency has been
+                # established for this promotion.
+                equivalence_level="bit_exact",
+            ),
+            parameter_units={
+                "symbol": "ticker",
+                "short_window": "bars",
+                "long_window": "bars",
+                "resolution_minutes": "minutes",
+            },
+            validated_settings={"short_window": 10, "long_window": 30, "resolution_minutes": 15},
+            validated_symbols=("AAPL", "QQQ", "SPY", "TSLA"),
+            # Same triage rule as ema_crossover_signal's artifact_paths
+            # (issue #1728 defect 2): the transitive first-party import
+            # closure of the root below, MINUS the files in
+            # _SMA_SIGNAL_DECISION_CLOSURE_EXCLUSIONS
+            # (scripts/run_signal_program_build_qualification.py) that are
+            # provably unreachable from evaluate_signal_bar()'s decision
+            # math. test_sma_signal_decision_digest_closure.py recomputes
+            # the closure from these paths and fails the build if a newly
+            # introduced import isn't triaged into one bucket or the other.
+            artifact_paths=(
+                "app/engine/strategy/algorithms/sma_crossover.py",
+                "app/engine/strategy/base.py",
+                "app/engine/strategy/signal_intent.py",
+                "app/engine/strategy/signal_program.py",
+                "app/engine/indicators/base.py",
+                "app/engine/indicators/sma.py",
+                "app/engine/consolidators/trade_bar_consolidator.py",
+                "app/engine/data/trade_bar.py",
+                "app/engine/live/indicator_state.py",
+                "app/lean_sidecar/trading_calendar.py",
+                "app/utils/timestamps.py",
+            ),
+        ),
         description=(
             "Classic golden-cross / death-cross. Enters long when the short "
             "SMA crosses above the long SMA, exits on the opposite cross. "
@@ -966,12 +1128,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             StrategyChartIndicator("sma", {"length": ChartParamRef("long_window")}),
         ),
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
-        build=lambda p: SmaCrossoverAlgorithm(
-            symbol=p.symbol,  # type: ignore[attr-defined]
-            short_window=p.short_window,  # type: ignore[attr-defined]
-            long_window=p.long_window,  # type: ignore[attr-defined]
-            resolution_minutes=p.resolution_minutes,  # type: ignore[attr-defined]
-        ),
+        build=lambda p: _build_sma_crossover_signal_program(p).strategy,  # type: ignore[return-value]
+        signal_program_factory=_build_sma_crossover_signal_program,
         instrument_surface="policy",
         action_plan_contract="single_long_stock",
         signal_intent_binding="action_plan_stock",
