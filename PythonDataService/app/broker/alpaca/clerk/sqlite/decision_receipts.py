@@ -57,6 +57,14 @@ class DecisionReceipt(BaseModel):
     intent_id: str = ""
     order_ref: str = ""
     indicator_snapshot: dict[str, float | int | str | None] = Field(default_factory=dict)
+    # PRD Sec 19 stored causal identity, written by
+    # ``append_atomic_decision_receipt_row`` in this same module
+    # (``decision_id`` == ``evaluation_id``). It belongs on the receipt row
+    # it describes, not in a structure paired alongside it. A row with
+    # neither key renders both ``None`` -- an explicit absence the panel
+    # states, never a link inferred from timing or proximity.
+    decision_id: str | None = None
+    effect_operation_id: str | None = None
 
 
 class DecisionReceiptConflictError(ValueError):

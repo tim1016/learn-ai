@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import Literal
 
 from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
 from app.broker.alpaca.clerk.fills import project_instance_fills
@@ -383,30 +383,8 @@ def _account_working_order_count(entries: list[OrderJournalEntry]) -> int:
     )
 
 
-class _CausalDecisionReceipt(Protocol):
-    """Structural shape of a decision receipt carrying PRD Sec 19 causal identity.
-
-    Matches ``sqlite_panel_source.CausalDecisionReceipt`` by shape, not
-    import: `sqlite_panel_source` imports `sqlite_panel_adapter`, which
-    imports `select_primary_action_by_lens` from this module, so a real
-    import of its receipt type here would be circular. A structural
-    ``Protocol`` needs no import at all — any object with these attributes
-    satisfies it, including a plain ``DecisionReceipt`` in the two fields'
-    default-``None`` case.
-    """
-
-    seq: int
-    ts_ms: int
-    outcome: str
-    reason_code: str
-    bar_ref: str
-    order_ref: str
-    decision_id: str | None
-    effect_operation_id: str | None
-
-
 def _recent_decision_views(
-    receipts: list[_CausalDecisionReceipt],
+    receipts: list[DecisionReceipt],
     *,
     limit: int = 8,
     simulated: bool = False,
@@ -553,7 +531,7 @@ def _execution_policy(mode: str) -> str:
 def _recent_activity_views(
     status: BotStatusView,
     entries: list[OrderJournalEntry],
-    decision_receipts: list[_CausalDecisionReceipt],
+    decision_receipts: list[DecisionReceipt],
     dry_run_activity: list[DryRunActivity],
     *,
     authority_account_id: str,

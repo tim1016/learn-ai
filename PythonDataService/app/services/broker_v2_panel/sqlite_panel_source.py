@@ -526,31 +526,13 @@ async def read_sqlite_chart_evidence(
         raise SqlitePanelEconomicUnavailable(str(exc)) from exc
 
 
-class CausalDecisionReceipt(DecisionReceipt):
-    """A decision receipt carrying its PRD Sec 19 stored causal identity.
-
-    Extends the canonical ``DecisionReceipt`` (owned by ``app/broker/``,
-    outside this module's edit scope) rather than pairing it with a parallel
-    seq-keyed map: causal identity is a fact about one receipt row, so it
-    travels on that row, not alongside it. Populated only from facts durably
-    written at Clerk intake (``append_atomic_decision_receipt_row`` stamps
-    ``decision_id`` == ``evaluation_id`` and ``effect_operation_id`` onto
-    every effect-bearing decision). The projector never infers these from
-    timing or proximity; a row with neither key renders both fields ``None``
-    — an explicit absence, not a guess.
-    """
-
-    decision_id: str | None = None
-    effect_operation_id: str | None = None
-
-
 def read_sqlite_decision_receipts(
     broker: str,
     strategy_instance_id: str,
     *,
     limit: int = 8,
     facade: SqliteAlpacaClerkFacade | None = None,
-) -> list[CausalDecisionReceipt] | None:
+) -> list[DecisionReceipt] | None:
     """Read bounded decision evidence, with its stored causal links, from SQLite.
 
     Never the legacy JSONL tail.
@@ -572,7 +554,7 @@ def read_sqlite_decision_receipts(
     # call as a durable `SqliteDecisionReceipts.append` mutation; this is a
     # plain in-memory list of already-read display DTOs, not a repository
     # handle.
-    adapted_views: list[CausalDecisionReceipt] = [
+    adapted_views: list[DecisionReceipt] = [
         _decision_receipt_from_resource(resource) for resource in resources
     ]
     return adapted_views
@@ -580,7 +562,7 @@ def read_sqlite_decision_receipts(
 
 def _decision_receipt_from_resource(
     resource: DecisionReceiptResource,
-) -> CausalDecisionReceipt:
+) -> DecisionReceipt:
     """Adapt a durable S1 receipt to the panel evidence view, causal links attached."""
     try:
         facts = json.loads(resource.facts_json)
@@ -598,7 +580,7 @@ def _decision_receipt_from_resource(
         # equivalent rather than a choice between two different facts. The
         # second read is a compatibility path for rows persisted before both
         # keys were written; it is deliberately not a precedence rule.
-        return CausalDecisionReceipt.model_validate(
+        return DecisionReceipt.model_validate(
             {
                 "seq": resource.seq,
                 "ts_ms": resource.observed_at_ms,
@@ -928,7 +910,6 @@ async def execute_sqlite_panel_action(
 
 
 __all__ = [
-    "CausalDecisionReceipt",
     "SqliteChartEvidence",
     "SqlitePanelBotNotFound",
     "SqlitePanelDecisionUnavailable",
