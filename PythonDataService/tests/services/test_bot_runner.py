@@ -2625,8 +2625,8 @@ def _ema_signal_evaluation_id(bar_close_ms: int, *, symbol: str = "SPY") -> str:
     params = registration.param_schema(symbol=symbol)
     program = registration.signal_program_factory(params)
     payload = {
-        "program_key": program.session.PROGRAM_KEY,
-        "program_version": program.session.PROGRAM_VERSION,
+        "program_key": program.session.program_key,
+        "program_version": program.session.program_version,
         "settings": program.strategy.signal_program_settings(),
         "bar_close_ms": bar_close_ms,
     }

@@ -74,7 +74,7 @@ async def replay_warmup_bars(
     the permanently-flat state a blanket discard would leave. This is why
     warmup no longer captures every bar as ``OBSERVE_ONLY`` (which
     forces an unconditional auto-discard, see
-    ``EmaCrossoverSignalSession.advance``): a bucket must stay inspectable
+    ``SignalSession.advance``): a bucket must stay inspectable
     in ``DECIDE`` mode so its settlement can be chosen per bucket.
 
     FR-016: a process can die after ``SignalSession.advance()`` stages a

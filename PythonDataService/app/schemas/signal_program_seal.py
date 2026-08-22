@@ -203,7 +203,7 @@ class ConfiguredSignalProgramSeal(BaseModel):
     # program's construction/session protocol — PRD §12's staged
     # open/advance/settle contract (``EvaluationMode``, ``Settlement``,
     # ``EvaluationTrace``) — which could change independently of either.
-    # Sourced from ``EmaCrossoverSignalSession.PROTOCOL_VERSION``, the one
+    # Sourced from ``SignalSession.PROTOCOL_VERSION``, the one
     # place that shape is declared.
     protocol_version: str
     # FR-002: the parameter schema's own legal type/range/unit contract is

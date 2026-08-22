@@ -46,8 +46,8 @@ from app.engine.strategy.algorithms.spy_strategy_c import SpyStrategyCAlgorithm
 from app.engine.strategy.base import Strategy
 from app.engine.strategy.signal_intent import SignalIntentKind
 from app.engine.strategy.signal_program import (
-    EmaCrossoverSignalProgram,
-    EmaCrossoverSignalSession,
+    SignalProgram,
+    SignalSession,
 )
 from app.schemas.signal_program_seal import (
     ExitEligibilityContract,
@@ -477,10 +477,10 @@ class SignalProgramContract:
     """
 
     program_version: str
-    # Distinct from PROGRAM_VERSION (the decision math) — identifies the
+    # Distinct from program_version (the decision math) — identifies the
     # shape of the session's construction/staging protocol. Mirrors
-    # EmaCrossoverSignalSession.PROTOCOL_VERSION rather than re-declaring it,
-    # so the two constants cannot drift apart unnoticed (see
+    # SignalSession.PROTOCOL_VERSION rather than re-declaring it, so the
+    # two constants cannot drift apart unnoticed (see
     # tests/engine/strategy/test_registry_signal_program_identity.py).
     protocol_version: str
     parameter_schema_version: str
@@ -587,7 +587,7 @@ class StrategyRegistration:
     # A Signal Program is optional because existing strategies may still use
     # the legacy event-handler lifecycle. When present, this is the one
     # construction authority for the program and its staged SignalSession.
-    signal_program_factory: Callable[[StrategyParamsBase], EmaCrossoverSignalProgram] | None = None
+    signal_program_factory: Callable[[StrategyParamsBase], SignalProgram] | None = None
     # Admission metadata is deliberately adjacent to the construction seam.
     # A factory without a contract is an unqualified program and cannot be
     # sealed for Start/Resume.
@@ -627,7 +627,21 @@ def hidden_params_present(
     return sorted(hidden.intersection(params))
 
 
-def _build_ema_crossover_signal_program(params: StrategyParamsBase) -> EmaCrossoverSignalProgram:
+# One declaration of this program's sealed identity, referenced by both its
+# construction seam (below, where it becomes the evaluation_id hash input)
+# and its registry contract (where it becomes the build-proof admission
+# identity). Declared once rather than restated as a literal in each place:
+# a factory whose program_version drifts from its contract's would produce
+# a bot whose evaluation traces claim a different program than its seal,
+# and neither hash would look wrong on its own.
+# test_registry_signal_program_identity.py enforces the relationship for
+# every registered program, so a new program that restates a literal here
+# instead of following this pattern fails loudly rather than silently.
+_EMA_SIGNAL_PROGRAM_KEY = "ema_crossover_signal"
+_EMA_SIGNAL_PROGRAM_VERSION = "ema-crossover-signal/v1"
+
+
+def _build_ema_crossover_signal_program(params: StrategyParamsBase) -> SignalProgram:
     """Construct the sole broker-neutral EMA Signal Program from registry params."""
     typed = params
     assert isinstance(typed, EmaCrossoverSignalParams)
@@ -637,18 +651,22 @@ def _build_ema_crossover_signal_program(params: StrategyParamsBase) -> EmaCrosso
         rsi_min=typed.rsi_min,
         rsi_max=typed.rsi_max,
     )
-    program = EmaCrossoverSignalProgram.create(strategy)
+    program = SignalProgram.create(
+        strategy,
+        program_key=_EMA_SIGNAL_PROGRAM_KEY,
+        program_version=_EMA_SIGNAL_PROGRAM_VERSION,
+    )
     strategy.signal_program = program
     return program
 
 
 _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
-    "ema_crossover_signal": StrategyRegistration(
+    _EMA_SIGNAL_PROGRAM_KEY: StrategyRegistration(
         display_name="EMA Crossover Signal",
         class_name="EmaCrossoverSignalAlgorithm",
         signal_program_contract=SignalProgramContract(
-            program_version="ema-crossover-signal/v1",
-            protocol_version=EmaCrossoverSignalSession.PROTOCOL_VERSION,
+            program_version=_EMA_SIGNAL_PROGRAM_VERSION,
+            protocol_version=SignalSession.PROTOCOL_VERSION,
             parameter_schema_version=EmaCrossoverSignalParams.PARAMETER_SCHEMA_VERSION,
             golden_trace_root="82b81f82b5690919871e50a6c9ac39f26fa28d2c09b96dad4a777d4615cd6179",
             provider="polygon",
@@ -746,7 +764,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # closure of the two roots below, MINUS the files proven (in
             # scripts/run_signal_program_build_qualification.py's exclusion
             # list) to be unreachable from evaluate_signal_bar()'s decision
-            # math: EmaCrossoverSignalSession.advance() (signal_program.py)
+            # math: SignalSession.advance() (signal_program.py)
             # builds and stores the EvaluationTrace *before* settle() ever
             # calls commit_signal_decision(), so execution/fill/sizing/
             # commission/Insight-publication bytes reached only through the

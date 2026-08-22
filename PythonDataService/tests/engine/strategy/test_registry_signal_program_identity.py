@@ -31,7 +31,7 @@ from __future__ import annotations
 from app.engine.indicators.ema import ExponentialMovingAverage
 from app.engine.indicators.rsi import RelativeStrengthIndex
 from app.engine.strategy.registry import _STRATEGY_REGISTRY, EmaCrossoverSignalParams
-from app.engine.strategy.signal_program import EmaCrossoverSignalSession
+from app.engine.strategy.signal_program import SignalSession
 
 
 def test_each_sealed_signal_program_identity_is_unique_to_its_registry_key() -> None:
@@ -98,10 +98,51 @@ def test_ema_crossover_derivatives_do_not_inherit_the_canonical_contract() -> No
         assert reg.signal_program_factory is None, f"'{key}' must not carry a signal_program_factory"
 
 
+def test_every_factory_built_program_carries_its_registration_identity() -> None:
+    """The constructed program's identity must equal its registration's.
+
+    ``program_version`` reaches two independent consumers by two independent
+    routes: the factory stamps it onto ``SignalSession``, where it is hashed
+    into every ``evaluation_id``; the contract declares it, where it becomes
+    the sealed build-proof identity. Neither hash looks wrong on its own, so
+    a drift between them yields a bot whose decision traces claim a
+    different program than its seal -- visible only as an unexplained
+    mismatch far downstream. ``program_key`` has the same exposure against
+    the registry key that ``prove_running_program_build`` looks receipts up
+    by.
+
+    Checking the relationship for *every* registered program (rather than
+    pinning EMA's literals) is what makes this survive slice 5: each program
+    promoted through the governed seam is covered the moment it is
+    registered, with no per-program test to remember.
+    """
+    sealed = [(key, reg) for key, reg in _STRATEGY_REGISTRY.items() if reg.signal_program_factory is not None]
+    assert sealed, "expected at least one registered Signal Program factory"
+
+    for key, reg in sealed:
+        contract = reg.signal_program_contract
+        assert contract is not None  # paired invariant, asserted by the test above
+        program = reg.signal_program_factory(reg.param_schema())  # type: ignore[misc]
+
+        assert program.session.program_key == key, (
+            f"'{key}' builds a session claiming program_key="
+            f"{program.session.program_key!r}. prove_running_program_build() looks "
+            "the build receipt up by the registry key, so a session that names a "
+            "different key traces its decisions under a program whose bytes were "
+            "never qualified for it."
+        )
+        assert program.session.program_version == contract.program_version, (
+            f"'{key}' builds a session at program_version="
+            f"{program.session.program_version!r} but its contract declares "
+            f"{contract.program_version!r}. Declare the identity once and "
+            "reference it from both the factory and the contract."
+        )
+
+
 def test_registry_protocol_and_parameter_schema_versions_mirror_their_one_declaration() -> None:
     """PRD §11.1 sealed-completeness fix: ``protocol_version`` and
     ``parameter_schema_version`` are each declared exactly once — on
-    ``EmaCrossoverSignalSession``/``EmaCrossoverSignalParams`` respectively —
+    ``SignalSession``/``EmaCrossoverSignalParams`` respectively —
     and the registry contract only ever mirrors that constant. This is the
     guard that keeps the mirror from drifting the way ``program_version``'s
     hand-duplicated literal already can: catching it here, not only via a
@@ -110,7 +151,7 @@ def test_registry_protocol_and_parameter_schema_versions_mirror_their_one_declar
     contract = _STRATEGY_REGISTRY["ema_crossover_signal"].signal_program_contract
     assert contract is not None
 
-    assert contract.protocol_version == EmaCrossoverSignalSession.PROTOCOL_VERSION
+    assert contract.protocol_version == SignalSession.PROTOCOL_VERSION
     assert contract.parameter_schema_version == EmaCrossoverSignalParams.PARAMETER_SCHEMA_VERSION
 
 

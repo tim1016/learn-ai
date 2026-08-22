@@ -35,11 +35,11 @@ from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
 from app.engine.strategy.signal_program import (
-    EmaCrossoverSignalProgram,
     EvaluationMode,
     EvaluationStage,
     EvaluationTrace,
     Settlement,
+    SignalProgram,
 )
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeed
@@ -145,7 +145,7 @@ class _LiveSignalRuntime:
     """Typed program/strategy composition for one runner-owned instance."""
 
     strategy: _LiveSignalStrategy
-    program: EmaCrossoverSignalProgram | None
+    program: SignalProgram | None
 
     def capture_source_bar(self, bar: TradeBar, *, mode: EvaluationMode) -> None:
         if self.program is not None:

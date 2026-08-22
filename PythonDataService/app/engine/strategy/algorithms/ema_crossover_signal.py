@@ -55,7 +55,7 @@ from app.engine.indicators.ema import ExponentialMovingAverage
 from app.engine.indicators.rsi import RelativeStrengthIndex
 from app.engine.strategy.base import DecisionSnapshot, LoggedTrade, Strategy
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
-from app.engine.strategy.signal_program import EmaCrossoverSignalProgram, SignalDecision
+from app.engine.strategy.signal_program import SignalDecision, SignalProgram
 from app.utils.timestamps import display_time
 
 
@@ -147,7 +147,7 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         # Set only by the registry's Signal Program factory. Direct
         # construction stays a compatibility surface for historical tests and
         # ledgers; public Backtest construction goes through this program.
-        self.signal_program: EmaCrossoverSignalProgram | None = None
+        self.signal_program: SignalProgram | None = None
 
     def initialize(self) -> None:
         # LEAN-parity defaults — match the C# reference Initialize().

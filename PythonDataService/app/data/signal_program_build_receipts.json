@@ -6,10 +6,10 @@
       "program_key": "ema_crossover_signal",
       "program_version": "ema-crossover-signal/v1",
       "golden_trace_root": "82b81f82b5690919871e50a6c9ac39f26fa28d2c09b96dad4a777d4615cd6179",
-      "artifact_digest": "41b35ed71b8e725d9af20d448c443ab242894ef808310d0d828f1a09a86bdb39",
+      "artifact_digest": "02a88650148b2ef34527b9ea6c05466e7ccd60ab6c32dd432ca493e64d3e886e",
       "qualification_suite": "tests/engine/strategy/test_ema_signal_program.py::test_validated_ema_settings_corpus_has_a_pinned_trace_root",
-      "qualified_at_ms": 1787407784410,
-      "receipt_hash": "0e13837c17a3400e6616bd0bad28a3a453e2d66bbf0a58731fade2ec4881f7cb"
+      "qualified_at_ms": 1787412850292,
+      "receipt_hash": "b84788ff312958bd3cb2928855821c49b90ed01deecf9d657eb848cbd94bd882"
     }
   ]
 }

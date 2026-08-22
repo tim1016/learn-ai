@@ -94,7 +94,7 @@ _QUALIFICATION_SUITES: dict[str, str] = {
 # reaches from the declared roots" — it is that transitive first-party
 # import closure MINUS the files below, each proven unable to change an
 # `EvaluationTrace` (`app/engine/strategy/signal_program.py`).
-# `EmaCrossoverSignalSession.advance()` builds and stores the trace from
+# `SignalSession.advance()` builds and stores the trace from
 # `evaluate_signal_bar()`'s return value *before* `settle()` ever calls
 # `commit_signal_decision()`, so anything reached only through the commit
 # path — fills, sizing, portfolio, commission, Insight publication — cannot

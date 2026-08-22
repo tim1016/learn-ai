@@ -25,7 +25,7 @@ from app.engine.strategy.signal_intent import SignalIntent
 if TYPE_CHECKING:
     from app.engine.execution.signal_intent_executor import SignalIntentExecutor
     from app.engine.live.indicator_state import ValidationResult
-    from app.engine.strategy.signal_program import EmaCrossoverSignalProgram
+    from app.engine.strategy.signal_program import SignalProgram
 
     # Type-only: a runtime import would create an indicator_state -> strategy
     # cycle. The default validate_state_payload imports it locally instead.
@@ -248,7 +248,7 @@ class Strategy(ABC):
         # Registry construction may attach a typed program. Every strategy
         # exposes the same explicit seam so engine code never probes private
         # attributes with ``getattr``.
-        self.signal_program: EmaCrossoverSignalProgram | None = None
+        self.signal_program: SignalProgram | None = None
         self.start_date: datetime | None = None
         self.end_date: datetime | None = None
         self.initial_cash: Decimal = Decimal(100000)
