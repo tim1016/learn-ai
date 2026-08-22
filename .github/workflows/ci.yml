@@ -244,10 +244,18 @@ jobs:
     name: Python Tests
     runs-on: ubuntu-latest
     env:
+      # `tests/broker` is in the baseline deliberately. It was omitted until
+      # #1728, and the diff-driven "extra" step below could not compensate: it
+      # matches a test file only by an app-file *stem*, so a change to the Clerk
+      # custody seam never pulled in `test_exit.py` / `test_folds_execution.py` /
+      # `test_projections.py` / `test_reconcile.py`, and nothing can ever pull in
+      # `test_panel_router.py` because no `app/**/panel_router.py` exists (that
+      # router is `app/routers/broker_v2_panel.py`). 13 tests were consequently
+      # red on master's tip while CI reported green.
       PYTHON_FAST_BASELINE_TEST_DIRS: >-
         tests/unit tests/indicators tests/edge tests/utils
         tests/engine tests/routers tests/schemas tests/services tests/operator
-        tests/contracts
+        tests/contracts tests/broker
     defaults:
       run:
         working-directory: PythonDataService
