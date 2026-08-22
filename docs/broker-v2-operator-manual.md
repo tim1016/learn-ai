@@ -111,15 +111,26 @@ reports `NOT_APPLICABLE` rather than `PROGRAM_BUILD_UNPROVEN` and is not
 gated by this proof; it runs on its existing, non-sealed execution path.
 
 A strategy instance deployed before this seal existed has no v2 seal on file.
-Its first Resume after this feature migrates it automatically: if its
-persisted parameters still validate against the currently registered strategy
-contract, Resume appends an exact seal under the same `strategy_instance_id`
-and proceeds — no operator action needed. If they no longer validate, Resume
-instead refuses with `PROGRAM_BUILD_UNPROVEN` and a `next_step` naming the
-exact deterministically-derived clone instance id to deploy in its place; the
-original instance's configuration and history remain permanently inspectable,
-but it can never Resume again under its own id. Deploying the named clone
-requires fresh parameters — it is a new deployment, not a rebind.
+Its first Resume after this feature attempts migration, and migration
+succeeds only when the v1 configuration is *exactly* reconstructible — never
+by guessing. Two things must hold: the persisted parameters still validate
+against the currently registered strategy contract, and every parameter's
+deploy-time origin is a recorded fact rather than an inference. A parameter
+that was never supplied at deploy time is factually a registered default and
+qualifies. A parameter that *was* explicitly supplied but whose origin was
+never recorded does not: comparing its stored value against today's default
+cannot prove it was never an override, because the registered default may have
+drifted since. When both conditions hold, Resume appends an exact seal under
+the same `strategy_instance_id` and proceeds — no operator action needed.
+
+Otherwise Resume refuses with `PROGRAM_BUILD_UNPROVEN` and a `next_step`
+naming the exact deterministically-derived clone instance id to deploy in its
+place. The original instance's configuration and history remain permanently
+inspectable, but it can never Resume again under its own id. Deploying the
+named clone requires fresh parameters — it is a new deployment, not a rebind.
+The clone's lineage back to the original is written before that instruction is
+ever shown; if the lineage cannot be recorded, Resume fails rather than
+promising a link it did not persist.
 
 ## SQLite manual paper tickets
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
+from typing import Protocol
 
 from app.broker.alpaca.clerk.active_protocol import ClerkAdmissionSnapshotStaleError
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
@@ -20,7 +21,7 @@ from app.schemas.run_admission import (
     StrategyValidationAdmissionFact,
     TerminalEvidenceAdmissionFact,
 )
-from app.services.bot_binding_repository import BotBindingRepository, BrokerBotBinding
+from app.services.bot_binding_repository import BrokerBotBinding, LegacyMigrationLineageRecord
 from app.services.bot_carryover import configuration_hash
 from app.services.bot_start_admission import (
     CustodyBoundActivator,
@@ -53,6 +54,43 @@ TerminalEvidenceResolver = Callable[[BrokerBotBinding], TerminalEvidenceAdmissio
 ValidationFactResolver = Callable[[BrokerBotBinding, int], StrategyValidationAdmissionFact]
 
 
+class LegacyMigrationLineageWriter(Protocol):
+    """The one write capability a mutating Resume needs for PRD Sec 11.5.
+
+    Deliberately narrower than ``BotBindingRepository`` (its only production
+    implementer): Resume never reads or writes anything else through this
+    seam, so typing the dependency against the full repository would make
+    "does Resume have what it needs to keep its promise" a matter of
+    auditing the whole repository's surface instead of this one method.
+    """
+
+    def ensure_legacy_migration_clone_lineage(
+        self,
+        *,
+        original_strategy_instance_id: str,
+        clone_instance_id: str,
+        reason: str,
+        now_ms: int,
+    ) -> LegacyMigrationLineageRecord: ...
+
+
+class LegacyMigrationLineageUnavailableError(RuntimeError):
+    """A mutating Resume cannot durably record the clone lineage it needs.
+
+    PRD Sec 11.5 / ADR 0043 Sec 3: the clone branch's returned
+    ``ProgramBuildAdmissionFact.next_step`` tells the operator the clone
+    "carries explicit lineage back to this instance" — a claim about
+    durable evidence, not an aspiration. ``resume()`` (``mutating=True``)
+    must therefore never reach that return with lineage unwritten. Raising
+    here — instead of silently skipping the write, as a ``None`` writer
+    used to let happen — makes that impossible: either the lineage record
+    exists before the decision is returned, or the caller sees this error
+    instead of a decision that promises evidence it never persisted.
+    ``preview()`` (``mutating=False``) never reaches this branch; it is not
+    allowed to write anything, by design.
+    """
+
+
 @dataclass(frozen=True)
 class AdmittedBotResume:
     """Successful Resume plus the exact decision used before activation."""
@@ -79,7 +117,7 @@ class BotResumeAdmission:
         carryover_account_policy_enabled: bool,
         session_capability: SessionCapabilityResolver,
         market_liveness: MarketLivenessFactResolver = market_liveness_fact,
-        legacy_migration_repository: BotBindingRepository | None = None,
+        legacy_migration_repository: LegacyMigrationLineageWriter | None = None,
     ) -> None:
         self._now_ms = now_ms
         self._feed_resolver = feed_resolver
@@ -95,10 +133,13 @@ class BotResumeAdmission:
         self._market_liveness = market_liveness
         # PRD Sec 11.5 legacy migration (#1728): only ``resume()`` persists
         # clone lineage evidence (``preview()`` stays mutation-free). ``None``
-        # keeps every existing caller working unchanged — the append path
-        # (the common case) needs no repository at all — while still
-        # returning an accurate, actionable decision for the clone case; it
-        # just cannot durably record the lineage without one.
+        # keeps every existing caller working unchanged for the common
+        # append path, which needs no lineage writer at all. A mutating
+        # Resume that actually reaches the clone branch is different: it
+        # must not return a decision whose ``next_step`` promises lineage it
+        # never wrote, so a ``None`` writer at that point fails closed with
+        # ``LegacyMigrationLineageUnavailableError`` instead of silently
+        # completing — see ``_resolve_program_build``.
         self._legacy_migration_repository = legacy_migration_repository
 
     async def preview(
@@ -155,8 +196,12 @@ class BotResumeAdmission:
         path persists it via the existing idempotent
         ``BotBindingRepository._ensure_sealed_program``. An unprovable
         parameter set fails closed and, only on the mutating ``resume()``
-        call (never ``preview()``), records create-once lineage evidence
-        naming the clone that must be deployed instead.
+        call (never ``preview()``), durably records create-once lineage
+        evidence naming the clone that must be deployed instead *before*
+        returning the refusal — a mutating call that reaches this branch
+        with no lineage writer configured raises
+        :class:`LegacyMigrationLineageUnavailableError` rather than return a
+        decision whose ``next_step`` promises lineage it never persisted.
         """
         if proposed.sealed_program is not None:
             return proposed, prove_running_program_build(proposed, verified_at_ms=verified_at_ms)
@@ -164,7 +209,13 @@ class BotResumeAdmission:
             reconstructed = reconstruct_legacy_program_seal(prior, validation)
         except LegacyProgramUnreconstructibleError:
             clone_instance_id = legacy_migration_clone_instance_id(prior.strategy_instance_id)
-            if mutating and self._legacy_migration_repository is not None:
+            if mutating:
+                if self._legacy_migration_repository is None:
+                    raise LegacyMigrationLineageUnavailableError(
+                        f"Resume for '{prior.strategy_instance_id}' would refuse with a "
+                        f"clone instruction naming '{clone_instance_id}', but no lineage "
+                        "writer is configured to durably record that clone's lineage."
+                    )
                 self._legacy_migration_repository.ensure_legacy_migration_clone_lineage(
                     original_strategy_instance_id=prior.strategy_instance_id,
                     clone_instance_id=clone_instance_id,

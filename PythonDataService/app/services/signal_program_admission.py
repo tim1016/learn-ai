@@ -19,7 +19,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from app.engine.strategy.registry import _STRATEGY_REGISTRY, SignalProgramContract, StrategyRegistration
+from app.engine.strategy.registry import _STRATEGY_REGISTRY, SignalProgramContract
 from app.schemas.run_admission import ProgramBuildAdmissionFact, StrategyValidationAdmissionFact
 from app.schemas.signal_program_seal import (
     ConfiguredSignalProgramSeal,
@@ -76,12 +76,19 @@ class LegacyProgramUnreconstructibleError(SignalProgramSealError):
     PRD Sec 11.5 draws a hard line here: every other missing-precondition
     case (no sealed account yet, no current validation evidence) is
     transient — the same Resume attempt succeeds once the precondition
-    clears, so it stays a plain :class:`SignalProgramSealError`. A
-    parameter set that no longer validates against the *currently*
-    registered contract is a permanent legacy-data gap; no future retry of
-    the same instance fixes it. Only this condition must clone a successor
-    instance with explicit lineage instead of appending an inexact seal
-    onto the original identity.
+    clears, so it stays a plain :class:`SignalProgramSealError`. Two
+    conditions are permanent legacy-data gaps instead — no future retry of
+    the same instance fixes either one, so both clone a successor instance
+    with explicit lineage rather than append an inexact seal onto the
+    original identity:
+
+    * the persisted parameter set no longer validates against the
+      *currently* registered contract; or
+    * a persisted parameter has no factual origin — it was supplied at
+      deploy time (so it is not the schema default by omission) but no
+      origin was ever recorded for it, and guessing from a value-vs-
+      current-default comparison is exactly the unsound inference this
+      error exists to refuse (see :func:`_legacy_parameter_origins`).
     """
 
 
@@ -119,7 +126,7 @@ def build_start_program_seal(
     Fresh deploys through ``paper_deploy_service`` always supply a complete
     ``parameter_origins`` mapping. A caller reconstructing a pre-v2 instance
     with no recorded origins must build a complete mapping first — see
-    :func:`_infer_legacy_parameter_origins`, used only by
+    :func:`_legacy_parameter_origins`, used only by
     :func:`reconstruct_legacy_program_seal`.
     """
     registration = _STRATEGY_REGISTRY.get(binding.strategy_key)
@@ -220,20 +227,22 @@ def reconstruct_legacy_program_seal(
     PRD Sec 11.5: a missing seal on an *existing* strategy instance means it
     was deployed before the v2 seal format existed, not that it is a fresh
     Start. This mirrors :func:`build_start_program_seal` exactly, with one
-    addition — a persisted parameter set that no longer validates against
-    the *currently* registered contract is distinguished from every other
-    reason sealing can fail today (no sealed account yet, no current
+    addition — two permanent legacy-data gaps are distinguished from every
+    other reason sealing can fail today (no sealed account yet, no current
     validation evidence): those remain transient and return ``None`` here,
     exactly like an un-registered program does, so the caller's existing
     generic ``PROGRAM_BUILD_UNPROVEN`` handling still applies and a later
-    Resume attempt can still succeed once the precondition clears. A
-    parameter mismatch instead raises
+    Resume attempt can still succeed once the precondition clears. Either a
+    persisted parameter set that no longer validates against the
+    *currently* registered contract, or a persisted parameter with no
+    factual origin, instead raises
     :class:`LegacyProgramUnreconstructibleError`, because no future retry of
     *this* instance can fix it — the caller must clone a successor.
 
     Pre-v2 instances never recorded ``strategy_param_origins``, so this is
-    also the one place a complete origin mapping is built by inference
-    rather than read as fact — see :func:`_infer_legacy_parameter_origins`.
+    also the one place a complete origin mapping is assembled from
+    whatever facts are available — see :func:`_legacy_parameter_origins`,
+    which refuses (rather than guesses) when a parameter has none.
     """
     registration = _STRATEGY_REGISTRY.get(binding.strategy_key)
     if registration is None or registration.signal_program_factory is None:
@@ -247,8 +256,12 @@ def reconstruct_legacy_program_seal(
             f"Strategy instance '{binding.strategy_instance_id}' persisted parameters no "
             f"longer validate against the currently registered '{binding.strategy_key}' contract."
         ) from exc
-    origins = _infer_legacy_parameter_origins(
-        registration, validated.model_dump(mode="json"), binding.strategy_param_origins
+    origins = _legacy_parameter_origins(
+        strategy_instance_id=binding.strategy_instance_id,
+        strategy_key=binding.strategy_key,
+        effective=validated.model_dump(mode="json"),
+        requested=binding.strategy_params or {},
+        recorded_origins=binding.strategy_param_origins,
     )
     try:
         return build_start_program_seal(binding, validation, parameter_origins=origins)
@@ -256,36 +269,65 @@ def reconstruct_legacy_program_seal(
         return None
 
 
-def _infer_legacy_parameter_origins(
-    registration: StrategyRegistration,
+def _legacy_parameter_origins(
+    *,
+    strategy_instance_id: str,
+    strategy_key: str,
     effective: dict[str, Any],
+    requested: dict[str, Any],
     recorded_origins: dict[str, Literal["registered_default", "deploy_override", "deployment_symbol"]]
     | None,
 ) -> dict[str, Literal["registered_default", "deploy_override", "deployment_symbol"]]:
-    """Fill a complete origin mapping for a pre-v2 (or partially-recorded) instance.
+    """Build a complete, *factual* origin map for a pre-v2 instance, or refuse.
 
-    Called only from :func:`reconstruct_legacy_program_seal`. Its output is
-    inferred, not factual, and can be wrong: for any parameter missing from
-    ``recorded_origins``, this labels it ``registered_default`` when the
-    effective value equals *today's* registered default, and
-    ``deploy_override`` otherwise. That comparison cannot see history — if
-    an instance was deployed with an explicit override that happened to
-    equal the default in force at the time, and the registered default has
-    since drifted to match that override's value, or a legacy override was
-    later adopted as the new default, this mislabels the parameter's true
-    deploy-time origin. It is the best available reconstruction for data
-    that predates origin tracking, used to append an exact v2 seal rather
-    than leave the instance permanently unresumable.
+    Called only from :func:`reconstruct_legacy_program_seal`. Every entry
+    here is a fact about this exact instance, never an inference from
+    comparing an effective value to today's registered default — a value
+    matching the current default does not prove it was never an explicit
+    deploy-time override, because the default can drift after deploy time
+    (and an old override can later be adopted as the new default). Two
+    factual sources fill this map:
+
+    * ``recorded_origins`` already carries an explicit entry for the
+      parameter — an earlier partial migration, or a post-seal deploy,
+      recorded it — so that recorded origin is used verbatim; or
+    * the parameter name is genuinely absent from ``requested``
+      (``binding.strategy_params``) — the caller never supplied it, so
+      Pydantic filled it from *this exact* ``param_schema``'s default just
+      now, the same way :func:`build_start_program_seal` treats an
+      unsupplied parameter on a fresh deploy. That is a fact about this
+      seal's own construction, not a guess reconstructed from history.
+
+    A parameter present in ``requested`` with no recorded origin has no
+    factual source at all: it was supplied explicitly at some past deploy,
+    but which value-vs-default choice that was is lost. Guessing from
+    today's default is precisely the unsound inference this function
+    exists to refuse, so it raises
+    :class:`LegacyProgramUnreconstructibleError` instead — routing the
+    caller to the clone path (PRD Sec 11.5) rather than sealing a guess as
+    exact identity.
     """
     recorded = recorded_origins or {}
-    defaults = registration.param_schema().model_dump(mode="json")
-    return {
-        name: recorded[name]
-        if name in recorded
-        else ("registered_default" if value == defaults.get(name) else "deploy_override")
-        for name, value in effective.items()
-        if name != "symbol"
-    }
+    origins: dict[str, Literal["registered_default", "deploy_override", "deployment_symbol"]] = {}
+    unresolved: list[str] = []
+    for name in effective:
+        if name == "symbol":
+            continue
+        if name in recorded:
+            origins[name] = recorded[name]
+        elif name not in requested:
+            origins[name] = "registered_default"
+        else:
+            unresolved.append(name)
+    if unresolved:
+        raise LegacyProgramUnreconstructibleError(
+            f"Strategy instance '{strategy_instance_id}' has no recorded origin for "
+            f"parameter(s) {sorted(unresolved)} of the currently registered "
+            f"'{strategy_key}' contract. Each was supplied explicitly at some past "
+            "deploy, but its deploy-time origin was never recorded and cannot be "
+            "reconstructed from today's registered default."
+        )
+    return origins
 
 
 def prove_running_program_build(

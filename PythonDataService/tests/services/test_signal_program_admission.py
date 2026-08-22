@@ -154,14 +154,16 @@ def test_build_start_program_seal_fails_closed_on_partial_parameter_origins() ->
         build_start_program_seal(binding, _validation(), parameter_origins={"gap": "deploy_override"})
 
 
-def test_reconstruct_legacy_program_seal_infers_origin_only_for_missing_entries() -> None:
-    """The legacy-only inference path fills gaps but trusts recorded origins.
+def test_reconstruct_legacy_program_seal_refuses_when_parameter_origin_is_not_provably_recorded() -> None:
+    """Independent-review Defect 1: a guess must never be sealed as exact identity.
 
-    A legacy binding whose ``gap`` happens to equal the *currently*
-    registered default, but whose origin was in fact explicitly recorded
-    as an override (e.g. by an earlier partial migration), must keep that
-    recorded origin rather than have it overwritten by the value-vs-default
-    guess.
+    A legacy binding whose ``rsi_min``/``rsi_max`` were explicitly supplied
+    at deploy time (present in ``strategy_params``) but never had their
+    origin recorded has no factual source for those origins. Comparing the
+    effective value to *today's* registered default cannot prove they were
+    never overridden — the default may have drifted since deploy time — so
+    this must route to the clone path (``LegacyProgramUnreconstructibleError``)
+    instead of guessing ``"registered_default"``.
     """
     defaults = _STRATEGY_REGISTRY["ema_crossover_signal"].param_schema().model_dump(mode="json")
     legacy_binding = _binding(
@@ -169,14 +171,33 @@ def test_reconstruct_legacy_program_seal_infers_origin_only_for_missing_entries(
         strategy_param_origins={"gap": "deploy_override"},
     )
 
+    with pytest.raises(LegacyProgramUnreconstructibleError) as exc_info:
+        reconstruct_legacy_program_seal(legacy_binding, _validation())
+
+    assert "rsi_min" in str(exc_info.value)
+    assert "rsi_max" in str(exc_info.value)
+
+
+def test_reconstruct_legacy_program_seal_treats_absent_deploy_param_as_factual_default() -> None:
+    """A parameter genuinely absent from the recorded deploy params is a
+    *fact* ('registered_default'), not an inference, and must still
+    migrate. Defect 1's fix must draw the line at "never supplied", not
+    force every pre-v2 instance through the clone path.
+    """
+    legacy_binding = _binding(
+        strategy_params={"gap": 0.35},
+        strategy_param_origins={"gap": "deploy_override"},
+    )
+
     reconstructed = reconstruct_legacy_program_seal(legacy_binding, _validation())
 
     assert reconstructed is not None
     assert reconstructed.configured_signal.parameters["gap"].origin == "deploy_override"
-    # rsi_min/rsi_max were never recorded, so they fall back to the
-    # value-vs-current-default inference documented on
-    # `_infer_legacy_parameter_origins`.
+    # rsi_min/rsi_max were never supplied at all -- absence from
+    # `strategy_params` is a fact about this instance's own persisted
+    # configuration, not a value-vs-current-default guess.
     assert reconstructed.configured_signal.parameters["rsi_min"].origin == "registered_default"
+    assert reconstructed.configured_signal.parameters["rsi_max"].origin == "registered_default"
 
 
 def test_committed_receipt_matches_current_artifacts_and_golden_root() -> None:
@@ -312,9 +333,22 @@ def test_legacy_migration_seal_appends_to_same_instance_preserving_v1_bytes(tmp_
     reconstruct its seal, and record a second (resume) launch carrying it.
     The append must land under the *same* ``strategy_instance_id`` and must
     not perturb a single byte of the original ``strategy_instance.json``.
+
+    ``strategy_params``/``strategy_param_origins`` are both left unset:
+    ``strategy_param_origins`` never survives a repository round-trip
+    (``BrokerBotBinding.strategy_param_origins`` is ``exclude=True`` --
+    "persisted only inside the append-only v2 seal"), so ``restored`` below
+    always has ``strategy_param_origins is None`` exactly like a real Resume
+    read. A binding whose ``strategy_params`` were explicitly recorded (even
+    values that happen to equal today's defaults) would therefore have no
+    factual origin for them post-restore and must clone (see
+    ``test_reconstruct_legacy_program_seal_refuses_when_parameter_origin_is_not_provably_recorded``).
+    This binding models the other real legacy shape instead -- a deploy that
+    never supplied explicit params at all -- so every parameter is
+    factually absent and reconstruction is exact.
     """
     repository = _repository(tmp_path)
-    legacy_binding = _binding()
+    legacy_binding = _binding(strategy_params=None, strategy_param_origins=None)
     repository.record_launch(legacy_binding, launch_reason="deploy")
     instance_path = tmp_path / "live_state" / _SID / "strategy_instance.json"
     original_v1_bytes = instance_path.read_bytes()

@@ -31,7 +31,7 @@ from app.schemas.run_admission import (
     TerminalEvidenceAdmissionFact,
 )
 from app.services.bot_binding_repository import BotBindingRepository, BrokerBotBinding, alpaca_v1_action_plan
-from app.services.bot_resume_admission import BotResumeAdmission
+from app.services.bot_resume_admission import BotResumeAdmission, LegacyMigrationLineageUnavailableError
 from app.services.bot_start_admission import StartAdmissionDenied
 from app.services.market_liveness import compose_market_liveness
 from app.services.signal_program_admission import legacy_migration_clone_instance_id
@@ -67,7 +67,7 @@ def _clerk(observed_at_ms: int) -> ClerkCustodySnapshot:
     )
 
 
-def _prior(*, strategy_params: dict[str, object]) -> BrokerBotBinding:
+def _prior(*, strategy_params: dict[str, object] | None) -> BrokerBotBinding:
     return BrokerBotBinding(
         strategy_instance_id=_SID,
         strategy_key="ema_crossover_signal",
@@ -179,8 +179,19 @@ def _admission(repository: BotBindingRepository | None, *, now_values: list[int]
 @pytest.mark.asyncio
 async def test_resume_preview_appends_a_reconstructible_seal_and_clears_program_build(
 ) -> None:
-    """PRD Sec 11.5 append case: preview alone proves reconstruction, no clone."""
-    prior = _prior(strategy_params={"gap": 0.2, "rsi_min": 50.0, "rsi_max": 70.0})
+    """PRD Sec 11.5 append case: preview alone proves reconstruction, no clone.
+
+    ``strategy_params=None`` models a legacy instance that never supplied
+    explicit params -- ``_prior`` never sets ``strategy_param_origins``
+    either, matching a real Resume's disk-read binding exactly (that field
+    is ``exclude=True`` and never round-trips). Every parameter is
+    therefore factually absent ("registered_default"), so reconstruction is
+    exact with no origin recorded and no clone. A binding whose
+    ``strategy_params`` instead recorded explicit values with no origin
+    evidence has no factual source for them and must clone -- see
+    ``test_resume_fails_closed_when_no_lineage_writer_is_configured`` below.
+    """
+    prior = _prior(strategy_params=None)
     admission = _admission(repository=None, now_values=[_NOW, _NOW + 1, _NOW + 2, _NOW + 3])
 
     decision = await admission.preview(prior, _status())
@@ -232,3 +243,21 @@ async def test_resume_refuses_and_clones_lineage_exactly_once_across_two_attempt
     other_clone_id = legacy_migration_clone_instance_id(other_prior.strategy_instance_id)
     await admission_preview.preview(other_prior, _status())
     assert repository.read_legacy_migration_lineage(other_clone_id) is None
+
+
+@pytest.mark.asyncio
+async def test_resume_fails_closed_when_no_lineage_writer_is_configured() -> None:
+    """Independent-review Defect 2: a mutating Resume must not promise lineage it never wrote.
+
+    ``_resolve_program_build``'s clone branch returns a decision whose
+    ``next_step`` tells the operator the clone "carries explicit lineage
+    back to this instance" -- a durable-evidence claim, not an aspiration.
+    Without a configured lineage writer, ``resume()`` (the mutating call)
+    must fail loudly instead of completing with that false promise.
+    ``preview()`` is unaffected: it never persists lineage by design.
+    """
+    prior = _prior(strategy_params={"gap": -1.0, "rsi_min": 50.0, "rsi_max": 70.0})
+    admission = _admission(repository=None, now_values=[_NOW, _NOW + 1, _NOW + 2, _NOW + 3])
+
+    with pytest.raises(LegacyMigrationLineageUnavailableError):
+        await admission.resume(prior, _status())
