@@ -28,7 +28,10 @@ carrying a factory/contract pairing that has drifted apart.
 
 from __future__ import annotations
 
-from app.engine.strategy.registry import _STRATEGY_REGISTRY
+from app.engine.indicators.ema import ExponentialMovingAverage
+from app.engine.indicators.rsi import RelativeStrengthIndex
+from app.engine.strategy.registry import _STRATEGY_REGISTRY, EmaCrossoverSignalParams
+from app.engine.strategy.signal_program import EmaCrossoverSignalSession
 
 
 def test_each_sealed_signal_program_identity_is_unique_to_its_registry_key() -> None:
@@ -93,3 +96,49 @@ def test_ema_crossover_derivatives_do_not_inherit_the_canonical_contract() -> No
         reg = _STRATEGY_REGISTRY[key]
         assert reg.signal_program_contract is None, f"'{key}' must not carry a signal_program_contract"
         assert reg.signal_program_factory is None, f"'{key}' must not carry a signal_program_factory"
+
+
+def test_registry_protocol_and_parameter_schema_versions_mirror_their_one_declaration() -> None:
+    """PRD §11.1 sealed-completeness fix: ``protocol_version`` and
+    ``parameter_schema_version`` are each declared exactly once — on
+    ``EmaCrossoverSignalSession``/``EmaCrossoverSignalParams`` respectively —
+    and the registry contract only ever mirrors that constant. This is the
+    guard that keeps the mirror from drifting the way ``program_version``'s
+    hand-duplicated literal already can: catching it here, not only via a
+    downstream hash mismatch, names exactly which constant went stale.
+    """
+    contract = _STRATEGY_REGISTRY["ema_crossover_signal"].signal_program_contract
+    assert contract is not None
+
+    assert contract.protocol_version == EmaCrossoverSignalSession.PROTOCOL_VERSION
+    assert contract.parameter_schema_version == EmaCrossoverSignalParams.PARAMETER_SCHEMA_VERSION
+
+
+def test_registry_signal_series_periods_match_the_constructed_indicators() -> None:
+    """The registry's sealed ``signals`` periods must describe the real,
+    constructed indicators, not a value that can silently drift out of sync
+    with ``EmaCrossoverSignalAlgorithm.initialize()``. This directly checks
+    the constructed indicator objects rather than relying only on the
+    golden-trace test to notice a period change indirectly.
+    """
+    contract = _STRATEGY_REGISTRY["ema_crossover_signal"].signal_program_contract
+    assert contract is not None
+    periods_by_name = {series.name: series.period for series in contract.signals}
+    warmup_by_name = {series.name: series.warmup_bars for series in contract.signals}
+
+    # Constructed the exact same way EmaCrossoverSignalAlgorithm.initialize()
+    # builds them ("EMA5", 5), ("EMA10", 10), ("RSI14", 14) — a narrow check
+    # of the period constants rather than a duplicate of the engine
+    # integration tests that run the full strategy lifecycle.
+    ema_fast = ExponentialMovingAverage("EMA5", 5)
+    ema_slow = ExponentialMovingAverage("EMA10", 10)
+    rsi = RelativeStrengthIndex("RSI14", 14)
+
+    assert periods_by_name["ema_fast"] == ema_fast.period
+    assert periods_by_name["ema_slow"] == ema_slow.period
+    assert periods_by_name["rsi"] == rsi.period
+    # is_ready fires at samples >= period for EMA, period + 1 for RSI
+    # (app/engine/indicators/base.py vs. RelativeStrengthIndex's override).
+    assert warmup_by_name["ema_fast"] == ema_fast.period
+    assert warmup_by_name["ema_slow"] == ema_slow.period
+    assert warmup_by_name["rsi"] == rsi.period + 1

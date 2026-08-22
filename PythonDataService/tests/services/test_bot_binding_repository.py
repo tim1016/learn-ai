@@ -13,10 +13,14 @@ from app.schemas.broker_bots import AlpacaPaperEvidenceOverride
 from app.schemas.run_admission import ProgramBuildAdmissionFact
 from app.schemas.signal_program_seal import (
     ConfiguredSignalProgramSeal,
+    ExitEligibilityContract,
+    NumericalProvenanceContract,
     ResolvedSignalParameter,
     SealedBotProgram,
+    SignalBarIntegrityContract,
     SignalClockContract,
     SignalDataContract,
+    SignalSeriesContract,
     seal_bot_program,
 )
 from app.services.bot_binding_repository import (
@@ -74,6 +78,8 @@ def _sealed_program(*, run_id: str = "run-001") -> SealedBotProgram:
     configured = ConfiguredSignalProgramSeal(
         program_key="ema_crossover_signal",
         program_version="ema-crossover-signal/v1",
+        protocol_version="signal-session-protocol/v1",
+        parameter_schema_version="ema-crossover-signal-params/v1",
         golden_trace_root="a" * 64,
         parameters={
             "fast_period": ResolvedSignalParameter(value=12, unit="bars", origin="registered_default"),
@@ -86,6 +92,17 @@ def _sealed_program(*, run_id: str = "run-001") -> SealedBotProgram:
             decision_timeframe_ms=60_000,
         ),
         clock=SignalClockContract(use_rth=True, warmup_lookback_days=5),
+        signals=(SignalSeriesContract(name="fast", indicator="ema", field="close", period=12, warmup_bars=12),),
+        decision_streams=("ENTER", "EXIT"),
+        bar_integrity=SignalBarIntegrityContract(),
+        exit_eligibility=ExitEligibilityContract(countdown_decision_clocks=5, countdown_state_persistable=False),
+        numerical_provenance=NumericalProvenanceContract(
+            formula="test formula",
+            reference="test reference",
+            canonical_implementation="test canonical implementation",
+            validated_against="test validated against",
+            equivalence_level="bit_exact",
+        ),
     )
     return seal_bot_program(
         strategy_instance_id=_SID,

@@ -166,6 +166,8 @@ def build_start_program_seal(
     configured = ConfiguredSignalProgramSeal(
         program_key=binding.strategy_key,
         program_version=contract.program_version,
+        protocol_version=contract.protocol_version,
+        parameter_schema_version=contract.parameter_schema_version,
         golden_trace_root=contract.golden_trace_root,
         parameters=parameters,
         parameters_match_validated_settings=_parameters_match(contract, effective),
@@ -179,6 +181,13 @@ def build_start_program_seal(
             use_rth=binding.use_rth,
             warmup_lookback_days=contract.warmup_lookback_days,
         ),
+        # Copied straight from the registry contract — the same objects, not
+        # a re-derivation — so these can never fall out of sync with it.
+        signals=contract.signals,
+        decision_streams=contract.decision_streams,
+        bar_integrity=contract.bar_integrity,
+        exit_eligibility=contract.exit_eligibility,
+        numerical_provenance=contract.numerical_provenance,
     )
     configured_hash = configured.semantic_hash()
     return seal_bot_program(
@@ -370,6 +379,18 @@ def prove_running_program_build(
         # docstring — just an identity check at the same cadence as the
         # program_version/golden_trace_root checks above.
         or configured.data.provider != contract.provider
+        # The sealed-semantics completeness fix (sibling to #1729): every
+        # field newly widened onto the seal (PRD Sec 11.1) must still match
+        # the currently registered contract, at the same cadence as the
+        # checks above — a stale or hand-edited seal on any of these must
+        # fail build-proof just as surely as a stale program_version would.
+        or configured.protocol_version != contract.protocol_version
+        or configured.parameter_schema_version != contract.parameter_schema_version
+        or configured.signals != contract.signals
+        or configured.decision_streams != contract.decision_streams
+        or configured.bar_integrity != contract.bar_integrity
+        or configured.exit_eligibility != contract.exit_eligibility
+        or configured.numerical_provenance != contract.numerical_provenance
     ):
         return _unproven(
             binding.strategy_key,

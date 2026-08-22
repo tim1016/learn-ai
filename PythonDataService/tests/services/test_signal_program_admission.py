@@ -233,6 +233,49 @@ def test_tampered_qualification_receipt_fails_closed(tmp_path: Path) -> None:
     assert proof.state == "UNPROVEN"
 
 
+def test_seal_signal_semantics_come_from_the_registry_contract() -> None:
+    """Task requirement: the sealed semantics must match the registry contract
+    they were derived from -- and be *derived*, not a second hand-authored
+    copy. ``build_start_program_seal`` copies these five field values straight
+    off ``SignalProgramContract``, so this equality holds by construction; the
+    regression this guards is a future edit that starts re-deriving one of
+    them from something else instead of the contract.
+    """
+    contract = _STRATEGY_REGISTRY["ema_crossover_signal"].signal_program_contract
+    assert contract is not None
+    binding = _sealed_binding()
+    seal = binding.sealed_program
+    assert seal is not None
+    configured = seal.configured_signal
+
+    assert configured.protocol_version == contract.protocol_version
+    assert configured.parameter_schema_version == contract.parameter_schema_version
+    assert configured.signals == contract.signals
+    assert configured.decision_streams == contract.decision_streams
+    assert configured.bar_integrity == contract.bar_integrity
+    assert configured.exit_eligibility == contract.exit_eligibility
+    assert configured.numerical_provenance == contract.numerical_provenance
+
+
+def test_sealed_protocol_version_mismatch_fails_closed() -> None:
+    """Sealed-completeness fix, sibling to the provider-mismatch test below:
+    every newly widened §11.1 field must fail build-proof on mismatch too, at
+    the same cadence as program_version/golden_trace_root/provider. Exercises
+    one representative new field end to end through ``prove_running_program_build``'s
+    real ``or`` chain, rather than only asserting the chain's source contains it.
+    """
+    binding = _sealed_binding()
+    seal = binding.sealed_program
+    assert seal is not None
+    tampered_configured = seal.configured_signal.model_copy(update={"protocol_version": "stale-protocol/v0"})
+    tampered_seal = seal.model_copy(update={"configured_signal": tampered_configured})
+    binding = binding.model_copy(update={"sealed_program": tampered_seal})
+
+    proof = prove_running_program_build(binding, verified_at_ms=_NOW)
+
+    assert proof.state == "UNPROVEN"
+
+
 def test_sealed_provider_identity_mismatch_fails_closed() -> None:
     """#1729 AC4: "provider" proof means the sealed qualification-lineage
     identity (PRD Sec 11.6) is present and unchanged against the currently

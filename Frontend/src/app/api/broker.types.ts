@@ -10607,10 +10607,17 @@ export interface components {
          * @description Inner seal: the exact semantic signal program selected by the user.
          */
         ConfiguredSignalProgramSeal: {
+            bar_integrity: components["schemas"]["SignalBarIntegrityContract"];
             clock: components["schemas"]["SignalClockContract"];
             data: components["schemas"]["SignalDataContract"];
+            /** Decision Streams */
+            decision_streams: string[];
+            exit_eligibility: components["schemas"]["ExitEligibilityContract"];
             /** Golden Trace Root */
             golden_trace_root: string;
+            numerical_provenance: components["schemas"]["NumericalProvenanceContract"];
+            /** Parameter Schema Version */
+            parameter_schema_version: string;
             /** Parameters */
             parameters: {
                 [key: string]: components["schemas"]["ResolvedSignalParameter"];
@@ -10621,12 +10628,16 @@ export interface components {
             program_key: string;
             /** Program Version */
             program_version: string;
+            /** Protocol Version */
+            protocol_version: string;
             /**
              * Schema Version
              * @default 2
              * @constant
              */
             schema_version?: 2;
+            /** Signals */
+            signals: components["schemas"]["SignalSeriesContract"][];
         };
         /**
          * ConfirmInFormAction
@@ -12643,6 +12654,32 @@ export interface components {
              * @enum {string}
              */
             logic: "AND" | "OR";
+        };
+        /**
+         * ExitEligibilityContract
+         * @description Level/countdown exit rule — the evidence future carryover work would read.
+         *
+         *     PRD §11.1: "level/countdown exit eligibility evidence where carryover may
+         *     later be considered." ``ema_crossover_signal`` exits on a fixed
+         *     decision-clock countdown (``EmaCrossoverSignalAlgorithm.commit_signal_decision``
+         *     sets ``_bars_until_exit = 5`` at entry). ``countdown_state_persistable``
+         *     records a real, checked fact about today's implementation, not an
+         *     aspiration: ``EmaCrossoverSignalAlgorithm.report_state_for_persistence``
+         *     returns ``None`` whenever the strategy is mid-position, so an in-flight
+         *     countdown cannot currently survive a Pause/Resume — carryover work must
+         *     either change that or treat mid-countdown Resume as unsupported.
+         */
+        ExitEligibilityContract: {
+            /** Countdown Decision Clocks */
+            countdown_decision_clocks: number;
+            /** Countdown State Persistable */
+            countdown_state_persistable: boolean;
+            /**
+             * Rule
+             * @default fixed_bar_count_countdown
+             * @constant
+             */
+            rule?: "fixed_bar_count_countdown";
         };
         /**
          * ExposureSlice
@@ -16947,6 +16984,46 @@ export interface components {
             parent_value: number | null;
         };
         /**
+         * NumericalProvenanceContract
+         * @description The Math Provenance Contract (CLAUDE.md #2/#5), sealed as program identity.
+         *
+         *     Mirrors the ``Formula``/``Reference``/``Canonical implementation``/
+         *     ``Validated against`` block already required by the
+         *     ``learn-ai-validation`` skill and present in
+         *     ``ema_crossover_signal.py``'s own module docstring; this is that same
+         *     fact, made part of the immutable seal rather than living only in prose
+         *     that could drift unnoticed. ``tolerance_atol``/``tolerance_rtol`` are
+         *     ``None`` at ``equivalence_level="bit_exact"`` — the trace/decision
+         *     identity in ``signal_program.py`` is Decimal-exact and SHA-256-compared,
+         *     not tolerance-compared; the documented ``1e-9`` absolute tolerance in
+         *     ``docs/references/reconciliations/ema-crossover-signal-lean-2026-07-18.md``
+         *     applies one level down, to the EMA/RSI *value* parity against LEAN.
+         */
+        NumericalProvenanceContract: {
+            /** Canonical Implementation */
+            canonical_implementation: string;
+            /**
+             * Equivalence Level
+             * @enum {string}
+             */
+            equivalence_level: "bit_exact" | "strict_float" | "behavioral";
+            /** Formula */
+            formula: string;
+            /**
+             * Parity Fixture Ids
+             * @default []
+             */
+            parity_fixture_ids?: string[];
+            /** Reference */
+            reference: string;
+            /** Tolerance Atol */
+            tolerance_atol?: number | null;
+            /** Tolerance Rtol */
+            tolerance_rtol?: number | null;
+            /** Validated Against */
+            validated_against: string;
+        };
+        /**
          * OHLCVBar
          * @description Single OHLCV bar.
          */
@@ -20858,6 +20935,64 @@ export interface components {
             trend_window_sessions: number;
         };
         /**
+         * SignalBarIntegrityContract
+         * @description Duplicate/gap/out-of-order, watermark, and session-close ownership facts.
+         *
+         *     PRD §11.1 lists these beside ``revision_policy`` (``SignalDataContract``)
+         *     as sealed identity, not runtime evidence. Today every field is a single
+         *     system-wide policy — not a per-program choice — enforced by two modules
+         *     outside this schema:
+         *
+         *     * ``app.services.source_bar_ledger.SourceBarLedger`` fails closed on a
+         *       same-identity-different-payload bar (``SOURCE_BAR_IDENTITY_CONFLICT``),
+         *       is idempotent on an exact repeat, fails closed on a non-monotonic
+         *       ``end_ms`` (``SOURCE_BAR_NON_MONOTONIC_LIVE``/``_HISTORY``), tolerates a
+         *       missing bar rather than filling or rejecting it, and refuses
+         *       ``append_history`` once live delivery has started for that
+         *       provider/symbol seam (``SOURCE_BAR_HISTORY_AFTER_LIVE`` — the
+         *       history/live watermark).
+         *     * ``app.services.bot_trade_strategy._signal_strategy_evaluations`` is the
+         *       one router that owns bucket closing: it force-flushes the trailing
+         *       partial consolidator bucket exactly at the canonical calendar's
+         *       ``session_close_ms_utc`` boundary rather than leaving it stranded
+         *       until the next session's bars arrive (FR-011).
+         *
+         *     A second policy would need its own Literal member and a per-program field
+         *     here, not a silent default change on these.
+         */
+        SignalBarIntegrityContract: {
+            /**
+             * Duplicate Policy
+             * @default reject_conflicting_payload_else_idempotent
+             * @constant
+             */
+            duplicate_policy?: "reject_conflicting_payload_else_idempotent";
+            /**
+             * Gap Policy
+             * @default tolerated_not_filled
+             * @constant
+             */
+            gap_policy?: "tolerated_not_filled";
+            /**
+             * History Live Watermark Policy
+             * @default history_before_live_monotonic_seam
+             * @constant
+             */
+            history_live_watermark_policy?: "history_before_live_monotonic_seam";
+            /**
+             * Out Of Order Policy
+             * @default reject_non_monotonic_end_ms
+             * @constant
+             */
+            out_of_order_policy?: "reject_non_monotonic_end_ms";
+            /**
+             * Session Close Ownership
+             * @default single_router_forced_flush_at_session_close
+             * @constant
+             */
+            session_close_ownership?: "single_router_forced_flush_at_session_close";
+        };
+        /**
          * SignalBehaviorMetricsResponse
          * @description Signal behavior analysis on active bars.
          */
@@ -20905,6 +21040,14 @@ export interface components {
              * @constant
              */
             early_close_policy?: "calendar_session_close";
+            /**
+             * Evaluation Modes
+             * @default [
+             *       "DECIDE",
+             *       "OBSERVE_ONLY"
+             *     ]
+             */
+            evaluation_modes?: ("DECIDE" | "OBSERVE_ONLY")[];
             /**
              * Pause Policy
              * @default OBSERVE_ONLY
@@ -21048,6 +21191,35 @@ export interface components {
             timespan?: "minute" | "hour" | "day";
             /** To Date */
             to_date: string;
+        };
+        /**
+         * SignalSeriesContract
+         * @description One named signal series a program consumes off the sealed data contract.
+         *
+         *     PRD §10.1/§11.1: "every signal series, field, and decision stream." A
+         *     program's ``data`` contract seals the *shared* provider/symbol/timeframe
+         *     pair every series reads from; this seals each named series drawn from
+         *     that shared stream — e.g. ``ema_fast``, ``ema_slow``, and ``rsi`` all read
+         *     ``field="close"`` off the same 15-minute decision bar. ``warmup_bars`` is
+         *     the series' own ``is_ready`` threshold (PRD §11.1 "readiness"): the
+         *     ``app.engine.indicators`` base class exposes ``is_ready`` as
+         *     ``samples >= period``, so an EMA's ``warmup_bars`` equals its period; RSI
+         *     overrides this to ``period + 1`` (one extra sample for the first delta).
+         */
+        SignalSeriesContract: {
+            /**
+             * Field
+             * @constant
+             */
+            field: "close";
+            /** Indicator */
+            indicator: string;
+            /** Name */
+            name: string;
+            /** Period */
+            period: number;
+            /** Warmup Bars */
+            warmup_bars: number;
         };
         /** SignalsRequest */
         SignalsRequest: {
