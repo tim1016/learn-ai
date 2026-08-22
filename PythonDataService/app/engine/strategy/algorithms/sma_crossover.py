@@ -281,6 +281,35 @@ class SmaCrossoverAlgorithm(Strategy):
         strategy believing it is flat while the broker still holds the
         position."""
         self._in_position = True
+        # Restoring the position is not enough: ``evaluate_signal_bar``
+        # already advanced the crossover relation to "short below long", so
+        # the next bar would see no *fresh* death cross and would not
+        # re-propose the EXIT — the strategy would hold real exposure until
+        # an entire golden-cross/death-cross cycle completed. The restore
+        # value is implied rather than remembered: an EXIT is proposed only
+        # on ``fresh_death_cross``, which requires the prior relation to
+        # have been "short above long", so it can only have been True.
+        self._prev_short_above_long = True
+
+    def discard_signal_decision(self, _bar: TradeBar, intent: SignalIntent | None) -> None:
+        """Restore the crossover relation a discarded EXIT would otherwise lose.
+
+        ``evaluate_signal_bar`` advances ``_prev_short_above_long`` to
+        describe the bar it just read, which is right for every settlement
+        except a discarded EXIT. The death cross that produced the intent has
+        already been consumed by that advance, so the next decision clock
+        sees no *fresh* death cross and never re-proposes the exit -- the
+        strategy keeps real exposure until an entire golden-cross/death-cross
+        cycle completes. See ``rollback_blocked_exit`` for the same restore
+        on the post-commit refusal path.
+
+        A discarded ENTER is deliberately NOT restored. Its golden cross was
+        a moment, not a level; re-proposing it on a later bar would open a
+        position on a signal that has gone stale. Losing an entry is the safe
+        direction; retaining exposure is not.
+        """
+        if intent is not None and intent.kind is SignalIntentKind.EXIT:
+            self._prev_short_above_long = True
 
     def on_force_flat(self) -> None:
         """Reset lifecycle bookkeeping to a clean flat slate.

@@ -33,7 +33,7 @@ from app.engine.execution.portfolio import Portfolio
 from app.engine.execution.signal_intent_executor import SignalIntentExecutionContext
 from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
-from app.engine.strategy.signal_intent import SignalIntent
+from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
 from app.engine.strategy.signal_program import EvaluationMode, Settlement, StageQuarantine
 
 # The custody surface is DERIVED, not hand-listed. ``rollback_blocked_entry``
@@ -52,29 +52,52 @@ from app.engine.strategy.signal_program import EvaluationMode, Settlement, Stage
 # of fixing the two instances.
 _ROLLBACK_METHODS = ("rollback_blocked_entry", "rollback_blocked_exit")
 
+# ...minus whatever the describe phase itself maintains. ``evaluate_signal_bar``
+# legitimately tracks *market relation* state on every bar it reads -- SMA's
+# ``_prev_short_above_long``, EMA's ``_prev_ema5_above_ema10`` -- and a program
+# may also restore that relation on discard, which puts the same name in both
+# sets. Holding such a name invariant across a run of discarded bars would be
+# asserting that the market never moved, so this test would fail on correct
+# code. Custody is the narrower thing only a commit may advance, so the
+# describe-maintained names are subtracted out.
+#
+# This does not silently drop coverage of the subtracted names: EMA's
+# ``_bars_until_exit`` preservation is pinned directly by
+# ``test_ema_signal_program.py``, and SMA's discarded-EXIT relation restore by
+# ``test_sma_discarded_exit_stays_reproposable`` below. Both are *behavioral*
+# assertions, which is the right shape for state that is supposed to move.
+_DESCRIBE_METHOD = "evaluate_signal_bar"
+
+
+def _assigned_self_attrs(strategy: object, method_name: str) -> frozenset[str]:
+    """Return the ``self.<attr>`` names one method of ``strategy`` assigns."""
+    method = getattr(type(strategy), method_name, None)
+    if method is None:
+        return frozenset()
+    names: set[str] = set()
+    tree = ast.parse(textwrap.dedent(inspect.getsource(method)))
+    for node in ast.walk(tree):
+        targets: list[ast.expr] = []
+        if isinstance(node, ast.Assign):
+            targets = list(node.targets)
+        elif isinstance(node, ast.AugAssign):
+            targets = [node.target]
+        for target in targets:
+            if (
+                isinstance(target, ast.Attribute)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "self"
+            ):
+                names.add(target.attr)
+    return frozenset(names)
+
 
 def _custody_surface(strategy: object) -> frozenset[str]:
-    """Return the ``self.<attr>`` names this strategy's rollback methods assign."""
-    names: set[str] = set()
+    """Names the rollback methods restore that the describe phase does not maintain."""
+    restored: set[str] = set()
     for method_name in _ROLLBACK_METHODS:
-        method = getattr(type(strategy), method_name, None)
-        if method is None:
-            continue
-        tree = ast.parse(textwrap.dedent(inspect.getsource(method)))
-        for node in ast.walk(tree):
-            targets: list[ast.expr] = []
-            if isinstance(node, ast.Assign):
-                targets = list(node.targets)
-            elif isinstance(node, ast.AugAssign):
-                targets = [node.target]
-            for target in targets:
-                if (
-                    isinstance(target, ast.Attribute)
-                    and isinstance(target.value, ast.Name)
-                    and target.value.id == "self"
-                ):
-                    names.add(target.attr)
-    return frozenset(names)
+        restored |= _assigned_self_attrs(strategy, method_name)
+    return frozenset(restored) - _assigned_self_attrs(strategy, _DESCRIBE_METHOD)
 
 
 class _RecordingExecutor:
@@ -184,3 +207,87 @@ def test_discarded_evaluation_leaves_position_custody_untouched(key: str) -> Non
         )
 
     assert staged_any, f"'{key}' never staged an evaluation; nothing was discarded"
+
+
+def _drive_until(
+    session: Any,
+    symbol: str,
+    width: int,
+    closes: list[str],
+    start: int,
+    kind: SignalIntentKind,
+) -> int:
+    """COMMIT bars until ``kind`` is proposed and committed; return its offset."""
+    for offset, close in enumerate(closes):
+        stage = session.advance(_bar(symbol, start + offset, width, close), mode=EvaluationMode.DECIDE)
+        assert not isinstance(stage, StageQuarantine), f"quarantined at offset {offset}"
+        session.settle(Settlement.COMMIT)
+        if any(intent.kind is kind for intent in stage.intents):
+            return offset
+    raise AssertionError(f"setup failed: {kind} was never proposed across {len(closes)} bars")
+
+
+def test_sma_discarded_exit_stays_reproposable() -> None:
+    """A DISCARDED death-cross EXIT must be re-proposed while the cross holds.
+
+    ``evaluate_signal_bar`` advances ``_prev_short_above_long`` to describe
+    the bar it just read. Before ``discard_signal_decision`` restored it, that
+    advance consumed the death cross even when the EXIT was never acted on:
+    the next clock computed ``fresh_death_cross = False`` and the strategy
+    kept its position -- real broker exposure -- until an entire
+    golden-cross/death-cross cycle completed. Pausing a bot across a death
+    cross therefore silently turned a decided exit into a held position.
+
+    This asserts the behaviour, not the attribute: the attribute is *supposed*
+    to move on every ordinary bar, so only its value across a discarded EXIT
+    is invariant.
+    """
+    registration = _STRATEGY_REGISTRY["sma_crossover"]
+    params = registration.param_schema()
+    program = registration.signal_program_factory(params)
+    strategy = program.strategy
+    session = program.session
+    width = session.timeframe_ms
+
+    strategy.ctx = StrategyContext(portfolio=Portfolio(initial_cash=Decimal("100000")))
+    strategy.initialize()
+    strategy.ctx.set_signal_intent_executor(_RecordingExecutor())
+
+    # Decline first so the seed bar records "short below long"; a monotonic
+    # ramp would seed "above" and never show a *fresh* golden cross.
+    falling_in = [str(300 - step * 2) for step in range(60)]
+    for offset, close in enumerate(falling_in):
+        stage = session.advance(_bar(params.symbol, offset + 1, width, close), mode=EvaluationMode.DECIDE)
+        assert not isinstance(stage, StageQuarantine)
+        session.settle(Settlement.COMMIT)
+    assert strategy._prev_short_above_long is False, "setup failed: decline did not seed short-below-long"
+
+    # Ramp up into a fresh golden cross and take the entry.
+    rising = [str(180 + step * 4) for step in range(80)]
+    _drive_until(session, params.symbol, width, rising, 200, SignalIntentKind.ENTER)
+    assert strategy._in_position, "setup failed: strategy is not holding a position"
+
+    # Fall until the death cross fires, and DISCARD that EXIT.
+    falling = [str(500 - step * 6) for step in range(80)]
+    exit_offset = None
+    for offset, close in enumerate(falling):
+        stage = session.advance(_bar(params.symbol, 400 + offset, width, close), mode=EvaluationMode.DECIDE)
+        assert not isinstance(stage, StageQuarantine)
+        if any(intent.kind is SignalIntentKind.EXIT for intent in stage.intents):
+            session.settle(Settlement.DISCARD)
+            exit_offset = offset
+            break
+        session.settle(Settlement.COMMIT)
+    assert exit_offset is not None, "setup failed: the decline never produced an EXIT to discard"
+    assert strategy._in_position, "a DISCARDED exit must leave the position held"
+
+    # The very next bar keeps short below long, so the exit is still owed.
+    stage = session.advance(
+        _bar(params.symbol, 400 + exit_offset + 1, width, falling[exit_offset + 1]),
+        mode=EvaluationMode.DECIDE,
+    )
+    assert not isinstance(stage, StageQuarantine)
+    assert any(intent.kind is SignalIntentKind.EXIT for intent in stage.intents), (
+        "the discarded EXIT was never re-proposed: the strategy consumed its death cross "
+        "while describing the bar, so it now holds exposure it has already decided to close."
+    )

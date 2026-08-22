@@ -34,6 +34,28 @@ def _entries_for(*strategy_keys: str) -> list[StrategyValidationEntry]:
     return [entry for entry in load_strategy_validation_entries(seeds) if entry.strategy_key in strategy_keys]
 
 
+def _synthetic_validated_entry(strategy_key: str) -> StrategyValidationEntry:
+    """Re-key a real, currently-accepted entry onto another strategy key.
+
+    The committed manifest seeds only two validated strategies; every other
+    key is validated at runtime by a human flagging it, which lands in the
+    gitignored ``artifacts/strategy_validation/flag_events.json``. A test
+    that reads a real entry for one of those keys therefore passes on a
+    developer machine that happens to have flagged it and fails in CI,
+    which has no such file. Re-keying an accepted entry keeps the row
+    deterministically validated wherever the suite runs.
+    """
+    entry = _accepted_deploy_entry()
+    event = entry.current_flag_event
+    assert event is not None
+    return entry.model_copy(
+        update={
+            "strategy_key": strategy_key,
+            "current_flag_event": event.model_copy(update={"strategy_key": strategy_key}),
+        }
+    )
+
+
 def _synthetic_blocked_entry(strategy_key: str) -> StrategyValidationEntry:
     """Force one real validated entry into a deterministic blocked state.
 
@@ -119,8 +141,12 @@ def test_strategy_views_admissible_modes_track_selectable(monkeypatch: pytest.Mo
     stale_proof_blocked = _synthetic_blocked_entry("deployment_validation")
     # rsi_mean_reversion is also a sealed Signal Program and is deliberately
     # left off the allowlist above, so it demonstrates the canary-blocked
-    # case distinctly from the stale-proof-blocked case.
-    (canary_blocked,) = _entries_for("rsi_mean_reversion")
+    # case distinctly from the stale-proof-blocked case. Its validated state
+    # is synthesized rather than read from the manifest: only two strategies
+    # are validated in the committed seed, so reading a real entry here would
+    # pass only on a machine whose runtime flag-events file happens to have
+    # flagged it.
+    canary_blocked = _synthetic_validated_entry("rsi_mean_reversion")
 
     rows = _strategy_views([accepted, stale_proof_blocked, canary_blocked], account_id=ACCT)
 

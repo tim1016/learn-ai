@@ -26,10 +26,10 @@
       "program_key": "sma_crossover",
       "program_version": "sma-crossover/v1",
       "golden_trace_root": "b0a136f7b485179bc37c7998df430480b94b0866d9bc58dbead636fa84a320e9",
-      "artifact_digest": "3065b6bf721627e1ee4768f48199941c8bc3f4f7c17cfc84a1ec15c9d314b0d8",
+      "artifact_digest": "14e64dbe0bdbcc0ef52970c08a626d671171ed6a85720dcf4cd95e73d1a4bd85",
       "qualification_suite": "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[sma_crossover]",
-      "qualified_at_ms": 1787425214526,
-      "receipt_hash": "682682aeece6c997fc9a4c59685542e575453bcf3b6fc53d57cf94f8467a6eec"
+      "qualified_at_ms": 1787435687261,
+      "receipt_hash": "df77eed01d73df212c412c0d0ee1f56f96695d7dad0c89552cb762afaf50ca6d"
     },
     {
       "schema_version": 1,
