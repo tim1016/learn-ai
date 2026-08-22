@@ -19,6 +19,7 @@ import { DualPaneChartComponent } from '../dual-pane-chart/dual-pane-chart.compo
 import { TradesTodayListComponent } from './trades-today-list.component';
 import { TraderMetricsComponent } from './trader-metrics.component';
 import { TraderBotBannerComponent } from './trader-bot-banner/trader-bot-banner.component';
+import { RecentDecisionsListComponent } from './recent-decisions-list/recent-decisions-list.component';
 
 /**
  * Trader lens (spec §6).
@@ -40,6 +41,7 @@ import { TraderBotBannerComponent } from './trader-bot-banner/trader-bot-banner.
     TradesTodayListComponent,
     TraderBotBannerComponent,
     TraderMetricsComponent,
+    RecentDecisionsListComponent,
   ],
   templateUrl: './trader-lens.component.html',
   styleUrl: './trader-lens.component.scss',
@@ -69,6 +71,8 @@ export class TraderLensComponent {
 
   protected readonly isLogOnly = computed(() => this.panel().mode === 'log_only');
   protected readonly isPaperExecution = computed(() => this.panel().mode === 'trade');
+  protected readonly isDryRun = computed(() => this.panel().mode === 'dry_run');
+  protected readonly recentDecisions = computed(() => this.panel().recent_decisions);
 
   protected readonly symbol = computed(() => this.panel().symbol);
 

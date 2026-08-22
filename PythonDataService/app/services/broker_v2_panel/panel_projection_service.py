@@ -18,7 +18,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
-from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
+from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
 from app.broker.alpaca.clerk.fills import project_instance_fills
 from app.broker.alpaca.clerk.models import ChannelHealth, ClerkEntryKind, ClerkStatus, OrderJournalEntry
 from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionReceipt
@@ -51,6 +51,10 @@ from app.schemas.run_admission import ProgramBuildAdmissionFact, RunAdmissionDec
 from app.schemas.signal_program_seal import SealedBotProgram
 from app.services.bot_binding_repository import ProgramBuildRunEvidence
 from app.services.bot_dry_run import DryRunActivity
+from app.services.broker_v2_panel.panel_authority_guard import (
+    default_authority_account_id,
+    reject_mixed_authority,
+)
 from app.services.broker_v2_panel.presented_actions import build_actions
 from app.services.broker_v2_panel.station_derivation import (
     STALE_THRESHOLD_MS,
@@ -415,7 +419,14 @@ def _recent_decision_views(
     ]
 
 
-def _recent_fill_views(sid: str, entries: list[OrderJournalEntry], *, limit: int = 8) -> list[RecentFillView]:
+def _recent_fill_views(
+    sid: str,
+    entries: list[OrderJournalEntry],
+    *,
+    limit: int = 8,
+    authority_account_id: str | None = None,
+    authority_kind: Literal["real_paper", "synthetic"] | None = None,
+) -> list[RecentFillView]:
     fills = project_instance_fills(sid, entries)
     return [
         RecentFillView(
@@ -425,6 +436,8 @@ def _recent_fill_views(sid: str, entries: list[OrderJournalEntry], *, limit: int
             quantity=fill.quantity,
             price=fill.fill_price,
             filled_at_ms=fill.filled_at_ms,
+            authority_account_id=authority_account_id,
+            authority_kind=authority_kind,
         )
         for fill in reversed(fills[-limit:])
     ]
@@ -531,6 +544,8 @@ def _recent_activity_views(
     decision_receipts: list[DecisionReceipt],
     dry_run_activity: list[DryRunActivity],
     *,
+    authority_account_id: str,
+    authority_kind: Literal["real_paper", "synthetic"],
     decision_causal_links: dict[int, DecisionCausalLinks] | None = None,
 ) -> tuple[list[RecentDecisionView], list[RecentFillView]]:
     """Project real or simulated activity behind one explicit mode boundary.
@@ -552,29 +567,56 @@ def _recent_activity_views(
     Simulated fills always come from the WAL (#1728 Gap 1 is about decision
     causal links, not fills — the WAL is Dry Run's genuine fill record; SQLite
     decision receipts carry no fill quantity/price).
+
+    ``authority_account_id``/``authority_kind`` name the one Clerk account
+    authority ``build_panel`` resolved this evidence cut from (issue #1729
+    AC #8). Every branch below stamps every row with these same values —
+    except the legacy WAL fallback, whose rows carry authority metadata
+    baked in at ``DryRunActivity`` construction time. Stamping uniformly
+    rather than trusting each branch to agree by construction is exactly
+    what lets ``panel_authority_guard.reject_mixed_authority`` catch a real
+    divergence (e.g. a caller accidentally handing this projector another
+    bot's synthetic activity) instead of only what convention makes probable.
     """
     if status.mode == "dry_run":
         if decision_receipts:
-            return (
+            decision_views, fill_views = (
                 _recent_decision_views(
                     decision_receipts,
                     causal_links=decision_causal_links,
                     simulated=True,
-                    authority_account_id=synthetic_account_id_for_strategy(
-                        status.strategy_instance_id
-                    ),
-                    authority_kind="synthetic",
+                    authority_account_id=authority_account_id,
+                    authority_kind=authority_kind,
                 ),
                 _dry_run_fill_views(dry_run_activity),
             )
-        return (
-            _dry_run_decision_views(dry_run_activity),
-            _dry_run_fill_views(dry_run_activity),
+        else:
+            decision_views, fill_views = (
+                _dry_run_decision_views(dry_run_activity),
+                _dry_run_fill_views(dry_run_activity),
+            )
+    else:
+        decision_views, fill_views = (
+            _recent_decision_views(
+                decision_receipts,
+                causal_links=decision_causal_links,
+                authority_account_id=authority_account_id,
+                authority_kind=authority_kind,
+            ),
+            _recent_fill_views(
+                status.strategy_instance_id,
+                entries,
+                authority_account_id=authority_account_id,
+                authority_kind=authority_kind,
+            ),
         )
-    return (
-        _recent_decision_views(decision_receipts, causal_links=decision_causal_links),
-        _recent_fill_views(status.strategy_instance_id, entries),
+    reject_mixed_authority(
+        authority_account_id=authority_account_id,
+        authority_kind=authority_kind,
+        decision_views=decision_views,
+        fill_views=fill_views,
     )
+    return decision_views, fill_views
 
 
 def _dry_run_last_bar_at_ms(activity: list[DryRunActivity]) -> int | None:
@@ -781,12 +823,26 @@ def build_panel(
     sealed_program: SealedBotProgram | None = None,
     program_build: ProgramBuildAdmissionFact | None = None,
     dry_run_activity: list[DryRunActivity] | None = None,
+    authority_account_id: str | None = None,
     market_pulse: MarketPulseView,
 ) -> BotPanelView:
     """Build the full panel view for one bot (§7).
 
     ``entries`` is the account order journal (read once). ``selected_transaction_ref``
     defaults to the bot's most recent transaction (§7.1).
+
+    ``authority_account_id`` names the exact Clerk account authority this
+    evidence cut (``recent_decisions``/``recent_fills``) was actually read
+    from. Callers with a selected SQLite facade (``panel_data_source.
+    _get_panel_with_entries_from_authority``) pass the facade's real
+    ``account_id`` so the row-level authority label can never drift from
+    which physically account-scoped repository the evidence came from — the
+    same account-namespace check that gates a repository open
+    (``ClerkSqliteRepository.open``/``DatabaseIdentityMismatch``) also backs
+    this label. Callers without a selected facade (every direct test in
+    ``tests/broker/v2panel/test_panel_projection.py``) omit it, and it falls
+    back to the Dry Run synthetic authority implied by ``status.mode`` /
+    ``status.strategy_instance_id``, or to ``account_id`` otherwise.
     """
     resolved_program_build = program_build or ProgramBuildAdmissionFact(
         state="NOT_APPLICABLE",
@@ -797,12 +853,16 @@ def build_panel(
     refs = transaction_refs_for_bot(status.strategy_instance_id, entries)
     transaction_ref = selected_transaction_ref or (refs[-1] if refs else None)
     latest_reconciliation = _latest_reconciliation_entry(entries)
+    # Ascending by seq (oldest first); `derive_stations` reads its own
+    # transaction-linked match out of this bounded window, and
+    # `_recent_activity_views` below reuses the identical fallback.
+    decision_receipts = recent_decisions or ([latest_decision] if latest_decision else [])
 
     stations = derive_stations(
         sid=status.strategy_instance_id,
         transaction_ref=transaction_ref,
         all_entries=entries,
-        latest_decision=latest_decision,
+        decisions=decision_receipts,
         latest_reconciliation=latest_reconciliation,
         now_ms=now_ms,
     )
@@ -856,12 +916,16 @@ def build_panel(
         resume_admission=resume_admission,
     )
 
-    decision_receipts = recent_decisions or ([latest_decision] if latest_decision else [])
+    resolved_authority_account_id = authority_account_id or default_authority_account_id(
+        status, account_id
+    )
     decision_views, fill_views = _recent_activity_views(
         status,
         entries,
         decision_receipts,
         activity,
+        authority_account_id=resolved_authority_account_id,
+        authority_kind=authority_kind_for_account(resolved_authority_account_id),
         decision_causal_links=decision_causal_links,
     )
     readiness_checks = _readiness_checks(actions, now_ms)

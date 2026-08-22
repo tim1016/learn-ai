@@ -100,6 +100,7 @@ from app.services.broker_v2_panel.sqlite_panel_source import (
     read_sqlite_panel_evidence,
 )
 from app.services.signal_program_admission import prove_running_program_build
+from app.services.sqlite_clerk_compat import active_sqlite_facade
 from app.services.strategy_validation_manifest import (
     StrategyValidationManifestError,
     load_strategy_validation_entries,
@@ -762,6 +763,7 @@ async def _get_panel_with_entries_from_authority(
         clerk_status,
         entries,
         account_id=resolved,
+        authority_account_id=authority_account_id,
         exposure=dict(economics.exposure),
         fills_today=economics.fills_today,
         realized_pnl_today=economics.realized_pnl_today,
@@ -796,7 +798,18 @@ async def _get_panel_with_entries_from_authority(
             bot_running=status.running,
         ),
     )
-    panel = adapt_sqlite_panel(panel, projection, economics=economics)
+    # The transaction-rail stored-key fallback (PRD Sec 19, issue #1729 AC #6/#7)
+    # needs the same repository `read_sqlite_panel_evidence` resolved internally
+    # for its reads; `facade` above can be `None` here for the primary (non
+    # Dry Run) authority, so re-resolve it the same way rather than skipping
+    # the fallback for the majority of real bots.
+    rail_facade = facade or active_sqlite_facade(broker)
+    panel = adapt_sqlite_panel(
+        panel,
+        projection,
+        economics=economics,
+        repository=rail_facade.repository if rail_facade is not None else None,
+    )
     return panel, entries, session_fills
 
 

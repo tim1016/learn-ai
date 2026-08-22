@@ -153,7 +153,14 @@ def hold_set_entry(
 
 
 def decision_receipt(
-    *, seq: int, ts_ms: int, outcome: DecisionOutcome, reason_code: str, bar_ref: str = "bar-1"
+    *,
+    seq: int,
+    ts_ms: int,
+    outcome: DecisionOutcome,
+    reason_code: str,
+    bar_ref: str = "bar-1",
+    order_ref: str = "",
+    intent_id: str = "",
 ) -> DecisionReceipt:
     return DecisionReceipt(
         seq=seq,
@@ -161,4 +168,6 @@ def decision_receipt(
         bar_ref=bar_ref,
         outcome=outcome,
         reason_code=reason_code,
+        order_ref=order_ref,
+        intent_id=intent_id,
     )

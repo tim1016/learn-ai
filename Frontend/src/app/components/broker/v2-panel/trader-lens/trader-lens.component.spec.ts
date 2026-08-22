@@ -287,6 +287,36 @@ describe('TraderLensComponent — trader evidence', () => {
   });
 });
 
+describe('TraderLensComponent — Dry Run evidence (issue #1729 AC #8)', () => {
+  it('shows the synthetic decision list instead of the trades-today rail', async () => {
+    const panel: BotPanelView = {
+      ...BASE_PANEL,
+      mode: 'dry_run',
+      recent_decisions: [
+        {
+          seq: 5,
+          recorded_at_ms: 1_753_800_000_000,
+          outcome: 'entered',
+          reason_code: 'CROSS_UP',
+          bar_ref: 'SPY@1753799999900',
+          order_ref: 'simulated:run-dry:1753799999900:ENTER',
+          simulated: true,
+          authority_account_id: 'sim:sid-001',
+          authority_kind: 'synthetic',
+        },
+      ],
+    };
+    const { container } = await render(TraderLensComponent, {
+      inputs: { panel, profile: PROFILE, liveChart: null, histChart: null },
+    });
+
+    expect(screen.getByText('Recent decisions')).toBeTruthy();
+    expect(screen.getByText('Synthetic')).toBeTruthy();
+    expect(container.querySelector('.trader-rail app-trades-today-list')).toBeNull();
+    expect(screen.queryByText('This bot records decisions but does not place broker orders.')).toBeNull();
+  });
+});
+
 describe('TraderLensComponent — live fallback chip', () => {
   it('shows overlay notice message when live bars unavailable', async () => {
     const liveChart: ChartLiveResponse = {

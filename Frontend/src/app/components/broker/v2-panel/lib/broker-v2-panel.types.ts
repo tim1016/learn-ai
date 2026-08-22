@@ -50,6 +50,14 @@ export type PanelAction = components['schemas']['PanelAction'];
 export type PrimaryActionByLens = components['schemas']['PrimaryActionByLens'];
 
 /**
+ * `authority_kind` names the exact Clerk account authority (real Paper vs
+ * one isolated Dry Run `sim:` account) this row was read from — never both
+ * at once (issue #1729 AC #8).
+ */
+export type RecentDecisionView = components['schemas']['RecentDecisionView'];
+export type RecentFillView = components['schemas']['RecentFillView'];
+
+/**
  * One `PanelActionButtonComponent` trigger event. The reason remains nullable
  * in the transport contract; current presented actions do not collect one.
  */

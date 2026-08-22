@@ -37,6 +37,8 @@
         [feeFidelity]="profile().fee_fidelity"
         [tradingDateMs]="tradingDateMs()"
       />
+    } @else if (isDryRun()) {
+      <app-recent-decisions-list [decisions]="recentDecisions()" />
     } @else if (isLogOnly()) {
       <section class="observation-note" role="status">
         <strong>Observation only</strong>
