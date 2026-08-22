@@ -96,6 +96,19 @@ from tests.broker.v2panel.fixtures import (
 
 _NOW = 1_700_000_000_000
 
+# _status()'s default fixture strategy. Must stay a strategy with no
+# registered Signal Program: _default_program_build() below fails closed
+# (deliberately, per ADR 0043 Finding 1) the instant a named strategy
+# becomes sealed with no explicit program_build evidence supplied, and this
+# module never supplies that evidence -- almost every test in this file
+# relies on the truthful NOT_APPLICABLE default. "deployment_validation"
+# was that strategy until it was promoted through the governed Signal
+# Program seam (issue #1730 Slice 5); "spy_orb" is a genuinely still-
+# unsealed compatibility strategy (no signal_program_factory) with an
+# equally parameter-free default, so it is a clean drop-in.
+assert _STRATEGY_REGISTRY["spy_orb"].signal_program_factory is None
+_UNSEALED_STRATEGY_KEY = "spy_orb"
+
 _MARKET_PULSE = MarketPulseView(
     session="OPEN",
     market_state="TRADABLE",
@@ -170,10 +183,12 @@ def _status(
     checkpoint_exposure: dict[str, float] | None = None,
     checkpoint_matches: bool = False,
     mode: Literal["log_only", "dry_run", "trade"] = "log_only",
+    strategy_key: str = _UNSEALED_STRATEGY_KEY,
 ) -> BotStatusView:
     resolved_desired_state = desired_state or ("RUNNING" if running else "STOPPED")
     return BotStatusView(
         strategy_instance_id=SID,
+        strategy_key=strategy_key,
         broker="alpaca",
         symbol="SPY",
         mode=mode,
@@ -237,14 +252,14 @@ def _default_program_build(strategy_key: str) -> ProgramBuildAdmissionFact:
     ``build_panel`` requires real evidence for every call — it must never
     guess (see the "require the argument" fix on its docstring). Every
     fixture in this module uses
-    ``_status()``'s default ``strategy_key`` ("deployment_validation"), which
-    has no registered Signal Program (``app/engine/strategy/registry.py``),
-    so ``NOT_APPLICABLE`` is the actually-true state here, not a fabricated
-    placeholder. A fixture naming a strategy that DOES have a registered
-    Signal Program (e.g. "ema_crossover_signal") has no truthful default —
-    missing evidence for it is ``UNPROVEN``, never ``NOT_APPLICABLE`` — so
-    such a test must pass ``program_build`` explicitly instead of relying on
-    this default.
+    ``_status()``'s default ``strategy_key`` (``_UNSEALED_STRATEGY_KEY``,
+    "spy_orb"), which has no registered Signal Program
+    (``app/engine/strategy/registry.py``), so ``NOT_APPLICABLE`` is the
+    actually-true state here, not a fabricated placeholder. A fixture naming
+    a strategy that DOES have a registered Signal Program (e.g.
+    "ema_crossover_signal") has no truthful default — missing evidence for
+    it is ``UNPROVEN``, never ``NOT_APPLICABLE`` — so such a test must pass
+    ``program_build`` explicitly instead of relying on this default.
     """
     registration = _STRATEGY_REGISTRY.get(strategy_key)
     if registration is None or registration.signal_program_factory is None:
@@ -1144,7 +1159,7 @@ def test_panel_composes_cards_rail_and_actions() -> None:
         "reconcile_now",
     }
     assert panel.mission_verdict.state == "working"
-    assert panel.strategy_key == "deployment_validation"
+    assert panel.strategy_key == _UNSEALED_STRATEGY_KEY
     assert panel.exposure == {"SPY": 100.0}
     assert panel.recent_decisions[0].reason_code == "CROSS_UP"
     assert {check.operation for check in panel.readiness_checks} == action_ids
