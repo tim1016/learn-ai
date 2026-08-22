@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from app.engine.live.identity import strategy_instance_artifact_dir
 from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
 from app.schemas.bot_lifecycle import BotDutyOutcomeKind
+from app.schemas.canary_admission import CanaryRollbackDecision
 
 
 class BotLifecycleStateCorruptError(RuntimeError):
@@ -54,6 +55,11 @@ class BotDutyOutcome(BaseModel):
     reason_code: str = Field(min_length=1, max_length=128)
     recorded_at_ms: int = Field(ge=0)
     run_id: str | None = None
+    # #1729 AC10: present only for an operator Stop of a canary (Signal-
+    # Program-backed trade-mode) instance -- see
+    # ``app.services.canary_admission.evaluate_canary_rollback``. Never set
+    # for a crash, an unverified exit, a non-canary bot, or Dry Run.
+    canary_rollback: CanaryRollbackDecision | None = None
 
 
 class BotLifecycleStateRecord(BaseModel):

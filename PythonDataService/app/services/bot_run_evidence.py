@@ -152,6 +152,7 @@ class BotRunEvidenceService:
                 reason_code=outcome.reason_code,
                 recorded_at_ms=outcome.recorded_at_ms,
                 crash_diagnostic=crash_diagnostic,
+                canary_rollback=outcome.canary_rollback,
             )
         )
 
@@ -243,6 +244,7 @@ class BotRunEvidenceService:
                 recorded_at_ms=outcome.recorded_at_ms,
                 run_id=outcome.run_id,
                 crash_diagnostic=outcome.crash_diagnostic,
+                canary_rollback=outcome.canary_rollback,
             )
             if outcome is not None
             else self._current_lifecycle_outcome(record, is_current=is_current)
@@ -278,4 +280,5 @@ class BotRunEvidenceService:
             reason_code=lifecycle.duty_outcome.reason_code,
             recorded_at_ms=lifecycle.duty_outcome.recorded_at_ms,
             run_id=lifecycle.duty_outcome.run_id,
+            canary_rollback=lifecycle.duty_outcome.canary_rollback,
         )

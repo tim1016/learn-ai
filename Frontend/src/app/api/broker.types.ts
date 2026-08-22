@@ -8537,6 +8537,7 @@ export interface components {
          * @description Immutable terminal outcome and optional crash evidence for one run.
          */
         BotRunTerminalOutcomeView: {
+            canary_rollback?: components["schemas"]["CanaryRollbackDecision"] | null;
             crash_diagnostic?: components["schemas"]["BotCrashDiagnostic"] | null;
             /**
              * Kind
@@ -9578,6 +9579,34 @@ export interface components {
             success: boolean;
             /** Ticker */
             ticker: string;
+        };
+        /**
+         * CanaryRollbackDecision
+         * @description Whether stopping one canary run is admitted at a Clerk-proved boundary.
+         *
+         *     A rollback is refused outright, not merely recorded, when the Clerk
+         *     cannot prove the resulting position is flat or an explicitly approved
+         *     carried exposure. This differs from an ordinary Stop, which always
+         *     persists an honest checkpoint even when custody is unprovable.
+         */
+        CanaryRollbackDecision: {
+            /** Allowed */
+            allowed: boolean;
+            /** Evaluated At Ms */
+            evaluated_at_ms: number;
+            /** Explanation */
+            explanation: string;
+            /** Next Step */
+            next_step: string | null;
+            /** Reason Code */
+            reason_code: string;
+            /**
+             * Stop Outcome
+             * @enum {string}
+             */
+            stop_outcome: "STOPPED_FLAT" | "STOPPED_WITH_APPROVED_ATTRIBUTED_EXPOSURE" | "STOP_REQUIRES_FLATTEN" | "STOPPED_CUSTODY_UNPROVABLE";
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
         };
         /**
          * CandidateFoldEvidence

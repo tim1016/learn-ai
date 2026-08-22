@@ -10,8 +10,9 @@ from typing import Literal
 from app.engine.live.bot_lifecycle_state import BotDutyOutcome
 from app.engine.live.desired_state import DesiredState, DesiredStateRepo
 from app.schemas.bot_run_evidence import BotCrashDiagnostic
+from app.schemas.canary_admission import CanaryRollbackDecision
 from app.services.bot_binding_repository import BrokerBotBinding
-from app.services.bot_carryover import prove_stop_outcome
+from app.services.bot_carryover import StopCustodyOutcome, prove_stop_outcome
 from app.services.bot_clerk_lifecycle import commit_stop_before_task_cancel
 from app.services.bot_crash_diagnostic import capture_bot_crash_diagnostic
 from app.services.bot_run_evidence import PROVISIONAL_STOP_REASON_CODE, BotRunEvidenceService
@@ -176,6 +177,7 @@ class BotRunTerminalRecorder:
         binding: BrokerBotBinding,
         *,
         reason_code: str,
+        canary_rollback: CanaryRollbackDecision | None = None,
     ) -> None:
         """Replace provisional stop evidence with the Clerk-proven outcome."""
         outcome = BotDutyOutcome(
@@ -183,6 +185,7 @@ class BotRunTerminalRecorder:
             reason_code=reason_code,
             recorded_at_ms=self._now_ms(),
             run_id=binding.run_id,
+            canary_rollback=canary_rollback,
         )
         self._run_evidence.record_terminal(
             binding.strategy_instance_id,
@@ -197,7 +200,7 @@ async def prove_terminal_stop_outcome(
     *,
     checkpoint_path: Path,
     now_ms: Callable[[], int],
-) -> str:
+) -> StopCustodyOutcome:
     """Obtain fresh Clerk custody and persist the stop checkpoint."""
     from app.broker.alpaca.clerk import get_alpaca_clerk
 

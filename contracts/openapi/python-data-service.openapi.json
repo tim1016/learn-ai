@@ -7168,6 +7168,16 @@
         "additionalProperties": false,
         "description": "Immutable terminal outcome and optional crash evidence for one run.",
         "properties": {
+          "canary_rollback": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CanaryRollbackDecision"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "crash_diagnostic": {
             "anyOf": [
               {
@@ -10054,6 +10064,65 @@
           "ticker"
         ],
         "title": "CalculateIndicatorsResponse",
+        "type": "object"
+      },
+      "CanaryRollbackDecision": {
+        "additionalProperties": false,
+        "description": "Whether stopping one canary run is admitted at a Clerk-proved boundary.\n\nA rollback is refused outright, not merely recorded, when the Clerk\ncannot prove the resulting position is flat or an explicitly approved\ncarried exposure. This differs from an ordinary Stop, which always\npersists an honest checkpoint even when custody is unprovable.",
+        "properties": {
+          "allowed": {
+            "title": "Allowed",
+            "type": "boolean"
+          },
+          "evaluated_at_ms": {
+            "minimum": 0.0,
+            "title": "Evaluated At Ms",
+            "type": "integer"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "next_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Step"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "stop_outcome": {
+            "enum": [
+              "STOPPED_FLAT",
+              "STOPPED_WITH_APPROVED_ATTRIBUTED_EXPOSURE",
+              "STOP_REQUIRES_FLATTEN",
+              "STOPPED_CUSTODY_UNPROVABLE"
+            ],
+            "title": "Stop Outcome",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_instance_id",
+          "allowed",
+          "reason_code",
+          "explanation",
+          "next_step",
+          "stop_outcome",
+          "evaluated_at_ms"
+        ],
+        "title": "CanaryRollbackDecision",
         "type": "object"
       },
       "CandidateFoldEvidence": {
