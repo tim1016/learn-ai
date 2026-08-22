@@ -27,10 +27,6 @@ from app.broker.alpaca.clerk.sqlite.decision_receipts import (
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.portfolio import Portfolio
 from app.engine.execution.signal_intent_executor import SignalIntentExecutionContext
-from app.engine.strategy.algorithms.deployment_validation import (
-    DeploymentDecision,
-    DeploymentValidationDecisionKernel,
-)
 from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
@@ -61,10 +57,6 @@ logger = logging.getLogger(__name__)
 _EFFECT_PURPOSE_BY_INTENT = {
     SignalIntentKind.ENTER: EffectPurpose.ENTER,
     SignalIntentKind.EXIT: EffectPurpose.EXIT,
-}
-_INTENT_BY_DEPLOYMENT_DECISION = {
-    DeploymentDecision.ENTER: SignalIntentKind.ENTER,
-    DeploymentDecision.EXIT: SignalIntentKind.EXIT,
 }
 # Carryover is globally disabled until a future, separately reviewed slice can
 # prove replay equivalence, retained open-cycle coverage, and first-future-
@@ -112,8 +104,11 @@ class StrategyEvaluation:
     crash_recovered: bool = False
     # The full canonical trace this evaluation staged, when the strategy is
     # a registered Signal Program (`registration.signal_program_factory` is
-    # not `None`). `None` for compatibility-mode strategies with no
-    # SignalSession (e.g. `deployment_validation`). Lets a caller that needs
+    # not `None`). `None` for a compatibility-mode strategy with no
+    # SignalSession -- every strategy in `_STRATEGY_EVALUATION_STREAMS` is a
+    # registered Signal Program today (issue #1730 Slice 5), so this is
+    # currently vacuous, but a future non-Signal-Program addition to that
+    # dict would again produce `None` here. Lets a caller that needs
     # the complete decision-meaning payload -- not just the identity/intents
     # subset above -- read it without re-deriving strategy state. Shadow-mode
     # trace-parity comparison (issue #1729 AC #2) is the first such caller;
@@ -393,42 +388,6 @@ def _evaluation_mode_for(feed: MarketDataFeed, bar: MarketDataBar) -> Evaluation
         return EvaluationMode.DECIDE
 
 
-async def _deployment_validation_evaluations(
-    binding: BrokerBotBinding,
-    feed: MarketDataFeed,
-    captured_decisions: Mapping[str, str] | None,
-) -> AsyncIterator[StrategyEvaluation]:
-    del captured_decisions  # no SignalSession here to recover a crash candidate from
-    kernel = DeploymentValidationDecisionKernel()
-    async for bar in feed.stream_bars(binding.symbol, use_rth=binding.use_rth):
-        decision = kernel.on_closed_bar(
-            end_ms=bar.end_ms,
-            open_price=bar.open,
-            close_price=bar.close,
-        )
-        kind = _INTENT_BY_DEPLOYMENT_DECISION.get(decision)
-        intents = (
-            ()
-            if kind is None
-            else (
-                SignalIntent(
-                    kind=kind,
-                    bar_close_ms=bar.end_ms,
-                    intended_price=bar.close,
-                ),
-            )
-        )
-        yield StrategyEvaluation(
-            bar=bar,
-            evaluation_id=_generic_evaluation_id(binding, bar.end_ms),
-            decision_bar_close_ms=bar.end_ms,
-            intents=intents,
-            rollback_blocked_entry=kernel.rollback_blocked_entry,
-            rollback_blocked_exit=kernel.rollback_blocked_exit,
-            evaluation_mode=_evaluation_mode_for(feed, bar),
-        )
-
-
 def _build_signal_strategy(
     strategy_key: str,
     symbol: str,
@@ -675,7 +634,7 @@ _StrategyEvaluationStream = Callable[
     AsyncIterator[StrategyEvaluation],
 ]
 _STRATEGY_EVALUATION_STREAMS: dict[str, _StrategyEvaluationStream] = {
-    "deployment_validation": _deployment_validation_evaluations,
+    "deployment_validation": _signal_strategy_evaluations,
     "ema_crossover_signal": _signal_strategy_evaluations,
     "sma_crossover": _signal_strategy_evaluations,
     "rsi_mean_reversion": _signal_strategy_evaluations,

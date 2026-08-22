@@ -248,6 +248,7 @@ def test_projection_retries_when_sqlite_revision_changes_during_file_write(
 @pytest.mark.parametrize("mode", ["trade", "dry_run", "log_only"])
 async def test_every_alpaca_mode_commits_sqlite_duty_before_projection(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     mode: Literal["trade", "dry_run", "log_only"],
 ) -> None:
     repo = ClerkSqliteRepository.initialize(
@@ -264,6 +265,15 @@ async def test_every_alpaca_mode_commits_sqlite_duty_before_projection(
         supported_broker_ids=frozenset({"alpaca"}),
         start_custody_guard=clerk.start_admission_snapshot,
         now_ms=now_ms_utc,
+    )
+    # The default deployed strategy ("deployment_validation") is a
+    # registered Signal Program (issue #1730 Slice 5) whose real build now
+    # proves PROVEN, so a `mode="trade"` deploy needs its own canary
+    # allowlist entry for this fixture's account -- unrelated to what this
+    # test itself is about (duty commit ordering before projection).
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("deployment_validation", "PA-TEST")}),
     )
     try:
         deployed = await registry.deploy(

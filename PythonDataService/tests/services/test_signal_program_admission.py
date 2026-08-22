@@ -206,15 +206,21 @@ def test_committed_receipt_matches_current_artifacts_and_golden_root() -> None:
     manifest = ProgramBuildQualificationManifest.model_validate_json(
         DEFAULT_QUALIFICATION_MANIFEST.read_text(encoding="utf-8")
     )
+    # The manifest is written sorted alphabetically by program_key
+    # (scripts/run_signal_program_build_qualification.py) -- not indexed by
+    # position, which "deployment_validation" (issue #1730 Slice 5's last
+    # promotion) would silently break by sorting before
+    # "ema_crossover_signal" and displacing it from receipts[0].
+    committed = next(receipt for receipt in manifest.receipts if receipt.program_key == "ema_crossover_signal")
 
     generated = qualification_receipt_payload(
         program_key="ema_crossover_signal",
         contract=contract,
-        qualified_at_ms=manifest.receipts[0].qualified_at_ms,
-        qualification_suite=manifest.receipts[0].qualification_suite,
+        qualified_at_ms=committed.qualified_at_ms,
+        qualification_suite=committed.qualification_suite,
     )
 
-    assert manifest.receipts[0].model_dump(mode="json") == generated
+    assert committed.model_dump(mode="json") == generated
 
 
 def test_tampered_qualification_receipt_fails_closed(tmp_path: Path) -> None:

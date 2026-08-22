@@ -288,8 +288,31 @@ class OrbParams(StrategyParamsBase):
 class DeploymentValidationParams(StrategyParamsBase):
     """Deployment-validation strategy with configurable signal/trade tickers."""
 
+    # FR-002: versions this schema's own legal type/unit/range contract —
+    # sealed as ``ConfiguredSignalProgramSeal.parameter_schema_version`` so a
+    # future change to this schema's fields is a provable identity change
+    # without duplicating every bound into the seal itself. Mirrors
+    # ``SmaCrossoverParams.PARAMETER_SCHEMA_VERSION``'s pattern.
+    PARAMETER_SCHEMA_VERSION: ClassVar[str] = "deployment-validation-params/v1"
+
     symbol: str = Field("SPY", min_length=1, max_length=20)
     trade_symbol: str | None = Field(None, min_length=1, max_length=20)
+
+    @model_validator(mode="after")
+    def _default_trade_symbol_to_signal_symbol(self) -> DeploymentValidationParams:
+        # Mirrors DeploymentValidationConsecutiveGreen.__init__'s own
+        # ``(trade_symbol or symbol)`` fallback. Signal Program admission
+        # (app/services/signal_program_admission.py::build_start_program_seal)
+        # resolves and seals every field of this model, including a hidden
+        # one left at its default -- ResolvedSignalParameter.value has no
+        # legal ``None`` variant (str | int | float | bool only), so an
+        # unresolved ``None`` here would crash seal construction with a
+        # Pydantic ValidationError the instant this became a registered
+        # Signal Program. Resolving the real fallback value here, once,
+        # keeps the sealed identity honest instead of sealing a sentinel.
+        if self.trade_symbol is None:
+            self.trade_symbol = self.symbol
+        return self
 
 
 class EmaCrossoverOptionsParams(StrategyParamsBase):
@@ -877,6 +900,34 @@ def _build_spy_strategy_c_signal_program(params: StrategyParamsBase) -> SignalPr
         program_key=_SPY_C_SIGNAL_PROGRAM_KEY,
         program_version=_SPY_C_SIGNAL_PROGRAM_VERSION,
         timeframe_ms=decision_timeframe_ms_for(typed, qualified_ms=15 * 60_000),
+    )
+    strategy.signal_program = program
+    return program
+
+
+# Same pattern as the identities above (issue #1730 Slice 5, last promotion):
+# declared once here, referenced by both the construction seam and the
+# registry contract below.
+_DEPLOYMENT_VALIDATION_SIGNAL_PROGRAM_KEY = "deployment_validation"
+_DEPLOYMENT_VALIDATION_SIGNAL_PROGRAM_VERSION = "deployment-validation/v1"
+
+
+def _build_deployment_validation_signal_program(params: StrategyParamsBase) -> SignalProgram:
+    """Construct the sole broker-neutral Deployment Validation Signal Program."""
+    typed = params
+    assert isinstance(typed, DeploymentValidationParams)
+    strategy = DeploymentValidationConsecutiveGreen(
+        symbol=typed.symbol,
+        trade_symbol=typed.trade_symbol,
+    )
+    program = SignalProgram.create(
+        strategy,
+        program_key=_DEPLOYMENT_VALIDATION_SIGNAL_PROGRAM_KEY,
+        program_version=_DEPLOYMENT_VALIDATION_SIGNAL_PROGRAM_VERSION,
+        # This program's decision clock IS the raw minute bar -- there is no
+        # consolidator/resolution parameter to derive it from (unlike
+        # sma_crossover's own configurable timeframe_ms above).
+        timeframe_ms=60_000,
     )
     strategy.signal_program = program
     return program
@@ -1666,6 +1717,103 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     "deployment_validation": StrategyRegistration(
         display_name="Deployment Validation",
         class_name="DeploymentValidationConsecutiveGreen",
+        signal_program_contract=SignalProgramContract(
+            program_version=_DEPLOYMENT_VALIDATION_SIGNAL_PROGRAM_VERSION,
+            protocol_version=SignalSession.PROTOCOL_VERSION,
+            parameter_schema_version=DeploymentValidationParams.PARAMETER_SCHEMA_VERSION,
+            golden_trace_root="5dca9fde8269386367e9d12b5f22a4caaa11c20d93ae44094e62a91c461d9ce8",
+            provider="polygon",
+            base_timeframe_ms=60_000,
+            # This program's decision clock IS the raw minute bar -- there is
+            # no consolidated resolution, unlike every other promoted
+            # program in this slice.
+            decision_timeframe_ms=60_000,
+            # No rolling indicator window: DeploymentValidationConsecutiveGreen
+            # resets its green-streak detector and hold countdown every
+            # session (_reset_day(), called the instant on_minute_bar sees a
+            # new calendar date). There is nothing to warm up across days.
+            warmup_lookback_days=0,
+            # Not indicator-driven -- evaluate_signal_bar reads only
+            # bar.open/bar.close (a green-bar pattern) and the calendar-derived
+            # session window, so there is no named series to seal here. An
+            # empty tuple states that honestly rather than inventing one.
+            signals=(),
+            decision_streams=tuple(kind.value for kind in SignalIntentKind),
+            bar_integrity=SignalBarIntegrityContract(),
+            # evaluate_signal_bar's exit branch counts down
+            # self._bars_until_exit_signal from _BARS_FROM_ENTRY_FILL_TO_EXIT_SIGNAL
+            # (3, set by commit_signal_decision at the ENTER decision clock --
+            # not deferred to on_order_event's fill, which the live adapter
+            # never calls; see that method's docstring) to zero across
+            # subsequent decision clocks -- a fixed hold, not a level-true
+            # relation. countdown_state_persistable=False: this
+            # strategy has not implemented report_state_for_persistence /
+            # restore_state_from_persistence / validate_state_payload at all
+            # (Strategy's base defaults apply unchanged; see
+            # test_is_not_warm_startable / test_satisfies_live_persistence_contract
+            # in tests/engine/test_deployment_validation_strategy.py), so no
+            # state -- flat or mid-countdown -- currently survives a
+            # Pause/Resume.
+            exit_eligibility=ExitEligibilityContract(
+                rule="fixed_bar_count_countdown",
+                countdown_decision_clocks=3,
+                countdown_state_persistable=False,
+            ),
+            numerical_provenance=NumericalProvenanceContract(
+                formula=(
+                    "Long-only. Starting 15 minutes after the session's scheduled open, detect two "
+                    "consecutive green minute bars (close > open) while flat; on the second, enter. "
+                    "Hold for 3 decision clocks after the entry fill, then exit. 15 minutes before the "
+                    "session's scheduled close, stop detecting new entries and flatten any open position."
+                ),
+                reference=(
+                    "Internal strategy specification from user session 2026-06-02; half-day cutoff "
+                    "contract decided in #1672 -- see "
+                    "docs/references/deployment-validation-consecutive-green.md. No LEAN or TradingView "
+                    "reconciliation exists for this promotion -- Polygon live data is unavailable, so "
+                    "per PRD direction this program is qualified against its own deterministic replay "
+                    "of the committed cross-engine-study cells (Polygon-captured one-minute bars) only, "
+                    "with no cross-engine parity claim."
+                ),
+                canonical_implementation=(
+                    "app/engine/strategy/algorithms/deployment_validation.py::"
+                    "DeploymentValidationConsecutiveGreen"
+                ),
+                validated_against=(
+                    "tests/engine/test_deployment_validation_strategy.py; "
+                    "tests/engine/strategy/test_deployment_validation_signal_program.py; "
+                    "tests/engine/strategy/test_signal_program_qualification_matrix.py::"
+                    "test_validated_settings_corpus_has_a_pinned_trace_root[deployment_validation]"
+                ),
+                # The trace/decision identity is Decimal-exact and
+                # SHA-256-compared (signal_program.py), not
+                # tolerance-compared -- same self-consistency-only posture as
+                # sma_crossover/spy_strategy_c (no
+                # tolerance_atol/tolerance_rtol/parity_fixture_ids): nothing
+                # beyond this corpus's own replay has been established for
+                # this promotion.
+                equivalence_level="bit_exact",
+            ),
+            parameter_units={
+                "symbol": "ticker",
+                "trade_symbol": "ticker",
+            },
+            # Not indicator-driven: beyond the always-injected symbol, there
+            # is no additional tunable this contract pins as validated.
+            validated_settings={},
+            validated_symbols=("AAPL", "QQQ", "SPY", "TSLA"),
+            artifact_paths=(
+                "app/engine/strategy/algorithms/deployment_validation.py",
+                "app/engine/strategy/base.py",
+                "app/engine/strategy/signal_intent.py",
+                "app/engine/strategy/signal_program.py",
+                "app/engine/consolidators/trade_bar_consolidator.py",
+                "app/engine/data/trade_bar.py",
+                "app/engine/live/indicator_state.py",
+                "app/lean_sidecar/trading_calendar.py",
+                "app/utils/timestamps.py",
+            ),
+        ),
         description=(
             "Minute-bar lifecycle validation strategy. Starting with the "
             "09:45 ET minute close, it watches for two consecutive green "
@@ -1725,10 +1873,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         strategy_bars=StrategyBarCadence("minute", 1),
         hidden_params={"trade_symbol"},
         action_plan_contract="single_long_stock",
-        build=lambda p: DeploymentValidationConsecutiveGreen(
-            symbol=p.symbol,  # type: ignore[attr-defined]
-            trade_symbol=p.trade_symbol,  # type: ignore[attr-defined]
-        ),
+        build=lambda p: _build_deployment_validation_signal_program(p).strategy,  # type: ignore[return-value]
+        signal_program_factory=_build_deployment_validation_signal_program,
     ),
     "spy_ema_crossover_options": StrategyRegistration(
         display_name="EMA Crossover Options",

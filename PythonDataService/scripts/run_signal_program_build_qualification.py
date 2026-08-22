@@ -106,6 +106,10 @@ _QUALIFICATION_SUITES: dict[str, str] = {
         "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
         "[spy_strategy_c]"
     ),
+    "deployment_validation": (
+        "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
+        "[deployment_validation]"
+    ),
 }
 
 # --- Signal-decision digest closure (issue #1728 defect 2) ----------------
@@ -239,6 +243,23 @@ _SPY_C_SIGNAL_DECISION_CLOSURE_EXCLUSIONS: dict[str, str] = _closure_exclusions(
     insight_manager='Reached only via StrategyContext.emit_insight(), never called by RsiRangeStrategy; not consulted by evaluate_signal_bar() either way.',
 )
 
+# Same triage, for `deployment_validation`'s own closure (issue #1730 Slice
+# 5, last promotion). Its decision math never touches portfolio state or the
+# Insight framework at all — evaluate_signal_bar reads only bar.open/
+# bar.close and the calendar-derived session window, and
+# commit_signal_decision calls ctx.set_holdings/ctx.liquidate directly
+# (instrument_surface="explicit") rather than ctx.emit_signal_intent or
+# ctx.emit_insight — but portfolio.py, insight.py, and insight_manager.py
+# are still transitively reached through strategy/base.py's own
+# general, strategy-agnostic imports (StrategyContext holds a Portfolio and
+# exposes emit_insight()), the same way every other program's closure reaches
+# them.
+_DEPLOYMENT_VALIDATION_SIGNAL_DECISION_CLOSURE_EXCLUSIONS: dict[str, str] = _closure_exclusions(
+    portfolio='Cash/holdings/fill accounting reached only through StrategyContext.set_holdings()/liquidate(), both called from commit_signal_decision() after _build_trace() has already produced the immutable EvaluationTrace; evaluate_signal_bar() reads only bar.open/bar.close, never portfolio state, to compute its facts.',
+    insight="Reached only via strategy/base.py's StrategyContext.emit_insight() plumbing, which DeploymentValidationConsecutiveGreen never calls at all (no Insight is ever constructed) — general, strategy-agnostic import surface, not decision math this program touches.",
+    insight_manager='Reached only via StrategyContext.emit_insight(), never called by DeploymentValidationConsecutiveGreen; not consulted by evaluate_signal_bar() either way.',
+)
+
 
 # One place the matrix test reads to find a program's triage, so a program
 # added later is covered by the closure matrix the moment it appears here
@@ -250,6 +271,7 @@ _CLOSURE_EXCLUSIONS_BY_PROGRAM: dict[str, dict[str, str]] = {
     "spy_strategy_a": _SPY_STRATEGY_A_SIGNAL_DECISION_CLOSURE_EXCLUSIONS,
     "spy_strategy_b": _SPY_STRATEGY_B_SIGNAL_DECISION_CLOSURE_EXCLUSIONS,
     "spy_strategy_c": _SPY_C_SIGNAL_DECISION_CLOSURE_EXCLUSIONS,
+    "deployment_validation": _DEPLOYMENT_VALIDATION_SIGNAL_DECISION_CLOSURE_EXCLUSIONS,
 }
 
 

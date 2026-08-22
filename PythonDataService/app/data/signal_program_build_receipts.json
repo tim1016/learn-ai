@@ -3,6 +3,16 @@
   "receipts": [
     {
       "schema_version": 1,
+      "program_key": "deployment_validation",
+      "program_version": "deployment-validation/v1",
+      "golden_trace_root": "5dca9fde8269386367e9d12b5f22a4caaa11c20d93ae44094e62a91c461d9ce8",
+      "artifact_digest": "428c34631e7e73befeffe0b980efdc6c00aa8cf027fe95305d867f266f82f1bd",
+      "qualification_suite": "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[deployment_validation]",
+      "qualified_at_ms": 1787429871241,
+      "receipt_hash": "689de65685b1fbc58c94f13a01a8515f38dda5aff0a3f415f3ad1b15e56f326e"
+    },
+    {
+      "schema_version": 1,
       "program_key": "ema_crossover_signal",
       "program_version": "ema-crossover-signal/v1",
       "golden_trace_root": "82b81f82b5690919871e50a6c9ac39f26fa28d2c09b96dad4a777d4615cd6179",

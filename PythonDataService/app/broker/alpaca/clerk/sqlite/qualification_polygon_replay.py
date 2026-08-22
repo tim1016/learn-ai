@@ -12,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from app.engine.strategy.signal_program import Settlement
 from app.marketdata.feed import FeedHealth, MarketDataBar
 from app.marketdata.ibkr_feed import IbkrMarketDataFeed
 from app.schemas.account_custody_synthetic_qualification import (
@@ -234,9 +235,22 @@ def run_polygon_replay(
     )
 
     async def collect() -> tuple[Any, ...]:
+        # "deployment_validation" is a registered Signal Program (issue
+        # #1730 Slice 5): its evaluations carry a staged SignalSession
+        # candidate that must be explicitly settled before the next bar's
+        # decision clock can advance (SignalSession.advance() otherwise
+        # quarantines it as UNSETTLED_STAGE). This harness has no custody
+        # seam of its own, so it settles the same way the read-only
+        # strategy_intents() stream does: an immediate commit.
         stream = strategy_evaluations(binding, feed)
+        evaluations: list[Any] = []
         try:
-            return tuple([await anext(stream) for _ in range(replayed_minute_count)])
+            for _ in range(replayed_minute_count):
+                evaluation = await anext(stream)
+                evaluations.append(evaluation)
+                if evaluation.settle_stage is not None:
+                    evaluation.settle_stage(Settlement.COMMIT)
+            return tuple(evaluations)
         finally:
             await stream.aclose()
 
