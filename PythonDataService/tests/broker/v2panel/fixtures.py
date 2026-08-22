@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.broker.alpaca.clerk.models import ClerkEntryKind, OrderJournalEntry
-from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionOutcome, DecisionReceipt
+from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionOutcome
 from app.broker.contract.models import (
     BrokerOrder,
     BrokerOrderEvent,
@@ -11,6 +11,7 @@ from app.broker.contract.models import (
     OrderSide,
 )
 from app.engine.live.order_identity import NAMESPACE_ROOT
+from app.services.broker_v2_panel.sqlite_panel_source import CausalDecisionReceipt
 
 ACCT = "test-acct"
 SID = "bot-alpha"
@@ -161,8 +162,10 @@ def decision_receipt(
     bar_ref: str = "bar-1",
     order_ref: str = "",
     intent_id: str = "",
-) -> DecisionReceipt:
-    return DecisionReceipt(
+    decision_id: str | None = None,
+    effect_operation_id: str | None = None,
+) -> CausalDecisionReceipt:
+    return CausalDecisionReceipt(
         seq=seq,
         ts_ms=ts_ms,
         bar_ref=bar_ref,
@@ -170,4 +173,6 @@ def decision_receipt(
         reason_code=reason_code,
         order_ref=order_ref,
         intent_id=intent_id,
+        decision_id=decision_id,
+        effect_operation_id=effect_operation_id,
     )

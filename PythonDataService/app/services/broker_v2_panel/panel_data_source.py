@@ -740,7 +740,7 @@ async def _get_panel_with_entries_from_authority(
             "The activated SQLite decision evidence is unavailable.",
             detail="The SQLite authority became unavailable during panel projection.",
         )
-    decisions, decision_causal_links = decision_read
+    decisions = decision_read
     decision = decisions[-1] if decisions else None
     economics = evidence.economics.snapshot
 
@@ -776,7 +776,6 @@ async def _get_panel_with_entries_from_authority(
         now_ms=captured_now_ms,
         selected_transaction_ref=transaction_ref,
         recent_decisions=decisions,
-        decision_causal_links=decision_causal_links,
         resume_admission=resume_admission,
         sealed_program=binding.sealed_program,
         program_build=program_build,

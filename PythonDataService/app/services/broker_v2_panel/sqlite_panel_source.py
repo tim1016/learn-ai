@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass
+from typing import Literal
 
 from app.broker.alpaca.clerk.models import ClerkStatus
 from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionReceipt
@@ -132,6 +133,43 @@ def read_sqlite_bot_status(
     return _sqlite_roster_status(broker, registration, facade.repository)
 
 
+
+@dataclass(frozen=True)
+class _DeclaredConfiguration:
+    """The submission-capability facts a roster row must state truthfully."""
+
+    mode: Literal["log_only", "dry_run", "trade"]
+    quantity: int | None
+    carryover_policy: Literal["FORBID", "ALLOW"]
+
+
+def _declared_configuration(strategy_instance_id: str, config_json: str) -> _DeclaredConfiguration:
+    """Read mode, quantity, and carryover policy out of SQLite's own config.
+
+    Refuses rather than substitutes a default: guessing `trade` for a row
+    whose real mode is unreadable would overstate what the bot may do, and
+    guessing `log_only` would understate it. Neither is safe to render.
+    """
+    try:
+        declared = json.loads(config_json)
+    except json.JSONDecodeError as exc:
+        raise SqliteCatalogProjectionUnavailable(
+            f"Bot '{strategy_instance_id}' has unreadable immutable SQLite configuration."
+        ) from exc
+    mode = declared.get("mode")
+    carryover_policy = declared.get("carryover_policy")
+    if mode not in ("log_only", "dry_run", "trade") or carryover_policy not in ("FORBID", "ALLOW"):
+        raise SqliteCatalogProjectionUnavailable(
+            f"Bot '{strategy_instance_id}' has no declared mode or carryover policy in SQLite."
+        )
+    quantity = declared.get("quantity")
+    return _DeclaredConfiguration(
+        mode=mode,
+        quantity=int(quantity) if quantity is not None else None,
+        carryover_policy=carryover_policy,
+    )
+
+
 def _sqlite_roster_status(
     broker: str,
     registration: dict[str, object],
@@ -149,6 +187,16 @@ def _sqlite_roster_status(
         raise SqliteCatalogProjectionUnavailable(
             f"Bot '{strategy_instance_id}' has no immutable SQLite configuration."
         )
+    # FR-031: the roster's immutable configuration is read from SQLite, not
+    # assumed. These three were previously hardcoded to `trade` / `None` /
+    # `FORBID`, and `panel_data_source._status_in_binding_mode` only patched
+    # them back for `dry_run` -- so a `log_only` bot, which must never submit
+    # an order, rendered on the roster as `trade`, and a bot deployed with
+    # `ALLOW` carryover rendered as `FORBID`. Both misstate what a bot may do
+    # with real money's paper stand-in. `config_json` carries the real values
+    # for every row this projection accepts; a row missing them cannot be
+    # projected honestly and is refused like any other incomplete config.
+    declared = _declared_configuration(strategy_instance_id, config.config_json)
     active_run = repository.active_run(strategy_instance_id)
     retired_at_ms = registration.get("retired_at_ms")
     running = active_run is not None
@@ -158,9 +206,9 @@ def _sqlite_roster_status(
         strategy_label=config.display_name,
         broker=broker,
         symbol=str(registration["symbol"]),
-        mode="trade",
-        quantity=None,
-        carryover_policy="FORBID",
+        mode=declared.mode,
+        quantity=declared.quantity,
+        carryover_policy=declared.carryover_policy,
         running=running,
         phase=("RETIRED" if retired_at_ms is not None else "ON_DUTY" if running else "OFF_DUTY"),
         desired_state="RUNNING" if running else "STOPPED",
@@ -478,20 +526,22 @@ async def read_sqlite_chart_evidence(
         raise SqlitePanelEconomicUnavailable(str(exc)) from exc
 
 
-@dataclass(frozen=True)
-class DecisionCausalLinks:
-    """PRD Sec 19 stored decision/effect identities for one receipt row.
+class CausalDecisionReceipt(DecisionReceipt):
+    """A decision receipt carrying its PRD Sec 19 stored causal identity.
 
-    Populated only from facts durably written at Clerk intake
-    (``append_atomic_decision_receipt_row`` stamps ``decision_id`` ==
-    ``evaluation_id`` and ``effect_operation_id`` onto every effect-bearing
-    decision). The projector never infers these from timing or proximity; a
-    row with neither key renders both fields ``None`` — an explicit absence,
-    not a guess.
+    Extends the canonical ``DecisionReceipt`` (owned by ``app/broker/``,
+    outside this module's edit scope) rather than pairing it with a parallel
+    seq-keyed map: causal identity is a fact about one receipt row, so it
+    travels on that row, not alongside it. Populated only from facts durably
+    written at Clerk intake (``append_atomic_decision_receipt_row`` stamps
+    ``decision_id`` == ``evaluation_id`` and ``effect_operation_id`` onto
+    every effect-bearing decision). The projector never infers these from
+    timing or proximity; a row with neither key renders both fields ``None``
+    — an explicit absence, not a guess.
     """
 
-    decision_id: str | None
-    effect_operation_id: str | None
+    decision_id: str | None = None
+    effect_operation_id: str | None = None
 
 
 def read_sqlite_decision_receipts(
@@ -500,12 +550,10 @@ def read_sqlite_decision_receipts(
     *,
     limit: int = 8,
     facade: SqliteAlpacaClerkFacade | None = None,
-) -> tuple[list[DecisionReceipt], dict[int, DecisionCausalLinks]] | None:
-    """Read bounded decision evidence and its stored causal links from SQLite.
+) -> list[CausalDecisionReceipt] | None:
+    """Read bounded decision evidence, with its stored causal links, from SQLite.
 
-    Never the legacy JSONL tail. The causal-link mapping is keyed by
-    ``seq`` so a caller can pair it back onto the parallel receipt list
-    without a second SQLite round trip.
+    Never the legacy JSONL tail.
     """
     facade = facade or active_sqlite_facade(broker)
     if facade is None:
@@ -524,19 +572,16 @@ def read_sqlite_decision_receipts(
     # call as a durable `SqliteDecisionReceipts.append` mutation; this is a
     # plain in-memory list of already-read display DTOs, not a repository
     # handle.
-    adapted_views: list[DecisionReceipt] = []
-    causal_links: dict[int, DecisionCausalLinks] = {}
-    for resource in resources:
-        receipt, causal = _decision_receipt_from_resource(resource)
-        adapted_views.append(receipt)
-        causal_links[resource.seq] = causal
-    return adapted_views, causal_links
+    adapted_views: list[CausalDecisionReceipt] = [
+        _decision_receipt_from_resource(resource) for resource in resources
+    ]
+    return adapted_views
 
 
 def _decision_receipt_from_resource(
     resource: DecisionReceiptResource,
-) -> tuple[DecisionReceipt, DecisionCausalLinks]:
-    """Adapt a durable S1 receipt to the panel evidence view + its causal links."""
+) -> CausalDecisionReceipt:
+    """Adapt a durable S1 receipt to the panel evidence view, causal links attached."""
     try:
         facts = json.loads(resource.facts_json)
     except (TypeError, json.JSONDecodeError) as exc:
@@ -548,7 +593,12 @@ def _decision_receipt_from_resource(
             f"SQLite decision receipt {resource.seq} facts must be an object."
         )
     try:
-        receipt = DecisionReceipt.model_validate(
+        # FR-019 defines `decision_id` == `evaluation_id`, and the atomic
+        # writer stamps both keys to that one value, so reading either is
+        # equivalent rather than a choice between two different facts. The
+        # second read is a compatibility path for rows persisted before both
+        # keys were written; it is deliberately not a precedence rule.
+        return CausalDecisionReceipt.model_validate(
             {
                 "seq": resource.seq,
                 "ts_ms": resource.observed_at_ms,
@@ -558,22 +608,17 @@ def _decision_receipt_from_resource(
                 "intent_id": resource.intent_id or "",
                 "order_ref": resource.order_ref or "",
                 "indicator_snapshot": facts.get("indicator_snapshot", {}),
+                "decision_id": (
+                    _facts_optional_str(facts, "decision_id")
+                    or _facts_optional_str(facts, "evaluation_id")
+                ),
+                "effect_operation_id": _facts_optional_str(facts, "effect_operation_id"),
             }
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise SqlitePanelDecisionUnavailable(
             f"SQLite decision receipt {resource.seq} does not satisfy the panel evidence contract."
         ) from exc
-    # FR-019 defines `decision_id` == `evaluation_id`, and the atomic writer
-    # stamps both keys to that one value, so reading either is equivalent
-    # rather than a choice between two different facts. The second read is a
-    # compatibility path for rows persisted before both keys were written; it
-    # is deliberately not a precedence rule.
-    causal = DecisionCausalLinks(
-        decision_id=_facts_optional_str(facts, "decision_id") or _facts_optional_str(facts, "evaluation_id"),
-        effect_operation_id=_facts_optional_str(facts, "effect_operation_id"),
-    )
-    return receipt, causal
 
 
 def _facts_optional_str(facts: dict, key: str) -> str | None:
@@ -883,7 +928,7 @@ async def execute_sqlite_panel_action(
 
 
 __all__ = [
-    "DecisionCausalLinks",
+    "CausalDecisionReceipt",
     "SqliteChartEvidence",
     "SqlitePanelBotNotFound",
     "SqlitePanelDecisionUnavailable",

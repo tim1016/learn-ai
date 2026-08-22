@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import date
@@ -88,7 +89,17 @@ class _Repository:
             strategy_instance_id=strategy_instance_id,
             strategy_key=strategy_key,
             display_name=strategy_key.replace("_", " ").title(),
-            config_json="{}",
+            # A real row's config_json is the full binding dump, so it always
+            # carries the submission-capability facts the roster must state
+            # truthfully. `"{}"` modelled a row production never writes.
+            # The two rows deliberately declare *different* submission
+            # capability, so a roster that reported one hardcoded value for
+            # every bot could not pass.
+            config_json=json.dumps(
+                {"mode": "trade", "quantity": 1, "carryover_policy": "FORBID"}
+                if strategy_instance_id == "active-spy"
+                else {"mode": "log_only", "quantity": 3, "carryover_policy": "ALLOW"}
+            ),
             config_hash="a" * 64,
             created_at_ms=1_700_000_000_000,
         )
@@ -108,9 +119,19 @@ def test_sqlite_roster_uses_only_activated_repository(monkeypatch: pytest.Monkey
     assert statuses[0].strategy_key == "opening_range_breakout"
     assert statuses[0].strategy_key != "unknown"
     assert statuses[0].strategy_label == "Opening Range Breakout"
-    assert statuses[0].quantity is None
+    # The roster states the bot's declared submission capability, read from
+    # SQLite -- not the `trade`/`None`/`FORBID` placeholder it used to assume.
+    assert statuses[0].quantity == 1
+    assert statuses[0].mode == "trade"
+    assert statuses[0].carryover_policy == "FORBID"
     assert statuses[1].running is False
     assert statuses[1].phase == "RETIRED"
+    # A `log_only` bot must never be presented as able to trade, and its real
+    # carryover policy must not be flattened to `FORBID`. Both were hardcoded
+    # before, and `_status_in_binding_mode` only corrected `dry_run`.
+    assert statuses[1].mode == "log_only"
+    assert statuses[1].quantity == 3
+    assert statuses[1].carryover_policy == "ALLOW"
 
     status = sqlite_panel_source.read_sqlite_bot_status("alpaca", "active-spy")
     assert status is not None
@@ -618,20 +639,18 @@ def test_sqlite_decision_receipts_adapt_durable_s1_rows_without_jsonl(
         lambda _broker: SimpleNamespace(account_id="paper-account", repository=repository),
     )
 
-    result = sqlite_panel_source.read_sqlite_decision_receipts("alpaca", "active-spy")
+    receipts = sqlite_panel_source.read_sqlite_decision_receipts("alpaca", "active-spy")
 
-    assert result is not None
-    receipts, causal_links = result
+    assert receipts is not None
     assert [receipt.seq for receipt in receipts] == [3]
     assert receipts[0].bar_ref == "SPY@1700000180000"
     assert receipts[0].reason_code == "STRATEGY_ENTER"
     assert receipts[0].intent_id == "intent-3"
     # PRD Sec 19: decision/effect identities stored at Clerk intake are read
-    # back verbatim, keyed by seq, never inferred from proximity.
-    assert causal_links[3] == sqlite_panel_source.DecisionCausalLinks(
-        decision_id="deadbeef",
-        effect_operation_id="effect-op-3",
-    )
+    # back verbatim, attached directly to the receipt, never inferred from
+    # proximity.
+    assert receipts[0].decision_id == "deadbeef"
+    assert receipts[0].effect_operation_id == "effect-op-3"
 
 
 @pytest.mark.asyncio

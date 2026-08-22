@@ -60,9 +60,13 @@ from app.schemas.run_admission import (
 )
 from app.schemas.signal_program_seal import (
     ConfiguredSignalProgramSeal,
+    ExitEligibilityContract,
+    NumericalProvenanceContract,
     ResolvedSignalParameter,
+    SignalBarIntegrityContract,
     SignalClockContract,
     SignalDataContract,
+    SignalSeriesContract,
     seal_bot_program,
 )
 from app.services.bot_binding_repository import ProgramBuildRunEvidence
@@ -79,7 +83,6 @@ from app.services.broker_v2_panel.sqlite_panel_adapter import (
     adapt_sqlite_panel,
     build_sqlite_catalog,
 )
-from app.services.broker_v2_panel.sqlite_panel_source import DecisionCausalLinks
 from app.services.sqlite_clerk_compat import sqlite_clerk_status
 from tests.broker.v2panel.fixtures import (
     ACCT,
@@ -270,7 +273,6 @@ def _panel(
     admission_evidence_refs: tuple[str, ...] = ("test:resume-admission",),
     sealed_program=None,
     program_build: ProgramBuildAdmissionFact | None = None,
-    decision_causal_links: dict[int, DecisionCausalLinks] | None = None,
     authority_account_id: str | None = None,
 ):
     resolved_exposure = {"SPY": 100.0} if exposure is None else exposure
@@ -333,7 +335,6 @@ def _panel(
         resume_admission=resume_admission,
         sealed_program=sealed_program,
         program_build=program_build or _default_program_build(status.strategy_key),
-        decision_causal_links=decision_causal_links,
         dry_run_activity=dry_run_activity,
         market_pulse=_MARKET_PULSE,
     )
@@ -1163,6 +1164,8 @@ def _sealed_bot_program():
     configured = ConfiguredSignalProgramSeal(
         program_key="ema_crossover_signal",
         program_version="ema-crossover-signal/v1",
+        protocol_version="signal-session-protocol/v1",
+        parameter_schema_version="ema-crossover-signal-params/v1",
         golden_trace_root="a" * 64,
         parameters={
             "fast_period": ResolvedSignalParameter(value=12, unit="bars", origin="registered_default"),
@@ -1175,6 +1178,17 @@ def _sealed_bot_program():
             decision_timeframe_ms=60_000,
         ),
         clock=SignalClockContract(use_rth=True, warmup_lookback_days=5),
+        signals=(SignalSeriesContract(name="fast", indicator="ema", field="close", period=12, warmup_bars=12),),
+        decision_streams=("ENTER", "EXIT"),
+        bar_integrity=SignalBarIntegrityContract(),
+        exit_eligibility=ExitEligibilityContract(countdown_decision_clocks=5, countdown_state_persistable=False),
+        numerical_provenance=NumericalProvenanceContract(
+            formula="test formula",
+            reference="test reference",
+            canonical_implementation="test canonical implementation",
+            validated_against="test validated against",
+            equivalence_level="bit_exact",
+        ),
     )
     return seal_bot_program(
         strategy_instance_id=SID,
@@ -1226,7 +1240,14 @@ def test_program_build_view_from_run_evidence_replays_the_proven_verdict() -> No
 
 def test_panel_exposes_sealed_program_build_proof_and_decision_causal_links() -> None:
     """PRD Sec 11.1-11.4, 19: seal + build proof + FR-030 causal links reach the panel."""
-    decision = decision_receipt(seq=3, ts_ms=_NOW - 500, outcome="entered", reason_code="CROSS_UP")
+    decision = decision_receipt(
+        seq=3,
+        ts_ms=_NOW - 500,
+        outcome="entered",
+        reason_code="CROSS_UP",
+        decision_id="e" * 64,
+        effect_operation_id="effect-op-3",
+    )
     seal = _sealed_bot_program()
     program_build = ProgramBuildAdmissionFact(
         state="PROVEN",
@@ -1239,7 +1260,6 @@ def test_panel_exposes_sealed_program_build_proof_and_decision_causal_links() ->
         evidence_refs=(f"program-build-digest:{'b' * 64}",),
         explanation="The running Signal Program build matches its golden qualification receipt.",
     )
-    causal_links = {3: DecisionCausalLinks(decision_id="e" * 64, effect_operation_id="effect-op-3")}
     panel = _panel(
         _status(mode="trade"),
         _clerk_status(),
@@ -1247,7 +1267,6 @@ def test_panel_exposes_sealed_program_build_proof_and_decision_causal_links() ->
         decision,
         sealed_program=seal,
         program_build=program_build,
-        decision_causal_links=causal_links,
     )
 
     # Seal content reused verbatim — never re-derived.
@@ -1713,15 +1732,20 @@ def test_dry_run_decisions_use_sqlite_causal_links_when_evidence_exists() -> Non
         quantity=1,
         fill_price=401.25,
     )
-    decision = decision_receipt(seq=5, ts_ms=_NOW - 50, outcome="entered", reason_code="CROSS_UP")
-    causal_links = {5: DecisionCausalLinks(decision_id="f" * 64, effect_operation_id="effect-op-5")}
+    decision = decision_receipt(
+        seq=5,
+        ts_ms=_NOW - 50,
+        outcome="entered",
+        reason_code="CROSS_UP",
+        decision_id="f" * 64,
+        effect_operation_id="effect-op-5",
+    )
 
     panel = _panel(
         _status(running=True, mode="dry_run"),
         _clerk_status(),
         [],
         decision,
-        decision_causal_links=causal_links,
         dry_run_activity=[activity],
     )
 

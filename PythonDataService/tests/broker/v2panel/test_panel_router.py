@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -129,6 +130,10 @@ def api(tmp_path: Path):
         config_hash="config-1",
         strategy_key="deployment_validation",
         display_name="Deployment Validation",
+        # Production always writes the full binding dump here; the roster now
+        # reads the bot's declared mode/quantity/carryover from it rather than
+        # assuming `trade`.
+        config_json=json.dumps({"mode": "trade", "quantity": 1, "carryover_policy": "FORBID"}),
     )
     submit_start_run(
         repo,

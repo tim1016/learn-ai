@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import Literal, Protocol
 
 from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
 from app.broker.alpaca.clerk.fills import project_instance_fills
@@ -61,14 +61,6 @@ from app.services.broker_v2_panel.station_derivation import (
     derive_stations,
     transaction_refs_for_bot,
 )
-
-if TYPE_CHECKING:
-    # Deferred to a type-checking-only import: `sqlite_panel_source` imports
-    # `sqlite_panel_adapter`, which imports `select_primary_action_by_lens`
-    # from this module — a real module-level import here would be circular.
-    # `from __future__ import annotations` already makes every annotation in
-    # this file a string, so this is purely for static type checkers.
-    from app.services.broker_v2_panel.sqlite_panel_source import DecisionCausalLinks
 
 # A channel-health observation older than this is not "fresh" for the clear-hold
 # gate (§7.3). Reuse the station staleness threshold — one trading day.
@@ -391,16 +383,36 @@ def _account_working_order_count(entries: list[OrderJournalEntry]) -> int:
     )
 
 
+class _CausalDecisionReceipt(Protocol):
+    """Structural shape of a decision receipt carrying PRD Sec 19 causal identity.
+
+    Matches ``sqlite_panel_source.CausalDecisionReceipt`` by shape, not
+    import: `sqlite_panel_source` imports `sqlite_panel_adapter`, which
+    imports `select_primary_action_by_lens` from this module, so a real
+    import of its receipt type here would be circular. A structural
+    ``Protocol`` needs no import at all — any object with these attributes
+    satisfies it, including a plain ``DecisionReceipt`` in the two fields'
+    default-``None`` case.
+    """
+
+    seq: int
+    ts_ms: int
+    outcome: str
+    reason_code: str
+    bar_ref: str
+    order_ref: str
+    decision_id: str | None
+    effect_operation_id: str | None
+
+
 def _recent_decision_views(
-    receipts: list[DecisionReceipt],
+    receipts: list[_CausalDecisionReceipt],
     *,
-    causal_links: dict[int, DecisionCausalLinks] | None = None,
     limit: int = 8,
     simulated: bool = False,
     authority_account_id: str | None = None,
     authority_kind: Literal["real_paper", "synthetic"] | None = None,
 ) -> list[RecentDecisionView]:
-    links = causal_links or {}
     return [
         RecentDecisionView(
             seq=receipt.seq,
@@ -409,8 +421,8 @@ def _recent_decision_views(
             reason_code=receipt.reason_code,
             bar_ref=receipt.bar_ref,
             order_ref=receipt.order_ref or None,
-            decision_id=(links[receipt.seq].decision_id if receipt.seq in links else None),
-            effect_operation_id=(links[receipt.seq].effect_operation_id if receipt.seq in links else None),
+            decision_id=receipt.decision_id,
+            effect_operation_id=receipt.effect_operation_id,
             simulated=simulated,
             authority_account_id=authority_account_id,
             authority_kind=authority_kind,
@@ -541,21 +553,21 @@ def _execution_policy(mode: str) -> str:
 def _recent_activity_views(
     status: BotStatusView,
     entries: list[OrderJournalEntry],
-    decision_receipts: list[DecisionReceipt],
+    decision_receipts: list[_CausalDecisionReceipt],
     dry_run_activity: list[DryRunActivity],
     *,
     authority_account_id: str,
     authority_kind: Literal["real_paper", "synthetic"],
-    decision_causal_links: dict[int, DecisionCausalLinks] | None = None,
 ) -> tuple[list[RecentDecisionView], list[RecentFillView]]:
     """Project real or simulated activity behind one explicit mode boundary.
 
     Dry Run runs through its own isolated synthetic Clerk authority (PR
     #1722) and durably records every decision through the identical SQLite
     decision-receipt path Paper uses — the caller already reads
-    ``decision_receipts``/``decision_causal_links`` from that Dry-Run-scoped
-    authority (see ``sqlite_panel_source.read_sqlite_decision_receipts`` and
-    the synthetic facade selected by ``panel_data_source._panel_authority_for_binding``),
+    ``decision_receipts`` (each row already carrying its own causal identity)
+    from that Dry-Run-scoped authority (see
+    ``sqlite_panel_source.read_sqlite_decision_receipts`` and the synthetic
+    facade selected by ``panel_data_source._panel_authority_for_binding``),
     so PRD Sec 19 causal links (``decision_id``/``effect_operation_id``)
     render for Dry Run exactly like Paper whenever that SQLite evidence
     exists. Only a Dry Run instance with no SQLite decision-receipt evidence
@@ -583,7 +595,6 @@ def _recent_activity_views(
             decision_views, fill_views = (
                 _recent_decision_views(
                     decision_receipts,
-                    causal_links=decision_causal_links,
                     simulated=True,
                     authority_account_id=authority_account_id,
                     authority_kind=authority_kind,
@@ -599,7 +610,6 @@ def _recent_activity_views(
         decision_views, fill_views = (
             _recent_decision_views(
                 decision_receipts,
-                causal_links=decision_causal_links,
                 authority_account_id=authority_account_id,
                 authority_kind=authority_kind,
             ),
@@ -818,7 +828,6 @@ def build_panel(
     now_ms: int,
     selected_transaction_ref: str | None = None,
     recent_decisions: list[DecisionReceipt] | None = None,
-    decision_causal_links: dict[int, DecisionCausalLinks] | None = None,
     resume_admission: RunAdmissionDecision | None = None,
     sealed_program: SealedBotProgram | None = None,
     program_build: ProgramBuildAdmissionFact,
@@ -929,7 +938,6 @@ def build_panel(
         activity,
         authority_account_id=resolved_authority_account_id,
         authority_kind=authority_kind_for_account(resolved_authority_account_id),
-        decision_causal_links=decision_causal_links,
     )
     readiness_checks = _readiness_checks(actions, now_ms)
     readiness_ready_count = sum(check.ready for check in readiness_checks)

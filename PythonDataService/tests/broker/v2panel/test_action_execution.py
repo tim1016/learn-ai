@@ -645,7 +645,7 @@ async def test_live_panel_skips_resume_admission_reconciliation(monkeypatch) -> 
     monkeypatch.setattr(
         panel_data_source,
         "read_sqlite_decision_receipts",
-        lambda *_args, **_kwargs: ([], {}),
+        lambda *_args, **_kwargs: [],
     )
     monkeypatch.setattr(panel_data_source, "panel_profile_for", lambda _broker: None)
     monkeypatch.setattr(panel_data_source, "build_market_pulse", lambda *_args, **_kwargs: SimpleNamespace())
