@@ -30,6 +30,31 @@ describe('formatReceiptLabel', () => {
     );
   });
 
+  it('renders the governed Signal Program canary vocabulary as operator language', () => {
+    expect(formatReceiptLabel('CANARY_PAIRING_NOT_ALLOWLISTED')).toBe(
+      'Canary Pairing Not Allowlisted',
+    );
+    expect(formatReceiptLabel('CANARY_ROLLBACK_REQUIRES_FLATTEN')).toBe(
+      'Canary Rollback Requires Flatten',
+    );
+    expect(formatReceiptLabel('CANARY_ROLLBACK_BOUNDARY_UNPROVABLE')).toBe(
+      'Canary Rollback Boundary Unprovable',
+    );
+    expect(formatReceiptLabel('PROGRAM_BUILD_UNPROVEN')).toBe('Program Build Unproven');
+    expect(formatReceiptLabel('CANDIDATE_UNCAPTURED_AT_CRASH')).toBe(
+      'Candidate Uncaptured At Crash',
+    );
+  });
+
+  it('renders authority, provenance, and verification vocabulary', () => {
+    expect(formatReceiptLabel('real_paper')).toBe('Real Paper');
+    expect(formatReceiptLabel('synthetic')).toBe('Synthetic');
+    expect(formatReceiptLabel('clerk_decision_receipt')).toBe('Clerk Decision Receipt');
+    expect(formatReceiptLabel('legacy_simulated_wal')).toBe('Legacy Simulated WAL');
+    expect(formatReceiptLabel('live_reproof')).toBe('Live Reproof');
+    expect(formatReceiptLabel('frozen_run_evidence')).toBe('Frozen Run Evidence');
+  });
+
   it('leaves backend prose untouched', () => {
     expect(formatReceiptLabel('Broker snapshot disagrees with the intent WAL.')).toBe(
       'Broker snapshot disagrees with the intent WAL.',
