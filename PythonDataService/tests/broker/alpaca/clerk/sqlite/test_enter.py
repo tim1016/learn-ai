@@ -296,6 +296,39 @@ def test_concurrent_duplicate_enter_produces_exactly_one_broker_intent(
     assert {r.order_ref for r in results if r is not None} == {results[0].order_ref}
 
 
+def test_accept_enter_blocks_second_decision_while_open(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """A second decision cannot add exposure while the first ENTER is open.
+
+    The admission check runs inside ``commit_first_transition``'s write lock.
+    That means this same result applies when the two decision IDs arrive from
+    separate runtime tasks: only the first can create an effect operation.
+    """
+    first = accept_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="dec-first",
+        lifecycle_run_id=RUN_ID,
+        leg=_leg(),
+    )
+
+    with pytest.raises(AdmissionBlockedError) as exc_info:
+        accept_enter(
+            repo,
+            account_id=ACCOUNT_ID,
+            strategy_instance_id=SID,
+            decision_id="dec-second",
+            lifecycle_run_id=RUN_ID,
+            leg=_leg(),
+        )
+
+    assert first.effect_operation_id is not None
+    assert exc_info.value.decision.reason_code == "ENTER_IN_PROGRESS"
+    assert len(repo.reconcilable_effect_operations()) == 1
+
+
 async def test_definitive_broker_rejection_folds_failed_not_unknown(
     repo: ClerkSqliteRepository,
 ) -> None:
@@ -664,14 +697,16 @@ async def test_exact_duplicate_ack_clears_lookup_error_uncertainty(
 
     recovered = repo.effect_operation(submission.effect_operation_id)
     assert recovered is not None and recovered.state == "in_progress"
-    assert accept_enter(
-        repo,
-        account_id=ACCOUNT_ID,
-        strategy_instance_id=SID,
-        decision_id="dec-after-exact-proof",
-        lifecycle_run_id=RUN_ID,
-        leg=_leg(),
-    ).created
+    with pytest.raises(AdmissionBlockedError) as exc_info:
+        accept_enter(
+            repo,
+            account_id=ACCOUNT_ID,
+            strategy_instance_id=SID,
+            decision_id="dec-after-exact-proof",
+            lifecycle_run_id=RUN_ID,
+            leg=_leg(),
+        )
+    assert exc_info.value.decision.reason_code == "ENTER_IN_PROGRESS"
 
 
 async def test_resolve_stays_unknown_on_a_mismatched_client_order_id(
@@ -1294,20 +1329,36 @@ async def test_lost_submit_atomically_blocks_more_exposure_until_exact_recovery(
         )
         is None
     )
-    assert accept_enter(
-        repo,
-        account_id=ACCOUNT_ID,
-        strategy_instance_id=SID,
-        decision_id="dec-after-recovery",
-        lifecycle_run_id=RUN_ID,
-        leg=_leg(),
-    ).created
+    with pytest.raises(AdmissionBlockedError) as exc_info:
+        accept_enter(
+            repo,
+            account_id=ACCOUNT_ID,
+            strategy_instance_id=SID,
+            decision_id="dec-after-recovery",
+            lifecycle_run_id=RUN_ID,
+            leg=_leg(),
+        )
+    assert exc_info.value.decision.reason_code == "ENTER_IN_PROGRESS"
 
 
-def test_exact_recovery_advances_each_effect_while_a_sibling_unknown_remains(
+def test_fold_order_evidence_advances_each_effect_while_another_strategy_remains_unknown(
     repo: ClerkSqliteRepository,
 ) -> None:
-    """Two pre-accepted operations share one episode without stranding the first."""
+    """Independent bot custody lifecycles do not strand each other.
+
+    A strategy may own only one open ENTER.  This preserves the recovery
+    regression under the new invariant by using a second strategy identity,
+    rather than relying on the formerly permitted same-strategy double ENTER.
+    """
+    other_sid = "qqq-bot"
+    other_run_id = "run-qqq"
+    repo.register_strategy_instance(strategy_instance_id=other_sid, symbol="QQQ", config_hash="h2")
+    submit_start_run(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=other_sid,
+        lifecycle_run_id=other_run_id,
+    )
     first = accept_enter(
         repo,
         account_id=ACCOUNT_ID,
@@ -1319,10 +1370,10 @@ def test_exact_recovery_advances_each_effect_while_a_sibling_unknown_remains(
     second = accept_enter(
         repo,
         account_id=ACCOUNT_ID,
-        strategy_instance_id=SID,
+        strategy_instance_id=other_sid,
         decision_id="dec-preaccepted-b",
-        lifecycle_run_id=RUN_ID,
-        leg=_leg(),
+        lifecycle_run_id=other_run_id,
+        leg=_leg(symbol="QQQ"),
     )
     assert first.effect_operation_id and first.order_ref
     assert second.effect_operation_id and second.order_ref
@@ -1352,12 +1403,17 @@ def test_exact_recovery_advances_each_effect_while_a_sibling_unknown_remains(
         scope="CUSTODY_SUBJECT",
         reason_code="ORDER_OUTCOME_UNKNOWN",
         strategy_instance_id=SID,
+    ) is None
+    assert repo.active_uncertainty(
+        scope="CUSTODY_SUBJECT",
+        reason_code="ORDER_OUTCOME_UNKNOWN",
+        strategy_instance_id=other_sid,
     )
 
     fold_order_evidence(
         repo,
         effect_operation_id=second.effect_operation_id,
-        order=_broker_order(second.order_ref, order_id="bo-b"),
+        order=_broker_order(second.order_ref, order_id="bo-b").model_copy(update={"symbol": "QQQ"}),
     )
     assert repo.effect_operation(first.effect_operation_id).state == "in_progress"  # type: ignore[union-attr]
     assert repo.effect_operation(second.effect_operation_id).state == "in_progress"  # type: ignore[union-attr]
@@ -1365,7 +1421,7 @@ def test_exact_recovery_advances_each_effect_while_a_sibling_unknown_remains(
         repo.active_uncertainty(
             scope="CUSTODY_SUBJECT",
             reason_code="ORDER_OUTCOME_UNKNOWN",
-            strategy_instance_id=SID,
+            strategy_instance_id=other_sid,
         )
         is None
     )

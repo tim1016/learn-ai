@@ -18,6 +18,7 @@ from app.schemas.market_liveness import MarketClockLivenessEvidence, MarketLiven
 from app.schemas.run_admission import (
     RunProcessAdmissionFact,
     StartRuntimeAdmissionFact,
+    StrategyValidationAdmissionFact,
     TerminalEvidenceAdmissionFact,
 )
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
@@ -65,6 +66,7 @@ def _prior() -> BrokerBotBinding:
         mode="trade",
         quantity=1,
         carryover_policy="FORBID",
+        sealed_account_id="paper-account",
         action_plan=alpaca_v1_action_plan("SPY"),
         run_id="run-prior",
         created_at_ms=500,
@@ -123,6 +125,17 @@ async def test_resume_admission_evaluates_liveness_with_a_post_await_timestamp()
     async def activate(*args: object, **kwargs: object) -> None:
         raise AssertionError("activate must not be called by preview()")
 
+    def validation_fact(_binding: object, observed_at_ms: int) -> StrategyValidationAdmissionFact:
+        return StrategyValidationAdmissionFact(
+            state="VERIFIED",
+            strategy_key="deployment_validation",
+            evidence_status="accepted",
+            event_id="validation-event-1",
+            evidence_snapshot_sha256="c" * 64,
+            verified_at_ms=observed_at_ms,
+            explanation="The validation proof is current.",
+        )
+
     seen_observed_at_ms: list[int] = []
 
     def market_liveness(symbol: str, observed_at_ms: int) -> MarketLivenessFact:
@@ -153,6 +166,7 @@ async def test_resume_admission_evaluates_liveness_with_a_post_await_timestamp()
             evidence_ref="terminal-evidence:run-prior:absent",
             explanation="No terminal evidence blocks Resume for the prior run.",
         ),
+        validation_fact=validation_fact,
         activate=activate,
         carryover_account_policy_enabled=False,
         session_capability=lambda symbol, account_id: None,

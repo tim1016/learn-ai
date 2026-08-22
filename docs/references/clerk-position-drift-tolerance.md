@@ -36,13 +36,15 @@ positions — same reasoning as `docs/references/clerk-fill-quantity-tolerance.m
 
 All SQLite custody paths call the canonical
 `folds.py::position_quantity_is_nonzero` predicate when deciding whether a
-position is exposure. It defines `abs(qty) >= epsilon` as nonzero, so exactly
-`1e-9` is never classified as both flat and nonzero by different **SQLite
-custody** workflows. Within that SQLite scope, residual drift and exposure/flat
-decisions use the same inclusive boundary, so exactly `1e-9` cannot be accepted
-as flat by one SQLite custody path and nonzero by another. ADR 0036 extends that
-target beyond SQLite by requiring every other exposure/flat workflow to call
-the same predicate.
+position is exposure. That includes
+`sqlite/uncertainty.py::_has_attributed_exposure`, which fences fresh ENTER
+admission after a repaired or legacy attributed-position projection. It defines
+`abs(qty) >= epsilon` as nonzero, so exactly `1e-9` is never classified as both
+flat and nonzero by different **SQLite custody** workflows. Within that SQLite
+scope, residual drift and exposure/flat decisions use the same inclusive
+boundary, so exactly `1e-9` cannot be accepted as flat by one SQLite custody
+path and nonzero by another. ADR 0036 extends that target beyond SQLite by
+requiring every other exposure/flat workflow to call the same predicate.
 
 ## Validation
 
@@ -56,3 +58,6 @@ the same predicate.
   `4e-13` residue as `clean`, not `position_drift`.
 - `test_plan_drift_uses_canonical_exact_epsilon_boundary` pins exact `1e-9`
   as drift, matching the shared predicate.
+- `test_new_exposure_uses_the_canonical_attributed_quantity_boundary_fixture`
+  pins quantities below, at, and above `1e-9` for fresh-ENTER admission;
+  exactly `1e-9` and every larger residual block new exposure.

@@ -14,7 +14,7 @@ function clerkStatus(): ClerkStatus {
     latest_reconciliation: null,
     outstanding_intents: 0,
     observed_at_ms: 1,
-    authority_kind: 'sqlite',
+    authority_kind: 'real_paper',
     operator_posture: healthyAccountOperatorPostureFixture(),
   };
 }

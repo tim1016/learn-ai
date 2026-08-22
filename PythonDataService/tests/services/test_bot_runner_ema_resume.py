@@ -217,6 +217,7 @@ async def test_unhandled_error_is_preserved_only_on_immutable_run_evidence(
         await registry.deploy(
             broker="alpaca",
             strategy_instance_id=_STRATEGY_INSTANCE_ID,
+            strategy_key="ema_crossover_signal",
             symbol="SPY",
         )
         await _wait_for(lambda: not registry.any_running())
@@ -257,11 +258,11 @@ async def test_unhandled_error_is_preserved_only_on_immutable_run_evidence(
 
 
 @pytest.mark.asyncio
-async def test_ema_resume_records_the_first_live_bar_without_crashing(
+async def test_ema_resume_does_not_decide_on_an_incomplete_signal_bucket(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The exact first Aug17-Ema bar after Resume produces a decision receipt."""
+    """A resumed minute bar waits for its 15-minute signal bucket to close."""
     monkeypatch.setattr(
         bot_trade_strategy,
         "market_liveness_fact",
@@ -289,15 +290,6 @@ async def test_ema_resume_records_the_first_live_bar_without_crashing(
 
         resumed = await registry.resume_existing("alpaca", _STRATEGY_INSTANCE_ID)
         await _wait_for(lambda: feed.bars_consumed == 1)
-        await _wait_for(
-            lambda: len(
-                repository.decision_receipt_tail(
-                    strategy_instance_id=_STRATEGY_INSTANCE_ID,
-                    limit=1,
-                )
-            )
-            == 1
-        )
 
         status = registry.status("alpaca", _STRATEGY_INSTANCE_ID)
         decisions = repository.decision_receipt_tail(
@@ -307,7 +299,7 @@ async def test_ema_resume_records_the_first_live_bar_without_crashing(
         assert resumed.active_run_id == status.active_run_id
         assert status.running is True
         assert status.duty_outcome is None
-        assert decisions[0].outcome == "no_action"
+        assert decisions == []
     finally:
         try:
             if registry.any_running():
@@ -332,6 +324,7 @@ async def test_resume_after_diagnostic_crash_reuses_the_existing_receipt(
         await registry.deploy(
             broker="alpaca",
             strategy_instance_id=_STRATEGY_INSTANCE_ID,
+            strategy_key="ema_crossover_signal",
             symbol="SPY",
         )
         await _wait_for(lambda: not registry.any_running())
@@ -384,6 +377,7 @@ async def test_resume_with_an_unreadable_receipt_is_denied_before_clerk_registra
         await registry.deploy(
             broker="alpaca",
             strategy_instance_id=_STRATEGY_INSTANCE_ID,
+            strategy_key="ema_crossover_signal",
             symbol="SPY",
         )
         await _wait_for(lambda: not registry.any_running())

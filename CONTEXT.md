@@ -68,6 +68,14 @@ is archived while the code it names still runs.
   orders. Submission mode is part of immutable instance configuration, so
   changing an existing live-paper instance into a dry-run instance creates a
   new `strategy_instance_id`.
+- **Sealed custody account** — the exact Clerk account captured in the final
+  Start custody snapshot and made immutable with the strategy instance. Every
+  later Resume and Clerk registration must match it; a legacy instance without
+  a seal is readable evidence but cannot be resumed into newly selected custody.
+- **Validation admission fact** — the Start/Resume-time receipt that re-reads
+  the active human validation event and re-hashes each referenced validator,
+  settings, and audit artifact. A rendered deploy page is not this fact; stale,
+  missing, or unreadable proof refuses a new run.
 - **Command intent identity** — the durable identifier for one operator command
   intent across transport retries. Reusing it with the same action and payload
   asks for the original outcome; reusing it with a different action or payload
@@ -370,6 +378,17 @@ so they survive a broker change.
   bound to that account; it is a domain seam, not another runtime service. Its
   Account service remains present while the approved broker account is
   connected, including when no bots are on duty.
+- **Synthetic Account Authority** — the account-scoped safety and audit
+  boundary for an explicitly activated `sim:` account. It may exercise Clerk
+  custody semantics for a Dry Run, but it has no claim on a broker-reported
+  account or its exposure.
+- **Authority kind** — the closed account-world label `real_paper` or
+  `synthetic` carried with an authority-scoped read. It prevents an operator
+  view or aggregate from presenting simulated and broker-paper facts as one
+  account truth.
+- **Sealed account** — the exact account identity committed by a bot's
+  immutable configuration. A run can register only with the same Account
+  Authority; a mismatch is a refusal before any run or custody work exists.
 - **Account service standby** — the healthy idle state of an attached Broker
   Account Authority with no bots on duty. Observation and reconciliation
   continue in the background, so standby is ready rather than fenced.
@@ -406,10 +425,11 @@ so they survive a broker change.
   account interpretation with this snapshot.
 - **Start admission decision** — the backend-authored answer to whether a new
   run may start for one immutable strategy instance. It is a pure function of
-  the bot process fact and Clerk custody snapshot; market-data readiness is
-  carried inside the bot-side facts together with runner boot-recovery and
-  restart-intensity evidence. Preview and execution call the same typed policy,
-  and Angular renders its explanation without recreating safety logic.
+  the bot process fact, validation admission fact, and Clerk custody snapshot;
+  market-data readiness is carried inside the bot-side facts together with
+  runner boot-recovery and restart-intensity evidence. Preview and execution
+  call the same typed policy, and Angular renders its explanation without
+  recreating safety logic.
 - **Start custody fence** — the Clerk intake lock held across the final Start
   decision and run activation. The fence proves that no new Clerk effect can
   change the exact custody journal cut between admission and activation. If the
@@ -419,8 +439,10 @@ so they survive a broker change.
   zero. An exit that deliberately leaves exposure open is a carryover stop, not
   a clean exit.
 - **Carryover stop checkpoint** — the durable Clerk-backed account-exposure
-  evidence captured when an approved STOP leaves instance-attributed exposure
-  in place.
+  evidence that a future individually qualified program may use when an
+  approved STOP leaves instance-attributed exposure in place. Alpaca Paper
+  carryover is currently globally disabled: no current program or setting may
+  create an approved checkpoint or resume exposure from one.
 - **Resume custody proof** — a fresh proof that immutable strategy
   configuration, current Clerk attribution, and broker account truth exactly
   match the carryover stop checkpoint. A new run may attach to the stopped
@@ -1183,6 +1205,20 @@ against a broker, so this vocabulary survives a broker change.
 - **Signal intent** — an instrument-free ENTER or EXIT decision emitted by a
   signal-only strategy at a decision-bar close. The Action Plan consumes that
   decision to choose the traded leg; the strategy never chooses the asset.
+- **Signal Program** — the versioned, registry-selected definition of a
+  broker-neutral strategy decision stream. It constructs the strategy's
+  **Signal Session**; it never selects an account, custody authority, or broker.
+- **Signal Session** — one running Signal Program's ordered decision-clock
+  state. It advances only accepted closed timeframe buckets and requires each
+  **Evaluation Stage** to settle before it accepts another decision clock.
+- **Evaluation Stage** — the one pending semantic result of a Signal Session
+  evaluation, including its trace and an optional ENTER/EXIT candidate. It is
+  settled as **COMMIT** (allow its execution-boundary request) or **DISCARD**
+  (restore retryable strategy state); it is never a broker-order receipt.
+- **Evaluation Trace** — stable, broker-neutral evidence of one closed decision
+  clock: bar qualification, readiness, relation/signal facts, candidate, reason
+  evidence, and the semantic Action Plan request. It is not a custody journal
+  and does not prove an order was submitted.
 - **Strategy Validation page** — the standalone surface that owns a strategy
   *becoming* validated and that displays the equivalence evidence. It is a
   **master-detail list** (a row per validated strategy, click through to detail),

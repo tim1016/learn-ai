@@ -145,3 +145,14 @@ first receipt timestamp. A different terminal kind or reason for the same
 run directory and return at most 25 records; they never replay the account or
 bot journals. A history cursor controls viewing only and cannot change the
 current binding or any command target.
+
+## Amendment: Dry Run synthetic custody clarification (2026-08-21)
+
+The mode-tiered admission amendment's statement that Dry Run "holds no
+custody" and records only through "its own journal" is clarified, not
+superseded. Dry Run holds **no real-account custody** and makes no real broker
+execution contact. Once the governed runtime is introduced, it may hold
+simulated custody only through an explicitly activated isolated `sim:` account
+authority and its synthetic Clerk ports. That authority cannot resolve,
+aggregate with, or write facts for an Alpaca paper account. ADR 0042 records
+the seam; this amendment does not change the validation tiers in this ADR.

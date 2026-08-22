@@ -137,10 +137,11 @@ def require_start_configuration(
     carryover_allowed: bool,
 ) -> None:
     """Apply request-configuration rules shared by preview and execution."""
-    if carryover_policy == "ALLOW" and not carryover_allowed:
+    if carryover_policy == "ALLOW":
         raise CarryoverPolicyRefusedError(
-            "Exposure carryover is disabled for this Alpaca paper account.",
+            "Exposure carryover is globally disabled for Alpaca paper bots.",
             detail=(
-                "Both the account policy and this deployment must opt in; the account policy is currently disabled."
+                "A future per-program qualification must prove replay and restart safety before "
+                "any carryover allowlist entry can be enabled."
             ),
         )

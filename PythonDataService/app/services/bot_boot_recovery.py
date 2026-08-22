@@ -62,6 +62,7 @@ class BotBootRecovery:
         *,
         lifecycle_repo_for: Callable[[str], BotLifecycleStateRepo],
         lifecycle_projector: AlpacaLifecycleProjector,
+        lifecycle_projector_for: Callable[[str], AlpacaLifecycleProjector] | None = None,
         desired_repo_for: Callable[[str], DesiredStateRepo],
         recovery_candidates: Callable[[], Iterable[BotRecoveryCandidate]],
         stop_authority_run: Callable[[str, str], Awaitable[None]],
@@ -72,6 +73,9 @@ class BotBootRecovery:
         del artifacts_root
         self._lifecycle_repo_for = lifecycle_repo_for
         self._lifecycle_projector = lifecycle_projector
+        self._lifecycle_projector_for = lifecycle_projector_for or (
+            lambda _strategy_instance_id: lifecycle_projector
+        )
         self._desired_repo_for = desired_repo_for
         self._recovery_candidates = recovery_candidates
         self._stop_authority_run = stop_authority_run
@@ -138,8 +142,9 @@ class BotBootRecovery:
             run_id = candidate.run_id
             if not self._manages_instance(strategy_instance_id):
                 continue
+            projector = self._lifecycle_projector_for(strategy_instance_id)
             if self._is_running(strategy_instance_id):
-                projection = self._lifecycle_projector.refresh(
+                projection = projector.refresh(
                     strategy_instance_id=strategy_instance_id,
                     now_ms=self._now_ms(),
                     updated_by="bot_runner_boot_sweep",
@@ -176,7 +181,7 @@ class BotBootRecovery:
                 and record.duty_outcome is not None
                 and desired_state in {DesiredState.RUNNING, DesiredState.PAUSED}
             ):
-                projection = self._lifecycle_projector.refresh(
+                projection = projector.refresh(
                     strategy_instance_id=strategy_instance_id,
                     now_ms=self._now_ms(),
                     updated_by="bot_runner_boot_sweep",
@@ -217,7 +222,7 @@ class BotBootRecovery:
                 )
             )
             if not needs_interrupted_evidence:
-                projection = self._lifecycle_projector.refresh(
+                projection = projector.refresh(
                     strategy_instance_id=strategy_instance_id,
                     now_ms=self._now_ms(),
                     updated_by="bot_runner_boot_sweep",
@@ -237,7 +242,7 @@ class BotBootRecovery:
                 recorded_at_ms=now_ms,
                 run_id=run_id,
             )
-            update_result = self._lifecycle_projector.project_terminal(
+            update_result = projector.project_terminal(
                 strategy_instance_id=strategy_instance_id,
                 outcome=outcome,
                 now_ms=now_ms,

@@ -59,6 +59,7 @@ from app.engine.live.bot_lifecycle_state import BotDutyOutcome, BotLifecyclePhas
 from app.engine.live.desired_state import DesiredState
 from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.signal_intent import SignalIntentKind
+from app.engine.strategy.signal_program import EvaluationMode, Settlement
 from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeedError
 from app.schemas.action_plan import ActionPlan
 from app.schemas.broker_bots import BotProcessFact
@@ -67,6 +68,7 @@ from app.schemas.market_liveness import (
     MarketLivenessFact,
     SymbolTradingStatusEvidence,
 )
+from app.schemas.run_admission import StrategyValidationAdmissionFact
 from app.services.bot_binding_repository import (
     BrokerBotBinding,
     RunOutcomeConflictError,
@@ -94,7 +96,7 @@ from app.services.bot_runner_errors import (
     InvalidRunHistoryCursorError,
 )
 from app.services.bot_runtime import PauseAwareFeed
-from app.services.bot_trade_strategy import strategy_evaluations
+from app.services.bot_trade_strategy import StrategyEvaluation, strategy_evaluations
 from app.services.market_liveness import compose_market_liveness, unknown_market_liveness
 from app.utils.timestamps import now_ms_utc
 
@@ -126,6 +128,19 @@ def _tradable_market_liveness(symbol: str, observed_at_ms: int):
     )
 
 
+def _verified_validation_fact(_binding: object, observed_at_ms: int) -> StrategyValidationAdmissionFact:
+    """Keep runner tests focused on task/custody behavior, not manifest fixtures."""
+    return StrategyValidationAdmissionFact(
+        state="VERIFIED",
+        strategy_key="deployment_validation",
+        evidence_status="accepted",
+        event_id="test-validation-event",
+        evidence_snapshot_sha256="a" * 64,
+        verified_at_ms=observed_at_ms,
+        explanation="Test validation evidence is current.",
+    )
+
+
 @pytest.fixture(autouse=True)
 def _fresh_live_market_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(bot_runner, "market_liveness_fact", _tradable_market_liveness)
@@ -139,6 +154,17 @@ def _fresh_live_market_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
     # bot_trade_strategy's, so it needs its own patch or it falls through to
     # the real (unconfigured, fail-closed) store and every ENTER is rejected.
     monkeypatch.setattr(clerk_runtime, "market_liveness_fact", _tradable_market_liveness)
+    monkeypatch.setattr(bot_runner, "current_strategy_validation_fact", _verified_validation_fact)
+
+
+@pytest.fixture
+def _isolated_synthetic_authority() -> None:
+    """Keep process-scoped synthetic Clerk state out of neighbouring tests."""
+    from app.broker.alpaca.clerk.active_authority import reset_alpaca_clerk_for_testing
+
+    reset_alpaca_clerk_for_testing()
+    yield
+    reset_alpaca_clerk_for_testing()
 
 
 def _strategy_signal_bars(closes: list[str]) -> list[MarketDataBar]:
@@ -254,6 +280,69 @@ async def test_binding_strategy_params_reach_the_constructed_live_strategy() -> 
 
     assert await kinds_for({}) == [SignalIntentKind.ENTER, SignalIntentKind.EXIT]
     assert await kinds_for({"overbought": 99.9}) == [SignalIntentKind.ENTER]
+
+
+@pytest.mark.asyncio
+async def test_ema_live_adapter_exposes_and_settles_signal_program_stages() -> None:
+    """#1727: the live adapter must not silently fall back to legacy EMA dispatch.
+
+    A stage is intentionally left pending until its runner reports an explicit
+    disposition.  Advancing through the first ENTER and EXIT proves no staged
+    no-action decision stays locked and suppresses the later legitimate intent.
+    """
+    binding = BrokerBotBinding(
+        strategy_instance_id="ema-staged-live-test",
+        strategy_key="ema_crossover_signal",
+        broker="alpaca",
+        symbol="SPY",
+        mode="dry_run",
+        action_plan=alpaca_v1_action_plan("SPY"),
+        run_id="run-001",
+        created_at_ms=_T0,
+    )
+    evaluation_count = 0
+    staged_count = 0
+    intents: list[SignalIntentKind] = []
+    async for evaluation in strategy_evaluations(
+        binding,
+        _FakeFeed(_ema_parity_bars_through_first_exit(), mode="finite"),
+    ):
+        evaluation_count += 1
+        if evaluation.settle_stage is not None:
+            staged_count += 1
+            evaluation.settle_stage(Settlement.COMMIT)
+        intents.extend(intent.kind for intent in evaluation.intents)
+
+    assert staged_count == evaluation_count
+    assert intents == [SignalIntentKind.ENTER, SignalIntentKind.EXIT]
+
+
+@pytest.mark.asyncio
+async def test_strategy_evaluations_unlocks_each_discarded_signal_stage() -> None:
+    """Observe-only and rejected candidates cannot strand the next EMA stage."""
+    binding = BrokerBotBinding(
+        strategy_instance_id="ema-staged-discard-test",
+        strategy_key="ema_crossover_signal",
+        broker="alpaca",
+        symbol="SPY",
+        mode="dry_run",
+        action_plan=alpaca_v1_action_plan("SPY"),
+        run_id="run-001",
+        created_at_ms=_T0,
+    )
+    evaluation_count = 0
+    staged_count = 0
+    async for evaluation in strategy_evaluations(
+        binding,
+        _FakeFeed(_ema_parity_bars_through_first_exit(), mode="finite"),
+    ):
+        evaluation_count += 1
+        assert evaluation.settle_stage is not None
+        staged_count += 1
+        evaluation.settle_stage(Settlement.DISCARD)
+
+    assert staged_count == evaluation_count
+    assert evaluation_count > 1
 
 
 def _bar(start_ms: int, symbol: str = "SPY") -> MarketDataBar:
@@ -756,7 +845,6 @@ def _registry(
     feed: _FakeFeed | None,
     *,
     policy: RestartIntensityPolicy | None = None,
-    carryover_allowed: bool = False,
     now_ms: Callable[[], int] = now_ms_utc,
     start_custody_guard: (
         Callable[[str], AbstractAsyncContextManager[ClerkCustodySnapshot]] | None
@@ -768,7 +856,6 @@ def _registry(
         restart_policy=policy or RestartIntensityPolicy(threshold=100),
         # Boot recovery has its own suite (test_boot_recovery.py).
         boot_recovery_required=False,
-        carryover_allowed=carryover_allowed,
         start_custody_guard=start_custody_guard or _flat_start_guard,
         now_ms=now_ms,
         market_liveness=_tradable_market_liveness,
@@ -823,6 +910,7 @@ async def test_deploy_produces_running_task_and_durable_on_duty_evidence(tmp_pat
     assert view.desired_state == "RUNNING"
     assert view.broker == "alpaca"
     assert view.active_run_id is not None
+    assert _strategy_instance_json(tmp_path)["sealed_account_id"] == "paper-account"
 
     # Durable evidence readable WITHOUT the runner (raw files).
     lifecycle = _lifecycle_json(tmp_path)
@@ -1813,7 +1901,7 @@ async def test_continue_refuses_a_live_run_that_is_not_paused(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_pause_aware_feed_discards_bars_buffered_during_pause() -> None:
+async def test_pause_aware_feed_progresses_bars_in_observe_only_mode() -> None:
     class _QueueFeed:
         feed_id = "queue"
 
@@ -1837,8 +1925,7 @@ async def test_pause_aware_feed_discards_bars_buffered_during_pause() -> None:
     source = _QueueFeed()
     gate = asyncio.Event()
     gate.set()
-    clock = [100]
-    feed = PauseAwareFeed(source, gate, now_ms=lambda: clock[0])
+    feed = PauseAwareFeed(source, gate)
     stream = feed.stream_bars("SPY")
 
     await source.queue.put(_bar(0))
@@ -1846,14 +1933,58 @@ async def test_pause_aware_feed_discards_bars_buffered_during_pause() -> None:
 
     gate.clear()
     await source.queue.put(_bar(100))
-    next_bar = asyncio.create_task(anext(stream))
-    await asyncio.sleep(0)
-    assert not next_bar.done()
+    assert (await anext(stream)).end_ms == 60_100
+    assert feed.observe_only is True
 
-    clock[0] = 200_000
     gate.set()
     await source.queue.put(_bar(300_000))
-    assert (await next_bar).end_ms == 360_000
+    assert (await anext(stream)).end_ms == 360_000
+    assert feed.observe_only is False
+
+
+@pytest.mark.asyncio
+async def test_pause_mode_is_captured_at_the_decision_bar_not_sampled_after_continue() -> None:
+    """A Continue after the raw close cannot release its paused EMA candidate."""
+
+    gate = asyncio.Event()
+    gate.set()
+
+    class _ModeBoundaryFeed(_FakeFeed):
+        async def stream_bars(self, symbol: str, *, use_rth: bool = True):
+            async for bar in super().stream_bars(symbol, use_rth=use_rth):
+                if bar.end_ms == _EMA_FIRST_ENTER_MS:
+                    gate.clear()
+                elif bar.end_ms > _EMA_FIRST_ENTER_MS:
+                    gate.set()
+                yield bar
+
+    binding = BrokerBotBinding(
+        strategy_instance_id="ema-pause-mode-test",
+        strategy_key="ema_crossover_signal",
+        broker="alpaca",
+        symbol="SPY",
+        mode="dry_run",
+        action_plan=alpaca_v1_action_plan("SPY"),
+        run_id="run-001",
+        created_at_ms=_T0,
+    )
+    paused_enter: list[StrategyEvaluation] = []
+    decided_intents: list[SignalIntentKind] = []
+    feed = PauseAwareFeed(
+        _ModeBoundaryFeed(_ema_parity_bars_through_first_exit(), mode="finite"),
+        gate,
+    )
+
+    async for evaluation in strategy_evaluations(binding, feed):
+        if evaluation.evaluation_mode is EvaluationMode.OBSERVE_ONLY and evaluation.intents:
+            paused_enter.append(evaluation)
+        elif evaluation.intents:
+            decided_intents.extend(intent.kind for intent in evaluation.intents)
+        if evaluation.settle_stage is not None:
+            evaluation.settle_stage(Settlement.COMMIT)
+
+    assert [evaluation.intents[0].kind for evaluation in paused_enter] == [SignalIntentKind.ENTER]
+    assert decided_intents == []
 
 
 def test_dry_run_activity_projection_excludes_prior_run_rows(tmp_path: Path) -> None:
@@ -1864,6 +1995,8 @@ def test_dry_run_activity_projection_excludes_prior_run_rows(tmp_path: Path) -> 
                 seq=seq,
                 strategy_instance_id=_SID,
                 run_id=run_id,
+                authority_account_id=f"sim:{_SID}",
+                authority_kind="synthetic",
                 recorded_at_ms=seq * 1_000,
                 bar_ref=f"SPY@{seq * 1_000}",
                 intent="ENTER",
@@ -1894,182 +2027,12 @@ def test_dry_run_activity_projection_excludes_prior_run_rows(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_approved_carryover_resumes_for_the_explicitly_supported_strategy(
-    tmp_path: Path,
-) -> None:
-    feed = _FakeFeed([], mode="hold")
-    clerk = _CustodyClerk(_custody_proof(exposure={}))
-    registry = _registry(
-        tmp_path,
-        feed,
-        carryover_allowed=True,
-        start_custody_guard=clerk.start_admission_snapshot,
-    )
-    set_alpaca_clerk(clerk)
-    try:
-        deployed = await registry.deploy(
-            broker="alpaca",
-            strategy_instance_id=_SID,
-            symbol="SPY",
-            mode="trade",
-            carryover_policy="ALLOW",
-        )
-        clerk.proof = _custody_proof(exposure={"SPY": 1.0})
-        stopped = await registry.stop("alpaca", _SID)
-
-        assert stopped.duty_outcome is not None
-        assert stopped.duty_outcome.reason_code == "STOPPED_WITH_APPROVED_ATTRIBUTED_EXPOSURE"
-        assert stopped.carryover_checkpoint_exposure == {"SPY": 1.0}
-        assert stopped.carryover_checkpoint_config_matches is True
-        assert _lifecycle_json(tmp_path)["carryover_policy"] == "ALLOW"
-        assert clerk.cancel_calls == [_SID]
-
-        resumed = await registry.resume_existing("alpaca", _SID)
-        assert resumed.running is True
-        assert resumed.active_run_id != deployed.active_run_id
-        await registry.stop("alpaca", _SID)
-    finally:
-        set_alpaca_clerk(None)
-
-
-@pytest.mark.asyncio
-async def test_ema_resume_refuses_carried_exposure_without_restorable_exit_state(
-    tmp_path: Path,
-) -> None:
-    feed = _FakeFeed([], mode="hold")
-    clerk = _CustodyClerk(_custody_proof(exposure={}))
-    registry = _registry(
-        tmp_path,
-        feed,
-        carryover_allowed=True,
-        start_custody_guard=clerk.start_admission_snapshot,
-    )
-    set_alpaca_clerk(clerk)
-    try:
-        await registry.deploy(
-            broker="alpaca",
-            strategy_instance_id=_SID,
-            strategy_key="ema_crossover_signal",
-            symbol="SPY",
-            mode="trade",
-            carryover_policy="ALLOW",
-        )
-        clerk.proof = _custody_proof(exposure={"SPY": 1.0})
-        await registry.stop("alpaca", _SID)
-
-        with pytest.raises(RecoveryUncertainError, match="cannot safely restore"):
-            await registry.resume_existing("alpaca", _SID)
-
-        assert registry.status("alpaca", _SID).running is False
-    finally:
-        set_alpaca_clerk(None)
-
-
-@pytest.mark.asyncio
-async def test_ema_resume_allows_freshly_proven_flat_custody(
-    tmp_path: Path,
-) -> None:
-    feed = _FakeFeed([], mode="hold")
-    clerk = _CustodyClerk(_custody_proof(exposure={}))
-    registry = _registry(
-        tmp_path,
-        feed,
-        carryover_allowed=True,
-        start_custody_guard=clerk.start_admission_snapshot,
-    )
-    set_alpaca_clerk(clerk)
-    try:
-        deployed = await registry.deploy(
-            broker="alpaca",
-            strategy_instance_id=_SID,
-            strategy_key="ema_crossover_signal",
-            symbol="SPY",
-            mode="trade",
-            carryover_policy="ALLOW",
-        )
-        clerk.proof = _custody_proof(exposure={"SPY": 1.0})
-        await registry.stop("alpaca", _SID)
-        clerk.proof = _custody_proof(exposure={})
-
-        resumed = await registry.resume_existing("alpaca", _SID)
-
-        assert resumed.running is True
-        assert resumed.active_run_id != deployed.active_run_id
-        await registry.stop("alpaca", _SID)
-    finally:
-        set_alpaca_clerk(None)
-
-
-@pytest.mark.asyncio
-async def test_carryover_resume_refuses_quantity_mismatch_without_side_effect(
-    tmp_path: Path,
-) -> None:
-    feed = _FakeFeed([], mode="hold")
-    clerk = _CustodyClerk(_custody_proof(exposure={}))
-    registry = _registry(
-        tmp_path,
-        feed,
-        carryover_allowed=True,
-        start_custody_guard=clerk.start_admission_snapshot,
-    )
-    set_alpaca_clerk(clerk)
-    try:
-        await registry.deploy(
-            broker="alpaca",
-            strategy_instance_id=_SID,
-            symbol="SPY",
-            mode="trade",
-            carryover_policy="ALLOW",
-        )
-        clerk.proof = _custody_proof(exposure={"SPY": 1.0})
-        await registry.stop("alpaca", _SID)
-        clerk.proof = _custody_proof(exposure={"SPY": 2.0})
-
-        with pytest.raises(RecoveryUncertainError, match="custody proof changed"):
-            await registry.resume_existing("alpaca", _SID)
-
-        assert registry.status("alpaca", _SID).running is False
-    finally:
-        set_alpaca_clerk(None)
-
-
-@pytest.mark.asyncio
-async def test_forbidden_carryover_requires_flatten_before_resume(
-    tmp_path: Path,
-) -> None:
-    feed = _FakeFeed([], mode="hold")
-    clerk = _CustodyClerk(_custody_proof(exposure={}))
-    registry = _registry(
-        tmp_path,
-        feed,
-        start_custody_guard=clerk.start_admission_snapshot,
-    )
-    set_alpaca_clerk(clerk)
-    try:
-        await registry.deploy(
-            broker="alpaca",
-            strategy_instance_id=_SID,
-            symbol="SPY",
-            mode="trade",
-        )
-        clerk.proof = _custody_proof(exposure={"SPY": 1.0})
-        stopped = await registry.stop("alpaca", _SID)
-
-        assert stopped.duty_outcome is not None
-        assert stopped.duty_outcome.reason_code == "STOP_REQUIRES_FLATTEN"
-        with pytest.raises(CarryoverPolicyRefusedError, match="not approved"):
-            await registry.resume_existing("alpaca", _SID)
-    finally:
-        set_alpaca_clerk(None)
-
-
-@pytest.mark.asyncio
-async def test_account_policy_refuses_carryover_before_artifact_write(
+async def test_carryover_rejects_a_new_deploy_without_an_enablement_switch(
     tmp_path: Path,
 ) -> None:
     registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
 
-    with pytest.raises(CarryoverPolicyRefusedError):
+    with pytest.raises(CarryoverPolicyRefusedError, match="globally disabled"):
         await registry.deploy(
             broker="alpaca",
             strategy_instance_id=_SID,
@@ -2081,42 +2044,17 @@ async def test_account_policy_refuses_carryover_before_artifact_write(
 
 
 @pytest.mark.asyncio
-async def test_account_policy_must_remain_enabled_for_carryover_resume(
-    tmp_path: Path,
-) -> None:
-    feed = _FakeFeed([], mode="hold")
-    clerk = _CustodyClerk(_custody_proof(exposure={}))
-    enabled_registry = _registry(
-        tmp_path,
-        feed,
-        carryover_allowed=True,
-        start_custody_guard=clerk.start_admission_snapshot,
+async def test_default_start_status_exposes_carryover_as_disabled(tmp_path: Path) -> None:
+    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
+    deployed = await registry.deploy(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        symbol="SPY",
+        mode="dry_run",
     )
-    set_alpaca_clerk(clerk)
-    try:
-        await enabled_registry.deploy(
-            broker="alpaca",
-            strategy_instance_id=_SID,
-            symbol="SPY",
-            mode="trade",
-            carryover_policy="ALLOW",
-        )
-        clerk.proof = _custody_proof(exposure={"SPY": 1.0})
-        await enabled_registry.stop("alpaca", _SID)
 
-        disabled_registry = _registry(
-            tmp_path,
-            feed,
-            carryover_allowed=False,
-            start_custody_guard=clerk.start_admission_snapshot,
-        )
-        with pytest.raises(CarryoverPolicyRefusedError):
-            await disabled_registry.resume_existing("alpaca", _SID)
-    finally:
-        set_alpaca_clerk(None)
-
-    assert disabled_registry.status("alpaca", _SID).running is False
-    assert disabled_registry.status("alpaca", _SID).carryover_account_policy_enabled is False
+    assert deployed.carryover_account_policy_enabled is False
+    await registry.stop("alpaca", _SID)
 
 
 # ── shutdown ──────────────────────────────────────────────────────────
@@ -3402,6 +3340,7 @@ async def test_decision_receipt_failure_prevents_the_broker_effect(
 async def test_dry_run_records_simulated_round_trip_with_zero_broker_writes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    _isolated_synthetic_authority: None,
 ) -> None:
     clerk = _FakeClerk()
     _install_fake_clerk(monkeypatch, clerk)
@@ -3427,8 +3366,68 @@ async def test_dry_run_records_simulated_round_trip_with_zero_broker_writes(
         ("ENTER", "buy", 3.0, True),
         ("EXIT", "sell", 3.0, True),
     ]
-    assert all(row.order_ref.startswith("simulated:") for row in activity)
+    assert {(row.authority_account_id, row.authority_kind) for row in activity} == {
+        (f"sim:{_SID}", "synthetic")
+    }
+    # The panel suffix is derived from the synthetic Clerk's real custody
+    # operations, not a runner-minted simulated order namespace.
+    assert all(not row.order_ref.startswith("simulated:") for row in activity)
+    from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
+    from app.broker.alpaca.clerk.active_authority import get_clerk_runtime
+    from app.services.source_bar_ledger import SourceBarLedger
+
+    account_id = synthetic_account_id_for_strategy(_SID)
+    runtime = get_clerk_runtime(account_id)
+    assert runtime is not None
+    assert runtime.authority_kind == "synthetic"
+    assert runtime.selected_account_id == account_id
+    retained = SourceBarLedger(artifacts_root=tmp_path, account_id=account_id)
+    assert len(retained.bars(provider="lean-golden", symbol="SPY")) == len(bars)
+    assert all(row.bar_ref.startswith(f"source-bar:{account_id}:") for row in activity)
+    # The EMA's 15-minute decision arrives when the following raw minute
+    # flushes its consolidator. A latest-bar fill would therefore price the
+    # following minute, not the decision close. Each journal receipt must
+    # name and price the unique durable bar at the intent's clock.
+    for row in activity:
+        decision_bar = retained.find_by_closed_end(
+            provider="lean-golden",
+            symbol="SPY",
+            end_ms=row.recorded_at_ms,
+        )
+        assert decision_bar is not None
+        assert (row.bar_ref, row.fill_price) == (decision_bar.bar_ref, float(decision_bar.close))
     await registry.stop("alpaca", _SID)
+
+
+def test_dry_run_activity_journal_lifts_legacy_authority_fields(tmp_path: Path) -> None:
+    """Pre-authority journal rows remain readable after the schema extension."""
+    instance_dir = tmp_path / "instance"
+    instance_dir.mkdir()
+    (instance_dir / "dry_run_activity.jsonl").write_text(
+        json.dumps(
+            {
+                "seq": 1,
+                "strategy_instance_id": _SID,
+                "run_id": "run-legacy",
+                "recorded_at_ms": _T0,
+                "bar_ref": "SPY@1700000000000",
+                "intent": "ENTER",
+                "order_ref": "simulated:legacy",
+                "symbol": "SPY",
+                "side": "buy",
+                "quantity": 1.0,
+                "fill_price": 400.0,
+                "simulated": True,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    rows = DryRunActivityJournal(instance_dir).tail(1)
+
+    assert rows[0].authority_account_id == f"sim:{_SID}"
+    assert rows[0].authority_kind == "synthetic"
 
 
 @pytest.mark.asyncio

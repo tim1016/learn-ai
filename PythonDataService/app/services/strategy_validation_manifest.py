@@ -309,6 +309,21 @@ def strategy_settings_file_is_current(
     )
 
 
+def strategy_validator_code_is_current(
+    entry: StrategyValidationEntry,
+    *,
+    repo_root: Path = _REPO_ROOT,
+) -> bool:
+    """Return whether the validator source still matches the accepted hash."""
+    if entry.validator_code_ref is None or entry.validator_code_sha256 is None:
+        return False
+    return _ref_matches_sha256(
+        repo_root,
+        entry.validator_code_ref,
+        entry.validator_code_sha256,
+    )
+
+
 class StrategyValidationManifestError(RuntimeError):
     pass
 

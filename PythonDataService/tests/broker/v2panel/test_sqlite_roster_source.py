@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
@@ -139,6 +140,55 @@ async def test_catalog_does_not_scan_runner_bindings_after_sqlite_activation(
     result = await panel_data_source.get_catalog("alpaca", "paper-account")
 
     assert [row.strategy_instance_id for row in result] == ["active-spy", "retired-qqq"]
+
+
+@pytest.mark.asyncio
+async def test_catalog_projects_dry_run_from_its_sealed_synthetic_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Dry Run must not disappear behind the real-paper Clerk selector."""
+
+    class _SyntheticFacade:
+        account_id = "sim:dry-spy"
+
+    class _CatalogRow:
+        strategy_instance_id = "dry-spy"
+        mode = "trade"
+
+        def model_copy(self, *, update: dict[str, str]) -> SimpleNamespace:
+            return SimpleNamespace(
+                strategy_instance_id=self.strategy_instance_id,
+                mode=update["mode"],
+            )
+
+    binding = SimpleNamespace(strategy_instance_id="dry-spy", mode="dry_run")
+    facade = _SyntheticFacade()
+
+    class _Registry:
+        def bindings_for_broker(self, _broker: str) -> list[SimpleNamespace]:
+            return [binding]
+
+        @asynccontextmanager
+        async def synthetic_runtime_for_projection(self, received_binding: SimpleNamespace):
+            assert received_binding is binding
+            yield SimpleNamespace(clerk=facade, authority_kind="synthetic")
+
+    async def real_catalog(_broker: str, _account_id: str) -> list[object]:
+        return []
+
+    async def synthetic_catalog(_broker: str, received_facade: _SyntheticFacade) -> list[_CatalogRow]:
+        assert received_facade is facade
+        return [_CatalogRow()]
+
+    monkeypatch.setattr(panel_data_source, "_validate_account", _resolved_account)
+    monkeypatch.setattr(panel_data_source, "get_bot_task_registry", lambda: _Registry())
+    monkeypatch.setattr(panel_data_source, "SqliteAlpacaClerkFacade", _SyntheticFacade)
+    monkeypatch.setattr(panel_data_source, "read_sqlite_catalog", real_catalog)
+    monkeypatch.setattr(panel_data_source, "read_sqlite_catalog_from_facade", synthetic_catalog)
+
+    result = await panel_data_source.get_catalog("alpaca", "paper-account")
+
+    assert [(row.strategy_instance_id, row.mode) for row in result] == [("dry-spy", "dry_run")]
 
 
 @pytest.mark.asyncio

@@ -501,7 +501,11 @@ async def gap_reconcile(artifacts_root: Path) -> SyntheticScenarioObservation:
             next_step="Reconcile.",
             cause_facts={"snapshot": "open_orders_and_positions"},
         )
-        before_admission = admit_new_exposure(repo, strategy_instance_id="spy-bot")
+        # The seeded SPY ENTER is deliberately filled by the reconciliation
+        # snapshot. Probe an otherwise unrelated strategy so this drill
+        # isolates the account-wide stale-snapshot hold rather than asking a
+        # second ENTER to ignore the first strategy's real attributed exposure.
+        before_admission = admit_new_exposure(repo, strategy_instance_id="qqq-bot")
         revision = repo.control_meta_snapshot().control_revision
         before = broker.proof()
         registry = get_fault_injection_registry()
@@ -531,7 +535,7 @@ async def gap_reconcile(artifacts_root: Path) -> SyntheticScenarioObservation:
         consumer_task = asyncio.create_task(consumer.run())
         try:
             await asyncio.wait_for(broker.snapshot_started.wait(), timeout=2.0)
-            during_admission = admit_new_exposure(repo, strategy_instance_id="spy-bot")
+            during_admission = admit_new_exposure(repo, strategy_instance_id="qqq-bot")
         except BaseException:
             broker.snapshot_release.set()
             consumer_task.cancel()
@@ -541,7 +545,7 @@ async def gap_reconcile(artifacts_root: Path) -> SyntheticScenarioObservation:
         else:
             broker.snapshot_release.set()
             await consumer_task
-        after_admission = admit_new_exposure(repo, strategy_instance_id="spy-bot")
+        after_admission = admit_new_exposure(repo, strategy_instance_id="qqq-bot")
         stale_hold_after = repo.active_uncertainty(
             scope="ACCOUNT_CLERK",
             reason_code=BROKER_SNAPSHOT_STALE_REASON_CODE,

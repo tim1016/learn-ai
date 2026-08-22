@@ -8,6 +8,8 @@ from typing import Literal
 import pytest
 
 from app.broker.alpaca.clerk import set_alpaca_clerk
+from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
+from app.broker.alpaca.clerk.active_authority import get_clerk_runtime
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
@@ -271,12 +273,28 @@ async def test_every_alpaca_mode_commits_sqlite_duty_before_projection(
             mode=mode,
         )
 
-        active = repo.active_run(f"paper-{mode}")
+        authority_repo = repo
+        if mode == "dry_run":
+            runtime = get_clerk_runtime(synthetic_account_id_for_strategy(f"paper-{mode}"))
+            assert runtime is not None and runtime.sqlite_repository is not None
+            authority_repo = runtime.sqlite_repository
+        active = authority_repo.active_run(f"paper-{mode}")
         assert active is not None
         assert active.lifecycle_run_id == deployed.active_run_id
 
         await registry.stop("alpaca", f"paper-{mode}")
-        assert repo.active_run(f"paper-{mode}") is None
+        if mode == "dry_run":
+            assert get_clerk_runtime(synthetic_account_id_for_strategy(f"paper-{mode}")) is None
+            reopened = ClerkSqliteRepository.open(
+                account_id=synthetic_account_id_for_strategy(f"paper-{mode}"),
+                artifacts_root=tmp_path / "artifacts",
+            )
+            try:
+                assert reopened.active_run(f"paper-{mode}") is None
+            finally:
+                reopened.close()
+        else:
+            assert authority_repo.active_run(f"paper-{mode}") is None
     finally:
         await registry.stop_all()
         set_alpaca_clerk(None)

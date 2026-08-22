@@ -111,6 +111,7 @@ def _binding(strategy_instance_id: str, *, run_id: str) -> BrokerBotBinding:
         mode="trade",
         quantity=1,
         carryover_policy="FORBID",
+        sealed_account_id="PA-QQQ",
         action_plan=alpaca_v1_action_plan("QQQ"),
         run_id=run_id,
         created_at_ms=1,

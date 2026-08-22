@@ -64,6 +64,7 @@ def _decision(
     next_step: str | None,
 ) -> RunAdmissionDecision:
     evidence_refs = [
+        *bot.validation.evidence_refs,
         f"bot-process-registry:{bot.process.registry_generation}",
         f"market-data-feed:{bot.market_data.feed_id or 'unknown'}:{bot.market_data.observed_at_ms}",
         (
@@ -160,6 +161,25 @@ def evaluate_run_admission(
             reason_code="CUSTODY_INSTANCE_MISMATCH",
             explanation="The Clerk custody proof belongs to a different strategy instance.",
             next_step="Refresh the selected instance from the Clerk.",
+        )
+    if bot.sealed_account_id != clerk.account_id:
+        return decide(
+            allowed=False,
+            reason_code="SEALED_ACCOUNT_MISMATCH",
+            explanation="The immutable run binding names a different custody account than this Clerk snapshot.",
+            next_step="Redeploy against the selected account; do not adopt changed custody on Resume.",
+        )
+    if bot.validation.state != "VERIFIED":
+        return decide(
+            allowed=False,
+            reason_code=(
+                "STRATEGY_VALIDATION_UNREADABLE"
+                if bot.validation.state == "UNREADABLE"
+                else "STRATEGY_VALIDATION_UNVERIFIED"
+            ),
+            explanation=bot.validation.explanation,
+            next_step=bot.validation.next_step
+            or "Restore current validation evidence and revalidate before deployment.",
         )
     if bot.runtime.state != "READY":
         return decide(

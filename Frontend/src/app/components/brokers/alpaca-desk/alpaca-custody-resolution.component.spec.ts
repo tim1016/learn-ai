@@ -8,7 +8,7 @@ function diagnosis(overrides: Partial<CustodyDiagnosis> = {}): CustodyDiagnosis 
   return {
     broker: 'alpaca',
     account_id: 'PA1',
-    authority_kind: 'sqlite',
+    authority_kind: 'real_paper',
     in_sync: true,
     observed_at_ms: 1,
     snapshot_version: 'v1',
@@ -40,7 +40,7 @@ describe('AlpacaCustodyResolutionComponent', () => {
       providers: [{
         provide: BrokersService,
         useValue: service(diagnosis({
-          authority_kind: 'sqlite',
+          authority_kind: 'real_paper',
           in_sync: false,
           resolvable: true,
           divergences: [{

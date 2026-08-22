@@ -7,6 +7,7 @@ desired_state (never PAUSED).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 from typing import Literal
 
@@ -35,7 +36,14 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
 )
 from app.broker.contract.models import OrderSide
 from app.schemas.broker_bots import BotStatusView
-from app.schemas.broker_v2_panel import BotHealthCard, BotPanelView, MarketPulseView, PanelAction
+from app.schemas.broker_v2_panel import (
+    BotHealthCard,
+    BotPanelView,
+    MarketPulseView,
+    PanelAction,
+    RecentDecisionView,
+    RecentFillView,
+)
 from app.schemas.live_runs import BotDutyOutcomeView
 from app.schemas.operator_blocker import AccountOperatorPosture
 from app.schemas.run_admission import RunAdmissionDecision, RunAdmissionFactAges
@@ -80,6 +88,52 @@ _MARKET_PULSE = MarketPulseView(
     attention_required=False,
     observed_at_ms=_NOW,
 )
+
+
+@pytest.mark.parametrize(
+    "row_factory",
+    [
+        lambda: RecentDecisionView(
+            seq=1,
+            recorded_at_ms=_NOW,
+            outcome="entered",
+            reason_code="SIMULATED",
+            bar_ref="source-bar:sim:ema-1:bar-1",
+            order_ref="order:1",
+            simulated=True,
+        ),
+        lambda: RecentFillView(
+            order_ref="order:1",
+            symbol="SPY",
+            side="buy",
+            quantity=1,
+            price=500,
+            filled_at_ms=_NOW,
+            simulated=True,
+        ),
+    ],
+)
+def test_simulated_panel_rows_require_synthetic_authority_metadata(
+    row_factory: Callable[[], RecentDecisionView | RecentFillView],
+) -> None:
+    with pytest.raises(ValidationError, match="synthetic authority metadata"):
+        row_factory()
+
+
+def test_simulated_panel_rows_accept_nonempty_synthetic_authority_metadata() -> None:
+    row = RecentDecisionView(
+        seq=1,
+        recorded_at_ms=_NOW,
+        outcome="entered",
+        reason_code="SIMULATED",
+        bar_ref="source-bar:sim:ema-1:bar-1",
+        order_ref="order:1",
+        simulated=True,
+        authority_account_id="sim:ema-1",
+        authority_kind="synthetic",
+    )
+
+    assert row.authority_account_id == "sim:ema-1"
 
 
 def _status(
@@ -1193,6 +1247,8 @@ def test_dry_run_activity_is_structurally_labelled_simulated() -> None:
         seq=1,
         strategy_instance_id=SID,
         run_id="run-dry",
+        authority_account_id=f"sim:{SID}",
+        authority_kind="synthetic",
         recorded_at_ms=_NOW - 100,
         bar_ref="SPY@1699999999900",
         intent="ENTER",
@@ -1216,6 +1272,10 @@ def test_dry_run_activity_is_structurally_labelled_simulated() -> None:
     assert panel.recent_decisions[0].reason_code == "SIMULATED_ENTER"
     assert panel.recent_fills[0].simulated is True
     assert panel.recent_fills[0].order_ref.startswith("simulated:")
+    assert panel.recent_decisions[0].authority_account_id == f"sim:{SID}"
+    assert panel.recent_decisions[0].authority_kind == "synthetic"
+    assert panel.recent_fills[0].authority_account_id == f"sim:{SID}"
+    assert panel.recent_fills[0].authority_kind == "synthetic"
     assert panel.health.last_decision_at_ms == _NOW - 100
     assert panel.health.last_bar_at_ms == 1_699_999_999_900
 

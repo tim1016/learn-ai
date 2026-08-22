@@ -12,8 +12,12 @@ import base64
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
+from app.broker.alpaca.clerk.account_authority import (
+    require_real_paper_account_id,
+    require_synthetic_account_id,
+)
 from app.broker.alpaca.clerk.active_protocol import ClerkAdmissionSnapshotStaleError
 from app.broker.alpaca.clerk.models import (
     AccountFreezeState,
@@ -28,7 +32,10 @@ from app.broker.alpaca.clerk.models import (
     InstanceCustodyProof,
     ReconciliationVerdict,
 )
-from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_ports
+from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
+    GuardedBrokerTradePort,
+    guard_broker_ports,
+)
 from app.broker.alpaca.clerk.sqlite.commands import (
     CommandSubmission,
     submit_start_run,
@@ -47,6 +54,7 @@ from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import (
     prepare_historical_execution_recovery,
     replay_historical_execution_recovery,
 )
+from app.broker.alpaca.clerk.sqlite.idempotency import UnknownEntryOrderError
 from app.broker.alpaca.clerk.sqlite.intake_fence import (
     IntakeFenceYieldError,
     ReentrantAsyncLock,
@@ -79,9 +87,10 @@ from app.broker.alpaca.clerk.sqlite.reconcile import (
 )
 from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryPolicyContext
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate, stream_health_refusal
 from app.broker.contract.errors import BrokerError
-from app.broker.contract.models import BrokerOrderLeg, OrderSide
+from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.config import settings
 from app.schemas.action_plan import ActionPlan, StockEntryLeg
@@ -90,6 +99,7 @@ from app.services.market_liveness import liveness_blocks_entry, market_liveness_
 
 if TYPE_CHECKING:
     from app.services.bot_binding_repository import BrokerBotBinding
+    from app.services.source_bar_ledger import RetainedSourceBar
 
 _WORKING_ORDER_STATES = frozenset(
     {
@@ -113,8 +123,36 @@ STREAM_HEALTH_REASON_CODE = "STREAM_HEALTH_HOLD"
 logger = logging.getLogger(__name__)
 
 
+class _DecisionBarBoundTradePort:
+    """Bind each synthetic Clerk order to one immutable retained decision bar."""
+
+    def __init__(self, inner: GuardedBrokerTradePort, retained_bar: RetainedSourceBar) -> None:
+        self._inner = inner
+        self._retained_bar = retained_bar
+
+    @property
+    def broker_id(self) -> str:
+        return self._inner.broker_id
+
+    async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
+        self._inner.bind_evaluated_bar(client_order_id, self._retained_bar)
+        return await self._inner.submit(leg, client_order_id=client_order_id)
+
+    async def cancel(self, order_id: str) -> None:
+        await self._inner.cancel(order_id)
+
+    async def get_order_by_client_order_id(self, client_order_id: str) -> BrokerOrder | None:
+        return await self._inner.get_order_by_client_order_id(client_order_id)
+
+
 class StrategyRegistrationConflictError(RuntimeError):
     """One strategy identity was reused with different immutable semantics."""
+
+
+class SealedAccountMismatchError(RuntimeError):
+    """A deployment seal names an account other than this Clerk repository."""
+
+    reason_code = "SEALED_ACCOUNT_MISMATCH"
 
 
 class StrategyAdmissionStaleError(ClerkAdmissionSnapshotStaleError):
@@ -128,7 +166,7 @@ class MissingEntryCustodyError(RuntimeError):
 class SqliteAlpacaClerkFacade:
     """Narrow live-control surface backed by one account repository."""
 
-    authority_kind = "sqlite"
+    authority_kind: Literal["sqlite", "synthetic"]
     broker_id = "alpaca"
     supports_revision_bound_admission = True
 
@@ -140,11 +178,17 @@ class SqliteAlpacaClerkFacade:
         trade: BrokerTradePort,
         stream_health: StreamHealthGate | None = None,
         intake: ReentrantAsyncLock | None = None,
+        authority_kind: Literal["sqlite", "synthetic"] = "sqlite",
     ) -> None:
+        if authority_kind == "synthetic":
+            require_synthetic_account_id(repo.account_id)
+        else:
+            require_real_paper_account_id(repo.account_id)
         self._repo = repo
         self._intake = intake or ReentrantAsyncLock()
         self._read, self._trade = guard_broker_ports(read=read, trade=trade, intake=self._intake)
         self._stream_health = stream_health
+        self.authority_kind = authority_kind
         self._effect_tasks: dict[tuple[str, str], asyncio.Task[EffectOperationReceipt]] = {}
 
     @property
@@ -334,6 +378,12 @@ class SqliteAlpacaClerkFacade:
         from app.services.bot_carryover import configuration_hash, immutable_configuration_payload
 
         async with self._intake:
+            if binding.sealed_account_id != self.account_id:
+                raise SealedAccountMismatchError(
+                    f"{SealedAccountMismatchError.reason_code}: sealed account "
+                    f"{binding.sealed_account_id!r} does not match "
+                    f"authority account {self.account_id!r}"
+                )
             if admission_snapshot is not None:
                 self._require_current_admission_snapshot(binding, admission_snapshot)
             config_hash = configuration_hash(binding)
@@ -433,6 +483,7 @@ class SqliteAlpacaClerkFacade:
         quantity: int,
         use_rth: bool = True,
         capability_account_id: str | None = None,
+        retained_source_bar: RetainedSourceBar | None = None,
     ) -> EffectOperationReceipt:
         """Route one semantic decision through SQLite ENTER/EXIT custody.
 
@@ -454,6 +505,7 @@ class SqliteAlpacaClerkFacade:
                     quantity=quantity,
                     use_rth=use_rth,
                     capability_account_id=capability_account_id,
+                    retained_source_bar=retained_source_bar,
                 ),
                 name=f"alpaca-sqlite-effect:{strategy_instance_id}:{decision_id}",
             )
@@ -499,8 +551,15 @@ class SqliteAlpacaClerkFacade:
         quantity: int,
         use_rth: bool = True,
         capability_account_id: str | None = None,
+        retained_source_bar: RetainedSourceBar | None = None,
     ) -> EffectOperationReceipt:
-        def rejected() -> EffectOperationReceipt:
+        def rejected(
+            *,
+            reason_code: str,
+            explanation: str,
+            next_step: str | None = None,
+            order_refs: tuple[str, ...] = (),
+        ) -> EffectOperationReceipt:
             return _effect_receipt(
                 strategy_instance_id=strategy_instance_id,
                 run_id=run_id,
@@ -509,7 +568,18 @@ class SqliteAlpacaClerkFacade:
                 action_plan=action_plan,
                 quantity=quantity,
                 state="rejected",
-                order_refs=(),
+                order_refs=order_refs,
+                explanation=f"{reason_code}: {explanation}",
+                next_step=next_step,
+            )
+
+        if self.authority_kind == "synthetic" and retained_source_bar is None:
+            return rejected(
+                reason_code="SIMULATED_SOURCE_BAR_UNPROVEN",
+                explanation=(
+                    "Synthetic custody received no exact retained source bar for this decision."
+                ),
+                next_step="Replay or ingest the decision bar, then retry through the sealed program.",
             )
 
         async with self._intake:
@@ -533,7 +603,11 @@ class SqliteAlpacaClerkFacade:
                     # ACCOUNT_CLERK hold + rejected receipt, no broker
                     # contact. EXIT/cancel remain unaffected: exit.py never
                     # consults `active_holds_for_admission`.
-                    return rejected()
+                    return rejected(
+                        reason_code=STREAM_HEALTH_REASON_CODE,
+                        explanation="The required market-data or execution channel is unhealthy.",
+                        next_step="Restore both channels and let the Clerk observe fresh health evidence.",
+                    )
                 # #1671: the caller's own liveness check happens before this
                 # sole-writer boundary is even reached, racing whatever
                 # queues ahead of it under `self._intake`. Recheck here,
@@ -542,55 +616,110 @@ class SqliteAlpacaClerkFacade:
                 # reach the broker — the same shared predicate
                 # bot_trade_strategy.py's own gate uses, so the two can
                 # never silently diverge.
-                liveness = market_liveness_fact(entry.instrument.underlying, self._repo.clock())
-                if liveness_blocks_entry(
-                    liveness,
-                    use_rth=use_rth,
-                    # Must be the feed's capability account, not
-                    # ``self.account_id`` (Alpaca execution custody) — that
-                    # can never scope an IBKR market-data entitlement, so
-                    # every extended-hours entry would be rejected here.
-                    extended_phase_proven=lambda: extended_phase_proven_at_ms(
-                        now_ms=self._repo.clock(),
-                        symbol=entry.instrument.underlying,
-                        account_id=capability_account_id,
-                    ),
-                ):
-                    return rejected()
-                accepted_enter = accept_enter(
-                    self._repo,
-                    account_id=self.account_id,
-                    strategy_instance_id=strategy_instance_id,
-                    decision_id=durable_decision_id,
-                    lifecycle_run_id=run_id,
-                    leg=operation_leg,
-                )
+                if self.authority_kind == "sqlite":
+                    liveness = market_liveness_fact(entry.instrument.underlying, self._repo.clock())
+                    if liveness_blocks_entry(
+                        liveness,
+                        use_rth=use_rth,
+                        # Must be the feed's capability account, not
+                        # ``self.account_id`` (Alpaca execution custody) — that
+                        # can never scope an IBKR market-data entitlement, so
+                        # every extended-hours entry would be rejected here.
+                        extended_phase_proven=lambda: extended_phase_proven_at_ms(
+                            now_ms=self._repo.clock(),
+                            symbol=entry.instrument.underlying,
+                            account_id=capability_account_id,
+                        ),
+                    ):
+                        return rejected(
+                            reason_code="MARKET_LIVENESS_BLOCKED",
+                            explanation="Current market-liveness evidence does not permit new exposure.",
+                            next_step="Wait for fresh tradable-market evidence before retrying ENTER.",
+                        )
+                try:
+                    accepted_enter = accept_enter(
+                        self._repo,
+                        account_id=self.account_id,
+                        strategy_instance_id=strategy_instance_id,
+                        decision_id=durable_decision_id,
+                        lifecycle_run_id=run_id,
+                        leg=operation_leg,
+                    )
+                except AdmissionBlockedError as exc:
+                    return rejected(
+                        reason_code=exc.decision.reason_code or "ENTER_ADMISSION_BLOCKED",
+                        explanation=exc.decision.why or "The Clerk refused new exposure.",
+                    )
             else:
+                active_exit = self._repo.active_exit_for_strategy(strategy_instance_id)
+                if active_exit is not None:
+                    return _effect_receipt(
+                        strategy_instance_id=strategy_instance_id,
+                        run_id=run_id,
+                        decision_id=decision_id,
+                        purpose=purpose,
+                        action_plan=action_plan,
+                        quantity=quantity,
+                        state=active_exit.state,
+                        order_refs=tuple(
+                            order.order_ref
+                            for order in self._repo.orders_for_effect_operation(
+                                active_exit.effect_operation_id
+                            )
+                        ),
+                        explanation=(
+                            f"EXIT_IN_PROGRESS: existing EXIT {active_exit.effect_operation_id} "
+                            "already owns this strategy's reduction custody."
+                        ),
+                        next_step="Await the existing EXIT custody outcome; do not submit another EXIT.",
+                    )
                 candidates = [
                     order
                     for order in self._repo.entry_orders_for_strategy(strategy_instance_id)
                     if _entry_symbol(self._repo, order.order_ref).upper() == entry.instrument.underlying.upper()
                 ]
                 if not candidates:
-                    raise MissingEntryCustodyError(
-                        f"strategy instance {strategy_instance_id!r} has no SQLite-owned "
-                        f"entry for {entry.instrument.underlying!r}"
+                    return rejected(
+                        reason_code="EXIT_CUSTODY_UNPROVEN",
+                        explanation=(
+                            f"No SQLite-owned entry exists for {entry.instrument.underlying!r}; "
+                            "the Clerk cannot prove a safe reduction target."
+                        ),
+                        next_step="Reconcile the instance custody before attempting another EXIT.",
                     )
-                accepted_exit = accept_exit(
-                    self._repo,
-                    account_id=self.account_id,
-                    strategy_instance_id=strategy_instance_id,
-                    decision_id=durable_decision_id,
-                    lifecycle_run_id=run_id,
-                    entry_order_ref=candidates[-1].order_ref,
-                )
+                try:
+                    accepted_exit = accept_exit(
+                        self._repo,
+                        account_id=self.account_id,
+                        strategy_instance_id=strategy_instance_id,
+                        decision_id=durable_decision_id,
+                        lifecycle_run_id=run_id,
+                        entry_order_ref=candidates[-1].order_ref,
+                    )
+                except UnknownEntryOrderError:
+                    # The lookup and accept both occur under the Clerk intake
+                    # lock.  If the target vanished despite that, return a
+                    # closed custody result rather than ending the bot task
+                    # while economic exposure may still exist.
+                    return rejected(
+                        reason_code="EXIT_CUSTODY_UNPROVEN",
+                        explanation="The Clerk could not prove that the selected entry still belongs to this EXIT.",
+                        next_step="Reconcile the instance custody before attempting another EXIT.",
+                    )
+
+        trade: BrokerTradePort
+        if self.authority_kind == "synthetic":
+            assert retained_source_bar is not None
+            trade = _DecisionBarBoundTradePort(self._trade, retained_source_bar)
+        else:
+            trade = self._trade
 
         if purpose is EffectPurpose.ENTER:
             submitted_enter = await submit_accepted_enter(
                 self._repo,
                 accepted=accepted_enter,
                 leg=operation_leg,
-                trade=self._trade,
+                trade=trade,
             )
             order_refs = (
                 (submitted_enter.order_ref,) if submitted_enter.order_ref is not None else ()
@@ -609,7 +738,7 @@ class SqliteAlpacaClerkFacade:
         submitted_exit = await resolve_accepted_exit(
             self._repo,
             accepted=accepted_exit,
-            trade=self._trade,
+            trade=trade,
         )
         order_refs = tuple(
             ref
@@ -934,6 +1063,8 @@ def _effect_receipt(
     quantity: int,
     state: str,
     order_refs: tuple[str, ...],
+    explanation: str | None = None,
+    next_step: str | None = None,
 ) -> EffectOperationReceipt:
     from app.broker.alpaca.clerk.models import AlpacaEffectOperation
 
@@ -958,8 +1089,10 @@ def _effect_receipt(
             quantity=quantity,
         ),
         state=mapped,
-        explanation=f"The SQLite Account Clerk recorded {purpose.value} as {state}.",
-        next_step=(
+        explanation=explanation or f"The SQLite Account Clerk recorded {purpose.value} as {state}.",
+        next_step=next_step
+        if next_step is not None
+        else (
             "Await fresh broker evidence and automatic reconciliation."
             if mapped
             in {

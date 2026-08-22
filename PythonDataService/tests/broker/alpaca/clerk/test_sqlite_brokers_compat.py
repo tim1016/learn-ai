@@ -112,7 +112,7 @@ async def test_existing_reads_project_active_sqlite_authority(sqlite_desk: FastA
         )
 
     assert status.status_code == 200
-    assert status.json()["authority_kind"] == "sqlite"
+    assert status.json()["authority_kind"] == "real_paper"
     assert status.json()["channel_healths"] == [
         {
             "stream": "market_data",
@@ -128,7 +128,7 @@ async def test_existing_reads_project_active_sqlite_authority(sqlite_desk: FastA
         },
     ]
     assert diagnosis.status_code == 200
-    assert diagnosis.json()["authority_kind"] == "sqlite"
+    assert diagnosis.json()["authority_kind"] == "real_paper"
     assert diagnosis.json()["in_sync"] is False
     assert diagnosis.json()["resolvable"] is False
     assert diagnosis.json()["divergences"][0]["kind"] == "needs_review"

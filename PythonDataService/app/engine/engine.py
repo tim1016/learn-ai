@@ -96,6 +96,9 @@ class BacktestEngine:
         portfolio = Portfolio(initial_cash=Decimal(1))  # placeholder; set below
         ctx = StrategyContext(portfolio=portfolio)
         strategy.ctx = ctx
+        program = strategy.signal_program
+        if program is not None:
+            program.activate_for_backtest()
         strategy.initialize()
 
         if strategy.start_date is None or strategy.end_date is None:
@@ -312,6 +315,14 @@ class BacktestEngine:
                 if fired is not None:
                     pass
 
+            # A registered Signal Program stages its semantic decision while
+            # the consolidator callback runs. Backtest is the compatibility
+            # adapter: it commits that stage before the existing order-drain
+            # phase, preserving historical fill timing while keeping the
+            # program's explicit advance/settle boundary available to other
+            # runtimes.
+            self._commit_staged_signal_program(strategy)
+
             # ----- Session entry cutoff: drop any order submitted after
             # the cutoff that would GROW |position|. Exits (reductions
             # and flips) always pass through — the wrapper protects
@@ -451,6 +462,7 @@ class BacktestEngine:
         if previous_minute_bar is not None:
             for consolidator in ctx.get_consolidators(symbol):
                 consolidator.scan(previous_minute_bar.end_ms)
+            self._commit_staged_signal_program(strategy)
             # A market order submitted from the final consolidated bar's
             # handler fills immediately against that bar in SIGNAL_BAR_CLOSE
             # mode — the same as any in-loop bar, mirroring LEAN's
@@ -544,3 +556,10 @@ class BacktestEngine:
         bar. Here we just return the attribute set there.
         """
         return getattr(consolidator, "_last_fired_bar", None)
+
+    @staticmethod
+    def _commit_staged_signal_program(strategy: Strategy) -> None:
+        """Apply a registry-owned staged program at Backtest's legacy seam."""
+        program = strategy.signal_program
+        if program is not None:
+            program.session.commit_if_staged()

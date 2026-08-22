@@ -417,7 +417,10 @@ async def lifespan(app: FastAPI):
         # Stop the Alpaca reconciliation sweep + live-lifecycle consumer first —
         # cancel their background tasks (and the consumer's socket) cleanly,
         # independent of the IBKR teardown.
-        from app.broker.alpaca.clerk.active_authority import set_active_clerk_runtime
+        from app.broker.alpaca.clerk.active_authority import (
+            close_synthetic_clerk_runtimes,
+            set_active_clerk_runtime,
+        )
         from app.broker.alpaca.market_liveness import (
             get_market_liveness_consumer,
             set_market_liveness_consumer,
@@ -435,6 +438,7 @@ async def lifespan(app: FastAPI):
         if alpaca_market_liveness is not None:
             await alpaca_market_liveness.stop()
             set_market_liveness_consumer(None)
+        await close_synthetic_clerk_runtimes()
         set_active_clerk_runtime(None)
         if alpaca_clerk_runtime is not None:
             await alpaca_clerk_runtime.close()

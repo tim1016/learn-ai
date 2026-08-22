@@ -14,7 +14,10 @@ import os
 import re
 from pathlib import Path
 
-_SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9_.-]+$")
+# ``sim:`` is the intentionally reserved synthetic-account namespace.  A
+# colon is not a path separator on the supported POSIX artifact store, and the
+# containment check below remains the authority against traversal.
+_SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9_.:-]+$")
 _RESERVED_COMPONENTS = frozenset({".", ".."})
 
 

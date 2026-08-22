@@ -5,7 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.broker.alpaca.clerk import get_alpaca_clerk
+from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
+from app.broker.alpaca.clerk.active_authority import get_clerk_runtime
 from app.broker.alpaca.clerk.active_protocol import (
+    ActiveAlpacaClerk,
     ClerkAdmissionSnapshotStaleError,
     RevisionBoundRunRegistrar,
 )
@@ -33,6 +36,14 @@ def _requires_duty_authority(binding: BrokerBotBinding) -> bool:
     return binding.broker == "alpaca"
 
 
+def _clerk_for_binding(binding: BrokerBotBinding) -> ActiveAlpacaClerk | None:
+    """Resolve the exact account-keyed authority; Dry Run never falls back."""
+    if binding.mode == "dry_run":
+        runtime = get_clerk_runtime(synthetic_account_id_for_strategy(binding.strategy_instance_id))
+        return None if runtime is None else runtime.clerk
+    return get_alpaca_clerk()
+
+
 async def register_alpaca_duty_run(
     binding: BrokerBotBinding,
     *,
@@ -41,7 +52,7 @@ async def register_alpaca_duty_run(
     """Persist SQLite duty identity before any Alpaca task can exist."""
     if not _requires_duty_authority(binding):
         return
-    clerk = get_alpaca_clerk()
+    clerk = _clerk_for_binding(binding)
     if clerk is None:
         raise ActiveClerkUnavailableError("The Alpaca Clerk is not installed.")
     if admission_snapshot is None or not isinstance(clerk, RevisionBoundRunRegistrar):
@@ -61,7 +72,7 @@ async def commit_stop_before_task_cancel(
     """Persist the active authority's STOP before process cancellation."""
     if not _requires_duty_authority(binding):
         return
-    clerk = get_alpaca_clerk()
+    clerk = _clerk_for_binding(binding)
     if clerk is None:
         raise ActiveClerkUnavailableError("The Alpaca Clerk is not installed.")
     await clerk.stop_strategy_run(
@@ -76,8 +87,23 @@ async def stop_interrupted_alpaca_duty_run(
     *,
     strategy_instance_id: str,
     run_id: str,
+    binding: BrokerBotBinding | None = None,
 ) -> None:
     """Revalidate SQLite authority, then stop one boot-orphaned run."""
+
+    if binding is not None and binding.mode == "dry_run":
+        runtime = get_clerk_runtime(synthetic_account_id_for_strategy(strategy_instance_id))
+        clerk = None if runtime is None else runtime.clerk
+        if clerk is None:
+            raise ActiveClerkUnavailableError(
+                "The Dry Run synthetic Clerk is not installed."
+            )
+        await clerk.stop_strategy_run(
+            strategy_instance_id=strategy_instance_id,
+            run_id=run_id,
+            reason="INTERRUPTED_BY_RESTART",
+        )
+        return
 
     authority = ActiveSqliteAlpacaLifecycleAuthority()
     sqlite_claim = (strategy_instance_id, run_id) in authority.recovery_candidates()

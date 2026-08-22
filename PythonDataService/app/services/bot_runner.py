@@ -30,8 +30,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
-from contextlib import AbstractAsyncContextManager
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
@@ -39,8 +39,10 @@ from uuid import uuid4
 from pydantic import ValidationError
 
 from app.broker.alpaca.clerk import get_alpaca_clerk
+from app.broker.alpaca.clerk.active_authority import (
+    ActiveClerkRuntime,
+)
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
-from app.config import settings
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.live.bot_lifecycle_state import (
     BotLifecycleStateCorruptError,
@@ -69,6 +71,7 @@ from app.schemas.run_admission import (
     TerminalEvidenceAdmissionFact,
 )
 from app.services.alpaca_bot_identity import AlpacaBotIdentityGuard
+from app.services.bot_binding_authority import BindingAuthoritySelector
 from app.services.bot_binding_repository import (
     BotBindingRepository,
     BrokerBotBinding,
@@ -137,13 +140,13 @@ from app.services.bot_start_admission import (
     StartAdmissionDenied,
     StartAdmissionEvidenceChanged,
     StartAdmissionUnavailable,
-    default_start_custody_guard,
     log_run_launch,
     make_start_request,
     resolve_start_runtime_fact,
 )
 from app.services.broker_capability_service import get_broker_capability_service
 from app.services.market_liveness import market_liveness_fact
+from app.services.strategy_validation_admission import current_strategy_validation_fact
 from app.utils.timestamps import now_ms_utc
 
 __all__ = [
@@ -186,7 +189,6 @@ class BotTaskRegistry:
         now_ms: Callable[[], int] = now_ms_utc,
         boot_recovery_required: bool = True,
         supported_broker_ids: frozenset[str] | None = None,
-        carryover_allowed: bool | None = None,
         start_custody_guard: Callable[[str], AbstractAsyncContextManager[ClerkCustodySnapshot]] | None = None,
         lifecycle_projector: AlpacaLifecycleProjector | None = None,
         market_liveness: MarketLivenessFactResolver | None = None,
@@ -213,9 +215,10 @@ class BotTaskRegistry:
         # artifacts_root but are managed by the host daemon, not the
         # in-container runner).
         self._supported_broker_ids = supported_broker_ids
-        self._carryover_allowed = (
-            settings.ALPACA_PAPER_CARRYOVER_ENABLED if carryover_allowed is None else carryover_allowed
-        )
+        # Exposure carryover remains unavailable until a separately reviewed
+        # replay proof exists; it is no longer a compatibility constructor
+        # switch that appears configurable but has no effect.
+        self._carryover_allowed = False
         self._bindings = BotBindingRepository(
             self._artifacts_root,
             instance_dir_for=self._confined_instance_dir,
@@ -227,19 +230,21 @@ class BotTaskRegistry:
             lifecycle_repo_for=self._lifecycle_repo,
             require_alpaca_identity=self._require_alpaca_identity,
         )
+        self._authorities = BindingAuthoritySelector(
+            artifacts_root=self._artifacts_root,
+            lifecycle_repo_for=self._lifecycle_repo,
+            real_projector=self._lifecycle_projector,
+            external_start_guard=start_custody_guard,
+            runtime_in_use=self._synthetic_runtime_in_use,
+        )
         self._boot_recovery = BotBootRecovery(
             self._artifacts_root,
             lifecycle_repo_for=self._lifecycle_repo,
             lifecycle_projector=self._lifecycle_projector,
+            lifecycle_projector_for=self._lifecycle_projector_for_instance,
             desired_repo_for=self._desired_repo,
             recovery_candidates=self._recovery_candidates,
-            stop_authority_run=lambda strategy_instance_id, run_id: (
-                stop_interrupted_alpaca_duty_run(
-                    self._artifacts_root,
-                    strategy_instance_id=strategy_instance_id,
-                    run_id=run_id,
-                )
-            ),
+            stop_authority_run=self._stop_interrupted_authority_run,
             manages_instance=self._manages_boot_recovery,
             is_running=self._is_running,
             now_ms=self._now_ms,
@@ -247,9 +252,10 @@ class BotTaskRegistry:
         self._start_admission = BotStartAdmission(
             now_ms=self._now_ms,
             feed_resolver=self._feed_resolver,
-            custody_guard=start_custody_guard or default_start_custody_guard,
+            custody_guard=self._start_custody_guard,
             process_fact=self._start_process_fact,
             runtime_fact=self._start_runtime_fact,
+            validation_fact=current_strategy_validation_fact,
             activate=self._activate_start_binding,
             session_capability=get_broker_capability_service().read_latest_for,
             market_liveness=self._market_liveness,
@@ -257,11 +263,12 @@ class BotTaskRegistry:
         self._resume_admission = BotResumeAdmission(
             now_ms=self._now_ms,
             feed_resolver=self._feed_resolver,
-            custody_guard=start_custody_guard or default_start_custody_guard,
+            custody_guard=self._start_custody_guard,
             process_fact=self._resume_process_fact,
             runtime_fact=self._start_runtime_fact,
             checkpoint=self._resume_checkpoint_fact,
             terminal_evidence=self._resume_terminal_evidence_fact,
+            validation_fact=current_strategy_validation_fact,
             activate=self._activate_resume_binding,
             carryover_account_policy_enabled=self._carryover_allowed,
             session_capability=get_broker_capability_service().read_latest_for,
@@ -271,6 +278,7 @@ class BotTaskRegistry:
             self._bindings,
             lifecycle_repo_for=self._lifecycle_repo,
             lifecycle_projector=self._lifecycle_projector,
+            lifecycle_projector_for=self._lifecycle_projector_for_instance,
         )
         self._terminal = BotRunTerminalRecorder(
             managed_bots=self._bots,
@@ -523,7 +531,7 @@ class BotTaskRegistry:
             self._desired_repo(binding.strategy_instance_id).set(
                 DesiredState.RUNNING, updated_by=_UPDATED_BY, now_ms=now, reason=reason
             )
-            projection = self._lifecycle_projector.project_active(
+            projection = self._authority_for(binding).lifecycle_projector().project_active(
                 strategy_instance_id=binding.strategy_instance_id,
                 run_id=binding.run_id,
                 now_ms=now,
@@ -754,7 +762,7 @@ class BotTaskRegistry:
         updated_by: str = "operator",
         reason: str | None = None,
     ) -> BotStatusView:
-        """Pause bar evaluation without ending or replacing the current run."""
+        """Pause custody effects without ending or replacing the current run."""
         async with self._operation_lock(strategy_instance_id):
             self._confined_instance_dir(strategy_instance_id)
             managed = require_live_managed_bot(self._bots, broker, strategy_instance_id)
@@ -764,9 +772,10 @@ class BotTaskRegistry:
                     "The current run is already paused.",
                     detail="Use Continue to let this same run evaluate bars again.",
                 )
-            # Pause conservatively stops bar evaluation before the durable
-            # write. Unlike Stop's intent-first ordering, this prevents one
-            # more strategy decision while the PAUSED transition is recorded.
+            # Pause switches the existing task to OBSERVE_ONLY before the
+            # durable write. Unlike Stop's intent-first ordering, no later
+            # candidate can enter custody while PAUSED is being recorded;
+            # feed/session progression continues for replay equivalence.
             managed.run_gate.clear()
             try:
                 self._desired_repo(strategy_instance_id).set(
@@ -890,6 +899,7 @@ class BotTaskRegistry:
             managed.binding,
             reason_code=outcome,
         )
+        await self._authority_for(managed.binding).release_if_unused()
         return self.status(broker, strategy_instance_id)
 
     async def stop_all(self) -> None:
@@ -931,6 +941,7 @@ class BotTaskRegistry:
                 managed.binding.strategy_instance_id,
                 managed.binding.run_id,
             )
+            await self._authority_for(managed.binding).release_if_unused()
 
     # ── S5 boot recovery (container restart is a drilled event) ───────
 
@@ -949,6 +960,7 @@ class BotTaskRegistry:
         (``EXITED_UNVERIFIED`` / ``INTERRUPTED_BY_RESTART``). Nothing is
         auto-restarted. A failed authority step leaves the boot gate closed.
         """
+        await self._recover_synthetic_authorities_for_boot()
         report = await self._boot_recovery.run(
             recover=recover,
             reconcile=reconcile,
@@ -1031,6 +1043,16 @@ class BotTaskRegistry:
         """All bots whose durable binding carries ``broker``."""
         return [self._compose_status(binding) for binding in self._bindings.list_for_broker(broker)]
 
+    def bindings_for_broker(self, broker: str) -> list[BrokerBotBinding]:
+        """Return durable bindings without projecting a currently live authority.
+
+        Broker V2 uses this only to select an account authority before it
+        reads that authority's roster. In particular, a stopped Dry Run may
+        have released its in-memory Clerk runtime while its sealed evidence
+        remains available for a read-only projection.
+        """
+        return self._bindings.list_for_broker(broker)
+
     def current_run(self, broker: str, strategy_instance_id: str) -> BotRunView:
         """Return the backend-owned current-run projection."""
         binding = self.binding_for_control(broker, strategy_instance_id)
@@ -1081,11 +1103,13 @@ class BotTaskRegistry:
         """Run the bot; on ANY exit record a typed durable duty outcome, then reap."""
         sid = binding.strategy_instance_id
         try:
+            source_bars = self._authority_for(binding).source_bars()
             await execute_bot_run(
                 binding,
                 feed,
                 run_gate=run_gate,
                 instance_dir=self._confined_instance_dir(sid),
+                source_bars=source_bars,
             )
         except asyncio.CancelledError:
             managed = self._bots.get(sid)
@@ -1130,13 +1154,88 @@ class BotTaskRegistry:
                 reason_code="BAR_STREAM_ENDED",
             )
         finally:
+            # Preserve the record long enough to distinguish an
+            # operator/service STOP from an unexpected task exit. ``reap``
+            # removes it from ``_bots``.
+            managed = self._bots.get(sid)
             self._terminal.reap(sid, binding.run_id)
+            # An operator/service STOP performs a second, authoritative
+            # terminal projection after this task unwinds. Keep its exact
+            # synthetic authority alive until that projection completes;
+            # otherwise a fast cancellation can unregister custody between
+            # the task's provisional terminal record and the final proof.
+            if managed is None or managed.stop_reason_code is None:
+                await self._authority_for(binding).release_if_unused()
 
     # ── guards and composition ────────────────────────────────────────
 
     def _operation_lock(self, strategy_instance_id: str) -> asyncio.Lock:
         """One lifecycle mutation at a time for a strategy instance."""
         return self._operation_locks.setdefault(strategy_instance_id, asyncio.Lock())
+
+    def _authority_for(self, binding: BrokerBotBinding):
+        """Return the one typed custody/evidence authority for a binding."""
+        return self._authorities.for_binding(binding)
+
+    def _start_custody_guard(
+        self,
+        binding: BrokerBotBinding,
+    ) -> AbstractAsyncContextManager[ClerkCustodySnapshot]:
+        return self._authority_for(binding).start_custody_guard()
+
+    def _lifecycle_projector_for_instance(self, strategy_instance_id: str) -> AlpacaLifecycleProjector:
+        binding = self._bindings.read(strategy_instance_id)
+        if binding is None:
+            return self._lifecycle_projector
+        return self._authority_for(binding).lifecycle_projector()
+
+    @asynccontextmanager
+    async def synthetic_runtime_for_projection(
+        self,
+        binding: BrokerBotBinding,
+    ) -> AsyncIterator[ActiveClerkRuntime]:
+        """Temporarily compose an inactive Dry Run authority for a read projection.
+
+        A stopped synthetic run still has durable custody evidence that must
+        remain visible in Broker V2. A panel read may therefore reopen its
+        sealed authority, but it releases a runtime it composed solely for
+        that read once the projection has finished.
+        """
+        if binding.mode != "dry_run":
+            raise ValueError("Only a Dry Run binding has a synthetic authority.")
+        async with self._authority_for(binding).runtime_for_projection() as runtime:
+            if runtime is None:
+                raise RunAdmissionRefusedError(
+                    "Only a Dry Run binding has a synthetic projection runtime."
+                )
+            yield runtime
+
+    async def _recover_synthetic_authorities_for_boot(self) -> None:
+        """Compose each already-activated Dry Run authority before boot repair."""
+        for binding in self._bindings.list_for_broker("alpaca"):
+            await self._authority_for(binding).ensure_recoverable()
+
+    async def _stop_interrupted_authority_run(
+        self,
+        strategy_instance_id: str,
+        run_id: str,
+    ) -> None:
+        """Stop an orphaned run through its binding's exact custody authority."""
+        binding = self._read_binding(strategy_instance_id)
+        await stop_interrupted_alpaca_duty_run(
+            self._artifacts_root,
+            strategy_instance_id=strategy_instance_id,
+            run_id=run_id,
+            binding=binding,
+        )
+
+    def _synthetic_runtime_in_use(self, binding: BrokerBotBinding) -> bool:
+        """Keep a deterministic per-instance runtime only while its task owns it."""
+        return any(
+            managed.binding.strategy_instance_id == binding.strategy_instance_id
+            and not managed.task.done()
+            for managed in self._bots.values()
+        )
 
     def _is_running(self, strategy_instance_id: str) -> bool:
         managed = self._bots.get(strategy_instance_id)
@@ -1169,14 +1268,22 @@ class BotTaskRegistry:
         return binding is None or binding.broker in self._supported_broker_ids
 
     def _recovery_candidates(self) -> tuple[BotRecoveryCandidate, ...]:
+        bindings = self._bindings.list_for_broker("alpaca")
         candidates = {
             binding.strategy_instance_id: BotRecoveryCandidate(
                 strategy_instance_id=binding.strategy_instance_id,
                 run_id=binding.run_id,
                 sqlite_active=False,
             )
-            for binding in self._bindings.list_for_broker("alpaca")
+            for binding in bindings
         }
+        for binding in bindings:
+            for strategy_instance_id, run_id in self._authority_for(binding).lifecycle_recovery_candidates():
+                candidates[binding.strategy_instance_id] = BotRecoveryCandidate(
+                    strategy_instance_id=strategy_instance_id,
+                    run_id=run_id,
+                    sqlite_active=True,
+                )
         clerk = get_alpaca_clerk()
         has_sqlite_candidate_capability = callable(
             getattr(clerk, "lifecycle_recovery_candidates", None)

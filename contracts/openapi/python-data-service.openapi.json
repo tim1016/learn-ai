@@ -11723,9 +11723,13 @@
             "type": "string"
           },
           "authority_kind": {
-            "const": "sqlite",
-            "default": "sqlite",
-            "title": "Authority Kind"
+            "default": "real_paper",
+            "enum": [
+              "real_paper",
+              "synthetic"
+            ],
+            "title": "Authority Kind",
+            "type": "string"
           },
           "broker": {
             "title": "Broker",
@@ -13562,9 +13566,13 @@
             "type": "string"
           },
           "authority_kind": {
-            "const": "sqlite",
-            "default": "sqlite",
-            "title": "Authority Kind"
+            "default": "real_paper",
+            "enum": [
+              "real_paper",
+              "synthetic"
+            ],
+            "title": "Authority Kind",
+            "type": "string"
           },
           "blocked_reason": {
             "anyOf": [
@@ -31210,6 +31218,32 @@
       "RecentDecisionView": {
         "description": "Bounded backend-authored decision receipt for the Trader lens.",
         "properties": {
+          "authority_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authority Account Id"
+          },
+          "authority_kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "real_paper",
+                  "synthetic"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authority Kind"
+          },
           "bar_ref": {
             "title": "Bar Ref",
             "type": "string"
@@ -31269,6 +31303,32 @@
       "RecentFillView": {
         "description": "Bounded Clerk-attributed fill receipt for the Trader lens.",
         "properties": {
+          "authority_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authority Account Id"
+          },
+          "authority_kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "real_paper",
+                  "synthetic"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authority Kind"
+          },
           "filled_at_ms": {
             "title": "Filled At Ms",
             "type": "integer"

@@ -38,6 +38,7 @@ Trade logging:
 from __future__ import annotations
 
 import csv
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
@@ -54,6 +55,7 @@ from app.engine.indicators.ema import ExponentialMovingAverage
 from app.engine.indicators.rsi import RelativeStrengthIndex
 from app.engine.strategy.base import DecisionSnapshot, LoggedTrade, Strategy
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
+from app.engine.strategy.signal_program import EmaCrossoverSignalProgram, SignalDecision
 from app.utils.timestamps import display_time
 
 
@@ -142,6 +144,10 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         self._observations_fp: object | None = None
         self._state_writer: csv.writer | None = None  # type: ignore[type-arg]
         self._state_fp: object | None = None
+        # Set only by the registry's Signal Program factory. Direct
+        # construction stays a compatibility surface for historical tests and
+        # ledgers; public Backtest construction goes through this program.
+        self.signal_program: EmaCrossoverSignalProgram | None = None
 
     def initialize(self) -> None:
         # LEAN-parity defaults — match the C# reference Initialize().
@@ -170,7 +176,7 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         self.ctx.register_consolidator(
             self._symbol,
             timedelta(minutes=15),
-            self._on_fifteen_minute_bar,
+            self._signal_program_handler(),
         )
 
         if self._output_dir is not None:
@@ -185,6 +191,21 @@ class EmaCrossoverSignalAlgorithm(Strategy):
             self._state_writer = csv.writer(self._state_fp)  # type: ignore[arg-type]
             self._state_writer.writerow(["ts_ms_utc", "close", "ema_fast", "ema_slow", "rsi", "cross_state", "signal"])
             self._state_fp.flush()  # type: ignore[union-attr]
+
+    def _signal_program_handler(self) -> Callable[[TradeBar], None]:
+        """Use the registered staged program when one owns this strategy."""
+        if self.signal_program is None or not self.signal_program.active:
+            return self._on_fifteen_minute_bar
+        return self.signal_program.on_consolidated_bar
+
+    def signal_program_settings(self) -> dict[str, str]:
+        """Stable EMA settings which participate in evaluation identity."""
+        return {
+            "symbol": self._symbol_name,
+            "gap": str(self._gap),
+            "rsi_min": str(self._rsi_min),
+            "rsi_max": str(self._rsi_max),
+        }
 
     # ------------------------------------------------------------------
     # on_minute_bar override — writes to observations.csv when output_dir
@@ -207,13 +228,26 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         )
 
     # ------------------------------------------------------------------
-    # Bar handler — the line-for-line port of OnFifteenMinuteBar.
+    # Signal-decision boundary — the line-for-line port of
+    # OnFifteenMinuteBar, split before custody effects.
     # ------------------------------------------------------------------
     def _on_fifteen_minute_bar(self, bar: TradeBar) -> None:
+        """Compatibility callback for direct, non-program constructions."""
+        decision = self.evaluate_signal_bar(bar)
+        if decision.intent is not None:
+            self.commit_signal_decision(bar, decision.intent)
+
+    def evaluate_signal_bar(self, bar: TradeBar) -> SignalDecision:
+        """Advance indicator math and describe one possible semantic action.
+
+        This method never emits an intent or changes position custody state.
+        The registered ``SignalSession`` owns the subsequent commit/discard,
+        which makes an ``OBSERVE_ONLY`` bar permanently non-actionable even
+        when an operator presses Continue immediately afterward.
+        """
         assert self._ema5 is not None
         assert self._ema10 is not None
         assert self._rsi14 is not None
-        assert self.ctx is not None
 
         # Update indicators with consolidated bar close at EndTime.
         self._ema5.update(bar.end_ms, bar.close)
@@ -228,7 +262,19 @@ class EmaCrossoverSignalAlgorithm(Strategy):
                 self._prev_ema5_above_ema10 = self._ema5.current_value > self._ema10.current_value
             else:
                 self._prev_ema5_above_ema10 = False
-            return
+            return SignalDecision(
+                intent=None,
+                ready=False,
+                relation_facts={"ema_fast_above_slow": False, "was_in_position": self._in_position},
+                signal_facts={"decision": "HOLD", "timeframe": "15m"},
+                reason_evidence={
+                    "prior_countdown": self._bars_until_exit,
+                    "ema_fast": "UNREADY",
+                    "ema_slow": "UNREADY",
+                    "rsi": "UNREADY",
+                },
+                action_plan_request=None,
+            )
 
         assert self._ema5.current_value is not None
         assert self._ema10.current_value is not None
@@ -237,34 +283,31 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         ema5_val = self._ema5.current_value
         ema10_val = self._ema10.current_value
         rsi_val = self._rsi14.current_value
+        prior_in_position = self._in_position
+        prior_countdown = self._bars_until_exit
 
         current_above = ema5_val > ema10_val
-        ema_gap = ema5_val - ema10_val
 
-        # Per-bar action label tracked locally; published at end of
-        # handler via ``last_decision_snapshot`` for the live runtime's
-        # DecisionWriter (Phase C-2 observability hook). Signal logic
-        # is unchanged — the variable is set inside existing branches
-        # and read only at the bottom.
+        # Per-bar action label is published for observability before the
+        # session settles the candidate. It is evidence of the decision, not
+        # evidence that custody accepted it.
         bar_signal = "HOLD"
+        intent: SignalIntent | None = None
 
         if self._in_position:
-            # Decrement bars-until-exit and emit EXIT when we hit zero.
-            self._bars_until_exit -= 1
-            if self._bars_until_exit <= 0:
-                # Emit the exit decision. The actual exit price and time
-                # will come from the resulting execution fill event in
-                # ``on_order_event``.
-                self.ctx.emit_signal_intent(
-                    SignalIntent(
-                        kind=SignalIntentKind.EXIT,
-                        bar_close_ms=bar.end_ms,
-                        intended_price=bar.close,
-                    )
+            next_countdown = self._bars_until_exit - 1
+            if next_countdown <= 0:
+                # Preserve the last eligible countdown until a stage commits.
+                # A discarded exit therefore re-evaluates only from a later
+                # bar; it never leaks a paused candidate through Continue.
+                intent = SignalIntent(
+                    kind=SignalIntentKind.EXIT,
+                    bar_close_ms=bar.end_ms,
+                    intended_price=bar.close,
                 )
-                self.ctx.log(f"EXIT SIGNAL: {display_time(bar.end_ms)} Close={bar.close:.2f}")
-                self._in_position = False
                 bar_signal = "EXIT"
+            else:
+                self._bars_until_exit = next_countdown
         else:
             # Entry check.
             fresh_crossover = current_above and not self._prev_ema5_above_ema10
@@ -273,50 +316,12 @@ class EmaCrossoverSignalAlgorithm(Strategy):
             rsi_ok = rsi_lower <= rsi_val <= rsi_upper
 
             if fresh_crossover and gap_ok and rsi_ok:
-                # Stash the indicator snapshot — it describes the
-                # decision that triggered the entry, so it must be
-                # captured here (not at fill time).
-                self._pending_entry = _PendingEntry(ema5=ema5_val, ema10=ema10_val, rsi=rsi_val)
-                self.ctx.emit_signal_intent(
-                    SignalIntent(
-                        kind=SignalIntentKind.ENTER,
-                        bar_close_ms=bar.end_ms,
-                        intended_price=bar.close,
-                    )
+                intent = SignalIntent(
+                    kind=SignalIntentKind.ENTER,
+                    bar_close_ms=bar.end_ms,
+                    intended_price=bar.close,
                 )
-                self._in_position = True
-                self._bars_until_exit = 5
                 bar_signal = "ENTER"
-
-                # ── Emit Insight (Phase 1) ──
-                # The insight describes the signal stream. The action plan
-                # may select a different traded asset for the same intent.
-                rsi_float = float(rsi_val)
-                # Confidence derived from RSI position in the configured
-                # gate. Peak confidence is at the center of the band.
-                rsi_lower_float = float(rsi_lower)
-                rsi_upper_float = float(rsi_upper)
-                rsi_position = (rsi_float - rsi_lower_float) / (rsi_upper_float - rsi_lower_float)
-                confidence = 0.5 + 0.3 * (1.0 - abs(rsi_position - 0.5))
-
-                self.ctx.emit_insight(
-                    Insight.price(
-                        symbol=self._symbol,
-                        direction=InsightDirection.UP,
-                        period=timedelta(minutes=15 * 5),  # 5 bars × 15 min
-                        magnitude=float(ema_gap / bar.close),
-                        confidence=round(confidence, 4),
-                        source_model="EmaCross_5_10_RSI14",
-                        tag=(f"EMA5={ema5_val:.4f} EMA10={ema10_val:.4f} RSI={rsi_val:.2f} Gap={ema_gap:.4f}"),
-                    )
-                )
-
-                self.ctx.log(
-                    f"ENTRY SIGNAL: {display_time(bar.end_ms)} "
-                    f"Close={bar.close:.2f} "
-                    f"EMA5={ema5_val:.4f} EMA10={ema10_val:.4f} "
-                    f"Gap={ema_gap:.4f} RSI={rsi_val:.2f}"
-                )
 
         # Update the crossover state for the next bar.
         self._prev_ema5_above_ema10 = current_above
@@ -356,6 +361,73 @@ class EmaCrossoverSignalAlgorithm(Strategy):
                     bar_signal,
                 ]
             )
+
+        return SignalDecision(
+            intent=intent,
+            ready=True,
+            relation_facts={
+                "ema_fast_above_slow": current_above,
+                "was_in_position": prior_in_position,
+            },
+            signal_facts={"decision": bar_signal, "timeframe": "15m"},
+            reason_evidence={
+                "prior_countdown": prior_countdown,
+                "ema_fast": str(ema5_val),
+                "ema_slow": str(ema10_val),
+                "rsi": str(rsi_val),
+            },
+            action_plan_request=(
+                {"contract": "single_long_stock", "intent": intent.kind.value}
+                if intent is not None
+                else None
+            ),
+        )
+
+    def commit_signal_decision(self, bar: TradeBar, intent: SignalIntent) -> None:
+        """Apply one session-committed signal through the bound executor."""
+        assert self.ctx is not None
+        if intent.kind is SignalIntentKind.EXIT:
+            self.ctx.emit_signal_intent(intent)
+            self._in_position = False
+            self._bars_until_exit = 0
+            self.ctx.log(f"EXIT SIGNAL: {display_time(bar.end_ms)} Close={bar.close:.2f}")
+            return
+
+        assert intent.kind is SignalIntentKind.ENTER
+        assert self._ema5 is not None and self._ema5.current_value is not None
+        assert self._ema10 is not None and self._ema10.current_value is not None
+        assert self._rsi14 is not None and self._rsi14.current_value is not None
+        ema5_val = self._ema5.current_value
+        ema10_val = self._ema10.current_value
+        rsi_val = self._rsi14.current_value
+        self._pending_entry = _PendingEntry(ema5=ema5_val, ema10=ema10_val, rsi=rsi_val)
+        self.ctx.emit_signal_intent(intent)
+        self._in_position = True
+        self._bars_until_exit = 5
+
+        rsi_lower, rsi_upper = self._rsi_gate_bounds()
+        rsi_position = (float(rsi_val) - float(rsi_lower)) / (float(rsi_upper) - float(rsi_lower))
+        confidence = 0.5 + 0.3 * (1.0 - abs(rsi_position - 0.5))
+        ema_gap = ema5_val - ema10_val
+        self.ctx.emit_insight(
+            Insight.price(
+                symbol=self._symbol,
+                direction=InsightDirection.UP,
+                period=timedelta(minutes=15 * 5),
+                magnitude=float(ema_gap / bar.close),
+                confidence=round(confidence, 4),
+                source_model="EmaCross_5_10_RSI14",
+                tag=f"EMA5={ema5_val:.4f} EMA10={ema10_val:.4f} RSI={rsi_val:.2f} Gap={ema_gap:.4f}",
+            )
+        )
+        self.ctx.log(
+            f"ENTRY SIGNAL: {display_time(bar.end_ms)} Close={bar.close:.2f} "
+            f"EMA5={ema5_val:.4f} EMA10={ema10_val:.4f} Gap={ema_gap:.4f} RSI={rsi_val:.2f}"
+        )
+
+    def discard_signal_decision(self, _bar: TradeBar, _intent: SignalIntent | None) -> None:
+        """A staged candidate has no speculative lifecycle state to unwind."""
+        return
 
     def rollback_blocked_entry(self) -> None:
         """Undo the ENTER-time state committed by ``_on_fifteen_minute_bar``

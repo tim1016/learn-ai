@@ -31,6 +31,24 @@ from app.broker.v2panel.vocabulary import (
 )
 from app.schemas.operator_blocker import OperatorBlocker, OperatorConfirmationCopy
 
+
+def _validate_simulated_authority_metadata(
+    *,
+    simulated: bool,
+    authority_account_id: str | None,
+    authority_kind: Literal["real_paper", "synthetic"] | None,
+) -> None:
+    """Require simulated panel evidence to name its isolated synthetic authority."""
+    if simulated and (
+        not authority_account_id
+        or not authority_account_id.startswith("sim:")
+        or authority_kind != "synthetic"
+    ):
+        raise ValueError(
+            "simulated panel rows require nonempty synthetic authority metadata"
+        )
+
+
 # ── §4 Panel capability profile ──────────────────────────────────────────────
 
 
@@ -345,6 +363,17 @@ class RecentDecisionView(BaseModel):
     bar_ref: str
     order_ref: str | None
     simulated: bool = False
+    authority_account_id: str | None = None
+    authority_kind: Literal["real_paper", "synthetic"] | None = None
+
+    @model_validator(mode="after")
+    def simulated_row_has_synthetic_authority(self) -> RecentDecisionView:
+        _validate_simulated_authority_metadata(
+            simulated=self.simulated,
+            authority_account_id=self.authority_account_id,
+            authority_kind=self.authority_kind,
+        )
+        return self
 
 
 class RecentFillView(BaseModel):
@@ -359,6 +388,17 @@ class RecentFillView(BaseModel):
     price: float | None
     filled_at_ms: int
     simulated: bool = False
+    authority_account_id: str | None = None
+    authority_kind: Literal["real_paper", "synthetic"] | None = None
+
+    @model_validator(mode="after")
+    def simulated_row_has_synthetic_authority(self) -> RecentFillView:
+        _validate_simulated_authority_metadata(
+            simulated=self.simulated,
+            authority_account_id=self.authority_account_id,
+            authority_kind=self.authority_kind,
+        )
+        return self
 
 
 class MarketPulseView(BaseModel):

@@ -16,6 +16,7 @@ from app.schemas.run_admission import (
     RunAdmissionDecision,
     RunProcessAdmissionFact,
     StartRuntimeAdmissionFact,
+    StrategyValidationAdmissionFact,
     TerminalEvidenceAdmissionFact,
 )
 from app.services.bot_binding_repository import BrokerBotBinding
@@ -34,12 +35,14 @@ from app.services.bot_start_admission import (
 from app.services.bot_trade_strategy import EXPOSURE_CARRYOVER_STRATEGY_KEYS
 from app.services.market_liveness import market_liveness_fact
 from app.services.run_admission import evaluate_run_admission
+from app.services.strategy_validation_admission import current_strategy_validation_fact
 
-CustodyGuard = Callable[[str], AbstractAsyncContextManager[ClerkCustodySnapshot]]
+CustodyGuard = Callable[[BrokerBotBinding], AbstractAsyncContextManager[ClerkCustodySnapshot]]
 ProcessFactResolver = Callable[[BrokerBotBinding, int], RunProcessAdmissionFact]
 RuntimeFactResolver = Callable[[str, int], Awaitable[StartRuntimeAdmissionFact]]
 CheckpointResolver = Callable[[BrokerBotBinding], ResumeCheckpointAdmissionFact | None]
 TerminalEvidenceResolver = Callable[[BrokerBotBinding], TerminalEvidenceAdmissionFact]
+ValidationFactResolver = Callable[[BrokerBotBinding, int], StrategyValidationAdmissionFact]
 
 
 @dataclass(frozen=True)
@@ -63,6 +66,7 @@ class BotResumeAdmission:
         runtime_fact: RuntimeFactResolver,
         checkpoint: CheckpointResolver,
         terminal_evidence: TerminalEvidenceResolver,
+        validation_fact: ValidationFactResolver = current_strategy_validation_fact,
         activate: CustodyBoundActivator,
         carryover_account_policy_enabled: bool,
         session_capability: SessionCapabilityResolver,
@@ -75,6 +79,7 @@ class BotResumeAdmission:
         self._runtime_fact = runtime_fact
         self._checkpoint = checkpoint
         self._terminal_evidence = terminal_evidence
+        self._validation_fact = validation_fact
         self._activate = activate
         self._carryover_account_policy_enabled = carryover_account_policy_enabled
         self._session_capability = session_capability
@@ -87,7 +92,7 @@ class BotResumeAdmission:
     ) -> RunAdmissionDecision:
         """Evaluate Resume without mutation while holding the Clerk fence."""
         proposed = new_run_binding(_request_from(prior), now_ms=self._now_ms())
-        async with self._decision(prior, proposed, status) as (decision, _feed, _custody):
+        async with self._decision(prior, proposed, status) as (_sealed_proposed, decision, _feed, _custody):
             return decision
 
     async def resume(
@@ -97,7 +102,7 @@ class BotResumeAdmission:
     ) -> AdmittedBotResume:
         """Evaluate and activate a new run inside one Clerk custody cut."""
         proposed = new_run_binding(_request_from(prior), now_ms=self._now_ms())
-        async with self._decision(prior, proposed, status) as (decision, feed, custody):
+        async with self._decision(prior, proposed, status) as (proposed, decision, feed, custody):
             if not decision.allowed:
                 raise StartAdmissionDenied(decision)
             assert feed is not None
@@ -112,9 +117,10 @@ class BotResumeAdmission:
         prior: BrokerBotBinding,
         proposed: BrokerBotBinding,
         status: BotStatusView,
-    ) -> AsyncIterator[tuple[RunAdmissionDecision, MarketDataFeed | None, ClerkCustodySnapshot]]:
+    ) -> AsyncIterator[tuple[BrokerBotBinding, RunAdmissionDecision, MarketDataFeed | None, ClerkCustodySnapshot]]:
         try:
-            async with self._custody_guard(prior.strategy_instance_id) as custody:
+            async with self._custody_guard(prior) as custody:
+                proposed = proposed.model_copy(update={"sealed_account_id": prior.sealed_account_id})
                 observed_at_ms = self._now_ms()
                 feed = self._feed_resolver()
                 capability_account_id = market_data_capability_account_id(feed)
@@ -134,7 +140,9 @@ class BotResumeAdmission:
                     proposed_run_id=proposed.run_id,
                     prior_run_id=prior.run_id,
                     configuration_hash=configuration_hash(prior),
+                    sealed_account_id=prior.sealed_account_id or "",
                     mode=prior.mode,
+                    validation=self._validation_fact(prior, observed_at_ms),
                     runtime=runtime,
                     process=self._process_fact(prior, observed_at_ms),
                     market_data=market_data_admission_fact(
@@ -166,6 +174,7 @@ class BotResumeAdmission:
                     terminal_evidence=self._terminal_evidence(prior),
                 )
                 yield (
+                    proposed,
                     evaluate_run_admission(
                         facts,
                         custody,

@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from app.engine.strategy.signal_program import EvaluationMode
 from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeed
 from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_dry_run import DryRunActivityJournal
 from app.services.bot_runner_errors import RunAdmissionRefusedError, UnknownBotError
 from app.services.bot_trade_strategy import run_dry_run_bot, run_trade_bot
-from app.utils.timestamps import now_ms_utc
+from app.services.source_bar_ledger import SourceBarLedger
 
 logger = logging.getLogger(__name__)
 
@@ -39,20 +40,29 @@ class ManagedBot:
 
 
 class PauseAwareFeed:
-    """Hold bar delivery while one live run is durably paused."""
+    """Progress the feed while a paused run is restricted to observation.
+
+    A pause is deliberately not a stream backpressure mechanism.  Holding or
+    discarding source bars would make the next strategy decision depend on an
+    operator's timing and leave retained-bar replay unable to reproduce the
+    session.  The runner reads ``observe_only`` per closed bar and settles any
+    candidate as discarded instead of sending it to custody.
+    """
 
     def __init__(
         self,
         source: MarketDataFeed,
         gate: asyncio.Event,
-        *,
-        now_ms: Callable[[], int] = now_ms_utc,
     ) -> None:
         self._source = source
         self._gate = gate
-        self._now_ms = now_ms
-        self._discard_before_ms = 0
         self.feed_id = source.feed_id
+        self._captured_modes: dict[tuple[str, int, int], EvaluationMode] = {}
+
+    @property
+    def observe_only(self) -> bool:
+        """True only while the same live run remains paused."""
+        return not self._gate.is_set()
 
     async def stream_bars(
         self,
@@ -61,16 +71,16 @@ class PauseAwareFeed:
         use_rth: bool = True,
     ) -> AsyncIterator[MarketDataBar]:
         async for bar in self._source.stream_bars(symbol, use_rth=use_rth):
-            blocked = not self._gate.is_set()
-            await self._gate.wait()
-            if blocked:
-                # The source can buffer bars while an operator has paused this
-                # run. Resume from a current cut instead of replaying that
-                # backlog into late trading decisions.
-                self._discard_before_ms = self._now_ms()
-            if bar.end_ms <= self._discard_before_ms:
-                continue
+            mode = EvaluationMode.DECIDE if self._gate.is_set() else EvaluationMode.OBSERVE_ONLY
+            self._captured_modes[(bar.symbol, bar.start_ms, bar.end_ms)] = mode
             yield bar
+
+    def evaluation_mode_for(self, bar: MarketDataBar) -> EvaluationMode:
+        """Return the mode captured when this precise source bar was yielded."""
+        return self._captured_modes.pop(
+            (bar.symbol, bar.start_ms, bar.end_ms),
+            EvaluationMode.DECIDE,
+        )
 
     async def recent_closed_bars(
         self,
@@ -111,6 +121,7 @@ async def execute_bot_run(
     *,
     run_gate: asyncio.Event | None,
     instance_dir: Path,
+    source_bars: SourceBarLedger | None,
 ) -> None:
     """Execute one binding's configured mode behind its same-run pause gate."""
     run_feed = PauseAwareFeed(feed, run_gate) if run_gate is not None else feed
@@ -121,6 +132,7 @@ async def execute_bot_run(
             binding,
             run_feed,
             DryRunActivityJournal(instance_dir),
+            source_bars=source_bars,
         )
     else:
         await _run_log_only_bot(binding, run_feed)

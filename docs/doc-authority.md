@@ -124,6 +124,7 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 | 0039 | An ADR's Status states the decision's standing, not the code's conformance. The ADR file is the sole status authority; one closed value (`Accepted`/`Proposed`/`Superseded`/`Retired`) per ADR, narrative moved out, CI-checkable |
 | 0040 | `CONTEXT.md` is one glossary of the live trading/operator domain (not repo process); every section declares its lineage (`live` / `historical (ADR 0037/0038)` / `compatibility evidence (ADR 0038)` / `neutral`); the dangling §16.4 deferral is deleted; every newly accepted ADR carries a `Vocabulary:` line |
 | 0041 | The operator manual's Button Reference (and Glossary tables) are generated from `OPERATOR_COPY`, not hand-written; "When available" prose is dropped in favour of the panel's runtime gate reasons; CI regenerate-and-diff, as for the OpenAPI/GraphQL snapshots |
+| 0042 | Sealed signal decisions meet account-scoped custody at one semantic seam |
 
 ---
 
@@ -201,6 +202,7 @@ PRDs were on 2026-07-04). Verify status before trusting them as current.
 |---|---|
 | `docs/architecture/operator-notice-prd.md` | Operator notice contract implementation (ADR-0015) |
 | `docs/prds/alpaca-account-clerk-sqlite-control-plane.md` | Proposed Alpaca Account Clerk SQLite authority, operation-first custody timeline, and fail-closed recovery; requires a follow-up ADR before implementation authority |
+| `docs/prds/sealed-signal-program-to-governed-alpaca-bot.md` | In-flight strategy-composition, deterministic replay, synthetic Dry Run, and Clerk-governed Alpaca Paper design; requires ADR capture before authority-changing implementation |
 
 ---
 

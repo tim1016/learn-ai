@@ -45,10 +45,12 @@ class BotRunEvidenceService:
         *,
         lifecycle_repo_for: Callable[[str], BotLifecycleStateRepo],
         lifecycle_projector: AlpacaLifecycleProjector,
+        lifecycle_projector_for: Callable[[str], AlpacaLifecycleProjector] | None = None,
     ) -> None:
         self._repository = repository
         self._lifecycle_repo_for = lifecycle_repo_for
         self._lifecycle_projector = lifecycle_projector
+        self._lifecycle_projector_for = lifecycle_projector_for or (lambda _sid: lifecycle_projector)
 
     def preserve_terminal(
         self,
@@ -119,13 +121,13 @@ class BotRunEvidenceService:
             )
         run_id = expected_active_run_id or outcome.run_id
         if run_id is None:
-            return self._lifecycle_projector.refresh(
+            return self._lifecycle_projector_for(strategy_instance_id).refresh(
                 strategy_instance_id=strategy_instance_id,
                 now_ms=outcome.recorded_at_ms,
                 updated_by=updated_by,
                 reason=reason,
             )
-        return self._lifecycle_projector.project_terminal(
+        return self._lifecycle_projector_for(strategy_instance_id).project_terminal(
             strategy_instance_id=strategy_instance_id,
             outcome=outcome,
             now_ms=outcome.recorded_at_ms,
