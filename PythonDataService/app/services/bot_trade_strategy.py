@@ -104,10 +104,10 @@ class StrategyEvaluation:
     # The full canonical trace this evaluation staged, when the strategy is
     # a registered Signal Program (`registration.signal_program_factory` is
     # not `None`). `None` for a compatibility-mode strategy with no
-    # SignalSession -- every strategy in `_STRATEGY_EVALUATION_STREAMS` is a
-    # registered Signal Program today (issue #1730 Slice 5), so this is
-    # currently vacuous, but a future non-Signal-Program addition to that
-    # dict would again produce `None` here. Lets a caller that needs
+    # SignalSession. Every key in `_SIGNAL_PROGRAM_STRATEGY_KEYS` is a
+    # registered Signal Program (issue #1730 Slice 5), so this is `None`
+    # only for a compatibility-mode strategy reaching this dataclass by
+    # another route. Lets a caller that needs
     # the complete decision-meaning payload -- not just the identity/intents
     # subset above -- read it without re-deriving strategy state. Shadow-mode
     # trace-parity comparison (issue #1729 AC #2) is the first such caller;
@@ -528,10 +528,9 @@ async def strategy_evaluations(
     :func:`strategy_intents`, a read-only stream with no custody seam to
     record or discard a recovered candidate through.
     """
-    evaluation_stream = _STRATEGY_EVALUATION_STREAMS.get(binding.strategy_key)
-    if evaluation_stream is None:
+    if binding.strategy_key not in _SIGNAL_PROGRAM_STRATEGY_KEYS:
         raise ValueError(f"unsupported Alpaca paper strategy: {binding.strategy_key}")
-    async for evaluation in evaluation_stream(binding, feed, captured_decisions):
+    async for evaluation in _signal_strategy_evaluations(binding, feed, captured_decisions):
         yield evaluation
 
 
@@ -551,24 +550,31 @@ async def strategy_intents(
         _settle_evaluation(evaluation, Settlement.COMMIT)
 
 
-_StrategyEvaluationStream = Callable[
-    ["BrokerBotBinding", MarketDataFeed, "Mapping[str, str] | None"],
-    AsyncIterator[StrategyEvaluation],
-]
-_STRATEGY_EVALUATION_STREAMS: dict[str, _StrategyEvaluationStream] = {
-    "deployment_validation": _signal_strategy_evaluations,
-    "ema_crossover_signal": _signal_strategy_evaluations,
-    "sma_crossover": _signal_strategy_evaluations,
-    "rsi_mean_reversion": _signal_strategy_evaluations,
-    "spy_strategy_a": _signal_strategy_evaluations,
-    "spy_strategy_b": _signal_strategy_evaluations,
-    "spy_strategy_c": _signal_strategy_evaluations,
-}
+# Retiring DeploymentValidationDecisionKernel made this an allowlist rather
+# than a dispatch table. It was previously a genuine mapping --
+# "deployment_validation" resolved to a second, Kernel-based stream while
+# every other key resolved to _signal_strategy_evaluations -- so a
+# Callable-valued dict was doing real work. With that outlier gone, every
+# key routed to the same function: a dispatch table with nothing to
+# dispatch on, plus a Callable type alias describing a value that no longer
+# varies. What the set actually expresses is membership, so it says that
+# directly and the one call site names its single stream.
+_SIGNAL_PROGRAM_STRATEGY_KEYS: frozenset[str] = frozenset(
+    {
+        "deployment_validation",
+        "ema_crossover_signal",
+        "sma_crossover",
+        "rsi_mean_reversion",
+        "spy_strategy_a",
+        "spy_strategy_b",
+        "spy_strategy_c",
+    }
+)
 
 
 def supported_alpaca_paper_strategy_keys() -> frozenset[str]:
     """Return the registry keys backed by an executable Clerk intent stream."""
-    return frozenset(_STRATEGY_EVALUATION_STREAMS)
+    return _SIGNAL_PROGRAM_STRATEGY_KEYS
 
 
 def alpaca_paper_strategy_default_symbol(strategy_key: str) -> str:

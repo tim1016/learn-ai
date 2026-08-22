@@ -14,14 +14,21 @@ and must stay empty (see ``test_canary_admission.py::test_canary_allowlist_ships
 which means a real "canary" bot can never reach RUNNING through the public
 ``deploy``/``deploy_with_admission`` surface in this test process either --
 the same allowlist gate that protects production also blocks the front door
-here. Every test below therefore deploys a bot normally (unaffected by the
-canary gate: default ``deployment_validation`` legacy strategy under
-``mode="trade"``) and then substitutes the *running* binding's
-``program_build`` with a simulated ``PROVEN`` Signal-Program fact -- exactly
-the fact shape a real admitted canary Start/Resume would have attached. This
-isolates the thing under test (does Stop's wiring key off the running
-binding's program-build proof and record a verdict?) from Start-admission
-policy, which is already exercised by ``test_run_admission.py``.
+here. Every test below therefore deploys a bot and then substitutes the *running*
+binding's ``program_build`` with a simulated ``PROVEN`` Signal-Program fact
+-- exactly the fact shape a real admitted canary Start/Resume would have
+attached. This isolates the thing under test (does Stop's wiring key off the
+running binding's program-build proof and record a verdict?) from
+Start-admission policy, which is already exercised by
+``test_run_admission.py``.
+
+Note that the deploy step itself is no longer outside the canary gate.
+``deployment_validation`` -- this file's real deployed strategy -- was
+promoted through the governed Signal Program seam (issue #1730 Slice 5), so
+its build now resolves ``PROVEN`` at deploy time and the real allowlist gate
+applies at the front door. Each ``_deploy_trade_bot_as_simulated_canary``
+caller admits exactly the one pairing it deploys under; see
+``_REAL_DEPLOY_PROGRAM_ACCOUNT_PAIR`` below.
 """
 
 from __future__ import annotations
@@ -264,7 +271,7 @@ async def test_canary_rollback_verdict_absent_for_legacy_non_program_instance(
     Simulated here, unlike before issue #1730 Slice 5: this file's real
     deployed strategy ("deployment_validation") was itself promoted through
     the governed Signal Program seam, and no strategy remains in
-    ``app.services.bot_trade_strategy._STRATEGY_EVALUATION_STREAMS`` with a
+    ``app.services.bot_trade_strategy._SIGNAL_PROGRAM_STRATEGY_KEYS`` with a
     real, undecorated NOT_APPLICABLE build any more -- there is no live
     trade-deployable subject left to exercise unmodified. The override below
     reproduces exactly the fact shape a real legacy (no registered Signal

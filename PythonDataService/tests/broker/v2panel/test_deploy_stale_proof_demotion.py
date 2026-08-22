@@ -418,6 +418,16 @@ async def test_deploy_names_the_blocked_strategy_reason_even_when_every_strategy
         "load_strategy_validation_entries",
         lambda _registry: [blocked],
     )
+    # deployment_validation became a sealed Signal Program in this commit, so
+    # the canary allowlist is now checked ahead of accepted-proof
+    # re-verification and would otherwise answer with its own (correct, but
+    # different) reason. This test is about a stale proof naming itself, not
+    # about the allowlist, so admit the one pairing it deploys under to reach
+    # that check -- the same idiom its sibling tests in this file use.
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("deployment_validation", ACCT)}),
+    )
 
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         response = await client.post(
