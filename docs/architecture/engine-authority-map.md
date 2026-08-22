@@ -101,6 +101,31 @@ probe; it does not calculate broker exposure, duty state, or account permission.
 The former Restore Clerk action is absent. A daemon or evidence failure therefore
 authors guidance only, never an executable recovery or broker-write control.
 
+### Per-run build evidence is file-backed on purpose
+
+FR-031 requires routine *immutable configuration* reads to come from SQLite, and
+the Broker V2 roster does read `mode`, `quantity`, and `carryover_policy` from
+`bot_config.config_json`. `ProgramBuildRunEvidence` is deliberately not part of
+that migration and stays file-backed under
+`live_state/<instance>/run_build_evidence/<run_id>.json`.
+
+The reason is a classification in the sealed-program PRD, not an unfinished
+migration: §11.3 lists "running build digest and compatibility-receipt identity"
+as **dynamic run evidence** — recorded per run, explicitly *not* semantic bot
+identity — alongside admission verdicts, feed health, and runtime watermarks.
+FR-031's subject is the immutable configuration projection of §11.1/§11.2, which
+this is not. It also has no SQLite representation at all: no table carries
+`running_artifact_digest` or `qualification_receipt_hash`, and `config_json` is
+built with `sealed_program` and `program_build` excluded precisely so build
+content cannot perturb `configuration_hash`.
+
+The read is honest about itself rather than pretending to an authority it does
+not have: `ProgramBuildAdmissionFact.state` is always one of `PROVEN` /
+`UNPROVEN` / `NOT_APPLICABLE` and is never fabricated, and its `verification`
+field discloses whether the value is a fresh live re-proof or a replay of the
+durable per-run record. Moving it to SQLite would be a new table plus a
+Start/Resume write path — a deliberate change, not a cleanup.
+
 ## Retirement register and remaining deprecated paths
 
 | Path | Role today | Replacement | Migration plan reference |
