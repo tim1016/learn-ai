@@ -31,6 +31,15 @@ class SignalDataContract(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    # Qualification lineage: the source that produced the golden EvaluationTrace
+    # corpus this program's ``golden_trace_root`` pins — ``polygon`` for
+    # ema-crossover-signal/v1, whose corpus comes from the offline
+    # ``PolygonReplayMarketDataFeed``. This is NOT an authorization for which
+    # live feed a running bot may consume, and nothing treats it as one: live
+    # bars come from the single feed wired in ``app/main.py`` and are stamped
+    # ``feed_id="ibkr"``. The two differ by design. See PRD §11.6 — and note
+    # that introducing a second live provider would make that ambiguity a real
+    # safety hole and require revisiting this decision.
     provider: str
     symbol: str
     base_timeframe_ms: int = Field(gt=0)
