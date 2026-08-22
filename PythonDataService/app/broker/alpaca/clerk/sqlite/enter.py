@@ -66,6 +66,7 @@ import hashlib
 from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
+from app.broker.alpaca.clerk.sqlite.decision_receipts import AtomicDecisionReceipt
 from app.broker.alpaca.clerk.sqlite.facts import EnterAcceptedFacts
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.idempotency import (
@@ -149,6 +150,7 @@ def accept_enter(
     decision_id: str,
     lifecycle_run_id: str,
     leg: BrokerOrderLeg,
+    decision_receipt: AtomicDecisionReceipt | None = None,
 ) -> EnterSubmission:
     """Reserve + accept, entirely local (no broker call). R1's fence.
 
@@ -216,6 +218,7 @@ def accept_enter(
         idempotency_key=idempotency_key,
         payload_hash=payload_hash,
         build_transition=build_transition,
+        decision_receipt=decision_receipt,
     )
     if isinstance(outcome, CommandExistingConflict):
         raise DurableConflictError(outcome.command)
@@ -251,6 +254,7 @@ async def submit_enter(
     lifecycle_run_id: str,
     leg: BrokerOrderLeg,
     trade: BrokerTradePort,
+    decision_receipt: AtomicDecisionReceipt | None = None,
 ) -> EnterSubmission:
     """Accept, then (only for a fresh reservation) call the broker.
 
@@ -276,6 +280,7 @@ async def submit_enter(
         decision_id=decision_id,
         lifecycle_run_id=lifecycle_run_id,
         leg=leg,
+        decision_receipt=decision_receipt,
     )
     return await submit_accepted_enter(repo, accepted=accepted, leg=leg, trade=trade)
 

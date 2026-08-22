@@ -35,6 +35,8 @@ from pathlib import Path
 
 from app.broker.alpaca.clerk.sqlite import reads, writes
 from app.broker.alpaca.clerk.sqlite.decision_receipts import (
+    AtomicDecisionReceipt,
+    append_atomic_decision_receipt_row,
     append_decision_receipt_row,
     update_decision_receipt_for_bar,
 )
@@ -366,7 +368,12 @@ class ClerkSqliteRepository(
     # The spine: append a transition through the R9 three-step fence
     # ------------------------------------------------------------------
 
-    def append_transition(self, transition: TransitionInput) -> CommittedTransition:
+    def append_transition(
+        self,
+        transition: TransitionInput,
+        *,
+        decision_receipt: AtomicDecisionReceipt | None = None,
+    ) -> CommittedTransition:
         """Prepare (fsync mirror) → commit (SQLite txn + fold) → finalize (fsync mirror).
 
         Raises whatever the mirror I/O or the SQLite transaction raises; on
@@ -434,6 +441,7 @@ class ClerkSqliteRepository(
                 prev_hash=prev_hash,
                 row_hash=row_hash,
                 payload=payload,
+                decision_receipt=decision_receipt,
             )
 
             # Step 3 — FINALIZE: fsync the matching external mirror line. Writes
@@ -817,7 +825,13 @@ class ClerkSqliteRepository(
         return None
 
     def _commit_transition_row(
-        self, *, sequence: int, prev_hash: str, row_hash: str, payload: dict
+        self,
+        *,
+        sequence: int,
+        prev_hash: str,
+        row_hash: str,
+        payload: dict,
+        decision_receipt: AtomicDecisionReceipt | None = None,
     ) -> int:
         """Insert order matches the pinned §4 transaction matrix literally:
         transition insert -> fold -> revision advance -> mirror_fence insert.
@@ -828,6 +842,22 @@ class ClerkSqliteRepository(
                 self._conn, sequence=sequence, prev_hash=prev_hash, row_hash=row_hash, payload=payload
             )
             self._folds.apply(self._conn, payload)
+            if decision_receipt is not None:
+                strategy_instance_id = payload["strategy_instance_id"]
+                run_id = payload["run_id"]
+                effect_operation_id = payload["effect_operation_id"]
+                if not strategy_instance_id or not run_id or not effect_operation_id:
+                    raise ValueError(
+                        "atomic decision capture requires strategy, run, and effect identity"
+                    )
+                append_atomic_decision_receipt_row(
+                    self._conn,
+                    strategy_instance_id=strategy_instance_id,
+                    run_id=run_id,
+                    effect_operation_id=effect_operation_id,
+                    order_ref=payload["order_ref"],
+                    receipt=decision_receipt,
+                )
             control_revision = writes.advance_control_revision(self._conn)
             writes.insert_mirror_fence_prepare_row(
                 self._conn,
@@ -857,6 +887,7 @@ class ClerkSqliteRepository(
         idempotency_key: str,
         payload_hash: str,
         build_transition: Callable[[], TransitionInput],
+        decision_receipt: AtomicDecisionReceipt | None = None,
     ) -> CommandCreated | CommandExistingSame | CommandExistingConflict:
         """A command first becomes durable as part of a canonical custody
         transition — never a standalone reservation write.
@@ -900,7 +931,10 @@ class ClerkSqliteRepository(
                 return CommandExistingConflict(existing)
 
             transition = build_transition()
-            committed = self.append_transition(transition)
+            committed = self.append_transition(
+                transition,
+                decision_receipt=decision_receipt,
+            )
             command = reads.command(self._conn, command_id)
             assert command is not None, (
                 f"fold for {transition.transition_kind!r} did not create "

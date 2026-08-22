@@ -7,6 +7,8 @@ stream, and routes only its semantic ENTER/EXIT intents to the Clerk.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
@@ -16,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
 from app.broker.alpaca.clerk.active_authority import get_clerk_runtime
+from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
 from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
 from app.broker.alpaca.clerk.sqlite.decision_receipts import DecisionOutcome, SqliteDecisionReceipts
 from app.engine.data.trade_bar import TradeBar
@@ -69,6 +72,8 @@ class StrategyEvaluation:
     """One closed bar and the zero-or-one semantic intent it produced."""
 
     bar: MarketDataBar
+    evaluation_id: str
+    decision_bar_close_ms: int
     intents: tuple[SignalIntent, ...]
     # Undoes the strategy's own ENTER-time state mutation when the caller
     # blocks this evaluation's ENTER intent after signal emission (#1671
@@ -310,6 +315,8 @@ async def _deployment_validation_evaluations(
         )
         yield StrategyEvaluation(
             bar=bar,
+            evaluation_id=_generic_evaluation_id(binding, bar.end_ms),
+            decision_bar_close_ms=bar.end_ms,
             intents=intents,
             rollback_blocked_entry=kernel.rollback_blocked_entry,
             rollback_blocked_exit=kernel.rollback_blocked_exit,
@@ -411,7 +418,9 @@ async def _signal_strategy_evaluations(
         engine_bar = _engine_bar(market_bar)
         runtime.capture_source_bar(engine_bar, mode=mode)
         _drain_bar(strategy, context, engine_bar)
-        evaluation = _evaluation_from_active_stage(runtime, context, market_bar, mode=mode)
+        evaluation = _evaluation_from_active_stage(
+            binding, runtime, context, market_bar, mode=mode
+        )
         if evaluation.settle_stage is not None or evaluation.intents:
             yield evaluation
         # #1708 review finding 2: the consolidator only fires a working
@@ -424,12 +433,15 @@ async def _signal_strategy_evaluations(
             for consolidator in context.get_consolidators(market_bar.symbol):
                 if consolidator.scan(market_bar.end_ms) is None:
                     continue
-                evaluation = _evaluation_from_active_stage(runtime, context, market_bar, mode=mode)
+                evaluation = _evaluation_from_active_stage(
+                    binding, runtime, context, market_bar, mode=mode
+                )
                 if evaluation.settle_stage is not None or evaluation.intents:
                     yield evaluation
 
 
 def _evaluation_from_active_stage(
+    binding: BrokerBotBinding,
     runtime: _LiveSignalRuntime,
     context: StrategyContext,
     market_bar: MarketDataBar,
@@ -446,6 +458,14 @@ def _evaluation_from_active_stage(
     context.consolidated_bars.clear()
     return StrategyEvaluation(
         bar=market_bar,
+        evaluation_id=(
+            stage.trace.evaluation_id
+            if stage is not None
+            else _generic_evaluation_id(binding, market_bar.end_ms)
+        ),
+        decision_bar_close_ms=(
+            stage.trace.bar_close_ms if stage is not None else market_bar.end_ms
+        ),
         intents=intents,
         rollback_blocked_entry=runtime.strategy.rollback_blocked_entry,
         rollback_blocked_exit=runtime.strategy.rollback_blocked_exit,
@@ -581,7 +601,7 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
             _settle_evaluation(evaluation, Settlement.COMMIT)
             continue
         intent = evaluation.intents[0]
-        intent_id = f"{intent.bar_close_ms}:{intent.kind.value}"
+        decision_id = evaluation.evaluation_id
         if evaluation.evaluation_mode is EvaluationMode.OBSERVE_ONLY:
             _discard_evaluation(evaluation, intent)
             _append_decision_receipt(
@@ -590,7 +610,6 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
                 evaluation=evaluation,
                 outcome="blocked",
                 reason_code="PAUSED_OBSERVE_ONLY",
-                intent_id=intent_id,
             )
             continue
         # The liveness gate applies only to ENTER — creating new exposure.
@@ -613,7 +632,6 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
                     evaluation=evaluation,
                     outcome="blocked",
                     reason_code=liveness.reason_code,
-                    intent_id=intent_id,
                     liveness=liveness,
                 )
                 logger.warning(
@@ -628,14 +646,6 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
                     },
                 )
                 continue
-        _append_decision_receipt(
-            decision_receipts,
-            binding=binding,
-            evaluation=evaluation,
-            outcome=("enter_intent" if intent.kind is SignalIntentKind.ENTER else "exit_intent"),
-            reason_code=f"STRATEGY_{intent.kind.value}",
-            intent_id=intent_id,
-        )
         logger.info(
             "Trade bot decision",
             extra={
@@ -650,12 +660,24 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
         receipt = await clerk.execute_for_instance(
             strategy_instance_id=binding.strategy_instance_id,
             run_id=binding.run_id,
-            decision_id=intent_id,
+            decision_id=decision_id,
             purpose=_EFFECT_PURPOSE_BY_INTENT[intent.kind],
             action_plan=binding.action_plan,
             quantity=binding.quantity,
             use_rth=binding.use_rth,
             capability_account_id=capability_account_id,
+            decision_evidence=EffectDecisionEvidence(
+                evaluation_id=decision_id,
+                bar_ref=_decision_bar_ref(binding, evaluation),
+                symbol=binding.symbol,
+                outcome=(
+                    "enter_intent"
+                    if intent.kind is SignalIntentKind.ENTER
+                    else "exit_intent"
+                ),
+                reason_code=f"STRATEGY_{intent.kind.value}",
+                observed_at_ms=now_ms_utc(),
+            ),
         )
         if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
             # The strategy already committed its ENTER/EXIT-time state
@@ -669,13 +691,6 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
             # symmetric rollback or the strategy believes it is flat while
             # the broker still holds the position (#1708 review finding 1).
             _discard_evaluation(evaluation, intent)
-            _record_blocked_decision(
-                decision_receipts,
-                binding=binding,
-                evaluation=evaluation,
-                intent_id=intent_id,
-                receipt=receipt,
-            )
         else:
             _settle_evaluation(evaluation, Settlement.COMMIT)
         logger.info(
@@ -698,13 +713,19 @@ def _append_decision_receipt(
     evaluation: StrategyEvaluation,
     outcome: DecisionOutcome,
     reason_code: str,
-    intent_id: str = "",
+    intent_id: str | None = None,
     order_ref: str = "",
     liveness: MarketLivenessFact | None = None,
 ) -> None:
     facts: dict[str, object] = {
-        "bar_ref": f"{binding.symbol}@{evaluation.bar.end_ms}",
+        "bar_ref": _decision_bar_ref(binding, evaluation),
+        "decision_id": evaluation.evaluation_id,
+        "evaluation_id": evaluation.evaluation_id,
+        "run_id": binding.run_id,
         "reason_code": reason_code,
+        "retention_class": (
+            "protected_refusal" if outcome == "blocked" else "tail"
+        ),
     }
     if liveness is not None:
         facts["market_liveness"] = liveness.model_dump(mode="json")
@@ -713,40 +734,37 @@ def _append_decision_receipt(
         symbol=binding.symbol,
         observed_at_ms=now_ms_utc(),
         facts=facts,
-        intent_id=intent_id or None,
+        intent_id=intent_id or evaluation.evaluation_id,
         order_ref=order_ref or None,
-    )
-
-
-def _record_blocked_decision(
-    receipts: SqliteDecisionReceipts,
-    *,
-    binding: BrokerBotBinding,
-    evaluation: StrategyEvaluation,
-    intent_id: str,
-    receipt: _EffectReceipt,
-) -> None:
-    """Replace a provisional intent with the Clerk's final admission refusal."""
-    refusal_reason = str(
-        getattr(receipt, "next_step", None)
-        or getattr(receipt, "explanation", None)
-        or "The Account Clerk rejected this strategy submission."
-    )
-    receipts.update_final_outcome(
-        bar_ref=f"{binding.symbol}@{evaluation.bar.end_ms}",
-        outcome="blocked",
-        order_ref=None,
-        facts={
-            "bar_ref": f"{binding.symbol}@{evaluation.bar.end_ms}",
-            "reason_code": "CLERK_ADMISSION_REJECTED",
-            "refusal_reason": refusal_reason,
-        },
     )
 
 
 def _effect_state_value(receipt: _EffectReceipt) -> str:
     state = receipt.state
     return str(getattr(state, "value", state))
+
+
+def _generic_evaluation_id(binding: BrokerBotBinding, bar_close_ms: int) -> str:
+    """Give compatibility evaluators the same closed identity shape as sessions."""
+    payload = {
+        "program_key": binding.strategy_key,
+        "program_version": (
+            binding.sealed_program.configured_signal.program_version
+            if binding.sealed_program is not None
+            else f"{binding.strategy_key}/legacy-v1"
+        ),
+        "settings": {"symbol": binding.symbol, **(binding.strategy_params or {})},
+        "bar_close_ms": bar_close_ms,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _decision_bar_ref(binding: BrokerBotBinding, evaluation: StrategyEvaluation) -> str:
+    return (
+        f"decision-bar:{evaluation.bar.feed_id}:{binding.symbol}:"
+        f"{evaluation.decision_bar_close_ms}"
+    )
 
 
 async def run_dry_run_bot(
@@ -766,16 +784,37 @@ async def run_dry_run_bot(
     clerk = None if runtime is None else runtime.clerk
     if clerk is None or getattr(clerk, "authority_kind", None) != "synthetic":
         raise RuntimeError("Dry Run requires its activated synthetic Clerk authority.")
+    repository = getattr(clerk, "repository", None)
+    if repository is None:
+        raise RuntimeError("The synthetic Clerk has no decision-evidence repository.")
+    decision_receipts = SqliteDecisionReceipts(
+        repository,
+        strategy_instance_id=binding.strategy_instance_id,
+    )
     retained_feed = _RetainedSourceBarFeed(feed, source_bars)
     async for evaluation in strategy_evaluations(binding, retained_feed):
         if len(evaluation.intents) > 1:
             raise RuntimeError("A supported Dry Run strategy emitted multiple intents for one closed bar.")
         if not evaluation.intents:
+            _append_decision_receipt(
+                decision_receipts,
+                binding=binding,
+                evaluation=evaluation,
+                outcome="no_action",
+                reason_code="NO_ACTION",
+            )
             _settle_evaluation(evaluation, Settlement.COMMIT)
             continue
         intent = evaluation.intents[0]
         if evaluation.evaluation_mode is EvaluationMode.OBSERVE_ONLY:
             _discard_evaluation(evaluation, intent)
+            _append_decision_receipt(
+                decision_receipts,
+                binding=binding,
+                evaluation=evaluation,
+                outcome="blocked",
+                reason_code="PAUSED_OBSERVE_ONLY",
+            )
             logger.info(
                 "Dry-run candidate discarded while paused in observe-only mode",
                 extra={
@@ -800,13 +839,29 @@ async def run_dry_run_bot(
         receipt = await clerk.execute_for_instance(
             strategy_instance_id=binding.strategy_instance_id,
             run_id=binding.run_id,
-            decision_id=f"{intent.bar_close_ms}:{intent.kind.value}",
+            decision_id=evaluation.evaluation_id,
             purpose=_EFFECT_PURPOSE_BY_INTENT[intent.kind],
             action_plan=binding.action_plan,
             quantity=binding.quantity,
             use_rth=binding.use_rth,
             capability_account_id=market_data_capability_account_id(feed),
             retained_source_bar=retained,
+            decision_evidence=EffectDecisionEvidence(
+                evaluation_id=evaluation.evaluation_id,
+                bar_ref=(
+                    retained.bar_ref
+                    if retained is not None
+                    else _decision_bar_ref(binding, evaluation)
+                ),
+                symbol=binding.symbol,
+                outcome=(
+                    "enter_intent"
+                    if intent.kind is SignalIntentKind.ENTER
+                    else "exit_intent"
+                ),
+                reason_code=f"STRATEGY_{intent.kind.value}",
+                observed_at_ms=now_ms_utc(),
+            ),
         )
         if _effect_state_value(receipt) == EffectOperationState.REJECTED.value:
             _discard_evaluation(evaluation, intent)
@@ -817,7 +872,7 @@ async def run_dry_run_bot(
                 "A synthetic effect was accepted without its exact retained decision-bar evidence."
             )
         order_ref = receipt.child_order_refs[0] if receipt.child_order_refs else (
-            f"simulated:{binding.run_id}:{intent.bar_close_ms}:{intent.kind.value}"
+            f"simulated:{binding.run_id}:{evaluation.evaluation_id}"
         )
         journal.append(
             DryRunActivity(

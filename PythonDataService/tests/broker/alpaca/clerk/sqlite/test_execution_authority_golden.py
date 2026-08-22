@@ -14,6 +14,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -246,14 +247,27 @@ def _project_fixture(
                 client_order_id = str(payload["order"]["client_order_id"])
                 accepted = accepted_by_client_order_id.get(client_order_id)
                 if accepted is None:
-                    accepted = accept_enter(
-                        repo,
-                        account_id=account_id,
-                        strategy_instance_id=strategy_instance_id,
-                        decision_id=f"golden-{len(accepted_by_client_order_id)}",
-                        lifecycle_run_id="golden-fixture-run",
-                        leg=_fixture_leg(frames, client_order_id=client_order_id),
-                    )
+                    # This S1-only harness folds every distinct broker order
+                    # (e.g. a round trip's closing SELL leg) through
+                    # `accept_enter`, never `accept_exit` — it exists to
+                    # prove execution-slice capture/fold/projection, not
+                    # EXIT domain semantics or ENTER admission. #1722's
+                    # ENTER fence (ADR 0042, PRD FR-020:
+                    # ATTRIBUTED_EXPOSURE_EXISTS/ENTER_IN_PROGRESS) is a
+                    # write-side admission concern orthogonal to what this
+                    # fixture replays, so bypass it here.
+                    with patch(
+                        "app.broker.alpaca.clerk.sqlite.enter.require_admission",
+                        lambda *args, **kwargs: None,
+                    ):
+                        accepted = accept_enter(
+                            repo,
+                            account_id=account_id,
+                            strategy_instance_id=strategy_instance_id,
+                            decision_id=f"golden-{len(accepted_by_client_order_id)}",
+                            lifecycle_run_id="golden-fixture-run",
+                            leg=_fixture_leg(frames, client_order_id=client_order_id),
+                        )
                     accepted_by_client_order_id[client_order_id] = accepted
                 event = from_alpaca_trade_update(payload)
                 facts = ExecutionSliceFilledFacts(
