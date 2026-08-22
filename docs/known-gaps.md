@@ -128,14 +128,20 @@ here (issues #1666, #1667, #1668) are closed and merged to master as of
 
 ## 8. Sealed Signal Program admission (verified 2026-08-21, issue #1728 / ADR 0043)
 
-- **`CANDIDATE_UNCAPTURED_AT_CRASH` is not implemented.** The PRD's executive
-  summary and FR-016 require replay to emit this named receipt when it finds a
-  staged candidate that crashed before Clerk intake, applying `DISCARD` and
-  creating no effect. No occurrence of `CANDIDATE_UNCAPTURED_AT_CRASH` exists
-  anywhere under `PythonDataService/app`; the `DecisionOutcome` literal in
-  `app/broker/alpaca/clerk/sqlite/decision_receipts.py` has no crash-window
-  outcome. This is distinct from — and not covered by — the separate,
-  already-merged Resume-after-crash work (PRD #1716, PRs #1717–#1720).
+- **`CANDIDATE_UNCAPTURED_AT_CRASH` (FR-016) is scoped to `ema_crossover_signal`
+  only.** Implemented in `_warm_up_signal_strategy`
+  (`app/services/bot_trade_strategy.py`): warmup replay now reapplies each
+  bucket's own known Clerk disposition (COMMIT for an effect-bearing outcome,
+  DISCARD otherwise) instead of blanket-discarding every replayed bucket, so
+  position-lifecycle state carries forward correctly; the first bucket with a
+  live candidate and no known disposition is recorded as
+  `candidate_uncaptured_at_crash` (retention class `protected_crash_evidence`)
+  and discarded, never reaching custody. This only applies to strategies with
+  a registered `signal_program_factory` (currently `ema_crossover_signal`
+  alone) — legacy strategies (`sma_crossover`, `rsi_mean_reversion`,
+  `spy_strategy_a/b/c`) have no `SignalSession`/`EvaluationStage` staging
+  record to recreate a candidate from, and remain uncovered until PRD Slice 5
+  promotes them. See `tests/services/test_candidate_uncaptured_at_crash.py`.
 - **`ema_crossover_2_bps` and `spy_ema_crossover` have no build-proof identity
   of their own.** Both were left with `signal_program_contract=None` /
   `signal_program_factory=None` after the `dataclasses.replace()` identity-leak

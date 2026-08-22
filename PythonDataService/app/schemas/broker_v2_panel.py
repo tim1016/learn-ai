@@ -360,6 +360,11 @@ class RecentDecisionView(BaseModel):
         "exited",
         "no_action",
         "blocked",
+        # FR-016: replay recreated a staged candidate with no Clerk
+        # disposition (a crash between `SignalSession.advance()` and
+        # intake); DISCARD applied, no effect created. Mirrors
+        # `DecisionOutcome` in app/broker/alpaca/clerk/sqlite/decision_receipts.py.
+        "candidate_uncaptured_at_crash",
     ]
     reason_code: str
     bar_ref: str

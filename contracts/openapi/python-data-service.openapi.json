@@ -31477,7 +31477,8 @@
               "entered",
               "exited",
               "no_action",
-              "blocked"
+              "blocked",
+              "candidate_uncaptured_at_crash"
             ],
             "title": "Outcome",
             "type": "string"

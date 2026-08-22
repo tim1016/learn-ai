@@ -517,6 +517,25 @@ class _TestDecisionReceiptRepository:
         self._rows[key] = updated
         return updated
 
+    def decision_receipt_tail(
+        self,
+        *,
+        strategy_instance_id: str,
+        limit: int,
+    ) -> list[DecisionReceiptResource]:
+        """FR-016: warmup replay reads this to reapply known dispositions.
+
+        Dict insertion order matches ascending ``seq`` order here (``seq``
+        is assigned once at append; ``update_decision_receipt_for_bar``
+        replaces a row in place without reordering it), mirroring the real
+        repository's "bounded newest suffix in ascending sequence order".
+        """
+        matching = [
+            row for (sid, _bar_ref), row in self._rows.items() if sid == strategy_instance_id
+        ]
+        matching.sort(key=lambda row: row.seq)
+        return matching[-limit:] if limit > 0 else []
+
 
 class _CustodyClerk:
     authority_kind = "sqlite"

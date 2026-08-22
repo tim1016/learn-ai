@@ -35,6 +35,12 @@ DecisionOutcome = Literal[
     "exited",
     "no_action",
     "blocked",
+    # FR-016: replay recreated a staged candidate with no Clerk disposition
+    # -- the process crashed after `SignalSession.advance()` staged it but
+    # before intake captured it. DISCARD is applied and no effect is ever
+    # created; see `docs/prds/sealed-signal-program-to-governed-alpaca-bot.md`
+    # section 13.4 and the `CANDIDATE_UNCAPTURED_AT_CRASH` reason code.
+    "candidate_uncaptured_at_crash",
 ]
 
 
