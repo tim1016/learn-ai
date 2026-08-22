@@ -70,18 +70,6 @@ class LegacyMigrationLineageConflictError(ValueError):
     """One clone instance id was assigned a different migration origin."""
 
 
-class ProgramBuildEvidenceIncompleteError(ValueError):
-    """A PROVEN build fact is missing a field required to persist run evidence.
-
-    ``prove_running_program_build`` only returns ``state="PROVEN"`` after
-    populating every one of these fields (see
-    ``app/services/signal_program_admission.py::prove_running_program_build``),
-    so reaching this with one absent means that invariant broke upstream —
-    an explicit, typed failure here is preferable to writing a run-evidence
-    row that silently mispresents itself as proven.
-    """
-
-
 def alpaca_v1_action_plan(symbol: str) -> ActionPlan:
     """Build the v1 stock plan from the existing deploy controls."""
     return ActionPlan(
@@ -639,18 +627,9 @@ class BotBindingRepository:
         seal = binding.sealed_program
         if proof is None or proof.state != "PROVEN" or seal is None:
             return
-        required_fields = (
-            "program_version",
-            "golden_trace_root",
-            "running_artifact_digest",
-            "qualification_receipt_hash",
-        )
-        missing_fields = [field for field in required_fields if getattr(proof, field) is None]
-        if missing_fields:
-            raise ProgramBuildEvidenceIncompleteError(
-                f"PROVEN program-build fact for run '{binding.run_id}' is missing "
-                f"{', '.join(missing_fields)}."
-            )
+        # ``ProgramBuildAdmissionFact``'s own model validator guarantees that
+        # a PROVEN fact always carries all four proof fields, so there is no
+        # completeness check left to do here.
         candidate = ProgramBuildRunEvidence(
             strategy_instance_id=binding.strategy_instance_id,
             run_id=binding.run_id,

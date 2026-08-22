@@ -52,7 +52,12 @@ def _proven_build() -> ProgramBuildAdmissionFact:
     return ProgramBuildAdmissionFact(
         state="PROVEN",
         program_key=_PROGRAM_KEY,
+        program_version="1",
+        golden_trace_root="a" * 64,
+        running_artifact_digest="b" * 64,
+        qualification_receipt_hash="c" * 64,
         verified_at_ms=_T0,
+        evidence_refs=(f"program-build-digest:{'b' * 64}",),
         explanation="test: simulated proven Signal Program build for Stop-side wiring coverage.",
     )
 

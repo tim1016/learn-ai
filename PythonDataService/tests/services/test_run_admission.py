@@ -796,6 +796,17 @@ def _canary_program_build(
     program_key: str = "ema_crossover_signal",
     observed_at_ms: int = _NOW - 1_000,
 ) -> ProgramBuildAdmissionFact:
+    proven_only: dict[str, object] = (
+        {
+            "program_version": "1",
+            "golden_trace_root": "a" * 64,
+            "running_artifact_digest": "b" * 64,
+            "qualification_receipt_hash": "c" * 64,
+            "evidence_refs": (f"program-build-digest:{'b' * 64}",),
+        }
+        if state == "PROVEN"
+        else {}
+    )
     return ProgramBuildAdmissionFact(
         state=state,
         program_key=program_key,
@@ -805,6 +816,7 @@ def _canary_program_build(
             if state == "PROVEN"
             else "The running program is unproven."
         ),
+        **proven_only,
     )
 
 
