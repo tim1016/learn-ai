@@ -232,8 +232,13 @@ class SyntheticPolygonReplayEvidence(BaseModel):
     aggregation_path: Literal["stream_minute_bars/aggregate_realtime_bar/IbkrMarketDataFeed"] = (
         "stream_minute_bars/aggregate_realtime_bar/IbkrMarketDataFeed"
     )
-    decision_consumer_path: Literal["strategy_evaluations/DeploymentValidationDecisionKernel"] = (
-        "strategy_evaluations/DeploymentValidationDecisionKernel"
+    # "deployment_validation" was promoted through the governed Signal
+    # Program seam (issue #1730 Slice 5): its live decisions are staged and
+    # settled through the same SignalSession every other registered Signal
+    # Program uses (app.services.bot_trade_strategy._signal_strategy_
+    # evaluations), not the retired DeploymentValidationDecisionKernel.
+    decision_consumer_path: Literal["strategy_evaluations/SignalSession"] = (
+        "strategy_evaluations/SignalSession"
     )
 
     @model_validator(mode="after")

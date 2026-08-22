@@ -146,9 +146,12 @@ async def test_shadow_trace_reproduces_the_first_ema_round_trip() -> None:
 
 @pytest.mark.asyncio
 async def test_shadow_trace_evaluation_rejects_a_compatibility_mode_strategy() -> None:
-    """`deployment_validation` has no SignalSession, so it has no trace to shadow."""
+    """`spy_orb` has no registered Signal Program (no SignalSession), so it
+    has no trace to shadow. `deployment_validation` used to be this file's
+    example of such a strategy; it was promoted through the governed Signal
+    Program seam (issue #1730 Slice 5) and no longer illustrates this case."""
     with pytest.raises(UnsupportedShadowProgramError):
-        await run_shadow_trace_evaluation("deployment_validation", "SPY", None, [])
+        await run_shadow_trace_evaluation("spy_orb", "SPY", None, [])
 
 
 def test_compare_canonical_traces_accepts_identical_sequences() -> None:

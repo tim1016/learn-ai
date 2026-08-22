@@ -137,7 +137,7 @@ def _report_payload() -> dict[str, Any]:
             "decision_count": 3,
             "decision_outcomes": ["HOLD", "ENTER", "HOLD"],
             "timestamp_contract": "int64_ms_utc",
-            "decision_consumer_path": ("strategy_evaluations/DeploymentValidationDecisionKernel"),
+            "decision_consumer_path": ("strategy_evaluations/SignalSession"),
             "aggregation_path": ("stream_minute_bars/aggregate_realtime_bar/IbkrMarketDataFeed"),
         },
         "recovery": {
