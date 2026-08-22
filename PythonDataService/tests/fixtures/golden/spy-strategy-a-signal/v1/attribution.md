@@ -12,7 +12,7 @@ originally captured to reconcile.
 - Reference: no LEAN or TradingView reconciliation exists for this
   promotion. Per explicit project direction (no Polygon live data available),
   this program is qualified against its own deterministic replay of
-  IBKR-sourced minute bars only — a self-consistency pin, not a
+  the committed cross-engine-study cells (Polygon-captured one-minute bars) only — a self-consistency pin, not a
   cross-engine parity claim. The pre-existing `ENG-008` golden fixture
   (`tests/fixtures/test_strategy_parity_fixtures.py`) pins the base class's
   own pre/post #1700 SignalIntent-port self-equivalence; it predates and

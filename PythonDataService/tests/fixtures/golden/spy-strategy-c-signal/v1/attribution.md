@@ -12,7 +12,7 @@ originally captured to reconcile.
 - Reference: no LEAN or TradingView reconciliation exists for this
   promotion. Per explicit project direction (no Polygon live data available),
   this program is qualified against its own deterministic replay of
-  IBKR-sourced minute bars only — a self-consistency pin, not a
+  the committed cross-engine-study cells (Polygon-captured one-minute bars) only — a self-consistency pin, not a
   cross-engine parity claim.
 - Parameters: each cell's signal symbol (`AAPL`, `QQQ`, `SPY`, or `TSLA`),
   `adx_entry_threshold=20.0`, `rsi_period=14`, `rsi_low_gate=38.0`,

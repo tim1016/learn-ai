@@ -1195,7 +1195,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                     "LEAN inspiration but no line-for-line port. No LEAN or TradingView "
                     "reconciliation exists for this promotion -- Polygon live data is unavailable, "
                     "so per PRD direction this program is qualified against its own deterministic "
-                    "replay of IBKR-sourced minute bars only, with no cross-engine parity claim."
+                    "replay of the committed cross-engine-study cells (Polygon-captured "
+                    "one-minute bars) only, with no cross-engine parity claim."
                 ),
                 canonical_implementation=(
                     "app/engine/strategy/algorithms/sma_crossover.py::SmaCrossoverAlgorithm"
@@ -1464,7 +1465,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                     "LEAN inspiration but no line-for-line port. No LEAN or TradingView "
                     "reconciliation exists for this promotion -- Polygon live data is unavailable, "
                     "so per PRD direction this program is qualified against its own deterministic "
-                    "replay of IBKR-sourced minute bars only, with no cross-engine parity claim."
+                    "replay of the committed cross-engine-study cells (Polygon-captured "
+                    "one-minute bars) only, with no cross-engine parity claim."
                 ),
                 canonical_implementation=(
                     "app/engine/strategy/algorithms/rsi_mean_reversion.py::RsiMeanReversionAlgorithm"
@@ -1987,7 +1989,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                     "_rsi_range_base.py); RSI/ADX per Wilder (1978). No LEAN or TradingView "
                     "reconciliation exists for THIS Signal Program promotion -- Polygon live data is "
                     "unavailable, so per PRD direction this program is qualified against its own "
-                    "deterministic replay of IBKR-sourced minute bars only, with no cross-engine parity "
+                    "deterministic replay of the committed cross-engine-study cells "
+                    "(Polygon-captured one-minute bars) only, with no cross-engine parity "
                     "claim. This is distinct from golden fixture ENG-008 (tests/fixtures/"
                     "test_strategy_parity_fixtures.py), which pins the base class's own pre/post #1700 "
                     "SignalIntent-port self-equivalence and predates -- and does not establish -- this "
@@ -2226,7 +2229,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                     "Internal -- no external port reference; long-only 15-min RTH SPY strategy. "
                     "No LEAN or TradingView reconciliation exists for this promotion -- Polygon "
                     "live data is unavailable, so per PRD direction this program is qualified "
-                    "against its own deterministic replay of IBKR-sourced minute bars only, with "
+                    "against its own deterministic replay of the committed cross-engine-study "
+                    "cells (Polygon-captured one-minute bars) only, with "
                     "no cross-engine parity claim."
                 ),
                 canonical_implementation=(
@@ -2482,7 +2486,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                     "Technical Trading Systems (1978) (app/engine/indicators/adx.py). No LEAN or "
                     "TradingView reconciliation exists for this promotion -- Polygon live data is "
                     "unavailable, so per PRD direction this program is qualified against its own "
-                    "deterministic replay of IBKR-sourced minute bars only, with no cross-engine "
+                    "deterministic replay of the committed cross-engine-study cells "
+                    "(Polygon-captured one-minute bars) only, with no cross-engine "
                     "parity claim."
                 ),
                 canonical_implementation=(
