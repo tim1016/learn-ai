@@ -16,7 +16,10 @@ program added in a later wave is covered the moment it is registered.
 
 from __future__ import annotations
 
+import logging
 from decimal import Decimal
+
+import pytest
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
@@ -98,3 +101,39 @@ def test_configurable_resolution_programs_track_the_resolved_decision_clock() ->
                 f"'{key}' at resolution_minutes={minutes} rejects its own bars -- "
                 "it would consume bars and never decide"
             )
+
+
+def test_quarantined_decision_bar_is_counted_and_logged(caplog: pytest.LogCaptureFixture) -> None:
+    """A refused bar must never vanish silently.
+
+    ``on_consolidated_bar`` used to drop a ``StageQuarantine`` with no branch,
+    no log and no counter. The session refused the bar, the runner never
+    learned of it, and the bot kept consuming data while producing zero
+    decisions -- "running but deciding nothing", which is the hardest live
+    failure to notice. A mis-shaped bucket is an anomaly, never routine.
+    """
+    registration = _STRATEGY_REGISTRY["sma_crossover"]
+    program = registration.signal_program_factory(registration.param_schema())
+    program.activate_for_backtest()
+    width = program.session.timeframe_ms
+
+    # A bucket one minute short of the session's own cadence.
+    mis_shaped = TradeBar(
+        symbol="SPY",
+        start_ms=0,
+        end_ms=width - 60_000,
+        open=Decimal("100"),
+        high=Decimal("101"),
+        low=Decimal("99"),
+        close=Decimal("100"),
+        volume=1_000,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="app.engine.strategy.signal_program"):
+        program.on_consolidated_bar(mis_shaped)
+
+    assert program.quarantine_counts == {"TIMEFRAME_MISMATCH": 1}
+    assert program.take_completed_stage() is None
+    assert any("quarantined" in record.message.lower() for record in caplog.records), (
+        "a quarantined decision bar produced no warning; it would be invisible in production"
+    )

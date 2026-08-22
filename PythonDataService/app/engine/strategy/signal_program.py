@@ -18,12 +18,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.strategy.signal_intent import SignalIntent
+
+logger = logging.getLogger(__name__)
 
 
 class Settlement(StrEnum):
@@ -260,6 +263,7 @@ class SignalProgram:
     _default_evaluation_mode: EvaluationMode | None = None
     _captured_modes_by_close_ms: dict[int, EvaluationMode] = field(default_factory=dict)
     _completed_stages: list[EvaluationStage] = field(default_factory=list)
+    _quarantine_counts: dict[str, int] = field(default_factory=dict)
 
     @classmethod
     def create(
@@ -303,12 +307,40 @@ class SignalProgram:
         if mode is None:
             raise RuntimeError("SignalProgram requires a captured evaluation mode for every live bar")
         stage = self.session.advance(bar, mode=mode)
-        if isinstance(stage, EvaluationStage) and stage.settlement is not None:
+        if isinstance(stage, StageQuarantine):
+            # A quarantine used to fall through this method with no branch,
+            # no log and no counter: the session refused the bar, the runner
+            # never learned of it, and the bot went on consuming data while
+            # producing zero decisions. "Running but deciding nothing" is the
+            # hardest live failure to notice, so every refusal is surfaced —
+            # a quarantine is an anomaly (a mis-shaped bucket, a clock that
+            # went backwards, an unsettled stage), never routine.
+            self._quarantine_counts[stage.reason] = self._quarantine_counts.get(stage.reason, 0) + 1
+            logger.warning(
+                "Signal Program quarantined a decision bar",
+                extra={
+                    "program_key": self.session.program_key,
+                    "reason": stage.reason,
+                    "status": str(stage.status),
+                    "bar_start_ms": bar.start_ms,
+                    "bar_end_ms": bar.end_ms,
+                    "expected_timeframe_ms": self.session.timeframe_ms,
+                    "observed_timeframe_ms": bar.end_ms - bar.start_ms,
+                    "quarantined_so_far": self._quarantine_counts[stage.reason],
+                },
+            )
+            return
+        if stage.settlement is not None:
             self._completed_stages.append(stage)
 
     def take_completed_stage(self) -> EvaluationStage | None:
         """Return an already-settled observation for runner audit projection."""
         return self._completed_stages.pop(0) if self._completed_stages else None
+
+    @property
+    def quarantine_counts(self) -> dict[str, int]:
+        """Refused decision bars by reason, for operator-visible diagnosis."""
+        return dict(self._quarantine_counts)
 
 
 def trace_root(traces: list[EvaluationTrace]) -> str:

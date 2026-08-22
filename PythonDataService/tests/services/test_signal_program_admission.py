@@ -492,3 +492,86 @@ def test_legacy_migration_clone_lineage_conflict_on_reused_clone_id(tmp_path: Pa
             reason="Persisted v1 parameters no longer validate.",
             now_ms=_NOW,
         )
+
+
+def _sma_binding(resolution_minutes: int) -> BrokerBotBinding:
+    return _binding(
+        strategy_instance_id="sealed-sma-1",
+        strategy_key="sma_crossover",
+        strategy_params={"resolution_minutes": resolution_minutes},
+        strategy_param_origins={"resolution_minutes": "deploy_override"},
+        sealed_account_id="sim:sealed-sma-1",
+    )
+
+
+def _sma_validation() -> StrategyValidationAdmissionFact:
+    return StrategyValidationAdmissionFact(
+        state="VERIFIED",
+        strategy_key="sma_crossover",
+        evidence_status="accepted",
+        event_id="validation-sma-1",
+        evidence_snapshot_sha256="b" * 64,
+        verified_at_ms=_NOW,
+        explanation="The exact validation snapshot was re-hashed.",
+    )
+
+
+def test_seal_records_the_cadence_the_program_will_actually_run() -> None:
+    """The hashed decision cadence must describe the running decision stream.
+
+    ``resolution_minutes`` is deploy-overridable and the registry factory
+    clocks the session from the *resolved* value. Copying the contract's
+    qualified cadence into the seal instead made the immutable attestation
+    describe a different decision stream than the bot executes, with only a
+    separate ``parameters_match_validated_settings`` flag hinting at it.
+    """
+    contract = _STRATEGY_REGISTRY["sma_crossover"].signal_program_contract
+    assert contract is not None
+    binding = _sma_binding(5)
+
+    seal = build_start_program_seal(
+        binding, _sma_validation(), parameter_origins=binding.strategy_param_origins
+    )
+
+    assert seal is not None
+    assert seal.configured_signal.data.decision_timeframe_ms == 5 * 60_000
+    assert seal.configured_signal.data.decision_timeframe_ms != contract.decision_timeframe_ms
+    assert seal.configured_signal.parameters_match_validated_settings is False
+
+
+def test_overridden_cadence_cannot_prove_its_running_build() -> None:
+    """A cadence the golden corpus never covered must not read as PROVEN.
+
+    ``golden_trace_root`` pins one decision *stream*. A program clocked at a
+    different resolution reads different bars and reaches different
+    decisions, so the qualification evidence does not describe it. Before the
+    seal recorded the running cadence, both sides of this comparison came
+    from the same contract constant and it could never fail.
+    """
+    binding = _sma_binding(5)
+    seal = build_start_program_seal(
+        binding, _sma_validation(), parameter_origins=binding.strategy_param_origins
+    )
+    assert seal is not None
+    binding = binding.model_copy(update={"sealed_program": seal})
+
+    proof = prove_running_program_build(binding, verified_at_ms=_NOW)
+
+    assert proof.state == "UNPROVEN"
+
+
+def test_qualified_cadence_still_proves_its_running_build() -> None:
+    """The guard above must not refuse a deploy that runs the qualified clock."""
+    contract = _STRATEGY_REGISTRY["sma_crossover"].signal_program_contract
+    assert contract is not None
+    qualified_minutes = contract.decision_timeframe_ms // 60_000
+    binding = _sma_binding(qualified_minutes)
+    seal = build_start_program_seal(
+        binding, _sma_validation(), parameter_origins=binding.strategy_param_origins
+    )
+    assert seal is not None
+    binding = binding.model_copy(update={"sealed_program": seal})
+
+    proof = prove_running_program_build(binding, verified_at_ms=_NOW)
+
+    assert proof.state == "PROVEN"

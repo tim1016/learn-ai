@@ -163,6 +163,23 @@ def build_start_program_seal(
             origin=origin,
         )
 
+    # The cadence the seal attests to must be the cadence the bot will run,
+    # not the one the contract was qualified at. `resolution_minutes` is a
+    # deploy-overridable parameter for every program except the fixed-cadence
+    # EMA one, and the registry factory derives the session clock from the
+    # *resolved* value -- so copying `contract.decision_timeframe_ms` into the
+    # hash made the immutable attestation describe a different decision stream
+    # than the one executing. `parameters_match_validated_settings` records
+    # that an override happened, but a flag beside a wrong hashed field does
+    # not make the field right.
+    #
+    # Read back from the constructed program rather than recomputing
+    # `resolution_minutes * 60_000` here: the factory is the authority on how
+    # parameters become a decision clock, and a second copy of that arithmetic
+    # in this module is exactly the drift the seal exists to detect.
+    running_program = registration.signal_program_factory(validated)
+    decision_timeframe_ms = running_program.session.timeframe_ms
+
     configured = ConfiguredSignalProgramSeal(
         program_key=binding.strategy_key,
         program_version=contract.program_version,
@@ -175,7 +192,7 @@ def build_start_program_seal(
             provider=contract.provider,
             symbol=binding.symbol.upper(),
             base_timeframe_ms=contract.base_timeframe_ms,
-            decision_timeframe_ms=contract.decision_timeframe_ms,
+            decision_timeframe_ms=decision_timeframe_ms,
         ),
         clock=SignalClockContract(
             use_rth=binding.use_rth,
@@ -379,6 +396,16 @@ def prove_running_program_build(
         # docstring — just an identity check at the same cadence as the
         # program_version/golden_trace_root checks above.
         or configured.data.provider != contract.provider
+        # The decision cadence is not a descriptive field: `golden_trace_root`
+        # pins one decision *stream*, and a program clocked at a different
+        # resolution reads different bars and reaches different decisions, so
+        # the qualification corpus does not describe it at all. The seal now
+        # records the cadence the program will really run (see
+        # `build_start_program_seal`), which makes this comparison meaningful
+        # -- previously both sides were copied from the same contract constant
+        # and it could never fail. A deploy that overrides `resolution_minutes`
+        # is therefore UNPROVEN rather than silently PROVEN against evidence
+        # gathered at another cadence.
         # The sealed-semantics completeness fix (sibling to #1729): every
         # field newly widened onto the seal (PRD Sec 11.1) must still match
         # the currently registered contract, at the same cadence as the
@@ -391,6 +418,7 @@ def prove_running_program_build(
         or configured.bar_integrity != contract.bar_integrity
         or configured.exit_eligibility != contract.exit_eligibility
         or configured.numerical_provenance != contract.numerical_provenance
+        or configured.data.decision_timeframe_ms != contract.decision_timeframe_ms
     ):
         return _unproven(
             binding.strategy_key,
