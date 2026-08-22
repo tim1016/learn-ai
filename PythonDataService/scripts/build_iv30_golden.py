@@ -25,16 +25,15 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 from pathlib import Path
 
 import pandas as pd
 
+from app.engine.edge.features_realtime.iv30_constructor import iv30_atm_50d
 from app.services.polygon_client import PolygonClientService
 from app.services.rate_dividend_service import get_rate_and_dividend
 from app.volatility.solver import implied_volatility
 from app.volatility.vix_replication import OptionQuote, vix_style_iv30
-from app.engine.edge.features_realtime.iv30_constructor import iv30_atm_50d
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -87,7 +86,7 @@ def fetch_chain(polygon: PolygonClientService) -> tuple[float, list[dict]]:
                 ticker=c["ticker"], multiplier=1, timespan="day",
                 from_date=GOLDEN_DATE, to_date=GOLDEN_DATE,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("  skip %s: %s", c["ticker"], exc)
             continue
         if not day:

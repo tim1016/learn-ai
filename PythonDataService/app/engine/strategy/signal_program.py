@@ -121,24 +121,47 @@ class SignalProgramStrategy(Protocol):
     def signal_program_settings(self) -> dict[str, str]: ...
 
 
-class EmaCrossoverSignalSession:
-    """Transactional adapter around the already canonical EMA decision math."""
+class SignalSession:
+    """Transactional adapter around one program's already canonical decision math.
 
-    PROGRAM_KEY = "ema_crossover_signal"
-    PROGRAM_VERSION = "ema-crossover-signal/v1"
+    ``program_key``/``program_version`` are required constructor arguments,
+    not class constants. The mechanism below (advance/settle/
+    commit_if_staged/_build_trace) is generic across any
+    ``SignalProgramStrategy`` — nothing here is EMA-specific — so identity
+    must be stated per instance by whoever constructs the session. A
+    defaulted or omitted program key would let a second program silently
+    inherit whichever identity happened to be hardcoded here, which is
+    exactly the bug this class used to carry (issue #1730).
+    """
+
     # Identifies the *shape* of this session's public contract — PRD §12's
     # staged open/advance/settle protocol (EvaluationMode DECIDE/OBSERVE_ONLY,
     # Settlement COMMIT/DISCARD, EvaluationTrace) — independent of
-    # PROGRAM_VERSION, which identifies the EMA/RSI decision math. A future
-    # program could reuse this exact protocol shape under a different
-    # PROGRAM_VERSION, or this shape could change under the same math.
-    # app.engine.strategy.registry mirrors this into the registry contract
-    # rather than re-declaring it, so the two cannot drift apart silently.
+    # program_version, which identifies one program's own decision math.
+    # Every program constructed through this class shares this protocol
+    # shape; app.engine.strategy.registry mirrors this constant into each
+    # registry contract rather than re-declaring it, so the two cannot
+    # drift apart silently.
     PROTOCOL_VERSION = "signal-session-protocol/v1"
-    TIMEFRAME_MS = 15 * 60 * 1000
 
-    def __init__(self, strategy: SignalProgramStrategy) -> None:
+    def __init__(
+        self,
+        strategy: SignalProgramStrategy,
+        *,
+        program_key: str,
+        program_version: str,
+        timeframe_ms: int,
+    ) -> None:
         self._strategy = strategy
+        self.program_key = program_key
+        self.program_version = program_version
+        # Per-instance for the same reason identity is: this was a fixed
+        # 15-minute class constant, and ``advance`` REJECTS any bar of a
+        # different width. Every program but EMA either exposes a
+        # configurable ``resolution_minutes`` or runs on a fixed non-15-minute
+        # cadence, so a shared constant silently quarantined every decision
+        # clock for them -- the bot ran, consumed bars, and never decided.
+        self.timeframe_ms = timeframe_ms
         self._active_stage: EvaluationStage | None = None
         self._last_bar_close_ms: int | None = None
         self.traces: list[EvaluationTrace] = []
@@ -156,7 +179,7 @@ class EmaCrossoverSignalSession:
         """Evaluate one complete bucket under its captured immutable mode."""
         if self._active_stage is not None:
             return StageQuarantine(StageStatus.UNSETTLED_STAGE, "UNSETTLED_STAGE")
-        if bar.end_ms - bar.start_ms != self.TIMEFRAME_MS:
+        if bar.end_ms - bar.start_ms != self.timeframe_ms:
             return StageQuarantine(StageStatus.REJECTED_BAR, "TIMEFRAME_MISMATCH")
         if self._last_bar_close_ms is not None and bar.end_ms <= self._last_bar_close_ms:
             return StageQuarantine(StageStatus.REJECTED_BAR, "NON_MONOTONIC_DECISION_CLOCK")
@@ -174,7 +197,7 @@ class EmaCrossoverSignalSession:
         return stage
 
     def settle(self, settlement: Settlement) -> EvaluationStage:
-        """Commit the staged semantic action or restore the retryable EMA state."""
+        """Commit the staged semantic action or restore the strategy's retryable state."""
         stage = self._active_stage
         if stage is None:
             raise RuntimeError("SignalSession has no staged evaluation to settle")
@@ -204,15 +227,15 @@ class EmaCrossoverSignalSession:
         settings = self._strategy.signal_program_settings()
         evaluation_id = _semantic_hash(
             {
-                "program_key": self.PROGRAM_KEY,
-                "program_version": self.PROGRAM_VERSION,
+                "program_key": self.program_key,
+                "program_version": self.program_version,
                 "settings": settings,
                 "bar_close_ms": bar.end_ms,
             }
         )
         return EvaluationTrace(
-            program_key=self.PROGRAM_KEY,
-            program_version=self.PROGRAM_VERSION,
+            program_key=self.program_key,
+            program_version=self.program_version,
             evaluation_id=evaluation_id,
             bar_close_ms=bar.end_ms,
             bar_qualified=True,
@@ -228,19 +251,34 @@ class EmaCrossoverSignalSession:
 
 
 @dataclass
-class EmaCrossoverSignalProgram:
+class SignalProgram:
     """Registered Signal Program which is the only session-construction seam."""
 
     strategy: SignalProgramStrategy
-    session: EmaCrossoverSignalSession
+    session: SignalSession
     active: bool = False
     _default_evaluation_mode: EvaluationMode | None = None
     _captured_modes_by_close_ms: dict[int, EvaluationMode] = field(default_factory=dict)
     _completed_stages: list[EvaluationStage] = field(default_factory=list)
 
     @classmethod
-    def create(cls, strategy: SignalProgramStrategy) -> EmaCrossoverSignalProgram:
-        return cls(strategy=strategy, session=EmaCrossoverSignalSession(strategy))
+    def create(
+        cls,
+        strategy: SignalProgramStrategy,
+        *,
+        program_key: str,
+        program_version: str,
+        timeframe_ms: int,
+    ) -> SignalProgram:
+        return cls(
+            strategy=strategy,
+            session=SignalSession(
+                strategy,
+                program_key=program_key,
+                program_version=program_version,
+                timeframe_ms=timeframe_ms,
+            ),
+        )
 
     def activate_for_backtest(self) -> None:
         """Select staged callbacks only for Backtest's explicit adapter seam."""
@@ -289,13 +327,13 @@ def _semantic_hash(value: Any) -> str:
 
 
 __all__ = [
-    "EmaCrossoverSignalProgram",
-    "EmaCrossoverSignalSession",
     "EvaluationMode",
     "EvaluationStage",
     "EvaluationTrace",
     "Settlement",
     "SignalDecision",
+    "SignalProgram",
+    "SignalSession",
     "StageQuarantine",
     "StageStatus",
     "trace_corpus_root",

@@ -7,7 +7,7 @@ existing canonical EMA crossover strategy. It does not alter EMA, RSI,
 consolidation, fill, portfolio, Action Plan, Clerk, account, or broker logic.
 
 The strategy registry is the only public factory for the program. The program
-opens one `EmaCrossoverSignalSession`; the session stages a closed 15-minute
+opens one `SignalSession`; the session stages a closed 15-minute
 decision clock and requires `COMMIT` or `DISCARD` before accepting another.
 `UNSETTLED_STAGE` is a closed quarantine result, not an implicit retry.
 

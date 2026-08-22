@@ -6,7 +6,9 @@ Canonical implementation: app/engine/strategy/algorithms/spy_strategy_a.py
 Validated against: app/engine/tests/ (gate-wiring unit tests); golden fixture ENG-008
     (tests/fixtures/test_strategy_parity_fixtures.py) pins trade_log self-equivalence
     at registered defaults — the base class's #1700 port to SignalIntent emission
-    reproduces this trade_log unchanged, per that fixture's #1699 pre-port receipt.
+    reproduces this trade_log unchanged, per that fixture's #1699 pre-port receipt;
+    tests/engine/strategy/test_spy_strategy_a_signal_program.py::
+    test_validated_spy_strategy_a_settings_corpus_has_a_pinned_trace_root.
 
 Entry gates (all evaluated each bar while flat):
     * ``rsi_low_gate <= RSI <= rsi_high_gate`` (simple range filter).
@@ -112,3 +114,14 @@ class SpyStrategyAAlgorithm(RsiRangeStrategy):
         if self._macd.macd is not None:
             snap["macd"] = self._macd.macd
         return snap
+
+    def _extra_signal_program_settings(self) -> dict[str, str]:
+        """Stable EMA/MACD settings which extend the shared RSI-range set."""
+        return {
+            "ema_fast_period": str(self.ema_fast_period),
+            "ema_slow_period": str(self.ema_slow_period),
+            "ema_gap_threshold": str(self.ema_gap_threshold),
+            "macd_fast": str(self.macd_fast),
+            "macd_slow": str(self.macd_slow),
+            "macd_signal": str(self.macd_signal),
+        }

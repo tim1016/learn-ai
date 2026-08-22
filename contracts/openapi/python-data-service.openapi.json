@@ -17310,25 +17310,35 @@
       },
       "ExitEligibilityContract": {
         "additionalProperties": false,
-        "description": "Level/countdown exit rule \u2014 the evidence future carryover work would read.\n\nPRD \u00a711.1: \"level/countdown exit eligibility evidence where carryover may\nlater be considered.\" ``ema_crossover_signal`` exits on a fixed\ndecision-clock countdown (``EmaCrossoverSignalAlgorithm.commit_signal_decision``\nsets ``_bars_until_exit = 5`` at entry). ``countdown_state_persistable``\nrecords a real, checked fact about today's implementation, not an\naspiration: ``EmaCrossoverSignalAlgorithm.report_state_for_persistence``\nreturns ``None`` whenever the strategy is mid-position, so an in-flight\ncountdown cannot currently survive a Pause/Resume \u2014 carryover work must\neither change that or treat mid-countdown Resume as unsupported.",
+        "description": "Level/countdown exit rule \u2014 the evidence future carryover work would read.\n\nPRD \u00a711.1: \"level/countdown exit eligibility evidence where carryover may\nlater be considered.\" Two rules exist, matching PRD \u00a717's own\n\"level- or countdown-true\" vocabulary for when a discarded staged EXIT\nmust re-emit:\n\n* ``\"fixed_bar_count_countdown\"`` \u2014 ``ema_crossover_signal`` exits on a\n  fixed decision-clock countdown\n  (``EmaCrossoverSignalAlgorithm.commit_signal_decision`` sets\n  ``_bars_until_exit = 5`` at entry); ``countdown_decision_clocks`` is\n  required.\n* ``\"level_true\"`` \u2014 ``sma_crossover`` exits the instant its exit\n  relation (a fresh death cross) is true on a decision clock, with no\n  hold period or counter at all\n  (``SmaCrossoverAlgorithm.evaluate_signal_bar``); there is no\n  \"countdown\" fact to seal, so ``countdown_decision_clocks`` must be\n  unset for this rule.\n\n``countdown_state_persistable`` records a real, checked fact about\ntoday's implementation, not an aspiration. For\n``fixed_bar_count_countdown``:\n``EmaCrossoverSignalAlgorithm.report_state_for_persistence`` returns\n``None`` whenever the strategy is mid-position, so an in-flight countdown\ncannot currently survive a Pause/Resume \u2014 carryover work must either\nchange that or treat mid-countdown Resume as unsupported. For\n``level_true`` programs that have not yet implemented the\npersistence-hook contract at all (e.g. ``sma_crossover`` today), this is\n``False`` for the stronger reason that no state -- not just an in-flight\nexit -- currently survives Pause/Resume.",
         "properties": {
           "countdown_decision_clocks": {
-            "exclusiveMinimum": 0.0,
-            "title": "Countdown Decision Clocks",
-            "type": "integer"
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Countdown Decision Clocks"
           },
           "countdown_state_persistable": {
             "title": "Countdown State Persistable",
             "type": "boolean"
           },
           "rule": {
-            "const": "fixed_bar_count_countdown",
             "default": "fixed_bar_count_countdown",
-            "title": "Rule"
+            "enum": [
+              "fixed_bar_count_countdown",
+              "level_true"
+            ],
+            "title": "Rule",
+            "type": "string"
           }
         },
         "required": [
-          "countdown_decision_clocks",
           "countdown_state_persistable"
         ],
         "title": "ExitEligibilityContract",
@@ -36163,11 +36173,15 @@
       },
       "SignalSeriesContract": {
         "additionalProperties": false,
-        "description": "One named signal series a program consumes off the sealed data contract.\n\nPRD \u00a710.1/\u00a711.1: \"every signal series, field, and decision stream.\" A\nprogram's ``data`` contract seals the *shared* provider/symbol/timeframe\npair every series reads from; this seals each named series drawn from\nthat shared stream \u2014 e.g. ``ema_fast``, ``ema_slow``, and ``rsi`` all read\n``field=\"close\"`` off the same 15-minute decision bar. ``warmup_bars`` is\nthe series' own ``is_ready`` threshold (PRD \u00a711.1 \"readiness\"): the\n``app.engine.indicators`` base class exposes ``is_ready`` as\n``samples >= period``, so an EMA's ``warmup_bars`` equals its period; RSI\noverrides this to ``period + 1`` (one extra sample for the first delta).",
+        "description": "One named signal series a program consumes off the sealed data contract.\n\nPRD \u00a710.1/\u00a711.1: \"every signal series, field, and decision stream.\" A\nprogram's ``data`` contract seals the *shared* provider/symbol/timeframe\npair every series reads from; this seals each named series drawn from\nthat shared stream \u2014 e.g. ``ema_fast``, ``ema_slow``, and ``rsi`` all read\n``field=\"close\"`` off the same 15-minute decision bar. ``field`` also\nadmits ``\"high_low_close\"`` for a ``BarIndicator``-family series (e.g.\n``spy_strategy_a``'s ADX) that reads the full high/low/close swing\nrather than a single scalar -- ``field=\"close\"`` would misdescribe what\nsuch a series actually consumes. ``warmup_bars`` is\nthe series' own ``is_ready`` threshold (PRD \u00a711.1 \"readiness\"): the\n``app.engine.indicators`` base class exposes ``is_ready`` as\n``samples >= period``, so an EMA's ``warmup_bars`` equals its period; RSI\noverrides this to ``period + 1`` (one extra sample for the first delta);\nADX overrides this to ``2 * period``.",
         "properties": {
           "field": {
-            "const": "close",
-            "title": "Field"
+            "enum": [
+              "close",
+              "high_low_close"
+            ],
+            "title": "Field",
+            "type": "string"
           },
           "indicator": {
             "title": "Indicator",

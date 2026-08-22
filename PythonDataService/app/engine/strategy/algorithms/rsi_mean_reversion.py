@@ -1,9 +1,9 @@
 """RsiMeanReversionAlgorithm — new-engine port of the legacy RSI mean-reversion strategy.
 
-Formula: Long-only RSI mean reversion. Entry: RSI(window) drops strictly below `oversold` threshold (typically 30). Exit: RSI(window) rises strictly above `overbought` threshold (typically 50). End-of-run: any open position closed on `on_end_of_algorithm`.
+Formula: Long-only RSI mean reversion. Entry: RSI(window) drops strictly below `oversold` threshold (typically 30). Exit: RSI(window) rises strictly above `overbought` threshold (typically 70). End-of-run: any open position closed on `on_end_of_algorithm`.
 Reference: Internal strategy retained from the retired pandas-ta service implementation. LEAN inspiration but no line-for-line port.
 Canonical implementation: this file. Parity-pinned secondary: `app/engine/strategy/spec/evaluator.py::SpecAlgorithm` driven by `spec/fixtures/rsi_mean_reversion.spec.json` reproduces the hand-coded twin trade-by-trade. Divergence-research-only parallel: `app/research/divergence/strategies/s2_rsi_mean_reversion.py` (vectorized pandas).
-Validated against: PythonDataService/tests/test_strategy_engine.py; spec ↔ hand-coded parity at `app/engine/strategy/spec/tests/test_spec_rsi_mean_reversion_parity.py`; engine-level test `test_rsi_mean_reversion_parity.py` validates trade-set contract against legacy module.
+Validated against: PythonDataService/tests/test_strategy_engine.py; spec ↔ hand-coded parity at `app/engine/strategy/spec/tests/test_spec_rsi_mean_reversion_parity.py`; engine-level test `test_rsi_mean_reversion_parity.py` validates trade-set contract against legacy module; `tests/engine/strategy/test_rsi_signal_program.py::test_validated_rsi_mean_reversion_settings_corpus_has_a_pinned_trace_root`.
 
 Historical source: retired pandas-ta service implementation
 
@@ -33,6 +33,7 @@ from app.engine.execution.order import Direction, OrderEvent
 from app.engine.indicators.rsi import RelativeStrengthIndex
 from app.engine.strategy.base import LoggedTrade, Strategy
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
+from app.engine.strategy.signal_program import SignalDecision, SignalProgram
 from app.utils.timestamps import display_time
 
 
@@ -91,6 +92,7 @@ class RsiMeanReversionAlgorithm(Strategy):
         self._window = window
         self._oversold = Decimal(str(oversold))
         self._overbought = Decimal(str(overbought))
+        self._resolution_minutes = resolution_minutes
         self._resolution = timedelta(minutes=resolution_minutes)
 
         self._symbol: str = ""
@@ -101,6 +103,10 @@ class RsiMeanReversionAlgorithm(Strategy):
         self._open_trade: _OpenTrade | None = None
 
         self.trade_log: list[LoggedTrade] = []
+        # Set only by the registry's Signal Program factory. Direct
+        # construction stays a compatibility surface for historical tests and
+        # ledgers; public Backtest construction goes through this program.
+        self.signal_program: SignalProgram | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -122,54 +128,117 @@ class RsiMeanReversionAlgorithm(Strategy):
         self.ctx.register_consolidator(
             self._symbol,
             self._resolution,
-            self._on_consolidated_bar,
+            self._signal_program_handler(),
         )
 
+    def signal_program_settings(self) -> dict[str, str]:
+        """Stable RSI settings which participate in evaluation identity."""
+        return {
+            "symbol": self._symbol_name,
+            "window": str(self._window),
+            "oversold": str(self._oversold),
+            "overbought": str(self._overbought),
+            "resolution_minutes": str(self._resolution_minutes),
+        }
+
     # ------------------------------------------------------------------
-    # Bar handler
+    # Signal-decision boundary — the bar handler split before custody
+    # effects, mirroring SmaCrossoverAlgorithm's evaluate_signal_bar /
+    # commit_signal_decision seam.
     # ------------------------------------------------------------------
     def _on_consolidated_bar(self, bar: TradeBar) -> None:
+        """Compatibility callback for direct, non-program constructions."""
+        decision = self.evaluate_signal_bar(bar)
+        if decision.intent is not None:
+            self.commit_signal_decision(bar, decision.intent)
+
+    def evaluate_signal_bar(self, bar: TradeBar) -> SignalDecision:
+        """Advance indicator math and describe one possible semantic action.
+
+        This method never emits an intent or changes position custody state.
+        The registered ``SignalSession`` owns the subsequent commit/discard,
+        which makes an ``OBSERVE_ONLY`` bar permanently non-actionable even
+        when an operator presses Continue immediately afterward.
+        """
         assert self._rsi is not None
-        assert self.ctx is not None
 
         self._rsi.update(bar.end_ms, bar.close)
+
+        timeframe = f"{self._resolution_minutes}m"
+
         if not self._rsi.is_ready:
-            return
+            return SignalDecision(
+                intent=None,
+                ready=False,
+                relation_facts={
+                    "rsi_below_oversold": False,
+                    "rsi_above_overbought": False,
+                    "was_in_position": self._in_position,
+                },
+                signal_facts={"decision": "HOLD", "timeframe": timeframe},
+                reason_evidence={"rsi": "UNREADY"},
+                action_plan_request=None,
+            )
 
         rsi_val = self._rsi.current_value
         assert rsi_val is not None
 
-        if not self._in_position:
-            if rsi_val < self._oversold:
-                self._pending_entry = _PendingEntry(rsi=rsi_val)
-                self.ctx.emit_signal_intent(
-                    SignalIntent(
-                        kind=SignalIntentKind.ENTER,
-                        bar_close_ms=bar.end_ms,
-                        intended_price=bar.close,
-                    )
-                )
-                self._in_position = True
-                self.ctx.log(
-                    f"ENTRY SIGNAL: {display_time(bar.end_ms)} "
-                    f"Close={bar.close:.2f} RSI{self._window}={rsi_val:.2f} "
-                    f"< oversold({self._oversold})"
-                )
+        prior_in_position = self._in_position
+        below_oversold = rsi_val < self._oversold
+        above_overbought = rsi_val > self._overbought
+
+        bar_signal = "HOLD"
+        intent: SignalIntent | None = None
+
+        if self._in_position:
+            if above_overbought:
+                intent = SignalIntent(kind=SignalIntentKind.EXIT, bar_close_ms=bar.end_ms, intended_price=bar.close)
+                bar_signal = "EXIT"
         else:
-            if rsi_val > self._overbought:
-                self.ctx.emit_signal_intent(
-                    SignalIntent(
-                        kind=SignalIntentKind.EXIT,
-                        bar_close_ms=bar.end_ms,
-                        intended_price=bar.close,
-                    )
-                )
-                self.ctx.log(
-                    f"EXIT SIGNAL: {display_time(bar.end_ms)} "
-                    f"Close={bar.close:.2f} RSI{self._window}={rsi_val:.2f} "
-                    f"> overbought({self._overbought})"
-                )
-                self._in_position = False
+            if below_oversold:
+                intent = SignalIntent(kind=SignalIntentKind.ENTER, bar_close_ms=bar.end_ms, intended_price=bar.close)
+                bar_signal = "ENTER"
+
+        return SignalDecision(
+            intent=intent,
+            ready=True,
+            relation_facts={
+                "rsi_below_oversold": below_oversold,
+                "rsi_above_overbought": above_overbought,
+                "was_in_position": prior_in_position,
+            },
+            signal_facts={"decision": bar_signal, "timeframe": timeframe},
+            reason_evidence={"rsi": str(rsi_val)},
+            action_plan_request=(
+                {"contract": "single_long_stock", "intent": intent.kind.value} if intent is not None else None
+            ),
+        )
+
+    def commit_signal_decision(self, bar: TradeBar, intent: SignalIntent) -> None:
+        """Apply one session-committed signal through the bound executor."""
+        assert self.ctx is not None
+        assert self._rsi is not None and self._rsi.current_value is not None
+        rsi_val = self._rsi.current_value
+
+        if intent.kind is SignalIntentKind.EXIT:
+            self.ctx.emit_signal_intent(intent)
+            self.ctx.log(
+                f"EXIT SIGNAL: {display_time(bar.end_ms)} "
+                f"Close={bar.close:.2f} RSI{self._window}={rsi_val:.2f} "
+                f"> overbought({self._overbought})"
+            )
+            self._in_position = False
+            return
+
+        assert intent.kind is SignalIntentKind.ENTER
+        self._pending_entry = _PendingEntry(rsi=rsi_val)
+        self.ctx.emit_signal_intent(intent)
+        self._in_position = True
+        self.ctx.log(
+            f"ENTRY SIGNAL: {display_time(bar.end_ms)} "
+            f"Close={bar.close:.2f} RSI{self._window}={rsi_val:.2f} "
+            f"< oversold({self._oversold})"
+        )
 
     def rollback_blocked_entry(self) -> None:
         """Undo lifecycle state when the live liveness gate blocks ENTER."""
@@ -177,7 +246,7 @@ class RsiMeanReversionAlgorithm(Strategy):
         self._pending_entry = None
 
     def rollback_blocked_exit(self) -> None:
-        """Undo the EXIT-time state committed by ``_on_consolidated_bar``
+        """Undo the EXIT-time state committed by ``commit_signal_decision``
         when the caller refuses to act on this signal (e.g. a Clerk
         admission rejection). Without this, a rejected EXIT leaves the
         strategy believing it is flat while the broker still holds the

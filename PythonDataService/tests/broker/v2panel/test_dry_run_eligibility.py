@@ -31,7 +31,10 @@ def _strategies() -> tuple:
         for entry in load_strategy_validation_entries(strategy_registry_seeds())
         if entry.strategy_key == "ema_crossover_signal"
     )
-    return _strategy_views([entry])
+    # Dry Run is never canary-gated (#1730) -- the account id here is
+    # arbitrary and does not need canary admission for these tests to
+    # exercise real Dry Run eligibility.
+    return _strategy_views([entry], account_id=ACCT)
 
 
 def _clerk_status(

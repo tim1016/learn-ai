@@ -2,11 +2,14 @@
 
 Formula: RSI(14) range + ADX > 20 + ADX rising bar-over-bar → entry; ADX < 15 → exit. Extends RsiRangeStrategy base.
 Reference: Internal — no external port reference; long-only 15-min RTH SPY strategy.
-Canonical implementation: app/engine/strategy/algorithms/spy_strategy_c.py
+Canonical implementation: app/engine/strategy/algorithms/spy_strategy_c.py (extends the shared
+    custody-split machinery in app/engine/strategy/algorithms/_rsi_range_base.py::RsiRangeStrategy).
 Validated against: app/engine/tests/ (gate-wiring unit tests); golden fixture ENG-008
     (tests/fixtures/test_strategy_parity_fixtures.py) pins trade_log self-equivalence
     at registered defaults — the base class's #1700 port to SignalIntent emission
-    reproduces this trade_log unchanged, per that fixture's #1699 pre-port receipt.
+    reproduces this trade_log unchanged, per that fixture's #1699 pre-port receipt;
+    tests/engine/strategy/test_spy_strategy_c_signal_program.py::
+    test_validated_spy_strategy_c_settings_corpus_has_a_pinned_trace_root (issue #1730 Slice 5).
 
 Entry gates (all evaluated each bar while flat):
     * ``rsi_low_gate <= RSI <= rsi_high_gate``.
@@ -65,3 +68,6 @@ class SpyStrategyCAlgorithm(RsiRangeStrategy):
         if self._adx.previous_value is not None:
             snap["adx_prev"] = self._adx.previous_value
         return snap
+
+    def _extra_signal_program_settings(self) -> dict[str, str]:
+        return {"adx_entry_threshold": str(self.adx_entry_threshold)}

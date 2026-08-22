@@ -61,18 +61,23 @@ class SignalSeriesContract(BaseModel):
     program's ``data`` contract seals the *shared* provider/symbol/timeframe
     pair every series reads from; this seals each named series drawn from
     that shared stream — e.g. ``ema_fast``, ``ema_slow``, and ``rsi`` all read
-    ``field="close"`` off the same 15-minute decision bar. ``warmup_bars`` is
+    ``field="close"`` off the same 15-minute decision bar. ``field`` also
+    admits ``"high_low_close"`` for a ``BarIndicator``-family series (e.g.
+    ``spy_strategy_a``'s ADX) that reads the full high/low/close swing
+    rather than a single scalar -- ``field="close"`` would misdescribe what
+    such a series actually consumes. ``warmup_bars`` is
     the series' own ``is_ready`` threshold (PRD §11.1 "readiness"): the
     ``app.engine.indicators`` base class exposes ``is_ready`` as
     ``samples >= period``, so an EMA's ``warmup_bars`` equals its period; RSI
-    overrides this to ``period + 1`` (one extra sample for the first delta).
+    overrides this to ``period + 1`` (one extra sample for the first delta);
+    ADX overrides this to ``2 * period``.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: str
     indicator: str
-    field: Literal["close"]
+    field: Literal["close", "high_low_close"]
     period: int = Field(gt=0)
     warmup_bars: int = Field(gt=0)
 
@@ -123,21 +128,48 @@ class ExitEligibilityContract(BaseModel):
     """Level/countdown exit rule — the evidence future carryover work would read.
 
     PRD §11.1: "level/countdown exit eligibility evidence where carryover may
-    later be considered." ``ema_crossover_signal`` exits on a fixed
-    decision-clock countdown (``EmaCrossoverSignalAlgorithm.commit_signal_decision``
-    sets ``_bars_until_exit = 5`` at entry). ``countdown_state_persistable``
-    records a real, checked fact about today's implementation, not an
-    aspiration: ``EmaCrossoverSignalAlgorithm.report_state_for_persistence``
-    returns ``None`` whenever the strategy is mid-position, so an in-flight
-    countdown cannot currently survive a Pause/Resume — carryover work must
-    either change that or treat mid-countdown Resume as unsupported.
+    later be considered." Two rules exist, matching PRD §17's own
+    "level- or countdown-true" vocabulary for when a discarded staged EXIT
+    must re-emit:
+
+    * ``"fixed_bar_count_countdown"`` — ``ema_crossover_signal`` exits on a
+      fixed decision-clock countdown
+      (``EmaCrossoverSignalAlgorithm.commit_signal_decision`` sets
+      ``_bars_until_exit = 5`` at entry); ``countdown_decision_clocks`` is
+      required.
+    * ``"level_true"`` — ``sma_crossover`` exits the instant its exit
+      relation (a fresh death cross) is true on a decision clock, with no
+      hold period or counter at all
+      (``SmaCrossoverAlgorithm.evaluate_signal_bar``); there is no
+      "countdown" fact to seal, so ``countdown_decision_clocks`` must be
+      unset for this rule.
+
+    ``countdown_state_persistable`` records a real, checked fact about
+    today's implementation, not an aspiration. For
+    ``fixed_bar_count_countdown``:
+    ``EmaCrossoverSignalAlgorithm.report_state_for_persistence`` returns
+    ``None`` whenever the strategy is mid-position, so an in-flight countdown
+    cannot currently survive a Pause/Resume — carryover work must either
+    change that or treat mid-countdown Resume as unsupported. For
+    ``level_true`` programs that have not yet implemented the
+    persistence-hook contract at all (e.g. ``sma_crossover`` today), this is
+    ``False`` for the stronger reason that no state -- not just an in-flight
+    exit -- currently survives Pause/Resume.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    rule: Literal["fixed_bar_count_countdown"] = "fixed_bar_count_countdown"
-    countdown_decision_clocks: int = Field(gt=0)
+    rule: Literal["fixed_bar_count_countdown", "level_true"] = "fixed_bar_count_countdown"
+    countdown_decision_clocks: int | None = Field(default=None, gt=0)
     countdown_state_persistable: bool
+
+    @model_validator(mode="after")
+    def _validate_countdown_clocks_matches_rule(self) -> ExitEligibilityContract:
+        if self.rule == "fixed_bar_count_countdown" and self.countdown_decision_clocks is None:
+            raise ValueError("fixed_bar_count_countdown requires countdown_decision_clocks")
+        if self.rule != "fixed_bar_count_countdown" and self.countdown_decision_clocks is not None:
+            raise ValueError(f"'{self.rule}' must not set countdown_decision_clocks")
+        return self
 
 
 class NumericalProvenanceContract(BaseModel):
@@ -203,7 +235,7 @@ class ConfiguredSignalProgramSeal(BaseModel):
     # program's construction/session protocol — PRD §12's staged
     # open/advance/settle contract (``EvaluationMode``, ``Settlement``,
     # ``EvaluationTrace``) — which could change independently of either.
-    # Sourced from ``EmaCrossoverSignalSession.PROTOCOL_VERSION``, the one
+    # Sourced from ``SignalSession.PROTOCOL_VERSION``, the one
     # place that shape is declared.
     protocol_version: str
     # FR-002: the parameter schema's own legal type/range/unit contract is

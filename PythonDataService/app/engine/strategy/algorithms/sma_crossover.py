@@ -3,7 +3,7 @@
 Formula: Long-only golden cross / death cross. Enter long when short SMA crosses above long SMA; exit when short SMA crosses below long SMA. Default periods follow `_rsi_range_base.py` conventions (50/200 for the divergence-research s3 variant; new engine accepts arbitrary).
 Reference: Internal strategy retained from the retired pandas-ta service implementation. LEAN inspiration but no line-for-line port.
 Canonical implementation: this file. Parity-pinned secondary: `app/engine/strategy/spec/evaluator.py::SpecAlgorithm` driven by `spec/fixtures/sma_crossover.spec.json` reproduces the hand-coded twin trade-by-trade. Divergence-research-only parallel: `app/research/divergence/strategies/s3_sma_crossover.py` (vectorized pandas).
-Validated against: PythonDataService/tests/test_strategy_engine.py; spec ↔ hand-coded parity at `app/engine/strategy/spec/tests/test_spec_sma_parity.py`.
+Validated against: PythonDataService/tests/test_strategy_engine.py; spec ↔ hand-coded parity at `app/engine/strategy/spec/tests/test_spec_sma_parity.py`; `tests/engine/strategy/test_sma_signal_program.py::test_validated_sma_settings_corpus_has_a_pinned_trace_root`.
 
 Golden-cross / death-cross rule lifted from
 the retired pandas-ta service implementation:
@@ -39,6 +39,7 @@ from app.engine.execution.order import Direction, OrderEvent
 from app.engine.indicators.sma import SimpleMovingAverage
 from app.engine.strategy.base import LoggedTrade, Strategy
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
+from app.engine.strategy.signal_program import SignalDecision, SignalProgram
 from app.utils.timestamps import display_time
 
 
@@ -91,6 +92,7 @@ class SmaCrossoverAlgorithm(Strategy):
         self._symbol_name = symbol.upper()
         self._short_window = short_window
         self._long_window = long_window
+        self._resolution_minutes = resolution_minutes
         self._resolution = timedelta(minutes=resolution_minutes)
 
         self._symbol: str = ""
@@ -107,6 +109,10 @@ class SmaCrossoverAlgorithm(Strategy):
         self._open_trade: _OpenTrade | None = None
 
         self.trade_log: list[LoggedTrade] = []
+        # Set only by the registry's Signal Program factory. Direct
+        # construction stays a compatibility surface for historical tests and
+        # ledgers; public Backtest construction goes through this program.
+        self.signal_program: SignalProgram | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -132,26 +138,55 @@ class SmaCrossoverAlgorithm(Strategy):
         self.ctx.register_consolidator(
             self._symbol,
             self._resolution,
-            self._on_consolidated_bar,
+            self._signal_program_handler(),
         )
 
+    def signal_program_settings(self) -> dict[str, str]:
+        """Stable SMA settings which participate in evaluation identity."""
+        return {
+            "symbol": self._symbol_name,
+            "short_window": str(self._short_window),
+            "long_window": str(self._long_window),
+            "resolution_minutes": str(self._resolution_minutes),
+        }
+
     # ------------------------------------------------------------------
-    # Bar handler
+    # Signal-decision boundary — the bar handler split before custody
+    # effects, mirroring EmaCrossoverSignalAlgorithm's
+    # evaluate_signal_bar / commit_signal_decision seam.
     # ------------------------------------------------------------------
     def _on_consolidated_bar(self, bar: TradeBar) -> None:
+        """Compatibility callback for direct, non-program constructions."""
+        decision = self.evaluate_signal_bar(bar)
+        if decision.intent is not None:
+            self.commit_signal_decision(bar, decision.intent)
+
+    def evaluate_signal_bar(self, bar: TradeBar) -> SignalDecision:
+        """Advance indicator math and describe one possible semantic action.
+
+        This method never emits an intent or changes position custody state.
+        The registered ``SignalSession`` owns the subsequent commit/discard,
+        which makes an ``OBSERVE_ONLY`` bar permanently non-actionable even
+        when an operator presses Continue immediately afterward.
+        """
         assert self._sma_short is not None
         assert self._sma_long is not None
-        assert self.ctx is not None
 
         self._sma_short.update(bar.end_ms, bar.close)
         self._sma_long.update(bar.end_ms, bar.close)
 
-        # Until both SMAs have enough samples, we can't make a decision. Once
-        # they become ready we *seed* the previous-state on the first eligible
-        # bar without trading, so the first crossover we observe is a fresh
-        # one rather than whatever historical state happens to sit there.
+        timeframe = f"{self._resolution_minutes}m"
+
+        # Until both SMAs have enough samples, we can't make a decision.
         if not (self._sma_short.is_ready and self._sma_long.is_ready):
-            return
+            return SignalDecision(
+                intent=None,
+                ready=False,
+                relation_facts={"short_above_long": False, "was_in_position": self._in_position},
+                signal_facts={"decision": "HOLD", "timeframe": timeframe},
+                reason_evidence={"sma_short": "UNREADY", "sma_long": "UNREADY"},
+                action_plan_request=None,
+            )
 
         assert self._sma_short.current_value is not None
         assert self._sma_long.current_value is not None
@@ -159,50 +194,80 @@ class SmaCrossoverAlgorithm(Strategy):
         short_val = self._sma_short.current_value
         long_val = self._sma_long.current_value
         current_above = short_val > long_val
+        prior_in_position = self._in_position
 
         if self._prev_short_above_long is None:
-            # First ready bar — just record the state, no trade.
+            # First ready bar — seed the crossover state only, no trade, so
+            # the first crossover we observe is a fresh one rather than
+            # whatever historical state happens to sit there.
             self._prev_short_above_long = current_above
-            return
+            return SignalDecision(
+                intent=None,
+                ready=True,
+                relation_facts={"short_above_long": current_above, "was_in_position": prior_in_position},
+                signal_facts={"decision": "HOLD", "timeframe": timeframe},
+                reason_evidence={"sma_short": str(short_val), "sma_long": str(long_val)},
+                action_plan_request=None,
+            )
 
         fresh_golden_cross = current_above and not self._prev_short_above_long
         fresh_death_cross = (not current_above) and self._prev_short_above_long
 
+        bar_signal = "HOLD"
+        intent: SignalIntent | None = None
+
         if self._in_position:
             if fresh_death_cross:
-                self.ctx.emit_signal_intent(
-                    SignalIntent(
-                        kind=SignalIntentKind.EXIT,
-                        bar_close_ms=bar.end_ms,
-                        intended_price=bar.close,
-                    )
-                )
-                self.ctx.log(
-                    f"EXIT SIGNAL: {display_time(bar.end_ms)} "
-                    f"Close={bar.close:.2f} "
-                    f"SMA{self._short_window}={short_val:.4f} "
-                    f"SMA{self._long_window}={long_val:.4f}"
-                )
-                self._in_position = False
+                intent = SignalIntent(kind=SignalIntentKind.EXIT, bar_close_ms=bar.end_ms, intended_price=bar.close)
+                bar_signal = "EXIT"
         else:
             if fresh_golden_cross:
-                self._pending_entry = _PendingEntry(sma_short=short_val, sma_long=long_val)
-                self.ctx.emit_signal_intent(
-                    SignalIntent(
-                        kind=SignalIntentKind.ENTER,
-                        bar_close_ms=bar.end_ms,
-                        intended_price=bar.close,
-                    )
-                )
-                self._in_position = True
-                self.ctx.log(
-                    f"ENTRY SIGNAL: {display_time(bar.end_ms)} "
-                    f"Close={bar.close:.2f} "
-                    f"SMA{self._short_window}={short_val:.4f} "
-                    f"SMA{self._long_window}={long_val:.4f}"
-                )
+                intent = SignalIntent(kind=SignalIntentKind.ENTER, bar_close_ms=bar.end_ms, intended_price=bar.close)
+                bar_signal = "ENTER"
 
+        # Update the crossover state for the next bar.
         self._prev_short_above_long = current_above
+
+        return SignalDecision(
+            intent=intent,
+            ready=True,
+            relation_facts={"short_above_long": current_above, "was_in_position": prior_in_position},
+            signal_facts={"decision": bar_signal, "timeframe": timeframe},
+            reason_evidence={"sma_short": str(short_val), "sma_long": str(long_val)},
+            action_plan_request=(
+                {"contract": "single_long_stock", "intent": intent.kind.value} if intent is not None else None
+            ),
+        )
+
+    def commit_signal_decision(self, bar: TradeBar, intent: SignalIntent) -> None:
+        """Apply one session-committed signal through the bound executor."""
+        assert self.ctx is not None
+        assert self._sma_short is not None and self._sma_short.current_value is not None
+        assert self._sma_long is not None and self._sma_long.current_value is not None
+        short_val = self._sma_short.current_value
+        long_val = self._sma_long.current_value
+
+        if intent.kind is SignalIntentKind.EXIT:
+            self.ctx.emit_signal_intent(intent)
+            self.ctx.log(
+                f"EXIT SIGNAL: {display_time(bar.end_ms)} "
+                f"Close={bar.close:.2f} "
+                f"SMA{self._short_window}={short_val:.4f} "
+                f"SMA{self._long_window}={long_val:.4f}"
+            )
+            self._in_position = False
+            return
+
+        assert intent.kind is SignalIntentKind.ENTER
+        self._pending_entry = _PendingEntry(sma_short=short_val, sma_long=long_val)
+        self.ctx.emit_signal_intent(intent)
+        self._in_position = True
+        self.ctx.log(
+            f"ENTRY SIGNAL: {display_time(bar.end_ms)} "
+            f"Close={bar.close:.2f} "
+            f"SMA{self._short_window}={short_val:.4f} "
+            f"SMA{self._long_window}={long_val:.4f}"
+        )
 
     def rollback_blocked_entry(self) -> None:
         """Undo lifecycle state when the live liveness gate blocks ENTER."""
@@ -210,7 +275,7 @@ class SmaCrossoverAlgorithm(Strategy):
         self._pending_entry = None
 
     def rollback_blocked_exit(self) -> None:
-        """Undo the EXIT-time state committed by ``_on_consolidated_bar``
+        """Undo the EXIT-time state committed by ``commit_signal_decision``
         when the caller refuses to act on this signal (e.g. a Clerk
         admission rejection). Without this, a rejected EXIT leaves the
         strategy believing it is flat while the broker still holds the

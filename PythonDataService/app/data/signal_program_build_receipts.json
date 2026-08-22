@@ -6,10 +6,60 @@
       "program_key": "ema_crossover_signal",
       "program_version": "ema-crossover-signal/v1",
       "golden_trace_root": "82b81f82b5690919871e50a6c9ac39f26fa28d2c09b96dad4a777d4615cd6179",
-      "artifact_digest": "41b35ed71b8e725d9af20d448c443ab242894ef808310d0d828f1a09a86bdb39",
-      "qualification_suite": "tests/engine/strategy/test_ema_signal_program.py::test_validated_ema_settings_corpus_has_a_pinned_trace_root",
-      "qualified_at_ms": 1787407784410,
-      "receipt_hash": "0e13837c17a3400e6616bd0bad28a3a453e2d66bbf0a58731fade2ec4881f7cb"
+      "artifact_digest": "68d7a39a958c9b7cf386f9b6ab2bef6c7d45dc2536f6c05b148003462fd6f4d8",
+      "qualification_suite": "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[ema_crossover_signal]",
+      "qualified_at_ms": 1787425214526,
+      "receipt_hash": "61ea4f3a617e039af442ab585ba57714a8a3bb35ae0152f7d907d5def20664b6"
+    },
+    {
+      "schema_version": 1,
+      "program_key": "rsi_mean_reversion",
+      "program_version": "rsi-mean-reversion/v1",
+      "golden_trace_root": "46d0b13b5e3307d983b4d5b4a1a21ba790db5e5644d164364a787bb2a12acde7",
+      "artifact_digest": "b317c7a86f00bcfe55530547d58a12fa32a53983c14354cdbb13461c5c7e16be",
+      "qualification_suite": "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[rsi_mean_reversion]",
+      "qualified_at_ms": 1787425214526,
+      "receipt_hash": "f6fed3623eead932a01c4e28b4af82b1870ffa2775c2ccfb3ea766a41e445604"
+    },
+    {
+      "schema_version": 1,
+      "program_key": "sma_crossover",
+      "program_version": "sma-crossover/v1",
+      "golden_trace_root": "b0a136f7b485179bc37c7998df430480b94b0866d9bc58dbead636fa84a320e9",
+      "artifact_digest": "3065b6bf721627e1ee4768f48199941c8bc3f4f7c17cfc84a1ec15c9d314b0d8",
+      "qualification_suite": "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[sma_crossover]",
+      "qualified_at_ms": 1787425214526,
+      "receipt_hash": "682682aeece6c997fc9a4c59685542e575453bcf3b6fc53d57cf94f8467a6eec"
+    },
+    {
+      "schema_version": 1,
+      "program_key": "spy_strategy_a",
+      "program_version": "spy-strategy-a/v1",
+      "golden_trace_root": "7ee88013046505a9df88fa9c83b94e1f5f4c4de92718dd874ca157b5eea25f5f",
+      "artifact_digest": "f672f6422fa9fdd3fc2a5614d36a1fef5153e6d70857801038b17182ac1ae3a6",
+      "qualification_suite": "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[spy_strategy_a]",
+      "qualified_at_ms": 1787425214526,
+      "receipt_hash": "9b4dc85f0f288278fac5e0a8e0a07f7a65e65e77bf05dc802079633b6fb1d447"
+    },
+    {
+      "schema_version": 1,
+      "program_key": "spy_strategy_b",
+      "program_version": "spy-strategy-b/v1",
+      "golden_trace_root": "775a5dfd4a98090111c4aa0f643f647b4b14cf27c9334ac266ebc9565b7485b4",
+      "artifact_digest": "643b44b64f73aea23beff45346e28d5569a0f9ac0421d1c2e85fd5ec1a0fc96b",
+      "qualification_suite": "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[spy_strategy_b]",
+      "qualified_at_ms": 1787425214526,
+      "receipt_hash": "10d27fc32e562fb7b3f6baab043767bdd1d9f0913946672c368f86bb49301d95"
+    },
+    {
+      "schema_version": 1,
+      "program_key": "spy_strategy_c",
+      "program_version": "spy-strategy-c/v1",
+      "golden_trace_root": "9efc77718f0028e78ad6ea7d56ffda19a510cbba7f5ea3b5a6d5cccade6a75c6",
+      "artifact_digest": "779e09f13485e81337b4a4458af6d59e29325fb3915b863804d2e1b78135d5a9",
+      "qualification_suite": "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[spy_strategy_c]",
+      "qualified_at_ms": 1787425214526,
+      "receipt_hash": "83c00fadf19f41895b9ef62d3c95a31914c82489c5027ed09d851acd12a7f625"
     }
   ]
 }
