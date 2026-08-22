@@ -662,6 +662,9 @@ def _build_ema_crossover_signal_program(params: StrategyParamsBase) -> SignalPro
         strategy,
         program_key=_EMA_SIGNAL_PROGRAM_KEY,
         program_version=_EMA_SIGNAL_PROGRAM_VERSION,
+        # Fixed cadence: this program exposes no resolution parameter, and
+        # its registration declares StrategyBarCadence("minute", 15).
+        timeframe_ms=15 * 60_000,
     )
     strategy.signal_program = program
     return program
@@ -688,6 +691,11 @@ def _build_sma_crossover_signal_program(params: StrategyParamsBase) -> SignalPro
         strategy,
         program_key=_SMA_SIGNAL_PROGRAM_KEY,
         program_version=_SMA_SIGNAL_PROGRAM_VERSION,
+        # Derived from the resolved parameter, not the contract's validated
+        # value: this program's decision clock is deploy-time configurable,
+        # and a session pinned to the validated 15 minutes would reject
+        # every bar of a bot deployed at any other resolution.
+        timeframe_ms=typed.resolution_minutes * 60_000,
     )
     strategy.signal_program = program
     return program

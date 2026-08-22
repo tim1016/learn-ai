@@ -178,11 +178,13 @@ def _strategy_signal_bars(closes: list[str], *, bar_minutes: int = 1) -> list[Ma
     otherwise-empty 15-minute bucket is a fine, cheap stand-in for a full
     bucket's worth of source bars. A registered Signal Program is stricter:
     ``SignalSession.advance()`` (``app/engine/strategy/signal_program.py``)
-    rejects any consolidated bar whose width isn't exactly
-    ``TIMEFRAME_MS`` (15 minutes) as ``TIMEFRAME_MISMATCH`` -- a 1-minute
-    source bar alone in its bucket produces a 1-minute-wide consolidated
-    bar, quarantining every decision clock. Pass ``bar_minutes=15`` so each
-    source bar alone already spans its full decision window.
+    rejects any consolidated bar whose width isn't exactly the session's
+    own ``timeframe_ms`` as ``TIMEFRAME_MISMATCH`` -- a 1-minute source bar
+    alone in its bucket produces a 1-minute-wide consolidated bar,
+    quarantining every decision clock. The strategies covered here build a
+    15-minute decision clock from their default parameters, so pass
+    ``bar_minutes=15`` and each source bar alone already spans its full
+    decision window.
     """
     width_ms = bar_minutes * 60_000
     return [

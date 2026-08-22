@@ -6,20 +6,20 @@
       "program_key": "ema_crossover_signal",
       "program_version": "ema-crossover-signal/v1",
       "golden_trace_root": "82b81f82b5690919871e50a6c9ac39f26fa28d2c09b96dad4a777d4615cd6179",
-      "artifact_digest": "02a88650148b2ef34527b9ea6c05466e7ccd60ab6c32dd432ca493e64d3e886e",
+      "artifact_digest": "a7a6c6161ae2d439b4e40038e253d886112b30cc741abc89dbaf7057239f84d4",
       "qualification_suite": "tests/engine/strategy/test_ema_signal_program.py::test_validated_ema_settings_corpus_has_a_pinned_trace_root",
-      "qualified_at_ms": 1787412850292,
-      "receipt_hash": "b84788ff312958bd3cb2928855821c49b90ed01deecf9d657eb848cbd94bd882"
+      "qualified_at_ms": 1787417786521,
+      "receipt_hash": "6698481e19015fb4f1dbcb84f60e2b3e9d5b65c5f25dabc2136de54ff1659033"
     },
     {
       "schema_version": 1,
       "program_key": "sma_crossover",
       "program_version": "sma-crossover/v1",
       "golden_trace_root": "b0a136f7b485179bc37c7998df430480b94b0866d9bc58dbead636fa84a320e9",
-      "artifact_digest": "f621916d997fdb7828fb58e294da03f97556cdb36ad6a70847c2bc1493363bc3",
+      "artifact_digest": "94d35cb8ebfe71396d5ad9581c9907f403c54b7105d1742c36de578e053c80b1",
       "qualification_suite": "tests/engine/strategy/test_sma_signal_program.py::test_validated_sma_settings_corpus_has_a_pinned_trace_root",
-      "qualified_at_ms": 1787415514353,
-      "receipt_hash": "657d1752a3fe2368f700655e077e856dc20757fc910d0ba7b1ed97df9bb6fc6c"
+      "qualified_at_ms": 1787417786521,
+      "receipt_hash": "b4f83e442f884c54c844af832f3ce60dbc8e7462ca942a20b268f2bb8b98e060"
     }
   ]
 }

@@ -143,7 +143,6 @@ class SignalSession:
     # registry contract rather than re-declaring it, so the two cannot
     # drift apart silently.
     PROTOCOL_VERSION = "signal-session-protocol/v1"
-    TIMEFRAME_MS = 15 * 60 * 1000
 
     def __init__(
         self,
@@ -151,10 +150,18 @@ class SignalSession:
         *,
         program_key: str,
         program_version: str,
+        timeframe_ms: int,
     ) -> None:
         self._strategy = strategy
         self.program_key = program_key
         self.program_version = program_version
+        # Per-instance for the same reason identity is: this was a fixed
+        # 15-minute class constant, and ``advance`` REJECTS any bar of a
+        # different width. Every program but EMA either exposes a
+        # configurable ``resolution_minutes`` or runs on a fixed non-15-minute
+        # cadence, so a shared constant silently quarantined every decision
+        # clock for them -- the bot ran, consumed bars, and never decided.
+        self.timeframe_ms = timeframe_ms
         self._active_stage: EvaluationStage | None = None
         self._last_bar_close_ms: int | None = None
         self.traces: list[EvaluationTrace] = []
@@ -172,7 +179,7 @@ class SignalSession:
         """Evaluate one complete bucket under its captured immutable mode."""
         if self._active_stage is not None:
             return StageQuarantine(StageStatus.UNSETTLED_STAGE, "UNSETTLED_STAGE")
-        if bar.end_ms - bar.start_ms != self.TIMEFRAME_MS:
+        if bar.end_ms - bar.start_ms != self.timeframe_ms:
             return StageQuarantine(StageStatus.REJECTED_BAR, "TIMEFRAME_MISMATCH")
         if self._last_bar_close_ms is not None and bar.end_ms <= self._last_bar_close_ms:
             return StageQuarantine(StageStatus.REJECTED_BAR, "NON_MONOTONIC_DECISION_CLOCK")
@@ -261,10 +268,16 @@ class SignalProgram:
         *,
         program_key: str,
         program_version: str,
+        timeframe_ms: int,
     ) -> SignalProgram:
         return cls(
             strategy=strategy,
-            session=SignalSession(strategy, program_key=program_key, program_version=program_version),
+            session=SignalSession(
+                strategy,
+                program_key=program_key,
+                program_version=program_version,
+                timeframe_ms=timeframe_ms,
+            ),
         )
 
     def activate_for_backtest(self) -> None:

@@ -124,8 +124,18 @@ def test_two_programs_constructed_through_the_session_never_share_an_evaluation_
     """
     strategy_a = _StubSignalStrategy(settings={"gap": "0.20"})
     strategy_b = _StubSignalStrategy(settings={"gap": "0.20"})
-    session_a = SignalSession(strategy_a, program_key="ema_crossover_signal", program_version="ema-crossover-signal/v1")
-    session_b = SignalSession(strategy_b, program_key="rsi_mean_reversion_signal", program_version="rsi-mean-reversion-signal/v1")
+    session_a = SignalSession(
+        strategy_a,
+        program_key="ema_crossover_signal",
+        program_version="ema-crossover-signal/v1",
+        timeframe_ms=15 * 60_000,
+    )
+    session_b = SignalSession(
+        strategy_b,
+        program_key="rsi_mean_reversion_signal",
+        program_version="rsi-mean-reversion-signal/v1",
+        timeframe_ms=15 * 60_000,
+    )
 
     stage_a = session_a.advance(_bar(), mode=EvaluationMode.DECIDE)
     stage_b = session_b.advance(_bar(), mode=EvaluationMode.DECIDE)
