@@ -38,6 +38,7 @@ Trade logging:
 from __future__ import annotations
 
 import csv
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
@@ -46,6 +47,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from app.engine.live.indicator_state import ValidationResult
+    from app.engine.strategy.signal_program import EmaCrossoverSignalProgram
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
@@ -145,7 +147,7 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         # Set only by the registry's Signal Program factory. Direct
         # construction stays a compatibility surface for historical tests and
         # ledgers; public Backtest construction goes through this program.
-        self.signal_program: object | None = None
+        self.signal_program: EmaCrossoverSignalProgram | None = None
 
     def initialize(self) -> None:
         # LEAN-parity defaults — match the C# reference Initialize().
@@ -190,11 +192,11 @@ class EmaCrossoverSignalAlgorithm(Strategy):
             self._state_writer.writerow(["ts_ms_utc", "close", "ema_fast", "ema_slow", "rsi", "cross_state", "signal"])
             self._state_fp.flush()  # type: ignore[union-attr]
 
-    def _signal_program_handler(self):
+    def _signal_program_handler(self) -> Callable[[TradeBar], object]:
         """Use the registered staged program when one owns this strategy."""
-        if self.signal_program is None or not self.signal_program.active:  # type: ignore[union-attr]
+        if self.signal_program is None or not self.signal_program.active:
             return self._on_fifteen_minute_bar
-        return self.signal_program.session.advance  # type: ignore[union-attr]
+        return self.signal_program.session.advance
 
     def signal_program_settings(self) -> dict[str, str]:
         """Stable EMA settings which participate in evaluation identity."""

@@ -12,10 +12,12 @@ from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import BacktestEngine
 from app.engine.execution.portfolio import Portfolio
 from app.engine.execution.signal_intent_executor import SignalIntentExecutionContext
+from app.engine.strategy.algorithms.ema_crossover_signal import EmaCrossoverSignalAlgorithm
 from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_intent import SignalIntent
 from app.engine.strategy.signal_program import (
+    EmaCrossoverSignalProgram,
     EvaluationTrace,
     Settlement,
     StageQuarantine,
@@ -57,7 +59,7 @@ def _bar(offset: int = 0) -> TradeBar:
     )
 
 
-def _prepared_program():
+def _prepared_program() -> tuple[EmaCrossoverSignalProgram, EmaCrossoverSignalAlgorithm, StrategyContext]:
     registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
     assert registration.signal_program_factory is not None
     program = registration.signal_program_factory(registration.param_schema())
