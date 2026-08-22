@@ -50,6 +50,16 @@
       "qualification_suite": "tests/engine/strategy/test_spy_strategy_b_signal_program.py::test_validated_spy_strategy_b_settings_corpus_has_a_pinned_trace_root",
       "qualified_at_ms": 1787421695996,
       "receipt_hash": "cd01c354f24b53337ddd9028802e37374c81c44b527f006a74dc2314fcf8188c"
+    },
+    {
+      "schema_version": 1,
+      "program_key": "spy_strategy_c",
+      "program_version": "spy-strategy-c/v1",
+      "golden_trace_root": "9efc77718f0028e78ad6ea7d56ffda19a510cbba7f5ea3b5a6d5cccade6a75c6",
+      "artifact_digest": "dbba53f72517176704ee79d3c61759706db014b0fc22b377926be0a8051e37e8",
+      "qualification_suite": "tests/engine/strategy/test_spy_strategy_c_signal_program.py::test_validated_spy_strategy_c_settings_corpus_has_a_pinned_trace_root",
+      "qualified_at_ms": 1787422154216,
+      "receipt_hash": "0dd719b59c8898f724331646f0b4c1b18f94a066af7956cec6cc8dcd1f0c5dec"
     }
   ]
 }
