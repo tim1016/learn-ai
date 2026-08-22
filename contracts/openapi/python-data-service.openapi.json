@@ -29785,6 +29785,15 @@
             "title": "State",
             "type": "string"
           },
+          "verification": {
+            "default": "live_reproof",
+            "enum": [
+              "live_reproof",
+              "frozen_run_evidence"
+            ],
+            "title": "Verification",
+            "type": "string"
+          },
           "verified_at_ms": {
             "minimum": 0.0,
             "title": "Verified At Ms",
@@ -31489,6 +31498,15 @@
             "default": false,
             "title": "Simulated",
             "type": "boolean"
+          },
+          "source": {
+            "default": "clerk_decision_receipt",
+            "enum": [
+              "clerk_decision_receipt",
+              "legacy_simulated_wal"
+            ],
+            "title": "Source",
+            "type": "string"
           }
         },
         "required": [
@@ -35100,8 +35118,7 @@
         "description": "Outer seal: signal identity plus execution-plan and validation choice.",
         "properties": {
           "action_plan": {
-            "title": "Action Plan",
-            "type": "object"
+            "$ref": "#/components/schemas/ActionPlan"
           },
           "bot_configuration_hash": {
             "pattern": "^[0-9a-f]{64}$",

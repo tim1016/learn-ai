@@ -443,6 +443,10 @@ def _dry_run_decision_views(
             reason_code=f"SIMULATED_{row.intent}",
             bar_ref=row.bar_ref,
             order_ref=row.order_ref,
+            # The WAL predates causal capture and has no decision_id /
+            # effect_operation_id columns at all, so these rows render the
+            # absence explicitly rather than borrowing a guess from SQLite.
+            source="legacy_simulated_wal",
             simulated=True,
             authority_account_id=row.authority_account_id,
             authority_kind=row.authority_kind,
@@ -503,6 +507,7 @@ def program_build_view_from_run_evidence(
             "The Signal Program build proven and recorded when this run started "
             "matches its golden qualification receipt."
         ),
+        verification="frozen_run_evidence",
     )
 
 

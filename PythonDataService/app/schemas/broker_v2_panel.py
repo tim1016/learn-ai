@@ -373,6 +373,15 @@ class RecentDecisionView(BaseModel):
     # sourced from evidence that does not yet carry these identities).
     decision_id: str | None = None
     effect_operation_id: str | None = None
+    # Which record this row was projected from. Both Paper and governed Dry Run
+    # read ``clerk_decision_receipt``; only a Dry Run instance that never ran
+    # under the synthetic Clerk falls back to ``legacy_simulated_wal``, whose
+    # rows structurally cannot carry causal identities. Without this, a `None`
+    # ``decision_id`` is ambiguous between "this decision never reached Clerk
+    # intake" and "this row came from a source that has no such column".
+    source: Literal["clerk_decision_receipt", "legacy_simulated_wal"] = (
+        "clerk_decision_receipt"
+    )
     simulated: bool = False
     authority_account_id: str | None = None
     authority_kind: Literal["real_paper", "synthetic"] | None = None
@@ -463,13 +472,15 @@ class BotPanelView(BaseModel):
     # is an explicit absence: a legacy pre-seal instance or a compatibility
     # strategy with no registered Signal Program, never an inferred one.
     sealed_program: SealedBotProgram | None
-    # PRD Sec 11.3/11.4 dynamic run evidence: whether the currently loaded
-    # program bytes are proven compatible with the sealed
-    # ``(program_version, golden_trace_root)``, freshly re-verified through
-    # the same canonical ``prove_running_program_build`` Start/Resume
-    # admission uses. Always present — ``NOT_APPLICABLE`` for a compatibility
-    # strategy with no registered Signal Program, ``UNPROVEN`` when the seal
-    # or receipt evidence does not (yet) close, ``PROVEN`` otherwise.
+    # PRD Sec 11.3/11.4 dynamic run evidence: whether the program bytes this
+    # run was admitted on are proven compatible with the sealed
+    # ``(program_version, golden_trace_root)``. This replays the durable
+    # per-run record written at Start/Resume when one exists, and only proves
+    # the currently loaded bytes live when it does not; read ``verification``
+    # to tell which — a panel read must never be mistaken for a fresh proof.
+    # Always present — ``NOT_APPLICABLE`` for a compatibility strategy with no
+    # registered Signal Program, ``UNPROVEN`` when the seal or receipt evidence
+    # does not (yet) close, ``PROVEN`` otherwise.
     program_build: ProgramBuildAdmissionFact
     # PRD Sec 11.3 "current admission-policy version and verdict": the most
     # recent Start/Resume admission decision this panel observed. ``None``

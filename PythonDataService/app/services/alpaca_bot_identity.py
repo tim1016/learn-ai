@@ -9,8 +9,7 @@ from pydantic import ValidationError
 from app.engine.live.historical_run_identity import (
     read_historical_strategy_instance_id,
 )
-from app.engine.live.identity import strategy_instance_artifact_dir
-from app.services.bot_binding_repository import BotBindingRepository
+from app.services.bot_binding_repository import live_state_binding_repository
 
 
 class AlpacaBotIdentityRefusedError(RuntimeError):
@@ -49,14 +48,7 @@ class AlpacaBotIdentityGuard:
     def __init__(self, artifacts_root: Path) -> None:
         root = Path(artifacts_root)
         self._artifacts_root = root
-        self._bindings = BotBindingRepository(
-            root,
-            instance_dir_for=lambda strategy_instance_id: strategy_instance_artifact_dir(
-                root,
-                "live_state",
-                strategy_instance_id,
-            ),
-        )
+        self._bindings = live_state_binding_repository(root)
 
     def require(self, strategy_instance_id: str, *, sqlite_claim: bool) -> None:
         try:

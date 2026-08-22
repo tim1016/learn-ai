@@ -25,6 +25,7 @@ from app.services.bot_binding_repository import (
     BotRunRecord,
     BrokerBotBinding,
     CurrentRunBinding,
+    ProgramBuildEvidenceIncompleteError,
     ProgramBuildRunEvidence,
     RunIdentityConflictError,
     RunOutcomeConflictError,
@@ -443,6 +444,25 @@ def test_program_build_evidence_rejects_a_record_with_a_mismatched_identity(
 
     with pytest.raises(ValueError, match="program-build evidence belongs"):
         repository.read_program_build_evidence(_SID, binding.run_id)
+
+
+def test_program_build_evidence_incomplete_reports_every_missing_field(
+    tmp_path: Path,
+) -> None:
+    """A PROVEN fact missing multiple required fields must report all of
+    them at once rather than only the first field it happens to check."""
+    repository = _repository(tmp_path)
+    seal = _sealed_program()
+    proof = _proven_program_build(seal).model_copy(
+        update={"running_artifact_digest": None, "qualification_receipt_hash": None}
+    )
+    binding = _binding(sealed_program=seal, program_build=proof)
+
+    with pytest.raises(
+        ProgramBuildEvidenceIncompleteError,
+        match="running_artifact_digest, qualification_receipt_hash",
+    ):
+        repository.record_launch(binding, launch_reason="deploy")
 
 
 def test_legacy_binding_is_lifted_without_rewrite_then_migrated_on_resume(

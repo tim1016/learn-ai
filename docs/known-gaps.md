@@ -143,6 +143,25 @@ here (issues #1666, #1667, #1668) are closed and merged to master as of
   `prove_running_program_build` reports `NOT_APPLICABLE` and neither strategy's
   running bytes are checked against any golden corpus. Already tracked in-code
   and as issue #1730.
+- **The external repository-writer census is a convention nudge, not a sound
+  safety gate.** `app/broker/alpaca/clerk/sqlite/repository_boundary.py` plus
+  `tests/broker/alpaca/clerk/sqlite/test_repository_writer_boundary.py` are
+  widely read as proving "an unaudited SQLite Clerk writer is impossible". They
+  do not. The AST visitor matches on *spelling*, not type: `_is_repository`
+  recognises exactly two parameter names (`repo`, `repository`), one attribute
+  (`self._repo`), and two facade patterns. An adversarial review on 2026-08-21
+  fed synthetic source through the real visitor and confirmed five false-negative
+  classes, none of them exotic — renaming the parameter to `db`, holding the
+  handle as `self._store`, reaching it via `getattr`, dropping the underscore
+  (`self.repo`), or calling a mutation method not yet listed in
+  `REPOSITORY_MUTATION_METHODS`. Each returns `Detected calls: set()`, so a
+  genuine unaudited custody mutation passes CI silently. The asymmetry is the
+  danger: false positives fail loud (see `sqlite_panel_source.py`, which had to
+  rename a plain local list off `receipts` to satisfy the matcher), while false
+  negatives fail silent. Treat the census as enforcing the `repo`/`self._repo`
+  convention, not as proof of writer exhaustiveness. A sound replacement needs a
+  type-based walk or an explicit capability token minted only at the enumerated
+  call sites. Pre-existing; not introduced or worsened by #1728.
 - **Retention sizing for open cycles longer than 30 trading days remains
   undecided** (PRD §27 item 3). `MAX_DECISION_RECEIPTS_PER_STRATEGY = 1_000`
   (`app/broker/alpaca/clerk/sqlite/decision_receipts.py`) bounds the per-

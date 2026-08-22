@@ -901,7 +901,7 @@ def test_reason_left_optional_for_non_comment_actions() -> None:
     assert request.reason is None
 
 
-def test_resolve_program_build_prefers_frozen_evidence_over_live_check(monkeypatch) -> None:
+def test_program_build_for_display_prefers_frozen_evidence_over_live_check(monkeypatch) -> None:
     """#1728 Gap 2: the panel must show what was proven and recorded for the
     current run, not a fresh re-check that can drift from what is actually
     running underfoot."""
@@ -933,7 +933,7 @@ def test_resolve_program_build_prefers_frozen_evidence_over_live_check(monkeypat
         strategy_instance_id=_SID, run_id="run-1", strategy_key="ema_crossover_signal"
     )
 
-    fact = panel_data_source._resolve_program_build(binding, verified_at_ms=9_999)
+    fact = panel_data_source._program_build_for_display(binding, verified_at_ms=9_999)
 
     assert fact.state == "PROVEN"
     assert fact.program_key == "ema_crossover_signal"
@@ -945,7 +945,7 @@ def test_resolve_program_build_prefers_frozen_evidence_over_live_check(monkeypat
     assert fact.verified_at_ms == 1_000
 
 
-def test_resolve_program_build_falls_back_to_live_check_when_no_evidence_recorded(
+def test_program_build_for_display_falls_back_to_live_check_when_no_evidence_recorded(
     monkeypatch,
 ) -> None:
     """No durable per-run record exists (never PROVEN at Start, or a run that
@@ -970,6 +970,6 @@ def test_resolve_program_build_falls_back_to_live_check_when_no_evidence_recorde
         strategy_instance_id=_SID, run_id="run-1", strategy_key="deployment_validation"
     )
 
-    fact = panel_data_source._resolve_program_build(binding, verified_at_ms=9_999)
+    fact = panel_data_source._program_build_for_display(binding, verified_at_ms=9_999)
 
     assert fact is sentinel

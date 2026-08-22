@@ -14,13 +14,12 @@ v2 seal is append-only evidence and never rewrites v1 identity bytes.
 from __future__ import annotations
 
 import hashlib
-import json
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from app.engine.strategy.registry import _STRATEGY_REGISTRY, SignalProgramContract
+from app.engine.strategy.registry import _STRATEGY_REGISTRY, SignalProgramContract, StrategyRegistration
 from app.schemas.run_admission import ProgramBuildAdmissionFact, StrategyValidationAdmissionFact
 from app.schemas.signal_program_seal import (
     ConfiguredSignalProgramSeal,
@@ -29,6 +28,7 @@ from app.schemas.signal_program_seal import (
     SignalClockContract,
     SignalDataContract,
     seal_bot_program,
+    semantic_payload_hash,
 )
 from app.services.bot_binding_repository import BrokerBotBinding
 
@@ -52,7 +52,7 @@ class ProgramBuildQualificationReceipt(BaseModel):
 
     @model_validator(mode="after")
     def validate_receipt_hash(self) -> ProgramBuildQualificationReceipt:
-        if _semantic_hash(self.model_dump(mode="json", exclude={"receipt_hash"})) != self.receipt_hash:
+        if semantic_payload_hash(self.model_dump(mode="json", exclude={"receipt_hash"})) != self.receipt_hash:
             raise ValueError("qualification receipt hash does not match its payload")
         return self
 
@@ -98,6 +98,29 @@ def build_start_program_seal(
 
     Non-program compatibility strategies return ``None``.  A registered
     program with incomplete validation or account identity fails closed.
+
+    This function never *infers* an origin by comparing an effective value
+    to the *currently* registered default, because a value matching
+    today's default does not prove it was never an explicit override — the
+    default may have drifted since deploy time. Two sources decide origin
+    instead, both factual for *this exact* seal:
+
+    * a parameter name absent from ``binding.strategy_params`` altogether
+      was never supplied by the caller for this binding — Pydantic filled
+      it from this exact ``param_schema``'s default, right now, so
+      ``"registered_default"`` is a fact about this seal's own
+      construction, not a guess reconstructed from possibly-stale history;
+    * a parameter name present in ``binding.strategy_params`` was supplied
+      by the caller, so its origin is ambiguous (an explicit choice that
+      happens to equal today's default looks identical to an unset one) and
+      ``parameter_origins`` must carry an explicit entry for it — a missing
+      entry fails closed with :class:`SignalProgramSealError`.
+
+    Fresh deploys through ``paper_deploy_service`` always supply a complete
+    ``parameter_origins`` mapping. A caller reconstructing a pre-v2 instance
+    with no recorded origins must build a complete mapping first — see
+    :func:`_infer_legacy_parameter_origins`, used only by
+    :func:`reconstruct_legacy_program_seal`.
     """
     registration = _STRATEGY_REGISTRY.get(binding.strategy_key)
     if registration is None or registration.signal_program_factory is None:
@@ -110,11 +133,9 @@ def build_start_program_seal(
     if validation.event_id is None or validation.evidence_snapshot_sha256 is None:
         raise SignalProgramSealError("Signal Program seal requires immutable validation evidence")
 
-    validated = registration.param_schema.model_validate(
-        {**(binding.strategy_params or {}), "symbol": binding.symbol}
-    )
+    requested = binding.strategy_params or {}
+    validated = registration.param_schema.model_validate({**requested, "symbol": binding.symbol})
     effective = validated.model_dump(mode="json")
-    defaults = registration.param_schema().model_dump(mode="json")
     origins = parameter_origins or {}
     parameters: dict[str, ResolvedSignalParameter] = {}
     for name, value in effective.items():
@@ -122,10 +143,13 @@ def build_start_program_seal(
             origin: Literal[
                 "registered_default", "deploy_override", "deployment_symbol"
             ] = "deployment_symbol"
+        elif name not in requested:
+            origin = "registered_default"
+        elif name in origins:
+            origin = origins[name]
         else:
-            origin = origins.get(
-                name,
-                "registered_default" if value == defaults.get(name) else "deploy_override",
+            raise SignalProgramSealError(
+                f"Signal Program seal requires an explicit origin for parameter '{name}'"
             )
         parameters[name] = ResolvedSignalParameter(
             value=value,
@@ -158,7 +182,7 @@ def build_start_program_seal(
         broker=binding.broker,
         sealed_account_id=binding.sealed_account_id,
         mode=binding.mode,
-        action_plan=binding.action_plan.model_dump(mode="json"),
+        action_plan=binding.action_plan,
         quantity=binding.quantity,
         carryover_policy=binding.carryover_policy,
         validation_event_id=validation.event_id,
@@ -206,21 +230,62 @@ def reconstruct_legacy_program_seal(
     parameter mismatch instead raises
     :class:`LegacyProgramUnreconstructibleError`, because no future retry of
     *this* instance can fix it — the caller must clone a successor.
+
+    Pre-v2 instances never recorded ``strategy_param_origins``, so this is
+    also the one place a complete origin mapping is built by inference
+    rather than read as fact — see :func:`_infer_legacy_parameter_origins`.
     """
     registration = _STRATEGY_REGISTRY.get(binding.strategy_key)
     if registration is None or registration.signal_program_factory is None:
         return None
     try:
-        registration.param_schema.model_validate({**(binding.strategy_params or {}), "symbol": binding.symbol})
+        validated = registration.param_schema.model_validate(
+            {**(binding.strategy_params or {}), "symbol": binding.symbol}
+        )
     except ValidationError as exc:
         raise LegacyProgramUnreconstructibleError(
             f"Strategy instance '{binding.strategy_instance_id}' persisted parameters no "
             f"longer validate against the currently registered '{binding.strategy_key}' contract."
         ) from exc
+    origins = _infer_legacy_parameter_origins(
+        registration, validated.model_dump(mode="json"), binding.strategy_param_origins
+    )
     try:
-        return build_start_program_seal(binding, validation, parameter_origins=binding.strategy_param_origins)
+        return build_start_program_seal(binding, validation, parameter_origins=origins)
     except SignalProgramSealError:
         return None
+
+
+def _infer_legacy_parameter_origins(
+    registration: StrategyRegistration,
+    effective: dict[str, Any],
+    recorded_origins: dict[str, Literal["registered_default", "deploy_override", "deployment_symbol"]]
+    | None,
+) -> dict[str, Literal["registered_default", "deploy_override", "deployment_symbol"]]:
+    """Fill a complete origin mapping for a pre-v2 (or partially-recorded) instance.
+
+    Called only from :func:`reconstruct_legacy_program_seal`. Its output is
+    inferred, not factual, and can be wrong: for any parameter missing from
+    ``recorded_origins``, this labels it ``registered_default`` when the
+    effective value equals *today's* registered default, and
+    ``deploy_override`` otherwise. That comparison cannot see history — if
+    an instance was deployed with an explicit override that happened to
+    equal the default in force at the time, and the registered default has
+    since drifted to match that override's value, or a legacy override was
+    later adopted as the new default, this mislabels the parameter's true
+    deploy-time origin. It is the best available reconstruction for data
+    that predates origin tracking, used to append an exact v2 seal rather
+    than leave the instance permanently unresumable.
+    """
+    recorded = recorded_origins or {}
+    defaults = registration.param_schema().model_dump(mode="json")
+    return {
+        name: recorded[name]
+        if name in recorded
+        else ("registered_default" if value == defaults.get(name) else "deploy_override")
+        for name, value in effective.items()
+        if name != "symbol"
+    }
 
 
 def prove_running_program_build(
@@ -316,7 +381,7 @@ def running_artifact_digest(contract: SignalProgramContract) -> str:
         if _SERVICE_ROOT not in candidate.parents or not candidate.is_file():
             raise ValueError(f"invalid Signal Program artifact path: {relative}")
         entries.append({"path": relative, "sha256": hashlib.sha256(candidate.read_bytes()).hexdigest()})
-    return _semantic_hash(entries)
+    return semantic_payload_hash(entries)
 
 
 def qualification_receipt_payload(
@@ -336,7 +401,7 @@ def qualification_receipt_payload(
         "qualification_suite": qualification_suite,
         "qualified_at_ms": qualified_at_ms,
     }
-    return {**payload, "receipt_hash": _semantic_hash(payload)}
+    return {**payload, "receipt_hash": semantic_payload_hash(payload)}
 
 
 def _parameters_match(contract: SignalProgramContract, effective: dict[str, Any]) -> bool:
@@ -359,11 +424,6 @@ def _unproven(
         explanation=explanation,
         next_step="Run golden qualification for these bytes, or deploy a newly sealed compatible instance.",
     )
-
-
-def _semantic_hash(payload: object) -> str:
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
 
 
 __all__ = [

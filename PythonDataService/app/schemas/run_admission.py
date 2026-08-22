@@ -106,6 +106,11 @@ class ProgramBuildAdmissionFact(BaseModel):
     evidence_refs: tuple[str, ...] = ()
     explanation: str
     next_step: str | None = None
+    # How this verdict was obtained. Admission (Start/Resume) always proves the
+    # running bytes live, which is the default. A panel read replays the durable
+    # per-run record instead, and says so rather than leaving a stale
+    # ``verified_at_ms`` as the only clue that no re-proof happened.
+    verification: Literal["live_reproof", "frozen_run_evidence"] = "live_reproof"
 
 
 class StartRunFacts(BaseModel):

@@ -20,6 +20,7 @@ from app.services.signal_program_admission import (
     DEFAULT_QUALIFICATION_MANIFEST,
     LegacyProgramUnreconstructibleError,
     ProgramBuildQualificationManifest,
+    SignalProgramSealError,
     build_start_program_seal,
     legacy_migration_clone_instance_id,
     prove_running_program_build,
@@ -111,11 +112,71 @@ def test_custom_gate_is_sealed_but_not_claimed_as_golden_validated() -> None:
         strategy_params={"gap": 0.35, "rsi_min": 50.0, "rsi_max": 70.0},
     )
 
-    seal = build_start_program_seal(binding, _validation())
+    seal = build_start_program_seal(binding, _validation(), parameter_origins=binding.strategy_param_origins)
 
     assert seal is not None
     assert seal.configured_signal.parameters["gap"].value == 0.35
     assert seal.configured_signal.parameters_match_validated_settings is False
+
+
+def test_build_start_program_seal_fails_closed_on_missing_parameter_origin() -> None:
+    """No inference in the Start path: an absent origin is a hard error, not a guess."""
+    binding = _binding()
+
+    with pytest.raises(SignalProgramSealError, match="explicit origin"):
+        build_start_program_seal(binding, _validation())
+
+
+def test_build_start_program_seal_defaults_every_untouched_parameter_without_an_origins_map() -> None:
+    """A binding that never supplied ``strategy_params`` needs no origins map.
+
+    Every effective value came straight from the registered schema default
+    for *this* seal's own construction, not from a value-vs-default guess
+    reconstructed from possibly-stale history -- so this is exempt from the
+    completeness requirement covered by the tests above. This is the
+    common fresh-deploy shape exercised by ``BotRunnerRegistry.deploy``
+    when the caller supplies no explicit strategy params at all.
+    """
+    binding = _binding(strategy_params=None, strategy_param_origins=None)
+
+    seal = build_start_program_seal(binding, _validation())
+
+    assert seal is not None
+    assert seal.configured_signal.parameters["gap"].origin == "registered_default"
+    assert seal.configured_signal.parameters["rsi_min"].origin == "registered_default"
+    assert seal.configured_signal.parameters["rsi_max"].origin == "registered_default"
+
+
+def test_build_start_program_seal_fails_closed_on_partial_parameter_origins() -> None:
+    binding = _binding()
+
+    with pytest.raises(SignalProgramSealError, match="explicit origin"):
+        build_start_program_seal(binding, _validation(), parameter_origins={"gap": "deploy_override"})
+
+
+def test_reconstruct_legacy_program_seal_infers_origin_only_for_missing_entries() -> None:
+    """The legacy-only inference path fills gaps but trusts recorded origins.
+
+    A legacy binding whose ``gap`` happens to equal the *currently*
+    registered default, but whose origin was in fact explicitly recorded
+    as an override (e.g. by an earlier partial migration), must keep that
+    recorded origin rather than have it overwritten by the value-vs-default
+    guess.
+    """
+    defaults = _STRATEGY_REGISTRY["ema_crossover_signal"].param_schema().model_dump(mode="json")
+    legacy_binding = _binding(
+        strategy_params={"gap": defaults["gap"], "rsi_min": defaults["rsi_min"], "rsi_max": defaults["rsi_max"]},
+        strategy_param_origins={"gap": "deploy_override"},
+    )
+
+    reconstructed = reconstruct_legacy_program_seal(legacy_binding, _validation())
+
+    assert reconstructed is not None
+    assert reconstructed.configured_signal.parameters["gap"].origin == "deploy_override"
+    # rsi_min/rsi_max were never recorded, so they fall back to the
+    # value-vs-current-default inference documented on
+    # `_infer_legacy_parameter_origins`.
+    assert reconstructed.configured_signal.parameters["rsi_min"].origin == "registered_default"
 
 
 def test_committed_receipt_matches_current_artifacts_and_golden_root() -> None:

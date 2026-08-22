@@ -564,6 +564,11 @@ def _decision_receipt_from_resource(
         raise SqlitePanelDecisionUnavailable(
             f"SQLite decision receipt {resource.seq} does not satisfy the panel evidence contract."
         ) from exc
+    # FR-019 defines `decision_id` == `evaluation_id`, and the atomic writer
+    # stamps both keys to that one value, so reading either is equivalent
+    # rather than a choice between two different facts. The second read is a
+    # compatibility path for rows persisted before both keys were written; it
+    # is deliberately not a precedence rule.
     causal = DecisionCausalLinks(
         decision_id=_facts_optional_str(facts, "decision_id") or _facts_optional_str(facts, "evaluation_id"),
         effect_operation_id=_facts_optional_str(facts, "effect_operation_id"),

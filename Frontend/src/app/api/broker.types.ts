@@ -18367,6 +18367,12 @@ export interface components {
              * @enum {string}
              */
             state: "PROVEN" | "UNPROVEN" | "NOT_APPLICABLE";
+            /**
+             * Verification
+             * @default live_reproof
+             * @enum {string}
+             */
+            verification?: "live_reproof" | "frozen_run_evidence";
             /** Verified At Ms */
             verified_at_ms: number;
         };
@@ -18971,6 +18977,12 @@ export interface components {
              * @default false
              */
             simulated?: boolean;
+            /**
+             * Source
+             * @default clerk_decision_receipt
+             * @enum {string}
+             */
+            source?: "clerk_decision_receipt" | "legacy_simulated_wal";
         };
         /**
          * RecentFillView
@@ -20593,8 +20605,7 @@ export interface components {
          * @description Outer seal: signal identity plus execution-plan and validation choice.
          */
         SealedBotProgram: {
-            /** Action Plan */
-            action_plan: Record<string, never>;
+            action_plan: components["schemas"]["ActionPlan"];
             /** Bot Configuration Hash */
             bot_configuration_hash: string;
             /** Broker */

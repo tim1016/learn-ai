@@ -21,6 +21,7 @@ from app.engine.live.durable_append_log import (
     create_atomic_exclusive_durable_file,
     create_exclusive_durable_file,
 )
+from app.engine.live.identity import strategy_instance_artifact_dir
 from app.engine.live.run_status import _atomic_write_json
 from app.schemas.action_plan import (
     ActionPlan,
@@ -636,21 +637,17 @@ class BotBindingRepository:
         seal = binding.sealed_program
         if proof is None or proof.state != "PROVEN" or seal is None:
             return
-        if proof.program_version is None:
+        required_fields = (
+            "program_version",
+            "golden_trace_root",
+            "running_artifact_digest",
+            "qualification_receipt_hash",
+        )
+        missing_fields = [field for field in required_fields if getattr(proof, field) is None]
+        if missing_fields:
             raise ProgramBuildEvidenceIncompleteError(
-                f"PROVEN program-build fact for run '{binding.run_id}' is missing program_version."
-            )
-        if proof.golden_trace_root is None:
-            raise ProgramBuildEvidenceIncompleteError(
-                f"PROVEN program-build fact for run '{binding.run_id}' is missing golden_trace_root."
-            )
-        if proof.running_artifact_digest is None:
-            raise ProgramBuildEvidenceIncompleteError(
-                f"PROVEN program-build fact for run '{binding.run_id}' is missing running_artifact_digest."
-            )
-        if proof.qualification_receipt_hash is None:
-            raise ProgramBuildEvidenceIncompleteError(
-                f"PROVEN program-build fact for run '{binding.run_id}' is missing qualification_receipt_hash."
+                f"PROVEN program-build fact for run '{binding.run_id}' is missing "
+                f"{', '.join(missing_fields)}."
             )
         candidate = ProgramBuildRunEvidence(
             strategy_instance_id=binding.strategy_instance_id,
@@ -788,3 +785,20 @@ class BotBindingRepository:
                 "action_plan": alpaca_v1_action_plan(payload["symbol"]).model_dump(),
             }
         return BrokerBotBinding.model_validate(payload)
+
+
+def live_state_binding_repository(artifacts_root: Path) -> BotBindingRepository:
+    """Build the canonical ``live_state``-scoped ``BotBindingRepository``.
+
+    One-shot reader bound to the given ``artifacts_root``.
+    ``BotBindingRepository`` holds no state beyond that root and an
+    instance-dir resolver, so constructing one per read costs nothing and
+    never risks reading a stale singleton.
+    """
+    root = Path(artifacts_root)
+    return BotBindingRepository(
+        root,
+        instance_dir_for=lambda strategy_instance_id: strategy_instance_artifact_dir(
+            root, "live_state", strategy_instance_id
+        ),
+    )

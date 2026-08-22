@@ -13,6 +13,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.schemas.action_plan import ActionPlan
+
 
 class ResolvedSignalParameter(BaseModel):
     """One effective parameter with its unit and deploy-time origin."""
@@ -69,7 +71,7 @@ class ConfiguredSignalProgramSeal(BaseModel):
     clock: SignalClockContract
 
     def semantic_hash(self) -> str:
-        return _semantic_hash(self.model_dump(mode="json"))
+        return semantic_payload_hash(self.model_dump(mode="json"))
 
 
 class SealedBotProgram(BaseModel):
@@ -84,7 +86,7 @@ class SealedBotProgram(BaseModel):
     broker: str
     sealed_account_id: str
     mode: Literal["log_only", "dry_run", "trade"]
-    action_plan: dict[str, Any]
+    action_plan: ActionPlan
     quantity: int = Field(gt=0)
     carryover_policy: Literal["FORBID", "ALLOW"]
     validation_event_id: str
@@ -97,7 +99,7 @@ class SealedBotProgram(BaseModel):
         if self.configured_signal.semantic_hash() != self.configured_signal_hash:
             raise ValueError("configured signal hash does not match its payload")
         payload = self.model_dump(mode="json", exclude={"bot_configuration_hash"})
-        if _semantic_hash(payload) != self.bot_configuration_hash:
+        if semantic_payload_hash(payload) != self.bot_configuration_hash:
             raise ValueError("bot configuration hash does not match its payload")
         return self
 
@@ -107,18 +109,35 @@ def seal_bot_program(**values: Any) -> SealedBotProgram:
     payload = {**values, "schema_version": 2}
     return SealedBotProgram(
         **payload,
-        bot_configuration_hash=_semantic_hash(payload),
+        bot_configuration_hash=semantic_payload_hash(payload),
     )
 
 
-def _semantic_hash(payload: object) -> str:
+def _hash_json_default(value: Any) -> Any:
+    """``json.dumps`` fallback: serialize a nested model, or fail loudly.
+
+    Must raise rather than return the ``TypeError`` — returning it hands
+    ``json.dumps`` a fresh non-serializable object, which calls this
+    function again and recurses until ``RecursionError``.
+    """
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    raise TypeError(f"unsupported semantic value: {type(value).__name__}")
+
+
+def semantic_payload_hash(payload: object) -> str:
+    """Canonical content hash for a JSON-serializable v2 seal payload.
+
+    The single hashing primitive for the v2 seal family — every seal
+    boundary (this module and ``app.services.signal_program_admission``)
+    calls this function so semantic identity always hashes the same
+    encoding.
+    """
     encoded = json.dumps(
         payload,
         sort_keys=True,
         separators=(",", ":"),
-        default=lambda value: value.model_dump(mode="json")
-        if isinstance(value, BaseModel)
-        else TypeError(f"unsupported semantic value: {type(value).__name__}"),
+        default=_hash_json_default,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
@@ -130,4 +149,5 @@ __all__ = [
     "SignalClockContract",
     "SignalDataContract",
     "seal_bot_program",
+    "semantic_payload_hash",
 ]

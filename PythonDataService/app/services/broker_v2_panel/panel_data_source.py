@@ -28,7 +28,6 @@ from app.broker.alpaca.clerk.models import (
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerAccountSnapshot
-from app.engine.live.identity import strategy_instance_artifact_dir
 from app.schemas.broker_bots import (
     AlpacaPaperDeployReceipt,
     AlpacaPaperDeployRequest,
@@ -50,7 +49,11 @@ from app.schemas.broker_v2_panel import (
 )
 from app.schemas.run_admission import ProgramBuildAdmissionFact, RunAdmissionDecision
 from app.services.account_truth_refresh import account_truth_artifacts_root
-from app.services.bot_binding_repository import BotBindingRepository, BrokerBotBinding
+from app.services.bot_binding_repository import (
+    BotBindingRepository,
+    BrokerBotBinding,
+    live_state_binding_repository,
+)
 from app.services.bot_runner import (
     ActivationFailedCleanupProvenError,
     BotRunnerError,
@@ -197,22 +200,15 @@ async def _panel_authority_for_binding(
 
 
 def _run_evidence_repository() -> BotBindingRepository:
-    """One-shot reader bound to the same artifacts_root the in-container bot
-    runner uses (``main.py`` wires ``BotTaskRegistry`` from the identical
-    ``account_truth_artifacts_root()`` value). ``BotBindingRepository`` holds
-    no state beyond that root and an instance-dir resolver, so constructing
-    one per read costs nothing and never risks reading a stale singleton.
+    """Bind the shared ``live_state`` repository factory to this service's
+    artifacts root — the same root ``main.py`` wires ``BotTaskRegistry``
+    from (``account_truth_artifacts_root()``), so a read here never drifts
+    from the in-container bot runner's own view.
     """
-    root = account_truth_artifacts_root()
-    return BotBindingRepository(
-        root,
-        instance_dir_for=lambda strategy_instance_id: strategy_instance_artifact_dir(
-            root, "live_state", strategy_instance_id
-        ),
-    )
+    return live_state_binding_repository(account_truth_artifacts_root())
 
 
-def _resolve_program_build(
+def _program_build_for_display(
     binding: BrokerBotBinding,
     *,
     verified_at_ms: int,
@@ -753,7 +749,7 @@ async def _get_panel_with_entries_from_authority(
     # underfoot afterwards (#1728 Gap 2). Falls back to the same canonical
     # proof Start/Resume admission uses only when no per-run evidence was
     # ever recorded (never PROVEN at Start, or a run that predates it).
-    program_build = _resolve_program_build(binding, verified_at_ms=captured_now_ms)
+    program_build = _program_build_for_display(binding, verified_at_ms=captured_now_ms)
 
     profile = panel_profile_for(broker)
     flatten_supported = profile.flatten_supported if profile is not None else False
