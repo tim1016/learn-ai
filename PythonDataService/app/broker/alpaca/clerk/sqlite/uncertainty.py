@@ -17,6 +17,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     UncertaintyRaisedFacts,
     UncertaintyResolvedFacts,
 )
+from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
@@ -34,7 +35,6 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
 )
 
 DRIFT_REDUCTION_EVIDENCE_MAX_AGE_MS = 30_000
-REDUCTION_QTY_EPSILON = 1e-9
 
 
 def _has_attributed_exposure(repo: ClerkSqliteRepository, *, strategy_instance_id: str) -> bool:
@@ -46,7 +46,7 @@ def _has_attributed_exposure(repo: ClerkSqliteRepository, *, strategy_instance_i
     currently live ENTER effect.  Both cases forbid a fresh ENTER.
     """
     return any(
-        abs(quantity) >= REDUCTION_QTY_EPSILON
+        position_quantity_is_nonzero(quantity)
         for quantity in repo.attributed_positions_for_strategy(strategy_instance_id).values()
     )
 
@@ -349,10 +349,12 @@ def _strict_uncertainty_facts(uncertainty: dict[str, Any], policy: ReasonPolicy)
 
 
 def _moves_toward_zero_without_crossing(quantity: float, delta: float) -> bool:
-    if abs(quantity) < REDUCTION_QTY_EPSILON or quantity * delta >= 0:
+    if not position_quantity_is_nonzero(quantity) or quantity * delta >= 0:
         return False
     after = quantity + delta
-    return abs(after) < REDUCTION_QTY_EPSILON or (quantity * after > 0 and abs(after) < abs(quantity))
+    return not position_quantity_is_nonzero(after) or (
+        quantity * after > 0 and abs(after) < abs(quantity)
+    )
 
 
 def _position_drift_allows_action(
@@ -378,7 +380,7 @@ def _position_drift_allows_action(
     if observation is None:
         return False
     current_attributed = repo.attributed_positions_by_symbol().get(intent.symbol.upper(), 0.0)
-    if abs(current_attributed - observation.attributed_qty) > REDUCTION_QTY_EPSILON:
+    if position_quantity_is_nonzero(current_attributed - observation.attributed_qty):
         return False
     return _moves_toward_zero_without_crossing(
         observation.broker_qty, intent.signed_delta
@@ -627,7 +629,10 @@ def require_manual_reduction(
         subject_id=subject_id,
         symbol=intent.symbol,
     )
-    if intent.side.upper() != "SELL" or intent.quantity > available_quantity + REDUCTION_QTY_EPSILON:
+    if intent.side.upper() != "SELL" or (
+        intent.quantity > available_quantity
+        and position_quantity_is_nonzero(intent.quantity - available_quantity)
+    ):
         decision = CapabilityDecision(
             allowed=False,
             capability=Capability.REDUCE,

@@ -1,7 +1,7 @@
 # PRD — Sealed Signal Programs to Governed Alpaca Bots
 
 - **Date:** 2026-08-21
-- **Status:** Ready for implementation planning; requires ADR capture before authority-changing implementation
+- **Status:** ADR 0042 captured the authority decision; delivery remains underway
 - **Product surface:** Alpaca Broker V2 under `/brokers/alpaca/...`; Backtest, Dry Run, and Alpaca Paper strategy execution
 - **Decision boundary:** No real-money Live mode; no deprecated IBKR bot-control work
 - **Research basis:** Completed strategy-to-bot Wayfinder map, eight resolved architecture tickets, and two adversarial senior-architect reviews

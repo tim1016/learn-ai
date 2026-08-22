@@ -230,7 +230,7 @@ async def test_registration_precedes_live_enter_and_caller_cancellation_keeps_cu
     repo.close()
 
 
-async def test_exit_without_owned_entry_returns_a_closed_custody_result(tmp_path: Path) -> None:
+async def test_execute_for_instance_rejects_exit_without_owned_entry(tmp_path: Path) -> None:
     """A stale strategy EXIT cannot crash its run while custody is uncertain."""
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
     facade = SqliteAlpacaClerkFacade(repo=repo, read=_Broker(), trade=_Broker())

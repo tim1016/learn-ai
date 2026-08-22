@@ -32,6 +32,7 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     build_recovery_catalog,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.lean_sidecar.trading_calendar import current_trading_session_window
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
@@ -311,6 +312,7 @@ async def read_sqlite_panel_evidence(
     strategy_instance_id: str,
     *,
     now_ms: int,
+    facade: SqliteAlpacaClerkFacade | None = None,
 ) -> SqlitePanelEvidence | None:
     """Read one panel's custody and S2 economics at the same SQLite revision.
 
@@ -325,7 +327,7 @@ async def read_sqlite_panel_evidence(
     ``SqlitePanelBotNotFound``, which callers answer 404. Collapsing the two
     tells an operator to repair a healthy authority.
     """
-    facade = active_sqlite_facade(broker)
+    facade = facade or active_sqlite_facade(broker)
     if facade is None:
         return None
     if facade.account_id != account_id:
@@ -481,9 +483,10 @@ def read_sqlite_decision_receipts(
     strategy_instance_id: str,
     *,
     limit: int = 8,
+    facade: SqliteAlpacaClerkFacade | None = None,
 ) -> list[DecisionReceipt] | None:
     """Read bounded decision evidence from SQLite, never the legacy JSONL tail."""
-    facade = active_sqlite_facade(broker)
+    facade = facade or active_sqlite_facade(broker)
     if facade is None:
         return None
     try:
@@ -652,6 +655,82 @@ async def read_sqlite_catalog(
     raise AssertionError("catalog coherence retry exhausted without a result")
 
 
+async def read_sqlite_catalog_from_facade(
+    broker: str,
+    facade: SqliteAlpacaClerkFacade,
+) -> list[BotCatalogView]:
+    """Project one explicitly selected account authority into the V2 roster.
+
+    The default catalog entry point deliberately resolves only the real-paper
+    compatibility authority. Dry Run callers already possess an account-keyed
+    synthetic Clerk, so routing them through that global selector would make a
+    successful sealed run disappear from the roster.
+    """
+    account_id = facade.account_id
+    for attempt in range(_CATALOG_COHERENCE_ATTEMPTS):
+        candidate_statuses = [
+            _sqlite_roster_status(broker, registration, facade.repository)
+            for registration in facade.repository.strategy_instances()
+        ]
+        strategy_instance_ids = [status.strategy_instance_id for status in candidate_statuses]
+        if not strategy_instance_ids:
+            return []
+
+        def read_projection_cut(
+            selected_ids: tuple[str, ...] = tuple(strategy_instance_ids),
+        ) -> tuple[dict[str, ClerkProjection], dict[str, EconomicSnapshot]]:
+            custody_reader = SqliteClerkProjectionReader.from_repository(facade.repository)
+            economic_reader = SqliteEconomicProjectionReader.from_repository(facade.repository)
+            try:
+                projections = {
+                    strategy_instance_id: projection
+                    for strategy_instance_id in selected_ids
+                    if (
+                        projection := custody_reader.bot_snapshot(strategy_instance_id)
+                    ) is not None
+                }
+                economics = economic_reader.catalog_economic_rollup(
+                    selected_ids,
+                    session_window=current_trading_session_window(now_ms_utc()),
+                )
+                return projections, economics
+            finally:
+                custody_reader.close()
+                economic_reader.close()
+
+        try:
+            projections, economic_rollups = await asyncio.to_thread(read_projection_cut)
+        except EconomicProjectionError as exc:
+            raise SqliteCatalogProjectionUnavailable(str(exc)) from exc
+        first_snapshot = next(iter(economic_rollups.values()), None)
+        if first_snapshot is None:
+            raise SqliteCatalogRevisionMismatch(
+                "SQLite catalog has no economic revision to bind lifecycle identity."
+            )
+        try:
+            statuses = _bound_roster_statuses(
+                facade,
+                broker,
+                account_id=first_snapshot.account_id,
+                authority_generation=first_snapshot.authority_generation,
+                control_revision=first_snapshot.control_revision,
+            )
+            if [status.strategy_instance_id for status in statuses] != strategy_instance_ids:
+                raise SqliteCatalogRevisionMismatch(
+                    "SQLite roster membership changed during catalog projection."
+                )
+            return build_sqlite_catalog(
+                statuses,
+                projections,
+                economic_rollups=economic_rollups,
+                account_id=account_id,
+            )
+        except SqliteCatalogRevisionMismatch:
+            if attempt == _CATALOG_COHERENCE_ATTEMPTS - 1:
+                raise
+    raise AssertionError("catalog coherence retry exhausted without a result")
+
+
 async def execute_sqlite_panel_action(
     broker: str,
     account_id: str,
@@ -758,6 +837,7 @@ __all__ = [
     "read_sqlite_bot_status",
     "read_sqlite_catalog",
     "read_sqlite_catalog_economic_rollups",
+    "read_sqlite_catalog_from_facade",
     "read_sqlite_catalog_projections",
     "read_sqlite_chart_evidence",
     "read_sqlite_chart_fills",

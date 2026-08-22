@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.models import OrderResource
     from app.schemas.action_plan import ActionPlan
     from app.services.bot_binding_repository import BrokerBotBinding
+    from app.services.source_bar_ledger import RetainedSourceBar
 
 
 class ClerkAdmissionSnapshotStaleError(RuntimeError):
@@ -75,6 +76,7 @@ class ActiveAlpacaClerk(Protocol):
         quantity: int,
         use_rth: bool = True,
         capability_account_id: str | None = None,
+        retained_source_bar: RetainedSourceBar | None = None,
     ) -> EffectOperationReceipt: ...
 
     async def reconcile_once(self) -> ReconciliationVerdict: ...

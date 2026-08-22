@@ -296,7 +296,7 @@ def test_concurrent_duplicate_enter_produces_exactly_one_broker_intent(
     assert {r.order_ref for r in results if r is not None} == {results[0].order_ref}
 
 
-def test_distinct_enter_decisions_accept_at_most_one_open_custody_lifecycle(
+def test_accept_enter_blocks_second_decision_while_open(
     repo: ClerkSqliteRepository,
 ) -> None:
     """A second decision cannot add exposure while the first ENTER is open.
@@ -1341,7 +1341,7 @@ async def test_lost_submit_atomically_blocks_more_exposure_until_exact_recovery(
     assert exc_info.value.decision.reason_code == "ENTER_IN_PROGRESS"
 
 
-def test_exact_recovery_advances_each_effect_while_another_strategy_remains_unknown(
+def test_fold_order_evidence_advances_each_effect_while_another_strategy_remains_unknown(
     repo: ClerkSqliteRepository,
 ) -> None:
     """Independent bot custody lifecycles do not strand each other.

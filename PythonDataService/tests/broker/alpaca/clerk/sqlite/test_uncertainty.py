@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 
 from app.broker.alpaca.clerk.sqlite.facts import AccountHoldRaisedFacts
+from app.broker.alpaca.clerk.sqlite.folds import POSITION_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
@@ -96,6 +97,46 @@ def test_cause_encoders_emit_the_unique_sorted_order_required_by_decoders() -> N
     )
 
 
+@pytest.mark.parametrize(
+    ("quantity", "allowed", "reason_code"),
+    (
+        pytest.param(
+            POSITION_QTY_EPSILON / 2,
+            True,
+            None,
+            id="below_absolute_share_tolerance",
+        ),
+        pytest.param(
+            POSITION_QTY_EPSILON,
+            False,
+            "ATTRIBUTED_EXPOSURE_EXISTS",
+            id="at_inclusive_absolute_share_tolerance",
+        ),
+        pytest.param(
+            POSITION_QTY_EPSILON * 2,
+            False,
+            "ATTRIBUTED_EXPOSURE_EXISTS",
+            id="above_absolute_share_tolerance",
+        ),
+    ),
+)
+def test_new_exposure_uses_the_canonical_attributed_quantity_boundary_fixture(
+    repo: ClerkSqliteRepository,
+    monkeypatch: pytest.MonkeyPatch,
+    quantity: float,
+    allowed: bool,
+    reason_code: str | None,
+) -> None:
+    """Pin the below/at/above fixture for the one Clerk exposure boundary."""
+    monkeypatch.setattr(repo, "attributed_positions_for_strategy", lambda _sid: {"SPY": quantity})
+
+    decision = decide_capability(
+        repo=repo,
+        capability=Capability.NEW_EXPOSURE,
+        strategy_instance_id=SID,
+    )
+
+    assert (decision.allowed, decision.reason_code) == (allowed, reason_code)
 # ── raise_uncertainty / resolve_uncertainty ─────────────────────────────────
 
 

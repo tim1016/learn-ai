@@ -96,6 +96,15 @@ class SourceBarLedger:
             trusted_root=account_dir,
         )
         self._lock = threading.Lock()
+        self._by_identity: dict[str, RetainedSourceBar] = {}
+        rows = self._wal.read_all()
+        for row in rows:
+            if row.bar_identity in self._by_identity:
+                raise _corrupt_error(self.path, f"duplicate bar identity {row.bar_identity!r}")
+            self._by_identity[row.bar_identity] = row
+        # The initial identity scan also establishes the next durable sequence;
+        # avoid a second full replay on the first append after construction.
+        self._wal._next_seq = rows[-1].seq + 1 if rows else 1
 
     @property
     def path(self) -> Path:
@@ -112,17 +121,75 @@ class SourceBarLedger:
             candidate = RetainedSourceBar.from_market_bar(
                 seq=self._wal.allocate_seq(), account_id=self.account_id, bar=bar
             )
-            for existing in self._wal.read_all():
-                if existing.bar_identity != candidate.bar_identity:
-                    continue
-                if existing.model_dump(exclude={"seq"}) == candidate.model_dump(exclude={"seq"}):
+            existing = self._by_identity.get(candidate.bar_identity)
+            if existing is not None:
+                # Fetch time is observation metadata, not the closed market
+                # payload. A redelivery with the same bar fetched later must
+                # replay the first durable observation rather than look like
+                # a provider revision.
+                if existing.model_dump(exclude={"seq", "fetched_at_ms"}) == candidate.model_dump(
+                    exclude={"seq", "fetched_at_ms"}
+                ):
                     return existing
                 raise SourceBarConflictError(
                     "SOURCE_BAR_IDENTITY_CONFLICT: "
                     f"{candidate.bar_identity!r} was observed with a different payload"
                 )
             self._wal.append(candidate)
+            self._by_identity[candidate.bar_identity] = candidate
             return candidate
+
+    def by_identity(self, bar_identity: str) -> RetainedSourceBar | None:
+        """Return the exact durable observation for one stable source-bar identity."""
+        with self._lock:
+            cached = self._by_identity.get(bar_identity)
+            if cached is not None:
+                return cached
+            # The synthetic broker and strategy runner intentionally open
+            # separate handles to the same append-only authority. Refresh a
+            # cache miss from the durable WAL so a just-appended decision bar
+            # is visible across those handles without choosing a newer bar.
+            for row in self._wal.read_all():
+                existing = self._by_identity.get(row.bar_identity)
+                if existing is not None and existing != row:
+                    raise _corrupt_error(
+                        self.path,
+                        f"duplicate bar identity {row.bar_identity!r}",
+                    )
+                self._by_identity[row.bar_identity] = row
+            return self._by_identity.get(bar_identity)
+
+    def find_by_market_bar(self, bar: MarketDataBar) -> RetainedSourceBar | None:
+        """Find the exact retained observation corresponding to one evaluated bar."""
+        identity = f"{bar.feed_id}:{bar.symbol}:{bar.start_ms}:{bar.end_ms}"
+        return self.by_identity(identity)
+
+    def find_by_closed_end(
+        self,
+        *,
+        provider: str,
+        symbol: str,
+        end_ms: int,
+    ) -> RetainedSourceBar | None:
+        """Return the one retained source observation for a decision close.
+
+        A signal program may emit a consolidated decision only when the next
+        raw bar arrives. Its ``bar_close_ms`` nevertheless names the closed
+        raw observation from which a synthetic fill must be derived. More than
+        one match is ambiguous evidence, so callers fail closed rather than
+        choose by arrival order.
+        """
+        matches = [
+            row
+            for row in self.bars(provider=provider, symbol=symbol)
+            if row.end_ms == end_ms
+        ]
+        if len(matches) > 1:
+            raise SourceBarConflictError(
+                "SOURCE_BAR_DECISION_AMBIGUITY: "
+                f"{provider}:{symbol}:{end_ms} has {len(matches)} retained observations"
+            )
+        return matches[0] if matches else None
 
     def bars(self, *, provider: str, symbol: str) -> list[RetainedSourceBar]:
         """Return one provider/symbol's retained observations in durable order."""

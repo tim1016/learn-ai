@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.broker.alpaca.clerk.account_authority import synthetic_account_id_for_strategy
 from app.services.jsonl_wal import JsonlWal
 
 DRY_RUN_ACTIVITY_FILENAME = "dry_run_activity.jsonl"
@@ -33,6 +34,29 @@ class DryRunActivity(BaseModel):
     quantity: float = Field(gt=0)
     fill_price: float = Field(gt=0)
     simulated: Literal[True] = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def _lift_legacy_authority(cls, value: Any) -> Any:
+        """Lift pre-authority rows without weakening current evidence checks."""
+        if not isinstance(value, dict):
+            return value
+        lifted = dict(value)
+        if "authority_account_id" not in lifted:
+            strategy_instance_id = lifted.get("strategy_instance_id")
+            if isinstance(strategy_instance_id, str):
+                lifted["authority_account_id"] = synthetic_account_id_for_strategy(
+                    strategy_instance_id
+                )
+        lifted.setdefault("authority_kind", "synthetic")
+        return lifted
+
+    @model_validator(mode="after")
+    def _require_authority_for_instance(self) -> DryRunActivity:
+        expected = synthetic_account_id_for_strategy(self.strategy_instance_id)
+        if self.authority_account_id != expected:
+            raise ValueError("Dry Run activity authority does not match strategy instance")
+        return self
 
 
 def _corrupt_error(path: Path, detail: str) -> RuntimeError:

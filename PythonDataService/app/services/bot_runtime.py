@@ -110,7 +110,7 @@ async def execute_bot_run(
     *,
     run_gate: asyncio.Event | None,
     instance_dir: Path,
-    source_bars: SourceBarLedger | None = None,
+    source_bars: SourceBarLedger | None,
 ) -> None:
     """Execute one binding's configured mode behind its same-run pause gate."""
     run_feed = PauseAwareFeed(feed, run_gate) if run_gate is not None else feed

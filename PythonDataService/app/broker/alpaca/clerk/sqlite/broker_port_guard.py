@@ -9,6 +9,7 @@ the intake fence.
 from __future__ import annotations
 
 import inspect
+from typing import TYPE_CHECKING
 
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.contract.capabilities import BrokerCapabilities
@@ -24,6 +25,9 @@ from app.broker.contract.models import (
     PortfolioHistoryRange,
 )
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
+
+if TYPE_CHECKING:
+    from app.services.source_bar_ledger import RetainedSourceBar
 
 
 class BrokerCallUnderIntakeError(RuntimeError):
@@ -135,6 +139,20 @@ class GuardedBrokerTradePort:
     async def get_order_by_client_order_id(self, client_order_id: str) -> BrokerOrder | None:
         self._assert_unfenced("get_order_by_client_order_id")
         return await self._inner.get_order_by_client_order_id(client_order_id)
+
+    def bind_evaluated_bar(self, client_order_id: str, retained_bar: RetainedSourceBar) -> None:
+        """Forward the synthetic-only exact-decision-bar capability.
+
+        This is deliberately not part of :class:`BrokerTradePort`: live
+        broker adapters neither understand nor need retained source-bar
+        evidence. The SQLite runtime calls it only for synthetic custody and
+        fails closed if its selected port does not provide the capability.
+        """
+        self._assert_unfenced("bind_evaluated_bar")
+        bind = getattr(self._inner, "bind_evaluated_bar", None)
+        if not callable(bind):
+            raise RuntimeError("Synthetic Clerk trade port cannot bind an evaluated source bar.")
+        bind(client_order_id, retained_bar)
 
     def _assert_unfenced(self, method: str) -> None:
         if self._intake.current_scope_depth() != 0:

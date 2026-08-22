@@ -13,6 +13,8 @@ a stale deep link never reads another account's evidence.
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Literal
 
 from app.broker.alpaca.clerk import get_alpaca_clerk
@@ -23,6 +25,7 @@ from app.broker.alpaca.clerk.models import (
     EffectPurpose,
     OrderJournalEntry,
 )
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerAccountSnapshot
 from app.schemas.broker_bots import (
@@ -45,6 +48,7 @@ from app.schemas.broker_v2_panel import (
     PanelActionResult,
 )
 from app.schemas.run_admission import RunAdmissionDecision
+from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_runner import (
     ActivationFailedCleanupProvenError,
     BotRunnerError,
@@ -84,6 +88,7 @@ from app.services.broker_v2_panel.sqlite_panel_source import (
     SqlitePanelEconomicUnavailable,
     execute_sqlite_panel_action,
     read_sqlite_catalog,
+    read_sqlite_catalog_from_facade,
     read_sqlite_clerk_status,
     read_sqlite_decision_receipts,
     read_sqlite_panel_evidence,
@@ -154,6 +159,37 @@ class PanelRunnerError(PanelDataError):
 
 # Only Alpaca has a panel-backing clerk in phase 1.
 _PANEL_BROKER = "alpaca"
+
+
+@asynccontextmanager
+async def _panel_authority_for_binding(
+    registry: object,
+    binding: BrokerBotBinding,
+) -> AsyncIterator[SqliteAlpacaClerkFacade | None]:
+    """Select the Clerk authority named by one durable bot binding.
+
+    The request account remains the real operator account used for route
+    authorization. Dry Run custody is intentionally stored under a separate
+    ``sim:<strategy_instance_id>`` account and must be selected explicitly for
+    its evidence reads.
+    """
+    if getattr(binding, "mode", None) != "dry_run":
+        yield None
+        return
+    projection_runtime = getattr(registry, "synthetic_runtime_for_projection", None)
+    if not callable(projection_runtime):
+        raise PanelUnavailableError(
+            "The Dry Run custody authority is unavailable.",
+            detail="The bot runner cannot compose the sealed synthetic Clerk for this projection.",
+        )
+    async with projection_runtime(binding) as runtime:
+        facade = runtime.clerk
+        if not isinstance(facade, SqliteAlpacaClerkFacade) or runtime.authority_kind != "synthetic":
+            raise PanelUnavailableError(
+                "The Dry Run custody authority is unavailable.",
+                detail="The sealed synthetic Clerk did not provide a SQLite projection authority.",
+            )
+        yield facade
 
 
 async def resolve_account_snapshot(broker: str) -> BrokerAccountSnapshot:
@@ -551,26 +587,51 @@ async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:
             "The activated SQLite bot roster is unavailable.",
             detail="Restore or reactivate the account-scoped SQLite authority.",
         )
-    return sqlite_catalog
+    registry = get_bot_task_registry()
+    if registry is None:
+        return sqlite_catalog
+    synthetic_rows: list[BotCatalogView] = []
+    for binding in registry.bindings_for_broker(broker):
+        if binding.mode != "dry_run":
+            continue
+        try:
+            async with _panel_authority_for_binding(registry, binding) as facade:
+                assert facade is not None
+                rows = await read_sqlite_catalog_from_facade(broker, facade)
+        except SqliteCatalogProjectionUnavailable as exc:
+            raise PanelUnavailableError(
+                "The sealed Dry Run roster could not be projected.",
+                detail=str(exc),
+            ) from exc
+        synthetic_rows.extend(
+            row.model_copy(update={"mode": "dry_run"})
+            for row in rows
+            if row.strategy_instance_id == binding.strategy_instance_id
+        )
+    return [*sqlite_catalog, *synthetic_rows]
 
 
-async def _get_panel_with_entries(
+async def _get_panel_with_entries_from_authority(
     broker: str,
     account_id: str,
     sid: str,
     *,
+    resolved: str,
+    captured_now_ms: int,
+    registry: object,
+    binding: object,
+    facade: SqliteAlpacaClerkFacade | None,
     transaction_ref: str | None = None,
-    now_ms: int | None = None,
 ) -> tuple[BotPanelView, list[OrderJournalEntry], tuple[FillRecord, ...] | None]:
-    """Build one SQLite-backed panel and return its exact chart fill set."""
-    resolved = await _validate_account(broker, account_id)
-    captured_now_ms = now_ms if now_ms is not None else now_ms_utc()
+    """Build one panel from its binding-selected SQLite authority."""
+    authority_account_id = facade.account_id if facade is not None else resolved
     try:
         evidence = await read_sqlite_panel_evidence(
             broker,
-            resolved,
+            authority_account_id,
             sid,
             now_ms=captured_now_ms,
+            facade=facade,
         )
     except SqlitePanelBotNotFound as exc:
         raise UnknownBotError(str(exc)) from exc
@@ -584,13 +645,7 @@ async def _get_panel_with_entries(
             "The activated SQLite panel authority is unavailable.",
             detail="Restore or reactivate the account-scoped SQLite authority.",
         )
-    status = evidence.status
-    registry = get_bot_task_registry()
-    if registry is None:
-        raise PanelUnavailableError(
-            "The bot runner is not available.",
-            detail="The service is still starting or has shut down.",
-        )
+    status = _status_in_binding_mode(evidence.status, binding)
     resume_admission: RunAdmissionDecision | None = None
     if not status.running:
         try:
@@ -610,9 +665,10 @@ async def _get_panel_with_entries(
         try:
             evidence = await read_sqlite_panel_evidence(
                 broker,
-                resolved,
+                authority_account_id,
                 sid,
                 now_ms=captured_now_ms,
+                facade=facade,
             )
         except SqlitePanelBotNotFound as exc:
             raise UnknownBotError(str(exc)) from exc
@@ -625,14 +681,13 @@ async def _get_panel_with_entries(
             raise PanelUnavailableError(
                 "The activated SQLite panel authority became unavailable.",
             )
-        status = evidence.status
+        status = _status_in_binding_mode(evidence.status, binding)
     projection = evidence.projection
     session_fills = evidence.economics.session_fills
     entries: list[OrderJournalEntry] = []
-    binding = registry.binding_for_control(broker, sid)
     clerk_status = await _clerk_status(symbol=binding.symbol)
     try:
-        decisions = read_sqlite_decision_receipts(broker, sid)
+        decisions = read_sqlite_decision_receipts(broker, sid, facade=facade)
     except SqlitePanelDecisionUnavailable as exc:
         raise PanelUnavailableError(
             "The activated SQLite decision evidence is unavailable.",
@@ -690,6 +745,51 @@ async def _get_panel_with_entries(
     )
     panel = adapt_sqlite_panel(panel, projection, economics=economics)
     return panel, entries, session_fills
+
+
+def _status_in_binding_mode(status: BotStatusView, binding: BrokerBotBinding) -> BotStatusView:
+    """Retain authority-owned lifecycle facts while exposing the sealed mode."""
+    if getattr(binding, "mode", None) != "dry_run":
+        return status
+    return status.model_copy(
+        update={
+            "mode": "dry_run",
+            "quantity": binding.quantity,
+            "carryover_policy": binding.carryover_policy,
+        }
+    )
+
+
+async def _get_panel_with_entries(
+    broker: str,
+    account_id: str,
+    sid: str,
+    *,
+    transaction_ref: str | None = None,
+    now_ms: int | None = None,
+) -> tuple[BotPanelView, list[OrderJournalEntry], tuple[FillRecord, ...] | None]:
+    """Build one SQLite-backed panel and return its exact chart fill set."""
+    resolved = await _validate_account(broker, account_id)
+    registry = get_bot_task_registry()
+    if registry is None:
+        raise PanelUnavailableError(
+            "The bot runner is not available.",
+            detail="The service is still starting or has shut down.",
+        )
+    binding = registry.binding_for_control(broker, sid)
+    captured_now_ms = now_ms if now_ms is not None else now_ms_utc()
+    async with _panel_authority_for_binding(registry, binding) as facade:
+        return await _get_panel_with_entries_from_authority(
+            broker,
+            account_id,
+            sid,
+            resolved=resolved,
+            captured_now_ms=captured_now_ms,
+            registry=registry,
+            binding=binding,
+            facade=facade,
+            transaction_ref=transaction_ref,
+        )
 
 
 async def get_panel_with_chart_fills(

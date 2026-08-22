@@ -396,13 +396,28 @@ async def activate_synthetic_clerk_authority(
         )
     try:
         meta = repository.control_meta_snapshot()
+        store = activation_store or SyntheticActivationStore(artifacts_root)
+        prior = store.latest(account_id)
+        if prior is not None:
+            if (
+                prior.authority_generation == meta.authority_generation
+                and prior.db_identity_token == meta.db_identity_token
+            ):
+                # A process can restart after the activation proof was fsync'd
+                # but before the in-memory authority registry was restored.
+                # Reusing this exact proof is safe; appending it again would
+                # violate the activation ledger's monotonic generation fence.
+                return prior
+            raise SyntheticActivationInvalid(
+                "synthetic activation does not match repository identity"
+            )
         record = SyntheticActivationRecord.create(
             account_id=account_id,
             authority_generation=meta.authority_generation,
             db_identity_token=meta.db_identity_token,
             activated_at_ms=now_ms_utc(),
         )
-        (activation_store or SyntheticActivationStore(artifacts_root)).append(record)
+        store.append(record)
         return record
     finally:
         repository.close()
@@ -526,6 +541,18 @@ class ClerkAuthorityRegistry:
     def resolve(self, account_id: str) -> ActiveClerkRuntime | None:
         return self._runtimes.get(account_id)
 
+    def unregister(self, account_id: str) -> ActiveClerkRuntime | None:
+        """Remove one exact authority without perturbing other accounts."""
+        return self._runtimes.pop(account_id, None)
+
+    def synthetic_runtimes(self) -> tuple[ActiveClerkRuntime, ...]:
+        """Return the isolated runtimes that must be closed at shutdown."""
+        return tuple(
+            runtime
+            for runtime in self._runtimes.values()
+            if runtime.authority_kind == "synthetic"
+        )
+
     def clear(self) -> None:
         self._runtimes.clear()
 
@@ -554,6 +581,25 @@ def register_clerk_runtime(runtime: ActiveClerkRuntime) -> None:
 def get_clerk_runtime(account_id: str) -> ActiveClerkRuntime | None:
     """Resolve one authority by exact account key; there is no fallback."""
     return _authority_registry.resolve(account_id)
+
+
+def unregister_clerk_runtime(account_id: str) -> ActiveClerkRuntime | None:
+    """Remove one exact non-primary authority after its owner releases it."""
+    runtime = _authority_registry.resolve(account_id)
+    if runtime is _runtime:
+        raise ValueError("the primary Clerk runtime cannot be unregistered by account")
+    return _authority_registry.unregister(account_id)
+
+
+async def close_synthetic_clerk_runtimes() -> None:
+    """Drain and close every registered synthetic runtime exactly once."""
+    runtimes = _authority_registry.synthetic_runtimes()
+    for runtime in runtimes:
+        account_id = runtime.selected_account_id
+        if account_id is not None:
+            _authority_registry.unregister(account_id)
+    for runtime in runtimes:
+        await runtime.close()
 
 
 def get_alpaca_clerk() -> ActiveAlpacaClerk | None:
@@ -587,6 +633,7 @@ __all__ = [
     "ClerkAuthorityRegistry",
     "ClerkStartupFailure",
     "activate_synthetic_clerk_authority",
+    "close_synthetic_clerk_runtimes",
     "get_active_clerk_runtime",
     "get_alpaca_clerk",
     "get_clerk_runtime",
@@ -596,4 +643,5 @@ __all__ = [
     "select_synthetic_clerk_runtime",
     "set_active_clerk_runtime",
     "set_alpaca_clerk",
+    "unregister_clerk_runtime",
 ]

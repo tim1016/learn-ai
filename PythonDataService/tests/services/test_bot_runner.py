@@ -142,6 +142,16 @@ def _fresh_live_market_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(clerk_runtime, "market_liveness_fact", _tradable_market_liveness)
 
 
+@pytest.fixture
+def _isolated_synthetic_authority() -> None:
+    """Keep process-scoped synthetic Clerk state out of neighbouring tests."""
+    from app.broker.alpaca.clerk.active_authority import reset_alpaca_clerk_for_testing
+
+    reset_alpaca_clerk_for_testing()
+    yield
+    reset_alpaca_clerk_for_testing()
+
+
 def _strategy_signal_bars(closes: list[str]) -> list[MarketDataBar]:
     return [
         MarketDataBar(
@@ -275,19 +285,49 @@ async def test_ema_live_adapter_exposes_and_settles_signal_program_stages() -> N
         run_id="run-001",
         created_at_ms=_T0,
     )
+    evaluation_count = 0
     staged_count = 0
     intents: list[SignalIntentKind] = []
     async for evaluation in strategy_evaluations(
         binding,
         _FakeFeed(_ema_parity_bars_through_first_exit(), mode="finite"),
     ):
+        evaluation_count += 1
         if evaluation.settle_stage is not None:
             staged_count += 1
             evaluation.settle_stage(Settlement.COMMIT)
         intents.extend(intent.kind for intent in evaluation.intents)
 
-    assert staged_count > 0
+    assert staged_count == evaluation_count
     assert intents == [SignalIntentKind.ENTER, SignalIntentKind.EXIT]
+
+
+@pytest.mark.asyncio
+async def test_strategy_evaluations_unlocks_each_discarded_signal_stage() -> None:
+    """Observe-only and rejected candidates cannot strand the next EMA stage."""
+    binding = BrokerBotBinding(
+        strategy_instance_id="ema-staged-discard-test",
+        strategy_key="ema_crossover_signal",
+        broker="alpaca",
+        symbol="SPY",
+        mode="dry_run",
+        action_plan=alpaca_v1_action_plan("SPY"),
+        run_id="run-001",
+        created_at_ms=_T0,
+    )
+    evaluation_count = 0
+    staged_count = 0
+    async for evaluation in strategy_evaluations(
+        binding,
+        _FakeFeed(_ema_parity_bars_through_first_exit(), mode="finite"),
+    ):
+        evaluation_count += 1
+        assert evaluation.settle_stage is not None
+        staged_count += 1
+        evaluation.settle_stage(Settlement.DISCARD)
+
+    assert staged_count == evaluation_count
+    assert evaluation_count > 1
 
 
 def _bar(start_ms: int, symbol: str = "SPY") -> MarketDataBar:
@@ -3241,12 +3281,8 @@ async def test_decision_receipt_failure_prevents_the_broker_effect(
 async def test_dry_run_records_simulated_round_trip_with_zero_broker_writes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    _isolated_synthetic_authority: None,
 ) -> None:
-    # Synthetic authorities are process-scoped; begin with the current test's
-    # isolated artifact root rather than a prior registry's sim: account.
-    from app.broker.alpaca.clerk.active_authority import reset_alpaca_clerk_for_testing
-
-    reset_alpaca_clerk_for_testing()
     clerk = _FakeClerk()
     _install_fake_clerk(monkeypatch, clerk)
     bars = _ema_parity_bars_through_first_exit()
@@ -3289,7 +3325,50 @@ async def test_dry_run_records_simulated_round_trip_with_zero_broker_writes(
     retained = SourceBarLedger(artifacts_root=tmp_path, account_id=account_id)
     assert len(retained.bars(provider="lean-golden", symbol="SPY")) == len(bars)
     assert all(row.bar_ref.startswith(f"source-bar:{account_id}:") for row in activity)
+    # The EMA's 15-minute decision arrives when the following raw minute
+    # flushes its consolidator. A latest-bar fill would therefore price the
+    # following minute, not the decision close. Each journal receipt must
+    # name and price the unique durable bar at the intent's clock.
+    for row in activity:
+        decision_bar = retained.find_by_closed_end(
+            provider="lean-golden",
+            symbol="SPY",
+            end_ms=row.recorded_at_ms,
+        )
+        assert decision_bar is not None
+        assert (row.bar_ref, row.fill_price) == (decision_bar.bar_ref, float(decision_bar.close))
     await registry.stop("alpaca", _SID)
+
+
+def test_dry_run_activity_journal_lifts_legacy_authority_fields(tmp_path: Path) -> None:
+    """Pre-authority journal rows remain readable after the schema extension."""
+    instance_dir = tmp_path / "instance"
+    instance_dir.mkdir()
+    (instance_dir / "dry_run_activity.jsonl").write_text(
+        json.dumps(
+            {
+                "seq": 1,
+                "strategy_instance_id": _SID,
+                "run_id": "run-legacy",
+                "recorded_at_ms": _T0,
+                "bar_ref": "SPY@1700000000000",
+                "intent": "ENTER",
+                "order_ref": "simulated:legacy",
+                "symbol": "SPY",
+                "side": "buy",
+                "quantity": 1.0,
+                "fill_price": 400.0,
+                "simulated": True,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    rows = DryRunActivityJournal(instance_dir).tail(1)
+
+    assert rows[0].authority_account_id == f"sim:{_SID}"
+    assert rows[0].authority_kind == "synthetic"
 
 
 @pytest.mark.asyncio

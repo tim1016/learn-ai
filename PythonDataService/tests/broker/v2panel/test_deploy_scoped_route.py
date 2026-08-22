@@ -633,7 +633,7 @@ async def test_deploy_accepts_a_registry_defined_strategy_key_the_catalog_has_no
 
 
 @pytest.mark.asyncio
-async def test_carryover_requires_account_policy_and_explicit_deploy_opt_in(
+async def test_carryover_is_refused_even_with_account_policy_and_explicit_opt_in(
     deploy_app,
     monkeypatch,
 ) -> None:

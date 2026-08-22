@@ -135,3 +135,30 @@ def test_single_authority_aggregate_rejects_mixed_real_and_synthetic_rows() -> N
                 AuthorityScopedRow(account_id="sim:ema-1", authority_kind="synthetic"),
             ),
         )
+
+
+@pytest.mark.parametrize(
+    ("account_id", "authority_kind"),
+    [
+        ("sim:ema-1", "real_paper"),
+        ("PA-REAL", "synthetic"),
+    ],
+)
+def test_authority_scoped_rows_enforce_account_namespace_at_model_boundary(
+    account_id: str,
+    authority_kind: str,
+) -> None:
+    with pytest.raises(ValidationError, match="require"):
+        AuthorityScopedRow(
+            account_id=account_id,
+            authority_kind=authority_kind,  # type: ignore[arg-type]
+        )
+
+
+def test_single_authority_aggregate_enforces_selected_account_namespace_when_empty() -> None:
+    with pytest.raises(ValidationError, match="sim: account ids require synthetic authority"):
+        SingleAuthorityAggregate(
+            account_id="sim:ema-1",
+            authority_kind="real_paper",
+            rows=(),
+        )

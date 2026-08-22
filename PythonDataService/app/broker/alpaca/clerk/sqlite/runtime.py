@@ -32,7 +32,10 @@ from app.broker.alpaca.clerk.models import (
     InstanceCustodyProof,
     ReconciliationVerdict,
 )
-from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_ports
+from app.broker.alpaca.clerk.sqlite.broker_port_guard import (
+    GuardedBrokerTradePort,
+    guard_broker_ports,
+)
 from app.broker.alpaca.clerk.sqlite.commands import (
     CommandSubmission,
     submit_start_run,
@@ -87,7 +90,7 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate, stream_health_refusal
 from app.broker.contract.errors import BrokerError
-from app.broker.contract.models import BrokerOrderLeg, OrderSide
+from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.config import settings
 from app.schemas.action_plan import ActionPlan, StockEntryLeg
@@ -96,6 +99,7 @@ from app.services.market_liveness import liveness_blocks_entry, market_liveness_
 
 if TYPE_CHECKING:
     from app.services.bot_binding_repository import BrokerBotBinding
+    from app.services.source_bar_ledger import RetainedSourceBar
 
 _WORKING_ORDER_STATES = frozenset(
     {
@@ -117,6 +121,28 @@ _ENCODED_DECISION_PREFIX = "encoded-"
 # both authorities.
 STREAM_HEALTH_REASON_CODE = "STREAM_HEALTH_HOLD"
 logger = logging.getLogger(__name__)
+
+
+class _DecisionBarBoundTradePort:
+    """Bind each synthetic Clerk order to one immutable retained decision bar."""
+
+    def __init__(self, inner: GuardedBrokerTradePort, retained_bar: RetainedSourceBar) -> None:
+        self._inner = inner
+        self._retained_bar = retained_bar
+
+    @property
+    def broker_id(self) -> str:
+        return self._inner.broker_id
+
+    async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
+        self._inner.bind_evaluated_bar(client_order_id, self._retained_bar)
+        return await self._inner.submit(leg, client_order_id=client_order_id)
+
+    async def cancel(self, order_id: str) -> None:
+        await self._inner.cancel(order_id)
+
+    async def get_order_by_client_order_id(self, client_order_id: str) -> BrokerOrder | None:
+        return await self._inner.get_order_by_client_order_id(client_order_id)
 
 
 class StrategyRegistrationConflictError(RuntimeError):
@@ -458,6 +484,7 @@ class SqliteAlpacaClerkFacade:
         quantity: int,
         use_rth: bool = True,
         capability_account_id: str | None = None,
+        retained_source_bar: RetainedSourceBar | None = None,
     ) -> EffectOperationReceipt:
         """Route one semantic decision through SQLite ENTER/EXIT custody.
 
@@ -479,6 +506,7 @@ class SqliteAlpacaClerkFacade:
                     quantity=quantity,
                     use_rth=use_rth,
                     capability_account_id=capability_account_id,
+                    retained_source_bar=retained_source_bar,
                 ),
                 name=f"alpaca-sqlite-effect:{strategy_instance_id}:{decision_id}",
             )
@@ -524,6 +552,7 @@ class SqliteAlpacaClerkFacade:
         quantity: int,
         use_rth: bool = True,
         capability_account_id: str | None = None,
+        retained_source_bar: RetainedSourceBar | None = None,
     ) -> EffectOperationReceipt:
         def rejected(
             *,
@@ -543,6 +572,15 @@ class SqliteAlpacaClerkFacade:
                 order_refs=order_refs,
                 explanation=f"{reason_code}: {explanation}",
                 next_step=next_step,
+            )
+
+        if self.authority_kind == "synthetic" and retained_source_bar is None:
+            return rejected(
+                reason_code="SIMULATED_SOURCE_BAR_UNPROVEN",
+                explanation=(
+                    "Synthetic custody received no exact retained source bar for this decision."
+                ),
+                next_step="Replay or ingest the decision bar, then retry through the sealed program.",
             )
 
         async with self._intake:
@@ -670,12 +708,19 @@ class SqliteAlpacaClerkFacade:
                         next_step="Reconcile the instance custody before attempting another EXIT.",
                     )
 
+        trade: BrokerTradePort
+        if self.authority_kind == "synthetic":
+            assert retained_source_bar is not None
+            trade = _DecisionBarBoundTradePort(self._trade, retained_source_bar)
+        else:
+            trade = self._trade
+
         if purpose is EffectPurpose.ENTER:
             submitted_enter = await submit_accepted_enter(
                 self._repo,
                 accepted=accepted_enter,
                 leg=operation_leg,
-                trade=self._trade,
+                trade=trade,
             )
             order_refs = (
                 (submitted_enter.order_ref,) if submitted_enter.order_ref is not None else ()
@@ -694,7 +739,7 @@ class SqliteAlpacaClerkFacade:
         submitted_exit = await resolve_accepted_exit(
             self._repo,
             accepted=accepted_exit,
-            trade=self._trade,
+            trade=trade,
         )
         order_refs = tuple(
             ref
