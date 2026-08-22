@@ -39,6 +39,7 @@ from app.engine.strategy.signal_program import (
     EmaCrossoverSignalProgram,
     EvaluationMode,
     EvaluationStage,
+    EvaluationTrace,
     Settlement,
 )
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
@@ -108,6 +109,15 @@ class StrategyEvaluation:
     # record `CANDIDATE_UNCAPTURED_AT_CRASH` and discard; it must never be
     # routed through the ordinary no-action/blocked/effect branches.
     crash_recovered: bool = False
+    # The full canonical trace this evaluation staged, when the strategy is
+    # a registered Signal Program (`registration.signal_program_factory` is
+    # not `None`). `None` for compatibility-mode strategies with no
+    # SignalSession (e.g. `deployment_validation`). Lets a caller that needs
+    # the complete decision-meaning payload -- not just the identity/intents
+    # subset above -- read it without re-deriving strategy state. Shadow-mode
+    # trace-parity comparison (issue #1729 AC #2) is the first such caller;
+    # see `app/broker/alpaca/clerk/sqlite/qualification_shadow_trace.py`.
+    trace: EvaluationTrace | None = None
 
 
 class _EffectReceipt(Protocol):
@@ -574,6 +584,7 @@ def _evaluation_from_active_stage(
             else lambda settlement: _settle_active_stage(runtime, context, settlement)
         ),
         evaluation_mode=(stage.trace.evaluation_mode if stage is not None else mode),
+        trace=stage.trace if stage is not None else None,
     )
 
 
