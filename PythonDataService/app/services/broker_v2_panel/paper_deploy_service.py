@@ -150,6 +150,8 @@ def _admissible_modes(*, selectable: bool, has_runtime: bool) -> tuple[Literal["
 
 def _strategy_views(
     entries: list[StrategyValidationEntry],
+    *,
+    account_id: str,
 ) -> tuple[AlpacaPaperDeployStrategy, ...]:
     """Project the composed strategy catalog into deploy-wire rows.
 
@@ -173,7 +175,7 @@ def _strategy_views(
             blocked_explanation=entry.blocked_explanation,
             params_schema=_deploy_params_schema(entry.strategy_key),
         )
-        for entry in compose_strategy_catalog(entries)
+        for entry in compose_strategy_catalog(entries, account_id=account_id)
     )
 
 
@@ -469,7 +471,7 @@ def build_alpaca_paper_deploy_view(
 ) -> AlpacaPaperDeployView:
     """Author the closed form choices and current launch verdict."""
     evaluated_at_ms = now_ms_utc()
-    strategies = _strategy_views(validation_entries)
+    strategies = _strategy_views(validation_entries, account_id=account.account_id)
     readiness_checks = _readiness_checks(
         account,
         clerk_status,

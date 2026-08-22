@@ -947,8 +947,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 ),
                 validated_against=(
                     "tests/engine/strategy/algorithms/test_signal_only_ema_crossover.py; "
-                    "tests/engine/strategy/test_ema_signal_program.py::"
-                    "test_validated_ema_settings_corpus_has_a_pinned_trace_root; "
+                    "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
+                    "[ema_crossover_signal]; "
                     "docs/references/reconciliations/ema-crossover-signal-lean-2026-07-18.md"
                 ),
                 # The trace/decision identity is Decimal-exact and
@@ -1204,8 +1204,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 validated_against=(
                     "app/engine/tests/test_sma_crossover_parity.py; "
                     "app/engine/strategy/spec/tests/test_spec_sma_parity.py; "
-                    "tests/engine/strategy/test_sma_signal_program.py::"
-                    "test_validated_sma_settings_corpus_has_a_pinned_trace_root"
+                    "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
+                    "[sma_crossover]"
                 ),
                 # The trace/decision identity is Decimal-exact and
                 # SHA-256-compared (signal_program.py), not
@@ -1474,8 +1474,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 validated_against=(
                     "app/engine/tests/test_rsi_mean_reversion_parity.py; "
                     "app/engine/strategy/spec/tests/test_spec_rsi_mean_reversion_parity.py; "
-                    "tests/engine/strategy/test_rsi_signal_program.py::"
-                    "test_validated_rsi_mean_reversion_settings_corpus_has_a_pinned_trace_root"
+                    "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
+                    "[rsi_mean_reversion]"
                 ),
                 # The trace/decision identity is Decimal-exact and
                 # SHA-256-compared (signal_program.py), not
@@ -2002,8 +2002,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 validated_against=(
                     "app/engine/tests/ (gate-wiring unit tests); golden fixture ENG-008 "
                     "(tests/fixtures/test_strategy_parity_fixtures.py); "
-                    "tests/engine/strategy/test_spy_strategy_a_signal_program.py::"
-                    "test_validated_spy_strategy_a_settings_corpus_has_a_pinned_trace_root"
+                    "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
+                    "[spy_strategy_a]"
                 ),
                 # The trace/decision identity is Decimal-exact and
                 # SHA-256-compared (signal_program.py), not
@@ -2241,8 +2241,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 validated_against=(
                     "app/engine/tests/test_strategies_abc.py; "
                     "tests/fixtures/test_strategy_parity_fixtures.py (ENG-008); "
-                    "tests/engine/strategy/test_spy_strategy_b_signal_program.py::"
-                    "test_validated_spy_strategy_b_settings_corpus_has_a_pinned_trace_root"
+                    "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
+                    "[spy_strategy_b]"
                 ),
                 # The trace/decision identity is Decimal-exact and
                 # SHA-256-compared (signal_program.py), not
@@ -2497,8 +2497,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 validated_against=(
                     "app/engine/tests/test_strategies_abc.py; "
                     "tests/fixtures/test_strategy_parity_fixtures.py (ENG-008 self-equivalence); "
-                    "tests/engine/strategy/test_spy_strategy_c_signal_program.py::"
-                    "test_validated_spy_strategy_c_settings_corpus_has_a_pinned_trace_root"
+                    "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
+                    "[spy_strategy_c]"
                 ),
                 # The trace/decision identity is Decimal-exact and
                 # SHA-256-compared (signal_program.py), not

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.services.bot_trade_strategy import supported_alpaca_paper_strategy_keys
 from app.services.broker_v2_panel import strategy_catalog
 from app.services.broker_v2_panel.paper_deploy_service import _strategy_views
@@ -29,6 +30,7 @@ from app.services.strategy_validation_manifest import (
     strategy_registry_seeds,
 )
 from tests.broker.v2panel.conftest import _accepted_deploy_entry
+from tests.broker.v2panel.fixtures import ACCT
 
 
 def test_validated_strategy_without_runtime_is_visible_but_not_selectable(
@@ -38,7 +40,7 @@ def test_validated_strategy_without_runtime_is_visible_but_not_selectable(
     entry = _accepted_deploy_entry()
     monkeypatch.setattr(strategy_catalog, "supported_alpaca_paper_strategy_keys", lambda: frozenset())
 
-    rows = _strategy_views([entry])
+    rows = _strategy_views([entry], account_id=ACCT)
 
     assert [row.strategy_key for row in rows] == [entry.strategy_key]
     row = rows[0]
@@ -52,26 +54,52 @@ def test_validated_strategy_without_runtime_is_visible_but_not_selectable(
 def test_no_runtime_block_reads_differently_from_a_stale_proof_block(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#1703: "not built yet" must be distinguishable from "not validated" / a stale proof."""
+    """#1703/#1730: three distinct block reasons must read distinctly:
+    no registered runtime, a stale accepted proof, and (new in #1730) a
+    sealed Signal Program whose account is not canary-allowlisted."""
     stale_proof_entry = _accepted_deploy_entry().model_copy(update={"audit_copy_sha256": "0" * 64})
     no_runtime_entry = _accepted_deploy_entry()
-    monkeypatch.setattr(strategy_catalog, "supported_alpaca_paper_strategy_keys", lambda: frozenset())
+    not_allowlisted_entry = _accepted_deploy_entry()
 
-    no_runtime_rows = _strategy_views([no_runtime_entry])
+    monkeypatch.setattr(strategy_catalog, "supported_alpaca_paper_strategy_keys", lambda: frozenset())
+    no_runtime_rows = _strategy_views([no_runtime_entry], account_id=ACCT)
     monkeypatch.undo()
-    stale_proof_rows = _strategy_views([stale_proof_entry])
+
+    # ema_crossover_signal is a sealed Signal Program (#1730): without an
+    # explicit canary admission, this account is blocked at the allowlist
+    # before the accepted proof is ever re-verified. This test is about
+    # stale-proof detection, not the allowlist, so admit this account for
+    # the one pairing it needs to reach that check.
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("ema_crossover_signal", ACCT)}),
+    )
+    stale_proof_rows = _strategy_views([stale_proof_entry], account_id=ACCT)
+    monkeypatch.undo()
+
+    # No canary admission at all: the same accepted entry now demotes to
+    # the canary-not-allowlisted block instead of the accepted-proof block.
+    not_allowlisted_rows = _strategy_views([not_allowlisted_entry], account_id=ACCT)
 
     no_runtime_reason = no_runtime_rows[0].blocked_explanation
     stale_proof_reason = stale_proof_rows[0].blocked_explanation
+    not_allowlisted_reason = not_allowlisted_rows[0].blocked_explanation
     assert no_runtime_reason is not None
     assert stale_proof_reason is not None
-    assert no_runtime_reason != stale_proof_reason
-    # A no-runtime row cannot even Dry Run; a stale-proof row still can.
+    assert not_allowlisted_reason is not None
+    assert len({no_runtime_reason, stale_proof_reason, not_allowlisted_reason}) == 3, (
+        "no-runtime, stale-proof, and canary-not-allowlisted blocks must each read distinctly."
+    )
+    # A no-runtime row cannot even Dry Run; a stale-proof row still can, and
+    # so does a canary-blocked row -- Dry Run is never canary-gated (#1730).
     assert no_runtime_rows[0].admissible_modes == ()
     assert stale_proof_rows[0].admissible_modes == ("dry_run",)
+    assert not_allowlisted_rows[0].admissible_modes == ("dry_run",)
 
 
-def test_selectable_rows_are_exactly_the_launchable_and_visible_rows() -> None:
+def test_selectable_rows_are_exactly_the_launchable_and_visible_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """#1703 replacement for the retired enum-to-runtime invariant test.
 
     Exhaustive sweep over every real committed, currently-validated
@@ -82,6 +110,16 @@ def test_selectable_rows_are_exactly_the_launchable_and_visible_rows() -> None:
     1. Every selectable row's strategy_key has a registered runtime.
     2. Every validated entry whose strategy_key has a registered runtime
        produces a row in the catalog — it is never silently dropped.
+
+    #1730 AC: "Catalog selectability is exactly equivalent to
+    launchability." Every real validated strategy today is a sealed
+    Signal Program, so real launchability for Paper now also requires
+    this account's exact (program, account) pairing to be canary-admitted
+    (#1729). Both directions of that requirement are exercised below:
+    unadmitted, every sealed-program entry with a runtime must be blocked
+    (never wrongly selectable); admitted, at least one must become
+    selectable again, proving the runtime/never-dropped sweep isn't
+    vacuously satisfied by an allowlist that blocks everything.
     """
     seeds = strategy_registry_seeds()
     entries = load_strategy_validation_entries(seeds)
@@ -94,8 +132,27 @@ def test_selectable_rows_are_exactly_the_launchable_and_visible_rows() -> None:
     ]
     assert validated_entries, "fixture sanity: at least one real strategy must be validated"
     runtime_keys = supported_alpaca_paper_strategy_keys()
+    account_id = "strategy-catalog-sweep-account"
 
-    rows = _strategy_views(validated_entries)
+    unadmitted_rows = _strategy_views(validated_entries, account_id=account_id)
+    for row in unadmitted_rows:
+        registration = _STRATEGY_REGISTRY.get(row.strategy_key)
+        is_sealed_program = registration is not None and registration.signal_program_contract is not None
+        if is_sealed_program and row.strategy_key in runtime_keys:
+            assert row.selectable is False, (
+                f"{row.strategy_key} is a sealed Signal Program with a runtime, not "
+                f"canary-admitted for '{account_id}', yet reports selectable=True."
+            )
+
+    # Admit this sweep's account for every entry under test so the
+    # runtime/never-dropped invariants below are proven against a real
+    # launchable case, not vacuously against an allowlist that blocks
+    # everything.
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset((entry.strategy_key, account_id) for entry in validated_entries),
+    )
+    rows = _strategy_views(validated_entries, account_id=account_id)
     rows_by_key = {row.strategy_key: row for row in rows}
 
     for row in rows:
@@ -109,3 +166,7 @@ def test_selectable_rows_are_exactly_the_launchable_and_visible_rows() -> None:
                 f"{entry.strategy_key} has a registered runtime and is validated, "
                 "but is missing from the catalog."
             )
+    assert any(row.selectable for row in rows), (
+        "fixture sanity: granting canary admission for every validated entry produced no "
+        "selectable row; the runtime/never-dropped sweep above would pass vacuously."
+    )

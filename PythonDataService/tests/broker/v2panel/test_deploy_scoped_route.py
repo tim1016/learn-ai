@@ -29,10 +29,23 @@ from app.utils.timestamps import now_ms_utc
 from tests.broker.v2panel.conftest import _BODY, _HEALTHY_POSTURE, _T0, _FakeAccount
 from tests.broker.v2panel.fixtures import ACCT, SID
 
+# ema_crossover_signal is a sealed Signal Program (#1730); most tests below
+# are about deploy routing, admission, or account-scoped gates, not the
+# canary allowlist, so each explicitly enables the one pairing `_BODY`
+# deploys under before submitting through the route.
+_ALLOW_BODY_STRATEGY = frozenset({("ema_crossover_signal", ACCT)})
+
 
 @pytest.mark.asyncio
-async def test_deploy_scoped_correct_account_delegates(deploy_app) -> None:
+async def test_deploy_scoped_correct_account_delegates(
+    deploy_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fast_app, registry = deploy_app
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        _ALLOW_BODY_STRATEGY,
+    )
 
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         resp = await client.post(f"/api/brokers/alpaca/accounts/{ACCT}/bots", json=_BODY)
@@ -103,8 +116,15 @@ async def test_dry_run_refuses_broker_exposure_carryover(deploy_app) -> None:
 
 
 @pytest.mark.asyncio
-async def test_start_admission_preview_uses_the_request_specific_policy(deploy_app) -> None:
+async def test_start_admission_preview_uses_the_request_specific_policy(
+    deploy_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fast_app, _registry = deploy_app
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        _ALLOW_BODY_STRATEGY,
+    )
 
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         response = await client.post(
@@ -118,8 +138,15 @@ async def test_start_admission_preview_uses_the_request_specific_policy(deploy_a
 
 
 @pytest.mark.asyncio
-async def test_deploy_accepts_dotted_equity_symbol_supported_by_form(deploy_app) -> None:
+async def test_deploy_accepts_dotted_equity_symbol_supported_by_form(
+    deploy_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fast_app, registry = deploy_app
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        _ALLOW_BODY_STRATEGY,
+    )
 
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         response = await client.post(
@@ -133,8 +160,15 @@ async def test_deploy_accepts_dotted_equity_symbol_supported_by_form(deploy_app)
 
 
 @pytest.mark.asyncio
-async def test_deploy_submits_selected_validated_strategy(deploy_app) -> None:
+async def test_deploy_submits_selected_validated_strategy(
+    deploy_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fast_app, registry = deploy_app
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        _ALLOW_BODY_STRATEGY,
+    )
 
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         response = await client.post(
@@ -165,8 +199,25 @@ async def test_deploy_scoped_account_mismatch_404(deploy_app) -> None:
 
 
 @pytest.mark.asyncio
-async def test_deploy_view_is_closed_paper_only_contract(deploy_app) -> None:
+async def test_deploy_view_is_closed_paper_only_contract(
+    deploy_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """This is the full deploy-view contract test, so it exercises all three
+    of `deploy_app`'s validated strategies -- not the canary allowlist --
+    and explicitly enables every (program, account) pairing they deploy
+    under (#1730), all sealed Signal Programs."""
     fast_app, _registry = deploy_app
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset(
+            {
+                ("ema_crossover_signal", ACCT),
+                ("rsi_mean_reversion", ACCT),
+                ("sma_crossover", ACCT),
+            }
+        ),
+    )
 
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         resp = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/deploy")
@@ -286,12 +337,22 @@ async def test_deploy_requires_current_accepted_validation_provenance(
 
 
 @pytest.mark.asyncio
-async def test_evidence_only_strategy_deploys_to_paper_with_no_override_required(deploy_app) -> None:
+async def test_evidence_only_strategy_deploys_to_paper_with_no_override_required(
+    deploy_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """#1702: Paper gates on the human-validated flag alone; the override
     contract that used to require an acknowledgement here is re-pointed at
     Live, so an evidence-only strategy deploys to Paper with no
     ``evidence_override`` in the request at all."""
     fast_app, registry = deploy_app
+    # sma_crossover is a sealed Signal Program (#1730); this test is about
+    # evidence-only Paper admission, not the canary allowlist, so explicitly
+    # enable the one pairing it deploys under.
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("sma_crossover", ACCT)}),
+    )
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=fast_app),
@@ -313,12 +374,24 @@ async def test_evidence_only_strategy_deploys_to_paper_with_no_override_required
 
 
 @pytest.mark.asyncio
-async def test_evidence_override_submitted_with_paper_is_rejected(deploy_app) -> None:
+async def test_evidence_override_submitted_with_paper_is_rejected(
+    deploy_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """#1702: the evidence-only override contract is Live-only now. A Paper
     request that still carries one is a typed conflict, not a silent drop —
     the same "surface invalid input" pattern the accepted-strategy override
     rejection below already used."""
     fast_app, registry = deploy_app
+    # sma_crossover is a sealed Signal Program (#1730); this test is about
+    # the evidence-override-on-Paper conflict, not the canary allowlist, so
+    # explicitly enable the one pairing it deploys under -- otherwise the
+    # request would 409 on "not currently selectable" before ever reaching
+    # the override check this test exists to pin.
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("sma_crossover", ACCT)}),
+    )
     evidence_override = {
         "acknowledgement": "I_ACCEPT_EVIDENCE_ONLY_DEPLOYMENT_RISK",
         "reason": "Paper canary approved by the strategy owner.",
@@ -380,8 +453,19 @@ async def test_evidence_override_acknowledgement_and_reason_are_closed(deploy_ap
 
 
 @pytest.mark.asyncio
-async def test_accepted_strategy_rejects_unnecessary_evidence_override(deploy_app) -> None:
+async def test_accepted_strategy_rejects_unnecessary_evidence_override(
+    deploy_app,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fast_app, registry = deploy_app
+    # ema_crossover_signal is a sealed Signal Program (#1730); this test is
+    # about the unnecessary-override conflict, not the canary allowlist, so
+    # explicitly enable the one pairing `_BODY` deploys under -- otherwise
+    # the request would 409 on "not currently selectable" first.
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        _ALLOW_BODY_STRATEGY,
+    )
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=fast_app),
@@ -439,6 +523,14 @@ async def test_failure_after_runner_dispatch_is_unknown(
     monkeypatch,
 ) -> None:
     fast_app, registry = deploy_app
+    # ema_crossover_signal is a sealed Signal Program (#1730); this test is
+    # about post-dispatch failure classification, not the canary allowlist,
+    # so explicitly enable the one pairing `_BODY` deploys under -- the
+    # preflight must admit the strategy for the runner to be dispatched at all.
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        _ALLOW_BODY_STRATEGY,
+    )
 
     async def failed_dispatch(**_kwargs) -> AdmittedBotStart:
         raise BotRunnerError(
@@ -467,6 +559,15 @@ async def test_start_refusal_returns_the_execution_policy_decision(
     monkeypatch,
 ) -> None:
     fast_app, registry = deploy_app
+    # ema_crossover_signal is a sealed Signal Program (#1730); this test is
+    # about surfacing a runner-refused Start decision, not the canary
+    # allowlist, so explicitly enable the one pairing `_BODY` deploys under
+    # -- the preflight must admit the strategy for the runner to be
+    # dispatched (and then refuse) at all.
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        _ALLOW_BODY_STRATEGY,
+    )
     denied = registry._decision(_BODY).model_copy(
         update={
             "allowed": False,
@@ -501,6 +602,13 @@ async def test_deploy_blocks_when_clerk_channel_health_is_unproven(
     monkeypatch,
 ) -> None:
     fast_app, registry = deploy_app
+    # This test is about the Clerk channel-health gate, not the strategy
+    # gate or the canary allowlist -- admit one strategy so the strategy
+    # gate is ready and channel health is the actual blocking reason.
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        _ALLOW_BODY_STRATEGY,
+    )
 
     async def no_channel_status() -> ClerkStatus:
         return ClerkStatus(
@@ -662,6 +770,13 @@ async def test_clerk_hold_authors_blocked_view_and_submission_remedy(
     monkeypatch,
 ) -> None:
     fast_app, registry = deploy_app
+    # This test is about the Clerk exposure-hold gate, not the strategy gate
+    # or the canary allowlist -- admit `_BODY`'s strategy so the strategy
+    # gate is ready and the hold is the actual blocking reason.
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        _ALLOW_BODY_STRATEGY,
+    )
 
     async def held_status() -> ClerkStatus:
         return ClerkStatus(
@@ -702,6 +817,13 @@ async def test_account_freeze_category_and_remedy_reach_deploy_unchanged(
     monkeypatch,
 ) -> None:
     fast_app, registry = deploy_app
+    # This test is about the Clerk custody-freeze gate, not the strategy
+    # gate or the canary allowlist -- admit one strategy so the strategy
+    # gate is ready and the freeze is the actual blocking reason.
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        _ALLOW_BODY_STRATEGY,
+    )
 
     async def frozen_status() -> ClerkStatus:
         return ClerkStatus(
@@ -737,6 +859,13 @@ async def test_account_trading_block_authors_ineligible_deploy_view(
     monkeypatch,
 ) -> None:
     fast_app, registry = deploy_app
+    # This test is about the account-posture gate, not the strategy gate or
+    # the canary allowlist -- admit one strategy so the strategy gate is
+    # ready and the trading block is the actual blocking reason.
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        _ALLOW_BODY_STRATEGY,
+    )
     monkeypatch.setattr(_FakeAccount, "trading_blocked", True)
 
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:

@@ -24,17 +24,17 @@ originally captured to reconcile.
 - Root generation: `trace_corpus_root(entries)` in
   `app.engine.strategy.signal_program`, encoded as canonical sorted-key JSON
   and SHA-256.
-- Assumption: `RsiRangeStrategy.initialize()` (the shared base
-  `SpyStrategyCAlgorithm` extends) does not call `set_start_date`/
-  `set_end_date` itself — the RSI-range family is deploy/router-configured
-  only. `scripts/generate_signal_program_trace_corpus.py::_ensure_backtest_window`
-  fills that gap for this replay by pinning the strategy's backtest window to
-  each cell's own min/max bar dates (mirroring
-  `tests/fixtures/golden_support/strategy_replay.py::run_strategy_over_bars`'s
-  identical pattern for this family's hand-coded ENG-008 fixture), and only
-  when a program does not already set its own dates — `ema_crossover_signal`
-  and `sma_crossover` are unaffected, each keeps setting its own placeholder
-  window inside `initialize()`.
+- Backtest window: `RsiRangeStrategy.initialize()` (the shared base
+  `SpyStrategyCAlgorithm` extends) sets the window itself —
+  `set_start_date(2024, 3, 28)` / `set_end_date(2026, 3, 27)`, identical to
+  `ema_crossover_signal` and `sma_crossover`. The generator neither sets nor
+  overrides a window: `scripts/generate_signal_program_trace_corpus.py`'s
+  `_entry_for_cell` builds the registered strategy and hands the cell's
+  minute bars to `BacktestEngine(InMemoryDataReader(...))`, whose
+  `iter_bars(symbol, start_date, end_date)` bounds iteration to whatever
+  window the strategy configured for itself. All six programs promoted in
+  this slice therefore replay the same window over the same ten cells and
+  produce the same 35,900 total traces.
 - Tolerance: not applicable. The root is a byte-stable SHA-256 commitment;
   there is no external reference this promotion is tolerance-compared
   against (see `numerical_provenance.equivalence_level="bit_exact"` on the

@@ -183,3 +183,80 @@ def test_registry_signal_series_periods_match_the_constructed_indicators() -> No
     assert warmup_by_name["ema_fast"] == ema_fast.period
     assert warmup_by_name["ema_slow"] == ema_slow.period
     assert warmup_by_name["rsi"] == rsi.period + 1
+
+
+def test_validated_against_only_names_evidence_that_actually_exists() -> None:
+    """A sealed contract's ``validated_against`` is audit metadata: it names
+    the evidence a reader is supposed to be able to go read. If it names a
+    test that was deleted or renamed, the seal still verifies and every test
+    still passes -- the receipt just quietly points at nothing, which is the
+    exact failure mode ``.claude/rules/numerical-rigor.md`` exists to prevent.
+
+    This is a real regression, not a hypothetical: the six per-program
+    ``test_validated_*_settings_corpus_has_a_pinned_trace_root`` functions
+    these fields used to name were collapsed into
+    ``test_signal_program_qualification_matrix.py``'s parameterized node, and
+    every one of the six ``validated_against`` strings kept naming the
+    deleted function. Nothing failed, because nothing checked.
+
+    Resolving each named path (and, for a ``file::test`` node id, the test
+    function itself, via AST rather than a pytest sub-run) makes the class of
+    bug impossible instead of fixing the six instances.
+    """
+    import ast
+    import re
+    from pathlib import Path
+
+    service_root = Path(__file__).resolve().parents[3]
+    repo_root = service_root.parent
+
+    def _resolve(candidate: str) -> Path | None:
+        for root in (service_root, repo_root):
+            path = root / candidate
+            if path.exists():
+                return path
+        return None
+
+    # Matches "a/b/c.py", "a/b/c.md" and "a/b/c.py::test_name[param]".
+    # Requires a real "/" and a concrete file extension, so surrounding prose
+    # ("(gate-wiring unit tests)", "ENG-008", "level/edge entry/exit") cannot
+    # be mistaken for a path. Bare directory references are deliberately not
+    # validated -- they are too ambiguous to distinguish from prose, and the
+    # evidence that matters is a concrete file.
+    token = re.compile(r"[\w.-]+(?:/[\w.-]+)+(?:\.py|\.md)(?:::[\w\[\]./-]+)?")
+
+    checked = 0
+    for key, registration in _STRATEGY_REGISTRY.items():
+        contract = registration.signal_program_contract
+        if contract is None:
+            continue
+        provenance = contract.numerical_provenance
+        # ``reference`` deliberately excluded: it names external sources
+        # (LEAN C# revisions, a TradingView Pine script, a validation PDF)
+        # that are not required to exist inside this repo.
+        evidence = f"{provenance.validated_against}; {provenance.canonical_implementation}"
+        for raw in token.findall(evidence):
+            file_part, _, node_part = raw.partition("::")
+            resolved = _resolve(file_part)
+            assert resolved is not None, (
+                f"'{key}' validated_against names '{file_part}', which does not "
+                f"exist under {service_root} or {repo_root}. Update the field to "
+                "name the evidence that replaced it."
+            )
+            checked += 1
+            if not node_part:
+                continue
+            function_name = node_part.split("[", 1)[0]
+            module = ast.parse(resolved.read_text(encoding="utf-8"))
+            defined = {
+                node.name
+                for node in ast.walk(module)
+                if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+            }
+            assert function_name in defined, (
+                f"'{key}' validated_against names '{raw}', but "
+                f"'{function_name}' is not defined in {resolved}. A renamed or "
+                "deleted test or class leaves this receipt pointing at nothing."
+            )
+
+    assert checked, "expected at least one sealed contract to name its evidence"
