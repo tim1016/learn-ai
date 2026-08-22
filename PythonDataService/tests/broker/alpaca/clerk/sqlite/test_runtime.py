@@ -400,7 +400,6 @@ async def test_competing_exit_captures_the_losing_decision_receipt(tmp_path: Pat
             bar_ref="decision-bar:test:SPY:3",
             symbol=binding.symbol,
             outcome="exit_intent",
-            reason_code="test",
             observed_at_ms=1_700_000_000_000,
         ),
     )
