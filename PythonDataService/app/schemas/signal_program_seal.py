@@ -61,18 +61,23 @@ class SignalSeriesContract(BaseModel):
     program's ``data`` contract seals the *shared* provider/symbol/timeframe
     pair every series reads from; this seals each named series drawn from
     that shared stream — e.g. ``ema_fast``, ``ema_slow``, and ``rsi`` all read
-    ``field="close"`` off the same 15-minute decision bar. ``warmup_bars`` is
+    ``field="close"`` off the same 15-minute decision bar. ``field`` also
+    admits ``"high_low_close"`` for a ``BarIndicator``-family series (e.g.
+    ``spy_strategy_a``'s ADX) that reads the full high/low/close swing
+    rather than a single scalar -- ``field="close"`` would misdescribe what
+    such a series actually consumes. ``warmup_bars`` is
     the series' own ``is_ready`` threshold (PRD §11.1 "readiness"): the
     ``app.engine.indicators`` base class exposes ``is_ready`` as
     ``samples >= period``, so an EMA's ``warmup_bars`` equals its period; RSI
-    overrides this to ``period + 1`` (one extra sample for the first delta).
+    overrides this to ``period + 1`` (one extra sample for the first delta);
+    ADX overrides this to ``2 * period``.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: str
     indicator: str
-    field: Literal["close"]
+    field: Literal["close", "high_low_close"]
     period: int = Field(gt=0)
     warmup_bars: int = Field(gt=0)
 

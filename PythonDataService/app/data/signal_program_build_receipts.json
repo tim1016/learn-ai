@@ -30,6 +30,16 @@
       "qualification_suite": "tests/engine/strategy/test_sma_signal_program.py::test_validated_sma_settings_corpus_has_a_pinned_trace_root",
       "qualified_at_ms": 1787417786521,
       "receipt_hash": "b4f83e442f884c54c844af832f3ce60dbc8e7462ca942a20b268f2bb8b98e060"
+    },
+    {
+      "schema_version": 1,
+      "program_key": "spy_strategy_a",
+      "program_version": "spy-strategy-a/v1",
+      "golden_trace_root": "7ee88013046505a9df88fa9c83b94e1f5f4c4de92718dd874ca157b5eea25f5f",
+      "artifact_digest": "ce3b52b4b53ab081ad5d94232e00fca18cd85e49cc1235b9a75a6704713e39d5",
+      "qualification_suite": "tests/engine/strategy/test_spy_strategy_a_signal_program.py::test_validated_spy_strategy_a_settings_corpus_has_a_pinned_trace_root",
+      "qualified_at_ms": 1787419721192,
+      "receipt_hash": "d90723750a4ed0c5c6de0a632b9aa6cc1b7ee8f6ac97293b5cadc643ee001c49"
     }
   ]
 }

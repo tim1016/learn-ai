@@ -36173,11 +36173,15 @@
       },
       "SignalSeriesContract": {
         "additionalProperties": false,
-        "description": "One named signal series a program consumes off the sealed data contract.\n\nPRD \u00a710.1/\u00a711.1: \"every signal series, field, and decision stream.\" A\nprogram's ``data`` contract seals the *shared* provider/symbol/timeframe\npair every series reads from; this seals each named series drawn from\nthat shared stream \u2014 e.g. ``ema_fast``, ``ema_slow``, and ``rsi`` all read\n``field=\"close\"`` off the same 15-minute decision bar. ``warmup_bars`` is\nthe series' own ``is_ready`` threshold (PRD \u00a711.1 \"readiness\"): the\n``app.engine.indicators`` base class exposes ``is_ready`` as\n``samples >= period``, so an EMA's ``warmup_bars`` equals its period; RSI\noverrides this to ``period + 1`` (one extra sample for the first delta).",
+        "description": "One named signal series a program consumes off the sealed data contract.\n\nPRD \u00a710.1/\u00a711.1: \"every signal series, field, and decision stream.\" A\nprogram's ``data`` contract seals the *shared* provider/symbol/timeframe\npair every series reads from; this seals each named series drawn from\nthat shared stream \u2014 e.g. ``ema_fast``, ``ema_slow``, and ``rsi`` all read\n``field=\"close\"`` off the same 15-minute decision bar. ``field`` also\nadmits ``\"high_low_close\"`` for a ``BarIndicator``-family series (e.g.\n``spy_strategy_a``'s ADX) that reads the full high/low/close swing\nrather than a single scalar -- ``field=\"close\"`` would misdescribe what\nsuch a series actually consumes. ``warmup_bars`` is\nthe series' own ``is_ready`` threshold (PRD \u00a711.1 \"readiness\"): the\n``app.engine.indicators`` base class exposes ``is_ready`` as\n``samples >= period``, so an EMA's ``warmup_bars`` equals its period; RSI\noverrides this to ``period + 1`` (one extra sample for the first delta);\nADX overrides this to ``2 * period``.",
         "properties": {
           "field": {
-            "const": "close",
-            "title": "Field"
+            "enum": [
+              "close",
+              "high_low_close"
+            ],
+            "title": "Field",
+            "type": "string"
           },
           "indicator": {
             "title": "Indicator",
